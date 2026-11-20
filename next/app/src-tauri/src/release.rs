@@ -68,7 +68,8 @@ pub struct Release {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes_url: Option<String>,
     /// An app release's signed update artifacts, by the updater's target name
-    /// (`linux-x86_64-appimage`). Only the app's own updater reads them (`updater.rs`).
+    /// (`linux-x86_64-appimage`, `windows-x86_64-exe`, `darwin-aarch64-app`: one per system and
+    /// format). Only the app's own updater reads them (`updater`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub update: BTreeMap<String, UpdateArtifact>,
 }
@@ -1053,6 +1054,26 @@ mod tests {
         let ok = format!("https://example.com/{}", "é".repeat(300));
         let normal = https_url(&ok).unwrap();
         assert_eq!(https_url(&normal).unwrap(), normal);
+    }
+
+    /// What the browser may be given (`updates::open_external` checks it before any system call):
+    /// an https address with a host and no user, nothing else.
+    #[test]
+    fn only_https_addresses_reach_the_browser() {
+        assert_eq!(
+            https_url("https://example.com/notes").unwrap(),
+            "https://example.com/notes"
+        );
+        for refused in [
+            "http://example.com/",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "ms-settings:defaultapps",
+            "https://user:secret@example.com/",
+            "notes.example.com",
+        ] {
+            assert!(https_url(refused).is_err(), "{refused}");
+        }
     }
 
     #[test]

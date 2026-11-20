@@ -1,9 +1,11 @@
 package server
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 )
@@ -121,36 +123,75 @@ func TestLockoutKeepsBlockedClientsWhenFull(t *testing.T) {
 	}
 }
 
-// The management API refuses a client after lockoutFailures wrong keys, even with the right
-// key, says when to try again, and still serves other clients.
-func TestManagementLockout(t *testing.T) {
+// lockoutCall sends GET /ping to m from address from with key ("": no Authorization header).
+func lockoutCall(m *Management, from, key string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(http.MethodGet, ManagementPrefix+"/ping", nil)
+	r.RemoteAddr = net.JoinHostPort(from, "1234")
+	if key != "" {
+		r.Header.Set("Authorization", "Bearer "+key)
+	}
+	w := httptest.NewRecorder()
+	m.ServeHTTP(w, r)
+	return w
+}
+
+func lockoutManagement() *Management {
 	cfg := &Config{ManagementKey: "right-key", ManagementAllowRemote: true}
 	m := NewManagement(func() *Config { return cfg }, nil, nil)
 	m.Handle("GET /ping", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
-	call := func(from, key string) *httptest.ResponseRecorder {
-		r := httptest.NewRequest(http.MethodGet, ManagementPrefix+"/ping", nil)
-		r.RemoteAddr = from + ":1234"
-		if key != "" {
-			r.Header.Set("Authorization", "Bearer "+key)
-		}
-		w := httptest.NewRecorder()
-		m.ServeHTTP(w, r)
-		return w
-	}
+	return m
+}
+
+// The management API refuses a client after lockoutFailures wrong keys, even with the right
+// key, says when to try again, and still serves other clients.
+func TestManagementLockout(t *testing.T) {
+	m := lockoutManagement()
 	for i := range lockoutFailures {
-		key := "wrong"
-		if i == 0 {
-			key = "" // a missing key counts too
-		}
-		if w := call("198.51.100.7", key); w.Code != http.StatusUnauthorized {
+		if w := lockoutCall(m, "198.51.100.7", "wrong"); w.Code != http.StatusUnauthorized {
 			t.Fatalf("failure %d answered %d", i+1, w.Code)
 		}
 	}
-	w := call("198.51.100.7", "right-key")
-	if w.Code != http.StatusForbidden || w.Header().Get("Retry-After") != "1800" {
-		t.Errorf("blocked client with the right key: %d, Retry-After %q; want 403 and 1800", w.Code, w.Header().Get("Retry-After"))
+	w := lockoutCall(m, "198.51.100.7", "right-key")
+	if w.Code != http.StatusForbidden || w.Header().Get("Retry-After") != "1800" || !strings.Contains(w.Body.String(), `"blocked"`) {
+		t.Errorf("blocked client with the right key: %d %s, Retry-After %q; want 403 blocked and 1800", w.Code, w.Body, w.Header().Get("Retry-After"))
 	}
-	if w := call("198.51.100.8", "right-key"); w.Code != http.StatusNoContent {
+	if w := lockoutCall(m, "198.51.100.8", "right-key"); w.Code != http.StatusNoContent {
 		t.Errorf("another client answered %d", w.Code)
+	}
+}
+
+// Calls with no key at all are 401 and do not count: a proxy or page that forgets the key
+// cannot lock out the people behind its address.
+func TestManagementLockoutIgnoresMissingKey(t *testing.T) {
+	m := lockoutManagement()
+	for i := range lockoutFailures + 1 {
+		if w := lockoutCall(m, "198.51.100.7", ""); w.Code != http.StatusUnauthorized {
+			t.Fatalf("keyless call %d answered %d, want 401", i+1, w.Code)
+		}
+	}
+	if w := lockoutCall(m, "198.51.100.7", "right-key"); w.Code != http.StatusNoContent {
+		t.Errorf("after %d keyless calls, the right key answered %d %s, want 204", lockoutFailures+1, w.Code, w.Body)
+	}
+}
+
+// A caller on this machine is never blocked, however many wrong keys it sends; the same wrong
+// keys from another machine block it.
+func TestManagementLockoutSparesThisMachine(t *testing.T) {
+	m := lockoutManagement()
+	for _, from := range []string{"127.0.0.1", "::1"} {
+		for range lockoutFailures + 1 {
+			if w := lockoutCall(m, from, "wrong"); w.Code != http.StatusUnauthorized {
+				t.Fatalf("wrong key from %s answered %d, want 401", from, w.Code)
+			}
+		}
+		if w := lockoutCall(m, from, "right-key"); w.Code != http.StatusNoContent {
+			t.Errorf("%s after %d wrong keys, with the right key: %d %s, want 204", from, lockoutFailures+1, w.Code, w.Body)
+		}
+	}
+	for range lockoutFailures + 1 {
+		lockoutCall(m, "198.51.100.9", "wrong")
+	}
+	if w := lockoutCall(m, "198.51.100.9", "right-key"); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), `"blocked"`) {
+		t.Errorf("another machine after %d wrong keys, with the right key: %d %s, want 403 blocked", lockoutFailures+1, w.Code, w.Body)
 	}
 }

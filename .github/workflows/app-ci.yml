@@ -64,10 +64,14 @@ jobs:
         with:
           persist-credentials: false
 
+      # From a cache, saved from pushes to main; .github/actions/apt-install says what happens
+      # when a mirror fails.
       - name: Install Tauri Linux dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf
+        uses: ./.github/actions/apt-install
+        with:
+          cache: app-ci
+          save: 'true'
+          packages: libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@1.97.0
@@ -76,7 +80,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: extensions/app/src-tauri -> target
-          save-if: ${{ runner.environment == 'github-hosted' }}
+          # Saved from main only: a cache saved on a PR or merge-group ref is usable only there, and
+          # those filled the repo's 10 GB and evicted main's, which every run restores.
+          save-if: ${{ runner.environment == 'github-hosted' && github.ref == 'refs/heads/main' }}
 
       - name: Check Rust
         run: cargo check --locked

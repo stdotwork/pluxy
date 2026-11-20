@@ -6,14 +6,16 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
 // Claude takes thinking in two forms. Newer models think adaptively: thinking {"type":
-// "adaptive"} with output_config.effort low, medium, high or max. Older models take a token budget:
-// thinking {"type": "enabled", "budget_tokens": n}, at least 1024 and below max_tokens. Clients in
-// other formats name an effort (OpenAI's reasoning_effort, from none to xhigh), which ApplyEffort
-// turns into whichever form the model takes.
+// "adaptive"} with output_config.effort low, medium, high, xhigh or max. Older models take a token
+// budget: thinking {"type": "enabled", "budget_tokens": n}, at least 1024 and below max_tokens.
+// Clients in other formats name an effort (OpenAI's reasoning_effort, from none to xhigh), which
+// ApplyEffort turns into whichever form the model takes, with the level and the way to turn
+// thinking off that each model has (FitThinking).
 
 // minBudget is the smallest thinking budget Messages accepts.
 const minBudget = 1024
@@ -29,13 +31,14 @@ var budgets = map[string]int{
 	"max":     128000,
 }
 
-// adaptiveEfforts maps each effort to output_config.effort on adaptive models.
+// adaptiveEfforts maps each effort to output_config.effort on adaptive models; FitThinking then
+// sends xhigh as max to a model without it. Messages has no minimal.
 var adaptiveEfforts = map[string]string{
 	"minimal": "low",
 	"low":     "low",
 	"medium":  "medium",
 	"high":    "high",
-	"xhigh":   "max",
+	"xhigh":   "xhigh",
 	"max":     "max",
 }
 
@@ -106,16 +109,26 @@ func adaptive(major, minor int) bool { return major > 4 || (major == 4 && minor 
 // a model that takes a budget gets that budget, an adaptive model the effort it falls in
 // (llm.ThinkingEffort). It reports false, leaving the body as it was, for an effort it does not
 // know or a body whose max_tokens leaves no room for the smallest budget, or a model that is not
-// a Claude model; the effort then stays reported as dropped.
+// a Claude model; the effort then stays reported as dropped. The settings are then made ones the
+// model takes, as FitThinking makes them (none, for example, becomes between_tools on Claude
+// Sonnet 5.5); ApplyEffortReport also returns each difference from what was asked.
 func ApplyEffort(body []byte, model, effort string) ([]byte, bool, error) {
+	out, _, applied, err := ApplyEffortReport(body, model, effort)
+	return out, applied, err
+}
+
+// ApplyEffortReport is ApplyEffort, and also reports each place the settings sent differ from
+// the effort asked for, with its path in the body.
+func ApplyEffortReport(body []byte, model, effort string) ([]byte, []llm.Loss, bool, error) {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(body, &m); err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	major, minor, ok := claudeVersion(model)
 	if !ok {
-		return body, false, nil
+		return body, nil, false, nil
 	}
+	var losses []llm.Loss
 	set := func(key string, v any) {
 		b, _ := json.Marshal(v)
 		m[key] = b
@@ -127,7 +140,7 @@ func ApplyEffort(body []byte, model, effort string) ([]byte, bool, error) {
 	switch {
 	case isBudget:
 		if !setBudget(m, max(budget, minBudget), set) {
-			return body, false, nil
+			return body, nil, false, nil
 		}
 	case effort == "none":
 		set("thinking", map[string]any{"type": "disabled"})
@@ -136,23 +149,37 @@ func ApplyEffort(body []byte, model, effort string) ([]byte, bool, error) {
 	case effort == "auto":
 		// Thinking with no budget named: the smallest one.
 		if !setBudget(m, minBudget, set) {
-			return body, false, nil
+			return body, nil, false, nil
 		}
 	case adaptive(major, minor):
 		e, ok := adaptiveEfforts[effort]
 		if !ok {
-			return body, false, nil
+			return body, nil, false, nil
+		}
+		if e != effort {
+			losses = append(losses, llm.Loss{Kind: llm.LossApproximated, Path: "output_config.effort",
+				Detail: "Claude has no effort " + effort + "; sent as " + e + ", its lowest"})
 		}
 		set("thinking", map[string]any{"type": "adaptive"})
-		set("output_config", map[string]any{"effort": e})
+		cfg := rawjson.Object(m["output_config"])
+		if cfg == nil {
+			cfg = map[string]json.RawMessage{}
+		}
+		cfg["effort"], _ = json.Marshal(e)
+		set("output_config", cfg)
 	default:
 		budget, ok := budgets[effort]
 		if !ok || !setBudget(m, budget, set) {
-			return body, false, nil
+			return body, nil, false, nil
 		}
 	}
+	if r, ok := rulesFor(model); ok {
+		f := &fitter{m: m, r: r}
+		f.config()
+		losses = append(losses, f.losses...)
+	}
 	out, err := json.Marshal(m)
-	return out, true, err
+	return out, losses, true, err
 }
 
 // setBudget sets a thinking budget, kept below max_tokens as Messages requires. It reports false

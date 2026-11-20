@@ -6,7 +6,8 @@
 //! A launch runs the executable the confirmation opened (the opened file, never its path again)
 //! in the cwd it opened, with exactly the confirmed argv, the executable's name as named as its
 //! `argv[0]`, /dev/null on stdin, stdout and stderr, and no other descriptor of the app's (no
-//! tool pipe, vault file or socket). Its environment is the launch environment (`environment`):
+//! tool pipe, vault file or socket) but, for a terminal launch on macOS, the confirmed program
+//! the terminal runs, as 3 (`command`). Its environment is the launch environment (`environment`):
 //! selected values of the app's own environment as it started (`Snapshot`), the variables the
 //! confirmed launch set, inherited by name or removed, and the secrets the host resolved for it,
 //! each resolved at the moment it is given (the spawn, a runtime's start or restart) by the
@@ -52,7 +53,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::FileExt;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -639,8 +640,9 @@ fn outside(s: &OsString, dir: &OsString) -> OsString {
 
 /// A launch's environment: the snapshot's session values (`BASE`, `LC_*`) but those request
 /// removes, with the AppImage's own folder taken out of PATH and the XDG folder lists when the app
-/// runs as one; then the variables request inherits from the snapshot, those it sets, and the
-/// resolved secrets (variable name, value).
+/// runs as one, and on macOS the client folders that exist added to the end of PATH
+/// (`with_client_folders`); then the variables request inherits from the snapshot, those it sets,
+/// and the resolved secrets (variable name, value).
 pub fn environment(
     snap: &Snapshot,
     request: &Request,
@@ -660,6 +662,10 @@ pub fn environment(
                 *v = outside(v, appdir);
             }
         }
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(v) = env.get_mut("PATH") {
+        *v = with_client_folders(v, snap.get("HOME"));
     }
     for n in &request.inherit {
         if let Some(v) = snap.get(n) {
@@ -688,14 +694,60 @@ pub fn environment(
     env.into_iter().collect()
 }
 
+/// The folders people's command-line clients are installed in on macOS, under the home folder
+/// and then system-wide: npm, Bun, Cargo, Volta, pnpm and Homebrew put them there.
+#[cfg(target_os = "macos")]
+const CLIENT_FOLDERS: &[&str] = &[
+    "~/.local/bin",
+    "~/.npm-global/bin",
+    "~/.bun/bin",
+    "~/.cargo/bin",
+    "~/.volta/bin",
+    "~/Library/pnpm",
+    "~/bin",
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+];
+
+/// PATH value path followed by the folders of `CLIENT_FOLDERS` that exist and it lacks (`~` is
+/// home, when it is absolute): an app started from the Finder or the Dock has launchd's PATH,
+/// `/usr/bin:/bin:/usr/sbin:/sbin`, which finds no client a person installed.
+#[cfg(target_os = "macos")]
+fn with_client_folders(path: &OsString, home: Option<&OsString>) -> OsString {
+    let home = home.map(PathBuf::from).filter(|h| h.is_absolute());
+    let mut entries: Vec<PathBuf> = std::env::split_paths(path).collect();
+    for f in CLIENT_FOLDERS {
+        let d = match (f.strip_prefix("~/"), &home) {
+            (Some(rest), Some(h)) => h.join(rest),
+            (Some(_), None) => continue,
+            (None, _) => PathBuf::from(f),
+        };
+        if d.is_dir() && !entries.contains(&d) {
+            entries.push(d);
+        }
+    }
+    std::env::join_paths(entries).unwrap_or_else(|_| path.clone())
+}
+
 /// What a launch runs from: the executable and cwd its confirmation opened, and the check that
 /// they are still what was confirmed.
 pub trait Opened: Send + Sync {
     fn executable(&self) -> &File;
     fn cwd(&self) -> &File;
+    /// The program a terminal runs (a launch that names one), opened, and its path as the launch
+    /// names it.
+    fn program(&self) -> Option<(&File, &Path)> {
+        None
+    }
     /// Refused once the executable or cwd changed since it was confirmed (replaced, or written
     /// in place).
     fn recheck(&self) -> Result<(), String>;
+    /// Whether a detached launch shows no window itself, so it starts with no console on Windows
+    /// (`confirmation::Authorized::windowless`).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    fn windowless(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(native_stack)]
@@ -706,8 +758,14 @@ impl Opened for crate::confirmation::Authorized {
     fn cwd(&self) -> &File {
         crate::confirmation::Authorized::cwd(self).expect("a launch's cwd")
     }
+    fn program(&self) -> Option<(&File, &Path)> {
+        crate::confirmation::Authorized::program(self)
+    }
     fn recheck(&self) -> Result<(), String> {
         crate::confirmation::Authorized::recheck(self)
+    }
+    fn windowless(&self) -> bool {
+        crate::confirmation::Authorized::windowless(self)
     }
 }
 
@@ -740,7 +798,12 @@ fn is_script(f: &File) -> bool {
 /// hold, for a detached launch on Linux: the pipes that hold its wrapper before it forks the
 /// launch, until the app has moved it into a scope of its own (`Hold`).
 /// On Linux it runs the opened file itself (`/proc/self/fd`); on macOS the path that file has now,
-/// once no other user can change it (`owned::exec_target`).
+/// once no other user but a member of `admin` can change it (`owned::exec_target`,
+/// `owned::Writers::Admins`). The program a terminal launch names is checked too, since the
+/// terminal starts it after this: on Linux the terminal finds it by the path the launch names,
+/// which no other user may be able to change or redirect (`owned::path_target`); on macOS the
+/// execution program in Terminal's window runs it from the file checked here, which it gets as
+/// descriptor 3, by the path that file has then, checked again there under the same rule.
 #[cfg(unix)]
 fn command(
     l: &Launch,
@@ -766,7 +829,22 @@ fn command(
     } else {
         snapshot().core
     };
-    let mut cmd = Command::new(crate::owned::exec_target(exe)?);
+    let mut cmd = Command::new(crate::owned::exec_target(
+        exe,
+        crate::owned::Writers::Admins,
+    )?);
+    #[cfg(target_os = "macos")]
+    let mut program_fd = None;
+    if let Some((program, named)) = l.opened.program() {
+        #[cfg(target_os = "linux")]
+        crate::owned::path_target(program, named)?;
+        #[cfg(target_os = "macos")]
+        {
+            let _ = named;
+            crate::owned::exec_target(program, crate::owned::Writers::Admins)?;
+            program_fd = Some(program.as_raw_fd());
+        }
+    }
     cmd.arg0(&l.named)
         .args(&l.argv)
         .env_clear()
@@ -838,6 +916,13 @@ fn command(
             if script && libc::fcntl(exe_fd, libc::F_SETFD, 0) != 0 {
                 return Err(err());
             }
+            // But the program a terminal runs, as 3 (`dup2` onto itself keeps close-on-exec).
+            #[cfg(target_os = "macos")]
+            if let Some(fd) = program_fd {
+                if libc::dup2(fd, 3) == -1 || libc::fcntl(3, libc::F_SETFD, 0) != 0 {
+                    return Err(err());
+                }
+            }
             Ok(())
         });
     }
@@ -868,7 +953,8 @@ fn command(
         } else {
             Io::Null
         })
-        .secrets(holds_secrets);
+        .secrets(holds_secrets)
+        .windowless(l.lifetime == Lifetime::Detached && l.opened.windowless());
     Ok(cmd)
 }
 

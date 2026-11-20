@@ -326,7 +326,10 @@ impl ManagedCore {
         #[cfg(not(unix))]
         let hold: Option<Hold> = None;
         #[cfg(unix)]
-        let mut cmd = Command::new(crate::owned::exec_target(&program)?);
+        let mut cmd = Command::new(crate::owned::exec_target(
+            &program,
+            crate::owned::Writers::Nobody,
+        )?);
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -1368,6 +1371,41 @@ mod tests {
             .unwrap();
         assert!(err.contains("listen is required"), "{err}");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// On macOS the app's own core never runs below a folder the `admin` group may write
+    /// (`owned::Writers::Nobody`): refused before it starts. The core here would otherwise run
+    /// and exit saying why.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn on_macos_a_core_below_a_folder_the_admin_group_may_write_is_refused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp("admin");
+        let bin = dir.join("bin");
+        fs::create_dir(&bin).unwrap();
+        let out = std::process::Command::new("/usr/bin/chgrp")
+            .arg("admin")
+            .arg(&bin)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "chgrp admin (the test's user must be in admin): {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        fs::set_permissions(&bin, fs::Permissions::from_mode(0o775)).unwrap();
+        let script = bin.join("core.sh");
+        fs::write(
+            &script,
+            "#!/bin/sh\necho 'pluxy: config: listen is required' >&2\nexit 3\n",
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let err = ManagedCore::start(File::open(&script).unwrap(), &script, &dir, None)
+            .err()
+            .unwrap();
+        fs::remove_dir_all(dir).unwrap();
+        assert!(err.contains("may be changed by other users"), "{err}");
     }
 
     #[cfg(unix)]

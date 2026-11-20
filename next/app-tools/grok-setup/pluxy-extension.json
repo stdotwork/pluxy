@@ -9,8 +9,11 @@
       0
     ],
     "programs": {
+      "darwin/amd64": "bin/grok-setup",
+      "darwin/arm64": "bin/grok-setup",
       "linux/amd64": "bin/grok-setup",
-      "linux/arm64": "bin/grok-setup"
+      "linux/arm64": "bin/grok-setup",
+      "windows/amd64": "bin/grok-setup.exe"
     },
     "operations": [
       {

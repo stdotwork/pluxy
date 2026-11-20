@@ -259,11 +259,21 @@ export function LogsPage() {
           <Switch label={t("wrap")} checked={wrap} onChange={setWrap} />
           <label class="field logs-search" data-part="field">
             <span class="label">{t("search")}</span>
-            <input type="search" value={search} onInput={(e) => setSearch(e.currentTarget.value)} />
+            <input
+              data-slot="input"
+              type="search"
+              value={search}
+              onInput={(e) => setSearch(e.currentTarget.value)}
+            />
           </label>
           <label class="field" data-part="field">
             <span class="label">{t("level")}</span>
-            <select aria-label={t("level")} value={level} onChange={(e) => setLevel(e.currentTarget.value)}>
+            <select
+              data-slot="select-trigger"
+              aria-label={t("level")}
+              value={level}
+              onChange={(e) => setLevel(e.currentTarget.value)}
+            >
               <option value="">{t("allLevels")}</option>
               <option value="info">{t("info")}</option>
               <option value="warn">{t("warn")}</option>
@@ -378,7 +388,7 @@ export function LogsPage() {
         >
           <label class="field logs-search" data-part="field">
             <span class="label">{t("requestId")}</span>
-            <input value={id} onInput={(e) => setId(e.currentTarget.value)} />
+            <input data-slot="input" value={id} onInput={(e) => setId(e.currentTarget.value)} />
           </label>
           <Button type="submit" disabled={!id.trim() || requestBusy}>
             {t("view")}

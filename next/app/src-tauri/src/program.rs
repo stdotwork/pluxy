@@ -1693,7 +1693,7 @@ fn command(spec: &Spec, f: &std::fs::File) -> Result<Command, String> {
     // Linux: the kernel opens /proc/self/fd/<n>, the checked file, as it executes; the descriptor
     // is close-on-exec, so the tool does not keep it. macOS: the path the checked file has now,
     // once no other user can change it (`owned::exec_target`).
-    let mut cmd = Command::new(crate::owned::exec_target(f)?);
+    let mut cmd = Command::new(crate::owned::exec_target(f, crate::owned::Writers::Nobody)?);
     // Its command line; on Linux its short name (`comm`) stays the descriptor's number.
     cmd.arg0(&spec.program)
         .env_clear()

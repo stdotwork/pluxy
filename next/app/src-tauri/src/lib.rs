@@ -19,10 +19,7 @@ pub mod artifact;
 pub mod bundled_core;
 pub mod bundled_manifest;
 pub mod client;
-// Built for the router and the runtimes; its key capture and entry commands (`client_key_*`)
-// stay Linux only until their Windows and macOS slice.
 #[cfg(native_stack)]
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod client_keys;
 mod command_names;
 #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
@@ -68,7 +65,7 @@ pub mod recovery;
 pub mod release;
 #[cfg(debug_assertions)]
 pub mod release_config;
-#[cfg(all(target_os = "linux", feature = "native-test"))]
+#[cfg(feature = "native-test")]
 mod release_native;
 #[cfg(native_stack)]
 pub mod route;
@@ -78,13 +75,13 @@ pub mod savefile;
 pub mod spawn;
 mod startup;
 pub mod trust;
-#[cfg(all(target_os = "linux", feature = "native-test"))]
+#[cfg(feature = "native-test")]
 mod update_native;
-#[cfg(unix)]
 mod updater;
 mod updates;
 pub mod vault;
-#[cfg(all(windows, feature = "artifact-test-trust"))]
+// Whether a file is this user's own: the test trust's files and the files launches open.
+#[cfg(windows)]
 mod win_acl;
 pub mod window;
 
@@ -169,8 +166,7 @@ struct App {
     key_entry_open: AtomicBool,
     key_entry_after: Mutex<Option<std::time::Instant>>,
     rotation_open: AtomicBool,
-    /// The app's own update (`updater.rs`).
-    #[cfg(unix)]
+    /// The app's own update (`updater/`).
     updater: updater::State,
 }
 
@@ -677,14 +673,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let mut tray = TrayIconBuilder::with_id("pluxy")
         .tooltip("pluxy")
         .menu(&menu)
-        .on_menu_event(|app, e| {
-            if tray_item_acts(
-                e.id().as_ref(),
-                app.state::<App>().quitting.load(Ordering::SeqCst),
-            ) {
-                tray_menu(app, e.id().as_ref());
-            }
-        })
+        .on_menu_event(|app, e| tray_menu_event(app, e.id().as_ref()))
         .on_tray_icon_event(|tray, e| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
@@ -705,6 +694,13 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     *app.state::<App>().status.lock().unwrap() = Some(status);
     *app.state::<App>().core_actions.lock().unwrap() = vec![start, stop, restart];
     Ok(())
+}
+
+/// The tray menu's event: a click on its item id.
+pub(crate) fn tray_menu_event(app: &AppHandle, id: &str) {
+    if tray_item_acts(id, app.state::<App>().quitting.load(Ordering::SeqCst)) {
+        tray_menu(app, id);
+    }
 }
 
 fn tray_menu(app: &AppHandle, id: &str) {
@@ -909,7 +905,7 @@ async fn core_restart(webview: Webview) -> Result<View, String> {
     with_conn(&webview, |c| c.restart_core()).await
 }
 
-/// This command accepts connection metadata only; GTK supplies the secret on the native side.
+/// This command accepts connection metadata only; native key entry supplies the secret on the native side.
 #[derive(serde::Serialize)]
 struct KeyEntryResult {
     status: &'static str,
@@ -954,7 +950,7 @@ async fn key_entry(webview: Webview, change: Option<Change>) -> Result<KeyEntryR
         if let Some(after) = *st.key_entry_after.lock().unwrap() {
             std::thread::sleep(after.saturating_duration_since(std::time::Instant::now()));
         }
-        // GTK must remain free to handle IPC/window close while the dialog is open.
+        // Run off the main thread so the app keeps handling IPC and window close while the dialog is open.
         let input = key_entry::request(&app, target.summary.clone());
         let mut error = None;
         // The key's check is a network call: `finish_key_unlocked` makes it without the lock.
@@ -2562,11 +2558,11 @@ async fn launcher_settings(webview: Webview, notice: bool) -> Result<Value, Stri
 }
 
 /// Asks for a secret in native key entry and keeps it in the vault as label; gives its ID. The
-/// secret never passes through the window: GTK's hidden entry reads it.
+/// secret never passes through the window: the native hidden entry reads it.
 #[tauri::command]
 async fn vault_secret_add(webview: Webview, label: String) -> Result<Value, String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let app = webview.app_handle().clone();
         if app
@@ -2578,6 +2574,13 @@ async fn vault_secret_add(webview: Webview, label: String) -> Result<Value, Stri
         }
         tauri::async_runtime::spawn_blocking(move || {
             let st = app.state::<App>();
+            struct Open<'a>(&'a std::sync::atomic::AtomicBool);
+            impl Drop for Open<'_> {
+                fn drop(&mut self) {
+                    self.0.store(false, Ordering::SeqCst);
+                }
+            }
+            let open = Open(&st.key_entry_open);
             let input = key_entry::request_as(
                 &app,
                 "pluxy secret",
@@ -2586,7 +2589,7 @@ async fn vault_secret_add(webview: Webview, label: String) -> Result<Value, Stri
                 ),
                 false,
             );
-            st.key_entry_open.store(false, Ordering::SeqCst);
+            drop(open);
             match input {
                 Ok(Some(input)) => st
                     .vault
@@ -2599,10 +2602,10 @@ async fn vault_secret_add(webview: Webview, label: String) -> Result<Value, Stri
         .await
         .map_err(|e| e.to_string())?
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
         let _ = label;
-        Err("the vault is on Linux only for now".into())
+        Err("the vault's secrets are on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2610,13 +2613,13 @@ async fn vault_secret_add(webview: Webview, label: String) -> Result<Value, Stri
 #[tauri::command]
 fn vault_secrets(webview: Webview) -> Result<Value, String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         Ok(serde_json::json!({"secrets": webview.state::<App>().vault.secrets()}))
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
-        Err("the vault is on Linux only for now".into())
+        Err("the vault's secrets are on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2624,14 +2627,14 @@ fn vault_secrets(webview: Webview) -> Result<Value, String> {
 #[tauri::command]
 fn vault_secret_remove(webview: Webview, id: String) -> Result<(), String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         webview.state::<App>().vault.remove_secret(&id)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
         let _ = id;
-        Err("the vault is on Linux only for now".into())
+        Err("the vault's secrets are on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2645,17 +2648,17 @@ async fn client_key_capture(
     client: String,
 ) -> Result<Value, String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let app = webview.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || client_keys::capture(&app, &label, &client))
             .await
             .map_err(|e| e.to_string())?
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
         let _ = (label, client);
-        Err("the vault is on Linux only for now".into())
+        Err("the vault's secrets are on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2669,17 +2672,17 @@ async fn client_key_enter(
     client: String,
 ) -> Result<Value, String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let app = webview.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || client_keys::enter(&app, &label, &client))
             .await
             .map_err(|e| e.to_string())?
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
         let _ = (label, client);
-        Err("the vault is on Linux only for now".into())
+        Err("the vault's secrets are on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2780,6 +2783,13 @@ fn asset_queue() -> &'static SyncSender<AssetJob> {
     })
 }
 
+/// A device page file's CSP, as core's pages site: sandboxed with scripts, loading only from the
+/// asset scheme, given as source (`pages::asset_source`; there this webview gets only its own
+/// folder), and no requests from script, frames or forms.
+fn asset_csp(s: &str) -> String {
+    format!("sandbox allow-scripts; default-src 'none'; script-src {s}; style-src {s}; img-src {s} data: blob:; font-src {s} data:; media-src {s} data: blob:; connect-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'")
+}
+
 fn respond_asset(job: AssetJob, status: u16, found: Option<(Vec<u8>, &'static str)>) {
     #[cfg(feature = "native-test")]
     native_test::log(
@@ -2788,16 +2798,19 @@ fn respond_asset(job: AssetJob, status: u16, found: Option<(Vec<u8>, &'static st
     );
     #[cfg(not(feature = "native-test"))]
     let _ = (&job.label, &job.path);
+    job.responder.respond(asset_response(status, found));
+}
+
+/// The asset scheme's answer: found's bytes and type with status, under the asset CSP for this
+/// system's asset scheme (`asset_csp`) when found.
+fn asset_response(status: u16, found: Option<(Vec<u8>, &'static str)>) -> Response<Vec<u8>> {
     let (body, kind) = found.unwrap_or((Vec::new(), "text/plain"));
-    // As core's pages site: sandboxed with scripts, loading only from the asset scheme (where
-    // this webview gets only its own folder), and no requests from script, frames or forms.
-    let s = device::ASSET_SCHEME;
     let csp = if status == 200 {
-        format!("sandbox allow-scripts; default-src 'none'; script-src {s}:; style-src {s}:; img-src {s}: data: blob:; font-src {s}: data:; media-src {s}: data: blob:; connect-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; form-action 'none'; base-uri 'none'")
+        asset_csp(&pages::asset_source(&device::asset_base()))
     } else {
         "sandbox; default-src 'none'".to_string()
     };
-    let resp = Response::builder()
+    Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, kind)
         .header("Content-Security-Policy", csp)
@@ -2807,8 +2820,7 @@ fn respond_asset(job: AssetJob, status: u16, found: Option<(Vec<u8>, &'static st
         .header("X-Content-Type-Options", "nosniff")
         .header("Referrer-Policy", "no-referrer")
         .body(body)
-        .expect("a response");
-    job.responder.respond(resp);
+        .expect("a response")
 }
 
 /// The `pluxy-page:` scheme: the page webviews' app document and their way to the window.
@@ -2931,18 +2943,15 @@ pub fn run() {
     let context = tauri::generate_context!();
     // The updater plugin exists only when the updater gate passes, before anything else runs: a
     // build without updater trust never loads it.
-    #[cfg(unix)]
     let gate = trust::updater_gate(
         context.config(),
         std::path::Path::new(&std::env::var_os("HOME").unwrap_or_default()),
     );
     let builder = tauri::Builder::default();
-    #[cfg(unix)]
     let builder = match &gate {
         Ok(key) => builder.plugin(tauri_plugin_updater::Builder::new().pubkey(key).build()),
         Err(_) => builder,
     };
-    #[cfg(unix)]
     let updater_plugin = gate.map(|_| ());
     let app = builder
         .invoke_handler(tauri::generate_handler![
@@ -3007,13 +3016,9 @@ pub fn run() {
             window_close,
             privacy_get,
             privacy_set,
-            #[cfg(unix)]
             updater::app_update_get,
-            #[cfg(unix)]
             updater::app_update_start,
-            #[cfg(unix)]
             updater::app_update_cancel,
-            #[cfg(unix)]
             updater::app_update_rollback,
         ])
         .register_asynchronous_uri_scheme_protocol(pages::SCHEME, page_scheme)
@@ -3228,7 +3233,6 @@ pub fn run() {
                 key_entry_open: AtomicBool::new(false),
                 key_entry_after: Mutex::new(None),
                 rotation_open: AtomicBool::new(false),
-                #[cfg(unix)]
                 updater: updater::State::new(updater_plugin.clone()),
             });
             let handle = app.handle().clone();
@@ -3321,6 +3325,8 @@ pub fn run() {
             } else {
                 show_in_dock(&handle, false);
             }
+            // A version an update installed accepts itself, which the earlier one waits for.
+            updater::accept(&handle);
             #[cfg(unix)]
             updater::record_started_from(&handle);
             #[cfg(feature = "native-test")]
@@ -3398,6 +3404,49 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_device_page_loads_its_files_from_the_asset_scheme_as_served() {
+        // Linux and macOS serve the asset scheme by its name; Windows as an http origin. The
+        // answer the scheme gives here is held to this system's.
+        let here = if cfg!(any(windows, target_os = "android")) {
+            "http://pluxy-app.localhost/"
+        } else {
+            "pluxy-app://localhost/"
+        };
+        assert_eq!(device::asset_base(), here);
+        let served = asset_response(200, Some((b"<p>".to_vec(), "text/html")));
+        let served = served.headers()["Content-Security-Policy"]
+            .to_str()
+            .unwrap();
+        for (base, source) in [
+            ("pluxy-app://localhost/", "pluxy-app:"),
+            ("http://pluxy-app.localhost/", "http://pluxy-app.localhost"),
+        ] {
+            let csp = if base == here {
+                served.to_string()
+            } else {
+                asset_csp(&pages::asset_source(base))
+            };
+            for directive in [
+                "script-src",
+                "style-src",
+                "img-src",
+                "font-src",
+                "media-src",
+            ] {
+                let listed = csp
+                    .split(';')
+                    .map(str::trim)
+                    .find_map(|d| d.strip_prefix(directive))
+                    .unwrap_or_default();
+                assert!(
+                    listed.split_whitespace().any(|s| s == source),
+                    "{directive} does not list {source}: {csp}"
+                );
+            }
+        }
+    }
 
     fn managed(state: &'static str, version: u64) -> View {
         View {
@@ -3540,7 +3589,6 @@ mod tests {
         ] {
             assert!(all.iter().any(|a| a == c), "{c} missing from {all:?}");
         }
-        #[cfg(unix)]
         assert!(all.iter().any(|a| a == "plugin:updater|check"));
         assert!(all.iter().all(|c| !c.contains("__app-acl__")));
         assert!(all.len() > 100, "{} plugin commands", all.len());

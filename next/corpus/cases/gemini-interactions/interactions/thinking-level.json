@@ -53,7 +53,7 @@
           "Api-Revision": "2026-05-20",
           "Content-Type": "application/json",
           "User-Agent": "Go-http-client/1.1",
-          "X-Goog-Api-Key": "sk-corpus-upstream"
+          "X-Goog-Api-Key": "sk-Cq7Vx2Np9Lw4Zr8"
         },
         "method": "POST",
         "path": "/v1beta/interactions"

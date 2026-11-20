@@ -261,6 +261,7 @@ func TestInputItemIDs(t *testing.T) {
 		"ctc_item_custom",
 		"ctco_item_custom_out",
 		"tsc_call_4000860",
+		"", // the output sent for c3, which has none (see history), has no ID
 	}
 	if len(got) != len(want) {
 		t.Fatalf("%d input items, want %d: %v", len(got), len(want), got)

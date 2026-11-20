@@ -73,7 +73,7 @@ func apiKeyLogin(ctx context.Context, set settings, key string) (*protocol.Grant
 		return grant, nil
 	}
 	e := upstreamError(resp, "")
-	if e.Code == llm.CodeAuth || e.Code == llm.CodePermission {
+	if e.Code == llm.CodeAuth || e.Code == llm.CodePermission || e.Code == llm.CodeAccountClosed {
 		return nil, refused("Google refused the key")
 	}
 	if e.Status >= 500 {

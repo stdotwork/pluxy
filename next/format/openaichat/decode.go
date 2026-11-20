@@ -13,7 +13,8 @@ type chatUsage struct {
 	PromptTokens        *int64 `json:"prompt_tokens"`
 	CompletionTokens    *int64 `json:"completion_tokens"`
 	PromptTokensDetails *struct {
-		CachedTokens *int64 `json:"cached_tokens"`
+		CachedTokens     *int64 `json:"cached_tokens"`
+		CacheWriteTokens *int64 `json:"cache_write_tokens"`
 	} `json:"prompt_tokens_details"`
 	CompletionTokensDetails *struct {
 		ReasoningTokens *int64 `json:"reasoning_tokens"`
@@ -31,6 +32,7 @@ func decodeUsage(raw json.RawMessage) *llm.Usage {
 	out := &llm.Usage{InputTokens: u.PromptTokens, OutputTokens: u.CompletionTokens, Raw: append(json.RawMessage(nil), raw...)}
 	if u.PromptTokensDetails != nil {
 		out.CachedInputTokens = u.PromptTokensDetails.CachedTokens
+		out.CacheWriteInputTokens = u.PromptTokensDetails.CacheWriteTokens
 	}
 	if u.CompletionTokensDetails != nil {
 		out.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens
@@ -53,13 +55,19 @@ func decodeFinish(raw string) llm.Finish {
 	return llm.Finish{Reason: reason, RawReason: raw}
 }
 
-// maxErrorRaw limits the upstream bytes an error keeps for diagnostics.
+// maxErrorRaw limits the upstream bytes an error keeps for diagnostics. Longer data is not kept:
+// a cut of it could fall inside a credential, whose start core's redaction cannot recognise.
 const maxErrorRaw = 1 << 20
 
-// malformed returns the error for upstream data that is not the JSON it should be. The data is
-// kept in Raw as a JSON string when it is not JSON, so the error can still be sent to core.
+// malformed returns the error for upstream data that is not the JSON it should be. The data, when
+// it is no longer than maxErrorRaw, is kept in Raw as a JSON string when it is not JSON, so the
+// error can still be sent to core.
 func malformed(msg string, data []byte) *llm.Error {
-	return &llm.Error{Code: llm.CodeUpstream, Message: msg, Raw: llm.RawJSON(data[:min(len(data), maxErrorRaw)])}
+	e := &llm.Error{Code: llm.CodeUpstream, Message: msg}
+	if len(data) <= maxErrorRaw {
+		e.Raw = llm.RawJSON(data)
+	}
+	return e
 }
 
 // replyFields returns the reply-level fields of a response or chunk that the model has no place

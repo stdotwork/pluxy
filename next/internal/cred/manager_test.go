@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -410,16 +411,19 @@ func TestFileBackendPermissions(t *testing.T) {
 	if _, err := store.Update("acct", rec.Registration, rec.Version, func(r *Record) { r.Label = "x" }); err != nil {
 		t.Fatal(err)
 	}
-	if st, _ := os.Stat(dir); st.Mode().Perm() != 0o700 {
-		t.Errorf("folder mode %v, want 0700", st.Mode().Perm())
+	// Windows keeps no such modes; TestFileBackendWindowsAccessList reads its access lists.
+	if runtime.GOOS != "windows" {
+		if st, _ := os.Stat(dir); st.Mode().Perm() != 0o700 {
+			t.Errorf("folder mode %v, want 0700", st.Mode().Perm())
+		}
+		st, _ := os.Stat(filepath.Join(dir, "acct.json"))
+		if st.Mode().Perm() != 0o600 {
+			t.Errorf("file mode %v, want 0600", st.Mode().Perm())
+		}
 	}
 	entries, _ := os.ReadDir(dir)
 	if len(entries) != 1 || entries[0].Name() != "acct.json" {
 		t.Fatalf("folder holds %v, want only acct.json", entries)
-	}
-	st, _ := os.Stat(filepath.Join(dir, "acct.json"))
-	if st.Mode().Perm() != 0o600 {
-		t.Errorf("file mode %v, want 0600", st.Mode().Perm())
 	}
 	b, _ := os.ReadFile(filepath.Join(dir, "acct.json"))
 	var onDisk Record
@@ -769,5 +773,115 @@ func TestRenewalUnderOldSettingsIsDropped(t *testing.T) {
 	wait(t, done)
 	if rec, _ := store.Get("acct"); rec.Credential.RefreshToken != "refresh-1" || string(rec.Account.Settings) != `{"base_url":"https://elsewhere.example"}` {
 		t.Errorf("record: refresh %q settings %s; want refresh-1 and the new settings", rec.Credential.RefreshToken, rec.Account.Settings)
+	}
+}
+
+func TestRemoveCallsOnRemove(t *testing.T) {
+	store, err := Open(FileBackend{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var removed []string
+	m := NewManager(store, single{&fakeProvider{}}, Options{OnRemove: func(id string) { removed = append(removed, id) }})
+	defer m.Close()
+	if _, err := m.Create(Record{ID: "acct", Extension: provID, State: StateActive, Credential: protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Remove("acct"); err != nil {
+		t.Fatal(err)
+	}
+	if len(removed) != 1 || removed[0] != "acct" {
+		t.Errorf("OnRemove = %v, want [acct]", removed)
+	}
+}
+
+type immediateLoginProvider struct {
+	*fakeProvider
+	grant *protocol.Grant
+}
+
+type immediateLoginCall struct {
+	grant *protocol.Grant
+	once  bool
+}
+
+func (c *immediateLoginCall) Next() protocol.Reply {
+	if !c.once {
+		c.once = true
+		return protocol.Reply{Event: llm.Event{Type: protocol.TypeLoginDone}, Grant: c.grant}
+	}
+	return protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeCancelled}}}
+}
+func (c *immediateLoginCall) Send(map[string]string) error { return nil }
+func (c *immediateLoginCall) Close()                       {}
+
+func (p *immediateLoginProvider) Login(context.Context, protocol.Account, protocol.Login) LoginCall {
+	return &immediateLoginCall{grant: p.grant}
+}
+
+// OnCredentialChange fires when an account's credential is renewed or it signs in again.
+func TestOnCredentialChangeOnRenewalAndRelogin(t *testing.T) {
+	p := &immediateLoginProvider{
+		fakeProvider: &fakeProvider{},
+		grant: &protocol.Grant{
+			Credential: &protocol.Credential{
+				Kind:         protocol.CredentialOAuth,
+				AccessToken:  "access-reauth",
+				RefreshToken: "refresh-reauth",
+				ExpiresAt:    time.Now().Add(time.Hour).Unix(),
+			},
+		},
+	}
+	store, err := Open(FileBackend{Dir: filepath.Join(t.TempDir(), "credentials")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.Create(Record{
+		ID:        "acct",
+		Extension: provID,
+		State:     StateActive,
+		Credential: protocol.Credential{
+			Kind:         protocol.CredentialOAuth,
+			AccessToken:  "access-0",
+			RefreshToken: "refresh-0",
+			ExpiresAt:    time.Now().Add(time.Hour).Unix(),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(store, single{p}, Options{})
+	t.Cleanup(m.Close)
+
+	changed := make(chan string, 4)
+	m.OnCredentialChange(func(id string) { changed <- id })
+
+	if _, err := m.Refresh(context.Background(), "acct"); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	select {
+	case id := <-changed:
+		if id != "acct" {
+			t.Fatalf("renewal changed id = %q, want acct", id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnCredentialChange did not fire on renewal")
+	}
+
+	view, err := m.StartLogin(context.Background(), LoginRequest{
+		Account: route.Account{ID: "acct"},
+		Method:  "device",
+		Reauth:  true,
+	})
+	if err != nil || view.State != LoginDone {
+		t.Fatalf("StartLogin reauth = %+v, %v", view, err)
+	}
+	select {
+	case id := <-changed:
+		if id != "acct" {
+			t.Fatalf("reauth changed id = %q, want acct", id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnCredentialChange did not fire on reauth")
 	}
 }

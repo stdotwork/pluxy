@@ -52,7 +52,7 @@ change of text; the page ID stays, because it is the page's address and theme ho
 ## Where an API key added in the panel lives
 
 An API key added on the Add Account page becomes an account in core's credential store: a folder
-with one file per account, readable only by its owner (`credentials_dir`, by default
+with one file per account, readable only by core's user and, on Windows, SYSTEM (`credentials_dir`, by default
 `credentials` beside the config file). It is never written to `config.yaml`, and no management
 reply shows it again.
 

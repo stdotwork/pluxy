@@ -693,3 +693,56 @@ fn a_file_only_another_user_may_use_is_not_private() {
         None => eprintln!("skipped: no file of another user with no group or other permission"),
     }
 }
+
+#[test]
+fn a_program_is_a_file_this_system_would_start_by_its_path() {
+    let dir = temp("executable");
+    let named = |n: &str| {
+        let p = dir.join(n);
+        fs::write(&p, b"MZ").unwrap();
+        p
+    };
+    // A folder, a missing file and a plain file are never programs.
+    fs::create_dir(dir.join("folder.exe")).unwrap();
+    assert!(!executable(&dir.join("folder.exe")));
+    assert!(!executable(&dir.join("missing.exe")));
+    let plain = named("tool");
+    assert!(!executable(&plain));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // The extension means nothing here; an execute bit does, through a link too.
+        assert!(!executable(&named("tool.exe")));
+        fs::set_permissions(&plain, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(executable(&plain));
+        std::os::unix::fs::symlink(&plain, dir.join("link")).unwrap();
+        assert!(executable(&dir.join("link")));
+    }
+    #[cfg(windows)]
+    {
+        // A PE image (starting MZ) named by its extension, in any case, and nothing else.
+        assert!(executable(&named("tool.exe")));
+        assert!(executable(&named("tool.COM")));
+        assert!(!executable(&named("tool.cmd")));
+        assert!(!executable(&named("tool.exe.txt")));
+        // Named a program but not one: a script, an empty file, a single byte.
+        for (name, bytes) in [
+            ("script.exe", &b"#!/bin/sh"[..]),
+            ("empty.exe", b""),
+            ("short.com", b"M"),
+        ] {
+            let p = dir.join(name);
+            fs::write(&p, bytes).unwrap();
+            assert!(!executable(&p), "{name}");
+        }
+    }
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_folder_is_flushed_and_a_missing_one_is_an_error_on_unix() {
+    let dir = temp("sync");
+    sync_dir(&dir).unwrap();
+    assert_eq!(cfg!(windows), sync_dir(&dir.join("missing")).is_ok());
+    fs::remove_dir_all(dir).unwrap();
+}

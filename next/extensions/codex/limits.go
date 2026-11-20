@@ -262,11 +262,10 @@ func limitItemIDs(objs []map[string]json.RawMessage, changed []bool) (dropped []
 			continue
 		}
 		typ, _ := str(o["type"])
-		if typ == "reasoning" && utf8.RuneCountInString(id) > itemIDLimit {
-			if enc, _ := str(o["encrypted_content"]); enc != "" {
-				dropped[i] = true
-				continue
-			}
+		if unsendableReasoning(o) {
+			// Reported by history.
+			dropped[i] = true
+			continue
 		}
 		normal := normalItemID(typ, id)
 		items[i] = item{typ, id, normal, true, normal == id && utf8.RuneCountInString(id) <= itemIDLimit}

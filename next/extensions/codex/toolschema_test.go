@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"reflect"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/stdotwork/pluxy/next/conformance"
+	"github.com/stdotwork/pluxy/next/extensions/codex/codextest"
 	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -21,7 +23,17 @@ func TestRejectedPattern(t *testing.T) {
 		{`^\p{L}+$`, true},
 		{`\P{Lu}`, true},
 		{`^[^\0]*$`, true},
-		{`a\\p{L}`, false}, // an escaped backslash, then a literal p
+		{`^(?!__.*__$)[a-z]+$`, true},
+		{`foo(?=bar)`, true},
+		{`a\\(?=b)`, true},      // escaped backslash, then unescaped lookahead
+		{`[^]a](?=b)`, true},    // literal ] after [^ does not close class prematurely
+		{`foo\(?!bar\)`, false}, // escaped paren is not a lookahead
+		{`[(?=a)(?!b)]`, false}, // inside a character class
+		{`[^](?=a)]`, false},    // still inside the character class
+		{`(?<name>a)`, false},   // named capture group
+		{`(?:a|b)`, false},      // non-capturing group
+		{`(?i)a`, false},        // inline flag
+		{`a\\p{L}`, false},      // an escaped backslash, then a literal p
 		{`a\\0`, false},
 		{`^\d+\p`, false}, // \p with no brace is not a property escape
 		{`^[a-z]+\.\w{2,3}$`, false},
@@ -245,13 +257,228 @@ func TestUnionToEnumKeepsConstDigits(t *testing.T) {
 	}
 }
 
-// Only a property of the tool's parameters is read for a union, as today's core does: one deeper
-// down, or the schema itself, is left as written.
+// Only a property of the tool's parameters is converted from a const union to an enum: a root
+// union is flattened rather than turned into an enum, and a deeper nested union is left alone.
 func TestUnionToEnumOnlyForParameterProperties(t *testing.T) {
 	schema := `{"type":"object","oneOf":` + consts(8) + `,"properties":{"o":{"type":"object","properties":{"deep":{"oneOf":` + consts(8) + `}}}}}`
-	if out, changed := fixSchema(json.RawMessage(schema)); changed {
-		t.Errorf("changed: %s", out)
+	got, changed := fixed(t, schema)
+	if !changed {
+		t.Fatal("expected root union to be flattened")
 	}
+	sameJSON(t, got, `{"type":"object","properties":{"o":{"type":"object","properties":{"deep":{"oneOf":`+consts(8)+`}}}}}`)
+}
+
+func TestFixSchemaDropsLookaheadPatterns(t *testing.T) {
+	got, changed := fixed(t, `{
+		"type": "object",
+		"properties": {
+			"name": {"type": "string", "pattern": "^(?!__.*__$)[a-z_]+$"},
+			"ok": {"type": "string", "pattern": "^(?:foo|bar)$"},
+			"fixed": {"default": {"pattern": "^(?!x)"}}
+		},
+		"patternProperties": {"^(?=x-)": {"type": "string"}, "^x-": {"type": "string", "pattern": "a(?=b)"}}
+	}`)
+	if !changed {
+		t.Fatal("the schema was not changed")
+	}
+	sameJSON(t, got, `{
+		"type": "object",
+		"properties": {
+			"name": {"type": "string"},
+			"ok": {"type": "string", "pattern": "^(?:foo|bar)$"},
+			"fixed": {"default": {"pattern": "^(?!x)"}}
+		},
+		"patternProperties": {"^x-": {"type": "string"}}
+	}`)
+}
+
+func TestFixSchemaAddsMissingArrayItems(t *testing.T) {
+	got, changed := fixed(t, `{
+		"type": "object",
+		"properties": {
+			"bare": {"type": "array"},
+			"nested": {"type": "array", "items": {"type": "array"}},
+			"nullable": {"type": ["array", "null"]},
+			"typed": {"type": "array", "items": {"type": "number"}},
+			"refarr": {"type": "array", "$ref": "#/$defs/Arr"},
+			"nonschema": {"default": {"type": "array"}}
+		},
+		"$defs": {"Arr": {"type": "array"}}
+	}`)
+	if !changed {
+		t.Fatal("the schema was not changed")
+	}
+	sameJSON(t, got, `{
+		"type": "object",
+		"properties": {
+			"bare": {"type": "array", "items": {"type": "string"}},
+			"nested": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
+			"nullable": {"type": ["array", "null"], "items": {"type": "string"}},
+			"typed": {"type": "array", "items": {"type": "number"}},
+			"refarr": {"type": "array", "$ref": "#/$defs/Arr"},
+			"nonschema": {"default": {"type": "array"}}
+		},
+		"$defs": {"Arr": {"type": "array", "items": {"type": "string"}}}
+	}`)
+
+	unchanged := `{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"}}}}`
+	if out, changed := fixSchema(json.RawMessage(unchanged)); changed {
+		t.Errorf("unchanged schema rewritten: %s", out)
+	}
+}
+
+func TestFixSchemaRootUnion(t *testing.T) {
+	t.Run("discriminated anyOf merges properties and intersects required", func(t *testing.T) {
+		got, changed := fixed(t, `{
+			"anyOf": [
+				{
+					"type": "object",
+					"properties": {
+						"status": {"type": "string", "enum": ["success"]},
+						"shared": {"type": "string"},
+						"value": {"type": "string"}
+					},
+					"required": ["status", "shared", "value"]
+				},
+				{
+					"type": "object",
+					"properties": {
+						"status": {"type": "string", "enum": ["error"]},
+						"shared": {"type": "string"},
+						"error": {"type": "string"}
+					},
+					"required": ["status", "shared", "error"]
+				}
+			]
+		}`)
+		if !changed {
+			t.Fatal("the schema was not changed")
+		}
+		sameJSON(t, got, `{
+			"type": "object",
+			"properties": {
+				"status": {"anyOf": [{"type": "string", "enum": ["success"]}, {"type": "string", "enum": ["error"]}]},
+				"shared": {"type": "string"},
+				"value": {"type": "string"},
+				"error": {"type": "string"}
+			},
+			"required": ["shared", "status"]
+		}`)
+	})
+
+	t.Run("root oneOf with $ref and non-object fallback", func(t *testing.T) {
+		got, changed := fixed(t, `{
+			"oneOf": [
+				{"$ref": "#/$defs/A"},
+				{"type": "null"}
+			],
+			"$defs": {
+				"A": {
+					"type": "object",
+					"properties": {"id": {"type": "string"}},
+					"required": ["id"]
+				}
+			}
+		}`)
+		if !changed {
+			t.Fatal("the schema was not changed")
+		}
+		sameJSON(t, got, `{
+			"type": "object",
+			"properties": {"id": {"type": "string"}},
+			"required": ["id"],
+			"$defs": {
+				"A": {
+					"type": "object",
+					"properties": {"id": {"type": "string"}},
+					"required": ["id"]
+				}
+			}
+		}`)
+
+		scalarUnion, changed := fixed(t, `{"anyOf":[{"type":"string"},{"type":"integer"}]}`)
+		if !changed {
+			t.Fatal("scalar root union was not changed")
+		}
+		sameJSON(t, scalarUnion, `{"type":"object","properties":{}}`)
+	})
+}
+
+func TestFixSchemaStrictOptionalProperties(t *testing.T) {
+	in := `{
+		"type": "object",
+		"properties": {
+			"req": {"type": "string"},
+			"optStr": {"type": "string"},
+			"optEnum": {"type": "string", "enum": ["a", "b"]},
+			"optUntypedEnum": {"enum": ["x", "y"]},
+			"optAlreadyNull": {"type": ["integer", "null"]},
+			"optAnyOf": {"anyOf": [{"type": "string"}, {"type": "number"}]},
+			"optRef": {"$ref": "#/$defs/Child", "description": "optional child"},
+			"optArr": {"type": "array"},
+			"nested": {
+				"type": "object",
+				"properties": {
+					"must": {"type": "boolean"},
+					"may": {"type": "number"}
+				},
+				"required": ["must"]
+			}
+		},
+		"required": ["req"],
+		"$defs": {
+			"Child": {
+				"type": "object",
+				"properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+				"required": ["a"]
+			}
+		}
+	}`
+
+	// Non-strict leaves optional properties untouched (except adding missing array items).
+	nonStrict, changed := fixed(t, in)
+	if !changed {
+		t.Fatal("expected missing array items change in non-strict mode")
+	}
+	nonStrictMap := nonStrict.(map[string]any)
+	if req := nonStrictMap["required"].([]any); len(req) != 1 || req[0] != "req" {
+		t.Fatalf("non-strict changed required = %v, want [req]", req)
+	}
+
+	// Strict makes every optional property required and nullable recursively.
+	out, changed := fixSchemaForMode(json.RawMessage(in), true)
+	if !changed {
+		t.Fatal("strict schema was not changed")
+	}
+	sameJSON(t, mustJSON(t, out), `{
+		"type": "object",
+		"properties": {
+			"req": {"type": "string"},
+			"optStr": {"type": ["string", "null"]},
+			"optEnum": {"type": ["string", "null"], "enum": ["a", "b"]},
+			"optUntypedEnum": {"enum": ["x", "y", null]},
+			"optAlreadyNull": {"type": ["integer", "null"]},
+			"optAnyOf": {"anyOf": [{"type": "string"}, {"type": "number"}, {"type": "null"}]},
+			"optRef": {"description": "optional child", "anyOf": [{"$ref": "#/$defs/Child"}, {"type": "null"}]},
+			"optArr": {"type": ["array", "null"], "items": {"type": "string"}},
+			"nested": {
+				"type": ["object", "null"],
+				"properties": {
+					"must": {"type": "boolean"},
+					"may": {"type": ["number", "null"]}
+				},
+				"required": ["must", "may"]
+			}
+		},
+		"required": ["req", "nested", "optAlreadyNull", "optAnyOf", "optArr", "optEnum", "optRef", "optStr", "optUntypedEnum"],
+		"$defs": {
+			"Child": {
+				"type": "object",
+				"properties": {"a": {"type": "string"}, "b": {"type": ["string", "null"]}},
+				"required": ["a", "b"]
+			}
+		}
+	}`)
 }
 
 // The rules apply to every function tool: a Responses client's own, one inside a namespace tool,
@@ -381,4 +608,105 @@ func TestCompactLiteFromClientMetadata(t *testing.T) {
 	if got := reqs[0].body["parallel_tool_calls"]; got != false {
 		t.Errorf("parallel_tool_calls upstream = %v, want false", got)
 	}
+}
+
+// TestStrictToolSchemasThroughTheExtension runs the real extension process against a fake Codex
+// upstream and checks that a tool schema combining all four CX7 forms (an array without items, a
+// regex lookahead in pattern, an optional property under strict: true, and a root anyOf) arrives
+// rewritten — both for a strict Responses passthrough request and for a translated Messages request.
+func TestStrictToolSchemasThroughTheExtension(t *testing.T) {
+	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
+	srv := codextest.New(t)
+	acct := testAccount(srv, subscription(srv.IssueToken("text"), ""))
+	ext, err := host.Start(manifest, host.Options{Log: io.Discard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(ext.Stop)
+
+	send := func(req llm.Request) codextest.Request {
+		t.Helper()
+		before := len(srv.Requests())
+		s := ext.Generate(context.Background(), acct, req)
+		defer s.Close()
+		for {
+			ev := s.Next()
+			if ev.Type == llm.EventError {
+				t.Fatalf("the call failed: %+v", ev.Error)
+			}
+			if ev.Terminal() {
+				break
+			}
+		}
+		all := srv.Requests()
+		if len(all) != before+1 {
+			t.Fatalf("%d requests reached the upstream after %d, want one more", len(all), before)
+		}
+		return all[before]
+	}
+
+	schema := `{
+		"anyOf": [
+			{
+				"type": "object",
+				"properties": {
+					"mode": {"type": "string"},
+					"query": {"type": "string", "pattern": "^(?!__)[a-z]+$"},
+					"tags": {"type": "array"}
+				},
+				"required": ["mode", "query"]
+			},
+			{
+				"type": "object",
+				"properties": {
+					"mode": {"type": "string"},
+					"note": {"type": "string"}
+				},
+				"required": ["mode"]
+			}
+		]
+	}`
+
+	body := `{"model":"gpt-6.1-sol","input":"hi","tools":[{"type":"function","name":"search","strict":true,"parameters":` + schema + `}]}`
+	r := send(responsesReq("gpt-6.1-sol", body, nil))
+	rawTools, _ := json.Marshal(r.Body["tools"])
+	var tools []map[string]json.RawMessage
+	if err := json.Unmarshal(rawTools, &tools); err != nil || len(tools) == 0 {
+		t.Fatalf("upstream tools = %s, err = %v", rawTools, err)
+	}
+	sameJSON(t, mustJSON(t, tools[0]["parameters"]), `{
+		"type": "object",
+		"properties": {
+			"mode": {"type": "string"},
+			"query": {"type": ["string", "null"]},
+			"tags": {"type": ["array", "null"], "items": {"type": "string"}},
+			"note": {"type": ["string", "null"]}
+		},
+		"required": ["mode", "note", "query", "tags"]
+	}`)
+
+	msgReq := llm.Request{
+		Model: "gpt-6.1-sol",
+		Items: []llm.Item{{Type: llm.ItemTypeMessage, Role: llm.RoleUser, Content: []llm.Part{{Type: llm.PartText, Text: "hi"}}}},
+		Tools: []llm.Tool{{Name: "search", Parameters: json.RawMessage(schema)}},
+		Native: &llm.Native{
+			Format: llm.FormatAnthropicMessages,
+			Body:   json.RawMessage(`{"model":"gpt-6.1-sol","max_tokens":100,"messages":[{"role":"user","content":"hi"}]}`),
+		},
+	}
+	r = send(msgReq)
+	rawTools, _ = json.Marshal(r.Body["tools"])
+	if err := json.Unmarshal(rawTools, &tools); err != nil || len(tools) == 0 {
+		t.Fatalf("translated upstream tools = %s, err = %v", rawTools, err)
+	}
+	sameJSON(t, mustJSON(t, tools[0]["parameters"]), `{
+		"type": "object",
+		"properties": {
+			"mode": {"type": "string"},
+			"query": {"type": "string"},
+			"tags": {"type": "array", "items": {"type": "string"}},
+			"note": {"type": "string"}
+		},
+		"required": ["mode"]
+	}`)
 }

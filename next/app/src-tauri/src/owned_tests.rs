@@ -75,6 +75,13 @@ const ALLOWED: &[(&str, Part, &str, usize, &str)] = &[
         "test: kills the core the test started and holds, to see its exit before it is reaped",
     ),
     (
+        "open_platform_native.rs",
+        Part::Code,
+        "WM_CLOSE",
+        2,
+        "native test (Windows, feature native-test): posts WM_CLOSE, as a close box does, only to the visible top-level windows of the processes the open session started (Notepad with the session's file, the browser with the session's address); it ends no process itself",
+    ),
+    (
         "native_core.rs",
         Part::Code,
         "OpenProcess",
@@ -87,6 +94,13 @@ const ALLOWED: &[(&str, Part, &str, usize, &str)] = &[
         "libc::kill",
         1,
         "native test (macOS): signal 0, which only asks whether a process exists",
+    ),
+    (
+        "proc_native.rs",
+        Part::Code,
+        "OpenProcess",
+        2,
+        "native test (Windows, feature native-test): opens a process with QUERY_LIMITED_INFORMATION only, to read its program file and whether it has exited; that right cannot end it",
     ),
     (
         "program_tests.rs",
@@ -115,20 +129,6 @@ const ALLOWED: &[(&str, Part, &str, usize, &str)] = &[
         "libc::kill",
         2,
         "test: signal 0 to see whether a process runs, and the cleanup of processes /proc shows run as this test's",
-    ),
-    (
-        "updater.rs",
-        Part::Code,
-        "kill -",
-        1,
-        "`kill -0` in the shell that waits for the old version to end: signal 0 only asks whether it exists",
-    ),
-    (
-        "updater.rs",
-        Part::Code,
-        "libc::kill",
-        1,
-        "ends the process group of the new version it started and holds unreaped, when that does not accept the update in time",
     ),
 ];
 
@@ -295,10 +295,8 @@ fn c() { TerminateJobObject(j, 1); }
 
 /// A fresh folder under the system's temporary folder (private to this user on unix), removed
 /// when dropped.
-#[cfg(any(windows, target_os = "macos"))]
 struct Temp(std::path::PathBuf);
 
-#[cfg(any(windows, target_os = "macos"))]
 impl Temp {
     fn new(name: &str) -> Temp {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -318,7 +316,6 @@ impl Temp {
     }
 }
 
-#[cfg(any(windows, target_os = "macos"))]
 impl Drop for Temp {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
@@ -544,12 +541,361 @@ mod unix {
     }
 }
 
+/// The program a terminal runs on Linux, checked by the path the terminal follows
+/// (`path_target`).
+#[cfg(target_os = "linux")]
+mod linux {
+    use super::Temp;
+    use crate::owned::{chmod_hint, path_target, path_target_by, private, private_group, Group};
+    use std::fs::{self, File};
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    use std::path::{Path, PathBuf};
+
+    /// t's folder by its real path.
+    fn real(t: &Temp) -> PathBuf {
+        fs::canonicalize(&t.0).unwrap()
+    }
+    fn chmod(p: &Path, mode: u32) {
+        fs::set_permissions(p, fs::Permissions::from_mode(mode)).unwrap();
+    }
+    fn folder(p: &Path, mode: u32) {
+        fs::create_dir(p).unwrap();
+        chmod(p, mode);
+    }
+    fn prog(p: &Path, mode: u32) {
+        fs::write(p, "#!/bin/sh\n").unwrap();
+        chmod(p, mode);
+    }
+    /// path_target of the file at p, opened now, with private saying which group is private.
+    fn by(p: &Path, private: &dyn Fn(u32) -> bool) -> Result<(), String> {
+        path_target_by(&File::open(p).unwrap(), p, private)
+    }
+    /// A refusal for part, saying why.
+    fn refused(r: Result<(), String>, part: &Path, why: &str) {
+        let e = r.expect_err(&part.display().to_string());
+        assert!(
+            e.starts_with(&format!("{} {why}", part.display())),
+            "refused for {e}, not as {} {why}",
+            part.display()
+        );
+    }
+    fn gid() -> u32 {
+        // SAFETY: getegid has no preconditions.
+        unsafe { libc::getegid() }
+    }
+    /// What `id` says, in words.
+    fn id(arg: &str) -> String {
+        let out = std::process::Command::new("id").arg(arg).output().unwrap();
+        assert!(out.status.success(), "id {arg}");
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    }
+    /// The name and members of group g, as `getent` gives them.
+    fn group(g: u32) -> Option<(String, Vec<String>)> {
+        let out = std::process::Command::new("getent")
+            .args(["group", &g.to_string()])
+            .output()
+            .unwrap();
+        let line = String::from_utf8(out.stdout).ok()?;
+        let fields: Vec<&str> = line.trim().split(':').collect();
+        let members = fields.get(3)?.split(',').filter(|m| !m.is_empty());
+        Some((fields[0].to_string(), members.map(String::from).collect()))
+    }
+    /// Gives p the group g, which its owner may do as a member of g.
+    fn set_group(p: &Path, g: u32) {
+        let c = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).unwrap();
+        // SAFETY: c is NUL-terminated.
+        assert_eq!(
+            unsafe { libc::chown(c.as_ptr(), u32::MAX, g) },
+            0,
+            "{}",
+            p.display()
+        );
+    }
+
+    /// Group write, by the person's own private group only (Homebrew on Linux, a umask of 002):
+    /// a folder and a program 0775 in that group pass; the same in any other group, or writable
+    /// by others, are refused, with the command that fixes it.
+    #[test]
+    fn group_write_is_taken_from_the_persons_private_group_only() {
+        let t = Temp::new("group");
+        let d = real(&t);
+        let bin = d.join("bin");
+        folder(&bin, 0o775);
+        let p = bin.join("agent");
+        prog(&p, 0o775);
+        let mine = |g: u32| g == gid();
+        let other = |_: u32| false;
+        assert_eq!(by(&p, &mine), Ok(()));
+        refused(by(&p, &other), &bin, "may be changed by other users");
+        chmod(&bin, 0o755);
+        refused(by(&p, &other), &p, "may be written by other users");
+        let e = by(&p, &other).unwrap_err();
+        assert!(
+            e.contains(&format!("`chmod g-w,o-w '{}'`", p.display())),
+            "{e}"
+        );
+        // Others may write: refused whatever the group.
+        chmod(&p, 0o757);
+        refused(by(&p, &mine), &p, "may be written by other users");
+        chmod(&p, 0o755);
+        chmod(&bin, 0o777);
+        refused(by(&p, &mine), &bin, "may be changed by other users");
+        // A sticky folder anyone may write, with the person's own entry (as /tmp).
+        chmod(&bin, 0o1777);
+        assert_eq!(by(&p, &other), Ok(()));
+    }
+
+    /// A group is private only when it is this user's alone, by each of five conditions: each
+    /// one broken alone says no.
+    #[test]
+    fn a_group_is_private_only_when_each_condition_holds() {
+        let me = vec!["me".to_string()];
+        let bob = vec!["me".to_string(), "bob".to_string()];
+        let base = Group {
+            user: "me",
+            primary: 1000,
+            name: "me",
+            gid: 1000,
+            members: &me,
+            others_primary: &[100, 1001],
+            other_lines: &[0, 100, 1001],
+        };
+        assert!(private(&base));
+        assert!(
+            private(&Group {
+                members: &[],
+                ..base
+            }),
+            "no member listed"
+        );
+        assert!(
+            !private(&Group {
+                primary: 100,
+                ..base
+            }),
+            "not the primary group"
+        );
+        assert!(
+            !private(&Group {
+                name: "devs",
+                ..base
+            }),
+            "named otherwise"
+        );
+        assert!(
+            !private(&Group {
+                members: &bob,
+                ..base
+            }),
+            "another member"
+        );
+        assert!(
+            !private(&Group {
+                others_primary: &[100, 1000],
+                ..base
+            }),
+            "another user's primary group (useradd -g)"
+        );
+        assert!(
+            !private(&Group {
+                other_lines: &[0, 1000],
+                ..base
+            }),
+            "another group line with its number (devs:x:1000:bob)"
+        );
+    }
+
+    /// The hint quotes the path for a shell, a `'` in it too, and says when root must run it.
+    #[test]
+    fn the_chmod_hint_quotes_the_path_for_a_shell() {
+        let p = Path::new("/home/me/it's here");
+        assert_eq!(
+            chmod_hint(p, false),
+            r"`chmod g-w,o-w '/home/me/it'\''s here'` makes it yours alone"
+        );
+        assert_eq!(
+            chmod_hint(p, true),
+            r"as root, `chmod g-w,o-w '/home/me/it'\''s here'` makes it root's alone"
+        );
+        // What a shell makes of the quoted path is the path.
+        let quoted = chmod_hint(p, false);
+        let arg = quoted
+            .strip_prefix("`chmod g-w,o-w ")
+            .and_then(|q| q.split_once("` "))
+            .unwrap()
+            .0;
+        let out = std::process::Command::new("/bin/sh")
+            .args(["-c", &format!("printf %s {arg}")])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), p.to_str().unwrap());
+    }
+
+    /// The person's private group as `id` and `getent` tell: their primary group, named as they
+    /// are, with no other member, no other user's primary group and no other group with its
+    /// number; and the real check takes group write from it alone.
+    #[test]
+    fn the_private_group_is_the_persons_own_and_no_other() {
+        let user = id("-un");
+        let primary: u32 = id("-g").parse().unwrap();
+        let groups: Vec<u32> = id("-G")
+            .split_whitespace()
+            .map(|g| g.parse().unwrap())
+            .collect();
+        // Every user's (name, primary group) and every group's (name, number), from getent.
+        let table = |db: &str, at: usize| -> Vec<(String, u32)> {
+            let out = std::process::Command::new("getent")
+                .arg(db)
+                .output()
+                .unwrap();
+            String::from_utf8(out.stdout)
+                .unwrap()
+                .lines()
+                .filter_map(|l| {
+                    let f: Vec<&str> = l.split(':').collect();
+                    Some((f.first()?.to_string(), f.get(at)?.parse().ok()?))
+                })
+                .collect()
+        };
+        let (users, lines) = (table("passwd", 3), table("group", 2));
+        let expected = |g: u32| {
+            g == primary
+                && group(g).is_some_and(|(name, members)| {
+                    name == user
+                        && members.iter().all(|m| *m == user)
+                        && !users.iter().any(|(u, p)| *u != user && *p == g)
+                        && lines.iter().filter(|(_, n)| *n == g).count() == 1
+                })
+        };
+        for &g in groups.iter().chain([0, 65534].iter()) {
+            assert_eq!(private_group(g), expected(g), "group {g}");
+        }
+        let t = Temp::new("real-group");
+        let d = real(&t);
+        if expected(primary) {
+            let bin = d.join("bin");
+            folder(&bin, 0o775);
+            set_group(&bin, primary);
+            prog(&bin.join("agent"), 0o775);
+            set_group(&bin.join("agent"), primary);
+            let p = bin.join("agent");
+            assert_eq!(path_target(&File::open(&p).unwrap(), &p), Ok(()));
+        } else {
+            println!("skipped: {user}'s primary group {primary} is not a private group");
+        }
+        match groups.iter().find(|g| !expected(**g)) {
+            Some(&g) => {
+                let shared = d.join("shared");
+                folder(&shared, 0o775);
+                set_group(&shared, g);
+                let p = shared.join("agent");
+                prog(&p, 0o755);
+                refused(
+                    path_target(&File::open(&p).unwrap(), &p),
+                    &shared,
+                    "may be changed by other users",
+                );
+            }
+            None => println!("skipped: {user} is in no group but a private one"),
+        }
+    }
+
+    /// The file the path leads to must be the one opened: another renamed over it is refused.
+    #[test]
+    fn a_file_renamed_over_the_path_after_it_was_opened_is_refused() {
+        let t = Temp::new("same");
+        let d = real(&t);
+        let p = d.join("agent");
+        prog(&p, 0o755);
+        let f = File::open(&p).unwrap();
+        prog(&d.join("new"), 0o755);
+        fs::rename(d.join("new"), &p).unwrap();
+        let e = path_target(&f, &p).unwrap_err();
+        assert!(e.contains("no longer the file"), "{e}");
+    }
+
+    /// `..` after an absolute link resolves from the link's target, as the kernel does; a link
+    /// loop ends in a refusal; relative and missing paths are refused; a name that is not UTF-8
+    /// is fine.
+    #[test]
+    fn links_and_dot_dot_resolve_as_the_kernel_resolves_them() {
+        use std::os::unix::ffi::OsStrExt;
+        let t = Temp::new("links");
+        let d = real(&t);
+        let real_dir = d.join("real");
+        fs::create_dir_all(real_dir.join("sub")).unwrap();
+        prog(&real_dir.join("agent"), 0o755);
+        let bin = d.join("bin");
+        folder(&bin, 0o755);
+        prog(&bin.join("agent"), 0o755);
+        symlink(real_dir.join("sub"), bin.join("l")).unwrap();
+        let named = bin.join("l").join("..").join("agent");
+        assert_eq!(path_target(&File::open(&named).unwrap(), &named), Ok(()));
+        let lexical = File::open(bin.join("agent")).unwrap();
+        assert!(
+            path_target(&lexical, &named).is_err(),
+            "the lexical file passed"
+        );
+
+        symlink("a", d.join("b")).unwrap();
+        symlink("b", d.join("a")).unwrap();
+        let e = path_target(&lexical, &d.join("a")).unwrap_err();
+        assert!(e.contains("too many links"), "{e}");
+
+        assert!(path_target(&lexical, Path::new("agent")).is_err());
+        assert!(path_target(&lexical, &d.join("missing")).is_err());
+        let odd = d.join(std::ffi::OsStr::from_bytes(b"\xff"));
+        folder(&odd, 0o755);
+        prog(&odd.join("agent"), 0o755);
+        let p = odd.join("agent");
+        assert_eq!(path_target(&File::open(&p).unwrap(), &p), Ok(()));
+    }
+
+    /// A path through the process file system leads elsewhere for the terminal than for the app
+    /// (`/proc/self` is each process's own): refused, and `/dev/fd` and `/dev/stdin` with it.
+    #[test]
+    fn a_path_through_the_process_file_system_is_refused() {
+        let t = Temp::new("proc");
+        let d = real(&t);
+        let p = d.join("agent");
+        prog(&p, 0o755);
+        let f = File::open(&p).unwrap();
+        let root = PathBuf::from("/proc/self/root").join(p.strip_prefix("/").unwrap());
+        let fd = PathBuf::from(format!("/dev/fd/{}", std::os::fd::AsRawFd::as_raw_fd(&f)));
+        for path in [root, fd, PathBuf::from("/dev/stdin")] {
+            let e = path_target(&f, &path).unwrap_err();
+            assert!(
+                e.contains("is in the process file system"),
+                "{}: {e}",
+                path.display()
+            );
+        }
+    }
+}
+
+/// The paths in `secure`'s suggested commands are one shell word each, whatever they hold.
+#[cfg(unix)]
+#[test]
+fn a_path_is_quoted_as_one_shell_word() {
+    use std::os::unix::ffi::OsStrExt;
+    let p = Path::new("/Users/a b/it's here/$HOME`x`/prog");
+    let q = crate::owned::shell_quoted(p);
+    assert_eq!(q, r"'/Users/a b/it'\''s here/$HOME`x`/prog'");
+    let out = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(format!("printf %s {q}"))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(out.stdout, p.as_os_str().as_bytes());
+}
+
 #[cfg(target_os = "macos")]
 mod macos {
     use super::Temp;
-    use crate::owned::{exec_target, secure};
+    use crate::owned::{exec_target, secure, Writers};
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
     use std::path::{Path, PathBuf};
 
     /// t's folder by its real path (the system's temporary folder is under the link `/var`).
@@ -563,8 +909,8 @@ mod macos {
     }
 
     /// A refusal that names part.
-    fn refused(path: &Path, part: &Path) {
-        let e = secure(path).expect_err(&path.display().to_string());
+    fn refused(path: &Path, part: &Path, writers: Writers) {
+        let e = secure(path, writers).expect_err(&path.display().to_string());
         assert!(
             e.starts_with(&format!("{} ", part.display())),
             "{} refused for {e}, not for {}",
@@ -579,7 +925,7 @@ mod macos {
         let dir = real(&t);
         let p = dir.join("prog");
         file(&p, 0o700);
-        assert_eq!(secure(&p), Ok(()));
+        assert_eq!(secure(&p, Writers::Nobody), Ok(()));
 
         // In a folder anyone can write to with the sticky bit set (as /tmp), only the owner of
         // an entry can rename or remove it.
@@ -588,7 +934,7 @@ mod macos {
         fs::set_permissions(&sticky, fs::Permissions::from_mode(0o1777)).unwrap();
         let q = sticky.join("prog");
         file(&q, 0o700);
-        assert_eq!(secure(&q), Ok(()));
+        assert_eq!(secure(&q, Writers::Nobody), Ok(()));
     }
 
     #[test]
@@ -598,35 +944,133 @@ mod macos {
 
         let others = dir.join("others");
         file(&others, 0o702);
-        refused(&others, &others);
+        refused(&others, &others, Writers::Nobody);
 
-        // A group writable file, in a group other than wheel (0) and admin (80).
+        // A group writable file, in any group: the user's own, and admin's.
         let group = dir.join("group");
         file(&group, 0o720);
-        let gid = unsafe { libc::getegid() };
-        assert!(gid != 0 && gid != 80, "the test runs with group {gid}");
-        let c = std::ffi::CString::new(group.as_os_str().as_encoded_bytes()).unwrap();
-        assert_eq!(unsafe { libc::chown(c.as_ptr(), u32::MAX, gid) }, 0);
-        refused(&group, &group);
+        set_group(&group, unsafe { libc::getegid() });
+        refused(&group, &group, Writers::Nobody);
+        let admins = dir.join("admins");
+        file(&admins, 0o720);
+        set_group(&admins, admin_gid());
+        refused(&admins, &admins, Writers::Nobody);
 
         let open = dir.join("open");
         fs::create_dir(&open).unwrap();
         fs::set_permissions(&open, fs::Permissions::from_mode(0o777)).unwrap();
         let inside = open.join("prog");
         file(&inside, 0o700);
-        refused(&inside, &open);
+        refused(&inside, &open, Writers::Nobody);
 
         let real_dir = dir.join("real");
         fs::create_dir(&real_dir).unwrap();
         file(&real_dir.join("prog"), 0o700);
         let link = dir.join("link");
         std::os::unix::fs::symlink(&real_dir, &link).unwrap();
-        refused(&link.join("prog"), &link);
+        refused(&link.join("prog"), &link, Writers::Nobody);
         let file_link = dir.join("file-link");
         std::os::unix::fs::symlink(real_dir.join("prog"), &file_link).unwrap();
-        refused(&file_link, &file_link);
+        refused(&file_link, &file_link, Writers::Nobody);
 
-        refused(Path::new("prog"), Path::new("prog"));
+        refused(Path::new("prog"), Path::new("prog"), Writers::Nobody);
+    }
+
+    /// The `admin` group's number, looked up here with `getgrnam_r` (the thread-safe `getgrnam`),
+    /// not with the product's own lookup (`owned::admin_gid`), so the tests do not check the product
+    /// against itself. No subprocess: parsing `dscl`'s output, as this did before, now and then
+    /// found a last word that was not a number on cloud macOS runners, for a cause not found.
+    fn admin_gid() -> u32 {
+        let mut g: libc::group = unsafe { std::mem::zeroed() };
+        let mut buf = vec![0 as libc::c_char; 1 << 20];
+        let mut found: *mut libc::group = std::ptr::null_mut();
+        let r = unsafe {
+            libc::getgrnam_r(
+                c"admin".as_ptr(),
+                &mut g,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut found,
+            )
+        };
+        assert!(
+            r == 0 && !found.is_null(),
+            "looking up the group admin: getgrnam_r returned {r} ({}), found {}",
+            std::io::Error::from_raw_os_error(r),
+            !found.is_null()
+        );
+        g.gr_gid
+    }
+
+    /// Gives p the group gid, which its owner may do only as a member of that group.
+    fn set_group(p: &Path, gid: u32) {
+        let c = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(
+            unsafe { libc::chown(c.as_ptr(), u32::MAX, gid) },
+            0,
+            "giving {} the group {gid}: {} (the test's user must be in that group)",
+            p.display(),
+            std::io::Error::last_os_error()
+        );
+    }
+
+    fn folder(p: &Path, mode: u32) {
+        fs::create_dir(p).unwrap();
+        fs::set_permissions(p, fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    #[test]
+    fn secure_lets_the_admin_group_write_a_folder_above_a_launch_only() {
+        let t = Temp::new("admin");
+        let dir = real(&t);
+        let admin = admin_gid();
+
+        // As /Applications (root:admin 0775) or a Homebrew folder (the user's, admin, 0775).
+        let shared = dir.join("shared");
+        folder(&shared, 0o775);
+        set_group(&shared, admin);
+        let p = shared.join("prog");
+        file(&p, 0o700);
+        // The app's own core and native tools: refused, as for any other group.
+        refused(&p, &shared, Writers::Nobody);
+        // A launch's program.
+        assert_eq!(secure(&p, Writers::Admins), Ok(()));
+
+        // Never the file itself.
+        let own = dir.join("admin-file");
+        file(&own, 0o770);
+        set_group(&own, admin);
+        refused(&own, &own, Writers::Admins);
+
+        // Nor a folder that another group may write, or everyone.
+        let staff = dir.join("staff");
+        folder(&staff, 0o775);
+        let gid = unsafe { libc::getegid() };
+        assert!(gid != admin, "the test runs with group {gid}, admin's");
+        set_group(&staff, gid);
+        file(&staff.join("prog"), 0o700);
+        refused(&staff.join("prog"), &staff, Writers::Admins);
+        let open = dir.join("open");
+        folder(&open, 0o777);
+        set_group(&open, admin);
+        file(&open.join("prog"), 0o700);
+        refused(&open.join("prog"), &open, Writers::Admins);
+    }
+
+    #[test]
+    fn secure_refuses_a_folder_the_wheel_group_may_write() {
+        // A folder made in /private/tmp (root:wheel) gets its group: wheel (0).
+        let t = Temp(PathBuf::from(format!(
+            "/private/tmp/pluxy-owned-wheel-{}",
+            std::process::id()
+        )));
+        let _ = fs::remove_dir_all(&t.0);
+        folder(&t.0, 0o770);
+        assert_eq!(fs::metadata(&t.0).unwrap().gid(), 0, "{}", t.0.display());
+        let p = t.0.join("prog");
+        file(&p, 0o700);
+        refused(&p, &t.0, Writers::Nobody);
+        refused(&p, &t.0, Writers::Admins);
     }
 
     #[test]
@@ -637,23 +1081,455 @@ mod macos {
         let p = dir.join("prog");
         file(&p, 0o700);
         let f = fs::File::open(&p).unwrap();
-        assert_eq!(exec_target(&f).unwrap(), p);
+        assert_eq!(exec_target(&f, Writers::Nobody).unwrap(), p);
         // Written in place it is still the file that was opened, as on Linux, where the kernel
         // runs what it holds then: what it holds is checked by the callers (`recheck`).
         fs::write(&p, b"#!/bin/sh\necho changed\n").unwrap();
-        assert_eq!(exec_target(&f).unwrap(), p);
+        assert_eq!(exec_target(&f, Writers::Nobody).unwrap(), p);
 
         let q = dir.join("swapped");
         file(&q, 0o700);
         let g = fs::File::open(&q).unwrap();
-        assert_eq!(exec_target(&g).unwrap(), q);
+        assert_eq!(exec_target(&g, Writers::Nobody).unwrap(), q);
         let other = dir.join("other");
         file(&other, 0o700);
         fs::rename(&other, &q).unwrap();
         assert!(
-            exec_target(&g).is_err(),
+            exec_target(&g, Writers::Nobody).is_err(),
             "a file replaced after it was opened"
         );
+
+        // Below a folder the admin group may write, it runs only under the rule that allows it.
+        let shared = dir.join("shared");
+        folder(&shared, 0o775);
+        set_group(&shared, admin_gid());
+        let r = shared.join("prog");
+        file(&r, 0o700);
+        let h = fs::File::open(&r).unwrap();
+        assert_eq!(exec_target(&h, Writers::Admins).unwrap(), r);
+        let e = exec_target(&h, Writers::Nobody).unwrap_err();
+        assert!(e.contains("may be changed by other users"), "{e}");
+    }
+
+    /// The place of the entry that holds text in path's access list, as macOS's own `ls -le`
+    /// numbers it.
+    fn entry_index(path: &Path, text: &str) -> usize {
+        let out = std::process::Command::new("/bin/ls")
+            .arg("-led")
+            .arg(path)
+            .output()
+            .unwrap();
+        let listed = String::from_utf8_lossy(&out.stdout).into_owned();
+        let line = listed
+            .lines()
+            .skip(1)
+            .find(|l| l.contains(text))
+            .unwrap_or_else(|| panic!("no entry {text:?} on {}: {listed}", path.display()));
+        line.trim().split(':').next().unwrap().parse().unwrap()
+    }
+
+    fn chmod(args: &[&str], path: &Path) {
+        let out = std::process::Command::new("/bin/chmod")
+            .args(args)
+            .arg(path)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "chmod {args:?} {}: {out:?}",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn secure_refuses_an_access_list_entry_that_lets_another_user_change_the_program() {
+        use crate::private_macos::add_entry;
+        let t = Temp::new("acl-file");
+        let dir = real(&t);
+
+        // Rights that change nothing pass.
+        let reads = dir.join("reads");
+        file(&reads, 0o700);
+        add_entry(
+            &reads,
+            "user:daemon allow read,execute,readattr,readsecurity",
+        );
+        assert_eq!(secure(&reads, Writers::Nobody), Ok(()));
+
+        // write, with a deny entry beside it, so the allow entry need not come first.
+        let p = dir.join("prog");
+        file(&p, 0o700);
+        add_entry(&p, "everyone deny delete");
+        add_entry(&p, "user:daemon allow write");
+        let i = entry_index(&p, "user:daemon allow write");
+        for writers in [Writers::Nobody, Writers::Admins] {
+            refused(&p, &p, writers);
+        }
+        let e = secure(&p, Writers::Admins).unwrap_err();
+        assert!(e.contains("user:daemon"), "{e}");
+        assert!(e.contains("(write)"), "{e}");
+        let remove = format!("`chmod -a# {i} {}`", crate::owned::shell_quoted(&p));
+        assert!(e.contains(&remove), "{e} does not say {remove}");
+        // Doing what it says passes.
+        chmod(&["-a#", &i.to_string()], &p);
+        assert_eq!(secure(&p, Writers::Nobody), Ok(()));
+
+        // An entry for the admin group on the file itself, even for a launch.
+        let q = dir.join("admin-entry");
+        file(&q, 0o700);
+        add_entry(&q, "group:admin allow append");
+        refused(&q, &q, Writers::Admins);
+
+        // An entry for everyone.
+        let r = dir.join("everyone");
+        file(&r, 0o700);
+        add_entry(&r, "everyone allow write");
+        refused(&r, &r, Writers::Nobody);
+        let e = secure(&r, Writers::Nobody).unwrap_err();
+        assert!(e.contains("group:everyone change it (write)"), "{e}");
+    }
+
+    /// Gives a new program, or a new folder above one, an entry for user:daemon holding exactly
+    /// rights, and what `secure` makes of it under each rule.
+    fn with_raw_entry(
+        dir: &Path,
+        name: &str,
+        on_folder: bool,
+        rights: u32,
+    ) -> [Result<(), String>; 2] {
+        let f = dir.join(name);
+        folder(&f, 0o700);
+        let p = f.join("prog");
+        file(&p, 0o700);
+        crate::private_macos::set_raw_entry(
+            if on_folder { &f } else { &p },
+            "user:daemon",
+            rights,
+            None,
+        );
+        let part = if on_folder { &f } else { &p };
+        let got = [secure(&p, Writers::Nobody), secure(&p, Writers::Admins)];
+        for e in got.iter().filter_map(|r| r.as_ref().err()) {
+            assert!(
+                e.starts_with(&format!("{} ", part.display())),
+                "{e} is not for {}",
+                part.display()
+            );
+        }
+        got
+    }
+
+    #[test]
+    fn secure_refuses_every_right_that_changes_the_program_or_a_folder_above() {
+        use crate::private_macos::{FILE_CHANGES, FOLDER_CHANGES, READ_ONLY};
+        let t = Temp::new("acl-rights");
+        let dir = real(&t);
+        for (on_folder, names) in [(false, FILE_CHANGES), (true, FOLDER_CHANGES)] {
+            for (bit, name) in names {
+                let got =
+                    with_raw_entry(&dir, &format!("{on_folder}-{name}"), on_folder, *bit as u32);
+                for r in got {
+                    let e = r.expect_err(name);
+                    assert!(
+                        e.contains(&format!("user:daemon change it ({name})")),
+                        "{e}"
+                    );
+                }
+            }
+            // Every read-only right at once passes: read, execute, readattr, readextattr,
+            // readsecurity, synchronize, generic_execute and generic_read (`sys/acl.h`), written
+            // out so that a bit added to `READ_ONLY` by mistake fails here.
+            let reads = 1 << 1 | 1 << 3 | 1 << 7 | 1 << 9 | 1 << 11 | 1 << 20 | 1 << 22 | 1 << 24;
+            assert_eq!(READ_ONLY, reads);
+            let got = with_raw_entry(&dir, &format!("{on_folder}-reads"), on_folder, reads as u32);
+            assert_eq!(got, [Ok(()), Ok(())], "on a folder: {on_folder}");
+            // A right no one names is refused, named by its number.
+            let got = with_raw_entry(&dir, &format!("{on_folder}-unknown"), on_folder, 1 << 14);
+            for r in got {
+                let e = r.expect_err("bit 14");
+                assert!(e.contains("user:daemon change it (bit 14)"), "{e}");
+            }
+        }
+    }
+
+    #[test]
+    fn secure_refuses_the_generic_write_and_all_rights() {
+        let t = Temp::new("acl-generic");
+        let dir = real(&t);
+        for on_folder in [false, true] {
+            for (bit, name) in [(23, "generic_write"), (21, "generic_all")] {
+                let got = with_raw_entry(&dir, &format!("{on_folder}-{name}"), on_folder, 1 << bit);
+                for r in got {
+                    let e = r.expect_err(name);
+                    assert!(e.contains(&format!("({name})")), "{e}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn secure_refuses_an_access_list_entry_that_lets_another_user_change_a_folder_above() {
+        use crate::private_macos::add_entry;
+        let t = Temp::new("acl-folder");
+        let dir = real(&t);
+
+        for right in ["add_file", "delete_child", "add_subdirectory", "delete"] {
+            let f = dir.join(right);
+            folder(&f, 0o700);
+            let p = f.join("prog");
+            file(&p, 0o700);
+            assert_eq!(secure(&p, Writers::Nobody), Ok(()), "{right}");
+            add_entry(&f, &format!("user:daemon allow {right}"));
+            refused(&p, &f, Writers::Nobody);
+            refused(&p, &f, Writers::Admins);
+            let e = secure(&p, Writers::Nobody).unwrap_err();
+            assert!(
+                e.contains(&format!("user:daemon change it ({right})")),
+                "{e}"
+            );
+            let clear = format!("`chmod -N {}`", crate::owned::shell_quoted(&f));
+            assert!(e.contains(&clear), "{e} does not say {clear}");
+            chmod(&["-N"], &f);
+            assert_eq!(secure(&p, Writers::Nobody), Ok(()), "{right} cleared");
+        }
+
+        // A folder is judged before what is below it: with an entry on both, the refusal names
+        // the folder. Walked from the program up, another user could swap the program and then
+        // remove their entry on the folder before it was read.
+        let both = dir.join("both");
+        folder(&both, 0o700);
+        let p = both.join("prog");
+        file(&p, 0o700);
+        add_entry(&both, "user:daemon allow add_file");
+        add_entry(&p, "user:daemon allow write");
+        refused(&p, &both, Writers::Nobody);
+        refused(&p, &both, Writers::Admins);
+
+        // A deny entry, as a home folder carries.
+        let home = dir.join("home");
+        folder(&home, 0o700);
+        let p = home.join("prog");
+        file(&p, 0o700);
+        add_entry(&home, "group:everyone deny delete");
+        add_entry(&p, "group:everyone deny delete");
+        assert_eq!(secure(&p, Writers::Nobody), Ok(()));
+        assert_eq!(secure(&p, Writers::Admins), Ok(()));
+    }
+
+    #[test]
+    fn secure_lets_an_admin_entry_on_a_folder_above_a_launch_only() {
+        use crate::private_macos::add_entry;
+        let t = Temp::new("acl-admin");
+        let dir = real(&t);
+        let shared = dir.join("shared");
+        folder(&shared, 0o755);
+        let p = shared.join("prog");
+        file(&p, 0o700);
+        add_entry(
+            &shared,
+            "group:admin allow add_file,add_subdirectory,delete_child",
+        );
+        refused(&p, &shared, Writers::Nobody);
+        assert_eq!(secure(&p, Writers::Admins), Ok(()));
+
+        // Another group's is refused for a launch too.
+        let staff = dir.join("staff");
+        folder(&staff, 0o755);
+        file(&staff.join("prog"), 0o700);
+        add_entry(&staff, "group:staff allow add_file");
+        refused(&staff.join("prog"), &staff, Writers::Admins);
+    }
+
+    #[test]
+    fn secure_refuses_an_inherited_access_list_entry() {
+        use crate::private_macos::add_entry;
+        let t = Temp::new("acl-inherit");
+        let dir = real(&t);
+
+        // Entries that reach only what is made later: the folder itself passes.
+        let outer = dir.join("outer");
+        folder(&outer, 0o700);
+        add_entry(
+            &outer,
+            "user:daemon allow add_file,directory_inherit,only_inherit",
+        );
+        // A file made in it takes nothing: the entry reaches folders only.
+        let plain = outer.join("plain");
+        file(&plain, 0o700);
+        assert_eq!(secure(&plain, Writers::Nobody), Ok(()));
+
+        // A folder made in it inherits the entry, and is refused for it.
+        let inner = outer.join("inner");
+        folder(&inner, 0o700);
+        entry_index(&inner, "inherited");
+        let p = inner.join("prog");
+        file(&p, 0o700);
+        refused(&p, &inner, Writers::Nobody);
+
+        // A program made in a folder with a file entry inherits it, and is refused for it.
+        let files = dir.join("files");
+        folder(&files, 0o700);
+        add_entry(&files, "user:daemon allow write,file_inherit,only_inherit");
+        let q = files.join("prog");
+        file(&q, 0o700);
+        entry_index(&q, "inherited");
+        refused(&q, &q, Writers::Nobody);
+        let e = secure(&q, Writers::Nobody).unwrap_err();
+        assert!(e.contains("user:daemon change it (write)"), "{e}");
+    }
+
+    /// An entry for a UUID no account has, which macOS cannot turn into a user or group number
+    /// (`mbr_uuid_to_id` fails), is refused, shown by that UUID.
+    #[test]
+    fn secure_refuses_an_entry_for_an_unknown_account_naming_its_uuid() {
+        let t = Temp::new("acl-unknown");
+        let dir = real(&t);
+        let p = dir.join("prog");
+        file(&p, 0o700);
+        // A random UUID, of no account.
+        let uuid = [
+            0x5b, 0x2e, 0x91, 0x0c, 0x7d, 0x43, 0x4a, 0x6f, 0x9e, 0x18, 0x32, 0xc4, 0xa7, 0x55,
+            0xe0, 0x1d,
+        ];
+        crate::private_macos::set_raw_entry(&p, "user:daemon", 1 << 2, Some(uuid));
+        refused(&p, &p, Writers::Nobody);
+        let e = secure(&p, Writers::Admins).unwrap_err();
+        assert!(
+            e.contains("lets unknown 5B2E910C-7D43-4A6F-9E18-32C4A755E01D change it (write)"),
+            "{e}"
+        );
+    }
+
+    /// Runs `hdiutil` with args, up to three times (it now and then fails to take a new image's
+    /// device at once), and panics with its output if it never succeeds.
+    fn hdiutil(args: &[&std::ffi::OsStr]) {
+        let mut last = None;
+        for _ in 0..3 {
+            let out = std::process::Command::new("/usr/bin/hdiutil")
+                .args(args)
+                .output()
+                .expect("/usr/bin/hdiutil");
+            if out.status.success() {
+                return;
+            }
+            last = Some(out);
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+        panic!("hdiutil {args:?}: {last:?}");
+    }
+
+    /// A new disk image of its own, in image_dir, attached at mnt for this user (`hdiutil` needs
+    /// no root) with ownership kept or ignored (`-owners on` or `off`), its top folder made 0755;
+    /// detached when dropped, before the folder that holds it is removed.
+    struct Volume {
+        mnt: PathBuf,
+    }
+
+    impl Volume {
+        fn attach(image_dir: &Path, mnt: &Path, owners: bool) -> Volume {
+            let name = mnt.file_name().unwrap();
+            let image = image_dir.join(name).with_extension("dmg");
+            let s = |s: &'static str| std::ffi::OsStr::new(s);
+            hdiutil(&[
+                s("create"),
+                s("-size"),
+                s("8m"),
+                s("-fs"),
+                s("HFS+"),
+                s("-volname"),
+                name,
+                image.as_os_str(),
+            ]);
+            fs::create_dir(mnt).unwrap();
+            hdiutil(&[
+                s("attach"),
+                s("-nobrowse"),
+                s("-noautoopen"),
+                s("-noverify"),
+                s("-owners"),
+                s(if owners { "on" } else { "off" }),
+                s("-mountpoint"),
+                mnt.as_os_str(),
+                image.as_os_str(),
+            ]);
+            let v = Volume {
+                mnt: mnt.to_path_buf(),
+            };
+            // Read back by mount(8), not by the check under test: `noowners` is how it names
+            // MNT_IGNORE_OWNERSHIP.
+            let out = std::process::Command::new("/sbin/mount").output().unwrap();
+            let listed = String::from_utf8_lossy(&out.stdout).into_owned();
+            let line = listed
+                .lines()
+                .find(|l| l.contains(&format!(" on {} (", mnt.display())))
+                .unwrap_or_else(|| panic!("{} is not mounted: {listed}", mnt.display()));
+            // Only the options in the brackets: the mount point may hold the word too.
+            let options = &line[line.rfind(" (").unwrap() + 2..];
+            let noowners = options
+                .trim_end_matches(')')
+                .split(", ")
+                .any(|o| o == "noowners");
+            assert_eq!(noowners, !owners, "{line}");
+            fs::set_permissions(mnt, fs::Permissions::from_mode(0o755)).unwrap();
+            v
+        }
+    }
+
+    impl Drop for Volume {
+        fn drop(&mut self) {
+            for force in [false, true] {
+                let mut c = std::process::Command::new("/usr/bin/hdiutil");
+                c.arg("detach").arg(&self.mnt);
+                if force {
+                    c.arg("-force");
+                }
+                if c.output().is_ok_and(|o| o.status.success()) {
+                    return;
+                }
+            }
+        }
+    }
+
+    /// On a volume that ignores ownership, where macOS shows every file as this user's, a program
+    /// is refused for the volume's top folder, the first part of its path there, and so is a
+    /// program on a volume that keeps ownership mounted below it. The same kind of image with
+    /// ownership kept passes.
+    #[test]
+    fn secure_refuses_a_program_on_a_volume_that_ignores_ownership() {
+        let t = Temp::new("noowners");
+        let dir = real(&t);
+        let kept = Volume::attach(&dir, &dir.join("kept"), true);
+        let p = kept.mnt.join("prog");
+        file(&p, 0o700);
+        assert_eq!(secure(&p, Writers::Nobody), Ok(()));
+
+        let ignored = Volume::attach(&dir, &dir.join("ignored"), false);
+        let q = ignored.mnt.join("prog");
+        file(&q, 0o700);
+        assert_eq!(fs::metadata(&q).unwrap().uid(), unsafe { libc::geteuid() });
+        let below = Volume::attach(&dir, &ignored.mnt.join("below"), true);
+        let r = below.mnt.join("prog");
+        file(&r, 0o700);
+        let v = crate::owned::shell_quoted(&ignored.mnt);
+        for (path, writers) in [
+            (&q, Writers::Nobody),
+            (&q, Writers::Admins),
+            (&r, Writers::Admins),
+        ] {
+            let e = secure(path, writers).expect_err(&path.display().to_string());
+            assert!(
+                e.starts_with(&format!(
+                    "{v} is on the volume at {v}, which ignores ownership, so any user may change it: "
+                )),
+                "{e}"
+            );
+            assert!(
+                e.contains(&format!("`sudo diskutil enableOwnership {v}`")),
+                "{e}"
+            );
+        }
+        let e = exec_target(&fs::File::open(&q).unwrap(), Writers::Admins).unwrap_err();
+        assert!(e.contains("which ignores ownership"), "{e}");
     }
 }
 

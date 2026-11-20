@@ -249,6 +249,7 @@ func TestClaudeAPIKey(t *testing.T) {
 			"accounts": []any{map[string]any{
 				"id": "key", "settings": srv.Settings(""),
 				"credential": map[string]any{"kind": "api_key", "api_key": key},
+				"models":     []string{"claude-opus-4-6"},
 			}},
 		},
 	})

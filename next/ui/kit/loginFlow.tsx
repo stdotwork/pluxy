@@ -72,7 +72,11 @@ function LoginField(props: {
     <div class="stack" data-part="field">
       <label class="field" for={controlId}>
         <span class="label">{props.field.optional ? t("optional", { label }) : label}</span>
-        {props.field.secret ? <input type="password" {...control} /> : <input type="text" {...control} />}
+        {props.field.secret ? (
+          <input data-slot="input" type="password" {...control} />
+        ) : (
+          <input data-slot="input" type="text" {...control} />
+        )}
       </label>
       {props.field.secret && (
         <div>
@@ -478,6 +482,7 @@ export function LoginFlow(props: LoginFlowProps) {
               <label>
                 <span class="label">{t("accountId")}</span>
                 <input
+                  data-slot="input"
                   type="text"
                   required
                   maxLength={128}

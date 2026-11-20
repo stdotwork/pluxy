@@ -10,7 +10,7 @@
     "body": {"contents":[{"role":"model","parts":[{"text":"Planning.","thought":true}]}]}
   },
   "upstream": [
-    {"body":{"access_token":"ya29.corpus-token","expires_in":3599,"token_type":"Bearer"}},
+    {"body":{"access_token":"ya29.Hk3Rt8Bw2Mz5","expires_in":3599,"token_type":"Bearer"}},
     {
       "body": {
         "candidates": [
@@ -107,7 +107,7 @@
         },
         "headers": {
           "Accept-Encoding": "gzip",
-          "Authorization": "Bearer ya29.corpus-token",
+          "Authorization": "Bearer ya29.Hk3Rt8Bw2Mz5",
           "Content-Type": "application/json",
           "User-Agent": "Go-http-client/1.1"
         },
