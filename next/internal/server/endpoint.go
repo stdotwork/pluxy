@@ -3,7 +3,6 @@ package server
 import (
 	"cmp"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -134,12 +133,12 @@ func serveEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep end
 		f.writeError(w, &llm.Error{Code: llm.CodeNotFound, Status: http.StatusNotFound, Message: "this endpoint is not served"})
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxRequestBody))
-	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			f.writeError(w, &llm.Error{Code: llm.CodeInvalidRequest, Message: "request body is too large", Status: http.StatusRequestEntityTooLarge})
-		}
+	body, e, ok := readRequestBody(w, r)
+	if !ok {
+		return
+	}
+	if e != nil {
+		f.writeError(w, e)
 		return
 	}
 	keepBody(r, body)
