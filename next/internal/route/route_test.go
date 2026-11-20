@@ -269,6 +269,68 @@ func TestNotRetrySafe(t *testing.T) {
 	h.wantAttempts("a")
 }
 
+// A timeout before any reply byte moves the request to the next account once, not to every
+// account: with a stuck extension or upstream each account costs the client a whole timeout.
+// The two kinds are the core watchdog's extension_timeout and the SDK's upstream timeouts, which
+// an extension reports as a retry-safe unavailable error that names the timeout.
+func TestTimeoutRotatesOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		e    llm.Error
+	}{
+		{"extension_timeout", llm.Error{Code: llm.CodeExtensionTimeout, Retryable: true, Scope: llm.ScopeEndpoint, Message: "the extension sent nothing for 6m0s"}},
+		{"upstream header timeout", llm.Error{Code: llm.CodeUnavailable, Retryable: true, Scope: llm.ScopeEndpoint, Message: `upstream unreachable: Post "https://u.example/v1": upstream response header timeout after 1m0s`}},
+		{"upstream request timeout", llm.Error{Code: llm.CodeUnavailable, Retryable: true, Scope: llm.ScopeEndpoint, Message: `upstream unreachable: Post "https://u.example/v1": upstream request timeout after 10m0s`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, Config{}, accts("a", "b", "c", "d")...)
+			for _, id := range []string{"a", "b", "c", "d"} {
+				h.on(id, fail(tc.e))
+			}
+			evs := h.run(h.req("m"))
+			if last := evs[len(evs)-1]; last.Error == nil || last.Error.Code != tc.e.Code || last.Error.Message != tc.e.Message {
+				t.Errorf("got %+v, want the timeout error", last)
+			}
+			if len(h.attempts) != 2 {
+				t.Errorf("attempts = %v, want exactly 2", h.attempts)
+			}
+		})
+	}
+}
+
+// An extension that stopped answering blocks the account's endpoint like a failing upstream does,
+// with the failure backoff, so the next request does not start on it again.
+func TestExtensionTimeoutBlocksTheEndpoint(t *testing.T) {
+	kind, scope, fixed, base, max := classify(&llm.Error{Code: llm.CodeExtensionTimeout, Retryable: true})
+	if kind != blockCooldown || scope != scopeEndpoint || fixed != 0 || base != failureBackoffBase || max != failureBackoffMax {
+		t.Errorf("classify = %q %q %v %v %v, want a cooldown of the endpoint on the failure backoff", kind, scope, fixed, base, max)
+	}
+	h := newHarness(t, Config{Strategy: StrategyFillFirst}, accts("a", "b")...)
+	h.on("a", fail(llm.Error{Code: llm.CodeExtensionTimeout, Retryable: true}), ok())
+	h.runOK("m")
+	h.runOK("m")
+	h.wantAttempts("a", "b", "b")
+}
+
+// Other retry-safe failures still go through every account, and a timeout only counts against
+// the request it happened on.
+func TestOtherRetrySafeFailuresTryEveryAccount(t *testing.T) {
+	h := newHarness(t, Config{}, accts("a", "b", "c")...)
+	down := fail(llm.Error{Code: llm.CodeUnavailable, Retryable: true, Scope: llm.ScopeEndpoint, Message: "upstream unreachable: dial tcp: connection refused"})
+	for _, id := range []string{"a", "b", "c"} {
+		h.on(id, down)
+	}
+	h.run(h.req("m"))
+	h.wantAttempts("a", "b", "c")
+
+	// A timeout and then a failure that is not one: the second does not count as the second timeout.
+	h = newHarness(t, Config{}, accts("a", "b", "c")...)
+	h.on("a", fail(llm.Error{Code: llm.CodeExtensionTimeout, Retryable: true, Scope: llm.ScopeEndpoint}))
+	h.on("b", down)
+	h.runOK("m")
+	h.wantAttempts("a", "b", "c")
+}
+
 // A request-scoped refusal (the request itself is bad) is neither retried nor held against
 // the account.
 func TestRequestErrorLeavesAccountAlone(t *testing.T) {

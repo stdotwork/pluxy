@@ -1,5 +1,6 @@
-// The privacy masks. Expected values are the old app's (extensions/app tests/privacyMask.test.ts),
-// with its two bugs fixed: `$&` in an identity and an identity starting with `@`.
+// The privacy masks. Expected values are the old app's (`tests/privacyMask.test.ts` in
+// router-for-me/EasyCLIProxyAPI, https://github.com/router-for-me/EasyCLIProxyAPI), with its two bugs
+// fixed: `$&` in an identity and an identity starting with `@`.
 import { expect, test } from "bun:test";
 import { join } from "node:path";
 import {

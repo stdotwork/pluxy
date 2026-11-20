@@ -861,14 +861,16 @@ func classify(e *llm.Error) (kind, scope string, fixed, base, max time.Duration)
 		if scope == "" {
 			scope = scopeModel
 		}
-	case llm.CodeUpstream, llm.CodeUnavailable:
+	case llm.CodeUpstream, llm.CodeUnavailable, llm.CodeExtensionTimeout:
+		// An extension that stopped answering is treated as the account's endpoint failing,
+		// so a retry-safe one moves the request to another account.
 		kind, base, max = blockCooldown, failureBackoffBase, failureBackoffMax
 		if scope == "" {
 			scope = scopeEndpoint
 		}
 	default:
-		// invalid_request, unsupported, cancelled, internal and core's extension_* codes are
-		// about the request, the caller or the extension process, not the account.
+		// invalid_request, unsupported, cancelled, internal and core's other extension_* codes
+		// are about the request, the caller or the extension process, not the account.
 		return "", "", 0, 0, 0
 	}
 	if scope == llm.ScopeRequest {
