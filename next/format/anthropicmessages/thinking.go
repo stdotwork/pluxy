@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
@@ -160,7 +161,12 @@ func ApplyEffortReport(body []byte, model, effort string) ([]byte, []llm.Loss, b
 				Detail: "Claude has no effort " + effort + "; sent as " + e + ", its lowest"})
 		}
 		set("thinking", map[string]any{"type": "adaptive"})
-		set("output_config", map[string]any{"effort": e})
+		cfg := rawjson.Object(m["output_config"])
+		if cfg == nil {
+			cfg = map[string]json.RawMessage{}
+		}
+		cfg["effort"], _ = json.Marshal(e)
+		set("output_config", cfg)
 	default:
 		budget, ok := budgets[effort]
 		if !ok || !setBudget(m, budget, set) {

@@ -3220,6 +3220,829 @@ fn junctions_and_scripts_are_refused_on_windows() {
     done(root);
 }
 
+// ---- A native tool's Linux build for WSL (device_admission.rs) ----
+
+/// The Linux build's program in the WSL fixtures' packages.
+const LINUX_TOOL: &str = "bin/tool-linux";
+
+/// A Linux platform that is not this computer's, so the platform a Linux build is staged,
+/// verified and admitted for is never this computer's by accident.
+fn wsl_platform() -> &'static str {
+    if platform() == "linux/arm64" {
+        "linux/amd64"
+    } else {
+        "linux/arm64"
+    }
+}
+
+/// A native tool's archive: its manifest, whose `app` is the fixtures' with app's fields over
+/// it, and files, each (path, bytes, mode).
+fn native_archive_with(
+    id: &str,
+    version: &str,
+    app: Value,
+    files: &[(&str, &[u8], u32)],
+) -> Vec<u8> {
+    let mut m = serde_json::json!({
+        "manifest_version": 1, "id": id, "version": version,
+        "app": {"version": 0, "tier": "native", "host_versions": [0],
+            "programs": {platform(): TOOL, wsl_platform(): LINUX_TOOL},
+            "environments": ["wsl"],
+            "operations": [{"id": "inspect", "description": "Report its state",
+                "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}],
+            "state": {"version": 0, "readable_versions": [0]}}
+    });
+    if let Value::Object(o) = app {
+        for (k, v) in o {
+            if v.is_null() {
+                m["app"].as_object_mut().unwrap().remove(&k);
+            } else {
+                m["app"][k] = v;
+            }
+        }
+    }
+    let m = serde_json::to_vec(&m).unwrap();
+    let mut b = tar::Builder::new(Vec::new());
+    for (name, data, mode) in
+        std::iter::once(("pluxy-extension.json", m.as_slice(), 0o644)).chain(files.iter().copied())
+    {
+        let mut h = tar::Header::new_gnu();
+        h.set_path(name).unwrap();
+        h.set_size(data.len() as u64);
+        h.set_mode(mode);
+        h.set_entry_type(tar::EntryType::Regular);
+        h.set_cksum();
+        b.append(&h, data).unwrap();
+    }
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    gz.write_all(&b.into_inner().unwrap()).unwrap();
+    gz.finish().unwrap()
+}
+
+/// The bytes of a Linux build's program, marked with tag.
+fn linux_tool_bytes(tag: &str) -> Vec<u8> {
+    format!("\x7fELF {tag}\n").into_bytes()
+}
+
+/// This computer's archive of id's release version, running in WSL, with app's fields.
+fn host_build(id: &str, version: &str, app: Value) -> Vec<u8> {
+    native_archive_with(id, version, app, &[(TOOL, &tool_bytes(version), 0o755)])
+}
+
+/// The Linux archive of id's release version, with app's fields.
+fn linux_build(id: &str, version: &str, app: Value) -> Vec<u8> {
+    native_archive_with(
+        id,
+        version,
+        app,
+        &[(LINUX_TOOL, &linux_tool_bytes(version), 0o755)],
+    )
+}
+
+/// Native-tier trust with one curated source and publisher and a key per key ID.
+struct KeyRoots {
+    publisher: String,
+    source: String,
+    keys: BTreeMap<String, ed25519_dalek::VerifyingKey>,
+}
+impl crate::artifact::PublisherKeys for KeyRoots {
+    fn publisher_key(
+        &self,
+        source: &str,
+        key_id: &str,
+        publisher: &str,
+    ) -> Result<ed25519_dalek::VerifyingKey, String> {
+        match self.keys.get(key_id) {
+            Some(k) if (source, publisher) == (&self.source, &self.publisher) => Ok(*k),
+            _ => Err("unknown publisher key or changed source".into()),
+        }
+    }
+}
+impl Roots for KeyRoots {
+    fn configured(&self) -> bool {
+        true
+    }
+    fn curated(&self, source: &str) -> bool {
+        source == self.source
+    }
+    fn reserved(&self, publisher: &str) -> bool {
+        publisher == self.publisher
+    }
+}
+
+/// A curated registry the WSL tests write, signed by the root's keys `k1` and `k2`.
+struct WslIndex {
+    d: Dirs,
+    reg: PathBuf,
+    keys: BTreeMap<String, ed25519_dalek::SigningKey>,
+    packages: serde_json::Map<String, Value>,
+}
+
+impl WslIndex {
+    fn new(root: &Path) -> WslIndex {
+        let reg = root.join("reg");
+        fs::create_dir_all(&reg).unwrap();
+        WslIndex {
+            d: dirs(root),
+            reg,
+            keys: [
+                ("k1".to_string(), signing_key()),
+                ("k2".to_string(), signing_key()),
+            ]
+            .into(),
+            packages: serde_json::Map::new(),
+        }
+    }
+
+    fn roots(&self) -> KeyRoots {
+        KeyRoots {
+            publisher: "pluxy".into(),
+            source: self.reg.join("curated.json").display().to_string(),
+            keys: self
+                .keys
+                .iter()
+                .map(|(k, v)| (k.clone(), v.verifying_key()))
+                .collect(),
+        }
+    }
+
+    /// Lists bytes as id's release version for platform, signed with key_id over a descriptor
+    /// naming the native tier and the platform signed_for.
+    fn list(
+        &mut self,
+        id: &str,
+        version: &str,
+        platform: &str,
+        bytes: &[u8],
+        key_id: &str,
+        signed_for: &str,
+    ) {
+        use ed25519_dalek::Signer;
+        let file = format!(
+            "{}-{version}-{}",
+            id.replace('/', "_"),
+            platform.replace('/', "_")
+        );
+        fs::write(self.reg.join(&file), bytes).unwrap();
+        let key = &self.keys[key_id];
+        let descriptor = serde_json::to_string(&serde_json::json!({
+            "id": id, "version": version, "tier": "native", "platform": signed_for,
+            "size": bytes.len(), "sha256": digest(bytes)}))
+        .unwrap();
+        let a = serde_json::json!({"url": file, "sha256": digest(bytes), "size": bytes.len(),
+            "key_id": key_id, "public_key": hex(key.verifying_key().as_bytes()),
+            "signature": hex(&key.sign(descriptor.as_bytes()).to_bytes()), "descriptor": descriptor});
+        let releases = self
+            .packages
+            .entry(id)
+            .or_insert(serde_json::json!({"releases": []}))["releases"]
+            .as_array_mut()
+            .unwrap();
+        match releases.iter_mut().find(|r| r["version"] == version) {
+            Some(r) => r["artifacts"][platform] = a,
+            None => {
+                releases.push(serde_json::json!({"version": version, "artifacts": {platform: a}}))
+            }
+        }
+    }
+
+    /// Lists id's release version for this computer, and its Linux build for `wsl_platform()`
+    /// as linux gives it, both signed with k1 for their own platforms.
+    fn both(&mut self, id: &str, version: &str, linux: Option<Vec<u8>>) {
+        self.list(
+            id,
+            version,
+            &platform(),
+            &host_build(id, version, Value::Null),
+            "k1",
+            &platform(),
+        );
+        if let Some(l) = linux {
+            self.list(id, version, wsl_platform(), &l, "k1", wsl_platform());
+        }
+    }
+
+    fn write(&self) {
+        let index = serde_json::json!({"registry_version": 0, "packages": self.packages});
+        fs::write(
+            self.reg.join("curated.json"),
+            serde_json::to_vec(&index).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            &self.d.registries,
+            serde_json::to_vec(&serde_json::json!({"version": 0, "registries": [
+                {"name": "curated", "url": self.reg.join("curated.json")}]}))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+}
+
+/// Installs id's release version from the curated registry and enables it, as its native
+/// confirmation would.
+fn install_enabled(c: &mut Catalog, id: &str, version: &str, roots: &dyn Roots) {
+    let d = c.dirs.clone();
+    let staged = stage_from_registry(&d, roots, "curated", id, Some(version)).unwrap();
+    if c.swaps(id, &staged.release) {
+        let s = c.swap_update(staged, roots).unwrap();
+        c.commit_swap(s, roots).unwrap();
+        return;
+    }
+    c.commit(staged).unwrap();
+    let a = candidate(c, id, roots).unwrap();
+    c.admit_checked(&a, roots).unwrap();
+}
+
+/// Stages id's Linux build for platform, as `device_install_wsl` does before its confirmation.
+fn stage_wsl(
+    c: &Catalog,
+    id: &str,
+    platform: &str,
+    roots: &dyn Roots,
+) -> Result<LinuxCandidate, String> {
+    let t = c.linux_target(id, platform, roots)?;
+    stage_linux(&c.dirs, roots, &t)
+}
+
+/// Stages and records id's Linux build for `wsl_platform()`, as a confirmed install does.
+fn install_wsl(c: &mut Catalog, id: &str, roots: &dyn Roots) -> Release {
+    let l = stage_wsl(c, id, wsl_platform(), roots).unwrap();
+    c.commit_linux(l, roots).unwrap();
+    c.get(id).unwrap().linux[wsl_platform()].clone()
+}
+
+fn staging_names(d: &Dirs) -> BTreeSet<String> {
+    fs::read_dir(d.staging())
+        .map(|r| {
+            r.flatten()
+                .map(|e| e.file_name().into_string().unwrap())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn environments_in_a_manifest_are_checked() {
+    let parse = |app: Value| {
+        let m = serde_json::json!({"manifest_version": 1, "id": "pluxy/tool", "version": "1",
+            "app": app});
+        validate(&serde_json::from_value::<Manifest>(m).unwrap()).map(|a| a.unwrap().environments)
+    };
+    let native = |envs: Value| {
+        serde_json::json!({"version": 0, "tier": "native", "host_versions": [0],
+            "programs": {"linux/amd64": "bin/tool"}, "environments": envs,
+            "operations": [{"id": "inspect", "description": "Report",
+                "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}],
+            "state": {"version": 0, "readable_versions": [0]}})
+    };
+    assert_eq!(
+        parse(native(serde_json::json!(["wsl"]))).unwrap(),
+        Some(vec!["wsl".to_string()])
+    );
+    let mut none = native(Value::Null);
+    none.as_object_mut().unwrap().remove("environments");
+    assert_eq!(parse(none).unwrap(), None);
+    let e = parse(native(serde_json::json!(["wsl", "docker"]))).unwrap_err();
+    assert_eq!(
+        e,
+        "app.environments names docker, which this app does not know"
+    );
+    let e = parse(native(serde_json::json!(["wsl", "wsl"]))).unwrap_err();
+    assert!(e.contains("names wsl twice"), "{e}");
+    let web = serde_json::json!({"version": 0, "tier": "web", "host_versions": [0],
+        "environments": ["wsl"]});
+    let e = parse(web).unwrap_err();
+    assert!(e.contains("web app cannot declare environments"), "{e}");
+    // The release keeps them, and the catalog says whether a tool runs in WSL.
+    let root = temp();
+    let mut x = WslIndex::new(&root);
+    x.both("pluxy/tool", "1.0.0", None);
+    x.list(
+        "pluxy/plain",
+        "1.0.0",
+        &platform(),
+        &host_build(
+            "pluxy/plain",
+            "1.0.0",
+            serde_json::json!({"environments": null}),
+        ),
+        "k1",
+        &platform(),
+    );
+    x.write();
+    let roots = x.roots();
+    let mut c = Catalog::open(x.d.clone(), false, &roots);
+    install_enabled(&mut c, "pluxy/tool", "1.0.0", &roots);
+    install_enabled(&mut c, "pluxy/plain", "1.0.0", &roots);
+    assert_eq!(c.get("pluxy/tool").unwrap().active.environments, ["wsl"]);
+    assert!(c.runs_in_wsl("pluxy/tool"));
+    assert!(!c.runs_in_wsl("pluxy/plain") && !c.runs_in_wsl("pluxy/none"));
+    let saved: Value = serde_json::from_slice(&fs::read(x.d.catalog()).unwrap()).unwrap();
+    assert!(saved["packages"]["pluxy/plain"]["active"]
+        .get("environments")
+        .is_none());
+    assert!(saved["packages"]["pluxy/plain"].get("linux").is_none());
+    done(root);
+}
+
+#[test]
+fn a_linux_build_is_recorded_only_once_confirmed() {
+    let root = temp();
+    let mut x = WslIndex::new(&root);
+    let l1 = linux_build("pluxy/tool", "1.0.0", Value::Null);
+    x.both("pluxy/tool", "1.0.0", Some(l1.clone()));
+    x.list(
+        "pluxy/plain",
+        "1.0.0",
+        &platform(),
+        &host_build(
+            "pluxy/plain",
+            "1.0.0",
+            serde_json::json!({"environments": null}),
+        ),
+        "k1",
+        &platform(),
+    );
+    x.list(
+        "pluxy/plain",
+        "1.0.0",
+        wsl_platform(),
+        &linux_build(
+            "pluxy/plain",
+            "1.0.0",
+            serde_json::json!({"environments": null}),
+        ),
+        "k1",
+        wsl_platform(),
+    );
+    x.write();
+    let roots = x.roots();
+    let d = x.d.clone();
+    let mut c = Catalog::open(d.clone(), false, &roots);
+    c.commit(stage_from_registry(&d, &roots, "curated", "pluxy/tool", Some("1.0.0")).unwrap())
+        .unwrap();
+    // Installed but not enabled: nothing to run in WSL yet.
+    let e = stage_wsl(&c, "pluxy/tool", wsl_platform(), &roots).unwrap_err();
+    assert!(e.contains("disabled"), "{e}");
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&a, &roots).unwrap();
+    for bad in ["windows/amd64", "linux/386", "linux", ""] {
+        let e = stage_wsl(&c, "pluxy/tool", bad, &roots).unwrap_err();
+        assert!(e.contains("is not a platform WSL runs"), "{bad}: {e}");
+    }
+    let e = stage_wsl(&c, "pluxy/none", wsl_platform(), &roots).unwrap_err();
+    assert!(e.contains("is not installed on this device"), "{e}");
+    install_enabled(&mut c, "pluxy/plain", "1.0.0", &roots);
+    let e = stage_wsl(&c, "pluxy/plain", wsl_platform(), &roots).unwrap_err();
+    assert_eq!(e, "pluxy/plain does not run in WSL");
+    let m = std::sync::Mutex::new(c);
+    let e = admitted_linux_unlocked(&m, "pluxy/plain", wsl_platform(), &roots).unwrap_err();
+    assert_eq!(e, "pluxy/plain does not run in WSL");
+    let e = admitted_linux_unlocked(&m, "pluxy/tool", wsl_platform(), &roots).unwrap_err();
+    assert_eq!(
+        e,
+        format!(
+            "pluxy/tool's Linux build for {} is not installed: install it for WSL",
+            wsl_platform()
+        )
+    );
+    let mut c = m.into_inner().unwrap();
+    let before = store_names(&d);
+
+    // Staged and checked: what its confirmation names. Cancelled (dropped): nothing is kept.
+    let l = stage_wsl(&c, "pluxy/tool", wsl_platform(), &roots).unwrap();
+    assert_eq!(
+        (l.id(), l.version(), l.platform(), l.sha256()),
+        ("pluxy/tool", "1.0.0", wsl_platform(), digest(&l1).as_str())
+    );
+    #[cfg(native_stack)]
+    {
+        let action = l.confirmation();
+        assert_eq!(
+            action.what,
+            format!(
+                "Install the Linux build of pluxy/tool 1.0.0 ({}, SHA-256 {}) to run it in WSL",
+                wsl_platform(),
+                digest(&l1)
+            )
+        );
+        assert_eq!(action.chain.len(), 1);
+        assert_eq!(action.chain[0].id, "main window");
+        assert_eq!(
+            (action.executor.id.as_str(), action.executor.digest.as_str()),
+            ("pluxy/tool", digest(&l1).as_str())
+        );
+        assert!(action.native_tool && action.files.is_empty() && action.launch.is_none());
+    }
+    assert_eq!(staging_names(&d).len(), 1);
+    drop(l);
+    assert!(staging_names(&d).is_empty());
+    assert!(c.get("pluxy/tool").unwrap().linux.is_empty());
+    assert_eq!(store_names(&d), before);
+    assert!(Catalog::open(d.clone(), false, &roots)
+        .get("pluxy/tool")
+        .unwrap()
+        .linux
+        .is_empty());
+
+    // The package changed while it was being confirmed: nothing is recorded.
+    let l = stage_wsl(&c, "pluxy/tool", wsl_platform(), &roots).unwrap();
+    c.set_enabled("pluxy/tool", false, &roots).unwrap();
+    let e = c.commit_linux(l, &roots).unwrap_err();
+    assert!(e.contains("disabled"), "{e}");
+    assert!(c.get("pluxy/tool").unwrap().linux.is_empty());
+    assert!(staging_names(&d).is_empty());
+    assert_eq!(store_names(&d), before);
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&a, &roots).unwrap();
+    // A staged file changed while it was being confirmed: nothing is recorded.
+    #[cfg(unix)]
+    {
+        let l = stage_wsl(&c, "pluxy/tool", wsl_platform(), &roots).unwrap();
+        thaw(&l.candidate.staged);
+        let tool = l.candidate.staged.join("bin").join("tool-linux");
+        fs::remove_file(&tool).unwrap();
+        fs::write(&tool, "\x7fELF changed\n").unwrap();
+        let e = c.commit_linux(l, &roots).unwrap_err();
+        assert!(e.contains("changed since they were installed"), "{e}");
+        assert!(c.get("pluxy/tool").unwrap().linux.is_empty());
+        assert!(staging_names(&d).is_empty());
+        assert_eq!(store_names(&d), before);
+    }
+
+    // Confirmed: recorded on the package, in the store by its digest, kept with the catalog.
+    let r = install_wsl(&mut c, "pluxy/tool", &roots);
+    assert_eq!(
+        (
+            r.version.as_str(),
+            r.sha256.as_str(),
+            r.tier.as_str(),
+            r.program.as_deref()
+        ),
+        ("1.0.0", digest(&l1).as_str(), "native", Some(LINUX_TOOL))
+    );
+    assert_eq!(r.signed.as_ref().unwrap().key_id, "k1");
+    assert!(store_names(&d).contains(&digest(&l1)));
+    assert!(staging_names(&d).is_empty());
+    let c = Catalog::open(d.clone(), false, &roots);
+    assert_eq!(c.get("pluxy/tool").unwrap().linux[wsl_platform()], r);
+    let m = std::sync::Mutex::new(c);
+    let a = admitted_linux_unlocked(&m, "pluxy/tool", wsl_platform(), &roots).unwrap();
+    let dir = d.store().join(digest(&l1));
+    assert_eq!(
+        (a.id(), a.version(), a.sha256(), a.dir(), a.program()),
+        (
+            "pluxy/tool",
+            "1.0.0",
+            digest(&l1).as_str(),
+            dir.as_path(),
+            dir.join("bin").join("tool-linux").as_path()
+        )
+    );
+    assert_eq!(a.program_sha256(), digest(&linux_tool_bytes("1.0.0")));
+    assert_eq!(a.operations()[0].id, "inspect");
+    // The device's own record is unchanged.
+    let own = admitted_unlocked(&m, "pluxy/tool", &roots).unwrap();
+    assert_eq!(own.program(), tool_in(&d.store().join(&own.sha256)));
+    // Only the platform installed.
+    let other = if wsl_platform() == "linux/arm64" {
+        "linux/amd64"
+    } else {
+        "linux/arm64"
+    };
+    let e = admitted_linux_unlocked(&m, "pluxy/tool", other, &roots).unwrap_err();
+    assert!(
+        e.contains("Linux build") && e.contains("is not installed"),
+        "{e}"
+    );
+    // Disabled, or in safe mode: not admitted.
+    let mut safe = Catalog::open(d.clone(), true, &roots);
+    let e = safe
+        .admitted_linux_record("pluxy/tool", wsl_platform(), &roots)
+        .unwrap_err();
+    assert!(e.contains("safe mode"), "{e}");
+    let e = safe
+        .linux_target("pluxy/tool", wsl_platform(), &roots)
+        .unwrap_err();
+    assert!(e.contains("safe mode"), "{e}");
+    safe.safe_mode = false;
+    safe.set_enabled("pluxy/tool", false, &roots).unwrap();
+    let e = safe
+        .admitted_linux_record("pluxy/tool", wsl_platform(), &roots)
+        .unwrap_err();
+    assert!(e.contains("disabled"), "{e}");
+    done(root);
+}
+
+#[test]
+fn a_linux_build_that_does_not_match_is_refused_and_leaves_nothing() {
+    let root = temp();
+    let mut x = WslIndex::new(&root);
+    let p = wsl_platform();
+    // Each (ID, what its registry lists for p, the refusal).
+    let mut cases: Vec<(&str, String)> = vec![];
+    // Only for another version.
+    x.both("pluxy/version", "1.0.0", None);
+    x.list(
+        "pluxy/version",
+        "1.1.0",
+        p,
+        &linux_build("pluxy/version", "1.1.0", Value::Null),
+        "k1",
+        p,
+    );
+    cases.push((
+        "pluxy/version",
+        format!("registry curated lists no pluxy/version 1.0.0 for {p}"),
+    ));
+    // None at all.
+    x.both("pluxy/missing", "1.0.0", None);
+    cases.push((
+        "pluxy/missing",
+        format!("registry curated lists no pluxy/missing 1.0.0 for {p}"),
+    ));
+    // Signed by the root's other key: another signer.
+    x.both("pluxy/signer", "1.0.0", None);
+    x.list(
+        "pluxy/signer",
+        "1.0.0",
+        p,
+        &linux_build("pluxy/signer", "1.0.0", Value::Null),
+        "k2",
+        p,
+    );
+    cases.push((
+        "pluxy/signer",
+        "signed by pluxy key k2, not by the signer of the installed release".into(),
+    ));
+    // Its manifest does not say it runs in WSL.
+    x.both(
+        "pluxy/nowsl",
+        "1.0.0",
+        Some(linux_build(
+            "pluxy/nowsl",
+            "1.0.0",
+            serde_json::json!({"environments": null}),
+        )),
+    );
+    cases.push((
+        "pluxy/nowsl",
+        format!("pluxy/nowsl 1.0.0 for {p} does not run in WSL"),
+    ));
+    // No program for p.
+    x.both(
+        "pluxy/noprog",
+        "1.0.0",
+        Some(linux_build(
+            "pluxy/noprog",
+            "1.0.0",
+            serde_json::json!({"programs": {platform(): TOOL}}),
+        )),
+    );
+    cases.push(("pluxy/noprog", format!("1.0.0 has no program for {p}")));
+    // Its program's mode does not let it run.
+    x.both("pluxy/mode", "1.0.0", None);
+    x.list(
+        "pluxy/mode",
+        "1.0.0",
+        p,
+        &native_archive_with(
+            "pluxy/mode",
+            "1.0.0",
+            Value::Null,
+            &[(LINUX_TOOL, b"\x7fELF", 0o644)],
+        ),
+        "k1",
+        p,
+    );
+    cases.push((
+        "pluxy/mode",
+        format!("program {LINUX_TOOL} is not an executable file"),
+    ));
+    // It declares more than the release the person enabled.
+    x.both("pluxy/more", "1.0.0", Some(linux_build("pluxy/more", "1.0.0", serde_json::json!({"operations": [
+        {"id": "inspect", "description": "Report its state", "input_schema": {"type": "object"}, "output_schema": {"type": "object"}},
+        {"id": "wipe", "description": "Remove everything", "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}]}))));
+    cases.push(("pluxy/more", "declares other operations".into()));
+    // Signed for another platform (this computer's) though listed for p.
+    x.both("pluxy/platform", "1.0.0", None);
+    x.list(
+        "pluxy/platform",
+        "1.0.0",
+        p,
+        &linux_build("pluxy/platform", "1.0.0", Value::Null),
+        "k1",
+        &platform(),
+    );
+    cases.push((
+        "pluxy/platform",
+        "descriptor platform does not match".into(),
+    ));
+    // Not the archive its signature names.
+    x.both(
+        "pluxy/tampered",
+        "1.0.0",
+        Some(linux_build("pluxy/tampered", "1.0.0", Value::Null)),
+    );
+    cases.push(("pluxy/tampered", "pluxy/tampered 1.0.0".into()));
+    x.write();
+    // One byte changed after it was listed and signed: the same size, another digest.
+    let tampered = x
+        .reg
+        .join(format!("pluxy_tampered-1.0.0-{}", p.replace('/', "_")));
+    let mut b = fs::read(&tampered).unwrap();
+    let last = b.len() - 1;
+    b[last] ^= 1;
+    fs::write(&tampered, b).unwrap();
+    let roots = x.roots();
+    let d = x.d.clone();
+    let mut c = Catalog::open(d.clone(), false, &roots);
+    for (id, _) in &cases {
+        install_enabled(&mut c, id, "1.0.0", &roots);
+    }
+    let before = store_names(&d);
+    for (id, want) in &cases {
+        let e = stage_wsl(&c, id, p, &roots).map(|_| ()).unwrap_err();
+        assert!(e.contains(want.as_str()), "{id}: {e}");
+        assert!(c.get(id).unwrap().linux.is_empty(), "{id}");
+        assert!(staging_names(&d).is_empty(), "{id}");
+        assert_eq!(store_names(&d), before, "{id}");
+    }
+    // The positive control on the same route.
+    x.both(
+        "pluxy/tool",
+        "1.0.0",
+        Some(linux_build("pluxy/tool", "1.0.0", Value::Null)),
+    );
+    x.write();
+    install_enabled(&mut c, "pluxy/tool", "1.0.0", &roots);
+    install_wsl(&mut c, "pluxy/tool", &roots);
+    done(root);
+}
+
+#[test]
+fn a_linux_build_is_dropped_whenever_the_active_release_changes() {
+    let root = temp();
+    let mut x = WslIndex::new(&root);
+    for v in ["1.0.0", "1.1.0"] {
+        x.both(
+            "pluxy/tool",
+            v,
+            Some(linux_build("pluxy/tool", v, Value::Null)),
+        );
+    }
+    x.write();
+    let roots = x.roots();
+    let d = x.d.clone();
+    let mut c = Catalog::open(d.clone(), false, &roots);
+    let gone = |c: &Catalog, r: &Release| {
+        let p = c.get("pluxy/tool").unwrap();
+        assert!(p.linux.is_empty(), "{p:?}");
+        assert!(!store_names(&c.dirs).contains(&r.sha256));
+        let saved: Value = serde_json::from_slice(&fs::read(c.dirs.catalog()).unwrap()).unwrap();
+        assert!(
+            saved["packages"]["pluxy/tool"].get("linux").is_none(),
+            "{saved}"
+        );
+    };
+    install_enabled(&mut c, "pluxy/tool", "1.0.0", &roots);
+    // An update of the enabled tool (a swap).
+    let r = install_wsl(&mut c, "pluxy/tool", &roots);
+    install_enabled(&mut c, "pluxy/tool", "1.1.0", &roots);
+    gone(&c, &r);
+    let e = admitted_linux_unlocked(
+        &std::sync::Mutex::new(Catalog::open(d.clone(), false, &roots)),
+        "pluxy/tool",
+        wsl_platform(),
+        &roots,
+    )
+    .unwrap_err();
+    assert!(e.contains("is not installed: install it for WSL"), "{e}");
+    // A rollback as a swap.
+    let r = install_wsl(&mut c, "pluxy/tool", &roots);
+    assert_eq!(r.version, "1.1.0");
+    let s = c.swap_rollback("pluxy/tool", &roots).unwrap();
+    c.commit_swap(s, &roots).unwrap();
+    gone(&c, &r);
+    // A rollback of the catalog.
+    let r = install_wsl(&mut c, "pluxy/tool", &roots);
+    c.rollback("pluxy/tool").unwrap();
+    gone(&c, &r);
+    // An update committed while disabled.
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&a, &roots).unwrap();
+    let r = install_wsl(&mut c, "pluxy/tool", &roots);
+    c.set_enabled("pluxy/tool", false, &roots).unwrap();
+    // Disabling keeps it: the release is the same.
+    assert_eq!(c.get("pluxy/tool").unwrap().linux[wsl_platform()], r);
+    c.commit(stage_from_registry(&d, &roots, "curated", "pluxy/tool", Some("1.0.0")).unwrap())
+        .unwrap();
+    gone(&c, &r);
+    // Removed.
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&a, &roots).unwrap();
+    let r = install_wsl(&mut c, "pluxy/tool", &roots);
+    c.remove("pluxy/tool").unwrap();
+    assert!(!store_names(&d).contains(&r.sha256));
+    done(root);
+}
+
+#[test]
+fn a_linux_build_is_checked_again_each_time_it_is_admitted() {
+    let root = temp();
+    let mut x = WslIndex::new(&root);
+    x.both(
+        "pluxy/tool",
+        "1.0.0",
+        Some(linux_build("pluxy/tool", "1.0.0", Value::Null)),
+    );
+    x.write();
+    let roots = x.roots();
+    let d = x.d.clone();
+    let mut c = Catalog::open(d.clone(), false, &roots);
+    install_enabled(&mut c, "pluxy/tool", "1.0.0", &roots);
+    let r = install_wsl(&mut c, "pluxy/tool", &roots);
+    let p = wsl_platform();
+    c.admitted_linux_record("pluxy/tool", p, &roots).unwrap();
+    // Its signature holds for its own platform only.
+    let other = if p == "linux/arm64" {
+        "linux/amd64"
+    } else {
+        "linux/arm64"
+    };
+    c.packages
+        .get_mut("pluxy/tool")
+        .unwrap()
+        .linux
+        .insert(other.into(), r.clone());
+    let e = c
+        .admitted_linux_record("pluxy/tool", other, &roots)
+        .unwrap_err();
+    assert!(e.contains("descriptor platform does not match"), "{e}");
+    // Of another version than the active release: not installed.
+    let mut old = r.clone();
+    old.version = "0.9.0".into();
+    c.packages
+        .get_mut("pluxy/tool")
+        .unwrap()
+        .linux
+        .insert(p.into(), old);
+    let e = c
+        .admitted_linux_record("pluxy/tool", p, &roots)
+        .unwrap_err();
+    assert!(e.contains("is not installed: install it for WSL"), "{e}");
+    // Signed by the root's other key, which verifies, but is not the active release's signer.
+    {
+        use ed25519_dalek::Signer;
+        let mut other_signer = r.clone();
+        let s = other_signer.signed.as_mut().unwrap();
+        let k2 = &x.keys["k2"];
+        s.key_id = "k2".into();
+        s.public_key = hex(k2.verifying_key().as_bytes());
+        s.signature = hex(&k2.sign(s.descriptor.as_bytes()).to_bytes());
+        c.packages
+            .get_mut("pluxy/tool")
+            .unwrap()
+            .linux
+            .insert(p.into(), other_signer);
+        let e = c
+            .admitted_linux_record("pluxy/tool", p, &roots)
+            .unwrap_err();
+        assert!(
+            e.contains("is not signed by the signer of its active release"),
+            "{e}"
+        );
+    }
+    c.packages
+        .get_mut("pluxy/tool")
+        .unwrap()
+        .linux
+        .insert(p.into(), r.clone());
+    // Without the root that signed it: refused.
+    let e = c
+        .admitted_linux_record("pluxy/tool", p, &NoRoots)
+        .unwrap_err();
+    assert!(e.contains("not configured"), "{e}");
+    // A changed file in its store folder: refused.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let m = std::sync::Mutex::new(c);
+        admitted_linux_unlocked(&m, "pluxy/tool", p, &roots).unwrap();
+        let dir = d.store().join(&r.sha256);
+        thaw(&dir);
+        let tool = dir.join("bin").join("tool-linux");
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(&tool, "\x7fELF changed\n").unwrap();
+        let e = admitted_linux_unlocked(&m, "pluxy/tool", p, &roots).unwrap_err();
+        assert!(e.contains("changed since they were installed"), "{e}");
+        // The device's own program is not the Linux build's: it is still admitted.
+        admitted_unlocked(&m, "pluxy/tool", &roots).unwrap();
+    }
+    done(root);
+}
+
 /// macOS: the store's folders keep no extended access list entry, as they keep no group or other
 /// mode bits, so a release put in the store inherits none.
 #[cfg(target_os = "macos")]

@@ -1,4 +1,4 @@
-// The tools shard of the Windows and macOS native test (platform.ts, PLATFORM_SHARDS in
+// The tools and open shards of the Windows and macOS native test (platform.ts, PLATFORM_SHARDS in
 // shards.ts): the sessions run.ts runs on Linux for signed tools, in the real app built with
 // native-test and artifact-test-trust, against a test core in local mode
 // (`go run ./e2e/panelcore -probe`, as dialogs.ts starts it):
@@ -9,10 +9,26 @@
 //   after the app quit, none of the tool processes each names still runs;
 // - routing: cross-package routing, then declared jobs (routing_native.rs, jobs_native.rs;
 //   routing.ts);
-// - launcher: the execution program and the launcher with managed launches
-//   (launcher_platform_native.rs; launcher.ts), with the fixtures' bin first on PATH and a canary
-//   variable no launch may get; after the app quit, a file named stop in the fixtures' work folder
-//   ends any agent left running.
+// - launcher: the execution program and the launcher, with this system's terminal kinds, detached
+//   and managed launches and Windows' program rules (launcher_platform_native.rs; launcher.ts),
+//   with the fixtures' bin first on PATH and a canary variable no launch may get. On Windows the
+//   app runs outside the job the runner's steps run in (outsideJobRun), so that its detached
+//   launches can leave it. After the app quit, a file named stop in the fixtures' work folder and
+//   in each folder in it ends every agent left running, and each agent's heartbeat must stop; on
+//   macOS Terminal, when the session's launches started it, is quit;
+// - vault: the vault, secret delivery and references and journal recovery, then client-key capture
+//   and entry (vault_native.rs, client_key_native.rs; vault.ts). Client keys are made on the test
+//   core, whose config file core.json in the fixtures names: the app's own core, which run.ts's
+//   session uses on Linux, does not run on these systems yet. Neither the vault's key and canary,
+//   the test core's management key nor a client key the check learned may appear in the app's
+//   output;
+// - open (the open shard, a job of its own): a tool's opening of a file in the system's own app,
+//   and the app's opening of an address in the default browser (open_platform_native.rs; open.ts,
+//   buildPlatformOpenFixtures), with the session's own https server (browser.ts). On macOS the
+//   session trusts that server's test authority for the run and deletes it afterwards, checking
+//   that macOS trusts the server's certificate only meanwhile; on Windows the app runs outside the
+//   runner's job as in the launcher session, as its confirmed opens are detached launches, and the
+//   session removes the check's .jsonl file type if the app left it, and reports that.
 //
 // Each session gets a fresh app state and a private temporary HOME holding the test trust profile
 // (the app's updater gate and trust store read it from HOME). On macOS the app's folders come from
@@ -22,19 +38,24 @@
 // tool's APPDATA and LOCALAPPDATA with the app's own.
 //
 // This test never kills or signals a process by its ID on Windows or macOS: the app it started is
-// stopped through its own child object, and a tool process left running is reported, not stopped.
+// stopped through its own child object (on Windows' launcher and open sessions, through the
+// starter's, which started it), and a tool process left running is reported, not stopped.
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readdirSync,
   readFileSync,
+  readSync,
   realpathSync,
+  rmdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -42,12 +63,15 @@ import { tmpdir } from "node:os";
 import { delimiter, join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
 import { buildAdmissionFixtures, EXE, PROFILE_FILE } from "./admission";
+import { macTrusts, type Served, serveHttps, trustOnMac } from "./browser";
 import { buildLauncherFixtures } from "./launcher";
+import { buildPlatformOpenFixtures, platformOpenSessions } from "./open";
 import { buildProgramFixtures } from "./program";
 import { buildRoutingFixtures } from "./routing";
+import { buildVaultFixtures } from "./vault";
 
-/** The sessions of this shard, by their names in shards.ts. */
-export const TOOL_SESSIONS = ["admission", "program", "routing", "launcher"] as const;
+/** The sessions of these shards, by their names in shards.ts. */
+export const TOOL_SESSIONS = ["admission", "program", "routing", "launcher", "vault", "open"] as const;
 export type ToolSession = (typeof TOOL_SESSIONS)[number];
 
 /** What platform.ts gives these sessions. */
@@ -72,7 +96,7 @@ const next = resolvePath(import.meta.dir, "..", "..");
 const PAGE = "ext/test/probe/probe";
 /** The updater key in the trust profile: this dev app has no test package to trust. */
 const UPDATER_KEY = "no-test-package";
-/** One app run: four minutes on Linux, with room for slower runners. */
+/** One app run: 10 minutes (4 minutes on Linux), with room for slower runners. */
 const TIMEOUT = 600_000;
 /** The test core's start: `go run` builds it first, once a minute or two on a runner. */
 const CORE_START = 180_000;
@@ -122,7 +146,7 @@ function knownFolders(ctx: Context): { roaming: string; local: string } {
 
 /** Starts the test core and waits at most CORE_START for its first line. Past that, it ends the
  * core (`stopCore`) and fails. */
-async function startCore(): Promise<{ proc: ChildProcess; base: string; key: string }> {
+async function startCore(): Promise<{ proc: ChildProcess; base: string; key: string; config: string }> {
   const proc = spawn("go", ["run", "./e2e/panelcore", "-probe"], {
     cwd: next,
     stdio: ["pipe", "pipe", "inherit"],
@@ -145,6 +169,178 @@ async function startCore(): Promise<{ proc: ChildProcess; base: string; key: str
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** A run of the app: its output, its end, and a way to stop it. */
+interface AppRun {
+  /** Calls f with each line of the app's stdout and stderr. */
+  lines(f: (line: string) => void): void;
+  /** Its exit code, once it ended and its output was read; null when it was stopped. */
+  closed: Promise<number | null>;
+  /** Stops it: only the process this session started. */
+  stop(): void;
+}
+
+/** The app as this session's child. */
+function childRun(bin: string, cwd: string, env: Record<string, string | undefined>): AppRun {
+  const child = spawn(bin, [], { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+  // "close", not "exit": it comes after the output is read.
+  const closed = new Promise<number | null>((resolve) => child.once("close", (c) => resolve(c)));
+  return {
+    lines(f) {
+      for (const s of [child.stdout, child.stderr]) if (s) createInterface({ input: s }).on("line", f);
+    },
+    closed,
+    stop() {
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+    },
+  };
+}
+
+/** Windows: the app started outside the job the runner's steps run in, which lets no process
+ * leave it (CREATE_BREAKAWAY_FROM_JOB is refused there), so no detached launch of the app's could
+ * start. WMI's Win32_Process.Create starts the fixture program's starter (`pluxy-fixture-run`,
+ * src-tauri/examples/program_fixture) outside it, as the workflow's "Detached launch outside the
+ * runner's job" step starts the unit tests; the starter starts the app as its own child with env
+ * and its output in files in a private folder, which this reads as they grow, and stops that
+ * child once asked. The app must be in this Windows session, where its windows and tray show. */
+async function outsideJobRun(
+  ctx: Context,
+  fixture: string,
+  cwd: string,
+  env: Record<string, string | undefined>,
+  folder: string,
+): Promise<AppRun> {
+  const at = (n: string) => join(folder, n);
+  const files = {
+    stdout: at("out.txt"),
+    stderr: at("err.txt"),
+    pid: at("pid"),
+    exit: at("exit"),
+    kill: at("kill"),
+  };
+  // The environment as a block holds names, not the per-drive folders (`=C:`) some list.
+  const whole = Object.fromEntries(
+    Object.entries(env).filter(([k, v]) => v !== undefined && k !== "" && !k.startsWith("=")),
+  );
+  writeFileSync(at("spec.json"), JSON.stringify({ program: ctx.bin, args: [], cwd, env: whole, ...files }));
+  const q = (s: string) => `'${s.replaceAll("'", "''")}'`;
+  writeFileSync(
+    at("start.ps1"),
+    [
+      `$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = ${q(`"${fixture}" pluxy-fixture-run "${at("spec.json")}"`)}; CurrentDirectory = ${q(cwd)} }`,
+      "Write-Output $r.ReturnValue",
+    ].join("\r\n"),
+  );
+  const started = ctx.powershell(`& ${q(at("start.ps1"))}`);
+  if (started.status !== 0 || started.out.trim() !== "0")
+    throw new Error(`WMI did not start the app outside the runner's job: ${started.out}`);
+  const deadline = Date.now() + 30_000;
+  while (!existsSync(files.pid) && !existsSync(files.exit) && Date.now() < deadline) await Bun.sleep(200);
+  if (!existsSync(files.pid)) {
+    // Should the starter still start it, it stops it at once.
+    writeFileSync(files.kill, "");
+    throw new Error(
+      `the starter did not start the app within 30 s: ${existsSync(files.exit) ? readFileSync(files.exit, "utf8") : "no word from it"}`,
+    );
+  }
+  const pid = Number(readFileSync(files.pid, "utf8"));
+  // Its Windows session, and this one's (WMI's process host runs in session 0).
+  const sessions = ctx.powershell(
+    `(Get-Process -Id ${pid}).SessionId; [System.Diagnostics.Process]::GetCurrentProcess().SessionId`,
+  );
+  const [theirs, ours] = sessions.out.split(/\r?\n/).map((l) => l.trim());
+  const listeners: ((line: string) => void)[] = [];
+  const tails = [files.stdout, files.stderr].map((path) => ({ path, offset: 0, pending: Buffer.alloc(0) }));
+  // Reads what each file has gained, line by line (a line is whole once its line break is there),
+  // once there is someone to give the lines to.
+  const pump = () => {
+    if (listeners.length === 0) return;
+    for (const t of tails) {
+      if (!existsSync(t.path)) continue;
+      const fd = openSync(t.path, "r");
+      try {
+        const chunk = Buffer.alloc(1 << 16);
+        for (;;) {
+          const n = readSync(fd, chunk, 0, chunk.length, t.offset);
+          if (n <= 0) break;
+          t.offset += n;
+          t.pending = Buffer.concat([t.pending, chunk.subarray(0, n)]);
+        }
+      } finally {
+        closeSync(fd);
+      }
+      for (let i = t.pending.indexOf(10); i >= 0; i = t.pending.indexOf(10)) {
+        const line = t.pending.subarray(0, i).toString("utf8").replace(/\r$/, "");
+        t.pending = t.pending.subarray(i + 1);
+        for (const f of listeners) f(line);
+      }
+    }
+  };
+  let asked: number | undefined;
+  const closed = (async () => {
+    while (!existsSync(files.exit)) {
+      pump();
+      if (asked !== undefined && Date.now() - asked > 60_000)
+        throw new Error(
+          `the app started outside the runner's job (process ${pid}) did not stop within 60 s of being asked; it is left running (this test signals no process by its ID)`,
+        );
+      await Bun.sleep(250);
+    }
+    // The starter writes the exit file once the app ended: its output is all in the files.
+    pump();
+    for (const t of tails) if (t.pending.length > 0) for (const f of listeners) f(t.pending.toString("utf8"));
+    const exit = readFileSync(files.exit, "utf8").trim();
+    return /^-?\d+$/.test(exit) ? Number(exit) : null;
+  })();
+  const run: AppRun = {
+    lines: (f) => listeners.push(f),
+    closed,
+    stop: () => {
+      asked ??= Date.now();
+      try {
+        writeFileSync(files.kill, "");
+      } catch {
+        // Its folder is gone (the session cleaned up): closed has said whether it stopped.
+      }
+    },
+  };
+  if (!theirs || theirs !== ours) {
+    run.stop();
+    await closed.catch(() => null);
+    throw new Error(
+      `the app started outside the runner's job is in Windows session ${theirs}, not this session's ${ours}: ${sessions.out}`,
+    );
+  }
+  return run;
+}
+
+/** The agents' heartbeat files under work (`<record>.<process ID>.beat`, which each rewrites
+ * every 50 ms until its stop file is there), with what each holds now. */
+function beats(work: string): Map<string, string> {
+  const out = new Map<string, string>();
+  const walk = (dir: string) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name.endsWith(".beat")) {
+        try {
+          out.set(p, readFileSync(p, "utf8"));
+        } catch {
+          // Replaced while read: it beats.
+          out.set(p, "");
+        }
+      }
+    }
+  };
+  walk(work);
+  return out;
+}
+
+/** macOS: whether Terminal runs (asked without starting it or sending it an Apple event). */
+function terminalRuns(): boolean {
+  const r = spawnSync("osascript", ["-e", 'application "Terminal" is running'], { encoding: "utf8" });
+  return r.status === 0 && r.stdout.trim() === "true";
 }
 
 /** env with PATH's value replaced, under the name the environment has it (`Path` on Windows). */
@@ -219,7 +415,12 @@ function makeRemovable(data: string) {
 /** One session: its fixtures, a fresh app state, the app run, and run.ts's checks of its report. */
 export async function toolSession(name: ToolSession, ctx: Context) {
   const { check, say } = ctx;
-  const root = mkdtempSync(join(process.env.RUNNER_TEMP ?? tmpdir(), "pluxy-tools-"));
+  // On Windows the user's own temporary folder, by its long path: the execution program's terminal
+  // runs a program only when no other account may change it, its folder, or what a folder above
+  // holds (app-tools README), and on GitHub's runners the Users group may add folders under `D:\a`,
+  // where RUNNER_TEMP is.
+  const base = windows ? realpathSync.native(tmpdir()) : (process.env.RUNNER_TEMP ?? tmpdir());
+  const root = mkdtempSync(join(base, "pluxy-tools-"));
   const fixtures = join(root, name);
   let home = join(root, "home");
   let configDir: string;
@@ -229,7 +430,15 @@ export async function toolSession(name: ToolSession, ctx: Context) {
   // The app's data folder (its package store's), once this session made it.
   let data: string | undefined;
   let core: Awaited<ReturnType<typeof startCore>> | undefined;
-  let proc: ChildProcess | undefined;
+  // The app's run, until it ended.
+  let app: AppRun | undefined;
+  // Windows' launcher and open sessions: the private folder of their starter's files.
+  let runFolder: string | undefined;
+  // macOS' launcher session: whether Terminal ran before the app did.
+  let terminalBefore: boolean | undefined;
+  // The open session's https server, and on macOS what removes its trusted test authority.
+  let served: Served | undefined;
+  let untrust: (() => void) | undefined;
   try {
     if (windows) {
       home = ctx.privateFolder();
@@ -264,6 +473,33 @@ export async function toolSession(name: ToolSession, ctx: Context) {
       ({ registries, nonce } = buildProgramFixtures(fixtures, home, programFixture));
     } else if (name === "routing") {
       ({ registries, nonce } = buildRoutingFixtures(fixtures, home, programFixture));
+    } else if (name === "vault") {
+      ({ registries, nonce, canaries } = buildVaultFixtures(fixtures, home, programFixture));
+    } else if (name === "open") {
+      const execution = join(appToolsTarget, "debug", `execution${EXE}`);
+      check(existsSync(execution), `the execution program ${execution} is not built`);
+      ({ registries, nonce } = buildPlatformOpenFixtures(
+        fixtures,
+        home,
+        programFixture,
+        execution,
+        join(next, "app-tools", "execution", "pluxy-extension.json"),
+      ));
+      // The session's own https address for the app's browser step, which macOS' browser asks for
+      // only once it trusts the server. A failure here is reported, and that step then fails.
+      served = serveHttps(fixtures);
+      if (!windows) {
+        try {
+          untrust = trustOnMac(served.certs, fixtures);
+          const t = macTrusts(served.certs, fixtures);
+          check(
+            t.ok,
+            `macOS does not trust the session's server after trusting its test authority: ${t.out}`,
+          );
+        } catch (e) {
+          check(false, `could not trust the session's test authority: ${(e as Error).message}`);
+        }
+      }
     } else {
       const execution = join(appToolsTarget, "debug", `execution${EXE}`);
       check(existsSync(execution), `the execution program ${execution} is not built`);
@@ -288,6 +524,12 @@ export async function toolSession(name: ToolSession, ctx: Context) {
 
     say("starting the test core");
     core = await startCore();
+    if (name === "vault") {
+      // The core whose config file the client-key check reads the keys core makes from.
+      writeFileSync(join(fixtures, "core.json"), JSON.stringify({ config: core.config }));
+      // Its management key, which the check types when it signs in again off Linux.
+      canaries = [...canaries, core.key];
+    }
     // The connection the app starts with: local mode, signed in with a kept key.
     writeFileSync(
       join(localDir, "connection.json"),
@@ -313,6 +555,8 @@ export async function toolSession(name: ToolSession, ctx: Context) {
       env.PLUXY_TEST_PROGRAM_CANARY = randomUUID();
     }
     if (name === "routing") env.PLUXY_APP_TEST_ROUTING = fixtures;
+    if (name === "vault") env.PLUXY_APP_TEST_VAULT = fixtures;
+    if (name === "open") env.PLUXY_APP_TEST_OPEN = fixtures;
     if (launcherBin) {
       env.PLUXY_APP_TEST_LAUNCHER = fixtures;
       // In the app's environment, never in a launch's (launcher_platform_native.rs checks the
@@ -325,17 +569,30 @@ export async function toolSession(name: ToolSession, ctx: Context) {
     }
 
     say(`running ${ctx.bin}`);
-    const child = spawn(ctx.bin, [], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
-    proc = child;
+    if (launcherBin && !windows) terminalBefore = terminalRuns();
+    let run: AppRun;
+    if ((launcherBin || name === "open") && windows) {
+      // The launcher's detached launches and the open session's confirmed opens (detached launches
+      // too) must be able to leave the app's job.
+      say("starting it outside the runner's job");
+      runFolder = ctx.privateFolder();
+      run = await outsideJobRun(ctx, programFixture, root, env, runFolder);
+    } else {
+      run = childRun(ctx.bin, root, env);
+    }
+    app = run;
     // biome-ignore lint/suspicious/noExplicitAny: the app's JSON evidence, checked field by field below
     const steps = new Map<string, any>();
     const order: string[] = [];
     const log: string[] = [];
+    // Every line, for the client keys the check learns as it runs (vault).
+    const output: string[] = [];
     const onLine = (line: string) => {
       if (canaries.some((c) => line.includes(c))) {
-        check(false, "the launcher check's key or canary appeared on the app's stdout/stderr");
+        check(false, `the ${name} check's key or canary appeared on the app's stdout/stderr`);
         return;
       }
+      output.push(line);
       log.push(line);
       if (log.length > 60) log.shift();
       const m = /^native-test: (\S+) (.*)$/.exec(line);
@@ -354,28 +611,28 @@ export async function toolSession(name: ToolSession, ctx: Context) {
       if (step === "closed") writeFileSync(quit, "");
       if (step === "stalled") {
         check(false, `the app stalled: ${json}`);
-        child.kill();
+        run.stop();
       }
     };
-    if (child.stdout) createInterface({ input: child.stdout }).on("line", onLine);
-    if (child.stderr) createInterface({ input: child.stderr }).on("line", onLine);
+    run.lines(onLine);
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
-      // Only the process this session started.
-      child.kill();
+      run.stop();
     }, TIMEOUT);
-    // "close", not "exit": it comes after the output is read. Once stopped, it has STOP_MS for
-    // that.
+    // Once stopped, the app has STOP_MS for its output to close ("close", not "exit": it comes
+    // after the output is read).
     let late: ReturnType<typeof setTimeout> | undefined;
-    const code = await new Promise<number | null | "open">((resolve) => {
-      child.once("close", (c) => resolve(c));
-      late = setTimeout(() => resolve("open"), TIMEOUT + STOP_MS);
-    });
+    const code = await Promise.race([
+      run.closed,
+      new Promise<"open">((resolve) => {
+        late = setTimeout(() => resolve("open"), TIMEOUT + STOP_MS);
+      }),
+    ]);
     clearTimeout(timer);
     clearTimeout(late);
     check(code !== "open", `the app's output did not close within ${STOP_MS / 1000} s after it was stopped`);
-    if (code !== "open") proc = undefined;
+    if (code !== "open") app = undefined;
 
     const failure = (steps.get("failed") as { error?: string } | undefined)?.error ?? "no report";
     check(!timedOut, `the app did not finish within ${TIMEOUT / 1000} s; stopped it`);
@@ -452,19 +709,125 @@ export async function toolSession(name: ToolSession, ctx: Context) {
       say(`launcher ${JSON.stringify(r ?? {})}`);
     }
 
+    if (name === "vault") {
+      const v = steps.get("vault");
+      check(v?.passed === true, `the vault check did not complete: ${failure}`);
+      const c = steps.get("client_keys");
+      check(c?.passed === true, `the client-key check did not complete: ${failure}`);
+      // The client keys the check captured, as it learned them (client_key_native.rs).
+      const file = join(fixtures, "client-keys");
+      const clientKeys = existsSync(file)
+        ? readFileSync(file, "utf8")
+            .split("\n")
+            .filter((k) => k.length > 0)
+        : [];
+      check(clientKeys.length === 2, `the client-key check noted ${clientKeys.length} keys, not 2`);
+      check(
+        !output.some((line) => clientKeys.some((k) => line.includes(k))),
+        "a client key from the client-key check appeared on the app's stdout/stderr",
+      );
+      say(`vault ${JSON.stringify(v ?? {})}`);
+      say(`client keys ${JSON.stringify(c ?? {})}`);
+    }
+
+    if (name === "open") {
+      const o = steps.get("open");
+      check(o?.passed === true, `the open check did not complete: ${failure}`);
+      say(`open ${JSON.stringify(o ?? {})}`);
+    }
+
     if (timedOut || code !== 0 || steps.has("failed")) say(`the app's last lines:\n  ${log.join("\n  ")}`);
   } finally {
     // An app still running here (the session failed before it quit): only the one it started.
-    if (proc && proc.exitCode === null && proc.signalCode === null) {
-      const p = proc;
-      p.kill();
-      if (!(await within(p, "close", STOP_MS)))
-        check(false, `the app's output did not close within ${STOP_MS / 1000} s after it was stopped`);
+    if (app) {
+      const a = app;
+      a.stop();
+      try {
+        const closed = await Promise.race([a.closed.then(() => true), Bun.sleep(STOP_MS).then(() => false)]);
+        if (!closed)
+          check(false, `the app's output did not close within ${STOP_MS / 1000} s after it was stopped`);
+      } catch (e) {
+        check(false, (e as Error).message);
+      }
     }
-    // The launcher's agent ends once this file is in its working folder.
-    if (name === "launcher" && existsSync(join(fixtures, "work"))) {
-      writeFileSync(join(fixtures, "work", "stop"), "");
-      await Bun.sleep(2000);
+    // The launcher's agents: each ends once a file named stop is in its record's folder (work, or
+    // the launch's own folder in it), and until then rewrites its heartbeat file every 50 ms.
+    const work = join(fixtures, "work");
+    if (name === "launcher" && existsSync(work)) {
+      for (const d of [
+        work,
+        ...readdirSync(work, { withFileTypes: true })
+          .filter((e) => e.isDirectory())
+          .map((e) => join(work, e.name)),
+      ])
+        writeFileSync(join(d, "stop"), "");
+      // Still for a second within 15 s: every agent ended.
+      let last = beats(work);
+      let still = [...last.keys()];
+      for (const deadline = Date.now() + 15_000; still.length > 0 && Date.now() < deadline; ) {
+        await Bun.sleep(1000);
+        const now = beats(work);
+        still = [...now].filter(([p, v]) => last.get(p) !== v).map(([p]) => p);
+        last = now;
+      }
+      check(
+        still.length === 0,
+        `the launcher's agents still run after their stop files: ${still.join(", ")}`,
+      );
+    }
+    // macOS: Terminal, started by this session's terminal launches, quit (its windows' programs
+    // ended above); one that ran before is left as it was.
+    if (terminalBefore === false && terminalRuns()) {
+      const r = spawnSync("osascript", ["-e", 'tell application "Terminal" to quit'], {
+        encoding: "utf8",
+        timeout: 30_000,
+      });
+      // It ends a moment after it answered.
+      for (const deadline = Date.now() + 10_000; terminalRuns() && Date.now() < deadline; )
+        await Bun.sleep(250);
+      check(
+        r.status === 0 && !terminalRuns(),
+        `Terminal, which this session's launches started, did not quit: ${r.status} ${r.stdout ?? ""}${r.stderr ?? ""}`,
+      );
+    }
+    if (terminalBefore === true) say("Terminal ran before this session: its windows from this session stay");
+    if (name === "open") {
+      served?.stop();
+      if (untrust && served) {
+        try {
+          untrust();
+          const t = macTrusts(served.certs, fixtures);
+          check(!t.ok, "macOS still trusts the session's server after its test authority was deleted");
+        } catch (e) {
+          check(false, `could not delete the session's test authority: ${(e as Error).message}`);
+        }
+      }
+      // The check removes its .jsonl file type itself; one left (the app ended first) is removed
+      // here, and reported.
+      if (windows) {
+        const left = ctx.powershell(
+          [
+            "$c = 'HKCU:\\Software\\Classes'",
+            "$left = @()",
+            'if (Test-Path -LiteralPath "$c\\PluxyTest.jsonl") { Remove-Item -LiteralPath "$c\\PluxyTest.jsonl" -Recurse; $left += \'PluxyTest.jsonl\' }',
+            '$k = Get-Item -LiteralPath "$c\\.jsonl" -ErrorAction SilentlyContinue',
+            "if ($k -and $k.GetValue('') -eq 'PluxyTest.jsonl') { $k.Dispose(); Remove-Item -LiteralPath \"$c\\.jsonl\" -Recurse; $left += '.jsonl' }",
+            "$left -join ','",
+          ].join("; "),
+        );
+        check(
+          left.status === 0 && left.out === "",
+          `the open check left its .jsonl file type registered, removed now: ${left.status} ${left.out}`,
+        );
+        // The junction, not what it leads to, before its folder is removed.
+        const junction = join(platformOpenSessions(home), "linked");
+        try {
+          rmdirSync(junction);
+        } catch (e) {
+          if ((e as NodeJS.ErrnoException).code !== "ENOENT")
+            check(false, `could not remove the junction ${junction}: ${(e as Error).message}`);
+        }
+      }
     }
     if (core && !(await stopCore(core.proc)))
       check(false, `the test core did not exit within ${(2 * STOP_MS) / 1000} s of being stopped`);
@@ -478,7 +841,7 @@ export async function toolSession(name: ToolSession, ctx: Context) {
     // Windows: its folders may stay in use a moment after the app quit (its WebView2 processes,
     // the agent the launcher started). Each is tried, and one left behind is a problem.
     const webview = made[1];
-    for (const d of windows ? [...made, root, home] : [root]) {
+    for (const d of windows ? [...made, root, home, ...(runFolder ? [runFolder] : [])] : [root]) {
       try {
         if (webview) ctx.removeWhenFree(d, webview);
         else rmSync(d, { recursive: true, force: true });

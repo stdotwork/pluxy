@@ -6,6 +6,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -904,9 +906,16 @@ func writeExtensionManifest(binDir string) error {
 }
 
 func writeCoreConfig(cfgPath, manifestPath, mockBaseURL string) error {
+	// Core always has a management key; the bench never calls the management API, so a random
+	// one made for this run is enough.
+	mgmt := make([]byte, 16)
+	if _, err := rand.Read(mgmt); err != nil {
+		return err
+	}
 	cfg := map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{benchClientKey},
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{benchClientKey},
+		"management_key": hex.EncodeToString(mgmt),
 		"extension": map[string]any{
 			"manifest": manifestPath,
 			"accounts": []any{

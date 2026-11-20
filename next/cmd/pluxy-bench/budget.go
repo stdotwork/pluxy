@@ -6,45 +6,52 @@ import (
 	"strings"
 )
 
-// Check-mode budgets. Each was set from the baseline on main at 35ad0d646 (docs/perf.md): the
-// median of three check runs on GitHub's ubuntu-latest runner (4 vCPU) and of five full runs on
-// an 8 vCPU Linux machine. Time budgets are ratios to the direct path in the same run, so the
-// mock's timing and the client's own costs cancel out; machine speed does not, so each leaves
-// room for two to three times the overhead measured on CI. Lower a budget when a fix lowers
-// its measured value.
+// Check-mode budgets. The ratio budgets were reset from the parse-once baseline on GitHub's
+// ubuntu-latest runner (4 vCPU); the chunk-delay and memory budgets remain from main at
+// 35ad0d646 (docs/perf.md), because parse-once did not halve their measured values. Time budgets
+// are ratios to the direct path in the same run, so the mock's timing and the client's own costs
+// cancel out; machine speed does not, so each leaves room for two to three times the overhead
+// measured on CI. Lower a budget when a fix lowers its measured value.
 const (
 	// BudgetStreamPassTTFTRatio bounds proxy p50 TTFT / direct p50 TTFT in stream-pass (mock
-	// TTFT 100 ms). Baseline 1.08 (CI) and 1.13 (8 vCPU): pluxy adds 8 to 13 ms at a 100 KB body.
-	BudgetStreamPassTTFTRatio = 1.25
+	// TTFT 100 ms). Parse-once baseline 1.034 (CI run 44677562763) and 1.025 (CI run
+	// 44676556514); 8 vCPU: CI only. At a 100 KB body, pluxy adds 3.4 ms in the higher sample.
+	BudgetStreamPassTTFTRatio = 1.10
 
 	// BudgetStreamTranslateTTFTRatio bounds the same ratio in stream-translate (Messages to
-	// Chat Completions). Baseline 1.11 (CI) and 1.16 (8 vCPU).
-	BudgetStreamTranslateTTFTRatio = 1.30
+	// Chat Completions). Parse-once baseline 1.053 (CI run 44677562763) and 1.040 (CI run
+	// 44676556514); 8 vCPU: CI only.
+	BudgetStreamTranslateTTFTRatio = 1.15
 
 	// BudgetStreamPassChunkDelayFraction bounds proxy p99 chunk delay / the mock's chunk
-	// interval (10 ms) in stream-pass. Baseline 0.046 (CI) and 0.053 (8 vCPU): about 0.5 ms.
+	// interval (10 ms) in stream-pass. Parse-once baseline 0.044 (CI run 44676556514) and 0.036
+	// (CI run 44677562763); 8 vCPU: CI only. It did not halve, so the budget stays.
 	BudgetStreamPassChunkDelayFraction = 0.2
 
-	// BudgetStreamTranslateChunkDelayFraction is the same bound in stream-translate. Baseline
-	// 0.047 (CI) and 0.055 (8 vCPU).
+	// BudgetStreamTranslateChunkDelayFraction is the same bound in stream-translate. Parse-once
+	// baseline 0.046 (CI run 44677562763) and 0.038 (CI run 44676556514); 8 vCPU: CI only. It did
+	// not halve, so the budget stays.
 	BudgetStreamTranslateChunkDelayFraction = 0.2
 
 	// BudgetNonstreamPassTotalRatio bounds proxy p50 total / direct p50 total in
-	// nonstream-pass (mock latency 100 ms). Baseline 1.08 (CI) and 1.13 (8 vCPU).
-	BudgetNonstreamPassTotalRatio = 1.25
+	// nonstream-pass (mock latency 100 ms). Parse-once baseline 1.035 (CI run 44677562763) and
+	// 1.025 (CI run 44676556514); 8 vCPU: CI only. At a 100 KB body, pluxy adds 3.5 ms in the
+	// higher sample.
+	BudgetNonstreamPassTotalRatio = 1.10
 
 	// BudgetAgentsTotalP99Ratio bounds proxy p99 total / direct p99 total with 80 streams open
-	// at once (about 3.3 s each). Baseline 1.09 (CI, 4 vCPU shared by both sides) and 1.03
-	// (8 vCPU).
-	BudgetAgentsTotalP99Ratio = 1.20
+	// at once (about 3.3 s each). Parse-once baseline 1.037 (CI run 44677562763) and 1.028 (CI
+	// run 44676556514); 8 vCPU: CI only.
+	BudgetAgentsTotalP99Ratio = 1.10
 
 	// BudgetIdleRSSMB bounds the resident memory (MB) of core and its extension processes,
-	// started and idle, before any request. Baseline 44 (CI) and 42 (8 vCPU).
+	// started and idle, before any request. Parse-once baseline 44.73 (CI run 44677562763) and
+	// 44.57 (CI run 44676556514); 8 vCPU: CI only. It did not halve, so the budget stays.
 	BudgetIdleRSSMB = 100.0
 
 	// BudgetAgentsRSSPerStreamKB bounds (peak RSS under agents - idle RSS) / 80 streams, in KB,
-	// at a 100 KB request body. Baseline 1016 (CI) and about 1,500 (8 vCPU, where the Go
-	// runtime runs more threads).
+	// at a 100 KB request body. Parse-once baseline 816.40 (CI run 44677562763) and 799.40 (CI
+	// run 44676556514); 8 vCPU: CI only. It did not halve, so the budget stays.
 	BudgetAgentsRSSPerStreamKB = 3072.0
 )
 

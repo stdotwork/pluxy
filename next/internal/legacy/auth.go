@@ -38,16 +38,15 @@ type Skipped struct {
 }
 
 // How long before expiry the extensions renew what they log in: Codex 4 days ahead, Claude an
-// hour ahead, Antigravity half an hour ahead and xAI five minutes ahead
+// hour ahead and xAI five minutes ahead
 // (next/extensions/*/login.go, next/extensions/claude/oauth.go), and a Codex SIWC sign-in five
 // minutes ahead (next/extensions/codex/siwc.go). Imported accounts get the same;
 // the others use core's default.
 const (
-	codexRefreshLead       = 96 * time.Hour
-	claudeRefreshLead      = time.Hour
-	antigravityRefreshLead = 30 * time.Minute
-	xaiRefreshLead         = 5 * time.Minute
-	siwcRefreshLead        = 5 * time.Minute
+	codexRefreshLead  = 96 * time.Hour
+	claudeRefreshLead = time.Hour
+	xaiRefreshLead    = 5 * time.Minute
+	siwcRefreshLead   = 5 * time.Minute
 )
 
 // googleTokenURI is the token endpoint a service account key names by default; the Gemini
@@ -228,14 +227,7 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 			settings["interactions"] = true
 		}
 	case "antigravity":
-		// The file holds no OAuth client secret (today's core has it built in, and so does the
-		// extension), so the account renews on its own.
-		r.Extension = Antigravity
-		renewAhead(antigravityRefreshLead)
-		c.Data = object(map[string]any{"project_id": text(m, "project_id")})
-		if u := text(m, "base_url"); u != "" {
-			settings["base_url"] = u
-		}
+		return f, nil, "pluxy no longer ships the Antigravity provider"
 	case "xai":
 		r.Extension = XAI
 		renewAhead(xaiRefreshLead)

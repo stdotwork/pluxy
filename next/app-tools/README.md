@@ -99,7 +99,7 @@ The program side of the contract, for any tool (`pluxy-program`):
 | `Error` | The contract's error object: `invalid_request`, `unsupported`, `not_found`, `unavailable`, `internal`, `cancelled`, or any code. |
 | `read_frame`, `write_frame` | The framing: a four-byte big-endian length and UTF-8 JSON; a program's frames are at most `MAX_FRAME` (1 MiB). |
 | `MAX_BATCH` | The largest batch a producer may send, 48 KiB of JSON. |
-| `environment` | `PLUXY_ENVIRONMENT`, which the host sets when it runs a package's Linux program in a WSL distribution: `wsl:<distribution>:<user>`. `Identity::from_env` (so `run`) then checks that `WSL_DISTRO_NAME` is that distribution and that the effective user ID's name in `/etc/passwd` is that user; otherwise the program stops before hello with `pluxy expected WSL <d>/<u>, this is <d'>/<u'>`, so a record of a distribution or user made again under the same name, or a routing mistake, runs nothing. Anywhere but Linux the variable is refused. |
+| `environment` | `PLUXY_ENVIRONMENT`, which the host sets when it runs a package's Linux program in a WSL distribution: `wsl:<distribution>:<user>`, with `PLUXY_ENVIRONMENT_ACCOUNT`, `<user ID>:<home>` as the host's record of the user has them. `Identity::from_env` (so `run`) then checks that `WSL_DISTRO_NAME` is that distribution, that the effective user ID's name in `/etc/passwd` is that user, and that the ID and that entry's home are the ones named; otherwise the program stops before hello with `pluxy expected WSL <d>/<u>, this is <d'>/<u'>` or `pluxy expected <u> with user ID <n> and home <h>, this is user ID <n'> with home <h'>`, so a record of a distribution or user made again under the same name (or of a home since moved), or a routing mistake, runs nothing. A missing or unreadable account is refused too. Anywhere but Linux the variable is refused. |
 
 Each call runs on a thread of its own that ends with the call; the thread that reads stdin
 routes cancels, the answers to a call's own calls, vault and jobs frames, and a job's acks. An
@@ -1131,7 +1131,10 @@ and then waits for Enter (`console`) or stays at a `cmd.exe /D` or `powershell.e
 -NoProfile` prompt, both from the System32 folder Windows reports (never the launch's
 `SystemRoot`). There is no Windows Terminal kind:
 `wt.exe` splits its command line its own way, so the arguments confirmed would not be the ones
-it runs.
+it runs. In the native test's build (feature `native-test`) nobody is at the window, so the
+`console` window does not wait for Enter, and the shell after the program runs one fixed command
+that writes its working folder to `pluxy-after-exit` in that folder, then exits; a normal build
+does neither.
 
 Windows cannot run an open file, so the execution program runs the program by its path, and
 first holds it: it opens the program and every folder above it so that none of them can be
@@ -1209,10 +1212,10 @@ either before the host is asked.
 
 `pluxy/wsl` (program `bin/pluxy-wsl.exe`, Windows only: on any other system every operation answers
 `unsupported`) tells pluxy's desktop app which WSL distributions and users there are, checks one,
-and prepares launches inside it. It is groundwork for the later WSL support: the app does not run
-native tools on Windows yet, so it does not use this tool, and its side (setting a client up in a
-distribution by running the client package's own Linux program there, through `wsl.exe`) is not
-built. This tool only reads. It writes nothing
+and prepares launches inside it. The app uses it to list and check the distributions and users a
+client page offers and to prepare a launch there; it then runs the client package's own Linux
+program in the distribution through `wsl.exe` itself ([Tools in
+WSL](../app/app-host/README.md#tools-in-wsl-windows)). This tool only reads. It writes nothing
 anywhere and never starts a launch. It runs only Windows' own `wsl.exe`, from System32 as
 `GetSystemDirectoryW` reports it: with no window, empty standard input, an environment of
 `SystemRoot`, `WINDIR` and `WSL_UTF8=1` only, its output read while it runs and capped, and a

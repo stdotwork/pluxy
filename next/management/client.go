@@ -277,11 +277,45 @@ func (c *Client) Logs(ctx context.Context, q url.Values) (LogLines, error) {
 	return v, c.get(ctx, "/logs", q, &v)
 }
 
-// Usage is GET /usage; q takes since, until, model, provider, account, key_id, failed,
-// bucket and buckets.
+// Usage is GET /usage; q takes since, until, by, model, provider, account, key, key_id,
+// failed, bucket and buckets.
 func (c *Client) Usage(ctx context.Context, q url.Values) (UsageReply, error) {
 	var v UsageReply
 	return v, c.get(ctx, "/usage", q, &v)
+}
+
+// Setup is GET /setup.
+func (c *Client) Setup(ctx context.Context) (Setup, error) {
+	var v Setup
+	return v, c.get(ctx, "/setup", nil, &v)
+}
+
+// SetupScan is POST /setup/scan.
+func (c *Client) SetupScan(ctx context.Context) (Setup, error) {
+	var v Setup
+	_, err := c.Call(ctx, http.MethodPost, "/setup/scan", nil, nil, &v)
+	return v, err
+}
+
+// SetupApply is POST /setup/apply.
+func (c *Client) SetupApply(ctx context.Context, picks []string) (SetupApplyReply, error) {
+	var v SetupApplyReply
+	_, err := c.Call(ctx, http.MethodPost, "/setup/apply", nil, SetupApplyRequest{Picks: picks}, &v)
+	return v, err
+}
+
+// SetupDone is POST /setup/done.
+func (c *Client) SetupDone(ctx context.Context) (SetupDoneReply, error) {
+	var v SetupDoneReply
+	_, err := c.Call(ctx, http.MethodPost, "/setup/done", nil, nil, &v)
+	return v, err
+}
+
+// UsageEvents is GET /usage/events; q takes after, before, limit, since, until, model,
+// provider, account, key, key_id and failed.
+func (c *Client) UsageEvents(ctx context.Context, q url.Values) (UsageEventsReply, error) {
+	var v UsageEventsReply
+	return v, c.get(ctx, "/usage/events", q, &v)
 }
 
 // ThemePath is the path of theme id (publisher/name), each part escaped.

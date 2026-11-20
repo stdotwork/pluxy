@@ -12,6 +12,11 @@
 //! - `open -- <file>`: opens file in the app Windows opens its type with (`ShellExecuteExW`,
 //!   verb `open`, the file's own extension as its class, no dialog).
 //! - `app -- <AUMID>`: starts a packaged app (`shell:AppsFolder\<AUMID>`).
+//!
+//! In a build with the `native-test` feature (the native test's only), nobody is at the window: the
+//! `console` kind writes `held` to `pluxy-after-exit` in its working folder instead of waiting for
+//! Enter, and the Command Prompt or PowerShell after the program runs one fixed command that writes
+//! its working folder there, then exits. A normal build never does either (`after_exit_tests`).
 
 use crate::recipe::os::{aumid_ok, kind_shell, opens, wide, OPEN_TYPES};
 use std::io::{BufRead, Write};
@@ -81,12 +86,7 @@ fn terminal(kind: &str, program: &str, args: &[&str]) -> i32 {
     println!("[{name} exited with code {code}]");
     match shell {
         Some(sh) => {
-            let flags: &[&str] = if kind == "cmd" {
-                &["/D"]
-            } else {
-                &["-NoLogo", "-NoProfile"]
-            };
-            if let Err(e) = Command::new(&sh).args(flags).status() {
+            if let Err(e) = Command::new(&sh).args(shell_flags(kind)).status() {
                 println!("pluxy: could not start {}: {e}", sh.display());
                 hold();
             }
@@ -129,8 +129,47 @@ thread_local! {
     static BEFORE_RUN: std::cell::RefCell<Option<BeforeRun>> = const { std::cell::RefCell::new(None) };
 }
 
-/// Waits for Enter, so the window stays until the person has read it.
+/// The arguments of the shell started after the program: Command Prompt with AutoRun off,
+/// PowerShell with no logo and no profile, each interactive with no command.
+#[cfg(not(feature = "native-test"))]
+pub(crate) fn shell_flags(kind: &str) -> &'static [&'static str] {
+    if kind == "cmd" {
+        &["/D"]
+    } else {
+        &["-NoLogo", "-NoProfile"]
+    }
+}
+
+/// The native test's shell after the program: one fixed command writing the shell's working
+/// folder to `pluxy-after-exit`, then it exits.
+#[cfg(feature = "native-test")]
+pub(crate) fn shell_flags(kind: &str) -> &'static [&'static str] {
+    if kind == "cmd" {
+        &["/D", "/C", "cd > pluxy-after-exit"]
+    } else {
+        &[
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "(Get-Location).Path | Out-File -Encoding ascii pluxy-after-exit",
+        ]
+    }
+}
+
+/// Whether the `console` window waits for Enter before it closes: always, but in the native
+/// test's build.
+pub(crate) fn waits() -> bool {
+    cfg!(not(feature = "native-test"))
+}
+
+/// Waits for Enter, so the window stays until the person has read it. In the native test's build
+/// it writes `held` to `pluxy-after-exit` instead.
 fn hold() {
+    if !waits() {
+        let _ = std::fs::write("pluxy-after-exit", "held");
+        return;
+    }
     print!("Press Enter to close this window.");
     let _ = std::io::stdout().flush();
     let _ = std::io::stdin().lock().read_line(&mut String::new());
@@ -201,6 +240,9 @@ fn app(aumid: &str) -> Result<(), String> {
     shell_execute(&format!(r"shell:AppsFolder\{aumid}"), None, None)
 }
 
+#[cfg(test)]
+#[path = "after_exit_tests.rs"]
+mod after_exit_tests;
 #[cfg(test)]
 #[path = "launch_windows_tests.rs"]
 mod tests;

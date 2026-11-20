@@ -2,6 +2,7 @@ package corpus
 
 import (
 	"bufio"
+	"cmp"
 	crand "crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -452,44 +453,6 @@ var Providers = map[string]Provider{
 			return "kimi", accounts
 		},
 	},
-	// An Antigravity login: the Antigravity extension with an OAuth credential against an
-	// Antigravity auth file in today's core, both with base_url pointed at the fake upstream (the
-	// default is https://daily-cloudcode-pa.googleapis.com) and the same Google Cloud project.
-	// The tokens are fake and expire in 2100, so neither core renews them or looks up the
-	// project; today's core serves an Antigravity login only the models in its catalog.
-	"antigravity": {
-		CatalogModels: true,
-		NewCore: func(upstreamURL string, models, keys []string) (string, []any) {
-			var accounts []any
-			for i, k := range keys {
-				id := "corpus"
-				if i > 0 {
-					id = fmt.Sprintf("corpus-%d", i+1)
-				}
-				acct := map[string]any{
-					"id":       id,
-					"settings": map[string]any{"base_url": upstreamURL},
-					"credential": map[string]any{"kind": "oauth", "access_token": k, "refresh_token": k + "-refresh",
-						"expires_at": corpusTokenExpiry, "data": map[string]any{"project_id": corpusAntigravityProject}},
-				}
-				if len(models) > 0 {
-					acct["models"] = models
-				}
-				accounts = append(accounts, acct)
-			}
-			return "antigravity", accounts
-		},
-		// The new core asks Cloud Code which models each Antigravity login has
-		// (fetchAvailableModels) when it loads the account; the answer lists the models the cases
-		// use. The recordings hold no such request: the old core's were answered the same way.
-		Aside: func(r *http.Request) (Reply, bool) {
-			if r.URL.Path != "/v1internal:fetchAvailableModels" {
-				return Reply{}, false
-			}
-			return Reply{Status: http.StatusOK, Headers: map[string]string{"Content-Type": "application/json"},
-				Body: json.RawMessage(`{"models":{"gemini-3.8-flash-high":{},"claude-sonnet-5-5-high":{}}}`)}, true
-		},
-	},
 	// A Muse Code login: the Meta extension with an OAuth credential (the minted API key as its
 	// access token, the device token as its refresh token) against a Meta auth file in today's
 	// core, both with base_url pointed at the fake upstream (the default is
@@ -629,7 +592,6 @@ var NewCoreExtensions = map[string]string{
 	"claude":            "./extensions/claude",
 	"gemini":            "./extensions/gemini",
 	"kimi":              "./extensions/kimi",
-	"antigravity":       "./extensions/antigravity",
 	"meta":              "./extensions/meta",
 	"xai":               "./extensions/xai",
 }
@@ -667,8 +629,8 @@ func BuildNewCore(moduleRoot, dir string) error {
 
 // StartNewCore starts the new core from binDir with the case's provider pointed at upstreamURL,
 // one account per key, the settings in extra added to its config, and the case's override (over)
-// merged in. With a managementKey the management API is on, and the extensions honour the login
-// and key endpoints their account settings name (a provider's NewCore points them at upstreamURL
+// merged in. With a managementKey the case may call the management API with it, and the
+// extensions honour the login and key endpoints their account settings name (a provider's NewCore points them at upstreamURL
 // where a quota call needs it).
 func StartNewCore(binDir, workDir, provider, upstreamURL string, models, keys []string, extra map[string]json.RawMessage, over *CoreOverride, managementKey string) (*Core, error) {
 	p, ok := Providers[provider]
@@ -694,9 +656,9 @@ func StartNewCore(binDir, workDir, provider, upstreamURL string, models, keys []
 			"accounts": accounts,
 		},
 	}
-	if managementKey != "" {
-		cfg["management_key"] = managementKey
-	}
+	// Core always has a management key: a case that does not call the API gets one it never
+	// sends.
+	cfg["management_key"] = cmp.Or(managementKey, "corpus-unused-management-key")
 	for k, v := range extra {
 		cfg[k] = v
 	}
@@ -926,6 +888,3 @@ func corpusServiceAccountEmail(i int) string {
 
 // corpusKimiDeviceID is the device ID of the corpus's Kimi accounts.
 const corpusKimiDeviceID = "corpus-device-0001"
-
-// corpusAntigravityProject is the Google Cloud project of the corpus's Antigravity accounts.
-const corpusAntigravityProject = "corpus-project-0001"

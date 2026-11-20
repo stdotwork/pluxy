@@ -48,10 +48,14 @@ type command struct {
 
 // opts are the values of the commands' own flags.
 type opts struct {
-	model, version, registry               string
-	since, until, account, provider, after string
-	limit                                  int
-	id                                     string
+	model, version, registry                       string
+	since, until, by, account, provider, clientKey string
+	after, before                                  string
+	limit                                          int
+	yes                                            bool
+	picks                                          stringSliceFlag
+	keyID                                          string
+	id                                             string
 }
 
 // invocation is one run of a command.
@@ -61,7 +65,10 @@ type invocation struct {
 	args   []string
 	opts   opts
 	json   bool
+	stdin  io.Reader
 	stdout io.Writer
+	stderr io.Writer
+	tty    bool
 }
 
 // call makes one management call. With --json the reply's body goes to standard output as it
@@ -107,6 +114,10 @@ func yesNo(b bool) string {
 }
 
 func accountPath(id string) string { return "/accounts/" + url.PathEscape(id) }
+
+func init() {
+	commands = append(commands, setupCommands()...)
+}
 
 // commands are the client subcommands, in the order help lists them.
 var commands = []command{
@@ -203,17 +214,17 @@ var commands = []command{
 		run: func(x *invocation) error {
 			var r management.RegistriesReply
 			return x.call(http.MethodGet, "/registries", nil, nil, &r, func() {
-				rows := [][]string{{"REGISTRY", "PACKAGE", "VERSIONS"}}
+				rows := [][]string{{"REGISTRY", "PACKAGE", "TITLE", "KIND", "TIER", "VERSIONS"}}
 				for _, reg := range r.Registries {
 					if reg.Error != "" {
-						rows = append(rows, []string{reg.Name, "-", "error: " + reg.Error})
+						rows = append(rows, []string{reg.Name, "-", "-", "-", "-", "error: " + reg.Error})
 					}
 					for _, p := range reg.Packages {
 						var versions []string
 						for _, rel := range p.Releases {
 							versions = append(versions, rel.Version)
 						}
-						rows = append(rows, []string{reg.Name, p.ID, strings.Join(versions, ", ")})
+						rows = append(rows, []string{reg.Name, p.ID, dash(p.Title), dash(p.Kind), dash(p.Tier), strings.Join(versions, ", ")})
 					}
 				}
 				x.table(rows)
@@ -243,17 +254,17 @@ var commands = []command{
 		run: func(x *invocation) error {
 			var r management.AccountsReply
 			return x.call(http.MethodGet, "/accounts", nil, nil, &r, func() {
-				rows := [][]string{{"ID", "EXTENSION", "SOURCE", "STATE", "COOLING UNTIL"}}
+				rows := [][]string{{"ID", "EXTENSION", "SOURCE", "HEALTH", "UNTIL", "WHY"}}
 				for _, a := range r.Accounts {
-					state := a.State
-					if a.Disabled {
-						state = "disabled"
+					health := dash(a.Health.State)
+					if a.Health.Source == management.SourceUnverified {
+						health += " (unverified)"
 					}
 					until := "-"
-					if a.CooldownUntil != nil {
-						until = a.CooldownUntil.Local().Format(time.DateTime)
+					if a.Health.Until != nil {
+						until = a.Health.Until.Local().Format(time.DateTime)
 					}
-					rows = append(rows, []string{a.ID, dash(a.Extension), a.Source, state, until})
+					rows = append(rows, []string{a.ID, dash(a.Extension), a.Source, health, until, dash(a.Health.Why)})
 				}
 				x.table(rows)
 			})
@@ -367,17 +378,27 @@ var commands = []command{
 				x.table(rows)
 			})
 		}},
-	{words: "usage", routes: []string{"GET /usage"}, summary: "request and token totals, by model",
+	{words: "usage", routes: []string{"GET /usage"}, summary: "request and token totals, broken down by model, account, key or provider",
 		flags: func(fs *flag.FlagSet, o *opts) {
-			fs.StringVar(&o.since, "since", "", "from this time (RFC 3339) or this long ago (such as 24h)")
+			fs.StringVar(&o.since, "since", "", "from this time (RFC 3339) or this long ago (such as 24h or 7d)")
 			fs.StringVar(&o.until, "until", "", "up to this time (RFC 3339)")
+			fs.StringVar(&o.by, "by", "", "breakdown to show: model, account, key or provider (default: model)")
 			fs.StringVar(&o.model, "model", "", "only this model")
 			fs.StringVar(&o.account, "account", "", "only this account")
 			fs.StringVar(&o.provider, "provider", "", "only this provider (extension)")
+			fs.StringVar(&o.clientKey, "client-key", "", "only this client key ID")
 		},
 		run: func(x *invocation) error {
 			q := url.Values{}
-			for k, v := range map[string]string{"since": x.opts.since, "until": x.opts.until, "model": x.opts.model, "account": x.opts.account, "provider": x.opts.provider} {
+			for k, v := range map[string]string{
+				"since":    x.opts.since,
+				"until":    x.opts.until,
+				"by":       x.opts.by,
+				"model":    x.opts.model,
+				"account":  x.opts.account,
+				"provider": x.opts.provider,
+				"key":      x.opts.clientKey,
+			} {
 				if v != "" {
 					q.Set(k, v)
 				}
@@ -388,13 +409,109 @@ var commands = []command{
 					x.printf("usage is not recorded (usage-statistics-enabled is off)\n")
 				}
 				x.printf("%d requests, %d failed, %d input and %d output tokens\n", u.Requests, u.Failure, u.Tokens.Input, u.Tokens.Output)
-				if len(u.Models) == 0 {
+				header := "MODEL"
+				groups := u.Models
+				switch u.By {
+				case "account":
+					header = "ACCOUNT"
+					groups = u.Breakdown
+				case "key":
+					header = "KEY"
+					groups = u.Breakdown
+				case "provider":
+					header = "PROVIDER"
+					groups = u.Breakdown
+				case "model":
+					header = "MODEL"
+					groups = u.Breakdown
+				}
+				if len(groups) == 0 {
 					return
 				}
-				rows := [][]string{{"MODEL", "REQUESTS", "FAILED", "INPUT", "OUTPUT"}}
-				for _, g := range u.Models {
-					rows = append(rows, []string{g.Name, strconv.FormatInt(g.Requests, 10), strconv.FormatInt(g.Failure, 10),
-						strconv.FormatInt(g.Tokens.Input, 10), strconv.FormatInt(g.Tokens.Output, 10)})
+				var rows [][]string
+				if header == "ACCOUNT" {
+					rows = [][]string{{"ACCOUNT", "PROVIDER", "REQUESTS", "FAILED", "INPUT", "OUTPUT"}}
+					for _, g := range groups {
+						rows = append(rows, []string{g.Name, dash(g.Provider), strconv.FormatInt(g.Requests, 10), strconv.FormatInt(g.Failure, 10),
+							strconv.FormatInt(g.Tokens.Input, 10), strconv.FormatInt(g.Tokens.Output, 10)})
+					}
+				} else {
+					rows = [][]string{{header, "REQUESTS", "FAILED", "INPUT", "OUTPUT"}}
+					for _, g := range groups {
+						rows = append(rows, []string{g.Name, strconv.FormatInt(g.Requests, 10), strconv.FormatInt(g.Failure, 10),
+							strconv.FormatInt(g.Tokens.Input, 10), strconv.FormatInt(g.Tokens.Output, 10)})
+					}
+				}
+				x.table(rows)
+			})
+		}},
+	{words: "usage events", routes: []string{"GET /usage/events"}, summary: "recorded requests, oldest first or newest first with --before",
+		flags: func(fs *flag.FlagSet, o *opts) {
+			fs.StringVar(&o.after, "after", "", "oldest first: only events with seq above this")
+			fs.StringVar(&o.before, "before", "", "newest first: only events with seq below this (0 or no value for the latest page)")
+			fs.IntVar(&o.limit, "limit", 0, "at most this many events (default: core's, 100)")
+			fs.StringVar(&o.since, "since", "", "from this time (RFC 3339) or this long ago (such as 24h or 7d)")
+			fs.StringVar(&o.until, "until", "", "up to this time (RFC 3339)")
+			fs.StringVar(&o.model, "model", "", "only this model")
+			fs.StringVar(&o.account, "account", "", "only this account")
+			fs.StringVar(&o.provider, "provider", "", "only this provider (extension)")
+			fs.StringVar(&o.clientKey, "client-key", "", "only this client key ID")
+		},
+		run: func(x *invocation) error {
+			q := url.Values{}
+			for k, v := range map[string]string{
+				"after":    x.opts.after,
+				"before":   x.opts.before,
+				"since":    x.opts.since,
+				"until":    x.opts.until,
+				"model":    x.opts.model,
+				"account":  x.opts.account,
+				"provider": x.opts.provider,
+				"key":      x.opts.clientKey,
+			} {
+				if v != "" {
+					q.Set(k, v)
+				}
+			}
+			if x.opts.limit > 0 {
+				q.Set("limit", strconv.Itoa(x.opts.limit))
+			}
+			var r management.UsageEventsReply
+			return x.call(http.MethodGet, "/usage/events", q, nil, &r, func() {
+				if !r.Enabled {
+					x.printf("usage is not recorded (usage-statistics-enabled is off)\n")
+				}
+				if len(r.Events) == 0 {
+					x.printf("no matching events\n")
+					return
+				}
+				rows := [][]string{{"SEQ", "TIME", "MODEL", "ACCOUNT", "KEY", "STATUS", "LATENCY", "TOKENS"}}
+				for _, ev := range r.Events {
+					status := strconv.Itoa(ev.Status)
+					if ev.Status == 0 {
+						status = "-"
+					}
+					if ev.Failed {
+						if ev.ErrorCode != "" {
+							status = status + " (" + ev.ErrorCode + ")"
+						} else {
+							status = status + " (failed)"
+						}
+					}
+					tokens := "-"
+					if ev.Tokens.Total != nil {
+						tokens = strconv.FormatInt(*ev.Tokens.Total, 10)
+					}
+					rows = append(rows, []string{
+						strconv.FormatUint(ev.Seq, 10),
+						ev.Timestamp.Local().Format(time.DateTime),
+						dash(ev.Model),
+						dash(ev.Account),
+						dash(ev.KeyID),
+						status,
+						fmt.Sprintf("%dms", ev.LatencyMS),
+						tokens,
+					})
 				}
 				x.table(rows)
 			})
@@ -528,6 +645,19 @@ func cmpOr(a, b string) string {
 	return b
 }
 
+func normalizeOptionalFlagValue(args []string, name, def string) []string {
+	out := make([]string, len(args))
+	copy(out, args)
+	for i, a := range out {
+		if a == "--"+name || a == "-"+name {
+			if i+1 == len(out) || strings.HasPrefix(out[i+1], "-") {
+				out[i] = a + "=" + def
+			}
+		}
+	}
+	return out
+}
+
 func packageVerb(verb, summary string) command {
 	return command{words: "ext " + verb, args: []string{"id"}, routes: []string{"POST /packages/{publisher}/{name}/" + verb}, summary: summary,
 		run: func(x *invocation) error {
@@ -555,6 +685,9 @@ func printStatus(x *invocation, s management.Status) {
 		x.printf("; revision %d refused: %s", s.Desired.Revision, s.Desired.Error)
 	}
 	x.printf("\n")
+	if s.FirstRun {
+		x.printf("first run: setup has not been completed (run pluxy setup)\n")
+	}
 	if s.SafeMode {
 		x.printf("safe mode: no extension runs\n")
 	}
@@ -625,6 +758,7 @@ func find(args []string) (*command, []string) {
 // help writes the list of commands whose words start with prefix.
 func help(w io.Writer, prefix string) {
 	fmt.Fprintln(w, "usage: pluxy serve [-config file] [flags]   run core (pluxy with no subcommand does too)")
+	fmt.Fprintln(w, "       pluxy init [-config file] [-port n]  write a first config (pluxy serve does when there is none)")
 	fmt.Fprintln(w, "       pluxy <command> [--json] [--config file | --url address --key key]")
 	fmt.Fprintln(w)
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
@@ -643,6 +777,10 @@ func help(w io.Writer, prefix string) {
 
 // runCLI runs one client subcommand and returns its exit code.
 func runCLI(args []string, stdout, stderr io.Writer, getenv func(string) string) int {
+	return runCLIWithInput(args, os.Stdin, stdout, stderr, getenv, isInteractive(os.Stdin))
+}
+
+func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string, tty bool) int {
 	if args[0] == "help" {
 		help(stdout, strings.Join(args[1:], " "))
 		return exitOK
@@ -669,6 +807,9 @@ func runCLI(args []string, stdout, stderr io.Writer, getenv func(string) string)
 	if cmd.flags != nil {
 		cmd.flags(fs, &o)
 	}
+	if cmd.words == "usage events" {
+		rest = normalizeOptionalFlagValue(rest, "before", "0")
+	}
 	// Flags may come before, between and after the arguments.
 	var pos []string
 	for {
@@ -694,33 +835,56 @@ func runCLI(args []string, stdout, stderr io.Writer, getenv func(string) string)
 	}
 	t, err := findCore(*configPath, cmpOr(*addr, getenv("PLUXY_URL")), cmpOr(*key, getenv("PLUXY_MANAGEMENT_KEY")))
 	if err != nil {
-		fmt.Fprintf(stderr, "pluxy: %v\n", err)
+		printError(stderr, *jsonOut, err)
 		return exitFailed
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	x := &invocation{ctx: ctx, client: &management.Client{URL: t.url, Key: t.key, HTTP: t.http}, args: pos, opts: o, json: *jsonOut, stdout: stdout}
+	x := &invocation{ctx: ctx, client: &management.Client{URL: t.url, Key: t.key, HTTP: t.http}, args: pos, opts: o, json: *jsonOut, stdin: stdin, stdout: stdout, stderr: stderr, tty: tty}
 	err = cmd.run(x)
 	if err == nil {
 		return exitOK
 	}
-	code := exitCode(err)
+	printError(stderr, *jsonOut, err)
+	return exitCode(err)
+}
+
+// printError writes a command's error to stderr: with --json, as the API's error object (the
+// reply's own body when core sent one), otherwise as a line of text.
+func printError(stderr io.Writer, asJSON bool, err error) {
+	if !asJSON {
+		fmt.Fprintf(stderr, "pluxy: %v\n", err)
+		return
+	}
 	var ae *management.APIError
-	if *jsonOut && errors.As(err, &ae) && json.Valid(ae.Body) {
+	if errors.As(err, &ae) && json.Valid(ae.Body) {
 		stderr.Write(ae.Body)
 		if !bytes.HasSuffix(ae.Body, []byte("\n")) {
 			fmt.Fprintln(stderr)
 		}
-	} else {
-		fmt.Fprintf(stderr, "pluxy: %v\n", err)
+		return
 	}
-	return code
+	code, msg := "failed", err.Error()
+	var ue usageError
+	switch {
+	case errors.As(err, &ae):
+		code, msg = ae.Code, ae.Message
+	case errors.As(err, &ue):
+		code = "invalid_request"
+	case management.IsUnreachable(err):
+		code = "unreachable"
+	}
+	b, _ := json.Marshal(map[string]any{"error": map[string]string{"code": code, "message": msg}})
+	fmt.Fprintf(stderr, "%s\n", b)
 }
 
 // exitCode is the exit code for a command's error.
 func exitCode(err error) int {
+	var ue usageError
 	var ae *management.APIError
 	switch {
+	case errors.As(err, &ue):
+		return exitUsage
 	case management.IsUnreachable(err):
 		return exitUnreachable
 	case errors.As(err, &ae):

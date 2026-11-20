@@ -16,9 +16,10 @@ import (
 func TestConformance(t *testing.T) {
 	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
 	conformance.Run(t, conformance.Target{
-		Manifest:     manifest,
-		Prepare:      prepare,
-		PrepareLogin: prepareLogin,
+		Manifest:             manifest,
+		Prepare:              prepare,
+		PrepareLogin:         prepareLogin,
+		PrepareAccountClosed: func(t *testing.T) conformance.Setup { return prepare(t, conformance.ScenarioAccountClosed) },
 	})
 }
 
@@ -38,7 +39,7 @@ func prepare(t *testing.T, s conformance.Scenario) conformance.Setup {
 	t.Helper()
 	srv := codextest.New(t)
 	switch s {
-	case conformance.ScenarioText, conformance.ScenarioRateLimited, conformance.ScenarioAuthFailed:
+	case conformance.ScenarioText, conformance.ScenarioRateLimited, conformance.ScenarioAuthFailed, conformance.ScenarioAccountClosed:
 		return conformance.Setup{Account: testAccount(srv, subscription(srv.IssueToken(string(s)), ""))}
 	case conformance.ScenarioHang:
 		tok, cancelled := srv.IssueHang()

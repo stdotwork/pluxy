@@ -13,7 +13,7 @@ import (
 func TestCodexClientModels(t *testing.T) {
 	t.Parallel()
 	base := runCore(t, map[string]any{
-		"listen": "127.0.0.1:0", "client_keys": []string{clientKey},
+		"listen": "127.0.0.1:0", "client_keys": []string{clientKey}, "management_key": managementKey,
 		"routing": map[string]any{"force_model_prefix": true},
 		"extension": map[string]any{
 			"manifest": filepath.Join(binDir, "codex", "pluxy-extension.json"),

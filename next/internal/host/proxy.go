@@ -17,7 +17,7 @@ const proxyMinor = 11
 const headersMinor = 12
 
 // timeoutsMinor is the protocol minor version that adds an account's timeouts.
-const timeoutsMinor = 19
+const timeoutsMinor = 22
 
 const (
 	defaultHeaderTimeoutMS int64 = 60_000
@@ -81,7 +81,7 @@ func outboundSecrets(c *protocol.Credential) map[string]string {
 }
 
 // resolveTimeouts resolves account.Timeouts against Options.Timeouts and the defaults (60s
-// header, 5m idle, 10m total). Extensions older than minor 19 do not receive the field.
+// header, 5m idle, 10m total). Extensions older than minor 22 do not receive the field.
 func (e *Extension) resolveTimeouts(account *protocol.Account) {
 	if e.info.ProtocolMinor < timeoutsMinor {
 		account.Timeouts = nil

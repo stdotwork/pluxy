@@ -62,12 +62,14 @@ function put(path: string, bytes: string, mode = 0o644) {
 }
 
 /** A stand-in program: records its arguments (one per line), its folder and its environment in
- * records/<name>.*, then `done`. */
+ * records/<name>.*, then `done`.
+ * `--version` only prints a version and records nothing: core's setup scan asks it. */
 function standIn(path: string, records: string, name: string) {
   const r = (x: string) => `'${join(records, `${name}.${x}`)}'`;
   put(
     path,
     `#!/bin/sh
+[ "$1" = "--version" ] && { echo "0.0.0 (stand-in)"; exit 0; }
 for a in "$@"; do printf '%s\\n' "$a"; done > ${r("argv")}
 pwd -P > ${r("cwd")}
 env > ${r("env")}

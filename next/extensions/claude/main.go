@@ -12,7 +12,9 @@
 // client's conversation into the top-level system prompt, for a Claude-compatible upstream that
 // refuses them there; it is today's per-key setting of the same name.
 // model_level_cooling keeps a used-up shared subscription window on the model that hit it rather
-// than on the whole account (today's claude.model-level-cooling; see ratelimit.go). The OAuth
+// than on the whole account (today's claude.model-level-cooling; see ratelimit.go). cache_ttl
+// sets the lifetime ("5m" default, or "1h") of cache_control markers pluxy adds to translated
+// requests that set none. The OAuth
 // client can be changed with client_id; tests move the sign-in page and token endpoint to a fake
 // with authorize_url and token_url (sdk.TestLoginHost), which a normal run ignores; see oauth.go.
 //
@@ -42,6 +44,9 @@
 // base_url is Anthropic's own origin (https://api.anthropic.com). For any other base_url the
 // account answers that it cannot count, without a request, and core estimates the count itself:
 // a Claude-compatible server may not have the endpoint, or may count differently.
+//
+// Responses compaction (core's endpoint call for POST /v1/responses/compact) is served with
+// Anthropic's on-demand compaction (compact.go).
 //
 // An account check (core's check call) of an api_key account reads Anthropic's model list,
 // GET {base_url}/v1/models with x-api-key and anthropic-version, which costs the account nothing.
@@ -101,6 +106,7 @@ func main() {
 		Models:       listModels,
 		Check:        check,
 		Quota:        quota,
+		Endpoint:     endpoint,
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "claude:", err)
@@ -119,6 +125,8 @@ type settings struct {
 	RebuildMidSystemMessage bool `json:"rebuild_mid_system_message"`
 	// ModelLevelCooling keeps a refused shared usage window on the model, not the account.
 	ModelLevelCooling bool `json:"model_level_cooling"`
+	// CacheTTL is the lifetime ("5m" default, or "1h") of cache_control markers pluxy adds.
+	CacheTTL string `json:"cache_ttl"`
 }
 
 // readSettings reads an account's settings and fills in the defaults.
@@ -147,6 +155,15 @@ func readSettings(raw json.RawMessage) (settings, error) {
 	}
 	if s.ClientID == "" {
 		s.ClientID = defaultClientID
+	}
+	s.CacheTTL = strings.ToLower(strings.TrimSpace(s.CacheTTL))
+	switch s.CacheTTL {
+	case "", cacheTTL5m:
+		s.CacheTTL = cacheTTL5m
+	case cacheTTL1h:
+	default:
+		return s, &llm.Error{Code: llm.CodeInvalidRequest, Scope: llm.ScopeCredential,
+			Message: fmt.Sprintf("cache_ttl must be %q or %q, not %q", cacheTTL5m, cacheTTL1h, s.CacheTTL)}
 	}
 	return s, nil
 }
@@ -229,7 +246,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
-	body, tr, err := buildBody(call.Request)
+	body, tr, err := buildBodyWithTTL(call.Request, s.CacheTTL)
 	if err != nil {
 		return err
 	}
@@ -392,7 +409,7 @@ func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
 			Message: "this account's base_url is not Anthropic's own (" + defaultBaseURL + "), which is the only one this extension sends a token count to"}
 	}
-	body, tr, err := buildBody(call.Request)
+	body, tr, err := buildBodyWithTTL(call.Request, s.CacheTTL)
 	if err != nil {
 		return err
 	}
@@ -453,6 +470,16 @@ func isAnthropicBase(baseURL string) bool {
 // settings either way, in place of the request's own. Under the reject drop policy a request
 // that drops anything is refused.
 func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
+	return buildBodyWithTTL(req, cacheTTL5m)
+}
+
+func buildBodyWithTTL(req llm.Request, cacheTTL string) ([]byte, *llm.Translation, error) {
+	return buildBodyWith(req, cacheTTL, anthropicmessages.EncodeOptions{})
+}
+
+// buildBodyWith builds the body as buildBodyWithTTL does, encoding a request in another format
+// with opts (anthropicmessages.EncodeRequestWith).
+func buildBodyWith(req llm.Request, cacheTTL string, opts anthropicmessages.EncodeOptions) ([]byte, *llm.Translation, error) {
 	tr := &llm.Translation{To: llm.FormatAnthropicMessages}
 	if n := req.Native; n != nil {
 		tr.From = n.Format
@@ -486,7 +513,7 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 			return body, tr, nil
 		}
 	}
-	body, losses, err := anthropicmessages.EncodeRequest(req)
+	body, losses, err := anthropicmessages.EncodeRequestWith(req, opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -495,7 +522,10 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 			return nil, nil, err
 		}
 	}
-	if body, err = addCacheBreakpoints(body); err != nil {
+	if body, losses, cacheTTL, err = applyClientCache(body, req, losses, cacheTTL); err != nil {
+		return nil, nil, err
+	}
+	if body, err = addCacheBreakpointsTTL(body, cacheTTL); err != nil {
 		return nil, nil, err
 	}
 	if body, err = fixBody(body); err != nil {
@@ -671,6 +701,8 @@ func upstreamError(resp *http.Response, model string, modelLevelCooling bool) *l
 		// A redirect sameOrigin refused to follow.
 		e.Code, e.Scope, e.Status = llm.CodeUpstream, llm.ScopeEndpoint, http.StatusBadGateway
 		e.Message = fmt.Sprintf("upstream redirected (%s) to another host; not followed", resp.Status)
+	case isAccountClosed(s, parsed.Error.Type, e.Message):
+		e.Code, e.Scope, e.Retryable = llm.CodeAccountClosed, llm.ScopeCredential, true
 	case s == http.StatusUnauthorized:
 		e.Code, e.Scope, e.Retryable = llm.CodeAuth, llm.ScopeCredential, true
 	case s == http.StatusForbidden:
@@ -721,4 +753,31 @@ func retryAfter(v string, now time.Time) int64 {
 		}
 	}
 	return 0
+}
+
+// isAccountClosed reports whether a 400, 401 or 403 reply says the organization or account has
+// been disabled, deactivated or suspended rather than refusing a single request.
+func isAccountClosed(status int, errType, msg string) bool {
+	if strings.EqualFold(strings.TrimSpace(errType), "account_deactivated") {
+		return true
+	}
+	if status != http.StatusBadRequest && status != http.StatusUnauthorized && status != http.StatusForbidden {
+		return false
+	}
+	m := strings.ToLower(msg)
+	for _, s := range []string{
+		"organization has been disabled",
+		"account has been disabled",
+		"account has been deactivated",
+		"this account is deactivated",
+		"your account has been suspended",
+		"credential has been disabled",
+		"user has been disabled",
+		"account_deactivated",
+	} {
+		if strings.Contains(m, s) {
+			return true
+		}
+	}
+	return false
 }
