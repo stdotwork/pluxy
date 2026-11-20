@@ -9,7 +9,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -40,13 +43,107 @@ var ErrStale = errors.New("a redacted value matches no secret in the config file
 // Redactor replaces the secrets in config documents with placeholders and back.
 type Redactor struct{ key []byte }
 
+// KeyIDSize is the byte length of the key-ID HMAC key kept in state/key-id.key.
+const KeyIDSize = 32
+
 // NewRedactor returns a Redactor with a new random key.
 func NewRedactor() *Redactor {
-	key := make([]byte, 32)
+	key := make([]byte, KeyIDSize)
 	if _, err := rand.Read(key); err != nil {
 		panic(err) // crypto/rand does not fail on supported platforms
 	}
 	return &Redactor{key: key}
+}
+
+// LoadKeyID returns a Redactor backed by the key stored at path, creating path (mode 0600)
+// with a new random key when it does not exist yet. A key kept on disk makes client key IDs
+// stable across restarts.
+func LoadKeyID(path string) (*Redactor, error) {
+	if key, err := readKeyID(path); err == nil {
+		return &Redactor{key: key}, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	_ = os.Chmod(dir, 0o700)
+
+	key := make([]byte, KeyIDSize)
+	if _, err := rand.Read(key); err != nil {
+		return nil, err
+	}
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return nil, err
+	}
+	tmp := f.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmp)
+		}
+	}()
+	if _, err := f.Write(key); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if err := f.Close(); err != nil {
+		return nil, err
+	}
+
+	err = os.Link(tmp, path)
+	switch {
+	case err == nil:
+		_ = os.Remove(tmp)
+		cleanup = false
+		if d, derr := os.Open(dir); derr == nil {
+			_ = d.Sync()
+			_ = d.Close()
+		}
+		return &Redactor{key: key}, nil
+	case errors.Is(err, fs.ErrExist):
+		existing, rerr := readKeyID(path)
+		if rerr != nil {
+			return nil, rerr
+		}
+		return &Redactor{key: existing}, nil
+	default:
+		// Filesystems without hardlink support fall back to atomic rename.
+		if rerr := os.Rename(tmp, path); rerr != nil {
+			return nil, rerr
+		}
+		cleanup = false
+		return &Redactor{key: key}, nil
+	}
+}
+
+func readKeyID(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", path)
+	}
+	key, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(key) != KeyIDSize {
+		return nil, fmt.Errorf("%s: expected %d-byte key, got %d bytes", path, KeyIDSize, len(key))
+	}
+	return key, nil
 }
 
 // ID returns the secret's ID: 24 hex digits of a keyed hash.

@@ -29,8 +29,8 @@
 // - bundle release gate: the release command (package.ts release) passes a clean release build and
 //   a clean bundle of this system's kind around it, and refuses a bundle holding the test-feature
 //   dev app, the test package renamed and the test package itself;
-// - admission, program, routing, launcher: run.ts's sessions of the same names, for signed tools,
-//   in the app built with artifact-test-trust against a test core (native/platform-tools.ts);
+// - admission, program, routing, launcher, vault: run.ts's sessions of the same names, for signed
+//   tools, in the app built with artifact-test-trust against a test core (native/platform-tools.ts);
 // - app update (the update shard): the test package, installed from its bundle into a folder of
 //   this user's and connected to a test core (`go run ./e2e/panelcore`), updates itself to its
 //   signed newer version and back,

@@ -85,12 +85,20 @@ func fakeExtension(mode string) {
 		echoParts()
 		return
 	}
-	if mode == "account-closed-18" {
-		accountClosedExtension(18)
+	if mode == "models-from-17" {
+		modelsFrom(17)
+		return
+	}
+	if mode == "models-from-18" {
+		modelsFrom(18)
 		return
 	}
 	if mode == "account-closed-19" {
 		accountClosedExtension(19)
+		return
+	}
+	if mode == "account-closed-20" {
+		accountClosedExtension(20)
 		return
 	}
 	if mode == "echo-pieces" {
@@ -716,15 +724,15 @@ func accountClosedExtension(minor int) {
 	}
 }
 
-// Core acts on account_closed only from an extension whose describe reports minor 19 or later;
+// Core acts on account_closed only from an extension whose describe reports minor 20 or later;
 // from an older extension it is downgraded to permission.
 func TestAccountClosedRequiresProtocolMinor19(t *testing.T) {
 	for _, c := range []struct {
 		mode string
 		want string
 	}{
-		{"account-closed-18", llm.CodePermission},
-		{"account-closed-19", llm.CodeAccountClosed},
+		{"account-closed-19", llm.CodePermission},
+		{"account-closed-20", llm.CodeAccountClosed},
 	} {
 		t.Run(c.mode, func(t *testing.T) {
 			ext, err := Start(filepath.Join(fakePackage(t, c.mode), ManifestFile), Options{Log: io.Discard})
@@ -773,5 +781,60 @@ func TestAccountClosedRequiresProtocolMinor19(t *testing.T) {
 				t.Errorf("session turn: %+v, want code %s", tev, c.want)
 			}
 		})
+	}
+}
+
+func modelsFrom(minor int) {
+	socket := os.Getenv(protocol.EnvSocket)
+	ln, err := net.Listen("unix", socket)
+	if err != nil {
+		os.Exit(1)
+	}
+	fmt.Print(protocol.HandshakeLine(protocol.Version, socket))
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		go func() {
+			defer conn.Close()
+			var call protocol.Call
+			if protocol.ReadFrame(conn, &call) != nil {
+				return
+			}
+			switch call.Op {
+			case protocol.OpDescribe:
+				_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: protocol.TypeDescribeResult},
+					Info: &protocol.Info{ID: os.Getenv(protocol.EnvExtensionID), Version: "0.0.0", Protocol: protocol.Version, ProtocolMinor: minor,
+						Operations: []string{protocol.OpGenerate, protocol.OpModels}}})
+			case protocol.OpModels:
+				_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: protocol.TypeModelsResult},
+					Models: &protocol.ModelList{OwnedBy: "test", From: protocol.ModelListFromAccount, Models: []protocol.Model{{ID: "m1"}}}})
+			}
+		}()
+	}
+}
+
+// ModelList.From is kept only when the extension reports protocol minor 18 or later.
+func TestModelsFromMinorVersionGating(t *testing.T) {
+	for _, tc := range []struct {
+		mode string
+		want string
+	}{
+		{"models-from-17", ""},
+		{"models-from-18", protocol.ModelListFromAccount},
+	} {
+		ext, err := Start(filepath.Join(fakePackage(t, tc.mode), ManifestFile), Options{Log: io.Discard})
+		if err != nil {
+			t.Fatal(err)
+		}
+		list, le := ext.Models(context.Background(), protocol.Account{ID: "a"})
+		ext.Stop()
+		if le != nil {
+			t.Fatalf("%s: %v", tc.mode, le)
+		}
+		if list.From != tc.want {
+			t.Errorf("%s: From = %q, want %q", tc.mode, list.From, tc.want)
+		}
 	}
 }

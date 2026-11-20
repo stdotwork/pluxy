@@ -113,6 +113,7 @@ export function Button(props: {
       type={props.type ?? "button"}
       class="btn"
       data-part="button"
+      data-slot="button"
       data-variant={props.variant ?? "quiet"}
       data-focus-key={props.focusKey}
       onClick={props.onClick}
@@ -415,7 +416,7 @@ export function Switch(props: {
         checked={props.checked}
         onChange={(e) => props.onChange(e.currentTarget.checked)}
       />
-      <span class="track" aria-hidden="true" />
+      <span class="track" data-slot="switch" aria-hidden="true" />
       <span>
         <span class="label">{props.label}</span>
         {props.hint && <small class="hint">{props.hint}</small>}

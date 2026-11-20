@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/stdotwork/pluxy/next/internal/configdoc"
+	"github.com/stdotwork/pluxy/next/internal/private"
 	"github.com/stdotwork/pluxy/next/internal/proxyurl"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/internal/server"
@@ -51,7 +52,11 @@ func (c *Core) WriteConfig(why string, edit func(cur []byte) ([]byte, error)) er
 
 // writeFileAtomic replaces the file at path (the file a symbolic link there points to) with b
 // in one step, keeping its permissions: other readers see the old contents or the new, never
-// part of them.
+// part of them. The new file is made private (private.CreateTemp), so no one else can open it
+// while the secrets are written, and then given the old file's permissions: its mode, and on
+// Windows, where a mode sets only the read-only attribute, its access list (private.CopyAccess).
+// A temporary file made the usual way would take its folder's list, which may let in users the
+// config's own list keeps out.
 func writeFileAtomic(path string, b []byte) (err error) {
 	target, err := filepath.EvalSymlinks(path)
 	if err != nil {
@@ -61,19 +66,28 @@ func writeFileAtomic(path string, b []byte) (err error) {
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(target), "."+filepath.Base(target)+".*.tmp")
+	dir, name := filepath.Split(target)
+	dir = filepath.Clean(dir)
+	root, err := os.OpenRoot(dir)
 	if err != nil {
 		return err
 	}
-	tmp := f.Name()
+	defer root.Close()
+	f, tmp, err := private.CreateTemp(root, dir, "."+name+".")
+	if err != nil {
+		return err
+	}
 	defer func() {
 		if err != nil {
-			_ = os.Remove(tmp)
+			_ = root.Remove(tmp)
 		}
 	}()
 	_, err = f.Write(b)
 	if err == nil {
 		err = f.Chmod(fi.Mode().Perm())
+	}
+	if err == nil {
+		err = private.CopyAccess(target, filepath.Join(dir, tmp))
 	}
 	if err == nil {
 		err = f.Sync()
@@ -84,13 +98,10 @@ func writeFileAtomic(path string, b []byte) (err error) {
 	if err != nil {
 		return err
 	}
-	if err = os.Rename(tmp, target); err != nil {
+	if err = root.Rename(tmp, name); err != nil {
 		return err
 	}
-	if dir, derr := os.Open(filepath.Dir(target)); derr == nil {
-		_ = dir.Sync()
-		_ = dir.Close()
-	}
+	_ = private.SyncDir(root)
 	return nil
 }
 
@@ -213,7 +224,7 @@ func newKey() string { return rand.Text() }
 type clientKeyView = management.ClientKey
 
 func (c *Core) keyView(k string) clientKeyView {
-	return clientKeyView{ID: c.redactor.ID(k), Masked: maskKey(k)}
+	return clientKeyView{ID: c.keyID(k), Masked: maskKey(k)}
 }
 
 func maskKey(k string) string {
@@ -385,7 +396,7 @@ func (c *Core) handleConfig(m *server.Management) {
 		err := c.WriteConfig("management API: client key removed", c.edit(func(d *configdoc.Doc) error {
 			found := false
 			left, err := d.RemoveClientKeys(func(k string) bool {
-				drop := c.redactor.ID(k) == id
+				drop := c.keyID(k) == id
 				found = found || drop
 				return drop
 			})
