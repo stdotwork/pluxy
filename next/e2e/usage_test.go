@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -78,6 +79,7 @@ type usageSummary struct {
 	Providers     []usageGroup `json:"providers"`
 	Accounts      []usageGroup `json:"accounts"`
 	Keys          []usageGroup `json:"keys"`
+	Dropped       uint64       `json:"dropped"`
 	BucketSeconds int64        `json:"bucket_seconds"`
 	Series        []struct {
 		Start    time.Time `json:"start"`
@@ -464,5 +466,232 @@ func TestUsageRecordsCacheWriteTokens(t *testing.T) {
 			t.Errorf("event %d (%v stream=%v): tokens = %+v, want input=12000 cached=4000 cache_creation_tokens=7000 output=50 total=12050 (raw: %s)",
 				i, ev.Endpoint, ev.Stream, ev.Tokens, raw)
 		}
+	}
+}
+
+// Usage events and client key IDs survive a core restart: the events are written to
+// usage/<UTC day>.jsonl with "v": 1 and mode 0600, the key-ID key lives in state/key-id.key,
+// and GET /usage counts the earlier requests with the same key IDs after restarting.
+func TestUsageSurvivesRestart(t *testing.T) {
+	u := answeringUpstream(t)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	writeConfig(t, cfgPath, map[string]any{
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey, secondClientKey},
+		"management_key": managementKey,
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "pluxy-extension.json"),
+			"accounts": []any{map[string]any{
+				"id":         "upstream-1",
+				"settings":   map[string]any{"base_url": u.URL + "/v1"},
+				"credential": map[string]any{"kind": "api_key", "api_key": upstreamKey},
+			}},
+		},
+	})
+
+	// Next is the Seq to pass as after for the next page; before returns newest first.
+	var id1, id2, dayFile string
+	var lastSeqBeforeRestart uint64
+	t.Run("before restart", func(t *testing.T) {
+		base, _ := runCoreFile(t, cfgPath, noWatch...)
+		c := &mcore{base: base}
+
+		if code, _, _ := chatReply(t, base, clientKey, false); code != http.StatusOK {
+			t.Fatalf("first request: status %d", code)
+		}
+		if code, _, _ := chatReply(t, base, clientKey, true); code != http.StatusOK {
+			t.Fatalf("second request: status %d", code)
+		}
+		if code, _, _ := chatReply(t, base, secondClientKey, false); code != http.StatusOK {
+			t.Fatalf("third request: status %d", code)
+		}
+
+		for _, k := range c.keys(t) {
+			switch k.Masked {
+			case mask(clientKey):
+				id1 = k.ID
+			case mask(secondClientKey):
+				id2 = k.ID
+			}
+		}
+		if id1 == "" || id2 == "" {
+			t.Fatalf("client keys missing IDs: %+v", c.keys(t))
+		}
+
+		p, _ := c.usageEvents(t, "")
+		if len(p.Events) != 3 {
+			t.Fatalf("events before restart: %d, want 3", len(p.Events))
+		}
+		lastSeqBeforeRestart = p.Events[len(p.Events)-1].Seq
+		dayFile = filepath.Join(dir, "usage", p.Events[0].Timestamp.UTC().Format("2006-01-02")+".jsonl")
+	})
+
+	info, err := os.Stat(dayFile)
+	if err != nil {
+		t.Fatalf("usage file %s missing after stop: %v", dayFile, err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Errorf("usage file mode = %o, want 0600", mode)
+	}
+	rawFile, err := os.ReadFile(dayFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantNoSecrets(t, dayFile, string(rawFile), clientKey, secondClientKey, upstreamKey, managementKey)
+	lines := strings.Split(strings.TrimSuffix(string(rawFile), "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("usage file lines = %d, want 3:\n%s", len(lines), rawFile)
+	}
+	for i, line := range lines {
+		var row struct {
+			V int `json:"v"`
+		}
+		if err := json.Unmarshal([]byte(line), &row); err != nil || row.V != 1 {
+			t.Fatalf("line %d = %s (%v), want valid JSON with v: 1", i, line, err)
+		}
+	}
+
+	keyInfo, err := os.Stat(filepath.Join(dir, "state", "key-id.key"))
+	if err != nil {
+		t.Fatalf("state/key-id.key missing: %v", err)
+	}
+	if mode := keyInfo.Mode().Perm(); mode != 0o600 {
+		t.Errorf("state/key-id.key mode = %o, want 0600", mode)
+	}
+
+	t.Run("after restart", func(t *testing.T) {
+		base, _ := runCoreFile(t, cfgPath, noWatch...)
+		c := &mcore{base: base}
+
+		var afterID1, afterID2 string
+		for _, k := range c.keys(t) {
+			switch k.Masked {
+			case mask(clientKey):
+				afterID1 = k.ID
+			case mask(secondClientKey):
+				afterID2 = k.ID
+			}
+		}
+		if afterID1 != id1 || afterID2 != id2 {
+			t.Fatalf("key IDs changed across restart: got (%q, %q), want (%q, %q)", afterID1, afterID2, id1, id2)
+		}
+
+		s, raw := c.usageSummary(t, "")
+		if s.Requests != 3 || s.Success != 3 || s.Tokens.Total != 36 || s.Dropped != 0 {
+			t.Fatalf("usage summary after restart: %s", raw)
+		}
+		if len(s.Keys) != 2 || s.Keys[0].Name != id1 || s.Keys[0].Requests != 2 || s.Keys[1].Name != id2 || s.Keys[1].Requests != 1 {
+			t.Fatalf("usage keys after restart: %+v (want %s:2, %s:1)", s.Keys, id1, id2)
+		}
+
+		if code, _, _ := chatReply(t, base, clientKey, false); code != http.StatusOK {
+			t.Fatalf("request after restart: status %d", code)
+		}
+		// Seq continues across restart; after=<lastSeqBeforeRestart> returns only the new request.
+		afterRestart, rawAfter := c.usageEvents(t, fmt.Sprintf("?after=%d", lastSeqBeforeRestart))
+		if len(afterRestart.Events) != 1 || afterRestart.Events[0].Seq <= lastSeqBeforeRestart {
+			t.Fatalf("after restart with after=%d: %s", lastSeqBeforeRestart, rawAfter)
+		}
+		// Paging newest first with before.
+		latest, rawBefore := c.usageEvents(t, "?before=0&limit=2")
+		if len(latest.Events) != 2 || !latest.More || latest.Events[0].Seq != afterRestart.Events[0].Seq ||
+			latest.Events[1].Seq != lastSeqBeforeRestart {
+			t.Fatalf("before=0 limit=2 after restart: %s", rawBefore)
+		}
+		s, raw = c.usageSummary(t, "")
+		if s.Requests != 4 || s.Tokens.Total != 48 || s.Keys[0].Name != id1 || s.Keys[0].Requests != 3 {
+			t.Fatalf("usage summary after new request: %s", raw)
+		}
+	})
+
+	afterRaw, err := os.ReadFile(dayFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterLines := strings.Split(strings.TrimSuffix(string(afterRaw), "\n"), "\n")
+	if len(afterLines) != 4 {
+		t.Fatalf("usage file lines after restart+request = %d, want 4", len(afterLines))
+	}
+}
+
+// Multi-day kept ranges summarize closed days into usage/summary/YYYY-MM-DD.json, expose by &
+// breakdown, choose hourly vs daily buckets, and work end-to-end through pluxy usage and pluxy
+// usage events --before.
+func TestUsageMultiDayRangeAndCLI(t *testing.T) {
+	u := answeringUpstream(t)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	writeConfig(t, cfgPath, map[string]any{
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "pluxy-extension.json"),
+			"accounts": []any{map[string]any{
+				"id":         "upstream-1",
+				"settings":   map[string]any{"base_url": u.URL + "/v1"},
+				"credential": map[string]any{"kind": "api_key", "api_key": upstreamKey},
+			}},
+		},
+	})
+
+	// Seed a closed-day usage file 10 days ago before starting core.
+	closedDay := time.Now().UTC().AddDate(0, 0, -10)
+	closedDayStr := closedDay.Format("2006-01-02")
+	usageDir := filepath.Join(dir, "usage")
+	if err := os.MkdirAll(usageDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	oldLine := fmt.Sprintf(`{"v":1,"seq":1,"timestamp":%q,"endpoint":"/v1/chat/completions","model":"gpt-4o","provider":"pluxy/openai-compatible","account":"upstream-older","key_id":"k-older","latency_ms":50,"tokens":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}`+"\n",
+		closedDay.Truncate(time.Hour).Format(time.RFC3339))
+	if err := os.WriteFile(filepath.Join(usageDir, closedDayStr+".jsonl"), []byte(oldLine), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	base, _ := runCoreFile(t, cfgPath, noWatch...)
+	if code, _, _ := chatReply(t, base, clientKey, false); code != http.StatusOK {
+		t.Fatalf("live request: status %d", code)
+	}
+
+	env := []string{"PLUXY_URL=" + base, "PLUXY_MANAGEMENT_KEY=" + managementKey}
+
+	// pluxy usage --since 30d --by account (plain table)
+	r := runCLI(t, env, "usage", "--since", "30d", "--by", "account")
+	if r.code != 0 || !strings.Contains(r.stdout, "upstream-1") || !strings.Contains(r.stdout, "upstream-older") || !strings.Contains(r.stdout, "ACCOUNT") {
+		t.Fatalf("pluxy usage --since 30d --by account: %s", r)
+	}
+
+	// pluxy usage --since 30d --by account --json
+	rj := runCLI(t, env, "usage", "--since", "30d", "--by", "account", "--json")
+	if rj.code != 0 {
+		t.Fatalf("pluxy usage --json: %s", rj)
+	}
+	var got struct {
+		usageSummary
+		By        string       `json:"by"`
+		Breakdown []usageGroup `json:"breakdown"`
+	}
+	if err := json.Unmarshal([]byte(rj.stdout), &got); err != nil {
+		t.Fatalf("invalid json from pluxy usage --json: %v\n%s", err, rj.stdout)
+	}
+	if got.Requests != 2 || got.Tokens.Total != 27 || got.By != "account" || len(got.Breakdown) != 2 || got.BucketSeconds != 86400 {
+		t.Fatalf("unexpected --since 30d --by account JSON: %+v\nraw=%s", got, rj.stdout)
+	}
+
+	// Verify closed-day summary file exists with mode 0600.
+	sumPath := filepath.Join(usageDir, "summary", closedDayStr+".json")
+	info, err := os.Stat(sumPath)
+	if err != nil {
+		t.Fatalf("closed day summary missing: %v", err)
+	}
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Errorf("summary mode = %o, want 0600", mode)
+	}
+
+	// pluxy usage events --before
+	re := runCLI(t, env, "usage", "events", "--before", "--limit", "1")
+	if re.code != 0 || !strings.Contains(re.stdout, "upstream-1") || !strings.Contains(re.stdout, "gpt-4o") {
+		t.Fatalf("pluxy usage events --before: %s", re)
 	}
 }

@@ -589,6 +589,7 @@ func ErrorResponse(e *llm.Error) (int, []byte) {
 			llm.CodeUnsupported:          http.StatusBadRequest,
 			llm.CodeAuth:                 http.StatusUnauthorized,
 			llm.CodePermission:           http.StatusForbidden,
+			llm.CodeAccountClosed:        http.StatusForbidden,
 			llm.CodeNotFound:             http.StatusNotFound,
 			llm.CodeRateLimit:            http.StatusTooManyRequests,
 			llm.CodeQuota:                http.StatusTooManyRequests,

@@ -19,7 +19,7 @@ import (
 // a handle to it, as the app checks its own private folders (app/src-tauri/src/private_windows.rs,
 // make_private_dir): a link, a file or a folder another account owns is refused, and a folder
 // whose list is not private gets the private list. Callers skip or refuse files in it that
-// another account owns (Owner).
+// another account owns (Owner), and rewrite one whose own list is not private (FilePrivate).
 //
 // The security calls go through advapi32.dll, and new files are made with ntdll.dll's
 // NtCreateFile; the standard library registers both as system DLLs, so they are loaded from
@@ -32,6 +32,8 @@ var (
 	procGetDescriptorControl      = advapi32.NewProc("GetSecurityDescriptorControl")
 	procGetSecurityInfo           = advapi32.NewProc("GetSecurityInfo")
 	procSetSecurityInfo           = advapi32.NewProc("SetSecurityInfo")
+	procGetNamedSecurityInfo      = advapi32.NewProc("GetNamedSecurityInfoW")
+	procSetNamedSecurityInfo      = advapi32.NewProc("SetNamedSecurityInfoW")
 	procGetAceEntry               = advapi32.NewProc("GetAce")
 	ntdll                         = syscall.NewLazyDLL("ntdll.dll")
 	procNtCreateFile              = ntdll.NewProc("NtCreateFile")
@@ -44,6 +46,7 @@ const (
 	ownerInfo         = 0x1        // OWNER_SECURITY_INFORMATION
 	daclInfo          = 0x4        // DACL_SECURITY_INFORMATION
 	protectedDaclInfo = 0x80000000 // PROTECTED_DACL_SECURITY_INFORMATION
+	unprotectedDacl   = 0x20000000 // UNPROTECTED_DACL_SECURITY_INFORMATION
 	daclProtected     = 0x1000     // SE_DACL_PROTECTED
 	readControl       = 0x00020000
 	writeDAC          = 0x00040000
@@ -303,6 +306,55 @@ func sameDir(a, b *os.File) (bool, error) {
 func fileOwner(f *os.File) (bool, string, error) {
 	who, ok, err := owner(syscall.Handle(f.Fd()))
 	return ok, who, err
+}
+
+// filePrivate reports whether the access list of the file f is private (isPrivate).
+func filePrivate(f *os.File) (bool, error) {
+	me, _, err := tokenSIDs()
+	if err != nil {
+		return false, err
+	}
+	var dacl *winACL
+	var sd uintptr
+	if r, _, _ := procGetSecurityInfo.Call(f.Fd(), seFileObject, daclInfo, 0, 0, uintptr(unsafe.Pointer(&dacl)), 0,
+		uintptr(unsafe.Pointer(&sd))); r != 0 {
+		return false, &os.PathError{Op: "read access list", Path: f.Name(), Err: syscall.Errno(r)}
+	}
+	defer syscall.LocalFree(syscall.Handle(sd))
+	return isPrivate(sd, dacl, me)
+}
+
+// copyAccess sets dst's access list to src's, protected when src's is; when src's is not, dst
+// inherits from its own folder as src does, and only src's own entries are copied (Windows
+// leaves out those src inherited and adds those dst's folder passes on).
+func copyAccess(src, dst string) error {
+	from, err := syscall.UTF16PtrFromString(src)
+	if err != nil {
+		return err
+	}
+	to, err := syscall.UTF16PtrFromString(dst)
+	if err != nil {
+		return err
+	}
+	var dacl, sd uintptr
+	if r, _, _ := procGetNamedSecurityInfo.Call(uintptr(unsafe.Pointer(from)), seFileObject, daclInfo, 0, 0,
+		uintptr(unsafe.Pointer(&dacl)), 0, uintptr(unsafe.Pointer(&sd))); r != 0 {
+		return &os.PathError{Op: "read access list", Path: src, Err: syscall.Errno(r)}
+	}
+	defer syscall.LocalFree(syscall.Handle(sd))
+	var control uint16
+	var revision uint32
+	if r, _, e := procGetDescriptorControl.Call(sd, uintptr(unsafe.Pointer(&control)), uintptr(unsafe.Pointer(&revision))); r == 0 {
+		return fmt.Errorf("security descriptor: %w", e)
+	}
+	info := uintptr(daclInfo | unprotectedDacl)
+	if control&daclProtected != 0 {
+		info = daclInfo | protectedDaclInfo
+	}
+	if r, _, _ := procSetNamedSecurityInfo.Call(uintptr(unsafe.Pointer(to)), seFileObject, info, 0, 0, dacl, 0); r != 0 {
+		return &os.PathError{Op: "set access list", Path: dst, Err: syscall.Errno(r)}
+	}
+	return nil
 }
 
 type unicodeString struct {

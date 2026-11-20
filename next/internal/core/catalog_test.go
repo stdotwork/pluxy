@@ -62,7 +62,7 @@ func TestModelRefreshLoopAndCredentialChange(t *testing.T) {
 			out[i] = protocol.Model{ID: id}
 		}
 		calls <- a.ID
-		return &protocol.ModelList{Models: out}, nil
+		return &protocol.ModelList{Models: out, From: protocol.ModelListFromAccount}, nil
 	})
 	if err := r.SetAccounts([]route.Account{{ID: "acct", Extension: "x"}}, nil); err != nil {
 		t.Fatal(err)
@@ -105,12 +105,26 @@ func TestModelRefreshLoopAndCredentialChange(t *testing.T) {
 	// accountModels reads the router's kept list for a routed account rather than bypassing it.
 	s := c.cur.Load()
 	acctModels, err := c.accountModels(context.Background(), s, "acct")
-	if err != nil || len(acctModels) != 2 || acctModels[0].ID != "m1" || acctModels[1].ID != "m2" {
-		t.Fatalf("accountModels = %+v, %v; want m1, m2 from router's kept list", acctModels, err)
+	if err != nil || len(acctModels.Models) != 2 || acctModels.Models[0].ID != "m1" || acctModels.Models[1].ID != "m2" || acctModels.From != protocol.ModelListFromAccount {
+		t.Fatalf("accountModels = %+v, %v; want m1, m2 (from=account) from router's kept list", acctModels, err)
+	}
+
+	// Verify GET /accounts/{id}/models includes "from".
+	h := c.Management()
+	acctReq := httptest.NewRequest(http.MethodGet, server.ManagementPrefix+"/accounts/acct/models", nil)
+	acctReq.Header.Set("Authorization", "Bearer fake-management-key")
+	acctReq.RemoteAddr = "127.0.0.1:12345"
+	acctRec := httptest.NewRecorder()
+	h.ServeHTTP(acctRec, acctReq)
+	if acctRec.Code != http.StatusOK {
+		t.Fatalf("GET /accounts/acct/models: status %d %s", acctRec.Code, acctRec.Body.String())
+	}
+	var acctReply management.AccountModelsReply
+	if err := json.Unmarshal(acctRec.Body.Bytes(), &acctReply); err != nil || acctReply.From != protocol.ModelListFromAccount || len(acctReply.Models) != 2 {
+		t.Fatalf("GET /accounts/acct/models reply = %+v, err=%v", acctReply, err)
 	}
 
 	// Verify POST /models/refresh management handler validation and error codes.
-	h := c.Management()
 	do := func(body string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, server.ManagementPrefix+"/models/refresh", bytes.NewBufferString(body))
 		req.Header.Set("Authorization", "Bearer fake-management-key")

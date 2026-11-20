@@ -412,6 +412,13 @@ func startCoreEnv(t *testing.T, env []string, bin string, argv ...string) (strin
 	}
 }
 
+// startCoreStoppable is startCoreArgv that also returns a function that stops core and waits for
+// it to exit, as the test's cleanup does when it was not called.
+func startCoreStoppable(t *testing.T, bin string, argv ...string) (string, *coreLog, func(), error) {
+	t.Helper()
+	return startCoreEnv(t, nil, bin, argv...)
+}
+
 // startOnFreePort starts core at bin on the config file at path, which content makes with a port
 // that freePort picked. A port can be taken after freePort returns and before core binds it; core
 // then exits with "address already in use". The file is then written again with another port and

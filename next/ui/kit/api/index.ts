@@ -15,6 +15,7 @@ import { settingsApi } from "./settings";
 import { setupApi } from "./setup";
 import { statusApi } from "./status";
 import { systemApi } from "./system";
+import { themesApi } from "./themes";
 import { usageApi } from "./usage";
 import { usageEventsApi } from "./usageEvents";
 
@@ -29,6 +30,7 @@ export * from "./settings";
 export * from "./setup";
 export * from "./status";
 export * from "./system";
+export * from "./themes";
 export * from "./usage";
 export * from "./usageEvents";
 
@@ -44,6 +46,7 @@ export const api = (host: Host) => ({
   ...settingsApi(host),
   ...setupApi(host),
   ...systemApi(host),
+  ...themesApi(host),
   ...usageApi(host),
   ...usageEventsApi(host),
 });

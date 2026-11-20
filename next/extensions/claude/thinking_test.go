@@ -157,3 +157,29 @@ func TestBuildBodyMapsReasoningSummary(t *testing.T) {
 		t.Errorf("losses %q: reasoning.summary is still reported dropped", got)
 	}
 }
+
+// A translated request with both reasoning effort and a json_schema response format keeps both
+// output_config.effort and output_config.format, and needs no structured-outputs beta header.
+func TestBuildBodyKeepsFormatWithReasoningEffort(t *testing.T) {
+	req := chatRequest("claude-opus-4-6", chatText(llm.RoleUser, "Hi", 0))
+	req.Options.ReasoningEffort = "high"
+	req.Options.ResponseFormat = &llm.ResponseFormat{
+		Type:   llm.ResponseFormatJSONSchema,
+		Name:   "answer",
+		Schema: json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}},"additionalProperties":false}`),
+	}
+	body, tr, err := buildBody(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `output_config={"effort":"high","format":{"schema":{"additionalProperties":false,"properties":{"ok":{"type":"boolean"}},"type":"object"},"type":"json_schema"}}`
+	if got := fields(body, "output_config"); got != want {
+		t.Errorf("got %s\nwant %s", got, want)
+	}
+	if len(tr.Losses) != 0 {
+		t.Errorf("losses = %v, want none", tr.Losses)
+	}
+	if _, betas := bodyBetas(body, false); len(betas) != 0 {
+		t.Errorf("bodyBetas = %v, want none (output_config.format needs no beta)", betas)
+	}
+}

@@ -57,9 +57,8 @@ func upstreamEvent(raw json.RawMessage) string {
 }
 
 // stopReason returns the stop reason to write: the upstream's own when it came from Messages,
-// otherwise the Messages value for the model's finish reason, as today's core maps them (a
-// content filter stop becomes end_turn). hasToolCalls makes a plain stop with tool calls in the
-// reply tool_use.
+// otherwise the Messages value for the model's finish reason (a content filter stop becomes
+// refusal). hasToolCalls makes a plain stop with tool calls in the reply tool_use.
 func stopReason(f *llm.Finish, upFormat string, hasToolCalls bool) string {
 	if f == nil {
 		return "end_turn"
@@ -72,6 +71,8 @@ func stopReason(f *llm.Finish, upFormat string, hasToolCalls bool) string {
 		return "max_tokens"
 	case llm.FinishToolCalls:
 		return "tool_use"
+	case llm.FinishContentFilter:
+		return "refusal"
 	case llm.FinishStop:
 		if hasToolCalls {
 			return "tool_use"
@@ -790,7 +791,7 @@ func status(e *llm.Error) int {
 		return http.StatusBadRequest
 	case llm.CodeAuth:
 		return http.StatusUnauthorized
-	case llm.CodePermission:
+	case llm.CodePermission, llm.CodeAccountClosed:
 		return http.StatusForbidden
 	case llm.CodeNotFound:
 		return http.StatusNotFound

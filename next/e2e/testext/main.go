@@ -31,6 +31,11 @@
 // with a fixed plan (its settings can move the five-hour reset and add a manual-resets limit), and
 // a signed-in account renews its credential.
 //
+// Two settings serve the account health tests: "exhausted_until" (Unix seconds) makes every
+// request on the account fail with a used-up quota until then, and its quota show the five-hour
+// window full until then; "generate_log" names a file each request on the account appends the
+// account's ID to, one line each.
+//
 // A file named crash-on-start in the package folder makes it exit before its handshake. Each
 // start appends the process ID to the file starts in the package folder.
 package main
@@ -61,6 +66,11 @@ type settings struct {
 	FiveHourResetsAt int64 `json:"five_hour_resets_at"`
 	// ManualResets, when set, adds a manual-resets limit (reset_credits) with this count.
 	ManualResets *int64 `json:"manual_resets"`
+	// ExhaustedUntil, when later than now, is the Unix time until which every request fails with
+	// a used-up quota and the five-hour window shows full.
+	ExhaustedUntil int64 `json:"exhausted_until"`
+	// GenerateLog, when set, is a file each request appends the account's ID to.
+	GenerateLog string `json:"generate_log"`
 }
 
 // The models that fail on purpose.
@@ -176,6 +186,18 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream, reply string)
 	}
 	var s settings
 	_ = json.Unmarshal(call.Account.Settings, &s)
+	if s.GenerateLog != "" {
+		f, err := os.OpenFile(s.GenerateLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(f, call.Account.ID)
+		f.Close()
+	}
+	if left := time.Until(time.Unix(s.ExhaustedUntil, 0)); left > 0 {
+		return &llm.Error{Code: llm.CodeQuota, Message: "the test provider's usage window is used up", Status: http.StatusTooManyRequests,
+			Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: left.Milliseconds()}
+	}
 	switch call.Request.Model {
 	case modelRateLimited:
 		return &llm.Error{Code: llm.CodeRateLimit, Message: "the test provider rate limited this model", Status: http.StatusTooManyRequests,
@@ -322,8 +344,12 @@ func quota(_ context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 		fiveHourReset = s.FiveHourResetsAt
 	}
 	pct := func(v float64) *float64 { return &v }
+	fiveHourUsed := float64(fiveHourPercent)
+	if s.ExhaustedUntil > time.Now().Unix() {
+		fiveHourUsed, fiveHourReset = 100, s.ExhaustedUntil
+	}
 	limits := []protocol.QuotaLimit{
-		{ID: "five_hour", Label: "5-hour limit", UsedPercent: pct(fiveHourPercent), ResetsAt: fiveHourReset, WindowSeconds: fiveHourWindowSec},
+		{ID: "five_hour", Label: "5-hour limit", UsedPercent: pct(fiveHourUsed), ResetsAt: fiveHourReset, WindowSeconds: fiveHourWindowSec},
 		{ID: "weekly", Label: "Weekly limit", UsedPercent: pct(weeklyPercent), ResetsAt: weeklyResetsAt, WindowSeconds: weeklyWindowSec},
 	}
 	if s.ManualResets != nil {

@@ -163,25 +163,29 @@ func TestQuotaReadsUsage(t *testing.T) {
 		used      *float64
 		resets    int64
 		window    int64
+		// feature: the window counts a metered feature (code review, an additional limit), not
+		// the account's requests in general, so routing never holds the account on it.
+		feature bool
 	}
 	wants := []want{
-		{"five_hour", "5-hour limit", pct(42), 1794268800, 18000},
-		{"weekly", "Weekly limit", pct(7.5), 1794668800, 604800},
-		{"code_review_weekly", "Code review weekly limit", pct(0), 1794768800, 604800},
-		{"gpt_5_3_codex_spark_five_hour", "GPT-5.3-Codex-Spark 5-hour limit", pct(10), 1794260000, 18000},
-		{"gpt_5_3_codex_spark_weekly", "GPT-5.3-Codex-Spark weekly limit", pct(3), 1794270000, 604800},
+		{"five_hour", "5-hour limit", pct(42), 1794268800, 18000, false},
+		{"weekly", "Weekly limit", pct(7.5), 1794668800, 604800, false},
+		{"code_review_weekly", "Code review weekly limit", pct(0), 1794768800, 604800, true},
+		{"gpt_5_3_codex_spark_five_hour", "GPT-5.3-Codex-Spark 5-hour limit", pct(10), 1794260000, 18000, true},
+		{"gpt_5_3_codex_spark_weekly", "GPT-5.3-Codex-Spark weekly limit", pct(3), 1794270000, 604800, true},
 	}
 	if len(q.Limits) != len(wants)+1 {
 		t.Fatalf("limits = %+v, want %d windows and the credit balance", q.Limits, len(wants))
 	}
 	for i, w := range wants {
 		l := q.Limits[i]
-		if l.ID != w.id || l.Label != w.label || l.UsedPercent == nil || *l.UsedPercent != *w.used || l.ResetsAt != w.resets || l.WindowSeconds != w.window {
+		if l.ID != w.id || l.Label != w.label || l.UsedPercent == nil || *l.UsedPercent != *w.used || l.ResetsAt != w.resets || l.WindowSeconds != w.window ||
+			l.Feature != w.feature || len(l.Models) != 0 {
 			t.Errorf("limits[%d] = %+v, want %+v", i, l, w)
 		}
 	}
 	c := q.Limits[len(wants)]
-	if c.ID != "credits" || c.Label != "Credit balance" || c.Remaining == nil || *c.Remaining != 12.5 || c.Unit != "credits" || c.Unlimited {
+	if c.ID != "credits" || c.Label != "Credit balance" || c.Remaining == nil || *c.Remaining != 12.5 || c.Unit != "credits" || c.Unlimited || c.Feature {
 		t.Errorf("credit limit = %+v, want a balance of 12.5 credits", c)
 	}
 	var raw struct {

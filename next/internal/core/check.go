@@ -92,6 +92,9 @@ func (c *Core) checkAccounts(s *snapshot, accounts []route.Account) {
 		}
 	}
 	for _, a := range accounts {
+		if c.state.IsBanned(a.ID) {
+			continue
+		}
 		g := s.exts[a.Extension]
 		if g == nil {
 			continue // safe mode
