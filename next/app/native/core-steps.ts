@@ -142,6 +142,69 @@ export function coreSource(dir: string, prepared: string): CoreSource {
   };
 }
 
+/** The Setup session's core (native/setup.ts): release 2.0.0 of the program at program (a core
+ * coreSource built), signed by a key made here, whose bundled registry offers only pluxy/claude,
+ * of tier pick: the test extension testext (panelcore -prepare's) under that ID, as panelcore
+ * -first-run offers it, so core's setup suggests it when it finds Claude Code. */
+export function firstRunSource(dir: string, program: string, testext: string): CoreSource {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const keyId = `native-test-${randomUUID()}`;
+  const folder = join(dir, "core-2.0.0");
+  const bundled = join(folder, "bundled");
+  const pkg = join(dir, "pluxy-claude");
+  mkdirSync(bundled, { recursive: true });
+  mkdirSync(join(pkg, "bin"), { recursive: true });
+  cpSync(program, join(folder, PROGRAM));
+  cpSync(testext, join(pkg, "bin", "testext"));
+  const manifest = {
+    manifest_version: 0,
+    id: "pluxy/claude",
+    version: "0.1.0",
+    protocol: [0],
+    programs: { [PLATFORM]: "bin/testext" },
+  };
+  writeFileSync(join(pkg, "pluxy-extension.json"), JSON.stringify(manifest));
+  tar(["-czf", join(bundled, "claude.tar.gz"), "-C", pkg, "pluxy-extension.json", "bin"], dir);
+  const archive = readFileSync(join(bundled, "claude.tar.gz"));
+  const offer = {
+    releases: [
+      {
+        version: manifest.version,
+        protocol: [0],
+        artifacts: {
+          [PLATFORM]: {
+            url: "claude.tar.gz",
+            sha256: createHash("sha256").update(archive).digest("hex"),
+            size: archive.length,
+          },
+        },
+      },
+    ],
+    title: "Claude",
+    summary: "Claude subscriptions and API keys",
+    kind: "provider",
+    tier: "pick",
+  };
+  writeFileSync(
+    join(bundled, "index.json"),
+    JSON.stringify({ registry_version: 0, packages: { [manifest.id]: offer } }),
+  );
+  const index = join(dir, "index.json");
+  writeFileSync(index, JSON.stringify({ format: 1, releases: [release(dir, "2.0.0", folder, privateKey, keyId)] }));
+  const jwk = publicKey.export({ format: "jwk" });
+  return {
+    index,
+    custom: program,
+    root: {
+      kind: "test",
+      publisher: "pluxy",
+      source: index,
+      key_id: keyId,
+      public_key: hex(Buffer.from(jwk.x ?? "", "base64url")),
+    },
+  };
+}
+
 /** What the managed run's core steps must report (native_core.rs). */
 export const CORE_STEPS: [string, Record<string, unknown>][] = [
   ["core_missing", { state: "missing", connected: false }],

@@ -1521,6 +1521,20 @@ added, paints the window in its canvas colour with the root's `dark` class, the 
 `GET /themes` through the app's host has it as `current`, and the next launch paints in it. The
 session ends on the Themes page in that theme.
 
+One more managed session (`native/setup.ts`, with the stages in `src-tauri/src/native_setup.rs`)
+walks [Setup](../management/README.md#setup) on the app's first start, on the build with
+`artifact-test-trust`. Its core is a first run: nothing installed and no accounts, a bundled
+registry that offers `pluxy/claude` as a pick (`native/core-steps.ts` `firstRunSource`), and a
+stand-in `claude` printing `2.4.1 (Claude Code)` first on the PATH it inherits from the app; a
+curated registry offers the Claude Code page's package (`native/first-run.ts`). The window opens
+on Setup by itself (`#/setup`, "Set up pluxy"); "Found on this machine" names Claude Code 2.4.1;
+the Claude pick is ticked; the Claude Code client row has "Set up" beside "Show what to paste";
+Start installs the pick, which then says Installed, and `GET /packages` through the app's host
+lists it; Finish lands on the Dashboard and `GET /setup` has `first_run` false. The next launch
+opens on the Dashboard; Setup, opened, says "Setup is finished." and has no Finish button. The
+session keeps a screenshot of each screen it holds (Claude Code found, after Start, finished) and
+ends on that page in GTK's dark variant.
+
 Then, in a session of its own (`native/instances-session.ts`), with the core program adopted in
 each profile, it launches the app again and again on one profile and checks that each later launch exits 0 within 10 seconds, starts no app or core of its own (it counts the
 app and core processes), and has the first show its window, also after the window was hidden and

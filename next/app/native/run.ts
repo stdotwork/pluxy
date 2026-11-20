@@ -227,6 +227,12 @@
 // The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session, and after them,
 // in the same session, the themes checks (native_themes.rs): a T3 Code theme file pasted on the
 // Themes page turns on, core keeps it, and the next launch paints in it.
+// The Setup checks (setup.ts, native_setup.rs) run in one more session, on the build with
+// artifact-test-trust, a first run with nothing installed: a core whose bundled registry offers
+// pluxy/claude as a pick (core-steps.ts firstRunSource) and a stand-in claude on its PATH
+// (first-run.ts). The window opens on Setup by itself, shows Claude Code found and the pick
+// ticked, offers Set up for it, Start installs the pick and Finish ends the first run; the next
+// launch opens on the Dashboard, and Setup then says it is finished, light and dark.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
 // own (dbus-run-session, xvfb-run), and random ports. Inside that session, before the app,
@@ -271,12 +277,15 @@ import {
   type CoreSource,
   coreProblems,
   coreSource,
+  firstRunSource,
+  PROGRAM,
   sentinelProblems,
   startSentinel,
   stopSentinel,
 } from "./core-steps";
 import { buildDeviceFixtures } from "./device";
 import { type Feed, standInBrowser, startFeed } from "./feed";
+import { buildFirstRunFixtures } from "./first-run";
 import { buildGrokFixtures } from "./grok";
 import { buildHermesFixtures } from "./hermes";
 import { runInstances } from "./instances";
@@ -292,7 +301,7 @@ import { buildSaveFixtures } from "./save";
 import { missingPrerequisites } from "./services";
 import { buildSessionsFixtures } from "./sessions";
 import { SESSIONS, selectShard } from "./shards";
-import { shotEnv } from "./shots";
+import { SHOT_FILE, shotEnv } from "./shots";
 import { buildSpawnFixtures } from "./spawn";
 import { buildTransactionsFixtures } from "./transactions";
 import { runUpdate } from "./update";
@@ -534,8 +543,8 @@ interface Release {
 }
 
 /** The window checks (window.ts), with or without a tray watcher in the session, the privacy
- * mode checks (privacy.ts), and the Access checks (access-suite.ts). */
-type Suite = "window" | "window-no-tray" | "privacy" | "access";
+ * mode checks (privacy.ts), the Setup checks (setup.ts), and the Access checks (access-suite.ts). */
+type Suite = "window" | "window-no-tray" | "privacy" | "setup" | "access";
 
 /** For a local or remote core, rotation.coreConfig is its config file. rotation.root keeps the
  * run's folders for the caller to remove; with rotation.restart the app starts again on them,
@@ -694,7 +703,8 @@ async function runApp(
       !pi &&
       !usage &&
       !save &&
-      suite !== "access"
+      suite !== "access" &&
+      suite !== "setup"
         ? join(root, "device")
         : undefined;
     const access = suite === "access" ? join(root, "access") : undefined;
@@ -895,6 +905,20 @@ async function runApp(
         JSON.stringify({ version: 0, registries: f.registries }),
       );
     }
+    // The Setup checks' stand-in claude, and the curated registry offering the Claude Code page's
+    // package, with its trust profile.
+    const setupDir = suite === "setup" ? join(root, "setup") : undefined;
+    if (setupDir) {
+      mkdirSync(setupDir);
+      const f = buildFirstRunFixtures(setupDir, dirs.home);
+      nonce = f.nonce;
+      launcherBin = f.bin;
+      roots = JSON.parse(readFileSync(join(dirs.home, PROFILE_FILE), "utf8")).roots;
+      writeFileSync(
+        join(dirs.config, artifact.identifier, "device-registries.json"),
+        JSON.stringify({ version: 0, registries: f.registries }),
+      );
+    }
     // The Codex check's signed packages, Codex's files in HOME, its stand-in terminal, codex and
     // Codex App program, its registry and trust profile, and its key and login canary.
     const codexDir = codex ? join(root, "codex") : undefined;
@@ -1081,7 +1105,8 @@ async function runApp(
       !ompDir &&
       !grokDir &&
       !hermesDir &&
-      !piDir
+      !piDir &&
+      !setupDir
     ) {
       try {
         nonce = /^nonce=([0-9a-f]{64})$/m.exec(run(probe, ["trust-marker", dirs.home], app))?.[1] ?? "";
@@ -1101,6 +1126,7 @@ async function runApp(
     const rotatedFile = join(root, "rotated-keys");
     const wrongKey = randomUUID();
     if (key) writeFileSync(keyFile, JSON.stringify({ key, wrong: wrongKey }), { mode: 0o600 });
+    const shots = shotEnv(`${currentSession}-${mode}`);
     // Only what the app needs: no display or session bus but the run's own.
     const env: Record<string, string> = {
       // The launcher check's stand-in terminal and agent come first.
@@ -1160,7 +1186,9 @@ async function runApp(
       ...(startup ? { PLUXY_APP_TEST_STARTUP_SUITE: artifact.identifier } : {}),
       ...(noTray ? { PLUXY_APP_TEST_NO_TRAY: "1" } : {}),
       ...(key ? { PLUXY_APP_TEST_KEY_FILE: keyFile } : {}),
-      ...shotEnv(`${currentSession}-${mode}`),
+      ...shots,
+      // setup.ts keeps a copy of the session's screenshot at each screen its stages hold.
+      ...(setupDir && shots[SHOT_FILE] ? { PLUXY_APP_TEST_SETUP_SHOT: shots[SHOT_FILE] } : {}),
       PLUXY_APP_TEST_ROTATED_FILE: rotatedFile,
       ...(rotation.coreConfig ? { PLUXY_APP_TEST_CORE_CONFIG: rotation.coreConfig } : {}),
       ...(rotation.restart ? { PLUXY_APP_TEST_ROTATION_RESTART: "1" } : {}),
@@ -1191,7 +1219,13 @@ async function runApp(
       suite
         ? join(
             import.meta.dir,
-            suite === "access" ? "access-suite.ts" : suite === "privacy" ? "privacy.ts" : "window.ts",
+            suite === "access"
+              ? "access-suite.ts"
+              : suite === "privacy"
+                ? "privacy.ts"
+                : suite === "setup"
+                  ? "setup.ts"
+                  : "window.ts",
           )
         : bin,
     ];
@@ -1236,8 +1270,8 @@ async function runApp(
         );
         return;
       }
-      // window.ts's, privacy.ts's and access-suite.ts's checks, each shown.
-      const driver = /^(window|privacy|access): /.exec(line)?.[1];
+      // window.ts's, privacy.ts's, setup.ts's and access-suite.ts's checks, each shown.
+      const driver = /^(window|privacy|setup|access): /.exec(line)?.[1];
       if (driver) {
         console.log(`  ${mode} | ${line}`);
         if (line.startsWith(`${driver}: suite passed`)) suitePassed = true;
@@ -3126,6 +3160,37 @@ async function main(): Promise<number> {
               release,
             )),
           );
+      // The Setup checks: a first run, on the build with artifact-test-trust (for the curated
+      // registry that offers the Claude Code page's package), with a core of its own whose bundled
+      // registry offers pluxy/claude as a pick.
+      if (runsSession("setup")) {
+        const firstRun = firstRunSource(
+          join(prepared, "first-run"),
+          join(releases, "core-2.0.0", PROGRAM),
+          join(prepared, "testext"),
+        );
+        p.push(
+          ...(await runApp(
+            "managed",
+            trusted,
+            updaterKey,
+            { mode: "managed", core_source: firstRun.index },
+            undefined,
+            false,
+            false,
+            undefined,
+            "setup",
+            {},
+            false,
+            false,
+            false,
+            false,
+            false,
+            undefined,
+            { from: firstRun, version: "2.0.0" },
+          )),
+        );
+      }
       problems.push(...p.map((x) => `managed: ${x}`));
       // The first start runs a stand-in that serves on the socket the app hands it (-listen-fd),
       // says where it listens, answers the app's readiness check (conn.rs ready), then exits; the
