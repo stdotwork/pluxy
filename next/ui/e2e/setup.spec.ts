@@ -58,8 +58,12 @@ test("a first run opens Setup, installs the suggested provider, adds an account,
   expect(reply.status).toBe(200);
 
   // Finish ends the first run and lands on the Dashboard; the panel no longer opens on Setup.
+  // Finish is at the page's end; in a small window the Dashboard still opens at its top.
+  await page.setViewportSize({ width: 700, height: 500 });
   await page.getByRole("button", { name: "Finish", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeInViewport();
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+  await page.setViewportSize({ width: 1280, height: 800 });
   await openPanel(page, core);
   await expect(nav(page)).toBeVisible();
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();

@@ -191,11 +191,50 @@ test("a first run with nothing found offers every provider unticked, and may sta
   expect(page).toContain("pluxy will run with no provider");
   expect(primary(page)).toEqual(["Start without a provider"]);
   // An account comes after a provider; a client's text can be shown at once.
-  expect(page).toContain("This comes after Start");
+  expect(page).toContain("tick one above and press Start");
   expect(page).not.toContain("Sign-in methods");
   expect(page).toContain("No client was found on this machine.");
   expect(page).toContain("Other clients (5)");
   expect(page).toContain(">Finish</button>");
+});
+
+test("the account part says what leads to an account: Start, a tick first, or the Extensions page", () => {
+  const after = /This comes after (Start|Install)/;
+  // A provider is ticked: Start installs it, and the account comes after.
+  expect(view(found)).toContain("This comes after Start");
+  // Providers are offered and none is ticked: the button there ends setup, so the words say to tick.
+  const unticked = view(nothingFound);
+  expect(primary(unticked)).toEqual(["Start without a provider"]);
+  expect(unticked).not.toMatch(after);
+  expect(unticked).toContain("tick one above and press Start");
+  // No provider is offered: nothing on this page leads to an account, and the words say where to go.
+  const none = view({ ...nothingFound, picks: [] });
+  expect(none).not.toMatch(after);
+  expect(none).not.toContain("tick one above");
+  expect(none).toMatch(/Install one on the <a href="#\/extensions">Extensions<\/a> page/);
+  // After setup the page has no Install button until a provider is ticked.
+  const later = view({ ...nothingFound, first_run: false });
+  expect(later).not.toContain(">Install</button>");
+  expect(later).not.toMatch(after);
+  expect(later).toContain("tick one above and press Install");
+  expect(view({ ...nothingFound, first_run: false }, { choices: { "pluxy/codex": true } })).toContain(
+    "This comes after Install",
+  );
+  expect(view({ ...nothingFound, first_run: false, picks: [] })).toMatch(/<a href="#\/extensions">/);
+});
+
+test("while the first scan runs, Start waits for what pluxy will suggest", () => {
+  const page = view(scanningFirst);
+  // Suggestions come with the scan's end: until then nothing is ticked, and that is not a choice.
+  expect(page).not.toContain("pluxy will run with no provider");
+  expect(page).not.toContain("Start without a provider");
+  expect(primary(page)).toEqual([]);
+  expect(page).toContain("pluxy is still looking");
+  // Finish stays, and a provider the person ticks meanwhile can be started.
+  expect(page).toContain(">Finish</button>");
+  expect(primary(view(scanningFirst, { choices: { "pluxy/gemini": true } }))).toEqual(["Start"]);
+  // A later scan runs over a kept one, whose suggestions stand: Start does not wait for it.
+  expect(primary(view({ ...nothingFound, scanning: true }))).toEqual(["Start without a provider"]);
 });
 
 test("found clients, a sign-in and a CLIProxyAPI setup are named, and what they suggest is ticked", () => {

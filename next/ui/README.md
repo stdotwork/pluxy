@@ -82,6 +82,8 @@ shell asks core for `GET /setup`: on a first run (`first_run`), when the address
 Setup opens in place of the Dashboard. The shell does not wait for the answer, so the Dashboard
 may show for an instant. A core without the call (it answers 404) gets no Setup page and nothing
 opens by itself. The page stays in the navigation after setup, as a status of the same things.
+Leaving the page scrolls the window to its top, so a page opened from a button far down Setup
+(Finish, a client's button) shows from its start.
 
 A host can add one button to each client the page lists as found:
 `corePages({ setup: { clientAction, clientActionHint } })` (`SetupOptions` in `kit/pages/setup.tsx`). `clientAction` takes the client's ID from core's
