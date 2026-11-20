@@ -119,8 +119,9 @@ type outMessage struct {
 // message, in order; tool results go in a user message. Function names Messages does not take
 // are sent under the names ToolNames gives them, and each tool's parameter schema is made one
 // Messages takes (an object schema without a root union). A tool choice that names the tools the
-// model may call (an allowed list) is carried by defining only those tools, since Messages has no
-// such list; hosted tools are defined as they were. Reasoning from another provider cannot be
+// model may call (an allowed list) is carried by defining only those function tools, since
+// Messages has no such list; every other tool, hosted ones included, is dropped. Reasoning from
+// another provider cannot be
 // replayed to a Messages upstream (its signatures do not verify), so it is dropped and reported,
 // as is the reasoning effort (thinking budgets are model-specific; the Claude provider sets
 // them). A user turn left with nothing to send after its unsupported parts are dropped is an
@@ -184,9 +185,10 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 
 	names := ToolNames(req)
 	// Messages has no allowed tool list: a choice that names the tools the model may call is
-	// carried by defining those tools alone, which is what the list asks for. Nothing is
-	// reported: the client's constraint is kept, not approximated. Hosted tools stay, since a
-	// list of function names does not speak to them.
+	// carried by defining those tools alone, which is what the list asks for. Every tool the
+	// list does not name is off the request, hosted and native ones included, since the list
+	// says which tools the model may call; nothing is reported for them, as the client's
+	// constraint is kept, not approximated.
 	allowed := map[string]bool{}
 	if tc := o.ToolChoice; tc != nil {
 		for _, name := range tc.Allowed {
@@ -195,7 +197,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	}
 	var tools []json.RawMessage
 	for i, t := range req.Tools {
-		if len(allowed) > 0 && t.Type != llm.ToolNative && !allowed[t.Name] {
+		if len(allowed) > 0 && (t.Type == llm.ToolNative || !allowed[t.Name]) {
 			continue
 		}
 		if t.Type == llm.ToolNative {

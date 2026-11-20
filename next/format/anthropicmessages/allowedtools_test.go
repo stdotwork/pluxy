@@ -3,6 +3,7 @@ package anthropicmessages
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/stdotwork/pluxy/next/format/openaichat"
@@ -62,6 +63,49 @@ func TestAllowedToolsNarrowMessagesTools(t *testing.T) {
 				t.Errorf("Messages tool_choice %q, want %q: %s", out.ToolChoice.Type, c.wantType, body)
 			}
 		})
+	}
+}
+
+// A hosted tool goes too: an allowed list names the function tools the model may call, and
+// Messages' definition of the tools is its only narrowing, so a hosted tool the list does not
+// name is off the request, without a loss of its own.
+func TestAllowedToolsDropHostedTools(t *testing.T) {
+	in := `{"model":"m","stream":true,
+	 "tools":[{"type":"function","name":"weather","parameters":{"type":"object"}},
+	          {"type":"web_search"}],
+	 "tool_choice":{"type":"allowed_tools","mode":"required","tools":[
+	   {"type":"function","name":"weather"}]},
+	 "input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Weather in Oslo?"}]}]}`
+	req, err := openairesponses.ParseRequest([]byte(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, losses, err := EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range losses {
+		if l.Path == "tools[1]" {
+			t.Errorf("tools[1] reported as %s, want the hosted tool off the request without a loss", l.Kind)
+		}
+	}
+	var out struct {
+		Tools []struct {
+			Name string `json:"name"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, tool := range out.Tools {
+		names = append(names, tool.Name)
+	}
+	if !reflect.DeepEqual(names, []string{"weather"}) {
+		t.Errorf("Messages tools %q, want the allowed function only: %s", names, body)
+	}
+	if strings.Contains(string(body), "web_search") {
+		t.Errorf("Messages body still has the hosted tool: %s", body)
 	}
 }
 
