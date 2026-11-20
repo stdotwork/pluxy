@@ -382,6 +382,33 @@ func TestEndpointKeepAlive(t *testing.T) {
 			t.Fatalf("got %d %q; want the JSON body without a keep-alive", status, body)
 		}
 	})
+
+	t.Run("Gemini Interactions", func(t *testing.T) {
+		between := endpointPause{entered: make(chan struct{}), release: make(chan struct{})}
+		var once sync.Once
+		t.Cleanup(func() { release(&once, between.release) })
+		h := endpointStreamHandler(t, func(llm.Request) route.Stream {
+			return pausedEndpointReply(llm.FormatGeminiInteractions, "text/event-stream",
+				[]string{"event: interaction.start\ndata: {}\n\n", "event: interaction.complete\ndata: {}\n\n"}, map[int]endpointPause{1: between})
+		})
+		w := newResponseWriter()
+		done := serveEndpointAsync(h, w, "/v1beta/interactions", `{"model":"models/m","stream":true}`)
+		waitForBody(t, w, "event: interaction.start", time.Second)
+		time.Sleep(2 * keepAliveAfter)
+		release(&once, between.release)
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("the Interactions reply did not finish")
+		}
+		status, body, _ := w.snapshot()
+		if status != http.StatusOK || !strings.Contains(body, "event: interaction.complete") {
+			t.Fatalf("got %d %q; want both Interactions events", status, body)
+		}
+		if strings.Contains(body, keepAliveComment) {
+			t.Fatalf("a keep-alive comment on the Gemini Interactions route: %q", body)
+		}
+	})
 }
 
 // A search request goes to an account as an endpoint call on both routes, with the client's body

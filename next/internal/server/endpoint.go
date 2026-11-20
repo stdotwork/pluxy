@@ -224,6 +224,7 @@ func writeEndpointReply(w http.ResponseWriter, r *http.Request, stream Stream, f
 		return
 	}
 	sse := strings.HasPrefix(reply.ContentType, "text/event-stream")
+	comments := sse && format != llm.FormatGeminiInteractions
 	w.Header().Set("Content-Type", reply.ContentType)
 	if sse {
 		w.Header().Set("Cache-Control", "no-cache")
@@ -234,11 +235,11 @@ func writeEndpointReply(w http.ResponseWriter, r *http.Request, stream Stream, f
 		m.sent = http.StatusOK
 	}
 	rc := http.NewResponseController(w)
-	// out is where the body goes: through keep-alive comments when it is a stream.
+	// out is where the body goes: through keep-alive comments on a non-Gemini stream.
 	var out io.Writer = w
 	flush := rc.Flush
 	var ka *keepAlive
-	if sse {
+	if comments {
 		ka = startKeepAlive(w, rc)
 		defer ka.stop()
 		out, flush = ka, ka.Flush
