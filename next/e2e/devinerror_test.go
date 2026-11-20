@@ -35,8 +35,9 @@ func devinChatError(t *testing.T, token string, answer http.HandlerFunc) (int, s
 	}))
 	t.Cleanup(up.Close)
 	base, logs := runCoreLogged(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
 		"extension": map[string]any{
 			"manifest": filepath.Join(binDir, "devin", "pluxy-extension.json"),
 			"accounts": []any{map[string]any{

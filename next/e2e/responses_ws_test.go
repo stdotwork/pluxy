@@ -166,9 +166,10 @@ func startWSCoreAccounts(t *testing.T, u *wsUpstream, websockets bool, configure
 		accounts = append(accounts, acct)
 	}
 	return runCore(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
-		"routing":     map[string]any{"strategy": "round-robin"},
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+		"routing":        map[string]any{"strategy": "round-robin"},
 		"extension": map[string]any{
 			"manifest": filepath.Join(binDir, "codex", "pluxy-extension.json"),
 			"accounts": accounts,

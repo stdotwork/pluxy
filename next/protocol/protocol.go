@@ -32,8 +32,9 @@ const Version = 0
 // diagnostic frame); minor 14 adds payload rules (Call.Payload); minor 15 has a session turn
 // carry them too; minor 16 adds an error's dropped (llm.Error.Dropped); minor 17 adds a
 // captured body's BodyStopped; minor 18 adds ModelList.From; minor 19 adds a quota limit's
-// Feature; minor 20 adds llm.CodeAccountClosed.
-const Minor = 20
+// Feature; minor 20 adds llm.CodeAccountClosed; minor 21 adds what a package is (title, summary,
+// kind) to the manifest and registry index, and changes no call.
+const Minor = 21
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
