@@ -492,8 +492,9 @@ an [endpoint call](protocol/README.md#endpoint); the Codex extension sends the b
 calls turned off on a Responses-lite request, the model renamed for the account, a thinking suffix's
 effort applied, and a prompt cache key (with `Session-Id`) derived as for `/responses` when the
 client names none; the upstream's JSON reply comes back to the client as it is. A request with
-`"stream": true` is refused with a 400, as today's core refuses it. An account of another extension
-does not serve it, so a model only those serve gets an error.
+`"stream": true` is refused with a 400, as today's core refuses it. xAI and Claude accounts serve it
+too (see their sections); an account of any other extension does not, so a model only those serve
+gets an error.
 
 **Alpha Search.** Codex's standalone search endpoint is `POST /v1/alpha/search` (also `POST
 /backend-api/codex/alpha/search`, for a ChatGPT sign-in's requests). Core routes it as an [endpoint call](protocol/README.md#endpoint)
@@ -595,22 +596,30 @@ subscription's token an hour before it expires.
 | `client_id` | Claude's OAuth client. Default is Claude's. |
 | `rebuild_mid_system_message` | `true` moves the text of each `system` message in a Messages client's conversation into the top-level `system` prompt, after what it holds, and removes those messages, for a Claude-compatible upstream that refuses them there; non-text blocks in them are left out. Default `false`: such messages go upstream where the client put them. Requests in other formats already have every system message in the top-level prompt. |
 | `model_level_cooling` | `true` keeps a used-up shared subscription window (5-hour or 7-day) on the model that hit it, so the account's other models stay in use; default `false` blocks the whole account. Today's `claude.model-level-cooling`. |
+| `cache_ttl` | Lifetime of `cache_control` markers pluxy adds to translated requests that set none: `"5m"` (default) or `"1h"`. |
 
 A Messages request goes to Anthropic unchanged: its body, so thinking blocks, signatures and
 `cache_control` markers arrive as the client wrote them, and its `anthropic-version`,
 `anthropic-beta` and identification headers (`User-Agent`, `X-App`, the `X-Stainless-*` headers of
 Anthropic's SDKs, `X-Claude-Code-Session-Id`, `X-Client-App` and
 `X-Anthropic-Additional-Protection`; and, only from a request that names itself as Claude Code
-(`X-App: cli`, a `claude-cli/` User-Agent and the `claude-code-20250219` beta), Claude Code's
-subagent, request-class and remote-session headers such as `X-Claude-Code-Agent-Id` and
-`X-Claude-Remote-Session-Id`, as today's core forwards them only from Claude Code). An API key goes in `x-api-key`; a
+(`X-App: cli` or `cli-bg`, a `claude-cli/` User-Agent and the `claude-code-20250219` beta), Claude
+Code's subagent, prompt, request-class and remote-session headers such as `X-Claude-Code-Agent-Id`,
+`X-Claude-Code-Prompt-Id` and `X-Claude-Remote-Session-Id`, as today's core forwards them only
+from Claude Code). An API key goes in `x-api-key`; a
 subscription's token or a setup token goes as a bearer token, with the `oauth-2025-04-20` beta added
 after the client's betas. Chat Completions, Responses and Gemini requests are
-translated to Messages; their reasoning effort becomes adaptive thinking with that effort on
+translated to Messages; a Chat client's own `cache_control` markers (top-level, on tools, on
+`tool_calls`, and on messages and parts) are carried over, a Responses client's
+`prompt_cache_retention` sets the added markers' TTL (`"24h"` as `"1h"`, `"in_memory"` as `"5m"`),
+and their reasoning effort becomes adaptive thinking with that effort on
 Claude 4.6 and later, and a thinking budget from Claude 3.7 to 4.5 (low 1024, medium 8192, high
 24576 tokens); a model name the extension does not know as a Claude model gets no thinking
 settings, and the effort is reported as dropped. A Responses client's `reasoning.summary` becomes
-`thinking.display` (`auto`, `concise` and `detailed` as `summarized`, `none` as `omitted`).
+`thinking.display` (`auto`, `concise` and `detailed` as `summarized`, `none` as `omitted`). A
+client's `json_schema` response format goes as `output_config.format` (`json_object` drops as
+unsupported), a Messages client's `output_config.format` carries over to other formats, and a
+content-filter stop from another upstream becomes `stop_reason` `"refusal"`.
 
 **Thinking settings.** Every request, a Messages client's own included, has its thinking settings
 made ones the model takes, by Anthropic's per-model tables, and each change is reported:
@@ -654,9 +663,11 @@ Today's core leaves both out of every translated request, on every model.
 
 Every request, a Messages client's or a translated one, also gets the betas its body needs, after
 the client's own and without repeats, as today's core adds them: `advisor-tool-2026-03-01` for a
-tool whose type starts with `advisor_`, `extended-cache-ttl-2025-04-11` for a `cache_control`
-marker with `ttl` `"1h"` (not on a token count), and `thinking-binding-controls-2026-08-01` for
-`thinking.block_binding`. A top-level `betas` list in the body, which Messages does not take there,
+tool whose type starts with `advisor_`, `extended-cache-ttl-2025-04-11` for a block- or tool-level
+`cache_control` marker with `ttl` `"1h"` (not on a token count),
+`thinking-binding-controls-2026-08-01` for `thinking.block_binding`,
+`mid-conversation-tool-changes-2026-07-01` for `tool_addition` or `tool_removal` blocks, and
+`inline-tools-2026-09-15` when a `tool_addition` defines a tool inline (`tool_definition`). A top-level `betas` list in the body, which Messages does not take there,
 is moved into `anthropic-beta`. The client's own betas are never removed. Not built: today's
 `anthropic-beta-strip` and `anthropic-beta-append` settings, and the Claude Code beta profile
 today's core sends for clients it makes look like Claude Code.
@@ -715,6 +726,24 @@ per-minute limit (one of Anthropic's exact per-minute messages, no quota status 
 window's, the quota refusal carries `quota_window_minutes` 300 or 10080. Unlike today's core,
 no random 1 to 30 seconds are added to the wait. A 529 (overloaded) moves the request to another
 account.
+
+**Compaction.** `POST /v1/responses/compact` (a Responses client's request to shorten its
+conversation, which the Codex CLI sends) is served on Claude accounts through the protocol's
+endpoint operation, with Anthropic's [on-demand
+compaction](https://platform.claude.com/docs/en/build-with-claude/compaction-on-demand). The
+Responses body is translated to Messages as for `/v1/responses` and sent once, not streamed, with
+`"compaction": {"type": "summarize"}` and the `compact-2026-09-04` beta, and without what
+Anthropic refuses on a compaction request: stop sequences, structured output, a `tool_choice` of
+type `any` or `tool`, and `context_management`. A conversation that ends on the model's reply is
+sent with it, which a compaction request takes although a generation on Claude 4.6 and later would
+refuse it as a prefill. The reply is OpenAI's compaction reply, one JSON object
+(`"object": "response.compaction"`), whose `output` is Claude's summary as one user message that
+starts with the Codex CLI's own summary prefix, the shape the Codex CLI keeps in place of the
+conversation when it compacts on its own side; its `usage` is the summarization call's (Anthropic's
+`usage.iterations`). Anthropic's signed compaction block is not passed on, so the next request
+can go to any account and needs no beta. A reply without a summary (a `stop_reason` other than
+`compaction`, such as `max_tokens` or `refusal`) is a 502 for that request, which blocks
+nothing. Every other endpoint call is answered as not served, so core tries another account.
 
 **Quota.** For a subscription account, quota reads `GET {base_url}/api/oauth/usage` and `GET {base_url}/api/oauth/profile` (default base `https://api.anthropic.com`) with the access token, the OAuth beta in `anthropic-beta` and `anthropic-version`. Like the account's requests, it presents no client identity of its own. It reports the 5-hour window (`five_hour`), the weekly windows (`seven_day`, `seven_day_oauth_apps`, `seven_day_opus`, `seven_day_sonnet`, `seven_day_cowork`, the Fable window), any window counted in dollars, and extra usage (`extra_usage`), with the share used and reset time; the plan (Free, Pro, Max, Max 5x, Max 20x or Team) comes from the profile, and usage is still reported when the profile cannot be read. A setup token's quota reads only the
 usage, not the profile: such a token is made for inference and lacks the profile scope (today's core

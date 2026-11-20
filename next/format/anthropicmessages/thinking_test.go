@@ -62,6 +62,25 @@ func TestApplyEffort(t *testing.T) {
 	}
 }
 
+func TestApplyEffortKeepsOutputConfigFormat(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-4-6","max_tokens":32000,"output_config":{"format":{"type":"json_schema","schema":{"type":"object"}}}}`)
+	out, applied, err := ApplyEffort(body, "claude-opus-4-6", "high")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !applied {
+		t.Fatal("applied = false, want true")
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	wantConfig := json.RawMessage(`{"effort":"high","format":{"type":"json_schema","schema":{"type":"object"}}}`)
+	if !jsonEqual(got["output_config"], wantConfig) {
+		t.Errorf("output_config = %s, want %s", got["output_config"], wantConfig)
+	}
+}
+
 func itoa(n int) string { b, _ := json.Marshal(n); return string(b) }
 
 func jsonEqual(a, b json.RawMessage) bool {
