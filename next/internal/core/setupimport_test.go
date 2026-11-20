@@ -267,6 +267,78 @@ func TestSetupImportChangesOnlyWhatTheFileSets(t *testing.T) {
 	}
 }
 
+// Two auth files whose names make one account ID: the dry run refuses the second as the import
+// does, so both reports name it as not brought.
+func TestSetupImportDryRunOneAccountID(t *testing.T) {
+	setTestHome(t)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	writeTestFile(t, cfgPath, `{"listen":"127.0.0.1:0","client_keys":["fake-client-key-1"],"management_key":"fake-mgmt-key"}`)
+	cpa := t.TempDir()
+	writeTestFile(t, filepath.Join(cpa, "auths", "a b.json"), `{"type": "claude", "access_token": "fake-1"}`)
+	writeTestFile(t, filepath.Join(cpa, "auths", "a-b.json"), `{"type": "claude", "access_token": "fake-2"}`)
+	writeTestFile(t, filepath.Join(cpa, "config.yaml"), "auth-dir: auths\n")
+	c, err := Start(Options{ConfigPath: cfgPath, SafeMode: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Stop()
+	req := management.SetupImportRequest{Config: filepath.Join(cpa, "config.yaml")}
+	req.DryRun = true
+	code, dry, body := importCall(t, c, "fake-mgmt-key", req)
+	if code != http.StatusOK {
+		t.Fatalf("dry run: %d %s", code, body)
+	}
+	req.DryRun = false
+	code, real, body := importCall(t, c, "fake-mgmt-key", req)
+	if code != http.StatusOK {
+		t.Fatalf("import: %d %s", code, body)
+	}
+	if !reflect.DeepEqual(dry.Brought, real.Brought) || !reflect.DeepEqual(dry.Changed, real.Changed) || !reflect.DeepEqual(dry.NotBrought, real.NotBrought) {
+		t.Errorf("the dry run's lists differ from the import's:\ndry  %+v\nreal %+v", dry, real)
+	}
+	if len(real.NotBrought) != 1 || real.NotBrought[0].Name != "a-b.json" || !strings.Contains(real.NotBrought[0].Why, "already has an account") {
+		t.Errorf("not brought %+v", real.NotBrought)
+	}
+	if n := len(c.creds.Records()); n != 1 {
+		t.Errorf("%d accounts in the store, want 1", n)
+	}
+}
+
+// A change the write path refuses, such as TLS while core runs, is refused by the dry run too:
+// the dry run runs the same checks.
+func TestSetupImportDryRunRefusesWhatTheImportRefuses(t *testing.T) {
+	setTestHome(t)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	writeTestFile(t, cfgPath, `{"listen":"127.0.0.1:0","client_keys":["fake-client-key-1"],"management_key":"fake-mgmt-key"}`)
+	cpa := t.TempDir()
+	writeTestFile(t, filepath.Join(cpa, "config.yaml"), "tls: {enable: true, cert: c.pem, key: k.pem}\n")
+	c, err := Start(Options{ConfigPath: cfgPath, SafeMode: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Stop()
+	before, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bodies []string
+	for _, dry := range []bool{true, false} {
+		code, _, body := importCall(t, c, "fake-mgmt-key", management.SetupImportRequest{Config: filepath.Join(cpa, "config.yaml"), DryRun: dry})
+		if code != http.StatusUnprocessableEntity || !strings.Contains(body, "tls cannot change while core runs") {
+			t.Errorf("dry %v: %d %s", dry, code, body)
+		}
+		bodies = append(bodies, body)
+	}
+	if bodies[0] != bodies[1] {
+		t.Errorf("the dry run and the import refuse differently:\ndry  %s\nreal %s", bodies[0], bodies[1])
+	}
+	if after, err := os.ReadFile(cfgPath); err != nil || !bytes.Equal(before, after) {
+		t.Errorf("the refused import changed core's config: %v", err)
+	}
+}
+
 // A path that is not absolute, a missing file and a file that is not a config are refused, and
 // the refusal holds none of the file's secrets.
 func TestSetupImportRefusals(t *testing.T) {

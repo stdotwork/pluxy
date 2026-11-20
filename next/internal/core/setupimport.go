@@ -121,7 +121,13 @@ func (c *Core) ImportCPA(req management.SetupImportRequest) (management.ImportRe
 			return management.ImportReport{}, err
 		}
 		if !c.isYAML() {
-			if _, err := server.ParseConfig(next, c.opts.ConfigPath); err != nil {
+			cfg, err := server.ParseConfig(next, c.opts.ConfigPath)
+			if err != nil {
+				return management.ImportReport{}, &editError{http.StatusUnprocessableEntity, "refused", scrub(err.Error())}
+			}
+			// The checks the write path makes, which a setting that cannot change while core
+			// runs (TLS, a credentials folder) fails: a dry run reports them too.
+			if err := c.fixed(cfg, c.cur.Load()); err != nil {
 				return management.ImportReport{}, &editError{http.StatusUnprocessableEntity, "refused", scrub(err.Error())}
 			}
 		}
@@ -157,7 +163,7 @@ func (c *Core) ImportCPA(req management.SetupImportRequest) (management.ImportRe
 					reserved[strings.ToLower(id)] = true
 				}
 			}
-			store = dryStore{have: c.creds.Records()}
+			store = &dryStore{have: c.creds.Records()}
 		}
 		var taken []legacy.Skipped
 		imported, taken, err = legacy.Import(store, p.folder.Files, func(id string) bool { return reserved[strings.ToLower(id)] })
@@ -467,14 +473,21 @@ func addMissing(d *configdoc.Doc, v any, path ...string) error {
 	return nil
 }
 
-// dryStore answers as the credential store would, without adding anything: an ID it has is
-// taken.
+// dryStore answers as the credential store would, without saving anything: an ID it already has,
+// or one an earlier create in the same dry run took, is taken.
 type dryStore struct{ have []cred.Record }
 
-func (s dryStore) Create(r cred.Record) (cred.Record, error) {
-	if slices.ContainsFunc(s.have, func(h cred.Record) bool { return strings.EqualFold(h.ID, r.ID) }) {
-		return cred.Record{}, cred.ErrExists
+func (s *dryStore) Create(r cred.Record) (cred.Record, error) {
+	if !cred.ValidID(r.ID) {
+		return cred.Record{}, fmt.Errorf("account ID %q is not valid: use letters, digits, '.', '_' and '-'", r.ID)
 	}
+	for _, h := range s.have {
+		// IDs name files, so IDs that differ only in case name the same file (see cred.Store).
+		if strings.EqualFold(h.ID, r.ID) {
+			return cred.Record{}, cred.ErrExists
+		}
+	}
+	s.have = append(s.have, r)
 	return r, nil
 }
 
