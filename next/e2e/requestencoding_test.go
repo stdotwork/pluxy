@@ -87,6 +87,62 @@ func TestUnsupportedRequestContentEncoding(t *testing.T) {
 	}
 }
 
+func TestGzipRequestBodyForEndpoint(t *testing.T) {
+	const reply = `{"id":"v1_gzip","status":"completed","model":"gemini-2.5-flash","outputs":[{"type":"text","text":"ok"}]}`
+	up := newFakeGemini(t, jsonReply(reply))
+	base := startInteractionsCore(t, interactionsAccount{id: "g1", key: interactionsKey, baseURL: up.URL, enabled: true})
+	body := `{"model":"gemini-2.5-flash","input":"compressed endpoint request"}`
+
+	resp := postEncodedPath(t, context.Background(), base, interactionsPath, clientKey, gzipRequestBody(t, body), "gzip")
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(raw) != reply {
+		t.Fatalf("status %d: %s; want 200 with the endpoint reply", resp.StatusCode, raw)
+	}
+	got := up.interactions()
+	if len(got) != 1 {
+		t.Fatalf("upstream got %d Interactions requests (%s), want 1", len(got), up.all())
+	}
+	if input := string(bodyFields(t, got[0].body)["input"]); input != `"compressed endpoint request"` {
+		t.Errorf("upstream input = %s, want the decoded request body", input)
+	}
+	if encoding := got[0].header.Get("Content-Encoding"); encoding != "" {
+		t.Errorf("upstream Content-Encoding = %q, want none", encoding)
+	}
+}
+
+func TestGzipRequestBodyForTokenCount(t *testing.T) {
+	up := newFakeGemini(t, jsonReply(`{"totalTokens":7}`))
+	base := startInteractionsCore(t, interactionsAccount{id: "g1", key: interactionsKey, baseURL: up.URL, enabled: true})
+	body := `{"contents":[{"role":"user","parts":[{"text":"count this compressed request"}]}]}`
+
+	resp := postEncodedPath(t, context.Background(), base, "/v1beta/models/gemini-2.5-flash:countTokens", clientKey,
+		gzipRequestBody(t, body), "gzip")
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(raw), `"totalTokens":7`) {
+		t.Fatalf("status %d: %s; want 200 with the upstream count", resp.StatusCode, raw)
+	}
+	up.mu.Lock()
+	seen := append([]seenRequest(nil), up.seen...)
+	up.mu.Unlock()
+	var counted []seenRequest
+	for _, req := range seen {
+		if strings.HasSuffix(req.path, ":countTokens") {
+			counted = append(counted, req)
+		}
+	}
+	if len(counted) != 1 {
+		t.Fatalf("upstream got %d countTokens requests (%s), want 1", len(counted), up.all())
+	}
+	if string(counted[0].body) != body {
+		t.Errorf("upstream body = %q, want decoded request %q", counted[0].body, body)
+	}
+	if encoding := counted[0].header.Get("Content-Encoding"); encoding != "" {
+		t.Errorf("upstream Content-Encoding = %q, want none", encoding)
+	}
+}
+
 func TestGzipRequestBodyOverDecodedLimit(t *testing.T) {
 	u := newUpstream(t)
 	u.respond = func(http.ResponseWriter, *http.Request, []byte) {
@@ -125,7 +181,12 @@ func gzipRequestBody(t *testing.T, body string) []byte {
 
 func postEncoded(t *testing.T, ctx context.Context, base, key string, payload []byte, encoding string) *http.Response {
 	t.Helper()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/chat/completions", bytes.NewReader(payload))
+	return postEncodedPath(t, ctx, base, "/v1/chat/completions", key, payload, encoding)
+}
+
+func postEncodedPath(t *testing.T, ctx context.Context, base, path, key string, payload []byte, encoding string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(payload))
 	if err != nil {
 		t.Fatal(err)
 	}
