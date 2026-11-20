@@ -29,10 +29,10 @@
 //	           which the method does not ask for, names the account in place of "Test account"
 //	           (the privacy mode tests' identities)
 //
-// A login's accounts serve the models fake-model, rate-limited and server-error; config accounts
-// keep serving whatever their config names, or any model. Every account answers check, and quota
-// with a fixed plan (its settings can move the five-hour reset and add a manual-resets limit), and
-// a signed-in account renews its credential.
+// A login's accounts serve the models fake-model, account-closed, rate-limited and server-error;
+// config accounts keep serving whatever their config names, or any model. Every account answers
+// check, and quota with a fixed plan (its settings can move the five-hour reset and add a
+// manual-resets limit), and a signed-in account renews its credential.
 //
 // Two settings serve the account health tests: "exhausted_until" (Unix seconds) makes every
 // request on the account fail with a used-up quota until then, and its quota show the five-hour
