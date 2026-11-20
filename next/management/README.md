@@ -77,7 +77,7 @@ management API of a core that is already running. `pluxy -config ...` with no su
 
 | Call | Command | What it does |
 | --- | --- | --- |
-| `GET /status` | `pluxy status` | Config versions (wanted and serving), each extension's state, build version, `management_api`, and **new** `first_run` |
+| `GET /status` | `pluxy status` | Config versions (wanted and serving), each extension's state, build version, `management_api`, and `first_run` |
 | `POST /reload` | `pluxy reload` | Reload the config now. 422 with the status when refused |
 | `GET /config`, `POST /config/validate`, `PUT /config` | `pluxy config show`, `pluxy config validate <file>`, `pluxy config apply <file>` | The config file with secrets replaced by placeholders; check a document; replace the file |
 | `GET /settings`, `PATCH /settings` | `pluxy settings`, `pluxy settings set <name> <value>` | The basic and routing settings by name |
@@ -85,18 +85,21 @@ management API of a core that is already running. `pluxy -config ...` with no su
 | `POST /management-key/rotate` | `pluxy key rotate-management` | A new management key, printed once |
 | `GET /logs`, `DELETE /logs`, `GET /request-error-logs[/{name}]`, `GET /request-log-by-id/{id}` | `pluxy logs [--after n]`, `pluxy logs clear`, `pluxy logs errors [name]`, `pluxy logs request <id>` | Core's log and request logs |
 
-### Setup (**new**)
+### Setup
 
 Setup is what a new install shows first. Core looks at the machine it runs on, says what it found, and
 proposes what to install. Nothing is installed until asked.
 
+`first_run` is true only while there is no `state/setup.json` and core has no installed packages and no accounts; once `setup.json` exists, its `first_run` is kept. Core scans on its own only at a first run's start with no kept scan; otherwise only on `POST /setup/scan`.
+
 | Call | Command | What it does |
 | --- | --- | --- |
-| `GET /setup` | `pluxy setup` | The last scan, at once (it is kept on disk): `first_run`; `scanning`; `scanned_at`; `found` (below); `picks` (below). The command prints it and, on a terminal, offers to apply the picks marked `suggested` |
+| `GET /setup` | `pluxy setup` | The last scan, at once (it is kept on disk): `first_run`; `scanning`; `scanned_at`; `found` (below); `picks` (below). The command prints it and, on a terminal, offers to apply the picks marked `suggested` (`--yes` applies without asking) |
 | `POST /setup/scan` | `pluxy setup scan` | Looks again. Returns at once with `scanning: true`; read `GET /setup` until it is false (each probe has 4 seconds) |
-| `POST /setup/apply` | `pluxy setup apply [--pick id]... [--yes]` | `{"picks": ["pluxy/claude", ...]}`: installs and enables each. Returns one result per pick (`done`, or `error`); one failure does not undo the others |
-| `POST /setup/import` | `pluxy import cpa <config.yaml> [--auth-dir <dir>] [--dry-run]` | Brings a CLIProxyAPI setup across and returns the import report (below). With `dry_run` nothing is written |
-| `POST /setup/done` | `pluxy setup done` | Ends first run: the panel and app stop opening on setup |
+| `POST /setup/apply` | `pluxy setup apply [--pick id]... [--yes]` | `{"picks": ["pluxy/claude", ...]}`: installs and enables each. Returns `{"results": [{"id", "status", "package", "error"}]}` with one result per pick (`done`, or `error`); one failure does not undo the others |
+| **new** `POST /setup/import` | `pluxy import cpa <config.yaml> [--auth-dir <dir>] [--dry-run]` | Brings a CLIProxyAPI setup across and returns the import report (below). With `dry_run` nothing is written |
+| `POST /setup/done` | `pluxy setup done` | Ends first run (`{"first_run": false}`): the panel and app stop opening on setup |
+| — | `pluxy client show <tool> [--key-id id]` | Prints what to paste into that client tool's config to point it at this core (address and a client key placeholder; never prints the management key) |
 
 `found`:
 
@@ -116,7 +119,7 @@ proposes what to install. Nothing is installed until asked.
 }
 ```
 
-A client's `state` is `not-configured`, `configured` (it points at this core) or `needs-update`. `sign_ins`
+A client's `state` is `not-configured`, `configured` (it points at this core), `needs-update`, or **new** `refused` (a file the desktop app's writer for that tool would refuse to change; no pick is suggested to apply to it). `sign_ins`
 only says a sign-in exists; core reads no token from it.
 
 `picks`, in the order to show them:
@@ -152,7 +155,7 @@ Every key of the config and every file of the auth folder is in exactly one of `
 | Call | Command | What it does |
 | --- | --- | --- |
 | `GET /packages` | `pluxy ext list` | Installed packages and their state |
-| `GET /registries` | `pluxy ext available` | What each registry offers; **new**: each package's `title`, `summary`, `kind` and `tier` (`pick`, `verified`, `unverified`) |
+| `GET /registries` | `pluxy ext available` | What each registry offers, with each package's `title`, `summary`, `kind` (`provider`, `client`) and `tier` (`pick`, `verified`, `unverified`) when its registry says them; core enforces nothing by tier. A first start installs nothing: every package, the bundled ones too, is installed by `POST /packages` |
 | `POST /packages` | `pluxy ext install <id> [--version v] [--registry r]` | Install and enable |
 | `POST /packages/{id}/enable`, `.../disable` | `pluxy ext enable <id>`, `pluxy ext disable <id>` | Start or stop routing to it |
 | `DELETE /packages/{id}` | `pluxy ext remove <id>` | Remove its files; its accounts stay |

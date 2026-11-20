@@ -199,10 +199,21 @@ func NewHandler(src Source) http.Handler {
 		mux.HandleFunc("GET "+path, accessLog(func(w http.ResponseWriter, r *http.Request) { serveResponsesWebSocket(w, r, src) }))
 	}
 	serveModels(mux, src)
+	// Claude Code probes its configured Anthropic endpoint before sending Messages. Answer the
+	// routes locally: the hello probe needs no account, and telemetry is accepted and dropped.
+	mux.HandleFunc("GET /api/hello", serveClaudeCodeProbe)
+	mux.HandleFunc("POST /api/event_logging/batch", serveClaudeCodeProbe)
 	// The health probe a container or load balancer sends. It takes no key and reads no config,
 	// so it is not refused, counted or logged as a client request.
 	mux.HandleFunc("GET /healthz", serveHealthz)
 	return withCORS(src, mux)
+}
+
+// serveClaudeCodeProbe answers a Claude Code probe with the status it expects. A GET pattern
+// also matches HEAD; net/http sends HEAD's headers and no body.
+func serveClaudeCodeProbe(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = io.WriteString(w, `{"status":"ok"}`)
 }
 
 // serveHealthz answers 200 with the text "ok". A GET pattern also matches HEAD; net/http sends
