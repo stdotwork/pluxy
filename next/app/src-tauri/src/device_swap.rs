@@ -201,11 +201,14 @@ impl Catalog {
         p.source = s.source.clone();
         p.enabled = true;
         p.admission = Some(Admission::of(&s.admitted));
+        // Its Linux builds were the replaced release's: the next use in WSL installs them again.
+        p.linux = BTreeMap::new();
         self.drop_consents_naming(id);
         if let Err(e) = self.save() {
             self.packages.insert(id.clone(), previous);
             return Err(e);
         }
+        self.collect();
         Ok(())
     }
 

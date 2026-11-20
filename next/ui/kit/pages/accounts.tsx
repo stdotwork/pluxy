@@ -331,6 +331,7 @@ export function AccountsPage() {
           <label class="field accounts-search" data-part="field">
             <span class="label">{t("search")}</span>
             <input
+              data-slot="input"
               type="text"
               placeholder={t("searchPlaceholder")}
               value={filters.search ?? ""}
@@ -340,6 +341,7 @@ export function AccountsPage() {
           <label class="field" data-part="field">
             <span class="label">{t("status")}</span>
             <select
+              data-slot="select-trigger"
               aria-label={t("status")}
               value={filters.status ?? "all"}
               onChange={(e) => change("status", e.currentTarget.value)}
@@ -353,6 +355,7 @@ export function AccountsPage() {
           <label class="field" data-part="field">
             <span class="label">{t("source")}</span>
             <select
+              data-slot="select-trigger"
               aria-label={t("source")}
               value={filters.source ?? ""}
               onChange={(e) => change("source", e.currentTarget.value)}
@@ -365,6 +368,7 @@ export function AccountsPage() {
           <label class="field" data-part="field">
             <span class="label">{t("sort")}</span>
             <select
+              data-slot="select-trigger"
               aria-label={t("sort")}
               value={filters.sort ?? "default"}
               onChange={(e) => change("sort", e.currentTarget.value)}
@@ -529,6 +533,7 @@ export function AccountsPage() {
           <label class="field" data-part="field">
             <span class="label">{t("perPage")}</span>
             <select
+              data-slot="select-trigger"
               aria-label={t("perPage")}
               value={perPage}
               onChange={(e) => {

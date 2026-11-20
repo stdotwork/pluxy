@@ -1,0 +1,13 @@
+{
+  "distro": "Ubuntu",
+  "user": "bob",
+  "uid": 1001,
+  "home": "/home/bob",
+  "arch": "amd64",
+  "automount": "/mnt/",
+  "drives": [
+    {"letter": "c", "path": "/mnt/c", "exec": true},
+    {"letter": "d", "path": "/mnt/d", "exec": false}
+  ],
+  "wsl": 2
+}

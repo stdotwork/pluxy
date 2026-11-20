@@ -96,6 +96,55 @@ func noRealIDs(t *testing.T, what string, r leakReply) {
 	}
 }
 
+// A model the account's config names has no extension owner to name. Its fallback owner is the
+// extension, never the account: GET /v1/models and its detail would otherwise send a config ID
+// that can be an email address to every client-key holder.
+func TestModelListsDoNotNameAccountsByRealID(t *testing.T) {
+	t.Parallel()
+	base := runCore(t, map[string]any{
+		"listen":      "127.0.0.1:0",
+		"client_keys": []string{clientKey},
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "pluxy-extension.json"),
+			"accounts": []any{map[string]any{
+				"id":       configEmailID,
+				"models":   []string{"config-model"},
+				"settings": map[string]any{"base_url": "http://127.0.0.1:1/v1"},
+				"credential": map[string]any{
+					"kind": "api_key", "api_key": "sk-model-list-test",
+				},
+			}},
+		},
+	})
+	for _, path := range []string{"/v1/models", "/v1/models/config-model"} {
+		t.Run(path, func(t *testing.T) {
+			req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, base+path, nil)
+			req.Header.Set("Authorization", "Bearer "+clientKey)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			var all strings.Builder
+			for name, values := range resp.Header {
+				for _, value := range values {
+					all.WriteString(name + ": " + value + "\n")
+				}
+			}
+			all.Write(raw)
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("status %d, want 200:\n%s", resp.StatusCode, all.String())
+			}
+			for _, value := range []string{configEmailID, "@"} {
+				if strings.Contains(all.String(), value) {
+					t.Errorf("the reply holds %q:\n%s", value, all.String())
+				}
+			}
+		})
+	}
+}
+
 // expiring is an AccessTTL whose first token (the login's) is already due for renewal.
 func expiring(n int) time.Duration {
 	if n == 1 {

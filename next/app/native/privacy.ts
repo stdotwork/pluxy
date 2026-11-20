@@ -4,7 +4,10 @@
 // (PLUXY_APP_TEST_WINDOW_BIN, built with native-test) once per stage with
 // PLUXY_APP_TEST_PRIVACY=<stage>; the stages themselves are src-tauri/src/native_privacy.rs.
 // Between stages it checks the choice the app keeps natively (privacy-mode.json beside
-// connection.json), and before the last stage it damages that file.
+// connection.json), and before the last privacy stage it damages that file. Then, in the same
+// session, the themes checks' stages (PLUXY_APP_TEST_THEMES=<stage>, src-tauri/src/native_themes.rs):
+// a T3 Code theme file pasted on the Themes page turns on and stays on after a restart. The last
+// stage ends on the Themes page in that theme, so the session's last screenshot shows it.
 //
 // It prints `privacy: ok <check>` or `privacy: FAILED <check>` for every check, then
 // `privacy: suite passed` or `privacy: suite FAILED`, and exits 0 only when every check passed.
@@ -38,10 +41,10 @@ for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
   });
 }
 
-/** Runs the app through one stage. */
-async function stage(name: string) {
+/** Runs the app through one stage of the privacy mode checks, or with themes, of the themes checks. */
+async function stage(name: string, themes = false) {
   const proc = spawn(bin as string, [], {
-    env: { ...process.env, PLUXY_APP_TEST_PRIVACY: name },
+    env: { ...process.env, [themes ? "PLUXY_APP_TEST_THEMES" : "PLUXY_APP_TEST_PRIVACY"]: name },
     stdio: ["ignore", "pipe", "pipe"],
   });
   child = proc;
@@ -50,11 +53,11 @@ async function stage(name: string) {
   const onLine = (line: string) => {
     lines.push(line);
     if (lines.length > 80) lines.shift();
-    const m = /^native-test: (privacy_\w+|failed) (.*)$/.exec(line);
+    const m = /^native-test: (privacy_\w+|themes_\w+|failed) (.*)$/.exec(line);
     if (!m) return;
     const value = JSON.parse(m[2] as string);
-    if (m[1] === "privacy_check") check(value.ok, `${name}: ${value.what}`);
-    if (m[1] === "privacy_report") report = value;
+    if (m[1] === "privacy_check" || m[1] === "themes_check") check(value.ok, `${name}: ${value.what}`);
+    if (m[1] === "privacy_report" || m[1] === "themes_report") report = value;
     if (m[1] === "failed") check(false, `${name}: the stage failed: ${JSON.stringify(value).slice(0, 2000)}`);
   };
   for (const stream of [proc.stdout, proc.stderr]) createInterface({ input: stream }).on("line", onLine);
@@ -96,6 +99,9 @@ check(choice() === "false", `second: privacy-mode.json keeps privacy mode off ($
 
 writeFileSync(saved, "not json", { mode: 0o600 });
 await stage("damaged");
+
+await stage("add", true);
+await stage("restart", true);
 
 console.log(`privacy: suite ${failed === 0 ? "passed" : "FAILED"} (${failed} failed)`);
 process.exit(failed === 0 ? 0 : 1);

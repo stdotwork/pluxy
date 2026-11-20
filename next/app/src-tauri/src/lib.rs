@@ -17,10 +17,7 @@ pub static PLUXY_TEST_BUILD: [u8; 31] = *b"PLUXY_TEST_BUILD_DO_NOT_RELEASE";
 pub mod access;
 pub mod artifact;
 pub mod client;
-// Built for the router and the runtimes; its key capture and entry commands (`client_key_*`)
-// stay Linux only until their Windows and macOS slice.
 #[cfg(native_stack)]
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod client_keys;
 mod command_names;
 #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
@@ -37,6 +34,7 @@ mod dialog;
 mod dialog_macos;
 #[cfg(windows)]
 mod dialog_windows;
+pub mod environments;
 pub(crate) mod format_chars;
 pub mod instance;
 mod key_entry;
@@ -81,6 +79,7 @@ mod update_native;
 mod updater;
 mod updates;
 pub mod vault;
+// Whether a file is this user's own: the test trust's files and the files launches open.
 #[cfg(windows)]
 mod win_acl;
 pub mod window;
@@ -152,6 +151,9 @@ struct App {
     /// The launcher's remembered launches, recent folders and notice setting (`launcher.rs`).
     #[cfg(native_stack)]
     launcher: Mutex<launcher::Launcher>,
+    /// The WSL environments the person added, as `pluxy/wsl` checked them (`environments.rs`).
+    #[cfg(native_stack)]
+    environments: Mutex<environments::Environments>,
     status: Mutex<Option<MenuItem<Wry>>>,
     /// Start, Stop and Restart, in that order.
     core_actions: Mutex<Vec<MenuItem<Wry>>>,
@@ -905,7 +907,7 @@ async fn core_restart(webview: Webview) -> Result<View, String> {
     with_conn(&webview, |c| c.restart_core()).await
 }
 
-/// This command accepts connection metadata only; GTK supplies the secret on the native side.
+/// This command accepts connection metadata only; native key entry supplies the secret on the native side.
 #[derive(serde::Serialize)]
 struct KeyEntryResult {
     status: &'static str,
@@ -950,7 +952,7 @@ async fn key_entry(webview: Webview, change: Option<Change>) -> Result<KeyEntryR
         if let Some(after) = *st.key_entry_after.lock().unwrap() {
             std::thread::sleep(after.saturating_duration_since(std::time::Instant::now()));
         }
-        // GTK must remain free to handle IPC/window close while the dialog is open.
+        // Run off the main thread so the app keeps handling IPC and window close while the dialog is open.
         let input = key_entry::request(&app, target.summary.clone());
         let mut error = None;
         // The key's check is a network call: `finish_key_unlocked` makes it without the lock.
@@ -1705,6 +1707,69 @@ async fn device_install(
     .map_err(|e| e.to_string())?
 }
 
+/// Installs native tool package's Linux build for platform (`linux/amd64` or `linux/arm64`) to
+/// run it in WSL (`install_wsl`).
+#[tauri::command]
+async fn device_install_wsl(
+    webview: Webview,
+    package: String,
+    platform: String,
+) -> Result<device::View, String> {
+    trusted(&webview)?;
+    let app = webview.app_handle().clone();
+    tauri::async_runtime::spawn_blocking(move || install_wsl(&app, &package, &platform))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Installs native tool id's Linux build for platform: the active release's version, from the
+/// registry it was installed from, recorded once the person confirmed it in a native
+/// confirmation naming its version, platform and archive digest. A cancel records nothing. The
+/// active release does not change, so its pages, jobs and tool on this computer stay as they are;
+/// its instances in WSL are stopped.
+#[cfg(native_stack)]
+fn install_wsl(app: &AppHandle, id: &str, platform: &str) -> Result<device::View, String> {
+    let st = app.state::<App>();
+    let roots = trust::TrustStore::current();
+    let target = st
+        .device
+        .lock()
+        .unwrap()
+        .linux_target(id, platform, &roots)?;
+    // Fetched and checked without holding the catalog.
+    let c = device::stage_linux(&st.device_dirs, &roots, &target)?;
+    let nothing = format!("nothing of {id}'s Linux build for {platform} was installed");
+    match ask_native(app, c.confirmation(), id) {
+        Ok(true) => {}
+        Ok(false) => return Err(format!("the install was cancelled; {nothing}")),
+        Err(e) => return Err(format!("{e}; {nothing}")),
+    }
+    let (view, left) = {
+        let mut catalog = st.device.lock().unwrap();
+        catalog.commit_linux(c, &roots)?;
+        (device_view(&st, &catalog), catalog.take_cleanup())
+    };
+    // Its instances in WSL ran the Linux build this one replaces: their next call starts this one.
+    // shortcut: `stop_wsl` is tested, not this call of it: it needs the running app's
+    // `AppHandle`, which no test can make; test it once the app has a test harness for its Tauri
+    // state, or once this code takes that state instead of the handle.
+    st.programs.stop_wsl(id);
+    let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-device", ());
+    match left {
+        None => Ok(view),
+        Some(left) => Err(format!(
+            "{id}'s Linux build for {platform} was installed, but {left}"
+        )),
+    }
+}
+
+#[cfg(not(native_stack))]
+fn install_wsl(_app: &AppHandle, id: &str, _platform: &str) -> Result<device::View, String> {
+    Err(format!(
+        "{id} is a native tool; native tools run on Linux, Windows and macOS only"
+    ))
+}
+
 /// The native file chooser's title.
 pub const CHOOSER: &str = "Install an extension package on this device";
 
@@ -2343,17 +2408,39 @@ async fn device_rollback(webview: Webview, id: String) -> Result<device::View, S
     .map_err(|e| e.to_string())?
 }
 
-/// What the program host starts tool id from: its admitted record, checked now
-/// (`Catalog::admitted`).
+/// What the program host starts an instance from: on this computer its package's admitted
+/// record, checked now (`Catalog::admitted`); in WSL its Linux build's, with the host's record of
+/// the environment.
 #[cfg(native_stack)]
 fn program_resolver(app: AppHandle) -> program::Resolve {
-    Box::new(move |id| {
+    Box::new(move |instance| {
+        let st = app.state::<App>();
+        let roots = trust::TrustStore::current();
         // Its files are hashed without holding the catalog (`checked_unlocked`).
-        device::admitted_unlocked(
-            &app.state::<App>().device,
-            id,
-            &trust::TrustStore::current(),
-        )
+        match &instance.environment {
+            environments::Environment::Local => {
+                device::admitted_unlocked(&st.device, &instance.package, &roots)
+                    .map(|a| program::Spec::from(&a))
+            }
+            env => {
+                let record = st
+                    .environments
+                    .lock()
+                    .unwrap()
+                    .get(env)
+                    .cloned()
+                    .ok_or_else(|| {
+                        format!("{} is not an environment this app knows", instance.name())
+                    })?;
+                let a = device::admitted_linux_unlocked(
+                    &st.device,
+                    &instance.package,
+                    &record.platform(),
+                    &roots,
+                )?;
+                Ok(program::Spec::in_wsl(&a, record))
+            }
+        }
     })
 }
 
@@ -2367,10 +2454,16 @@ async fn program_call(
     op: String,
     input: Value,
     ticket: Option<String>,
+    environment: Option<Value>,
 ) -> Result<Value, String> {
     trusted(&webview)?;
     #[cfg(native_stack)]
     {
+        // Where it runs: this computer, or a WSL environment only this window chooses.
+        let instance = environments::Instance {
+            package,
+            environment: environments::Environment::from_window(environment.as_ref())?,
+        };
         let app = webview.app_handle().clone();
         // Registered now, before it can wait, so a cancel or the window's closing reaches it.
         let call = app
@@ -2384,7 +2477,8 @@ async fn program_call(
             std::thread::Builder::new()
                 .name("pluxy-prog-call".into())
                 .spawn(move || {
-                    route::call_main(&app, call, &package, &op, input, None)
+                    route::call_main_in(&app, call, &instance, &op, input, None, None)
+                        .map(|(v, _)| v)
                         .map_err(|e| e.to_string())
                 })
                 .map_err(|e| e.to_string())?
@@ -2396,7 +2490,7 @@ async fn program_call(
     }
     #[cfg(not(native_stack))]
     {
-        let _ = (package, op, input, ticket);
+        let _ = (package, op, input, ticket, environment);
         Err("native tools run on Linux, Windows and macOS only".into())
     }
 }
@@ -2418,21 +2512,34 @@ fn program_cancel(webview: Webview, ticket: String) -> Result<(), String> {
 
 /// Whether the native tool package runs, and how it last stopped.
 #[tauri::command]
-fn program_status(webview: Webview, package: String) -> Result<Value, String> {
+fn program_status(
+    webview: Webview,
+    package: String,
+    environment: Option<Value>,
+) -> Result<Value, String> {
     trusted(&webview)?;
     #[cfg(native_stack)]
     {
         let st = webview.state::<App>();
+        let instance = environments::Instance {
+            package: package.clone(),
+            environment: environments::Environment::from_window(environment.as_ref())?,
+        };
         let mut status =
-            serde_json::to_value(st.programs.status(&package)).map_err(|e| e.to_string())?;
+            serde_json::to_value(st.programs.status_in(&instance)).map_err(|e| e.to_string())?;
         // Its journals: open ones, and how recent ones ended; or why its records cannot be read
         // (its start fails then too).
-        match st.vault.journals(&package) {
+        match st.vault.journals_in(&instance) {
             Ok(j) => status["journals"] = serde_json::to_value(j).map_err(|e| e.to_string())?,
             Err(e) => status["journals_error"] = Value::from(e),
         }
         // Its managed runtimes: running, ended, or left by a run of the app that did not stop.
-        status["runtimes"] = Value::from(st.runtimes.list(&package));
+        // A tool in WSL has none (its spawn frames are refused): the local ones are not its.
+        status["runtimes"] = if instance.environment.is_local() {
+            Value::from(st.runtimes.list(&package))
+        } else {
+            Value::Array(Vec::new())
+        };
         #[cfg(feature = "native-test")]
         {
             status["test_frames"] = program::test_frames(&package);
@@ -2441,8 +2548,103 @@ fn program_status(webview: Webview, package: String) -> Result<Value, String> {
     }
     #[cfg(not(native_stack))]
     {
-        let _ = package;
+        let _ = (package, environment);
         Err("native tools run on Linux, Windows and macOS only".into())
+    }
+}
+
+/// The WSL environments this app knows, and whether WSL can be used here (Windows only).
+#[tauri::command]
+fn environments_get(webview: Webview) -> Result<Value, String> {
+    trusted(&webview)?;
+    #[cfg(native_stack)]
+    {
+        let st = webview.state::<App>();
+        let e = st.environments.lock().unwrap();
+        Ok(serde_json::json!({"available": cfg!(windows), "environments": e.all()}))
+    }
+    #[cfg(not(native_stack))]
+    {
+        Ok(serde_json::json!({"available": false, "environments": []}))
+    }
+}
+
+/// Adds the WSL environment of distro and user, or checks it again: `pluxy/wsl`'s `check` (it
+/// starts the distribution), kept as the host's record. Gives the record.
+#[tauri::command]
+async fn environment_add(webview: Webview, distro: String, user: String) -> Result<Value, String> {
+    trusted(&webview)?;
+    #[cfg(native_stack)]
+    {
+        environments::Environment::wsl(&distro, &user)?;
+        let app = webview.app_handle().clone();
+        let call = app
+            .state::<App>()
+            .programs
+            .begin_call(None)
+            .map_err(|e| e.to_string())?;
+        tauri::async_runtime::spawn_blocking(move || {
+            std::thread::Builder::new()
+                .name("pluxy-prog-call".into())
+                .spawn(move || {
+                    let input = serde_json::json!({"distro": distro, "user": user});
+                    let out = route::call_main(
+                        &app,
+                        call,
+                        environments::WSL_PACKAGE,
+                        "check",
+                        input,
+                        None,
+                    )
+                    .map_err(|e| e.to_string())?;
+                    let r = environments::Record::from_check(
+                        &distro,
+                        &user,
+                        &out,
+                        environments::now(),
+                    )?;
+                    app.state::<App>()
+                        .environments
+                        .lock()
+                        .unwrap()
+                        .put(r.clone())?;
+                    serde_json::to_value(r).map_err(|e| e.to_string())
+                })
+                .map_err(|e| e.to_string())?
+                .join()
+                .map_err(|_| "the call's thread failed".to_string())?
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(native_stack))]
+    {
+        let _ = (distro, user);
+        Err("WSL runs on Windows only".into())
+    }
+}
+
+/// Forgets the WSL environment of distro and user, stopping the tools running there.
+#[tauri::command]
+fn environment_remove(webview: Webview, distro: String, user: String) -> Result<Value, String> {
+    trusted(&webview)?;
+    #[cfg(native_stack)]
+    {
+        let env = environments::Environment::wsl(&distro, &user)?;
+        let st = webview.state::<App>();
+        let removed = st.environments.lock().unwrap().remove(&env)?;
+        st.programs.stop_in(&env);
+        // Its remembered launches go too: one click would start them in whatever is there now.
+        // shortcut: the launcher's own `forget_environment` is tested, not this call of it: it
+        // needs a running app's `Webview`, which no test can make; test it once the app has a
+        // test harness for its Tauri state, or once this code takes that state instead.
+        launcher::forget_environment(webview.app_handle(), &env)?;
+        Ok(serde_json::json!({"removed": removed}))
+    }
+    #[cfg(not(native_stack))]
+    {
+        let _ = (distro, user);
+        Err("WSL runs on Windows only".into())
     }
 }
 
@@ -2484,18 +2686,24 @@ async fn launcher_terminals(webview: Webview) -> Result<Value, String> {
 /// A new launch from the launcher, prepared by the execution program; it always asks a native
 /// confirmation.
 #[tauri::command]
-async fn launcher_launch(webview: Webview, launch: Value) -> Result<Value, String> {
+async fn launcher_launch(
+    webview: Webview,
+    launch: Value,
+    environment: Option<Value>,
+) -> Result<Value, String> {
     trusted(&webview)?;
     #[cfg(native_stack)]
     {
         let app = webview.app_handle().clone();
-        tauri::async_runtime::spawn_blocking(move || launcher::launch(&app, &launch))
+        // In a WSL environment only this window chooses: prepared there by `pluxy/wsl`.
+        let env = environments::Environment::from_window(environment.as_ref())?;
+        tauri::async_runtime::spawn_blocking(move || launcher::launch(&app, &launch, &env))
             .await
             .map_err(|e| e.to_string())?
     }
     #[cfg(not(native_stack))]
     {
-        let _ = launch;
+        let _ = (launch, environment);
         Err("the launcher runs on Linux, Windows and macOS only".into())
     }
 }
@@ -2558,11 +2766,11 @@ async fn launcher_settings(webview: Webview, notice: bool) -> Result<Value, Stri
 }
 
 /// Asks for a secret in native key entry and keeps it in the vault as label; gives its ID. The
-/// secret never passes through the window: GTK's hidden entry reads it.
+/// secret never passes through the window: the native hidden entry reads it.
 #[tauri::command]
 async fn vault_secret_add(webview: Webview, label: String) -> Result<Value, String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let app = webview.app_handle().clone();
         if app
@@ -2574,6 +2782,13 @@ async fn vault_secret_add(webview: Webview, label: String) -> Result<Value, Stri
         }
         tauri::async_runtime::spawn_blocking(move || {
             let st = app.state::<App>();
+            struct Open<'a>(&'a std::sync::atomic::AtomicBool);
+            impl Drop for Open<'_> {
+                fn drop(&mut self) {
+                    self.0.store(false, Ordering::SeqCst);
+                }
+            }
+            let open = Open(&st.key_entry_open);
             let input = key_entry::request_as(
                 &app,
                 "pluxy secret",
@@ -2582,7 +2797,7 @@ async fn vault_secret_add(webview: Webview, label: String) -> Result<Value, Stri
                 ),
                 false,
             );
-            st.key_entry_open.store(false, Ordering::SeqCst);
+            drop(open);
             match input {
                 Ok(Some(input)) => st
                     .vault
@@ -2595,10 +2810,10 @@ async fn vault_secret_add(webview: Webview, label: String) -> Result<Value, Stri
         .await
         .map_err(|e| e.to_string())?
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
         let _ = label;
-        Err("the vault is on Linux only for now".into())
+        Err("the vault's secrets are on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2606,13 +2821,13 @@ async fn vault_secret_add(webview: Webview, label: String) -> Result<Value, Stri
 #[tauri::command]
 fn vault_secrets(webview: Webview) -> Result<Value, String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         Ok(serde_json::json!({"secrets": webview.state::<App>().vault.secrets()}))
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
-        Err("the vault is on Linux only for now".into())
+        Err("the vault's secrets are on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2620,14 +2835,14 @@ fn vault_secrets(webview: Webview) -> Result<Value, String> {
 #[tauri::command]
 fn vault_secret_remove(webview: Webview, id: String) -> Result<(), String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         webview.state::<App>().vault.remove_secret(&id)
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
         let _ = id;
-        Err("the vault is on Linux only for now".into())
+        Err("the vault's secrets are on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2641,17 +2856,17 @@ async fn client_key_capture(
     client: String,
 ) -> Result<Value, String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let app = webview.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || client_keys::capture(&app, &label, &client))
             .await
             .map_err(|e| e.to_string())?
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
         let _ = (label, client);
-        Err("the vault is on Linux only for now".into())
+        Err("the vault's secrets are on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2665,17 +2880,17 @@ async fn client_key_enter(
     client: String,
 ) -> Result<Value, String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let app = webview.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || client_keys::enter(&app, &label, &client))
             .await
             .map_err(|e| e.to_string())?
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
         let _ = (label, client);
-        Err("the vault is on Linux only for now".into())
+        Err("the vault's secrets are on Linux, Windows and macOS only".into())
     }
 }
 
@@ -2980,6 +3195,7 @@ pub fn run() {
             device_registries,
             device_install,
             device_install_file,
+            device_install_wsl,
             device_enable,
             device_remove,
             device_rollback,
@@ -2992,6 +3208,9 @@ pub fn run() {
             program_call,
             program_cancel,
             program_status,
+            environments_get,
+            environment_add,
+            environment_remove,
             launcher_state,
             launcher_terminals,
             launcher_launch,
@@ -3063,6 +3282,8 @@ pub fn run() {
                 confirmation::Confirmations::open(config.join("remembered-launches.json"))?;
             #[cfg(native_stack)]
             let launcher_file = launcher::file(&config);
+            #[cfg(native_stack)]
+            let environments_file = config.join(environments::FILE);
             let release_settings = release::settings_path(&config);
             let device_dirs = device::Dirs {
                 root: app.path().app_data_dir()?.join("device-packages"),
@@ -3201,6 +3422,8 @@ pub fn run() {
                 ),
                 #[cfg(native_stack)]
                 launcher: Mutex::new(launcher::Launcher::open(launcher_file)),
+                #[cfg(native_stack)]
+                environments: Mutex::new(environments::Environments::open(environments_file)),
                 status: Mutex::new(None),
                 core_actions: Mutex::new(Vec::new()),
                 shown: Mutex::new(Shown::default()),

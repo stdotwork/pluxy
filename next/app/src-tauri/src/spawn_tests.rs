@@ -1555,10 +1555,21 @@ fn an_open_launch_gets_only_the_absolute_path_entries() {
             .find(|(k, _)| k == "PATH")
             .map(|(_, v)| v.to_string_lossy().into_owned())
     };
+    // macOS adds the system-wide client folders that exist (`/home/me` does not, so none of
+    // its own), then keeps the absolute entries.
+    #[cfg(target_os = "macos")]
+    let (all, absolute) = {
+        let added: String = ["/opt/homebrew/bin", "/usr/local/bin"]
+            .iter()
+            .filter(|d| Path::new(d).is_dir())
+            .map(|d| format!(":{d}"))
+            .collect();
+        (format!("{all}{added}"), format!("{absolute}{added}"))
+    };
     let mut r = Request::default();
-    assert_eq!(path(&r).as_deref(), Some(all));
+    assert_eq!(path(&r), Some(all.to_string()));
     r.absolute_path = true;
-    assert_eq!(path(&r).as_deref(), Some(absolute));
+    assert_eq!(path(&r), Some(absolute.to_string()));
 }
 
 /// A launch's files as the confirmation opened them, which records at each check whether its
@@ -1709,4 +1720,144 @@ fn the_runtimes_file_is_private() {
         assert!(std::fs::symlink_metadata(&file).unwrap().is_file());
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_launch_through_wsl_exe_passes_on_the_variables_it_sets_and_nothing_else() {
+    let root = Path::new(r"C:\Windows");
+    for yes in [
+        r"C:\Windows\System32\wsl.exe",
+        r"c:\windows\system32\WSL.EXE",
+        r"\\?\C:\Windows\System32\wsl.exe",
+    ] {
+        assert!(is_wsl_exe(Path::new(yes), Some(root)), "{yes}");
+    }
+    for no in [
+        r"C:\Windows\SysWOW64\wsl.exe",
+        r"C:\tools\wsl.exe",
+        r"C:\Windows\System32\wslg.exe",
+        "wsl.exe",
+    ] {
+        assert!(!is_wsl_exe(Path::new(no), Some(root)), "{no}");
+    }
+    assert!(!is_wsl_exe(Path::new(r"C:\Windows\System32\wsl.exe"), None));
+    assert_eq!(wslenv(&Request::default()), None);
+    let (_, r) = parse(
+        &serde_json::json!({"environment": {"set": {"MODE": "x"}, "inherit": ["LANG"],
+            "secrets": {"API_KEY": "key"}}, "key": "s"}),
+        &|f| f == "key",
+    )
+    .unwrap();
+    // Set and secret names cross; inherited Windows values do not.
+    assert_eq!(wslenv(&r).as_deref(), Some("MODE/u:API_KEY/u"));
+}
+
+/// A managed and a detached launch named as Windows' own `wsl.exe`, with Windows' folder given
+/// (`TEST_SYSTEM_ROOT`; the program run is still this test's agent), each start with `WSLENV`
+/// naming what they set: both launch paths take their environment from `launch_env`. On Windows
+/// the detached one runs only outside the runner's job (`let_go`), as CI's step "Detached launch
+/// outside the runner's job" runs this test; inside it, it is refused before it runs.
+#[test]
+fn managed_and_detached_launches_of_wsl_exe_start_with_wslenv() {
+    *TEST_SYSTEM_ROOT.lock().unwrap() = Some(PathBuf::from(r"C:\Windows"));
+    let dir = folder("wslenv-launch");
+    let as_wsl = |rec: &Path, lifetime| {
+        let mut l = agent(&dir, rec, &[], lifetime);
+        l.named = PathBuf::from(r"C:\Windows\System32\wsl.exe");
+        l.request.set.insert("FIXTURE_SET".into(), "set".into());
+        l
+    };
+    let (rd, rm) = (dir.join("detached"), dir.join("managed"));
+    let ran = let_go(&as_wsl(&rd, Lifetime::Detached), "p", &By(none));
+    let rt = Runtimes::open(None, Box::new(By(none)));
+    let m = rt.start("p", as_wsl(&rm, Lifetime::Managed)).unwrap();
+    let mr = record(&rm, 0);
+    let d = ran.then(|| record(&rd, 0));
+    *TEST_SYSTEM_ROOT.lock().unwrap() = None;
+    let _ = rt.stop("p", m["runtime"].as_str().unwrap());
+    let mut all = vec![pid(&mr, "pid"), pid(&mr, "child")];
+    if let Some(d) = &d {
+        all.extend([pid(d, "pid"), pid(d, "child")]);
+    } else {
+        // Refused before it ran (Windows, in a job it may not leave): nothing started.
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!rd.exists(), "a refused detached launch started");
+    }
+    clean(&all, &dir);
+    for r in d.iter().chain([&mr]) {
+        assert_eq!(r["env"]["WSLENV"], "FIXTURE_SET/u", "{r}");
+        assert_eq!(r["env"]["FIXTURE_SET"], "set", "{r}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Every launch, managed or detached, gets its environment from `launch_env`: one of Windows'
+/// own `wsl.exe` gets `WSLENV` naming what it sets (replacing any it inherited), and no other
+/// launch does.
+#[test]
+fn a_launch_of_wsl_exe_gets_wslenv_in_its_environment_and_no_other_launch_does() {
+    let dir = folder("wslenv");
+    let (lifetime, request) = parse(
+        &serde_json::json!({"environment": {"set": {"MODE": "x"}, "secrets": {"API_KEY": "key"}},
+            "key": "s"}),
+        &|f| f == "key",
+    )
+    .unwrap();
+    let launch = |named: &str| Launch {
+        opened: opened(&dir),
+        named: PathBuf::from(named),
+        argv: vec![],
+        lifetime,
+        request: request.clone(),
+        secrets: vec![("API_KEY".into(), "s-1".into())],
+        stdin: None,
+    };
+    let secrets = [("API_KEY".to_string(), "v".to_string())];
+    let root = Some(Path::new(r"C:\Windows"));
+    let wslenv_of = |env: Vec<(String, OsString)>| -> Vec<OsString> {
+        env.into_iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("WSLENV"))
+            .map(|(_, v)| v)
+            .collect()
+    };
+    let wsl = launch(r"C:\Windows\System32\wsl.exe");
+    assert_eq!(
+        wslenv_of(launch_env(&wsl, &secrets, root)),
+        [OsString::from("MODE/u:API_KEY/u")]
+    );
+    // Not wsl.exe, or no Windows folder to find it in: nothing added.
+    assert!(wslenv_of(launch_env(&launch(r"C:\tools\wsl.exe"), &secrets, root)).is_empty());
+    assert!(wslenv_of(launch_env(&wsl, &secrets, None)).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// macOS: a launch's PATH is the app's, then the client folders that exist, each once.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_path_adds_existing_client_folders() {
+    let home = std::env::temp_dir().join(format!("pluxy-path-{}", crate::managed::random_key()));
+    std::fs::create_dir_all(home.join(".local/bin")).unwrap();
+    std::fs::create_dir_all(home.join(".bun/bin")).unwrap();
+    let local = home.join(".local/bin");
+    let snap = Snapshot::of(
+        &[
+            ("PATH", &format!("/usr/bin:/bin:{}", local.display())),
+            ("HOME", home.to_str().unwrap()),
+        ],
+        core_limit(),
+    );
+    let env = environment(&snap, &Request::default(), &[]);
+    let path = env.iter().find(|(k, _)| k == "PATH").unwrap().1.clone();
+    let entries: Vec<PathBuf> = std::env::split_paths(&path).collect();
+    assert_eq!(
+        entries[..3],
+        [PathBuf::from("/usr/bin"), "/bin".into(), local.clone()]
+    );
+    assert!(entries.contains(&home.join(".bun/bin")));
+    assert_eq!(entries.iter().filter(|e| **e == local).count(), 1);
+    assert!(
+        !entries.contains(&home.join(".cargo/bin")),
+        "a missing folder is left out"
+    );
+    std::fs::remove_dir_all(&home).unwrap();
 }

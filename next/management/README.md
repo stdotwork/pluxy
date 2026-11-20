@@ -81,7 +81,7 @@ management API of a core that is already running. `pluxy -config ...` with no su
 | `POST /reload` | `pluxy reload` | Reload the config now. 422 with the status when refused |
 | `GET /config`, `POST /config/validate`, `PUT /config` | `pluxy config show`, `pluxy config validate <file>`, `pluxy config apply <file>` | The config file with secrets replaced by placeholders; check a document; replace the file |
 | `GET /settings`, `PATCH /settings` | `pluxy settings`, `pluxy settings set <name> <value>` | The basic and routing settings by name |
-| `GET /client-keys`, `POST /client-keys`, `DELETE /client-keys/{id}` | `pluxy key list`, `pluxy key add`, `pluxy key remove <id>` | Client keys. `id` is stable across restarts (**changed**: today it changes at every start). `add` prints the key once |
+| `GET /client-keys`, `POST /client-keys`, `DELETE /client-keys/{id}` | `pluxy key list`, `pluxy key add`, `pluxy key remove <id>` | Client keys. `id` is stable across restarts. `add` prints the key once |
 | `POST /management-key/rotate` | `pluxy key rotate-management` | A new management key, printed once |
 | `GET /logs`, `DELETE /logs`, `GET /request-error-logs[/{name}]`, `GET /request-log-by-id/{id}` | `pluxy logs [--after n]`, `pluxy logs clear`, `pluxy logs errors [name]`, `pluxy logs request <id>` | Core's log and request logs |
 
@@ -223,8 +223,10 @@ reading waits for the one request it lets through. `pluxy account list` shows `s
 
 | Call | Command | What it does |
 | --- | --- | --- |
-| `GET /usage` | `pluxy usage [--since 7d] [--until t] [--by model\|account\|key\|provider] [--model m] [--account a] [--key k]` | Totals, breakdowns and a time series. **Changed**: reaches back as far as the usage files kept on disk (`usage.keep_days`, default 90), not only since the last start |
-| `GET /usage/events` | `pluxy usage events [--after seq] [--limit n]` | The recorded requests, oldest first. **new** fields per event: `attempts`, `chain_step` |
+| `GET /usage` | `pluxy usage [--since 7d] [--until t] [--by model\|account\|key\|provider] [--model m] [--account a] [--client-key k]` | Totals, breakdowns (`by` + `breakdown` alongside `models`, `providers`, `accounts`, `keys`) and a time series (`1h` buckets for ranges up to 2 days / 48 hours, `24h` beyond, unless `bucket` is given; `1m` / 60 steps when no range is given). **Changed**: reaches back across all usage files kept on disk (`usage.keep_days`, default 90), reading closed UTC days from hourly `usage/summary/YYYY-MM-DD.json` files (stays when `.jsonl` files are pruned) and today from memory / `usage/YYYY-MM-DD.jsonl`. Also accepts `key` as an alias for `key_id` |
+| `GET /usage/events` | `pluxy usage events [--after seq \| --before [seq]] [--limit n] [--since t] [--until t] [--model m] [--account a] [--provider p] [--client-key k]` | The recorded requests, oldest first with `after` or newest first with `before`. **new** fields per event: `attempts`, `chain_step` |
+
+Closed days are counted by whole UTC hours, so a `since` or `until` inside an hour on a closed day counts that whole hour.
 
 ### Themes
 

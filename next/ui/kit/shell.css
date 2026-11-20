@@ -9,8 +9,8 @@
   }
 
   .nav {
-    background: var(--px-color-surface);
-    border: 0 solid var(--px-color-border);
+    background: var(--px-color-nav);
+    border: 0 solid var(--px-color-nav-border);
     display: flex;
     gap: calc(var(--s) * 1);
     z-index: 1;
@@ -26,7 +26,7 @@
 
   .brand {
     font-weight: var(--px-font-weight-strong);
-    color: var(--px-color-text);
+    color: var(--px-color-nav-text);
     text-decoration: none;
     letter-spacing: 0.02em;
     padding: calc(var(--s) * 2) calc(var(--s) * 3);
@@ -34,7 +34,7 @@
 
   .nav-item {
     display: block;
-    color: var(--px-color-text-muted);
+    color: var(--px-color-nav-muted);
     text-decoration: none;
     border-radius: var(--px-shape-radius);
     padding: calc(var(--s) * 2) calc(var(--s) * 3);
@@ -49,12 +49,12 @@
   }
 
   .nav-item:hover {
-    background: var(--px-color-surface-raised);
-    color: var(--px-color-text);
+    background: var(--px-color-nav-hover);
+    color: var(--px-color-nav-text);
   }
 
   .nav-item[aria-current="page"] {
-    background: color-mix(in srgb, var(--px-color-accent) 14%, transparent);
+    background: var(--px-color-nav-selected);
     color: var(--px-color-accent);
     font-weight: var(--px-font-weight-strong);
   }
@@ -89,7 +89,7 @@
   .nav-group-label {
     font-size: var(--px-font-size-small);
     font-weight: var(--px-font-weight-strong);
-    color: var(--px-color-text-muted);
+    color: var(--px-color-nav-muted);
     text-transform: uppercase;
     letter-spacing: 0.04em;
     padding: calc(var(--s) * 2) calc(var(--s) * 3) calc(var(--s) * 0.5);
@@ -106,7 +106,7 @@
   }
 
   html[data-nav="rail"] .nav-group + .nav-group {
-    border-top: var(--px-shape-border) solid var(--px-color-border);
+    border-top: var(--px-shape-border) solid var(--px-color-nav-border);
     padding-top: calc(var(--s) * 1);
   }
 
@@ -185,7 +185,7 @@
   }
 
   html[data-nav="top"] .nav-group + .nav-group {
-    border-inline-start: var(--px-shape-border) solid var(--px-color-border);
+    border-inline-start: var(--px-shape-border) solid var(--px-color-nav-border);
     padding-inline-start: calc(var(--s) * 1);
   }
 
@@ -264,7 +264,7 @@
     html:is([data-nav="sidebar"], [data-nav="rail"]) .nav-group + .nav-group {
       border-top: 0;
       padding-top: 0;
-      border-inline-start: var(--px-shape-border) solid var(--px-color-border);
+      border-inline-start: var(--px-shape-border) solid var(--px-color-nav-border);
       padding-inline-start: calc(var(--s) * 1);
     }
 

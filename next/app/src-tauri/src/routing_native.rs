@@ -260,8 +260,7 @@ impl Page {
         self.reply(&id)
     }
 
-    /// The page's webview (for the vault, sessions and usage checks, which run on Linux only).
-    #[cfg(target_os = "linux")]
+    /// The page's webview (for the vault, sessions and usage checks).
     pub(super) fn webview(&self) -> &Webview {
         &self.wv
     }

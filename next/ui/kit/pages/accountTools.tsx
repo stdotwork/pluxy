@@ -332,6 +332,7 @@ function AccountModels(props: {
           <label class="field" data-part="field">
             <span class="label">{t("testModel")}</span>
             <select
+              data-slot="select-trigger"
               disabled={props.busy}
               value={props.model}
               onChange={(e) => props.onModel(e.currentTarget.value)}
