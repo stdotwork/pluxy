@@ -536,6 +536,7 @@ type ServedModel struct {
 // are all held is not listed: no request for it can be served now.
 func (r *Router) ServedModels(ctx context.Context) []ServedModel {
 	accounts, creds := r.knownSnapshot()
+	accounts = r.routed(accounts)
 	catalog := r.catalogFunc()
 	now := r.now()
 	lists := make([]*protocol.ModelList, len(accounts))
@@ -574,7 +575,7 @@ func (r *Router) ServedModels(ctx context.Context) []ServedModel {
 		}
 		steps := []Step{{Model: name}}
 		serving, _ := split(r.targets(steps, accounts, l.served))
-		if e, ok := r.servedEntry(name, steps, serving, accounts, l); ok {
+		if e, ok := r.servedEntry(name, steps, serving, accounts, l, false); ok {
 			out = append(out, e)
 		}
 	}
@@ -582,7 +583,7 @@ func (r *Router) ServedModels(ctx context.Context) []ServedModel {
 	for _, name := range slices.Sorted(maps.Keys(r.cfg.Chains)) {
 		steps := r.cfg.Chains[name]
 		serving, _ := split(r.targets(steps, accounts, l.served))
-		if e, ok := r.servedEntry(name, steps, serving, accounts, l); ok {
+		if e, ok := r.servedEntry(name, steps, serving, accounts, l, true); ok {
 			out = append(out, e)
 		}
 	}
@@ -601,8 +602,10 @@ type modelLists struct {
 
 // servedEntry is the entry of name, served by targets, the targets of steps: its accounts,
 // highest priority first within a step, and the model of the first of them that lists its step's
-// model, under name. ok is false when no target lists its step's model.
-func (r *Router) servedEntry(name string, steps []Step, targets []target, accounts []*Account, l modelLists) (ServedModel, bool) {
+// model, under name. When none lists it, a chain's entry (chain true) is built from the first
+// target, whose list is not known; ok is false for a name without a chain, and when there is no
+// target.
+func (r *Router) servedEntry(name string, steps []Step, targets []target, accounts []*Account, l modelLists, chain bool) (ServedModel, bool) {
 	targets = slices.Clone(targets)
 	slices.SortStableFunc(targets, func(a, b target) int { return cmp.Or(a.step-b.step, b.a.Priority-a.a.Priority) })
 	var e ServedModel
@@ -621,6 +624,13 @@ func (r *Router) servedEntry(name string, steps []Step, targets []target, accoun
 		}
 		found = true
 		e.Model, e.Upstream, e.Extension = r.listedModel(t.a, l.names[i][j], l.lists[i], name), t.model, t.a.Extension
+	}
+	if !found && chain && len(targets) > 0 {
+		t := targets[0]
+		i := slices.Index(accounts, t.a)
+		n := Name{Public: steps[t.step].Model, Upstream: t.model, Base: t.model}
+		e.Model, e.Upstream, e.Extension = r.listedModel(t.a, n, l.lists[i], name), t.model, t.a.Extension
+		found = true
 	}
 	return e, found
 }
@@ -665,6 +675,7 @@ func (r *Router) listedModel(a *Account, n Name, list *protocol.ModelList, name 
 // go to another extension, whatever else serves the name.
 func (r *Router) ModelNames(ctx context.Context, extension string) []Name {
 	accounts, creds := r.knownSnapshot()
+	accounts = r.routed(accounts)
 	creds = storedCredentials{creds}
 	catalog := r.catalogFunc()
 	served := r.served(ctx, accounts, creds, catalog)

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/stdotwork/pluxy/next/internal/core"
+	"github.com/stdotwork/pluxy/next/management"
 )
 
 // laterCommands are the management calls whose commands later changes add (the README's
@@ -116,6 +117,34 @@ func TestParseStep(t *testing.T) {
 			t.Errorf("parseStep(%q) = %+v, want an error", c.in, s)
 		case !c.bad && (err != nil || s.Model != c.model || s.Provider != c.provider || !slices.Equal(s.Accounts, c.accounts)):
 			t.Errorf("parseStep(%q) = %+v, %v; want %s, %q, %v", c.in, s, err, c.model, c.provider, c.accounts)
+		}
+	}
+}
+
+// chain list writes each step so that chain set reads back the same step.
+func TestStepTextRoundTrips(t *testing.T) {
+	for _, model := range []string{"gpt-6.1-sol", "llama3:8b", "claude-opus-4-7@20260416", "x@pluxy/x", "x@pluxy/x:y", "x@", "a:b@c"} {
+		for _, provider := range []string{"", "pluxy/claude"} {
+			for _, accounts := range [][]string{nil, {"a"}, {"a", "b"}} {
+				s := management.ChainStep{Model: model, Provider: provider, Accounts: accounts}
+				got, err := parseStep(s.String())
+				if err != nil || got.Model != s.Model || got.Provider != s.Provider || !slices.Equal(got.Accounts, s.Accounts) {
+					t.Errorf("parseStep(%q) = %q %q %q, %v; want %q %q %q", s.String(), got.Model, got.Provider, got.Accounts, err, s.Model, s.Provider, s.Accounts)
+				}
+			}
+		}
+	}
+	// A step that reads back as written gets no escape.
+	for s, want := range map[*management.ChainStep]string{
+		{Model: "gpt-6.1-sol"}:                         "gpt-6.1-sol",
+		{Model: "llama3:8b", Accounts: []string{"a"}}:  "llama3:8b:a",
+		{Model: "claude-opus-4-7@20260416"}:            "claude-opus-4-7@20260416",
+		{Model: "llama3:8b"}:                           "llama3:8b@",
+		{Model: "x@pluxy/x", Accounts: []string{"a"}}:  "x@pluxy/x@:a",
+		{Model: "llama3:8b", Provider: "pluxy/ollama"}: "llama3:8b@pluxy/ollama",
+	} {
+		if got := s.String(); got != want {
+			t.Errorf("%q %q %q written as %q, want %q", s.Model, s.Provider, s.Accounts, got, want)
 		}
 	}
 }
