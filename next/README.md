@@ -1812,8 +1812,8 @@ win (including `null`; nested objects are replaced as a whole). The extension va
 normalises its defaults. Settings must never hold secrets. A login to an existing account
 ignores grant settings and keeps the account's existing settings.
 
-The management API is served under `/v0/management` when the config sets `management_key`;
-send it as a bearer token. With a management key set, the config may set no accounts.
+The management API is served under `/v0/management`; a config without `management_key` is refused
+at start. Send it as a bearer token. The config may set no accounts.
 
 | Request | Does |
 | --- | --- |

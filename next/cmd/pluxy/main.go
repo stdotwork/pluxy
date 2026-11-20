@@ -299,15 +299,14 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string, 
 		return fmt.Errorf("extension_pages.listen: %w", err)
 	}
 	c.SetPagesPort(pagesLn.Addr().(*net.TCPAddr).Port)
-	managementOn := func() bool { return c.Config().ManagementKey != "" }
 	mux := http.NewServeMux()
 	mux.Handle(core.ManagementPrefix, c.Management())
-	// The panel is on while the management API is: it is a page for that API.
+	// The panel is a page for the management API.
 	assets := panel.Assets()
 	if !panel.Built(assets) {
 		log.Print("warning: this core was built without its panel (go generate ./internal/panel builds it)")
 	}
-	ui := panel.Handler(assets, managementOn, func(r *http.Request) string {
+	ui := panel.Handler(assets, func(r *http.Request) string {
 		origin, _ := c.PagesOrigin(r.Host) // none: the panel says why where it would show a page
 		return origin
 	})
@@ -326,7 +325,7 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string, 
 		TLSConfig:         tlsConfig,
 	}
 	pagesSrv := &http.Server{
-		Handler:           pages.Handler(c.PagesFolder, managementOn),
+		Handler:           pages.Handler(c.PagesFolder),
 		ReadHeaderTimeout: 30 * time.Second,
 	}
 	scheme := "http"
