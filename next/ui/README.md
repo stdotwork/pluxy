@@ -1,7 +1,7 @@
 # pluxy UI kit and panel
 
-One UI kit, two builds. The **panel** is the kit's browser build: core embeds it and serves it at
-`/panel/` while the management API is on. The desktop app ([`../app`](../app/README.md)) is the
+One UI kit, two builds. The **panel** is the kit's browser build: core embeds it and always serves it
+at `/panel/`; the management API is always on. The desktop app ([`../app`](../app/README.md)) is the
 kit's second build, with more pages. Both read the same theme files ([theme contract](themes/README.md)) and put shared
 pages in the same places. Core keeps the themes a person adds and which theme is on
 ([where themes are kept](themes/README.md#where-themes-are-kept)), so both builds show the same ones.
@@ -346,8 +346,8 @@ before it builds and tests core, so its tests always run against the panel of th
 
 ## What core serves
 
-`/panel/` and its files, only while the config sets `management_key` (the panel is a page for the
-management API; without the key, `/panel/` is not found, as the API is). Every reply carries a
+`/panel/` and its files. The panel is a page for the management API, and the management API is always
+on: a config without `management_key` is refused at start and on a reload. Every reply carries a
 Content Security Policy that allows scripts, styles and requests only to core itself, images
 and fonts also from `data:` URLs, and frames only from the extension pages site. The page itself is revalidated on each load; the other files
 have content-hashed names and are cached.
