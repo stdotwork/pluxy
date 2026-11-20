@@ -1435,7 +1435,9 @@ whose model list could not be read serve any model, but they decide the provider
 account lists the name. Accounts that cannot serve now count in this choice too: a banned or
 blocked account, one turned off and one waiting for a new login keep the name on their provider,
 and the error of a request they cannot serve names them with their state in `left_out`; only a
-change to accounts, priorities or chains moves a name to another provider. When another provider
+change to accounts, priorities, weights or chains moves a name to another provider. Under the
+`weighted` strategy an account with `weight: 0` takes no part: it neither serves the name nor
+decides its provider. When another provider
 serves the same name too, its accounts take none of these requests, however blocked the first
 provider's are; a fallback chain (below) is how a name moves to another provider or model.
 
