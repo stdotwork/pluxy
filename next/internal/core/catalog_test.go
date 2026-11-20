@@ -171,7 +171,7 @@ func TestCatalogueRefreshUsesStateAge(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	start := func(t *testing.T, statePath string, interval time.Duration, now func() time.Time) (*Core, *atomic.Int32) {
+	start := func(t *testing.T, statePath string, interval time.Duration, now func() time.Time) *atomic.Int32 {
 		t.Helper()
 		var calls atomic.Int32
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
