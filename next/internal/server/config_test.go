@@ -337,7 +337,7 @@ func TestConfigNeedsAClientKey(t *testing.T) {
 }
 
 func TestConfigUsageKeepDays(t *testing.T) {
-	const base = `"listen":"127.0.0.1:0","client_keys":["k"],"extension":{"manifest":"m.json","accounts":[{"id":"a"}]}`
+	const base = `"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","extension":{"manifest":"m.json","accounts":[{"id":"a"}]}`
 	for _, tc := range []struct {
 		name, extra string
 		want        int
