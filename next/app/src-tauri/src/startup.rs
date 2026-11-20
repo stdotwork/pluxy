@@ -12,6 +12,9 @@ use std::path::{Path, PathBuf};
 
 #[cfg(windows)]
 mod registry;
+/// The user's registry, for the app's update (`updater/uninstall_entry.rs`).
+#[cfg(windows)]
+pub(crate) use registry::{set_text, text_value};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]

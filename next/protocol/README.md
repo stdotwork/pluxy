@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.23
+# pluxy extension protocol, version 0.24
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -34,10 +34,11 @@ manifest's `title`, `summary` and `kind`, and in a [registry index](#registry-in
 the registry's `tier`. Version 0.22 adds the account's
 [`timeouts`](#timeouts): upstream request limits for response headers, stream byte gaps and
 non-streamed completion. Version 0.23 adds [alive frames](#alive-frames): the extension tells core
-its upstream is still sending, and core ends a call that sends nothing at all for too long. It is
-deliberately small; later versions add capabilities and more operations
-without changing what is described here. An extension written for version 0 works unchanged with a
-core that speaks 0.23 (see
+its upstream is still sending, and core ends a call that sends nothing at all for too long.
+Version 0.24 adds a model's `capabilities`: what the model supports and when it was deprecated. It
+is deliberately small; later versions add more capabilities and operations without changing what
+is described here. An extension written for version 0 works unchanged with a core that speaks 0.24
+(see
 [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
@@ -343,14 +344,15 @@ event as for `generate`.
 
 ```json
 {"type": "models.result", "models": {"owned_by": "openai", "from": "account", "models": [
-  {"id": "gpt-6.1-sol", "display_name": "GPT-6.1 Sol", "created": 1794268800, "context_length": 400000, "max_completion_tokens": 128000}
+  {"id": "gpt-6.1-sol", "display_name": "GPT-6.1 Sol", "created": 1794268800, "context_length": 400000, "max_completion_tokens": 128000,
+   "capabilities": {"tools": true, "structured_output": true, "vision": true, "pdf": false, "reasoning": true, "reasoning_levels": ["low", "medium", "high", "xhigh", "max"]}}
 ]}}
 ```
 
 | Field | Meaning |
 | --- | --- |
 | `models` | The models the account serves, by the names its upstream knows them by. Empty when the extension has no list for the account. At most 10000. |
-| `owned_by` | Who provides the account's models, shown as `owned_by` for models without one of their own, and for the models the account's config names. Default: the account's ID. |
+| `owned_by` | Who provides the account's models, shown as `owned_by` for models without one of their own, and for the models the account's config names. Default: the extension's ID (never the account's: an account ID can be an email address or a label). |
 | `from` | Optional, since 0.18: where the list came from — `"account"` (read from the provider using the account's credential) or `"extension"` (the extension's built-in catalog). Omitted when unknown or reported by an older extension. |
 | model `id` | The model's name upstream, as requests name it. Required, unique in the list; core keeps the first of any repeats. |
 | model `name` | Its resource name in Gemini's list, such as `models/gemini-2.5-pro`. Default `id`. |
@@ -360,6 +362,7 @@ event as for `generate`.
 | model `context_length`, `max_completion_tokens` | Its context window and longest reply, in tokens. |
 | model `input_token_limit`, `output_token_limit` | Gemini's names for the same limits, where the provider gives them apart. Default: the two above. |
 | model `generation_methods`, `input_modalities`, `output_modalities` | Gemini's `supportedGenerationMethods`, `supportedInputModalities` and `supportedOutputModalities`. |
+| model `capabilities` | Optional, since 0.24: what the model supports and when it was deprecated — `tools`, `structured_output`, `vision`, `pdf`, `reasoning` (booleans), `reasoning_levels` (optional list from `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` when `reasoning` is true), and `deprecated_at` (optional Unix seconds). For an extension below 0.24, core ignores `capabilities` and fills them from its catalogue only. |
 
 Every field but `id` is optional and shown only where a client's list has a place for it. Core
 renames, leaves out and prefixes the listed models by the account's naming rules (its `models`,
@@ -481,6 +484,7 @@ with `native.format` naming the endpoint:
 | `codex.alpha_search` | `POST /v1/alpha/search` (and `/backend-api/codex/alpha/search`) | Codex's search request, in Codex's own shape; the reply is one JSON object. Its `model` is optional: a request without one is sent to any account, with `request.model` empty. |
 | `openai.images.generations` | `POST /v1/images/generations` | An Images API request; the reply is one JSON object, or server-sent events when it asks for `"stream": true`. Core refuses a request without a `prompt` and names `gpt-image-2` as the model when it names none. |
 | `openai.images.edits` | `POST /v1/images/edits` | As for generations. A `multipart/form-data` edit arrives in its JSON form: each field a member (`n`, `output_compression` and `partial_images` as numbers, `stream` as a boolean, `mask[file_id]` and `mask[image_url]` inside `mask`), the image files (`image[]`, else `image`) added to `images` as `{"image_url": "data:..."}` and the mask file as `mask.image_url`. Core refuses a form without an image file. |
+| `openai.embeddings` | `POST /v1/embeddings` | An OpenAI Embeddings API request, served by OpenAI-compatible accounts whose wire is Chat or Responses; the reply is one JSON object. |
 | `gemini.interactions` | `POST /v1beta/interactions` | Gemini's Interactions API request, in Google's own shape; the reply is one JSON object, or server-sent events when it asks for `"stream": true`, which the extension sends with each event's name. The request names a model or an agent: core refuses one that names both or neither, a `stream` that is not a boolean, and a body that is not JSON, removes a `models/` prefix from the model, and sends a request with an agent and no model to any account, with `request.model` empty. The client's `Api-Revision` header is in `native.headers` (`api-revision`). Google's clients may send the client key in `x-goog-api-key` or `?key=`. |
 
 For `codex.models`, `non_codex` clears `prefer_websockets`, `use_responses_lite`,
@@ -740,7 +744,7 @@ request, `header_ms` (default 60000) bounds the wait for HTTP response headers a
 upstream WebSocket turn). On a request that is not streamed, `total_ms` (default 600000) bounds
 the whole upstream request from start to finish. Core resolves each limit from the account's
 override and `routing.timeouts`, and sends `timeouts` only to extensions whose `protocol_minor`
-is 18 or more.
+is 22 or more.
 
 A timeout that fires before any upstream response byte arrives is retry-safe so core can move the
 request to another account, once (a second timeout ends the request, as with `extension_timeout` below); once response headers or reply bytes have arrived, it ends the
@@ -1432,7 +1436,7 @@ extension below 0.23 gets none: it cannot promise alive frames.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.23. An extension reports the minor version it
+raise the minor version: this document is version 0.24. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1463,8 +1467,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.21 | A manifest's optional `title`, `summary` and `kind`, and a [registry index](#registry-index) package's optional `title`, `summary`, `kind` and `tier`. No call or frame changes. |
 | 0.22 | The account's optional [`timeouts`](#timeouts). |
 | 0.23 | [Alive frames](#alive-frames): the call's and turn's `alive` and the `alive` frame; core's `extension_timeout`. |
+| 0.24 | A model's `capabilities` ([`models`](#models)). |
 
-## What version 0.23 leaves out
+## What version 0.24 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

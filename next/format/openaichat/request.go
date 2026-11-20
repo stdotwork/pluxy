@@ -409,9 +409,15 @@ type outPart struct {
 }
 
 type outRequest struct {
-	Model         string            `json:"model"`
-	Messages      []json.RawMessage `json:"messages"`
-	Stream        bool              `json:"stream"`
+	Model    string            `json:"model"`
+	Messages []json.RawMessage `json:"messages"`
+	outTail
+}
+
+// outTail holds the request body's fields after its messages, in the body's order, so that one
+// marshal of it gives the body's tail.
+type outTail struct {
+	Stream        bool `json:"stream"`
 	StreamOptions *struct {
 		IncludeUsage bool `json:"include_usage"`
 	} `json:"stream_options,omitempty"`
@@ -471,14 +477,16 @@ func marshal(v any, raw json.RawMessage) json.RawMessage {
 func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 	e := &encoder{}
 	out := outRequest{
-		Model:           req.Model,
-		Messages:        []json.RawMessage{},
-		Stream:          req.Stream,
-		MaxTokens:       req.Options.MaxOutputTokens,
-		Temperature:     req.Options.Temperature,
-		TopP:            req.Options.TopP,
-		Stop:            req.Options.Stop,
-		ReasoningEffort: req.Options.ReasoningEffort,
+		Model:    req.Model,
+		Messages: []json.RawMessage{},
+		outTail: outTail{
+			Stream:          req.Stream,
+			MaxTokens:       req.Options.MaxOutputTokens,
+			Temperature:     req.Options.Temperature,
+			TopP:            req.Options.TopP,
+			Stop:            req.Options.Stop,
+			ReasoningEffort: req.Options.ReasoningEffort,
+		},
 	}
 	if req.Stream {
 		out.StreamOptions = &struct {
@@ -606,11 +614,49 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 		}
 		out.Messages = append(out.Messages, marshal(m, m.raw))
 	}
-	b, err := json.Marshal(out)
+	body, err := encodeBody(&out)
 	if err != nil {
 		return nil, nil, err
 	}
-	return rawjson.Merge(b, e.kept(req.Origin)), e.losses, nil
+	return rawjson.Merge(body, e.kept(req.Origin)), e.losses, nil
+}
+
+// encodeBody returns out as the request body's JSON, writing the messages' JSON as it stands.
+// Each message is already compact JSON (json.Marshal of a value, merged with its kept fields), so
+// marshaling the whole body again would only scan them once more.
+func encodeBody(out *outRequest) ([]byte, error) {
+	model, err := json.Marshal(out.Model)
+	if err != nil {
+		return nil, err
+	}
+	tail, err := json.Marshal(out.outTail)
+	if err != nil {
+		return nil, err
+	}
+	size := len(model) + 2 + len(`,"messages":[]`) + 2 + len(tail)
+	for _, m := range out.Messages {
+		size += len(m) + 1
+	}
+	b := make([]byte, 0, size)
+	b = append(b, `{"model":`...)
+	b = append(b, model...)
+	b = append(b, `,"messages":[`...)
+	for i, m := range out.Messages {
+		if i > 0 {
+			b = append(b, ',')
+		}
+		if m == nil {
+			// marshal gave nothing for it: the same null a marshal of the whole body writes.
+			b = append(b, "null"...)
+			continue
+		}
+		b = append(b, m...)
+	}
+	b = append(b, ']')
+	// The tail always holds stream, so it starts with the object's brace and its fields follow
+	// the messages' array after a comma.
+	b = append(b, ',')
+	return append(b, tail[1:]...), nil
 }
 
 // geminiSignature takes the thought signature off a function call from a Gemini request and

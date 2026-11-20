@@ -205,7 +205,7 @@ func (m *Manager) Records() []Record { return m.store.List() }
 func (m *Manager) StoredCredential(extension, id string) (*protocol.Credential, *llm.Error) {
 	rec, ok := m.store.Get(id)
 	if !ok || rec.Extension != extension || !rec.Usable() {
-		return nil, credentialError(llm.CodeUnavailable, fmt.Sprintf("account %q of extension %s is unavailable", id, extension))
+		return nil, credentialError(llm.CodeUnavailable, fmt.Sprintf("the account of extension %s is unavailable", extension))
 	}
 	return &rec.Credential, nil
 }
@@ -251,22 +251,22 @@ func credentialError(code, msg string) *llm.Error {
 func (m *Manager) Credential(ctx context.Context, extension, id string) (*protocol.Credential, uint64, *llm.Error) {
 	rec, ok := m.store.Get(id)
 	if !ok || rec.Extension != extension {
-		return nil, 0, credentialError(llm.CodeUnavailable, fmt.Sprintf("account %q of extension %s is not in the credential store", id, extension))
+		return nil, 0, credentialError(llm.CodeUnavailable, fmt.Sprintf("the account of extension %s is not in the credential store", extension))
 	}
 	if !rec.Usable() {
-		return nil, 0, credentialError(llm.CodeAuth, fmt.Sprintf("account %q is %s", id, describeState(rec)))
+		return nil, 0, credentialError(llm.CodeAuth, "the account is "+describeState(rec))
 	}
 	m.mu.Lock()
 	rn := m.renewalFor(rec)
 	m.mu.Unlock()
 	if rn != nil && rn.refused {
-		return nil, 0, credentialError(llm.CodeAuth, fmt.Sprintf("account %q: the provider refused the grant; it needs a new login", id))
+		return nil, 0, credentialError(llm.CodeAuth, "the provider refused the grant; the account needs a new login")
 	}
 	now := m.now()
 	expired := rec.Credential.ExpiresAt != 0 && rec.Credential.ExpiresAt <= now.Unix()
 	if !m.due(rec) && expired && m.Refreshable(rec) {
 		// Renewal is waiting after a failure, and the credential no longer works.
-		msg := fmt.Sprintf("account %q: the credential has expired and renewal is waiting after a failure", id)
+		msg := "the credential has expired and renewal is waiting after a failure"
 		if last := m.LastRenewalError(rec); last != nil {
 			msg += ": " + last.Message
 		}
@@ -283,18 +283,18 @@ func (m *Manager) Credential(ctx context.Context, extension, id string) (*protoc
 		case e == nil && (r.Registration != rec.Registration || r.Extension != extension):
 			// Removed during the renewal, and maybe added again for another extension: the
 			// record is not the account this attempt asked for.
-			return nil, 0, credentialError(llm.CodeUnavailable, fmt.Sprintf("account %q was removed", id))
+			return nil, 0, credentialError(llm.CodeUnavailable, "the account was removed")
 		case e == nil:
 			rec = r
 			if !rec.Usable() {
-				return nil, 0, credentialError(llm.CodeAuth, fmt.Sprintf("account %q is %s", id, describeState(rec)))
+				return nil, 0, credentialError(llm.CodeAuth, "the account is "+describeState(rec))
 			}
 		case e.Code == llm.CodeCancelled && ctx.Err() != nil:
 			return nil, 0, &llm.Error{Code: llm.CodeCancelled, Message: "the request was cancelled"}
 		case rec.Credential.ExpiresAt > now.Unix() && !rejectedGrant(e):
 			// Renewal failed but the credential still works for now: use it.
 		default:
-			out := credentialError(llm.CodeUnavailable, fmt.Sprintf("account %q: the credential has expired and renewing it failed: %s", id, e.Message))
+			out := credentialError(llm.CodeUnavailable, "the credential has expired and renewing it failed: "+e.Message)
 			if rejectedGrant(e) {
 				out.Code = llm.CodeAuth
 			} else if until := m.retryAt(rec); until.After(now) {
@@ -392,7 +392,7 @@ func (m *Manager) renew(ctx context.Context, seen Record, force bool) (Record, *
 		cur, ok := m.store.Get(seen.ID)
 		if !ok || cur.Registration != seen.Registration {
 			m.mu.Unlock()
-			return Record{}, credentialError(llm.CodeUnavailable, fmt.Sprintf("account %q was removed", seen.ID))
+			return Record{}, credentialError(llm.CodeUnavailable, "the account was removed")
 		}
 		if cur.Version != seen.Version {
 			m.mu.Unlock()
@@ -440,13 +440,13 @@ func (m *Manager) runRenewal(seen Record, f *flight) {
 	cur, ok := m.store.Get(seen.ID)
 	switch {
 	case !ok || cur.Registration != seen.Registration:
-		e = credentialError(llm.CodeUnavailable, fmt.Sprintf("account %q was removed", seen.ID))
+		e = credentialError(llm.CodeUnavailable, "the account was removed")
 	case cur.Version != seen.Version:
 		rec = cur
 	default:
 		p := m.provs.Provider(cur.Extension)
 		if p == nil {
-			rec, e = cur, credentialError(llm.CodeExtensionUnavailable, fmt.Sprintf("account %q: extension %s does not run", cur.ID, cur.Extension))
+			rec, e = cur, credentialError(llm.CodeExtensionUnavailable, fmt.Sprintf("extension %s does not run", cur.Extension))
 			break
 		}
 		acct := protocol.Account{ID: cur.ID, Settings: cur.Account.Settings, Credential: &cur.Credential, ProxyURL: cur.Account.ProxyURL, Headers: cur.Account.Headers}
@@ -482,13 +482,13 @@ func (m *Manager) apply(cur Record, cred *protocol.Credential, perr *llm.Error) 
 		switch {
 		case errors.Is(err, ErrNotFound):
 			log.Printf("credentials: account %q: refused a renewed credential: the account was removed while it was being renewed", cur.ID)
-			return Record{}, credentialError(llm.CodeUnavailable, fmt.Sprintf("account %q was removed", cur.ID))
+			return Record{}, credentialError(llm.CodeUnavailable, "the account was removed")
 		case errors.Is(err, ErrStale):
 			log.Printf("credentials: account %q: refused a renewed credential: the account's credential was replaced while it was being renewed", cur.ID)
 			return next, nil
 		case err != nil:
 			log.Printf("credentials: account %q: saving the renewed credential failed: %v", cur.ID, err)
-			return cur, credentialError(llm.CodeInternal, fmt.Sprintf("account %q: saving the renewed credential failed", cur.ID))
+			return cur, credentialError(llm.CodeInternal, "saving the renewed credential failed")
 		}
 		rn := &renewal{at: now}
 		if at := renewAt(*cred); at != 0 && now.Unix() >= at {
@@ -504,7 +504,7 @@ func (m *Manager) apply(cur Record, cred *protocol.Credential, perr *llm.Error) 
 		})
 		switch {
 		case errors.Is(err, ErrNotFound):
-			return Record{}, credentialError(llm.CodeUnavailable, fmt.Sprintf("account %q was removed", cur.ID))
+			return Record{}, credentialError(llm.CodeUnavailable, "the account was removed")
 		case errors.Is(err, ErrStale):
 			// The credential was replaced meanwhile (a new login), or the settings changed: the
 			// refusal was about the account as it was.
@@ -522,7 +522,7 @@ func (m *Manager) apply(cur Record, cred *protocol.Credential, perr *llm.Error) 
 		return cur, perr
 	default:
 		if latest, ok := m.store.Get(cur.ID); !ok {
-			return Record{}, credentialError(llm.CodeUnavailable, fmt.Sprintf("account %q was removed", cur.ID))
+			return Record{}, credentialError(llm.CodeUnavailable, "the account was removed")
 		} else if latest.Registration != cur.Registration || !sameCredential(latest.Credential, cur.Credential) ||
 			!bytes.Equal(latest.Account.Settings, cur.Account.Settings) {
 			// The failure was about a credential that has since been replaced, or about the

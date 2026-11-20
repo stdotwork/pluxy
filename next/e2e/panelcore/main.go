@@ -19,6 +19,8 @@
 // bundled registry offers one pick, pluxy/claude (the test extension under that ID, so setup
 // suggests it). Core runs with a new empty home folder and a PATH that holds only a claude
 // program printing a version, so its scan finds Claude Code and nothing of the machine's own.
+// With -cpa as well, that home folder holds a CLIProxyAPI setup (~/.cli-proxy-api: a config.yaml
+// and an auth folder of three made-up accounts), which the scan finds and an import can read.
 //
 // With -prepare <folder>, it starts nothing: it builds core into <folder>/pluxy and writes the
 // test packages as core's bundled packages, <folder>/bundled/index.json (where core looks for
@@ -72,6 +74,7 @@ func main() {
 	withTLS := flag.Bool("tls", false, "reach core's API through an https proxy with a certificate from a new authority")
 	probe := flag.Bool("probe", false, "also offer test/probe, the desktop app's native test page")
 	firstRun := flag.Bool("first-run", false, "start core as a new install: nothing installed, no accounts, a home folder and PATH of its own")
+	cpa := flag.Bool("cpa", false, "with -first-run: put a CLIProxyAPI setup (a config.yaml and three auth files, all made up) in the home folder")
 	// The claude program of -first-run is a copy of this one: asked for its version, it prints one.
 	if len(os.Args) == 2 && os.Args[1] == "--version" {
 		fmt.Println(fakeClaudeVersion + " (Claude Code)")
@@ -87,9 +90,9 @@ func main() {
 		err = prepareOnly(*prepare)
 	case *firstRun:
 		testPackages = []pkg{firstRunPackage}
-		err = serve(*withTLS, true)
+		err = serve(*withTLS, true, *cpa)
 	default:
-		err = serve(*withTLS, false)
+		err = serve(*withTLS, false, false)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "panelcore:", err)
@@ -131,8 +134,8 @@ func prepareOnly(dir string) error {
 // serve builds core and the test extension, starts core with them, prints its address and
 // management key, and runs until stdin ends or a signal arrives. The deferred calls stop core
 // and then remove the temporary folder, also when setup fails. firstRun: core starts as a new
-// install does (see the package comment).
-func serve(withTLS, firstRun bool) error {
+// install does (see the package comment). cpa: its home folder holds a CLIProxyAPI setup.
+func serve(withTLS, firstRun, cpa bool) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -179,6 +182,11 @@ func serve(withTLS, firstRun bool) error {
 	if firstRun {
 		if env, err = firstRunEnv(dir); err != nil {
 			return err
+		}
+		if cpa {
+			if err := writeCPASetup(filepath.Join(dir, "home")); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -329,6 +337,28 @@ var probePackage = pkg{
 			"report": map[string]any{"type": "string", "title": "Report", "maxLength": 4096},
 		},
 	}},
+}
+
+// writeCPASetup puts a CLIProxyAPI setup where setup's scan looks for one, below home: a
+// config.yaml and its auth folder. Every key and token in it is made up. Two of the accounts are
+// ones the pick of -first-run serves; the third is of a provider pluxy does not ship.
+func writeCPASetup(home string) error {
+	dir := filepath.Join(home, ".cli-proxy-api")
+	files := map[string]string{
+		"config.yaml": "port: 8317\napi-keys: [fake-cpa-client-key]\nauth-dir: auths\ndebug: on\n",
+		filepath.Join("auths", "claude-work.json"):   `{"type": "claude", "access_token": "fake-claude-work"}`,
+		filepath.Join("auths", "claude-home.json"):   `{"type": "claude", "access_token": "fake-claude-home"}`,
+		filepath.Join("auths", "antigravity-a.json"): `{"type": "antigravity", "access_token": "fake-antigravity"}`,
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "auths"), 0o700); err != nil {
+		return err
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // firstRunPackage is the one package -first-run's registry offers: the test extension as the

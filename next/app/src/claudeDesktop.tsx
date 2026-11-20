@@ -38,6 +38,7 @@ import {
 } from "./claudeDesktopForm";
 import type { AgentPage } from "./easyMode";
 import { connectionGet } from "./host";
+import { launcherProblem } from "./startCli";
 
 const t = strings("claudeDesktop", {
   title: "Claude Desktop",
@@ -171,7 +172,7 @@ function StartApp(props: { available: boolean }) {
   return (
     <Card title={t("start")}>
       <Text label={t("override")} hint={t("overrideHint")} value={override} onInput={setOverride} />
-      {action.error && <Notice tone="danger">{action.error}</Notice>}
+      {action.error && <Notice tone="danger">{launcherProblem(action.error)}</Notice>}
       <Button variant="primary" onClick={start} disabled={action.busy || !props.available}>
         {t("launch")}
       </Button>

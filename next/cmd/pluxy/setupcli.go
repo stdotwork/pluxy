@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/internal/core"
@@ -86,6 +87,17 @@ func setupCommands() []command {
 					x.printf("first-run setup complete\n")
 				})
 			},
+		},
+		{
+			words:   "import cpa",
+			args:    []string{"config.yaml"},
+			routes:  []string{"POST /setup/import"},
+			summary: "bring a CLIProxyAPI setup (its config.yaml and auth folder) across and print what came, what changed and what did not",
+			flags: func(fs *flag.FlagSet, o *opts) {
+				fs.StringVar(&o.authDir, "auth-dir", "", "the auth folder (default: the config's oauth.auth-dir)")
+				fs.BoolVar(&o.dryRun, "dry-run", false, "report what the import would do, and write nothing")
+			},
+			run: runImportCPA,
 		},
 		{
 			words:   "client show",
@@ -271,6 +283,58 @@ func runClientShow(x *invocation) error {
 		}
 		if p.Note != "" {
 			x.printf("\n%s\n", p.Note)
+		}
+	})
+}
+
+// runImportCPA is pluxy import cpa. Core reads the files on its own machine, so a relative path
+// is made absolute from the current folder first.
+func runImportCPA(x *invocation) error {
+	abs := func(p string) (string, error) {
+		if p == "" || strings.HasPrefix(p, "~") {
+			return p, nil
+		}
+		return filepath.Abs(p)
+	}
+	cfg, err := abs(x.args[0])
+	if err != nil {
+		return err
+	}
+	dir, err := abs(x.opts.authDir)
+	if err != nil {
+		return err
+	}
+	var r management.ImportReport
+	req := management.SetupImportRequest{Config: cfg, AuthDir: dir, DryRun: x.opts.dryRun}
+	return x.call(http.MethodPost, "/setup/import", nil, req, &r, func() {
+		if r.DryRun {
+			x.printf("Dry run: nothing was written.\n")
+		}
+		x.printf("\nBrought (%d):\n", len(r.Brought))
+		rows := [][]string{{"WHAT", "NAME", "AS"}}
+		for _, b := range r.Brought {
+			rows = append(rows, []string{b.What, dash(b.Name), dash(b.As)})
+		}
+		x.table(rows)
+		x.printf("\nChanged (%d):\n", len(r.Changed))
+		rows = [][]string{{"WHAT", "NAME", "AS", "FROM", "TO", "WHY", "KEEP WITH"}}
+		for _, c := range r.Changed {
+			rows = append(rows, []string{c.What, dash(c.Name), dash(c.As), dash(c.From), dash(c.To), dash(c.Why), dash(c.KeepWith)})
+		}
+		x.table(rows)
+		x.printf("\nNot brought (%d):\n", len(r.NotBrought))
+		rows = [][]string{{"WHAT", "NAME", "WHY"}}
+		for _, n := range r.NotBrought {
+			rows = append(rows, []string{n.What, dash(n.Name), dash(n.Why)})
+		}
+		x.table(rows)
+		if len(r.Needs) > 0 {
+			x.printf("\nNeeds (install with pluxy ext install <pick>):\n")
+			rows = [][]string{{"PICK", "WHY"}}
+			for _, n := range r.Needs {
+				rows = append(rows, []string{n.Pick, n.Why})
+			}
+			x.table(rows)
 		}
 	})
 }
