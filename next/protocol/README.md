@@ -744,7 +744,7 @@ request, `header_ms` (default 60000) bounds the wait for HTTP response headers a
 upstream WebSocket turn). On a request that is not streamed, `total_ms` (default 600000) bounds
 the whole upstream request from start to finish. Core resolves each limit from the account's
 override and `routing.timeouts`, and sends `timeouts` only to extensions whose `protocol_minor`
-is 18 or more.
+is 22 or more.
 
 A timeout that fires before any upstream response byte arrives is retry-safe so core can move the
 request to another account, once (a second timeout ends the request, as with `extension_timeout` below); once response headers or reply bytes have arrived, it ends the
