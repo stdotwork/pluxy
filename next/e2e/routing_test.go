@@ -27,9 +27,10 @@ func startCoreAccounts(t *testing.T, u *upstream, routing map[string]any, keys .
 		})
 	}
 	return runCore(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
-		"routing":     routing,
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+		"routing":        routing,
 		"extension": map[string]any{
 			"manifest": filepath.Join(binDir, "pluxy-extension.json"),
 			"accounts": accounts,
@@ -226,9 +227,10 @@ func TestAccountTranslatingTheFormatServesInPlace(t *testing.T) {
 	}))
 	t.Cleanup(gemini.Close)
 	base := runCore(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
-		"routing":     map[string]any{"strategy": "fill-first"},
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+		"routing":        map[string]any{"strategy": "fill-first"},
 		"extension": map[string]any{
 			"manifest": filepath.Join(binDir, "pluxy-extension.json"),
 			"accounts": []any{

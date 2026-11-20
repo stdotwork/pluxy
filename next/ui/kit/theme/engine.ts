@@ -12,6 +12,7 @@ import {
   tokenProperty,
   tokenValueProblem,
 } from "./contract";
+import { APP_THEME_VARIABLES, T3_ROLE_TO_TOKEN, type T3ColorRole, type T3RoleMap } from "./t3";
 import { cssProblem } from "./validate";
 
 export type Appearance = "light" | "dark";
@@ -39,6 +40,8 @@ export interface Resolved {
   appearance: Appearance;
   layout: Layout;
   tokens: Record<TokenName, string>;
+  /** Extra CSS custom properties (--app-theme-*) when the theme carries T3 Code roles. */
+  variables: Record<string, string>;
   /** Custom CSS to apply, theme's first; empty in safe mode. */
   css: string[];
   warnings: string[];
@@ -52,6 +55,25 @@ export function resolve(theme: Theme, choices: Choices, env: Environment): Resol
   for (const [name, def] of Object.entries(TOKENS) as [TokenName, { light: string; dark?: string }][]) {
     tokens[name] = appearance === "dark" ? (def.dark ?? def.light) : def.light;
   }
+
+  const variables: Record<string, string> = {};
+  if (theme.t3) {
+    const activeRoles: T3RoleMap = {};
+    if (appearance === theme.t3.appearance) {
+      if (theme.t3.generated) Object.assign(activeRoles, theme.t3.generated);
+      if (theme.t3.colors) Object.assign(activeRoles, theme.t3.colors);
+    }
+    const variant = theme.t3.variants?.[appearance];
+    if (variant) Object.assign(activeRoles, variant);
+
+    for (const [role, value] of Object.entries(activeRoles) as [T3ColorRole, string | undefined][]) {
+      if (value === undefined) continue;
+      const mapped = T3_ROLE_TO_TOKEN[role];
+      if (mapped) tokens[mapped] = value;
+      variables[APP_THEME_VARIABLES[role]] = value;
+    }
+  }
+
   Object.assign(tokens, theme.tokens);
   if (appearance === "dark" && theme.dark) Object.assign(tokens, theme.dark);
 
@@ -78,11 +100,14 @@ export function resolve(theme: Theme, choices: Choices, env: Environment): Resol
       else css.push(choices.css);
     }
   }
-  return { appearance, layout, tokens, css, warnings };
+  return { appearance, layout, tokens, variables, css, warnings };
 }
 
-export function tokensCss(tokens: Record<string, string>): string {
-  const decls = Object.entries(tokens).map(([name, value]) => `${tokenProperty(name)}:${value};`);
+export function tokensCss(tokens: Record<string, string>, variables: Record<string, string> = {}): string {
+  const decls = [
+    ...Object.entries(tokens).map(([name, value]) => `${tokenProperty(name)}:${value};`),
+    ...Object.entries(variables).map(([name, value]) => `${name}:${value};`),
+  ];
   return `:root{${decls.join("")}}`;
 }
 
@@ -100,7 +125,7 @@ export class ThemeApplier {
     root.classList.toggle("dark", r.appearance === "dark");
     for (const option of LAYOUT_OPTIONS) root.dataset[option] = r.layout[option];
     root.style.colorScheme = r.appearance;
-    this.tokens.replaceSync(tokensCss(r.tokens));
+    this.tokens.replaceSync(tokensCss(r.tokens, r.variables));
     this.custom = r.css.map((text) => {
       const sheet = new CSSStyleSheet();
       sheet.replaceSync(text);

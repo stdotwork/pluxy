@@ -3,7 +3,8 @@
 One UI kit, two builds. The **panel** is the kit's browser build: core embeds it and serves it at
 `/panel/` while the management API is on. The desktop app ([`../app`](../app/README.md)) is the
 kit's second build, with more pages. Both read the same theme files ([theme contract](themes/README.md)) and put shared
-pages in the same places.
+pages in the same places. Core keeps the themes a person adds and which theme is on
+([where themes are kept](themes/README.md#where-themes-are-kept)), so both builds show the same ones.
 
 | Folder | What it holds |
 | --- | --- |
@@ -72,6 +73,18 @@ opens the Source tab with that account's ID selected; an account's "Edit in Conf
 there. An account from a provider key section of `config.yaml` opens the Source tab with nothing
 selected, because the file does not hold its ID: core makes the ID when it reads the file.
 
+The Setup page (`#/setup`) is the one page the panel opens by itself. Once signed in, the
+shell asks core for `GET /setup`: on a first run (`first_run`), when the address names no page,
+Setup opens in place of the Dashboard. The shell does not wait for the answer, so the Dashboard
+may show for an instant. A core without the call (it answers 404) gets no Setup page and nothing
+opens by itself. The page stays in the navigation after setup, as a status of the same things.
+
+A host can add one button to each client the page lists as found:
+`corePages({ setup: { clientAction, clientActionHint } })` (`SetupOptions` in `kit/pages/setup.tsx`). `clientAction` takes the client's ID from core's
+scan and returns a label and the ID of the host's page the button opens, or nothing; the hint is
+one sentence shown while a client has a button. The panel passes none; the desktop app offers
+"Set up" for the clients it can set up on its own computer.
+
 | Page (ID) | Group | Replaces (old route) |
 | --- | --- | --- |
 | Dashboard (`status`) | Operate | Dashboard (`/`) |
@@ -81,6 +94,7 @@ selected, because the file does not hold its ID: core makes the ID when it reads
 | Quota Management (`quota`) | Observe | Quota Management (`/quota`) |
 | Logs Viewer (`logs`) | Observe | Logs Viewer (`/logs`) |
 | Usage (`usage`) | Observe | No old panel page: the old desktop app's list of recorded requests |
+| Set up pluxy (`setup`) | Control | No old page |
 | Config Panel (`config`) | Control | Config Panel (`/config`; `/settings` and `/api-keys` led there) |
 | System (`system`) | Control | Management Center Info (`/system`) |
 | Extensions (`extensions`) | Control | Plugins (`/plugins`) and Plugin Store (`/plugin-store`) |
@@ -193,7 +207,7 @@ feature, it keeps the old label, unless the label named something this core does
   Model", "Video result credential cache TTL", the "LAN discovery" section, every Streaming field
   (so there is no Streaming tab), every payload rule (so there is no Payload tab), Claude's and
   Codex's cloaking and header defaults, Codex's response steering and live media relay, the
-  Antigravity and Devin fields, the plugin settings, "Disable Control Panel", and the panel update
+  Devin fields, the plugin settings, "Disable Control Panel", and the panel update
   settings ("Disable Panel Auto Updates", "Panel Repository", "Global GitHub Token"). Any of them
   can still be written in the Source tab.
 - "Disable Image Generation": core has no switch for every account. Each Codex account has its own

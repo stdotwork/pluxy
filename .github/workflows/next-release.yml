@@ -115,9 +115,21 @@ jobs:
             echo "::error::GET /panel/ answered '$panel'"
             exit 1
           fi
-          # The first start installed and enabled every bundled extension.
+          # The first start installed nothing; the bundled registry offers every extension, each
+          # with a title, and each installs and runs when asked.
           expected="$(ls next/extensions/*/pluxy-extension.json | wc -l)"
-          packages="$(curl -fsS -H "Authorization: Bearer $MANAGEMENT_KEY" http://127.0.0.1:8400/v0/management/packages)"
+          api=http://127.0.0.1:8400/v0/management
+          auth="Authorization: Bearer $MANAGEMENT_KEY"
+          curl -fsS -H "$auth" "$api/packages" | jq -e '.packages | length == 0' > /dev/null
+          registries="$(curl -fsS -H "$auth" "$api/registries")"
+          echo "$registries" | jq -c '.registries[] | {name, packages: [.packages[]? | {id, title, kind, tier}]}'
+          echo "$registries" | jq -e --argjson n "$expected" \
+            '[.registries[] | select(.name == "bundled") | .packages[] | select(.title != null and .title != "")] | length == $n' > /dev/null
+          for id in $(echo "$registries" | jq -r '.registries[] | select(.name == "bundled") | .packages[].id'); do
+            curl -fsS -H "$auth" -H 'Content-Type: application/json' -o /dev/null \
+              -d "{\"id\": \"$id\", \"registry\": \"bundled\", \"enable\": true}" "$api/packages"
+          done
+          packages="$(curl -fsS -H "$auth" "$api/packages")"
           echo "$packages" | jq -c '.packages[] | {id, version, enabled, state}'
           echo "$packages" | jq -e --argjson n "$expected" \
             '(.packages | length) == $n and all(.packages[]; .enabled and .state != "failed")' > /dev/null

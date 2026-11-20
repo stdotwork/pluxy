@@ -154,7 +154,6 @@ var payloadChannels = map[string]struct{ channel, root string }{
 	"pluxy/kimi":              {"kimi", ""},
 	"pluxy/xai":               {"xai", ""},
 	"pluxy/meta":              {"meta", ""},
-	"pluxy/antigravity":       {"antigravity", "request"},
 }
 
 // The slice's check: every provider extension with a JSON upstream body applies the rules core
@@ -170,8 +169,9 @@ func TestPayloadEveryExtension(t *testing.T) {
 			t.Parallel()
 			up := newPayloadUpstream(t, false)
 			base := runCore(t, map[string]any{
-				"listen":      "127.0.0.1:0",
-				"client_keys": []string{clientKey},
+				"listen":         "127.0.0.1:0",
+				"client_keys":    []string{clientKey},
+				"management_key": managementKey,
 				"payload": map[string]any{"override": []any{
 					map[string]any{"models": []any{map[string]any{"name": "m-pay*", "protocol": ch.channel}}, "params": map[string]any{"pluxy_e2e": "set"}},
 					map[string]any{"models": []any{map[string]any{"name": "m-payload", "protocol": "another-channel"}}, "params": map[string]any{"pluxy_wrong": "set"}},
@@ -209,7 +209,7 @@ payload:
   default: # Default rules only set parameters when they are missing in the payload.
     - models:
         - name: "gemini-2.5-pro" # Supports wildcards (e.g., "gemini-*")
-          protocol: "gemini" # restricts the rule to a specific protocol, options: openai, gemini, claude, codex, antigravity
+          protocol: "gemini" # restricts the rule to a specific protocol, options: openai, gemini, claude, codex
           from-protocol: "responses" # restricts the rule to the source protocol, options: openai, responses, gemini, claude
           headers: # all configured request headers must match; values support "*" wildcards
             X-Client-Tier: "tenant-*-region-*"
@@ -226,7 +226,7 @@ payload:
   default-raw: # Default raw rules set parameters using raw JSON when missing (must be valid JSON).
     - models:
         - name: "gemini-2.5-pro" # Supports wildcards (e.g., "gemini-*")
-          protocol: "gemini" # restricts the rule to a specific protocol, options: openai, gemini, claude, codex, antigravity
+          protocol: "gemini" # restricts the rule to a specific protocol, options: openai, gemini, claude, codex
       params: # JSON path (gjson/sjson syntax) -> raw JSON value (strings are used as-is, must be valid JSON)
         "generationConfig.responseJsonSchema": "{\"type\":\"object\",\"properties\":{\"answer\":{\"type\":\"string\"}}}"
   override: # Override rules always set parameters, overwriting any existing values.
@@ -239,7 +239,7 @@ payload:
         service_tier: priority
     - models:
         - name: "gpt-*" # Supports wildcards (e.g., "gpt-*")
-          protocol: "codex" # restricts the rule to a specific protocol, options: openai, gemini, claude, codex, antigravity
+          protocol: "codex" # restricts the rule to a specific protocol, options: openai, gemini, claude, codex
       params: # JSON path (gjson/sjson syntax) -> value
         "reasoning.effort": "high"
     - models:
@@ -250,13 +250,13 @@ payload:
   override-raw: # Override raw rules always set parameters using raw JSON (must be valid JSON).
     - models:
         - name: "gpt-*" # Supports wildcards (e.g., "gpt-*")
-          protocol: "codex" # restricts the rule to a specific protocol, options: openai, gemini, claude, codex, antigravity
+          protocol: "codex" # restricts the rule to a specific protocol, options: openai, gemini, claude, codex
       params: # JSON path (gjson/sjson syntax) -> raw JSON value (strings are used as-is, must be valid JSON)
         "response_format": "{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"answer\",\"schema\":{\"type\":\"object\"}}}"
   filter: # Filter rules remove specified parameters from the payload.
     - models:
         - name: "gemini-2.5-pro" # Supports wildcards (e.g., "gemini-*")
-          protocol: "gemini" # restricts the rule to a specific protocol, options: openai, gemini, claude, codex, antigravity
+          protocol: "gemini" # restricts the rule to a specific protocol, options: openai, gemini, claude, codex
       params: # JSON paths (gjson/sjson syntax) to remove from the payload
         - "generationConfig.thinkingConfig.thinkingBudget"
         - "generationConfig.responseJsonSchema"
@@ -284,6 +284,8 @@ port: ` + strconv.Itoa(port) + `
 access:
   api-keys:
     - "` + clientKey + `"
+remote-management:
+  secret-key: "` + managementKey + `"
 api-keys:
   codex:
     - name: cx
@@ -316,6 +318,7 @@ requests:` + strings.ReplaceAll(examplePayload, "\n", "\n  "))
 	})
 	base, _, logs := startOnFreePort(t, filepath.Join(binDir, "pluxy"), path, cfg, "-bundled", bundled)
 	logs.waitFor(t, "config revision 1 active")
+	installBundled(t, base, "pluxy/codex", "pluxy/claude", "pluxy/gemini")
 	logs.mu.Lock()
 	for _, line := range logs.lines {
 		if strings.Contains(line, "payload") {
@@ -375,8 +378,9 @@ requests:` + strings.ReplaceAll(examplePayload, "\n", "\n  "))
 func TestPayloadDefaultAndClientHeaders(t *testing.T) {
 	up := newPayloadUpstream(t, false)
 	base := runCore(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
 		"payload": map[string]any{"default": []any{map[string]any{
 			"models": []any{map[string]any{"name": "gemini-2.5-pro", "protocol": "gemini", "headers": map[string]string{"X-Client-Tier": "tenant-*-region-*"}}},
 			"params": map[string]any{"generationConfig.thinkingConfig.thinkingBudget": 32768},
@@ -423,8 +427,9 @@ func TestPayloadRetryAppliedOnce(t *testing.T) {
 			"credential": map[string]any{"kind": "api_key", "api_key": upstreamKey}}
 	}
 	base := runCore(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
 		"payload": map[string]any{"filter": []any{map[string]any{
 			"models": []any{map[string]any{"name": "gpt-*", "protocol": "codex"}},
 			"params": []string{`tools.#(name=="apply_patch")`},
@@ -468,9 +473,10 @@ func TestPayloadStreamingCountAndEndpoint(t *testing.T) {
 	rules := map[string]any{"override": []any{map[string]any{"models": []any{map[string]any{"name": "m-payload"}}, "params": map[string]any{"pluxy_e2e": "set"}}}}
 	core := func(up *payloadUpstream, manifest string) string {
 		return runCore(t, map[string]any{
-			"listen":      "127.0.0.1:0",
-			"client_keys": []string{clientKey},
-			"payload":     rules,
+			"listen":         "127.0.0.1:0",
+			"client_keys":    []string{clientKey},
+			"management_key": managementKey,
+			"payload":        rules,
 			"extension": map[string]any{
 				"manifest": filepath.Join(binDir, manifest),
 				"accounts": []any{map[string]any{"id": "a", "models": []string{"m-payload"}, "settings": map[string]any{"base_url": up.URL + "/a"},

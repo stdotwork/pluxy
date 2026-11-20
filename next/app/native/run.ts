@@ -224,7 +224,9 @@
 // from ~/.local/bin, then from Pi's own bin folder, which comes first) in a terminal through the
 // launcher with no key in argv or environment; the key and a login canary stay out of every window
 // answer, confirmation and the app's output, and removing the package leaves no process.
-// The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session.
+// The privacy mode checks (privacy.ts, native_privacy.rs) run in one more session, and after them,
+// in the same session, the themes checks (native_themes.rs): a T3 Code theme file pasted on the
+// Themes page turns on, core keeps it, and the next launch paints in it.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
 // own (dbus-run-session, xvfb-run), and random ports. Inside that session, before the app,
@@ -3127,7 +3129,8 @@ async function main(): Promise<number> {
       problems.push(...p.map((x) => `managed: ${x}`));
       // The first start runs a stand-in that serves on the socket the app hands it (-listen-fd),
       // says where it listens, answers the app's readiness check (conn.rs ready), then exits; the
-      // next start, recovery's, runs the real core. The app runs the adopted copy of this script
+      // next start, recovery's, runs the real core. The first config is the real core's (init). The
+      // app runs the adopted copy of this script
       // from an open file, so its mark is not beside $0.
       if (runsSession("early exit")) {
         const early = join(prepared, "early-exit.sh");
@@ -3170,7 +3173,7 @@ func main() {
         run("go", ["build", "-o", standIn, standInSource], prepared);
         writeFileSync(
           early,
-          `#!/bin/sh\nif [ ! -e '${early}.ran' ]; then\n  : > '${early}.ran'\n  exec '${standIn}' "$@"\nfi\nexec '${core}' "$@"\n`,
+          `#!/bin/sh\nif [ "$1" != init ] && [ ! -e '${early}.ran' ]; then\n  : > '${early}.ran'\n  exec '${standIn}' "$@"\nfi\nexec '${core}' "$@"\n`,
           { mode: 0o755 },
         );
         const e = await runApp(

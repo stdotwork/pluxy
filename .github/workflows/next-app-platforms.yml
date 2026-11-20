@@ -44,9 +44,9 @@ jobs:
   app:
     name: app (${{ matrix.os }})
     # On macOS, the repository variable PLUXY_MACOS_CLOUD_RUNNER, when set, gives the runner label
-    # to use instead of GitHub's, except in pull requests (AGENTS.md, "Where jobs run"). Windows stays on GitHub's runner:
+    # to use instead of GitHub's, except in pull requests and merge groups (AGENTS.md, "Where jobs run"). Windows stays on GitHub's runner:
     # the registry tests run only on a runner that reports itself GitHub-hosted.
-    runs-on: ${{ matrix.os == 'macos-latest' && github.event_name != 'pull_request' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
+    runs-on: ${{ matrix.os == 'macos-latest' && github.event_name != 'pull_request' && github.event_name != 'merge_group' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -138,9 +138,10 @@ jobs:
           [ "$ran" -eq "$expected" ]
       # A detached launch must leave the app's job. The runner's own job refuses that (the unit
       # tests check the refusal), so the check that it works runs the breakaway test, the
-      # lifetime tests and the stdin secret test (a detached launch with a piped stdin), whose
-      # detached launches then run and must be in no job, from a process outside that job:
-      # started by WMI, or failing that by the Task Scheduler.
+      # lifetime tests, the stdin secret test (a detached launch with a piped stdin) and the WSLENV
+      # test (a detached launch of wsl.exe gets WSLENV), whose detached launches then run and must
+      # be in no job, from a process outside that job: started by WMI, or failing that by the Task
+      # Scheduler.
       - name: Detached launch outside the runner's job
         if: runner.os == 'Windows'
         working-directory: next/app/src-tauri
@@ -156,7 +157,7 @@ jobs:
             Remove-Item "$dir\*" -Force -ErrorAction SilentlyContinue
             # The exit code goes first to a file of its own (a redirection before echo: `echo 0>`
             # would redirect stream 0), then into place, so done.txt never appears empty.
-            Set-Content "$dir\run.cmd" "@`"$exe`" outside_job lifetime_ a_launchs_stdin_secret_reaches_it_on_its_stdin_only --include-ignored --test-threads=1 > `"$dir\out.txt`" 2>&1`r`n@> `"$dir\done.tmp`" echo %ERRORLEVEL%`r`n@move /y `"$dir\done.tmp`" `"$dir\done.txt`" > nul"
+            Set-Content "$dir\run.cmd" "@`"$exe`" outside_job lifetime_ a_launchs_stdin_secret_reaches_it_on_its_stdin_only managed_and_detached_launches_of_wsl_exe_start_with_wslenv --include-ignored --test-threads=1 > `"$dir\out.txt`" 2>&1`r`n@> `"$dir\done.tmp`" echo %ERRORLEVEL%`r`n@move /y `"$dir\done.tmp`" `"$dir\done.txt`" > nul"
             if ($how -eq 'WMI') {
               $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = "cmd.exe /c `"$dir\run.cmd`""; CurrentDirectory = $dir }
               if ($r.ReturnValue -ne 0) { return "WMI could not start it ($($r.ReturnValue))" }
@@ -169,7 +170,7 @@ jobs:
             if (-not (Test-Path "$dir\done.txt")) { return "$($how): no result within 120 s" }
             Get-Content "$dir\out.txt" | Write-Host
             $code = (Get-Content "$dir\done.txt").Trim()
-            if ($code -eq '0' -and (Select-String -Quiet -Path "$dir\out.txt" -Pattern '^test result: ok\. 10 passed')) { return 'ok' }
+            if ($code -eq '0' -and (Select-String -Quiet -Path "$dir\out.txt" -Pattern '^test result: ok\. 11 passed')) { return 'ok' }
             return "$($how): the test failed (exit $code)"
           }
           $why = @()
@@ -273,25 +274,26 @@ jobs:
   # on Windows, an app bundle on macOS, never an installer), then the dev app, since the package's
   # builds rename the program they make in target/debug. The update shard also runs a test core
   # (`go run ./e2e/panelcore`), so it sets up Go. The tools shard (native/platform-tools.ts) runs
-  # run.ts's admission, program, routing and launcher sessions here, on the app built with the
-  # test trust (artifact-test-trust) against a test core it starts with `go run`, so it sets up Go
-  # too.
+  # run.ts's admission, program, routing, launcher and vault sessions here, on the app built with
+  # the test trust (artifact-test-trust) against a test core it starts with `go run`, so it sets up
+  # Go too. The open shard runs platform-tools.ts's open session the same way, on the same build.
   # A schedule or manual run has no inputs: null is not true, so it runs these.
   native:
     name: native (${{ matrix.os }}, ${{ matrix.shard }})
     if: inputs.skip-native != true
     # It writes the account's own folders and settings, so it runs only on a disposable runner
     # (next/app/native/runner.ts): GitHub's, or on macOS the one PLUXY_MACOS_CLOUD_RUNNER names when
-    # set, outside pull requests (AGENTS.md, "Where jobs run"). Such a runner reports itself self-hosted, so the job names
+    # set, outside pull requests and merge groups (AGENTS.md, "Where jobs run"). Such a runner reports itself self-hosted, so the job names
     # it to the test in PLUXY_EPHEMERAL_CI_RUNNER, which is empty on every other runner. Windows
     # stays on GitHub's: this names no cloud runner there (Namespace's trial plan has no Windows),
-    # and the tests need a signed-in desktop.
-    runs-on: ${{ matrix.os == 'macos-latest' && github.event_name != 'pull_request' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
+    # and the tests need a signed-in desktop. The open shard stays on GitHub's runner on macOS too:
+    # its session runs only on a GitHub-hosted runner (next/app/README.md, "Limits").
+    runs-on: ${{ matrix.os == 'macos-latest' && matrix.shard != 'open' && github.event_name != 'pull_request' && github.event_name != 'merge_group' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
     env:
-      PLUXY_EPHEMERAL_CI_RUNNER: ${{ matrix.os == 'macos-latest' && github.event_name != 'pull_request' && vars.PLUXY_MACOS_CLOUD_RUNNER || '' }}
+      PLUXY_EPHEMERAL_CI_RUNNER: ${{ matrix.os == 'macos-latest' && matrix.shard != 'open' && github.event_name != 'pull_request' && github.event_name != 'merge_group' && vars.PLUXY_MACOS_CLOUD_RUNNER || '' }}
     # The builds (about 3 minutes with the caches restored), then the native test's own limit
-    # (at most 75 minutes).
-    timeout-minutes: 105
+    # (at most 90 minutes).
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -302,13 +304,14 @@ jobs:
           - platform
           - package
           - tools
+          - open
           - update
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      # The tools and update shards' sessions start a test core with `go run ./e2e/panelcore`.
+      # The tools, open and update shards' sessions start a test core with `go run ./e2e/panelcore`.
       - name: Set up Go
-        if: matrix.shard == 'tools' || matrix.shard == 'update'
+        if: matrix.shard == 'tools' || matrix.shard == 'open' || matrix.shard == 'update'
         uses: actions/setup-go@v5
         with:
           go-version-file: next/go.mod
@@ -340,31 +343,38 @@ jobs:
         run: bun run package:test "$RUNNER_TEMP/test-package"
       # The app with the test hooks (never in a release build): the one the checks start.
       - name: Build the app for the native test
-        if: matrix.shard != 'tools'
+        if: matrix.shard != 'tools' && matrix.shard != 'open'
         working-directory: next/app/src-tauri
         run: cargo build --locked --features native-test
-      # The tools shard: the app with the test hooks and the test trust, the fixture tool its signed
-      # packages hold, and the execution program the launcher session installs, built into
-      # target/app-tools as run.ts builds it (without execution's native-test feature, which only
-      # run.ts's open session uses).
+      # The tools and open shards: the app with the test hooks and the test trust, the fixture tool
+      # their signed packages hold, and the execution program the launcher and open sessions
+      # install, built into target/app-tools with its native-test feature: on Windows a terminal
+      # launch's console window then does not wait for Enter, and its Command Prompt or PowerShell
+      # after the program runs one fixed command, which the launcher session reads back (never in a
+      # release build). The feature changes nothing about opening files.
       - name: Build the app and tools for the tools sessions
-        if: matrix.shard == 'tools'
+        if: matrix.shard == 'tools' || matrix.shard == 'open'
         working-directory: next/app/src-tauri
         run: |
           cargo build --locked --features native-test,artifact-test-trust --bin pluxy-app --example program_fixture
           cd ../../app-tools
-          cargo build --locked -p execution --target-dir ../app/src-tauri/target/app-tools
-      # The tools shard runs four app sessions one after another. Each waits at most (limits in
+          cargo build --locked -p execution --features native-test --target-dir ../app/src-tauri/target/app-tools
+      # The tools shard runs five app sessions one after another. Each waits at most (limits in
       # native/platform-tools.ts and platform.ts): 3 minutes for its test core to start
       # (CORE_START); 10 minutes for the app (TIMEOUT), then 30 seconds for its output to close
       # once stopped (STOP_MS) and, if it still runs, 30 seconds more once cleanup stops it again
       # (STOP_MS); 1 minute for the core to exit (twice STOP_MS); 3 seconds of fixed pauses; and on
-      # Windows 30 seconds for each of the four folders it removes (FREE_MS): 17 minutes 3 seconds,
-      # 68 minutes 12 seconds for four. 75 minutes lets every session report and clean up even when
-      # each app hangs, with nearly 7 minutes for the short commands it runs besides (PowerShell,
-      # icacls), which have no limit of their own.
+      # Windows 30 seconds for each of the four folders it removes (FREE_MS; five in the launcher
+      # session): 17 minutes 3 seconds, 85 minutes 15 seconds for five. The launcher session also
+      # waits up to 105 s on Windows for its app to start and for it and its agents to end, and up
+      # to 55 s on macOS for its agents and Terminal: about 87 minutes 30 seconds on Windows. 95
+      # minutes lets every session report and clean up even when each app hangs, with over 7
+      # minutes for the short commands it runs besides (PowerShell, icacls), which have no limit of
+      # their own. The open shard runs one such session (its app started outside the runner's job
+      # on Windows, as the launcher session's is) and, on macOS, at most four certificate trust
+      # commands of at most a minute each: about 22 minutes at worst.
       - name: Native test
-        timeout-minutes: ${{ matrix.shard == 'tools' && 75 || 40 }}
+        timeout-minutes: ${{ matrix.shard == 'tools' && 95 || 40 }}
         env:
           PLUXY_APP_NATIVE_SHARD: ${{ matrix.shard }}
           PLUXY_APP_TEST_PACKAGE: ${{ runner.temp }}/test-package
@@ -378,13 +388,13 @@ jobs:
     name: dialogs (${{ matrix.os }})
     # It writes the account's own folders and settings, so it runs only on a disposable runner
     # (next/app/native/runner.ts): GitHub's, or on macOS the one PLUXY_MACOS_CLOUD_RUNNER names when
-    # set, outside pull requests (AGENTS.md, "Where jobs run"). Such a runner reports itself self-hosted, so the job names
+    # set, outside pull requests and merge groups (AGENTS.md, "Where jobs run"). Such a runner reports itself self-hosted, so the job names
     # it to the test in PLUXY_EPHEMERAL_CI_RUNNER, which is empty on every other runner. Windows
     # stays on GitHub's: this names no cloud runner there (Namespace's trial plan has no Windows),
     # and the tests need a signed-in desktop.
-    runs-on: ${{ matrix.os == 'macos-latest' && github.event_name != 'pull_request' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
+    runs-on: ${{ matrix.os == 'macos-latest' && github.event_name != 'pull_request' && github.event_name != 'merge_group' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
     env:
-      PLUXY_EPHEMERAL_CI_RUNNER: ${{ matrix.os == 'macos-latest' && github.event_name != 'pull_request' && vars.PLUXY_MACOS_CLOUD_RUNNER || '' }}
+      PLUXY_EPHEMERAL_CI_RUNNER: ${{ matrix.os == 'macos-latest' && github.event_name != 'pull_request' && github.event_name != 'merge_group' && vars.PLUXY_MACOS_CLOUD_RUNNER || '' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false

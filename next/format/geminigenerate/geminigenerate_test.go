@@ -243,7 +243,11 @@ func TestThinkingConfigEffort(t *testing.T) {
 		{`{"thinkingBudget":1024}`, "low"},
 		{`{"thinkingBudget":0}`, "none"},
 		{`{"thinkingBudget":-1}`, "auto"},
+		{`{"thinkingBudget":32768}`, "xhigh"},
 		{`{"thinkingLevel":"HIGH"}`, "high"},
+		{`{"thinkingLevel":"XHIGH"}`, "xhigh"},
+		{`{"thinkingLevel":"THINKING_LEVEL_UNSPECIFIED"}`, ""},
+		{`{"thinkingLevel":"THINKING_LEVEL_UNSPECIFIED","thinkingBudget":1024}`, "low"},
 	} {
 		req := mustParse(t, `{"contents":[],"generationConfig":{"thinkingConfig":`+tc.cfg+`}}`)
 		if req.Options.ReasoningEffort != tc.want {

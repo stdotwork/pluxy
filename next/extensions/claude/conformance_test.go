@@ -20,9 +20,10 @@ func TestConformance(t *testing.T) {
 	for _, kind := range []string{protocol.CredentialAPIKey, protocol.CredentialOAuth} {
 		t.Run(kind, func(t *testing.T) {
 			conformance.Run(t, conformance.Target{
-				Manifest:     manifest,
-				Prepare:      func(t *testing.T, s conformance.Scenario) conformance.Setup { return prepare(t, s, kind) },
-				PrepareLogin: prepareLogin,
+				Manifest:             manifest,
+				Prepare:              func(t *testing.T, s conformance.Scenario) conformance.Setup { return prepare(t, s, kind) },
+				PrepareLogin:         prepareLogin,
+				PrepareAccountClosed: func(t *testing.T) conformance.Setup { return prepare(t, conformance.ScenarioAccountClosed, kind) },
 			})
 		})
 	}
@@ -65,6 +66,11 @@ func prepare(t *testing.T, s conformance.Scenario, kind string) conformance.Setu
 			w.Header().Set("Retry-After", "20")
 			w.WriteHeader(http.StatusTooManyRequests)
 			io.WriteString(w, `{"type":"error","error":{"type":"rate_limit_error","message":"Number of requests has exceeded your rate limit"}}`)
+		case conformance.ScenarioAccountClosed:
+			// Captured reply from https://github.com/router-for-me/CLIProxyAPI/issues/2442.
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			io.WriteString(w, `{"type":"error","error":{"type":"invalid_request_error","message":"This organization has been disabled."}}`)
 		}
 	}
 	setup := conformance.Setup{Account: protocol.Account{ID: "conformance", Settings: srv.Settings("")}}

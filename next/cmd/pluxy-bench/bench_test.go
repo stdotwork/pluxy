@@ -4,6 +4,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestPercentileAndSummarize(t *testing.T) {
@@ -166,5 +167,33 @@ func TestPaddedDeltaMarkersAndFidelity(t *testing.T) {
 	}
 	if joined.String() != d0+d1 {
 		t.Fatalf("joined = %q, want %q", joined.String(), d0+d1)
+	}
+}
+
+func TestSelectProfileScenarios(t *testing.T) {
+	specs := []ScenarioSpec{
+		{Name: "agents"},
+		{Name: "throughput"},
+		{Name: "nonstream-pass", Latency: 250 * time.Millisecond},
+	}
+
+	got, err := selectProfileScenarios(specs, "")
+	if err != nil {
+		t.Fatalf("selectProfileScenarios default: %v", err)
+	}
+	if len(got) != 2 || got[0].Name != "agents" || got[1].Name != "throughput" {
+		t.Fatalf("selectProfileScenarios default = %+v, want agents and throughput", got)
+	}
+
+	got, err = selectProfileScenarios(specs, "nonstream-pass")
+	if err != nil {
+		t.Fatalf("selectProfileScenarios nonstream-pass: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "nonstream-pass" || got[0].Latency != 250*time.Millisecond {
+		t.Fatalf("selectProfileScenarios nonstream-pass = %+v, want the built scenario", got)
+	}
+
+	if _, err := selectProfileScenarios(specs, "missing"); err == nil {
+		t.Fatal("selectProfileScenarios missing: want an unknown-scenario error")
 	}
 }

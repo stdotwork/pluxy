@@ -871,7 +871,7 @@ func TestEditYAMLCreatesMissingSections(t *testing.T) {
 		t.Errorf("comment lost:\n%s", got)
 	}
 	// A v8 root api-keys mapping holds providers, not client keys: it is left alone.
-	providers := "server:\n  host: 127.0.0.1\n  port: 8400\napi-keys:\n  codex:\n    - base-url: https://codex.example.com\n      keys:\n        - api-key: fake-codex\n"
+	providers := "server:\n  host: 127.0.0.1\n  port: 8400\nremote-management:\n  secret-key: fake-management\napi-keys:\n  codex:\n    - base-url: https://codex.example.com\n      keys:\n        - api-key: fake-codex\n"
 	got = edited(t, providers, true, func(d *Doc) error { return d.AddClientKey("fake-first") })
 	cfg := loads(t, got, true)
 	if !slices.Equal(cfg.ClientKeys, []string{"fake-first"}) || !strings.Contains(got, "fake-codex") || !strings.Contains(got, "codex:") {

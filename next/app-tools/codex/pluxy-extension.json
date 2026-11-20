@@ -2,6 +2,9 @@
   "manifest_version": 1,
   "id": "pluxy/codex-setup",
   "version": "0.1.0",
+  "title": "Codex CLI",
+  "summary": "Points OpenAI's Codex CLI at pluxy by editing its config file, with a backup to undo it.",
+  "kind": "client",
   "app": {
     "version": 0,
     "tier": "native",

@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.19
+# pluxy extension protocol, version 0.22
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -26,11 +26,16 @@ upstream JSON body that the config sets, fills in or removes. Version 0.15 has a
 them too. Version 0.16 adds an error's `dropped`: what a refusal under the `reject` drop policy
 could not carry. Version 0.17 adds a captured body's `body_stopped`: the extension did not read it
 to its end. Version 0.18 adds a model list's `from`: whether the list came from the account at the
-provider or from the extension's built-in catalog. Version 0.19 adds the account's
+provider or from the extension's built-in catalog. Version 0.19 adds a quota limit's `feature`: the
+limit counts a feature of the plan, not the account's requests to its models. Version 0.20 adds the
+error code `account_closed`: the provider closed, suspended or deactivated the account, or refused it
+for a breach of terms. Version 0.21 adds what a package is, for someone who does not know its ID: a
+manifest's `title`, `summary` and `kind`, and in a [registry index](#registry-index) the same with
+the registry's `tier`. Version 0.22 adds the account's
 [`timeouts`](#timeouts): upstream request limits for response headers, stream byte gaps and
-non-streamed completion. It is deliberately small; later versions add capabilities and more
-operations without changing what is described here. An extension written for version 0 works
-unchanged with a core that speaks 0.19 (see
+non-streamed completion. It is deliberately small; later versions add capabilities and more operations
+without changing what is described here. An extension written for version 0 works unchanged with a
+core that speaks 0.22 (see
 [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
@@ -81,6 +86,9 @@ An extension ships as a folder with a manifest named `pluxy-extension.json`:
 | `programs` | Program to run per platform, keyed by Go's `GOOS/GOARCH`. Paths are relative to the manifest's folder and may not leave it. |
 | `ui` | Optional: pages the panel shows for the extension, with their own `version`. See [extension pages](../ui/extension-pages/README.md#ui). |
 | `config` | Optional: the schema of the extension's settings, with its own `version`; the panel draws a form from it. See [extension pages](../ui/extension-pages/README.md#config). |
+| `title` | Since 0.21; core does not need it, `pluxy-pack` refuses to pack a provider extension without it (and an app tool that sets `summary` or `"kind": "client"` without it): the package's name for people, a few words such as `Claude`. One line, at most 80 characters. |
+| `summary` | Since 0.21; needed by `pluxy-pack` as `title` is: one sentence saying what it adds, for someone who does not know the provider. One line, at most 300 characters. |
+| `kind` | Since 0.21, optional: what the package adds. `provider` (the default for a manifest with `protocol`), or `client` for an app tool that points a coding client at core. Later versions add kinds. |
 
 The package version, manifest version, protocol version and the versions of `ui` and `config`
 are separate on purpose: each can change without the others. Later versions add more optional
@@ -115,6 +123,10 @@ newest first, each pinned to its archives' SHA-256 digests and sizes:
   "registry_version": 0,
   "packages": {
     "pluxy/codex": {
+      "title": "Codex and ChatGPT",
+      "summary": "OpenAI's Codex models with a ChatGPT subscription or an OpenAI API key.",
+      "kind": "provider",
+      "tier": "pick",
       "releases": [
         {
           "version": "0.1.0",
@@ -137,6 +149,8 @@ newest first, each pinned to its archives' SHA-256 digests and sizes:
 | --- | --- |
 | `registry_version` | Version of this index format. Version 0 is described here. |
 | `packages` | Packages by ID (the manifest's `id`). |
+| `title`, `summary`, `kind` | Since 0.21, optional: what the package is, as its manifest says ([Package manifest](#package-manifest)). Core shows them in management's `GET /registries`. A title or summary that is not one line within its length, or a kind that is not a lower-case word, makes the index invalid. A kind core does not know is shown as it is. |
+| `tier` | Since 0.21, optional: how far the registry vouches for the package. `pick`: offered when a new install is set up; `verified`: reviewed by the registry's maintainers; `unverified`: listed only. Absent means `unverified`. Core shows it and enforces nothing by it. |
 | `releases` | Releases offered, newest first. A release's `version` appears once per package. |
 | `protocol` | Protocol versions the release's program speaks, so core can pick a release it can run before downloading it. |
 | `artifacts` | The release's archives by platform (`GOOS/GOARCH`). |
@@ -393,7 +407,9 @@ account cannot be checked without a generation (the upstream has no such call), 
 Version 0.5. Core asks what an account's plan allows and how much of it is used, for the
 management API's quota view (`GET /v0/management/accounts/{id}/quota`). Core sends it only to an
 extension that reports `protocol_minor` 5 or more and lists `quota` in `operations`, and only when
-someone asks: core does not poll.
+someone asks or to check an account that routing keeps out after a refusal (at most once every 15
+minutes for each such account; see core's README, "Accounts and routing"): core does not poll
+accounts that serve.
 
 ```json
 {"type": "call", "id": "c-22", "op": "quota", "account": {"id": "work", "settings": {...}, "credential": {...}}}
@@ -423,9 +439,18 @@ event as for `generate`.
 | limit `resets_at` | When it resets, in Unix seconds. |
 | limit `window_seconds` | The length of its usage window. |
 | limit `models` | The models it applies to, when not all of the account's. |
+| limit `feature` | Optional, since 0.19: `true` when the limit counts a feature of the plan (code review, another app's allowance, a credit pool for one product) rather than the account's requests to its models. A feature's limit lists no `models`. Core ignores it from an extension older than 0.19. |
 | `raw` | The provider's replies the quota was read from, as one JSON object, for what `limits` has no place for. |
 
-Every field of a limit but `id` is optional; report what the provider gives. Read the quota from the
+Every field of a limit but `id` is optional; report what the provider gives.
+
+Core's routing reads `limits` to check a block it keeps on an account after a refusal: a limit with
+a `resets_at` to come that is used up (`used_percent` 100, or `remaining` 0) keeps the block until
+it resets, if it covers the block. A limit covers the whole account unless it says otherwise: one
+with `models` covers only blocks on those models, and one with `feature` covers none. So a limit
+that counts only some of the account's requests must say so, with `models` when the extension can
+name them and `feature` when it counts a feature, or core may keep the whole account out until it
+resets. Read the quota from the
 provider's own usage endpoint for the account's subscription, with the same client identity
 (user agent and the like) the extension uses for the account's requests, and never with a request
 that spends from the plan (a generation). An account that has no plan to report (an API key, or
@@ -553,7 +578,7 @@ the endpoint (or does not serve it for this account's credential) answers with c
 | `credential` | The credential for this call (below). |
 | `proxy_url` | Since 0.11, optional: the proxy every upstream request of this call goes through (below). Absent: no proxy. |
 | `headers` | Since 0.12, optional: extra HTTP headers every upstream request of this call carries, an object of header name to value (below). Absent: none. |
-| `timeouts` | Since 0.19, optional: upstream request limits in milliseconds (`header_ms`, `idle_ms`, `total_ms`; below). Absent: extension defaults. |
+| `timeouts` | Since 0.22, optional: upstream request limits in milliseconds (`header_ms`, `idle_ms`, `total_ms`; below). Absent: extension defaults. |
 
 An extension only ever receives its own accounts: core stores each credential with the ID of the
 extension that created it and never sends it to another.
@@ -705,7 +730,7 @@ process has not created any `sdk.Upstream` transport.
 
 ### Timeouts
 
-From version 0.19 an account may carry `timeouts`, an object with `header_ms`, `idle_ms` and
+From version 0.22 an account may carry `timeouts`, an object with `header_ms`, `idle_ms` and
 `total_ms` in milliseconds. Each is optional; `0` turns that limit off. On a streamed upstream
 request, `header_ms` (default 60000) bounds the wait for HTTP response headers and `idle_ms`
 (default 300000) bounds the gap between raw upstream body bytes (and between messages on an
@@ -903,7 +928,7 @@ Usage, in `finish.usage`; a field that is absent was not reported, which is diff
 | `status` | The upstream HTTP status, when there was one. |
 | `provider_code` | The upstream's own error code, when there was one. |
 | `retryable` | True only when the upstream certainly did not run the request (it was refused), so trying again, on this account later or on another account, is safe. For `login` and `refresh` calls, see [Errors in login and refresh calls](#errors-in-login-and-refresh-calls). |
-| `scope` | What the failure is about: `request` (this request is bad), `credential` (this account), `model` (this model on this account), `endpoint` (the upstream endpoint). A rate limit or quota is `model` unless the provider says it covers the whole account, such as a subscription's used-up usage window; today's core also holds back only the model for a plain 429. When `scope` is absent, core takes `model` for `rate_limit`, `quota` and `not_found`, `credential` for `auth` and `permission`, and `endpoint` for `upstream` and `unavailable`. |
+| `scope` | What the failure is about: `request` (this request is bad), `credential` (this account), `model` (this model on this account), `endpoint` (the upstream endpoint). A rate limit or quota is `model` unless the provider says it covers the whole account, such as a subscription's used-up usage window; today's core also holds back only the model for a plain 429. When `scope` is absent, core takes `model` for `rate_limit`, `quota` and `not_found`, `credential` for `auth`, `permission` and `account_closed`, and `endpoint` for `upstream` and `unavailable`. |
 | `retry_after_ms` | When the upstream said to try again, in milliseconds from now. |
 | `raw` | The upstream's error body, as the extension got it. Core removes the account's secrets from it before passing it on, as from `message`. |
 | `usage` | Usage the upstream reported before the failure, in the same form as `finish.usage`; absent when it reported none. A reply that fails partway may still have cost tokens. |
@@ -917,6 +942,7 @@ Codes an extension sends:
 | `invalid_request` | The upstream rejected the request itself. |
 | `auth` | The credential was refused. |
 | `permission` | The credential is valid but not allowed this request. |
+| `account_closed` | Version 0.20. The provider closed, suspended or deactivated the account, or refused it for a breach of terms. Core always bans the account. When `retryable` is true, the request moves on to sibling accounts as any retry-safe account failure does, unless `scope` is `request` (the refusal is about this request's content): then it stops there. |
 | `not_found` | The model or resource does not exist upstream. |
 | `rate_limit` | Too many requests; try again later. |
 | `quota` | A usage allowance is used up. |
@@ -1237,8 +1263,8 @@ Rules:
   message: connecting the upstream socket for it makes no second one, so the rules apply once per
   turn.
 - Paths are relative to the model request. An extension whose body carries the request inside
-  another object applies them inside it: the Antigravity extension's body is
-  `{"project": ..., "request": {...}}`, and its rules apply inside `request`, as in today's core.
+  another object applies them inside it: if an extension's body is
+  `{"project": ..., "request": {...}}`, its rules apply inside `request`.
 - In this order, checking each rule's conditions on the body as it is when the rule's turn comes:
   `default`, then `default-raw`, each rule in order, each of its params in sorted path order,
   writing a value only where the body has none and no earlier default wrote one (the first
@@ -1370,7 +1396,7 @@ recorded.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.19. An extension reports the minor version it
+raise the minor version: this document is version 0.22. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1396,9 +1422,12 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.16 | An error's `dropped`. |
 | 0.17 | A captured body's `body_stopped` ([upstream capture](#upstream-capture)). |
 | 0.18 | A model list's `from` ([`models`](#models)). |
-| 0.19 | The account's optional [`timeouts`](#timeouts). |
+| 0.19 | A [quota](#quota) limit's `feature`. |
+| 0.20 | Error code [`account_closed`](#errors). |
+| 0.21 | A manifest's optional `title`, `summary` and `kind`, and a [registry index](#registry-index) package's optional `title`, `summary`, `kind` and `tier`. No call or frame changes. |
+| 0.22 | The account's optional [`timeouts`](#timeouts). |
 
-## What version 0.19 leaves out
+## What version 0.22 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

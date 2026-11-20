@@ -24,9 +24,10 @@ func startTimeoutCore(t *testing.T, u *upstream, routing map[string]any, account
 		accts = append(accts, a)
 	}
 	return runCoreLogged(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
-		"routing":     routing,
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+		"routing":        routing,
 		"extension": map[string]any{
 			"manifest": filepath.Join(binDir, "pluxy-extension.json"),
 			"accounts": accts,
@@ -421,9 +422,10 @@ func TestUpstreamTimeoutCodexWebSocketIdle(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	base, logs := runCoreLogged(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
-		"routing":     map[string]any{"timeouts": map[string]any{"idle_ms": 200}},
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+		"routing":        map[string]any{"timeouts": map[string]any{"idle_ms": 200}},
 		"extension": map[string]any{
 			"manifest": filepath.Join(binDir, "codex", "pluxy-extension.json"),
 			"accounts": []any{map[string]any{
