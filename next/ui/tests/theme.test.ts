@@ -209,11 +209,30 @@ describe("reading a theme", () => {
     const needs = "a T3 Code theme file needs a colors object, or both canvas and accent";
     expect(why({ name: "No colours", appearance: "dark" })).toBe(needs);
     expect(why({ name: "No colours", appearance: "light", canvas: "#ffffff" })).toBe(needs);
-    const missing = "theme_version is missing or not a whole number";
-    expect(why({ name: "No colours" })).toBe(missing);
-    expect(why({ name: "No colours", appearance: "sepia" })).toBe(missing);
-    expect(why({ name: " ", appearance: "dark" })).toBe(missing);
-    expect(why({ appearance: "dark", colors: {} })).toBe(missing);
+    // Anything else is not a theme file: the reason names what either kind of file has, and does
+    // not blame a field the person never heard of.
+    for (const raw of [
+      { foo: 1 },
+      { name: "No colours" },
+      { name: "No colours", appearance: "sepia" },
+      { name: " ", appearance: "dark" },
+      { appearance: "dark", colors: {} },
+    ]) {
+      const reason = why(raw);
+      expect(reason).toStartWith("the file is not a theme file.");
+      expect(reason).not.toContain("missing");
+      for (const field of ['"theme_version"', '"name"', '"appearance"', '"colors"', '"canvas"', '"accent"'])
+        expect(reason).toContain(field);
+    }
+  });
+
+  test("a token value the rules refuse is named with the part that breaks them", () => {
+    const r = ok({ ...base, tokens: { "color.bg": "url(https://example.com/x)", "color.text": "red; x" } });
+    expect(r.theme.tokens).toEqual({});
+    expect(r.warnings).toEqual([
+      'tokens: color.bg contains "url(", which a token value may not contain; the default is kept',
+      'tokens: color.text contains ";", which a token value may not contain; the default is kept',
+    ]);
   });
 
   test("keeps what it can, with a warning for each part it ignores", () => {

@@ -19,8 +19,11 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode/utf16"
 
+	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/management"
+	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 // Exit codes of the client subcommands (next/management/README.md).
@@ -37,8 +40,10 @@ const (
 // command is one client subcommand: the words that name it, its arguments, the management
 // calls it makes (as the API's patterns, which the route table test checks) and what it does.
 type command struct {
-	words   string
-	args    []string
+	words string
+	args  []string
+	// more: the last argument may be given more than once (at least once).
+	more    bool
 	routes  []string
 	summary string
 	// flags adds the command's own flags.
@@ -56,6 +61,8 @@ type opts struct {
 	picks                                          stringSliceFlag
 	keyID                                          string
 	id                                             string
+	authDir                                        string
+	dryRun                                         bool
 }
 
 // invocation is one run of a command.
@@ -254,7 +261,7 @@ var commands = []command{
 		run: func(x *invocation) error {
 			var r management.AccountsReply
 			return x.call(http.MethodGet, "/accounts", nil, nil, &r, func() {
-				rows := [][]string{{"ID", "EXTENSION", "SOURCE", "HEALTH", "UNTIL", "WHY"}}
+				rows := [][]string{{"ID", "PUBLIC ID", "EXTENSION", "SOURCE", "HEALTH", "UNTIL", "WHY"}}
 				for _, a := range r.Accounts {
 					health := dash(a.Health.State)
 					if a.Health.Source == management.SourceUnverified {
@@ -264,9 +271,109 @@ var commands = []command{
 					if a.Health.Until != nil {
 						until = a.Health.Until.Local().Format(time.DateTime)
 					}
-					rows = append(rows, []string{a.ID, dash(a.Extension), a.Source, health, until, dash(a.Health.Why)})
+					rows = append(rows, []string{a.ID, a.PublicID, dash(a.Extension), a.Source, health, until, dash(a.Health.Why)})
 				}
 				x.table(rows)
+			})
+		}},
+	{words: "route", args: []string{"model"}, routes: []string{"GET /route"}, summary: "the accounts a request for a model would try now, in order, and those it would leave out",
+		run: func(x *invocation) error {
+			var r management.RouteReply
+			return x.call(http.MethodGet, "/route", url.Values{"model": {x.args[0]}}, nil, &r, func() {
+				chain := len(r.Chain) > 0
+				if chain {
+					x.printf("chain %s: %s\n\n", r.Model, chainText(r.Chain))
+				}
+				// With a chain, each account's step leads its row.
+				row := func(step string, cells ...string) []string {
+					if !chain {
+						return cells
+					}
+					return append([]string{step}, cells...)
+				}
+				if len(r.Order) == 0 {
+					x.printf("no account would be tried for %s\n", r.Model)
+				} else {
+					// Under soonest-reset each account also shows the reset it was ranked by.
+					ranked := false
+					for _, s := range r.Order {
+						ranked = ranked || s.Rank != nil
+					}
+					head := row("STEP", "TRY", "PUBLIC ID", "ID", "PROVIDER", "MODEL")
+					if ranked {
+						head = append(head, "RESET")
+					}
+					rows := [][]string{head}
+					for i, s := range r.Order {
+						cells := row(strconv.Itoa(s.Step), strconv.Itoa(i+1), s.Account, s.ID, s.Provider, s.Model)
+						if ranked {
+							reset := "none known"
+							switch k := s.Rank; {
+							case k == nil:
+							case k.FullUntil != nil:
+								reset = "used up until " + k.FullUntil.Local().Format(time.DateTime)
+							case k.Reset != nil:
+								reset = k.Reset.Local().Format("2006-01-02 15:04")
+								if k.WindowSeconds > 0 {
+									reset += " (" + windowText(k.WindowSeconds) + " window)"
+								}
+							}
+							cells = append(cells, reset)
+						}
+						rows = append(rows, cells)
+					}
+					x.table(rows)
+				}
+				if len(r.LeftOut) == 0 {
+					return
+				}
+				x.printf("\nleft out:\n")
+				rows := [][]string{row("STEP", "PUBLIC ID", "ID", "STATE", "UNTIL")}
+				for _, l := range r.LeftOut {
+					until := "-"
+					if l.Until != nil {
+						until = l.Until.Local().Format(time.DateTime)
+					}
+					rows = append(rows, row(strconv.Itoa(l.Step), l.Account, l.ID, l.State, until))
+				}
+				x.table(rows)
+			})
+		}},
+	{words: "chain list", routes: []string{"GET /chains"}, summary: "the fallback chains",
+		run: func(x *invocation) error {
+			var r management.ChainsReply
+			return x.call(http.MethodGet, "/chains", nil, nil, &r, func() {
+				if len(r.Chains) == 0 {
+					x.printf("no chains: each model is served by the accounts of one provider\n")
+					return
+				}
+				rows := [][]string{{"NAME", "STEPS"}}
+				for _, c := range r.Chains {
+					rows = append(rows, []string{c.Name, chainText(c.Steps)})
+				}
+				x.table(rows)
+			})
+		}},
+	{words: "chain set", args: []string{"name", "step"}, more: true, routes: []string{"PUT /chains/{name}"},
+		summary: "set a model name's fallback chain; a step is model[@provider][:account,account] (a model with a colon in its name ends with @: llama3:8b@; what follows the last @ is a provider only when it is an extension ID, so claude-opus-4-7@20260416 is a model)",
+		run: func(x *invocation) error {
+			var steps []management.ChainStep
+			for _, a := range x.args[1:] {
+				s, err := parseStep(a)
+				if err != nil {
+					return err
+				}
+				steps = append(steps, s)
+			}
+			var r management.Chain
+			return x.call(http.MethodPut, management.ChainPath(x.args[0]), nil, management.ChainRequest{Steps: steps}, &r, func() {
+				x.printf("chain %s: %s\n", r.Name, chainText(r.Steps))
+			})
+		}},
+	{words: "chain remove", args: []string{"name"}, routes: []string{"DELETE /chains/{name}"}, summary: "remove a fallback chain: the name goes back to one provider's accounts",
+		run: func(x *invocation) error {
+			return x.call(http.MethodDelete, management.ChainPath(x.args[0]), nil, nil, nil, func() {
+				x.printf("chain %s removed\n", x.args[0])
 			})
 		}},
 	accountSwitch("enable", false, "turn an account on"),
@@ -341,9 +448,20 @@ var commands = []command{
 		run: func(x *invocation) error {
 			var r management.ModelsReply
 			return x.call(http.MethodGet, "/models", nil, nil, &r, func() {
-				rows := [][]string{{"MODEL", "EXTENSION", "UPSTREAM", "ACCOUNTS"}}
+				rows := [][]string{{"MODEL", "EXTENSION", "UPSTREAM", "CONTEXT", "MAX OUTPUT", "CAPABILITIES", "FROM", "ACCOUNTS"}}
 				for _, m := range r.Models {
-					rows = append(rows, []string{m.ID, dash(m.Extension), dash(m.Upstream), strings.Join(m.Accounts, ",")})
+					ctxStr, outStr := "-", "-"
+					if m.ContextLength > 0 {
+						ctxStr = strconv.Itoa(m.ContextLength)
+					}
+					maxOut := m.MaxOutputTokens
+					if maxOut == 0 {
+						maxOut = m.MaxCompletionTokens
+					}
+					if maxOut > 0 {
+						outStr = strconv.Itoa(maxOut)
+					}
+					rows = append(rows, []string{m.ID, dash(m.Extension), dash(m.Upstream), ctxStr, outStr, formatCapabilities(m.Capabilities), dash(m.From), strings.Join(m.Accounts, ",")})
 				}
 				x.table(rows)
 			})
@@ -593,12 +711,30 @@ func resolveThemeID(flagID, filePath string, raw []byte) string {
 	if flagID != "" {
 		return flagID
 	}
-	var doc struct {
-		ID string `json:"id"`
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) == nil {
+		var id, name string
+		if err := json.Unmarshal(fields["id"], &id); err != nil {
+			id = ""
+		}
+		if err := json.Unmarshal(fields["name"], &name); err != nil {
+			name = ""
+		}
+		if _, pluxyFile := fields["theme_version"]; !pluxyFile {
+			if validT3ThemeID(id) {
+				return "t3/" + id
+			}
+			if strings.TrimSpace(name) != "" {
+				return "t3/" + themeIDFromName(name)
+			}
+		} else if validThemeID(id) {
+			return id
+		}
 	}
-	if json.Unmarshal(raw, &doc) == nil && validThemeID(doc.ID) {
-		return doc.ID
-	}
+	return themeFileID(filePath)
+}
+
+func themeFileID(filePath string) string {
 	base := filepath.Base(filePath)
 	if len(base) >= 5 && strings.EqualFold(base[len(base)-5:], ".json") {
 		base = base[:len(base)-5]
@@ -615,6 +751,53 @@ func resolveThemeID(flagID, filePath string, raw []byte) string {
 		}
 	}
 	return "t3/" + b.String()
+}
+
+func validT3ThemeID(id string) bool {
+	if len(id) < 1 || len(id) > 48 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || (i > 0 && c == '-') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// themeIDFromName matches themeIdFromName in next/ui/kit/theme/t3.ts.
+func themeIDFromName(name string) string {
+	label := strings.ToLower(strings.TrimSpace(name))
+	var b strings.Builder
+	hyphen := false
+	for _, r := range label {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			hyphen = false
+		} else if b.Len() > 0 && !hyphen {
+			b.WriteByte('-')
+			hyphen = true
+		}
+	}
+	normalized := strings.Trim(b.String(), "-")
+	if len(normalized) > 48 {
+		normalized = normalized[:48]
+	}
+	if normalized != "" {
+		return normalized
+	}
+	if label == "" {
+		return "custom-theme"
+	}
+
+	hash := uint32(2166136261)
+	for _, unit := range utf16.Encode([]rune(label)) {
+		hash ^= uint32(unit)
+		hash *= 16777619
+	}
+	return "theme-" + strconv.FormatUint(uint64(hash), 36)
 }
 
 func validThemeID(id string) bool {
@@ -636,6 +819,61 @@ func validThemePart(s string) bool {
 		}
 	}
 	return true
+}
+
+// windowText writes a usage window's length in whole days or hours where it has them, such as
+// 7d or 5h.
+func windowText(seconds int64) string {
+	d := time.Duration(seconds) * time.Second
+	switch {
+	case d%(24*time.Hour) == 0:
+		return strconv.FormatInt(int64(d/(24*time.Hour)), 10) + "d"
+	case d%time.Hour == 0:
+		return strconv.FormatInt(int64(d/time.Hour), 10) + "h"
+	}
+	return d.String()
+}
+
+// chainText writes a chain's steps as chain set takes them.
+func chainText(steps []management.ChainStep) string {
+	parts := make([]string, len(steps))
+	for i, s := range steps {
+		parts[i] = s.String()
+	}
+	return strings.Join(parts, " -> ")
+}
+
+// parseStep reads a step as chain set takes it: model[@provider][:account,account]. What follows
+// the last @ is the provider only when it is an extension's ID (publisher/name), or empty;
+// otherwise the @ is part of the model's name (claude-opus-4-7@20260416). Without a provider, the
+// model ends at the last colon, so a model whose name holds a colon is written with an @ after it
+// (llama3:8b@ for any provider, llama3:8b@pluxy/ollama for one).
+func parseStep(s string) (management.ChainStep, error) {
+	step := management.ChainStep{Model: s}
+	accounts, hasAccounts := "", false
+	i := strings.LastIndexByte(s, '@')
+	provider := ""
+	if i >= 0 {
+		provider, _, _ = strings.Cut(s[i+1:], ":")
+	}
+	if i >= 0 && (provider == "" || host.ValidID(provider)) {
+		step.Model = s[:i]
+		step.Provider, accounts, hasAccounts = strings.Cut(s[i+1:], ":")
+	} else if i := strings.LastIndexByte(s, ':'); i >= 0 {
+		step.Model, accounts, hasAccounts = s[:i], s[i+1:], true
+	}
+	if hasAccounts {
+		for _, a := range strings.Split(accounts, ",") {
+			if a == "" {
+				return step, usageError{fmt.Sprintf("step %q: an account ID is empty", s)}
+			}
+			step.Accounts = append(step.Accounts, a)
+		}
+	}
+	if step.Model == "" {
+		return step, usageError{fmt.Sprintf("step %q names no model", s)}
+	}
+	return step, nil
 }
 
 func cmpOr(a, b string) string {
@@ -741,6 +979,47 @@ func printFlat(x *invocation, v any) {
 	x.table(rows)
 }
 
+func formatCapabilities(c *protocol.ModelCapabilities) string {
+	if c == nil {
+		return "-"
+	}
+	var parts []string
+	if c.Tools {
+		parts = append(parts, "tools")
+	}
+	if c.StructuredOutput {
+		parts = append(parts, "structured_output")
+	}
+	if c.Vision {
+		parts = append(parts, "vision")
+	}
+	if c.PDF {
+		parts = append(parts, "pdf")
+	}
+	if c.Reasoning {
+		parts = append(parts, "reasoning")
+	}
+	if c.DeprecatedAt > 0 {
+		parts = append(parts, "deprecated")
+	}
+	if len(parts) == 0 {
+		return "-"
+	}
+	return strings.Join(parts, ",")
+}
+
+// argsUsage is how help and usage errors write cmd's arguments.
+func argsUsage(cmd *command) string {
+	out := ""
+	for _, a := range cmd.args {
+		out += " <" + a + ">"
+	}
+	if cmd.more {
+		out += "..."
+	}
+	return out
+}
+
 // find returns the command args start with, and the arguments after its words.
 func find(args []string) (*command, []string) {
 	var best *command
@@ -762,14 +1041,12 @@ func help(w io.Writer, prefix string) {
 	fmt.Fprintln(w, "       pluxy <command> [--json] [--config file | --url address --key key]")
 	fmt.Fprintln(w)
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	for _, c := range commands {
+	for i := range commands {
+		c := &commands[i]
 		if !strings.HasPrefix(c.words+" ", prefix) {
 			continue
 		}
-		line := c.words
-		for _, a := range c.args {
-			line += " <" + a + ">"
-		}
+		line := c.words + argsUsage(c)
 		fmt.Fprintf(tw, "  %s\t%s\n", line, c.summary)
 	}
 	tw.Flush()
@@ -825,12 +1102,8 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 		pos = append(pos, fs.Arg(0))
 		rest = fs.Args()[1:]
 	}
-	if len(pos) != len(cmd.args) {
-		want := ""
-		for _, a := range cmd.args {
-			want += " <" + a + ">"
-		}
-		fmt.Fprintf(stderr, "pluxy: usage: pluxy %s%s [flags]\n", cmd.words, want)
+	if len(pos) != len(cmd.args) && !(cmd.more && len(pos) > len(cmd.args)) {
+		fmt.Fprintf(stderr, "pluxy: usage: pluxy %s%s [flags]\n", cmd.words, argsUsage(cmd))
 		return exitUsage
 	}
 	t, err := findCore(*configPath, cmpOr(*addr, getenv("PLUXY_URL")), cmpOr(*key, getenv("PLUXY_MANAGEMENT_KEY")))

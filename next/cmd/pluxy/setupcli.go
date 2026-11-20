@@ -2,14 +2,14 @@ package main
 
 import (
 	"bufio"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
-	"slices"
+	"path/filepath"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/internal/core"
@@ -89,9 +89,20 @@ func setupCommands() []command {
 			},
 		},
 		{
+			words:   "import cpa",
+			args:    []string{"config.yaml"},
+			routes:  []string{"POST /setup/import"},
+			summary: "bring a CLIProxyAPI setup (its config.yaml and auth folder) across and print what came, what changed and what did not",
+			flags: func(fs *flag.FlagSet, o *opts) {
+				fs.StringVar(&o.authDir, "auth-dir", "", "the auth folder (default: the config's oauth.auth-dir)")
+				fs.BoolVar(&o.dryRun, "dry-run", false, "report what the import would do, and write nothing")
+			},
+			run: runImportCPA,
+		},
+		{
 			words:   "client show",
 			args:    []string{"tool"},
-			routes:  []string{"GET /setup"},
+			routes:  []string{"GET /setup/clients/{id}/paste"},
 			summary: "print what to paste into a client tool's config to point it at core",
 			flags: func(fs *flag.FlagSet, o *opts) {
 				fs.StringVar(&o.keyID, "key-id", "", "client key ID from pluxy key list to reference")
@@ -260,45 +271,70 @@ func runClientShow(x *invocation) error {
 	if _, ok := core.ClientSnippetFor(x.args[0], "", ""); !ok {
 		return usageError{fmt.Sprintf("unknown client tool %q (supported: %s)", x.args[0], strings.Join(core.ClientSnippetTools, ", "))}
 	}
-	if _, err := x.client.Setup(x.ctx); err != nil {
+	var q url.Values
+	if x.opts.keyID != "" {
+		q = url.Values{"key_id": {x.opts.keyID}}
+	}
+	var p management.ClientPaste
+	return x.call(http.MethodGet, "/setup/clients/"+url.PathEscape(x.args[0])+"/paste", q, nil, &p, func() {
+		x.printf("Client: %s\nAddress: %s\n", p.Name, p.BaseURL)
+		for _, f := range p.Files {
+			x.printf("\n%s:\n%s\n", f.Path, f.Content)
+		}
+		if p.Note != "" {
+			x.printf("\n%s\n", p.Note)
+		}
+	})
+}
+
+// runImportCPA is pluxy import cpa. Core reads the files on its own machine, so a relative path
+// is made absolute from the current folder first.
+func runImportCPA(x *invocation) error {
+	abs := func(p string) (string, error) {
+		if p == "" || strings.HasPrefix(p, "~") {
+			return p, nil
+		}
+		return filepath.Abs(p)
+	}
+	cfg, err := abs(x.args[0])
+	if err != nil {
 		return err
 	}
-	key := "<client-key>"
-	if x.opts.keyID != "" {
-		keys, err := x.client.ClientKeys(x.ctx)
-		if err != nil {
-			return err
+	dir, err := abs(x.opts.authDir)
+	if err != nil {
+		return err
+	}
+	var r management.ImportReport
+	req := management.SetupImportRequest{Config: cfg, AuthDir: dir, DryRun: x.opts.dryRun}
+	return x.call(http.MethodPost, "/setup/import", nil, req, &r, func() {
+		if r.DryRun {
+			x.printf("Dry run: nothing was written.\n")
 		}
-		i := slices.IndexFunc(keys, func(k management.ClientKey) bool { return k.ID == x.opts.keyID })
-		if i < 0 {
-			return &management.APIError{
-				Status:  http.StatusNotFound,
-				Code:    "not_found",
-				Message: fmt.Sprintf("no client key with id %q", x.opts.keyID),
+		x.printf("\nBrought (%d):\n", len(r.Brought))
+		rows := [][]string{{"WHAT", "NAME", "AS"}}
+		for _, b := range r.Brought {
+			rows = append(rows, []string{b.What, dash(b.Name), dash(b.As)})
+		}
+		x.table(rows)
+		x.printf("\nChanged (%d):\n", len(r.Changed))
+		rows = [][]string{{"WHAT", "NAME", "AS", "FROM", "TO", "WHY", "KEEP WITH"}}
+		for _, c := range r.Changed {
+			rows = append(rows, []string{c.What, dash(c.Name), dash(c.As), dash(c.From), dash(c.To), dash(c.Why), dash(c.KeepWith)})
+		}
+		x.table(rows)
+		x.printf("\nNot brought (%d):\n", len(r.NotBrought))
+		rows = [][]string{{"WHAT", "NAME", "WHY"}}
+		for _, n := range r.NotBrought {
+			rows = append(rows, []string{n.What, dash(n.Name), dash(n.Why)})
+		}
+		x.table(rows)
+		if len(r.Needs) > 0 {
+			x.printf("\nNeeds (install with pluxy ext install <pick>):\n")
+			rows = [][]string{{"PICK", "WHY"}}
+			for _, n := range r.Needs {
+				rows = append(rows, []string{n.Pick, n.Why})
 			}
+			x.table(rows)
 		}
-		key = fmt.Sprintf("<client-key:%s (%s)>", keys[i].ID, keys[i].Masked)
-	}
-	baseURL := strings.TrimRight(x.client.URL, "/")
-	snip, _ := core.ClientSnippetFor(x.args[0], baseURL, key)
-	if x.json {
-		b, err := json.MarshalIndent(struct {
-			core.ClientSnippet
-			BaseURL string `json:"base_url"`
-			Key     string `json:"key"`
-		}{snip, baseURL, key}, "", "  ")
-		if err != nil {
-			return err
-		}
-		x.printf("%s\n", b)
-		return nil
-	}
-	x.printf("Client: %s\nAddress: %s\n", snip.Name, baseURL)
-	for _, f := range snip.Files {
-		x.printf("\n%s:\n%s\n", f.Path, f.Content)
-	}
-	if snip.Note != "" {
-		x.printf("\n%s\n", snip.Note)
-	}
-	return nil
+	})
 }

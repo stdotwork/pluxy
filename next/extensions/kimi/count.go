@@ -3,9 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
-	"errors"
 	"io"
-	"net"
 	"net/http"
 	"slices"
 	"strings"
@@ -63,9 +61,7 @@ func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		var op *net.OpError
-		dial := errors.As(err, &op) && op.Op == "dial"
-		return &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: dial}
+		return &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: sdk.Retryable(err)}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {

@@ -1,37 +1,254 @@
 {
   "description": "A Meta key whose config lists no models lists today's catalog for it.",
-  "source": ["core/sdk/cliproxy/service_models.go","core/internal/registry/models/models.json meta"],
-  "client": {"method":"GET","path":"/v1/models"},
-  "old_core": {"account":{"models":null}},
-  "new_core": {"account":{"models":null}},
-  "unordered": ["client.body.data"],
+  "source": [
+    "core/sdk/cliproxy/service_models.go",
+    "core/internal/registry/models/models.json meta"
+  ],
+  "client": {
+    "method": "GET",
+    "path": "/v1/models"
+  },
+  "old_core": {
+    "account": {
+      "models": null
+    }
+  },
+  "new_core": {
+    "account": {
+      "models": null
+    }
+  },
+  "unordered": [
+    "client.body.data"
+  ],
+  "exceptions": [
+    {
+      "path": "client.body.data",
+      "kind": "intended",
+      "reason": "The new core enriches GET /v1/models entries with context_length, max_output_tokens, capabilities and from merged across the account's list, core's models.dev catalogue and the extension's built-in list (with the smaller positive limit winning); today's core lists only id, object, created and owned_by.",
+      "want": [
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 1007997,
+          "created": 1791763200,
+          "from": "extension",
+          "id": "muse-wonder-1.0",
+          "max_output_tokens": 128000,
+          "object": "model",
+          "owned_by": "meta"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 1048576,
+          "created": 1788307200,
+          "from": "catalogue",
+          "id": "muse-spark-1.3",
+          "max_output_tokens": 65536,
+          "object": "model",
+          "owned_by": "meta"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 1048576,
+          "created": 1783555200,
+          "from": "catalogue",
+          "id": "muse-spark-1.1",
+          "max_output_tokens": 65536,
+          "object": "model",
+          "owned_by": "meta"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 1048576,
+          "created": 1785888000,
+          "from": "catalogue",
+          "id": "muse-spark-1.2",
+          "max_output_tokens": 65536,
+          "object": "model",
+          "owned_by": "meta"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 1048576,
+          "created": 1785888000,
+          "from": "catalogue",
+          "id": "muse-spark-1.2-contributor",
+          "max_output_tokens": 65536,
+          "object": "model",
+          "owned_by": "meta"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 1048576,
+          "created": 1788307200,
+          "from": "catalogue",
+          "id": "muse-spark-1.3-contributor",
+          "max_output_tokens": 65536,
+          "object": "model",
+          "owned_by": "meta"
+        },
+        {
+          "context_length": 1007997,
+          "created": 1791763200,
+          "from": "extension",
+          "id": "muse-wonder-1.0-contributor",
+          "max_output_tokens": 128000,
+          "object": "model",
+          "owned_by": "meta"
+        },
+        {
+          "context_length": 1007997,
+          "created": 1791763200,
+          "from": "extension",
+          "id": "muse-wonder-full-1.0",
+          "max_output_tokens": 128000,
+          "object": "model",
+          "owned_by": "meta"
+        },
+        {
+          "context_length": 1007997,
+          "created": 1791763200,
+          "from": "extension",
+          "id": "muse-wonder-full-1.0-contributor",
+          "max_output_tokens": 128000,
+          "object": "model",
+          "owned_by": "meta"
+        }
+      ]
+    }
+  ],
   "recorded_old_core": {
     "client": {
       "body": {
         "data": [
-          {"created":1783555200,"id":"muse-spark-1.1","object":"model","owned_by":"meta"},
-          {"created":1785888000,"id":"muse-spark-1.2","object":"model","owned_by":"meta"},
+          {
+            "created": 1783555200,
+            "id": "muse-spark-1.1",
+            "object": "model",
+            "owned_by": "meta"
+          },
+          {
+            "created": 1785888000,
+            "id": "muse-spark-1.2",
+            "object": "model",
+            "owned_by": "meta"
+          },
           {
             "created": 1785888000,
             "id": "muse-spark-1.2-contributor",
             "object": "model",
             "owned_by": "meta"
           },
-          {"created":1788307200,"id":"muse-spark-1.3","object":"model","owned_by":"meta"},
+          {
+            "created": 1788307200,
+            "id": "muse-spark-1.3",
+            "object": "model",
+            "owned_by": "meta"
+          },
           {
             "created": 1788307200,
             "id": "muse-spark-1.3-contributor",
             "object": "model",
             "owned_by": "meta"
           },
-          {"created":1791763200,"id":"muse-wonder-1.0","object":"model","owned_by":"meta"},
+          {
+            "created": 1791763200,
+            "id": "muse-wonder-1.0",
+            "object": "model",
+            "owned_by": "meta"
+          },
           {
             "created": 1791763200,
             "id": "muse-wonder-1.0-contributor",
             "object": "model",
             "owned_by": "meta"
           },
-          {"created":1791763200,"id":"muse-wonder-full-1.0","object":"model","owned_by":"meta"},
+          {
+            "created": 1791763200,
+            "id": "muse-wonder-full-1.0",
+            "object": "model",
+            "owned_by": "meta"
+          },
           {
             "created": 1791763200,
             "id": "muse-wonder-full-1.0-contributor",

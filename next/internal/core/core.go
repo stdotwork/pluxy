@@ -30,17 +30,16 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/stdotwork/pluxy/next/internal/buildinfo"
+	"github.com/stdotwork/pluxy/next/internal/catalogue"
 	"github.com/stdotwork/pluxy/next/internal/configdoc"
 	"github.com/stdotwork/pluxy/next/internal/cred"
 	"github.com/stdotwork/pluxy/next/internal/extconfig"
 	"github.com/stdotwork/pluxy/next/internal/host"
-	"github.com/stdotwork/pluxy/next/internal/legacy"
 	"github.com/stdotwork/pluxy/next/internal/logfile"
 	"github.com/stdotwork/pluxy/next/internal/packages"
 	"github.com/stdotwork/pluxy/next/internal/proxyurl"
@@ -107,9 +106,11 @@ type Core struct {
 
 	routing *routing // routing's checks and saved blocks, from start
 
-	usage  *usage.Store   // the usage record, kept across reloads
-	logs   *logfile.Files // the logs folder
-	themes *themeStore    // stored UI themes and selected theme ID in state/themes
+	usage        *usage.Store         // the usage record, kept across reloads
+	logs         *logfile.Files       // the logs folder
+	themes       *themeStore          // stored UI themes and selected theme ID in state/themes
+	catalogue    *catalogue.Catalogue // the models.dev snapshot and refresh
+	catalogueNow func() time.Time     // tests can move the refresh clock
 
 	bgCtx    context.Context
 	bgCancel context.CancelFunc
@@ -141,13 +142,20 @@ func Start(opts Options) (*Core, error) {
 	opts.Host.SettingsSecrets = configdoc.SettingsSecrets
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), checks: newChecks(),
-		bgCtx: bgCtx, bgCancel: bgCancel}
+		bgCtx: bgCtx, bgCancel: bgCancel, catalogueNow: time.Now}
+	c.loadPublicKey()
 	// Every extension call carries the proxy of the config active when it is sent.
 	c.opts.Host.ProxyURL = func() string {
 		if s := c.cur.Load(); s != nil {
 			return s.Config.ProxyURL
 		}
 		return ""
+	}
+	c.opts.Host.Timeouts = func() *protocol.Timeouts {
+		if s := c.cur.Load(); s != nil {
+			return s.Config.Routing.Timeouts
+		}
+		return nil
 	}
 	// ... and the payload rules of that config.
 	c.opts.Host.Payload = func() *payload.Rules {
@@ -182,6 +190,9 @@ func Start(opts Options) (*Core, error) {
 		c.logs = logfile.New(LogsDir(opts.ConfigPath))
 	}
 	c.themes = newThemeStore(filepath.Join(StateDir(opts.ConfigPath), "themes"))
+	c.catalogue = catalogue.New(catalogue.Options{
+		StatePath: filepath.Join(StateDir(opts.ConfigPath), "catalogue.json"),
+	})
 	c.pkgDir = cfg.Packages.Dir
 	// No publisher's folder can be called .settings: IDs start with a letter or digit.
 	c.settings = extconfig.NewStore(filepath.Join(c.pkgDir, ".settings"))
@@ -439,31 +450,7 @@ func (c *Core) transact(force bool, why string, change func(packages.State), str
 	for _, n := range next.Config.Notices {
 		log.Print(n)
 	}
-	c.reportPendingImport(next.Config)
 	return nil
-}
-
-// reportPendingImport logs how many credential files of today's auth folder (a config.yaml's
-// oauth.auth-dir) are not imported yet. Core never imports them while it runs: see
-// legacy.Import.
-func (c *Core) reportPendingImport(cfg *server.Config) {
-	if cfg.AuthDir == "" {
-		return
-	}
-	known := map[string]bool{}
-	for _, r := range c.creds.Records() {
-		known[strings.ToLower(r.ID)] = true
-	}
-	for _, a := range cfg.Accounts() {
-		known[strings.ToLower(a.ID)] = true
-	}
-	n, err := legacy.Pending(cfg.AuthDir, func(id string) bool { return known[strings.ToLower(id)] })
-	switch {
-	case err != nil:
-		log.Printf("config.yaml: oauth.auth-dir: %v", err)
-	case n > 0:
-		log.Printf("config.yaml: oauth.auth-dir %s holds %d credential files not imported yet; to import them, stop core and run: pluxy -config %s -import-auth %s", cfg.AuthDir, n, c.opts.ConfigPath, cfg.AuthDir)
-	}
 }
 
 // fixed refuses a config that changes a setting that cannot change while core runs.
@@ -609,6 +596,9 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 		c.discard(next, prev)
 		return nil, fmt.Errorf("config: %w", err)
 	}
+	if c.catalogue != nil {
+		router.UseCatalogue(c.catalogue.LookupFor)
+	}
 	if !c.opts.SafeMode {
 		router.UseCatalog(catalog(next.exts))
 	}
@@ -719,7 +709,8 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 		c.loadRouting(c.routing)
 	}
 	swapPprof(next, prev)
-	c.checkAccounts(next, accounts)
+	c.checkAccounts(next, inService(accounts))
+	c.logUnservedSteps(next)
 	for _, g := range old {
 		g.Drain(func() {
 			c.mu.Lock()
@@ -731,6 +722,25 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 		})
 	}
 	c.sweep()
+}
+
+// logUnservedSteps logs a line for each chain of s with a step CheckSteps refuses (no account
+// serves it, or it names an account that is unknown or does not serve it), as a request through
+// it would find. It reads the accounts' model lists in the background and returns at once.
+func (c *Core) logUnservedSteps(s *snapshot) {
+	chains := s.Config.Routing.Chains
+	if len(chains) == 0 {
+		return
+	}
+	c.bgWG.Add(1)
+	go func() {
+		defer c.bgWG.Done()
+		for _, name := range slices.Sorted(maps.Keys(chains)) {
+			if err := s.Router.CheckSteps(c.bgCtx, chains[name]); err != nil && c.bgCtx.Err() == nil {
+				log.Printf("routing.chains.%s: %v", name, err)
+			}
+		}
+	}()
 }
 
 // extensionConfig returns the config section of extension id in s.
@@ -755,24 +765,40 @@ func (c *Core) configured(s *snapshot) []route.Account {
 
 // routed returns the accounts s routes over: the config's, then those the credential store
 // holds, for the extensions s runs. A stored account whose ID the config also uses is left out.
+// A stored account turned off by a person or waiting for a new login is among them, held
+// (route.Account.Held): the router sends it nothing, but it keeps its provider's model names.
 func (c *Core) routed(s *snapshot) []route.Account {
 	accounts := c.configured(s)
 	all := s.Config.Accounts()
-	kinds := map[string]string{}
 	for _, r := range c.creds.Records() {
-		kinds[r.ID] = r.Credential.Kind
-	}
-	for _, a := range c.creds.Accounts() {
-		if s.exts[a.Extension] == nil {
+		held := ""
+		switch {
+		case r.Disabled:
+			held = route.HealthDisabled
+		case r.State == cred.StateReauth:
+			held = route.HealthNeedsLogin
+		case !r.Usable():
 			continue
 		}
-		if slices.ContainsFunc(all, func(x route.Account) bool { return x.ID == a.ID }) {
-			log.Printf("account %q is both in the config and added by login; using the config's", a.ID)
+		if s.exts[r.Extension] == nil {
 			continue
 		}
-		accounts = append(accounts, c.extensionConfig(s, a.Extension).LoginDefaults(a, kinds[a.ID]))
+		if slices.ContainsFunc(all, func(x route.Account) bool { return x.ID == r.ID }) {
+			if held == "" {
+				log.Printf("account %q is both in the config and added by login; using the config's", r.ID)
+			}
+			continue
+		}
+		a := r.Account
+		a.ID, a.Credential, a.Managed, a.Extension, a.Held = r.ID, nil, true, r.Extension, held
+		accounts = append(accounts, c.extensionConfig(s, r.Extension).LoginDefaults(a, r.Credential.Kind))
 	}
 	return accounts
+}
+
+// inService returns the accounts of accounts that are not held.
+func inService(accounts []route.Account) []route.Account {
+	return slices.DeleteFunc(slices.Clone(accounts), func(a route.Account) bool { return a.Held != "" })
 }
 
 // accountsChanged gives the active router the credential store's accounts after they changed.
@@ -784,7 +810,7 @@ func (c *Core) accountsChanged() {
 	if err := s.Router.SetAccounts(accounts, sameAccount); err != nil {
 		log.Printf("updating accounts: %v", err)
 	}
-	c.checkAccounts(s, accounts)
+	c.checkAccounts(s, inService(accounts))
 }
 
 // reserved reports whether the active config sets an account with ID id, which a login may

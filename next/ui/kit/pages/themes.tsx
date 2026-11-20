@@ -1,31 +1,26 @@
 import { useEffect, useId, useState } from "preact/hooks";
+import { useSave } from "../save";
 import type { PageDef } from "../shell";
 import { rich, strings } from "../strings";
 import { type Layout, type LayoutOption, MAX_THEME_BYTES } from "../theme/contract";
 import { resolve } from "../theme/engine";
 import type { Listed } from "../theme/state";
-import {
-  Button,
-  Card,
-  type Choice,
-  Choices,
-  ConfirmButton,
-  Notice,
-  PageHead,
-  Switch,
-  useThemeState,
-} from "../ui";
+import { Button, Card, type Choice, Choices, Notice, PageHead, Switch, useThemeState } from "../ui";
 
 const t = strings("themes", {
   title: "Themes",
   short: "Theme",
   theme: "Theme",
   notRead: "Themes could not be read from core: {error}",
+  currentUnusable:
+    "{id} is turned on, but this page cannot use it: {error}. Remove it, or pick another theme.",
   notTurnedOn: "{name} was not turned on: {error}",
   unusable: "Cannot be used: {error}",
   export: "Export",
   exportLabel: "Export {name} as a theme file",
   remove: "Remove {name}",
+  confirmRemove: "Yes, remove {name}",
+  cancel: "Cancel",
   notRemoved: "{name} was not removed: {error}",
   add: "Add a theme",
   addHelp:
@@ -129,16 +124,37 @@ function noted<V extends string>(choices: Choice<V>[], themeValue: string | unde
   return choices.map((c) => (c.value === themeValue ? { ...c, note: t("themeNote") } : c));
 }
 
-function saveFile(name: string, text: string) {
-  const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = name;
-  document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
-  // Allow the browser to start consuming the Blob before releasing it.
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+/** What the person did last on the page that failed, and the calls that tell the page about it. */
+interface Acts {
+  /** The person does something new: what the page said about the last thing goes. */
+  onAct: () => void;
+  onProblem: (problem: string) => void;
+}
+
+/** Remove, which asks once more first. The question names the theme as it is written. */
+function RemoveButton(props: { name: string; onConfirm: () => void }) {
+  const [asking, setAsking] = useState(false);
+  if (!asking) {
+    return (
+      <Button variant="danger" onClick={() => setAsking(true)}>
+        {t("remove", { name: props.name })}
+      </Button>
+    );
+  }
+  return (
+    <span class="confirm">
+      <Button
+        variant="danger"
+        onClick={() => {
+          setAsking(false);
+          props.onConfirm();
+        }}
+      >
+        {t("confirmRemove", { name: props.name })}
+      </Button>
+      <Button onClick={() => setAsking(false)}>{t("cancel")}</Button>
+    </span>
+  );
 }
 
 /** A theme's own colours in its light (or only) appearance; none until its file has been read. */
@@ -163,7 +179,7 @@ function Swatch(props: { listed: Listed }) {
   );
 }
 
-function ThemePicker(props: { onProblem: (problem: string | undefined) => void }) {
+function ThemePicker(props: Acts) {
   const themes = useThemeState();
   const id = useId();
   const listed = themes.listed;
@@ -175,39 +191,51 @@ function ThemePicker(props: { onProblem: (problem: string | undefined) => void }
   useEffect(() => {
     void themes.loadFiles();
   }, [themes, unread]);
+  const remove = async (l: Listed) => {
+    props.onAct();
+    const error = await themes.removeTheme(l.id);
+    if (error) props.onProblem(t("notRemoved", { name: l.name, error }));
+  };
   return (
     <div class="themes" role="radiogroup" aria-labelledby={`${id}-l`}>
       <span class="label" id={`${id}-l`}>
         {t("theme")}
       </span>
       <div class="theme-grid">
-        {listed.map((l) => (
-          <label key={l.id} class="theme-card" data-part="card" data-unusable={l.problem ? "" : undefined}>
-            <input
-              type="radio"
-              name={id}
-              checked={themes.current.theme.id === l.id}
-              disabled={l.problem !== undefined}
-              onChange={async () => {
-                props.onProblem(undefined);
-                const error = await themes.select(l.id);
-                if (error) props.onProblem(t("notTurnedOn", { name: l.name, error }));
-              }}
-            />
-            <Swatch listed={l} />
-            <span class="theme-name">{l.name}</span>
-            <small class="muted">
-              {l.problem ? t("unusable", { error: l.problem }) : (l.offered?.theme.description ?? l.id)}
-            </small>
-          </label>
-        ))}
+        {listed.map((l) =>
+          l.problem ? (
+            // A stored file the page cannot use: nothing to pick, and the one thing to do is remove it.
+            <div key={l.id} class="theme-card" data-part="card" data-unusable="">
+              <Swatch listed={l} />
+              <span class="theme-name">{l.name}</span>
+              <small class="muted">{t("unusable", { error: l.problem })}</small>
+              <RemoveButton name={l.name} onConfirm={() => remove(l)} />
+            </div>
+          ) : (
+            <label key={l.id} class="theme-card" data-part="card">
+              <input
+                type="radio"
+                name={id}
+                checked={themes.current.theme.id === l.id}
+                onChange={async () => {
+                  props.onAct();
+                  const error = await themes.select(l.id);
+                  if (error) props.onProblem(t("notTurnedOn", { name: l.name, error }));
+                }}
+              />
+              <Swatch listed={l} />
+              <span class="theme-name">{l.name}</span>
+              <small class="muted">{l.offered?.theme.description ?? l.id}</small>
+            </label>
+          ),
+        )}
       </div>
     </div>
   );
 }
 
 /** Export and Remove, for the theme that is on. */
-function CurrentTheme(props: { onProblem: (problem: string | undefined) => void }) {
+function CurrentTheme(props: Acts & { onExport: (name: string, text: string) => void }) {
   const themes = useThemeState();
   const { theme, builtIn } = themes.current;
   return (
@@ -215,42 +243,50 @@ function CurrentTheme(props: { onProblem: (problem: string | undefined) => void 
       <Button
         label={t("exportLabel", { name: theme.name })}
         onClick={() => {
+          props.onAct();
           const file = themes.exportFile();
-          saveFile(file.name, file.text);
+          props.onExport(file.name, file.text);
         }}
       >
         {t("export")}
       </Button>
       {!builtIn && (
-        <ConfirmButton
+        <RemoveButton
           key={theme.id}
+          name={theme.name}
           onConfirm={async () => {
-            props.onProblem(undefined);
+            props.onAct();
             const error = await themes.removeTheme(theme.id);
             if (error) props.onProblem(t("notRemoved", { name: theme.name, error }));
           }}
-        >
-          {t("remove", { name: theme.name })}
-        </ConfirmButton>
+        />
       )}
     </div>
   );
 }
 
-function AddTheme() {
+/** What the last add came to: why not, or the theme it added. */
+type AddResult = { error: string } | { added: string; id: string };
+
+function AddTheme(props: {
+  result: AddResult | undefined;
+  onResult: (result: AddResult) => void;
+  onAct: () => void;
+}) {
   const themes = useThemeState();
   const id = useId();
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<{ error: string } | { added: string }>();
+  const { result } = props;
 
   /** A chosen file and pasted JSON go the same way. Returns whether the theme was added. */
   const add = async (source: string) => {
     setBusy(true);
-    setResult(undefined);
+    props.onAct();
     const error = await themes.addTheme(source);
     setBusy(false);
-    setResult(error === undefined ? { added: themes.current.theme.name } : { error });
+    const { name, id: added } = themes.current.theme;
+    props.onResult(error === undefined ? { added: name, id: added } : { error });
     return error === undefined;
   };
 
@@ -269,7 +305,8 @@ function AddTheme() {
             if (!file) return;
             // Checked before the file is read: a theme file is a few KiB.
             if (file.size > MAX_THEME_BYTES) {
-              setResult({ error: t("tooLarge", { limit: MAX_THEME_BYTES / 1024 }) });
+              props.onAct();
+              props.onResult({ error: t("tooLarge", { limit: MAX_THEME_BYTES / 1024 }) });
               return;
             }
             await add(await file.text());
@@ -296,7 +333,11 @@ function AddTheme() {
             '{\n  "name": "Nightfall",\n  "appearance": "dark",\n  "canvas": "#1a1b26",\n  "accent": "#7aa2f7"\n}'
           }
           value={text}
-          onInput={(e) => setText(e.currentTarget.value)}
+          onInput={(e) => {
+            // What the page said about the last add was about other text.
+            props.onAct();
+            setText(e.currentTarget.value);
+          }}
         />
         <div class="actions">
           <Button type="submit" variant="primary" disabled={busy || text.trim() === ""}>
@@ -305,7 +346,10 @@ function AddTheme() {
         </div>
       </form>
       {result && "error" in result && <Notice tone="danger">{t("notAdded", { error: result.error })}</Notice>}
-      {result && "added" in result && <Notice tone="ok">{t("added", { name: result.added })}</Notice>}
+      {/* True only while the theme it added is the one that is on. */}
+      {result && "added" in result && result.id === themes.current.theme.id && (
+        <Notice tone="ok">{t("added", { name: result.added })}</Notice>
+      )}
     </Card>
   );
 }
@@ -318,24 +362,40 @@ export function ThemesPage() {
   const allWarnings = [...warnings, ...r.warnings];
   const layout = layoutChoices();
   const [problem, setProblem] = useState<string>();
+  const [addResult, setAddResult] = useState<AddResult>();
+  const saved = useSave();
+  const acts: Acts = {
+    onAct: () => {
+      setProblem(undefined);
+      setAddResult(undefined);
+      saved.clear();
+    },
+    onProblem: setProblem,
+  };
 
   return (
     <>
       <PageHead title={t("title")} />
       <div class="stack">
         <Card>
-          <ThemePicker onProblem={setProblem} />
+          <ThemePicker {...acts} />
           {themes.problem && <Notice tone="danger">{t("notRead", { error: themes.problem })}</Notice>}
+          {themes.unusable && (
+            <Notice tone="danger">
+              {t("currentUnusable", { id: themes.unusable.id, error: themes.unusable.problem })}
+            </Notice>
+          )}
           {problem && <Notice tone="danger">{problem}</Notice>}
           {allWarnings.length > 0 && (
             <Notice tone="warn">
               {theme.name}: {allWarnings.join("; ")}
             </Notice>
           )}
-          <CurrentTheme onProblem={setProblem} />
+          {saved.notice}
+          <CurrentTheme {...acts} onExport={(name, text) => saved.save(name, text, "application/json")} />
         </Card>
 
-        <AddTheme />
+        <AddTheme result={addResult} onResult={setAddResult} onAct={acts.onAct} />
 
         <Card>
           <Choices

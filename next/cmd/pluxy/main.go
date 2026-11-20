@@ -24,7 +24,6 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/buildinfo"
 	"github.com/stdotwork/pluxy/next/internal/core"
 	"github.com/stdotwork/pluxy/next/internal/cred"
-	"github.com/stdotwork/pluxy/next/internal/legacy"
 	"github.com/stdotwork/pluxy/next/internal/logfile"
 	"github.com/stdotwork/pluxy/next/internal/pages"
 	"github.com/stdotwork/pluxy/next/internal/panel"
@@ -55,7 +54,6 @@ func serve(args []string) {
 	safeMode := fs.Bool("safe-mode", false, "start no extensions: client requests fail, the management API works")
 	watch := fs.Duration("watch-interval", time.Second, "how often to look for config file changes (0: do not watch)")
 	bundled := fs.String("bundled", "", "index of the registry of bundled packages (default: bundled/index.json beside this program, when it exists)")
-	importAuth := fs.String("import-auth", "", "copy the credential files of today's core's auth folder at this path into the credential store, then exit (run it while core is stopped)")
 	version := fs.Bool("version", false, "print the build's version, commit and build date, then exit")
 	listenFD := fs.Int("listen-fd", -1, "serve on the listening TCP socket inherited at this file descriptor instead of binding listen (for a program that starts core and keeps the socket)")
 	fs.Usage = func() {
@@ -71,62 +69,10 @@ func serve(args []string) {
 		fmt.Println(buildinfo.Line())
 		return
 	}
-	if *importAuth != "" {
-		if err := importAuthDir(*configPath, *importAuth); err != nil {
-			log.Print(err)
-			os.Exit(1)
-		}
-		return
-	}
 	if err := run(*configPath, *safeMode, *watch, *bundled, *listenFD); err != nil {
 		log.Print(err)
 		os.Exit(1)
 	}
-}
-
-// importAuthDir copies the credential files in today's core's auth folder dir into the
-// credential store of the config at configPath, and says what it imported and skipped. The
-// config's notices (settings it ignores, a hashed management key) go to standard error, as
-// core's log does at start, so a script reading the counts on standard output does not see them.
-func importAuthDir(configPath, dir string) error {
-	cfg, err := server.LoadImportConfig(configPath)
-	if err != nil {
-		return core.ScrubConfigError(configPath, err)
-	}
-	for _, n := range cfg.Notices {
-		log.Print(n)
-	}
-	if err := legacy.CheckImportFolders(dir, cfg.CredentialsDir); err != nil {
-		return err
-	}
-	files, skipped, err := legacy.ReadAuthDir(dir, cfg.Import, time.Now())
-	if err != nil {
-		return fmt.Errorf("reading %s: %w", dir, err)
-	}
-	store, err := cred.Open(cred.FileBackend{Dir: cfg.CredentialsDir})
-	if err != nil {
-		return err
-	}
-	reserved := map[string]bool{}
-	for _, a := range cfg.Accounts() {
-		reserved[strings.ToLower(a.ID)] = true
-	}
-	imported, more, err := legacy.Import(store, files, func(id string) bool { return reserved[strings.ToLower(id)] })
-	for _, f := range imported {
-		line := fmt.Sprintf("imported %s as account %s (%s)", f.File, f.Record.ID, f.Record.Extension)
-		if len(f.Ignored) > 0 {
-			line += "; not supported yet, not imported: " + strings.Join(f.Ignored, ", ")
-		}
-		fmt.Println(line)
-	}
-	for _, s := range append(skipped, more...) {
-		fmt.Printf("skipped %s: %s\n", s.File, s.Reason)
-	}
-	if err != nil {
-		return err
-	}
-	fmt.Printf("%d imported, %d skipped, into %s\n", len(imported), len(skipped)+len(more), cfg.CredentialsDir)
-	return nil
 }
 
 // listen binds addr, or with fd 0 or more serves on the listening TCP socket inherited at fd.
@@ -300,15 +246,14 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string, 
 		return fmt.Errorf("extension_pages.listen: %w", err)
 	}
 	c.SetPagesPort(pagesLn.Addr().(*net.TCPAddr).Port)
-	managementOn := func() bool { return c.Config().ManagementKey != "" }
 	mux := http.NewServeMux()
 	mux.Handle(core.ManagementPrefix, c.Management())
-	// The panel is on while the management API is: it is a page for that API.
+	// The panel is a page for the management API.
 	assets := panel.Assets()
 	if !panel.Built(assets) {
 		log.Print("warning: this core was built without its panel (go generate ./internal/panel builds it)")
 	}
-	ui := panel.Handler(assets, managementOn, func(r *http.Request) string {
+	ui := panel.Handler(assets, func(r *http.Request) string {
 		origin, _ := c.PagesOrigin(r.Host) // none: the panel says why where it would show a page
 		return origin
 	})
@@ -327,7 +272,7 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string, 
 		TLSConfig:         tlsConfig,
 	}
 	pagesSrv := &http.Server{
-		Handler:           pages.Handler(c.PagesFolder, managementOn),
+		Handler:           pages.Handler(c.PagesFolder),
 		ReadHeaderTimeout: 30 * time.Second,
 	}
 	scheme := "http"

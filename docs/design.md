@@ -69,7 +69,9 @@ is Tauri 2, so its native side is Rust.
   (such as the Codex WebSocket's silence limit) end a connection by time.
 - **Usage is a bounded record.** Core keeps one event per request in memory, within a size and age
   limit, and reading it never removes anything. A program that pages through it is told when it
-  missed events.
+  missed events. Usage is kept in plain files, not in a database: one JSON line per request in a
+  file for each UTC day, with a summary file for each closed day. Closed-day files are not
+  compressed in this version, which is worth revisiting if the volume grows.
 
 Details: [`next/README.md`](../next/README.md) (routing, reloads, packages, usage and the
 management API).

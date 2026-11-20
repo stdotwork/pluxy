@@ -145,6 +145,10 @@ const (
 // Account is an account as the management API lists it. It never holds a secret.
 type Account struct {
 	ID string `json:"id"`
+	// PublicID is the ID client replies name the account by (the X-Pluxy-Account header, the
+	// pluxy member of an error): short, stable across restarts, and never an email address or a
+	// label, whatever ID the account has.
+	PublicID string `json:"public_id"`
 	// Source is "config" for an account set in core's config, "login" for one added by login.
 	Source    string `json:"source"`
 	Extension string `json:"extension,omitempty"`
@@ -180,6 +184,8 @@ type Account struct {
 	// Headers are the account's headers, with a placeholder in place of each secret value, the
 	// one GET /config shows for it.
 	Headers map[string]string `json:"headers,omitempty"`
+	// Timeouts overrides routing.timeouts for this account (header_ms, idle_ms, total_ms).
+	Timeouts *protocol.Timeouts `json:"timeouts,omitempty"`
 	// Settings are an account added by login's settings, with a placeholder in place of each
 	// secret, as GET /config shows the config file.
 	Settings json.RawMessage `json:"settings,omitempty"`
@@ -240,6 +246,30 @@ type AccountReply struct {
 // takes the account's routing fields too, by their JSON names.
 type AccountPatch struct {
 	Disabled *bool `json:"disabled,omitempty"`
+}
+
+// RouteReply is GET /route's reply: what a request for the model would do now (route.Plan). Each
+// account is named by its ID and its public ID, the one replies name it by.
+type RouteReply = route.Plan
+
+// ChainStep is one step of a fallback chain: a model, and optionally the one provider and the
+// accounts (by ID) that serve it.
+type ChainStep = route.Step
+
+// Chain is a fallback chain: the model name clients ask for, and its steps in order.
+type Chain struct {
+	Name  string      `json:"name"`
+	Steps []ChainStep `json:"steps"`
+}
+
+// ChainsReply is GET /chains's reply, sorted by name.
+type ChainsReply struct {
+	Chains []Chain `json:"chains"`
+}
+
+// ChainRequest is PUT /chains/{name}'s body.
+type ChainRequest struct {
+	Steps []ChainStep `json:"steps"`
 }
 
 // CooldownResetReply is POST /accounts/{id}/cooldown/reset's reply.
@@ -520,9 +550,69 @@ type SetupApplyReply struct {
 	Results []SetupApplyResult `json:"results"`
 }
 
+// SetupImportRequest is POST /setup/import's body: a CLIProxyAPI config.yaml on core's machine,
+// and its auth folder (default: the config's oauth.auth-dir). With DryRun nothing is written.
+type SetupImportRequest struct {
+	Config  string `json:"config"`
+	AuthDir string `json:"auth_dir,omitempty"`
+	DryRun  bool   `json:"dry_run,omitempty"`
+}
+
+// ImportReport is POST /setup/import's reply. Every key of the config and every file of the auth
+// folder is in exactly one of Brought, Changed and NotBrought.
+type ImportReport struct {
+	DryRun     bool         `json:"dry_run"`
+	Brought    []ImportRow  `json:"brought"`
+	Changed    []ImportRow  `json:"changed"`
+	NotBrought []ImportRow  `json:"not_brought"`
+	Needs      []ImportNeed `json:"needs"`
+}
+
+// ImportRow is one item of an import report: a key of the config (What is its path in the file)
+// or a file of the auth folder (What is "auth file", Name its name).
+type ImportRow struct {
+	What string `json:"what"`
+	Name string `json:"name,omitempty"`
+	// As is what it became in pluxy.
+	As   string `json:"as,omitempty"`
+	From string `json:"from,omitempty"`
+	To   string `json:"to,omitempty"`
+	Why  string `json:"why,omitempty"`
+	// KeepWith says how to keep what the old setup did, where pluxy changed it.
+	KeepWith string `json:"keep_with,omitempty"`
+}
+
+// ImportNeed is a provider package the imported accounts need and core does not have installed.
+type ImportNeed struct {
+	Pick string `json:"pick"`
+	Why  string `json:"why"`
+}
+
 // SetupDoneReply is POST /setup/done's reply.
 type SetupDoneReply struct {
 	FirstRun bool `json:"first_run"`
+}
+
+// ClientPaste is GET /setup/clients/{id}/paste's reply: what to paste into a client tool's
+// config files to point it at this core.
+type ClientPaste struct {
+	// Tool is the tool's canonical ID (SetupClient.ID), whatever name the call used.
+	Tool string `json:"tool"`
+	Name string `json:"name"`
+	// BaseURL is core's address as a program on core's machine reaches it.
+	BaseURL string `json:"base_url"`
+	// Key is a placeholder for a client key, never its value.
+	Key   string            `json:"key"`
+	Files []ClientPasteFile `json:"files"`
+	// Note says what the files need besides themselves; left out when nothing.
+	Note string `json:"note,omitempty"`
+}
+
+// ClientPasteFile is one file of a ClientPaste: where it goes (from the home folder, ~) and
+// the settings to put in it.
+type ClientPasteFile struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
 }
 
 // ThemeSummary describes one theme stored by core, as GET /themes lists it and PUT returns it.

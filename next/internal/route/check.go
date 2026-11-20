@@ -62,6 +62,7 @@ func (r *Router) Check(ctx context.Context) {
 			q, e = rd.Reading(ctx, *a)
 		}
 		r.state.checked(claims, q, e, r.now())
+		r.state.noteReading(a.ID, q, e, r.now())
 	}
 }
 

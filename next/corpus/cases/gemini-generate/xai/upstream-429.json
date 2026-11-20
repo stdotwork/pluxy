@@ -71,7 +71,8 @@
       "want": {
         "code": 429,
         "message": "Rate limit reached for requests",
-        "status": "RESOURCE_EXHAUSTED"
+        "status": "RESOURCE_EXHAUSTED",
+        "pluxy": "(volatile)"
       }
     },
     {

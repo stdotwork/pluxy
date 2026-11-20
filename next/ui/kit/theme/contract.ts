@@ -140,6 +140,10 @@ export const PARTS = [
   "account-edit-discard",
   "subscription-end",
   "privacy-toggle",
+  "setup-found",
+  "setup-pick",
+  "setup-client",
+  "setup-paste",
 ] as const;
 
 export type Part = (typeof PARTS)[number];
@@ -183,7 +187,8 @@ const FORBIDDEN_IN_VALUE = /[;{}<>\\@]|\/\*|url\(/i;
 export function tokenValueProblem(name: string, value: unknown): string | undefined {
   if (typeof value !== "string") return "is not a string";
   if (value.length < 1 || value.length > 200) return "must be 1 to 200 characters";
-  if (FORBIDDEN_IN_VALUE.test(value)) return "holds a character or sequence tokens may not hold";
+  const forbidden = FORBIDDEN_IN_VALUE.exec(value);
+  if (forbidden) return `contains ${JSON.stringify(forbidden[0])}, which a token value may not contain`;
   if (name === "density") {
     const n = Number(value);
     if (!Number.isFinite(n) || n < 0.5 || n > 2) return "must be a number from 0.5 to 2";

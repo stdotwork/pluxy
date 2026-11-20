@@ -2,10 +2,10 @@
 // options. A host build passes the pages it offers; the shell knows nothing else about them.
 
 import type { VNode } from "preact";
-import { useCallback, useEffect, useId, useMemo, useState } from "preact/hooks";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "preact/hooks";
 import { api } from "./api";
 import { ExtensionPage, type ExtensionPageProps } from "./extensions/page";
-import type { Host } from "./host";
+import type { Host, Reply } from "./host";
 import { PrivacyContext, type PrivacyState, privacyMasks } from "./privacy";
 import { strings } from "./strings";
 import type { ThemeState } from "./theme/state";
@@ -71,6 +71,22 @@ const leaveGuards = new Set<LeaveGuard>();
 export function guardLeave(guard: LeaveGuard): () => void {
   leaveGuards.add(guard);
   return () => leaveGuards.delete(guard);
+}
+
+/** The Setup page's ID: the one page the shell opens by itself, and hides when core lacks its calls. */
+export const SETUP_PAGE = "setup";
+
+/**
+ * What the shell does with core's answer to GET /setup once signed in. offered: the Setup page
+ * is in the navigation; a core without the call (404) gets none. open: Setup opens in place of
+ * the first page, on a first run when the address (hash) names no page.
+ */
+export function setupGate(
+  reply: Reply<{ first_run: boolean }>,
+  hash: string,
+): { offered: boolean; open: boolean } {
+  if (reply.status === 404) return { offered: false, open: false };
+  return { offered: true, open: reply.body?.first_run === true && hash.replace(/^#\/?/, "") === "" };
 }
 
 function currentId(pages: PageDef[]): string {
@@ -216,7 +232,29 @@ export function Shell(props: {
     uiVersion,
     props.extensionPage ?? ExtensionPage,
   );
-  const pages = useMemo(() => [...props.pages, ...extPages], [props.pages, extPages]);
+  // The shell does not wait for this answer: the first page may show for an instant.
+  const hasSetup = props.pages.some((p) => p.id === SETUP_PAGE);
+  const [setupOffered, setSetupOffered] = useState(true);
+  useEffect(() => {
+    if (!signedIn || !hasSetup) return;
+    let live = true;
+    kit.api.setup().then((r) => {
+      if (!live) return;
+      // A refused key is left to the page that loads next: this read is the shell's own, and
+      // signing out here could undo a sign-in that is under way in the desktop app.
+      if (r.status === 401) return;
+      const gate = setupGate(r, location.hash);
+      setSetupOffered(gate.offered);
+      if (gate.open) location.replace(`#/${SETUP_PAGE}`);
+    });
+    return () => {
+      live = false;
+    };
+  }, [signedIn, hasSetup, kit]);
+  const pages = useMemo(
+    () => [...props.pages.filter((p) => setupOffered || p.id !== SETUP_PAGE), ...extPages],
+    [props.pages, extPages, setupOffered],
+  );
   const [page, setPage] = useState(() => currentId(pages));
 
   useEffect(() => {
@@ -239,6 +277,29 @@ export function Shell(props: {
 
   const active = pages.find((p) => p.id === page);
   const navId = useId();
+  // Laid out as a bar (the theme's top navigation, or any navigation in a narrow window), the
+  // navigation scrolls sideways when it is wider than the window: the current page's entry is
+  // brought into view when the page opens, and when the entries or the bar's size change.
+  const navRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const bar = navRef.current;
+    if (!bar) return;
+    const show = () => {
+      const entry = bar.querySelector('[aria-current="page"]');
+      if (!entry || bar.scrollWidth <= bar.clientWidth) return;
+      const b = bar.getBoundingClientRect();
+      const e = entry.getBoundingClientRect();
+      // Past the entry by a little, so the cue at the bar's edge does not cover it.
+      const margin = 24;
+      if (e.left < b.left + margin) bar.scrollLeft -= b.left + margin - e.left;
+      else if (e.right > b.right - margin) bar.scrollLeft += e.right - (b.right - margin);
+    };
+    show();
+    if (typeof ResizeObserver === "undefined") return;
+    const sizes = new ResizeObserver(show);
+    sizes.observe(bar);
+    return () => sizes.disconnect();
+  }, [page, signedIn, pages]);
   useEffect(() => {
     document.documentElement.dataset.page = signedIn ? page : "signin";
     document.title =
@@ -264,7 +325,7 @@ export function Shell(props: {
     <KitContext.Provider value={kit}>
       <PrivacyContext.Provider value={masks}>
         <div class="shell" data-part="shell">
-          <nav class="nav" data-part="nav" data-slot="sidebar" aria-label={t("navigation")}>
+          <nav class="nav" data-part="nav" data-slot="sidebar" aria-label={t("navigation")} ref={navRef}>
             <a class="brand" href={`#/${pages[0]?.id ?? ""}`}>
               {props.brand ?? "pluxy"}
             </a>

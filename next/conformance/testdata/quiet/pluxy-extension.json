@@ -1,0 +1,16 @@
+{
+  "manifest_version": 0,
+  "id": "conformance/quiet",
+  "version": "0.0.0",
+  "protocol": [
+    0
+  ],
+  "programs": {
+    "linux/amd64": "quiet",
+    "linux/arm64": "quiet",
+    "darwin/amd64": "quiet",
+    "darwin/arm64": "quiet",
+    "windows/amd64": "quiet.exe",
+    "windows/arm64": "quiet.exe"
+  }
+}

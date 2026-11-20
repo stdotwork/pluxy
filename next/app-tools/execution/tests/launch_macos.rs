@@ -7,6 +7,7 @@ use std::os::unix::io::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 const TERMINAL: &str = "/System/Applications/Utilities/Terminal.app";
@@ -70,6 +71,10 @@ fn in_window(file: File, program: &Path, out: &Path) -> bool {
         .unwrap();
     status.success()
 }
+
+// The tests that open a Terminal window hold this for their whole body: parallel `open -a Terminal`
+// calls on a Terminal that has not started yet can fail with LaunchServices error -1712.
+static TERMINAL_WINDOW: Mutex<()> = Mutex::new(());
 
 /// Whether this test may open a Terminal window: on GitHub's runners only, elsewhere it would open
 /// one on the person's desktop.
@@ -153,6 +158,7 @@ fn a_terminal_launch_runs_the_program_in_a_terminal_window_in_its_folder_with_it
     if !windows_allowed() {
         return;
     }
+    let _window = TERMINAL_WINDOW.lock().unwrap_or_else(|e| e.into_inner());
     let d = std::env::temp_dir().join(format!("pluxy-terminal-{}", std::process::id()));
     std::fs::create_dir_all(&d).unwrap();
     let d = std::fs::canonicalize(d).unwrap();
@@ -191,6 +197,7 @@ fn a_program_swapped_at_its_path_after_the_apps_check_never_runs_in_the_window()
     if !windows_allowed() {
         return;
     }
+    let _window = TERMINAL_WINDOW.lock().unwrap_or_else(|e| e.into_inner());
     let d = folder("swap");
     let program = d.join("agent");
     script(&program, r#"echo checked > "$1.part"; mv "$1.part" "$1""#);
@@ -212,6 +219,7 @@ fn a_program_below_a_folder_the_admin_group_may_write_runs_in_the_window() {
     if !windows_allowed() {
         return;
     }
+    let _window = TERMINAL_WINDOW.lock().unwrap_or_else(|e| e.into_inner());
     let d = folder("admin");
     let bin = d.join("bin");
     std::fs::create_dir(&bin).unwrap();

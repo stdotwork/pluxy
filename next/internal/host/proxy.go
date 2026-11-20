@@ -16,6 +16,15 @@ const proxyMinor = 11
 // headersMinor is the protocol minor version that adds an account's headers.
 const headersMinor = 12
 
+// timeoutsMinor is the protocol minor version that adds an account's timeouts.
+const timeoutsMinor = 22
+
+const (
+	defaultHeaderTimeoutMS int64 = 60_000
+	defaultIdleTimeoutMS   int64 = 300_000
+	defaultTotalTimeoutMS  int64 = 600_000
+)
+
 // outbound turns account.ProxyURL, the account's own proxy_url setting, into the proxy the call
 // carries: that setting, else Options.ProxyURL; none for direct or none. It refuses the call when
 // it needs a proxy or headers and the extension predates them, which would send it without. The
@@ -30,13 +39,13 @@ func (e *Extension) outbound(account *protocol.Account) (*protocol.Credential, *
 	account.ProxyURL = proxyurl.Resolve(account.ProxyURL, global)
 	if account.ProxyURL != "" && e.info.ProtocolMinor < proxyMinor {
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
-			Message: fmt.Sprintf("extension %s implements protocol 0.%d, which cannot send through a proxy (0.%d adds proxy_url); account %q has one, so it is not sent there",
-				e.manifest.ID, e.info.ProtocolMinor, proxyMinor, account.ID)}
+			Message: fmt.Sprintf("extension %s implements protocol 0.%d, which cannot send through a proxy (0.%d adds proxy_url); the account has one, so it is not sent there",
+				e.manifest.ID, e.info.ProtocolMinor, proxyMinor)}
 	}
 	if len(account.Headers) > 0 && e.info.ProtocolMinor < headersMinor {
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
-			Message: fmt.Sprintf("extension %s implements protocol 0.%d, which cannot send an account's headers (0.%d adds headers); account %q has some, so it is not sent there",
-				e.manifest.ID, e.info.ProtocolMinor, headersMinor, account.ID)}
+			Message: fmt.Sprintf("extension %s implements protocol 0.%d, which cannot send an account's headers (0.%d adds headers); the account has some, so it is not sent there",
+				e.manifest.ID, e.info.ProtocolMinor, headersMinor)}
 	}
 	var d outboundForms
 	d.Proxy = proxyurl.Password(account.ProxyURL)
@@ -69,4 +78,39 @@ func outboundSecrets(c *protocol.Credential) map[string]string {
 		out[fmt.Sprintf("header %d", i)] = f
 	}
 	return out
+}
+
+// resolveTimeouts resolves account.Timeouts against Options.Timeouts and the defaults (60s
+// header, 5m idle, 10m total). Extensions older than minor 22 do not receive the field.
+func (e *Extension) resolveTimeouts(account *protocol.Account) {
+	if e.info.ProtocolMinor < timeoutsMinor {
+		account.Timeouts = nil
+		return
+	}
+	var global *protocol.Timeouts
+	if e.opts.Timeouts != nil {
+		global = e.opts.Timeouts()
+	}
+	if global == nil {
+		global = &protocol.Timeouts{}
+	}
+	own := account.Timeouts
+	if own == nil {
+		own = &protocol.Timeouts{}
+	}
+	pick := func(a, g *int64, def int64) *int64 {
+		v := def
+		if g != nil {
+			v = *g
+		}
+		if a != nil {
+			v = *a
+		}
+		return &v
+	}
+	account.Timeouts = &protocol.Timeouts{
+		HeaderMS: pick(own.HeaderMS, global.HeaderMS, defaultHeaderTimeoutMS),
+		IdleMS:   pick(own.IdleMS, global.IdleMS, defaultIdleTimeoutMS),
+		TotalMS:  pick(own.TotalMS, global.TotalMS, defaultTotalTimeoutMS),
+	}
 }
