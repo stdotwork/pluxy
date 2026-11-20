@@ -124,13 +124,6 @@ func (s *Server) KeyRequests() []KeyRequest {
 	return append([]KeyRequest(nil), s.keyCalls...)
 }
 
-// Requests returns the Responses requests the server answered, in order.
-func (s *Server) Requests() []Request {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]Request(nil), s.requests...)
-}
-
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	if s.Answer != nil && s.Answer(w, r) {
 		return

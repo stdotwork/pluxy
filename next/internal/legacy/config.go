@@ -2287,7 +2287,6 @@ func (x *translator) classify(path string, v any, inherited *rule, sink sink) {
 // keeps every model and provider, tried in the order the group lists its models and then the
 // order core reads the provider sections, rather than in turn.
 func (x *translator) chains() error {
-	type key struct{ model, ext string }
 	var order []string
 	steps := map[string][]route.Step{}
 	exts := map[string][]string{}
