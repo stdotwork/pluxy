@@ -296,8 +296,7 @@ export function QuotaPage() {
                 <>
                   {p.text(a.id, accountIdentities(a))}
                   <small class="quota-identity muted">
-                    {p.id(a.label)}
-                    {a.extension && <> · {a.extension}</>}
+                    {[p.id(a.label), a.extension].filter(Boolean).join(" · ")}
                   </small>
                 </>
               ),

@@ -4,7 +4,7 @@
 
 import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import type { Account, ExtensionStatus, UsageGroup } from "../api";
+import { type Account, type ExtensionStatus, leftOut, type UsageGroup } from "../api";
 import { accountIdentities, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { strings } from "../strings";
@@ -152,8 +152,8 @@ const verdictText = (v: Verdict) =>
     offline: t("verdictOffline"),
   })[v];
 
-/** An account is serving unless it is turned off or needs a new login. */
-const isActive = (a: Account) => !a.disabled && a.state === "active";
+/** An account is serving unless it is turned off, needs a new login, or core leaves it out. */
+const isActive = (a: Account) => !a.disabled && a.state === "active" && !leftOut(a);
 
 function Panel(props: { eyebrow: string; title: string; children: ComponentChildren }) {
   return (
@@ -347,9 +347,7 @@ export function StatusPage() {
                       [t("healthActive"), active.toLocaleString()],
                       [
                         t("healthUnavailable"),
-                        (
-                          list?.filter((a) => !a.disabled && a.state !== "active").length ?? 0
-                        ).toLocaleString(),
+                        (list?.filter((a) => !a.disabled && !isActive(a)).length ?? 0).toLocaleString(),
                       ],
                       [t("healthDisabled"), (list?.filter((a) => a.disabled).length ?? 0).toLocaleString()],
                     ]}

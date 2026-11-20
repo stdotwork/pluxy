@@ -1,7 +1,7 @@
 // One account's details, opened from the Accounts list (accounts.tsx). The list passes
 // AccountDetailProps and nothing else; it uses AccountState for its own state column.
 
-import type { Account } from "../api";
+import { type Account, leftOut } from "../api";
 import { accountIdentities, usePrivacy } from "../privacy";
 import { strings } from "../strings";
 import {
@@ -37,15 +37,23 @@ const t = strings("accountDetail", {
   enable: "Enable",
   disable: "Disable",
   remove: "Remove",
+  banned: "banned",
+  exhausted: "exhausted",
+  needs_login: "needs login",
+  leftOutBecause: "Left out because",
+  leftOutUntil: "Left out until",
+  bannedHint: "No request is sent to this account until you enable it again.",
 });
 
-/** An account's state as a badge: "disabled" when it is turned off, else its state. */
+/**
+ * An account's state as a badge: "disabled" when it is turned off, the health state that keeps
+ * requests away from it when there is one, else its state.
+ */
 export function AccountState(props: { a: Account }) {
-  return props.a.disabled ? (
-    <Badge tone="muted">{t("disabled")}</Badge>
-  ) : (
-    <StateBadge state={props.a.state} />
-  );
+  if (props.a.disabled) return <Badge tone="muted">{t("disabled")}</Badge>;
+  const out = leftOut(props.a);
+  if (out) return <Badge tone={out === "exhausted" ? "warn" : "danger"}>{t(out)}</Badge>;
+  return <StateBadge state={props.a.state} />;
 }
 
 export interface AccountDetailProps {
@@ -66,6 +74,9 @@ export function AccountDetail(props: AccountDetailProps) {
     props.onClose();
     props.onChanged();
   });
+  const out = leftOut(a);
+  // Enabling is what lifts a provider's ban, so a banned account offers Enable, not Disable.
+  const off = a.disabled || out === "banned";
   return (
     <Detail title={p.text(a.id, ids)} onClose={props.onClose}>
       <Facts
@@ -76,20 +87,23 @@ export function AccountDetail(props: AccountDetailProps) {
           [t("credential"), a.kind],
           [t("comesFrom"), a.source === "config" ? t("fromConfig") : t("fromLogin")],
           [t("needsLogin"), p.text(a.reason, ids)],
+          [t("leftOutBecause"), out && p.text(a.health?.why, ids)],
+          [t("leftOutUntil"), out && when(a.health?.until)],
           [t("expires"), when(a.expires_at)],
           [t("renewalFailed"), p.text(a.renewal_error?.message, ids)],
           [t("added"), when(a.created_at)],
           [t("changed"), when(a.updated_at)],
         ]}
       />
+      {out === "banned" && <Notice tone="warn">{t("bannedHint")}</Notice>}
       {(act.error ?? remove.error) && <Notice tone="danger">{p.text(act.error ?? remove.error, ids)}</Notice>}
       {a.source === "config" ? (
         <p class="muted">{t("setInConfig")}</p>
       ) : (
         <div class="actions">
           <AccountEdit account={a} onChanged={props.onChanged} disabled={act.busy || remove.busy} />
-          <Button disabled={act.busy} onClick={() => act.run(() => api.setDisabled(a.id, !a.disabled))}>
-            {a.disabled ? t("enable") : t("disable")}
+          <Button disabled={act.busy} onClick={() => act.run(() => api.setDisabled(a.id, !off))}>
+            {off ? t("enable") : t("disable")}
           </Button>
           <ConfirmButton
             disabled={act.busy || remove.busy}

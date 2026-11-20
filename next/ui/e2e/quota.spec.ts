@@ -143,3 +143,12 @@ test("manual resets show their count only for the account that reports them", as
   await expect(b.getByText("Test plan", { exact: true })).toBeVisible();
   await expect(b.getByText("Manual resets", { exact: true })).toHaveCount(0);
 });
+
+test("an account with no label shows its extension without a separator before it", async ({ page }) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await goTo(page, "Quota Management");
+  // alpha-1 comes from core's config and has no label.
+  const item = page.locator('[data-part="item"]').filter({ hasText: "alpha-1" });
+  await expect(item.locator(".quota-identity")).toHaveText("test/alpha");
+});

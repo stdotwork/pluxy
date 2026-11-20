@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { Account } from "../kit/api/accounts";
+import { type Account, leftOut } from "../kit/api/accounts";
 import { filterAccounts, hasProblem } from "../kit/pages/accounts";
 
 const now = Date.parse("2026-01-01T00:00:00Z");
@@ -60,4 +60,35 @@ test("sort orders and combined filters have exact results", () => {
 test("search finds HTTP errors whose message does not repeat their status", () => {
   const rows = [account("denied", { last_error: { code: "auth", message: "Access denied", status: 403 } })];
   expect(filterAccounts(rows, { search: "403" }).map((a) => a.id)).toEqual(["denied"]);
+});
+
+test("an account core leaves out of routing is a problem, unless a person turned it off", () => {
+  const health = (state: string, fields: Partial<Account> = {}) =>
+    account(state, { health: { state }, ...fields });
+  const rows = [
+    health("ok"),
+    health("cooling"),
+    health("banned"),
+    health("exhausted"),
+    health("needs_login"),
+    health("disabled", { disabled: true }),
+    account("banned-then-off", { disabled: true, health: { state: "banned" } }),
+    account("old-core"),
+  ];
+  expect(rows.map(leftOut)).toEqual([
+    undefined,
+    undefined,
+    "banned",
+    "exhausted",
+    "needs_login",
+    undefined,
+    undefined,
+    undefined,
+  ]);
+  expect(rows.map((a) => hasProblem(a, now))).toEqual([false, false, true, true, true, false, false, false]);
+  expect(filterAccounts(rows, { status: "problem" }, now).map((a) => a.id)).toEqual([
+    "banned",
+    "exhausted",
+    "needs_login",
+  ]);
 });

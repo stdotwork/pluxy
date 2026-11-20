@@ -1,10 +1,10 @@
 // The Accounts list; accountDetail.tsx owns one account's details.
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { type Account, problem } from "../api";
+import { type Account, leftOut, problem } from "../api";
 import { one } from "../api/path";
 import { accountIdentities, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
-import { strings } from "../strings";
+import { rich, strings } from "../strings";
 import { Tabs } from "../tabs";
 import { Button, Empty, List, MasterDetail, Notice, PageHead, type Tone, useKit, useLoad } from "../ui";
 import { AccountDetail, AccountState } from "./accountDetail";
@@ -15,7 +15,8 @@ const t = strings("accounts", {
   short: "Accts",
   tip: "Auth files & credentials",
   refresh: "Refresh",
-  empty: "No accounts yet. Add them in core's config, or through a provider extension's login.",
+  empty: "No accounts yet. Sign in to one on {page}, or set them in core's config.",
+  addAccount: "Add Account",
   noResults: "No results",
   list: "Accounts",
   account: "Account",
@@ -115,7 +116,11 @@ function coolingUntil(a: Account): number {
 
 export function hasProblem(a: Account, now = Date.now()): boolean {
   return (
-    a.state === "reauth_required" || a.check?.state === "failed" || !!a.last_error || coolingUntil(a) > now
+    a.state === "reauth_required" ||
+    a.check?.state === "failed" ||
+    !!a.last_error ||
+    coolingUntil(a) > now ||
+    !!leftOut(a)
   );
 }
 
@@ -449,7 +454,7 @@ export function AccountsPage() {
         <MasterDetail
           list={
             accounts.data && list.length === 0 ? (
-              <Empty>{t("empty")}</Empty>
+              <Empty>{rich(t("empty"), { page: <a href="#/add-account">{t("addAccount")}</a> })}</Empty>
             ) : filtered.length === 0 && !accounts.loading ? (
               <Empty>{t("noResults")}</Empty>
             ) : (
