@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -202,4 +203,88 @@ func TestNeedsLoginKeepsTheProvider(t *testing.T) {
 	if n := len(codex.Requests()); n != 0 {
 		t.Errorf("Codex got %d requests; the name stays on Claude while its login waits", n)
 	}
+}
+
+// A free-plan Codex login's credential-backed list does not name a pro model. Turning the login
+// off keeps that list: gpt-6.1-sol remains on Claude's provider and is served there, with no
+// credentialless model-list read by Codex.
+func TestDisabledFreeCodexLoginKeepsProModelOnClaude(t *testing.T) {
+	var claudeCalls atomic.Int32
+	claude := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/messages" || r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		claudeCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"msg_ok","type":"message","role":"assistant","model":"gpt-6.1-sol","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":5,"output_tokens":3}}`)
+	}))
+	t.Cleanup(claude.Close)
+	codex := codextest.New(t)
+
+	dir := filepath.Join(t.TempDir(), "credentials")
+	store, err := cred.Open(cred.FileBackend{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, _ := json.Marshal(map[string]string{"id_token": idTokenWithPlan("codex-free", "free")})
+	if _, err := store.Create(cred.Record{
+		ID: "codex-free", Extension: "pluxy/codex", State: cred.StateActive,
+		Account:    route.Account{Priority: 1, Settings: json.RawMessage(`{"base_url":"` + codex.URL + `"}`)},
+		Credential: protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: codex.IssueToken("text"), Data: data},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	base, _, logs := runCoreArgs(t, map[string]any{
+		"listen":          "127.0.0.1:0",
+		"client_keys":     []string{clientKey},
+		"management_key":  managementKey,
+		"credentials_dir": dir,
+		"extension": map[string]any{"manifest": filepath.Join(binDir, "claude", "pluxy-extension.json"), "accounts": []any{
+			map[string]any{"id": "claude-a", "priority": 0, "models": []string{"gpt-6.1-sol"},
+				"settings": map[string]any{"base_url": claude.URL}, "credential": map[string]any{"kind": "api_key", "api_key": "sk-ant-api-e2e"}},
+		}},
+		"extensions": map[string]any{"pluxy/codex": map[string]any{"accounts": []any{}}},
+	}, "-bundled", bundledRegistry(t, map[string]string{"pluxy/codex": filepath.Join("codex", "codex")}))
+	logs.waitFor(t, "config revision 1 active")
+
+	const body = `{"model":"gpt-6.1-sol","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`
+	ask := func(when string) {
+		t.Helper()
+		resp := postPath(t, context.Background(), base, "/v1/messages", clientKey, body)
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || resp.Header.Get("X-Pluxy-Provider") != "pluxy/claude" {
+			t.Errorf("%s: status %d, provider %q, body %s; want Claude's 200", when, resp.StatusCode, resp.Header.Get("X-Pluxy-Provider"), raw)
+		}
+	}
+
+	ask("with the free Codex login in service")
+	if n := claudeCalls.Load(); n != 1 {
+		t.Errorf("Claude got %d requests, want 1", n)
+	}
+	if n := len(codex.Requests()); n != 0 {
+		t.Errorf("Codex got %d requests, want none: its free list does not name gpt-6.1-sol", n)
+	}
+
+	if code := manage(t, base, http.MethodPatch, "/accounts/codex-free", map[string]any{"disabled": true}, nil); code != http.StatusOK {
+		t.Fatalf("disabling the Codex login: status %d", code)
+	}
+	ask("with the free Codex login disabled")
+	if n := claudeCalls.Load(); n != 2 {
+		t.Errorf("Claude got %d requests after disabling Codex, want 2", n)
+	}
+	if n := len(codex.Requests()); n != 0 {
+		t.Errorf("Codex got %d requests while held, want none", n)
+	}
+}
+
+func idTokenWithPlan(account, plan string) string {
+	enc := func(v any) string {
+		b, _ := json.Marshal(v)
+		return base64.RawURLEncoding.EncodeToString(b)
+	}
+	return enc(map[string]string{"alg": "none"}) + "." + enc(map[string]any{
+		"https://api.openai.com/auth": map[string]string{"chatgpt_account_id": account, "chatgpt_plan_type": plan},
+	}) + ".x"
 }

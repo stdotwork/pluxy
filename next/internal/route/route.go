@@ -307,14 +307,6 @@ func (r *Router) SetAccounts(accounts []Account, same func(old, cur *Account) bo
 	for _, a := range known {
 		a.rev = r.state.revision(a.ID)
 	}
-	// A model list read while an account was held was read with no credential: it is read
-	// again once the account is in service, and the other way round.
-	var relist []*Account
-	for _, a := range r.known {
-		if i := slices.IndexFunc(known, func(b *Account) bool { return b.ID == a.ID }); i >= 0 && known[i].Held != a.Held {
-			relist = append(relist, a)
-		}
-	}
 	old := r.accounts
 	var changed, fresh []*Account
 	kept := map[string]bool{} // the endpoints of the accounts that stay unchanged
@@ -333,7 +325,7 @@ func (r *Router) SetAccounts(accounts []Account, same func(old, cur *Account) bo
 	r.state.restart(changed, fresh, kept)
 	r.accounts, r.known = list, known
 	r.picker.setOrder(list)
-	r.lists.retain(known, append(changed, relist...), same == nil)
+	r.lists.retain(known, changed, same == nil)
 	for _, a := range old {
 		if !slices.ContainsFunc(list, func(b *Account) bool { return b.ID == a.ID }) {
 			r.state.forget(a.ID)

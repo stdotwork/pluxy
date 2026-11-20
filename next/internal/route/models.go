@@ -111,7 +111,7 @@ func (r *Router) CarryLists(prev *Router, same func(old, cur *Account) bool) {
 	defer prev.lists.mu.Unlock()
 	for _, a := range accounts {
 		i := slices.IndexFunc(prevAccounts, func(o *Account) bool { return o.ID == a.ID })
-		if i < 0 || prevAccounts[i].Held != a.Held || (same != nil && !same(prevAccounts[i], a)) {
+		if i < 0 || (same != nil && !same(prevAccounts[i], a)) {
 			continue
 		}
 		pe := prev.lists.entries[a.ID]
@@ -156,6 +156,26 @@ func (r *Router) listOf(ctx context.Context, a *Account, creds Credentials, cata
 	r.mu.RLock()
 	current := slices.Contains(r.known, a)
 	c.mu.Lock()
+	if a.Held != "" {
+		var e *catalogEntry
+		if current {
+			e = c.entries[a.ID]
+		}
+		c.mu.Unlock()
+		r.mu.RUnlock()
+		if e == nil {
+			return nil
+		}
+		select {
+		case <-e.done:
+			c.mu.Lock()
+			list := e.list
+			c.mu.Unlock()
+			return list
+		case <-ctx.Done():
+			return nil
+		}
+	}
 	var e *catalogEntry
 	if current {
 		e = c.entries[a.ID]
@@ -412,7 +432,7 @@ func isClosed(ch chan struct{}) bool {
 // error message for reporting.
 func (r *Router) readList(ctx context.Context, a *Account, creds Credentials, catalog CatalogFunc) (*protocol.ModelList, string) {
 	credential := a.Credential
-	if a.Managed && a.Held == "" {
+	if a.Managed {
 		if creds == nil {
 			return nil, "no credential store"
 		}

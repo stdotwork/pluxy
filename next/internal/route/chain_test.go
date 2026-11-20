@@ -454,6 +454,63 @@ func TestHeldAccountKeepsTheProvider(t *testing.T) {
 	}
 }
 
+// A held account keeps the model list read while it was in service, and its extension is not
+// asked again while it is held.
+func TestHeldAccountKeepsTheModelListReadInService(t *testing.T) {
+	m := []ModelEntry{{Name: "m"}}
+	accounts := []Account{
+		{ID: "p1", Extension: "P", Managed: true, Priority: 1},
+		{ID: "q1", Extension: "Q", Models: m},
+	}
+	h := newChainHarness(t, Config{}, accounts...)
+	h.r.UseCredentials(&fakeCredentials{version: 3})
+	reads := 0
+	h.r.UseCatalog(func(_ context.Context, a Account, credential *protocol.Credential) (*protocol.ModelList, *llm.Error) {
+		reads++
+		if a.ID == "p1" && credential != nil {
+			return &protocol.ModelList{Models: []protocol.Model{{ID: "m"}}}, nil
+		}
+		return &protocol.ModelList{Models: []protocol.Model{{ID: "other"}}}, nil
+	})
+	h.runOK("m")
+	h.wantAttempts("p1")
+	if reads != 1 {
+		t.Fatalf("catalog reads = %d, want 1 with p1 in service", reads)
+	}
+
+	accounts[0].Held = HealthDisabled
+	if err := h.r.SetAccounts(accounts, func(old, cur *Account) bool { return string(old.Settings) == string(cur.Settings) }); err != nil {
+		t.Fatal(err)
+	}
+	known, creds := h.r.knownSnapshot()
+	var held *Account
+	for _, a := range known {
+		if a.ID == "p1" {
+			held = a
+			break
+		}
+	}
+	if held == nil {
+		t.Fatal("p1 is not among the known accounts")
+	}
+	list := h.r.listOf(context.Background(), held, creds, h.r.catalogFunc(), h.now)
+	if list == nil || !slices.Equal(modelIDs(list), []string{"m"}) {
+		t.Errorf("held account's list = %+v, want the [m] read in service", list)
+	}
+	if reads != 1 {
+		t.Errorf("catalog reads = %d after p1 became held, want its kept list and no new read", reads)
+	}
+
+	h.attempts = nil
+	evs := h.run(h.req("m", ""))
+	e := evs[len(evs)-1].Error
+	if e == nil || e.Explain == nil || len(e.Explain.LeftOut) != 1 || e.Explain.LeftOut[0].Account != h.r.state.PublicID("p1") ||
+		e.Explain.LeftOut[0].State != HealthDisabled {
+		t.Errorf("request = %+v, want the held p1 named as disabled", evs[len(evs)-1])
+	}
+	h.wantAttempts()
+}
+
 // A banned account keeps its name on its provider too.
 func TestBannedAccountKeepsTheProvider(t *testing.T) {
 	m := []ModelEntry{{Name: "m"}}

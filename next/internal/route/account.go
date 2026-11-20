@@ -64,7 +64,8 @@ type Account struct {
 	// it off) or HealthNeedsLogin (the provider refused its sign-in). The router never sends it a
 	// request, but it counts the account when it chooses the provider of a model name, so an
 	// account going out of service does not move the name to another provider, and names it in
-	// what a request leaves out. Its model list is read with no credential.
+	// what a request leaves out. It keeps the model list read while it was in service, and its
+	// extension is not called while it is held.
 	Held string `json:"-"`
 
 	// gen is the generation of the router that holds this copy (see State.Retain).
