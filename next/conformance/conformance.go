@@ -1,7 +1,8 @@
 // Package conformance is the extension conformance kit, version 0. It starts a provider
 // extension exactly as core does and checks it against the extension protocol
-// (../protocol/README.md): the handshake, streamed and unstreamed replies, cancellation, a crash,
-// shutdown and structured errors; for an extension that signs in to accounts, login and
+// (../protocol/README.md): the handshake, streamed and unstreamed replies, a tool result's parts
+// and error flag, cancellation, a crash, shutdown and structured errors; for an extension that
+// signs in to accounts, login and
 // credential refresh; for one that lists models, its model list; and, when its fixture arranges
 // a quiet upstream, its alive frames.
 //
@@ -186,6 +187,7 @@ func Run(t *testing.T, target Target) {
 	t.Run("handshake", k.handshake)
 	t.Run("stream", func(t *testing.T) { k.text(t, true) })
 	t.Run("no_stream", func(t *testing.T) { k.text(t, false) })
+	t.Run("tool_result", k.toolResult)
 	t.Run("cancel", k.cancel)
 	t.Run("errors/rate_limited", func(t *testing.T) {
 		k.wantError(t, ScenarioRateLimited, llm.Error{Code: llm.CodeRateLimit, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: 20000}, llm.ScopeModel)
@@ -347,6 +349,39 @@ func (k *kit) text(t *testing.T, stream bool) {
 	u := last.Usage
 	if u == nil || u.InputTokens == nil || *u.InputTokens != InputTokens || u.OutputTokens == nil || *u.OutputTokens != OutputTokens {
 		t.Errorf("usage = %s, want input %d and output %d", jsonString(u), InputTokens, OutputTokens)
+	}
+}
+
+// toolResult checks that a tool result holding an image beside its text and reporting a failure
+// gets the normal reply: an extension that reports protocol 0.25 or later gets its parts and
+// error flag, and core gives one before it the text alone, so neither may fail the call over
+// them.
+func (k *kit) toolResult(t *testing.T) {
+	ext := k.start(t)
+	setup := k.target.Prepare(t, ScenarioText)
+	req := request(true)
+	req.Items = append(req.Items,
+		llm.Item{Type: llm.ItemTypeToolCall, CallID: "call_shot", Name: "screenshot", Arguments: "{}"},
+		llm.Item{Type: llm.ItemTypeToolResult, CallID: "call_shot", Output: "Saved.", IsError: true,
+			Content: []llm.Part{
+				{Type: llm.PartText, Text: "Saved."},
+				{Type: llm.PartImage, URL: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="},
+			}})
+	s := ext.Generate(context.Background(), setup.Account, req)
+	defer s.Close()
+	evs := collect(t, s)
+	last := evs[len(evs)-1]
+	if last.Type != llm.EventFinish {
+		t.Fatalf("ended with %s: %v", last.Type, last.Error)
+	}
+	var text strings.Builder
+	for _, ev := range evs {
+		if ev.Type == llm.EventTextDelta {
+			text.WriteString(ev.Delta)
+		}
+	}
+	if text.String() != ReplyText {
+		t.Errorf("text = %q, want %q", text.String(), ReplyText)
 	}
 }
 
