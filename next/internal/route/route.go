@@ -574,6 +574,7 @@ func (c *call) attempts() llm.Event {
 	tried := map[targetKey]bool{} // this round
 	used := map[string]bool{}     // accounts, this round
 	attempts, rounds := 0, 0
+	timeouts := 0 // attempts that ended in a timeout before any reply byte
 	// Today's request-retry rounds, set for routing or for an account. limit is how many rounds
 	// after the first an account takes part in: its own count, else routing's, else none.
 	rounded := r.cfg.RequestRetry != nil || slices.ContainsFunc(capable, func(t target) bool { return t.a.RequestRetry != nil })
@@ -679,6 +680,14 @@ func (c *call) attempts() llm.Event {
 			}
 			if !retrySafe(last) {
 				return ev
+			}
+			if last.IsTimeout() {
+				// A timeout before any reply byte costs the client the whole limit: the request
+				// moves on to one more account, not through every account.
+				timeouts++
+				if timeouts > 1 {
+					return errorEvent(last)
+				}
 			}
 			continue
 		}
@@ -925,6 +934,9 @@ func (c *call) try(t target, seq uint64) (ev llm.Event, started bool) {
 		return ev, false
 	}
 	c.cur, c.at, c.seq = s, t, seq
+	// The reply began, so the request is not sent again: keep only its model, which the rest
+	// of the call reads, and let its body and parsed form go while the reply streams.
+	c.req.LLM = llm.Request{Model: c.req.LLM.Model}
 	if r.affinity != nil && c.req.Session != "" {
 		r.affinity.bind(c.affinityKey(), a, t.model, r.now(), r.ttl)
 	}

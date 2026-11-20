@@ -7,7 +7,9 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/llm"
@@ -63,6 +65,139 @@ func bodyReply(contentType string, pieces ...string) []llm.Event {
 		evs = append(evs, llm.Event{Type: llm.EventNative, Raw: b})
 	}
 	return append(evs, llm.Event{Type: llm.EventFinish, Finish: &llm.Finish{Reason: llm.FinishStop}})
+}
+
+// endpointStreamHandler returns the client API handler whose endpoint attempts answer with the
+// routed request and a stream made by reply.
+func endpointStreamHandler(t *testing.T, reply func(req llm.Request) route.Stream) http.Handler {
+	t.Helper()
+	gen := func(context.Context, string, protocol.Account, llm.Request) route.Stream {
+		t.Error("an endpoint request went to generate")
+		return &events{evs: []llm.Event{{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeInternal}}}}
+	}
+	ep := func(_ context.Context, _ string, _ protocol.Account, req llm.Request) route.Stream { return reply(req) }
+	router, err := route.New(route.Config{}, []route.Account{{ID: "a"}}, gen, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewHandler(fixedSource{&Generation{Config: &Config{ClientKeys: []string{"k"}}, Router: router, Attempt: gen, Endpoint: ep}})
+}
+
+type endpointPause struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+// pausedEndpointReply is an endpoint reply whose given body pieces pause before they are written,
+// after every preceding piece reached the client. It lets a test observe the quiet between events.
+func pausedEndpointReply(format, contentType string, pieces []string, pauses map[int]endpointPause) route.Stream {
+	raw, _ := json.Marshal(llm.EndpointReply{ContentType: contentType})
+	steps := []func() llm.Event{
+		func() llm.Event {
+			return llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{Format: format, Raw: raw}}
+		},
+	}
+	for i, piece := range pieces {
+		i, piece := i, piece
+		steps = append(steps, func() llm.Event {
+			if pause, ok := pauses[i]; ok {
+				close(pause.entered)
+				<-pause.release
+			}
+			body, _ := json.Marshal(piece)
+			return llm.Event{Type: llm.EventNative, Raw: body}
+		})
+	}
+	steps = append(steps, func() llm.Event {
+		return llm.Event{Type: llm.EventFinish, Finish: &llm.Finish{Reason: llm.FinishStop}}
+	})
+	return &stepStream{steps: steps}
+}
+
+type stepStream struct {
+	steps []func() llm.Event
+	i     int
+}
+
+func (s *stepStream) Next() llm.Event {
+	f := s.steps[s.i]
+	if s.i < len(s.steps)-1 {
+		s.i++
+	}
+	return f()
+}
+
+func (*stepStream) Close() {}
+
+// responseWriter is an http.ResponseWriter whose body can be read while a handler still writes it.
+type responseWriter struct {
+	mu      sync.Mutex
+	header  http.Header
+	status  int
+	body    strings.Builder
+	flushed bool
+}
+
+func newResponseWriter() *responseWriter { return &responseWriter{header: make(http.Header)} }
+
+func (w *responseWriter) Header() http.Header { return w.header }
+
+func (w *responseWriter) WriteHeader(status int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.status == 0 {
+		w.status = status
+	}
+}
+
+func (w *responseWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.body.Write(p)
+}
+
+func (w *responseWriter) FlushError() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.flushed = true
+	return nil
+}
+
+func (w *responseWriter) Flush() { _ = w.FlushError() }
+
+func (w *responseWriter) snapshot() (int, string, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.status, w.body.String(), w.flushed
+}
+
+func waitForBody(t *testing.T, w *responseWriter, want string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		_, body, _ := w.snapshot()
+		if strings.Contains(body, want) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("body did not contain %q within %s: %q", want, timeout, body)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func serveEndpointAsync(h http.Handler, w http.ResponseWriter, path, body string) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer k")
+		h.ServeHTTP(w, r)
+	}()
+	return done
 }
 
 // A compaction request goes to an account as an endpoint call carrying the client's body, model,
@@ -173,6 +308,107 @@ func TestEndpointStreamAndBreaches(t *testing.T) {
 	if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "openai.responses reply") {
 		t.Fatalf("a reply in another format: got %d %s", w.Code, w.Body)
 	}
+}
+
+// A quiet SSE endpoint reply gets comments only between whole events; a JSON endpoint reply gets
+// none at all, however long it pauses between body pieces.
+func TestEndpointKeepAlive(t *testing.T) {
+	shortKeepAlive(t, 80*time.Millisecond)
+	release := func(once *sync.Once, ch chan struct{}) { once.Do(func() { close(ch) }) }
+
+	t.Run("SSE", func(t *testing.T) {
+		afterFirst := endpointPause{entered: make(chan struct{}), release: make(chan struct{})}
+		insideSecond := endpointPause{entered: make(chan struct{}), release: make(chan struct{})}
+		var once1, once2 sync.Once
+		t.Cleanup(func() {
+			release(&once1, afterFirst.release)
+			release(&once2, insideSecond.release)
+		})
+		h := endpointStreamHandler(t, func(llm.Request) route.Stream {
+			return pausedEndpointReply(llm.FormatOpenAIResponsesCompact, "text/event-stream",
+				[]string{"data: one\n\n", "data: two\n", "\n"}, map[int]endpointPause{1: afterFirst, 2: insideSecond})
+		})
+		w := newResponseWriter()
+		done := serveEndpointAsync(h, w, "/v1/responses/compact", `{"model":"m"}`)
+		waitForBody(t, w, "data: one\n\n", time.Second)
+		waitForBody(t, w, keepAliveComment, time.Second)
+		_, before, flushed := w.snapshot()
+		if !flushed {
+			t.Error("the comment was not flushed")
+		}
+		commentCount := strings.Count(before, keepAliveComment)
+		release(&once1, afterFirst.release)
+		waitForBody(t, w, "data: two\n", time.Second)
+		time.Sleep(2 * keepAliveAfter)
+		_, during, _ := w.snapshot()
+		if got := strings.Count(during, keepAliveComment); got != commentCount {
+			t.Fatalf("a comment went inside an event: %q", during)
+		}
+		release(&once2, insideSecond.release)
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("the endpoint reply did not finish")
+		}
+		status, body, _ := w.snapshot()
+		if status != http.StatusOK || strings.Count(body, keepAliveComment) != commentCount {
+			t.Fatalf("got %d %q; want status 200 with the comments only between events", status, body)
+		}
+		if !strings.Contains(body, "data: one\n\n"+keepAliveComment+"data: two\n\n") {
+			t.Fatalf("the comment is not between whole events: %q", body)
+		}
+	})
+
+	t.Run("JSON", func(t *testing.T) {
+		between := endpointPause{entered: make(chan struct{}), release: make(chan struct{})}
+		var once sync.Once
+		t.Cleanup(func() { release(&once, between.release) })
+		h := endpointStreamHandler(t, func(llm.Request) route.Stream {
+			return pausedEndpointReply(llm.FormatOpenAIResponsesCompact, "application/json",
+				[]string{`{"one":1,`, `"two":2}`}, map[int]endpointPause{1: between})
+		})
+		w := newResponseWriter()
+		done := serveEndpointAsync(h, w, "/v1/responses/compact", `{"model":"m"}`)
+		waitForBody(t, w, `{"one":1,`, time.Second)
+		time.Sleep(2 * keepAliveAfter)
+		release(&once, between.release)
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("the endpoint reply did not finish")
+		}
+		status, body, _ := w.snapshot()
+		if status != http.StatusOK || body != `{"one":1,"two":2}` || strings.Contains(body, keepAliveComment) {
+			t.Fatalf("got %d %q; want the JSON body without a keep-alive", status, body)
+		}
+	})
+
+	t.Run("Gemini Interactions", func(t *testing.T) {
+		between := endpointPause{entered: make(chan struct{}), release: make(chan struct{})}
+		var once sync.Once
+		t.Cleanup(func() { release(&once, between.release) })
+		h := endpointStreamHandler(t, func(llm.Request) route.Stream {
+			return pausedEndpointReply(llm.FormatGeminiInteractions, "text/event-stream",
+				[]string{"event: interaction.start\ndata: {}\n\n", "event: interaction.complete\ndata: {}\n\n"}, map[int]endpointPause{1: between})
+		})
+		w := newResponseWriter()
+		done := serveEndpointAsync(h, w, "/v1beta/interactions", `{"model":"models/m","stream":true}`)
+		waitForBody(t, w, "event: interaction.start", time.Second)
+		time.Sleep(2 * keepAliveAfter)
+		release(&once, between.release)
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("the Interactions reply did not finish")
+		}
+		status, body, _ := w.snapshot()
+		if status != http.StatusOK || !strings.Contains(body, "event: interaction.complete") {
+			t.Fatalf("got %d %q; want both Interactions events", status, body)
+		}
+		if strings.Contains(body, keepAliveComment) {
+			t.Fatalf("a keep-alive comment on the Gemini Interactions route: %q", body)
+		}
+	})
 }
 
 // A search request goes to an account as an endpoint call on both routes, with the client's body

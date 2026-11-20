@@ -15,11 +15,11 @@ import { KitContext } from "../../ui/kit/ui";
 import defaultTheme from "../../ui/themes/default.json";
 import paper from "../../ui/themes/paper.json";
 import terminal from "../../ui/themes/terminal.json";
-import { agentPages } from "./agentPages";
+import { agentPages, setupClientAction } from "./agentPages";
 import { clientListPage } from "./clientList";
 import { detected, encode, listed, openClient, PREF, parse } from "./clientListItems";
 import { ConnectionPage } from "./connection";
-import { type DeviceCatalog, device, newest } from "./device";
+import { type DeviceCatalog, type DeviceRegistry, device, newest } from "./device";
 import { DevicePage, devicePage } from "./devicePage";
 import { easyModePage } from "./easyMode";
 import { appHost, type Connection, connectionGet, privacyGet, privacySet } from "./host";
@@ -94,6 +94,15 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
       );
     };
   }, [loadDevice]);
+  // What the registries offer this device, read once: the Setup page offers to set up a client
+  // whose tool one of them offers, as Beginner Mode does.
+  const [offers, setOffers] = useState<DeviceRegistry[]>();
+  useEffect(() => {
+    device.registries().then(
+      (r) => setOffers(r.body),
+      () => {},
+    );
+  }, []);
   // The app's own core exited: show it.
   useEffect(() => {
     const off = listen("pluxy-connection", () => connectionGet().then(changed, () => {}));
@@ -129,8 +138,11 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
   const pages: PageDef[] = useMemo(() => {
     const installed = detected(clients, catalog);
     const visible = listed(clients, installed, saved, open);
+    // Setup lists the clients on core's machine. The app sets a client up on this computer, so
+    // it offers to only when core runs here.
+    const setup = conn.mode === "remote" ? undefined : setupClientAction(agents, catalog, offers);
     return [
-      ...corePages(),
+      ...corePages({ setup }),
       easyModePage(agents, catalog, loadDevice),
       {
         id: "connection",
@@ -153,7 +165,7 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
       ...visible.flatMap((c) => agents.find((a) => a.id === c.id) ?? []),
       ...devicePages(catalog),
     ];
-  }, [shown, catalog, loadDevice, agents, clients, saved, open, saveClients]);
+  }, [conn.mode, shown, catalog, offers, loadDevice, agents, clients, saved, open, saveClients]);
 
   // Not connected or not signed in (or the app's own core did not start): the Connection page,
   // where the person can fix the address or give the key, and this device's extensions, which

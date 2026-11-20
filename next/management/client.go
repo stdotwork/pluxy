@@ -334,6 +334,17 @@ func (c *Client) SetupApply(ctx context.Context, picks []string) (SetupApplyRepl
 	return v, err
 }
 
+// ClientPaste is GET /setup/clients/{id}/paste. keyID, when not empty, names the client key
+// the reply's Key placeholder points at.
+func (c *Client) ClientPaste(ctx context.Context, id, keyID string) (ClientPaste, error) {
+	var q url.Values
+	if keyID != "" {
+		q = url.Values{"key_id": {keyID}}
+	}
+	var v ClientPaste
+	return v, c.get(ctx, "/setup/clients/"+url.PathEscape(id)+"/paste", q, &v)
+}
+
 // SetupDone is POST /setup/done.
 func (c *Client) SetupDone(ctx context.Context) (SetupDoneReply, error) {
 	var v SetupDoneReply
