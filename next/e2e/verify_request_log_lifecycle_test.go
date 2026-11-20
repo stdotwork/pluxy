@@ -39,8 +39,9 @@ func TestVerifyRequestLogLifecycleAcrossConcurrentPaths(t *testing.T) {
 		"extension": map[string]any{
 			"manifest": filepath.Join(binDir, "pluxy-extension.json"),
 			"accounts": []any{map[string]any{"id": "upstream-1",
-				"settings":   map[string]any{"base_url": u.URL + "/v1"},
-				"credential": map[string]any{"kind": "api_key", "api_key": upstreamKey}}},
+				"disable_cooling": true,
+				"settings":        map[string]any{"base_url": u.URL + "/v1"},
+				"credential":      map[string]any{"kind": "api_key", "api_key": upstreamKey}}},
 		},
 	})
 	c := &mcore{base: base, path: path}
