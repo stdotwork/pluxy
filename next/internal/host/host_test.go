@@ -41,6 +41,11 @@ func TestMain(m *testing.M) {
 // fakeExtension misbehaves during startup. It writes its process ID to the file "pid" in its
 // working folder (the package folder) so the test can check it was reaped.
 func fakeExtension(mode string) {
+	if m, ok := strings.CutPrefix(mode, "tool-result-"); ok {
+		minor, _ := strconv.Atoi(m)
+		toolResultEcho(minor)
+		return
+	}
 	if mode == "echo-credential" {
 		echoCredential()
 		return
