@@ -32,6 +32,7 @@ func TestClaudeResponsesCompact(t *testing.T) {
 			"accounts": []any{map[string]any{
 				"id": "key", "settings": srv.Settings(""),
 				"credential": map[string]any{"kind": "api_key", "api_key": srv.IssueKey()},
+				"models":     []string{"claude-opus-4-6"},
 			}},
 		},
 	})
