@@ -95,6 +95,14 @@ func TestCodexBackendRoutes(t *testing.T) {
 			t.Fatalf("POST %s: status %d, want 404", path, unknown.StatusCode)
 		}
 	}
+	// The mux matches the escaped path, so this one reaches the allowlist's own check as well: a
+	// segment that unescapes to a slash is refused there, not passed on as another path.
+	escaped := do(http.MethodGet, "/backend-api/wham/tasks/a%2Fb", "")
+	_, _ = io.Copy(io.Discard, escaped.Body)
+	escaped.Body.Close()
+	if escaped.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET a%%2Fb task: status %d, want 404", escaped.StatusCode)
+	}
 
 	mu.Lock()
 	got := append([]codexBackendRequest(nil), seen...)

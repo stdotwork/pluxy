@@ -7,7 +7,8 @@ import (
 )
 
 // The Codex CLI's backend calls hold to the route that matched: a segment that is empty, a dot
-// segment, or one that unescapes to a slash, backslash or control character is refused.
+// segment, or one that unescapes to a slash, backslash or control character, or that is escaped
+// twice, is refused.
 func TestSafeBackendPath(t *testing.T) {
 	for path, want := range map[string]bool{
 		"/wham/usage": true,
@@ -25,6 +26,7 @@ func TestSafeBackendPath(t *testing.T) {
 		"/wham/%2E/x":                                   false,
 		"/wham/a%2Fb":                                   false,
 		"/wham/a%5Cb":                                   false,
+		"/ps/plugins/%252e%252e":                        false,
 		"/wham/a%00b":                                   false,
 		"/wham/a%0ab":                                   false,
 		"/wham/%zz":                                     false,

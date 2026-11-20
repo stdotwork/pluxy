@@ -150,15 +150,16 @@ func serveCodexBackend(w http.ResponseWriter, r *http.Request, g *Generation) {
 
 // safeBackendPath reports whether path, a request path below /backend-api as the client sent it
 // (escaped), stays where the route that matched it put it: it starts with a slash and no segment,
-// once unescaped, is empty, "." or "..", or holds a slash, a backslash or a control character
-// (an escaped one would let the backend read the path as another).
+// once unescaped, is empty, "." or "..", or holds a slash, a backslash, a percent sign or a
+// control character (an escaped one would let the backend read the path as another, and one
+// escaped twice would get past a check that unescapes once).
 func safeBackendPath(path string) bool {
 	if !strings.HasPrefix(path, "/") {
 		return false
 	}
 	for _, seg := range strings.Split(path[1:], "/") {
 		s, err := url.PathUnescape(seg)
-		if err != nil || s == "" || s == "." || s == ".." || strings.ContainsAny(s, "/\\") {
+		if err != nil || s == "" || s == "." || s == ".." || strings.ContainsAny(s, "/\\%") {
 			return false
 		}
 		for _, c := range s {
