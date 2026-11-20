@@ -275,6 +275,133 @@ func TestFindCore(t *testing.T) {
 	}
 }
 
+// Setup subcommands (TTY vs non-TTY, --yes, --pick, partial failure) and client show.
+func TestCLISetupAndClientShow(t *testing.T) {
+	var applied [][]string
+	var doneCalled bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer mgmt-secret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"error":{"code":"unauthorized","message":"invalid management key"}}`))
+			return
+		}
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v0/management/setup":
+			w.Write([]byte(`{"first_run":true,"scanning":false,"scanned_at":"2026-11-19T12:00:00Z","found":{"clients":[{"id":"claude-code","name":"Claude Code","installed":true,"version":"2.4.1","config":"~/.claude/settings.json","state":"not-configured"}],"sign_ins":[],"imports":[],"core":{"listen":"127.0.0.1:8317","reachable_from_network":false}},"picks":[{"id":"pluxy/claude","kind":"provider","title":"Claude","summary":"Claude","installed":false,"suggested":true,"because":"Claude Code is installed"},{"id":"pluxy/openai-compatible","kind":"provider","title":"OpenAI","summary":"OpenAI","installed":false,"suggested":false}]}`))
+		case "POST /v0/management/setup/scan":
+			w.Write([]byte(`{"first_run":true,"scanning":true,"found":{"clients":[],"sign_ins":[],"imports":[],"core":{"listen":"127.0.0.1:8317","reachable_from_network":false}},"picks":[]}`))
+		case "POST /v0/management/setup/apply":
+			var req struct {
+				Picks []string `json:"picks"`
+			}
+			json.NewDecoder(r.Body).Decode(&req)
+			applied = append(applied, req.Picks)
+			if slices.Contains(req.Picks, "bad/pkg") {
+				w.Write([]byte(`{"results":[{"id":"pluxy/claude","status":"done","package":{"id":"pluxy/claude","version":"0.1.0","registry":"bundled","url":"","sha256":"","fingerprint":"","enabled":true,"installed_at":"2026-11-19T12:00:00Z","state":"active"}},{"id":"bad/pkg","status":"error","error":"not found"}]}`))
+				return
+			}
+			w.Write([]byte(`{"results":[{"id":"pluxy/claude","status":"done","package":{"id":"pluxy/claude","version":"0.1.0","registry":"bundled","url":"","sha256":"","fingerprint":"","enabled":true,"installed_at":"2026-11-19T12:00:00Z","state":"active"}}]}`))
+		case "POST /v0/management/setup/done":
+			doneCalled = true
+			w.Write([]byte(`{"first_run":false}`))
+		case "GET /v0/management/client-keys":
+			w.Write([]byte(`{"keys":[{"id":"k1","masked":"sk******ab"}]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"error":{"code":"not_found","message":"nope"}}`))
+		}
+	}))
+	defer srv.Close()
+
+	env := func(k string) string {
+		return map[string]string{"PLUXY_URL": srv.URL, "PLUXY_MANAGEMENT_KEY": "mgmt-secret"}[k]
+	}
+	runWith := func(stdin string, tty bool, args ...string) (string, string, int) {
+		var out, errOut bytes.Buffer
+		code := runCLIWithInput(args, strings.NewReader(stdin), &out, &errOut, env, tty)
+		return out.String(), errOut.String(), code
+	}
+
+	// Non-terminal stdin does not prompt or apply.
+	if out, errOut, code := runWith("", false, "setup"); code != 0 || errOut != "" || !strings.Contains(out, "pluxy/claude") || len(applied) != 0 {
+		t.Fatalf("setup non-tty: code=%d out=%q err=%q applied=%v", code, out, errOut, applied)
+	}
+	// Terminal answering n does not apply.
+	if _, errOut, code := runWith("n\n", true, "setup"); code != 0 || !strings.Contains(errOut, "Apply suggested picks") || len(applied) != 0 {
+		t.Fatalf("setup tty n: code=%d err=%q applied=%v", code, errOut, applied)
+	}
+	// Terminal answering y applies suggested picks.
+	if out, _, code := runWith("y\n", true, "setup"); code != 0 || !strings.Contains(out, "done") || len(applied) != 1 || !slices.Equal(applied[0], []string{"pluxy/claude"}) {
+		t.Fatalf("setup tty y: code=%d out=%q applied=%v", code, out, applied)
+	}
+	// --yes applies without terminal.
+	applied = nil
+	if _, _, code := runWith("", false, "setup", "--yes"); code != 0 || len(applied) != 1 || !slices.Equal(applied[0], []string{"pluxy/claude"}) {
+		t.Fatalf("setup --yes: code=%d applied=%v", code, applied)
+	}
+	// setup scan --json prints body unchanged.
+	if out, _, code := runWith("", false, "setup", "scan", "--json"); code != 0 || !strings.Contains(out, `"scanning":true`) {
+		t.Fatalf("setup scan --json: %d %q", code, out)
+	}
+	// setup --yes --json prints the apply reply alone.
+	applied = nil
+	if out, _, code := runWith("", false, "setup", "--yes", "--json"); code != 0 || len(applied) != 1 || !json.Valid([]byte(out)) || !strings.HasPrefix(out, `{"results":`) {
+		t.Fatalf("setup --yes --json: code=%d out=%q applied=%v", code, out, applied)
+	}
+	// setup apply with one failing pick exits 1, prints the reply and, on stderr, an error object.
+	if out, errOut, code := runWith("", false, "setup", "apply", "--pick", "pluxy/claude", "--pick", "bad/pkg", "--json"); code != 1 || !strings.Contains(out, `"bad/pkg"`) || !strings.HasPrefix(errOut, `{"error":{"code":"failed"`) {
+		t.Fatalf("setup apply partial failure: code=%d out=%q err=%q", code, out, errOut)
+	}
+	// setup apply with no picks, no terminal and no --yes is a usage error; with --json its
+	// error is an object.
+	applied = nil
+	if _, errOut, code := runWith("", false, "setup", "apply"); code != 2 || len(applied) != 0 || !strings.Contains(errOut, "--yes") {
+		t.Fatalf("setup apply without a terminal: code=%d err=%q applied=%v", code, errOut, applied)
+	}
+	if out, errOut, code := runWith("", false, "setup", "apply", "--json"); code != 2 || out != "" || !strings.HasPrefix(errOut, `{"error":{"code":"invalid_request"`) {
+		t.Fatalf("setup apply --json without a terminal: code=%d out=%q err=%q", code, out, errOut)
+	}
+	// An API error with --json is the API's own object.
+	if _, errOut, code := runWith("", false, "logs", "--json"); code != 5 || errOut != "{\"error\":{\"code\":\"not_found\",\"message\":\"nope\"}}\n" {
+		t.Fatalf("logs --json against a 404: code=%d err=%q", code, errOut)
+	}
+	// setup done.
+	if out, _, code := runWith("", false, "setup", "done"); code != 0 || !doneCalled || !strings.Contains(out, "complete") {
+		t.Fatalf("setup done: code=%d doneCalled=%v out=%q", code, doneCalled, out)
+	}
+
+	// client show for all 5 tools, never printing the management key.
+	for _, tool := range []string{"claude-code", "codex", "opencode", "pi", "omp"} {
+		out, errOut, code := runWith("", false, "client", "show", tool)
+		if code != 0 || errOut != "" || !strings.Contains(out, srv.URL) || strings.Contains(out, "mgmt-secret") {
+			t.Errorf("client show %s: code=%d err=%q out=%q", tool, code, errOut, out)
+		}
+	}
+	// Pi's files are JSON with no comment line in them.
+	out, _, _ := runWith("", false, "client", "show", "pi", "--json")
+	var pi struct {
+		Files []struct{ Path, Content string }
+	}
+	if err := json.Unmarshal([]byte(out), &pi); err != nil || len(pi.Files) != 2 {
+		t.Fatalf("client show pi --json: %v: %s", err, out)
+	}
+	for _, f := range pi.Files {
+		if !json.Valid([]byte(f.Content)) || strings.Contains(f.Content, "#") {
+			t.Errorf("client show pi: %s is not plain JSON: %q", f.Path, f.Content)
+		}
+	}
+	// --key-id valid vs unknown.
+	if out, _, code := runWith("", false, "client", "show", "claude-code", "--key-id", "k1"); code != 0 || !strings.Contains(out, "k1") || !strings.Contains(out, "sk******ab") || strings.Contains(out, "mgmt-secret") {
+		t.Errorf("client show --key-id k1: code=%d out=%q", code, out)
+	}
+	if _, _, code := runWith("", false, "client", "show", "claude-code", "--key-id", "missing"); code != 5 {
+		t.Errorf("client show --key-id missing: code=%d, want 5", code)
+	}
+	if _, _, code := runWith("", false, "client", "show", "unknown-tool"); code != 2 {
+		t.Errorf("client show unknown: code=%d, want 2", code)
+	}
+}
+
 func TestUsageCLI(t *testing.T) {
 	var seenQueries []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

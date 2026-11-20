@@ -25,6 +25,9 @@ type appManifest struct {
 	ManifestVersion int    `json:"manifest_version"`
 	ID              string `json:"id"`
 	Version         string `json:"version"`
+	Title           string `json:"title"`
+	Summary         string `json:"summary"`
+	Kind            string `json:"kind"`
 	App             *struct {
 		Tier     string            `json:"tier"`
 		Programs map[string]string `json:"programs"`
@@ -66,6 +69,9 @@ func loadAppTools(root string) ([]extension, error) {
 		e := extension{name: entry.Name(), dir: toolDir, raw: raw, manifest: manifest{
 			ID:       m.ID,
 			Version:  m.Version,
+			Title:    m.Title,
+			Summary:  m.Summary,
+			Kind:     m.Kind,
 			Programs: m.App.Programs,
 			UI:       m.App.UI,
 		}}
@@ -88,6 +94,15 @@ func (m *appManifest) validate() error {
 	}
 	if !versionPattern.MatchString(m.Version) {
 		return fmt.Errorf("version %q is not 1 to 64 letters, digits, '.', '+', '_' and '-' starting with a letter or digit", m.Version)
+	}
+	// A client is described like a provider; the app's other tools need not be yet.
+	if m.Kind == kindClient || m.Title != "" || m.Summary != "" {
+		if err := checkDescription(m.Title, m.Summary); err != nil {
+			return err
+		}
+	}
+	if m.Kind != "" && m.Kind != kindClient {
+		return fmt.Errorf("kind %q: an app tool packed here is a %s, or names no kind", m.Kind, kindClient)
 	}
 	if m.App == nil || m.App.Tier != "native" || len(m.App.Programs) == 0 {
 		return errors.New("not a native tool with programs (app.tier native, app.programs)")
@@ -192,7 +207,7 @@ func packAppTools(root, out, programs string, platforms []string, only string, s
 			fmt.Fprintf(stdout, "%s %s %s\n", tool.manifest.ID, tool.manifest.Version, platform)
 		}
 		if len(release.Artifacts) > 0 {
-			ix.Packages[tool.manifest.ID] = indexPackage{Releases: []indexRelease{release}}
+			ix.Packages[tool.manifest.ID] = tool.manifest.indexPackage("", release)
 		}
 	}
 	if count == 0 {

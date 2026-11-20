@@ -75,12 +75,14 @@ function files(dir: string, base = dir): Record<string, string> {
 }
 
 /** A stand-in program: records its arguments (one per line), its folder and its environment in
- * records/<name>.*, then `done`; a terminal then runs what follows its `-e`. */
+ * records/<name>.*, then `done`; a terminal then runs what follows its `-e`.
+ * `--version` only prints a version and records nothing: core's setup scan asks it. */
 function standIn(path: string, records: string, name: string, terminal: boolean) {
   const r = (x: string) => `'${join(records, `${name}.${x}`)}'`;
   put(
     path,
     `#!/bin/sh
+[ "$1" = "--version" ] && { echo "0.0.0 (stand-in)"; exit 0; }
 for a in "$@"; do printf '%s\\n' "$a"; done > ${r("argv")}
 pwd -P > ${r("cwd")}
 env > ${r("env")}

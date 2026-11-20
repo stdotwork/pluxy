@@ -194,7 +194,7 @@ feature, it keeps the old label, unless the label named something this core does
   Model", "Video result credential cache TTL", the "LAN discovery" section, every Streaming field
   (so there is no Streaming tab), every payload rule (so there is no Payload tab), Claude's and
   Codex's cloaking and header defaults, Codex's response steering and live media relay, the
-  Antigravity and Devin fields, the plugin settings, "Disable Control Panel", and the panel update
+  Devin fields, the plugin settings, "Disable Control Panel", and the panel update
   settings ("Disable Panel Auto Updates", "Panel Repository", "Global GitHub Token"). Any of them
   can still be written in the Source tab.
 - "Disable Image Generation": core has no switch for every account. Each Codex account has its own

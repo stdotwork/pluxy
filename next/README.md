@@ -32,7 +32,6 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `extensions/kimi` | Provider extension for Kimi Code, Moonshot AI's coding subscription, signed in with a device code; `kimitest` is a fake Kimi for its tests. |
 | `extensions/xai` | Provider extension for xAI's Grok models: an API key, or a Grok account signed in as the Grok CLI signs in; `xaitest` is a fake xAI and xAI sign-in for its tests. |
 | `extensions/meta` | Provider extension for Meta's Muse models: a Muse Code subscription signed in with a device code, or a Meta API key; `metatest` is a fake Meta for its tests. |
-| `extensions/antigravity` | Provider extension for Google Antigravity: Gemini and Claude models through a Google account signed in to Antigravity; `agtest` is a fake Google login and Cloud Code for its tests. |
 | `extensions/devin` | Provider extension for Devin: the models a Devin account gets, signed in as Devin's CLI signs in or with a session token, over Devin's protobuf API; `devintest` is a fake Devin for its tests. |
 | `examples/scripted` | The tutorial's example extension. |
 | `examples/oauth` | An example provider that signs in by device code, browser (PKCE) or API key and renews its tokens, with a fake OAuth provider for tests (`oauthtest`). |
@@ -94,7 +93,14 @@ go build -o extensions/claude/claude ./extensions/claude
 ./pluxy serve -config config.json
 ```
 
-`pluxy -config config.json`, with no subcommand, serves too. Flags:
+`pluxy -config config.json`, with no subcommand, serves too. With no file at the config's path,
+`pluxy serve` writes a first config there and starts on it: it listens on `127.0.0.1` port 8317,
+or a free port when 8317 is taken, with one new client key and a new management key, in a file
+only its user can read. Core logs the file's path and the address, never the keys; read them in
+the file. `pluxy init [-config file] [-port n]` writes the same config without starting core
+(`-port 0`: a free port), and never replaces a file. A config with no management key is refused
+at start, with a message saying how to add one. A first start installs no package: install the
+providers you use from the bundled registry ([Packages](#packages)) or the panel. Flags:
 
 - `-config`: the config file (default `config.json`).
 - `-version`: print the build's version, commit and build date on one line, `pluxy <version> (<commit>, <date>)`, and exit. It does not read the config. Core logs the same line when it starts.
@@ -106,7 +112,7 @@ go build -o extensions/claude/claude ./extensions/claude
 
 A running core answers `curl http://127.0.0.1:8400/healthz` with `ok`.
 
-With a `management_key` set, the web panel is at `http://127.0.0.1:8400/panel/`: core's status,
+The web panel is at `http://127.0.0.1:8400/panel/`: core's status,
 accounts, extensions and themes, the pages extensions bring and their settings. Sign in with the
 management key. Extension pages are served from a listener of their own, on another site than
 the panel (`extension_pages` in the config); see [extension pages](ui/extension-pages/README.md).
@@ -178,7 +184,7 @@ the upstream's own count endpoint: Anthropic's for a Claude account on Anthropic
 `https://api.anthropic.com`, the default) or an OpenAI-compatible account with `"wire_api": "messages"`, Kimi's Messages count endpoint for a Kimi account, Gemini's for a Gemini account (Gemini API or Vertex AI) or one with
 `"wire_api": "gemini"`. A count from an upstream of the client's own kind comes back as the upstream sent it;
 otherwise core answers with the count in the client's shape. An account whose upstream has no count
-endpoint (Codex, xAI, Meta, Devin, Antigravity, and Chat or Responses accounts), and a Claude
+endpoint (Codex, xAI, Meta, Devin, and Chat or Responses accounts), and a Claude
 account whose `base_url` is not Anthropic's own (today's core draws the same line), cannot count:
 core tries the model's next account, and when the count gets no answer and one of the accounts
 tried could not count, it answers with its own estimate in the client's shape, as today's core
@@ -361,7 +367,7 @@ A config written for today's core, with its key names, works too: see
 ### Pack the extensions
 
 `pluxy-pack` builds every extension under `extensions/` as a release archive and writes the
-bundled registry index a fresh install starts from:
+bundled registry index an install ships with:
 
 ```bash
 go run ./cmd/pluxy-pack -out dist -platforms linux/amd64,darwin/arm64
@@ -386,12 +392,17 @@ publishes these yet; `.github/workflows/next-app-tools-pack.yml` builds and pack
 go run ./cmd/pluxy-pack -out dist -app-tools programs -platforms linux/amd64,windows/amd64
 ```
 
-Core installs and enables every package the bundled index lists on its first start with an
-empty packages folder:
+The index also says what each package is, from its manifest: `title`, `summary`, `kind`
+(`provider`, or `client` for the app's tools that point a coding client at core) and `tier`
+(`pick` for the packages a new install is offered, `verified` for the rest of pluxy's own; the
+list of picks is in `cmd/pluxy-pack`). Core installs none of them by itself: start it with the
+bundled index and install what you use:
 
 ```bash
 go build -trimpath -ldflags "-s -w" -o pluxy ./cmd/pluxy
 ./pluxy -config config.json -bundled dist/bundled/index.json
+pluxy ext available                 # what the bundled registry offers, with titles
+pluxy ext install pluxy/claude      # install and enable one
 ```
 
 `pluxy` itself is a plain `go build` of `./cmd/pluxy`, as above; the `-ldflags` only make it
@@ -403,8 +414,8 @@ relative archive URLs resolve against the index.
 ### Run it in a container
 
 `Dockerfile` (build context: this folder) builds an Alpine image with a static `pluxy`, the web
-panel built in, and every extension packed by `pluxy-pack` as the bundled packages, so the first
-start installs and enables them. It runs as user `65532`, not root.
+panel built in, and every extension packed by `pluxy-pack` as the bundled packages, which it
+installs only when asked (`pluxy ext install`, or the panel). It runs as user `65532`, not root.
 
 ```bash
 docker build -t pluxy .
@@ -413,7 +424,8 @@ docker build -t pluxy .
 Core reads no environment variables, so everything is set in `config.json`, and everything core
 keeps is in one folder: `/config`, a volume. It holds `config.json` and, beside it, the
 `credentials`, `packages` and `logs` folders core makes. Make a folder with a config file
-before the first start; `listen` must be `0.0.0.0:8400`, since the container's own `127.0.0.1`
+before the first start (with an empty `/config`, core writes a first config that listens on the
+container's own `127.0.0.1`: unreachable from outside, and the health check fails); `listen` must be `0.0.0.0:8400`, since the container's own `127.0.0.1`
 is not reachable from outside it, and the image's health check asks port 8400. Inside a container,
 requests through a published port come from Docker's network address, not from `127.0.0.1`, so
 the management API refuses them unless `management_allow_remote` is `true` (it still needs the
@@ -879,6 +891,18 @@ model name (refused with 400; set `generation_config.thinking_level` instead), a
 that drops a thought step whose signature does not look like one Gemini issued. An
 `"interactions": true` account still serves Chat Completions, Responses, Messages and Gemini
 clients, through GenerateContent with the same key.
+
+**Compaction.** `POST /v1/responses/compact` (also `POST /backend-api/codex/responses/compact`) is
+served on every Gemini account (Gemini API keys, Vertex AI service accounts and express mode keys,
+without needing `interactions`). The Responses request is translated to `GenerateContent` with the
+extension's schema, turn and call-ID repairs, stop sequences and structured output cleared, tools
+kept with `toolConfig` in `NONE` mode so the model answers in text while keeping tool declarations
+for any tool history, and the Codex CLI's compaction prompt (`prompt.md`) appended as a user
+turn. The request runs once, not streamed; thought parts are excluded, and the summary comes back
+as OpenAI's `response.compaction` object carrying one user message with the Codex CLI's
+`summary_prefix.md` followed by a newline and the summary. An incomplete or empty summary fails as
+a non-retryable request error.
+
 **Turn fixes.** Google refuses some conversations that clients send, so the extension changes the
 turns of every GenerateContent request to the Gemini API or Vertex AI, as today's core does, a
 Gemini client's own request included. A first turn from the model gets an empty user turn
@@ -905,7 +929,7 @@ Today's core can also relay Gemini requests through a browser tab signed in to A
 connects to core over a WebSocket. This extension does not: the extension protocol gives a
 program no listener that outlives its calls, and core stops idle programs.
 
-**Quota and identity.** Gemini has no usage endpoint, so quota answers unsupported. A `service_account` login's grant carries `identity` `{"client_email"}`, the key's service account; an API key login has none.
+**Quota and identity.** Google offers no quota reading or rate-limit headers for Gemini API keys or Vertex AI accounts, so `quota` reports the last-seen values from the account's most recent HTTP 429 reply (`google.rpc.QuotaFailure`, `google.rpc.RetryInfo` or HTTP `Retry-After`, and `google.rpc.ErrorInfo`), kept in extension memory only (nothing is written to disk) and labelled with when the 429 was seen and that it is not a live reading; an account that has not received a 429 answers with an empty limit list stating that no rate-limit reply has been seen yet. A `service_account` login's grant carries `identity` `{"client_email"}`, the key's service account; an API key login has none.
 
 ## Kimi
 
@@ -1205,110 +1229,6 @@ false), apply_patch rewriting for Codex Desktop, dropping encrypted reasoning Me
 Responses compaction through Meta, and token counting.
 
 **Quota.** Meta reports a Muse Code login's usage only from its key endpoint, so quota sends `POST https://api.meta.ai/muse-code/key` with an empty object, the device token, `x-api-version: 1.0.0` and Muse Code's client identity headers. The device token renews the account, so this goes only where a renewal goes, never to `base_url`. The call makes a new API key, which is dropped and never returned or stored; the account's own key is left alone, and if Meta retires it, core renews the credential on the next refused request (whether Meta does is not known). It reports `window` ("Usage limit", with its length) and `weekly` ("Weekly limit") from `subs_usage`, and the plan from `subs_tier_name`. An API key answers unsupported. A device login's grant carries `identity` `{"email"}`.
-
-## Antigravity
-
-The Antigravity extension (`extensions/antigravity`) serves the Gemini and Claude models a Google
-account gets in Google Antigravity, through Google's Cloud Code API. Point `extension.manifest` at
-`extensions/antigravity/pluxy-extension.json`. Accounts are added by login through the management
-API (below) with method `browser`: the reply's prompt carries Google's sign-in link, and the login
-finishes when the browser comes back to `http://localhost:51121/oauth-callback`, which the
-extension serves on this machine while the login runs. When core runs elsewhere, or the port is
-taken, paste the address the browser ended on as the prompt's `redirect_url` input.
-
-The sign-in is Google's OAuth for installed apps with the Antigravity app's own OAuth client and
-scopes, as today's core signs in, plus PKCE. Google's token endpoint also takes that client's
-secret. The extension has it built in: it is the installed-app client secret of the OAuth client the
-Antigravity desktop app uses, which ships inside every copy of the app, and today's core carries the
-same value (`ClientSecret` in the old core's `core/internal/auth/antigravity/constants.go`). It is not a user's
-credential and gives no access to an account without a sign-in. A login asks for no input, the
-credential does not keep the secret, and every renewal sends it, so an account renews whether it
-was logged in or imported. After signing in, the
-extension asks Cloud Code for the account's Google Cloud project (`loadCodeAssist`), or has one
-made on the account's default tier (`onboardUser`); the credential keeps the project too. Core
-renews the token 30 minutes before it expires; a renewal also looks up a project the credential
-lacks.
-
-An account written in the config holds the same credential:
-
-```json
-{
-  "id": "antigravity",
-  "credential": {"kind": "oauth", "access_token": "ya29...", "refresh_token": "1//...",
-    "data": {"project_id": "my-project-123"}}
-}
-```
-
-| Setting | Meaning |
-| --- | --- |
-| `base_url` | The Cloud Code host (default `https://daily-cloudcode-pa.googleapis.com`, the one today's core uses); the project calls go there too. |
-| `user_agent` | Replaces the Antigravity app's User-Agent (`antigravity/hub/2.29.0 (aidev_client; ...)`). |
-| `callback_listen` | `false` keeps the login from listening on port 51121; only a pasted address finishes it. |
-
-A request is built as a Gemini GenerateContent body: a Gemini client's own, or a translation of
-any other format with its reasoning effort as thinking settings, as the Gemini extension makes
-them. It goes to `{base_url}/v1internal:generateContent` (`:streamGenerateContent?alt=sse` for a
-stream) inside Cloud Code's envelope, as today's core sends it: the model, the project, request
-type `agent` (`image_gen` for image models), a request ID, and a session ID hashed from the first
-user text. Safety settings are left out; a Gemini model gets no output limit and has turns of
-function responses sent as the model's, and a conversation that starts or ends with the model gets
-an empty user turn at that end; a Claude model gets function calling in `VALIDATED` mode;
-translated system instructions go as a user turn. Each function declaration's schema is sent as
-`parameters`, and a response schema as `responseSchema`, in the subset Cloud Code takes, as today's
-core cleans them: local `$ref`s inlined, `const` as an enum, constraints and short enums moved into
-the description as hints (`minLength: 1`, `Allowed: a, b`), a type list such as
-`["string","null"]` as one nullable type, each `allOf` merged into the schema that holds it
-(Cloud Code's schema has no `allOf`: the branches' required names join the schema's, and their
-other keys fill the ones it lacks, its own winning), `if`, `then` and `else` removed after the
-properties of each `then` and `else` move into the schema that holds it (the model sees them as plain
-optional properties, as in today's core; the schema's own property wins, and a branch's `required`
-is dropped), and other JSON Schema keywords removed; for a
-Claude model, a union becomes its strongest branch. For Claude and Gemini 3 Pro, as in today's core, each
-object in a function's parameters that requires nothing gets a required placeholder property:
-`reason` (a string) where it has no properties, `_` (a boolean) where it has some and none is
-required. An object is a schema of type `object`; a union object (with `anyOf` or `oneOf`) gets
-none. Every schema with `properties` and no type gets type `object`, whatever the model, as in
-today's core. A function's response schema gets no placeholder: today's core adds one there, but the schema
-describes what the client returns, and nothing would remove the placeholder. A response format's schema keeps
-the `title` of every schema in it, as today's core does: Google's Schema type has a `title` field. A
-function's parameters and response schema lose their titles except for Claude and Gemini 3 Pro, also
-as in today's core. The extension removes
-the placeholders from the model's calls before any client format sees them; today's core does that
-only for Messages clients. It leaves a placeholder in a call where a client schema at the same path
-declares the name, as a property or in `required`: the other branches of a union (also those
-Claude's cleaning cuts), another item of a tuple, or a function declared again under that name. So
-it never removes a key the client declared; it does remove a key named `reason` that the model
-writes into an object with no declared properties, such as a free-form map. Claude models, Gemini 3 Pro and the image model are always
-asked on the stream method and gathered into one reply when the client wants one. Replies are
-taken out of the envelope's `response` field. A 429 is a used-up quota when Google says
-`QUOTA_EXHAUSTED` or asks for a wait of five minutes or more, and a rate limit otherwise, with the
-wait from Google's retry details or message. It holds back only that model on the account, as
-today's core cools only the model that answered, except a used-up credit balance
-(`INSUFFICIENT_G1_CREDITS_BALANCE`), which holds back the account.
-
-A `functionCall` part of a Cloud Code reply is one whole call, as Gemini sends calls, and a part
-with no name is a call with no name. Today's core treats such a part three ways. A Messages client
-gets a nameless part that comes while a call is open as more input for that call
-(`core/internal/translator/antigravity/claude/antigravity_claude_response.go`). A Chat client gets
-it as a second call with an empty name. A Responses client does not get it. The Messages
-behaviour is not kept, because nothing shows that Cloud Code sends such parts in reply to the
-requests the extension makes. Google's Vertex AI documentation shows nameless parts only for
-streamed function call arguments (`streamFunctionCallArguments`, Gemini 3 and later), which a
-request has to ask for, and whose parts carry `partialArgs`, not `args`. Neither core nor the
-extension asks for it. Today's core added the behaviour to its Gemini Messages translator in
-December 2025 with no recorded stream, and to its Antigravity one in October 2026, eleven months
-after that translator was written. Its tests use made-up chunks. It also appends each part's
-whole `args` object to the call's input, so a second part with arguments gives the client
-`{"a":"1"}{"b":"2"}`, which is not JSON.
-
-Not built, from today's core: the paid Google AI credits fallback, its own cache of Antigravity's
-reasoning (thought signatures travel in band, as for Gemini), the per-account model probe
-(`fetchAvailableModels`), Responses compaction through Antigravity, structured output for Claude
-5.5 as prompt text, sensitive-word obfuscation (`antigravity.sensitive-words`), the connection
-pool settings (`antigravity.connection-pool.*`), the app version lookup at every start, token
-counting (core has no count-tokens route).
-
-**Quota.** Quota reads `POST {base_url}/v1internal:retrieveUserQuotaSummary` with the credential's project, and the plan from `POST {base_url}/v1internal:loadCodeAssist`, with the access token and the account's Antigravity user agent. Each bucket of each model group becomes a limit, such as "Gemini models 5-hour limit", with the share used, the reset time, the window length where known and the group's models. A login's grant carries `identity` `{"email"}`.
 
 ## Devin
 
@@ -1674,7 +1594,7 @@ A rule applies when any entry of its `models` does:
 | Field | Matches |
 | --- | --- |
 | `name` | The model the request reaches the upstream as, or the one the client asked for (before an alias or prefix, with its thinking suffix or without it). `*` matches any text. |
-| `protocol` | The extension: `openai` (`pluxy/openai-compatible`), `claude`, `codex`, `gemini` (Gemini API keys and Vertex), `kimi`, `xai`, `meta`, `antigravity`; for another package the last part of its ID. Today's core used the upstream's API format here, so its `openai` also covered Kimi, which is `kimi` here. |
+| `protocol` | The extension: `openai` (`pluxy/openai-compatible`), `claude`, `codex`, `gemini` (Gemini API keys and Vertex), `kimi`, `xai`, `meta`; for another package the last part of its ID. Today's core used the upstream's API format here, so its `openai` also covered Kimi, which is `kimi` here. |
 | `from-protocol` | The API the client called: `openai` (Chat Completions, legacy Completions), `responses` (also compaction), `claude`, `gemini`, `interactions`, `codex-alpha-search`, `openai-image`. |
 | `headers` | The client's request headers, each value a pattern with `*`. Core checks them; they are not sent to the extension. |
 | `match`, `not-match`, `exist`, `not-exist` | The body about to go upstream. |
@@ -1682,9 +1602,7 @@ A rule applies when any entry of its `models` does:
 Paths are dotted keys (`\.` for a dot in a key), array indexes and the queries `#(...)` (the first
 match) and `#(...)#` (every match), the parts today's example config uses. A path with anything
 else (wildcards, `|`, `@`, `#` counts, `-1`) or a raw value that is not JSON fails the load, a
-reload or a settings change, with a message that names the rule and the path. The Antigravity
-extension's body carries the request inside `request`, and its rules apply there, as in today's
-core.
+reload or a settings change, with a message that names the rule and the path.
 
 A default checks the body the extension built, where today's core checked the client's request
 translated to the upstream's format: a field the extension fills in itself counts as present, such
@@ -1975,7 +1893,7 @@ starts it afresh.
 
 | Field | Meaning |
 | --- | --- |
-| `management_key` | Bearer token for the management API. Without it the management API is off. |
+| `management_key` | Bearer token for the management API and the panel. Required: a config without one is refused at start. |
 | `idle_stop_ms` | Stop the program after this long without requests. Default 10 minutes; 0 keeps it running. |
 | `drain_timeout_ms` | Longest a replaced version may keep finishing its requests. Default 10 minutes. |
 | `restart.backoff_ms` | Wait before the first restart after a crash; doubles per crash in a row. Default 1 second. |
@@ -2022,7 +1940,8 @@ in `trusted_proxies`, every client has the proxy's address, so one client's wron
 
 | Call | What it does |
 | --- | --- |
-| `GET /v0/management/status` | `desired` (the newest config version core has seen, with `error` when it was refused) and `active` (the one serving), each with `revision` and `hash`; `extensions`, one entry per running generation with `state` (`starting`, `active`, `idle`, `crashed`, `quarantined`, `draining`, `stopped`), `current`, `pid`, `restarts`, `last_error` and `active_requests`; `safe_mode`; `version`, `commit` and `built`, the build's version, commit and build date as `-version` prints them. |
+| `GET /v0/management/status` | `desired` (the newest config version core has seen, with `error` when it was refused) and `active` (the one serving), each with `revision` and `hash`; `extensions`, one entry per running generation with `state` (`starting`, `active`, `idle`, `crashed`, `quarantined`, `draining`, `stopped`), `current`, `pid`, `restarts`, `last_error` and `active_requests`; `safe_mode`; `first_run`; `version`, `commit` and `built`, the build's version, commit and build date as `-version` prints them. |
+| `GET /v0/management/setup`, `POST /v0/management/setup/scan`, `POST /v0/management/setup/apply`, `POST /v0/management/setup/done` | First-run setup scan, package picks, applying picks and ending first run; see [`management/README.md`](management/README.md#setup). |
 | `POST /v0/management/reload` | Reload now. 200 with the status when the new revision is active; 422 with the status when it was refused. |
 | `GET /v0/management/ui` | The pages of the extensions that run and where they are served; see [extension pages](ui/extension-pages/README.md#how-core-serves-pages). |
 | `GET`, `PATCH /v0/management/extensions/{publisher}/{name}/config` | An extension's settings, checked against the schema its manifest declares; see [extension pages](ui/extension-pages/README.md#how-core-serves-pages). |
@@ -2305,7 +2224,7 @@ was not cut, and what was left unread is only what the upstream sent after that 
 nothing but the end of the transfer. Devin's reply is binary frames with no line breaks, so the
 Devin provider reads on past its end frame to the body's end, for at most 64 KiB and 1 second;
 past that its reply is complete but its body is marked, and its end within the window is left
-out. The Gemini and Antigravity providers read their streams to the end. A response with neither a
+out. The Gemini provider reads its streams to the end. A response with neither a
 length nor chunked encoding whose connection closes early reads, in Go, as a body that ended
 there, also over TLS closed without its closing alert between two records (a close inside a
 record is marked), so it gets no line and nothing is left out: marking such bodies would cut
@@ -2436,10 +2355,10 @@ changed. Management never shows a registry or archive URL's user name, password 
 ### Bundled packages
 
 The packages a pluxy install ships with are a registry like any other, named `bundled`: by
-default `bundled/index.json` beside the `pluxy` program, or the index `-bundled` names. On its
-first start with a packages folder that has no `packages.json`, core installs and enables every
-package the bundled registry lists, through the same steps as any install. Bundled packages are
-removed like any other, and stay removed; installing one again takes it from `bundled`.
+default `bundled/index.json` beside the `pluxy` program, or the index `-bundled` names. It needs
+no network. Core installs nothing from it by itself, on a first start or later: a package is
+installed from it like from any registry (`POST /packages` with `"registry": "bundled"`, or
+`pluxy ext install <id>`), and removed like any other.
 
 ### Package management API
 
@@ -2496,15 +2415,15 @@ imports, so a migration sees them before core ever starts.
 
 A migrated config needs its management key set again once. Today's core writes a bcrypt hash over
 `management.secret-key` in the file after it reads the key, and this core cannot use a hash: it
-leaves the management API and the panel off and says why in its log. Replace the hash with the key
-itself, in plain text.
+refuses the config and says so. Replace the hash with the key itself, in plain text. A config with
+no management key at all is refused too, with a message saying how to add one.
 
 Settings only this core has keep their JSON names in a `config.yaml`: `packages`, `extensions`,
 `extension`, `extension_pages`, `drop_policy`, `token_count_estimate`, `credentials_dir` and `cors`
 (today's core has no CORS setting: it allows every origin). Provider accounts set in
 the file go to the installed package of their provider (`pluxy/codex`, `pluxy/claude`,
 `pluxy/gemini`, `pluxy/xai`, `pluxy/openai-compatible`), so those packages must be installed:
-the bundled ones are, on the first start.
+install them from the bundled registry (`pluxy ext install pluxy/codex`) before they serve.
 
 ### Provider key sections
 
@@ -2550,9 +2469,9 @@ are accepted silently.
 | `config-version` | Must be 8 when present, as in today's core. | Supported |
 | `server.host` (`host`), `server.port` (`port`) | `listen` is `host:port`. An empty host listens on every interface and a port of 0 or none is 8317, as in today's core. | Supported |
 | `access.api-keys` (`api-keys` as a list) | `client_keys`. At least one key is required; today's core serves anyone when the list is empty. | Supported |
-| `management.secret-key` (`remote-management.secret-key`) | `management_key`, exactly as written: turns on the management API and the panel. A key already hashed with bcrypt (today's core can write one) is not supported yet: the management API stays off and the log says why. | Supported; hashed keys later |
+| `management.secret-key` (`remote-management.secret-key`) | `management_key`, exactly as written. Required: a config without one, or with a key already hashed with bcrypt (today's core can write one), is refused, saying what to set. | Supported; hashed keys refused |
 | `management.allow-remote` (`remote-management.allow-remote`) | `management_allow_remote`: without it the management API answers only this machine, as in today's core. | Supported |
-| `management.disable-control-panel` | The panel is on exactly when the management API is. | Dropped: the management key already turns the panel on and off |
+| `management.disable-control-panel` | The panel is always on, with the management API. | Dropped: the panel needs the management key |
 | `management.disable-auto-update-panel`, `management.panel-github-repository`, `server.github-token` (`github-token`) | The panel is built into core; nothing is downloaded. | Dropped: no panel download |
 | `management.base-url` | | Dropped: no terminal UI |
 | `server.max-request-body-bytes` | Request bodies are capped at 24 MiB. | Dropped: core needs a fixed cap for its request frame |
@@ -2596,13 +2515,12 @@ are accepted silently.
 | `experimental-cch-signing` (Claude keys) | | Dead |
 | `oauth.auth-dir` (`auth-dir`) | The folder `-import-auth` reads (see below). Core never reads or writes it while it runs; at each load it logs how many credential files there are not imported yet. | Supported |
 | `oauth.auth-auto-refresh-workers` (`auth-auto-refresh-workers`) | Each account is renewed shortly before it expires. | Dropped: no need for a pool size |
-| `oauth.model-alias` (`oauth-model-alias`), `oauth.excluded-models` (`oauth-excluded-models`) | Each channel's rules become the `model_alias` and `excluded_models` of the package that serves its accounts, for the accounts added to it by a sign-in (not with an API key): `codex` is `pluxy/codex`, `claude` is `pluxy/claude`, `vertex` is `pluxy/gemini`, `kimi` (and `kimi-ai`, `kimi.ai`, `kimi.com`) is `pluxy/kimi`, `xai` is `pluxy/xai`, `meta` is `pluxy/meta`, `antigravity` is `pluxy/antigravity`, `devin` is `pluxy/devin`. Rules for another channel are named in the log and ignored. An alias's `force-mapping` and `openapi` are later, as the same settings are on the keys' models below. | Supported |
+| `oauth.model-alias` (`oauth-model-alias`), `oauth.excluded-models` (`oauth-excluded-models`) | Each channel's rules become the `model_alias` and `excluded_models` of the package that serves its accounts, for the accounts added to it by a sign-in (not with an API key): `codex` is `pluxy/codex`, `claude` is `pluxy/claude`, `vertex` is `pluxy/gemini`, `kimi` (and `kimi-ai`, `kimi.ai`, `kimi.com`) is `pluxy/kimi`, `xai` is `pluxy/xai`, `meta` is `pluxy/meta`, `devin` is `pluxy/devin`. Rules for another channel are named in the log and ignored. An alias's `force-mapping` and `openapi` are later, as the same settings are on the keys' models below. | Supported |
 | `oauth.settings` (`oauth-settings`) | | Dropped: needs a model catalog, and no page uses it |
 | `oauth.request-scoped-errors` (`oauth-request-scoped-errors`) and every `request-scoped-errors` | | Dropped: a request-scoped error is already not the account's fault |
 | `oauth.providers.aistudio.ws-auth` (`ws-auth`) | | Dropped: the AI Studio relay needs a long-lived listener the extension protocol does not have |
 | `oauth.providers.codex.live-media-relay.*` | | Dropped: realtime and WebRTC are out of scope |
 | `oauth.providers.codex.signin-with-chatgpt-identifier` (`codex.signin-with-chatgpt-identifier`) | `signin_with_chatgpt_identifier` on the Sign in with ChatGPT (SIWC) accounts `-import-auth` adds. Left unset, they use the extension's default, `pluxy`. | Supported when importing |
-| `oauth.providers.antigravity.*` (`antigravity`, `antigravity-signature-*`, `quota-exceeded.antigravity-credits`) | | Dropped: no need found; the credits fallback would spend paid credits unasked |
 | `oauth.providers.devin.*` (`devin`) | Only `sensitive-words`. | Dropped: rewriting words to get past a content filter is out of scope |
 | `api-keys.meta` (`meta-api-key`) | | Dropped: the login is built; no need for a bare key |
 | Every `headers` on a group or key | The account's [`headers`](#upstream-headers): a key's own, else its group's (a key's `headers: {}` sends none), and an `openai-compatibility` group's for all its keys. Names and values are trimmed and empty ones dropped, as in today's core. A header whose value today's core takes from the client's request (`$` and a header name, or `$CPA-SESSION-ID`) is named in the log and not imported. A header this core refuses (`Host`, `Content-Length`, `Transfer-Encoding`, `Connection`) fails the load, where today's core sends it. | Supported |
@@ -2663,7 +2581,6 @@ use it from one core only, or sign in again in the other.
 | `claude` | `pluxy/claude` subscription account | `access_token`, `refresh_token`, `expired`. |
 | `kimi`, `kimi-ai` | `pluxy/kimi` account | `access_token`, `refresh_token`, `expired`, `device_id`; `base_url` is an account setting, and so is the site, `domain`, decided as today's core decides it: from `domain`, else `base_url`'s host, else the type (`kimi.ai` for `kimi-ai`). |
 | `vertex` | `pluxy/gemini` Vertex AI account with a service account | `service_account` is the credential; `project_id` and `location` (default `us-central1`, as in today's core) are the account's `vertex` settings. `interactions` or `native_interactions` set to JSON `true` at the top of the file is the account's `interactions` setting. |
-| `antigravity` | `pluxy/antigravity` account | `access_token`, `refresh_token`, `expired`; `project_id` stays with the credential and `base_url` is an account setting. The file holds no OAuth client secret (today's core has it built in, and so does the extension), so the account renews on its own, as it does in today's core. |
 | `xai` | `pluxy/xai` Grok login account | `access_token`, `refresh_token`, `expired`; `token_endpoint` stays with the credential and `base_url` is an account setting. |
 | `meta` | `pluxy/meta` Muse Code login account | `api_key` (else `access_token`) is the minted key and `dca_token` (else a `dca:` `access_token`) the device token that mints a new one; `base_url` stays with the credential. A file with only the device token mints its key on the first request. |
 | `devin` | `pluxy/devin` account with a session token | `session_token` (else `api_key`) is the credential; `base_url` is an account setting and `user_name` the label when the file has no `label` or `email`. |

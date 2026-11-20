@@ -21,6 +21,7 @@ func TestConfigHeaderPlaceholdersAreThoseOfAccounts(t *testing.T) {
 		{"provider section", `listen: 127.0.0.1:8317
 access:
   api-keys: [fake-client-key-1]
+remote-management: {secret-key: fake-management-key-1}
 codex-api-key:
   - api-key: fake-codex-key-1
     base-url: https://codex.example.com
@@ -42,6 +43,7 @@ password: "12345678"
 		{"core's layout", `listen: 127.0.0.1:8317
 access:
   api-keys: [fake-client-key-1]
+remote-management: {secret-key: fake-management-key-1}
 extensions:
   pluxy/x:
     accounts:
@@ -50,7 +52,7 @@ extensions:
           X-Api-Key: "  fake-kept-spaces  "
           Authorization: Bearer fake-yaml-bearer
 `, true, nil},
-		{"core's layout, json", `{"listen": "127.0.0.1:8317", "client_keys": ["fake-client-key-1"],
+		{"core's layout, json", `{"listen": "127.0.0.1:8317", "client_keys": ["fake-client-key-1"], "management_key": "fake-management-key-1",
   "extensions": {"pluxy/x": {"accounts": [{"id": "a", "headers": {"X-Api-Key": "  fake-json-spaces  "}}]}}}`, false, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -23,6 +23,17 @@ import (
 	"github.com/stdotwork/pluxy/next/extensions/kimi/kimitest"
 )
 
+// installBundled installs and enables the packages ids from the bundled registry of the core at
+// base: a first start installs nothing.
+func installBundled(t *testing.T, base string, ids ...string) {
+	t.Helper()
+	for _, id := range ids {
+		if code := manage(t, base, "POST", "/packages", map[string]any{"id": id, "registry": "bundled", "enable": true}, nil); code != http.StatusOK {
+			t.Fatalf("installing %s from the bundled registry: status %d", id, code)
+		}
+	}
+}
+
 // bundledRegistry writes a local registry offering each extension built in binDir (ID to the
 // program's path under binDir) as version 0.1.0, and returns its index's path.
 func bundledRegistry(t *testing.T, programs map[string]string) string {
@@ -214,12 +225,12 @@ openai-compatibility:
 		"imported kimi-1700000000000.json as account kimi-1700000000000 (pluxy/kimi)",
 		"imported codex-ab12cd34-user@example.com-plus.json as account codex-ab12cd34-user-example.com-plus (pluxy/codex)",
 		"imported claude-user@example.com.json as account claude-user-example.com (pluxy/claude)",
-		"imported antigravity-user@example.com.json as account antigravity-user-example.com (pluxy/antigravity)",
+		"skipped antigravity-user@example.com.json: pluxy no longer ships the Antigravity provider",
 		"imported xai-grok@example.com.json as account xai-grok-example.com (pluxy/xai)",
 		"imported meta-muse.json as account meta-muse (pluxy/meta)",
 		"imported devin-user.json as account devin-user (pluxy/devin)",
 		"skipped gemini-old.json: today's core does not load it either",
-		"7 imported, 1 skipped",
+		"6 imported, 2 skipped",
 	} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("import output lacks %q", want)
@@ -234,6 +245,7 @@ openai-compatibility:
 	if all := logs.waitFor(t, "config revision 1 active"); strings.Contains(all, "not supported yet, ignored") {
 		t.Errorf("core named settings it does not support:\n%s", all)
 	}
+	installBundled(t, base, "pluxy/openai-compatible", "pluxy/kimi", "pluxy/codex", "pluxy/claude")
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
@@ -307,12 +319,14 @@ openai-compatibility:
 	for _, a := range accounts.Accounts {
 		got[a.ID] = a.Source + " " + a.Kind + " " + strconv.FormatBool(a.Disabled)
 	}
+	if _, ok := got["antigravity-user-example.com"]; ok {
+		t.Errorf("antigravity account was imported: %v", got["antigravity-user-example.com"])
+	}
 	for id, want := range map[string]string{
 		"local":                                "config api_key false",
 		"kimi-1700000000000":                   "login oauth false",
 		"codex-ab12cd34-user-example.com-plus": "login oauth false",
 		"claude-user-example.com":              "login oauth true",
-		"antigravity-user-example.com":         "login oauth false",
 		"xai-grok-example.com":                 "login oauth false",
 		"meta-muse":                            "login oauth false",
 		"devin-user":                           "login api_key false",
@@ -327,7 +341,8 @@ openai-compatibility:
 }
 
 // -import-auth prints the config's notices (a dropped setting, a bcrypt management key) on standard
-// error and keeps standard output for the counts.
+// error and keeps standard output for the counts. A config core would not serve, for want of a
+// usable management key, still imports: it is the way a CPA setup's accounts come across.
 func TestImportAuthPrintsConfigNotices(t *testing.T) {
 	work := t.TempDir()
 	authDir := filepath.Join(work, "old-auths")
@@ -352,7 +367,7 @@ func TestImportAuthPrintsConfigNotices(t *testing.T) {
 	}
 	for _, want := range []string{
 		"dropped, ignored: server.max-request-body-bytes",
-		"management.secret-key is a bcrypt hash",
+		"remote-management.secret-key is a bcrypt hash: replace it with a new key (pluxy cannot use a bcrypt hash)",
 	} {
 		if !strings.Contains(stderr.String(), want) {
 			t.Errorf("stderr lacks %q:\n%s", want, &stderr)
