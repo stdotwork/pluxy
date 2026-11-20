@@ -687,6 +687,10 @@ func MergeModel(acct, cat, ext *protocol.Model) (m protocol.Model, maxOutputToke
 
 	m.ContextLength = ctxLimit
 	m.MaxCompletionTokens = outLimit
+	if m.InputTokenLimit != 0 || m.OutputTokenLimit != 0 {
+		m.InputTokenLimit = ctxLimit
+		m.OutputTokenLimit = outLimit
+	}
 	maxOutputTokens = outLimit
 	from = cmp.Or(ctxFrom, outFrom, capFrom)
 	return m, maxOutputTokens, from

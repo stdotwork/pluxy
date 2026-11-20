@@ -538,3 +538,19 @@ func TestAccountAliasDoesNotUsePublicCatalogueEntry(t *testing.T) {
 		t.Errorf("gpt-5.6-luna alias = %+v, want no catalogue limits, capabilities or from", got)
 	}
 }
+
+func TestMergeModelAlignsGeminiLimitsWithTheMergedLimits(t *testing.T) {
+	acct := &protocol.Model{
+		ContextLength:       1048576,
+		MaxCompletionTokens: 65536,
+		InputTokenLimit:     1048576,
+		OutputTokenLimit:    65536,
+	}
+	cat := &protocol.Model{ContextLength: 500000, MaxCompletionTokens: 32768}
+	got, maxOut, _ := MergeModel(acct, cat, nil)
+	if got.ContextLength != 500000 || got.MaxCompletionTokens != 32768 ||
+		got.InputTokenLimit != 500000 || got.OutputTokenLimit != 32768 || maxOut != 32768 {
+		t.Errorf("merged limits = ctx=%d, out=%d, input=%d, output=%d, max_output_tokens=%d; want all context/input 500000 and all output/max 32768",
+			got.ContextLength, got.MaxCompletionTokens, got.InputTokenLimit, got.OutputTokenLimit, maxOut)
+	}
+}
