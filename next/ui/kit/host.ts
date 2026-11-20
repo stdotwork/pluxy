@@ -44,4 +44,10 @@ export interface Host {
    * knows it: the browser panel's is the origin that served it. A host that cannot say leaves it out.
    */
   address?: string;
+  /**
+   * Saves text as a file called name where the person finds it, and resolves to where that is; it
+   * rejects with why it could not. Only a host whose window cannot download a file has it (the
+   * desktop app); without it the kit downloads the file as a browser does.
+   */
+  saveFile?(name: string, text: string): Promise<string>;
 }

@@ -6,7 +6,10 @@
 //!   unchanged, is pasted into "Or paste a theme file's JSON" and added: the window paints in its
 //!   canvas colour (`--px-color-bg` and `--app-theme-canvas` on the root element), the root has
 //!   class `dark`, and the picker lists Nightfall, chosen; `GET /themes` through the app's host
-//!   (the `core_call` command) has `t3/nightfall` as `current`.
+//!   (the `core_call` command) has `t3/nightfall` as `current`. Then Export is pressed: the page
+//!   says where the file was saved, that path is `nightfall.json` in the session's Downloads
+//!   folder, and the file there, read from disk, holds the theme file's JSON. The app saves it
+//!   itself (the `file_save` command), with no dialog to drive.
 //! - `restart`: the next launch paints in that theme before anything is clicked, and its Themes
 //!   page has Nightfall chosen; the stage stays on that page long enough for the session's last
 //!   screenshot to show it.
@@ -238,6 +241,64 @@ fn add(c: &mut Checks, app: &AppHandle) {
     c.check(
         r["status"] == 200 && r["body"]["current"] == ID && has,
         format!("GET /themes through the app's host has {ID} stored and current ({r})"),
+    );
+    export(c, app);
+}
+
+/// Presses Export and checks the file the page says it saved.
+fn export(c: &mut Checks, app: &AppHandle) {
+    let press = format!(
+        "(() => {{ const b = document.querySelector({}); if (!b) return false; b.click(); return true; }})()",
+        json!(format!(
+            "button[aria-label=\"Export {NAME} as a theme file\"]"
+        ))
+    );
+    if !c.check(
+        main_eval(app, &press) == Some(json!(true)),
+        format!("the Themes page has Export for {NAME}, pressed"),
+    ) {
+        return;
+    }
+    const SAVED: &str = "Saved to ";
+    let said = within(15, || {
+        main_eval(
+            app,
+            "[...document.querySelectorAll('[role=status]')].map((e) => e.textContent).find((t) => t.startsWith('Saved to ')) ?? null",
+        )
+        .and_then(|v| v.as_str().map(str::to_string))
+    });
+    let notices = main_eval(
+        app,
+        "[...document.querySelectorAll('[role=alert], [role=status]')].map((e) => e.textContent).join(' | ')",
+    )
+    .unwrap_or(Value::Null);
+    if !c.check(
+        said.is_some(),
+        format!("the page says where {NAME} was saved (notices: {notices})"),
+    ) {
+        return;
+    }
+    let path = std::path::PathBuf::from(&said.unwrap_or_default()[SAVED.len()..]);
+    // A session with no Downloads folder set up gets the one at home.
+    let downloads = app
+        .path()
+        .download_dir()
+        .or_else(|_| app.path().home_dir().map(|home| home.join("Downloads")))
+        .ok();
+    c.check(
+        path.file_name().and_then(|n| n.to_str()) == Some("nightfall.json")
+            && path.parent().map(|p| p.to_path_buf()) == downloads,
+        format!(
+            "the saved file is nightfall.json in the Downloads folder ({}, Downloads {downloads:?})",
+            path.display()
+        ),
+    );
+    let held = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+    c.check(
+        held.is_some() && held == serde_json::from_str::<Value>(THEME).ok(),
+        format!("the file at {} holds the theme file's JSON", path.display()),
     );
 }
 

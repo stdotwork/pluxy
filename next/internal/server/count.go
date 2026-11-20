@@ -104,11 +104,11 @@ func serveCount(w http.ResponseWriter, r *http.Request, g *Generation, f countFo
 	rr.Attempt = func(ctx context.Context, ext string, a protocol.Account, req llm.Request) route.Stream {
 		return &countWatch{Stream: g.Count(ctx, ext, a, req), cannot: &cannot}
 	}
-	rr.Attempting = func(a route.Attempt) { t.account = a.Account }
+	rr.Attempting = t.attempt
 	stream := g.Router.Generate(host.WithPayloadClient(r.Context(), req.Model, r.Header), rr)
 	defer stream.Close()
 	ev := stream.Next()
-	t.setHeader(w)
+	t.setHeaders(w, g.Config.Routing.ExplainOn())
 	var format string
 	for ; !ev.Terminal(); ev = stream.Next() {
 		if ev.Type == llm.EventResponseStart && ev.Response != nil {
@@ -126,7 +126,7 @@ func serveCount(w http.ResponseWriter, r *http.Request, g *Generation, f countFo
 			return
 		}
 		logFailure(r, ev.Error)
-		f.writeError(w, ev.Error)
+		f.writeError(w, t.explained(ev.Error))
 		return
 	}
 	u := ev.Usage

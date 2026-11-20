@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { type ErrorLogFile, type LogContent, problem } from "../api";
 import { useAccountLabels, usePrivacy } from "../privacy";
+import { useSave } from "../save";
 import type { PageDef } from "../shell";
 import { strings } from "../strings";
 import {
@@ -59,18 +60,6 @@ const t = strings("logs", {
   retained: "Showing the latest 10,000 loaded lines. Older lines are no longer searched or downloaded here.",
 });
 
-function saveLog(name: string, content: string) {
-  const url = URL.createObjectURL(new Blob([content], { type: "text/plain;charset=utf-8" }));
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = name;
-  document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
-  // Allow the browser to start consuming the Blob before releasing it.
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
 function logLevel(line: string) {
   return line.match(/^\[[^\]]+\] \[(info|warn)\s*\]/)?.[1] ?? "";
 }
@@ -85,6 +74,8 @@ function LogText({ content, wrap }: { content: string; wrap: boolean }) {
 
 export function LogsPage() {
   const { api, unauthorized } = useKit();
+  const saved = useSave();
+  const saveLog = (name: string, content: string) => saved.save(name, content, "text/plain;charset=utf-8");
   // Privacy mode masks what the views show; search, downloads and the files keep the real text.
   const p = usePrivacy();
   const files = useLoad(api.errorLogs);
@@ -244,6 +235,7 @@ export function LogsPage() {
           </Button>
         }
       />
+      {saved.notice}
       <Card title={t("content")}>
         {error && <Notice tone="danger">{mask(error)}</Notice>}
         {off && (

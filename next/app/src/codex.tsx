@@ -34,7 +34,7 @@ import {
 } from "./codexForm";
 import type { AgentPage } from "./easyMode";
 import { connectionGet } from "./host";
-import { keptTerminal, useDeviceChanged } from "./startCli";
+import { keptTerminal, launcherProblem, useDeviceChanged } from "./startCli";
 
 const t = strings("codex", {
   title: "Codex",
@@ -350,7 +350,7 @@ function Launch(props: { available: boolean }) {
             onChange={setTerminal}
           />
         )}
-        {terminals.error && <Notice tone="warn">{terminals.error}</Notice>}
+        {terminals.error && <Notice tone="warn">{launcherProblem(terminals.error)}</Notice>}
         <Button
           variant="primary"
           onClick={() =>
@@ -379,7 +379,7 @@ function Launch(props: { available: boolean }) {
         </Button>
         {!cwd.trim() && <small class="hint">{t("appCwd")}</small>}
       </Card>
-      {action.error && <Notice tone="danger">{action.error}</Notice>}
+      {action.error && <Notice tone="danger">{launcherProblem(action.error)}</Notice>}
     </>
   );
 }

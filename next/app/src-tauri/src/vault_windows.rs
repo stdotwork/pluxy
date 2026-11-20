@@ -151,8 +151,9 @@ fn not_ours(what: &str) -> String {
 }
 
 /// Deletes the file open as f (with `DELETE`), through its handle: at once with POSIX semantics
-/// where the file system has them, else when its last handle closes.
-fn delete(f: &File) -> io::Result<()> {
+/// where the file system has them, else when its last handle closes. Also the updater's removal
+/// of what it recorded (`updater/exe.rs`).
+pub(crate) fn delete(f: &File) -> io::Result<()> {
     let ex = FILE_DISPOSITION_INFO_EX {
         Flags: FILE_DISPOSITION_FLAG_DELETE | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS,
     };
@@ -395,49 +396,58 @@ impl Folder {
 
     /// The names inside it, read through its handle.
     pub(super) fn names(&self) -> Result<Vec<String>, String> {
-        let mut out = Vec::new();
-        // u64s keep each entry aligned.
-        let mut buf = vec![0u64; 8192];
-        let mut class = FileFullDirectoryRestartInfo;
+        entries(&self.0)
+            .map(|v| v.into_iter().map(|(name, _)| name).collect())
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// The names inside the folder open as dir (with `FILE_LIST_DIRECTORY`), each with its file
+/// attributes, read through its handle. Also the updater's removal of a folder it recorded
+/// (`updater/exe.rs`).
+pub(crate) fn entries(dir: &File) -> io::Result<Vec<(String, u32)>> {
+    let mut out = Vec::new();
+    // u64s keep each entry aligned.
+    let mut buf = vec![0u64; 8192];
+    let mut class = FileFullDirectoryRestartInfo;
+    loop {
+        // SAFETY: buf is writable for its whole length.
+        let got = unsafe {
+            GetFileInformationByHandleEx(
+                handle(dir),
+                class,
+                buf.as_mut_ptr().cast(),
+                (buf.len() * 8) as u32,
+            )
+        };
+        if got == 0 {
+            let e = io::Error::last_os_error();
+            if e.raw_os_error() == Some(ERROR_NO_MORE_FILES as i32) {
+                return Ok(out);
+            }
+            return Err(e);
+        }
+        class = FileFullDirectoryInfo;
+        let base = buf.as_ptr() as *const u8;
+        let mut offset = 0usize;
         loop {
-            // SAFETY: buf is writable for its whole length.
-            let got = unsafe {
-                GetFileInformationByHandleEx(
-                    handle(&self.0),
-                    class,
-                    buf.as_mut_ptr().cast(),
-                    (buf.len() * 8) as u32,
+            // SAFETY: the system filled buf with a chain of entries, each starting at an
+            // aligned offset inside it, with its name of FileNameLength bytes after it.
+            let entry = unsafe { &*(base.add(offset) as *const FILE_FULL_DIR_INFO) };
+            let name = unsafe {
+                std::slice::from_raw_parts(
+                    base.add(offset + offset_of!(FILE_FULL_DIR_INFO, FileName)) as *const u16,
+                    entry.FileNameLength as usize / 2,
                 )
             };
-            if got == 0 {
-                let e = io::Error::last_os_error();
-                if e.raw_os_error() == Some(ERROR_NO_MORE_FILES as i32) {
-                    return Ok(out);
-                }
-                return Err(e.to_string());
+            let name = String::from_utf16_lossy(name);
+            if name != "." && name != ".." {
+                out.push((name, entry.FileAttributes));
             }
-            class = FileFullDirectoryInfo;
-            let base = buf.as_ptr() as *const u8;
-            let mut offset = 0usize;
-            loop {
-                // SAFETY: the system filled buf with a chain of entries, each starting at an
-                // aligned offset inside it, with its name of FileNameLength bytes after it.
-                let entry = unsafe { &*(base.add(offset) as *const FILE_FULL_DIR_INFO) };
-                let name = unsafe {
-                    std::slice::from_raw_parts(
-                        base.add(offset + offset_of!(FILE_FULL_DIR_INFO, FileName)) as *const u16,
-                        entry.FileNameLength as usize / 2,
-                    )
-                };
-                let name = String::from_utf16_lossy(name);
-                if name != "." && name != ".." {
-                    out.push(name);
-                }
-                if entry.NextEntryOffset == 0 {
-                    break;
-                }
-                offset += entry.NextEntryOffset as usize;
+            if entry.NextEntryOffset == 0 {
+                break;
             }
+            offset += entry.NextEntryOffset as usize;
         }
     }
 }

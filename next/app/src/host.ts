@@ -150,6 +150,8 @@ export function appHost(
     },
     features,
     address: conn.target?.replace(/\/+$/, "") || undefined,
+    // The window cannot download: the native side saves the file and answers its path.
+    saveFile: (name, text) => invoke<string>("file_save", { name, text }),
   };
 }
 

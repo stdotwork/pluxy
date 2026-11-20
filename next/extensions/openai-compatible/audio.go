@@ -18,17 +18,6 @@ import (
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
-// endpointCall serves the OpenAI-compatible extension's endpoint calls.
-func endpointCall(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
-	if call.Request.Native != nil {
-		switch call.Request.Native.Format {
-		case llm.FormatOpenAIAudioSpeech, llm.FormatOpenAIAudioTranscriptions, llm.FormatOpenAIAudioTranslations:
-			return audio(ctx, call, out)
-		}
-	}
-	return compact(ctx, call, out)
-}
-
 // audio serves OpenAI's speech, transcription and translation endpoints through an account.
 // Speech sends the client's JSON body unchanged. Transcriptions and translations rebuild the
 // multipart form from the JSON form core read. The upstream reply keeps its body and Content-Type;

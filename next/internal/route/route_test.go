@@ -734,6 +734,82 @@ func TestSessionAffinity(t *testing.T) {
 	h.wantAttempts("a", "b", "b")
 }
 
+// affinityConfig reads a routing section as a JSON config holds it.
+func affinityConfig(t *testing.T, routing string) Config {
+	t.Helper()
+	var cfg Config
+	if err := json.Unmarshal([]byte(routing), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+// A JSON config that says nothing about session affinity has it on; "enabled": false turns it
+// off, and a ttl_ms alone leaves it on. One session sends three requests in a row.
+func TestSessionAffinityDefault(t *testing.T) {
+	s1 := Request{LLM: llm.Request{Model: "m"}, Tenant: "t", Session: "s1"}
+	for name, c := range map[string]struct {
+		routing string
+		want    []string
+	}{
+		"no section":    {`{}`, []string{"a", "a", "a"}},
+		"empty section": {`{"session_affinity": {}}`, []string{"a", "a", "a"}},
+		"ttl only":      {`{"session_affinity": {"ttl_ms": 60000}}`, []string{"a", "a", "a"}},
+		"enabled":       {`{"session_affinity": {"enabled": true}}`, []string{"a", "a", "a"}},
+		"disabled":      {`{"session_affinity": {"enabled": false}}`, []string{"a", "b", "a"}},
+		"disabled, ttl": {`{"session_affinity": {"enabled": false, "ttl_ms": 60000}}`, []string{"a", "b", "a"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, affinityConfig(t, c.routing), accts("a", "b")...)
+			h.run(s1)
+			h.run(s1)
+			h.run(s1)
+			h.wantAttempts(c.want...)
+		})
+	}
+}
+
+func TestSessionAffinityDefaultSticks(t *testing.T) {
+	h := newHarness(t, Config{}, accts("a", "b")...)
+	s1 := Request{LLM: llm.Request{Model: "m"}, Tenant: "t", Session: "s1"}
+	s2 := Request{LLM: llm.Request{Model: "m"}, Tenant: "t", Session: "s2"}
+	h.run(s1) // a, bound
+	h.run(s2) // b, bound
+	h.run(s1)
+	h.run(s1)
+	h.run(s2)
+	h.wantAttempts("a", "b", "a", "a", "b")
+
+	// A request with no session still takes turns.
+	h.attempts = nil
+	none := Request{LLM: llm.Request{Model: "m"}, Tenant: "t"}
+	h.run(none)
+	h.run(none)
+	if len(h.attempts) != 2 || h.attempts[0] == h.attempts[1] {
+		t.Errorf("sessionless attempts = %v, want two different accounts", h.attempts)
+	}
+
+	// An hour after its last request the default lets a session go.
+	h.attempts = nil
+	h.now = h.now.Add(time.Hour + time.Minute)
+	h.run(s1)
+	h.run(s1)
+	if len(h.attempts) != 2 || h.attempts[0] != h.attempts[1] {
+		t.Errorf("after the hour: attempts = %v, want one account", h.attempts)
+	}
+}
+
+func TestSessionAffinityTTLKept(t *testing.T) {
+	h := newHarness(t, affinityConfig(t, `{"session_affinity": {"ttl_ms": 60000}}`), accts("a", "b")...)
+	s1 := Request{LLM: llm.Request{Model: "m"}, Tenant: "t", Session: "s1"}
+	h.run(s1) // a, bound for a minute
+	h.now = h.now.Add(30 * time.Second)
+	h.run(s1) // a, the binding lasts a minute from the last request
+	h.now = h.now.Add(2 * time.Minute)
+	h.run(s1) // the binding is gone: round robin goes on to b
+	h.wantAttempts("a", "a", "b")
+}
+
 // heldStream is a reply that has started and stays open until closed.
 type heldStream struct {
 	n       int
@@ -1291,10 +1367,11 @@ func TestUsageLimitOnlyWhenEveryAccountQualifies(t *testing.T) {
 }
 
 // A reply that started and then ends with the last account's quota refusal ends with the
-// usage-limit reply; the provider is named only when every account belongs to one extension, and
-// a pool without a known window has none.
+// usage-limit reply; the provider is named only when every account belongs to one extension (two
+// serve one name only through a chain), and a pool without a known window has none.
 func TestUsageLimitAfterTheReplyStarted(t *testing.T) {
-	h := newHarness(t, Config{QuotaResponseMode: QuotaUsageLimit, Strategy: StrategyFillFirst},
+	chain := map[string][]Step{"m": {{Model: "m", Provider: "pluxy/codex"}, {Model: "m", Provider: "pluxy/openai-compatible"}}}
+	h := newHarness(t, Config{QuotaResponseMode: QuotaUsageLimit, Strategy: StrategyFillFirst, Chains: chain},
 		Account{ID: "a", Extension: "pluxy/codex"}, Account{ID: "b", Extension: "pluxy/openai-compatible"})
 	h.r.state.failure(h.r.accounts[1], "m", 0, &llm.Error{Code: llm.CodeQuota, RetryAfterMS: time.Hour.Milliseconds(), Message: "used up"}, h.now, 0)
 	quota := llm.Error{Code: llm.CodeQuota, Status: 429, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: (3 * time.Hour).Milliseconds(),
@@ -1607,10 +1684,11 @@ func TestCooledDownModelIsNotUnknown(t *testing.T) {
 }
 
 // An account whose model list cannot be read serves any model, so a long block on it must not be
-// the retry time of a model other accounts serve and one of them unblocks sooner.
+// the retry time of a model other accounts serve and one of them unblocks sooner. Both are of one
+// provider, so both serve the request.
 func TestCooldownWaitComesFromTheAccountThatServesTheModel(t *testing.T) {
 	h := newHarness(t, Config{},
-		Account{ID: "codex", Extension: "pluxy/codex"}, Account{ID: "b", Models: []ModelEntry{{Name: "m"}}})
+		Account{ID: "codex", Extension: "pluxy/codex"}, Account{ID: "b", Extension: "pluxy/codex", Models: []ModelEntry{{Name: "m"}}})
 	h.r.UseCatalog(func(context.Context, Account, *protocol.Credential) (*protocol.ModelList, *llm.Error) {
 		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "list unreadable"}
 	})

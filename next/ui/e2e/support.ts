@@ -14,6 +14,8 @@ export interface Core {
   key: string;
   /** A client key, for requests to the client API. */
   clientKey: string;
+  /** Core's config file. Its folder holds the home folder a firstRun core runs with (`home`). */
+  config: string;
   /** Calls the management API (`/v0/management` + path) with the management key. */
   mgmt<T = unknown>(method: string, path: string, body?: unknown): Promise<{ status: number; body: T }>;
 }
@@ -24,14 +26,16 @@ export interface Core {
  * panel just built (`bun run test:browser` builds it first).
  *
  * firstRun starts core as a new install: nothing installed, no accounts, a home folder of its own
- * and only a claude program on its PATH (panelcore's -first-run).
+ * and only a claude program on its PATH (panelcore's -first-run). cpa, with firstRun, puts a
+ * CLIProxyAPI setup of made-up accounts in that home folder (panelcore's -cpa).
  */
-export function useCore(options: { firstRun?: boolean } = {}): Core {
+export function useCore(options: { firstRun?: boolean; cpa?: boolean } = {}): Core {
   let proc: ChildProcess | undefined;
   const core: Core = {
     base: "",
     key: "",
     clientKey: "",
+    config: "",
     async mgmt<T>(method: string, path: string, body?: unknown) {
       const r = await fetch(`${core.base}/v0/management${path}`, {
         method,
@@ -44,7 +48,8 @@ export function useCore(options: { firstRun?: boolean } = {}): Core {
   };
 
   test.beforeAll(async () => {
-    const p = spawn("go", ["run", "./e2e/panelcore", ...(options.firstRun ? ["-first-run"] : [])], {
+    const flags = [...(options.firstRun ? ["-first-run"] : []), ...(options.cpa ? ["-cpa"] : [])];
+    const p = spawn("go", ["run", "./e2e/panelcore", ...flags], {
       cwd: join(import.meta.dirname, "..", ".."),
       stdio: ["pipe", "pipe", "inherit"],
     });
@@ -52,14 +57,17 @@ export function useCore(options: { firstRun?: boolean } = {}): Core {
     const exited = new Promise<never>((_, reject) => {
       p.once("exit", (code) => reject(new Error(`panelcore exited with ${code} before core was ready`)));
     });
-    const ready = new Promise<{ base: string; key: string; client_key: string }>((resolve) => {
-      if (!p.stdout) throw new Error("no stdout");
-      createInterface({ input: p.stdout }).once("line", (line) => resolve(JSON.parse(line)));
-    });
+    const ready = new Promise<{ base: string; key: string; client_key: string; config: string }>(
+      (resolve) => {
+        if (!p.stdout) throw new Error("no stdout");
+        createInterface({ input: p.stdout }).once("line", (line) => resolve(JSON.parse(line)));
+      },
+    );
     const r = await Promise.race([ready, exited]);
     core.base = r.base;
     core.key = r.key;
     core.clientKey = r.client_key;
+    core.config = r.config;
   });
 
   // Core keeps which theme is on, so one test's choice would show in the next test's new browser:

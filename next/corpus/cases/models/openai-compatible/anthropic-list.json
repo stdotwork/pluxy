@@ -12,6 +12,12 @@
   "volatile": ["client.body.data[*].created_at"],
   "exceptions": [
     {
+      "path": "client.body.data[*].owned_by",
+      "kind": "intended",
+      "reason": "Model lists name the extension, not the account: an account ID can be an email address or a label, while the extension ID is who provides the model and already appears as the provider on replies.",
+      "want": "pluxy/openai-compatible"
+    },
+    {
       "path": "client.body.data[1].display_name",
       "kind": "intended",
       "reason": "A model a key's config lists under an alias shows its upstream name as its display name for every provider in the new core, as today's core shows it for Codex, Claude and Gemini keys; today's core shows the alias instead for an openai-compatibility key.",

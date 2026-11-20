@@ -33,7 +33,8 @@
       "want": {
         "code": "rate_limit",
         "message": "Selected model is at capacity. Please try a different model.",
-        "type": "rate_limit_error"
+        "type": "rate_limit_error",
+        "pluxy": "(volatile)"
       }
     }
   ],
