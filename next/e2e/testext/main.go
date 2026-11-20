@@ -6,6 +6,7 @@
 //
 //	"gated"         sends its first text, then waits until GET <settings.gate> answers, then finishes
 //	"crash"         sends its first text, then exits with status 2
+//	"account-closed" fails at once with account_closed, which bans the account
 //	"rate-limited"  fails at once with a retry-safe 429 that asks for 5 minutes (a model cooldown)
 //	"server-error"  fails at once with a 500 that blocks nothing (a failed request, an error log)
 //	"account-proxy" answers with the SHA-256 (hex) of the proxy URL the account was given, or
@@ -75,8 +76,9 @@ type settings struct {
 
 // The models that fail on purpose.
 const (
-	modelRateLimited = "rate-limited"
-	modelServerError = "server-error"
+	modelAccountClosed = "account-closed"
+	modelRateLimited   = "rate-limited"
+	modelServerError   = "server-error"
 )
 
 // rateLimitRetryAfter is how long the rate-limited model asks to be left alone.
@@ -199,6 +201,9 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream, reply string)
 			Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: left.Milliseconds()}
 	}
 	switch call.Request.Model {
+	case modelAccountClosed:
+		return &llm.Error{Code: llm.CodeAccountClosed, Message: "the test provider closed this account", Status: http.StatusForbidden,
+			Retryable: true, Scope: llm.ScopeCredential}
 	case modelRateLimited:
 		return &llm.Error{Code: llm.CodeRateLimit, Message: "the test provider rate limited this model", Status: http.StatusTooManyRequests,
 			Retryable: true, Scope: llm.ScopeModel, RetryAfterMS: rateLimitRetryAfter.Milliseconds()}
@@ -321,7 +326,7 @@ func models(_ context.Context, call sdk.ModelsCall) (*protocol.ModelList, error)
 	if !fromLogin(call.Account.Credential) {
 		return &protocol.ModelList{}, nil
 	}
-	return &protocol.ModelList{OwnedBy: "test", Models: []protocol.Model{{ID: "fake-model"}, {ID: modelRateLimited}, {ID: modelServerError}}}, nil
+	return &protocol.ModelList{OwnedBy: "test", Models: []protocol.Model{{ID: "fake-model"}, {ID: modelAccountClosed}, {ID: modelRateLimited}, {ID: modelServerError}}}, nil
 }
 
 // fromLogin tells whether a login made the credential.
