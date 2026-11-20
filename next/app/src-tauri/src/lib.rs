@@ -3379,8 +3379,9 @@ pub fn run() {
             let window_prefs = window::Store::open(config.join("window.json"));
             // A version an update installed accepts itself, which the earlier one waits for:
             // before the managed core starts and before anything reads the core that came with
-            // the app, which the update replaced with the app.
-            updater::accept(app.handle());
+            // the app, which the update replaced with the app. It reads no app state, which is
+            // managed below; `updater::accepted` finishes once it is.
+            let accepting = updater::accept(app.handle());
             // The core that came with the app, if this build has one (`bundled_core.rs`).
             let bundled = bundled_core::compiled().and_then(|m| {
                 let exe = std::env::current_exe().ok()?;
@@ -3558,6 +3559,7 @@ pub fn run() {
             } else {
                 show_in_dock(&handle, false);
             }
+            updater::accepted(&handle, accepting);
             updater::record_started_from(&handle);
             #[cfg(feature = "native-test")]
             native_test::start(handle);
