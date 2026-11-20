@@ -59,6 +59,12 @@
   "volatile": ["client.body.created_at","client.events[*].data.response.created_at"],
   "exceptions": [
     {
+      "path": "upstream[0].body.max_tokens",
+      "kind": "intended",
+      "reason": "A request that sets no output limit gets the model's own from the Claude extension's model list (64000 for claude-sonnet-4-5), as LiteLLM and today's CLIProxyAPI take theirs from their catalogs; today's core sent 32000 whatever the model.",
+      "want": 64000
+    },
+    {
       "path": "upstream[0].body.messages[0].content",
       "kind": "intended",
       "reason": "The same text: the new core writes message content as content blocks; today's core keeps a plain string.",
@@ -133,7 +139,7 @@
       "path": "upstream[0].headers.X-Api-Key",
       "kind": "intended",
       "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
-      "want": "sk-corpus-upstream"
+      "want": "sk-Cq7Vx2Np9Lw4Zr8"
     }
   ],
   "recorded_old_core": {
@@ -204,7 +210,7 @@
           "Accept": "text/event-stream",
           "Accept-Encoding": "identity",
           "Anthropic-Version": "2023-06-01",
-          "Authorization": "Bearer sk-corpus-upstream",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
           "Content-Type": "application/json",
           "User-Agent": "pluxy-corpus/0"
         },

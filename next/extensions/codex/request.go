@@ -4,7 +4,9 @@ import (
 	"crypto/sha1"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/format/openairesponses"
@@ -33,6 +35,9 @@ type upstreamRequest struct {
 	// keepOutput says that the reply's terminal event is left as the upstream sent it, without
 	// the id restoration and without the output rebuild (see repairs).
 	keepOutput bool
+	// encryptedReasoning holds the input paths of the reasoning items with encrypted content, which a
+	// retry after Codex refused that content leaves out (dropForeignReasoning).
+	encryptedReasoning []string
 }
 
 // repairs returns the repairs the request's reply gets.
@@ -78,7 +83,7 @@ func buildRequest(req llm.Request, accountID string, s settings, a account, ws b
 	if err := json.Unmarshal(body, &m); err != nil || m == nil {
 		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "the request body is not a JSON object", Scope: llm.ScopeRequest}
 	}
-	sh := shaper{m: m, req: req, model: model, effort: effort, s: s, a: a, accountID: accountID, ws: ws}
+	sh := shaper{m: m, req: req, tr: tr, model: model, effort: effort, s: s, a: a, accountID: accountID, ws: ws}
 	// A Responses-lite client's stream, or its turn over the upstream WebSocket, keeps its
 	// output as the upstream sent it, as today's core does (preserveNativeOutput). Core's
 	// Responses writer still rebuilds an empty output for an HTTP client, as today's HTTP
@@ -87,17 +92,24 @@ func buildRequest(req llm.Request, accountID string, s settings, a account, ws b
 	if err := sh.shape(); err != nil {
 		return nil, err
 	}
+	if req.DropPolicy == llm.DropReject && tr.Dropped() {
+		// Shaping dropped what the endpoint cannot take (see history).
+		paths := tr.DroppedPaths()
+		return nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Dropped: paths,
+			Message: "the Codex endpoint cannot take parts of this request: " + strings.Join(paths, ", ")}
+	}
 	out, err := json.Marshal(m)
 	if err != nil {
 		return nil, err
 	}
 	return &upstreamRequest{body: out, tr: tr, model: model, sessionID: sh.sessionID, names: sh.names,
-		keepOutput: nativeLite && (ws || req.Stream)}, nil
+		keepOutput: nativeLite && (ws || req.Stream), encryptedReasoning: sh.encryptedReasoning}, nil
 }
 
-// Fields the Codex endpoint does not take, removed from every request.
+// Fields the Codex endpoint does not take, removed from every request. Codex's own request has no
+// metadata field. prompt_cache_retention stays when the account passes it on (see shape).
 var removedFields = []string{
-	"temperature", "top_p", "max_tokens", "max_completion_tokens", "truncation", "user",
+	"temperature", "top_p", "max_tokens", "max_completion_tokens", "truncation", "user", "metadata",
 	"prompt_cache_retention", "prompt_cache_options", "previous_response_id", "safety_identifier",
 	"generate",
 }
@@ -108,6 +120,7 @@ var removedFields = []string{
 type shaper struct {
 	m         map[string]json.RawMessage
 	req       llm.Request
+	tr        *llm.Translation // gets the losses the shaping causes
 	model     string
 	effort    string // from a thinking suffix on the model name
 	s         settings
@@ -119,6 +132,8 @@ type shaper struct {
 	// names maps each function name the request sent upstream in place of the client's to the
 	// client's (see limits).
 	names map[string]string
+	// encryptedReasoning: see upstreamRequest.
+	encryptedReasoning []string
 }
 
 // wsFields are fields the Responses WebSocket takes that HTTP does not: a turn continues the
@@ -142,6 +157,7 @@ func (h *shaper) shape() error {
 	if err := h.input(); err != nil {
 		return err
 	}
+	h.history()
 	m["stream"] = raw(true)
 	m["store"] = raw(false)
 	h.include()
@@ -153,8 +169,12 @@ func (h *shaper) shape() error {
 			}
 		}
 	}
+	h.minOutputTokens()
 	for _, k := range removedFields {
 		if h.ws && slices.Contains(wsFields, k) {
+			continue
+		}
+		if k == "prompt_cache_retention" && h.s.PromptCacheRetentionPassthrough {
 			continue
 		}
 		delete(m, k)
@@ -180,7 +200,110 @@ func (h *shaper) shape() error {
 			delete(m, "background")
 		}
 	}
+	// Last, so it covers an effort from any source: the client's, a thinking suffix, or a
+	// configuration update a SIWC account's request folded in.
+	h.clampEffort()
 	return nil
+}
+
+// codexMinOutputTokens is the smallest integer max_output_tokens the Codex endpoint takes; it
+// answers a smaller one with invalid_request_error (Claude Code's model switch asks for 1).
+const codexMinOutputTokens = 16
+
+// minOutputTokens raises a whole-number output budget under 16 to 16. A budget that is missing,
+// not a number, not a whole number, or below 1 is left for the upstream to judge.
+func (h *shaper) minOutputTokens() {
+	v, ok := h.m["max_output_tokens"]
+	if !ok {
+		return
+	}
+	n, err := strconv.ParseFloat(string(v), 64)
+	if err != nil || n < 1 || n >= codexMinOutputTokens || n != float64(int64(n)) {
+		return
+	}
+	h.m["max_output_tokens"] = raw(codexMinOutputTokens)
+}
+
+// effortOrder lists the reasoning efforts the Codex catalog knows, lowest first.
+var effortOrder = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+
+// clampEffortTo returns the level of levels to send for effort: effort itself when the model takes
+// it, else the highest level below it, else the lowest level above it. An effort or a level the
+// order does not know is not touched, and the result's second value says whether it changed.
+func clampEffortTo(effort string, levels []string) (string, bool) {
+	rank := slices.Index(effortOrder, strings.ToLower(effort))
+	if rank < 0 {
+		return effort, false
+	}
+	best, bestRank, above, aboveRank := "", -1, "", len(effortOrder)
+	for _, l := range levels {
+		r := slices.Index(effortOrder, strings.ToLower(l))
+		switch {
+		case r < 0:
+		case r == rank:
+			return effort, false
+		case r < rank && r > bestRank:
+			best, bestRank = l, r
+		case r > rank && r < aboveRank:
+			above, aboveRank = l, r
+		}
+	}
+	switch {
+	case best != "":
+		return best, true
+	case above != "":
+		return above, true
+	}
+	return effort, false
+}
+
+// modelEffortLevels returns the reasoning levels the Codex catalog lists for model, nil when it
+// does not list the model.
+func modelEffortLevels(model string) []string {
+	templates := clientTemplates()
+	t, ok := templates[model]
+	if !ok {
+		t, ok = templates[strings.ToLower(model)]
+	}
+	if !ok {
+		return nil
+	}
+	var levels []struct {
+		Effort string `json:"effort"`
+	}
+	if json.Unmarshal(t["supported_reasoning_levels"], &levels) != nil {
+		return nil
+	}
+	out := make([]string, 0, len(levels))
+	for _, l := range levels {
+		out = append(out, l.Effort)
+	}
+	return out
+}
+
+// clampEffort changes a reasoning effort the model does not take to one it does (clampEffortTo),
+// and reports the change as a loss. A model the catalog does not list keeps the effort.
+func (h *shaper) clampEffort() {
+	var r map[string]json.RawMessage
+	if json.Unmarshal(h.m["reasoning"], &r) != nil || r == nil {
+		return
+	}
+	var effort string
+	if json.Unmarshal(r["effort"], &effort) != nil || effort == "" {
+		return
+	}
+	levels := modelEffortLevels(h.model)
+	if len(levels) == 0 {
+		return
+	}
+	to, changed := clampEffortTo(effort, levels)
+	if !changed {
+		return
+	}
+	r["effort"] = raw(to)
+	h.m["reasoning"] = raw(r)
+	h.tr.Losses = llm.AddLoss(h.tr.Losses, llm.Loss{Kind: llm.LossApproximated, Path: "reasoning.effort",
+		Detail: effort + " is not a reasoning level of " + h.model + "; sent " + to})
 }
 
 // lite reports whether the client is a Responses-lite client (see liteRequest).
@@ -396,7 +519,7 @@ func (h *shaper) tools() {
 	}
 	lite := h.lite()
 	// A SIWC account gets no image tool, as in today's core.
-	if h.s.imageTool() && !lite && !h.a.siwc && !strings.HasSuffix(h.model, "spark") && !strings.EqualFold(h.a.planType, "free") && !hasTool(tools, "image_generation") {
+	if h.s.imageTool() && !h.s.imageOff(h.model) && !lite && !h.a.siwc && !strings.HasSuffix(h.model, "spark") && !strings.EqualFold(h.a.planType, "free") && !hasTool(tools, "image_generation") {
 		tools = append(tools, raw(map[string]string{"type": "image_generation", "output_format": "png"}))
 		h.m["tools"] = raw(tools)
 	}
@@ -473,15 +596,27 @@ func (h *shaper) header(name string) string {
 }
 
 // promptCacheKey sets the request's prompt cache key, which keeps a conversation's requests on
-// the upstream's warm prompt cache: the client's prompt_cache_key, else (when the client names
-// no session of its own with Session-Id) a key derived from the account and the conversation's
-// start, so every turn of a conversation gets the same key.
+// the upstream's warm prompt cache: the client's prompt_cache_key, else a key derived from the
+// account, the model and Claude Code's session and agent, else (when the client names no session
+// of its own with Session-Id) a key derived from the account and the conversation's start, so
+// every turn of a conversation gets the same key.
 func (h *shaper) promptCacheKey() {
 	if k := h.str("prompt_cache_key"); k != "" {
 		h.sessionID = k
 		return
 	}
 	delete(h.m, "prompt_cache_key")
+	// Claude Code's session, with its agent (a subagent has its own prompt), keeps each agent's
+	// requests on one key.
+	if session := h.claudeCodeSession(); session != "" {
+		agent := strings.TrimSpace(h.header("x-claude-code-agent-id"))
+		if agent == "" {
+			agent = "main"
+		}
+		h.sessionID = uuid5("pluxy:codex:claude-code\x00" + h.accountID + "\x00" + h.model + "\x00" + session + "\x00" + agent)
+		h.m["prompt_cache_key"] = raw(h.sessionID)
+		return
+	}
 	if h.header("session-id") != "" {
 		return
 	}
@@ -491,6 +626,42 @@ func (h *shaper) promptCacheKey() {
 	}
 	h.sessionID = uuid5("pluxy:codex:prompt-cache\x00" + h.accountID + "\x00" + h.model + "\x00" + root)
 	h.m["prompt_cache_key"] = raw(h.sessionID)
+}
+
+// sessionSuffix is how Claude Code's older metadata.user_id ends: _session_<id>.
+var sessionSuffix = regexp.MustCompile(`_session_([a-f0-9-]+)$`)
+
+// claudeCodeSession returns a Claude Code conversation's session ID, from the request's
+// X-Claude-Code-Session-Id header or else a Messages body's metadata.user_id, which Claude Code
+// writes either as user_<...>_session_<id> or as a JSON object with session_id.
+func (h *shaper) claudeCodeSession() string {
+	if s := strings.TrimSpace(h.header("x-claude-code-session-id")); s != "" {
+		return s
+	}
+	if h.req.Native == nil || h.req.Native.Format != llm.FormatAnthropicMessages {
+		return ""
+	}
+	var b struct {
+		Metadata struct {
+			UserID string `json:"user_id"`
+		} `json:"metadata"`
+	}
+	if json.Unmarshal(h.req.Native.Body, &b) != nil {
+		return ""
+	}
+	id := b.Metadata.UserID
+	if m := sessionSuffix.FindStringSubmatch(id); m != nil {
+		return m[1]
+	}
+	if strings.HasPrefix(id, "{") {
+		var u struct {
+			SessionID string `json:"session_id"`
+		}
+		if json.Unmarshal([]byte(id), &u) == nil {
+			return strings.TrimSpace(u.SessionID)
+		}
+	}
+	return ""
 }
 
 // conversationRoot returns what identifies a conversation from its first turn: the text of the

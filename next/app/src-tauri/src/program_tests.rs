@@ -66,6 +66,7 @@ fn fast() -> Limits {
         quarantine_after: 5,
         stable: Duration::from_secs(600),
         drain: Duration::from_secs(10),
+        wsl_retry: Duration::from_millis(100),
     }
 }
 
@@ -150,7 +151,7 @@ impl Private for Stub {
     fn test_carries(&self, _: &str) -> (bool, bool) {
         (false, false)
     }
-    fn journals(&self, _: &str) -> Result<Vec<Value>, String> {
+    fn journals(&self, _: &Instance) -> Result<Vec<Value>, String> {
         if self.unreadable {
             return Err("its records are damaged".into());
         }
@@ -159,6 +160,7 @@ impl Private for Stub {
     fn frame(
         &self,
         tool: &Hop,
+        _: &Instance,
         op: &str,
         describing: Option<&[String]>,
         r: &Value,
@@ -265,6 +267,8 @@ fn release(mode: Value, version: &str, generation: u64) -> Spec {
         dir,
         operations: operations(),
         state_version: 0,
+        environment: Environment::Local,
+        wsl: None,
     }
 }
 
@@ -281,9 +285,10 @@ impl Drop for Folder {
 fn host_gated(spec: Spec, limits: Limits, before: impl Fn(&str) + Send + Sync + 'static) -> Host {
     let folder = Folder(spec.dir.clone());
     Host::for_tests(
-        Box::new(move |id| {
+        Box::new(move |instance: &Instance| {
             let _ = &folder;
-            before(id);
+            let id = instance.key();
+            before(&id);
             if id == ID {
                 Ok(spec.clone())
             } else {
@@ -1099,7 +1104,7 @@ fn a_call_allowed_for_another_release_is_refused() {
     let e = h
         .run_call_with(
             h.begin_call(None).unwrap(),
-            ID,
+            &Instance::local(ID),
             "summary",
             json!({"items": []}),
             ctx(&"ab".repeat(32), 2),
@@ -1110,7 +1115,7 @@ fn a_call_allowed_for_another_release_is_refused() {
     let e = h
         .run_call_with(
             h.begin_call(None).unwrap(),
-            ID,
+            &Instance::local(ID),
             "summary",
             json!({"items": []}),
             ctx(&"cd".repeat(32), 1),
@@ -1120,7 +1125,7 @@ fn a_call_allowed_for_another_release_is_refused() {
     assert_eq!(e.code, "extension_unavailable", "{e}");
     let ok = h.run_call_with(
         h.begin_call(None).unwrap(),
-        ID,
+        &Instance::local(ID),
         "summary",
         json!({"items": ["a"]}),
         ctx(&"ab".repeat(32), 1),
@@ -1835,7 +1840,7 @@ fn a_call_with_a_bounded_turn_gives_up_waiting_for_a_busy_package() {
     let e = h
         .run_call_with(
             h.begin_call(None).unwrap(),
-            ID,
+            &Instance::local(ID),
             "summary",
             json!({"items": []}),
             Arc::new(Context {
@@ -1886,7 +1891,7 @@ fn a_call_delivers_its_secrets_in_its_frame_and_the_tool_reaches_the_vault_only_
     let out = h
         .run_call_with(
             call,
-            ID,
+            &Instance::local(ID),
             "apply",
             json!({"key": "r-1", "file": file}),
             Arc::new(context),
@@ -3338,3 +3343,231 @@ fn lifetime_a_launch_gets_exactly_its_arguments_working_folder_and_environment()
         check(&agent);
     }
 }
+
+/// The record of a WSL environment, as `pluxy/wsl`'s check gives it.
+fn wsl_record(user: &str) -> crate::environments::Record {
+    crate::environments::Record::from_check(
+        "Ubuntu",
+        user,
+        &json!({"distro": "Ubuntu", "user": user, "uid": 1001, "home": format!("/home/{user}"),
+            "arch": "amd64", "automount": "/mnt/",
+            "drives": [{"letter": "c", "path": "/mnt/c", "exec": true}]}),
+        0,
+    )
+    .unwrap()
+}
+
+fn call_in(h: &Host, instance: &Instance) -> Result<Value, CallError> {
+    h.run_call_with(
+        h.begin_call(None).unwrap(),
+        instance,
+        "summary",
+        json!({"items": []}),
+        Arc::new(Context::main()),
+        Cancel::default(),
+    )
+}
+
+#[test]
+fn an_instance_in_wsl_has_its_own_slot_and_starts_only_from_its_own_record() {
+    let local = package(Value::Null);
+    let bob = wsl_record("bob");
+    let in_wsl = Spec {
+        environment: bob.environment(),
+        wsl: Some(bob.clone()),
+        ..local.clone()
+    };
+    let folder = Folder(local.dir.clone());
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let (l, w, seen) = (local.clone(), in_wsl.clone(), Arc::clone(&asked));
+    // The record for alice names bob's instance: a routing mistake.
+    let h = Host::for_tests(
+        Box::new(move |i: &Instance| {
+            let _ = &folder;
+            seen.lock().unwrap().push(i.key());
+            if i.environment.is_local() {
+                Ok(l.clone())
+            } else {
+                Ok(w.clone())
+            }
+        }),
+        fast(),
+    );
+    let alice_i = Instance {
+        package: ID.into(),
+        environment: wsl_record("alice").environment(),
+    };
+    let (pid, _) = pids(&summary(&h, &[]).unwrap());
+    let _held = h.lease(ID).unwrap();
+    // Off Windows nothing runs in WSL; the local tool runs on, its own slot untouched.
+    #[cfg(unix)]
+    {
+        let bob_i = Instance {
+            package: ID.into(),
+            environment: bob.environment(),
+        };
+        let e = call_in(&h, &bob_i).unwrap_err();
+        assert!(e.message.contains("WSL runs on Windows only"), "{e:?}");
+        assert!(h.status_in(&bob_i).last.unwrap().contains("Windows only"));
+    }
+    let e = call_in(&h, &alice_i).unwrap_err();
+    assert!(e.message.contains("names"), "{e:?}");
+    assert_eq!(h.status(ID).state, "active");
+    assert_eq!(h.status(ID).pid, Some(pid as u32));
+    assert!(h.status(ID).last.is_none());
+    let asked = asked.lock().unwrap().clone();
+    assert!(asked.contains(&ID.to_string()) && asked.contains(&alice_i.key()));
+}
+
+/// A host whose WSL instance for bob runs the fixture here, as this computer's program with that
+/// instance's environment (no `wsl.exe` off Windows), in mode; and that instance.
+fn wsl_here(mode: Value) -> (Host, Instance) {
+    let bob = wsl_record("bob");
+    let spec = Spec {
+        environment: bob.environment(),
+        ..package(mode)
+    };
+    let instance = Instance {
+        package: ID.into(),
+        environment: bob.environment(),
+    };
+    let (folder, want) = (Folder(spec.dir.clone()), instance.clone());
+    let h = Host::for_tests(
+        Box::new(move |i: &Instance| {
+            let _ = &folder;
+            if *i == want {
+                Ok(spec.clone())
+            } else {
+                Err(format!("{} is not installed on this device", i.name()))
+            }
+        }),
+        fast(),
+    );
+    (h, instance)
+}
+
+/// A host running tool ID on this computer (from spec) and as bob's instance in WSL (the fixture
+/// here, with that instance's environment); and that instance.
+fn here_and_in_wsl(spec: Spec) -> (Host, Instance) {
+    let bob = wsl_record("bob");
+    let instance = Instance {
+        package: ID.into(),
+        environment: bob.environment(),
+    };
+    let in_wsl = Spec {
+        environment: bob.environment(),
+        ..spec.clone()
+    };
+    let (folder, want) = (Folder(spec.dir.clone()), instance.clone());
+    let h = Host::for_tests(
+        Box::new(move |i: &Instance| {
+            let _ = &folder;
+            if *i == want {
+                Ok(in_wsl.clone())
+            } else if *i == Instance::local(ID) {
+                Ok(spec.clone())
+            } else {
+                Err(format!("{} is not installed on this device", i.name()))
+            }
+        }),
+        Limits {
+            idle: Duration::from_secs(60),
+            ..fast()
+        },
+    );
+    (h, instance)
+}
+
+/// Both of tool ID's instances run: their process IDs (here, then in WSL).
+fn both_run(h: &Host, bob: &Instance) -> (u32, u32) {
+    summary(h, &[]).unwrap();
+    call_in(h, bob).unwrap();
+    let (here, wsl) = (h.status(ID).pid.unwrap(), h.status_in(bob).pid.unwrap());
+    assert_ne!(here, wsl);
+    (here, wsl)
+}
+
+/// A change of the package stops its instances in every environment; a removed environment's
+/// record stops only the instances there, and so does a newly installed Linux build (`stop_wsl`).
+#[test]
+fn a_package_change_stops_its_instances_in_wsl_and_an_environment_removed_only_those() {
+    let (h, bob) = here_and_in_wsl(package(Value::Null));
+    let (here, wsl) = both_run(&h, &bob);
+    h.stop(ID);
+    until("both stopped", 10, || {
+        !alive(u64::from(here)) && !alive(u64::from(wsl))
+    });
+    let (here, wsl) = both_run(&h, &bob);
+    h.stop_in(&bob.environment);
+    until("the instance in WSL stopped", 10, || !alive(u64::from(wsl)));
+    assert_eq!(h.status(ID).pid, Some(here));
+    assert!(alive(u64::from(here)));
+    // This computer is no environment to remove: nothing stops.
+    h.stop_in(&Environment::Local);
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(h.status(ID).pid, Some(here));
+    call_in(&h, &bob).unwrap();
+    let wsl = h.status_in(&bob).pid.unwrap();
+    h.stop_wsl(ID);
+    until("the instance in WSL stopped", 10, || !alive(u64::from(wsl)));
+    assert_eq!(h.status(ID).pid, Some(here));
+    assert!(alive(u64::from(here)));
+    h.stop_all();
+}
+
+/// A swap to a new release stops the instances in WSL, which ran the old release's Linux build:
+/// their next call starts the one installed for the release now active.
+#[test]
+fn a_swap_stops_the_instances_in_wsl_of_the_release_it_replaces() {
+    let (h, bob) = here_and_in_wsl(package(Value::Null));
+    let (_, wsl) = both_run(&h, &bob);
+    let p = h
+        .prepare_spec(release(Value::Null, "1.1.0", 2), h.stops(ID))
+        .unwrap();
+    h.switch(p).unwrap();
+    assert_eq!(h.status(ID).generation, Some(2));
+    until("the instance in WSL stopped", 10, || !alive(u64::from(wsl)));
+    h.stop_all();
+}
+
+// WSL 1 can refuse a start (`0xd0000225`, wsl.exe's text on stderr or in place of a frame): such a
+// start is tried again, twice, 2 seconds apart, and none of those tries counts as a crash; only
+// when the last one is refused too does one crash count, with its backoff.
+#[test]
+fn a_start_wsl_refused_is_tried_again_and_counts_as_one_crash_only_when_it_stays_refused() {
+    let mut modes = vec![
+        json!({"wsl_refuse": 2}),
+        json!({"wsl_refuse": 2, "wsl_refuse_stdout": true}),
+    ];
+    // The text arriving on stdout only after the start was reaped (wsl.exe's pipe outlives it):
+    // still read, and still a refusal.
+    if cfg!(unix) {
+        modes.push(json!({"wsl_refuse": 2, "wsl_refuse_late": true}));
+    }
+    for mode in modes {
+        let (h, bob) = wsl_here(mode.clone());
+        let v = call_in(&h, &bob).unwrap_or_else(|e| panic!("{mode}: {e:?}"));
+        assert_eq!(v["count"], 0, "{mode}");
+        let st = h.status_in(&bob);
+        assert_eq!((st.state, st.crashes), ("ready", 0), "{mode}: {st:?}");
+        h.stop_all();
+    }
+    let (h, bob) = wsl_here(json!({"wsl_refuse": 10}));
+    let e = call_in(&h, &bob).unwrap_err();
+    assert!(
+        e.message.contains("wsl.exe said") && e.message.contains("0xd0000225"),
+        "{e:?}"
+    );
+    let st = h.status_in(&bob);
+    assert_eq!((st.state, st.crashes), ("crashed", 1), "{st:?}");
+    // Its backoff holds the next call, which starts nothing.
+    let e = call_in(&h, &bob).unwrap_err();
+    assert!(e.message.contains("may restart it in"), "{e:?}");
+    h.stop_all();
+}
+
+// The program host and the spawn service against a real WSL distribution (`wsl_real_*`, ignored
+// but in the WSL jobs of next-app-tools-platforms.yml).
+#[cfg(windows)]
+#[path = "wsl_real_tests.rs"]
+mod wsl_real;

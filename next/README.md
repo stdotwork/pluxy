@@ -19,6 +19,7 @@ Messages upstream are translated, and what the translation could not carry is lo
 | --- | --- |
 | `cmd/pluxy` | The core program. |
 | `cmd/pluxy-pack` | Builds each extension's release archives and the bundled registry index; packs the desktop app's native tools with `-app-tools`. |
+| `cmd/pluxy-bench` | Measures the time and memory pluxy adds between a client and its upstream, against a mock upstream, and checks them against budgets in CI ([docs/perf.md](../docs/perf.md)). |
 | `protocol/` | The extension protocol: [README](protocol/README.md), [tutorial](protocol/TUTORIAL.md), wire types and framing. |
 | `llm/` | The internal model of a request and its streamed reply, shared by core and extensions. |
 | `sdk/` | Go SDK for writing extensions. |
@@ -35,13 +36,15 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `extensions/devin` | Provider extension for Devin: the models a Devin account gets, signed in as Devin's CLI signs in or with a session token, over Devin's protobuf API; `devintest` is a fake Devin for its tests. |
 | `examples/scripted` | The tutorial's example extension. |
 | `examples/oauth` | An example provider that signs in by device code, browser (PKCE) or API key and renews its tokens, with a fake OAuth provider for tests (`oauthtest`). |
+| `management` | The management API's contract ([README](management/README.md)), its request and reply types, and a client; the `pluxy` command's subcommands use it. |
 | `internal/host`, `internal/server` | Core's extension host and HTTP API (client formats and the management API). |
 | `internal/cred` | Core's credential store and renewal of accounts added by login. |
+| `internal/private` | Core's private folders and files (credentials, extensions' settings, logs): 0700 and 0600 on Linux and macOS, an owner-only access list on Windows. |
 | `internal/packages` | Registries, release archives and the record of installed packages. |
 | `internal/panel` | Serves the web panel at `/panel/`, embedded in core's binary. |
 | `internal/pages` | Serves extension pages on a site of their own ([extension pages](ui/extension-pages/README.md)). |
 | `internal/logfile` | Core's [log files](#log-files): `main.log`, its rotation, the folder's size cap, reading lines back. |
-| `internal/usage` | The [usage record](#usage-statistics): one event per request, kept in memory within limits. |
+| `internal/usage` | The [usage record](#usage-statistics): one event per request, kept in memory and written asynchronously to daily JSONL files. |
 | `internal/extconfig` | Extensions' settings: the schema from the manifest, checking values, and the store core keeps them in. |
 | `ui/` | The UI kit the panel and the desktop app share, the panel's browser build, and the [theme contract](ui/themes/README.md) ([README](ui/README.md)). |
 | `app/` | The desktop app: the kit's second build in a Tauri window, with a tray icon and three ways to reach core ([README](app/README.md)). Linux only for now; its agent clients and the record of the old desktop app's features are in [PARITY.md](app/PARITY.md). |
@@ -88,10 +91,10 @@ go build -o extensions/claude/claude ./extensions/claude
 ```
 
 ```bash
-./pluxy -config config.json
+./pluxy serve -config config.json
 ```
 
-Flags:
+`pluxy -config config.json`, with no subcommand, serves too. Flags:
 
 - `-config`: the config file (default `config.json`).
 - `-version`: print the build's version, commit and build date on one line, `pluxy <version> (<commit>, <date>)`, and exit. It does not read the config. Core logs the same line when it starts.
@@ -118,7 +121,8 @@ requests over all their accounts: see [Accounts and routing](#accounts-and-routi
 
 The OpenAI-compatible extension also adds accounts through the management API with method
 `api_key`. Its inputs are `api_key` (secret), `base_url` (required unless the account already has
-one), and optional `wire_api` (`chat`, `responses`, `messages` or `gemini`; default `chat`).
+one), optional `wire_api` (`chat`, `responses`, `messages` or `gemini`; default `chat`), and
+optional `quota` (`openrouter`, `deepseek` or `none`).
 `base_url` includes the API path, such as `https://api.openai.com/v1` or a Gemini host's `/v1beta`.
 The extension trims its trailing slash, checks the key with `GET {base_url}/models` using the
 selected API's authentication header, and returns the URL and wire API as non-secret account
@@ -143,6 +147,28 @@ it does, as today's core does: `"reasoning_levels"` in its `settings` lists the 
 upstream accepts (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`), by default `low`,
 `medium` and `high`, so `xhigh` and `max` go as `high`, `minimal` and `none` as `low`, and `auto`
 as `medium`. Today's core refuses `minimal` with a 400 instead.
+
+For an OpenAI-compatible account whose vendor offers a usage or balance endpoint for a normal API
+key, `GET /v0/management/accounts/{id}/quota` reads it: OpenRouter's `GET /api/v1/key` (reporting
+the plan `free` or `paid` from `is_free_tier`, the key's USD spending limit and remaining allowance
+`limit`, the daily, weekly and monthly USD spend `usage_daily`, `usage_weekly` and `usage_monthly`,
+and `free_model_daily_requests` when present) or DeepSeek's `GET /user/balance` (reporting `available`
+or `unavailable` from `is_available` and each currency's `total_balance` from `balance_infos` as
+`balance_<currency>`). An account's `settings` (or its `api_key` login input) may set `"quota"` to
+`"openrouter"`, `"deepseek"` or `"none"`; when unset, the extension picks by `base_url`'s host
+(`openrouter.ai` for OpenRouter, `api.deepseek.com` for DeepSeek) and answers unsupported for any
+other host.
+
+Responses compaction (`POST /v1/responses/compact` and `POST /backend-api/codex/responses/compact`)
+is served on OpenAI-compatible accounts by `wire_api`: a `"responses"` account passes the client's
+body through to `POST {base_url}/responses/compact` unchanged with the account's key header and
+returns the upstream's reply as it came; a `"chat"` account translates the Responses conversation to
+one non-streamed `POST {base_url}/chat/completions` request with `tool_choice` set to `"none"`,
+structured output and stop sequences cleared, and the Codex CLI's compaction prompt (`prompt.md`)
+appended as a last user message, and returns OpenAI's `response.compaction` object carrying one user
+message with the Codex CLI's `summary_prefix.md` followed by a newline and the summary (`reasoning_content`
+is excluded, and an empty or cut-off summary is an error on the request); a `"messages"` or
+`"gemini"` account answers unsupported so core tries another account.
 
 Gemini clients call `POST /v1beta/models/{model}:generateContent` or `:streamGenerateContent`
 (a stream is server-sent events, with or without `alt=sse`), and `:countTokens`.
@@ -408,7 +434,12 @@ tokens four days before they expire (tokens that last less than that, five minut
 
 Every request goes to `{base_url}/responses` as Codex takes it: streamed, not stored, with the
 reasoning's encrypted content included, sampling settings removed, and the Codex terminal
-client's `User-Agent` and `originator` (turn off with `"codex_identity": false`). Chat
+client's `User-Agent` and `originator` (turn off with `"codex_identity": false`). The client's
+`metadata` is not sent (Codex's own request has none), an integer output budget under 16, which the
+endpoint refuses, is raised to 16, and a reasoning effort the model does not take (by the model's
+levels in the Codex catalog) is changed to the nearest level it does, below the effort when there is
+one, and reported as a loss. A Claude Code request's prompt cache key follows its session and agent
+(`X-Claude-Code-Session-Id` and `X-Claude-Code-Agent-Id`, or the session in `metadata.user_id`). Chat
 Completions, Messages and Gemini requests are translated to Responses. A Messages client (such as
 Claude Code) gets each reasoning item's encrypted content as its thinking block's signature, and
 replaying the block sends the reasoning back, so it carries over between turns. Codex refuses IDs
@@ -443,6 +474,9 @@ Account `settings`, all optional:
 | `base_url` | Default `https://api.openai.com/v1` for an API key and a SIWC sign-in, `https://chatgpt.com/backend-api/codex` for a subscription. |
 | `codex_identity` | Default `true`: send the Codex client's `User-Agent` and `originator`. |
 | `image_generation_tool` | Default `true`: offer the hosted `image_generation` tool, as today's core does (never to a free plan or a `-spark` model). |
+| `image_generation_off_models` | Default none: model names, or patterns with `*` and `?` (any case), that are not offered the `image_generation` tool. A tool the client lists itself stays. |
+| `codex_client_version` | Default `0.154.0`: the version the Codex client's `User-Agent` names when `codex_identity` is on. |
+| `prompt_cache_retention_passthrough` | Default `false`: send the client's `prompt_cache_retention` on, for an upstream that takes it (neither today's core nor the Codex client sends it to the ChatGPT backend, and a SIWC sign-in never sends it). |
 | `callback_listen` | Default `true`: let a browser or SIWC sign-in listen on port 1455. |
 | `images` | Default `true`: serve the Images API on the account (below). |
 | `signin_with_chatgpt_identifier` | Default `pluxy`: the name a SIWC sign-in gives this program, shown on the sign-in page (`agent_name_hint`) and starting its requests' `User-Agent`. Today's core calls it `codex.signin-with-chatgpt-identifier`, with the default `CLIProxyAPI`. |
@@ -458,8 +492,9 @@ an [endpoint call](protocol/README.md#endpoint); the Codex extension sends the b
 calls turned off on a Responses-lite request, the model renamed for the account, a thinking suffix's
 effort applied, and a prompt cache key (with `Session-Id`) derived as for `/responses` when the
 client names none; the upstream's JSON reply comes back to the client as it is. A request with
-`"stream": true` is refused with a 400, as today's core refuses it. An account of another extension
-does not serve it, so a model only those serve gets an error.
+`"stream": true` is refused with a 400, as today's core refuses it. xAI and Claude accounts serve it
+too (see their sections); an account of any other extension does not, so a model only those serve
+gets an error.
 
 **Alpha Search.** Codex's standalone search endpoint is `POST /v1/alpha/search` (also `POST
 /backend-api/codex/alpha/search`, for a ChatGPT sign-in's requests). Core routes it as an [endpoint call](protocol/README.md#endpoint)
@@ -515,7 +550,8 @@ five minutes before they expire. The account's requests follow today's core's SI
 to `{base_url}/responses` (default `https://api.openai.com/v1`) with the SIWC token and the
 `User-Agent` `<identifier> (<GOOS>; <GOARCH>)`, the session (when there is one) as `session_id`
 and `X-Client-Request-Id`, and none of the Codex client's headers, `Originator`,
-`Chatgpt-Account-Id` or routing hint; `codex_identity` and `image_generation_tool` do not apply,
+`Chatgpt-Account-Id` or routing hint; `codex_identity`, `codex_client_version`, `image_generation_tool`,
+`image_generation_off_models` and `prompt_cache_retention_passthrough` do not apply,
 and no image tool is offered. `configuration_update` input items, which the OpenAI API refuses on
 such a token, are removed and the last one's reasoning effort becomes the request's (a thinking
 suffix's effort wins); `temperature`, `prompt_cache_retention`, `prompt_cache_options` and
@@ -560,21 +596,48 @@ subscription's token an hour before it expires.
 | `client_id` | Claude's OAuth client. Default is Claude's. |
 | `rebuild_mid_system_message` | `true` moves the text of each `system` message in a Messages client's conversation into the top-level `system` prompt, after what it holds, and removes those messages, for a Claude-compatible upstream that refuses them there; non-text blocks in them are left out. Default `false`: such messages go upstream where the client put them. Requests in other formats already have every system message in the top-level prompt. |
 | `model_level_cooling` | `true` keeps a used-up shared subscription window (5-hour or 7-day) on the model that hit it, so the account's other models stay in use; default `false` blocks the whole account. Today's `claude.model-level-cooling`. |
+| `cache_ttl` | Lifetime of `cache_control` markers pluxy adds to translated requests that set none: `"5m"` (default) or `"1h"`. |
 
 A Messages request goes to Anthropic unchanged: its body, so thinking blocks, signatures and
 `cache_control` markers arrive as the client wrote them, and its `anthropic-version`,
 `anthropic-beta` and identification headers (`User-Agent`, `X-App`, the `X-Stainless-*` headers of
 Anthropic's SDKs, `X-Claude-Code-Session-Id`, `X-Client-App` and
 `X-Anthropic-Additional-Protection`; and, only from a request that names itself as Claude Code
-(`X-App: cli`, a `claude-cli/` User-Agent and the `claude-code-20250219` beta), Claude Code's
-subagent, request-class and remote-session headers such as `X-Claude-Code-Agent-Id` and
-`X-Claude-Remote-Session-Id`, as today's core forwards them only from Claude Code). An API key goes in `x-api-key`; a
+(`X-App: cli` or `cli-bg`, a `claude-cli/` User-Agent and the `claude-code-20250219` beta), Claude
+Code's subagent, prompt, request-class and remote-session headers such as `X-Claude-Code-Agent-Id`,
+`X-Claude-Code-Prompt-Id` and `X-Claude-Remote-Session-Id`, as today's core forwards them only
+from Claude Code). An API key goes in `x-api-key`; a
 subscription's token or a setup token goes as a bearer token, with the `oauth-2025-04-20` beta added
 after the client's betas. Chat Completions, Responses and Gemini requests are
-translated to Messages; their reasoning effort becomes adaptive thinking with that effort on
+translated to Messages; a Chat client's own `cache_control` markers (top-level, on tools, on
+`tool_calls`, and on messages and parts) are carried over, a Responses client's
+`prompt_cache_retention` sets the added markers' TTL (`"24h"` as `"1h"`, `"in_memory"` as `"5m"`),
+and their reasoning effort becomes adaptive thinking with that effort on
 Claude 4.6 and later, and a thinking budget from Claude 3.7 to 4.5 (low 1024, medium 8192, high
 24576 tokens); a model name the extension does not know as a Claude model gets no thinking
-settings, and the effort is reported as dropped. The extension never changes how a client presents itself: a client that is
+settings, and the effort is reported as dropped. A Responses client's `reasoning.summary` becomes
+`thinking.display` (`auto`, `concise` and `detailed` as `summarized`, `none` as `omitted`). A
+client's `json_schema` response format goes as `output_config.format` (`json_object` drops as
+unsupported), a Messages client's `output_config.format` carries over to other formats, and a
+content-filter stop from another upstream becomes `stop_reason` `"refusal"`.
+
+**Thinking settings.** Every request, a Messages client's own included, has its thinking settings
+made ones the model takes, by Anthropic's per-model tables, and each change is reported:
+
+- Effort `xhigh` goes as `xhigh` from Claude 4.7 on, and as `max` to Claude 4.6, which has no
+  `xhigh`; `minimal` goes as `low`.
+- Thinking off (`none`, or `thinking` `disabled` or `between_tools`) goes as each model turns it
+  off: Fable, Mythos and Opus 5.5 always think, so it goes without `thinking`, at effort `low`
+  unless one is set; Sonnet 5.5 takes `between_tools`; Opus 5 and Haiku 5.5 take `disabled` at
+  effort `high` or below, so a higher effort goes as `high`; older models take `disabled`.
+- A thinking budget goes to Claude 4.7 and later as adaptive thinking at the effort it falls in.
+- A forced tool choice (`any` or a named tool) goes as `auto` to Opus 5.5, Sonnet 5.5, and Fable
+  and Mythos 5.1 and later, which refuse one; with a thinking budget it goes without thinking.
+- `top_k` is left out on Claude 4.7 and later, and on older models while thinking is on.
+- With a thinking budget, a tool result whose assistant turn has no thinking block, in a
+  conversation that has none, goes with adaptive thinking on Claude 4.6 and without thinking on
+  older models. On Claude 4.5 and older, a conversation that ends on an assistant turn loses that
+  turn while thinking is on, and with thinking off loses the reasoning it ends on. The extension never changes how a client presents itself: a client that is
 not Claude Code is not made to look like Claude Code.
 
 **Sampling options.** A translated request's `temperature` and `top_p` reach Claude only where
@@ -600,9 +663,11 @@ Today's core leaves both out of every translated request, on every model.
 
 Every request, a Messages client's or a translated one, also gets the betas its body needs, after
 the client's own and without repeats, as today's core adds them: `advisor-tool-2026-03-01` for a
-tool whose type starts with `advisor_`, `extended-cache-ttl-2025-04-11` for a `cache_control`
-marker with `ttl` `"1h"` (not on a token count), and `thinking-binding-controls-2026-08-01` for
-`thinking.block_binding`. A top-level `betas` list in the body, which Messages does not take there,
+tool whose type starts with `advisor_`, `extended-cache-ttl-2025-04-11` for a block- or tool-level
+`cache_control` marker with `ttl` `"1h"` (not on a token count),
+`thinking-binding-controls-2026-08-01` for `thinking.block_binding`,
+`mid-conversation-tool-changes-2026-07-01` for `tool_addition` or `tool_removal` blocks, and
+`inline-tools-2026-09-15` when a `tool_addition` defines a tool inline (`tool_definition`). A top-level `betas` list in the body, which Messages does not take there,
 is moved into `anthropic-beta`. The client's own betas are never removed. Not built: today's
 `anthropic-beta-strip` and `anthropic-beta-append` settings, and the Claude Code beta profile
 today's core sends for clients it makes look like Claude Code.
@@ -661,6 +726,24 @@ per-minute limit (one of Anthropic's exact per-minute messages, no quota status 
 window's, the quota refusal carries `quota_window_minutes` 300 or 10080. Unlike today's core,
 no random 1 to 30 seconds are added to the wait. A 529 (overloaded) moves the request to another
 account.
+
+**Compaction.** `POST /v1/responses/compact` (a Responses client's request to shorten its
+conversation, which the Codex CLI sends) is served on Claude accounts through the protocol's
+endpoint operation, with Anthropic's [on-demand
+compaction](https://platform.claude.com/docs/en/build-with-claude/compaction-on-demand). The
+Responses body is translated to Messages as for `/v1/responses` and sent once, not streamed, with
+`"compaction": {"type": "summarize"}` and the `compact-2026-09-04` beta, and without what
+Anthropic refuses on a compaction request: stop sequences, structured output, a `tool_choice` of
+type `any` or `tool`, and `context_management`. A conversation that ends on the model's reply is
+sent with it, which a compaction request takes although a generation on Claude 4.6 and later would
+refuse it as a prefill. The reply is OpenAI's compaction reply, one JSON object
+(`"object": "response.compaction"`), whose `output` is Claude's summary as one user message that
+starts with the Codex CLI's own summary prefix, the shape the Codex CLI keeps in place of the
+conversation when it compacts on its own side; its `usage` is the summarization call's (Anthropic's
+`usage.iterations`). Anthropic's signed compaction block is not passed on, so the next request
+can go to any account and needs no beta. A reply without a summary (a `stop_reason` other than
+`compaction`, such as `max_tokens` or `refusal`) is a 502 for that request, which blocks
+nothing. Every other endpoint call is answered as not served, so core tries another account.
 
 **Quota.** For a subscription account, quota reads `GET {base_url}/api/oauth/usage` and `GET {base_url}/api/oauth/profile` (default base `https://api.anthropic.com`) with the access token, the OAuth beta in `anthropic-beta` and `anthropic-version`. Like the account's requests, it presents no client identity of its own. It reports the 5-hour window (`five_hour`), the weekly windows (`seven_day`, `seven_day_oauth_apps`, `seven_day_opus`, `seven_day_sonnet`, `seven_day_cowork`, the Fable window), any window counted in dollars, and extra usage (`extra_usage`), with the share used and reset time; the plan (Free, Pro, Max, Max 5x, Max 20x or Team) comes from the profile, and usage is still reported when the profile cannot be read. A setup token's quota reads only the
 usage, not the profile: such a token is made for inference and lacks the profile scope (today's core
@@ -1132,7 +1215,10 @@ core cleans them: local `$ref`s inlined, `const` as an enum, constraints and sho
 the description as hints (`minLength: 1`, `Allowed: a, b`), a type list such as
 `["string","null"]` as one nullable type, each `allOf` merged into the schema that holds it
 (Cloud Code's schema has no `allOf`: the branches' required names join the schema's, and their
-other keys fill the ones it lacks, its own winning), and other JSON Schema keywords removed; for a
+other keys fill the ones it lacks, its own winning), `if`, `then` and `else` removed after the
+properties of each `then` and `else` move into the schema that holds it (the model sees them as plain
+optional properties, as in today's core; the schema's own property wins, and a branch's `required`
+is dropped), and other JSON Schema keywords removed; for a
 Claude model, a union becomes its strongest branch. For Claude and Gemini 3 Pro, as in today's core, each
 object in a function's parameters that requires nothing gets a required placeholder property:
 `reason` (a string) where it has no properties, `_` (a boolean) where it has some and none is
@@ -1258,15 +1344,18 @@ whole (under 1 MiB, and not broken off), and cleaned. The cleaned text is one li
 1000 characters with an ellipsis. Replaced by `[redacted]` are: every run of token characters
 (letters, digits and `_-.+/=~`) holding 4 or more consecutive characters of one of the account's
 secrets: its session token after the public `devin-session-token$` prefix, the values of its
-secret headers, its proxy's user name and password and the secrets in its settings; `Bearer` and
+secret headers, its proxy's user name and password and the secrets in its settings (4
+characters all within a secret's public vendor prefix, such as `sk-proj-`, do not count; see
+[Account checks](#account-checks)); `Bearer` and
 `Basic` values; the values of fields named like `access_token`, `token` or `api_key`; and any
 other run of 24 or more token characters. A run is also read with its escapes decoded (JSON's
 `\/` and `\uXXXX`, `%XX`), so a piece written with escapes between its characters is replaced
-too. Core removes only whole copies of an account's secrets, and such text can hold part of one
-the upstream echoed, split across lines or cut short. Otherwise the message names only the status
-(`Devin answered 500 Internal Server Error`), or, for a quota read whose reply broke off, says
-that it broke off. The 4-character rule can also replace a word that shares 4 characters with
-one of the secrets, such as `proxy` for a proxy user name `proxy-user-1`.
+too. Core removes whole copies of an account's secrets everywhere, and pieces of them by the same
+4-character rule from every extension's errors (see [Account checks](#account-checks)), but not
+the other rules or the bound, so the extension keeps its own cleaning. Otherwise the message
+names only the status (`Devin answered 500 Internal Server Error`), or, for a quota read whose
+reply broke off, says that it broke off. The 4-character rule can also replace a word that shares
+4 characters with one of the secrets, such as `proxy` for a proxy user name `proxy-user-1`.
 
 Not built, from today's core: removing Claude Code's and Codex's attribution lines from the system
 prompt and `devin.sensitive-words`; rewriting tool descriptions; encoding tool call IDs (they pass
@@ -1305,6 +1394,26 @@ its model and its endpoint), and a failure that ends after a later-started reque
 the same scope leaves no block and no last error. Among eligible accounts, core prefers the
 session's account (with session affinity on), then the highest `priority`, then picks by
 strategy.
+
+A reset the upstream names is used when it is between 1 second and 8 days away (the longest usage
+window of any supported provider is 7 days). A shorter one is held for 1 second. A longer one is
+not believed: the account is held for 30 minutes and checked after 15. The upstream's newest word
+replaces the block's end, sooner or later; a backoff core chose itself only moves a block later.
+A rate limit or quota block on an account or one of its models with more than 15 minutes left is
+checked every 15 minutes. The check reads the account's usage from its provider (the extension's
+`quota` call). A usage window covers a block on the whole account when it counts every request on
+the account, and a block on one model when it does that or counts that model's requests; a window
+that counts other models only, or a feature of the plan such as code review, covers neither (the
+extension says which; see `protocol/README.md`, "quota"). When no window that covers the block is
+full, the block ends; otherwise it lasts until the covering full window that resets last resets. An account with no usage reading, such as an API key, lets one
+request through at the check instead, and that request's outcome decides. A real request is never
+the check where a reading exists. A check that cannot be made leaves the block and is made again
+15 minutes later. Quota blocks are saved to `state/routing.json` beside the config file (mode
+0600) and read back at start, where each is checked at once, so a restart sends no requests to
+accounts whose usage ran out. A file core cannot read, or that another version wrote, is not
+loaded and is left as it is until a block must be saved; it is then moved to `routing.json.bad`. `pluxy account clear` (`POST /accounts/{id}/cooldown/reset`)
+still clears an account's blocks at once. Each account's `health` in `GET /accounts` sums this
+up in one word (see `management/README.md`, "Accounts").
 
 When every account is blocked, the reply tells the client how long is left in whole seconds,
 rounded up and at least 1 while anything is left: the message's "try again in 1s" (or `1m1s`),
@@ -1518,7 +1627,22 @@ extension's own output, show `[redacted]` in place of the account's credential a
 secret in its settings (the values `GET /config` and `GET /accounts` show as placeholders), such
 as a `base_url` with a token in its query that an unreachable upstream's error quotes. A
 settings secret shorter than 8 bytes is left in text, since removing every occurrence of so
-short a string would mangle unrelated text. Each
+short a string would mangle unrelated text. An error's message and the string values of its raw
+body, from every extension and for every call (requests, checks, quota and model reads,
+refreshes, sessions and logins), also lose every run of token characters (letters, digits and
+`_-.+/=~`, read as written and with JSON and percent escapes decoded) that holds 4 or more
+consecutive characters of one of the account's secrets: an upstream that refuses a key often
+echoes its start (`invalid x-api-key: sk-ant-api03-AbCdEf...`), which whole-secret redaction
+misses. The secrets are the credential's key and tokens, secret header values, the proxy's user
+name and password and the secrets core finds in the settings (a URL by its user name, password
+and secret query values only), by their parts, and on a login the inputs it marks secret (the
+extension protocol's [Accounts](protocol/README.md#accounts) says which). A known vendor's
+public key prefix (`sk-proj-`, `sk-kimi-`, `xai-` and the others listed there) gives no piece,
+so `project` or `kimi` stays in an error for such a key; a secret of under 16 bytes after its
+prefix keeps every piece. Any other word of the error that shares 4 characters with a secret
+goes too, such as `token` for a header `Bearer gw-token-12345`; a reply that succeeded is never
+changed by the rule.
+Each
 extension checks with its upstream's model list, and only accounts with an API key:
 
 | Extension | Check |
@@ -1555,9 +1679,9 @@ for it. The same list decides which models such an account serves: a request for
 account serves is refused without calling an upstream, as today's core refuses it (404
 `model_not_found`; today's core answers 400). An account whose extension has no list, an empty
 one, or one it could not read within 15 seconds serves any model, and core asks again a minute
-later. Core asks an
-extension once per account and keeps the answer until the accounts change: a reload, or an
-account added, removed or signed in again.
+later. Core asks again for each known list every 30 minutes with jitter, when an account's
+credential is renewed or it signs in again, and on `POST /v0/management/models/refresh`; a
+refresh that fails, times out or comes back empty keeps the last good list.
 
 ### Codex client catalog
 
@@ -1651,7 +1775,7 @@ an account's own, leaving out a rule for an alias the account already has; its
 Besides the accounts in the config, a provider extension that signs in to accounts (OAuth in a
 browser, a device code, or an API key it checks) can add accounts through the management API.
 Core keeps each one in its credential store, a folder with one file per account readable only by
-its owner (`credentials_dir`, default `credentials` beside the config file), and renews its
+core's user and, on Windows, SYSTEM (`credentials_dir`, default `credentials` beside the config file), and renews its
 credential through the extension shortly before it expires. Only the extension that created an
 account ever receives its credential. The protocol side is in the
 [protocol README](protocol/README.md#login-and-refresh).
@@ -1664,7 +1788,10 @@ SYSTEM). A folder made by pluxy run as administrator is owned by the Administrat
 without administrator rights refuses it: take ownership of the folder and its files from an
 elevated prompt (`takeown /f <folder> /r`), or move the folder away and sign the accounts in again.
 A file in the folder that is a link, or that another account owns, is skipped with a notice in the
-log rather than loaded.
+log rather than loaded. A record file with a list of its own that lets in more (one written before
+the folder was private, or moved in from another folder), which making the folder private does not
+reach, is written again as a private file when the accounts are loaded, with a notice in the log.
+The same access list and folder checks keep the extensions' settings ([extension pages](ui/extension-pages/README.md)) and the [log files](#log-files) private.
 
 An extension may return non-secret account settings with a login grant. When adding an
 account, core uses those as defaults: properties explicitly supplied in `POST /accounts.settings`
@@ -1678,7 +1805,7 @@ send it as a bearer token. With a management key set, the config may set no acco
 | Request | Does |
 | --- | --- |
 | `GET /accounts` | Lists every account (`source` `config` or `login`), its credential `kind`, `state` (`active`, or `reauth_required` when the provider refused the grant), `disabled`, `expires_at`, the last renewal error and the last [account check](#account-checks); its routing fields (`priority`, `weight`, `disable_cooling`, `max_concurrency`, `request_retry`, `prefix`, `models`, `excluded_models`, `model_alias`, `endpoint`), its own `proxy_url`, with `redacted` in place of a user name and password, and its
-[`headers`](#upstream-headers), with a placeholder in place of each secret value; and what routing knows about it now: `cooldowns` (each live block's `scope`, `credential`, `model` with its `model`, or `endpoint`; `kind`, `rate_limit`, `quota` or `cooldown` for failures without a reset time; `until`; `backoff_level`; and the `error` that set it), `cooldown_until` (when the latest block on the whole account ends; model blocks do not count), `last_error` and `last_error_at` (the latest failure that set a block, until a request on the account that started after it succeeds; like a cooldown, it is not cleared by a request that started earlier, and a failure from a request that started before a success on the account sets none) and `active_requests`. An account that gets no requests (disabled, or waiting for a login) has no routing state. An account added by login also shows its `settings`, with each secret replaced by a placeholder in the same form as `GET /config` (see [Changing the config through management](#changing-the-config-through-management)), by the same rules made stricter: everything below a key named like a secret is a secret, however deep; `settings_inexact` is `true` when they hold a number that a client reading numbers as float64 and writing back the shortest decimal for each, as a browser does, would change (such as `0.10000000000000001`, `1e-400` or `9007199254740993`). Never a secret. |
+[`headers`](#upstream-headers), with a placeholder in place of each secret value; its `health` (`state` `ok`, `cooling`, `exhausted`, `needs_login`, `banned` or `disabled`, with `until`, `why`, `source` and `next_check`; see `management/README.md`, "Accounts"); and what routing knows about it now: `cooldowns` (each live block's `scope`, `credential`, `model` with its `model`, or `endpoint`; `kind`, `rate_limit`, `quota` or `cooldown` for failures without a reset time; `until`; `backoff_level`; and the `error` that set it), `cooldown_until` (when the latest block on the whole account ends; model blocks do not count), `last_error` and `last_error_at` (the latest failure that set a block, until a request on the account that started after it succeeds; like a cooldown, it is not cleared by a request that started earlier, and a failure from a request that started before a success on the account sets none) and `active_requests`. An account that gets no requests (disabled, or waiting for a login) has no routing state. An account added by login also shows its `settings`, with each secret replaced by a placeholder in the same form as `GET /config` (see [Changing the config through management](#changing-the-config-through-management)), by the same rules made stricter: everything below a key named like a secret is a secret, however deep; `settings_inexact` is `true` when they hold a number that a client reading numbers as float64 and writing back the shortest decimal for each, as a browser does, would change (such as `0.10000000000000001`, `1e-400` or `9007199254740993`). Never a secret. |
 | `POST /accounts` | Starts a login that adds an account: `{"id": "work", "extension": "pluxy/codex", "method": "device", "input": {...}, ...}` plus any account fields from the config (`settings`, `models`, `priority`, ...). `extension` names the extension that signs in and owns the account; it may be left out while only one extension runs. Replies 202 with the login, usually carrying its first prompt (a URL or a device code). |
 | `GET /logins/{id}` | The login's state (`pending`, `done`, `failed`, `cancelled`), prompt or error. |
 | `POST /logins/{id}/input` | `{"input": {...}}`: what the user entered for the prompt, such as the redirect URL of a browser login. |
@@ -1763,6 +1890,10 @@ config can still be checked and reloaded through management.
 
 ### Management API
 
+[`management/README.md`](management/README.md) is the API's contract and describes the `pluxy`
+command, its client: `pluxy serve` runs core, and the other subcommands (`pluxy status`,
+`pluxy account list`, `pluxy help` for the rest) call a running core's management API.
+
 Beside the account calls [above](#accounts-added-by-login), management serves these. Every call
 needs `Authorization: Bearer <management_key>`.
 
@@ -1781,13 +1912,15 @@ page are not gated; the panel's calls are.
 {"management_key": "choose-a-management-key", "management_allow_remote": true}
 ```
 
-A client that sends a missing or wrong management key 5 times in a row is refused for 30 minutes,
-with a 403 and `Retry-After`, even when it then sends the right key; core logs a line naming it.
+A client on another machine that sends a wrong management key 5 times in a row is refused for 30
+minutes, with a 403 `blocked` and `Retry-After`, even when it then sends the right key; core logs a
+line naming it. A call with no key at all is a 401 that does not count, and a call from this machine
+is never counted or blocked, so the person at the keyboard can always get back in.
 A right key clears its count, and a count is forgotten after 2 hours without a failure. These are
 today's core's numbers. The client is the address [`trusted_proxies`](#run-it) gives, and an
 IPv6 client is counted by its /64, so it cannot start again by moving to another address in the
-block it was given; today's core counts each address. Behind a proxy that is not in
-`trusted_proxies`, every client has the proxy's address, so one client's wrong keys block them all.
+block it was given; today's core counts each address. Behind a proxy on another machine that is not
+in `trusted_proxies`, every client has the proxy's address, so one client's wrong keys block them all.
 
 | Call | What it does |
 | --- | --- |
@@ -1802,9 +1935,9 @@ These calls read and change the config file core runs on, whether it is the JSON
 `config.yaml` with today's key names. A change goes through the same steps as a reload: core
 checks the new contents and prepares them, and only when they are ready to serve does it write
 the file and switch to them. The file is replaced in one step (a new file renamed over it, with
-the same permissions, through a symbolic link if the path is one), so nothing ever reads half of
-it. When a change is refused, the file and the running config stay as they were, and status
-keeps showing the file as it is. When another program writes the file while a change is being
+the same permissions, on Windows the same access list, through a symbolic link if the path is
+one), so nothing ever reads half of it. When a change is refused, the file and the running
+config stay as they were, and status keeps showing the file as it is. When another program writes the file while a change is being
 prepared, the change is dropped with a 409, so that write is not lost. Today's core writes its file in place and saves a change that
 its reload may then refuse.
 
@@ -1818,11 +1951,12 @@ its keys and its indent. `PUT /config` writes the document as sent.
 | `GET /v0/management/config` | The config file: `format` (`json` or `yaml`), `hash` (as in status) and `content`, the file as written with each secret replaced by a placeholder such as `pluxy-redacted-4f1c...`. Secrets are found by key name, in both layouts of a `config.yaml` and in the JSON config: client keys, the management key, every `api-key` and `api_key`, everything in an account's `credential` except its `kind`, passwords, tokens and secrets (names are compared in lower case whatever joins their words, or none, so `accessToken` and `accesstoken` are `access_token`, with letters folded as core matches a JSON key to a setting, so `client_keyſ` is `client_keys`; `aws_secret_access_key`, `client_secrets` and `passwords` are ones too, and so is a name that ends in a number or a word saying how the value is written, such as `apiKey2`, `api_key_value` or `privateKeyPem`), header values about authentication (`Authorization`, `X-Api-Key`, cookies) or named like a secret in any mapping whose name holds `header` (`extra_headers`, `headers_override`), and any URL with a user name, password or query. Everything below a key named like a secret is a secret, however deep, also when given through a YAML alias (as a value, or as a key's name), as `GET /accounts` shows a login account's settings, except in today's core's provider sections at the top of a `config.yaml` (the sections of the v8 `api-keys` mapping, such as `codex`, and the older lists such as `codex-api-key`), whose entries are read by these rules; any other key of the v8 `api-keys` mapping is read as a secret key. A string secret of 8 bytes or more written again as a whole value anywhere else in the file (a note holding a key) is hidden there too; a shorter copy, or a number, is shown, and so is a copy of a value that is a secret only for being in a mapping below a secret key. `true`, `false`, `null` and the empty string never are secrets, as they carry none. Comments are shown as written. 422 when the file does not parse. Today's core returns its config, the management key's hash and provider keys included, as they are. |
 | `POST /v0/management/config/validate` | `{"content": "..."}`: checks a document as a reload would, without starting extensions or writing anything, placeholders put back as `PUT /config` puts them (below). 200 with `valid: true` and the `notices` a `config.yaml` load logs, or `valid: false` and `error`, such as for a placeholder where its secret is not. |
 | `PUT /v0/management/config` | `{"content": "...", "base_hash": "..."}`: replaces the file with the document and applies it. Each placeholder goes back only where its own secret is in the file now: the same account or list item (by its `id` or `name` when it holds that item's secrets, else by its secrets), and the same keys, also where a YAML alias or merge key reads it (below). 200 with the file as `GET /config` shows it; 409 when `base_hash` is set and the file has changed since; 422 with `error` when core refuses the document, such as for a placeholder anywhere else, naming its line; a refused document writes nothing. |
-| `GET /v0/management/client-keys` | The client keys: each one's `id` and `masked` form (first and last two characters, as the old panel showed them; a key shorter than 8 characters is hidden whole). |
+| `GET /v0/management/client-keys` | The client keys: each one's `id` (a keyed hash whose key is kept in `state/key-id.key` beside the config file, mode `0600`, so IDs stay the same across restarts) and `masked` form (first and last two characters, as the old panel showed them; a key shorter than 8 characters is hidden whole). |
 | `POST /v0/management/client-keys` | Adds a new random client key (`sk-` and 26 random characters). 201 with the key's `id` and `masked` form and its `value`, which no later call shows. |
 | `DELETE /v0/management/client-keys/{id}` | Removes the client key. 204; 404 when no key has the ID; 409 for the last key, since core refuses a config without client keys. |
 | `POST /v0/management/management-key/rotate` | Replaces the management key with a new random one and returns it as `value`. The old key stops working as the reply is sent. |
 | `GET /v0/management/models` | The models `GET /v1/models` lists, as one list in the same order: `models`, each with `id` (the name clients use), what the extension says about the model (`owned_by`, `display_name`, limits, ...), `upstream` (its name upstream), `extension` (the extension of the account whose entry the list shows) and `accounts` (the IDs of every account that serves the name, in routing order). An account that serves any model because its list is not known lists none. Never a credential. |
+| `POST /v0/management/models/refresh` | Ask providers for their model lists again now; optional JSON body `{"account": "<id>"}` for one account. Returns the updated `models` list and per-account `accounts` results (`models`, `kept`, `error`). A read that fails, times out or comes back empty keeps the last good list. |
 | `GET /v0/management/settings` | The basic and routing settings, by today's core's names, and `token_count_estimate`, this core's own, under its own name (below). |
 | `PATCH /v0/management/settings` | Changes the settings the body names (`{"routing": {"strategy": "fill-first"}}`) and replies with them all. 400 for a name or value it does not take. |
 
@@ -1920,13 +2054,18 @@ a client that has that message finds the turn in the record; a client that goes 
 is written leaves the turn recorded as finished, with the tokens the upstream reported. For a
 reply core translates, that holds for the `.done` messages written just before it too.
 
-The record lives in memory and is gone after a restart. It keeps the last `max_events` requests
+The recent window lives in an in-memory ring holding the last `max_events` requests
 (default 10000, at most 200000) and none recorded (when the request ended) longer ago than
-`max_age_ms` (default 24 hours, at most 30 days); a reload that lowers either drops the oldest at once. Reading it never removes anything:
-today's core hands its usage queue out once and deletes what it hands out.
+`max_age_ms` (default 24 hours, at most 30 days); a reload that lowers either drops the oldest at once.
+Core also writes every recorded event asynchronously through a bounded 4,096-event queue to one
+JSONL file per UTC day under `usage/` beside the config file (`usage/YYYY-MM-DD.jsonl`, mode `0600`,
+`"v": 1` on each line), without `fsync` per line. When the queue is full, new events are dropped from
+the disk queue and counted in `dropped` so slow storage never blocks requests. On startup, the in-memory ring is refilled from today's and yesterday's files (skipping a torn last line) while continuing `seq` from the highest `seq` seen in the refilled files (numbering older unsequenced lines in order), and day files older than `keep_days` (default 90; `0` keeps everything) are deleted at startup and daily.
+When a range in `GET /v0/management/usage` covers closed UTC days (before today), each closed day gets a summary file `usage/summary/YYYY-MM-DD.json` (mode `0600`) built on demand from its day file, cached in memory after, and kept even after `keep_days` removes old `.jsonl` files; summaries store per-hour, model, provider, account, client key, failure split, latency sum and all six token counts so long ranges never re-read closed `.jsonl` files. Closed days are counted by whole UTC hours, so a `since` or `until` inside an hour on a closed day counts that whole hour. Today's portion comes from the in-memory ring (or today's `.jsonl` file if earlier events from today rolled out of the ring).
+Client key IDs (`key_id`) use an HMAC key stored in `state/key-id.key` beside the config file (mode `0600`), so key IDs match across restarts. Reading the record never removes anything: today's core hands its usage queue out once and deletes what it hands out.
 
 ```json
-{"usage": {"enabled": true, "max_events": 10000, "max_age_ms": 86400000}}
+{"usage": {"enabled": true, "max_events": 10000, "max_age_ms": 86400000, "keep_days": 90}}
 ```
 
 `usage.enabled` (today's `usage-statistics-enabled`) is on unless the config turns it off. Off,
@@ -1934,12 +2073,10 @@ requests are not recorded and what was recorded stays readable.
 
 | Call | What it does |
 | --- | --- |
-| `GET /v0/management/usage` | What the recorded requests add up to: `total_requests`, `success_count`, `failure_count`, `success_rate` (0 to 1), `average_latency_ms` and `tokens` (the sums of each token count); the same per model (`models`), extension (`providers`), account (`accounts`, each with its `provider`) and client key (`keys`, by `key_id`), most requests first; and `series`, the requests, failures and tokens in each of the last `buckets` steps of `bucket` (default 60 steps of `1m`; `bucket` from `1s` to `24h`, `buckets` up to 1440), oldest first, ending with the step that holds now. `oldest` is the arrival time of the oldest event kept, `evicted` how many events the limits have pushed out since core started, and `enabled` whether recording is on. |
-| `GET /v0/management/usage/events` | The recorded events, oldest first: up to `limit` (default 100, at most 1000) with a `seq` above `after`. The reply's `next` is the `seq` to pass as `after` for the next page, `more` says whether more match, and `lost` says whether events after `after` were pushed out before this read, so a program that polls with `after` knows it missed some. |
+| `GET /v0/management/usage` | What the recorded requests add up to over the kept range: `total_requests`, `success_count`, `failure_count`, `success_rate` (0 to 1), `average_latency_ms` and `tokens` (the sums of each token count); the same per model (`models`), extension (`providers`), account (`accounts`, each with its `provider`) and client key (`keys`, by `key_id`), most requests first, plus `by` and `breakdown` when `by` (`model`, `account`, `key`, `provider`) is asked; and `series`, the requests, failures and tokens in each step (`bucket` from `1s` to `24h`, `buckets` up to 1440; defaults to 60 steps of `1m` with no range, `1h` steps for ranges up to 48 hours and `24h` steps beyond), oldest first, ending at `until` (or with the step that holds now). `oldest` is the arrival time of the oldest event considered, `evicted` how many events the limits have pushed out since core started, `dropped` how many events were dropped since core started because the disk writer's queue was full, and `enabled` whether recording is on. |
+| `GET /v0/management/usage/events` | The recorded events in the recent ring, oldest first with `after` (`seq` above `after`) or newest first with `before` (`seq` below `before`, or `0` for the latest page), up to `limit` (default 100, at most 1000). The reply's `next` is the `seq` to pass for the next page, `more` says whether more match, and `lost` says whether events after `after` were pushed out before this read, so a program that polls with `after` knows it missed some. |
 
-Both calls take the filters `since` (an RFC 3339 time, or a duration back from now such as
-`24h`), `until` (an RFC 3339 time), `model`, `provider`, `account`, `key_id` and `failed`
-(`true` or `false`). A filter that does not parse is a 400.
+Both calls take the filters `since` (an RFC 3339 time, or a duration back from now such as `24h`, `7d` or `30d`), `until` (an RFC 3339 time), `model`, `provider`, `account`, `key` (or `key_id`) and `failed` (`true` or `false`). A filter that does not parse is a 400.
 
 ## Log files
 
@@ -1959,6 +2096,15 @@ renamed `main-<time>.log` and a new one begins. `logs.max_total_size_mb` (today'
 `logs-max-total-size-mb`) caps the folder: when its `.log` files take more, the oldest are deleted
 first, `main.log` never; 0 (the default) is no cap. The cap is applied when a file is rotated, when a
 request log is written and when the setting changes. A change of either setting takes effect at the reload that makes it.
+
+The logs folder and the files core writes in it (`main.log`, its rotated files and the
+[request logs](#request-logs)) can be read only by core's user (and, on Windows, SYSTEM). On
+Linux and macOS the folder is made 0700 and each file 0600. On Windows the folder and each file
+get the protected access list of the [credentials folder](#accounts-added-by-login), and the
+folder is checked the same way each time core opens `main.log` and each time it writes a
+request log: a folder whose list is not private is made private, and one that is a link or a
+file, or that another account owns, is refused. Core still starts then, but writes no log files,
+and says why on standard error. A `main.log` that another account owns is refused too.
 
 Core also writes one access line when each client API request ends: after a streamed reply ends,
 and when a Responses WebSocket closes. It writes none for `/healthz`, the management API, the
@@ -2090,7 +2236,11 @@ public prefix (`devin-session-token$<jwt>`), the token of a `Bearer` value or a 
 each part of 8 bytes or more removed on its own too (the extension protocol's
 [Accounts](protocol/README.md#accounts) lists the structures). Replies and upstream
 sections come from the extension with the account's own credential, the secrets in its settings,
-its proxy's password and its secret header values already removed; in the upstream sections the
+its proxy's password and its secret header values already removed, and an error's text and the
+body of an upstream reply with an error status (400 or more), or of every reply of a request
+that failed, without the pieces of the account's secrets (see [Account checks](#account-checks)):
+a failed request's log can lose words of the model's text that share 4 characters with a secret;
+in the upstream sections the
 values of headers and query parameters whose names hold `auth`, `key`, `token`, `secret`,
 `cookie`, `session`, `password`, `passphrase` or `signature` are masked too, the URL's user name and password
 are left out, and the characters a secret could be made of on each side of a body's left-out

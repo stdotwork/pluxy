@@ -186,8 +186,8 @@ pub fn has_entries(f: &impl AsRawFd) -> io::Result<bool> {
 }
 
 /// Who an access list entry is for: a user or a group by number (`mbr_uuid_to_id`), or its UUID
-/// when that lookup fails. A UUID Directory Services does not know (a removed account) still gets
-/// a user number, a temporary one, so it shows as `user:<n> (no name)`, not as `Unknown`.
+/// when that lookup fails, as it does for a UUID no account has (`unknown <UUID>`). A user number
+/// with no name shows as `user:<n> (no name)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Subject {
     User(u32),
@@ -466,11 +466,17 @@ pub(crate) fn add_entry(path: &std::path::Path, entry: &str) {
 
 /// Tests: gives path, which must have no access list yet, the one entry `<subject> allow`
 /// with exactly the right bits rights, any of them, `chmod +a`'s names or not (the kernel's
-/// generic rights). It adds `<subject> allow read` with macOS's own `chmod`, takes the list in the
-/// form the kernel reads (`FILESEC_ACL_RAW`), sets that entry's rights there and gives it back to
-/// the kernel (`chmodx_np`), which takes any rights.
+/// generic rights), and, with uuid, for the account of that UUID instead of subject. It adds
+/// `<subject> allow read` with macOS's own `chmod`, takes the list in the form the kernel reads
+/// (`FILESEC_ACL_RAW`), sets that entry's rights (and UUID) there and gives it back to the kernel
+/// (`chmodx_np`), which takes any rights and any UUID.
 #[cfg(test)]
-pub(crate) fn set_raw_entry(path: &std::path::Path, subject: &str, rights: u32) {
+pub(crate) fn set_raw_entry(
+    path: &std::path::Path,
+    subject: &str,
+    rights: u32,
+    uuid: Option<[u8; 16]>,
+) {
     use std::os::unix::ffi::OsStrExt;
     extern "C" {
         fn acl_get_link_np(path: *const std::os::raw::c_char, ty: c_int) -> *mut c_void;
@@ -481,7 +487,8 @@ pub(crate) fn set_raw_entry(path: &std::path::Path, subject: &str, rights: u32) 
     /// In `struct kauth_filesec` (`sys/kauth.h`): the magic number, two 16-byte GUIDs, then the
     /// list's entry count and flags; each entry is a 16-byte GUID, its flags and its rights.
     const COUNT: usize = 4 + 16 + 16;
-    const FIRST_RIGHTS: usize = COUNT + 4 + 4 + 16 + 4;
+    const FIRST_GUID: usize = COUNT + 4 + 4;
+    const FIRST_RIGHTS: usize = FIRST_GUID + 16 + 4;
     assert_eq!(status(path).unwrap().1, Vec::new(), "{}", path.display());
     add_entry(path, &format!("{subject} allow read"));
     let p = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
@@ -516,6 +523,9 @@ pub(crate) fn set_raw_entry(path: &std::path::Path, subject: &str, rights: u32) 
         let at = raw.add(FIRST_RIGHTS).cast::<u32>();
         assert_eq!(at.read_unaligned(), 1 << 1, "the entry's rights are read");
         at.write_unaligned(rights);
+        if let Some(u) = uuid {
+            std::ptr::copy_nonoverlapping(u.as_ptr(), raw.add(FIRST_GUID), 16);
+        }
         let set = chmodx_np(p.as_ptr(), fsec);
         let e = io::Error::last_os_error();
         filesec_free(fsec);

@@ -26,6 +26,7 @@ them. App-only packages omit provider fields; no dummy provider is needed.
 | `config` | Optional settings, using the existing [config format](../../ui/extension-pages/README.md#config), with its own version. App settings belong to this device. |
 | `resources` | Web only: requested broker resources, each with an `id`, `kind` (`file` or `subtree`) and nonempty `operations` list. A declaration grants no access. |
 | `programs` | Native only: platform (`GOOS/GOARCH`) to relative executable path, as for provider programs. At least one entry is required. |
+| `environments` | Native only, optional: where else its program may run, each once. The only one is `wsl`: on Windows, its Linux program may run in a WSL distribution. Its releases must then publish `linux/amd64` and/or `linux/arm64` archives as well, which the app installs as the [Linux build for WSL](#linux-build-for-wsl). Any other value is refused. |
 | `operations` | Native only: declared operations, each with an `id`, plain `description`, `input_schema` and `output_schema` JSON objects, an optional `effect` (`read`, `write`, `launch` or `disclose`; absent means `write`) and optional `secrets`: at most four input fields that carry a secret, each `"value"` (the tool receives the secret) or `"reference"` (it receives only a reference to it; a `launch` operation's are references only); each must be a `string` property of the input schema. See [Secrets, references and the vault](#secrets-references-and-the-vault). At least one operation is required. |
 | `exports` | Native only, optional: `{"contract": <nonnegative integer>, "operations": [<declared IDs>]}`, the operations other packages may import and the version of that export contract. |
 | `imports` | Optional, both tiers: at most 16 entries `{"package": <ID>, "contract": [<accepted export contracts>], "operations": [<IDs>], "required": <bool, default true>, "secrets": [<IDs>]}`, one per package, never the package itself. `secrets` (native tools only) lists the imported operations it may pass secret references to. See [Calls between packages](#calls-between-packages). |
@@ -80,6 +81,26 @@ catalog builds one; it offers, read-only: ID, version, archive SHA-256 and size,
 source, signature, the root's public key, store folder, program path and the program's SHA-256
 (check the opened file against it before running it), operations, state versions, app
 contribution version and host contract.
+
+### Linux build for WSL
+
+A native tool that declares `"environments": ["wsl"]` may also run its Linux program in a WSL
+distribution. That program comes from the release's `linux/<arch>` archive, the Linux build,
+installed beside the device's own archive only when the person asks for it in the main window
+(`device_install_wsl`, for `linux/amd64` or `linux/arm64`). The tool must be enabled and confirmed
+for its active release. The Linux build is the active release's version from the registry the tool
+was installed from, signed by the same signer (publisher, key ID and source), with a signature
+that holds for that platform. Its manifest has the same ID and version, is a native tool for this
+host contract, declares `wsl`, declares the same operations, state, imports, exports, jobs and
+environments as the active release, and has a program for the platform whose mode in the archive
+lets it run. The app checks it as it checks any archive, then asks in a native confirmation that
+names the package, version, platform and the archive's SHA-256. Only once the person confirms is
+it kept in the same store, by its own SHA-256, and recorded on the package by platform; a cancel
+keeps nothing. Any change of the active release (an update, a rollback, a removal) drops every
+Linux build of the package, so a tool in WSL never runs another version than the device's; the
+next use in WSL asks again. Before each start in WSL the program host takes it as
+`device::admitted_linux_unlocked`, which checks the tool's own admission, the Linux build's
+signature for its platform and every one of its files again.
 
 ### Signed descriptor bytes
 
@@ -360,7 +381,7 @@ checks the sources for any other call that could end a process.
 
 | | Windows | macOS |
 | --- | --- | --- |
-| What runs | The file the host opened and checked: its path now (with `\\?\` removed), opened again with only reading shared, so it cannot be renamed, replaced or written until the process runs; only `.exe` and `.com` files that start with `MZ` | The file the host opened and checked, by the path it has now (`F_GETPATH`), once no other user can change that file or any folder above it and the path still names the same file (device, inode, size, mode and times). That reads each part's mode and extended access list together, from `/` down to the file, inherited entries too: an allow entry for another user or group that holds any right but the read-only ones (`read`, `execute`, `readattr`, `readextattr`, `readsecurity`, `synchronize`, and the kernel's generic read and execute) is refused, so `write`, `add_file`, `delete` and the like, the kernel's `generic_write` and `generic_all`, and any right not known today. The refusal gives the entry's number, who it is for, its rights and how to remove it (`chmod -a#`, or `chmod -N` for every entry, with the path quoted for the shell). Deny entries pass, as home folders carry `group:everyone deny delete`. For the program of a detached launch or a managed runtime, and the program a terminal launch runs, a folder above it may also be writable by the `admin` group, by its mode or an access list entry, as macOS makes `/Applications` and Homebrew makes its folders. Another admin account can then replace the program between the check and the exec (and, for a program inside an app, whatever it later loads or starts from its app: frameworks, plug-ins, helper apps), and, with or without that rule, can replace at any time what any program loads from such folders (Homebrew's libraries, a script's interpreter and modules) |
+| What runs | The file the host opened and checked: its path now (with `\\?\` removed), opened again with only reading shared, so it cannot be renamed, replaced or written until the process runs; only `.exe` and `.com` files that start with `MZ` | The file the host opened and checked, by the path it has now (`F_GETPATH`), once no other user can change that file or any folder above it and the path still names the same file (device, inode, size, mode and times). That reads each part's mode and extended access list together, from `/` down to the file, inherited entries too: an allow entry for another user or group that holds any right but the read-only ones (`read`, `execute`, `readattr`, `readextattr`, `readsecurity`, `synchronize`, and the kernel's generic read and execute) is refused, so `write`, `add_file`, `delete` and the like, the kernel's `generic_write` and `generic_all`, and any right not known today. The refusal gives the entry's number, who it is for, its rights and how to remove it (`chmod -a#`, or `chmod -N` for every entry, with the path quoted for the shell). Deny entries pass, as home folders carry `group:everyone deny delete`. Each part must be on a volume that keeps ownership: one that ignores it (`MNT_IGNORE_OWNERSHIP`, Finder's "Ignore ownership on this volume", the default for many external drives) shows every file as owned by whoever asks and lets any user change it, so a part there is refused, a folder above the program too when the program is on another volume mounted below it, with a message that names the part and the volume and says to turn ownership on (`sudo diskutil enableOwnership`) or move the program. For the program of a detached launch or a managed runtime, and the program a terminal launch runs, a folder above it may also be writable by the `admin` group, by its mode or an access list entry, as macOS makes `/Applications` and Homebrew makes its folders. Another admin account can then replace the program between the check and the exec (and, for a program inside an app, whatever it later loads or starts from its app: frameworks, plug-ins, helper apps), and, with or without that rule, can replace at any time what any program loads from such folders (Homebrew's libraries, a script's interpreter and modules) |
 | Handles and descriptors it gets | Only its three standard handles (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), made inheritable only while it starts | Every descriptor above 2 closes as it executes, but for a terminal launch the program it runs, as 3 (see `program` in [Launches and managed runtimes](#launches-and-managed-runtimes)) |
 | Tool, managed runtime, the app's core | A job object of its own, which ends the process and everything it started when stopped and when the app exits or crashes (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) | A process group of its own (a tool's, a runtime's); the app's core stays in the app's group |
 | Asked to stop | `CTRL_BREAK` to its process group on its own hidden console, then the job ends after the grace. An app that has a console of its own (a debug build run from a terminal) cannot send it, and ends the job at once | SIGTERM, then SIGKILL to the group after the grace, as on Linux |
@@ -370,8 +391,64 @@ checks the sources for any other call that could end a process.
 Names of environment variables are compared ignoring case on Windows. Besides the names a launch
 never gets anywhere ([What a launch gets](#what-a-launch-gets)), it never gets `DYLD_*` on macOS,
 nor `COR_*` or `__COMPAT_LAYER` on Windows: each makes a program load code it was not asked to
-run. Nor does it get `WSLENV` on Windows, which would pass the Windows variables it names on into
-a WSL distribution.
+run. Nor may it set `WSLENV` on Windows, which would pass the Windows variables it names on into
+a WSL distribution: for a launch of Windows' own `wsl.exe` (a launch in WSL, prepared by
+`pluxy/wsl`), the host itself sets `WSLENV` to the variables the launch sets or gives a secret
+in, each passed on unchanged (`/u`), and to nothing else.
+
+### Tools in WSL (Windows)
+
+On Windows a package whose manifest names `"environments": ["wsl"]` may also run in a WSL
+distribution, as one of its users: an instance of its own beside the one on this computer
+(`src-tauri/src/environments.rs`). Only the app's window chooses where a call runs; the host
+carries that choice itself (never in an operation's input, so a page or another package cannot
+choose it) and refuses, before anything starts, an environment it has no record of or a package
+that does not run in WSL. The host's record of an environment is what `pluxy/wsl`'s `check` gave
+when the person added it ([app tools](../../app-tools/README.md#wsl)): the distribution, the user,
+their home, the processor and the Windows drives mounted there, kept in `environments.json` beside
+`launcher.json`, readable only by your user.
+
+- **What runs.** The release's Linux build for the distribution's processor (`linux/amd64` or
+  `linux/arm64`), installed for WSL after its own native confirmation and verified like any
+  release. Its program runs from the Windows disk, through the drive the distribution mounts
+  (`/mnt/c/...`; a distribution that mounts no drive, or mounts it `noexec`, is refused): Windows'
+  own `wsl.exe -d <distribution> -u <user> --cd <its folder> --exec <its program>`, started and
+  held like any tool (its own job, three pipes). `wsl.exe` does not open the program itself, so
+  the host keeps it pinned (no writer, rename or delete) for the whole run, not only until it
+  starts.
+- **What it gets.** `wsl.exe` gets only `SystemRoot` (WSL 2 refuses to start without it), the
+  contract's values, `PLUXY_TOOL_DATA_DIR`, `PLUXY_ENVIRONMENT=wsl:<distribution>:<user>` and
+  `PLUXY_ENVIRONMENT_ACCOUNT=<user ID>:<home>` (the record's), each passed into the distribution
+  unchanged by `WSLENV` (`/u`). No `PATH`, so WSL adds no Windows
+  folder to the tool's. A tool in WSL also sees the variables WSL itself sets there (`HOME`,
+  `USER`, `PATH`, `WSL_DISTRO_NAME`, `WSL_INTEROP`, the WSLg display variables and others); the
+  host does not remove them. Before it says hello the tool checks that it runs in that
+  distribution as that user, with the record's user ID and home, so a stale record (a
+  distribution or user made again under the name, or a home since moved) runs nothing.
+- **Its data folder** is `<home>/.local/state/pluxy/tools/<publisher>/<name>` in the
+  distribution, which the tool makes at its first write (the host never writes in a
+  distribution).
+- **Its own state.** Each instance has its own process, turn, calls of unknown outcome and vault
+  records (backups and journals, in a folder named by the package's digest and a digest of the
+  distribution and user). Changing, disabling or removing the package stops its instances in
+  every environment; removing an environment stops what runs there and forgets the launcher's
+  remembered launches and recent folders there, revoking their approvals.
+- **Start.** A tool in WSL has 60 seconds to say hello and describe itself (a stopped WSL 2
+  distribution starts first). When WSL itself refuses to start the program (WSL 1's `0xd0000225` on
+  either stream: nothing ran), the start is tried twice more, two seconds apart, and none of those
+  tries counts as a crash; only when the last one is refused too does one crash count, with its
+  backoff. What `wsl.exe` prints instead of a frame (at most 512 characters of its first 4 KiB) is
+  shown in the start's error, and so is that refusal when it comes on standard error; other
+  standard error goes to the status log.
+- **Native confirmations** of its writes show `Runs in WSL: distribution "<d>", user "<u>"
+  (<home>).` above the review (the names quoted: neither holds a `"`), and that line is part of
+  what a remembered approval names. A launch the launcher starts there shows its own line,
+  `Starts in WSL: …`, and runs only if `pluxy/wsl`'s prepared launch is exactly the one asked for
+  (Windows' own `wsl.exe` started in the app's home folder, that distribution, user, folder,
+  program, arguments and kind) and holds nothing else (only `executable`, `argv`, `cwd` and
+  `program`).
+- **Not yet.** A tool in WSL may use its vault, but its own calls, jobs, launches, runtimes and
+  saves are refused.
 
 ## Calls between packages
 
@@ -590,7 +667,8 @@ program's name) and `cwd`, and may name:
   Windows, any of `argv`). The confirmation opens and
   hashes it as it does the executable, so a remembered approval does not stand for a replaced
   program (a self-update) either, and the spawn refuses one changed since it was confirmed. The
-  terminal starts it after the spawn, so the spawn also checks who could change it by then:
+  terminal starts it after the spawn, so the spawn (on Windows the terminal) also checks who
+  could change it by then:
   - on Linux the terminal finds it by the path `argv` names, the argument right after the
     terminal's exec flag (`-e`, `-x` or `--`, which must be the first argument), which `program`
     must be (refused otherwise). The check covers only a launch that names `program` there: a
@@ -616,6 +694,22 @@ program's name) and `cwd`, and may name:
     program ([What runs](#windows-and-macos), `admin` folders included): a file put at the
     program's path since the confirmation never runs. The spawn applies the same rule first, so
     the app refuses a program in a folder another user may change;
+  - on Windows the execution program's terminal mode runs the argument right after `--` by its
+    path (the app requires only that `program` is one of `argv`, since a WSL launch names its
+    Linux program after `--exec`). The app checks no more than that the program is still the
+    file confirmed. The execution program, in the launch's console, first opens the program and
+    every folder above it with deleting shared with no one (and writing too, for the program), so
+    none of them can be renamed, removed or replaced, nor the program written, until it starts.
+    It then checks that the path names exactly what it holds (its final path, so no link,
+    junction or short name is on the way, and the same volume serial number and file ID), that
+    the program is a PE image (`.exe` or `.com` starting `MZ`), and that no account but the
+    person, SYSTEM, Administrators and TrustedInstaller may change the program or its folder,
+    nor remove or rename what a folder above holds (owner and access list, read through the held
+    handles; adding to a folder above is allowed, as every account may in `C:\`). It refuses
+    otherwise, naming the path and why, and the program never runs: a program another account
+    swapped in since the confirmation is that account's own, or that account held a right the
+    check refuses. The refusal shows in the terminal's window, after the app has started the
+    launch;
 - `file` and `within`: the file the launch opens, which must be one of `argv`, and the folder it
   must be inside, named together, each by its resolved path. The confirmation resolves both and
   refuses, before any dialog:
@@ -651,7 +745,34 @@ program's name) and `cwd`, and may name:
   folder is its own ([the execution program's `open`
   launch](../../app-tools/README.md#execution)). A desktop whose opener guesses types otherwise
   than GIO (KDE's `kde-open`, which xdg-open runs there) may still pick another app for a file
-  the check let through;
+  the check let through.
+
+  On Windows and macOS the system picks the app by the file's extension, not its content, so the
+  type is the extension's: `.txt` (`text/plain`), `.json`, `.jsonl`, `.ndjson`, `.md` or `.log`
+  (the types above), any other refused; the content is not read (`src/confirmation_open.rs`).
+  The folder may not be a drive's root or `/`, the home folder or a folder above it, and is
+  refused when the home folder cannot be resolved. The file, the folder and every folder between
+  them must be the person's own and writable by no one else: on Windows their owner and access
+  list (`src/win_acl.rs`: owned by the person or by the owner Windows gives the person's new
+  files, the token's default owner, which is the Administrators group for an elevated
+  administrator; no allow entry giving anyone but the person, SYSTEM or Administrators a right to
+  change it; and not a link or junction); on macOS
+  their owner, mode and no access list entry at all. On Windows the file must also be on a local
+  drive (not a network path), name no alternate data stream, have a path shorter than 260
+  characters, and be named by its plain path (`C:\…`, never `\\?\`); the launch runs
+  `pluxy/execution`'s own program (compared by identity; another package's own program is
+  refused) with argv exactly `open`, `--` and the file, which hands the file to the app Windows
+  opens its extension with, and it starts with no console (as does that program's `app` mode,
+  and no other launch). On macOS the file has no execute bit and none of the
+  attributes that can choose another app for it (`com.apple.FinderInfo`,
+  `com.apple.ResourceFork`, `com.apple.LaunchServices.OpenWith`), and the launch runs
+  `/usr/bin/open` with argv exactly the file. The dialog's first line says "Opens the file <file>
+  (<type>, inside <folder>) with the app Windows (or macOS) opens .<ext> files with, through
+  <opener>." The spawn checks the file's identity and metadata again as on Linux. On Windows a
+  permissions change on a folder above the file between confirming and launching can also
+  refuse the open: setting a folder's access list as `icacls` does also goes through what is
+  inside it and changes the file's change time, even when the file's own permissions stay the
+  same (an inheritable entry changes them too), and the person then confirms the open again;
 - `stdin`: one of the launch's secret fields, whose secret the host writes to the launch's
   standard input and then closes: the private channel to a credential bridge, never argv, its
   environment or a file. The confirmation names it; it is part of the environment revision;
@@ -717,7 +838,12 @@ started does not end with it.
   `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP`) and the proxy variables (`http_proxy`,
   `https_proxy`, `no_proxy`, `all_proxy`, and the same in capitals); those it has are passed on,
   but those the launch removes. When the app runs as an AppImage, entries inside its own folder
-  are taken out of `PATH`, `XDG_DATA_DIRS` and `XDG_CONFIG_DIRS`. Then come the variables the launch
+  are taken out of `PATH`, `XDG_DATA_DIRS` and `XDG_CONFIG_DIRS`. On macOS `PATH` then gets, after
+  its own entries, the folders people's command-line clients are installed in that exist and it
+  lacks: `~/.local/bin`, `~/.npm-global/bin`, `~/.bun/bin`, `~/.cargo/bin`, `~/.volta/bin`,
+  `~/Library/pnpm` and `~/bin` (`~` the app's `HOME`), then `/opt/homebrew/bin` and
+  `/usr/local/bin`: an app started from the Finder or the Dock has launchd's `PATH`, which finds
+  none of them. Then come the variables the launch
   inherits by name, those it sets, and its secrets, which the host resolves from the vault at the
   spawn, each checked then as a delivery to the tool whose launch it is: the tool that asked holds
   references only. No shell is run to read a login environment.
@@ -886,22 +1012,22 @@ of the bytes or the chosen path is logged, and the answers carry neither.
 ## Secrets, references and the vault
 
 The app keeps a host-private **vault** in its data folder (`vault`; on Windows in its local data
-folder, which does not roam with the profile), owner-only: on Linux and macOS folders 0700 and
-files 0600 of the user; on Windows a protected access list whose allow entries name only the user
-and SYSTEM, set as each folder and file is made, and an owner that is the user, the token's default
-owner (Administrators for an elevated account) or SYSTEM, checked at each read. The vault holds
-each native tool's backups and journals on all three systems, and the secrets the person entered
-on Linux, the only system with secret entry yet. It is never a
-folder a package names or reads through the host, and no window or page API gives its paths, a
-secret's value, a backup's bytes or a journal's intent. A native tool has the user's full access
-and could read it directly: this separates APIs and storage, it is not an operating-system
-sandbox, and it does not protect a secret from another program of the same user.
+folder, which does not roam with the profile), owner-only: on Linux and macOS folders 0700 and files
+0600 of the user; on Windows a protected access list whose allow entries name only the user and
+SYSTEM, set as each folder and file is made, and an owner that is the user, the token's default
+owner (Administrators for an elevated account) or SYSTEM, checked at each read. The vault holds each
+native tool's backups and journals and the secrets the person entered, on all three systems. It is
+never a folder a package names or reads through the host, and no window or page API gives its paths,
+a secret's value, a backup's bytes or a journal's intent. A native tool has the user's full access
+and could read it directly: this separates APIs and storage, it is not an operating-system sandbox,
+and it does not protect a secret from another program of the same user.
 
 ### Secrets and references
 
 A secret enters only through native key entry (`vault_secret_add`, the app README's Commands):
-GTK's hidden entry reads it, and the window gets back its opaque ID (`s-` and 32 hexadecimal
-digits) and label, never the value. An operation's `secrets` fields carry secrets:
+the hidden entry (GTK's on Linux, Win32's on Windows, AppKit's on macOS) reads it, and the window
+gets back its opaque ID (`s-` and 32 hexadecimal digits) and label, never the value. An
+operation's `secrets` fields carry secrets:
 
 - From the window, a secret field holds a vault secret's ID.
 - From a native tool, it holds a reference the host gave that tool in the call it is serving,

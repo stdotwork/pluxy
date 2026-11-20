@@ -235,6 +235,15 @@ fn set_stage(dir: &Path, s: &str) -> Result<(), String> {
     fs::write(dir.join("stage"), s).map_err(|e| e.to_string())
 }
 
+/// A value this process made once, at its first use, from the system's random source. A process id
+/// is reused (on Windows an earlier stage's id can go to a later stage), so the session tells the
+/// stages apart by this value and keeps the id for its logs. The report of the held acceptance
+/// (`update_gap`, in `updater/mod.rs`) carries it too.
+pub(crate) fn run_id() -> &'static str {
+    static RUN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    RUN.get_or_init(crate::managed::random_key)
+}
+
 /// What every process on the update route reports first: its version and process, the installed
 /// copy's digest and what is next to it (once an earlier install's leftovers are gone, or after
 /// 30 s; not in `/Applications`, which holds other apps: the session compares that folder
@@ -262,6 +271,7 @@ fn report(app: &AppHandle, main: &Webview, dir: &Path, stage: &str) -> Result<Va
         "stage": stage,
         "version": app.package_info().version.to_string(),
         "pid": std::process::id(),
+        "run": run_id(),
         "shown": attr(main, APP_CARD, "installed"),
         "installed": installed(app),
         "installed_sha": installed_sha(app),

@@ -77,7 +77,7 @@
           "Accept-Encoding": "identity",
           "Anthropic-Beta": "interleaved-thinking-2025-05-14",
           "Anthropic-Version": "2023-06-01",
-          "Authorization": "Bearer sk-corpus-upstream",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
           "Content-Type": "application/json",
           "User-Agent": "pluxy-corpus/0"
         },
