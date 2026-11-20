@@ -34,6 +34,21 @@ export const TOKENS = {
   "color.chart-failure": { light: "var(--px-color-danger)" },
   "color.diff-add": { light: "#1f7a3d", dark: "#5cc98a" },
   "color.diff-remove": { light: "#b42318", dark: "#ff7b72" },
+  "color.nav": { light: "var(--px-color-surface)" },
+  "color.nav-text": { light: "var(--px-color-text)" },
+  "color.nav-muted": { light: "var(--px-color-text-muted)" },
+  "color.nav-hover": { light: "var(--px-color-surface-raised)" },
+  "color.nav-selected": { light: "color-mix(in srgb, var(--px-color-accent) 14%, transparent)" },
+  "color.nav-border": { light: "var(--px-color-border)" },
+  "color.overlay": { light: "var(--px-color-surface)" },
+  "color.input-border": { light: "var(--px-color-border)" },
+  "color.placeholder": { light: "var(--px-color-text-muted)" },
+  "color.selected": { light: "var(--px-color-surface-raised)" },
+  "color.selected-text": { light: "var(--px-color-text)" },
+  "color.danger-surface": { light: "color-mix(in srgb, var(--px-color-danger) 8%, transparent)" },
+  "color.warn-surface": { light: "color-mix(in srgb, var(--px-color-warn) 8%, transparent)" },
+  "color.code-bg": { light: "var(--px-color-surface-raised)" },
+  "color.code-text": { light: "var(--px-color-text)" },
   "font.body": { light: 'system-ui, -apple-system, "Segoe UI", sans-serif' },
   "font.mono": { light: 'ui-monospace, "SF Mono", Menlo, Consolas, monospace' },
   "font.size": { light: "14px" },
@@ -126,6 +141,12 @@ export const PARTS = [
 ] as const;
 
 export type Part = (typeof PARTS)[number];
+
+/**
+ * T3 Code's data-slot names, on the parts both UIs have, so CSS written for a T3 Code theme
+ * matches them. In the order the README lists them.
+ */
+export const SLOTS = ["button", "input", "switch", "select-trigger", "dialog-popup", "sidebar"] as const;
 
 /** Each layout option's values; the first is the default. */
 export const LAYOUT = {

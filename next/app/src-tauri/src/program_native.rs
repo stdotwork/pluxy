@@ -1,18 +1,24 @@
 //! The native test's check of the program host (native-test builds with `artifact-test-trust`
-//! only). It drives the real app through the window's own commands and the real GTK native
+//! only). It drives the real app through the window's own commands and the real native
 //! confirmation, with the signed summary tool `native/program.ts` built (its digest and the
 //! summary's expected answer are in `expect.json`, worked out there, not by the app), and looks at
-//! the real processes, threads and pipes in `/proc`:
+//! the real processes, threads and pipes (`proc_native.rs`: `/proc` on Linux, libproc on macOS,
+//! a Tool Help snapshot on Windows):
 //!
 //! - installed, and enabled in the native confirmation, the tool runs no process; a call while it
 //!   is disabled is refused and starts none;
 //! - three calls from the window at once start it once: each answers the expected summary from
-//!   the same process, which leads its own process group with the child it started, has only the
-//!   contract's environment (not the app's canary; the app's HOME and its own 0700 data folder)
-//!   and only stdin, stdout and stderr open, and
-//!   runs in its package folder;
+//!   the same process, which leads its own process group (on Windows: its immediate job holds
+//!   only it, its child and the `conhost.exe` of its hidden console, and ends them when closed)
+//!   with the child it started, has only the contract's environment (not the app's canary; the
+//!   app's HOME and its own data folder, 0700 on Linux and macOS; on Windows also the app's
+//!   `SystemRoot`, `APPDATA` and `LOCALAPPDATA`, `ToolEnv::system`) and only stdin, stdout and
+//!   stderr open (on Windows: its three standard handles are pipes, and a file the app holds
+//!   through an inheritable handle meanwhile is not open in it at that handle's value, though a
+//!   process std starts has it there), and runs in its package folder;
 //! - the command thread that started it has ended while it runs on, with its supervisor thread;
-//! - its stdin and stdout pipes are held by the app and the tool only, no web process;
+//! - its stdin and stdout pipes are held by the app and the tool only, no web process (Linux and
+//!   macOS: Windows lists no process's handles to an unprivileged one);
 //! - a call is cancelled from the window, then the next call is answered by the same process;
 //! - from the tool's own page webview, every program command is refused by Tauri's command check,
 //!   and none reached the tool (its call count);
@@ -32,10 +38,14 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, Webview};
 
 pub(super) const ID: &str = "pluxy/summary";
+/// The fixture's first argument that makes it print the file a handle value names
+/// (`examples/program_fixture/fixture.rs`, `HANDLE`).
+#[cfg(windows)]
+const HANDLE: &str = "pluxy-fixture-handle";
 /// The program commands a page webview must be refused.
 const PROGRAM_COMMANDS: &[&str] = &["program_call", "program_cancel", "program_status"];
 /// The environment app program contract v0 gives a tool, and nothing else: its three values,
-/// the app's HOME and the tool's own data folder.
+/// the app's HOME and the tool's own data folder; on Windows also `SYSTEM_ENV`, those the app has.
 const CONTRACT_ENV: &[&str] = &[
     "HOME",
     "PLUXY_APP_ARTIFACT_SHA256",
@@ -44,72 +54,70 @@ const CONTRACT_ENV: &[&str] = &[
     "PLUXY_TOOL_DATA_DIR",
 ];
 
-/// The processes running program, by /proc: the tool and the child it started.
-pub(super) fn processes(program: &Path) -> BTreeSet<u32> {
-    std::fs::read_dir("/proc")
-        .map(|d| {
-            d.filter_map(|e| e.ok())
-                .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
-                .filter(|pid| {
-                    std::fs::read_link(format!("/proc/{pid}/exe")).is_ok_and(|exe| exe == program)
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+/// The app's own system folders a tool gets on Windows (`program::ToolEnv::system`).
+#[cfg(windows)]
+const SYSTEM_ENV: &[&str] = &["APPDATA", "LOCALAPPDATA", "SystemRoot"];
+
+pub(super) use super::procs::{alive, processes, threads};
+
+/// The tool's program file in its package folder dir.
+pub(super) fn program_file(dir: &Path) -> PathBuf {
+    dir.join("bin").join(if cfg!(windows) {
+        "summary.exe"
+    } else {
+        "summary"
+    })
 }
 
-/// Whether pid runs and is not a zombie.
-pub(super) fn alive(pid: u64) -> bool {
-    std::fs::read_to_string(format!("/proc/{pid}/stat"))
-        .ok()
-        .and_then(|s| {
-            s.rsplit_once(") ")
-                .and_then(|(_, rest)| rest.chars().next())
-        })
-        .is_some_and(|state| state != 'Z')
+/// Windows: a file the app holds open through an inheritable handle while it starts the tool. The
+/// host passes a tool its three standard handles only (`owned::windows`), so the tool must not
+/// have this one.
+#[cfg(windows)]
+struct Canary {
+    file: std::fs::File,
+    path: PathBuf,
+    /// Its final path (`std::fs::canonicalize`, which asks `GetFinalPathNameByHandleW`), in
+    /// lower case.
+    real: String,
 }
 
-/// The names of this app's threads.
-pub(super) fn threads() -> Vec<String> {
-    std::fs::read_dir("/proc/self/task")
-        .map(|d| {
-            d.filter_map(|e| e.ok())
-                .filter_map(|e| std::fs::read_to_string(e.path().join("comm")).ok())
-                .map(|s| s.trim().to_string())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// The processes holding the pipe that pid has open as fd.
-fn pipe_holders(pid: u64, fd: u32) -> Result<(String, BTreeSet<u64>), String> {
-    let pipe = std::fs::read_link(format!("/proc/{pid}/fd/{fd}"))
-        .map_err(|e| format!("fd {fd} of {pid}: {e}"))?
-        .to_string_lossy()
-        .into_owned();
-    require(
-        pipe.starts_with("pipe:"),
-        format!("fd {fd} of the tool is {pipe}"),
-    )?;
-    let mut holders = BTreeSet::new();
-    for e in std::fs::read_dir("/proc")
-        .map_err(|e| e.to_string())?
-        .flatten()
-    {
-        let Some(p) = e.file_name().to_str().and_then(|s| s.parse::<u64>().ok()) else {
-            continue;
-        };
-        let Ok(fds) = std::fs::read_dir(e.path().join("fd")) else {
-            continue;
-        };
-        if fds
-            .flatten()
-            .any(|f| std::fs::read_link(f.path()).is_ok_and(|l| l.to_string_lossy() == pipe))
+#[cfg(windows)]
+impl Canary {
+    fn open(dir: &Path) -> Result<Self, String> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
+        let path = dir.join("pluxy-inherit-canary");
+        let file = std::fs::File::create(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        // SAFETY: the handle is the open file's own.
+        if unsafe {
+            SetHandleInformation(
+                file.as_raw_handle() as _,
+                HANDLE_FLAG_INHERIT,
+                HANDLE_FLAG_INHERIT,
+            )
+        } == 0
         {
-            holders.insert(p);
+            return Err(format!(
+                "making the canary's handle inheritable: {}",
+                std::io::Error::last_os_error()
+            ));
         }
+        let real = std::fs::canonicalize(&path)
+            .map_err(|e| format!("{}: {e}", path.display()))?
+            .to_string_lossy()
+            .to_lowercase();
+        Ok(Self { file, path, real })
     }
-    Ok((pipe, holders))
+
+    fn value(&self) -> u64 {
+        use std::os::windows::io::AsRawHandle;
+        self.file.as_raw_handle() as usize as u64
+    }
+
+    /// Whether path, as `GetFinalPathNameByHandleW` gives it, is this file.
+    fn named(&self, path: &Value) -> bool {
+        path.as_str().is_some_and(|p| p.to_lowercase() == self.real)
+    }
 }
 
 fn summary(main: &Webview, items: &Value) -> Result<Value, String> {
@@ -147,7 +155,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         .join("device-packages")
         .join("store")
         .join(&sha);
-    let program = dir.join("bin").join("summary");
+    let program = program_file(&dir);
     let mut out = json!({"program": program});
 
     // Installed: no process, and a call while disabled is refused and starts none.
@@ -180,13 +188,22 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     let s = status(main)?;
     require(s["state"] == "idle", format!("status once enabled: {s}"))?;
 
-    // Three calls at once: one start, the expected summary, from the same process.
+    // Three calls at once: one start, the expected summary, from the same process. On Windows the
+    // app holds a file open through an inheritable handle meanwhile, which the tool must not get.
+    #[cfg(windows)]
+    let canary = Canary::open(&fixtures)?;
+    #[allow(unused_mut)]
+    let mut input = json!({"items": items});
+    #[cfg(windows)]
+    {
+        input["handle"] = json!(canary.value());
+    }
     let slots: Vec<String> = (0..3)
         .map(|_| {
             start(
                 main,
                 "program_call",
-                json!({"package": ID, "op": "summary", "input": {"items": items}}),
+                json!({"package": ID, "op": "summary", "input": input}),
             )
         })
         .collect::<Result<_, _>>()?;
@@ -216,20 +233,65 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         .as_array()
         .map(|a| a.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
+    #[cfg(not(windows))]
+    let want: Vec<&str> = CONTRACT_ENV.to_vec();
+    // The app's own system folders join them, those it has as full paths, as the tool sorts.
+    #[cfg(windows)]
+    let want: Vec<&str> = {
+        let mut w = CONTRACT_ENV.to_vec();
+        w.extend(SYSTEM_ENV.iter().copied().filter(|k| {
+            std::env::var_os(k).is_some_and(|v| std::path::Path::new(&v).is_absolute())
+        }));
+        w.sort();
+        w
+    };
+    require(env == want, format!("the tool's environment: {env:?}"))?;
+    // On Windows each system folder the tool has is the app's own, and it has each the app has as
+    // a full path (none the app has as a relative one).
+    // shortcut: a runner's system folders are all full paths, so no run checks the relative case
+    // (left out of the tool's environment, `ToolEnv::system`), nor does a unit test; upgrade when
+    // a session can start the app with a relative APPDATA, LOCALAPPDATA or SystemRoot.
+    #[cfg(windows)]
+    for k in SYSTEM_ENV {
+        let app_value = std::env::var_os(k)
+            .filter(|v| Path::new(v).is_absolute())
+            .map(|v| v.to_string_lossy().into_owned());
+        require(
+            env.contains(k) == app_value.is_some() && first["system"][k] == json!(app_value),
+            format!(
+                "the tool's {k}: {}, the app's {app_value:?}",
+                first["system"][k]
+            ),
+        )?;
+    }
+    // HOME is the app's own (on Windows its profile folder, `USERPROFILE`); the data folder is the
+    // tool's, made private beside the vault (on Windows in the local data folder, which does not
+    // roam).
+    // Windows: read from the app's environment here, not as the host finds it (`home_dir`).
+    #[cfg(windows)]
+    let (home, data) = (
+        std::env::var_os("USERPROFILE")
+            .map(PathBuf::from)
+            .ok_or("the app has no USERPROFILE")?,
+        app.path()
+            .app_local_data_dir()
+            .map_err(|e| e.to_string())?
+            .join("tools")
+            .join(ID),
+    );
+    #[cfg(not(windows))]
+    let (home, data) = (
+        app.path().home_dir().map_err(|e| e.to_string())?,
+        app.path()
+            .app_data_dir()
+            .map_err(|e| e.to_string())?
+            .join("tools")
+            .join(ID),
+    );
+    // As paths: on Windows the package ID's `/` and the folder's `\` are both separators.
+    let same = |v: &Value, p: &Path| v.as_str().is_some_and(|v| Path::new(v) == p);
     require(
-        env == CONTRACT_ENV,
-        format!("the tool's environment: {env:?}"),
-    )?;
-    // HOME is the app's own; the data folder is the tool's, made 0700 beside the vault.
-    let home = app.path().home_dir().map_err(|e| e.to_string())?;
-    let data = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("tools")
-        .join(ID);
-    require(
-        first["home"] == json!(home) && first["data_dir"] == json!(data),
+        same(&first["home"], &home) && same(&first["data_dir"], &data),
         format!(
             "the tool's HOME and data folder: {} and {}, expected {} and {}",
             first["home"],
@@ -238,6 +300,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             data.display()
         ),
     )?;
+    #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let m = std::fs::symlink_metadata(&data).map_err(|e| format!("{}: {e}", data.display()))?;
@@ -250,14 +313,101 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 data.display()
             ),
         )?;
+        require(
+            first["fds"] == json!([0, 1, 2]),
+            format!("the tool's open descriptors: {}", first["fds"]),
+        )?;
     }
-    require(
-        first["fds"] == json!([0, 1, 2]),
-        format!("the tool's open descriptors: {}", first["fds"]),
-    )?;
+    #[cfg(windows)]
+    {
+        let m = std::fs::symlink_metadata(&data).map_err(|e| format!("{}: {e}", data.display()))?;
+        let f = crate::private_windows::open_for_access_list(&data, true)
+            .map_err(|e| format!("{}: {e}", data.display()))?;
+        require(
+            m.is_dir()
+                && !m.is_symlink()
+                && crate::private_windows::owned(&f).unwrap_or(false)
+                && crate::private_windows::is_private(&f).unwrap_or(false),
+            format!(
+                "the tool's data folder {} is not this user's private folder",
+                data.display()
+            ),
+        )?;
+        require(
+            first["std_pipes"] == json!([true, true, true]),
+            format!("the tool's standard handles: {}", first["std_pipes"]),
+        )?;
+        require(
+            !canary.named(&first["handle_path"]),
+            format!(
+                "the tool got the app's inheritable handle {} to {}",
+                canary.value(),
+                canary.path.display()
+            ),
+        )?;
+        // The control: a process started by std's spawn, which passes on every inheritable
+        // handle, has it at that value.
+        let mut control = std::process::Command::new(&program);
+        control
+            .args([HANDLE, &canary.value().to_string()])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null());
+        let o = crate::owned::windows::std_spawn(&mut control)
+            .and_then(|c| c.wait_with_output())
+            .map_err(|e| format!("the handle control: {e}"))?;
+        let seen = String::from_utf8_lossy(&o.stdout).trim().to_string();
+        require(
+            canary.named(&json!(seen)),
+            format!(
+                "the handle control did not find {} at {}: {seen:?}",
+                canary.path.display(),
+                canary.value()
+            ),
+        )?;
+        out["inherit_control"] = json!(seen);
+        drop(canary);
+    }
     let real = std::fs::canonicalize(&dir).map_err(|e| e.to_string())?;
+    // On Linux and macOS it leads its own process group. On Windows its immediate job is the
+    // host's, and ends what it holds when it closes: the tool, its child, and one process more,
+    // `%SystemRoot%\System32\conhost.exe`, which Windows starts for the hidden console the host
+    // gives the tool (`CREATE_NO_WINDOW`) and puts in the tool's job. Every member the job counts
+    // is listed with the program it runs; nothing else may be in it.
+    #[cfg(unix)]
+    let grouped = first["pgid"] == pid;
+    #[cfg(windows)]
+    let grouped = {
+        let job = &first["job"];
+        let members: Vec<(u64, &str)> = job["members"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|m| Some((m["pid"].as_u64()?, m["image"].as_str()?)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let listed = job["members"].as_array().map_or(0, Vec::len);
+        let conhost = std::env::var("SystemRoot")
+            .map(|root| format!(r"{root}\System32\conhost.exe"))
+            .map_err(|e| format!("SystemRoot: {e}"))?;
+        let (ours, others): (Vec<_>, Vec<_>) =
+            members.iter().partition(|(p, _)| *p == pid || *p == child);
+        job["kill_on_close"] == true
+            && job["assigned"].as_u64() == Some(listed as u64)
+            && members.len() == listed
+            && ours.iter().map(|(p, _)| *p).collect::<BTreeSet<_>>() == BTreeSet::from([pid, child])
+            && others.len() == 1
+            && others
+                .iter()
+                .all(|(_, image)| image.eq_ignore_ascii_case(&conhost))
+    };
+    // Its folder as it reports it, resolved as the package folder is.
+    let cwd = first["cwd"]
+        .as_str()
+        .and_then(|c| std::fs::canonicalize(c).ok());
     require(
-        first["pgid"] == pid && first["cwd"] == json!(real),
+        grouped && cwd.as_deref() == Some(real.as_path()),
         format!("the tool's group and folder: {first}"),
     )?;
     require(
@@ -283,9 +433,10 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
     )?;
 
     // Its pipes: the app's and the tool's only.
-    let me = std::process::id() as u64;
+    #[cfg(unix)]
     for fd in [0, 1] {
-        let (pipe, holders) = pipe_holders(pid, fd)?;
+        let me = std::process::id() as u64;
+        let (pipe, holders) = super::procs::pipe_holders(pid, fd)?;
         require(
             holders == BTreeSet::from([me, pid]),
             format!("{pipe} (the tool's fd {fd}) is held by {holders:?}; app {me}, tool {pid}"),

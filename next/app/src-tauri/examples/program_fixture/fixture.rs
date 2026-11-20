@@ -8,7 +8,9 @@
 //! - `describe` with the manifest's operations and state;
 //! - `summary` with what it was given (`count`, `longest`) and what it sees of itself: its process
 //!   and group, the child it started, the calls it has had, its environment's names, its open
-//!   file descriptors and its working folder;
+//!   file descriptors and its working folder (on Windows also its job and the programs in it,
+//!   whether its standard handles are pipes and the file its handle with the input's `handle`
+//!   value names, if any);
 //! - `wait` only once it is cancelled;
 //! - `store` and `launch` with what they were given, doing nothing else: the routing check's
 //!   write- and launch-class operations;
@@ -100,6 +102,10 @@ pub const AGENT: &str = "pluxy-fixture-agent";
 /// The first argument that makes it the lifetime checks' stand-in agent or runtime (`heartbeat`),
 /// on every platform.
 pub const HEARTBEAT: &str = "pluxy-fixture-heartbeat";
+/// The first argument that makes it print the file its handle with the value of the second
+/// argument names, if any (Windows, `handle_path`), and exit: the program check's control for
+/// handle inheritance.
+pub const HANDLE: &str = "pluxy-fixture-handle";
 
 /// How the unit tests make it misbehave, from `fixture.json`. Absent: it behaves.
 #[derive(Default)]
@@ -207,6 +213,132 @@ fn write_frame(w: &mut impl Write, v: &Value) {
 
 fn error(id: &Value, code: &str, message: &str) -> Value {
     json!({"type": "error", "id": id, "error": {"code": code, "message": message}})
+}
+
+/// What it sees of itself on Windows, where it has no process group or descriptors to list: the
+/// system folders it was given (`system`), its immediate job (`job`, `immediate_job`) and whether
+/// each of its standard input, output and error is a pipe (`std_pipes`).
+#[cfg(windows)]
+fn windows_seen(out: &mut Value) {
+    use windows_sys::Win32::Storage::FileSystem::{GetFileType, FILE_TYPE_PIPE};
+    use windows_sys::Win32::System::Console::{
+        GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
+    };
+    let mut system = serde_json::Map::new();
+    for k in ["APPDATA", "LOCALAPPDATA", "SystemRoot"] {
+        let v = std::env::var_os(k).map(|v| v.to_string_lossy().into_owned());
+        system.insert(k.into(), json!(v));
+    }
+    out["system"] = Value::Object(system);
+    out["job"] = immediate_job();
+    // SAFETY: GetStdHandle returns this process's handle or none; GetFileType takes either.
+    out["std_pipes"] = json!([STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE]
+        .map(|which| unsafe { GetFileType(GetStdHandle(which)) } == FILE_TYPE_PIPE));
+}
+
+/// The file this process's handle with value names (`GetFinalPathNameByHandleW`), if it has such
+/// a handle and it is a file on disk.
+#[cfg(windows)]
+fn handle_path(value: u64) -> Option<String> {
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileType, GetFinalPathNameByHandleW, FILE_TYPE_DISK,
+    };
+    let h = value as usize as windows_sys::Win32::Foundation::HANDLE;
+    // Only a file on disk: asking a pipe's name can wait for a read on it.
+    // SAFETY: GetFileType takes any value, and answers FILE_TYPE_UNKNOWN for no handle.
+    if unsafe { GetFileType(h) } != FILE_TYPE_DISK {
+        return None;
+    }
+    let mut buf = vec![0u16; 1024];
+    // SAFETY: buf is as long as the length given; flags 0 is the normalized DOS path.
+    let n = unsafe { GetFinalPathNameByHandleW(h, buf.as_mut_ptr(), buf.len() as u32, 0) } as usize;
+    (n > 0 && n < buf.len()).then(|| String::from_utf16_lossy(&buf[..n]))
+}
+
+/// The job this process is in itself, the innermost when jobs nest (a process on a CI runner may
+/// be in the runner's job too): how many processes it holds (`assigned`), each one's ID and the
+/// path of its program (`members`, `image` null when it cannot be read), and whether closing the
+/// job ends them (`kill_on_close`); `error` when it is in no job or the job cannot be read.
+#[cfg(windows)]
+fn immediate_job() -> Value {
+    use windows_sys::Win32::System::JobObjects::{
+        JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation, QueryInformationJobObject,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    /// JOBOBJECT_BASIC_PROCESS_ID_LIST with room for 64 IDs.
+    #[repr(C)]
+    struct List {
+        assigned: u32,
+        listed: u32,
+        ids: [usize; 64],
+    }
+    let mut list = List {
+        assigned: 0,
+        listed: 0,
+        ids: [0; 64],
+    };
+    // SAFETY: a null job handle names the calling process's immediate job; the buffer is as long
+    // as the length given.
+    let ok = unsafe {
+        QueryInformationJobObject(
+            std::ptr::null_mut(),
+            JobObjectBasicProcessIdList,
+            (&mut list as *mut List).cast(),
+            std::mem::size_of::<List>() as u32,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return json!({"error": format!("its job's processes: {}", io::Error::last_os_error())});
+    }
+    // SAFETY: an all-zero JOBOBJECT_EXTENDED_LIMIT_INFORMATION is a valid value to fill.
+    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+    // SAFETY: as above, with the structure's own length.
+    let ok = unsafe {
+        QueryInformationJobObject(
+            std::ptr::null_mut(),
+            JobObjectExtendedLimitInformation,
+            (&mut limits as *mut JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return json!({"error": format!("its job's limits: {}", io::Error::last_os_error())});
+    }
+    let listed = (list.listed as usize).min(list.ids.len());
+    let members: Vec<Value> = list.ids[..listed]
+        .iter()
+        .map(|&pid| json!({"pid": pid, "image": image(pid as u32)}))
+        .collect();
+    json!({
+        "assigned": list.assigned,
+        "members": members,
+        "kill_on_close": limits.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE != 0,
+    })
+}
+
+/// The path of the program process pid runs, as Windows names it (`C:\Windows\System32\…`).
+#[cfg(windows)]
+fn image(pid: u32) -> Option<String> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: no pointers; the handle it returns is checked.
+    let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if h.is_null() {
+        return None;
+    }
+    let mut buf = vec![0u16; 32768];
+    let mut len = buf.len() as u32;
+    // SAFETY: h is a live process handle with the query right; buf holds len characters.
+    let ok =
+        unsafe { QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len) };
+    // SAFETY: h is open, and closed only here.
+    unsafe { CloseHandle(h) };
+    (ok != 0).then(|| String::from_utf16_lossy(&buf[..len as usize]))
 }
 
 /// The file descriptors open in this process, but for the one listing them.
@@ -1022,6 +1154,17 @@ pub fn main() -> ! {
         if args.get(1).is_some_and(|a| a == HEARTBEAT) {
             heartbeat(&args);
         }
+        if args.get(1).is_some_and(|a| a == HANDLE) {
+            #[cfg(windows)]
+            if let Some(p) = args
+                .get(2)
+                .and_then(|v| v.parse().ok())
+                .and_then(handle_path)
+            {
+                println!("{p}");
+            }
+            std::process::exit(0);
+        }
         if args.get(1).is_some_and(|a| a.starts_with(AGENT)) {
             agent(&args);
         }
@@ -1220,6 +1363,13 @@ pub fn main() -> ! {
                                     .map(|a| a.to_string_lossy().into_owned()),
                             })
                         });
+                        #[cfg(windows)]
+                        if mode.output.is_none() {
+                            windows_seen(&mut out);
+                            if let Some(v) = f["input"]["handle"].as_u64() {
+                                out["handle_path"] = json!(handle_path(v));
+                            }
+                        }
                         if let Some(n) = mode.pad {
                             out["pad"] = json!("x".repeat(n));
                         }

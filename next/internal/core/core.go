@@ -105,6 +105,7 @@ type Core struct {
 
 	usage     *usage.Store         // the usage record, kept across reloads
 	logs      *logfile.Files       // the logs folder
+	themes    *themeStore          // stored UI themes and selected theme ID in state/themes
 	catalogue *catalogue.Catalogue // the models.dev snapshot and daily refresh
 
 	bgCtx    context.Context
@@ -160,6 +161,7 @@ func Start(opts Options) (*Core, error) {
 	if c.logs = opts.Logs; c.logs == nil {
 		c.logs = logfile.New(LogsDir(opts.ConfigPath))
 	}
+	c.themes = newThemeStore(filepath.Join(StateDir(opts.ConfigPath), "themes"))
 	c.catalogue = catalogue.New(catalogue.Options{
 		StatePath: filepath.Join(StateDir(opts.ConfigPath), "catalogue.json"),
 	})

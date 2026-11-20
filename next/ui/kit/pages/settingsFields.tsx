@@ -135,7 +135,12 @@ export function SettingControl({
         <label class="field" data-part="field" for={field.key}>
           <span class="label">{field.label}</span>
           {field.kind === "strategy" ? (
-            <select id={field.key} value={String(value)} onChange={(e) => set(e.currentTarget.value)}>
+            <select
+              data-slot="select-trigger"
+              id={field.key}
+              value={String(value)}
+              onChange={(e) => set(e.currentTarget.value)}
+            >
               <option value="round-robin">{strategies?.["round-robin"] ?? t("roundRobin")}</option>
               <option value="weighted-round-robin">
                 {strategies?.["weighted-round-robin"] ?? t("weighted")}
@@ -145,6 +150,7 @@ export function SettingControl({
             </select>
           ) : field.kind === "number" ? (
             <input
+              data-slot="input"
               id={field.key}
               type="number"
               min={field.min}
@@ -163,6 +169,7 @@ export function SettingControl({
             />
           ) : (
             <input
+              data-slot="input"
               id={field.key}
               type="text"
               required={!field.optional}
