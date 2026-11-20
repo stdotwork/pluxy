@@ -637,7 +637,10 @@ func encodeBody(out *outRequest) ([]byte, error) {
 		}
 		b = append(b, m...)
 	}
-	b = append(b, ']', ',')
+	b = append(b, ']')
+	// The tail always holds stream, so it starts with the object's brace and its fields follow
+	// the messages' array after a comma.
+	b = append(b, ',')
 	return append(b, tail[1:]...), nil
 }
 
