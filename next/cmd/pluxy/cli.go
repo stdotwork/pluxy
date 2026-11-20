@@ -293,6 +293,39 @@ var commands = []command{
 			var r management.QuotaReply
 			return x.call(http.MethodGet, accountPath(x.args[0])+"/quota", nil, nil, &r, func() { printFlat(x, r.Quota) })
 		}},
+	{words: "account models", args: []string{"id"}, routes: []string{"GET /accounts/{id}/models"}, summary: "the models an account serves",
+		run: func(x *invocation) error {
+			var r management.AccountModelsReply
+			return x.call(http.MethodGet, accountPath(x.args[0])+"/models", nil, nil, &r, func() {
+				if r.From != "" {
+					x.printf("from: %s\n", r.From)
+				}
+				rows := [][]string{{"ID", "NAMES", "OWNED BY", "CONTEXT", "MAX OUTPUT", "EXCLUDED"}}
+				for _, m := range r.Models {
+					names := strings.Join(m.Names, ",")
+					if names == "" {
+						names = "-"
+					}
+					ctxLen := m.ContextLength
+					if ctxLen == 0 {
+						ctxLen = m.InputTokenLimit
+					}
+					maxOut := m.MaxCompletionTokens
+					if maxOut == 0 {
+						maxOut = m.OutputTokenLimit
+					}
+					ctxStr, outStr := "-", "-"
+					if ctxLen > 0 {
+						ctxStr = strconv.Itoa(ctxLen)
+					}
+					if maxOut > 0 {
+						outStr = strconv.Itoa(maxOut)
+					}
+					rows = append(rows, []string{m.ID, names, dash(m.OwnedBy), ctxStr, outStr, yesNo(m.Excluded)})
+				}
+				x.table(rows)
+			})
+		}},
 	{words: "model list", routes: []string{"GET /models"}, summary: "every model clients can ask for, and the accounts that serve it",
 		run: func(x *invocation) error {
 			var r management.ModelsReply

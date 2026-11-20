@@ -411,7 +411,12 @@ tokens four days before they expire (tokens that last less than that, five minut
 
 Every request goes to `{base_url}/responses` as Codex takes it: streamed, not stored, with the
 reasoning's encrypted content included, sampling settings removed, and the Codex terminal
-client's `User-Agent` and `originator` (turn off with `"codex_identity": false`). Chat
+client's `User-Agent` and `originator` (turn off with `"codex_identity": false`). The client's
+`metadata` is not sent (Codex's own request has none), an integer output budget under 16, which the
+endpoint refuses, is raised to 16, and a reasoning effort the model does not take (by the model's
+levels in the Codex catalog) is changed to the nearest level it does, below the effort when there is
+one, and reported as a loss. A Claude Code request's prompt cache key follows its session and agent
+(`X-Claude-Code-Session-Id` and `X-Claude-Code-Agent-Id`, or the session in `metadata.user_id`). Chat
 Completions, Messages and Gemini requests are translated to Responses. A Messages client (such as
 Claude Code) gets each reasoning item's encrypted content as its thinking block's signature, and
 replaying the block sends the reasoning back, so it carries over between turns. Codex refuses IDs
@@ -446,6 +451,9 @@ Account `settings`, all optional:
 | `base_url` | Default `https://api.openai.com/v1` for an API key and a SIWC sign-in, `https://chatgpt.com/backend-api/codex` for a subscription. |
 | `codex_identity` | Default `true`: send the Codex client's `User-Agent` and `originator`. |
 | `image_generation_tool` | Default `true`: offer the hosted `image_generation` tool, as today's core does (never to a free plan or a `-spark` model). |
+| `image_generation_off_models` | Default none: model names, or patterns with `*` and `?` (any case), that are not offered the `image_generation` tool. A tool the client lists itself stays. |
+| `codex_client_version` | Default `0.154.0`: the version the Codex client's `User-Agent` names when `codex_identity` is on. |
+| `prompt_cache_retention_passthrough` | Default `false`: send the client's `prompt_cache_retention` on, for an upstream that takes it (neither today's core nor the Codex client sends it to the ChatGPT backend, and a SIWC sign-in never sends it). |
 | `callback_listen` | Default `true`: let a browser or SIWC sign-in listen on port 1455. |
 | `images` | Default `true`: serve the Images API on the account (below). |
 | `signin_with_chatgpt_identifier` | Default `pluxy`: the name a SIWC sign-in gives this program, shown on the sign-in page (`agent_name_hint`) and starting its requests' `User-Agent`. Today's core calls it `codex.signin-with-chatgpt-identifier`, with the default `CLIProxyAPI`. |
@@ -518,7 +526,8 @@ five minutes before they expire. The account's requests follow today's core's SI
 to `{base_url}/responses` (default `https://api.openai.com/v1`) with the SIWC token and the
 `User-Agent` `<identifier> (<GOOS>; <GOARCH>)`, the session (when there is one) as `session_id`
 and `X-Client-Request-Id`, and none of the Codex client's headers, `Originator`,
-`Chatgpt-Account-Id` or routing hint; `codex_identity` and `image_generation_tool` do not apply,
+`Chatgpt-Account-Id` or routing hint; `codex_identity`, `codex_client_version`, `image_generation_tool`,
+`image_generation_off_models` and `prompt_cache_retention_passthrough` do not apply,
 and no image tool is offered. `configuration_update` input items, which the OpenAI API refuses on
 such a token, are removed and the last one's reasoning effort becomes the request's (a thinking
 suffix's effort wins); `temperature`, `prompt_cache_retention`, `prompt_cache_options` and
@@ -1707,8 +1716,10 @@ SYSTEM). A folder made by pluxy run as administrator is owned by the Administrat
 without administrator rights refuses it: take ownership of the folder and its files from an
 elevated prompt (`takeown /f <folder> /r`), or move the folder away and sign the accounts in again.
 A file in the folder that is a link, or that another account owns, is skipped with a notice in the
-log rather than loaded. The same access list and folder checks keep the extensions' settings
-([extension pages](ui/extension-pages/README.md)) and the [log files](#log-files) private.
+log rather than loaded. A record file with a list of its own that lets in more (one written before
+the folder was private, or moved in from another folder), which making the folder private does not
+reach, is written again as a private file when the accounts are loaded, with a notice in the log.
+The same access list and folder checks keep the extensions' settings ([extension pages](ui/extension-pages/README.md)) and the [log files](#log-files) private.
 
 An extension may return non-secret account settings with a login grant. When adding an
 account, core uses those as defaults: properties explicitly supplied in `POST /accounts.settings`
@@ -1852,9 +1863,9 @@ These calls read and change the config file core runs on, whether it is the JSON
 `config.yaml` with today's key names. A change goes through the same steps as a reload: core
 checks the new contents and prepares them, and only when they are ready to serve does it write
 the file and switch to them. The file is replaced in one step (a new file renamed over it, with
-the same permissions, through a symbolic link if the path is one), so nothing ever reads half of
-it. When a change is refused, the file and the running config stay as they were, and status
-keeps showing the file as it is. When another program writes the file while a change is being
+the same permissions, on Windows the same access list, through a symbolic link if the path is
+one), so nothing ever reads half of it. When a change is refused, the file and the running
+config stay as they were, and status keeps showing the file as it is. When another program writes the file while a change is being
 prepared, the change is dropped with a 409, so that write is not lost. Today's core writes its file in place and saves a change that
 its reload may then refuse.
 
