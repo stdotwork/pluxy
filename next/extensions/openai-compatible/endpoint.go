@@ -20,9 +20,27 @@ func endpointCall(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return compact(ctx, call, out)
 	case llm.FormatOpenAIEmbeddings:
 		return embeddings(ctx, call, out)
+	case llm.FormatOpenAIImagesGenerations, llm.FormatOpenAIImagesEdits:
+		return images(ctx, call, out)
 	default:
 		return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
 			Message: fmt.Sprintf("the OpenAI-compatible extension does not serve %q", format)}
+	}
+}
+
+// requireOpenAIWire refuses an endpoint the upstream's Chat or Responses wire cannot serve. Its
+// error carries credential scope so core tries the request on another account.
+func requireOpenAIWire(wire wireInfo, endpoint string) error {
+	switch wire.format {
+	case llm.FormatOpenAIChat, llm.FormatOpenAIResponses:
+		return nil
+	default:
+		return &llm.Error{
+			Code:      llm.CodeUnsupported,
+			Scope:     llm.ScopeCredential,
+			Retryable: true,
+			Message:   "this account's upstream speaks " + formatNames[wire.format] + ", which does not serve " + endpoint,
+		}
 	}
 }
 
@@ -34,15 +52,8 @@ func embeddings(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
-	switch s.WireAPI {
-	case wireChat, wireResponses:
-	default:
-		return &llm.Error{
-			Code:      llm.CodeUnsupported,
-			Scope:     llm.ScopeCredential,
-			Retryable: true,
-			Message:   "this account's upstream speaks " + formatNames[wire.format] + ", which does not serve embeddings",
-		}
+	if err := requireOpenAIWire(wire, "embeddings"); err != nil {
+		return err
 	}
 	// The key goes as Chat's does on both wires that serve embeddings.
 	chat := wireInfo{format: llm.FormatOpenAIChat}

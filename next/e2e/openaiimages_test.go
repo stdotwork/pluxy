@@ -50,8 +50,9 @@ func TestOpenAICompatibleImages(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	base := runCore(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
 		"extension": map[string]any{
 			"manifest": filepath.Join(binDir, "pluxy-extension.json"),
 			"accounts": []any{map[string]any{
@@ -76,9 +77,14 @@ func TestOpenAICompatibleImages(t *testing.T) {
 
 	t.Run("generations", func(t *testing.T) {
 		const body = `{"model":"image-model","prompt":"a cat","size":"1024x1024","x_vendor":{"keep":true}}`
-		code, reply := clientPost(t, base, "/v1/images/generations", body, nil)
-		if code != http.StatusOK || reply != upstreamReply {
-			t.Fatalf("reply = %d %s, want 200 %s", code, reply, upstreamReply)
+		resp := postPath(t, context.Background(), base, "/v1/images/generations", clientKey, body)
+		reply, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || string(reply) != upstreamReply {
+			t.Fatalf("reply = %d %s, want 200 %s", resp.StatusCode, reply, upstreamReply)
+		}
+		if got := resp.Header.Get("Content-Type"); got != "application/json; charset=utf-8" {
+			t.Errorf("reply Content-Type = %q, want application/json; charset=utf-8", got)
 		}
 		reqs := requests("/v1/images/generations")
 		if len(reqs) != 1 {
@@ -144,6 +150,9 @@ func TestOpenAICompatibleImages(t *testing.T) {
 		resp.Body.Close()
 		if resp.StatusCode != http.StatusOK || string(replyBody) != upstreamReply {
 			t.Fatalf("reply = %d %s, want 200 %s", resp.StatusCode, replyBody, upstreamReply)
+		}
+		if got := resp.Header.Get("Content-Type"); got != "application/json; charset=utf-8" {
+			t.Errorf("reply Content-Type = %q, want application/json; charset=utf-8", got)
 		}
 
 		reqs := requests("/v1/images/edits")
