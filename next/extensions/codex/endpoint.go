@@ -181,7 +181,22 @@ func inputTokens(ctx context.Context, call sdk.Call, out inputTokensBody) error 
 			Message: "a ChatGPT subscription has no Responses input token count endpoint"}
 	}
 	req := call.Request
-	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL(s, a)+"/responses/input_tokens", bytes.NewReader(req.Native.Body))
+	body := []byte(req.Native.Body)
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(body, &m); err != nil || m == nil {
+		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "the request body is not a JSON object", Scope: llm.ScopeRequest}
+	}
+	var named string
+	_ = json.Unmarshal(m["model"], &named)
+	if req.Model != "" && named != req.Model {
+		// The account may know the model by another name (an alias or prefix): the upstream
+		// counts for the model routing chose.
+		m["model"] = raw(req.Model)
+		if body, err = json.Marshal(m); err != nil {
+			return err
+		}
+	}
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL(s, a)+"/responses/input_tokens", bytes.NewReader(body))
 	if err != nil {
 		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
 	}

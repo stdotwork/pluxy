@@ -225,7 +225,7 @@ func serveEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep end
 	rr := routeRequest(r, req, body)
 	var cannot atomic.Bool
 	rr.Attempt = func(ctx context.Context, ext string, a protocol.Account, req llm.Request) route.Stream {
-		return &endpointWatch{Stream: g.Endpoint(ctx, ext, a, req), cannot: &cannot}
+		return &countWatch{Stream: g.Endpoint(ctx, ext, a, req), cannot: &cannot}
 	}
 	rr.Endpoint = true
 	rr.AnyModel = ep.modelOptional
@@ -235,21 +235,6 @@ func serveEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep end
 	}
 	stream := meterStream(g.Router.Generate(host.WithPayloadClient(r.Context(), req.Model, r.Header), rr), m)
 	writeEndpointReplyFor(w, r, stream, ep, f, m, body, &cannot, g.Config.TokenCountEstimateOn())
-}
-
-// endpointWatch notes when an account answers that it cannot serve the endpoint, before routing
-// turns a pool of those answers into its endpoint-specific 503 reply.
-type endpointWatch struct {
-	route.Stream
-	cannot *atomic.Bool
-}
-
-func (s *endpointWatch) Next() llm.Event {
-	ev := s.Stream.Next()
-	if ev.Type == llm.EventError && isCannotCount(ev.Error) {
-		s.cannot.Store(true)
-	}
-	return ev
 }
 
 // writeEndpointReply checks and writes an endpoint's events. A nil meter records nothing.

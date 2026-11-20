@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 
 	"github.com/stdotwork/pluxy/next/llm"
@@ -21,8 +22,17 @@ func inputTokens(ctx context.Context, call sdk.Call, out bodySender) error {
 		return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
 			Message: "this account's upstream speaks " + formatNames[wire.format] + ", which has no Responses input token count endpoint"}
 	}
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(call.Request.Native.Body, &body); err != nil || body == nil {
+		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "the input token count request body is not a JSON object", Scope: llm.ScopeRequest}
+	}
+	// An account's alias names the model upstream by another name: send the one routing chose.
+	upstream, _, err := withModel(call.Request.Native.Body, body, call.Request.Model)
+	if err != nil {
+		return err
+	}
 	call.Request.Stream = false
-	resp, err := postBody(ctx, call, s, wire, key, "/responses/input_tokens", call.Request.Native.Body)
+	resp, err := postBody(ctx, call, s, wire, key, "/responses/input_tokens", upstream)
 	if err != nil {
 		return err
 	}

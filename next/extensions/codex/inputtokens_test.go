@@ -96,3 +96,27 @@ func TestInputTokensRefusesSubscription(t *testing.T) {
 		t.Fatalf("err = %+v; want retryable CodeUnsupported on ScopeCredential", err)
 	}
 }
+
+// An account's alias names the model upstream by another name: the count goes to the upstream
+// under the model routing chose.
+func TestInputTokensNamesTheRoutedModel(t *testing.T) {
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		io.WriteString(w, `{"object":"response.input_tokens","input_tokens":3}`)
+	}))
+	defer srv.Close()
+	call := inputTokenCall(map[string]any{"base_url": srv.URL + "/v1"}, &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "made-up-key"}, `{"model":"client-alias","input":"hello"}`)
+
+	var rec tokenCountRecorder
+	if err := inputTokens(context.Background(), call, &rec); err != nil {
+		t.Fatalf("inputTokens: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(gotBody, &got); err != nil {
+		t.Fatalf("upstream body %s: %v", gotBody, err)
+	}
+	if got["model"] != "gpt-test" || got["input"] != "hello" {
+		t.Errorf("upstream body = %s, want model gpt-test and the input unchanged", gotBody)
+	}
+}

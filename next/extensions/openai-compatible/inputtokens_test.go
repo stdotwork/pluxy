@@ -73,3 +73,30 @@ func TestInputTokensResponsesPassthrough(t *testing.T) {
 		t.Errorf("upstream body = %s, want unchanged %s", got, body)
 	}
 }
+
+// An account's alias names the model upstream by another name: the count goes to the upstream
+// under the model routing chose, with the rest of the body unchanged.
+func TestInputTokensNamesTheRoutedModel(t *testing.T) {
+	srv, recorded := newCompactUpstream(t, func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		io.WriteString(w, `{"object":"response.input_tokens","input_tokens":3}`)
+	})
+	settings := json.RawMessage(`{"base_url":"` + srv.URL + `/v1","wire_api":"responses"}`)
+	call := compactCall(settings, "sk-test", "upstream-model", `{"model":"client-alias","input":"hello"}`)
+	call.Request.Native.Format = llm.FormatOpenAIResponsesInputTokens
+
+	var rec compactRecorder
+	if err := inputTokens(context.Background(), call, &rec); err != nil {
+		t.Fatalf("inputTokens: %v", err)
+	}
+	reqs := recorded()
+	if len(reqs) != 1 {
+		t.Fatalf("upstream got %d requests, want 1", len(reqs))
+	}
+	var got map[string]any
+	if err := json.Unmarshal(reqs[0].body, &got); err != nil {
+		t.Fatalf("upstream body %s: %v", reqs[0].body, err)
+	}
+	if got["model"] != "upstream-model" || got["input"] != "hello" {
+		t.Errorf("upstream body = %s, want model upstream-model and the input unchanged", reqs[0].body)
+	}
+}
