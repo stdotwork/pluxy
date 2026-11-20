@@ -3,8 +3,8 @@
 // Command gen fetches https://models.dev/api.json, keeps only the four providers' models
 // (Claude/Anthropic, OpenAI/Codex, Google/Gemini, and the OpenAI-compatible vendors pluxy
 // ships built-in lists for) and only the fields core uses for limits and capabilities,
-// supplements any built-in list models missing from models.dev's primary provider sections,
-// and writes snapshot.json.
+// pulls any built-in list model that models.dev carries under another provider key in
+// api.json, and writes snapshot.json. It never invents or derives entries outside models.dev.
 package main
 
 import (
@@ -182,7 +182,7 @@ func main() {
 	copyInto("meta", "meta")
 
 	// Index every model across all models.dev providers by normalized short ID for fallback lookup
-	// when a built-in model appears under an aggregator provider in models.dev.
+	// when a built-in model appears under another provider key in models.dev.
 	anyProvider := map[string]rawModel{}
 	providerOrder := make([]string, 0, len(all))
 	for p := range all {
@@ -210,20 +210,14 @@ func main() {
 		}
 	}
 
-	// Supplement OpenAI/Codex from extensions/codex/client_models.json for Codex-specific models
-	// (such as codex-auto-review, gpt-6-chat-thinking, gpt-reserve).
-	supplementCodexClientModels(buckets["openai"])
-
-	// Ensure every model in the built-in lists is covered by its vendor bucket (either directly,
-	// via @YYYYMMDD / -YYYYMMDD date stripping, via another models.dev provider, or from its
-	// built-in entry and family peer).
-	supplementBuiltinList(buckets["anthropic"], anyProvider, "../../extensions/claude/models.json", "claude-sonnet-4-5")
-	supplementBuiltinList(buckets["openai"], anyProvider, "../../extensions/codex/models.json", "gpt-5.6-luna")
-	supplementBuiltinList(buckets["google"], anyProvider, "../../extensions/gemini/models.json", "gemini-3.5-flash")
-	supplementBuiltinList(buckets["google-vertex"], anyProvider, "../../extensions/gemini/vertex-models.json", "gemini-3.5-flash")
-	supplementBuiltinList(buckets["moonshotai"], anyProvider, "../../extensions/kimi/models.json", "kimi-k3")
-	supplementBuiltinList(buckets["xai"], anyProvider, "../../extensions/xai/models.json", "grok-4.7")
-	supplementBuiltinList(buckets["meta"], anyProvider, "../../extensions/meta/models.json", "muse-wonder-1.0")
+	// Pull built-in models that models.dev carries under another provider key into their vendor bucket.
+	pullFromOtherProviders(buckets["anthropic"], anyProvider, "../../extensions/claude/models.json")
+	pullFromOtherProviders(buckets["openai"], anyProvider, "../../extensions/codex/models.json")
+	pullFromOtherProviders(buckets["google"], anyProvider, "../../extensions/gemini/models.json")
+	pullFromOtherProviders(buckets["google-vertex"], anyProvider, "../../extensions/gemini/vertex-models.json")
+	pullFromOtherProviders(buckets["moonshotai"], anyProvider, "../../extensions/kimi/models.json")
+	pullFromOtherProviders(buckets["xai"], anyProvider, "../../extensions/xai/models.json")
+	pullFromOtherProviders(buckets["meta"], anyProvider, "../../extensions/meta/models.json")
 
 	out := make(map[string]rawProvider, len(buckets))
 	for k, models := range buckets {
@@ -242,76 +236,12 @@ func main() {
 	}
 }
 
-func supplementCodexClientModels(openaiBucket map[string]rawModel) {
-	raw, err := os.ReadFile("../../extensions/codex/client_models.json")
-	if err != nil {
-		fatal(err)
-	}
-	var payload struct {
-		Models []struct {
-			Slug            string   `json:"slug"`
-			ContextWindow   int      `json:"context_window"`
-			InputModalities []string `json:"input_modalities"`
-			ReasoningLevels []struct {
-				Effort string `json:"effort"`
-			} `json:"supported_reasoning_levels"`
-		} `json:"models"`
-	}
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		fatal(err)
-	}
-	for _, m := range payload.Models {
-		id := strings.TrimSpace(m.Slug)
-		if id == "" {
-			continue
-		}
-		if _, exists := openaiBucket[id]; exists {
-			continue
-		}
-		var levels []string
-		for _, rl := range m.ReasoningLevels {
-			e := strings.ToLower(strings.TrimSpace(rl.Effort))
-			if slices.Contains(canonicalEfforts, e) && !slices.Contains(levels, e) {
-				levels = append(levels, e)
-			}
-		}
-		inMod := m.InputModalities
-		if len(inMod) == 0 {
-			inMod = []string{"text", "image"}
-		}
-		rm := rawModel{
-			Limit: &rawLimit{
-				Context: max(m.ContextWindow, 272000),
-				Output:  128000,
-			},
-			Modalities: &rawModalities{
-				Input:  inMod,
-				Output: []string{"text"},
-			},
-			ToolCall:         true,
-			StructuredOutput: true,
-			Attachment:       slices.Contains(inMod, "image"),
-			Reasoning:        len(levels) > 0,
-		}
-		if len(levels) > 0 {
-			rm.ReasoningOptions = []rawReasoningOpt{{Type: "effort", Values: levels}}
-		}
-		openaiBucket[id] = rm
-	}
-}
-
 type builtinItem struct {
-	ID                  string   `json:"id"`
-	Name                string   `json:"name"`
-	ContextLength       int      `json:"context_length"`
-	MaxCompletionTokens int      `json:"max_completion_tokens"`
-	InputTokenLimit     int      `json:"input_token_limit"`
-	OutputTokenLimit    int      `json:"output_token_limit"`
-	InputModalities     []string `json:"input_modalities"`
-	OutputModalities    []string `json:"output_modalities"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
-func supplementBuiltinList(bucket map[string]rawModel, anyProvider map[string]rawModel, path, peerID string) {
+func pullFromOtherProviders(bucket map[string]rawModel, anyProvider map[string]rawModel, path string) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		fatal(err)
@@ -343,7 +273,6 @@ func supplementBuiltinList(bucket map[string]rawModel, anyProvider map[string]ra
 			if _, ok := bucket[candidate]; ok {
 				return true
 			}
-			// Also check @YYYYMMDD keys in bucket (e.g. claude-opus-4-1@20250805).
 			for k := range bucket {
 				if strings.ReplaceAll(strings.ToLower(k), "@", "-") == candidate {
 					return true
@@ -353,7 +282,6 @@ func supplementBuiltinList(bucket map[string]rawModel, anyProvider map[string]ra
 		return false
 	}
 
-	peer := bucket[peerID]
 	for _, it := range items {
 		id := cmp.Or(it.ID, it.Name)
 		id = strings.TrimPrefix(strings.TrimSpace(id), "models/")
@@ -372,28 +300,7 @@ func supplementBuiltinList(bucket map[string]rawModel, anyProvider map[string]ra
 		}
 		if m, ok := anyProvider[low]; ok {
 			bucket[low] = m
-			continue
 		}
-		// Derive from the family peer in the same bucket, using the built-in list's limits.
-		ctxLimit := cmp.Or(it.ContextLength, it.InputTokenLimit)
-		outLimit := cmp.Or(it.MaxCompletionTokens, it.OutputTokenLimit)
-		derived := peer
-		derived.Limit = &rawLimit{
-			Context: ctxLimit,
-			Output:  outLimit,
-		}
-		if len(it.InputModalities) > 0 || len(it.OutputModalities) > 0 {
-			inMod := it.InputModalities
-			if len(inMod) == 0 && peer.Modalities != nil {
-				inMod = slices.Clone(peer.Modalities.Input)
-			}
-			outMod := it.OutputModalities
-			if len(outMod) == 0 && peer.Modalities != nil {
-				outMod = slices.Clone(peer.Modalities.Output)
-			}
-			derived.Modalities = &rawModalities{Input: inMod, Output: outMod}
-		}
-		bucket[low] = trimModel(derived)
 	}
 }
 

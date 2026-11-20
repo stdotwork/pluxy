@@ -15,8 +15,10 @@ import (
 )
 
 // TestEmbeddedSnapshotCoversBuiltinLists verifies that every model named in any of the
-// four providers' built-in fallback lists (and Codex's client catalog) resolves in the
-// embedded models.dev snapshot with a positive context window and non-nil capabilities.
+// four providers' built-in fallback lists resolves in the embedded models.dev snapshot
+// with a positive context window and non-nil capabilities, except for the explicit list of
+// built-in model IDs that models.dev does not carry today. It fails both when an unlisted
+// model is missing and when a listed model is found in the snapshot.
 func TestEmbeddedSnapshotCoversBuiltinLists(t *testing.T) {
 	t.Parallel()
 	cat := New(Options{})
@@ -24,13 +26,27 @@ func TestEmbeddedSnapshotCoversBuiltinLists(t *testing.T) {
 	files := []string{
 		"../../extensions/claude/models.json",
 		"../../extensions/codex/models.json",
-		"../../extensions/codex/client_models.json",
 		"../../extensions/gemini/models.json",
 		"../../extensions/gemini/vertex-models.json",
 		"../../extensions/kimi/models.json",
 		"../../extensions/xai/models.json",
 		"../../extensions/meta/models.json",
 	}
+
+	// Model IDs present in pluxy's built-in fallback lists that models.dev does not carry today.
+	wantMissing := map[string]bool{
+		"codex-auto-review":                true,
+		"kimi-k2.8":                        true,
+		"kimi-k2.8-code":                   true,
+		"kimi-k3-256k":                     true,
+		"grok-4.7-build-fast":              true,
+		"grok-3-mini-fast":                 true,
+		"grok-composer-2.5-fast":           true,
+		"muse-wonder-1.0-contributor":      true,
+		"muse-wonder-full-1.0":             true,
+		"muse-wonder-full-1.0-contributor": true,
+	}
+	seenMissing := map[string]bool{}
 
 	for _, rel := range files {
 		raw, err := os.ReadFile(rel)
@@ -44,8 +60,15 @@ func TestEmbeddedSnapshotCoversBuiltinLists(t *testing.T) {
 		for _, id := range ids {
 			m, ok := cat.Lookup(id)
 			if !ok {
+				if wantMissing[id] {
+					seenMissing[id] = true
+					continue
+				}
 				t.Errorf("%s: model %q missing from embedded snapshot", rel, id)
 				continue
+			}
+			if wantMissing[id] {
+				t.Errorf("%s: model %q is now present in embedded snapshot; remove it from wantMissing", rel, id)
 			}
 			if m.ContextLength <= 0 {
 				t.Errorf("%s: model %q has context_length %d, want > 0", rel, id, m.ContextLength)
@@ -53,6 +76,11 @@ func TestEmbeddedSnapshotCoversBuiltinLists(t *testing.T) {
 			if m.Capabilities == nil {
 				t.Errorf("%s: model %q has nil capabilities", rel, id)
 			}
+		}
+	}
+	for id := range wantMissing {
+		if !seenMissing[id] {
+			t.Errorf("wantMissing lists %q, which was not missing from any built-in list", id)
 		}
 	}
 }

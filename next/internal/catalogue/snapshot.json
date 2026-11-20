@@ -4035,108 +4035,6 @@
         ],
         "structured_output": true,
         "attachment": true
-      },
-      "muse-wonder-1.0-contributor": {
-        "limit": {
-          "context": 1007997,
-          "output": 128000
-        },
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "video",
-            "audio"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "tool_call": true,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "minimal",
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ]
-          }
-        ],
-        "structured_output": true,
-        "attachment": true
-      },
-      "muse-wonder-full-1.0": {
-        "limit": {
-          "context": 1007997,
-          "output": 128000
-        },
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "video",
-            "audio"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "tool_call": true,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "minimal",
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ]
-          }
-        ],
-        "structured_output": true,
-        "attachment": true
-      },
-      "muse-wonder-full-1.0-contributor": {
-        "limit": {
-          "context": 1007997,
-          "output": 128000
-        },
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "video",
-            "audio"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "tool_call": true,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "minimal",
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ]
-          }
-        ],
-        "structured_output": true,
-        "attachment": true
       }
     }
   },
@@ -4424,66 +4322,6 @@
         "structured_output": true,
         "attachment": true
       },
-      "kimi-k2.8": {
-        "limit": {
-          "context": 1048576,
-          "output": 65536
-        },
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "video"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "tool_call": true,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "low",
-              "high",
-              "max"
-            ]
-          }
-        ],
-        "structured_output": true,
-        "attachment": true
-      },
-      "kimi-k2.8-code": {
-        "limit": {
-          "context": 1048576,
-          "output": 65536
-        },
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "video"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "tool_call": true,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "low",
-              "high",
-              "max"
-            ]
-          }
-        ],
-        "structured_output": true,
-        "attachment": true
-      },
       "kimi-k3": {
         "limit": {
           "context": 1048576,
@@ -4494,35 +4332,6 @@
             "text",
             "image",
             "video"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "tool_call": true,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "low",
-              "high",
-              "max"
-            ]
-          }
-        ],
-        "structured_output": true,
-        "attachment": true
-      },
-      "kimi-k3-256k": {
-        "limit": {
-          "context": 262144,
-          "output": 65536
-        },
-        "modalities": {
-          "input": [
-            "text",
-            "image"
           ],
           "output": [
             "text"
@@ -4607,37 +4416,6 @@
   },
   "openai": {
     "models": {
-      "codex-auto-review": {
-        "limit": {
-          "context": 272000,
-          "output": 128000
-        },
-        "modalities": {
-          "input": [
-            "text",
-            "image"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "tool_call": true,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ]
-          }
-        ],
-        "structured_output": true,
-        "attachment": true
-      },
       "gpt-3.5-turbo": {
         "limit": {
           "context": 16385,
@@ -5480,37 +5258,6 @@
         "structured_output": true,
         "attachment": true
       },
-      "gpt-6-chat-thinking": {
-        "limit": {
-          "context": 272000,
-          "output": 128000
-        },
-        "modalities": {
-          "input": [
-            "text",
-            "image"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "tool_call": true,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ]
-          }
-        ],
-        "structured_output": true,
-        "attachment": true
-      },
       "gpt-6-luna": {
         "limit": {
           "context": 1050000,
@@ -5812,37 +5559,6 @@
         ],
         "attachment": true
       },
-      "gpt-reserve": {
-        "limit": {
-          "context": 272000,
-          "output": 128000
-        },
-        "modalities": {
-          "input": [
-            "text",
-            "image"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "tool_call": true,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ]
-          }
-        ],
-        "structured_output": true,
-        "attachment": true
-      },
       "o1": {
         "limit": {
           "context": 200000,
@@ -6086,35 +5802,6 @@
         },
         "tool_call": true
       },
-      "grok-3-mini-fast": {
-        "limit": {
-          "context": 131072,
-          "output": 32768
-        },
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "tool_call": true,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "low",
-              "medium",
-              "high",
-              "xhigh"
-            ]
-          }
-        ],
-        "structured_output": true,
-        "attachment": true
-      },
       "grok-4.20-0309-non-reasoning": {
         "limit": {
           "context": 1000000,
@@ -6309,10 +5996,10 @@
         "structured_output": true,
         "attachment": true
       },
-      "grok-4.7-build-fast": {
+      "grok-build-0.1": {
         "limit": {
-          "context": 500000,
-          "output": 500000
+          "context": 256000,
+          "output": 256000
         },
         "modalities": {
           "input": [
@@ -6325,68 +6012,6 @@
         },
         "tool_call": true,
         "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "low",
-              "medium",
-              "high",
-              "xhigh"
-            ]
-          }
-        ],
-        "structured_output": true,
-        "attachment": true
-      },
-      "grok-build-0.1": {
-        "limit": {
-          "context": 256000,
-          "output": 256000
-        },
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "pdf"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "tool_call": true,
-        "reasoning": true,
-        "structured_output": true,
-        "attachment": true
-      },
-      "grok-composer-2.5-fast": {
-        "limit": {
-          "context": 200000,
-          "output": 32768
-        },
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "pdf"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "tool_call": true,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "low",
-              "medium",
-              "high",
-              "xhigh"
-            ]
-          }
-        ],
         "structured_output": true,
         "attachment": true
       },
