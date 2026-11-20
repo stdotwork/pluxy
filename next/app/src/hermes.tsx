@@ -24,7 +24,7 @@ import { Backups, reply } from "./backups";
 import type { AgentPage } from "./easyMode";
 import { CLIENT, keysOf, modelOf, PACKAGE, type ReadBack, type Secret, validModel } from "./hermesForm";
 import { connectionGet } from "./host";
-import { keptTerminal, useDeviceChanged } from "./startCli";
+import { keptTerminal, launcherProblem, useDeviceChanged } from "./startCli";
 
 const t = strings("hermes", {
   title: "Hermes Agent",
@@ -168,8 +168,8 @@ function StartCli(props: { available: boolean }) {
           onChange={setTerminal}
         />
       )}
-      {terminals.error && <Notice tone="warn">{terminals.error}</Notice>}
-      {action.error && <Notice tone="danger">{action.error}</Notice>}
+      {terminals.error && <Notice tone="warn">{launcherProblem(terminals.error)}</Notice>}
+      {action.error && <Notice tone="danger">{launcherProblem(action.error)}</Notice>}
       <Button variant="primary" onClick={start} disabled={action.busy || !props.available || !cwd.trim()}>
         {t("launch")}
       </Button>

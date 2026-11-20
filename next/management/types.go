@@ -145,6 +145,10 @@ const (
 // Account is an account as the management API lists it. It never holds a secret.
 type Account struct {
 	ID string `json:"id"`
+	// PublicID is the ID client replies name the account by (the X-Pluxy-Account header, the
+	// pluxy member of an error): short, stable across restarts, and never an email address or a
+	// label, whatever ID the account has.
+	PublicID string `json:"public_id"`
 	// Source is "config" for an account set in core's config, "login" for one added by login.
 	Source    string `json:"source"`
 	Extension string `json:"extension,omitempty"`
@@ -242,6 +246,30 @@ type AccountReply struct {
 // takes the account's routing fields too, by their JSON names.
 type AccountPatch struct {
 	Disabled *bool `json:"disabled,omitempty"`
+}
+
+// RouteReply is GET /route's reply: what a request for the model would do now (route.Plan). Each
+// account is named by its ID and its public ID, the one replies name it by.
+type RouteReply = route.Plan
+
+// ChainStep is one step of a fallback chain: a model, and optionally the one provider and the
+// accounts (by ID) that serve it.
+type ChainStep = route.Step
+
+// Chain is a fallback chain: the model name clients ask for, and its steps in order.
+type Chain struct {
+	Name  string      `json:"name"`
+	Steps []ChainStep `json:"steps"`
+}
+
+// ChainsReply is GET /chains's reply, sorted by name.
+type ChainsReply struct {
+	Chains []Chain `json:"chains"`
+}
+
+// ChainRequest is PUT /chains/{name}'s body.
+type ChainRequest struct {
+	Steps []ChainStep `json:"steps"`
 }
 
 // CooldownResetReply is POST /accounts/{id}/cooldown/reset's reply.
@@ -520,6 +548,44 @@ type SetupApplyResult struct {
 // SetupApplyReply is POST /setup/apply's reply.
 type SetupApplyReply struct {
 	Results []SetupApplyResult `json:"results"`
+}
+
+// SetupImportRequest is POST /setup/import's body: a CLIProxyAPI config.yaml on core's machine,
+// and its auth folder (default: the config's oauth.auth-dir). With DryRun nothing is written.
+type SetupImportRequest struct {
+	Config  string `json:"config"`
+	AuthDir string `json:"auth_dir,omitempty"`
+	DryRun  bool   `json:"dry_run,omitempty"`
+}
+
+// ImportReport is POST /setup/import's reply. Every key of the config and every file of the auth
+// folder is in exactly one of Brought, Changed and NotBrought.
+type ImportReport struct {
+	DryRun     bool         `json:"dry_run"`
+	Brought    []ImportRow  `json:"brought"`
+	Changed    []ImportRow  `json:"changed"`
+	NotBrought []ImportRow  `json:"not_brought"`
+	Needs      []ImportNeed `json:"needs"`
+}
+
+// ImportRow is one item of an import report: a key of the config (What is its path in the file)
+// or a file of the auth folder (What is "auth file", Name its name).
+type ImportRow struct {
+	What string `json:"what"`
+	Name string `json:"name,omitempty"`
+	// As is what it became in pluxy.
+	As   string `json:"as,omitempty"`
+	From string `json:"from,omitempty"`
+	To   string `json:"to,omitempty"`
+	Why  string `json:"why,omitempty"`
+	// KeepWith says how to keep what the old setup did, where pluxy changed it.
+	KeepWith string `json:"keep_with,omitempty"`
+}
+
+// ImportNeed is a provider package the imported accounts need and core does not have installed.
+type ImportNeed struct {
+	Pick string `json:"pick"`
+	Why  string `json:"why"`
 }
 
 // SetupDoneReply is POST /setup/done's reply.

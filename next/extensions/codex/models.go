@@ -18,8 +18,8 @@ import (
 const (
 	// modelsOwner is the owned_by of models an account's config lists itself, as in today's core.
 	modelsOwner = "openai"
-	// codexClientVersion matches the Codex CLI client_version expected by the ChatGPT backend's
-	// /models catalog endpoint; older or missing versions omit newer models.
+	// codexClientVersion is the default Codex CLI version in the User-Agent and the ChatGPT
+	// backend model list's client_version; older or missing versions omit newer models.
 	codexClientVersion = "0.159.0"
 	modelsTimeout      = 15 * time.Second
 	modelsMaxBody      = 8 << 20
@@ -106,7 +106,7 @@ func fetchCodexModels(ctx context.Context, s settings, a account) ([]protocol.Mo
 		return nil, false
 	}
 	q := u.Query()
-	q.Set("client_version", codexClientVersion)
+	q.Set("client_version", s.clientVersion())
 	u.RawQuery = q.Encode()
 
 	ctx, cancel := context.WithTimeout(ctx, modelsTimeout)

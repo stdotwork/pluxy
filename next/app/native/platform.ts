@@ -22,7 +22,8 @@
 // - window and tray: the app has a tray icon; closing the window leaves the app in the tray, or
 //   quits it, as the preference says; the window's size and place are kept across a restart.
 // - bundle: the test package (package.ts test, made before this run and named by
-//   PLUXY_APP_TEST_PACKAGE: a folder bundle on Windows, an app bundle on macOS) has the test
+//   PLUXY_APP_TEST_PACKAGE: a folder bundle holding the program set on Windows, an app bundle on
+//   macOS) has the test
 //   identity in its own files, starts from its bundle and passes its updater gate with its test
 //   trust profile, and quits leaving no process; the same bundle without the profile, and the dev
 //   app (normal identifier, no test trust) with it, are refused at the gate;
@@ -35,13 +36,33 @@
 //   this user's and connected to a test core (`go run ./e2e/panelcore`), updates itself to its
 //   signed newer version and back,
 //   and refuses the rest, with update-cases.ts's cases (the same as Linux's update session): no
-//   updater trust; this system's crafted installs (Windows: an .msi- and a setup-program-patched
-//   program, a folder Everyone may change; macOS: the program outside its bundle, a bundle its
+//   updater trust; this system's crafted installs (Windows: an .msi-patched program, a folder
+//   Everyone may change; macOS: the program outside its bundle, a bundle its
 //   group may change, the installed bundle started through a link on its path); macOS: the
 //   update route starts the bundle by its real path, and a launch through LaunchServices (`/usr/bin/open`) is offered the
-//   update; the update route with its third launch in the acceptance gap and its rollback; stand-ins
+//   update; Windows: an update ended (by the session, which started it) between two parts of the
+//   program set, and the earlier version, started again on the mixed folder, undoes it and keeps
+//   its own set as kept; the update route with its third launch in the acceptance gap and its rollback; stand-ins
 //   for installers and elevation first on PATH never ran; macOS: no quarantine on the installed
-//   bundle.
+//   bundle; macOS: the same package in the stock /Applications (inApplications) updates and rolls
+//   back, is offered the update with root's, admin's and deny entries on that folder, and is
+//   refused for each access list entry, owner or membership that rule turns away.
+// - install (the update shard): on Windows the test package's per-user setup program (`/S`
+//   throughout) installs into the user's local application data folder with a per-user uninstall
+//   entry, nothing machine-wide, and a manifest that asks for no elevation; the installed app
+//   reads the setup's bundle type, turns its login item on, updates itself in place to its newer
+//   version and rolls back (update-cases.ts's route), the uninstall entry's DisplayVersion
+//   following each version that accepted itself; the setup and the uninstaller each refuse while
+//   the app runs and leave it running; once it quits, uninstalling removes the folder (with what
+//   the app left there, queuing nothing for Windows to delete at the next restart), the login
+//   item and the uninstall entry and keeps the app's data; and a junction in bundled\ is removed
+//   without removing what it points to. On macOS the test package's disk image is attached; its
+//   volume holds the same bundle and a link to /Applications; the bundle copied out with `ditto`
+//   into /Applications and into ~/Applications starts, updates itself and rolls back from each,
+//   nothing else in either folder changing; run from the mounted image it is refused because its
+//   volume is not APFS; `spctl` and `syspolicy_check` output is recorded; the image detaches; and
+//   the login item of a copy whose bundle is then deleted stays behind, with what launchd does
+//   with it at the next login recorded.
 //
 // These write what a real run writes: the user's registry or LaunchAgents folder, and on Windows
 // the app's own folder in the user's profile. So it runs only on a disposable CI runner
@@ -56,17 +77,20 @@ import {
   appendFileSync,
   chmodSync,
   copyFileSync,
+  cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { MARKER_FILE, PROFILE_FILE } from "./admission";
@@ -75,19 +99,26 @@ import { TOOL_SESSIONS, toolSession } from "./platform-tools";
 import { DISPOSABLE_RUNNER, onDisposableRunner } from "./runner";
 import { SESSIONS, selectShard } from "./shards";
 import {
+  CHAIN_MS,
   checkSteps,
   LAUNCH_MS,
+  launchChain,
   NO_ROOTS,
+  ownNames,
   pinOf,
   privateFolder,
   REFUSALS,
   type Refusal,
   refusedLaunch,
-  sha256,
+  SET_PARTS,
+  type StandIns,
+  setDigest,
   standIns,
   startUpdateFeed,
   treeDigest,
+  type UpdateFeed,
   updateRoute,
+  V1,
   withPathFirst,
 } from "./update-cases";
 
@@ -731,6 +762,10 @@ interface BundlePackage {
   program: string;
   updater_pubkey: string;
   update: { bundle: string; payload: string; target: string; version: string; signature: string };
+  /** macOS: the disk image holding the bundle. */
+  dmg?: string;
+  /** Windows: the per-user setup program, at the app's version. */
+  setup?: string;
 }
 
 function testPackage(): BundlePackage | undefined {
@@ -826,16 +861,25 @@ async function bundle() {
   const exe = windows ? "pluxy-app-test.exe" : "pluxy-app-test";
   // What the bundle is, read with the system's own tools.
   if (windows) {
-    const files = readdirSync(made.bundle);
+    const files = readdirSync(made.bundle).sort();
     check(
-      JSON.stringify(files) === JSON.stringify([exe]),
-      `the folder bundle holds ${files.join(", ")}, not only ${exe}`,
+      JSON.stringify(files) === JSON.stringify(SET_PARTS),
+      `the folder bundle holds ${files.join(", ")}, not only the program set ${SET_PARTS.join(", ")}`,
     );
     check(made.program === join(made.bundle, exe), `the program ${made.program} is not the bundle's ${exe}`);
+    // The update is the second build's set as a .tar.gz, its parts at the top. Read with Windows'
+    // own tar: the one first on the runner's PATH (Git's GNU tar) takes `D:` for a remote host.
+    const tar = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
+    const read = run(tar, ["-tzf", made.update.payload]);
+    check(read.status === 0, `${tar} could not list the update archive: ${read.out}`);
+    const listed = read.out.split(/\r?\n/).filter(Boolean);
+    const tops = [...new Set(listed.map((e) => e.replace(/\/.*$/, "")))].sort();
     check(
-      readFileSync(made.update.payload).subarray(0, 2).toString() === "MZ",
-      "the update payload is not an exe",
+      JSON.stringify(tops) === JSON.stringify(SET_PARTS),
+      `the update archive's top entries are ${tops.join(", ")}, not the program set's`,
     );
+    check(made.update.target === "windows-x86_64-set", `the update's target is ${made.update.target}`);
+    say(`update archive: ${listed.length} entries`);
   } else {
     const plist = join(made.bundle, "Contents", "Info.plist");
     const key = (k: string) => run("plutil", ["-extract", k, "raw", "-o", "-", plist]).out;
@@ -992,8 +1036,7 @@ async function bundleReleaseGate() {
     if (made) {
       const renamed = join(dir, windows ? "candidate" : "candidate.app");
       if (windows) {
-        mkdirSync(renamed);
-        for (const f of readdirSync(made.bundle)) copyFileSync(join(made.bundle, f), join(renamed, f));
+        cpSync(made.bundle, renamed, { recursive: true });
       } else {
         const copied = run("ditto", [made.bundle, renamed]);
         if (copied.status !== 0) throw new Error(`ditto: ${copied.out}`);
@@ -1031,9 +1074,9 @@ async function startCore(): Promise<{ proc: ChildProcess; base: string; key: str
   return { proc, ...JSON.parse(line) };
 }
 
-/** The test package's program with the bundle type an installer gives it: tauri-bundler patches
- * the first __TAURI_BUNDLE_TYPE_VAR_UNK with the type's (`MSI`, `NSS`). */
-function patchedBundleType(program: string, kind: "MSI" | "NSS"): Buffer {
+/** The test package's program with the bundle type an .msi gives it: tauri-bundler patches the
+ * first __TAURI_BUNDLE_TYPE_VAR_UNK with the type's (`MSI`). */
+function patchedBundleType(program: string, kind: "MSI"): Buffer {
   const bytes = Buffer.from(readFileSync(program));
   const at = bytes.indexOf(Buffer.from("__TAURI_BUNDLE_TYPE_VAR_UNK"));
   if (at < 0) throw new Error(`${program} has no unpatched bundle type`);
@@ -1071,11 +1114,10 @@ async function update() {
     // system's temporary folder is under /var, a link to /private/var): the "linked" refusal.
     let linkedProgram = "";
     if (windows) {
-      const folder = join(ownFolder(join(root, "install")), basename(made.bundle));
-      mkdirSync(folder);
-      installed = join(folder, exe);
-      copyFileSync(made.program, installed);
-      program = installed;
+      // The folder bundle's program set: the folder is the installed copy.
+      installed = join(ownFolder(join(root, "install")), basename(made.bundle));
+      cpSync(made.bundle, installed, { recursive: true });
+      program = join(installed, exe);
     } else {
       const put = join(privateFolder(join(home, "Applications")), basename(made.bundle));
       const copied = run("ditto", ["--norsrc", "--noextattr", "--noqtn", made.bundle, put]);
@@ -1091,8 +1133,8 @@ async function update() {
     const v1 = pinOf(installed);
     writeFileSync(join(work, "v1.sha256"), v1);
     const payload = readFileSync(made.update.payload);
-    // The new version's pin: the program itself, or the tree of the bundle the archive holds.
-    const v2 = windows ? sha256(payload) : treeDigest(made.update.bundle);
+    // The new version's pin: the program set or the tree of the bundle the archive holds.
+    const v2 = windows ? setDigest(made.update.bundle) : treeDigest(made.update.bundle);
     say(`installed ${installed}: v1 ${v1}, v2 ${v2}`);
 
     say("starting the test core");
@@ -1153,8 +1195,8 @@ async function update() {
         const bundle = join(folder, basename(made.bundle));
         mkdirSync(bundle);
         crafted = join(bundle, exe);
-        if (refusal.case === "msi" || refusal.case === "nsis") {
-          writeFileSync(crafted, patchedBundleType(made.program, refusal.case === "msi" ? "MSI" : "NSS"));
+        if (refusal.case === "msi") {
+          writeFileSync(crafted, patchedBundleType(made.program, "MSI"));
         } else {
           copyFileSync(made.program, crafted);
           // Everyone may change the bundle's folder (and, inherited, the program).
@@ -1205,6 +1247,82 @@ async function update() {
     }
     check(stand.ran() === "", `an installer or elevation ran: ${stand.ran()}`);
 
+    // Windows: the update ended between two parts of the program set, then the earlier version
+    // started again on the mixed folder.
+    if (windows) {
+      const updates = join(local, "updates");
+      let between: Record<string, unknown> | undefined;
+      let mixed = "";
+      let asides: string[] = [];
+      const parts = await launchChain({
+        label: "parts",
+        program,
+        env: { ...trusted, PLUXY_APP_TEST_UPDATE_CASE: "parts" },
+        ms: LAUNCH_MS,
+        check,
+        say,
+        onStep: (name, v, child) => {
+          if (name !== "update_between_parts") return;
+          between = v;
+          // What the folder holds as the update waits there, read before it is ended.
+          try {
+            mixed = pinOf(installed);
+          } catch (e) {
+            mixed = `unreadable: ${(e as Error).message}`;
+          }
+          asides = readdirSync(installed).filter((n) => n.startsWith(".pluxy-old-"));
+          check(
+            v.pid === child.pid,
+            `the process waiting between parts is ${v.pid}, not the launch ${child.pid}`,
+          );
+          child.kill("SIGKILL");
+        },
+      });
+      for (const n of parts.names) seen.add(n);
+      say(`between parts: ${JSON.stringify(between)}; asides ${asides.join(", ")}; ended ${parts.ended}`);
+      check(
+        between?.part === "bundled",
+        `the update did not wait after its first part: ${JSON.stringify(between)}`,
+      );
+      check(
+        mixed !== v1 && mixed !== v2,
+        `the folder was not half replaced when the update was ended: ${mixed}`,
+      );
+      check(
+        asides.length === 1 && asides[0]?.endsWith("-bundled"),
+        `asides when the update was ended: ${asides.join(", ")}`,
+      );
+      check(existsSync(join(updates, "pending.json")), "the ended update left no pending.json");
+      // Launched by a spelling of its name in other case: the program's name in the set is the
+      // one the disk holds, not the launch's.
+      const spelled = join(installed, exe.toUpperCase());
+      const undone = await launchChain({
+        label: "parts undone",
+        program: spelled,
+        env: { ...trusted, PLUXY_APP_TEST_UPDATE_CASE: "parts-undone" },
+        ms: LAUNCH_MS,
+        check,
+        say,
+      });
+      for (const n of undone.names) seen.add(n);
+      const u = undone.step("update_parts_undone")[0];
+      say(`the start after: ${JSON.stringify(u)}`);
+      if (u?.launched_as !== exe.toUpperCase())
+        skip(`the start after was not launched as ${exe.toUpperCase()} but as ${u?.launched_as}`);
+      check(u?.version === V1, `the earlier version did not start on the mixed folder: ${JSON.stringify(u)}`);
+      check(
+        u?.installed_sha === v1 && pinOf(installed) === v1,
+        `the start after did not undo it: ${JSON.stringify(u)}`,
+      );
+      check(u?.pending === false, "pending.json is still there after the undo");
+      check(u?.kept_sha === v1, `the earlier set is not kept as ${V1}: ${JSON.stringify(u)}`);
+      check(
+        JSON.stringify(u?.beside) === JSON.stringify(SET_PARTS) &&
+          JSON.stringify(readdirSync(installed).sort()) === JSON.stringify(SET_PARTS),
+        `in the program's folder after the undo: ${readdirSync(installed).join(", ")}`,
+      );
+    }
+
     // The update route.
     add(
       await updateRoute({
@@ -1224,10 +1342,11 @@ async function update() {
     );
     checkSteps(check, system, seen);
     check(stand.ran() === "", `an installer or elevation ran: ${stand.ran()}`);
-    // Nothing an install made is left next to the installed copy.
-    const left = readdirSync(dirname(installed));
+    // Nothing an install made is left next to the installed copy (on Windows, in the set's
+    // folder).
+    const left = readdirSync(windows ? installed : dirname(installed)).sort();
     check(
-      JSON.stringify(left) === JSON.stringify([basename(installed)]),
+      JSON.stringify(left) === JSON.stringify(ownNames(installed)),
       `next to the installed copy at the end: ${left.join(", ")}`,
     );
     if (mac)
@@ -1236,6 +1355,7 @@ async function update() {
         "the installed app bundle is quarantined",
       );
     say(`requests: ${JSON.stringify(Object.fromEntries(served.requests))}`);
+    if (mac) await inApplications({ made, feed: served, work, core, stand, v1, v2 });
   } finally {
     feed?.stop();
     if (core) {
@@ -1252,6 +1372,1113 @@ async function update() {
   }
 }
 
+/** sudo, never asking for a password (the runner has it without one); throws on failure. */
+function sudo(args: string[]): string {
+  const r = run("sudo", ["-n", ...args]);
+  if (r.status !== 0) throw new Error(`sudo ${args.join(" ")}: ${r.out}`);
+  return r.out;
+}
+
+/** The refusals of the test package in /Applications (updater/applications.rs): an access list
+ * entry the session adds to /Applications or to the bundle, the bundle given to root, and this
+ * user taken out of admin. The reason each must give. */
+const IN_APPLICATIONS = {
+  ruleA: /is not a folder of yours that only you can change, nor the stock Applications folder/,
+  entry: /entry \d+ of its access list \(`ls -le` shows it\) lets another account change it or what is in it/,
+  inherited:
+    /entry \d+ of its access list \(`ls -le` shows it\) lets another account change what is put in it/,
+};
+
+/** macOS: the test package in the stock /Applications, put there as an administrator would put it
+ * with Finder (`ditto`, as this user: the bundle is this user's, in the user's own group): first the
+ * facts the rule rests on, read with the system's tools; then the route (v1 to v2 and a confirmed
+ * rollback, `applications` in update_native.rs), after which a folder of the update's naming that
+ * this user put in /Applications is still there, the same folder, and /Applications holds the
+ * same names as before; then the refusals and the admitted entries. The runner's account is an administrator with sudo
+ * that asks no password (GitHub's macOS images); the runner is thrown away after the job, and
+ * what is changed here is put back. */
+async function inApplications(o: {
+  made: BundlePackage;
+  feed: UpdateFeed;
+  work: string;
+  core: { base: string; key: string };
+  stand: StandIns;
+  v1: string;
+  v2: string;
+}) {
+  const apps = "/Applications";
+  const user = run("id", ["-un"]).out;
+  const member = () => run("dseditgroup", ["-o", "checkmember", "-m", user, "admin"]).out;
+  // The facts no Apple document settles, as this runner shows them.
+  say(`/Applications, ls -lde: ${run("ls", ["-lde", apps]).out}`);
+  say(`/Applications, ls -ldO: ${run("ls", ["-ldO", apps]).out}`);
+  say(`/System/Volumes/Data: ${run("stat", ["-f", "%Su %Sg %Lp", "/System/Volumes/Data"]).out}`);
+  say(`/: ${run("stat", ["-f", "%Su %Sg %Lp", "/"]).out}`);
+  say(`this user: ${run("id", []).out}`);
+  say(`sudo -n -l: ${run("sudo", ["-n", "-l"]).out.replaceAll("\n", " | ")}`);
+  const was = member();
+  say(`admin membership: ${was}`);
+  if (!was.startsWith("yes")) {
+    sudo(["dseditgroup", "-o", "edit", "-a", user, "-t", "user", "admin"]);
+    sudo(["dscacheutil", "-flushcache"]);
+    say(`added to admin: ${member()}`);
+  }
+  check(member().startsWith("yes"), `${user} is not in admin: ${member()}`);
+
+  const installed = join(apps, basename(o.made.bundle));
+  const decoy = join(apps, ".pluxy-update-0123456789abcdef");
+  if (existsSync(installed) || existsSync(decoy))
+    throw new Error(`${installed} or ${decoy} exists: this is not a fresh runner`);
+  const p = makeProfile(TEST_ID);
+  try {
+    const copied = run("ditto", ["--norsrc", "--noextattr", "--noqtn", o.made.bundle, installed]);
+    if (copied.status !== 0) throw new Error(`ditto: ${copied.out}`);
+    say(`the bundle in /Applications: ${run("ls", ["-lde", installed]).out}`);
+    check(pinOf(installed) === o.v1, "the bundle copied into /Applications is not v1");
+    // A folder of the user's, named as the updater named its staging folders before, which
+    // another administrator could rename one of the user's folders to: it must stay.
+    mkdirSync(decoy);
+    writeFileSync(join(decoy, "theirs"), "x");
+    const decoyId = statSync(decoy).ino;
+    const before = readdirSync(apps).sort();
+
+    const home = privateHome(p);
+    const nonce = writeUpdaterTrust(home, o.made.updater_pubkey);
+    writeFileSync(
+      join(p.dir, "connection.json"),
+      JSON.stringify({ mode: "local", url: o.core.base, key: o.core.key }),
+      { mode: 0o600 },
+    );
+    writeFileSync(join(p.dir, "window.json"), JSON.stringify({ close_behavior: "minimize-to-tray" }), {
+      mode: 0o600,
+    });
+    rmSync(join(o.work, "stage"), { force: true });
+    const env = {
+      ...withPathFirst({ ...p.env, HOME: home }, o.stand.bin),
+      PLUXY_APP_TEST_UPDATE: o.work,
+      PLUXY_APP_TEST_FEED: o.feed.url,
+      PLUXY_APP_TEST_FEED_CA: o.feed.ca,
+      PLUXY_TEST_TRUST_NONCE: nonce,
+    };
+    const program = join(installed, "Contents", "MacOS", "pluxy-app-test");
+
+    // The route. Whether macOS lets this ad-hoc signed app replace itself in /Applications
+    // without a prompt (App Management) shows here: a blocked swap fails the update with its
+    // error, which the stage reports carry.
+    const downloads = o.feed.downloads();
+    const r = await launchChain({
+      label: "applications",
+      program,
+      env: { ...env, PLUXY_APP_TEST_UPDATE_CASE: "applications" },
+      ms: CHAIN_MS,
+      check,
+      say,
+    });
+    const stages = r.step("update_stage");
+    const ran = stages.map((s) => `${s.stage}@${s.version}`);
+    say(`applications: versions that ran: ${ran.join(", ")}`);
+    for (const s of stages) say(`applications: ${s.stage}: last ${JSON.stringify(s.last)}`);
+    check(
+      JSON.stringify(ran) ===
+        JSON.stringify([`first@${V1}`, `updated@${o.made.update.version}`, `rolled-back@${V1}`]),
+      `applications: the route ran ${JSON.stringify(ran)}`,
+    );
+    const at = (name: string) => stages.find((s) => s.stage === name) ?? {};
+    for (const [name, sha] of Object.entries({ first: o.v1, updated: o.v2, "rolled-back": o.v1 })) {
+      check(
+        at(name).installed === installed && at(name).installed_sha === sha,
+        `applications: ${name}: the app says it runs from ${at(name).installed} at ${at(name).installed_sha}`,
+      );
+    }
+    check(
+      (at("updated").last as Step)?.result === "installed",
+      `applications: the update was not reported installed: ${JSON.stringify(at("updated").last)}`,
+    );
+    check(
+      (at("rolled-back").last as Step)?.result === "rolled-back",
+      `applications: the rollback was not reported: ${JSON.stringify(at("rolled-back").last)}`,
+    );
+    check(r.step("update_applications_done").length === 1, "applications: the route did not finish");
+    check(pinOf(installed) === o.v1, "applications: the copy installed at the end is not v1");
+    check(o.feed.downloads() === downloads + 1, "applications: v2 was not downloaded once");
+    // Nothing was listed, made or removed in /Applications but the bundle's own entry.
+    check(
+      existsSync(decoy) &&
+        statSync(decoy).ino === decoyId &&
+        readFileSync(join(decoy, "theirs"), "utf8") === "x",
+      "applications: the folder of the user's named .pluxy-update-<hex> changed or went",
+    );
+    const after = readdirSync(apps).sort();
+    check(
+      JSON.stringify(after) === JSON.stringify(before),
+      `applications: /Applications held ${JSON.stringify(before)}, now ${JSON.stringify(after)}`,
+    );
+    check(o.stand.ran() === "", `applications: an installer or elevation ran: ${o.stand.ran()}`);
+
+    // The refusals, each before any download, the bundle unchanged.
+    const unchanged = () => pinOf(installed) === o.v1;
+    const refuse = async (c: Refusal) =>
+      refusedLaunch({ refusal: c, program, env, check, say, feed: o.feed, unchanged });
+    const withEntry = async (on: string, entry: string, c: Refusal, during?: () => void) => {
+      // /Applications is root's; the bundle is this user's.
+      const add =
+        on === apps
+          ? sudo
+          : (a: string[]) => {
+              const r = run(a[0] as string, a.slice(1));
+              if (r.status !== 0) throw new Error(`${a.join(" ")}: ${r.out}`);
+            };
+      add(["chmod", "+a", entry, on]);
+      try {
+        say(`${c.label}: ${run("ls", ["-lde", on]).out}`);
+        during?.();
+        await refuse(c);
+      } finally {
+        add(["chmod", "-a", entry, on]);
+      }
+    };
+    const rule = (label: string, kase: string, why: RegExp): Refusal => ({
+      label,
+      case: kase,
+      reason: new RegExp(`${IN_APPLICATIONS.ruleA.source}.*${why.source}`, "s"),
+    });
+    await withEntry(
+      apps,
+      "group:staff allow add_file,delete_child",
+      rule("staff entry", "staff-entry", IN_APPLICATIONS.entry),
+    );
+    // Group 0 is wheel: refused, not taken for root (user 0).
+    await withEntry(
+      apps,
+      "group:wheel allow add_file",
+      rule("wheel entry", "wheel-entry", IN_APPLICATIONS.entry),
+    );
+    // An inherit-only entry: whether it reaches what is copied in later is recorded too.
+    await withEntry(
+      apps,
+      "group:staff allow write,file_inherit,only_inherit",
+      rule("inherited entry", "inherited-entry", IN_APPLICATIONS.inherited),
+      () => {
+        const probe = join(apps, "pluxy-inherit-probe");
+        const src = mkdtempSync(join(tmpdir(), "pluxy-probe-"));
+        try {
+          mkdirSync(join(src, "Contents"));
+          writeFileSync(join(src, "Contents", "file"), "x");
+          const c = run("ditto", ["--norsrc", "--noextattr", "--noqtn", src, probe]);
+          say(`inherited entry: ditto into /Applications: ${c.status} ${c.out}`);
+          say(
+            `inherited entry: what was copied in: ${run("ls", ["-leR", probe]).out.replaceAll("\n", " | ")}`,
+          );
+        } finally {
+          rmSync(probe, { recursive: true, force: true });
+          rmSync(src, { recursive: true, force: true });
+        }
+      },
+    );
+    await withEntry(installed, "group:staff allow add_file", {
+      label: "bundle entry",
+      case: "bundle-entry",
+      reason:
+        /pluxy Test\.app is not a folder of yours that only you can change: entry \d+ of its access list .*Remove that entry \(in Terminal: chmod -a# \d+ /s,
+    });
+    sudo(["chown", "root", installed]);
+    try {
+      await refuse({
+        label: "not yours",
+        case: "not-yours",
+        reason:
+          /pluxy Test\.app is not a folder of yours that only you can change: its owner is user 0, not you\. Copy pluxy to Applications in your home folder/,
+      });
+    } finally {
+      sudo(["chown", user, installed]);
+    }
+
+    // Admitted: entries for root and admin, whatever they allow, and a deny entry, read through
+    // the same calls: the update is offered.
+    const admittedEntries = [
+      "user:root allow add_file,delete_child",
+      "group:admin allow add_file,add_subdirectory,delete_child",
+      "everyone deny delete",
+    ];
+    for (const entry of admittedEntries) sudo(["chmod", "+a", entry, apps]);
+    try {
+      say(`admitted entries: ${run("ls", ["-lde", apps]).out.replaceAll("\n", " | ")}`);
+      const r = await launchChain({
+        label: "admitted entries",
+        program,
+        env: { ...env, PLUXY_APP_TEST_UPDATE_CASE: "admitted" },
+        ms: LAUNCH_MS,
+        check,
+        say,
+      });
+      const s = r.step("update_admitted")[0];
+      check(
+        s?.available === "true" && s.installed === installed && s.installed_sha === o.v1,
+        `admitted entries: the update was not offered from /Applications: ${JSON.stringify(s)}`,
+      );
+    } finally {
+      for (const entry of admittedEntries) sudo(["chmod", "-a", entry, apps]);
+    }
+
+    // Last: this user out of admin, with the bundle another account's (as one an administrator
+    // put there): the administrators' message, whoever owns the bundle. Only the rule's message
+    // is checked: processes started before still carry the group, so the kernel would still let
+    // this session's processes write.
+    sudo(["dseditgroup", "-o", "edit", "-d", user, "-t", "user", "admin"]);
+    sudo(["chown", "root", installed]);
+    try {
+      sudo(["dscacheutil", "-flushcache"]);
+      say(`not admin: ${member()}`);
+      await refuse({
+        label: "not admin",
+        case: "not-admin",
+        reason:
+          /pluxy is in \/Applications, which only administrators can change, and this account is not one/,
+      });
+    } finally {
+      sudo(["chown", user, installed]);
+      sudo(["dseditgroup", "-o", "edit", "-a", user, "-t", "user", "admin"]);
+      sudo(["dscacheutil", "-flushcache"]);
+    }
+    check(member().startsWith("yes"), `${user} is not back in admin: ${member()}`);
+    check(unchanged(), "applications: the bundle changed during the refusals");
+  } finally {
+    rmSync(installed, { recursive: true, force: true });
+    rmSync(decoy, { recursive: true, force: true });
+    p.remove();
+  }
+}
+
+// ---- the install (macOS: the disk image) ----------------------------------------------------
+
+/** The test package's disk image attached as a person's double-click attaches it (no Finder
+ * window opened): its volume's mount point and kind, as hdiutil reports them. */
+function attach(image: string): { mount: string; kind: string } {
+  const r = spawnSync("hdiutil", ["attach", "-noautoopen", "-plist", image], { encoding: "utf8" });
+  if (r.status !== 0) throw new Error(`hdiutil attach ${image}: ${r.stdout ?? ""}${r.stderr ?? ""}`);
+  const json = spawnSync("plutil", ["-convert", "json", "-o", "-", "-"], {
+    encoding: "utf8",
+    input: r.stdout,
+  });
+  if (json.status !== 0) throw new Error(`plutil, hdiutil's answer: ${json.stderr}`);
+  const entities = (JSON.parse(json.stdout) as { "system-entities": Record<string, string>[] })[
+    "system-entities"
+  ];
+  const mounted = entities.filter((e) => e["mount-point"]);
+  if (mounted.length !== 1)
+    throw new Error(`hdiutil attached ${mounted.length} volumes of ${image}, not one: ${json.stdout}`);
+  const e = mounted[0] as Record<string, string>;
+  return { mount: e["mount-point"] as string, kind: e["volume-kind"] ?? "" };
+}
+
+/** The refusal of the app run from its mounted disk image: its folder (the volume's root) is on
+ * the image's HFS+ volume, which cannot swap a bundle (updater/app.rs, `swap_volume`). Not any
+ * refusal: this one, for this folder. */
+const fromImage = (mount: string): Refusal => ({
+  label: "from the disk image",
+  case: "dmg",
+  reason: new RegExp(
+    `${mount.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} is on a hfs volume, which cannot swap the app for its new version in one step`,
+  ),
+});
+
+/** A command's exit and output on one line, for the log. */
+function recorded(cmd: string, args: string[]): string {
+  const r = run(cmd, args);
+  return `exit ${r.status}: ${r.out.replaceAll("\n", " | ").slice(0, 1500)}`;
+}
+
+/** macOS: the disk image (package.ts test) attached; its volume holds the test package's bundle,
+ * the same tree, and the link to /Applications a person drags it onto; the bundle copied out of
+ * it, as Finder copies (`ditto`), into the stock /Applications and into ~/Applications (the
+ * runner user's own); from each, the copy starts, updates itself to the signed newer version and
+ * rolls back (the `applications` route, update_native.rs), nothing else in the folder changing;
+ * the bundle run from the mounted image is refused for its volume, not APFS, before any download;
+ * `spctl` and `syspolicy_check` say what they say of the bundle and the image (recorded, not
+ * judged: the image is built here, unsigned and never quarantined, so Gatekeeper's first open is
+ * a release check); the image detaches. Last, the login item of the copy in ~/Applications
+ * outlives the bundle: once the bundle is deleted, its LaunchAgent stays, naming a program that
+ * is gone, and what launchd does with it at the next login (bootstrapping it into this user's
+ * graphical domain, as a login does) is recorded. */
+async function dmgInstall() {
+  const made = testPackage();
+  if (!made) return;
+  check(made.dmg && existsSync(made.dmg), `the test package has no disk image: ${made.dmg}`);
+  if (!made.dmg) return;
+  const name = basename(made.bundle);
+  const exe = "pluxy-app-test";
+  const user = run("id", ["-un"]).out;
+  const homeApps = join(homedir(), "Applications");
+  const folders = ["/Applications", homeApps];
+  for (const f of folders)
+    if (existsSync(join(f, name)))
+      throw new Error(
+        `${join(f, name)} exists: this is not a fresh runner, and the test would write over it`,
+      );
+  const madeHomeApps = !existsSync(homeApps);
+  const root = mkdtempSync(join(process.env.RUNNER_TEMP ?? tmpdir(), "pluxy-install-"));
+  const profiles: Profile[] = [];
+  let mount: string | undefined;
+  let core: Awaited<ReturnType<typeof startCore>> | undefined;
+  let feed: UpdateFeed | undefined;
+  let loaded = "";
+  try {
+    // /Applications takes an administrator (updater/applications.rs); the runner's account is one.
+    const member = () => run("dseditgroup", ["-o", "checkmember", "-m", user, "admin"]).out;
+    if (!member().startsWith("yes")) {
+      sudo(["dseditgroup", "-o", "edit", "-a", user, "-t", "user", "admin"]);
+      sudo(["dscacheutil", "-flushcache"]);
+    }
+    check(member().startsWith("yes"), `${user} is not in admin: ${member()}`);
+
+    // 1. Attach the image.
+    const attached = attach(made.dmg);
+    mount = attached.mount;
+    const at = mount;
+    say(`hdiutil attach: ${at}, volume kind ${attached.kind}`);
+    say(
+      `mounted as: ${
+        run("mount", [])
+          .out.split("\n")
+          .find((l) => l.includes(` on ${at} (`)) ?? "not listed"
+      }`,
+    );
+
+    // 2. What the volume holds: the bundle, the same tree as the test package's, and the link to
+    // /Applications.
+    say(`the volume holds: ${readdirSync(at).sort().join(", ")}; ${run("ls", ["-lde", at]).out}`);
+    const link = join(at, "Applications");
+    const linkStat = lstatSync(link, { throwIfNoEntry: false });
+    check(
+      linkStat?.isSymbolicLink() && readlinkSync(link) === "/Applications",
+      `the volume's Applications is not a link to /Applications: ${linkStat?.isSymbolicLink() ? readlinkSync(link) : "not a link"}`,
+    );
+    const inImage = join(at, name);
+    const v1 = pinOf(made.bundle);
+    const imaged = existsSync(inImage) ? pinOf(inImage) : "missing";
+    say(`the bundle in the image: ${run("ls", ["-lde", inImage]).out}; tree ${imaged}`);
+    check(imaged === v1, `the image's ${name} is ${imaged}, not the test package's bundle ${v1}`);
+
+    // 3. Copied out, as Finder copies, into /Applications and ~/Applications.
+    if (madeHomeApps) mkdirSync(homeApps);
+    say(`~/Applications: ${run("ls", ["-lde", homeApps]).out}${madeHomeApps ? " (made here)" : ""}`);
+    for (const f of folders) {
+      const dest = join(f, name);
+      const copied = run("ditto", [inImage, dest]);
+      if (copied.status !== 0) throw new Error(`ditto ${inImage} ${dest}: ${copied.out}`);
+      say(`copied to ${dest}: ${run("ls", ["-lde", dest]).out}`);
+      check(pinOf(dest) === v1, `the copy in ${f} is not the image's bundle`);
+    }
+
+    // 4. From each: start, update, roll back.
+    const work = privateFolder(join(root, "work"));
+    writeFileSync(join(work, "v1.sha256"), v1);
+    const v2 = treeDigest(made.update.bundle);
+    say(`v1 ${v1}, v2 ${v2}; starting the test core`);
+    core = await startCore();
+    const served = startUpdateFeed({
+      dir: work,
+      payload: readFileSync(made.update.payload),
+      file: basename(made.update.payload),
+      target: made.update.target,
+      version: made.update.version,
+      signature: made.update.signature,
+      pubkey: made.updater_pubkey,
+    });
+    feed = served;
+    const stand = standIns(root, ["osascript", "sudo", "installer", "authopen"]);
+    let last: { p: Profile; env: Record<string, string> } | undefined;
+    for (const f of folders) {
+      const label = f === "/Applications" ? "/Applications" : "~/Applications";
+      const installed = realpathSync(join(f, name));
+      const program = join(installed, "Contents", "MacOS", exe);
+      const p = makeProfile(TEST_ID);
+      profiles.push(p);
+      const home = privateHome(p);
+      const nonce = writeUpdaterTrust(home, made.updater_pubkey);
+      writeFileSync(
+        join(p.dir, "connection.json"),
+        JSON.stringify({ mode: "local", url: core.base, key: core.key }),
+        { mode: 0o600 },
+      );
+      writeFileSync(join(p.dir, "window.json"), JSON.stringify({ close_behavior: "minimize-to-tray" }), {
+        mode: 0o600,
+      });
+      rmSync(join(work, "stage"), { force: true });
+      const env = {
+        ...withPathFirst({ ...p.env, HOME: home }, stand.bin),
+        PLUXY_APP_TEST_UPDATE: work,
+        PLUXY_APP_TEST_FEED: served.url,
+        PLUXY_APP_TEST_FEED_CA: served.ca,
+        PLUXY_TEST_TRUST_NONCE: nonce,
+      } as Record<string, string>;
+      const before = readdirSync(f).sort();
+      const downloads = served.downloads();
+      const r = await launchChain({
+        label,
+        program,
+        env: { ...env, PLUXY_APP_TEST_UPDATE_CASE: "applications" },
+        ms: CHAIN_MS,
+        check,
+        say,
+      });
+      const stages = r.step("update_stage");
+      const ran = stages.map((s) => `${s.stage}@${s.version}`);
+      say(`${label}: versions that ran: ${ran.join(", ")}`);
+      check(
+        JSON.stringify(ran) ===
+          JSON.stringify([`first@${V1}`, `updated@${made.update.version}`, `rolled-back@${V1}`]),
+        `${label}: the route ran ${JSON.stringify(ran)}`,
+      );
+      const stageOf = (s: string) => stages.find((x) => x.stage === s) ?? {};
+      for (const [s, sha] of Object.entries({ first: v1, updated: v2, "rolled-back": v1 })) {
+        check(
+          stageOf(s).installed === installed && stageOf(s).installed_sha === sha,
+          `${label}: ${s}: the app says it runs from ${stageOf(s).installed} at ${stageOf(s).installed_sha}`,
+        );
+      }
+      check(
+        (stageOf("updated").last as Step)?.result === "installed",
+        `${label}: the update was not reported installed: ${JSON.stringify(stageOf("updated").last)}`,
+      );
+      check(
+        (stageOf("rolled-back").last as Step)?.result === "rolled-back",
+        `${label}: the rollback was not reported: ${JSON.stringify(stageOf("rolled-back").last)}`,
+      );
+      check(r.step("update_applications_done").length === 1, `${label}: the route did not finish`);
+      check(pinOf(installed) === v1, `${label}: the copy installed at the end is not v1`);
+      check(served.downloads() === downloads + 1, `${label}: v2 was not downloaded once`);
+      const after = readdirSync(f).sort();
+      check(
+        JSON.stringify(after) === JSON.stringify(before),
+        `${label}: the folder held ${JSON.stringify(before)}, now ${JSON.stringify(after)}`,
+      );
+      check(stand.ran() === "", `${label}: an installer or elevation ran: ${stand.ran()}`);
+      last = { p, env };
+    }
+
+    // 5. The bundle run from the mounted image (on the last profile, whose feed is set): refused
+    // for its volume, before any download.
+    if (last) {
+      await refusedLaunch({
+        refusal: fromImage(at),
+        program: join(inImage, "Contents", "MacOS", exe),
+        env: last.env,
+        check,
+        say,
+        feed: served,
+        unchanged: () => pinOf(inImage) === v1,
+      });
+    }
+
+    // What Gatekeeper's tools say of the copy in /Applications and of the image: information.
+    const installedApp = join("/Applications", name);
+    say(`spctl, the bundle: ${recorded("spctl", ["--assess", "--type", "execute", "-vv", installedApp])}`);
+    say(
+      `spctl, the image: ${recorded("spctl", ["--assess", "--type", "open", "--context", "context:primary-signature", "-vv", made.dmg])}`,
+    );
+    if (existsSync("/usr/bin/syspolicy_check"))
+      say(
+        `syspolicy_check distribution, the bundle: ${recorded("syspolicy_check", ["distribution", installedApp])}`,
+      );
+    else say("syspolicy_check: not on this system (macOS 14 and later have it)");
+
+    // 6. Detach.
+    const detached = run("hdiutil", ["detach", at]);
+    say(`hdiutil detach: exit ${detached.status}: ${detached.out}`);
+    check(detached.status === 0 && !existsSync(at), `the image did not detach: ${detached.out}`);
+    if (!existsSync(at)) mount = undefined;
+
+    // 7. The login item of the copy in ~/Applications, after the bundle is deleted.
+    const p = last?.p;
+    if (!p) return;
+    const copy = join(realpathSync(homeApps), name);
+    const program = join(copy, "Contents", "MacOS", exe);
+    const enabled = await stage(p, "enable", [], [program]);
+    check(
+      enabled.code === 0 && enabled.report,
+      `login item: the app did not report and quit: ${enabled.code} ${enabled.dump}`,
+    );
+    const plist = join(p.agents, `${TEST_ID}.plist`);
+    const args = () =>
+      (
+        JSON.parse(run("plutil", ["-convert", "json", "-o", "-", plist]).out) as {
+          ProgramArguments: string[];
+        }
+      ).ProgramArguments;
+    check(existsSync(plist) && args()[0] === program, `login item: ${plist} does not run ${program}`);
+    rmSync(copy, { recursive: true, force: true });
+    check(!existsSync(copy), `login item: ${copy} could not be deleted`);
+    check(existsSync(plist), "login item: the LaunchAgent went with the bundle");
+    say(
+      `login item after the bundle is deleted: ${plist} stays, running ${JSON.stringify(existsSync(plist) ? args() : [])}`,
+    );
+    // What a login does with it: launchd loads the user's LaunchAgents into the graphical domain
+    // and runs those that run at load.
+    const domain = `gui/${process.getuid?.() ?? 0}`;
+    if (run("launchctl", ["print", domain]).status !== 0) {
+      skip(
+        `launchd has no ${domain} domain on this machine, so what a login does with the login item is not shown`,
+      );
+    } else {
+      check(
+        run("launchctl", ["print", `${domain}/${TEST_ID}`]).status !== 0,
+        `login item: ${TEST_ID} is loaded in ${domain} already`,
+      );
+      say(`launchctl bootstrap: ${recorded("launchctl", ["bootstrap", domain, plist])}`);
+      loaded = `${domain}/${TEST_ID}`;
+      await Bun.sleep(3000);
+      say(`launchctl print ${loaded}: ${recorded("launchctl", ["print", loaded])}`);
+    }
+  } finally {
+    if (loaded) run("launchctl", ["bootout", loaded]);
+    feed?.stop();
+    if (core) {
+      const proc = core.proc;
+      proc.stdin?.end();
+      if (proc.exitCode === null) await new Promise((r) => proc.once("exit", r));
+    }
+    await Bun.sleep(500);
+    if (mount) run("hdiutil", ["detach", "-force", mount]);
+    for (const f of folders) rmSync(join(f, name), { recursive: true, force: true });
+    if (madeHomeApps) rmSync(homeApps, { recursive: true, force: true });
+    for (const p of profiles) p.remove();
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// ---- the install (Windows: the per-user setup program) ---------------------------------------
+
+/** The setup's uninstall entry for the test product (Tauri's NSIS template: per user, HKCU). */
+const UNINSTALL_KEY = `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${TEST_PRODUCT}`;
+/** The same entry machine-wide, in either registry view: a per-user setup writes neither. */
+const MACHINE_UNINSTALL_KEYS = [
+  `HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${TEST_PRODUCT}`,
+  `HKLM\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${TEST_PRODUCT}`,
+];
+
+/** A registry value's data as reg prints it, or undefined when the key or the value is not there. */
+function regValue(key: string, name: string): string | undefined {
+  const q = run("reg", ["query", key, "/v", name]);
+  if (q.status !== 0) return undefined;
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^\\s*${escaped}\\s+REG_\\w+\\s+(.*)$`, "m").exec(q.out)?.[1]?.trimEnd();
+}
+
+const regKeyExists = (key: string) => run("reg", ["query", key]).status === 0;
+
+/** Where the setup records the folder it installed into, which a later setup installs into again
+ * and the uninstaller keeps (the template's MANUPRODUCTKEY, `Software\<manufacturer>\<product>`;
+ * with no publisher set the manufacturer is the identifier's second part). */
+const SETUP_RECORD = `HKCU\\Software\\pluxy\\${TEST_PRODUCT}`;
+
+/** Runs the setup program silently; its exit code and what it wrote. */
+function runSetup(setup: string) {
+  const r = spawnSync(setup, ["/S"], { encoding: "utf8", timeout: 300_000 });
+  return { status: r.status, out: `${r.stdout ?? ""}${r.stderr ?? ""}`.trim() };
+}
+
+/** Runs the setup's uninstaller silently, as NSIS runs it itself: a copy outside the folder, told
+ * the folder with `_?=` (the last argument, unquoted), so this waits for it and gets its exit code.
+ * The folder's own uninstall.exe started there would copy itself to a temporary folder, start that
+ * copy and exit at once. */
+function runUninstaller(folder: string) {
+  const dir = mkdtempSync(join(process.env.RUNNER_TEMP ?? tmpdir(), "pluxy-un-"));
+  try {
+    const copy = join(dir, "uninstall.exe");
+    copyFileSync(join(folder, "uninstall.exe"), copy);
+    const r = spawnSync(copy, ["/S", `_?=${folder}`], {
+      encoding: "utf8",
+      timeout: 300_000,
+      windowsVerbatimArguments: true,
+    });
+    return { status: r.status, out: `${r.stdout ?? ""}${r.stderr ?? ""}`.trim() };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** The execution level a program's manifest asks for, read from its bytes (NSIS embeds the
+ * manifest as plain text), and whether it names a higher one anywhere. */
+function executionLevel(program: string): { level?: string; higher: boolean } {
+  const text = readFileSync(program).toString("latin1");
+  return {
+    level: /<requestedExecutionLevel\s+level="(\w+)"/.exec(text)?.[1],
+    higher: /requireAdministrator|highestAvailable/.test(text),
+  };
+}
+
+/** The shortcuts named for the test product: on the user's desktop and in the user's Start menu,
+ * and the machine-wide ones (the Public desktop, the all-users Start menu); and the two places a
+ * silent install puts the user's (Tauri's template: `$DESKTOP` and `$SMPROGRAMS`, no Start menu
+ * folder set). */
+function shortcuts(): { user: string[]; machine: string[]; expected: string[] } {
+  const r = powershell(
+    "$d = [Environment]::GetFolderPath('Desktop'); $s = [Environment]::GetFolderPath('Programs'); " +
+      "$cd = [Environment]::GetFolderPath('CommonDesktopDirectory'); $cs = [Environment]::GetFolderPath('CommonPrograms'); " +
+      "@{ user = @($d, $s); machine = @($cd, $cs) } | ConvertTo-Json -Compress",
+  );
+  if (r.status !== 0) throw new Error(`the shortcut folders: ${r.out}`);
+  const dirs = JSON.parse(r.out.split(/\r?\n/).pop() as string) as { user: string[]; machine: string[] };
+  const found = (folders: string[]) => {
+    const out: string[] = [];
+    const walk = (dir: string, depth: number) => {
+      if (!existsSync(dir) || depth > 2) return;
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        if (e.isDirectory()) walk(join(dir, e.name), depth + 1);
+        else if (e.name.toLowerCase() === `${TEST_PRODUCT}.lnk`.toLowerCase()) out.push(join(dir, e.name));
+      }
+    };
+    for (const d of folders) walk(d, 0);
+    return out;
+  };
+  return {
+    user: found(dirs.user),
+    machine: found(dirs.machine),
+    expected: dirs.user.map((d) => join(d, `${TEST_PRODUCT}.lnk`)),
+  };
+}
+
+/** What Windows will rename or delete at the next restart under folder (NSIS's /REBOOTOK
+ * fallback, MoveFileEx with MOVEFILE_DELAY_UNTIL_REBOOT, writes these machine-wide), or "".
+ * Throws when the value cannot be read for any reason other than its absence: the session cannot
+ * tell then. */
+function restartDeletes(folder: string): string {
+  const q = run("reg", [
+    "query",
+    "HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager",
+    "/v",
+    "PendingFileRenameOperations",
+  ]);
+  if (q.status !== 0) {
+    if (/unable to find the specified registry key or value/i.test(q.out)) return "";
+    throw new Error(`could not read PendingFileRenameOperations (reg exit ${q.status}): ${q.out}`);
+  }
+  return q.out
+    .split(/\\0|\r?\n/)
+    .filter((l) => l.toLowerCase().includes(folder.toLowerCase()))
+    .join("; ");
+}
+
+/** Folders a machine-wide install would have made. */
+const machineFolders = () =>
+  [process.env.ProgramFiles, process.env["ProgramFiles(x86)"]]
+    .filter((d): d is string => Boolean(d))
+    .map((d) => join(d, TEST_PRODUCT));
+
+async function install() {
+  if (mac) return dmgInstall();
+  const made = testPackage();
+  if (!made) return;
+  check(made.setup && existsSync(made.setup), `the test package has no setup program: ${made.setup}`);
+  if (!made.setup) return;
+  const setup = made.setup;
+  const exe = "pluxy-app-test.exe";
+  const localAppData = process.env.LOCALAPPDATA as string;
+  const folder = join(localAppData, TEST_PRODUCT);
+  const program = join(folder, exe);
+  const local = join(localAppData, TEST_ID);
+  for (const [what, there] of [
+    [folder, existsSync(folder)],
+    [local, existsSync(local)],
+    [UNINSTALL_KEY, regKeyExists(UNINSTALL_KEY)],
+    [SETUP_RECORD, regKeyExists(SETUP_RECORD)],
+  ] as const)
+    if (there)
+      throw new Error(`${what} exists: this is not a fresh runner, and the test would write over it`);
+  const p = makeProfile(TEST_ID);
+  const root = mkdtempSync(join(process.env.RUNNER_TEMP ?? tmpdir(), "pluxy-install-"));
+  let core: Awaited<ReturnType<typeof startCore>> | undefined;
+  let feed: ReturnType<typeof startUpdateFeed> | undefined;
+  let home: string | undefined;
+  let running: Launch | undefined;
+  let outside: string | undefined;
+  const runCommand = `"${program}" --autostart`;
+  try {
+    // 1. Install, silently, as this user.
+    const before = shortcuts();
+    check(
+      before.user.length === 0 && before.machine.length === 0,
+      `shortcuts before the install: ${JSON.stringify(before)}`,
+    );
+    const installed = runSetup(setup);
+    say(`setup /S: exit ${installed.status}${installed.out ? `: ${installed.out}` : ""}`);
+    check(installed.status === 0, `the setup exited with ${installed.status}: ${installed.out}`);
+
+    // 2. Where it went, and nothing machine-wide.
+    const files = existsSync(folder) ? readdirSync(folder).sort() : [];
+    check(
+      JSON.stringify(files) === JSON.stringify([...SET_PARTS, "uninstall.exe"].sort()),
+      `the install folder ${folder} holds ${files.join(", ")}, not the program set and uninstall.exe`,
+    );
+    check(
+      existsSync(join(folder, "pluxy.exe")) &&
+        readFileSync(join(folder, "pluxy.exe"), "utf8") === `stub core ${appVersion}\n`,
+      "the installed pluxy.exe is not the set's (the stub of this version)",
+    );
+    check(
+      existsSync(join(folder, "bundled", "stub.txt")),
+      `the installed bundled\\ holds ${existsSync(join(folder, "bundled")) ? readdirSync(join(folder, "bundled")).join(", ") : "nothing"}`,
+    );
+    const entry = {
+      DisplayName: regValue(UNINSTALL_KEY, "DisplayName"),
+      DisplayVersion: regValue(UNINSTALL_KEY, "DisplayVersion"),
+      InstallLocation: regValue(UNINSTALL_KEY, "InstallLocation"),
+      UninstallString: regValue(UNINSTALL_KEY, "UninstallString"),
+    };
+    say(`uninstall entry: ${JSON.stringify(entry)}`);
+    check(entry.DisplayName === TEST_PRODUCT, `the uninstall entry's DisplayName is ${entry.DisplayName}`);
+    check(
+      entry.DisplayVersion === appVersion,
+      `the uninstall entry's DisplayVersion is ${entry.DisplayVersion}`,
+    );
+    check(
+      entry.InstallLocation?.toLowerCase() === `"${folder}"`.toLowerCase(),
+      `the uninstall entry's InstallLocation is ${entry.InstallLocation}, not "${folder}"`,
+    );
+    check(
+      entry.UninstallString?.toLowerCase() === `"${join(folder, "uninstall.exe")}"`.toLowerCase(),
+      `the uninstall entry's UninstallString is ${entry.UninstallString}`,
+    );
+    for (const key of MACHINE_UNINSTALL_KEYS) check(!regKeyExists(key), `the setup wrote ${key}`);
+    for (const d of machineFolders()) check(!existsSync(d), `the setup made ${d}`);
+    const placed = shortcuts();
+    say(`shortcuts: ${JSON.stringify(placed)}`);
+    const profile = (process.env.USERPROFILE as string).toLowerCase();
+    check(placed.machine.length === 0, `machine-wide shortcuts: ${placed.machine.join(", ")}`);
+    const lower = (l: string[]) => l.map((x) => x.toLowerCase()).sort();
+    check(
+      JSON.stringify(lower(placed.user)) === JSON.stringify(lower(placed.expected)),
+      `the user's shortcuts are ${JSON.stringify(placed.user)}, not ${JSON.stringify(placed.expected)}`,
+    );
+    check(
+      placed.user.every((s) => s.toLowerCase().startsWith(`${profile}\\`)),
+      `shortcuts outside the user's profile: ${placed.user.join(", ")}`,
+    );
+    // No elevation: the setup's manifest asks to run as the user who started it, and so does the
+    // uninstaller it wrote (the runner's user is an administrator with UAC off, so running is not
+    // proof of that by itself).
+    for (const prog of [setup, join(folder, "uninstall.exe")]) {
+      const level = existsSync(prog) ? executionLevel(prog) : { higher: true };
+      say(`${basename(prog)}: requestedExecutionLevel ${level.level}`);
+      check(
+        level.level === "asInvoker" && !level.higher,
+        `${prog} asks for ${JSON.stringify(level)}, not asInvoker alone`,
+      );
+    }
+    // The setup's copy of the program carries the bundle type it patched in (the app reads it
+    // below, at its first stage).
+    check(
+      existsSync(program) && readFileSync(program).includes(Buffer.from("__TAURI_BUNDLE_TYPE_VAR_NSS")),
+      `${program} does not carry the setup's bundle type`,
+    );
+    const acl = run("icacls", [folder]);
+    say(`the install folder's access list: ${acl.out.replace(/\s+/g, " ").slice(0, 600)}`);
+
+    // 3. The installed app: its login item turned on, through its own command.
+    const enabled = await stage(p, "enable", [], [program]);
+    check(
+      enabled.code === 0 && enabled.report,
+      `enable: the app did not report and quit: ${enabled.code} ${enabled.dump}`,
+    );
+    const runValue = regValue(RUN_KEY, TEST_ID);
+    check(
+      runValue?.toLowerCase() === runCommand.toLowerCase(),
+      `enable: the Run value is ${JSON.stringify(runValue)}, not ${runCommand}`,
+    );
+
+    // 4. The installed copy updates itself in place to 0.2.0 and rolls back, its uninstall entry's
+    // version following each version that accepts itself. The updater refuses a copy whose program
+    // or folder others could change (win_acl), so an update that installs shows the folder passed.
+    home = privateHome(p);
+    const nonce = writeUpdaterTrust(home, made.updater_pubkey);
+    const work = privateFolder(join(root, "work"));
+    const v1 = pinOf(folder);
+    writeFileSync(join(work, "v1.sha256"), v1);
+    const v2 = setDigest(made.update.bundle);
+    say(`installed ${folder}: v1 ${v1}, v2 ${v2}`);
+    core = await startCore();
+    mkdirSync(local, { recursive: true });
+    writeFileSync(
+      join(local, "connection.json"),
+      JSON.stringify({ mode: "local", url: core.base, key: core.key }),
+      {
+        mode: 0o600,
+      },
+    );
+    writeFileSync(join(p.dir, "window.json"), JSON.stringify({ close_behavior: "minimize-to-tray" }), {
+      mode: 0o600,
+    });
+    const served = startUpdateFeed({
+      dir: work,
+      payload: readFileSync(made.update.payload),
+      file: basename(made.update.payload),
+      target: made.update.target,
+      version: made.update.version,
+      signature: made.update.signature,
+      pubkey: made.updater_pubkey,
+    });
+    feed = served;
+    const stand = standIns(root, ["msiexec", "runas", "schtasks", "sc"]);
+    const env = {
+      ...withPathFirst({ ...p.env, HOME: home }, stand.bin),
+      PLUXY_APP_TEST_UPDATE: work,
+      PLUXY_APP_TEST_FEED: served.url,
+      PLUXY_APP_TEST_FEED_CA: served.ca,
+    };
+    // The first launch sets the feed (without updater trust, so it is refused an update).
+    await refusedLaunch({
+      refusal: NO_ROOTS,
+      program,
+      env,
+      check,
+      say,
+      feed: served,
+      unchanged: () => pinOf(folder) === v1,
+    });
+    const display: Record<string, string | undefined> = {};
+    const bundleType: Record<string, unknown> = {};
+    await updateRoute({
+      program,
+      installed: folder,
+      third: program,
+      env: { ...env, PLUXY_TEST_TRUST_NONCE: nonce },
+      dir: work,
+      v1,
+      v2,
+      v2Version: made.update.version,
+      managed: false,
+      feed: served,
+      check,
+      say,
+      others: ["uninstall.exe"],
+      onStage: (stage, v) => {
+        display[stage] = regValue(UNINSTALL_KEY, "DisplayVersion");
+        bundleType[stage] = v.bundle_type;
+      },
+    });
+    say(
+      `DisplayVersion at each stage: ${JSON.stringify(display)}; bundle type: ${JSON.stringify(bundleType)}`,
+    );
+    const wantDisplay = { first: V1, refused: V1, updated: made.update.version, "rolled-back": V1 };
+    check(
+      JSON.stringify(display) === JSON.stringify(wantDisplay),
+      `the uninstall entry's DisplayVersion at each stage was ${JSON.stringify(display)}, not ${JSON.stringify(wantDisplay)}`,
+    );
+    // The setup's program reads as installed by the setup; the update's program, as built, reads as
+    // a folder bundle; the rollback (and the put-back of the refused update) bring the setup's back.
+    const wantType = { first: "Nsis", refused: "Nsis", updated: null, "rolled-back": "Nsis" };
+    check(
+      JSON.stringify(bundleType) === JSON.stringify(wantType),
+      `the app's bundle type at each stage was ${JSON.stringify(bundleType)}, not ${JSON.stringify(wantType)}`,
+    );
+    check(stand.ran() === "", `an installer or elevation ran: ${stand.ran()}`);
+    check(
+      regValue(UNINSTALL_KEY, "InstallLocation")?.toLowerCase() === `"${folder}"`.toLowerCase(),
+      "the uninstall entry's InstallLocation changed",
+    );
+
+    // 5. The setup, run again while the app runs, refuses and leaves it running.
+    running = new Launch(program, "running", { ...p.env, PLUXY_APP_TEST_INSTANCES: "1" });
+    launches.push(running);
+    const up = await running.next("up", UP_MS);
+    check(up, `the installed app never came up: ${running.dump()}`);
+    const pinned = pinOf(folder);
+    const again = runSetup(setup);
+    say(`setup /S while the app runs: exit ${again.status}: ${again.out}`);
+    check(
+      again.status === 2,
+      `the setup run while the app runs exited with ${again.status}, not 2 (aborted)`,
+    );
+    check(
+      /is running from/.test(again.out),
+      `the setup did not say the app is running: ${JSON.stringify(again.out)}`,
+    );
+    check(alive(running.pid), "the setup ended the running app");
+    check(
+      (await running.command("state"))?.exists === true,
+      "the running app no longer answers after the setup",
+    );
+    check(pinOf(folder) === pinned, "the refused setup changed the program set");
+    check(
+      regValue(UNINSTALL_KEY, "DisplayVersion") === V1,
+      "the refused setup changed the uninstall entry's version",
+    );
+
+    // 6. The uninstaller, run while the app runs, refuses and leaves it running.
+    const refusedUninstall = runUninstaller(folder);
+    say(`uninstall /S while the app runs: exit ${refusedUninstall.status}: ${refusedUninstall.out}`);
+    check(
+      refusedUninstall.status === 2,
+      `the uninstaller run while the app runs exited with ${refusedUninstall.status}, not 2 (aborted)`,
+    );
+    check(
+      /is running from/.test(refusedUninstall.out),
+      `the uninstaller did not say the app is running: ${JSON.stringify(refusedUninstall.out)}`,
+    );
+    check(alive(running.pid), "the uninstaller ended the running app");
+    check(
+      (await running.command("state"))?.exists === true,
+      "the running app no longer answers after the uninstaller",
+    );
+    check(
+      pinOf(folder) === pinned && existsSync(join(folder, "uninstall.exe")),
+      "the refused uninstaller removed files of the install",
+    );
+    check(
+      regValue(RUN_KEY, TEST_ID)?.toLowerCase() === runCommand.toLowerCase(),
+      "the refused uninstaller removed the login item",
+    );
+    check(regKeyExists(UNINSTALL_KEY), "the refused uninstaller removed the uninstall entry");
+
+    // 7. Quit, then uninstall: no folder, no login item and nothing Task Manager kept for it, no
+    // uninstall entry or shortcut; the app's data stays. What the app itself leaves in the folder,
+    // which the uninstaller (the first version's) does not know, goes too: an update's staging
+    // folder and asides, and a file of a later version in bundled\.
+    running.send("quit");
+    const quit = await running.exitWithin(60_000);
+    check(quit === 0, `quit exited with ${quit}: ${running.dump()}`);
+    running = undefined;
+    // The setup also refuses while another program of the app's in the folder runs: pluxy.exe, or
+    // a program an interrupted update set aside. Each is a copy of Windows' ping, which runs until
+    // it is ended, under that name.
+    const ping = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "PING.EXE");
+    const core0 = readFileSync(join(folder, "pluxy.exe"));
+    for (const name of ["pluxy.exe", ".pluxy-old-0123456789abcdef-pluxy-app-test.exe"]) {
+      const holder = join(folder, name);
+      copyFileSync(ping, holder);
+      const proc = spawn(holder, ["-n", "600", "127.0.0.1"], { stdio: "ignore" });
+      try {
+        await Bun.sleep(1000);
+        check(proc.exitCode === null, `${name}: the stand-in did not keep running`);
+        const r = runSetup(setup);
+        say(`setup /S while ${name} runs: exit ${r.status}: ${r.out}`);
+        check(r.status === 2, `the setup run while ${name} runs exited with ${r.status}, not 2 (aborted)`);
+        check(
+          /is running from/.test(r.out),
+          `the setup did not say ${name} is running: ${JSON.stringify(r.out)}`,
+        );
+        check(proc.exitCode === null && alive(proc.pid as number), `the setup ended ${name}`);
+      } finally {
+        proc.kill();
+        if (proc.exitCode === null) await new Promise((r) => proc.once("exit", r));
+      }
+      if (name === "pluxy.exe") writeFileSync(holder, core0);
+      else rmSync(holder, { force: true });
+    }
+    check(pinOf(folder) === pinned, "the program set changed after the stand-ins");
+    const leftovers = [
+      join(folder, ".pluxy-update-0123456789abcdef", "bundled", "stub.txt"),
+      join(folder, ".pluxy-old-0123456789abcdef-bundled", "stub.txt"),
+      join(folder, ".pluxy-old-0123456789abcdef-pluxy.exe"),
+      join(folder, "bundled", "packages-9.9.9.txt"),
+    ];
+    for (const f of leftovers) {
+      mkdirSync(dirname(f), { recursive: true });
+      writeFileSync(f, "left by the app\n");
+    }
+    // Task Manager's mark for the item (on: an even first byte).
+    const mark = run("reg", [
+      "add",
+      APPROVED_KEY,
+      "/v",
+      TEST_ID,
+      "/t",
+      "REG_BINARY",
+      "/d",
+      "020000000000000000000000",
+      "/f",
+    ]);
+    check(mark.status === 0, `writing Task Manager's mark: ${mark.out}`);
+    await Bun.sleep(1000);
+    const removed = runUninstaller(folder);
+    say(`uninstall /S: exit ${removed.status}${removed.out ? `: ${removed.out}` : ""}`);
+    check(removed.status === 0, `the uninstaller exited with ${removed.status}: ${removed.out}`);
+    check(
+      !existsSync(folder),
+      `the install folder is still there, holding ${existsSync(folder) ? readdirSync(folder).join(", ") : ""}`,
+    );
+    check(regValue(RUN_KEY, TEST_ID) === undefined, "the uninstaller left the login item's Run value");
+    check(
+      regValue(APPROVED_KEY, TEST_ID) === undefined,
+      "the uninstaller left Task Manager's StartupApproved value",
+    );
+    check(!regKeyExists(UNINSTALL_KEY), "the uninstaller left the uninstall entry");
+    // The hook emptied bundled\ (with its later file) before Tauri's RMDir /REBOOTOK of it, so
+    // nothing was left for Windows to delete at the next restart.
+    const pending = restartDeletes(folder);
+    check(!pending, `the uninstall queued a delete at restart: ${pending}`);
+    const after = shortcuts();
+    check(
+      after.user.length === 0 && after.machine.length === 0,
+      `shortcuts after the uninstall: ${JSON.stringify(after)}`,
+    );
+    check(
+      existsSync(p.dir) && existsSync(local),
+      `the app's data was removed: ${p.dir} ${existsSync(p.dir)}, ${local} ${existsSync(local)}`,
+    );
+
+    // 8. Junctions to a folder outside, inside bundled\ and inside an update's leftover folder:
+    // uninstalling removes the junctions, not what they point to.
+    const reinstalled = runSetup(setup);
+    check(reinstalled.status === 0, `the second setup exited with ${reinstalled.status}: ${reinstalled.out}`);
+    outside = mkdtempSync(join(process.env.RUNNER_TEMP ?? tmpdir(), "pluxy-outside-"));
+    const kept = join(outside, "keep.txt");
+    writeFileSync(kept, "not the app's\n");
+    mkdirSync(join(folder, ".pluxy-update-0123456789abcdef"), { recursive: true });
+    for (const junction of [
+      join(folder, "bundled", "link"),
+      join(folder, ".pluxy-update-0123456789abcdef", "link"),
+    ]) {
+      const made8 = run("cmd.exe", ["/d", "/c", "mklink", "/J", junction, outside]);
+      check(
+        made8.status === 0 && existsSync(join(junction, "keep.txt")),
+        `making the junction ${junction}: ${made8.out}`,
+      );
+    }
+    const removed8 = runUninstaller(folder);
+    say(
+      `uninstall /S with junctions in bundled\\ and .pluxy-update-*: exit ${removed8.status}${removed8.out ? `: ${removed8.out}` : ""}; ${kept} ${existsSync(kept) ? "kept" : "removed"}`,
+    );
+    check(removed8.status === 0, `the uninstaller exited with ${removed8.status}: ${removed8.out}`);
+    check(existsSync(kept), `the uninstaller followed a junction and removed ${kept}`);
+    const pending8 = restartDeletes(folder);
+    check(!pending8, `the uninstall queued a delete at restart: ${pending8}`);
+    check(
+      !existsSync(folder),
+      `the install folder is still there, holding ${existsSync(folder) ? readdirSync(folder).join(", ") : ""}`,
+    );
+  } finally {
+    running?.kill();
+    for (const l of launches) l.kill("SIGKILL");
+    feed?.stop();
+    if (core) {
+      const proc = core.proc;
+      proc.stdin?.end();
+      if (proc.exitCode === null) await new Promise((r) => proc.once("exit", r));
+    }
+    await Bun.sleep(500);
+    // What the run made outside the profile, if a check above stopped it early.
+    if (existsSync(join(folder, "uninstall.exe"))) runUninstaller(folder);
+    if (existsSync(folder)) removeWhenFree(folder, local);
+    run("reg", ["delete", RUN_KEY, "/v", TEST_ID, "/f"]);
+    run("reg", ["delete", APPROVED_KEY, "/v", TEST_ID, "/f"]);
+    run("reg", ["delete", UNINSTALL_KEY, "/f"]);
+    // The setup's record of where it installed, which its uninstaller keeps, and its manufacturer's
+    // key once that is empty.
+    run("reg", ["delete", SETUP_RECORD, "/f"]);
+    const maker = SETUP_RECORD.slice(0, SETUP_RECORD.lastIndexOf("\\"));
+    const left = run("reg", ["query", maker]);
+    if (left.status === 0 && left.out.split(/\r?\n/).filter(Boolean).length <= 1)
+      run("reg", ["delete", maker, "/f"]);
+    for (const s of [...shortcuts().user]) rmSync(s, { force: true });
+    if (outside) rmSync(outside, { recursive: true, force: true });
+    removeWhenFree(root, local);
+    if (home) removeWhenFree(home, local);
+    p.remove();
+  }
+}
+
 // ---- the run --------------------------------------------------------------------------------
 
 async function main() {
@@ -1262,6 +2489,7 @@ async function main() {
     ["bundle", bundle],
     ["bundle release gate", bundleReleaseGate],
     ["app update", update],
+    ["install", install],
     ...TOOL_SESSIONS.map(
       (name) =>
         [

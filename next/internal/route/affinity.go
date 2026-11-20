@@ -8,8 +8,10 @@ import (
 // affinity remembers which account served a session, so later requests of that session go to
 // the same account while it stays eligible and keep using its prompt cache. It is a soft
 // preference: when the bound account is blocked the request goes elsewhere and the session is
-// bound to the new account. Bindings are scoped by tenant (the client key) and model and
-// expire after the router's TTL without use. The table is part of State, so bindings survive a
+// bound to the new account. Bindings are scoped by tenant (the client key) and the model the
+// client asked for, and remember the model the account was sent, so a session that a fallback
+// chain moved to a later step stays on that step's model. They expire after the router's TTL
+// without use. The table is part of State, so bindings survive a
 // config reload.
 type affinity struct {
 	mu       sync.Mutex
@@ -26,6 +28,7 @@ type affinityKey struct{ tenant, model, session string }
 
 type binding struct {
 	account string
+	model   string // the account's name for the model it served
 	expires time.Time
 }
 
@@ -38,20 +41,20 @@ func newAffinity() *affinity {
 	return &affinity{bindings: map[affinityKey]binding{}, since: map[string]uint64{}, revs: map[string]uint64{}}
 }
 
-// lookup returns the account bound to the session, if any.
-func (f *affinity) lookup(k affinityKey, now time.Time) (string, bool) {
+// lookup returns the binding of the session, if any.
+func (f *affinity) lookup(k affinityKey, now time.Time) (binding, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	b, ok := f.bindings[k]
 	if !ok || !b.expires.After(now) {
-		return "", false
+		return binding{}, false
 	}
-	return b.account, true
+	return b, true
 }
 
-// bind binds the session to account a until ttl from now, unless a is a copy of an account
-// from before retain or restart dropped it.
-func (f *affinity) bind(k affinityKey, a *Account, now time.Time, ttl time.Duration) {
+// bind binds the session to account a and its name for the model, model, until ttl from now,
+// unless a is a copy of an account from before retain or restart dropped it.
+func (f *affinity) bind(k affinityKey, a *Account, model string, now time.Time, ttl time.Duration) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if a.gen < f.since[a.ID] || a.rev < f.revs[a.ID] {
@@ -68,7 +71,7 @@ func (f *affinity) bind(k affinityKey, a *Account, now time.Time, ttl time.Durat
 			return
 		}
 	}
-	f.bindings[k] = binding{account: account, expires: now.Add(ttl)}
+	f.bindings[k] = binding{account: account, model: model, expires: now.Add(ttl)}
 }
 
 // retain drops the bindings to accounts not in keep; routers older than gen no longer bind

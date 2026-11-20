@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stdotwork/pluxy/next/internal/core"
 	"github.com/stdotwork/pluxy/next/management"
@@ -91,6 +92,64 @@ func TestEveryRouteHasACommand(t *testing.T) {
 	}
 }
 
+// chain set reads each step as model[@provider][:account,account].
+func TestParseStep(t *testing.T) {
+	for _, c := range []struct {
+		in, model, provider string
+		accounts            []string
+		bad                 bool
+	}{
+		{in: "gpt-6.1-sol", model: "gpt-6.1-sol"},
+		{in: "claude-opus-5-5@pluxy/claude", model: "claude-opus-5-5", provider: "pluxy/claude"},
+		{in: "claude-opus-5-5@pluxy/claude:a,b", model: "claude-opus-5-5", provider: "pluxy/claude", accounts: []string{"a", "b"}},
+		{in: "claude-opus-5-5:a", model: "claude-opus-5-5", accounts: []string{"a"}},
+		{in: "llama3:8b@", model: "llama3:8b"},
+		{in: "claude-opus-4-7@20260416", model: "claude-opus-4-7@20260416"},
+		{in: "claude-opus-4-7@20260416:a", model: "claude-opus-4-7@20260416", accounts: []string{"a"}},
+		{in: "claude-opus-4-7@20260416@pluxy/claude:a", model: "claude-opus-4-7@20260416", provider: "pluxy/claude", accounts: []string{"a"}},
+		{in: "llama3:8b@pluxy/ollama", model: "llama3:8b", provider: "pluxy/ollama"},
+		{in: "@pluxy/claude", bad: true},
+		{in: "opus:", bad: true},
+		{in: "opus:a,,b", bad: true},
+	} {
+		s, err := parseStep(c.in)
+		switch {
+		case c.bad && err == nil:
+			t.Errorf("parseStep(%q) = %+v, want an error", c.in, s)
+		case !c.bad && (err != nil || s.Model != c.model || s.Provider != c.provider || !slices.Equal(s.Accounts, c.accounts)):
+			t.Errorf("parseStep(%q) = %+v, %v; want %s, %q, %v", c.in, s, err, c.model, c.provider, c.accounts)
+		}
+	}
+}
+
+// chain list writes each step so that chain set reads back the same step.
+func TestStepTextRoundTrips(t *testing.T) {
+	for _, model := range []string{"gpt-6.1-sol", "llama3:8b", "claude-opus-4-7@20260416", "x@pluxy/x", "x@pluxy/x:y", "x@", "a:b@c"} {
+		for _, provider := range []string{"", "pluxy/claude"} {
+			for _, accounts := range [][]string{nil, {"a"}, {"a", "b"}} {
+				s := management.ChainStep{Model: model, Provider: provider, Accounts: accounts}
+				got, err := parseStep(s.String())
+				if err != nil || got.Model != s.Model || got.Provider != s.Provider || !slices.Equal(got.Accounts, s.Accounts) {
+					t.Errorf("parseStep(%q) = %q %q %q, %v; want %q %q %q", s.String(), got.Model, got.Provider, got.Accounts, err, s.Model, s.Provider, s.Accounts)
+				}
+			}
+		}
+	}
+	// A step that reads back as written gets no escape.
+	for s, want := range map[*management.ChainStep]string{
+		{Model: "gpt-6.1-sol"}:                         "gpt-6.1-sol",
+		{Model: "llama3:8b", Accounts: []string{"a"}}:  "llama3:8b:a",
+		{Model: "claude-opus-4-7@20260416"}:            "claude-opus-4-7@20260416",
+		{Model: "llama3:8b"}:                           "llama3:8b@",
+		{Model: "x@pluxy/x", Accounts: []string{"a"}}:  "x@pluxy/x@:a",
+		{Model: "llama3:8b", Provider: "pluxy/ollama"}: "llama3:8b@pluxy/ollama",
+	} {
+		if got := s.String(); got != want {
+			t.Errorf("%q %q %q written as %q, want %q", s.Model, s.Provider, s.Accounts, got, want)
+		}
+	}
+}
+
 // Exit codes and output of the client subcommands against a fake core.
 func TestCLIOutput(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -110,6 +169,10 @@ func TestCLIOutput(t *testing.T) {
 				return
 			}
 			w.Write([]byte(`{"account":{"id":"a/b","source":"login","state":"active","disabled":true,"refreshable":false}}`))
+		case "GET /v0/management/route":
+			w.Write([]byte(`{"model":"m","order":[{"id":"soon","account":"acc_1","provider":"p","model":"m","rank":{"reset":"2026-11-21T10:00:00Z","window_seconds":604800}},` +
+				`{"id":"unread","account":"acc_2","provider":"p","model":"m","rank":{}},` +
+				`{"id":"spent","account":"acc_3","provider":"p","model":"m","rank":{"reset":"2026-11-20T10:00:00Z","window_seconds":604800,"full_until":"2026-11-20T08:00:00Z"}}],"left_out":[]}`))
 		case "GET /v0/management/accounts/a1/models":
 			w.Write([]byte(`{"models":[{"id":"m1","names":["m1"],"owned_by":"anthropic","context_length":200000,"max_completion_tokens":64000},{"id":"m2","names":[],"excluded":true,"owned_by":"anthropic"}],"from":"account"}` + "\n"))
 		case "GET /v0/management/accounts/a%2Fb/models", "GET /v0/management/accounts/a/b/models":
@@ -182,6 +245,14 @@ func TestCLIOutput(t *testing.T) {
 	}
 	if _, _, code := run("model", "refresh", "--account", "nobody"); code != 5 {
 		t.Errorf("model refresh --account nobody: %d, want 5", code)
+	}
+	// Under soonest-reset each account shows the reset it was ranked by.
+	out, _, code := run("route", "m")
+	soon := time.Date(2026, 11, 21, 10, 0, 0, 0, time.UTC).Local().Format("2006-01-02 15:04") + " (7d window)"
+	spent := "used up until " + time.Date(2026, 11, 20, 8, 0, 0, 0, time.UTC).Local().Format(time.DateTime)
+	if lines := strings.Split(out, "\n"); code != 0 || len(lines) < 4 || !strings.Contains(lines[0], "RESET") ||
+		!strings.Contains(lines[1], soon) || !strings.Contains(lines[2], "none known") || !strings.Contains(lines[3], spent) {
+		t.Errorf("route m: %d %q, want each account's reset", code, out)
 	}
 	if out, errOut, code := run("account", "models", "a1"); code != 0 || !strings.Contains(out, "from: account") || !strings.Contains(out, "m1") || !strings.Contains(out, "200000") || !strings.Contains(out, "64000") || !strings.Contains(out, "m2") {
 		t.Errorf("account models a1: %d %q %q", code, out, errOut)

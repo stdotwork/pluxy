@@ -21,18 +21,24 @@ import (
 )
 
 // Codex client identity: the User-Agent and originator of the Codex terminal client, which
-// today's core sends in place of the client's own (its "cloaking"). The version in the User-Agent
-// is the account's codex_client_version, else defaultCodexVersion.
-const (
-	defaultCodexVersion = "0.154.0"
-	codexOriginator     = "codex-tui"
-)
+// today's core sends in place of the client's own (its "cloaking"). codexClientVersion is the
+// version in the User-Agent and in the model list's client_version unless the account sets
+// codex_client_version.
+const codexOriginator = "codex-tui"
 
 // codexUserAgent is the User-Agent of an account that sets no codex_client_version.
-var codexUserAgent = codexUserAgentFor(defaultCodexVersion)
+var codexUserAgent = codexUserAgentFor(codexClientVersion)
 
 func codexUserAgentFor(version string) string {
 	return "codex-tui/" + version + " (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; " + version + ")"
+}
+
+// clientVersion returns the Codex client version the account claims.
+func (s settings) clientVersion() string {
+	if s.CodexClientVersion == "" {
+		return codexClientVersion
+	}
+	return s.CodexClientVersion
 }
 
 // userAgent returns the User-Agent the Codex identity sends.
