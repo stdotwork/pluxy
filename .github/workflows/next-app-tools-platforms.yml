@@ -40,10 +40,12 @@ jobs:
   tools:
     name: app tools (${{ matrix.os }})
     # On macOS, the repository variable PLUXY_MACOS_CLOUD_RUNNER, when set, gives the runner label
-    # to use instead of GitHub's (AGENTS.md, "Where jobs run"). On Windows the transaction and
+    # to use instead of GitHub's for pushes, the daily run and manual runs; pull requests and merge
+    # groups use GitHub's, as the Terminal window tests run one at a time (AGENTS.md, "Where jobs
+    # run"). On Windows the transaction and
     # recipe tests fail on Blacksmith's runner, so the Windows leg stays on GitHub's (or the
     # maintainers' PLUXY_WINDOWS_RUNNER).
-    runs-on: ${{ matrix.os == 'windows-latest' && (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_WINDOWS_RUNNER && fromJSON(vars.PLUXY_WINDOWS_RUNNER) || matrix.os == 'macos-latest' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
+    runs-on: ${{ matrix.os == 'windows-latest' && (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_WINDOWS_RUNNER && fromJSON(vars.PLUXY_WINDOWS_RUNNER) || matrix.os == 'macos-latest' && github.event_name != 'pull_request' && github.event_name != 'merge_group' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
     strategy:
       fail-fast: false
       matrix:
