@@ -1720,7 +1720,7 @@ normalises its defaults. Settings must never hold secrets. A login to an existin
 ignores grant settings and keeps the account's existing settings.
 
 The management API is served under `/v0/management`; a config without `management_key` is refused
-at start. Send it as a bearer token. The config may set no accounts.
+at start and on a reload. Send it as a bearer token. The config may set no accounts.
 
 | Request | Does |
 | --- | --- |
