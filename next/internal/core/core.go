@@ -66,8 +66,8 @@ type Options struct {
 	// so. Nil: core uses the folder logs beside the config file, without writing to it.
 	Logs *logfile.Files
 	// Bundled is the index of the registry of packages this install ships with (absolute), or
-	// empty for none. On the first start with a packages folder that has no record yet, every
-	// package it lists is installed and enabled.
+	// empty for none. It is a registry like any other, named bundled: core installs nothing
+	// from it by itself, on a first start or later.
 	Bundled string
 }
 
@@ -95,8 +95,10 @@ type Core struct {
 	creds  *cred.Manager // opened by the first load
 	pkgDir string        // the packages folder, fixed for core's run
 
-	settings  *extconfig.Store // extensions' settings, in the packages folder
-	pagesPort atomic.Int64     // the pages listener's port, once main has it
+	settings   *extconfig.Store // extensions' settings, in the packages folder
+	pagesPort  atomic.Int64     // the pages listener's port, once main has it
+	listenAddr atomic.Value     // the actual bound listen address, once main has it
+	setup      *setupManager    // kept setup scan and first-run flag
 
 	redactor *configdoc.Redactor // hides the config file's secrets from the management API
 	keyIDs   *configdoc.Redactor // derives stable client key IDs from state/key-id.key
@@ -158,7 +160,7 @@ func Start(opts Options) (*Core, error) {
 	cfg, err := server.LoadConfig(opts.ConfigPath)
 	if err != nil {
 		bgCancel()
-		return nil, c.scrubbed(err)
+		return nil, &ConfigError{c.scrubbed(err)}
 	}
 	keyIDs, err := configdoc.LoadKeyID(filepath.Join(StateDir(opts.ConfigPath), "key-id.key"))
 	if err != nil {
@@ -184,7 +186,7 @@ func Start(opts Options) (*Core, error) {
 	c.pkgDir = cfg.Packages.Dir
 	// No publisher's folder can be called .settings: IDs start with a letter or digit.
 	c.settings = extconfig.NewStore(filepath.Join(c.pkgDir, ".settings"))
-	if c.initial, err = c.loadPackages(cfg); err != nil {
+	if c.initial, err = c.loadPackages(); err != nil {
 		_ = c.usage.Close()
 		bgCancel()
 		return nil, err
@@ -200,6 +202,9 @@ func Start(opts Options) (*Core, error) {
 		return nil, err
 	}
 	c.creds.OnChange(c.accountsChanged)
+	snap := c.cur.Load()
+	inUse := len(snap.pkgs) > 0 || len(snap.Config.Accounts()) > 0 || len(c.creds.Records()) > 0
+	c.setup = newSetupManager(filepath.Join(StateDir(opts.ConfigPath), setupFileName), c.setupCoreTarget, inUse)
 	c.creds.OnCredentialChange(c.credentialChanged)
 	c.startModelRefresh()
 	c.startRouting()
@@ -855,6 +860,9 @@ func (c *Core) Stop() {
 	c.stopped = true
 	c.bgCancel()
 	c.checks.stop()
+	if c.setup != nil {
+		c.setup.stop()
+	}
 	c.stopRouting()
 	c.mu.Lock()
 	gens := append([]*host.Managed(nil), c.draining...)
@@ -898,7 +906,8 @@ type Status = management.Status
 func (c *Core) Status() Status {
 	version, commit, built := buildinfo.Get()
 	c.mu.Lock() // publish switches the snapshot and the revisions under it
-	s := Status{SafeMode: c.opts.SafeMode, Desired: c.desired, Active: c.active, Extensions: []ExtensionStatus{},
+	firstRun := c.setup == nil || c.setup.isFirstRun()
+	s := Status{SafeMode: c.opts.SafeMode, FirstRun: firstRun, Desired: c.desired, Active: c.active, Extensions: []ExtensionStatus{},
 		Version: version, Commit: commit, Built: built}
 	draining := append([]*host.Managed(nil), c.draining...)
 	cur := c.cur.Load()
