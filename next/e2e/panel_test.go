@@ -53,8 +53,8 @@ func get(t *testing.T, method, url string) (*http.Response, string) {
 	return resp, string(b)
 }
 
-// Core serves the panel at /panel/ while the management API is on: the page and its assets,
-// each under the panel's Content Security Policy, with nothing secret in them.
+// Core serves the panel at /panel/: the page and its assets, each under the panel's Content
+// Security Policy, with nothing secret in them.
 func TestPanelIsServedWithTheManagementAPI(t *testing.T) {
 	needPanel(t)
 	base := startCore(t, answeringUpstream(t), func(cfg map[string]any) { cfg["management_key"] = managementKey })

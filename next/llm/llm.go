@@ -7,7 +7,11 @@
 // model; the extension protocol carries it on the wire (see ../protocol/README.md).
 package llm
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+	"time"
+)
 
 // Request is a model request in pluxy's internal form.
 type Request struct {
@@ -459,6 +463,9 @@ const (
 	CodeExtensionCrashed     = "extension_crashed"
 	CodeExtensionProtocol    = "extension_protocol"
 	CodeExtensionUnavailable = "extension_unavailable"
+	// CodeExtensionTimeout: the extension sent core nothing at all on a call for longer than
+	// it promised to (as long as the account's timeouts let the upstream stay quiet, plus a minute).
+	CodeExtensionTimeout = "extension_timeout"
 )
 
 // Error scopes: what a failure is about.
@@ -494,6 +501,50 @@ type Error struct {
 	// request is out of quota until a reset the upstream named (routing's usage-limit quota
 	// response mode). It never travels over the protocol.
 	UsageLimit *UsageLimit `json:"-"`
+	// Explain, set only by core, says what routing tried for the request and which accounts it
+	// left out, for the `pluxy` member of the error a client gets. It never travels over the
+	// protocol.
+	Explain *Explain `json:"-"`
+}
+
+// Explain is the `pluxy` member of a client's error: what routing did for the request. It holds
+// codes and times, never the words of an upstream's reply.
+type Explain struct {
+	// Trace is the request's trace ID, as the X-CPA-TRACE-ID header has it.
+	Trace string `json:"trace,omitempty"`
+	// Tried are the attempts the request made, in order.
+	Tried []Tried `json:"tried"`
+	// LeftOut are the accounts that serve the request's model and were not tried, and why.
+	LeftOut []LeftOut `json:"left_out"`
+}
+
+// Tried is one attempt: the account (its public ID), its provider, the model sent upstream and
+// how it ended, by the code of the error (for example rate_limit or quota).
+type Tried struct {
+	Account  string `json:"account"`
+	Provider string `json:"provider"`
+	Model    string `json:"model,omitempty"`
+	Result   string `json:"result"`
+}
+
+// LeftOut is an account that serves the request's model and was not tried. State is the
+// account's health (ok, cooling, exhausted, needs_login, banned or disabled), busy while the
+// account was at its concurrency limit, or skipped when the request's limits ended it before the
+// account's turn. Until is when the block that holds it ends, when known.
+type LeftOut struct {
+	Account  string     `json:"account"`
+	Provider string     `json:"provider,omitempty"`
+	Model    string     `json:"model,omitempty"`
+	State    string     `json:"state"`
+	Until    *time.Time `json:"until,omitempty"`
+}
+
+// Pluxy adds the error's `pluxy` member to the error object o of a client format, when core set
+// one.
+func (e *Error) Pluxy(o map[string]any) {
+	if e.Explain != nil {
+		o["pluxy"] = e.Explain
+	}
 }
 
 // RawJSON returns upstream bytes for a Raw field, which must hold valid JSON: b itself when it is
@@ -504,6 +555,26 @@ func RawJSON(b []byte) json.RawMessage {
 	}
 	s, _ := json.Marshal(string(b))
 	return s
+}
+
+// UpstreamTimeoutPhrase is in the message of a failure that an SDK upstream timeout caused
+// ("upstream response header timeout after 1m0s"). The protocol carries such a failure as an
+// ordinary unavailable error, so core finds it by this phrase.
+const UpstreamTimeoutPhrase = " timeout after "
+
+// IsTimeout reports whether e is a timeout: core's extension_timeout, or an upstream failure
+// whose message names an SDK upstream timeout.
+func (e *Error) IsTimeout() bool {
+	if e == nil {
+		return false
+	}
+	switch e.Code {
+	case CodeExtensionTimeout:
+		return true
+	case CodeUnavailable, CodeUpstream:
+		return strings.Contains(e.Message, UpstreamTimeoutPhrase)
+	}
+	return false
 }
 
 func (e *Error) Error() string {

@@ -43,13 +43,13 @@ func folder(t *testing.T) string {
 	return dir
 }
 
-func handler(dir string, on bool) http.Handler {
+func handler(dir string) http.Handler {
 	return Handler(func(id, key string) (Folder, bool) {
 		if id == "pub/ext" && key == fp {
 			return Folder{Dir: dir, Files: digests()}, true
 		}
 		return Folder{}, false
-	}, func() bool { return on })
+	})
 }
 
 func get(h http.Handler, method, target string) *httptest.ResponseRecorder {
@@ -61,7 +61,7 @@ func get(h http.Handler, method, target string) *httptest.ResponseRecorder {
 }
 
 func TestServesPageFilesSandboxed(t *testing.T) {
-	h := handler(folder(t), true)
+	h := handler(folder(t))
 	for path, kind := range map[string]string{
 		"/pub/ext/" + fp + "/index.html": "text/html; charset=utf-8",
 		"/pub/ext/" + fp + "/js/app.js":  "text/javascript; charset=utf-8",
@@ -98,7 +98,7 @@ func TestServesNothingElse(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(dir, "link.html")); err != nil {
 		t.Fatal(err)
 	}
-	h := handler(dir, true)
+	h := handler(dir)
 	for _, path := range []string{
 		"/", "/pub/ext/" + fp, "/pub/ext/" + fp + "/", "/pub/ext/ffffffffffffffff/index.html", "/pub/other/" + fp + "/index.html",
 		"/pub/ext/" + fp + "/notes.exe", "/pub/ext/" + fp + "/../outside.html", "/pub/ext/" + fp + "/js/../../outside.html",
@@ -110,9 +110,6 @@ func TestServesNothingElse(t *testing.T) {
 	}
 	if w := get(h, http.MethodPost, "/pub/ext/"+fp+"/index.html"); w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST: %d", w.Code)
-	}
-	if w := get(handler(dir, false), http.MethodGet, "/pub/ext/"+fp+"/index.html"); w.Code != http.StatusNotFound {
-		t.Errorf("with management off: %d", w.Code)
 	}
 	r := httptest.NewRequest(http.MethodGet, "/pub/ext/"+fp+"/index.html", nil)
 	r.Host = "evil; script-src *"
@@ -157,7 +154,7 @@ func TestOriginIsAnotherSite(t *testing.T) {
 // served. Review finding 9: replies that are not page files carry a restrictive policy too.
 func TestServesOnlyTheFilesAsChecked(t *testing.T) {
 	dir := folder(t)
-	h := handler(dir, true)
+	h := handler(dir)
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("changed after fingerprint"), 0o644); err != nil {
 		t.Fatal(err)
 	}

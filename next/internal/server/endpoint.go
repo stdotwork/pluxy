@@ -4,7 +4,6 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -170,12 +169,12 @@ func serveEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep end
 		f.writeError(w, &llm.Error{Code: llm.CodeNotFound, Status: http.StatusNotFound, Message: "this endpoint is not served"})
 		return
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxRequestBody))
-	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			f.writeError(w, &llm.Error{Code: llm.CodeInvalidRequest, Message: "request body is too large", Status: http.StatusRequestEntityTooLarge})
-		}
+	body, e, ok := readRequestBody(w, r)
+	if !ok {
+		return
+	}
+	if e != nil {
+		f.writeError(w, e)
 		return
 	}
 	keepBody(r, body)
@@ -230,30 +229,30 @@ func serveEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep end
 	rr.Endpoint = true
 	rr.AnyModel = ep.modelOptional
 	rr.Attempting = func(a route.Attempt) {
-		t.account = a.Account
+		t.attempt(a)
 		m.attempt(a, t.id)
 	}
 	stream := meterStream(g.Router.Generate(host.WithPayloadClient(r.Context(), req.Model, r.Header), rr), m)
-	writeEndpointReplyFor(w, r, stream, ep, f, m, body, &cannot, g.Config.TokenCountEstimateOn())
+	writeEndpointReplyFor(w, r, stream, ep, f, m, body, &cannot, g.Config.TokenCountEstimateOn(), g.Config.Routing.ExplainOn())
 }
 
 // writeEndpointReply checks and writes an endpoint's events. A nil meter records nothing.
-func writeEndpointReply(w http.ResponseWriter, r *http.Request, stream Stream, format string, f clientFormat, m *meter) {
-	writeEndpointReplyFor(w, r, stream, endpoint{format: format}, f, m, nil, nil, false)
+func writeEndpointReply(w http.ResponseWriter, r *http.Request, stream Stream, format string, f clientFormat, m *meter, explain bool) {
+	writeEndpointReplyFor(w, r, stream, endpoint{format: format}, f, m, nil, nil, false, explain)
 }
 
 // writeEndpointReplyFor is writeEndpointReply with the endpoint's estimate fallback. A nil cannot
 // means the endpoint has no estimate.
-func writeEndpointReplyFor(w http.ResponseWriter, r *http.Request, stream Stream, ep endpoint, f clientFormat, m *meter, body []byte, cannot *atomic.Bool, estimateOn bool) {
+func writeEndpointReplyFor(w http.ResponseWriter, r *http.Request, stream Stream, ep endpoint, f clientFormat, m *meter, body []byte, cannot *atomic.Bool, estimateOn, explain bool) {
 	r, t := requestTrace(r)
 	defer stream.Close()
 	fail := func(e *llm.Error) {
 		logFailure(r, e)
-		m.fail(e, f.writeError(w, e))
+		m.fail(e, f.writeError(w, t.explained(e)))
 	}
 
 	ev := stream.Next()
-	t.setHeader(w)
+	t.setHeaders(w, explain)
 	if ev.Type == llm.EventError {
 		if ep.estimate != nil && cannot != nil && cannot.Load() && estimateOn {
 			reply, e := ep.estimate(body)
@@ -281,6 +280,7 @@ func writeEndpointReplyFor(w http.ResponseWriter, r *http.Request, stream Stream
 		return
 	}
 	sse := strings.HasPrefix(reply.ContentType, "text/event-stream")
+	comments := sse && ep.format != llm.FormatGeminiInteractions
 	w.Header().Set("Content-Type", reply.ContentType)
 	if sse {
 		w.Header().Set("Cache-Control", "no-cache")
@@ -291,6 +291,15 @@ func writeEndpointReplyFor(w http.ResponseWriter, r *http.Request, stream Stream
 		m.sent = http.StatusOK
 	}
 	rc := http.NewResponseController(w)
+	// out is where the body goes: through keep-alive comments on a non-Gemini stream.
+	var out io.Writer = w
+	flush := rc.Flush
+	var ka *keepAlive
+	if comments {
+		ka = startKeepAlive(w, rc)
+		defer ka.stop()
+		out, flush = ka, ka.Flush
+	}
 	for {
 		ev = stream.Next()
 		switch ev.Type {
@@ -302,27 +311,33 @@ func writeEndpointReplyFor(w http.ResponseWriter, r *http.Request, stream Stream
 				m.fail(e, http.StatusOK)
 				return
 			}
-			if _, err := io.WriteString(w, chunk); err != nil {
+			if _, err := io.WriteString(out, chunk); err != nil {
 				m.fail(&llm.Error{Code: llm.CodeCancelled}, http.StatusOK) // the client went away
 				return
 			}
 			if sse {
-				if err := rc.Flush(); err != nil {
+				if err := flush(); err != nil {
 					m.fail(&llm.Error{Code: llm.CodeCancelled}, http.StatusOK)
 					return
 				}
 			}
 		case llm.EventFinish:
+			if ka != nil {
+				ka.finish()
+			}
 			m.finish(ev)
 			return
 		case llm.EventError:
 			// The reply has started: a stream gets the error as its last event; any other body
 			// ends where it broke off.
+			if ka != nil {
+				ka.finish()
+			}
 			logFailure(r, ev.Error)
 			if sse {
 				_, body := openaichat.ErrorResponse(ev.Error)
-				_, _ = fmt.Fprintf(w, "event: error\ndata: %s\n\n", body)
-				_ = rc.Flush()
+				_, _ = fmt.Fprintf(out, "event: error\ndata: %s\n\n", body)
+				_ = flush()
 			}
 			m.fail(ev.Error, http.StatusOK)
 			return

@@ -624,7 +624,7 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 		return s
 	}
 	e.resolveTimeouts(&account)
-	rules, perr := e.payload(ctx, account.ID, req, payloadMinor)
+	rules, perr := e.payload(ctx, req, payloadMinor)
 	if perr != nil {
 		s := &Stream{}
 		s.fail(perr)
@@ -640,11 +640,15 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 		return failed(llm.CodeExtensionUnavailable, fmt.Sprintf("extension %s is not reachable: %v", e.manifest.ID, err))
 	}
 	s := &Stream{conn: conn, ctx: ctx, ext: e, redact: redact, pieces: e.accountPieces(account), capture: capture(ctx, e.info), account: account.ID}
+	alive := e.info.ProtocolMinor >= AliveMinor
+	if alive {
+		s.watch = watchdog(account.Timeouts, req.Stream)
+	}
 	if op == protocol.OpEndpoint {
 		s.body = redact.Body()
 	}
 	s.stop = context.AfterFunc(ctx, func() { conn.Close() })
-	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: op, Account: &account, Request: &req, Capture: s.capture != nil, Payload: rules}
+	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: op, Account: &account, Request: &req, Capture: s.capture != nil, Payload: rules, Alive: alive}
 	if err := protocol.WriteFrame(conn, call); err != nil {
 		if errors.Is(err, protocol.ErrFrameTooLarge) {
 			// The request is valid but too big to pass on in one frame; only a smaller request
@@ -678,12 +682,22 @@ type Stream struct {
 	// capture receives the call's diagnostic frames; nil when the call is not captured.
 	capture CaptureFunc
 	account string
+	// watch is how long Next waits for a frame before it ends the call with extension_timeout
+	// (watchdog); 0: no limit. started is set once response.start has arrived; alives counts
+	// the alive frames.
+	watch   time.Duration
+	started bool
+	alives  atomic.Int64
 	// pieces are the account's secrets, whose pieces are removed from the upstream's error text.
 	pieces pieces
 	// held is the call's capture, redacted, until the call ends: whether it ended in an error
 	// says how much of it loses the pieces (pieces.diagnostic).
 	held heldCapture
 }
+
+// Alives returns how many alive frames the extension has sent on the call so far. It may be
+// called while Next runs.
+func (s *Stream) Alives() int { return int(s.alives.Load()) }
 
 func failed(code, msg string) *Stream {
 	s := &Stream{}
@@ -703,23 +717,26 @@ func (s *Stream) Next() llm.Event {
 		return s.last()
 	}
 	var reply protocol.Reply
-	if err := protocol.ReadFrame(s.conn, &reply); err != nil {
-		s.fail(s.readError(err))
-		return s.last()
-	}
-	for reply.Type == protocol.TypeDiagnostic {
-		if s.capture != nil && reply.Diagnostic != nil {
-			s.held.hold(redactDiagnostic(s.redact, *reply.Diagnostic))
-		}
-		reply = protocol.Reply{}
-		if err := protocol.ReadFrame(s.conn, &reply); err != nil {
+	for {
+		if err := s.read(&reply); err != nil {
 			s.fail(s.readError(err))
 			return s.last()
 		}
+		if reply.Type == protocol.TypeAlive {
+			s.alives.Add(1)
+		} else if reply.Type != protocol.TypeDiagnostic {
+			break
+		} else if s.capture != nil && reply.Diagnostic != nil {
+			s.held.hold(redactDiagnostic(s.redact, *reply.Diagnostic))
+		}
+		reply = protocol.Reply{}
 	}
 	if err := s.seq.Check(reply.Event); err != nil {
 		s.fail(redacted(s.redact, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s broke the protocol: %v", s.ext.manifest.ID, err)}))
 		return s.last()
+	}
+	if reply.Type == llm.EventResponseStart {
+		s.started = true
 	}
 	var piece string
 	if s.body != nil && reply.Event.Type == llm.EventNative && json.Unmarshal(reply.Event.Raw, &piece) == nil {
@@ -770,9 +787,20 @@ func bodyPiece(text string) json.RawMessage {
 	return b
 }
 
+// read reads the next frame, within the watchdog's limit when the call has one.
+func (s *Stream) read(reply *protocol.Reply) error {
+	if s.watch > 0 {
+		_ = s.conn.SetReadDeadline(time.Now().Add(s.watch))
+	}
+	return protocol.ReadFrame(s.conn, reply)
+}
+
 func (s *Stream) readError(err error) *llm.Error {
 	if s.ctx != nil && s.ctx.Err() != nil {
 		return &llm.Error{Code: llm.CodeCancelled, Message: "the request was cancelled"}
+	}
+	if s.watch > 0 && errors.Is(err, os.ErrDeadlineExceeded) {
+		return s.ext.timedOut(s.account, s.watch, s.started)
 	}
 	var se *json.SyntaxError
 	var te *json.UnmarshalTypeError
@@ -882,6 +910,14 @@ func (o *output) leaveOut(n int, note string) {
 }
 
 func (o *output) note(note string) { fmt.Fprintf(o.w, "%s(%s)\n", o.prefix, note) }
+
+// core logs a line of core's own about the extension, at once: it holds no credential, so it
+// does not wait for a refresh or login to end.
+func (o *output) core(text string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	fmt.Fprintf(o.w, "%s%s\n", o.prefix, text)
+}
 
 // dropQueue leaves out the lines held so far, past maxReplaced, with its note: also after other
 // lines were left out for the size limit, whose note says only the rest is. o.mu is held.

@@ -811,9 +811,11 @@ func status(e *llm.Error) int {
 // (resets_at) and retryable false, as today's core writes it.
 func errorFields(e *llm.Error) obj {
 	if u := e.UsageLimit; u != nil {
-		return obj{"type": "error", "error": obj{"type": "rate_limit_error",
+		o := obj{"type": "rate_limit_error",
 			"message":   fmt.Sprintf("%s (reset after %s)", u.Message(), u.ResetAfter()),
-			"resets_at": u.ResetsAt.Unix(), "retryable": false}}
+			"resets_at": u.ResetsAt.Unix(), "retryable": false}
+		e.Pluxy(o)
+		return obj{"type": "error", "error": o}
 	}
 	st := status(e)
 	msg := e.Message
@@ -824,7 +826,9 @@ func errorFields(e *llm.Error) obj {
 	if _, ok := anthropicStatus[e.ProviderCode]; ok && e.Code == llm.CodeUpstream {
 		typ = e.ProviderCode
 	}
-	return obj{"type": "error", "error": obj{"type": typ, "message": msg}}
+	o := obj{"type": typ, "message": msg}
+	e.Pluxy(o)
+	return obj{"type": "error", "error": o}
 }
 
 // ErrorResponse returns the HTTP status and Anthropic error body for e.

@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.22
+# pluxy extension protocol, version 0.23
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -33,9 +33,11 @@ for a breach of terms. Version 0.21 adds what a package is, for someone who does
 manifest's `title`, `summary` and `kind`, and in a [registry index](#registry-index) the same with
 the registry's `tier`. Version 0.22 adds the account's
 [`timeouts`](#timeouts): upstream request limits for response headers, stream byte gaps and
-non-streamed completion. It is deliberately small; later versions add capabilities and more operations
+non-streamed completion. Version 0.23 adds [alive frames](#alive-frames): the extension tells core
+its upstream is still sending, and core ends a call that sends nothing at all for too long. It is
+deliberately small; later versions add capabilities and more operations
 without changing what is described here. An extension written for version 0 works unchanged with a
-core that speaks 0.22 (see
+core that speaks 0.23 (see
 [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
@@ -257,6 +259,7 @@ Core opens a connection and writes one call frame:
 | `session` | For `session`: what kind of session to open (see [Sessions](#sessions)). |
 | `capture` | Since 0.13, for `generate`, `count_tokens` and `endpoint`: true when core asks for the call's [upstream capture](#upstream-capture). Absent: false. |
 | `payload` | Since 0.14, for `generate`, `count_tokens` and `endpoint`, and since 0.15 for a `session.turn`: the [payload rules](#payload-rules) that apply to the call or turn. Absent: none. |
+| `alive` | Since 0.23, for `generate`, `count_tokens` and `endpoint`: true when core takes [alive frames](#alive-frames) on the call. Absent: false. |
 
 An extension that gets an `op` it does not know replies with an `error` event whose code is
 `unsupported`.
@@ -347,7 +350,7 @@ event as for `generate`.
 | Field | Meaning |
 | --- | --- |
 | `models` | The models the account serves, by the names its upstream knows them by. Empty when the extension has no list for the account. At most 10000. |
-| `owned_by` | Who provides the account's models, shown as `owned_by` for models without one of their own, and for the models the account's config names. Default: the account's ID. |
+| `owned_by` | Who provides the account's models, shown as `owned_by` for models without one of their own, and for the models the account's config names. Default: the extension's ID (never the account's: an account ID can be an email address or a label). |
 | `from` | Optional, since 0.18: where the list came from — `"account"` (read from the provider using the account's credential) or `"extension"` (the extension's built-in catalog). Omitted when unknown or reported by an older extension. |
 | model `id` | The model's name upstream, as requests name it. Required, unique in the list; core keeps the first of any repeats. |
 | model `name` | Its resource name in Gemini's list, such as `models/gemini-2.5-pro`. Default `id`. |
@@ -742,7 +745,7 @@ override and `routing.timeouts`, and sends `timeouts` only to extensions whose `
 is 18 or more.
 
 A timeout that fires before any upstream response byte arrives is retry-safe so core can move the
-request to another account; once response headers or reply bytes have arrived, it ends the
+request to another account, once (a second timeout ends the request, as with `extension_timeout` below); once response headers or reply bytes have arrived, it ends the
 stream or request with an error instead.
 
 ## The request
@@ -956,7 +959,8 @@ Codes an extension sends:
 
 Codes core produces itself: `extension_crashed` (the connection ended without a terminal event),
 `extension_protocol` (the extension broke a rule above), `extension_unavailable` (the extension is
-not running).
+not running), `extension_timeout` (since 0.23, the extension sent nothing at all for longer than
+[alive frames](#alive-frames) allow).
 
 An error may come after other events, for example when the upstream stream breaks halfway. Core
 then reports it to the client in the client's stream format; it never retries once bytes have
@@ -1152,6 +1156,7 @@ terminal event. A turn's `error` ends that turn, not the session.
 | `request` | A model request, as for `generate`. A turn may continue the session's previous response; for `openai.responses`, `native.body.previous_response_id` names it and `items` hold only the new input. A turn that continues nothing carries the whole conversation. |
 | `capture` | Since 0.13: true when core asks for the turn's [upstream capture](#upstream-capture), as for `generate`. |
 | `payload` | Since 0.15: the [payload rules](#payload-rules) that apply to the turn, as for `generate`. Absent: none. |
+| `alive` | Since 0.23: true when core takes [alive frames](#alive-frames) on the turn, as for `generate`. |
 
 Core removes every credential the session has carried, in all the forms listed under
 [Errors](#errors), from every event of every turn.
@@ -1393,12 +1398,43 @@ In Go, `sdk.Upstream` does all of this for each client it wraps, for requests ma
 handler's context; a request made with `sdk.Uncaptured(ctx)` is sent the same way but not
 recorded.
 
+## Alive frames
+
+A model can think for minutes while its upstream sends only bytes that carry no reply, such as
+keep-alive comments, so a call can be healthy and still send core nothing. From version 0.23 the
+extension says so with an `alive` frame, and core relies on it to tell a quiet call from one that
+stopped answering.
+
+Core sets the call's `alive` (or the turn's) only for an extension that reports `protocol_minor`
+23 or more. During such a call or turn, when upstream bytes arrive (response headers or any body
+bytes, on HTTP or on an upstream WebSocket) and the extension has sent core no frame for 10
+seconds, it sends one:
+
+```json
+{"type": "alive"}
+```
+
+An `alive` frame carries nothing else and may come at any point before the terminal event, never
+after it. It is not an event: it does not count in the event order, and core never passes it on to
+a client. The Go SDK sends it for every request made through `sdk.Upstream`; an extension that
+makes upstream requests another way sends it itself, or reports a lower minor version.
+
+Core in turn ends a call or turn on which it has received nothing at all, no event and no frame,
+for as long as the SDK may wait on the upstream plus 60 seconds (see [Timeouts](#timeouts)): for a
+streamed request the longer of the header and idle limits, since nothing reaches core before the
+upstream's headers, and for one that is not streamed the longest of the header, idle and total
+limits. It ends it with the error code
+`extension_timeout` and logs a line that names it. Before the reply has started this is a
+retry-safe failure, so core can move the request to one more account (once, as with an upstream timeout);
+after, it ends the reply with that error. When a limit it waits on is off (`0`) there is no deadline, and an
+extension below 0.23 gets none: it cannot promise alive frames.
+
 ## Versioning
 
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.22. An extension reports the minor version it
+raise the minor version: this document is version 0.23. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1428,8 +1464,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.20 | Error code [`account_closed`](#errors). |
 | 0.21 | A manifest's optional `title`, `summary` and `kind`, and a [registry index](#registry-index) package's optional `title`, `summary`, `kind` and `tier`. No call or frame changes. |
 | 0.22 | The account's optional [`timeouts`](#timeouts). |
+| 0.23 | [Alive frames](#alive-frames): the call's and turn's `alive` and the `alive` frame; core's `extension_timeout`. |
 
-## What version 0.22 leaves out
+## What version 0.23 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

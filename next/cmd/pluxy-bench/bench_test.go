@@ -197,3 +197,41 @@ func TestSelectProfileScenarios(t *testing.T) {
 		t.Fatal("selectProfileScenarios missing: want an unknown-scenario error")
 	}
 }
+
+func TestBuildScenariosRequestsOverride(t *testing.T) {
+	set := map[string]bool{"requests": true}
+	specs := buildScenarios(false, 100, set, 0, 0, 0, 0, 200)
+	for _, s := range specs {
+		switch s.Name {
+		case "agents", "throughput":
+			if s.Requests != 0 {
+				t.Errorf("%s Requests = %d, want it left at 0", s.Name, s.Requests)
+			}
+		default:
+			if s.Requests != 200 {
+				t.Errorf("%s Requests = %d, want 200", s.Name, s.Requests)
+			}
+		}
+	}
+
+	for _, s := range buildScenarios(false, 100, map[string]bool{}, 0, 0, 0, 0, 200) {
+		if s.Requests != 0 && s.Requests == 200 {
+			t.Errorf("%s Requests = 200 without -requests", s.Name)
+		}
+	}
+}
+
+func TestCheckRequestsFlag(t *testing.T) {
+	if err := checkRequestsFlag(true, false, 0); err != nil {
+		t.Fatalf("-check alone: %v", err)
+	}
+	if err := checkRequestsFlag(false, true, 100); err != nil {
+		t.Fatalf("-requests alone: %v", err)
+	}
+	if err := checkRequestsFlag(true, true, 100); err == nil {
+		t.Fatal("-requests with -check: want an error")
+	}
+	if err := checkRequestsFlag(false, true, 0); err == nil {
+		t.Fatal("-requests 0: want an error")
+	}
+}

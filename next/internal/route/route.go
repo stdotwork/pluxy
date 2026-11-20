@@ -8,9 +8,11 @@
 //  1. Filter: accounts that serve the model (and the pinned account, if the request pins one),
 //     that no block covers (rate limit, quota or cooldown, on the account's credential, the
 //     model on that account, or its endpoint), that are under their concurrency limit and that
-//     this request has not tried in the current round.
+//     this request has not tried in the current round. With no fallback chain for the model,
+//     only the accounts of one provider serve it; with a chain, each step's accounts serve the
+//     step's model (chain.go).
 //  2. Prefer: the account the request's session is bound to, if it is still eligible; else the
-//     eligible accounts with the highest priority.
+//     eligible accounts of the chain's first step that has any, with the highest priority.
 //  3. Pick by strategy: round robin, weighted, fill-first or least-active.
 //  4. Attempt, and read the first event. An error before the reply starts is an outcome: it
 //     updates the account's state, then the request rotates to another eligible account if the
@@ -35,8 +37,8 @@ import (
 
 // Config is the routing section of core's config. The zero value is valid.
 type Config struct {
-	// Strategy picks among eligible accounts: round-robin (default), weighted, fill-first or
-	// least-active.
+	// Strategy picks among eligible accounts: round-robin (default), weighted, fill-first,
+	// least-active or soonest-reset.
 	Strategy string `json:"strategy,omitempty"`
 	// MaxAttempts bounds upstream attempts per request, counting the first. 0 means no fixed
 	// limit: each account is still tried at most once per round, and a new round needs a
@@ -69,7 +71,8 @@ type Config struct {
 	// minute, above 0 blocks for that long, below 0 records no block, Retry-After or not
 	// (today's transient-error-cooldown-seconds).
 	TransientErrorCooldownMS int64 `json:"transient_error_cooldown_ms,omitempty"`
-	// SessionAffinity, when set, sends requests of the same session to the same account.
+	// SessionAffinity sends requests of the same session to the same account. It is on unless
+	// it says "enabled": false, with no section at all too (see AffinityOn).
 	SessionAffinity *AffinityConfig `json:"session_affinity,omitempty"`
 	// ForceModelPrefix: an account with a Prefix serves its models only under
 	// "<prefix>/<model>", except a model whose name is the prefix itself (today's
@@ -81,9 +84,20 @@ type Config struct {
 	// for any cooldown; QuotaUsageLimit the final usage-limit reply, which tells the client to
 	// stop until the reset.
 	QuotaResponseMode string `json:"quota_response_mode,omitempty"`
+	// Explain, when false, leaves out of replies the headers that name the account (all but the
+	// trace ID) and the pluxy member of errors, for a core whose client keys go to people who
+	// should not see which accounts serve them. Unset or true: replies say what happened.
+	Explain *bool `json:"explain,omitempty"`
 	// Timeouts sets default upstream HTTP timeouts for all accounts (header_ms, idle_ms,
 	// total_ms). Nil fields use core's defaults (60s, 5m, 10m); 0 turns a limit off.
 	Timeouts *protocol.Timeouts `json:"timeouts,omitempty"`
+	// Chains are the fallback chains, by the model name a client asks for (see Step). A name
+	// with no chain is served by the accounts of one provider.
+	Chains map[string][]Step `json:"chains,omitempty"`
+	// QuotaRefreshMS is how often soonest-reset reads every account's usage, in milliseconds:
+	// unset, 30 minutes; 0 turns the readings off, and accounts are then ranked only by the
+	// readings the checks of long blocks take.
+	QuotaRefreshMS *int64 `json:"quota_refresh_ms,omitempty"`
 }
 
 // Quota response modes (Config.QuotaResponseMode).
@@ -96,10 +110,29 @@ const (
 // usage-limit mode, as in today's core, since waiting it out is cheaper than stopping.
 const usageLimitMinReset = 5 * time.Minute
 
-// AffinityConfig turns on session affinity.
+// AffinityConfig is the session affinity settings.
 type AffinityConfig struct {
+	// Enabled false turns session affinity off. Unset or true: on.
+	Enabled *bool `json:"enabled,omitempty"`
 	// TTLMS is how long a session stays bound after its last request. Default one hour.
 	TTLMS int64 `json:"ttl_ms,omitempty"`
+}
+
+// defaultAffinityTTL is how long a session stays bound when ttl_ms is not set.
+const defaultAffinityTTL = time.Hour
+
+// AffinityOn reports whether requests of one session go to the same account: unless the config
+// turns it off, so a coding agent's conversation stays where its prompt cache is.
+func (c *Config) AffinityOn() bool {
+	return c.SessionAffinity == nil || c.SessionAffinity.Enabled == nil || *c.SessionAffinity.Enabled
+}
+
+// AffinityTTL is how long a session stays bound after its last request.
+func (c *Config) AffinityTTL() time.Duration {
+	if c.SessionAffinity == nil || c.SessionAffinity.TTLMS == 0 {
+		return defaultAffinityTTL
+	}
+	return time.Duration(c.SessionAffinity.TTLMS) * time.Millisecond
 }
 
 // Validate checks the strategy name and limits.
@@ -109,6 +142,9 @@ func (c *Config) Validate() error {
 	}
 	if c.MaxAttempts < 0 || c.MaxAccounts < 0 || c.MaxWaitMS < 0 || c.RequestRetry != nil && *c.RequestRetry < 0 {
 		return fmt.Errorf("routing limits must not be negative")
+	}
+	if c.QuotaRefreshMS != nil && *c.QuotaRefreshMS < 0 {
+		return fmt.Errorf("routing.quota_refresh_ms must not be negative")
 	}
 	if c.SessionAffinity != nil && c.SessionAffinity.TTLMS < 0 {
 		return fmt.Errorf("routing.session_affinity.ttl_ms must not be negative")
@@ -121,7 +157,7 @@ func (c *Config) Validate() error {
 	if err := ValidateTimeouts("routing.timeouts", c.Timeouts); err != nil {
 		return err
 	}
-	return nil
+	return ValidateChains(c.Chains)
 }
 
 // maxTimeoutMS bounds configured timeouts: 30 days, far beyond any real limit and safe inside
@@ -190,8 +226,13 @@ type Request struct {
 type Attempt struct {
 	// Account is the account's ID, Extension the extension that serves it.
 	Account, Extension string
+	// Public is the account's public ID, the one replies name it by (State.PublicID).
+	Public string
 	// Model is the account's name for the request's model (an alias or prefix resolved).
 	Model string
+	// Step is the chain's step the attempt is for, from 1; 0 for a request whose model has no
+	// chain.
+	Step int
 }
 
 // Credentials supplies the credentials of managed accounts (Account.Managed): core's
@@ -213,17 +254,18 @@ type Router struct {
 	attempt  AttemptFunc
 	state    *State
 	picker   *picker
-	affinity *affinity // nil without session affinity
+	affinity *affinity // nil with session affinity off
 	ttl      time.Duration
 	gen      uint64    // this router's generation, from state (see State.Retain)
 	created  time.Time // when the router was made: the created time of models accounts list themselves
 
-	mu       sync.RWMutex // guards accounts, creds, readings and catalog
-	accounts []*Account
+	mu       sync.RWMutex // guards accounts, known, creds, readings and catalog
+	accounts []*Account   // the accounts requests are routed over
+	known    []*Account   // accounts and the held accounts (Account.Held), in the order given
 	creds    Credentials
 	readings Readings
 	catalog  CatalogFunc
-	lists    catalogs // the accounts' model lists from catalog
+	lists    catalogs // the known accounts' model lists from catalog
 
 	// For tests: the clock, the wait, the source of jitter, and a hook run after an account
 	// is chosen and before it is reserved.
@@ -244,20 +286,22 @@ func New(cfg Config, accounts []Account, attempt AttemptFunc, state *State) (*Ro
 	}
 	r := &Router{cfg: cfg, attempt: attempt, state: state, gen: state.nextGen(), created: time.Now(), now: time.Now, sleep: sleepCtx, rand: rand.Float64}
 	var err error
-	if r.accounts, err = accountList(accounts, r.gen, state); err != nil {
+	if r.known, err = accountList(accounts, r.gen, state); err != nil {
 		return nil, err
 	}
+	r.accounts = inService(r.known)
 	if r.picker, err = newPicker(cfg.Strategy, r.accounts, state.rotation, r.gen); err != nil {
 		return nil, err
 	}
-	if cfg.SessionAffinity != nil {
-		ttl := time.Duration(cfg.SessionAffinity.TTLMS) * time.Millisecond
-		if ttl == 0 {
-			ttl = time.Hour
-		}
-		r.affinity, r.ttl = state.affinity, ttl
+	if cfg.AffinityOn() {
+		r.affinity, r.ttl = state.affinity, cfg.AffinityTTL()
 	}
 	return r, nil
+}
+
+// inService returns the accounts of accounts that are not held.
+func inService(accounts []*Account) []*Account {
+	return slices.DeleteFunc(slices.Clone(accounts), func(a *Account) bool { return a.Held != "" })
 }
 
 func accountList(accounts []Account, gen uint64, state *State) ([]*Account, error) {
@@ -278,7 +322,8 @@ func accountList(accounts []Account, gen uint64, state *State) ([]*Account, erro
 	return out, nil
 }
 
-// SetAccounts replaces the accounts requests are routed over. Requests already routing keep
+// SetAccounts replaces the accounts requests are routed over, with the held accounts among them
+// (Account.Held), which only count toward the choice of a name's provider. Requests already routing keep
 // the set they started with. Routing state of an account that leaves the set is dropped (its
 // blocks, last error and session bindings), so an account added again later under the same ID
 // starts clean. So is the state of an account that
@@ -287,15 +332,16 @@ func accountList(accounts []Account, gen uint64, state *State) ([]*Account, erro
 // endpoint that no unchanged account names. Outcomes that requests already routing see on its
 // old copy record nothing and bind no session.
 func (r *Router) SetAccounts(accounts []Account, same func(old, cur *Account) bool) error {
-	list, err := accountList(accounts, r.gen, r.state)
+	known, err := accountList(accounts, r.gen, r.state)
 	if err != nil {
 		return err
 	}
+	list := inService(known)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	// The new copies take their revisions here, under r.mu with the forgets below, so a
 	// SetAccounts running at the same time cannot give a copy a revision its forget has passed.
-	for _, a := range list {
+	for _, a := range known {
 		a.rev = r.state.revision(a.ID)
 	}
 	old := r.accounts
@@ -314,9 +360,9 @@ func (r *Router) SetAccounts(accounts []Account, same func(old, cur *Account) bo
 	// Before the new copies serve: a request that picks an old copy meanwhile records nothing
 	// on it.
 	r.state.restart(changed, fresh, kept)
-	r.accounts = list
+	r.accounts, r.known = list, known
 	r.picker.setOrder(list)
-	r.lists.retain(list, changed, same == nil)
+	r.lists.retain(known, changed, same == nil)
 	for _, a := range old {
 		if !slices.ContainsFunc(list, func(b *Account) bool { return b.ID == a.ID }) {
 			r.state.forget(a.ID)
@@ -348,6 +394,35 @@ func (r *Router) snapshot() ([]*Account, Credentials) {
 	return r.accounts, r.creds
 }
 
+// knownSnapshot is snapshot with the held accounts among the accounts.
+func (r *Router) knownSnapshot() ([]*Account, Credentials) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.known, r.creds
+}
+
+// routed returns the accounts of accounts that routing uses for a request: under the weighted
+// strategy, all but those of weight 0, which serve none. Held accounts stay: they take part in
+// choosing a name's provider.
+func (r *Router) routed(accounts []*Account) []*Account {
+	if r.picker.strategy != StrategyWeighted {
+		return accounts
+	}
+	return slices.DeleteFunc(slices.Clone(accounts), func(a *Account) bool { return a.weight() == 0 })
+}
+
+// split returns the targets of accounts in service, and those of held accounts.
+func split(targets []target) (serving, held []target) {
+	for _, t := range targets {
+		if t.a.Held != "" {
+			held = append(held, t)
+		} else {
+			serving = append(serving, t)
+		}
+	}
+	return serving, held
+}
+
 func (r *Router) catalogFunc() CatalogFunc {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -376,19 +451,22 @@ type call struct {
 	ctx context.Context
 	req Request
 
-	started  bool
-	final    *llm.Event // set when the request ended without a running attempt
-	cur      Stream     // the attempt whose reply reached the caller
-	acct     *Account
-	seq      uint64
-	capable  []*Account        // the accounts that serve the request's model
-	upstream map[string]string // each capable account's name for the request's model, by account ID
-	ended    bool              // the attempt's reservation is released
+	started bool
+	final   *llm.Event // set when the request ended without a running attempt
+	cur     Stream     // the attempt whose reply reached the caller
+	at      target     // the account and step of cur
+	seq     uint64
+	tried   []triedAttempt // the attempts that failed, in order, for the error that explains them
+	steps   []Step         // the request's steps: its model's chain, or one step for the model
+	chain   bool           // the model has a chain
+	capable []target       // the accounts that serve each step, in step order
+	held    []target       // the held accounts that would serve a step, in step order
+	ended   bool           // the attempt's reservation is released
 
 	creds   Credentials
 	renewed map[string]bool // accounts whose refused credential was renewed during this request
 	fresh   bool            // the last failed attempt's credential has been renewed: try it again
-	again   *Account        // the account to try next, its credential just renewed
+	again   *target         // the account to try next, its credential just renewed
 }
 
 func (c *call) Next() llm.Event {
@@ -408,9 +486,9 @@ func (c *call) Next() llm.Event {
 		// After the reply has started, an outcome still updates the account's state, but the
 		// request is never retried: the caller may already have sent bytes to the client.
 		if ev.Type == llm.EventFinish {
-			c.r.state.success(c.acct, c.upstream[c.acct.ID], c.seq)
+			c.r.state.success(c.at.a, c.at.model, c.seq)
 		} else {
-			c.r.failure(c.acct, c.upstream[c.acct.ID], c.seq, ev.Error)
+			c.r.failure(c.at.a, c.at.model, c.seq, ev.Error)
 			if u := c.usageLimit(ev.Error); u != nil {
 				ev.Error = u
 			}
@@ -430,7 +508,7 @@ func (c *call) Close() {
 func (c *call) release() {
 	if !c.ended {
 		c.ended = true
-		c.r.state.end(c.acct, c.seq)
+		c.r.state.end(c.at.a, c.seq)
 	}
 }
 
@@ -449,6 +527,9 @@ func (c *call) route() llm.Event {
 		if u := c.usageLimit(ev.Error); u != nil {
 			ev.Error = u
 		}
+		if c.r.cfg.ExplainOn() {
+			ev.Error = c.explained(ev.Error)
+		}
 	}
 	return ev
 }
@@ -457,34 +538,31 @@ func (c *call) route() llm.Event {
 // gives up and returns the error event that ends the request.
 func (c *call) attempts() llm.Event {
 	r, model := c.r, c.req.LLM.Model
-	accounts, creds := r.snapshot()
+	accounts, creds := r.knownSnapshot()
 	c.creds = creds
 	var eligible []*Account
-	for _, a := range accounts {
-		if c.req.Pin != "" && a.ID != c.req.Pin || r.picker.strategy == StrategyWeighted && a.weight() == 0 {
+	for _, a := range r.routed(accounts) {
+		if c.req.Pin != "" && !c.pinned(a) {
 			continue
 		}
 		eligible = append(eligible, a)
 	}
 	// An account without models of its own serves those its extension lists, as today's core
 	// serves an account the models of its provider's catalog.
-	var served map[string][]string
-	if !c.anyModel() {
-		served = r.served(c.ctx, eligible, creds, r.catalogFunc())
-	}
-	var capable []*Account
-	c.upstream = map[string]string{}
-	for _, a := range eligible {
-		if c.anyModel() {
-			capable = append(capable, a) // no model to serve: the upstream name stays empty
-			continue
+	if c.anyModel() {
+		// No model to serve: every account is capable, and the upstream name stays empty.
+		c.steps = []Step{{}}
+		for _, a := range eligible {
+			c.capable = append(c.capable, target{a: a})
 		}
-		// Blocks on a model are kept under its upstream name, which is the account's own.
-		if up, ok := a.resolve(model, r.cfg.ForceModelPrefix, served[a.ID]); ok {
-			capable = append(capable, a)
-			c.upstream[a.ID] = up
-		}
+		c.capable, c.held = split(c.capable)
+	} else {
+		// Held accounts take part in choosing each step's provider, and serve nothing.
+		served := r.served(c.ctx, eligible, creds, r.catalogFunc())
+		c.steps, c.chain = r.stepsFor(model)
+		c.capable, c.held = split(r.targets(c.steps, eligible, served))
 	}
+	capable := c.capable
 	if len(capable) == 0 {
 		msg := fmt.Sprintf("no account serves model %q", model)
 		if c.req.Pin != "" {
@@ -492,14 +570,14 @@ func (c *call) attempts() llm.Event {
 		}
 		return errorEvent(&llm.Error{Code: llm.CodeNotFound, Message: msg, ProviderCode: "model_not_found"})
 	}
-	c.capable = capable
 
-	tried := map[string]bool{} // this round
-	used := map[string]bool{}  // this round
+	tried := map[targetKey]bool{} // this round
+	used := map[string]bool{}     // accounts, this round
 	attempts, rounds := 0, 0
+	timeouts := 0 // attempts that ended in a timeout before any reply byte
 	// Today's request-retry rounds, set for routing or for an account. limit is how many rounds
 	// after the first an account takes part in: its own count, else routing's, else none.
-	rounded := r.cfg.RequestRetry != nil || slices.ContainsFunc(capable, func(a *Account) bool { return a.RequestRetry != nil })
+	rounded := r.cfg.RequestRetry != nil || slices.ContainsFunc(capable, func(t target) bool { return t.a.RequestRetry != nil })
 	limit := func(a *Account) int {
 		if a.RequestRetry != nil {
 			return *a.RequestRetry
@@ -514,7 +592,7 @@ func (c *call) attempts() llm.Event {
 	var last *llm.Error
 	for {
 		now := r.now()
-		var cands []*Account
+		var cands []target
 		var next time.Time // earliest time an account is eligible again, ignoring this round
 		var nextReason *llm.Error
 		// With rounds: the earliest time an account that takes part in the next round is
@@ -522,14 +600,15 @@ func (c *call) attempts() llm.Event {
 		var nextRound time.Time
 		more := false
 		busy := false
-		for _, a := range capable {
+		for _, t := range capable {
+			a := t.a
 			if r.state.IsBanned(a.ID) {
 				continue
 			}
 			if rounded && limit(a) < rounds {
 				continue // past its own rounds
 			}
-			until, reason, full := r.state.availability(a, c.upstream[a.ID], now)
+			until, reason, full := r.state.availability(a, t.model, now)
 			if at, ok := limited[a.ID]; ok && r.cooling(a) {
 				// As in today's core: an account refused for rate or quota in this request is
 				// tried again no sooner than 10 seconds on.
@@ -544,12 +623,12 @@ func (c *call) attempts() llm.Event {
 				if next.IsZero() || until.Before(next) {
 					next, nextReason = until, reason
 				}
-			case tried[a.ID] || r.cfg.MaxAccounts > 0 && len(used) >= r.cfg.MaxAccounts && !used[a.ID]:
+			case tried[t.key()] || r.cfg.MaxAccounts > 0 && len(used) >= r.cfg.MaxAccounts && !used[a.ID]:
 				// Tried this round, or left out of it by the account limit: it waits for the next.
 				next, nextReason = now, nil
 				until = now
 			default:
-				cands = append(cands, a)
+				cands = append(cands, t)
 			}
 			if rounded && !full && !until.IsZero() && limit(a) > rounds {
 				if !more || until.Before(nextRound) {
@@ -562,27 +641,32 @@ func (c *call) attempts() llm.Event {
 			return errorEvent(last)
 		}
 		if len(cands) > 0 {
-			a := c.again
-			if c.again == nil || !slices.Contains(cands, c.again) {
-				a = c.choose(cands, now)
+			var t target
+			if c.again != nil && slices.Contains(cands, *c.again) {
+				t = *c.again
+			} else {
+				t = c.choose(cands, now)
 			}
 			c.again = nil
+			a := t.a
 			if r.beforeReserve != nil {
 				r.beforeReserve(a.ID)
 			}
-			seq, ok := r.state.reserve(a, c.upstream[a.ID], r.now())
+			seq, ok := r.state.reserve(a, t.model, r.now())
 			if !ok {
 				// Another request took the account's last slot, or a block landed, since the
 				// candidates were gathered: choose again.
 				continue
 			}
 			attempts++
-			tried[a.ID], used[a.ID] = true, true
-			ev, started := c.try(a, seq)
+			tried[t.key()], used[a.ID] = true, true
+			ev, started := c.try(t, seq)
 			if started {
 				return ev
 			}
 			last = ev.Error
+			c.tried = append(c.tried, triedAttempt{t.key(), llm.Tried{Account: r.state.PublicID(a.ID), Provider: a.Extension,
+				Model: t.model, Result: resultCode(last)}})
 			if rounded && (last.Code == llm.CodeRateLimit || last.Code == llm.CodeQuota) {
 				limited[a.ID] = r.now()
 			}
@@ -590,12 +674,20 @@ func (c *call) attempts() llm.Event {
 				// The upstream refused the account's credential and a renewed one is ready:
 				// the account may serve the request after all.
 				c.fresh = false
-				delete(tried, a.ID)
-				c.again = a
+				delete(tried, t.key())
+				c.again = &t
 				continue
 			}
 			if !retrySafe(last) {
 				return ev
+			}
+			if last.IsTimeout() {
+				// A timeout before any reply byte costs the client the whole limit: the request
+				// moves on to one more account, not through every account.
+				timeouts++
+				if timeouts > 1 {
+					return errorEvent(last)
+				}
 			}
 			continue
 		}
@@ -665,16 +757,16 @@ func (c *call) usageLimit(e *llm.Error) *llm.Error {
 	var reset time.Time
 	var window int64
 	var cause *llm.Error
-	provider := c.capable[0].Extension
-	for _, a := range c.capable {
-		until, w, why, ok := r.state.quotaOut(a, c.upstream[a.ID], now)
+	provider := c.capable[0].a.Extension
+	for _, t := range c.capable {
+		until, w, why, ok := r.state.quotaOut(t.a, t.model, now)
 		if !ok {
 			return nil
 		}
 		if reset.IsZero() || until.Before(reset) {
 			reset, window, cause = until, w, why
 		}
-		if a.Extension != provider {
+		if t.a.Extension != provider {
 			provider = ""
 		}
 	}
@@ -749,54 +841,67 @@ func jsonText(v json.RawMessage) string {
 	return ""
 }
 
-// choose picks one of cands: the session's account if it is among them, otherwise by priority
-// and then strategy.
-func (c *call) choose(cands []*Account, now time.Time) *Account {
+// choose picks one of cands, which are in step order: the session's account and model if they
+// are among them, whatever their step; otherwise, among the first step's, by priority and then
+// strategy.
+func (c *call) choose(cands []target, now time.Time) target {
 	r := c.r
 	if r.affinity != nil && c.req.Session != "" {
-		if id, ok := r.affinity.lookup(c.affinityKey(), now); ok {
-			for _, a := range cands {
-				if a.ID == id {
-					return a
+		if b, ok := r.affinity.lookup(c.affinityKey(), now); ok {
+			for _, t := range cands {
+				if t.a.ID == b.account && t.model == b.model {
+					return t
 				}
 			}
 		}
 	}
-	top := cands[0].Priority
-	for _, a := range cands {
-		top = max(top, a.Priority)
-	}
-	best := cands[:0:0]
-	for _, a := range cands {
-		if a.Priority == top {
-			best = append(best, a)
+	step := cands[0].step
+	top := cands[0].a.Priority
+	for _, t := range cands {
+		if t.step == step {
+			top = max(top, t.a.Priority)
 		}
 	}
-	return r.picker.pick(c.req.LLM.Model, best, r.state.activeCount, now)
+	var best []*Account
+	for _, t := range cands {
+		if t.step == step && t.a.Priority == top {
+			best = append(best, t.a)
+		}
+	}
+	a := r.picker.pick(rotationKey(c.req.LLM.Model, c.chain, step), best, r.state.activeCount, r.state.rank, now)
+	i := slices.IndexFunc(cands, func(t target) bool { return t.step == step && t.a == a })
+	return cands[i]
+}
+
+// pinned reports whether the request's pin names a: by its ID, or by the public ID a reply
+// named it by.
+func (c *call) pinned(a *Account) bool {
+	return a.ID == c.req.Pin || c.r.state.PublicID(a.ID) == c.req.Pin
 }
 
 func (c *call) affinityKey() affinityKey {
 	return affinityKey{tenant: c.req.Tenant, model: c.req.LLM.Model, session: c.req.Session}
 }
 
-// try runs one attempt on a, reserved with sequence number seq, and reads its first event.
-// started is true when the reply began; the attempt then belongs to the call.
-func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
-	r := c.r
+// try runs one attempt on t's account for its step, reserved with sequence number seq, and
+// reads its first event. started is true when the reply began; the attempt then belongs to the
+// call.
+func (c *call) try(t target, seq uint64) (ev llm.Event, started bool) {
+	r, a := c.r, t.a
 	if c.req.Attempting != nil {
-		c.req.Attempting(Attempt{Account: a.ID, Extension: a.Extension, Model: c.upstream[a.ID]})
+		c.req.Attempting(Attempt{Account: a.ID, Extension: a.Extension, Public: r.state.PublicID(a.ID), Model: t.model, Step: c.stepNumber(t)})
 	}
 	call := a.call()
 	var version uint64
 	if a.Managed {
 		var e *llm.Error
 		if c.creds == nil {
-			e = &llm.Error{Code: llm.CodeUnavailable, Scope: llm.ScopeCredential, Message: fmt.Sprintf("account %q has no credential store", a.ID)}
+			e = &llm.Error{Code: llm.CodeUnavailable, Scope: llm.ScopeCredential, Message: "the account has no credential store"}
 		} else {
 			call.Credential, version, e = c.creds.Credential(c.ctx, a.Extension, a.ID)
 		}
 		if e != nil {
-			r.failure(a, c.upstream[a.ID], seq, e)
+			r.failure(a, t.model, seq, e)
 			r.state.end(a, seq)
 			return errorEvent(e), false
 		}
@@ -805,7 +910,7 @@ func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
 	if c.req.Attempt != nil {
 		attempt = c.req.Attempt
 	}
-	req := Renamed(c.req.LLM, c.upstream[a.ID])
+	req := Renamed(c.req.LLM, t.model)
 	req.Caller = caller(a.Extension, c.req.Tenant)
 	s := attempt(c.ctx, a.Extension, call, req)
 	ev = s.Next()
@@ -824,17 +929,20 @@ func (c *call) try(a *Account, seq uint64) (ev llm.Event, started bool) {
 				return ev, false
 			}
 		}
-		r.failure(a, c.upstream[a.ID], seq, ev.Error)
+		r.failure(a, t.model, seq, ev.Error)
 		r.state.end(a, seq)
 		return ev, false
 	}
-	c.cur, c.acct, c.seq = s, a, seq
+	c.cur, c.at, c.seq = s, t, seq
+	// The reply began, so the request is not sent again: keep only its model, which the rest
+	// of the call reads, and let its body and parsed form go while the reply streams.
+	c.req.LLM = llm.Request{Model: c.req.LLM.Model}
 	if r.affinity != nil && c.req.Session != "" {
-		r.affinity.bind(c.affinityKey(), a, r.now(), r.ttl)
+		r.affinity.bind(c.affinityKey(), a, t.model, r.now(), r.ttl)
 	}
 	if ev.Terminal() {
 		// A reply that is finished in its first event: record it now.
-		c.r.state.success(a, c.upstream[a.ID], seq)
+		c.r.state.success(a, t.model, seq)
 		c.release()
 	}
 	return ev, true

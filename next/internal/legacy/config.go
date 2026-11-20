@@ -977,6 +977,8 @@ func (x *translator) routing() error {
 		r["strategy"] = "fill-first"
 	case "least-active":
 		r["strategy"] = "least-active"
+	case "soonest-reset":
+		r["strategy"] = "soonest-reset"
 	default:
 		// Today's core uses round-robin for a name it does not know.
 		x.notes = append(x.notes, fmt.Sprintf("config.yaml: routing.strategy %q is not known: using round-robin", s))
@@ -991,6 +993,10 @@ func (x *translator) routing() error {
 			ttl = max(d, time.Second) // as today's core reads it
 		}
 		r["session_affinity"] = map[string]any{"ttl_ms": ttl.Milliseconds()}
+	} else {
+		// Today's core has it off unless the file turns it on; a JSON config has it on unless
+		// it says otherwise.
+		r["session_affinity"] = map[string]any{"enabled": false}
 	}
 	if on, err := flag(x.t, "routing.force-model-prefix"); err != nil {
 		return err
