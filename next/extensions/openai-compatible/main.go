@@ -66,7 +66,7 @@ const (
 )
 
 func main() {
-	if err := sdk.Serve(sdk.Extension{ID: id, Version: version, Login: login, LoginMethods: loginMethods, Generate: generate, CountTokens: countTokens, Models: listModels, Check: check, Quota: quota, Endpoint: compact}); err != nil {
+	if err := sdk.Serve(sdk.Extension{ID: id, Version: version, Login: login, LoginMethods: loginMethods, Generate: generate, CountTokens: countTokens, Models: listModels, Check: check, Quota: quota, Endpoint: endpointCall}); err != nil {
 		fmt.Fprintln(os.Stderr, "openai-compatible:", err)
 		os.Exit(1)
 	}
@@ -349,16 +349,21 @@ func postBody(ctx context.Context, call sdk.Call, s settings, wire wireInfo, key
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: sdk.Retryable(err)}
+		return nil, requestFailed(ctx, err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		defer resp.Body.Close()
 		return nil, upstreamError(resp, call.Request.Model)
 	}
 	return resp, nil
+}
+
+// requestFailed turns a failed upstream request into a structured error.
+func requestFailed(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: sdk.Retryable(err)}
 }
 
 // countTokens counts the request's input tokens with the upstream's own count endpoint: a
