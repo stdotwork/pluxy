@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/stdotwork/pluxy/next/format/internal/audioinput"
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
 	"github.com/stdotwork/pluxy/next/llm"
 )
@@ -241,6 +242,14 @@ func (e *encoder) content(it llm.Item, msgPath string) (content []json.RawMessag
 			content = append(content, marshal(m, e.kept(p.Origin)))
 			sendable = true
 		case p.Type == llm.PartFile && it.Role != llm.RoleAssistant:
+			// Responses takes audio as input_audio, with its bytes inline; a file part holding
+			// audio is that audio however the client sent it.
+			if mediaType, data, ok := audioinput.Inline(p); ok {
+				m := map[string]string{"type": "input_audio", "data": data, "format": audioinput.Format(mediaType)}
+				content = append(content, marshal(m, e.kept(p.Origin)))
+				sendable = true
+				break
+			}
 			m := map[string]string{"type": "input_file"}
 			for k, v := range map[string]string{"file_id": p.FileID, "file_data": p.FileData, "file_url": p.URL, "filename": p.Filename} {
 				if v != "" {
