@@ -258,7 +258,6 @@ func TestVerifyDroidGeminiToolTurns(t *testing.T) {
 // Droid's OpenAI provider sends POST /responses after being configured with a /v1 base URL.
 // The bare route must serve the same Responses turn as /v1/responses (CLIProxyAPI issue #1401).
 func TestVerifyDroidBareResponsesAlias(t *testing.T) {
-	t.Skip("bug cc-droid-factory: core serves /v1/responses but not the bare /responses route a Droid OpenAI provider posts to")
 	up := newDroidUpstream(t, codexReply)
 	base := startDroidCodexCore(t, up)
 	resp := postPath(t, context.Background(), base, "/responses", clientKey, `{"model":"gpt-5-codex","input":"Say hello.","stream":false}`)
