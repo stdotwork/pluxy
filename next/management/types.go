@@ -125,6 +125,23 @@ type RegistriesReply struct {
 	Registries []Registry `json:"registries"`
 }
 
+// Health is an account's health (Account.Health; the README's "Accounts").
+type Health = route.Health
+
+// Health states (Health.State) and where a block's end came from (Health.Source).
+const (
+	HealthOK         = route.HealthOK
+	HealthCooling    = route.HealthCooling
+	HealthExhausted  = route.HealthExhausted
+	HealthNeedsLogin = route.HealthNeedsLogin
+	HealthBanned     = route.HealthBanned
+	HealthDisabled   = route.HealthDisabled
+
+	SourceProvider   = route.SourceProvider
+	SourceBackoff    = route.SourceBackoff
+	SourceUnverified = route.SourceUnverified
+)
+
 // Account is an account as the management API lists it. It never holds a secret.
 type Account struct {
 	ID string `json:"id"`
@@ -170,6 +187,10 @@ type Account struct {
 	// fraction, a very large or very small exponent, an integer past 2^53), which a client that
 	// reads JSON numbers as float64, as a browser does, would write back changed.
 	SettingsInexact bool `json:"settings_inexact,omitempty"`
+
+	// Health is the account's state in one word, with when and why (route.Health): ok,
+	// cooling, exhausted, needs_login, banned or disabled.
+	Health Health `json:"health"`
 
 	// What routing knows about the account now (route.Runtime). An account that receives no
 	// requests (disabled, or waiting for a new login) has none of it.
@@ -262,6 +283,26 @@ type QuotaReply struct {
 	Quota     *protocol.Quota `json:"quota"`
 }
 
+// AccountModel is one model an account serves, as GET /accounts/{id}/models lists it: the
+// model by its upstream name, with what the extension says about it, and the names clients ask
+// for it by after the account's exclusions, aliases and prefix.
+type AccountModel struct {
+	protocol.Model
+	// Names are the names clients use for the model on this account; empty when the account's
+	// excluded_models leave it out.
+	Names []string `json:"names"`
+	// Excluded is true when the account's excluded_models leave the model out.
+	Excluded bool `json:"excluded,omitempty"`
+}
+
+// AccountModelsReply is GET /accounts/{id}/models's reply.
+type AccountModelsReply struct {
+	Models []AccountModel `json:"models"`
+	// From says where the list came from: "account" (read from the provider using the account's
+	// credential), "extension" (the extension's built-in list), or omitted.
+	From string `json:"from,omitempty"`
+}
+
 // ModelsReply is GET /models's reply.
 type ModelsReply struct {
 	Models []route.ServedModel `json:"models"`
@@ -283,7 +324,8 @@ type RefreshModelsReply struct {
 
 // ClientKey is a client key as the management API lists it.
 type ClientKey struct {
-	// ID names the key in calls, without showing it. It changes when core restarts.
+	// ID names the key in calls, without showing it. It stays the same across restarts (derived
+	// with the key in state/key-id.key).
 	ID string `json:"id"`
 	// Masked is the key with all but its first and last two characters hidden; a key shorter
 	// than 8 characters is hidden whole.

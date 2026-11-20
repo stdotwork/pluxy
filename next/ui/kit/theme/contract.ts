@@ -1,6 +1,8 @@
 // The theme contract, version 0, as code. themes/README.md is its reference; tests/contract.test.ts
 // checks that the two agree.
 
+import type { T3Appearance, T3RoleMap } from "./t3";
+
 export const THEME_VERSION = 0;
 
 /** Largest theme file, in bytes of UTF-8. */
@@ -193,6 +195,14 @@ export function tokenValueProblem(name: string, value: unknown): string | undefi
 export const APPEARANCES = ["both", "light", "dark"] as const;
 export type ThemeAppearance = (typeof APPEARANCES)[number];
 
+export interface T3ThemeData {
+  /** Which appearance holds `colors` and receives `canvas`/`accent` palette generation. */
+  appearance: T3Appearance;
+  generated?: T3RoleMap;
+  colors?: T3RoleMap;
+  variants?: Partial<Record<T3Appearance, T3RoleMap>>;
+}
+
 export interface Theme {
   id: string;
   name: string;
@@ -202,4 +212,5 @@ export interface Theme {
   dark?: Partial<Record<TokenName, string>>;
   layout: Partial<Layout>;
   css?: string;
+  t3?: T3ThemeData;
 }

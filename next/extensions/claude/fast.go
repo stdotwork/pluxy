@@ -76,7 +76,7 @@ func fastCredits(body []byte) bool {
 // well) nor moves the request on to another account. A refused shared usage window (quota)
 // is still the account's.
 func fastFailure(e *llm.Error) *llm.Error {
-	if e.Code != llm.CodeQuota {
+	if e.Code != llm.CodeQuota && e.Code != llm.CodeAccountClosed {
 		e.Scope = llm.ScopeRequest
 	}
 	return e

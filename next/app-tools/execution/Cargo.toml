@@ -30,6 +30,8 @@ windows-sys = { version = "=0.61.2", features = [
 ] }
 
 [features]
-# For the native test only (next/app/native/run.ts): an open launch also takes its opener from the
-# input's search_path, for the test's stand-in opener. Never in a release build.
+# For the native test only (next/app/native/run.ts, platform-tools.ts): an open launch also takes
+# its opener from the input's search_path, for the test's stand-in opener; on Windows a `console`
+# window does not wait for Enter, and the shell after the program runs one fixed command that
+# writes its working folder to `pluxy-after-exit` (src/launch_windows.rs). Never in a release build.
 native-test = []

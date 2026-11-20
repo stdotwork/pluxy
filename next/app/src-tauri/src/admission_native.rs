@@ -51,7 +51,7 @@ pub(super) fn set_app(app: &AppHandle) {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn app() -> Result<&'static AppHandle, String> {
+pub(super) fn app() -> Result<&'static AppHandle, String> {
     APP.get()
         .ok_or_else(|| "the native test did not keep its app".to_string())
 }

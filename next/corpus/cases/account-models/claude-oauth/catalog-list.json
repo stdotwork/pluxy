@@ -157,6 +157,12 @@
       "reason": "Different management API by design: the new management API answers application/json; today's core's gin handlers add a charset."
     },
     {
+      "path": "client.body.from",
+      "kind": "intended",
+      "want": "extension",
+      "reason": "The new management API reports whether each account model list came from the provider account or the extension fallback; the corpus intercepts /v1/models with 404, so the extension returns its built-in fallback."
+    },
+    {
       "path": "client.body.models[*].type",
       "kind": "intended",
       "absent": true,
