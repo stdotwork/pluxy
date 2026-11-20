@@ -95,6 +95,7 @@ fn fixture_in(root: &Path) -> (PathBuf, Confirmations, Action) {
             environment_review: vec![],
             secret_uses: vec![],
         }),
+        environment: None,
     };
     let c = Confirmations::open(dir.join("settings.json")).unwrap();
     (dir, c, action)
@@ -1178,6 +1179,46 @@ fn a_confirmed_open_is_refused_once_its_file_or_folder_changed() {
     std::os::unix::fs::symlink(dir.join("moved"), &within).unwrap();
     assert!(c.consume(&id, &t).is_err());
     let _ = fs::remove_dir_all(dir);
+}
+#[test]
+fn where_an_action_runs_is_shown_first_and_bound_into_a_remembered_approval() {
+    let (dir, mut c, a) = fixture();
+    let bob = Action {
+        environment: Some("Runs in WSL: distribution Ubuntu, user bob (/home/bob).".into()),
+        ..a.clone()
+    };
+    let p = c.prepare(bob.clone(), Origin::NativeUi).unwrap();
+    let review = p.review().unwrap();
+    assert!(
+        review.starts_with(
+            "Runs in WSL: distribution Ubuntu, user bob (/home/bob).\n\nThis native tool"
+        ),
+        "{review}"
+    );
+    let plain = c
+        .prepare(a.clone(), Origin::NativeUi)
+        .unwrap()
+        .review()
+        .unwrap();
+    assert!(!plain.contains("Runs in WSL"), "{plain}");
+    let (id, t) = approve(&mut c, bob.clone(), true);
+    c.consume(&id, &t).unwrap();
+    let gesture = || Gesture {
+        created: Instant::now(),
+        origin: Origin::NativeUi,
+    };
+    // The approval remembered for bob stands for bob only: not for alice, not for this computer.
+    let alice = Action {
+        environment: Some("Runs in WSL: distribution Ubuntu, user alice (/home/alice).".into()),
+        ..a.clone()
+    };
+    for other in [alice, a] {
+        let p = c.prepare(other, Origin::NativeUi).unwrap();
+        assert!(c.remembered(p, gesture()).is_err());
+    }
+    let p = c.prepare(bob, Origin::NativeUi).unwrap();
+    assert!(c.remembered(p, gesture()).is_ok());
+    remove(&dir);
 }
 
 /// Windows starts only program images: a file named `.exe` or `.com` that starts `MZ`. A batch

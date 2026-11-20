@@ -593,22 +593,83 @@ fn an_environment_names_a_wsl_distribution_and_user() {
     ] {
         assert!(environment::parse(bad).is_err(), "{bad}");
     }
+    let here = |distro: Option<&str>, user: &str, uid: u32, home: &str| environment::Here {
+        distro: distro.map(String::from),
+        user: user.into(),
+        uid,
+        home: home.into(),
+    };
+    let bob = "1001:/home/bob";
     assert_eq!(
-        environment::compare("wsl:Ubuntu:bob", (Some("Ubuntu"), "bob")),
+        environment::compare(
+            "wsl:Ubuntu:bob",
+            bob,
+            &here(Some("Ubuntu"), "bob", 1001, "/home/bob")
+        ),
         Ok(())
     );
     assert_eq!(
-        environment::compare("wsl:Ubuntu:bob", (Some("Other"), "bob")),
+        environment::compare(
+            "wsl:Ubuntu:bob",
+            bob,
+            &here(Some("Other"), "bob", 1001, "/home/bob")
+        ),
         Err("pluxy expected WSL Ubuntu/bob, this is Other/bob".into())
     );
     assert_eq!(
-        environment::compare("wsl:Ubuntu:bob", (Some("Ubuntu"), "alice")),
+        environment::compare(
+            "wsl:Ubuntu:bob",
+            bob,
+            &here(Some("Ubuntu"), "alice", 1000, "/home/alice")
+        ),
         Err("pluxy expected WSL Ubuntu/bob, this is Ubuntu/alice".into())
     );
     assert_eq!(
-        environment::compare("wsl:Ubuntu:bob", (None, "bob")),
+        environment::compare("wsl:Ubuntu:bob", bob, &here(None, "bob", 1001, "/home/bob")),
         Err("pluxy expected WSL Ubuntu/bob, this is (not WSL)/bob".into())
     );
+    // bob removed and made again (another number), or bob's home moved.
+    assert_eq!(
+        environment::compare(
+            "wsl:Ubuntu:bob",
+            bob,
+            &here(Some("Ubuntu"), "bob", 1002, "/home/bob")
+        ),
+        Err(
+            "pluxy expected bob with user ID 1001 and home /home/bob, this is user ID 1002 with \
+             home /home/bob"
+                .into()
+        )
+    );
+    assert_eq!(
+        environment::compare(
+            "wsl:Ubuntu:bob",
+            bob,
+            &here(Some("Ubuntu"), "bob", 1001, "/srv/bob")
+        ),
+        Err(
+            "pluxy expected bob with user ID 1001 and home /home/bob, this is user ID 1001 with \
+             home /srv/bob"
+                .into()
+        )
+    );
+    assert_eq!(environment::parse_account("0:/root"), Ok((0, "/root")));
+    assert_eq!(
+        environment::parse_account("1001:/home/b:c"),
+        Ok((1001, "/home/b:c"))
+    );
+    for bad in [
+        "",
+        "1001",
+        "1001:",
+        "1001:home",
+        "x:/h",
+        "-1:/h",
+        "+1:/h",
+        "99999999999:/h",
+    ] {
+        assert!(environment::parse_account(bad).is_err(), "{bad}");
+    }
 }
 
 #[test]
@@ -618,9 +679,13 @@ fn the_user_is_the_effective_user_ids_name() {
     assert_eq!(environment::effective_uid("Name:\tx\n"), None);
     let passwd = "root:x:0:0::/root:/bin/sh\nalice:x:1000:1000::/home/alice:/bin/sh\n\
                   bob:x:1001:1001::/home/bob:/bin/sh\nbob2:x:1001:1001::/home/b:/bin/sh\n";
-    assert_eq!(environment::user_named(passwd, 1001), Some("bob"));
-    assert_eq!(environment::user_named(passwd, 0), Some("root"));
-    assert_eq!(environment::user_named(passwd, 7), None);
+    assert_eq!(
+        environment::account_of(passwd, 1001),
+        Some(("bob", "/home/bob"))
+    );
+    assert_eq!(environment::account_of(passwd, 0), Some(("root", "/root")));
+    assert_eq!(environment::account_of(passwd, 7), None);
+    assert_eq!(environment::account_of("short:x:7\n", 7), None);
 }
 
 /// This test binary run again as a child, with env, running only `identity_child`: what it said.
@@ -641,6 +706,7 @@ fn identity_in_child_os(env: &[(&str, &std::ffi::OsStr)]) -> String {
         "--test-threads=1",
     ])
     .env_remove("PLUXY_ENVIRONMENT")
+    .env_remove("PLUXY_ENVIRONMENT_ACCOUNT")
     .env_remove("WSL_DISTRO_NAME")
     .env("PLUXY_PROGRAM_TEST_CHILD", "1")
     .env("PLUXY_APP_CONTRACT_VERSIONS", "0")
@@ -677,30 +743,77 @@ fn a_program_in_another_distribution_or_as_another_user_refuses_to_start() {
         .output()
         .unwrap();
     let me = String::from_utf8(me.stdout).unwrap().trim().to_string();
+    // This user's number and home, from the system's own tools.
+    let uid = std::process::Command::new("id").arg("-u").output().unwrap();
+    let uid = String::from_utf8(uid.stdout).unwrap().trim().to_string();
+    let entry = std::process::Command::new("getent")
+        .args(["passwd", &uid])
+        .output()
+        .unwrap();
+    let entry = String::from_utf8(entry.stdout).unwrap();
+    let home = entry.trim().split(':').nth(5).unwrap().to_string();
+    let account = format!("{uid}:{home}");
     // No environment: this computer, as before.
     assert_eq!(identity_in_child(&[]), "ok example/tool");
-    // The distribution and user named: it starts.
+    // The distribution, user, user number and home named: it starts.
     let here = format!("wsl:Fake:{me}");
+    let named = |env: &str, distro: Option<&str>, account: Option<&str>| {
+        let mut v = vec![("PLUXY_ENVIRONMENT", env.to_string())];
+        v.extend(distro.map(|d| ("WSL_DISTRO_NAME", d.to_string())));
+        v.extend(account.map(|a| ("PLUXY_ENVIRONMENT_ACCOUNT", a.to_string())));
+        let v: Vec<(&str, &str)> = v.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        identity_in_child(&v)
+    };
     assert_eq!(
-        identity_in_child(&[("PLUXY_ENVIRONMENT", &here), ("WSL_DISTRO_NAME", "Fake")]),
+        named(&here, Some("Fake"), Some(&account)),
         "ok example/tool"
     );
     // Another distribution, another user, or not WSL at all: it stops before hello.
     assert_eq!(
-        identity_in_child(&[("PLUXY_ENVIRONMENT", &here), ("WSL_DISTRO_NAME", "Other")]),
+        named(&here, Some("Other"), Some(&account)),
         format!("err pluxy expected WSL Fake/{me}, this is Other/{me}")
     );
     assert_eq!(
-        identity_in_child(&[
-            ("PLUXY_ENVIRONMENT", "wsl:Fake:nosuchuser"),
-            ("WSL_DISTRO_NAME", "Fake")
-        ]),
+        named("wsl:Fake:nosuchuser", Some("Fake"), Some(&account)),
         format!("err pluxy expected WSL Fake/nosuchuser, this is Fake/{me}")
     );
     assert_eq!(
-        identity_in_child(&[("PLUXY_ENVIRONMENT", &here)]),
+        named(&here, None, Some(&account)),
         format!("err pluxy expected WSL Fake/{me}, this is (not WSL)/{me}")
     );
+    // The user's name, but another account than the record's: a user removed and made again
+    // under the name (another number), or with another home.
+    let other_uid = format!("{}:{home}", uid.parse::<u64>().unwrap() + 4242);
+    assert_eq!(
+        named(&here, Some("Fake"), Some(&other_uid)),
+        format!(
+            "err pluxy expected {me} with user ID {} and home {home}, this is user ID {uid} with \
+             home {home}",
+            uid.parse::<u64>().unwrap() + 4242
+        )
+    );
+    assert_eq!(
+        named(
+            &here,
+            Some("Fake"),
+            Some(&format!("{uid}:/nonexistent-home"))
+        ),
+        format!(
+            "err pluxy expected {me} with user ID {uid} and home /nonexistent-home, this is user \
+             ID {uid} with home {home}"
+        )
+    );
+    // No account, or one that is not `<user ID>:<home>`: refused, never taken for any.
+    assert_eq!(
+        named(&here, Some("Fake"), None),
+        "err PLUXY_ENVIRONMENT_ACCOUNT is not set: start this program from pluxy's app"
+    );
+    for bad in ["", "x:/home/x", "1000", "1000:", "1000:home", "-1:/h"] {
+        assert!(
+            named(&here, Some("Fake"), Some(bad)).starts_with("err "),
+            "{bad}"
+        );
+    }
     assert!(identity_in_child(&[("PLUXY_ENVIRONMENT", "docker:x")]).starts_with("err "));
 }
 
@@ -734,17 +847,41 @@ fn wsl_real_identity_is_the_distribution_and_user_wsl_runs_this_as() {
         Ok(distro),
         "WSL sets the distribution's name"
     );
-    assert_eq!(environment::check(&format!("wsl:{distro}:{user}")), Ok(()));
+    // The user's number and home as the distribution's own tools give them (WSL sets HOME from
+    // the user's entry).
+    let uid = std::process::Command::new("id").arg("-u").output().unwrap();
+    let uid: u32 = String::from_utf8(uid.stdout)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let home = std::env::var("HOME").expect("HOME");
+    let account = format!("{uid}:{home}");
     assert_eq!(
-        environment::check(&format!("wsl:{other}:{user}")),
+        environment::check(&format!("wsl:{distro}:{user}"), &account),
+        Ok(())
+    );
+    assert_eq!(
+        environment::check(&format!("wsl:{other}:{user}"), &account),
         Err(format!(
             "pluxy expected WSL {other}/{user}, this is {distro}/{user}"
         ))
     );
     assert_eq!(
-        environment::check(&format!("wsl:{distro}:root")),
+        environment::check(&format!("wsl:{distro}:root"), &account),
         Err(format!(
             "pluxy expected WSL {distro}/root, this is {distro}/{user}"
+        ))
+    );
+    assert_eq!(
+        environment::check(
+            &format!("wsl:{distro}:{user}"),
+            &format!("{}:{home}", uid + 1)
+        ),
+        Err(format!(
+            "pluxy expected {user} with user ID {} and home {home}, this is user ID {uid} with \
+             home {home}",
+            uid + 1
         ))
     );
 }

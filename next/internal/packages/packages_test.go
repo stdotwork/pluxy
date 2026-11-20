@@ -308,3 +308,34 @@ func TestCommitAndRemoveStayInsideThePackagesFolder(t *testing.T) {
 		t.Error("the package was written outside the packages folder")
 	}
 }
+
+// A package's description is read when it is one line of bounded length, with kind and tier as
+// lower-case words; an index with a title that would move a terminal's cursor is refused.
+func TestIndexDescriptions(t *testing.T) {
+	sum := strings.Repeat("a", 64)
+	ix := func(p string) Index {
+		var x Index
+		if err := json.Unmarshal([]byte(`{"registry_version":0,"packages":{"pluxy/x":`+p+`}}`), &x); err != nil {
+			t.Fatal(err)
+		}
+		return x
+	}
+	rel := `"releases":[{"version":"1","protocol":[0],"artifacts":{"linux/amd64":{"url":"x.tar.gz","sha256":"` + sum + `","size":1}}}]`
+	for _, c := range []struct {
+		name, pkg string
+		ok        bool
+	}{
+		{"none", `{` + rel + `}`, true},
+		{"all", `{"title":"Claude","summary":"Claude models — with a subscription.","kind":"provider","tier":"pick",` + rel + `}`, true},
+		{"a later kind", `{"kind":"theme","tier":"unverified",` + rel + `}`, true},
+		{"escape in title", `{"title":"Claude\u001b[2J",` + rel + `}`, false},
+		{"newline in summary", `{"summary":"one\ntwo",` + rel + `}`, false},
+		{"long title", `{"title":"` + strings.Repeat("t", 81) + `",` + rel + `}`, false},
+		{"tier not a word", `{"tier":"Pick!",` + rel + `}`, false},
+	} {
+		x := ix(c.pkg)
+		if err := x.validate(); (err == nil) != c.ok {
+			t.Errorf("%s: validate = %v, want ok %v", c.name, err, c.ok)
+		}
+	}
+}

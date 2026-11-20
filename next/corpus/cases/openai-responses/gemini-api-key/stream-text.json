@@ -497,7 +497,7 @@
     {
       "path": "client.events",
       "kind": "intended",
-      "reason": "The new core writes a Responses stream from a Gemini reply with Gemini's responseId as the response id (today's core prefixes it with resp_), item ids built from it, call ids as call_<n> when Gemini sends none (today's core makes them from the time), and each thought signature as its own reasoning item holding the signature unchanged in encrypted_content, before the part it came on, with an empty summary part (today's core wraps it in its own carrier string, cpa-gemini-responses-carrier-v1:, that records which part it belongs to).",
+      "reason": "The new core writes a Responses stream from a Gemini reply with Gemini's responseId as the response id (today's core prefixes it with resp_), item ids built from it, call ids as call_<responseId>_<n>, unique across replies, when Gemini sends none (today's core makes them from the time), and each thought signature as its own reasoning item holding the signature unchanged in encrypted_content, before the part it came on, with an empty summary part (today's core wraps it in its own carrier string, cpa-gemini-responses-carrier-v1:, that records which part it belongs to).",
       "want": [
         {
           "data": {

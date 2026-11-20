@@ -496,6 +496,15 @@ func TestFileBackendWindowsSkipsARecordAnotherAccountOwns(t *testing.T) {
 	}
 }
 
+// A file CreatePrivate makes has the private access list from the start, as a record has.
+func TestCreatePrivateWindowsAccessList(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := CreatePrivate(path, []byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+	checkPrivate(t, "created file", path, false)
+}
+
 // letsEveryoneIn reports whether path's access list has an entry for Everyone.
 func letsEveryoneIn(t *testing.T, path string) bool {
 	t.Helper()

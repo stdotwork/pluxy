@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"io"
 	"maps"
+	"net/http"
 	"os"
 	"os/exec"
 	"path"
@@ -22,6 +23,8 @@ import (
 type packManifest struct {
 	ID       string `json:"id"`
 	Version  string `json:"version"`
+	Title    string `json:"title"`
+	Summary  string `json:"summary"`
 	Protocol []int  `json:"protocol"`
 }
 
@@ -29,6 +32,10 @@ type packManifest struct {
 type packIndex struct {
 	RegistryVersion int `json:"registry_version"`
 	Packages        map[string]struct {
+		Title    string `json:"title"`
+		Summary  string `json:"summary"`
+		Kind     string `json:"kind"`
+		Tier     string `json:"tier"`
 		Releases []struct {
 			Version   string `json:"version"`
 			Protocol  []int  `json:"protocol"`
@@ -131,10 +138,19 @@ func packCore(t *testing.T, index string) string {
 }
 
 // The pack tool writes an archive for every extension and platform it is asked for, and a
-// bundled index that pins each archive; a fresh core installs and enables every one.
+// bundled index that pins each archive and describes each package from its manifest; a fresh
+// core installs none, offers every one, and installs each when asked.
 func TestPackToolBundlesEveryExtension(t *testing.T) {
 	t.Parallel()
 	manifests := extensionManifests(t)
+	// The providers of the setup picks; pluxy's other extensions are verified.
+	picked := map[string]string{}
+	for id := range manifests {
+		picked[id] = "verified"
+	}
+	for _, id := range []string{"pluxy/codex", "pluxy/claude", "pluxy/openai-compatible", "pluxy/gemini", "pluxy/xai", "pluxy/kimi"} {
+		picked[id] = "pick"
+	}
 	bin := buildPackTool(t)
 	out := t.TempDir()
 	runPack(t, bin, out)
@@ -152,6 +168,9 @@ func TestPackToolBundlesEveryExtension(t *testing.T) {
 		if !ok {
 			t.Errorf("index does not list %s", id)
 			continue
+		}
+		if p.Title == "" || p.Title != m.Title || p.Summary != m.Summary || p.Kind != "provider" || p.Tier != picked[id] {
+			t.Errorf("%s: described as %q, %q, %s, %s; want the manifest's title and summary, provider, %s", id, p.Title, p.Summary, p.Kind, p.Tier, picked[id])
 		}
 		if len(p.Releases) != 1 {
 			t.Errorf("%s: %d releases, want 1", id, len(p.Releases))
@@ -186,6 +205,23 @@ func TestPackToolBundlesEveryExtension(t *testing.T) {
 	}
 
 	base := packCore(t, filepath.Join(out, "bundled", "index.json"))
+	if ps := listPackages(t, base); len(ps) != 0 {
+		t.Errorf("a fresh core installed %+v", ps)
+	}
+	var regs registriesView
+	if code := manage(t, base, "GET", "/registries", nil, &regs); code != http.StatusOK || len(regs.Registries) != 1 {
+		t.Fatalf("registries: %d %+v", code, regs)
+	}
+	offered := map[string]string{}
+	for _, p := range regs.Registries[0].Packages {
+		offered[p.ID] = p.Title
+	}
+	for id, m := range manifests {
+		if offered[id] != m.Title {
+			t.Errorf("core offers %s with the title %q, want %q", id, offered[id], m.Title)
+		}
+	}
+	installBundled(t, base, slices.Sorted(maps.Keys(digests))...)
 	installed := map[string]packageView{}
 	for _, p := range listPackages(t, base) {
 		installed[p.ID] = p
@@ -267,6 +303,9 @@ func packTree(t *testing.T, dir string) map[string][]byte {
 type appToolManifest struct {
 	ID      string `json:"id"`
 	Version string `json:"version"`
+	Title   string `json:"title"`
+	Summary string `json:"summary"`
+	Kind    string `json:"kind"`
 	App     struct {
 		Programs map[string]string `json:"programs"`
 		UI       *struct {
@@ -404,11 +443,32 @@ func TestPackToolPacksAppTools(t *testing.T) {
 	if len(archives) != want {
 		t.Errorf("%d archives, want %d (each tool's named platforms)", len(archives), want)
 	}
+	// The clients of the setup picks; pluxy's other app tools are verified.
+	appTier := map[string]string{}
+	for id := range manifests {
+		appTier[id] = "verified"
+	}
+	for _, id := range []string{"pluxy/claude-code", "pluxy/codex-setup", "pluxy/opencode", "pluxy/pi-setup", "pluxy/omp-setup"} {
+		appTier[id] = "pick"
+	}
+	clients := 0
+	defer func() {
+		// Every writer of a client's settings is described as a client.
+		if clients != 8 {
+			t.Errorf("%d app tools are described as clients, want the 8 client writers", clients)
+		}
+	}()
 	for id, m := range manifests {
 		p, ok := ix.Packages[id]
 		if !ok || len(p.Releases) != 1 {
 			t.Errorf("index lists %s as %+v, want one release", id, p)
 			continue
+		}
+		if p.Title != m.Title || p.Summary != m.Summary || p.Kind != m.Kind || p.Tier != appTier[id] {
+			t.Errorf("%s: described as %q, %q, %q, %s; want the manifest's title, summary and kind, %s", id, p.Title, p.Summary, p.Kind, p.Tier, appTier[id])
+		}
+		if m.Kind == "client" {
+			clients++
 		}
 		rel := p.Releases[0]
 		if rel.Version != m.Version {
