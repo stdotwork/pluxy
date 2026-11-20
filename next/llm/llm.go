@@ -160,6 +160,10 @@ const (
 	// Interactions request in Google's own shape, which names a model or an agent; the reply is
 	// one JSON object, or server-sent events when it asks for "stream": true.
 	FormatGeminiInteractions = "gemini.interactions"
+	// FormatOpenAIResponsesInputTokens is OpenAI's Responses input token count, POST
+	// /v1/responses/input_tokens: a Responses request body, answered with
+	// {"object":"response.input_tokens","input_tokens":N}.
+	FormatOpenAIResponsesInputTokens = "openai.responses.input_tokens"
 	// FormatOpenAIImagesGenerations is OpenAI's Images API generation, POST
 	// /v1/images/generations: a JSON body, answered with one JSON object, or server-sent events
 	// when it asks for a stream.
