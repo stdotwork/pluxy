@@ -64,6 +64,9 @@ pub struct Action {
     pub native_tool: bool,
     pub files: Vec<PathBuf>,
     pub launch: Option<Launch>,
+    /// Where the action runs when that is not this computer (`environments::Record::
+    /// confirmation_line`): shown above the review, and part of what a remembered approval names.
+    pub environment: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct Metadata {
@@ -269,6 +272,8 @@ struct ExactAction {
     native_tool: bool,
     files: Vec<Target>,
     launch: Option<ExactLaunch>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    environment: Option<String>,
 }
 // Supersede an earlier approval for this launch recipe even after executable metadata,
 // environment policy or terminal-adapter revision changes; those still require fresh review.
@@ -424,6 +429,10 @@ impl Prepared {
 
 ",
             );
+        }
+        // Where it runs, when that is not this computer, first of all.
+        if let Some(line) = &self.exact.environment {
+            s.insert_str(0, &format!("{}\n\n", escape_format_characters(line)));
         }
         Ok(s)
     }
@@ -1056,6 +1065,7 @@ impl Confirmations {
                 native_tool: false,
                 files: vec![],
                 launch: None,
+                environment: None,
             },
             Origin::Main,
         )?;
@@ -1222,6 +1232,7 @@ impl Confirmations {
                 native_tool: action.native_tool,
                 files: files.iter().map(|f| f.identity.clone()).collect(),
                 launch,
+                environment: action.environment,
             },
             files,
             executable,

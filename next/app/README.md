@@ -366,6 +366,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `device_list` | This device's extension catalog |
 | `device_registries` | What the registries in `device-registries.json` offer this computer |
 | `device_install` | Installs or updates a package from one of those registries |
+| `device_install_wsl` | Installs a native tool's Linux build (`linux/amd64` or `linux/arm64`) for its active release, through a native confirmation ([Linux build for WSL](app-host/README.md#linux-build-for-wsl)) |
 | `device_install_file` | Opens the native file chooser and installs or updates the package chosen there (Linux) |
 | `device_enable`, `device_remove`, `device_rollback` | Enables or disables (a native tool only through its native confirmation), removes, or rolls back a package on this device |
 | `device_imports` | Allows a curated web package's native imports, through a native confirmation, or revokes them |
@@ -374,7 +375,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `access_signer` | Opens a native confirmation to approve a device package's signer for its source |
 | `access_grant` | Opens the native file chooser for a package's declared resource, then a native confirmation, and keeps the grant |
 | `access_revoke` | Revokes a grant, answering once the reads under it have finished |
-| `program_call`, `program_cancel` | Calls an operation of an admitted native tool, starting it if it is not running; cancels a call by the ticket it was given |
+| `program_call`, `program_cancel` | Calls an operation of an admitted native tool, starting it if it is not running, on this computer or in a WSL environment the window names (`environment`, Windows); cancels a call by the ticket it was given |
 | `program_status` | Whether a native tool runs, its leases, how it last stopped, its crashes in a row and backoff, calls of unknown outcome, replaced releases still draining, its vault journals, open and recently ended, or why they cannot be read, and its managed runtimes, running, ended or `unknown` (left running by a run of the app that did not stop them) |
 | `vault_secret_add` | Opens native key entry and keeps the secret typed there in the vault under a label; returns only its ID |
 | `vault_secrets`, `vault_secret_remove` | The vault's secrets, by ID and label (and a client key's binding), never their values; removes one |
@@ -383,7 +384,9 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `core_alias_create` | After a native confirmation, adds a model alias (`fork`, so the model keeps its name) to the `model_alias` of each account added by login that serves the model in the connected core; refuses an alias core already serves for anything else and a model only accounts set in core's config serve, and takes the alias out again when core then does not serve it; returns the accounts that have it (Linux) |
 | `launcher_state` | The launcher's state: whether the execution program can be used, the remembered launches with their source, the recent folders and the notice setting |
 | `launcher_terminals` | The terminals the execution program finds, Automatic first |
-| `launcher_launch` | A new launch, prepared by the execution program; it always opens the native confirmation |
+| `launcher_launch` | A new launch, prepared by the execution program (in a WSL environment the window names, by `pluxy/wsl`); it always opens the native confirmation |
+| `environments_get` | The WSL environments the app knows, and whether WSL can be used here (Windows only) |
+| `environment_add`, `environment_remove` | Adds a WSL distribution and user, as `pluxy/wsl` checks them (which starts the distribution), or checks one again; forgets one, stopping the tools running there |
 | `launcher_start` | Starts a remembered launch again in one click, from the window only, with its remembered approval |
 | `launcher_forget` | Forgets a remembered launch, revoking its approval |
 | `launcher_settings` | Whether a one-click start shows a launch notice |
@@ -972,6 +975,17 @@ the menu. The list, the recent folders and the notice setting are in `launcher.j
 `connection.json`, readable only by your user; it holds no secret (a secret field holds a vault
 secret's ID), and a damaged file is moved aside as `launcher.json.corrupt-<time>`.
 
+On Windows, a launch can also start **in WSL**, in a distribution and as a user the app knows
+([Tools in WSL](app-host/README.md#tools-in-wsl-windows)): `pluxy/wsl` prepares it inside the
+distribution (the program found on the `PATH` that `wsl.exe --exec` gives, with no login shell, or
+the full path given; the folder in the distribution, by default the user's home), and the execution
+program launches that `wsl.exe` command. It opens in the Windows console (no other terminal is
+offered there); a terminal launch takes no standard input and is detached only. The confirmation
+shows where it starts and that the program inside the distribution is found when it starts, not
+checked by the app, which cannot hold a file there. Its recent folders and its remembered launch go
+by the client and the environment, such as **Claude Code (WSL Ubuntu/bob)**; a launch remembered
+for one distribution or user never starts in another.
+
 Detached launches keep running after the app quits, each in a transient systemd scope of its own
 when a systemd user manager runs ([Launches](app-host/README.md#launches-and-managed-runtimes)). The
 page lists the managed runtimes the execution program started, with **Stop** and **Restart** (each
@@ -1013,6 +1027,23 @@ settings. The card's terminal list loads again whenever this device's packages c
 (`pluxy-device`), such as when the launcher is enabled from Beginner Mode; a chosen terminal the
 list no longer offers falls back to Automatic (`src/startCli.ts`). Every client page's Start CLI
 does the same.
+
+**In WSL** (Windows): the page's **Environment / configuration directory** block
+(`src/environmentBlock.tsx`, shared by client pages) chooses **Windows local** or **WSL
+subsystem**, then a **Distribution** and a **User**. Choosing WSL lists the distributions without
+starting any (`pluxy/wsl`, which must be installed and enabled); reading a distribution's users
+starts it, which the block says. Picking a user has the app check that distribution and user and
+keep its record ([Tools in WSL](app-host/README.md#tools-in-wsl-windows)); **Detect again** lists
+them again. Every call of the page then goes to Claude Code's Linux build running in that
+distribution as that user, so the default file is that user's `~/.claude/settings.json` and typed
+paths are paths in the distribution (a `\\wsl.localhost\<distribution>\…` or `\\wsl$\…` path of the
+chosen distribution becomes its Linux path; any other network path is refused there). The first
+use asks to **Install the Linux build for WSL**, in its own native confirmation. **Start CLI**
+starts Claude Code in that distribution through the launcher, in the Windows console. The page
+keeps its last choice for the window; the app checks it against its records on every call.
+**Apply** does not work in WSL yet: it needs a client key or one of the vault's secrets, and the
+vault's secrets, client key capture and native key entry are Linux only for now, so on Windows
+there is no key to give. Reading, previewing, backups and **Start CLI** work there.
 
 **Backup and restore** (`src/backups.tsx`, the backup browser every writer's page shows) keeps
 manual backups of the previewed file in the app's vault through the tool's standard backup
