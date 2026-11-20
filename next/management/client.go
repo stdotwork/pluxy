@@ -345,6 +345,13 @@ func (c *Client) ClientPaste(ctx context.Context, id, keyID string) (ClientPaste
 	return v, c.get(ctx, "/setup/clients/"+url.PathEscape(id)+"/paste", q, &v)
 }
 
+// SetupImport is POST /setup/import.
+func (c *Client) SetupImport(ctx context.Context, req SetupImportRequest) (ImportReport, error) {
+	var v ImportReport
+	_, err := c.Call(ctx, http.MethodPost, "/setup/import", nil, req, &v)
+	return v, err
+}
+
 // SetupDone is POST /setup/done.
 func (c *Client) SetupDone(ctx context.Context) (SetupDoneReply, error) {
 	var v SetupDoneReply
