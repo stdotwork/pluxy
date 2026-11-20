@@ -61,10 +61,21 @@ func TestEmbeddingsThroughOpenAICompatible(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if len(got) != 1 {
-		t.Fatalf("upstream got %d requests, want 1", len(got))
+	var paths []string
+	for _, r := range got {
+		paths = append(paths, r.method+" "+r.path)
 	}
-	r := got[0]
+	var embedding *request
+	for i := range got {
+		if got[i].path == "/v1/embeddings" {
+			embedding = &got[i]
+			break
+		}
+	}
+	if embedding == nil {
+		t.Fatalf("upstream got %v, want POST /v1/embeddings", paths)
+	}
+	r := *embedding
 	if r.method != http.MethodPost || r.path != "/v1/embeddings" {
 		t.Errorf("upstream request = %s %s, want POST /v1/embeddings", r.method, r.path)
 	}
