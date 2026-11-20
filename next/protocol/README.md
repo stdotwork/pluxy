@@ -333,7 +333,7 @@ event as for `generate`.
 | Field | Meaning |
 | --- | --- |
 | `models` | The models the account serves, by the names its upstream knows them by. Empty when the extension has no list for the account. At most 10000. |
-| `owned_by` | Who provides the account's models, shown as `owned_by` for models without one of their own, and for the models the account's config names. Default: the account's ID. |
+| `owned_by` | Who provides the account's models, shown as `owned_by` for models without one of their own, and for the models the account's config names. Default: the extension's ID (never the account's: an account ID can be an email address or a label). |
 | model `id` | The model's name upstream, as requests name it. Required, unique in the list; core keeps the first of any repeats. |
 | model `name` | Its resource name in Gemini's list, such as `models/gemini-2.5-pro`. Default `id`. |
 | model `display_name`, `description`, `version` | For people. |
