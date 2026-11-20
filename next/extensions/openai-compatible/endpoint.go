@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 
@@ -57,7 +58,11 @@ func embeddings(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	}
 	// The key goes as Chat's does on both wires that serve embeddings.
 	chat := wireInfo{format: llm.FormatOpenAIChat}
-	resp, err := postBody(ctx, call, s, chat, key, "/embeddings", call.Request.Native.Body)
+	reqBody, err := embeddingsBody(call)
+	if err != nil {
+		return err
+	}
+	resp, err := postBody(ctx, call, s, chat, key, "/embeddings", reqBody)
 	if err != nil {
 		return err
 	}
@@ -81,4 +86,15 @@ func embeddings(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return err
 	}
 	return out.Finish(llm.Finish{Reason: llm.FinishStop}, nil)
+}
+
+// embeddingsBody returns the client's Embeddings body, naming the model routing chose when it
+// differs from the client's (an account's alias names a model upstream by another name).
+func embeddingsBody(call sdk.Call) ([]byte, error) {
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(call.Request.Native.Body, &body); err != nil || body == nil {
+		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "the Embeddings API request body is not a JSON object", Scope: llm.ScopeRequest}
+	}
+	out, _, err := withModel(call.Request.Native.Body, body, call.Request.Model)
+	return out, err
 }

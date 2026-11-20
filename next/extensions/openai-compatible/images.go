@@ -102,7 +102,7 @@ func imageBody(call sdk.Call) ([]byte, string, error) {
 			return multipartBody.body, multipartBody.contentType, nil
 		}
 	}
-	out, changed, err := withImageModel(call.Request.Native.Body, body, call.Request.Model)
+	out, changed, err := withModel(call.Request.Native.Body, body, call.Request.Model)
 	if err != nil {
 		return nil, "", err
 	}
@@ -297,9 +297,9 @@ func extensionForMediaType(mediaType string) string {
 	return ""
 }
 
-// withImageModel returns body with model in place, or changed false when it already names the
+// withModel returns body with model in place, or changed false when it already names the
 // model routing chose. The original bytes are kept in that case.
-func withImageModel(original []byte, body map[string]json.RawMessage, model string) ([]byte, bool, error) {
+func withModel(original []byte, body map[string]json.RawMessage, model string) ([]byte, bool, error) {
 	if model == "" {
 		return original, false, nil
 	}
