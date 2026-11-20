@@ -82,8 +82,9 @@ func TestOpenAICompatibleResponsesCompact(t *testing.T) {
 			io.WriteString(w, upstreamReply)
 		})
 		base := runCore(t, map[string]any{
-			"listen":      "127.0.0.1:0",
-			"client_keys": []string{clientKey},
+			"listen":         "127.0.0.1:0",
+			"client_keys":    []string{clientKey},
+			"management_key": managementKey,
 			"extension": map[string]any{
 				"manifest": filepath.Join(binDir, "pluxy-extension.json"),
 				"accounts": []any{map[string]any{
@@ -125,8 +126,9 @@ func TestOpenAICompatibleResponsesCompact(t *testing.T) {
 				`"usage":{"prompt_tokens":144,"prompt_tokens_details":{"cached_tokens":20},"completion_tokens":276,"completion_tokens_details":{"reasoning_tokens":200},"total_tokens":420}}`)
 		})
 		base := runCore(t, map[string]any{
-			"listen":      "127.0.0.1:0",
-			"client_keys": []string{clientKey},
+			"listen":         "127.0.0.1:0",
+			"client_keys":    []string{clientKey},
+			"management_key": managementKey,
 			"extension": map[string]any{
 				"manifest": filepath.Join(binDir, "pluxy-extension.json"),
 				"accounts": []any{map[string]any{
@@ -242,8 +244,9 @@ func TestOpenAICompatibleResponsesCompact(t *testing.T) {
 			w.WriteHeader(http.StatusInternalServerError)
 		})
 		base := runCore(t, map[string]any{
-			"listen":      "127.0.0.1:0",
-			"client_keys": []string{clientKey},
+			"listen":         "127.0.0.1:0",
+			"client_keys":    []string{clientKey},
+			"management_key": managementKey,
 			"extension": map[string]any{
 				"manifest": filepath.Join(binDir, "pluxy-extension.json"),
 				"accounts": []any{map[string]any{

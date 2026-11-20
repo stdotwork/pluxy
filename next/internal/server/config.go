@@ -55,8 +55,8 @@ type Config struct {
 	// default, answers with core's own estimate (package tokenest); false answers with the
 	// error. A count that only accounts that can count refuse is an error either way.
 	TokenCountEstimate *bool `json:"token_count_estimate,omitempty"`
-	// ManagementKey turns on the management API (ManagementPrefix); clients send it as a
-	// bearer token. Empty: no management API.
+	// ManagementKey is the key of the management API (ManagementPrefix); clients send it as a
+	// bearer token. Required: a config without one is refused.
 	ManagementKey string `json:"management_key,omitempty"`
 	// ManagementAllowRemote serves the management API to clients on other machines too (today's
 	// management.allow-remote). Default: only to this machine (FromThisMachine).
@@ -88,6 +88,9 @@ type Config struct {
 	// keyDigests are the SHA-256 digests of ClientKeys, made when the config is loaded so that a
 	// request's check does not hash a key (prepareClientKeys).
 	keyDigests [][sha256.Size]byte
+	// keyHash, when set, is what digest hashes with instead of sha256.Sum256: tests set it to
+	// count the bytes a request's key check hashes.
+	keyHash func([]byte) [sha256.Size]byte
 	// managementDigest is the SHA-256 digest of ManagementKey, made when the config is loaded for
 	// the same reason (prepareManagementKey); nil: not made.
 	managementDigest *[sha256.Size]byte
@@ -117,8 +120,17 @@ type Config struct {
 func (c *Config) prepareClientKeys() {
 	c.keyDigests = make([][sha256.Size]byte, len(c.ClientKeys))
 	for i, k := range c.ClientKeys {
-		c.keyDigests[i] = sha256.Sum256([]byte(k))
+		c.keyDigests[i] = c.digest([]byte(k))
 	}
+}
+
+// digest hashes b with the hash a test replaced sha256.Sum256 with, if it did (keyHash), and
+// with sha256.Sum256 otherwise.
+func (c *Config) digest(b []byte) [sha256.Size]byte {
+	if c.keyHash != nil {
+		return c.keyHash(b)
+	}
+	return sha256.Sum256(b)
 }
 
 // prepareManagementKey makes the digest of the management key, which the management API compares
@@ -145,7 +157,7 @@ func (c *Config) clientKeyDigests() [][sha256.Size]byte {
 	}
 	out := make([][sha256.Size]byte, len(c.ClientKeys))
 	for i, k := range c.ClientKeys {
-		out[i] = sha256.Sum256([]byte(k))
+		out[i] = c.digest([]byte(k))
 	}
 	return out
 }
@@ -264,10 +276,7 @@ func (p *PprofConfig) prepare() error {
 	if _, err := strconv.ParseUint(port, 10, 16); err != nil {
 		return fmt.Errorf("config: pprof.addr %q: the port must be a number from 0 to 65535", p.Addr)
 	}
-	if strings.EqualFold(host, "localhost") {
-		return nil
-	}
-	if ip, err := netip.ParseAddr(host); err != nil || !ip.IsLoopback() {
+	if !IsLoopbackHost(host) {
 		return fmt.Errorf("config: pprof.addr %q must be a loopback address (127.0.0.0/8, ::1 or localhost): the profiling pages show the program's memory and goroutines, so they are served on this machine only", p.Addr)
 	}
 	return nil
@@ -378,6 +387,9 @@ func (x ExtensionConfig) validate(name string, seen map[string]bool) error {
 		if err := upheader.Check(fmt.Sprintf("%s.accounts[%d].headers", name, i), a.Headers); err != nil {
 			return fmt.Errorf("config: %w", err)
 		}
+		if err := route.ValidateTimeouts(fmt.Sprintf("%s.accounts[%d].timeouts", name, i), a.Timeouts); err != nil {
+			return fmt.Errorf("config: %w", err)
+		}
 		if err := a.CheckNames(); err != nil {
 			return fmt.Errorf("config: %s.accounts[%d]: %w", name, i, err)
 		}
@@ -447,6 +459,18 @@ func LoadConfig(path string) (*Config, error) {
 	return ParseConfig(b, path)
 }
 
+// LoadImportConfig reads and validates a config file for -import-auth, which imports accounts
+// and exits, serving nothing: a config with no usable management key is read too, so that a
+// config.yaml whose key today's core hashed can still bring its accounts across. Serving it is
+// still refused.
+func LoadImportConfig(path string) (*Config, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return parseConfig(b, path, false)
+}
+
 // exampleClientKeys are the client keys of today's example config (config.example.yaml). They
 // are public, so a config that still holds one has not set up access.
 var exampleClientKeys = []string{"your-api-key-1", "your-api-key-2", "your-api-key-3"}
@@ -475,7 +499,14 @@ func IsYAML(path string) bool {
 // it are relative to path's folder. A config.yaml (IsYAML) is read with today's core's key
 // names (package legacy) and then checked as the JSON config is.
 func ParseConfig(b []byte, path string) (*Config, error) {
+	return parseConfig(b, path, true)
+}
+
+// parseConfig is ParseConfig; with needKey false a config with no usable management key is
+// read too (LoadImportConfig).
+func parseConfig(b []byte, path string, needKey bool) (*Config, error) {
 	c := Config{Import: legacy.DefaultImportOptions}
+	hashed := false
 	if IsYAML(path) {
 		res, err := legacy.Translate(b)
 		if err != nil {
@@ -485,6 +516,7 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 			return nil, fmt.Errorf("config %s: %w", path, err)
 		}
 		c.Notices, c.AuthDir, c.Import = res.Notices, res.AuthDir, res.Import
+		hashed = res.HashedManagementKey
 	}
 	if err := json.Unmarshal(b, &c); err != nil {
 		return nil, fmt.Errorf("config %s: %w", path, err)
@@ -495,6 +527,20 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 	if len(c.ClientKeys) == 0 {
 		// Today's core serves anyone without a key then; this core refuses to.
 		return nil, errors.New("config: client_keys is empty (access.api-keys in a config.yaml): set at least one client key; core serves no client without one")
+	}
+	if hashed && !needKey {
+		c.Notices = append(c.Notices, "config.yaml: remote-management.secret-key is a bcrypt hash: replace it with a new key (pluxy cannot use a bcrypt hash) before core serves this config")
+	}
+	if c.ManagementKey == "" && hashed && needKey {
+		return nil, fmt.Errorf("config %s: remote-management.secret-key is a bcrypt hash: replace it with a new key (pluxy cannot use a bcrypt hash); core always has a management key, so the panel and the pluxy command can manage it", path)
+	}
+	if c.ManagementKey == "" && needKey {
+		// Today's core turned its management API and panel off without one, silently.
+		where := `"management_key": "<a long random secret>"`
+		if IsYAML(path) {
+			where = "remote-management: {secret-key: <a long random secret>}"
+		}
+		return nil, fmt.Errorf("config %s: no management key: core always has one, so the panel and the pluxy command can manage it. Add %s to the file, or move the file aside and run pluxy init to write a new config with both keys", path, where)
 	}
 	if ex := c.ExampleClientKeys(); len(ex) > 0 {
 		// Core starts, as today's core does, so the management API stays open to fix the keys.
@@ -579,14 +625,11 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 	}
 	if c.AuthDir != "" {
 		// As today's core reads it, ~ is the home folder.
-		if rest, ok := strings.CutPrefix(c.AuthDir, "~"); ok && (rest == "" || rest[0] == '/' || rest[0] == filepath.Separator) {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return nil, fmt.Errorf("config: oauth.auth-dir %q: %w", c.AuthDir, err)
-			}
-			c.AuthDir = filepath.Join(home, rest)
+		dir, err := ExpandHome(c.AuthDir)
+		if err != nil {
+			return nil, fmt.Errorf("config: oauth.auth-dir %q: %w", c.AuthDir, err)
 		}
-		c.AuthDir = rel(c.AuthDir)
+		c.AuthDir = rel(dir)
 	}
 	if c.CredentialsDir == "" {
 		c.CredentialsDir = "credentials"
@@ -612,13 +655,55 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 		x.ID = id
 		c.Extensions[id] = x
 	}
-	if len(seen) == 0 && c.ManagementKey == "" && c.AuthDir == "" {
-		return nil, errors.New("config: set at least one account unless management_key is set (accounts can then be added by login) or, in a config.yaml, oauth.auth-dir (accounts can then be imported)")
-	}
 	if err := c.Routing.Validate(); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	c.prepareClientKeys()
 	c.prepareManagementKey()
 	return &c, nil
+}
+
+// ExpandHome returns path with a leading ~ (alone, or before a path separator) replaced by the
+// home folder.
+func ExpandHome(path string) (string, error) {
+	rest, ok := strings.CutPrefix(path, "~")
+	if !ok || rest != "" && rest[0] != '/' && rest[0] != filepath.Separator {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, rest), nil
+}
+
+// IsLoopbackHost reports whether host (a name or an address, with no port) reaches this machine
+// only: localhost or a loopback address.
+func IsLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip, err := netip.ParseAddr(host)
+	return err == nil && ip.IsLoopback()
+}
+
+// LocalURL is the address a program on this machine reaches a server listening on listen at:
+// a listen address with no host or an unspecified one (every interface) is reached at the
+// loopback address of its family.
+func LocalURL(listen string, tlsEnable bool) (string, error) {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return "", err
+	}
+	if ip := net.ParseIP(host); host == "" || ip != nil && ip.IsUnspecified() {
+		host = "127.0.0.1"
+		if ip != nil && ip.To4() == nil {
+			host = "::1"
+		}
+	}
+	scheme := "http"
+	if tlsEnable {
+		scheme = "https"
+	}
+	return scheme + "://" + net.JoinHostPort(host, port), nil
 }

@@ -51,7 +51,8 @@
       "want": {
         "code": "auth",
         "message": "invalid session token",
-        "type": "authentication_error"
+        "type": "authentication_error",
+        "pluxy": "(volatile)"
       }
     },
     {

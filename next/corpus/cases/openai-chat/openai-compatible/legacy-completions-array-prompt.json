@@ -80,12 +80,6 @@
       "kind": "intended",
       "reason": "A list of several prompts asks for one completion each, which one chat request cannot give, so the new core refuses it with 400; today's core sends the list's JSON text as a single prompt.",
       "absent": true
-    },
-    {
-      "path": "client.headers.X-Cpa-Trace-Id",
-      "kind": "intended",
-      "reason": "The new core rejects the request before choosing an account, so the reply has no trace ID; today's core sends it to an account's upstream and its reply carries one.",
-      "absent": true
     }
   ]
 }

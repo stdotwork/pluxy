@@ -18,13 +18,15 @@ export const SHARDS: Record<string, readonly string[]> = {
   // omp 0.9.
   agents: ["codex", "claude-desktop", "opencode", "omp", "grok", "hermes", "pi"],
   // About 7.7 minutes: managed 1.9, local 1.1, remote 1.1, packaged 1.0, access 0.9, update 0.8,
-  // window 0.4, startup 0.3, early exit and instances 0.2, window-no-tray 0.1, privacy 0.1.
+  // window 0.4, startup 0.3, early exit and instances 0.2, window-no-tray 0.1, privacy 0.1; and
+  // setup, added later, about 1.5 on a Namespace devbox (not yet measured on GitHub's runners).
   app: [
     "managed",
     "startup",
     "window",
     "window-no-tray",
     "privacy",
+    "setup",
     "access",
     "early exit",
     "instances",
@@ -57,8 +59,9 @@ export const PLATFORM_SHARDS: Record<string, readonly string[]> = {
   // The application update (update-cases.ts): a job of its own, since it builds the test package,
   // runs a test core, and its route restarts the app four times. Its session is not "update",
   // which names the Linux one in the app shard: a session is named once across all shards. The
-  // install session (macOS: the disk image, its bundle copied out, updated and rolled back) shares
-  // it, since it needs the same test package and test core.
+  // install session (Windows: the per-user setup program, installed, updated in place by the app
+  // and uninstalled; macOS: the disk image, its bundle copied out, updated and rolled back)
+  // shares it, since it needs the same test package and test core.
   update: ["app update", "install"],
 };
 

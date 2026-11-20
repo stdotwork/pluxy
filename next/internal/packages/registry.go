@@ -22,6 +22,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/stdotwork/pluxy/next/internal/host"
 )
@@ -65,8 +67,54 @@ type Index struct {
 
 // Package is what a registry offers of one package.
 type Package struct {
+	// Title and Summary say what the package is, for someone who does not know its ID: a name
+	// of a few words and one sentence. Both are optional.
+	Title   string `json:"title,omitempty"`
+	Summary string `json:"summary,omitempty"`
+	// Kind is what the package adds: KindProvider or KindClient, or another word a later
+	// registry uses. Optional.
+	Kind string `json:"kind,omitempty"`
+	// Tier is how far the registry vouches for the package: TierPick, TierVerified or
+	// TierUnverified. Core shows it and enforces nothing by it. Absent means unverified.
+	Tier string `json:"tier,omitempty"`
 	// Releases, newest first.
 	Releases []Release `json:"releases"`
+}
+
+// What a package adds (Package.Kind).
+const (
+	// KindProvider: an extension core runs that serves models from an upstream.
+	KindProvider = "provider"
+	// KindClient: a tool that points a coding client at core, such as the desktop app's
+	// writer of Claude Code's settings.
+	KindClient = "client"
+)
+
+// How far a registry vouches for a package (Package.Tier).
+const (
+	// TierPick: offered when a new install is set up.
+	TierPick = "pick"
+	// TierVerified: reviewed by the registry's maintainers; installable, not offered.
+	TierVerified = "verified"
+	// TierUnverified: listed, not reviewed.
+	TierUnverified = "unverified"
+)
+
+// Limits on a package's description in an index.
+const (
+	maxTitle   = 80
+	maxSummary = 300
+)
+
+var wordPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+
+// describedText reports whether s is fit to show as one line: valid UTF-8 of at most max
+// characters with no control characters, which a terminal would act on.
+func describedText(s string, max int) bool {
+	if !utf8.ValidString(s) || utf8.RuneCountInString(s) > max {
+		return false
+	}
+	return !strings.ContainsFunc(s, unicode.IsControl)
 }
 
 // Release is one pinned release of a package.
@@ -94,6 +142,14 @@ func (ix *Index) validate() error {
 	for id, p := range ix.Packages {
 		if !host.ValidID(id) {
 			return fmt.Errorf("package ID %q is not of the form publisher/name", id)
+		}
+		if !describedText(p.Title, maxTitle) || !describedText(p.Summary, maxSummary) {
+			return fmt.Errorf("package %s: title and summary must be one line of at most %d and %d characters", id, maxTitle, maxSummary)
+		}
+		for name, w := range map[string]string{"kind": p.Kind, "tier": p.Tier} {
+			if w != "" && !wordPattern.MatchString(w) {
+				return fmt.Errorf("package %s: %s %q is not a lower-case word", id, name, w)
+			}
 		}
 		seen := map[string]bool{}
 		for _, r := range p.Releases {

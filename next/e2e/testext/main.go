@@ -5,6 +5,8 @@
 // The requested model picks the behaviour:
 //
 //	"gated"         sends its first text, then waits until GET <settings.gate> answers, then finishes
+//	"silent"        sends nothing at all until the call is cancelled
+//	"stall"         sends its first text, then nothing until the call is cancelled
 //	"crash"         sends its first text, then exits with status 2
 //	"rate-limited"  fails at once with a retry-safe 429 that asks for 5 minutes (a model cooldown)
 //	"server-error"  fails at once with a 500 that blocks nothing (a failed request, an error log)
@@ -28,7 +30,7 @@
 //
 // A login's accounts serve the models fake-model, rate-limited and server-error; config accounts
 // keep serving whatever their config names, or any model. Every account answers check, and quota
-// with a fixed plan (its settings can move the five-hour reset and add a manual-resets limit), and
+// with a fixed plan (its settings can move the five-hour and weekly resets and add a manual-resets limit), and
 // a signed-in account renews its credential.
 //
 // Two settings serve the account health tests: "exhausted_until" (Unix seconds) makes every
@@ -64,6 +66,8 @@ type settings struct {
 	Gate string `json:"gate"`
 	// FiveHourResetsAt, when set, is the Unix time the five-hour window resets at, in place of the fixed one.
 	FiveHourResetsAt int64 `json:"five_hour_resets_at"`
+	// WeeklyResetsAt, when set, is the Unix time the weekly window resets at, in place of the fixed one.
+	WeeklyResetsAt int64 `json:"weekly_resets_at"`
 	// ManualResets, when set, adds a manual-resets limit (reset_credits) with this count.
 	ManualResets *int64 `json:"manual_resets"`
 	// ExhaustedUntil, when later than now, is the Unix time until which every request fails with
@@ -205,6 +209,9 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream, reply string)
 	case modelServerError:
 		return &llm.Error{Code: llm.CodeUpstream, Message: "the test provider failed this request", Status: http.StatusInternalServerError,
 			Scope: llm.ScopeRequest}
+	case "silent":
+		<-ctx.Done()
+		return ctx.Err()
 	}
 	if err := out.Start(llm.ResponseInfo{ID: "testext-" + strconv.Itoa(os.Getpid()), Model: call.Request.Model}); err != nil {
 		return err
@@ -219,6 +226,9 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream, reply string)
 	switch call.Request.Model {
 	case "crash":
 		os.Exit(2)
+	case "stall":
+		<-ctx.Done()
+		return ctx.Err()
 	case "gated":
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.Gate, nil)
 		if err != nil {
@@ -343,6 +353,10 @@ func quota(_ context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	if s.FiveHourResetsAt != 0 {
 		fiveHourReset = s.FiveHourResetsAt
 	}
+	weeklyReset := int64(weeklyResetsAt)
+	if s.WeeklyResetsAt != 0 {
+		weeklyReset = s.WeeklyResetsAt
+	}
 	pct := func(v float64) *float64 { return &v }
 	fiveHourUsed := float64(fiveHourPercent)
 	if s.ExhaustedUntil > time.Now().Unix() {
@@ -350,7 +364,7 @@ func quota(_ context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	}
 	limits := []protocol.QuotaLimit{
 		{ID: "five_hour", Label: "5-hour limit", UsedPercent: pct(fiveHourUsed), ResetsAt: fiveHourReset, WindowSeconds: fiveHourWindowSec},
-		{ID: "weekly", Label: "Weekly limit", UsedPercent: pct(weeklyPercent), ResetsAt: weeklyResetsAt, WindowSeconds: weeklyWindowSec},
+		{ID: "weekly", Label: "Weekly limit", UsedPercent: pct(weeklyPercent), ResetsAt: weeklyReset, WindowSeconds: weeklyWindowSec},
 	}
 	if s.ManualResets != nil {
 		// The manual resets the Codex extension reports: a count, with no reset time.

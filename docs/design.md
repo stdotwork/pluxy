@@ -27,8 +27,10 @@ extension. Core keeps:
 
 Every provider is an extension: a separate program that core starts and talks to over a local
 socket. The pages and settings an extension adds to the panel come in its package. An install
-ships its provider extensions as bundled packages that install on the first start (the container
-image bundles all of them), and a bundled package is removed like any other.
+ships its provider extensions as bundled packages, a registry on disk that needs no network (the
+container image bundles all of them). A first start installs none of them: the registry says what
+each package is (`title`, `summary`, `kind`, `tier`), and a person or setup installs what they use.
+Core writes its own first config, with a management key, and refuses a config without one.
 
 Extensions are separate programs, not libraries loaded into core, so that a crash cannot take core
 down and an extension need not be written in Go. Code that many providers need, such as the

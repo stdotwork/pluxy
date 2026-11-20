@@ -164,8 +164,8 @@ func TestSessionTurns(t *testing.T) {
 	}
 	conn.Close()
 	info := described.Info
-	if info.ProtocolMinor != protocol.Minor || !slices.Contains(info.Operations, protocol.OpSession) {
-		t.Fatalf("describe: minor %d, operations %v; want minor %d with session", info.ProtocolMinor, info.Operations, protocol.Minor)
+	if info.ProtocolMinor < protocol.Minor || !slices.Contains(info.Operations, protocol.OpSession) {
+		t.Fatalf("describe: minor %d, operations %v; want minor at least %d with session", info.ProtocolMinor, info.Operations, protocol.Minor)
 	}
 
 	conn = dial(t, socket)

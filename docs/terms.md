@@ -65,7 +65,7 @@ The old panel's health labels (`Healthy`, `Warning`, `Disabled`) were a separate
 ### Provider names
 
 Use one display name per provider, from one shared list in each UI:
-`Claude`, `Codex`, `Gemini`, `Antigravity`, `Devin`, `Kimi`, `xAI`, `Muse (Meta)`, `Vertex AI`,
+`Claude`, `Codex`, `Gemini`, `Devin`, `Kimi`, `xAI`, `Muse (Meta)`, `Vertex AI`,
 `AI Studio`, `OpenAI Compatible`. Use `Grok` only for xAI's product, CLI or plan names (`Grok Build`,
 `SuperGrok`), not for the provider (owner to confirm). The Claude login card says `Claude OAuth`,
 not `Anthropic OAuth`.
@@ -82,9 +82,8 @@ come later as data files of texts ([Texts and locales](../next/ui/README.md#text
 The table below is the glossary for them: use its terms when a locale is added. It covers the
 languages the old desktop app and the old web panel had.
 
-The old desktop app (`extensions/app`) has en, zh-CN, zh-TW and ja; its zh-TW text is converted
-from zh-CN by `extensions/app/src/i18n/traditional.ts`, so a zh-CN change reaches zh-TW only if the
-converter maps it. The old panel (removed) had en, zh-CN, zh-TW, ko, ru, tr and vi.
+The old desktop app (removed) had en, zh-CN, zh-TW and ja. The old panel (removed) had en, zh-CN,
+zh-TW, ko, ru, tr and vi.
 
 | Concept | zh-CN | zh-TW | ja | ko | ru | tr | vi |
 |---|---|---|---|---|---|---|---|

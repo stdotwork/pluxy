@@ -24,7 +24,8 @@
       "want": {
         "code": 404,
         "message": "no account serves model \"corpus-not-in-catalog\"",
-        "status": "NOT_FOUND"
+        "status": "NOT_FOUND",
+        "pluxy": "(volatile)"
       }
     }
   ],

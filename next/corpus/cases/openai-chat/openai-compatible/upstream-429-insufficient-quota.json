@@ -25,7 +25,8 @@
       "want": {
         "code": "insufficient_quota",
         "message": "You exceeded your current quota, please check your plan and billing details.",
-        "type": "rate_limit_error"
+        "type": "rate_limit_error",
+        "pluxy": "(volatile)"
       }
     }
   ],

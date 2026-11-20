@@ -20,6 +20,7 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"cmp"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
@@ -38,6 +39,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // manifestFile is the package manifest's name at the top of a release archive.
@@ -164,7 +167,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			count++
 			fmt.Fprintf(stdout, "%s %s %s\n", ext.manifest.ID, ext.manifest.Version, platform)
 		}
-		ix.Packages[ext.manifest.ID] = indexPackage{Releases: []indexRelease{release}}
+		ix.Packages[ext.manifest.ID] = ext.manifest.indexPackage(kindProvider, release)
 	}
 
 	body, err := json.MarshalIndent(ix, "", "  ")
@@ -234,6 +237,9 @@ type manifest struct {
 	ManifestVersion int               `json:"manifest_version"`
 	ID              string            `json:"id"`
 	Version         string            `json:"version"`
+	Title           string            `json:"title"`
+	Summary         string            `json:"summary"`
+	Kind            string            `json:"kind"`
 	Protocol        []int             `json:"protocol"`
 	Programs        map[string]string `json:"programs"`
 	UI              *struct {
@@ -291,6 +297,12 @@ func (m *manifest) validate() error {
 	}
 	if len(m.Protocol) == 0 {
 		return errors.New("protocol must list at least one version")
+	}
+	if err := checkDescription(m.Title, m.Summary); err != nil {
+		return err
+	}
+	if m.Kind != "" && m.Kind != kindProvider {
+		return fmt.Errorf("kind %q: an extension core runs is a %s", m.Kind, kindProvider)
 	}
 	for platform, program := range m.Programs {
 		if program == "" || !filepath.IsLocal(filepath.FromSlash(program)) || strings.Contains(program, `\`) {
@@ -471,7 +483,53 @@ type index struct {
 }
 
 type indexPackage struct {
+	Title    string         `json:"title,omitempty"`
+	Summary  string         `json:"summary,omitempty"`
+	Kind     string         `json:"kind,omitempty"`
+	Tier     string         `json:"tier"`
 	Releases []indexRelease `json:"releases"`
+}
+
+// What a package adds, as the index says (protocol README, "Registry index").
+const (
+	kindProvider = "provider"
+	kindClient   = "client"
+)
+
+// picks are the packages a new install is offered at setup: tier "pick" in the index. Every
+// other package packed here is pluxy's own and reviewed: tier "verified".
+var picks = []string{
+	"pluxy/codex", "pluxy/claude", "pluxy/openai-compatible", "pluxy/gemini", "pluxy/xai", "pluxy/kimi",
+	"pluxy/claude-code", "pluxy/codex-setup", "pluxy/opencode", "pluxy/pi-setup", "pluxy/omp-setup",
+}
+
+// tier is the index's tier for the package id.
+func tier(id string) string {
+	if slices.Contains(picks, id) {
+		return "pick"
+	}
+	return "verified"
+}
+
+// indexPackage is the index's entry for m with its one release; kind is used when the manifest
+// names none.
+func (m manifest) indexPackage(kind string, release indexRelease) indexPackage {
+	return indexPackage{Title: m.Title, Summary: m.Summary, Kind: cmp.Or(m.Kind, kind), Tier: tier(m.ID),
+		Releases: []indexRelease{release}}
+}
+
+// checkDescription checks a manifest's title and summary: both set, each one line, at most 80
+// and 300 characters, as core reads them from an index.
+func checkDescription(title, summary string) error {
+	for _, f := range []struct {
+		name, value string
+		max         int
+	}{{"title", title, 80}, {"summary", summary, 300}} {
+		if f.value == "" || utf8.RuneCountInString(f.value) > f.max || strings.ContainsFunc(f.value, unicode.IsControl) {
+			return fmt.Errorf("%s must be set: one line of at most %d characters that says what the package is", f.name, f.max)
+		}
+	}
+	return nil
 }
 
 type indexRelease struct {

@@ -46,22 +46,17 @@ func findCore(configPath, addr, key string) (target, error) {
 	if t.url != "" {
 		return t, nil
 	}
-	host, port, err := net.SplitHostPort(cfg.Listen)
+	_, port, err := net.SplitHostPort(cfg.Listen)
 	if err != nil {
 		return t, fmt.Errorf("config %s: listen %q: %w", configPath, cfg.Listen, err)
 	}
 	if port == "0" {
 		return t, fmt.Errorf("config %s listens on port 0, a port core picks at start: pass --url with the address core printed", configPath)
 	}
-	if ip := net.ParseIP(host); host == "" || ip != nil && ip.IsUnspecified() {
-		host = "127.0.0.1"
-		if ip != nil && ip.To4() == nil {
-			host = "::1"
-		}
+	if t.url, err = server.LocalURL(cfg.Listen, cfg.TLS.Enable); err != nil {
+		return t, err
 	}
-	scheme := "http"
 	if cfg.TLS.Enable {
-		scheme = "https"
 		if pool, err := x509.SystemCertPool(); err == nil {
 			cert := cfg.TLS.Cert
 			if !filepath.IsAbs(cert) {
@@ -72,6 +67,5 @@ func findCore(configPath, addr, key string) (target, error) {
 			}
 		}
 	}
-	t.url = scheme + "://" + net.JoinHostPort(host, port)
 	return t, nil
 }

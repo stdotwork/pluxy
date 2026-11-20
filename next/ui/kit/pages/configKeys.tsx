@@ -117,7 +117,8 @@ export function useConfigKeys(tab: string, onChanged: () => void) {
 }
 type KeysState = ReturnType<typeof useConfigKeys>;
 
-function KeyNotice(props: { title: string; value: string; close: () => void; seen: () => void }) {
+/** A new key, shown once: its value, Copy and Close. The Setup page shows a new client key with it too. */
+export function KeyNotice(props: { title: string; value: string; close: () => void; seen: () => void }) {
   const [copied, setCopied] = useState(false);
   const [failed, setFailed] = useState(false);
   const ref = useRef<HTMLElement>(null);

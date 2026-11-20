@@ -93,7 +93,7 @@
       "kind": "intended",
       "reason": "Follows from the status: the new core answers with the upstream's 503 (in an error body it builds itself) instead of retrying.",
       "want": {
-        "error": {"code":"server_error","message":"upstream overloaded","type":"server_error"}
+        "error": {"code":"server_error","message":"upstream overloaded","type":"server_error", "pluxy": "(volatile)"}
       }
     },
     {

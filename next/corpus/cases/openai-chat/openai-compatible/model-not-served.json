@@ -18,7 +18,8 @@
       "want": {
         "code": "model_not_found",
         "message": "no account serves model \"gpt-unknown\"",
-        "type": "invalid_request_error"
+        "type": "invalid_request_error",
+        "pluxy": "(volatile)"
       }
     }
   ],

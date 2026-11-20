@@ -181,6 +181,18 @@ fn text(ty: u32, bytes: &[u8]) -> Option<String> {
     String::from_utf16(&units[..end]).ok()
 }
 
+/// The text of a `REG_SZ` value below `HKEY_CURRENT_USER`; None if the key or the value does not
+/// exist, or the value is not text.
+pub(crate) fn text_value(subkey: &str, name: &str) -> Result<Option<String>, String> {
+    Ok(read(subkey, name)?.and_then(|(ty, bytes)| text(ty, &bytes)))
+}
+
+/// Sets a `REG_SZ` value below `HKEY_CURRENT_USER`, making the key if it is missing.
+pub(crate) fn set_text(subkey: &str, name: &str, value: &str) -> Result<(), String> {
+    let units: Vec<u8> = wide(value).iter().flat_map(|u| u.to_le_bytes()).collect();
+    write(subkey, name, REG_SZ, &units)
+}
+
 /// The command the item runs for the app at `path`.
 pub fn command(path: &Path) -> Result<String, String> {
     let p = path.to_str().ok_or("the app path is not UTF-8")?;

@@ -32,7 +32,6 @@ Messages upstream are translated, and what the translation could not carry is lo
 | `extensions/kimi` | Provider extension for Kimi Code, Moonshot AI's coding subscription, signed in with a device code; `kimitest` is a fake Kimi for its tests. |
 | `extensions/xai` | Provider extension for xAI's Grok models: an API key, or a Grok account signed in as the Grok CLI signs in; `xaitest` is a fake xAI and xAI sign-in for its tests. |
 | `extensions/meta` | Provider extension for Meta's Muse models: a Muse Code subscription signed in with a device code, or a Meta API key; `metatest` is a fake Meta for its tests. |
-| `extensions/antigravity` | Provider extension for Google Antigravity: Gemini and Claude models through a Google account signed in to Antigravity; `agtest` is a fake Google login and Cloud Code for its tests. |
 | `extensions/devin` | Provider extension for Devin: the models a Devin account gets, signed in as Devin's CLI signs in or with a session token, over Devin's protobuf API; `devintest` is a fake Devin for its tests. |
 | `examples/scripted` | The tutorial's example extension. |
 | `examples/oauth` | An example provider that signs in by device code, browser (PKCE) or API key and renews its tokens, with a fake OAuth provider for tests (`oauthtest`). |
@@ -56,7 +55,9 @@ Go extensions build each upstream client's transport with `sdk.Upstream(base)`, 
 their configured `*http.Transport`. This includes login, token refresh and WebSocket handshake
 clients. The wrapper sends a request through the account's proxy and with its extra headers
 and payload rules, records it when core asks for a capture, and sends a request tracked with
-`sdk.TrackSend` on a connection of its own; see `sdk.Upstream`. Build requests with the
+`sdk.TrackSend` on a connection of its own; see `sdk.Upstream`. When `base` sets `MaxIdleConns`
+and not `MaxIdleConnsPerHost`, the wrapper sets the per-host limit to `MaxIdleConns`, so a burst
+of concurrent requests to one upstream keeps its connections for the next one. Build requests with the
 handler's context: it carries core's cancellation and `sdk.UpstreamInfo(ctx)`, which exposes the
 account ID and settings, request model and native format, and operation, without the credential.
 
@@ -94,7 +95,14 @@ go build -o extensions/claude/claude ./extensions/claude
 ./pluxy serve -config config.json
 ```
 
-`pluxy -config config.json`, with no subcommand, serves too. Flags:
+`pluxy -config config.json`, with no subcommand, serves too. With no file at the config's path,
+`pluxy serve` writes a first config there and starts on it: it listens on `127.0.0.1` port 8317,
+or a free port when 8317 is taken, with one new client key and a new management key, in a file
+only its user can read. Core logs the file's path and the address, never the keys; read them in
+the file. `pluxy init [-config file] [-port n]` writes the same config without starting core
+(`-port 0`: a free port), and never replaces a file. A config with no management key is refused
+at start, with a message saying how to add one. A first start installs no package: install the
+providers you use from the bundled registry ([Packages](#packages)) or the panel. Flags:
 
 - `-config`: the config file (default `config.json`).
 - `-version`: print the build's version, commit and build date on one line, `pluxy <version> (<commit>, <date>)`, and exit. It does not read the config. Core logs the same line when it starts.
@@ -106,7 +114,7 @@ go build -o extensions/claude/claude ./extensions/claude
 
 A running core answers `curl http://127.0.0.1:8400/healthz` with `ok`.
 
-With a `management_key` set, the web panel is at `http://127.0.0.1:8400/panel/`: core's status,
+The web panel is at `http://127.0.0.1:8400/panel/`: core's status,
 accounts, extensions and themes, the pages extensions bring and their settings. Sign in with the
 management key. Extension pages are served from a listener of their own, on another site than
 the panel (`extension_pages` in the config); see [extension pages](ui/extension-pages/README.md).
@@ -173,12 +181,23 @@ is excluded, and an empty or cut-off summary is an error on the request); a `"me
 Gemini clients call `POST /v1beta/models/{model}:generateContent` or `:streamGenerateContent`
 (a stream is server-sent events, with or without `alt=sse`), and `:countTokens`.
 
+Once a streamed reply has started, core writes the client the SSE comment `: keep-alive` whenever
+15 seconds pass with nothing written to it, so a client or proxy does not drop a reply while the
+model thinks. It does this on `/v1/chat/completions`, `/v1/completions`, `/v1/responses`,
+`/backend-api/codex/responses` and `/v1/messages`, and on an SSE reply from
+`/v1/responses/compact`, `/backend-api/codex/responses/compact`, `/v1/alpha/search`,
+`/backend-api/codex/alpha/search`, `/v1/images/generations` or `/v1/images/edits`. No Gemini
+client route gets one, including `/v1beta/models/{model}:streamGenerateContent` and
+`/v1beta/interactions`: most SSE readers skip a comment, but Google's Python SDK reads every line
+as JSON and fails on one, and Google's API never sends them. Replies that are not streamed and
+WebSocket sessions get none.
+
 Token counts (Anthropic's `POST /v1/messages/count_tokens` and Gemini's `:countTokens`) come from
 the upstream's own count endpoint: Anthropic's for a Claude account on Anthropic's own API (base URL
 `https://api.anthropic.com`, the default) or an OpenAI-compatible account with `"wire_api": "messages"`, Kimi's Messages count endpoint for a Kimi account, Gemini's for a Gemini account (Gemini API or Vertex AI) or one with
 `"wire_api": "gemini"`. A count from an upstream of the client's own kind comes back as the upstream sent it;
 otherwise core answers with the count in the client's shape. An account whose upstream has no count
-endpoint (Codex, xAI, Meta, Devin, Antigravity, and Chat or Responses accounts), and a Claude
+endpoint (Codex, xAI, Meta, Devin, and Chat or Responses accounts), and a Claude
 account whose `base_url` is not Anthropic's own (today's core draws the same line), cannot count:
 core tries the model's next account, and when the count gets no answer and one of the accounts
 tried could not count, it answers with its own estimate in the client's shape, as today's core
@@ -297,11 +316,55 @@ reload applies a change, where today's core needs a restart.
 {"trusted_proxies": ["127.0.0.1", "10.0.0.0/8"]}
 ```
 
-A reply to a request that went to an account carries `X-CPA-TRACE-ID`, as today's core sends it:
+A reply to a request that may use the client API carries `X-CPA-TRACE-ID`, as today's core sends it:
 the time and a random part, such as `20261109061500-3f9a0c2e5b7d4e18`. Core's log lines about the
 request (a failure, what translation lost) carry the same ID and the account, so a reply can be
-matched with them. A request refused before that (no client key, a body that does not parse, no
-account for the model) gets none.
+matched with them. Today's core sends it only once it has chosen an account; this core sends it
+also when no account was tried (every account cooling down, a body that does not parse, no
+account for the model). A request refused for its client key (401, 403) gets none. A Responses
+WebSocket's handshake carries one for the socket.
+
+A reply to a request that went to an account also says which: `X-Pluxy-Account` (the account's
+public ID, below), `X-Pluxy-Provider` (its extension, such as `pluxy/codex`), `X-Pluxy-Model` (the
+name sent upstream) and `X-Pluxy-Attempts` (how many accounts the request tried). An error from
+an upstream's refusal carries them too: they name the last account tried. A WebSocket's handshake
+has none of them, as its turns choose their accounts later.
+
+An account's **public ID** is what replies name it by: `acc_` and 8 hex digits, a keyed digest of
+the account's ID. The ID an account has in the config or the store can be an email address or a
+label someone typed (an import of today's auth files names an account by its file, which holds the
+email address), so it never leaves core in a reply, and no error `message` names an account either (a message says "the account was removed"; the header and the member say which). The digest's key is made at the first start and
+kept in `state/account-key` beside the config, so an account keeps its public ID across restarts
+and a reload; deleting the file gives every account a new one. `GET /accounts` and `pluxy account list`
+show each account's `public_id`, and a request may pin an account (`X-Pluxy-Account`, below) by it.
+
+A request that ends in an error without a reply says what was tried and why the rest were left
+out, in a `pluxy` member of the error object, in the OpenAI, Anthropic and Gemini formats alike (a
+Responses WebSocket turn's error message has it too):
+
+```json
+{"error": {"code": "model_cooldown", "message": "...", "type": "rate_limit_error",
+  "pluxy": {"trace": "20261109061500-3f9a0c2e5b7d4e18",
+    "tried": [{"account": "acc_4e26e0c2", "provider": "pluxy/codex", "model": "gpt-5", "result": "quota"}],
+    "left_out": [{"account": "acc_306dcbdb", "state": "exhausted", "until": "2026-11-09T17:00:00Z"},
+                 {"account": "acc_0702c008", "state": "banned"}]}}}
+```
+
+`tried` lists the attempts in order; `result` is the code of the error the attempt ended with (such
+as `rate_limit`, `quota`, `auth`, `account_closed`, `upstream`). `left_out` lists the accounts that
+serve the model and were not tried: `state` is the account's health (`cooling`, `exhausted`,
+`banned`, `needs_login` or `disabled`), `busy` when it was at its `max_concurrency`, or `skipped` when
+the request's limits ended it before the account's turn; `until` is when the block ends, when known.
+An account that is turned off or waits for a login is named when its own `models` name the model, or
+when it shares its extension with an account that serves it. The member holds codes and times,
+never the words of an upstream's reply. `routing.explain` `false` leaves out the `X-Pluxy-*` headers
+and the member, and keeps the trace ID.
+
+`pluxy route <model>` (`GET /v0/management/route?model=<name>`) says what a request for the model
+would do now without sending one: the accounts in the order it would try them (the step of the
+model's fallback chain, the account's priority, then the strategy's turns) and those it would leave
+out, as above. For a model with a chain the reply has the chain (`chain`) and each account its step
+(`step`, from 1). Asking changes no routing state.
 
 `drop_policy` (top level) says what happens when translating a request to the upstream's format
 would drop part of it: `"report"` (the default) sends it and logs what was dropped, `"reject"`
@@ -317,7 +380,7 @@ A config written for today's core, with its key names, works too: see
 ### Pack the extensions
 
 `pluxy-pack` builds every extension under `extensions/` as a release archive and writes the
-bundled registry index a fresh install starts from:
+bundled registry index an install ships with:
 
 ```bash
 go run ./cmd/pluxy-pack -out dist -platforms linux/amd64,darwin/arm64
@@ -342,12 +405,17 @@ publishes these yet; `.github/workflows/next-app-tools-pack.yml` builds and pack
 go run ./cmd/pluxy-pack -out dist -app-tools programs -platforms linux/amd64,windows/amd64
 ```
 
-Core installs and enables every package the bundled index lists on its first start with an
-empty packages folder:
+The index also says what each package is, from its manifest: `title`, `summary`, `kind`
+(`provider`, or `client` for the app's tools that point a coding client at core) and `tier`
+(`pick` for the packages a new install is offered, `verified` for the rest of pluxy's own; the
+list of picks is in `cmd/pluxy-pack`). Core installs none of them by itself: start it with the
+bundled index and install what you use:
 
 ```bash
 go build -trimpath -ldflags "-s -w" -o pluxy ./cmd/pluxy
 ./pluxy -config config.json -bundled dist/bundled/index.json
+pluxy ext available                 # what the bundled registry offers, with titles
+pluxy ext install pluxy/claude      # install and enable one
 ```
 
 `pluxy` itself is a plain `go build` of `./cmd/pluxy`, as above; the `-ldflags` only make it
@@ -359,8 +427,8 @@ relative archive URLs resolve against the index.
 ### Run it in a container
 
 `Dockerfile` (build context: this folder) builds an Alpine image with a static `pluxy`, the web
-panel built in, and every extension packed by `pluxy-pack` as the bundled packages, so the first
-start installs and enables them. It runs as user `65532`, not root.
+panel built in, and every extension packed by `pluxy-pack` as the bundled packages, which it
+installs only when asked (`pluxy ext install`, or the panel). It runs as user `65532`, not root.
 
 ```bash
 docker build -t pluxy .
@@ -369,7 +437,8 @@ docker build -t pluxy .
 Core reads no environment variables, so everything is set in `config.json`, and everything core
 keeps is in one folder: `/config`, a volume. It holds `config.json` and, beside it, the
 `credentials`, `packages` and `logs` folders core makes. Make a folder with a config file
-before the first start; `listen` must be `0.0.0.0:8400`, since the container's own `127.0.0.1`
+before the first start (with an empty `/config`, core writes a first config that listens on the
+container's own `127.0.0.1`: unreachable from outside, and the health check fails); `listen` must be `0.0.0.0:8400`, since the container's own `127.0.0.1`
 is not reachable from outside it, and the image's health check asks port 8400. Inside a container,
 requests through a published port come from Docker's network address, not from `127.0.0.1`, so
 the management API refuses them unless `management_allow_remote` is `true` (it still needs the
@@ -475,7 +544,7 @@ Account `settings`, all optional:
 | `codex_identity` | Default `true`: send the Codex client's `User-Agent` and `originator`. |
 | `image_generation_tool` | Default `true`: offer the hosted `image_generation` tool, as today's core does (never to a free plan or a `-spark` model). |
 | `image_generation_off_models` | Default none: model names, or patterns with `*` and `?` (any case), that are not offered the `image_generation` tool. A tool the client lists itself stays. |
-| `codex_client_version` | Default `0.154.0`: the version the Codex client's `User-Agent` names when `codex_identity` is on. |
+| `codex_client_version` | Default `0.159.0`: the version in the Codex client's `User-Agent` when `codex_identity` is on, and in the ChatGPT model list's `client_version`. |
 | `prompt_cache_retention_passthrough` | Default `false`: send the client's `prompt_cache_retention` on, for an upstream that takes it (neither today's core nor the Codex client sends it to the ChatGPT backend, and a SIWC sign-in never sends it). |
 | `callback_listen` | Default `true`: let a browser or SIWC sign-in listen on port 1455. |
 | `images` | Default `true`: serve the Images API on the account (below). |
@@ -1174,110 +1243,6 @@ Responses compaction through Meta, and token counting.
 
 **Quota.** Meta reports a Muse Code login's usage only from its key endpoint, so quota sends `POST https://api.meta.ai/muse-code/key` with an empty object, the device token, `x-api-version: 1.0.0` and Muse Code's client identity headers. The device token renews the account, so this goes only where a renewal goes, never to `base_url`. The call makes a new API key, which is dropped and never returned or stored; the account's own key is left alone, and if Meta retires it, core renews the credential on the next refused request (whether Meta does is not known). It reports `window` ("Usage limit", with its length) and `weekly` ("Weekly limit") from `subs_usage`, and the plan from `subs_tier_name`. An API key answers unsupported. A device login's grant carries `identity` `{"email"}`.
 
-## Antigravity
-
-The Antigravity extension (`extensions/antigravity`) serves the Gemini and Claude models a Google
-account gets in Google Antigravity, through Google's Cloud Code API. Point `extension.manifest` at
-`extensions/antigravity/pluxy-extension.json`. Accounts are added by login through the management
-API (below) with method `browser`: the reply's prompt carries Google's sign-in link, and the login
-finishes when the browser comes back to `http://localhost:51121/oauth-callback`, which the
-extension serves on this machine while the login runs. When core runs elsewhere, or the port is
-taken, paste the address the browser ended on as the prompt's `redirect_url` input.
-
-The sign-in is Google's OAuth for installed apps with the Antigravity app's own OAuth client and
-scopes, as today's core signs in, plus PKCE. Google's token endpoint also takes that client's
-secret. The extension has it built in: it is the installed-app client secret of the OAuth client the
-Antigravity desktop app uses, which ships inside every copy of the app, and today's core carries the
-same value (`ClientSecret` in the old core's `core/internal/auth/antigravity/constants.go`). It is not a user's
-credential and gives no access to an account without a sign-in. A login asks for no input, the
-credential does not keep the secret, and every renewal sends it, so an account renews whether it
-was logged in or imported. After signing in, the
-extension asks Cloud Code for the account's Google Cloud project (`loadCodeAssist`), or has one
-made on the account's default tier (`onboardUser`); the credential keeps the project too. Core
-renews the token 30 minutes before it expires; a renewal also looks up a project the credential
-lacks.
-
-An account written in the config holds the same credential:
-
-```json
-{
-  "id": "antigravity",
-  "credential": {"kind": "oauth", "access_token": "ya29...", "refresh_token": "1//...",
-    "data": {"project_id": "my-project-123"}}
-}
-```
-
-| Setting | Meaning |
-| --- | --- |
-| `base_url` | The Cloud Code host (default `https://daily-cloudcode-pa.googleapis.com`, the one today's core uses); the project calls go there too. |
-| `user_agent` | Replaces the Antigravity app's User-Agent (`antigravity/hub/2.29.0 (aidev_client; ...)`). |
-| `callback_listen` | `false` keeps the login from listening on port 51121; only a pasted address finishes it. |
-
-A request is built as a Gemini GenerateContent body: a Gemini client's own, or a translation of
-any other format with its reasoning effort as thinking settings, as the Gemini extension makes
-them. It goes to `{base_url}/v1internal:generateContent` (`:streamGenerateContent?alt=sse` for a
-stream) inside Cloud Code's envelope, as today's core sends it: the model, the project, request
-type `agent` (`image_gen` for image models), a request ID, and a session ID hashed from the first
-user text. Safety settings are left out; a Gemini model gets no output limit and has turns of
-function responses sent as the model's, and a conversation that starts or ends with the model gets
-an empty user turn at that end; a Claude model gets function calling in `VALIDATED` mode;
-translated system instructions go as a user turn. Each function declaration's schema is sent as
-`parameters`, and a response schema as `responseSchema`, in the subset Cloud Code takes, as today's
-core cleans them: local `$ref`s inlined, `const` as an enum, constraints and short enums moved into
-the description as hints (`minLength: 1`, `Allowed: a, b`), a type list such as
-`["string","null"]` as one nullable type, each `allOf` merged into the schema that holds it
-(Cloud Code's schema has no `allOf`: the branches' required names join the schema's, and their
-other keys fill the ones it lacks, its own winning), `if`, `then` and `else` removed after the
-properties of each `then` and `else` move into the schema that holds it (the model sees them as plain
-optional properties, as in today's core; the schema's own property wins, and a branch's `required`
-is dropped), and other JSON Schema keywords removed; for a
-Claude model, a union becomes its strongest branch. For Claude and Gemini 3 Pro, as in today's core, each
-object in a function's parameters that requires nothing gets a required placeholder property:
-`reason` (a string) where it has no properties, `_` (a boolean) where it has some and none is
-required. An object is a schema of type `object`; a union object (with `anyOf` or `oneOf`) gets
-none. Every schema with `properties` and no type gets type `object`, whatever the model, as in
-today's core. A function's response schema gets no placeholder: today's core adds one there, but the schema
-describes what the client returns, and nothing would remove the placeholder. A response format's schema keeps
-the `title` of every schema in it, as today's core does: Google's Schema type has a `title` field. A
-function's parameters and response schema lose their titles except for Claude and Gemini 3 Pro, also
-as in today's core. The extension removes
-the placeholders from the model's calls before any client format sees them; today's core does that
-only for Messages clients. It leaves a placeholder in a call where a client schema at the same path
-declares the name, as a property or in `required`: the other branches of a union (also those
-Claude's cleaning cuts), another item of a tuple, or a function declared again under that name. So
-it never removes a key the client declared; it does remove a key named `reason` that the model
-writes into an object with no declared properties, such as a free-form map. Claude models, Gemini 3 Pro and the image model are always
-asked on the stream method and gathered into one reply when the client wants one. Replies are
-taken out of the envelope's `response` field. A 429 is a used-up quota when Google says
-`QUOTA_EXHAUSTED` or asks for a wait of five minutes or more, and a rate limit otherwise, with the
-wait from Google's retry details or message. It holds back only that model on the account, as
-today's core cools only the model that answered, except a used-up credit balance
-(`INSUFFICIENT_G1_CREDITS_BALANCE`), which holds back the account.
-
-A `functionCall` part of a Cloud Code reply is one whole call, as Gemini sends calls, and a part
-with no name is a call with no name. Today's core treats such a part three ways. A Messages client
-gets a nameless part that comes while a call is open as more input for that call
-(`core/internal/translator/antigravity/claude/antigravity_claude_response.go`). A Chat client gets
-it as a second call with an empty name. A Responses client does not get it. The Messages
-behaviour is not kept, because nothing shows that Cloud Code sends such parts in reply to the
-requests the extension makes. Google's Vertex AI documentation shows nameless parts only for
-streamed function call arguments (`streamFunctionCallArguments`, Gemini 3 and later), which a
-request has to ask for, and whose parts carry `partialArgs`, not `args`. Neither core nor the
-extension asks for it. Today's core added the behaviour to its Gemini Messages translator in
-December 2025 with no recorded stream, and to its Antigravity one in October 2026, eleven months
-after that translator was written. Its tests use made-up chunks. It also appends each part's
-whole `args` object to the call's input, so a second part with arguments gives the client
-`{"a":"1"}{"b":"2"}`, which is not JSON.
-
-Not built, from today's core: the paid Google AI credits fallback, its own cache of Antigravity's
-reasoning (thought signatures travel in band, as for Gemini), the per-account model probe
-(`fetchAvailableModels`), Responses compaction through Antigravity, structured output for Claude
-5.5 as prompt text, sensitive-word obfuscation (`antigravity.sensitive-words`), the connection
-pool settings (`antigravity.connection-pool.*`), the app version lookup at every start, token
-counting (core has no count-tokens route).
-
-**Quota.** Quota reads `POST {base_url}/v1internal:retrieveUserQuotaSummary` with the credential's project, and the plan from `POST {base_url}/v1internal:loadCodeAssist`, with the access token and the account's Antigravity user agent. Each bucket of each model group becomes a limit, such as "Gemini models 5-hour limit", with the share used, the reset time, the window length where known and the group's models. A login's grant carries `identity` `{"email"}`.
-
 ## Devin
 
 The Devin extension (`extensions/devin`) serves the models a Devin account gets (SWE-2, Claude,
@@ -1395,6 +1360,20 @@ the request, for example a 429 or a 401) moves the request on to another account
 failure goes to the client. Once a reply has started, nothing is retried. Extensions never
 retry on their own.
 
+A model name is served by the accounts of one provider: the provider (extension) of the
+highest-priority account that serves the name. On a tie, the account that comes first decides:
+the accounts of the `extension` section, then those of the `extensions` sections in order of
+extension ID, then the accounts added by login, in order of account ID. Accounts
+whose model list could not be read serve any model, but they decide the provider only when no
+account lists the name. Accounts that cannot serve now count in this choice too: a banned or
+blocked account, one turned off and one waiting for a new login keep the name on their provider,
+and the error of a request they cannot serve names them with their state in `left_out`; only a
+change to accounts, priorities, weights or chains moves a name to another provider. Under the
+`weighted` strategy an account with `weight: 0` takes no part: it neither serves the name nor
+decides its provider. When another provider
+serves the same name too, its accounts take none of these requests, however blocked the first
+provider's are; a fallback chain (below) is how a name moves to another provider or model.
+
 An account is eligible when it serves the model, no block covers it and it is under its
 concurrency limit. Refusals block what they are about, for as long as the upstream said
 (`Retry-After`) or else by backoff: a rate limit or quota on one model (a plain 429, as today's
@@ -1404,7 +1383,7 @@ to a minute. Results count in the order their requests started on the account: a
 clears the blocks that failures of earlier-started requests left on its account (its credential,
 its model and its endpoint), and a failure that ends after a later-started request succeeded on
 the same scope leaves no block and no last error. Among eligible accounts, core prefers the
-session's account (with session affinity on), then the highest `priority`, then picks by
+session's account (session affinity is on unless the config turns it off), then the highest `priority`, then picks by
 strategy.
 
 A reset the upstream names is used when it is between 1 second and 8 days away (the longest usage
@@ -1442,7 +1421,10 @@ nearest second (at least 1), so with 1.2 s left it says `reset_time` "1s" next t
     "max_attempts": 0,
     "max_accounts": 0,
     "max_wait_ms": 0,
-    "session_affinity": {"ttl_ms": 3600000}
+    "session_affinity": {"ttl_ms": 3600000},
+    "chains": {
+      "claude-opus-5-5": [{"model": "claude-opus-5-5", "provider": "pluxy/claude"}, {"model": "gpt-6.1-sol"}]
+    }
   },
   "extension": {
     "accounts": [
@@ -1454,7 +1436,8 @@ nearest second (at least 1), so with 1.2 s left it says `reset_time` "1s" next t
 
 | Field | Meaning |
 | --- | --- |
-| `strategy` | `round-robin` (default; takes turns after the account picked last), `weighted` (by `weight`, interleaved), `fill-first` (first eligible account in order), `least-active` (fewest running requests). |
+| `strategy` | `round-robin` (default; takes turns after the account picked last), `weighted` (by `weight`, interleaved), `fill-first` (first eligible account in order), `least-active` (fewest running requests), `soonest-reset` (below). |
+| `quota_refresh_ms` | For `soonest-reset`: how often core reads every enabled account's usage from its provider (the extension's `quota` call), in the background and never on a request's path; the first comes a minute after core starts. Default 1800000 (30 minutes); 0 turns the readings off, and accounts are then ranked only by the readings core takes when it checks a long block. Accounts whose provider has no usage reading (API keys) are never read. |
 | `max_attempts` | Upstream attempts per request, counting the first. 0: no fixed limit; each account is tried once per round. |
 | `max_accounts` | Distinct accounts one request may try in a round, as today's `max-retry-credentials` limits them; each round gets its own count, and an account the limit left out takes part in a later round. 0: no limit. |
 | `max_wait_ms` | Longest a request waits, in total, for a blocked account; with `request_retry`, before each round. 0 (default): never; when every account is blocked the request fails at once with a 429 and `retry_after_ms`. A request never tries an account before the time the upstream gave. |
@@ -1462,16 +1445,31 @@ nearest second (at least 1), so with 1.2 s left it says `reset_time` "1s" next t
 | `disable_cooling` | `true`: failures leave no block, so every account stays eligible. |
 | `transient_error_cooldown_ms` | How long a failing upstream or endpoint (a 5xx or a broken connection) is blocked when it gave no `Retry-After`: 0 (default) backs off from a second to a minute, above 0 that long, below 0 not at all, `Retry-After` or not. |
 | `quota_response_mode` | What a client gets when every account that serves its model is out of quota until a reset the upstream named, the first of them more than 5 minutes away: `retryable` (default) a retryable 429 with `Retry-After`, as for any block; `usage-limit` the final usage-limit reply below. |
-| `session_affinity` | When present, requests of one session go to the same account while it is eligible. The session comes from the `X-Claude-Code-Session-Id`, `Session-Id`, `X-Session-Id` or `X-Session-Affinity` header, or the body's `prompt_cache_key`; bindings are per client key and model. |
+| `explain` | `false` leaves out of replies the headers that name the account (`X-Pluxy-Account`, `X-Pluxy-Provider`, `X-Pluxy-Model`, `X-Pluxy-Attempts`) and the `pluxy` member of errors (see [Run it](#run-it)), for a core whose client keys go to people who should not see which accounts serve them. The trace ID stays. Default `true`. |
+| `session_affinity` | On by default, with no setting needed: requests of one session go to the same account while it is eligible, so a coding agent's conversation keeps its provider-side prompt cache. `{"enabled": false}` turns it off; `{"ttl_ms": 1800000}` sets how long a session stays bound after its last request (default one hour, 3600000). The session comes from the `X-Claude-Code-Session-Id`, `Session-Id`, `X-Session-Id` or `X-Session-Affinity` header, or the body's `prompt_cache_key`; a request with none takes turns as usual. Bindings are per client key and model. A `config.yaml` keeps today's default, off (below). |
+| `timeouts` | Upstream HTTP request timeouts in milliseconds: `header_ms` (default 60000) for response headers and `idle_ms` (default 300000) between raw upstream bytes on streamed requests, and `total_ms` (default 600000) in all on non-streamed requests; `0` turns a limit off. For an extension that speaks protocol 0.23, core also ends an attempt on which the extension sent it nothing at all for as long as the SDK may wait on the upstream plus a minute (the longer of `header_ms` and `idle_ms` when streamed, the longest of the three when not) with `extension_timeout`, which moves the request to another account when no reply has started; with any limit it needs at `0`, there is no such deadline. A timeout before any reply byte (this one or an upstream limit's) moves a request to one more account, once: a second timeout ends the request with that error, so a stuck upstream costs a client two limits and not one per account. |
+| `chains` | Fallback chains, by the model name clients ask for (below). Default: none. |
 | account `priority` | Higher first; lower accounts serve only while every higher one is blocked. Default 0. |
 | account `weight` | For `weighted`. Default 1; 0 leaves the account out. |
 | account `disable_cooling` | Overrides `disable_cooling` for the account. |
 | account `max_concurrency` | Requests running at once on the account. 0: no limit. |
 | account `request_retry` | Rounds after the first that the account takes part in, in place of `request_retry` (today's per-key `request-retry`): the account leaves a request's rounds past its own count, and a count above routing's runs more rounds with only the accounts whose count reaches them. Setting it on an account runs rounds even when routing sets none; accounts without one then take part in the first only. |
 | account `endpoint` | Accounts naming the same endpoint share its outages. Default: the account's ID. |
+| account `timeouts` | Overrides `routing.timeouts` (`header_ms`, `idle_ms`, `total_ms`) for the account; `0` turns a limit off. |
 
-A client can pin a request to one account with the `X-Pluxy-Account: <id>` header. A pinned
-request never goes to another account.
+`soonest-reset` spends allowance that is about to reset before it is lost: among the eligible
+accounts of the top priority, a new request goes to the account whose longest usage window (a
+Codex or Claude account's weekly window) resets soonest, by its provider's own usage reading.
+Reset times are rounded to the hour, so accounts whose windows end minutes apart tie and take
+turns. Accounts with no known reset come after those with one, and an account whose reading shows
+a full window comes last until that window resets; a blocked account is never picked, whatever
+its reset. Priority comes first, and session affinity still keeps a session on its account.
+`pluxy route <model>` shows the reset each account was ranked by. It is not the default.
+
+A client can pin a request to one account with the `X-Pluxy-Account: <id>` header, naming the
+account by its ID or its public ID (the one replies give). A pinned request never goes to another
+account.
+
 
 With `quota_response_mode` `usage-limit`, a request that ends with a rate or quota refusal (or
 finds every account blocked) gets today's core's usage-limit reply when each account that serves
@@ -1500,6 +1498,36 @@ there only when every account belongs to one extension; `limit_window_minutes` o
 is known. `last_upstream_error` and the message's last error have credentials, tokens and local
 paths replaced, as today's core replaces them. A stream that has already started ends with the
 same error, and a Chat Completions stream then with `data: [DONE]`.
+
+### Fallback chains
+
+A chain lists, under a model name clients ask for, the steps a request for it goes through in
+order: each step is a model, and optionally the one provider (`provider`, an extension's ID) and
+the accounts (`accounts`, their IDs) that serve it. A step that names neither is served as a name
+with no chain is: by one provider's accounts. A request uses the first step's accounts, by priority
+and strategy as above, and moves to the next step only when no account of the step can serve it
+now: each is blocked, at its concurrency limit, or refused the request in a way that is safe to try
+elsewhere. Moving on needs no wait; when no step can serve now, the request waits, within
+`max_wait_ms`, for the first account of any step to come back. It never moves once its reply has
+started, nor for an error about the request itself (a 400, a refusal of its content), which would
+end the same way on the next step. A session bound to an account stays on that account and its
+step's model while it can serve, even once an earlier step could serve again.
+
+A chain has at most 8 steps. A step names a model, never another chain (a step may name the
+chain's own name: that is the model of the name), and no step repeats another. Two steps that come
+to the same account and model (`m@pluxy/claude`, then `m` served by Claude) try it once. A chain's name may be one no account serves,
+such as `my-fast`: it is then in the model lists, as its first served step's model.
+
+| Call | Command | What it does |
+| --- | --- | --- |
+| `GET /v0/management/chains` | `pluxy chain list` | The chains, by name |
+| `PUT /v0/management/chains/{name}` | `pluxy chain set <name> <step>...` | Sets the chain, `{"steps": [{"model", "provider", "accounts"}]}`, and writes it to the config file. A step on the command line is `model[@provider][:account,account]`. What follows the last `@` is the provider only when it is an extension's ID (`publisher/name`), so `claude-opus-4-7@20260416` is a model; a model whose name holds a colon ends with an `@` (`llama3:8b@`, or `llama3:8b@pluxy/ollama:a1` with a provider and an account). 422 for more than 8 steps, a step that names another chain, a step that repeats another, a step no account serves now, or a step that names an account core does not know or one that does not serve the step (named in the error; an account waiting for a login or turned off that serves it is accepted). Under the `weighted` strategy an account of `weight` 0 serves no step. A config.yaml cannot hold chains (409) |
+| `DELETE /v0/management/chains/{name}` | `pluxy chain remove <name>` | Removes it: the name goes back to one provider's accounts. 404 when there is none |
+
+The reply of a request served through a chain names the account, provider and model of the step
+that served it (`X-Pluxy-*`), and its usage event the step (`chain_step`, from 1). An error's
+`left_out` entries then also name each account's `provider` and `model`, since one account can
+serve two steps; `pluxy route` shows the chain and the step of each account.
 
 ### Outbound proxy
 
@@ -1591,7 +1619,7 @@ A rule applies when any entry of its `models` does:
 | Field | Matches |
 | --- | --- |
 | `name` | The model the request reaches the upstream as, or the one the client asked for (before an alias or prefix, with its thinking suffix or without it). `*` matches any text. |
-| `protocol` | The extension: `openai` (`pluxy/openai-compatible`), `claude`, `codex`, `gemini` (Gemini API keys and Vertex), `kimi`, `xai`, `meta`, `antigravity`; for another package the last part of its ID. Today's core used the upstream's API format here, so its `openai` also covered Kimi, which is `kimi` here. |
+| `protocol` | The extension: `openai` (`pluxy/openai-compatible`), `claude`, `codex`, `gemini` (Gemini API keys and Vertex), `kimi`, `xai`, `meta`; for another package the last part of its ID. Today's core used the upstream's API format here, so its `openai` also covered Kimi, which is `kimi` here. |
 | `from-protocol` | The API the client called: `openai` (Chat Completions, legacy Completions), `responses` (also compaction), `claude`, `gemini`, `interactions`, `codex-alpha-search`, `openai-image`. |
 | `headers` | The client's request headers, each value a pattern with `*`. Core checks them; they are not sent to the extension. |
 | `match`, `not-match`, `exist`, `not-exist` | The body about to go upstream. |
@@ -1599,9 +1627,7 @@ A rule applies when any entry of its `models` does:
 Paths are dotted keys (`\.` for a dot in a key), array indexes and the queries `#(...)` (the first
 match) and `#(...)#` (every match), the parts today's example config uses. A path with anything
 else (wildcards, `|`, `@`, `#` counts, `-1`) or a raw value that is not JSON fails the load, a
-reload or a settings change, with a message that names the rule and the path. The Antigravity
-extension's body carries the request inside `request`, and its rules apply there, as in today's
-core.
+reload or a settings change, with a message that names the rule and the path.
 
 A default checks the body the extension built, where today's core checked the client's request
 translated to the upstream's format: a field the extension fills in itself counts as present, such
@@ -1684,7 +1710,7 @@ any request:
 | `GET /v1beta/models/{name}` | One model, named with or without `models/`, or a 404. |
 
 A list holds each model the accounts serve, once under each name a client can ask for it by,
-sorted by name. An account whose config lists `models` lists those. An account without `models`
+and the name of each fallback chain no account serves, sorted by name. An account whose config lists `models` lists those. An account without `models`
 lists the models its extension says the account serves (the protocol's `models` operation, from
 version 0.3), under the account's naming rules below; an extension that cannot say adds nothing
 for it. The same list decides which models such an account serves: a request for a model no
@@ -1703,11 +1729,14 @@ with an empty value, selects this reply before the Anthropic client check. Witho
 parameter the lists above keep their usual shape.
 
 Core resolves the models served by accounts of `pluxy/codex` with the same exclusions, aliases
-and prefixes as the normal list. It sends one `codex.models` endpoint call containing the client
-version and each model's public and upstream names. The Codex extension loads its embedded
-catalog on the first such call and selects templates by upstream name. It removes
-`cpa_capabilities`, replaces `slug` with the public name and `display_name` when provided,
-and clears Codex-only options for names that a non-Codex account can also serve. The catalog
+and prefixes as the normal list. For a name outside a fallback chain it lists the name only when
+routing chooses `pluxy/codex` as the name's provider. It also lists each fallback chain's name
+when a step of it can go to a `pluxy/codex` account, as that step's model. It sends one
+`codex.models` endpoint call containing the client version and each model's public and upstream
+names. The Codex extension loads its embedded catalog on the first such call and selects templates
+by upstream name. It removes `cpa_capabilities`, replaces `slug` with the public name and
+`display_name` when provided, and clears Codex-only options for chain names whose fallback chain
+has a step a non-Codex account can serve. The catalog
 keeps `minimal_client_version` from the template;
 clients below 0.144.0 receive reasoning levels only through `xhigh`, while empty or unparseable
 versions keep modern levels. Models without a template are omitted: a routing entry alone
@@ -1811,8 +1840,8 @@ win (including `null`; nested objects are replaced as a whole). The extension va
 normalises its defaults. Settings must never hold secrets. A login to an existing account
 ignores grant settings and keeps the account's existing settings.
 
-The management API is served under `/v0/management` when the config sets `management_key`;
-send it as a bearer token. With a management key set, the config may set no accounts.
+The management API is served under `/v0/management`; a config without `management_key` is refused
+at start and on a reload. Send it as a bearer token. The config may set no accounts.
 
 | Request | Does |
 | --- | --- |
@@ -1889,7 +1918,7 @@ starts it afresh.
 
 | Field | Meaning |
 | --- | --- |
-| `management_key` | Bearer token for the management API. Without it the management API is off. |
+| `management_key` | Bearer token for the management API and the panel. Required: a config without one is refused at start. |
 | `idle_stop_ms` | Stop the program after this long without requests. Default 10 minutes; 0 keeps it running. |
 | `drain_timeout_ms` | Longest a replaced version may keep finishing its requests. Default 10 minutes. |
 | `restart.backoff_ms` | Wait before the first restart after a crash; doubles per crash in a row. Default 1 second. |
@@ -1936,7 +1965,8 @@ in `trusted_proxies`, every client has the proxy's address, so one client's wron
 
 | Call | What it does |
 | --- | --- |
-| `GET /v0/management/status` | `desired` (the newest config version core has seen, with `error` when it was refused) and `active` (the one serving), each with `revision` and `hash`; `extensions`, one entry per running generation with `state` (`starting`, `active`, `idle`, `crashed`, `quarantined`, `draining`, `stopped`), `current`, `pid`, `restarts`, `last_error` and `active_requests`; `safe_mode`; `version`, `commit` and `built`, the build's version, commit and build date as `-version` prints them. |
+| `GET /v0/management/status` | `desired` (the newest config version core has seen, with `error` when it was refused) and `active` (the one serving), each with `revision` and `hash`; `extensions`, one entry per running generation with `state` (`starting`, `active`, `idle`, `crashed`, `quarantined`, `draining`, `stopped`), `current`, `pid`, `restarts`, `last_error` and `active_requests`; `safe_mode`; `first_run`; `version`, `commit` and `built`, the build's version, commit and build date as `-version` prints them. |
+| `GET /v0/management/setup`, `POST /v0/management/setup/scan`, `POST /v0/management/setup/apply`, `POST /v0/management/setup/done` | First-run setup scan, package picks, applying picks and ending first run; see [`management/README.md`](management/README.md#setup). |
 | `POST /v0/management/reload` | Reload now. 200 with the status when the new revision is active; 422 with the status when it was refused. |
 | `GET /v0/management/ui` | The pages of the extensions that run and where they are served; see [extension pages](ui/extension-pages/README.md#how-core-serves-pages). |
 | `GET`, `PATCH /v0/management/extensions/{publisher}/{name}/config` | An extension's settings, checked against the schema its manifest declares; see [extension pages](ui/extension-pages/README.md#how-core-serves-pages). |
@@ -1967,7 +1997,7 @@ its keys and its indent. `PUT /config` writes the document as sent.
 | `POST /v0/management/client-keys` | Adds a new random client key (`sk-` and 26 random characters). 201 with the key's `id` and `masked` form and its `value`, which no later call shows. |
 | `DELETE /v0/management/client-keys/{id}` | Removes the client key. 204; 404 when no key has the ID; 409 for the last key, since core refuses a config without client keys. |
 | `POST /v0/management/management-key/rotate` | Replaces the management key with a new random one and returns it as `value`. The old key stops working as the reply is sent. |
-| `GET /v0/management/models` | The models `GET /v1/models` lists, as one list in the same order: `models`, each with `id` (the name clients use), what the extension says about the model (`owned_by`, `display_name`, limits, ...), `upstream` (its name upstream), `extension` (the extension of the account whose entry the list shows) and `accounts` (the IDs of every account that serves the name, in routing order). An account that serves any model because its list is not known lists none. Never a credential. |
+| `GET /v0/management/models` | The models `GET /v1/models` lists, as one list in the same order: `models`, each with `id` (the name clients use), what the extension says about the model (`owned_by`, `display_name`, limits, ...), `upstream` (its name upstream), `extension` (the extension of the account whose entry the list shows) and `accounts` (the IDs of the accounts a request for the name uses, as routing chooses them: one provider's, or with a fallback chain each step's in step order, highest priority first within a step). An account that serves any model because its list is not known adds no name, but is among the accounts of the names its provider serves; a fallback chain that only such accounts serve is listed as the first of them, with its step's model as `upstream`. Under the `weighted` strategy an account of `weight` 0 is in no entry. A name whose accounts all wait for a login or are turned off is left out. Never a credential. |
 | `POST /v0/management/models/refresh` | Ask providers for their model lists again now; optional JSON body `{"account": "<id>"}` for one account. Returns the updated `models` list and per-account `accounts` results (`models`, `kept`, `error`). A read that fails, times out or comes back empty keeps the last good list. |
 | `GET /v0/management/settings` | The basic and routing settings, by today's core's names, and `token_count_estimate`, this core's own, under its own name (below). |
 | `PATCH /v0/management/settings` | Changes the settings the body names (`{"routing": {"strategy": "fill-first"}}`) and replies with them all. 400 for a name or value it does not take. |
@@ -2019,8 +2049,8 @@ to `management.secret-key`, or `remote-management.secret-key` when only that is 
 
 | Setting | JSON config | Values |
 | --- | --- | --- |
-| `routing.strategy` | `routing.strategy` (`weighted` for `weighted-round-robin`) | `round-robin`, `fill-first`, `weighted-round-robin`, `least-active`; today's other spellings (`wrr`, `ff`, ...) are taken too. |
-| `routing.session-affinity` | `routing.session_affinity` there or not | `true` or `false`. |
+| `routing.strategy` | `routing.strategy` (`weighted` for `weighted-round-robin`) | `round-robin`, `fill-first`, `weighted-round-robin`, `least-active`, `soonest-reset`; today's other spellings (`wrr`, `ff`, ...) are taken too. |
+| `routing.session-affinity` | `routing.session_affinity.enabled` | `true` or `false`. A `config.yaml` keeps today's default, `false`; a JSON config has it on until it says `false`. |
 | `routing.session-affinity-ttl` | `routing.session_affinity.ttl_ms` | A duration such as `1h` (default) or `30m`. In a JSON config it needs session affinity on. |
 | `routing.force-model-prefix` | `routing.force_model_prefix` | `true`: an account with a `prefix` serves its models only under the prefix. |
 | `routing.retry.max-retry-credentials` | `routing.max_accounts` | Accounts one request may try in a round, as in today's core; 0 is no limit. |
@@ -2219,7 +2249,7 @@ was not cut, and what was left unread is only what the upstream sent after that 
 nothing but the end of the transfer. Devin's reply is binary frames with no line breaks, so the
 Devin provider reads on past its end frame to the body's end, for at most 64 KiB and 1 second;
 past that its reply is complete but its body is marked, and its end within the window is left
-out. The Gemini and Antigravity providers read their streams to the end. A response with neither a
+out. The Gemini provider reads its streams to the end. A response with neither a
 length nor chunked encoding whose connection closes early reads, in Go, as a body that ended
 there, also over TLS closed without its closing alert between two records (a close inside a
 record is marked), so it gets no line and nothing is left out: marking such bodies would cut
@@ -2350,10 +2380,10 @@ changed. Management never shows a registry or archive URL's user name, password 
 ### Bundled packages
 
 The packages a pluxy install ships with are a registry like any other, named `bundled`: by
-default `bundled/index.json` beside the `pluxy` program, or the index `-bundled` names. On its
-first start with a packages folder that has no `packages.json`, core installs and enables every
-package the bundled registry lists, through the same steps as any install. Bundled packages are
-removed like any other, and stay removed; installing one again takes it from `bundled`.
+default `bundled/index.json` beside the `pluxy` program, or the index `-bundled` names. It needs
+no network. Core installs nothing from it by itself, on a first start or later: a package is
+installed from it like from any registry (`POST /packages` with `"registry": "bundled"`, or
+`pluxy ext install <id>`), and removed like any other.
 
 ### Package management API
 
@@ -2410,15 +2440,15 @@ imports, so a migration sees them before core ever starts.
 
 A migrated config needs its management key set again once. Today's core writes a bcrypt hash over
 `management.secret-key` in the file after it reads the key, and this core cannot use a hash: it
-leaves the management API and the panel off and says why in its log. Replace the hash with the key
-itself, in plain text.
+refuses the config and says so. Replace the hash with the key itself, in plain text. A config with
+no management key at all is refused too, with a message saying how to add one.
 
 Settings only this core has keep their JSON names in a `config.yaml`: `packages`, `extensions`,
 `extension`, `extension_pages`, `drop_policy`, `token_count_estimate`, `credentials_dir` and `cors`
 (today's core has no CORS setting: it allows every origin). Provider accounts set in
 the file go to the installed package of their provider (`pluxy/codex`, `pluxy/claude`,
 `pluxy/gemini`, `pluxy/xai`, `pluxy/openai-compatible`), so those packages must be installed:
-the bundled ones are, on the first start.
+install them from the bundled registry (`pluxy ext install pluxy/codex`) before they serve.
 
 ### Provider key sections
 
@@ -2464,9 +2494,9 @@ are accepted silently.
 | `config-version` | Must be 8 when present, as in today's core. | Supported |
 | `server.host` (`host`), `server.port` (`port`) | `listen` is `host:port`. An empty host listens on every interface and a port of 0 or none is 8317, as in today's core. | Supported |
 | `access.api-keys` (`api-keys` as a list) | `client_keys`. At least one key is required; today's core serves anyone when the list is empty. | Supported |
-| `management.secret-key` (`remote-management.secret-key`) | `management_key`, exactly as written: turns on the management API and the panel. A key already hashed with bcrypt (today's core can write one) is not supported yet: the management API stays off and the log says why. | Supported; hashed keys later |
+| `management.secret-key` (`remote-management.secret-key`) | `management_key`, exactly as written. Required: a config without one, or with a key already hashed with bcrypt (today's core can write one), is refused, saying what to set. | Supported; hashed keys refused |
 | `management.allow-remote` (`remote-management.allow-remote`) | `management_allow_remote`: without it the management API answers only this machine, as in today's core. | Supported |
-| `management.disable-control-panel` | The panel is on exactly when the management API is. | Dropped: the management key already turns the panel on and off |
+| `management.disable-control-panel` | The panel is always on, with the management API. | Dropped: the panel needs the management key |
 | `management.disable-auto-update-panel`, `management.panel-github-repository`, `server.github-token` (`github-token`) | The panel is built into core; nothing is downloaded. | Dropped: no panel download |
 | `management.base-url` | | Dropped: no terminal UI |
 | `server.max-request-body-bytes` | Request bodies are capped at 24 MiB. | Dropped: core needs a fixed cap for its request frame |
@@ -2476,8 +2506,8 @@ are accepted silently.
 | `server.commercial-mode` (`commercial-mode`) | | Dropped: it turns off features this core does not have |
 | `server.discovery.*` (`discovery`) | | Dropped: no client here reads the advertisement |
 | `server.discovery.advertise-management` | | Dead |
-| `routing.strategy` | `routing.strategy`: `round-robin`, `fill-first` (also `fillfirst`, `ff`), `weighted-round-robin` (also `weightedroundrobin`, `wrr`; this core's `weighted`); this core's `weighted` and `least-active` work too. A name today's core does not know is `round-robin`, as there, and the log says so. | Supported |
-| `routing.session-affinity`, `routing.session-affinity-ttl` | `routing.session_affinity` with `ttl_ms` from the duration (default `1h`). | Supported |
+| `routing.strategy` | `routing.strategy`: `round-robin`, `fill-first` (also `fillfirst`, `ff`), `weighted-round-robin` (also `weightedroundrobin`, `wrr`; this core's `weighted`); this core's `weighted`, `least-active` and `soonest-reset` work too. A name today's core does not know is `round-robin`, as there, and the log says so. | Supported |
+| `routing.session-affinity`, `routing.session-affinity-ttl` | `routing.session_affinity` with `ttl_ms` from the duration (default `1h`). A `config.yaml` without `session-affinity: true` has it off, as today's core does, though a JSON config has it on by default. | Supported |
 | `routing.session-affinity-subagents` | A Claude Code subagent sends its session's `X-Claude-Code-Session-Id`, so with `routing.session-affinity` it stays on the session's account, as today's default `true` keeps it. `false` (spread subagents over the pool) is not built, and the log names it. | Dropped: a subagent stays on its session's account, and no need was found to spread subagents over the pool |
 | `routing.session-affinity-rebind-on` | | Dropped: no need found |
 | `routing.force-model-prefix` (`force-model-prefix`) | `routing.force_model_prefix`. | Supported |
@@ -2510,13 +2540,12 @@ are accepted silently.
 | `experimental-cch-signing` (Claude keys) | | Dead |
 | `oauth.auth-dir` (`auth-dir`) | The folder `-import-auth` reads (see below). Core never reads or writes it while it runs; at each load it logs how many credential files there are not imported yet. | Supported |
 | `oauth.auth-auto-refresh-workers` (`auth-auto-refresh-workers`) | Each account is renewed shortly before it expires. | Dropped: no need for a pool size |
-| `oauth.model-alias` (`oauth-model-alias`), `oauth.excluded-models` (`oauth-excluded-models`) | Each channel's rules become the `model_alias` and `excluded_models` of the package that serves its accounts, for the accounts added to it by a sign-in (not with an API key): `codex` is `pluxy/codex`, `claude` is `pluxy/claude`, `vertex` is `pluxy/gemini`, `kimi` (and `kimi-ai`, `kimi.ai`, `kimi.com`) is `pluxy/kimi`, `xai` is `pluxy/xai`, `meta` is `pluxy/meta`, `antigravity` is `pluxy/antigravity`, `devin` is `pluxy/devin`. Rules for another channel are named in the log and ignored. An alias's `force-mapping` and `openapi` are later, as the same settings are on the keys' models below. | Supported |
+| `oauth.model-alias` (`oauth-model-alias`), `oauth.excluded-models` (`oauth-excluded-models`) | Each channel's rules become the `model_alias` and `excluded_models` of the package that serves its accounts, for the accounts added to it by a sign-in (not with an API key): `codex` is `pluxy/codex`, `claude` is `pluxy/claude`, `vertex` is `pluxy/gemini`, `kimi` (and `kimi-ai`, `kimi.ai`, `kimi.com`) is `pluxy/kimi`, `xai` is `pluxy/xai`, `meta` is `pluxy/meta`, `devin` is `pluxy/devin`. Rules for another channel are named in the log and ignored. An alias's `force-mapping` and `openapi` are later, as the same settings are on the keys' models below. | Supported |
 | `oauth.settings` (`oauth-settings`) | | Dropped: needs a model catalog, and no page uses it |
 | `oauth.request-scoped-errors` (`oauth-request-scoped-errors`) and every `request-scoped-errors` | | Dropped: a request-scoped error is already not the account's fault |
 | `oauth.providers.aistudio.ws-auth` (`ws-auth`) | | Dropped: the AI Studio relay needs a long-lived listener the extension protocol does not have |
 | `oauth.providers.codex.live-media-relay.*` | | Dropped: realtime and WebRTC are out of scope |
 | `oauth.providers.codex.signin-with-chatgpt-identifier` (`codex.signin-with-chatgpt-identifier`) | `signin_with_chatgpt_identifier` on the Sign in with ChatGPT (SIWC) accounts `-import-auth` adds. Left unset, they use the extension's default, `pluxy`. | Supported when importing |
-| `oauth.providers.antigravity.*` (`antigravity`, `antigravity-signature-*`, `quota-exceeded.antigravity-credits`) | | Dropped: no need found; the credits fallback would spend paid credits unasked |
 | `oauth.providers.devin.*` (`devin`) | Only `sensitive-words`. | Dropped: rewriting words to get past a content filter is out of scope |
 | `api-keys.meta` (`meta-api-key`) | | Dropped: the login is built; no need for a bare key |
 | Every `headers` on a group or key | The account's [`headers`](#upstream-headers): a key's own, else its group's (a key's `headers: {}` sends none), and an `openai-compatibility` group's for all its keys. Names and values are trimmed and empty ones dropped, as in today's core. A header whose value today's core takes from the client's request (`$` and a header name, or `$CPA-SESSION-ID`) is named in the log and not imported. A header this core refuses (`Host`, `Content-Length`, `Transfer-Encoding`, `Connection`) fails the load, where today's core sends it. | Supported |
@@ -2577,7 +2606,6 @@ use it from one core only, or sign in again in the other.
 | `claude` | `pluxy/claude` subscription account | `access_token`, `refresh_token`, `expired`. |
 | `kimi`, `kimi-ai` | `pluxy/kimi` account | `access_token`, `refresh_token`, `expired`, `device_id`; `base_url` is an account setting, and so is the site, `domain`, decided as today's core decides it: from `domain`, else `base_url`'s host, else the type (`kimi.ai` for `kimi-ai`). |
 | `vertex` | `pluxy/gemini` Vertex AI account with a service account | `service_account` is the credential; `project_id` and `location` (default `us-central1`, as in today's core) are the account's `vertex` settings. `interactions` or `native_interactions` set to JSON `true` at the top of the file is the account's `interactions` setting. |
-| `antigravity` | `pluxy/antigravity` account | `access_token`, `refresh_token`, `expired`; `project_id` stays with the credential and `base_url` is an account setting. The file holds no OAuth client secret (today's core has it built in, and so does the extension), so the account renews on its own, as it does in today's core. |
 | `xai` | `pluxy/xai` Grok login account | `access_token`, `refresh_token`, `expired`; `token_endpoint` stays with the credential and `base_url` is an account setting. |
 | `meta` | `pluxy/meta` Muse Code login account | `api_key` (else `access_token`) is the minted key and `dca_token` (else a `dca:` `access_token`) the device token that mints a new one; `base_url` stays with the credential. A file with only the device token mints its key on the first request. |
 | `devin` | `pluxy/devin` account with a session token | `session_token` (else `api_key`) is the credential; `base_url` is an account setting and `user_name` the label when the file has no `label` or `email`. |

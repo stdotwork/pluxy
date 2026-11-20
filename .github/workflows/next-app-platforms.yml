@@ -3,9 +3,9 @@ name: Next app platforms
 # Builds and unit-tests the desktop app's Rust crate on Windows and macOS, and runs the real app
 # there (next/app/native/platform.ts: a second launch raising the first, the login item, the
 # window and the tray; the test package and the release gate; the signed tool sessions, admission,
-# program, routing and launcher; the app's update; on macOS the disk image's install;
-# next/app/native/dialogs.ts: native key entry, confirmations and key rotation). The rest of the
-# Linux native test (Xvfb, portals) stays in next-app.yml.
+# program, routing, launcher and open; the app's update; on Windows the per-user setup program, on
+# macOS the disk image's install; next/app/native/dialogs.ts: native key entry, confirmations and
+# key rotation). The rest of the Linux native test (Xvfb, portals) stays in next-app.yml.
 
 on:
   # Pull requests and merge-queue groups run this through ci.yml, which runs it only when what it
@@ -272,10 +272,11 @@ jobs:
   # are named in next/app/native/shards.ts (PLATFORM_SHARDS), one job per shard; the summary has
   # the counts.
   # The package and update shards build the test package first (package.ts test: a folder bundle
-  # on Windows, an app bundle and its disk image on macOS), then the dev app, since the package's
-  # builds rename the program they make in target/debug. The update shard also runs a test core
-  # (`go run ./e2e/panelcore`), so it sets up Go; on macOS its install session attaches the disk
-  # image and installs, updates and rolls back the bundle copied out of it. The tools shard
+  # and the per-user setup program on Windows, an app bundle and its disk image on macOS), then the
+  # dev app, since the package's builds rename the program they make in target/debug. The update
+  # shard also runs a test core (`go run ./e2e/panelcore`), so it sets up Go; on Windows its install
+  # session installs, updates and uninstalls the setup program's copy, and on macOS it attaches the
+  # disk image and installs, updates and rolls back the bundle copied out of it. The tools shard
   # (native/platform-tools.ts) runs run.ts's admission, program, routing, launcher and vault sessions
   # here, on the app built with the test trust (artifact-test-trust) against a test core it starts
   # with `go run`, so it sets up Go too. The open shard runs platform-tools.ts's open session the

@@ -269,6 +269,68 @@ func TestNotRetrySafe(t *testing.T) {
 	h.wantAttempts("a")
 }
 
+// A timeout before any reply byte moves the request to the next account once, not to every
+// account: with a stuck extension or upstream each account costs the client a whole timeout.
+// The two kinds are the core watchdog's extension_timeout and the SDK's upstream timeouts, which
+// an extension reports as a retry-safe unavailable error that names the timeout.
+func TestTimeoutRotatesOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		e    llm.Error
+	}{
+		{"extension_timeout", llm.Error{Code: llm.CodeExtensionTimeout, Retryable: true, Scope: llm.ScopeEndpoint, Message: "the extension sent nothing for 6m0s"}},
+		{"upstream header timeout", llm.Error{Code: llm.CodeUnavailable, Retryable: true, Scope: llm.ScopeEndpoint, Message: `upstream unreachable: Post "https://u.example/v1": upstream response header timeout after 1m0s`}},
+		{"upstream request timeout", llm.Error{Code: llm.CodeUnavailable, Retryable: true, Scope: llm.ScopeEndpoint, Message: `upstream unreachable: Post "https://u.example/v1": upstream request timeout after 10m0s`}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, Config{}, accts("a", "b", "c", "d")...)
+			for _, id := range []string{"a", "b", "c", "d"} {
+				h.on(id, fail(tc.e))
+			}
+			evs := h.run(h.req("m"))
+			if last := evs[len(evs)-1]; last.Error == nil || last.Error.Code != tc.e.Code || last.Error.Message != tc.e.Message {
+				t.Errorf("got %+v, want the timeout error", last)
+			}
+			if len(h.attempts) != 2 {
+				t.Errorf("attempts = %v, want exactly 2", h.attempts)
+			}
+		})
+	}
+}
+
+// An extension that stopped answering blocks the account's endpoint like a failing upstream does,
+// with the failure backoff, so the next request does not start on it again.
+func TestExtensionTimeoutBlocksTheEndpoint(t *testing.T) {
+	kind, scope, fixed, base, max := classify(&llm.Error{Code: llm.CodeExtensionTimeout, Retryable: true})
+	if kind != blockCooldown || scope != scopeEndpoint || fixed != 0 || base != failureBackoffBase || max != failureBackoffMax {
+		t.Errorf("classify = %q %q %v %v %v, want a cooldown of the endpoint on the failure backoff", kind, scope, fixed, base, max)
+	}
+	h := newHarness(t, Config{Strategy: StrategyFillFirst}, accts("a", "b")...)
+	h.on("a", fail(llm.Error{Code: llm.CodeExtensionTimeout, Retryable: true}), ok())
+	h.runOK("m")
+	h.runOK("m")
+	h.wantAttempts("a", "b", "b")
+}
+
+// Other retry-safe failures still go through every account, and a timeout only counts against
+// the request it happened on.
+func TestOtherRetrySafeFailuresTryEveryAccount(t *testing.T) {
+	h := newHarness(t, Config{}, accts("a", "b", "c")...)
+	down := fail(llm.Error{Code: llm.CodeUnavailable, Retryable: true, Scope: llm.ScopeEndpoint, Message: "upstream unreachable: dial tcp: connection refused"})
+	for _, id := range []string{"a", "b", "c"} {
+		h.on(id, down)
+	}
+	h.run(h.req("m"))
+	h.wantAttempts("a", "b", "c")
+
+	// A timeout and then a failure that is not one: the second does not count as the second timeout.
+	h = newHarness(t, Config{}, accts("a", "b", "c")...)
+	h.on("a", fail(llm.Error{Code: llm.CodeExtensionTimeout, Retryable: true, Scope: llm.ScopeEndpoint}))
+	h.on("b", down)
+	h.runOK("m")
+	h.wantAttempts("a", "b", "c")
+}
+
 // A request-scoped refusal (the request itself is bad) is neither retried nor held against
 // the account.
 func TestRequestErrorLeavesAccountAlone(t *testing.T) {
@@ -670,6 +732,82 @@ func TestSessionAffinity(t *testing.T) {
 	h.now = h.now.Add(2 * time.Minute)
 	h.run(s1)
 	h.wantAttempts("a", "b", "b")
+}
+
+// affinityConfig reads a routing section as a JSON config holds it.
+func affinityConfig(t *testing.T, routing string) Config {
+	t.Helper()
+	var cfg Config
+	if err := json.Unmarshal([]byte(routing), &cfg); err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+// A JSON config that says nothing about session affinity has it on; "enabled": false turns it
+// off, and a ttl_ms alone leaves it on. One session sends three requests in a row.
+func TestSessionAffinityDefault(t *testing.T) {
+	s1 := Request{LLM: llm.Request{Model: "m"}, Tenant: "t", Session: "s1"}
+	for name, c := range map[string]struct {
+		routing string
+		want    []string
+	}{
+		"no section":    {`{}`, []string{"a", "a", "a"}},
+		"empty section": {`{"session_affinity": {}}`, []string{"a", "a", "a"}},
+		"ttl only":      {`{"session_affinity": {"ttl_ms": 60000}}`, []string{"a", "a", "a"}},
+		"enabled":       {`{"session_affinity": {"enabled": true}}`, []string{"a", "a", "a"}},
+		"disabled":      {`{"session_affinity": {"enabled": false}}`, []string{"a", "b", "a"}},
+		"disabled, ttl": {`{"session_affinity": {"enabled": false, "ttl_ms": 60000}}`, []string{"a", "b", "a"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t, affinityConfig(t, c.routing), accts("a", "b")...)
+			h.run(s1)
+			h.run(s1)
+			h.run(s1)
+			h.wantAttempts(c.want...)
+		})
+	}
+}
+
+func TestSessionAffinityDefaultSticks(t *testing.T) {
+	h := newHarness(t, Config{}, accts("a", "b")...)
+	s1 := Request{LLM: llm.Request{Model: "m"}, Tenant: "t", Session: "s1"}
+	s2 := Request{LLM: llm.Request{Model: "m"}, Tenant: "t", Session: "s2"}
+	h.run(s1) // a, bound
+	h.run(s2) // b, bound
+	h.run(s1)
+	h.run(s1)
+	h.run(s2)
+	h.wantAttempts("a", "b", "a", "a", "b")
+
+	// A request with no session still takes turns.
+	h.attempts = nil
+	none := Request{LLM: llm.Request{Model: "m"}, Tenant: "t"}
+	h.run(none)
+	h.run(none)
+	if len(h.attempts) != 2 || h.attempts[0] == h.attempts[1] {
+		t.Errorf("sessionless attempts = %v, want two different accounts", h.attempts)
+	}
+
+	// An hour after its last request the default lets a session go.
+	h.attempts = nil
+	h.now = h.now.Add(time.Hour + time.Minute)
+	h.run(s1)
+	h.run(s1)
+	if len(h.attempts) != 2 || h.attempts[0] != h.attempts[1] {
+		t.Errorf("after the hour: attempts = %v, want one account", h.attempts)
+	}
+}
+
+func TestSessionAffinityTTLKept(t *testing.T) {
+	h := newHarness(t, affinityConfig(t, `{"session_affinity": {"ttl_ms": 60000}}`), accts("a", "b")...)
+	s1 := Request{LLM: llm.Request{Model: "m"}, Tenant: "t", Session: "s1"}
+	h.run(s1) // a, bound for a minute
+	h.now = h.now.Add(30 * time.Second)
+	h.run(s1) // a, the binding lasts a minute from the last request
+	h.now = h.now.Add(2 * time.Minute)
+	h.run(s1) // the binding is gone: round robin goes on to b
+	h.wantAttempts("a", "a", "b")
 }
 
 // heldStream is a reply that has started and stays open until closed.
@@ -1229,10 +1367,11 @@ func TestUsageLimitOnlyWhenEveryAccountQualifies(t *testing.T) {
 }
 
 // A reply that started and then ends with the last account's quota refusal ends with the
-// usage-limit reply; the provider is named only when every account belongs to one extension, and
-// a pool without a known window has none.
+// usage-limit reply; the provider is named only when every account belongs to one extension (two
+// serve one name only through a chain), and a pool without a known window has none.
 func TestUsageLimitAfterTheReplyStarted(t *testing.T) {
-	h := newHarness(t, Config{QuotaResponseMode: QuotaUsageLimit, Strategy: StrategyFillFirst},
+	chain := map[string][]Step{"m": {{Model: "m", Provider: "pluxy/codex"}, {Model: "m", Provider: "pluxy/openai-compatible"}}}
+	h := newHarness(t, Config{QuotaResponseMode: QuotaUsageLimit, Strategy: StrategyFillFirst, Chains: chain},
 		Account{ID: "a", Extension: "pluxy/codex"}, Account{ID: "b", Extension: "pluxy/openai-compatible"})
 	h.r.state.failure(h.r.accounts[1], "m", 0, &llm.Error{Code: llm.CodeQuota, RetryAfterMS: time.Hour.Milliseconds(), Message: "used up"}, h.now, 0)
 	quota := llm.Error{Code: llm.CodeQuota, Status: 429, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: (3 * time.Hour).Milliseconds(),
@@ -1545,10 +1684,11 @@ func TestCooledDownModelIsNotUnknown(t *testing.T) {
 }
 
 // An account whose model list cannot be read serves any model, so a long block on it must not be
-// the retry time of a model other accounts serve and one of them unblocks sooner.
+// the retry time of a model other accounts serve and one of them unblocks sooner. Both are of one
+// provider, so both serve the request.
 func TestCooldownWaitComesFromTheAccountThatServesTheModel(t *testing.T) {
 	h := newHarness(t, Config{},
-		Account{ID: "codex", Extension: "pluxy/codex"}, Account{ID: "b", Models: []ModelEntry{{Name: "m"}}})
+		Account{ID: "codex", Extension: "pluxy/codex"}, Account{ID: "b", Extension: "pluxy/codex", Models: []ModelEntry{{Name: "m"}}})
 	h.r.UseCatalog(func(context.Context, Account, *protocol.Credential) (*protocol.ModelList, *llm.Error) {
 		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "list unreadable"}
 	})
