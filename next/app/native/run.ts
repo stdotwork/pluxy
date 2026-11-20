@@ -3129,7 +3129,8 @@ async function main(): Promise<number> {
       problems.push(...p.map((x) => `managed: ${x}`));
       // The first start runs a stand-in that serves on the socket the app hands it (-listen-fd),
       // says where it listens, answers the app's readiness check (conn.rs ready), then exits; the
-      // next start, recovery's, runs the real core. The app runs the adopted copy of this script
+      // next start, recovery's, runs the real core. The first config is the real core's (init). The
+      // app runs the adopted copy of this script
       // from an open file, so its mark is not beside $0.
       if (runsSession("early exit")) {
         const early = join(prepared, "early-exit.sh");
@@ -3172,7 +3173,7 @@ func main() {
         run("go", ["build", "-o", standIn, standInSource], prepared);
         writeFileSync(
           early,
-          `#!/bin/sh\nif [ ! -e '${early}.ran' ]; then\n  : > '${early}.ran'\n  exec '${standIn}' "$@"\nfi\nexec '${core}' "$@"\n`,
+          `#!/bin/sh\nif [ "$1" != init ] && [ ! -e '${early}.ran' ]; then\n  : > '${early}.ran'\n  exec '${standIn}' "$@"\nfi\nexec '${core}' "$@"\n`,
           { mode: 0o755 },
         );
         const e = await runApp(

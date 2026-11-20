@@ -30,7 +30,7 @@ server and to the person's other computers.
 
 | Mode | What the app does | When the app quits |
 | --- | --- | --- |
-| Run core here (`managed`) | Runs one of its own core versions ([below](#the-apps-own-core)) with a config of its own, `core/config.json` in the app's data folder. The first start writes that config with a free loopback port, which then stays the core's, new random keys, and folders for credentials and packages beside it. After that the file is yours to edit; the app only reads its `management_key`. | Stops that core (SIGTERM, then a kill after 10 seconds). On Linux the core also gets SIGTERM if the app dies without stopping it; on macOS it runs on, holding its port, until it is stopped. |
+| Run core here (`managed`) | Runs one of its own core versions ([below](#the-apps-own-core)) with a config of its own, `core/config.json` in the app's data folder. The first start has the core write that config (`pluxy init -port 0`): a free loopback port, which then stays the core's, new random keys, and folders for credentials and packages beside it. After that the file is yours to edit; the app only reads its `management_key`. | Stops that core (SIGTERM, then a kill after 10 seconds). On Linux the core also gets SIGTERM if the app dies without stopping it; on macOS it runs on, holding its port, until it is stopped. |
 | Core on this computer (`local`) | Connects to a core that already runs on a loopback address (`127.0.0.0/8`, `::1` or `localhost`), such as a system service. You give its address and management key. | Leaves it running. The app never starts or stops it. |
 | Remote core (`remote`) | Connects over https only, so the key is never sent in the clear. You can name a PEM file of certificate authorities to trust for that core, for a certificate you made yourself; without one, the usual public roots are used. The core's address is shown next to the app's name. | Leaves it running. |
 
@@ -195,7 +195,7 @@ once confirmed, the app copies it into a version of its own, `custom-<its SHA-25
 still a regular file of that size and digest (at most 512 MiB; a FIFO or device is refused
 without being read; on Unix it must be executable, on Windows a program image named `.exe` or
 `.com`), and runs the copy. Only the program is copied, nothing beside it (such as
-`bundled/`), so an adopted core starts without the bundled packages a release brings. An adopted
+`bundled/`), so an adopted core has none of the bundled packages a release brings to install. An adopted
 program has no signature.
 
 The app only ever stops the core process it started. A core it did not start, such as a system
@@ -1405,7 +1405,8 @@ started by `go run ./e2e/panelcore` from `next/`, on random loopback ports in te
 a fresh HOME and XDG folders, once in each mode. The app runs only a core in its own store, so
 each managed run but the core steps' (below) starts with one there: the signed test release 2.0.0,
 installed as a confirmed install would (`session_probe install-core`), whose bundled test
-packages the sign-ins and pages need beside the core's program; the startup runs and the
+packages the sign-ins and pages need beside the core's program (a core's first start installs
+none: the session installs them from the bundled registry before its steps); the startup runs and the
 early-exit run instead adopt their core program first (`session_probe adopt-core`), which copies
 the program alone. In each it checks that the window's webview
 reaches every command, that at the top of an extension page's webview Tauri refuses every app
