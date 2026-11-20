@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.23
+# pluxy extension protocol, version 0.25
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -34,10 +34,12 @@ manifest's `title`, `summary` and `kind`, and in a [registry index](#registry-in
 the registry's `tier`. Version 0.22 adds the account's
 [`timeouts`](#timeouts): upstream request limits for response headers, stream byte gaps and
 non-streamed completion. Version 0.23 adds [alive frames](#alive-frames): the extension tells core
-its upstream is still sending, and core ends a call that sends nothing at all for too long. It is
+its upstream is still sending, and core ends a call that sends nothing at all for too long.
+Version 0.24 adds a model's `capabilities`: what the model supports and when it was deprecated.
+Version 0.25 adds a [tool result](#the-request)'s `content` parts and its `is_error` flag. It is
 deliberately small; later versions add capabilities and more operations
 without changing what is described here. An extension written for version 0 works unchanged with a
-core that speaks 0.23 (see
+core that speaks 0.25 (see
 [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
@@ -788,7 +790,7 @@ Item types:
 | --- | --- |
 | `message` | `role` (`system`, `developer`, `user`, `assistant`), `content`: a list of parts; `text_content` is true when the client gave the content as a plain string. |
 | `tool_call` | `call_id`, `name`, `arguments` (the raw argument string, not parsed); `custom` (default false) marks a call to a custom (freeform) tool, whose `arguments` is the tool's raw input rather than JSON. |
-| `tool_result` | `call_id`, `output` (string). |
+| `tool_result` | `call_id`, `output` (string). Since 0.25, `content`: a list of parts as a message's, when the result holds more than text (images, files or parts core could not interpret), with `output` still holding its text parts joined; and `is_error`, true when the tool reported a failure. |
 | `reasoning` | `text`: reasoning text or summary the client replayed. Opaque reasoning data (such as an OpenAI encrypted blob or an Anthropic thinking signature) stays in `origin.raw`. |
 | `native` | An item core could not interpret (for example a hosted tool call or Anthropic redacted thinking); `origin.raw` holds it whole, in its place in the conversation. |
 
@@ -1432,7 +1434,7 @@ extension below 0.23 gets none: it cannot promise alive frames.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.23. An extension reports the minor version it
+raise the minor version: this document is version 0.25. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1463,8 +1465,10 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.21 | A manifest's optional `title`, `summary` and `kind`, and a [registry index](#registry-index) package's optional `title`, `summary`, `kind` and `tier`. No call or frame changes. |
 | 0.22 | The account's optional [`timeouts`](#timeouts). |
 | 0.23 | [Alive frames](#alive-frames): the call's and turn's `alive` and the `alive` frame; core's `extension_timeout`. |
+| 0.24 | A model's `capabilities` ([`models`](#models)). |
+| 0.25 | A [tool result](#the-request)'s `content` parts and `is_error`, following 0.24. |
 
-## What version 0.23 leaves out
+## What version 0.25 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,
