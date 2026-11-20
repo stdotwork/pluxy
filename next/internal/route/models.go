@@ -532,8 +532,10 @@ type ServedModel struct {
 // as the first of them that lists the name has it. An account that serves any model because its
 // list is not known lists no name, but serves those of its provider. A name with a fallback
 // chain, and a chain's new name, is served by the accounts of each of its steps, step by step, and
-// described as the first of them that lists its step's model has that model. A name whose accounts
-// are all held is not listed: no request for it can be served now.
+// described as the first of them that lists its step's model has that model, or, when none lists
+// it, as the first of them. A name whose accounts are all held is not listed: no request for it
+// can be served now. Accounts routing leaves out (weight 0 under the weighted strategy) are in no
+// entry.
 func (r *Router) ServedModels(ctx context.Context) []ServedModel {
 	accounts, creds := r.knownSnapshot()
 	accounts = r.routed(accounts)
