@@ -339,6 +339,41 @@ func TestSetupImportDryRunRefusesWhatTheImportRefuses(t *testing.T) {
 	}
 }
 
+// The file names its auth folder twice (the older auth-dir and the v8 oauth.auth-dir): the row
+// of the key the translator read is the one that says its folder is not there, and the older one
+// keeps its own reason.
+func TestSetupImportAuthDirRow(t *testing.T) {
+	setTestHome(t)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	writeTestFile(t, cfgPath, `{"listen":"127.0.0.1:0","client_keys":["fake-client-key-1"],"management_key":"fake-mgmt-key"}`)
+	cpa := t.TempDir()
+	older, v8 := filepath.Join(cpa, "older"), filepath.Join(cpa, "v8")
+	writeTestFile(t, filepath.Join(cpa, "config.yaml"), "auth-dir: "+older+"\noauth: {auth-dir: "+v8+"}\n")
+	c, err := Start(Options{ConfigPath: cfgPath, SafeMode: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Stop()
+	code, rep, body := importCall(t, c, "fake-mgmt-key", management.SetupImportRequest{Config: filepath.Join(cpa, "config.yaml"), DryRun: true})
+	if code != http.StatusOK {
+		t.Fatalf("dry run: %d %s", code, body)
+	}
+	rows := map[string]management.ImportRow{}
+	for _, r := range append(append(append([]management.ImportRow{}, rep.Brought...), rep.Changed...), rep.NotBrought...) {
+		rows[r.What] = r
+	}
+	if r := rows["oauth.auth-dir"]; !strings.Contains(r.Why, "the folder "+v8+" is not there") {
+		t.Errorf("oauth.auth-dir row %+v: the folder it names is not reported", r)
+	}
+	if r := rows["auth-dir"]; !strings.Contains(r.Why, "the file sets oauth.auth-dir too") {
+		t.Errorf("auth-dir row %+v: it lost its own reason", r)
+	}
+	if !slices.ContainsFunc(rep.NotBrought, func(r management.ImportRow) bool { return r.What == "oauth.auth-dir" }) {
+		t.Errorf("oauth.auth-dir is not under not_brought: %s", body)
+	}
+}
+
 // A path that is not absolute, a missing file and a file that is not a config are refused, and
 // the refusal holds none of the file's secrets.
 func TestSetupImportRefusals(t *testing.T) {

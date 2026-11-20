@@ -203,11 +203,15 @@ func (c *Core) ImportCPA(req management.SetupImportRequest) (management.ImportRe
 		NotBrought: conv(lists.NotBrought), Needs: c.importNeeds(p, imported)}, nil
 }
 
-// authDirKey is the path in the file of the auth folder's key.
+// authDirKey is the path in the file of the auth folder's key: the one the translator read.
 func authDirKey(res *legacy.Result) string {
-	// The ledger names a key by its spelling in the file: the v8 one, or the older auth-dir.
-	if res.Ledger.Has(legacy.ConfigItem("auth-dir")) {
-		return "auth-dir"
+	// The ledger names a key by its spelling in the file: the v8 one, or the older auth-dir. When
+	// the file sets both, the v8 one is the key translator read (oauth.auth-dir); the older one
+	// keeps the reason it is not brought.
+	for _, k := range []string{"oauth.auth-dir", "auth-dir"} {
+		if res.Ledger.Has(legacy.ConfigItem(k)) {
+			return k
+		}
 	}
 	return "oauth.auth-dir"
 }
