@@ -26,15 +26,25 @@ func endpointCall(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	}
 }
 
-// embeddings passes an Embeddings API request through to {base_url}/embeddings whatever the
-// account's wire_api, with its key sent as for Chat, and returns the upstream's reply unchanged.
+// embeddings passes an Embeddings API request through to {base_url}/embeddings on a Chat or
+// Responses account, with its key sent as for Chat, and returns the upstream's reply unchanged.
+// Messages and Gemini accounts answer unsupported so core tries another account.
 func embeddings(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
-	s, _, key, err := account(call)
+	s, wire, key, err := account(call)
 	if err != nil {
 		return err
 	}
-	// Embeddings is an OpenAI API endpoint even on an account whose generation wire is Messages
-	// or Gemini, so its key goes as Chat's does and the path does not depend on wire_api.
+	switch s.WireAPI {
+	case wireChat, wireResponses:
+	default:
+		return &llm.Error{
+			Code:      llm.CodeUnsupported,
+			Scope:     llm.ScopeCredential,
+			Retryable: true,
+			Message:   "this account's upstream speaks " + formatNames[wire.format] + ", which does not serve embeddings",
+		}
+	}
+	// The key goes as Chat's does on both wires that serve embeddings.
 	chat := wireInfo{format: llm.FormatOpenAIChat}
 	resp, err := postBody(ctx, call, s, chat, key, "/embeddings", call.Request.Native.Body)
 	if err != nil {

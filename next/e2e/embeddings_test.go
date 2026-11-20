@@ -10,8 +10,8 @@ import (
 	"testing"
 )
 
-// An embeddings request reaches the OpenAI-compatible account's POST {base_url}/embeddings
-// whatever its wire_api, with the key sent as for Chat, and the upstream's reply reaches the
+// An embeddings request reaches a Chat-wire OpenAI-compatible account's POST
+// {base_url}/embeddings, with the key sent as for Chat, and the upstream's reply reaches the
 // client unchanged.
 func TestEmbeddingsThroughOpenAICompatible(t *testing.T) {
 	const reply = `{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.25,0.5,0.75]}],"model":"text-embedding-3-small","usage":{"prompt_tokens":3,"total_tokens":3}}`
@@ -33,14 +33,15 @@ func TestEmbeddingsThroughOpenAICompatible(t *testing.T) {
 	t.Cleanup(up.Close)
 
 	base := runCore(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
 		"extension": map[string]any{
 			"manifest": filepath.Join(binDir, "pluxy-extension.json"),
 			"accounts": []any{map[string]any{
 				"id":       "embeddings",
 				"models":   []string{"text-embedding-3-small"},
-				"settings": map[string]any{"base_url": up.URL + "/v1", "wire_api": "messages"},
+				"settings": map[string]any{"base_url": up.URL + "/v1", "wire_api": "chat"},
 				"credential": map[string]any{
 					"kind": "api_key", "api_key": upstreamKey,
 				},
