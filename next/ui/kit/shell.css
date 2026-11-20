@@ -8,6 +8,13 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  /* A shell with no navigation (signing in, the desktop app before it is connected) gives its one
+     part the whole window, not the navigation's column or row. */
+  .shell > :only-child {
+    grid-column: 1 / -1;
+    grid-row: 1 / -1;
+  }
+
   .nav {
     background: var(--px-color-nav);
     /* For the navigation laid out as a bar, which scrolls sideways when it is wider than the
