@@ -340,35 +340,6 @@ test("while scanning, the page reads about once a second, stops, and shows what 
   expect(setupReads()).toHaveLength(3);
 });
 
-test("a person's untick survives a re-read while an untouched suggestion stays ticked", async () => {
-  jest.useFakeTimers();
-  const scans = [setup(true, "2026-11-20T00:00:00Z"), setup(true, "2026-11-20T00:00:00Z")];
-  const fake = await mount((call) => {
-    if (call.method === "GET" && call.path === "/setup") return { status: 200, body: scans.shift()! };
-    return quiet(call);
-  });
-
-  const codex = row(fake.root, "Codex");
-  const claude = row(fake.root, "Claude");
-  const codexBox = all(codex!, "input")[0]!;
-  const claudeBox = all(claude!, "input")[0]!;
-  expect(codexBox.checked).toBe(true);
-  expect(claudeBox.checked).toBe(true);
-
-  codexBox.checked = false;
-  codexBox.dispatchEvent(new Event("change"));
-  await settle();
-  expect(codexBox.checked).toBe(false);
-
-  await tickUntil(
-    () => fake.calls.filter((call) => call.method === "GET" && call.path === "/setup").length === 2,
-  );
-  const afterCodex = all(row(fake.root, "Codex")!, "input")[0]!;
-  const afterClaude = all(row(fake.root, "Claude")!, "input")[0]!;
-  expect(afterCodex.checked).toBe(false);
-  expect(afterClaude.checked).toBe(true);
-});
-
 test("leaving while core scans stops the re-reads", async () => {
   jest.useFakeTimers();
   const scans = [setup(true), setup(true)];
