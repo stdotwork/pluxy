@@ -49,3 +49,25 @@ func TestEmbeddingsRefusesWiresWithoutEmbeddings(t *testing.T) {
 		})
 	}
 }
+
+// An account's alias names the model upstream by another name: the body sent upstream names the
+// model routing chose, and a body already naming it goes unchanged, byte for byte.
+func TestEmbeddingsBodyNamesTheRoutedModel(t *testing.T) {
+	call := imageCall(llm.FormatOpenAIEmbeddings, "upstream-embed", `{"model":"client-alias","input":["a","b"],"dimensions":256}`)
+	body, err := embeddingsBody(call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["model"] != "upstream-embed" || got["dimensions"] != float64(256) {
+		t.Errorf("body = %s, want model upstream-embed and the other fields kept", body)
+	}
+	same := `{"model": "upstream-embed", "input": "a"}`
+	call = imageCall(llm.FormatOpenAIEmbeddings, "upstream-embed", same)
+	if body, err := embeddingsBody(call); err != nil || string(body) != same {
+		t.Errorf("body = %s, %v; want the client's bytes unchanged", body, err)
+	}
+}
