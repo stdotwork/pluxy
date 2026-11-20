@@ -353,12 +353,18 @@ func (e *encoder) parts(it llm.Item, msgPath string) (parts []json.RawMessage, s
 	return parts, sendable, dropped
 }
 
-// responseParts encodes a tool result's images and files as a functionResponse's parts; its text
-// is in Output, the response.
+// responseParts encodes a tool result's images and files as a functionResponse's parts. Its text
+// is in Output, the response, and functionResponse.parts cannot hold a text part: a text part
+// that is that text is kept as already sent, and one that is not is reported dropped.
 func (e *encoder) responseParts(it llm.Item, itemPath string) []json.RawMessage {
 	var media []llm.Part
 	for i, p := range it.Content {
 		if p.Type == llm.PartText {
+			pp := pathOf(p.Origin, fmt.Sprintf("%s.content[%d]", itemPath, i))
+			if !strings.Contains(it.Output, p.Text) {
+				e.lose(llm.LossDropped, pp, "GenerateContent cannot take a text part beside a tool result's text; this one is not in its output")
+				continue
+			}
 			e.kept(p.Origin)
 			continue
 		}
