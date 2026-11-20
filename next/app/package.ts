@@ -168,6 +168,10 @@ function bundledCores(work: string): Record<string, BundledCore> {
       { ...(process.env as Record<string, string>), CGO_ENABLED: "0" },
     );
     cpSync(join(prepared, "bundled"), join(folder, "bundled"), { recursive: true });
+    // Both versions bundle the same test packages: a file naming the version makes each part of
+    // the program set differ between them, as two releases' do (the update session ends an
+    // update after its first part, bundled\, and checks that the folder is then neither set).
+    writeFileSync(join(folder, "bundled", "test-core-version.txt"), `${v}\n`);
     entries.push(coreRelease(releases, v, folder, privateKey, keyId));
   }
   const index = join(releases, "index.json");
