@@ -441,7 +441,7 @@ type Info struct {
 	Payload *payload.Rules
 	// Stream is true when the call's model request asked for streaming.
 	Stream bool
-	// Timeouts holds the upstream timeouts core resolved for the account (minor version 18).
+	// Timeouts holds the upstream timeouts core resolved for the account (minor version 19).
 	// Nil uses the SDK defaults when hasTimeouts is set.
 	Timeouts *protocol.Timeouts
 

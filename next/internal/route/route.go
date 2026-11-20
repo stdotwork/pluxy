@@ -308,7 +308,7 @@ func (r *Router) SetAccounts(accounts []Account, same func(old, cur *Account) bo
 	r.state.restart(changed, fresh, kept)
 	r.accounts = list
 	r.picker.setOrder(list)
-	r.lists.clear()
+	r.lists.retain(list, changed, same == nil)
 	r.mu.Unlock()
 	for _, a := range old {
 		if !slices.ContainsFunc(list, func(b *Account) bool { return b.ID == a.ID }) {

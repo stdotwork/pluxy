@@ -150,6 +150,7 @@ export function UsagePage() {
     <label class="field" data-part="field">
       <span class="label">{label}</span>
       <input
+        data-slot="input"
         type="text"
         placeholder={name === "since" ? t("sinceHint") : undefined}
         value={filters[name]}
@@ -181,6 +182,7 @@ export function UsagePage() {
         <label class="field" data-part="field">
           <span class="label">{t("failed")}</span>
           <select
+            data-slot="select-trigger"
             aria-label={t("failed")}
             value={filters.failed}
             onChange={(e) => changeFilters({ ...filters, failed: e.currentTarget.value })}

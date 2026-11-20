@@ -1,8 +1,17 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { LAYOUT, MAX_THEME_BYTES, PARTS, THEME_VERSION, TOKENS, tokenProperty } from "../kit/theme/contract";
-import { type Choices, DEFAULT_CHOICES, resolve, tokensCss } from "../kit/theme/engine";
+import {
+  LAYOUT,
+  MAX_THEME_BYTES,
+  PARTS,
+  SLOTS,
+  THEME_VERSION,
+  TOKENS,
+  tokenProperty,
+  tokenValueProblem,
+} from "../kit/theme/contract";
+import { type Choices, DEFAULT_CHOICES, resolve, ThemeApplier, tokensCss } from "../kit/theme/engine";
 import { parseTheme, parseThemeText } from "../kit/theme/validate";
 
 const themesDir = join(import.meta.dir, "..", "themes");
@@ -64,6 +73,42 @@ describe("the README and the code agree", () => {
       .map(([hook]) => hook?.match(/^`data-part="([^"]+)"`/)?.[1])
       .filter((h) => h !== undefined);
     expect(documented).toEqual([...PARTS]);
+  });
+
+  test("every T3 Code data-slot name, and the kit sets each one", () => {
+    const documented = rows("### Hooks you can rely on")
+      .map(([hook]) => hook?.match(/^`data-slot="([^"]+)"`/)?.[1])
+      .filter((h) => h !== undefined);
+    expect(documented).toEqual([...SLOTS]);
+    expect(readme).toContain('| `class="dark"` | Root element, while the appearance is dark |');
+    const kit = join(import.meta.dir, "..", "kit");
+    const source = (readdirSync(kit, { recursive: true }) as string[])
+      .filter((f) => f.endsWith(".tsx"))
+      .map((f) => readFileSync(join(kit, f), "utf8"))
+      .join("\n");
+    for (const slot of SLOTS) expect(source).toContain(`data-slot="${slot}"`);
+  });
+
+  test("a token's default is a value a theme could set, and follows only tokens that exist", () => {
+    for (const [name, def] of Object.entries(TOKENS)) {
+      for (const value of [def.light, "dark" in def ? def.dark : def.light]) {
+        expect(tokenValueProblem(name, value)).toBeUndefined();
+        for (const [, property] of value.matchAll(/var\((--px-[a-z-]+)\)/g)) {
+          expect(Object.keys(TOKENS).map(tokenProperty)).toContain(property as string);
+        }
+      }
+    }
+  });
+
+  test("every colour token is used by the kit's CSS", () => {
+    const kit = join(import.meta.dir, "..", "kit");
+    const css = (readdirSync(kit, { recursive: true }) as string[])
+      .filter((f) => f.endsWith(".css"))
+      .map((f) => readFileSync(join(kit, f), "utf8"))
+      .join("\n");
+    for (const name of Object.keys(TOKENS).filter((n) => n.startsWith("color."))) {
+      expect(css).toContain(`var(${tokenProperty(name)})`);
+    }
   });
 
   test("account list controls expose theme hooks", () => {
@@ -215,6 +260,45 @@ describe("resolving", () => {
 
   test("reduced motion stops transitions", () => {
     expect(resolve(theme, choose({}), { ...env, reducedMotion: true }).tokens["motion.duration"]).toBe("0ms");
+  });
+
+  test("the newer colour tokens follow the older ones until a theme sets them", () => {
+    const plain = resolve(ok(base).theme, DEFAULT_CHOICES, env).tokens;
+    expect(plain["color.nav"]).toBe("var(--px-color-surface)");
+    expect(plain["color.code-bg"]).toBe("var(--px-color-surface-raised)");
+    expect(plain["color.danger-surface"]).toBe("color-mix(in srgb, var(--px-color-danger) 8%, transparent)");
+    const set = resolve(ok({ ...base, tokens: { "color.nav": "#102030" } }).theme, DEFAULT_CHOICES, env);
+    expect(set.tokens["color.nav"]).toBe("#102030");
+    expect(tokensCss(set.tokens)).toContain("--px-color-nav:#102030;");
+  });
+
+  test("the root has class dark only while the appearance is dark", () => {
+    const g = globalThis as { CSSStyleSheet?: unknown };
+    const had = g.CSSStyleSheet;
+    g.CSSStyleSheet = class {
+      replaceSync() {}
+    };
+    try {
+      const classes = new Set<string>();
+      const doc = {
+        documentElement: {
+          dataset: {} as Record<string, string>,
+          style: {} as Record<string, string>,
+          classList: {
+            toggle: (name: string, on: boolean) => (on ? classes.add(name) : classes.delete(name)),
+          },
+        },
+        adoptedStyleSheets: [] as unknown[],
+      };
+      const applier = new ThemeApplier(doc as unknown as Document);
+      applier.apply(resolve(theme, choose({ appearance: "dark" }), env));
+      expect(doc.documentElement.dataset.appearance).toBe("dark");
+      expect([...classes]).toEqual(["dark"]);
+      applier.apply(resolve(theme, choose({ appearance: "light" }), env));
+      expect([...classes]).toEqual([]);
+    } finally {
+      g.CSSStyleSheet = had;
+    }
   });
 
   test("tokens become custom properties", () => {

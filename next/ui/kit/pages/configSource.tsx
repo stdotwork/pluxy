@@ -119,6 +119,7 @@ export function ConfigSource(props: ConfigSourceProps) {
         {missing && <Notice tone="muted">{t("accountNotFound", { id: p.text(missing) })}</Notice>}
         <div class="config-source-search actions">
           <input
+            data-slot="input"
             type="search"
             aria-label={t("searchConfig")}
             placeholder={t("searchConfig")}

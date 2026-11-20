@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.18
+# pluxy extension protocol, version 0.19
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -25,10 +25,12 @@ back, for core's request logs. Version 0.14 adds [payload rules](#payload-rules)
 upstream JSON body that the config sets, fills in or removes. Version 0.15 has a session turn carry
 them too. Version 0.16 adds an error's `dropped`: what a refusal under the `reject` drop policy
 could not carry. Version 0.17 adds a captured body's `body_stopped`: the extension did not read it
-to its end. Version 0.18 adds the account's [`timeouts`](#timeouts): upstream request limits for
-response headers, stream byte gaps and non-streamed completion. It is deliberately small; later
-versions add capabilities and more operations without changing what is described here. An
-extension written for version 0 works unchanged with a core that speaks 0.18 (see
+to its end. Version 0.18 adds a model list's `from`: whether the list came from the account at the
+provider or from the extension's built-in catalog. Version 0.19 adds the account's
+[`timeouts`](#timeouts): upstream request limits for response headers, stream byte gaps and
+non-streamed completion. It is deliberately small; later versions add capabilities and more
+operations without changing what is described here. An extension written for version 0 works
+unchanged with a core that speaks 0.19 (see
 [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
@@ -323,7 +325,7 @@ The reply is one frame, then the extension closes the connection: a `models.resu
 event as for `generate`.
 
 ```json
-{"type": "models.result", "models": {"owned_by": "openai", "models": [
+{"type": "models.result", "models": {"owned_by": "openai", "from": "account", "models": [
   {"id": "gpt-6.1-sol", "display_name": "GPT-6.1 Sol", "created": 1794268800, "context_length": 400000, "max_completion_tokens": 128000}
 ]}}
 ```
@@ -332,6 +334,7 @@ event as for `generate`.
 | --- | --- |
 | `models` | The models the account serves, by the names its upstream knows them by. Empty when the extension has no list for the account. At most 10000. |
 | `owned_by` | Who provides the account's models, shown as `owned_by` for models without one of their own, and for the models the account's config names. Default: the account's ID. |
+| `from` | Optional, since 0.18: where the list came from — `"account"` (read from the provider using the account's credential) or `"extension"` (the extension's built-in catalog). Omitted when unknown or reported by an older extension. |
 | model `id` | The model's name upstream, as requests name it. Required, unique in the list; core keeps the first of any repeats. |
 | model `name` | Its resource name in Gemini's list, such as `models/gemini-2.5-pro`. Default `id`. |
 | model `display_name`, `description`, `version` | For people. |
@@ -550,7 +553,7 @@ the endpoint (or does not serve it for this account's credential) answers with c
 | `credential` | The credential for this call (below). |
 | `proxy_url` | Since 0.11, optional: the proxy every upstream request of this call goes through (below). Absent: no proxy. |
 | `headers` | Since 0.12, optional: extra HTTP headers every upstream request of this call carries, an object of header name to value (below). Absent: none. |
-| `timeouts` | Since 0.18, optional: upstream request limits in milliseconds (`header_ms`, `idle_ms`, `total_ms`; below). Absent: extension defaults. |
+| `timeouts` | Since 0.19, optional: upstream request limits in milliseconds (`header_ms`, `idle_ms`, `total_ms`; below). Absent: extension defaults. |
 
 An extension only ever receives its own accounts: core stores each credential with the ID of the
 extension that created it and never sends it to another.
@@ -702,7 +705,7 @@ process has not created any `sdk.Upstream` transport.
 
 ### Timeouts
 
-From version 0.18 an account may carry `timeouts`, an object with `header_ms`, `idle_ms` and
+From version 0.19 an account may carry `timeouts`, an object with `header_ms`, `idle_ms` and
 `total_ms` in milliseconds. Each is optional; `0` turns that limit off. On a streamed upstream
 request, `header_ms` (default 60000) bounds the wait for HTTP response headers and `idle_ms`
 (default 300000) bounds the gap between raw upstream body bytes (and between messages on an
@@ -1367,7 +1370,7 @@ recorded.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.17. An extension reports the minor version it
+raise the minor version: this document is version 0.19. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1392,9 +1395,10 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.15 | The `payload` of a [session turn](#turns). |
 | 0.16 | An error's `dropped`. |
 | 0.17 | A captured body's `body_stopped` ([upstream capture](#upstream-capture)). |
-| 0.18 | The account's optional [`timeouts`](#timeouts). |
+| 0.18 | A model list's `from` ([`models`](#models)). |
+| 0.19 | The account's optional [`timeouts`](#timeouts). |
 
-## What version 0.18 leaves out
+## What version 0.19 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

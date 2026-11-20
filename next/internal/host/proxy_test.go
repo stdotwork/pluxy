@@ -416,7 +416,7 @@ func TestResolveTimeouts(t *testing.T) {
 		t.Fatalf("resolved = %+v, want header=0 idle=2000 total=%d", acct.Timeouts, defaultTotalTimeoutMS)
 	}
 
-	// Older extensions (< minor 18) do not receive Timeouts.
+	// Older extensions (< minor 19) do not receive Timeouts.
 	old := &Extension{
 		info: protocol.Info{ProtocolMinor: timeoutsMinor - 1},
 		opts: Options{Timeouts: func() *protocol.Timeouts { return global }},

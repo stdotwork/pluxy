@@ -193,3 +193,21 @@ jobs:
         run: go test -count=1 -v ./internal/cred/
       - name: Test the settings and logs folders
         run: go test -count=1 -v -run Windows ./internal/extconfig/ ./internal/logfile/ ./internal/server/
+
+  bench:
+    name: Benchmark check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: next/go.mod
+          cache: true
+          cache-dependency-path: next/go.mod
+      - name: Benchmark regression check
+        working-directory: next
+        run: go run ./cmd/pluxy-bench -check
