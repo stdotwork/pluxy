@@ -142,6 +142,7 @@ function SignIn(props: { host: Host; onDone: () => void; reason?: string }) {
         <label class="field" data-part="field">
           <span class="label">{t("key")}</span>
           <input
+            data-slot="input"
             type="password"
             autocomplete="current-password"
             required
@@ -203,6 +204,8 @@ export function Shell(props: {
     setSignedIn(false);
   }, [host]);
   const extensionsChanged = useCallback(() => setUiVersion((n) => n + 1), []);
+  // Core keeps the themes: the theme state follows it while signed in.
+  useEffect(() => (signedIn ? themes.connect(unauthorized) : undefined), [signedIn, themes, unauthorized]);
   const kit = useMemo(
     () => ({ host, api: api(host), themes, privacy, unauthorized, extensionsChanged }),
     [host, themes, privacy, unauthorized, extensionsChanged],
@@ -261,7 +264,7 @@ export function Shell(props: {
     <KitContext.Provider value={kit}>
       <PrivacyContext.Provider value={masks}>
         <div class="shell" data-part="shell">
-          <nav class="nav" data-part="nav" aria-label={t("navigation")}>
+          <nav class="nav" data-part="nav" data-slot="sidebar" aria-label={t("navigation")}>
             <a class="brand" href={`#/${pages[0]?.id ?? ""}`}>
               {props.brand ?? "pluxy"}
             </a>

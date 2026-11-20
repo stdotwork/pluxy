@@ -1,8 +1,8 @@
 //! What the native test sees of the real processes, threads and pipes, on each platform: the
-//! processes running a program, whether a process runs, this app's thread names, and the
-//! processes holding a pipe. Linux reads `/proc`; macOS asks libproc; Windows takes a Tool Help
-//! snapshot and asks each process or thread. These only look: nothing here signals, stops or
-//! changes a process.
+//! processes running a program, whether a process runs, this app's thread names, the processes
+//! holding a pipe, and a process's argv and environment. Linux reads `/proc`; macOS asks libproc
+//! and `sysctl`; Windows takes a Tool Help snapshot and asks each process or thread. These only
+//! look: nothing here signals, stops or changes a process.
 //!
 //! A process that has exited but not been reaped (a zombie, or on Windows a process whose handle
 //! is still held) does not run: it is in no `processes` set and not `alive`.
@@ -83,6 +83,17 @@ mod imp {
             }
         }
         Ok((pipe, holders))
+    }
+
+    /// The argv and environment of pid, as /proc has them; none unless both can be read.
+    pub(super) fn argv_env(pid: u64) -> Option<(String, String)> {
+        let read = |f: &str| {
+            std::fs::read(format!("/proc/{pid}/{f}"))
+                .ok()
+                .filter(|b| !b.is_empty())
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+        };
+        Some((read("cmdline")?, read("environ")?))
     }
 }
 
@@ -279,6 +290,48 @@ mod imp {
             .collect();
         Ok((format!("pipe:{handle:#x}"), holders))
     }
+
+    /// The argv and environment of pid, a process of this user, from `sysctl(KERN_PROCARGS2)`,
+    /// which gives argc, the executable's path, NUL padding, argc arguments, then the environment
+    /// strings, each ending in a NUL: the path and the arguments, NUL-separated, and the
+    /// environment. None when they cannot be read.
+    pub(super) fn argv_env(pid: u64) -> Option<(String, String)> {
+        let pid = libc::c_int::try_from(pid).ok()?;
+        let mut max: libc::c_int = 0;
+        let mut size = size_of::<libc::c_int>();
+        let mut mib = [libc::CTL_KERN, libc::KERN_ARGMAX];
+        let got = unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                2,
+                (&mut max as *mut libc::c_int).cast(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if got != 0 || max <= 0 {
+            return None;
+        }
+        let mut buf = vec![0u8; max as usize];
+        let mut size = buf.len();
+        let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+        let got = unsafe {
+            libc::sysctl(
+                mib.as_mut_ptr(),
+                3,
+                buf.as_mut_ptr().cast(),
+                &mut size,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        if got != 0 {
+            return None;
+        }
+        buf.truncate(size);
+        super::parse_procargs2(&buf)
+    }
 }
 
 #[cfg(windows)]
@@ -453,4 +506,80 @@ pub(super) fn threads() -> Vec<String> {
 #[cfg(unix)]
 pub(super) fn pipe_holders(pid: u64, fd: u32) -> Result<(String, BTreeSet<u64>), String> {
     imp::pipe_holders(pid, fd)
+}
+
+/// The argv and environment of pid, a process of this user; none unless both can be read.
+/// Windows gives no supported way to read another process's environment; there the tool reports
+/// its own.
+#[cfg(unix)]
+pub(super) fn argv_env(pid: u64) -> Option<(String, String)> {
+    imp::argv_env(pid)
+}
+
+/// Parses a macOS `sysctl(KERN_PROCARGS2)` buffer: `argc` (`i32` in native byte order), the
+/// executable's path, NUL padding, `argc` NUL-terminated arguments, then the environment strings.
+#[cfg(any(target_os = "macos", test))]
+fn parse_procargs2(buf: &[u8]) -> Option<(String, String)> {
+    let argc = i32::from_ne_bytes(buf.get(..4)?.try_into().ok()?);
+    if argc <= 0 {
+        return None;
+    }
+    let rest = buf.get(4..)?;
+    // The executable's path, then the NULs padding it (the format gives no padding length, so skip
+    // all consecutive NULs after it, matching `ps`).
+    let path_end = rest.iter().position(|b| *b == 0)?;
+    let mut at = path_end;
+    while rest.get(at) == Some(&0) {
+        at += 1;
+    }
+    let mut end = at;
+    for _ in 0..argc {
+        end += rest.get(end..)?.iter().position(|b| *b == 0)? + 1;
+    }
+    let lossy = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
+    Some((
+        format!("{}\0{}", lossy(&rest[..path_end]), lossy(&rest[at..end])),
+        lossy(&rest[end..]),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_procargs2;
+
+    fn procargs2(argc: i32, rest: &[u8]) -> Vec<u8> {
+        let mut buf = argc.to_ne_bytes().to_vec();
+        buf.extend_from_slice(rest);
+        buf
+    }
+
+    #[test]
+    fn procargs2_parses_padded_args_and_env() {
+        let buf = procargs2(
+            3,
+            b"/s/bin/tool\0\0\0\0tool\0\0serve\0HOME=/h\0PLUXY_EXTENSION_ID=pluxy/agent\0",
+        );
+        let (argv, env) = parse_procargs2(&buf).expect("valid KERN_PROCARGS2 buffer");
+        assert_eq!(argv, "/s/bin/tool\0tool\0\0serve\0");
+        assert_eq!(env, "HOME=/h\0PLUXY_EXTENSION_ID=pluxy/agent\0");
+    }
+
+    #[test]
+    fn procargs2_rejects_nonpositive_argc_and_truncated_buffers() {
+        assert_eq!(parse_procargs2(&[]), None);
+        assert_eq!(parse_procargs2(&[1, 0, 0]), None);
+        assert_eq!(
+            parse_procargs2(&procargs2(0, b"/s/bin/tool\0\0ENV=1\0")),
+            None
+        );
+        assert_eq!(
+            parse_procargs2(&procargs2(-1, b"/s/bin/tool\0\0ENV=1\0")),
+            None
+        );
+        assert_eq!(parse_procargs2(&procargs2(1, b"/s/bin/tool")), None);
+        assert_eq!(
+            parse_procargs2(&procargs2(2, b"/s/bin/tool\0\0only_one\0")),
+            None
+        );
+    }
 }

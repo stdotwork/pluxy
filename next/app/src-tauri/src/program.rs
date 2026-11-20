@@ -67,7 +67,16 @@
 //! A tool's `spawn` and `runtime` frames, for a host call it serves, go to the host's spawn service
 //! (`Host::set_spawner`, `spawn.rs`), on a thread of their own; their IDs count among its own calls.
 //! Its `files` frames go to the host's save service (`Host::set_saver`, `savefile.rs`) the same way.
+//!
+//! What runs is an instance: a package in an environment (`environments.rs`). On this computer
+//! that is the package itself, as above. On Windows, a package may also run in a WSL distribution
+//! as one of its users: its release's Linux program, from the Windows disk through the drive the
+//! distribution mounts, started through Windows' own `wsl.exe` with the contract's values passed on
+//! by `WSLENV`, pinned (no writer, rename or delete) for the whole run; it makes its own data folder
+//! there. Each instance has its own process, slot, turn, calls of unknown outcome and vault
+//! records; a tool in WSL may use its vault, but its own calls, jobs, spawns and saves are refused.
 
+use crate::environments::{Environment, Instance, Record};
 use crate::managed::{start_when_free, BUSY_PAUSE};
 use crate::owned::{
     kill_group, leader, read_some, Child, ChildStderr, ChildStdin, ChildStdout, Leader,
@@ -107,6 +116,8 @@ const MAX_TICKET: usize = 64;
 const LOG_RATE: usize = 50;
 /// How often the supervisor looks at its tool, and the pipe readers at their stop flag.
 const TICK: Duration = Duration::from_millis(100);
+/// How long a reaped tool's pipe readers have to read what it wrote last.
+const READERS: Duration = Duration::from_secs(1);
 
 /// The host's time limits. `Default` is the contract's.
 #[derive(Clone, Copy, Debug)]
@@ -129,6 +140,8 @@ pub struct Limits {
     pub stable: Duration,
     /// How long a replaced release's calls may take before it is stopped.
     pub drain: Duration,
+    /// Between the tries of a start WSL refused (`environments::WSL_RETRIES`).
+    pub wsl_retry: Duration,
 }
 
 impl Default for Limits {
@@ -143,6 +156,7 @@ impl Default for Limits {
             quarantine_after: 5,
             stable: Duration::from_secs(600),
             drain: Duration::from_secs(600),
+            wsl_retry: crate::environments::WSL_RETRY_PAUSE,
         }
     }
 }
@@ -172,6 +186,39 @@ pub struct Spec {
     operations: Vec<Operation>,
     /// The state version the release writes, which describe must report.
     state_version: i64,
+    /// Where it runs, and in WSL the host's record of that environment (`Spec::in_wsl`).
+    environment: Environment,
+    wsl: Option<Record>,
+}
+
+impl Spec {
+    /// Package a's release, as its Linux build for WSL (the record device gives for the record's
+    /// platform), to run in record's distribution as its user.
+    pub fn in_wsl(a: &crate::device::Admitted, record: Record) -> Spec {
+        Spec {
+            environment: record.environment(),
+            wsl: Some(record),
+            ..Spec::from(a)
+        }
+    }
+
+    /// The instance it runs as.
+    fn instance(&self) -> Instance {
+        Instance {
+            package: self.id.clone(),
+            environment: self.environment.clone(),
+        }
+    }
+
+    /// Its slot's key (`Instance::key`).
+    fn key(&self) -> String {
+        self.instance().key()
+    }
+
+    /// How messages name it: the package, and its WSL distribution and user there.
+    fn name(&self) -> String {
+        self.instance().name()
+    }
 }
 
 impl From<&crate::device::Admitted> for Spec {
@@ -193,6 +240,8 @@ impl From<&crate::device::Admitted> for Spec {
                 })
                 .collect(),
             state_version: a.state().version,
+            environment: Environment::Local,
+            wsl: None,
         }
     }
 }
@@ -234,6 +283,10 @@ fn tool_env(inner: &Inner, spec: &Spec) -> Result<Vec<(&'static str, PathBuf)>, 
     let Some(env) = inner.env.get() else {
         return Ok(Vec::new());
     };
+    // In WSL its environment is the record's (`wsl_command`), and it makes its data folder there.
+    if spec.wsl.is_some() {
+        return Ok(Vec::new());
+    }
     let data = crate::vault::tool_data_dir(&env.tools, &spec.id)
         .map_err(|e| format!("{}: its data folder: {e}", spec.id))?;
     let mut vars = vec![("HOME", env.home.clone()), ("PLUXY_TOOL_DATA_DIR", data)];
@@ -241,12 +294,13 @@ fn tool_env(inner: &Inner, spec: &Spec) -> Result<Vec<(&'static str, PathBuf)>, 
     Ok(vars)
 }
 
-/// Gives the admitted record for a package ID, checked now, or why there is none. Only the
-/// device catalog makes an `Admitted`.
-pub type Resolve = Box<dyn Fn(&str) -> Result<crate::device::Admitted, String> + Send + Sync>;
+/// Gives what an instance starts from, checked now, or why there is none: on this computer, its
+/// package's admitted record (`Spec::from`); in WSL, its Linux build's with the environment's record
+/// (`Spec::in_wsl`). Only the device catalog makes an `Admitted`.
+pub type Resolve = Box<dyn Fn(&Instance) -> Result<Spec, String> + Send + Sync>;
 
 /// What the host starts from: `Resolve`'s record, or the unit tests' own.
-type Records = Box<dyn Fn(&str) -> Result<Spec, String> + Send + Sync>;
+type Records = Resolve;
 
 /// Fields a tool's call frame may not have: the host names a call's caller and chain.
 const IDENTITY_FIELDS: &[&str] = &["chain", "caller", "requester", "from", "origin", "context"];
@@ -371,14 +425,15 @@ pub type Saver = Spawner;
 /// The host-private services a tool reaches through the host (`Host::set_private`): the app's
 /// vault.
 pub trait Private: Send + Sync {
-    /// Package id's open journals, as describe names them; an error fails the start.
-    fn journals(&self, id: &str) -> Result<Vec<Value>, String>;
+    /// Instance's open journals, as describe names them; an error fails the start.
+    fn journals(&self, instance: &Instance) -> Result<Vec<Value>, String>;
     /// The output of tool's `vault` frame request, sent for a host call of op it serves, or, with
     /// describing, for the describe it is answering on its package's turn, naming the IDs of the
     /// open journals it was told of.
     fn frame(
         &self,
         tool: &Hop,
+        instance: &Instance,
         op: &str,
         describing: Option<&[String]>,
         request: &Value,
@@ -617,6 +672,9 @@ enum StartError {
     Refused(CallError),
     /// The start failed: the calls waiting on it get this too.
     Failed(CallError),
+    /// WSL refused to start the tool (`environments::wsl_refused_start`): tried again, and only
+    /// counted as a crash once the tries are over.
+    WslRefused(CallError),
 }
 
 /// Why a running tool is being stopped.
@@ -678,9 +736,38 @@ struct Run {
     describing: Mutex<Option<(String, Vec<String>)>>,
     /// Its last stderr line, as logged: why it stopped, if it says.
     last_line: Mutex<Option<String>>,
+    /// It said hello.
+    greeted: AtomicBool,
+    /// In WSL, before hello: the first bytes of its stderr as they came, which may be
+    /// `wsl.exe`'s own text in UTF-16 (`wsl_refusal`).
+    early_err: Mutex<Vec<u8>>,
 }
 
+/// How much of what `wsl.exe` prints before hello is kept to read why it did not start.
+const WSL_TEXT: usize = 4096;
+
 impl Run {
+    /// It runs in WSL, so `wsl.exe` may have printed instead of it.
+    fn in_wsl(&self) -> bool {
+        !self.spec.environment.is_local()
+    }
+
+    /// Why WSL refused to start it, if that is why it ended before hello: `wsl.exe`'s text on
+    /// stdout (its pipe broken with it) or on stderr naming the refusal.
+    fn wsl_refusal(&self) -> Option<String> {
+        if !self.in_wsl() || self.greeted.load(Ordering::SeqCst) {
+            return None;
+        }
+        if let Some(End::Failed(w)) = self.end.lock().unwrap().as_ref() {
+            if crate::environments::wsl_refused_start(w) {
+                return Some(w.clone());
+            }
+        }
+        let said = crate::environments::wsl_said(&self.early_err.lock().unwrap());
+        crate::environments::wsl_refused_start(&said)
+            .then(|| format!("did not start: wsl.exe said {said}"))
+    }
+
     fn pid(&self) -> Option<u32> {
         match self.pid.load(Ordering::SeqCst) {
             0 => None,
@@ -808,7 +895,7 @@ pub struct Lease {
 impl Drop for Lease {
     fn drop(&mut self) {
         let mut slots = self.inner.slots();
-        if let Some(slot) = slots.get_mut(&self.run.spec.id) {
+        if let Some(slot) = slots.get_mut(&self.run.spec.key()) {
             if slot.run.as_ref().is_some_and(|r| Arc::ptr_eq(r, &self.run)) {
                 slot.leases -= 1;
                 if slot.leases == 0 {
@@ -833,7 +920,7 @@ pub struct Prepared {
 impl Drop for Prepared {
     fn drop(&mut self) {
         let mut slots = self.inner.slots();
-        if let Some(slot) = slots.get_mut(&self.run.spec.id) {
+        if let Some(slot) = slots.get_mut(&self.run.spec.key()) {
             if slot
                 .candidate
                 .as_ref()
@@ -874,10 +961,7 @@ fn valid_ticket(t: &str) -> bool {
 impl Host {
     /// A host that starts each tool from the record resolve gives for it at that moment.
     pub fn new(resolve: Resolve, limits: Limits) -> Host {
-        Host::with(
-            Box::new(move |id| resolve(id).map(|a| Spec::from(&a))),
-            limits,
-        )
+        Host::with(resolve, limits)
     }
 
     /// For the unit tests: records that are no device's.
@@ -934,7 +1018,7 @@ impl Host {
 
     /// A lease on tool id, starting it if it is not running (once, however many ask at once).
     pub fn lease(&self, id: &str) -> Result<Lease, CallError> {
-        self.lease_for(id, &|_| Ok(()), &Cancel::default())
+        self.lease_for(&Instance::local(id), &|_| Ok(()), &Cancel::default())
             .map_err(|e| self.0.escaped(e))
     }
 
@@ -942,14 +1026,17 @@ impl Host {
     /// lease is taken or tool started. A cancel is seen before each start and each wait.
     fn lease_for(
         &self,
-        id: &str,
+        instance: &Instance,
         check: &dyn Fn(&Spec) -> Result<(), CallError>,
         cancel: &Cancel,
     ) -> Result<Lease, CallError> {
         let inner = &self.0;
+        let (key, id) = (instance.key(), instance.name());
         let mut slots = inner.slots();
         // The start this call waited on, if it waited on one.
         let mut waited_on: Option<u64> = None;
+        // Starts of a tool in WSL 1 that WSL itself refused, tried again (`environments.rs`).
+        let mut retried = 0;
         loop {
             if inner.closing.load(Ordering::SeqCst) {
                 return Err(fail("extension_unavailable", "the app is quitting"));
@@ -957,7 +1044,7 @@ impl Host {
             if cancel.is_set() {
                 return Err(fail("cancelled", "the call was cancelled"));
             }
-            let slot = slots.entry(id.to_string()).or_default();
+            let slot = slots.entry(key.clone()).or_default();
             if let (Some(n), Some((m, e))) = (waited_on, &slot.failed) {
                 if n == *m {
                     return Err(e.clone());
@@ -1018,9 +1105,9 @@ impl Host {
                         slot.starts += 1;
                         let n = slot.starts;
                         drop(slots);
-                        let started = start(inner, id, check);
+                        let started = start(inner, instance, check);
                         slots = inner.slots();
-                        let slot = slots.entry(id.to_string()).or_default();
+                        let slot = slots.entry(key.clone()).or_default();
                         slot.starting = false;
                         inner.changed.notify_all();
                         if let Err(e) = started {
@@ -1034,14 +1121,30 @@ impl Host {
                             if slot.phase == Phase::Starting {
                                 slot.phase = Phase::Idle;
                             }
-                            let e = match e {
-                                StartError::Refused(e) => e,
-                                StartError::Failed(e) => {
-                                    slot.last = Some(e.message.clone());
-                                    slot.failed = Some((n, e.clone()));
-                                    e
-                                }
+                            let (e, refused) = match e {
+                                StartError::Refused(e) => (e, None),
+                                StartError::Failed(e) => (e, Some(false)),
+                                StartError::WslRefused(e) => (e, Some(true)),
                             };
+                            if refused == Some(true) && retried < crate::environments::WSL_RETRIES
+                            {
+                                // Tried again after a pause, with no crash counted.
+                                slot.last = Some(e.message.clone());
+                                inner.changed.notify_all();
+                                retried += 1;
+                                drop(slots);
+                                std::thread::sleep(inner.limits.wsl_retry);
+                                slots = inner.slots();
+                                continue;
+                            }
+                            if let Some(wsl) = refused {
+                                slot.last = Some(e.message.clone());
+                                slot.failed = Some((n, e.clone()));
+                                // A start WSL still refused once the tries are over: one crash.
+                                if wsl {
+                                    slot.phase = count_crash(slot, &inner.limits);
+                                }
+                            }
                             inner.changed.notify_all();
                             return Err(e);
                         }
@@ -1059,7 +1162,7 @@ impl Host {
             slot.waiting += 1;
             slots = inner.changed.wait_timeout(slots, TICK).unwrap().0;
             // Slots are never removed.
-            slots.get_mut(id).expect("its slot").waiting -= 1;
+            slots.get_mut(&key).expect("its slot").waiting -= 1;
         }
     }
 
@@ -1117,7 +1220,7 @@ impl Host {
     ) -> Result<Value, CallError> {
         self.run_call_with(
             call,
-            id,
+            &Instance::local(id),
             op,
             input,
             Arc::new(Context::main()),
@@ -1125,18 +1228,18 @@ impl Host {
         )
     }
 
-    /// Calls op of tool id with input, as call, in context, the router's decision; any of also
+    /// Calls op of instance with input, as call, in context, the router's decision; any of also
     /// cancels it too.
     pub fn run_call_with(
         &self,
         call: Call,
-        id: &str,
+        instance: &Instance,
         op: &str,
         input: Value,
         context: Arc<Context>,
         also: Cancel,
     ) -> Result<Value, CallError> {
-        self.call_inner(id, op, input, &also.with(&call.cancel), context)
+        self.call_inner(instance, op, input, &also.with(&call.cancel), context)
             .map_err(|e| self.0.escaped(e))
     }
 
@@ -1160,12 +1263,13 @@ impl Host {
 
     fn call_inner(
         &self,
-        id: &str,
+        instance: &Instance,
         op: &str,
         input: Value,
         cancel: &Cancel,
         context: Arc<Context>,
     ) -> Result<Value, CallError> {
+        let id = instance.name();
         if serde_json::to_vec(&input).map_or(usize::MAX, |b| b.len()) > MAX_INPUT {
             return Err(fail(
                 "invalid_request",
@@ -1175,7 +1279,7 @@ impl Host {
         // Checked against the record before the tool is leased, or started: the release the
         // router allowed the call for, if it named one, the operation and the input.
         let lease = self.lease_for(
-            id,
+            instance,
             &|spec| {
                 if let Some((sha256, generation)) = &context.expect {
                     if spec.sha256 != *sha256 || spec.generation != *generation {
@@ -1328,7 +1432,7 @@ impl Host {
         {
             let mut slots = self.0.slots();
             let kept = run.sent.lock().unwrap().remove(&cid).is_some();
-            let slot = slots.entry(id.to_string()).or_default();
+            let slot = slots.entry(instance.key()).or_default();
             match &result {
                 Err(e) if e.unknown && kept => slot.unknown.push(Unknown {
                     call: cid,
@@ -1351,6 +1455,53 @@ impl Host {
     /// ones draining, are stopped too. Calls of unknown outcome are still reported at its next
     /// start.
     pub fn stop(&self, id: &str) {
+        self.stop_key(id);
+        // Every instance of the package: in WSL too, which runs the same release's Linux build.
+        self.stop_wsl(id);
+    }
+
+    /// `stop`, of tool id's instances in WSL only: they run a Linux build of the release that
+    /// was active then, which a swap or a newly installed Linux build replaces.
+    pub fn stop_wsl(&self, id: &str) {
+        let keys: Vec<String> = {
+            let slots = self.0.slots();
+            let wsl = format!("{id}@");
+            slots
+                .keys()
+                .filter(|k| k.starts_with(&wsl))
+                .cloned()
+                .collect()
+        };
+        for k in &keys {
+            self.stop_key(k);
+        }
+    }
+
+    /// Stops every instance running in environment (its record was removed); none for this
+    /// computer.
+    pub fn stop_in(&self, environment: &Environment) {
+        let suffix = Instance {
+            package: String::new(),
+            environment: environment.clone(),
+        }
+        .vault_suffix();
+        if suffix.is_empty() {
+            return;
+        }
+        let keys: Vec<String> = self
+            .0
+            .slots()
+            .keys()
+            .filter(|k| k.ends_with(&suffix))
+            .cloned()
+            .collect();
+        for k in &keys {
+            self.stop_key(k);
+        }
+    }
+
+    /// `stop`, of the instance whose slot key is id.
+    fn stop_key(&self, id: &str) {
         let mut slots = self.0.slots();
         // Counted even for a tool that never ran: a swap staged before it is refused.
         slots.entry(id.to_string()).or_default().stops += 1;
@@ -1388,7 +1539,7 @@ impl Host {
             slots.keys().cloned().collect()
         };
         for id in &ids {
-            self.stop(id);
+            self.stop_key(id);
         }
         let deadline = Instant::now() + self.0.limits.stop + Duration::from_secs(2);
         let mut slots = self.0.slots();
@@ -1402,8 +1553,14 @@ impl Host {
     }
 
     pub fn status(&self, id: &str) -> Status {
+        self.status_in(&Instance::local(id))
+    }
+
+    /// Whether instance runs, and how it last stopped.
+    pub fn status_in(&self, instance: &Instance) -> Status {
+        let id = &instance.package;
         let slots = self.0.slots();
-        let slot = slots.get(id);
+        let slot = slots.get(&instance.key());
         let phase = slot.map_or(Phase::Idle, |s| s.phase);
         let leases = slot.map_or(0, |s| s.leases);
         let run = slot.and_then(|s| s.run.as_ref());
@@ -1543,8 +1700,18 @@ impl Host {
 
     /// Makes the prepared tool the one that serves its package: new calls and leases go to it.
     /// The one it replaces drains: the calls holding its leases finish on it, then it stops; after
-    /// the drain limit it is stopped. Refused when the candidate stopped meanwhile.
+    /// the drain limit it is stopped. The package's instances in WSL, which run the replaced
+    /// release's Linux build, are stopped (`stop_wsl`). Refused when the candidate stopped
+    /// meanwhile.
     pub fn switch(&self, p: Prepared) -> Result<(), CallError> {
+        let id = p.run.spec.id.clone();
+        self.switch_local(p)?;
+        self.stop_wsl(&id);
+        Ok(())
+    }
+
+    /// `switch`, of the slot on this computer.
+    fn switch_local(&self, p: Prepared) -> Result<(), CallError> {
         let id = p.run.spec.id.clone();
         let mut slots = self.0.slots();
         let slot = slots.entry(id.clone()).or_default();
@@ -1690,6 +1857,9 @@ fn open_program(spec: &Spec) -> Result<std::fs::File, String> {
 /// The command that runs the opened program file f, as the contract says.
 #[cfg(unix)]
 fn command(spec: &Spec, f: &std::fs::File) -> Result<Command, String> {
+    if spec.wsl.is_some() {
+        return Err(format!("{}: WSL runs on Windows only", spec.name()));
+    }
     // Linux: the kernel opens /proc/self/fd/<n>, the checked file, as it executes; the descriptor
     // is close-on-exec, so the tool does not keep it. macOS: the path the checked file has now,
     // once no other user can change it (`owned::exec_target`).
@@ -1731,6 +1901,9 @@ fn command(spec: &Spec, f: &std::fs::File) -> Result<Command, String> {
 #[cfg(windows)]
 fn command(spec: &Spec, f: &std::fs::File) -> Result<crate::owned::windows::Command, String> {
     use crate::owned::windows::{self as w, Io, Kind};
+    if let Some(r) = &spec.wsl {
+        return wsl_command(spec, r, f);
+    }
     let pinned = w::pin_file(f)?;
     let mut cmd = w::Command::new(pinned, Kind::Tool);
     cmd.arg0(&spec.program)
@@ -1743,6 +1916,45 @@ fn command(spec: &Spec, f: &std::fs::File) -> Result<crate::owned::windows::Comm
         .stderr(Io::Piped)
         // Its pipes carry secrets.
         .secrets(true);
+    Ok(cmd)
+}
+
+/// The command that runs spec's Linux program f in r's WSL distribution as its user: Windows' own
+/// `wsl.exe` (System32's, pinned as any program is), `-d <distro> -u <user> --cd <folder> --exec
+/// <program>` with the program and its folder as the distribution sees them through the drive it
+/// mounts, the contract's values passed on by `WSLENV`, in a job of its own. `wsl.exe` does not
+/// run the program image itself: the distribution reads it by its path, so f stays pinned (no
+/// writer, rename or delete) for as long as the tool is held.
+#[cfg(windows)]
+fn wsl_command(
+    spec: &Spec,
+    r: &Record,
+    f: &std::fs::File,
+) -> Result<crate::owned::windows::Command, String> {
+    use crate::owned::windows::{self as w, Io, Kind};
+    let root = ToolEnv::system()
+        .into_iter()
+        .find(|(k, _)| *k == "SystemRoot")
+        .map(|(_, v)| v)
+        .ok_or("the app has no SystemRoot, which wsl.exe needs")?;
+    let system32 = root.join("System32");
+    let exe = system32.join("wsl.exe");
+    let held = w::open_pinned(&exe).map_err(|e| format!("{}: {e}", exe.display()))?;
+    let pinned = w::pin_file(&held)?;
+    let program = w::pin_other(f)?;
+    let linux = r.linux_path(&program.path)?;
+    let dir = r.linux_path(&spec.dir)?;
+    let mut cmd = w::Command::new(pinned, Kind::Tool);
+    cmd.arg0("wsl.exe")
+        .args(r.tool_args(&linux, &dir))
+        .envs(r.tool_env(&spec.id, &spec.sha256, &CONTRACT.to_string(), Some(&root))?)
+        // Its own folder: `--cd` names the one in the distribution.
+        .current_dir(&system32)
+        .stdin(Io::Piped)
+        .stdout(Io::Piped)
+        .stderr(Io::Piped)
+        .secrets(true)
+        .keep(program);
     Ok(cmd)
 }
 
@@ -1762,7 +1974,7 @@ fn new_run(
     let mut cmd = command(&spec, program)?;
     cmd.envs(env.iter().map(|(k, v)| (k, v)));
     let (hello_tx, hello_rx) = mpsc::channel();
-    let gate = Arc::clone(&inner.slots().entry(spec.id.clone()).or_default().gate);
+    let gate = Arc::clone(&inner.slots().entry(spec.key()).or_default().gate);
     let run = Arc::new(Run {
         spec,
         pid: AtomicU64::new(0),
@@ -1786,6 +1998,8 @@ fn new_run(
         saver: inner.saver.get().cloned(),
         describing: Mutex::new(None),
         last_line: Mutex::new(None),
+        greeted: AtomicBool::new(false),
+        early_err: Mutex::new(Vec::new()),
     });
     Ok((run, hello_rx, cmd))
 }
@@ -1814,16 +2028,17 @@ fn spawn_supervisor(
 /// ready, or has failed and been reaped. The slot is Starting.
 fn start(
     inner: &Arc<Inner>,
-    id: &str,
+    instance: &Instance,
     check: &dyn Fn(&Spec) -> Result<(), CallError>,
 ) -> Result<(), StartError> {
     let failed = |e: String| StartError::Failed(fail("extension_unavailable", e));
-    let spec = (inner.resolve)(id).map_err(failed)?;
-    if spec.id != id {
-        return Err(failed(format!("the record for {id} names {}", spec.id)));
+    let (key, id) = (instance.key(), instance.name());
+    let spec = (inner.resolve)(instance).map_err(failed)?;
+    if spec.instance() != *instance {
+        return Err(failed(format!("the record for {id} names {}", spec.name())));
     }
     if let Err(e) = compatible(&spec) {
-        set_incompatible(inner, id, &e);
+        set_incompatible(inner, &key, &e);
         return Err(failed(e));
     }
     check(&spec).map_err(StartError::Refused)?;
@@ -1832,7 +2047,7 @@ fn start(
     let (run, hello_rx, cmd) = new_run(inner, spec, &program, &env).map_err(failed)?;
     {
         let mut slots = inner.slots();
-        let slot = slots.entry(id.to_string()).or_default();
+        let slot = slots.entry(key.clone()).or_default();
         // Its package changed since its record was read, or the app is quitting: that record
         // is not run.
         if slot.stop_asked || inner.closing.load(Ordering::SeqCst) {
@@ -1849,7 +2064,7 @@ fn start(
     }
     if let Err(e) = spawn_supervisor(inner, &run, cmd, program) {
         let mut slots = inner.slots();
-        if let Some(slot) = slots.get_mut(id) {
+        if let Some(slot) = slots.get_mut(&key) {
             if slot.run.as_ref().is_some_and(|r| Arc::ptr_eq(r, &run)) {
                 slot.run = None;
             }
@@ -1859,7 +2074,7 @@ fn start(
     match handshake(inner, &run, hello_rx, true) {
         Ok(reported) => {
             let mut slots = inner.slots();
-            let slot = slots.entry(id.to_string()).or_default();
+            let slot = slots.entry(key.clone()).or_default();
             if slot.run.as_ref().is_some_and(|r| Arc::ptr_eq(r, &run)) && !run.ending() {
                 slot.phase = Phase::Ready;
                 slot.idle_since = Some(Instant::now());
@@ -1884,6 +2099,12 @@ fn start(
                 true,
             );
             wait_reaped(inner, &run);
+            if let Some(why) = run.wsl_refusal() {
+                return Err(StartError::WslRefused(fail(
+                    "extension_unavailable",
+                    format!("{id} {why}"),
+                )));
+            }
             Err(failed(e.message))
         }
     }
@@ -1938,15 +2159,21 @@ fn handshake(
     unknown: bool,
 ) -> Result<Vec<String>, CallError> {
     let spec = &run.spec;
-    let id = &spec.id;
-    let deadline = Instant::now() + inner.limits.startup;
+    let (id, key, instance) = (spec.name(), spec.key(), spec.instance());
+    // A tool in WSL may first wait for its distribution to start.
+    let startup = if spec.wsl.is_some() {
+        inner.limits.startup.max(crate::environments::WSL_STARTUP)
+    } else {
+        inner.limits.startup
+    };
+    let deadline = Instant::now() + startup;
     let left = || deadline.saturating_duration_since(Instant::now());
     let timeout = || {
         fail(
             "extension_unavailable",
             format!(
                 "{id} did not say hello and describe itself within {}s",
-                inner.limits.startup.as_secs()
+                startup.as_secs()
             ),
         )
     };
@@ -1985,7 +2212,7 @@ fn handshake(
     let pending = |inner: &Inner| -> Vec<Unknown> {
         inner
             .slots()
-            .get(id)
+            .get(&key)
             .map(|s| s.unknown.clone())
             .unwrap_or_default()
     };
@@ -1993,7 +2220,7 @@ fn handshake(
     // cannot be read fail the start: it must not take work with a journal it was not told of.
     let journals = || match (&run.private, unknown) {
         (Some(p), true) => p
-            .journals(id)
+            .journals(&instance)
             .map_err(|e| fail("unavailable", format!("reading {id}'s vault journals: {e}"))),
         _ => Ok(Vec::new()),
     };
@@ -2046,7 +2273,7 @@ fn handshake(
     // Each open journal it was told of must be ended before it takes work.
     if let (Some(p), false) = (&run.private, journals.is_empty()) {
         let open = p
-            .journals(id)
+            .journals(&instance)
             .map_err(|e| fail("unavailable", format!("reading {id}'s vault journals: {e}")))?;
         if let Some(j) = journals
             .iter()
@@ -2125,7 +2352,7 @@ fn supervise(
     if let Some(e) = threads.iter().find_map(|t| t.as_ref().err()) {
         run.finish(End::Failed(format!("its pipe threads: {e}")), true);
     }
-    let [_, _, log_reader] = threads;
+    let [_, frame_reader, log_reader] = threads;
     let _ = spawned.send(Ok(()));
     let mut stopping: Option<Instant> = None;
     loop {
@@ -2136,7 +2363,7 @@ fn supervise(
         {
             let mut slots = inner.slots();
             if let Some(slot) = slots
-                .get_mut(&run.spec.id)
+                .get_mut(&run.spec.key())
                 .filter(|s| s.run.as_ref().is_some_and(|r| Arc::ptr_eq(r, &run)))
             {
                 if slot.phase == Phase::Ready
@@ -2152,7 +2379,7 @@ fn supervise(
                     inner.changed.notify_all();
                 }
             } else if let Some(o) = slots
-                .get(&run.spec.id)
+                .get(&run.spec.key())
                 .and_then(|s| s.old.iter().find(|o| Arc::ptr_eq(&o.run, &run)))
             {
                 // Replaced: it stops once its last call ends, or at the drain limit.
@@ -2183,10 +2410,17 @@ fn supervise(
     kill_group(&mut child);
     let status = child.wait();
     run.tx.lock().unwrap().take();
+    // What it wrote last is read before anything is decided: its last log lines (and the count of
+    // those left out) for the status, and what `wsl.exe` said instead of a frame on either pipe,
+    // which decides whether WSL refused the start. Its readers reach the end of its pipes on their
+    // own once it is reaped; a process it left holding one keeps them for at most `READERS`.
+    let readers: Vec<_> = [frame_reader, log_reader].into_iter().flatten().collect();
+    let until = Instant::now() + READERS;
+    while readers.iter().any(|t| !t.is_finished()) && Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(10));
+    }
     run.closed.store(true, Ordering::SeqCst);
-    // Its last lines, and the count of those left out of the log, reach the status. The reader
-    // stops within a tick once it is reaped.
-    if let Ok(t) = log_reader {
+    for t in readers {
         let _ = t.join();
     }
     run.pending.lock().unwrap().clear();
@@ -2197,8 +2431,9 @@ fn supervise(
         Err(e) => e.to_string(),
     };
     let last_line = run.last_line.lock().unwrap().clone();
+    let refused = run.wsl_refusal();
     let mut slots = inner.slots();
-    if let Some(slot) = slots.get_mut(&run.spec.id) {
+    if let Some(slot) = slots.get_mut(&run.spec.key()) {
         // Calls it did not answer are of unknown outcome. They are recorded here, before the
         // slot can start the tool again: their threads may wake after that start's describe
         // looked.
@@ -2207,7 +2442,7 @@ fn supervise(
             slot.unknown.push(Unknown {
                 why: format!(
                     "{} stopped before it answered {op}; its outcome is unknown, and it is not sent again",
-                    run.spec.id
+                    run.spec.name()
                 ),
                 call,
                 op,
@@ -2243,19 +2478,16 @@ fn supervise(
                 ),
             };
             // A crash: backoff before the next start, or quarantine after too many in a row. A
-            // clean stop (idle, or one the host asked for) ends the crashes in a row.
-            slot.phase = if phase == Phase::Crashed {
+            // clean stop (idle, or one the host asked for) ends the crashes in a row. A start WSL
+            // refused is not a crash yet: the start tries again, and counts one only when the
+            // tries are over.
+            slot.phase = if refused.is_some() {
+                Phase::Idle
+            } else if phase == Phase::Crashed {
                 if run.started.elapsed() >= inner.limits.stable {
                     slot.crashes = 0;
                 }
-                slot.crashes += 1;
-                if slot.crashes >= inner.limits.quarantine_after.max(1) {
-                    slot.retry_at = None;
-                    Phase::Quarantined
-                } else {
-                    slot.retry_at = Some(Instant::now() + backoff(&inner.limits, slot.crashes));
-                    Phase::Crashed
-                }
+                count_crash(slot, &inner.limits)
             } else {
                 if matches!(phase, Phase::Idle | Phase::Stopped) {
                     slot.crashes = 0;
@@ -2268,6 +2500,19 @@ fn supervise(
     }
     run.reaped.store(true, Ordering::SeqCst);
     inner.changed.notify_all();
+}
+
+/// Counts one more crash in a row in slot: its backoff, or quarantine after too many. Gives the
+/// phase it leaves the slot in.
+fn count_crash(slot: &mut Slot, limits: &Limits) -> Phase {
+    slot.crashes += 1;
+    if slot.crashes >= limits.quarantine_after.max(1) {
+        slot.retry_at = None;
+        Phase::Quarantined
+    } else {
+        slot.retry_at = Some(Instant::now() + backoff(limits, slot.crashes));
+        Phase::Crashed
+    }
 }
 
 fn spawn_named(
@@ -2296,6 +2541,22 @@ fn read_frames(run: &Arc<Run>, mut stdout: ChildStdout) {
         while buf.len() >= 4 {
             let len = u32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
             if len > MAX_FRAME {
+                // Before hello in WSL, that is `wsl.exe`'s own error text, not a frame: all of
+                // it, up to its end (`wsl.exe` exits once it has said it), is read first.
+                if run.in_wsl() && !said_hello {
+                    while buf.len() < WSL_TEXT {
+                        match read_some(&run.closed, &mut stdout, &mut chunk) {
+                            Some(n) => buf.extend_from_slice(&chunk[..n]),
+                            None => break,
+                        }
+                    }
+                    buf.truncate(WSL_TEXT);
+                    run.violation(format!(
+                        "did not start: wsl.exe said {}",
+                        crate::environments::wsl_said(&buf)
+                    ));
+                    break 'read;
+                }
                 run.violation(format!(
                     "sent a frame of {len} bytes; the limit is {MAX_FRAME}"
                 ));
@@ -2308,6 +2569,9 @@ fn read_frames(run: &Arc<Run>, mut stdout: ChildStdout) {
             if let Err(why) = deliver(run, &frame, &mut said_hello) {
                 run.violation(why);
                 break 'read;
+            }
+            if said_hello {
+                run.greeted.store(true, Ordering::SeqCst);
             }
         }
     }
@@ -2403,6 +2667,12 @@ fn outbound(run: &Arc<Run>, id: &str, v: &Value) {
         return refuse(
             "invalid_request",
             "a call ID is 1 to 64 letters, digits, '-', '_' or '.'".into(),
+        );
+    }
+    if run.spec.wsl.is_some() {
+        return refuse(
+            "unsupported",
+            "a tool in WSL cannot call other packages or the job service yet".into(),
         );
     }
     if let Some(f) = IDENTITY_FIELDS.iter().find(|f| v.get(**f).is_some()) {
@@ -2504,6 +2774,12 @@ fn spawn(run: &Arc<Run>, id: &str, v: &Value) {
         return refuse(
             "invalid_request",
             "a request ID is 1 to 64 letters, digits, '-', '_' or '.'".into(),
+        );
+    }
+    if run.spec.wsl.is_some() {
+        return refuse(
+            "unsupported",
+            "a tool in WSL cannot start launches or save files yet".into(),
         );
     }
     let Some(serves) = v["for"].as_str() else {
@@ -2610,7 +2886,7 @@ fn vault(run: &Arc<Run>, id: &str, v: &Value) {
             sha256: run.spec.sha256.clone(),
             generation: run.spec.generation,
         };
-        private.frame(&tool, &op, told.as_deref(), v)
+        private.frame(&tool, &run.spec.instance(), &op, told.as_deref(), v)
     })();
     if run.ending() {
         return;
@@ -2680,6 +2956,11 @@ fn read_log(run: &Run, mut stderr: ChildStderr) {
         left_out: 0,
     };
     while let Some(n) = read_some(&run.closed, &mut stderr, &mut chunk) {
+        if run.in_wsl() && !run.greeted.load(Ordering::SeqCst) {
+            let mut early = run.early_err.lock().unwrap();
+            let room = WSL_TEXT.saturating_sub(early.len()).min(n);
+            early.extend_from_slice(&chunk[..room]);
+        }
         for &b in &chunk[..n] {
             if b == b'\n' {
                 if !skipping {

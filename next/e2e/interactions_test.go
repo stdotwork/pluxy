@@ -115,9 +115,10 @@ func startInteractionsCore(t *testing.T, accounts ...interactionsAccount) string
 		})
 	}
 	return runCore(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
-		"routing":     map[string]any{"strategy": "fill-first"},
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+		"routing":        map[string]any{"strategy": "fill-first"},
 		"extension": map[string]any{
 			"manifest": geminiManifest(t),
 			"accounts": list,
@@ -238,6 +239,10 @@ func TestInteractionsStreamArrivesIncrementally(t *testing.T) {
 	readFirst := make(chan struct{})
 	var timedOut atomic.Bool
 	up := newFakeGemini(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != interactionsPath {
+			http.NotFound(w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		fl := w.(http.Flusher)
 		io.WriteString(w, "event: content.delta\ndata: {\"event_type\":\"content.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Hel\"}}\n\n")
@@ -399,6 +404,10 @@ func TestInteractionsAccountWithoutTheSettingIsRefused(t *testing.T) {
 // final error event; the reply had started, so its status stays 200.
 func TestInteractionsStreamBreaksMidway(t *testing.T) {
 	up := newFakeGemini(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != interactionsPath {
+			http.NotFound(w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		io.WriteString(w, "event: content.delta\ndata: {\"event_type\":\"content.delta\",\"delta\":{\"type\":\"text\",\"text\":\"Hel\"}}\n\n")
 		w.(http.Flusher).Flush()

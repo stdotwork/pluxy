@@ -77,26 +77,29 @@ management API of a core that is already running. `pluxy -config ...` with no su
 
 | Call | Command | What it does |
 | --- | --- | --- |
-| `GET /status` | `pluxy status` | Config versions (wanted and serving), each extension's state, build version, `management_api`, and **new** `first_run` |
+| `GET /status` | `pluxy status` | Config versions (wanted and serving), each extension's state, build version, `management_api`, and `first_run` |
 | `POST /reload` | `pluxy reload` | Reload the config now. 422 with the status when refused |
 | `GET /config`, `POST /config/validate`, `PUT /config` | `pluxy config show`, `pluxy config validate <file>`, `pluxy config apply <file>` | The config file with secrets replaced by placeholders; check a document; replace the file |
 | `GET /settings`, `PATCH /settings` | `pluxy settings`, `pluxy settings set <name> <value>` | The basic and routing settings by name |
-| `GET /client-keys`, `POST /client-keys`, `DELETE /client-keys/{id}` | `pluxy key list`, `pluxy key add`, `pluxy key remove <id>` | Client keys. `id` is stable across restarts (**changed**: today it changes at every start). `add` prints the key once |
+| `GET /client-keys`, `POST /client-keys`, `DELETE /client-keys/{id}` | `pluxy key list`, `pluxy key add`, `pluxy key remove <id>` | Client keys. `id` is stable across restarts. `add` prints the key once |
 | `POST /management-key/rotate` | `pluxy key rotate-management` | A new management key, printed once |
 | `GET /logs`, `DELETE /logs`, `GET /request-error-logs[/{name}]`, `GET /request-log-by-id/{id}` | `pluxy logs [--after n]`, `pluxy logs clear`, `pluxy logs errors [name]`, `pluxy logs request <id>` | Core's log and request logs |
 
-### Setup (**new**)
+### Setup
 
 Setup is what a new install shows first. Core looks at the machine it runs on, says what it found, and
 proposes what to install. Nothing is installed until asked.
 
+`first_run` is true only while there is no `state/setup.json` and core has no installed packages and no accounts; once `setup.json` exists, its `first_run` is kept. Core scans on its own only at a first run's start with no kept scan; otherwise only on `POST /setup/scan`.
+
 | Call | Command | What it does |
 | --- | --- | --- |
-| `GET /setup` | `pluxy setup` | The last scan, at once (it is kept on disk): `first_run`; `scanning`; `scanned_at`; `found` (below); `picks` (below). The command prints it and, on a terminal, offers to apply the picks marked `suggested` |
+| `GET /setup` | `pluxy setup` | The last scan, at once (it is kept on disk): `first_run`; `scanning`; `scanned_at`; `found` (below); `picks` (below). The command prints it and, on a terminal, offers to apply the picks marked `suggested` (`--yes` applies without asking) |
 | `POST /setup/scan` | `pluxy setup scan` | Looks again. Returns at once with `scanning: true`; read `GET /setup` until it is false (each probe has 4 seconds) |
-| `POST /setup/apply` | `pluxy setup apply [--pick id]... [--yes]` | `{"picks": ["pluxy/claude", ...]}`: installs and enables each. Returns one result per pick (`done`, or `error`); one failure does not undo the others |
-| `POST /setup/import` | `pluxy import cpa <config.yaml> [--auth-dir <dir>] [--dry-run]` | Brings a CLIProxyAPI setup across and returns the import report (below). With `dry_run` nothing is written |
-| `POST /setup/done` | `pluxy setup done` | Ends first run: the panel and app stop opening on setup |
+| `POST /setup/apply` | `pluxy setup apply [--pick id]... [--yes]` | `{"picks": ["pluxy/claude", ...]}`: installs and enables each. Returns `{"results": [{"id", "status", "package", "error"}]}` with one result per pick (`done`, or `error`); one failure does not undo the others |
+| **new** `POST /setup/import` | `pluxy import cpa <config.yaml> [--auth-dir <dir>] [--dry-run]` | Brings a CLIProxyAPI setup across and returns the import report (below). With `dry_run` nothing is written |
+| `POST /setup/done` | `pluxy setup done` | Ends first run (`{"first_run": false}`): the panel and app stop opening on setup |
+| — | `pluxy client show <tool> [--key-id id]` | Prints what to paste into that client tool's config to point it at this core (address and a client key placeholder; never prints the management key) |
 
 `found`:
 
@@ -116,7 +119,7 @@ proposes what to install. Nothing is installed until asked.
 }
 ```
 
-A client's `state` is `not-configured`, `configured` (it points at this core) or `needs-update`. `sign_ins`
+A client's `state` is `not-configured`, `configured` (it points at this core), `needs-update`, or **new** `refused` (a file the desktop app's writer for that tool would refuse to change; no pick is suggested to apply to it). `sign_ins`
 only says a sign-in exists; core reads no token from it.
 
 `picks`, in the order to show them:
@@ -152,7 +155,7 @@ Every key of the config and every file of the auth folder is in exactly one of `
 | Call | Command | What it does |
 | --- | --- | --- |
 | `GET /packages` | `pluxy ext list` | Installed packages and their state |
-| `GET /registries` | `pluxy ext available` | What each registry offers; **new**: each package's `title`, `summary`, `kind` and `tier` (`pick`, `verified`, `unverified`) |
+| `GET /registries` | `pluxy ext available` | What each registry offers, with each package's `title`, `summary`, `kind` (`provider`, `client`) and `tier` (`pick`, `verified`, `unverified`) when its registry says them; core enforces nothing by tier. A first start installs nothing: every package, the bundled ones too, is installed by `POST /packages` |
 | `POST /packages` | `pluxy ext install <id> [--version v] [--registry r]` | Install and enable |
 | `POST /packages/{id}/enable`, `.../disable` | `pluxy ext enable <id>`, `pluxy ext disable <id>` | Start or stop routing to it |
 | `DELETE /packages/{id}` | `pluxy ext remove <id>` | Remove its files; its accounts stay |
@@ -215,7 +218,7 @@ reading waits for the one request it lets through. `pluxy account list` shows `s
 | Call | Command | What it does |
 | --- | --- | --- |
 | **new** `GET /chains` | `pluxy chain list` | The fallback chains: `{"chains": [{"name", "steps"}]}`, sorted by name |
-| **new** `PUT /chains/{name}` | `pluxy chain set <name> <step>...` | `{"steps": [{"model": "...", "provider": "pluxy/claude", "accounts": ["..."]}]}`. A step on the command line is `model[@provider][:account,account]`. What follows the last `@` is the provider only when it is an extension's ID (`publisher/name`), so `claude-opus-4-7@20260416` is a model; a model whose name holds a colon ends with an `@` (`llama3:8b@`, or `llama3:8b@pluxy/ollama:a1` with a provider and an account). Replies with the chain, `{"name", "steps"}`. 422 for a step no account can serve, more than 8 steps, a step naming another chain, or a step that repeats another; 409 for a config.yaml, which cannot hold chains |
+| **new** `PUT /chains/{name}` | `pluxy chain set <name> <step>...` | `{"steps": [{"model": "...", "provider": "pluxy/claude", "accounts": ["..."]}]}`. A step on the command line is `model[@provider][:account,account]`. What follows the last `@` is the provider only when it is an extension's ID (`publisher/name`), so `claude-opus-4-7@20260416` is a model; a model whose name holds a colon ends with an `@` (`llama3:8b@`, or `llama3:8b@pluxy/ollama:a1` with a provider and an account). Replies with the chain, `{"name", "steps"}`. 422 for a step no account can serve (under `weighted`, an account with `weight: 0` serves nothing), a step naming an account core does not know or one that does not serve it, a provider that is not an extension's ID, more than 8 steps, a step naming another chain, or a step that repeats another; 409 for a config.yaml, which cannot hold chains |
 | **new** `DELETE /chains/{name}` | `pluxy chain remove <name>` | Back to the default: accounts of one provider, the same model. 404 when there is no such chain |
 | **new** `GET /route?model=<name>` | `pluxy route <model>` | Sends nothing. Says what a request for the model would do now: each account in the order it would be tried, and for each account left out, why and until when. `{"model", "order": [{"id", "account", "provider", "model"}], "left_out": [{"id", "account", "state", "until"}]}`: `id` is the account's ID (only this API shows it) and `account` its public ID, which client replies use; the rest are the names of the `pluxy` member below. Asking changes no routing state. For a model with a chain, `chain` holds its steps and each account its `step` (from 1), and `left_out` entries name their `provider` and `model`. Under the `soonest-reset` strategy each `order` entry also has `rank`, what it was ranked by: `reset` (its longest usage window's reset, rounded to the hour) and `window_seconds` when a reading names one, and `full_until` when a usage window is full; `{}` when no reading is known. A session's bound account is not shown yet |
 
@@ -223,8 +226,10 @@ reading waits for the one request it lets through. `pluxy account list` shows `s
 
 | Call | Command | What it does |
 | --- | --- | --- |
-| `GET /usage` | `pluxy usage [--since 7d] [--until t] [--by model\|account\|key\|provider] [--model m] [--account a] [--key k]` | Totals, breakdowns and a time series. **Changed**: reaches back as far as the usage files kept on disk (`usage.keep_days`, default 90), not only since the last start |
-| `GET /usage/events` | `pluxy usage events [--after seq] [--limit n]` | The recorded requests, oldest first. **new** fields per event: `attempts`, `chain_step` |
+| `GET /usage` | `pluxy usage [--since 7d] [--until t] [--by model\|account\|key\|provider] [--model m] [--account a] [--client-key k]` | Totals, breakdowns (`by` + `breakdown` alongside `models`, `providers`, `accounts`, `keys`) and a time series (`1h` buckets for ranges up to 2 days / 48 hours, `24h` beyond, unless `bucket` is given; `1m` / 60 steps when no range is given). **Changed**: reaches back across all usage files kept on disk (`usage.keep_days`, default 90), reading closed UTC days from hourly `usage/summary/YYYY-MM-DD.json` files (stays when `.jsonl` files are pruned) and today from memory / `usage/YYYY-MM-DD.jsonl`. Also accepts `key` as an alias for `key_id` |
+| `GET /usage/events` | `pluxy usage events [--after seq \| --before [seq]] [--limit n] [--since t] [--until t] [--model m] [--account a] [--provider p] [--client-key k]` | The recorded requests, oldest first with `after` or newest first with `before`. **new** fields per event: `attempts`, `chain_step` |
+
+Closed days are counted by whole UTC hours, so a `since` or `until` inside an hour on a closed day counts that whole hour.
 
 ### Themes
 

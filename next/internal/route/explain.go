@@ -214,13 +214,7 @@ type PlanLeftOut struct {
 // turns, on a copy of its memory) and sends nothing, so asking changes no routing state.
 func (r *Router) Plan(ctx context.Context, model string) Plan {
 	accounts, creds := r.knownSnapshot()
-	var eligible []*Account
-	for _, a := range accounts {
-		if r.picker.strategy == StrategyWeighted && a.weight() == 0 {
-			continue
-		}
-		eligible = append(eligible, a)
-	}
+	eligible := r.routed(accounts)
 	served := r.served(ctx, eligible, creds, r.catalogFunc())
 	steps, chain := r.stepsFor(model)
 	capable, held := split(r.targets(steps, eligible, served))

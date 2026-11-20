@@ -19,7 +19,8 @@ import (
 // backend. Each file can be read only by core's user (and, on Windows, SYSTEM), and the folder is
 // made private on each save: on unix by their modes (0700 and 0600); on Windows, where Go applies
 // only the read-only bit, by a protected access list (internal/private), and there the folder is
-// also checked and made private when the records are loaded, before any is read. A save writes a
+// also checked and made private when the records are loaded, before any is read, and a record
+// whose own list is not private is then written again as a private file. A save writes a
 // temporary file in the same folder, syncs it and renames it over the old one, so a crash leaves
 // the old record or the new one.
 //
@@ -129,7 +130,10 @@ func (f FileBackend) load() ([]Record, error) {
 // readRecord reads the record file name in root. A file that is not a regular file (a link, say),
 // or one owned by an account the folder's check would not accept (private.Owner), is skipped with a
 // notice in the log, and nil is returned: core did not make it, and another account may have put
-// it there before the folder was private.
+// it there before the folder was private. A record whose own access list is not private
+// (private.FilePrivate: on Windows, one made before the folder was private or moved in from
+// another folder) is written again as a private file, with a notice in the log, before it is
+// returned.
 func (f FileBackend) readRecord(root *os.Root, name string) ([]byte, error) {
 	path := filepath.Join(f.Dir, name)
 	skip := func(why string) ([]byte, error) {
@@ -159,7 +163,21 @@ func (f FileBackend) readRecord(root *os.Root, name string) ([]byte, error) {
 		return skip("it is owned by " + owner + ", not by this user. Take ownership of it from an elevated prompt " +
 			"(for example: takeown /f \"" + path + "\"), or remove it and sign the account in again")
 	}
-	return io.ReadAll(file)
+	ok, err := private.FilePrivate(file)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	b, err := io.ReadAll(file)
+	if err != nil || ok {
+		return b, err
+	}
+	// Closed first: Windows does not replace a file that is open.
+	file.Close()
+	if err := private.WriteFile(root, f.Dir, tmpPrefix, name, b); err != nil {
+		return nil, fmt.Errorf("making %s private: %w", name, err)
+	}
+	log.Printf("credential store: made %s private: its own access list let in more than this user and SYSTEM", path)
+	return b, nil
 }
 
 // Save writes r atomically.
@@ -201,6 +219,42 @@ func (f FileBackend) delete(id string) error {
 	}
 	defer root.Close()
 	if err := root.Remove(id + ext); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return private.SyncDir(root)
+}
+
+// CreatePrivate writes b to a new file at path that only core's user can read, made as a
+// record file is: mode 0600, and on Windows the protected access list from the moment it
+// exists. It fails with an error that is fs.ErrExist when something is at path already, and
+// never leaves part of b at path. The folder must exist.
+func CreatePrivate(path string, b []byte) error {
+	dir, name := filepath.Split(path)
+	if dir == "" {
+		dir = "."
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	tmp, tmpName, err := private.CreateTemp(root, dir, tmpPrefix)
+	if err != nil {
+		return err
+	}
+	defer root.Remove(tmpName) // after the link below, path keeps the file
+	_, err = tmp.Write(b)
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	// A link, unlike a rename, never replaces what is at path.
+	if err := root.Link(tmpName, name); err != nil {
 		return err
 	}
 	return private.SyncDir(root)

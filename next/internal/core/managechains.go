@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/stdotwork/pluxy/next/internal/configdoc"
+	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/internal/server"
 	"github.com/stdotwork/pluxy/next/management"
@@ -20,8 +21,9 @@ import (
 //	DELETE /v0/management/chains/{name}  remove it: name goes back to one provider's accounts
 //
 // A chain is written to the config file as any management change is, and refused (422) when it
-// has more than route.MaxChainSteps steps, a step names another chain, or no account serves a
-// step. A config.yaml cannot hold chains (409).
+// has more than route.MaxChainSteps steps, a step names another chain or a provider that is not
+// an extension's ID, no account serves a step, or a step names an account core does not know or
+// one that does not serve it. A config.yaml cannot hold chains (409).
 func (c *Core) handleChains(m *server.Management) {
 	m.Handle("GET /chains", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, chainsReply(c.Config().Routing.Chains))
@@ -42,6 +44,14 @@ func (c *Core) handleChains(m *server.Management) {
 			chains = map[string][]route.Step{}
 		}
 		chains[name] = req.Steps
+		// A provider is an extension's ID, so pluxy chain list writes every step as chain set
+		// reads it back.
+		for i, st := range req.Steps {
+			if st.Provider != "" && !host.ValidID(st.Provider) {
+				writeError(w, http.StatusUnprocessableEntity, "refused", fmt.Sprintf("chain %s: step %d names the provider %q; a provider is an extension's ID, publisher/name", name, i+1, st.Provider))
+				return
+			}
+		}
 		if err := route.ValidateChains(chains); err != nil {
 			writeError(w, http.StatusUnprocessableEntity, "refused", err.Error())
 			return

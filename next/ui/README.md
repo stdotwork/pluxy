@@ -3,7 +3,8 @@
 One UI kit, two builds. The **panel** is the kit's browser build: core embeds it and serves it at
 `/panel/` while the management API is on. The desktop app ([`../app`](../app/README.md)) is the
 kit's second build, with more pages. Both read the same theme files ([theme contract](themes/README.md)) and put shared
-pages in the same places.
+pages in the same places. Core keeps the themes a person adds and which theme is on
+([where themes are kept](themes/README.md#where-themes-are-kept)), so both builds show the same ones.
 
 | Folder | What it holds |
 | --- | --- |
@@ -193,7 +194,7 @@ feature, it keeps the old label, unless the label named something this core does
   Model", "Video result credential cache TTL", the "LAN discovery" section, every Streaming field
   (so there is no Streaming tab), every payload rule (so there is no Payload tab), Claude's and
   Codex's cloaking and header defaults, Codex's response steering and live media relay, the
-  Antigravity and Devin fields, the plugin settings, "Disable Control Panel", and the panel update
+  Devin fields, the plugin settings, "Disable Control Panel", and the panel update
   settings ("Disable Panel Auto Updates", "Panel Repository", "Global GitHub Token"). Any of them
   can still be written in the Source tab.
 - "Disable Image Generation": core has no switch for every account. Each Codex account has its own

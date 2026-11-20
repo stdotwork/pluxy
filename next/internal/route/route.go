@@ -371,6 +371,16 @@ func (r *Router) knownSnapshot() ([]*Account, Credentials) {
 	return r.known, r.creds
 }
 
+// routed returns the accounts of accounts that routing uses for a request: under the weighted
+// strategy, all but those of weight 0, which serve none. Held accounts stay: they take part in
+// choosing a name's provider.
+func (r *Router) routed(accounts []*Account) []*Account {
+	if r.picker.strategy != StrategyWeighted {
+		return accounts
+	}
+	return slices.DeleteFunc(slices.Clone(accounts), func(a *Account) bool { return a.weight() == 0 })
+}
+
 // split returns the targets of accounts in service, and those of held accounts.
 func split(targets []target) (serving, held []target) {
 	for _, t := range targets {
@@ -501,8 +511,8 @@ func (c *call) attempts() llm.Event {
 	accounts, creds := r.knownSnapshot()
 	c.creds = creds
 	var eligible []*Account
-	for _, a := range accounts {
-		if c.req.Pin != "" && !c.pinned(a) || r.picker.strategy == StrategyWeighted && a.weight() == 0 {
+	for _, a := range r.routed(accounts) {
+		if c.req.Pin != "" && !c.pinned(a) {
 			continue
 		}
 		eligible = append(eligible, a)

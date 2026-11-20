@@ -640,8 +640,9 @@ fn outside(s: &OsString, dir: &OsString) -> OsString {
 
 /// A launch's environment: the snapshot's session values (`BASE`, `LC_*`) but those request
 /// removes, with the AppImage's own folder taken out of PATH and the XDG folder lists when the app
-/// runs as one; then the variables request inherits from the snapshot, those it sets, and the
-/// resolved secrets (variable name, value).
+/// runs as one, and on macOS the client folders that exist added to the end of PATH
+/// (`with_client_folders`); then the variables request inherits from the snapshot, those it sets,
+/// and the resolved secrets (variable name, value).
 pub fn environment(
     snap: &Snapshot,
     request: &Request,
@@ -661,6 +662,10 @@ pub fn environment(
                 *v = outside(v, appdir);
             }
         }
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(v) = env.get_mut("PATH") {
+        *v = with_client_folders(v, snap.get("HOME"));
     }
     for n in &request.inherit {
         if let Some(v) = snap.get(n) {
@@ -689,6 +694,114 @@ pub fn environment(
     env.into_iter().collect()
 }
 
+/// Whether named is Windows' own `wsl.exe` (`<system_root>\System32\wsl.exe`, compared as
+/// Windows compares paths: ignoring case, with or without `\\?\`).
+pub fn is_wsl_exe(named: &std::path::Path, system_root: Option<&std::path::Path>) -> bool {
+    let (Some(named), Some(root)) = (named.to_str(), system_root.and_then(|r| r.to_str())) else {
+        return false;
+    };
+    let plain = |p: &str| {
+        p.strip_prefix(r"\\?\")
+            .unwrap_or(p)
+            .trim_end_matches('\\')
+            .to_ascii_lowercase()
+    };
+    !root.is_empty() && plain(named) == format!(r"{}\system32\wsl.exe", plain(root))
+}
+
+/// `WSLENV`'s value for a launch through `wsl.exe` with request: each variable it sets or gives a
+/// secret in, passed on into the distribution unchanged (`/u`, Windows to Linux only); None when
+/// it names none. Requests never set `WSLENV` themselves (`NEVER_PLATFORM`).
+pub fn wslenv(request: &Request) -> Option<String> {
+    let names: Vec<String> = request
+        .set
+        .keys()
+        .chain(request.secrets.keys())
+        .map(|n| format!("{n}/u"))
+        .collect();
+    (!names.is_empty()).then(|| names.join(":"))
+}
+
+/// env, with `WSLENV` added for a launch of Windows' own `wsl.exe` in system_root (`wslenv`).
+fn with_wslenv(
+    mut env: Vec<(String, OsString)>,
+    l: &Launch,
+    system_root: Option<&std::path::Path>,
+) -> Vec<(String, OsString)> {
+    if is_wsl_exe(&l.named, system_root) {
+        if let Some(v) = wslenv(&l.request) {
+            env.retain(|(k, _)| !k.eq_ignore_ascii_case("WSLENV"));
+            env.push(("WSLENV".into(), OsString::from(v)));
+        }
+    }
+    env
+}
+
+/// The environment launch l runs with, its secrets' values resolved: the launch environment as
+/// its request asks (`environment`), and `WSLENV` for a launch of Windows' own `wsl.exe` in
+/// system_root (`with_wslenv`). Every launch, managed or detached, gets its environment here.
+fn launch_env(
+    l: &Launch,
+    secrets: &[(String, String)],
+    system_root: Option<&std::path::Path>,
+) -> Vec<(String, OsString)> {
+    with_wslenv(environment(snapshot(), &l.request, secrets), l, system_root)
+}
+
+/// Windows' folder (`SystemRoot`), whose System32 holds its own `wsl.exe`; None off Windows,
+/// where nothing runs in WSL.
+fn system_root() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(root) = TEST_SYSTEM_ROOT.lock().unwrap().clone() {
+        return Some(root);
+    }
+    if cfg!(windows) {
+        std::env::var_os("SystemRoot").map(PathBuf::from)
+    } else {
+        None
+    }
+}
+
+/// Windows' folder for `system_root` in tests on any system: a launch named as its own `wsl.exe`
+/// (the program run is still the test's) then gets `WSLENV` on every launch path.
+#[cfg(test)]
+pub(crate) static TEST_SYSTEM_ROOT: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+/// The folders people's command-line clients are installed in on macOS, under the home folder
+/// and then system-wide: npm, Bun, Cargo, Volta, pnpm and Homebrew put them there.
+#[cfg(target_os = "macos")]
+const CLIENT_FOLDERS: &[&str] = &[
+    "~/.local/bin",
+    "~/.npm-global/bin",
+    "~/.bun/bin",
+    "~/.cargo/bin",
+    "~/.volta/bin",
+    "~/Library/pnpm",
+    "~/bin",
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+];
+
+/// PATH value path followed by the folders of `CLIENT_FOLDERS` that exist and it lacks (`~` is
+/// home, when it is absolute): an app started from the Finder or the Dock has launchd's PATH,
+/// `/usr/bin:/bin:/usr/sbin:/sbin`, which finds no client a person installed.
+#[cfg(target_os = "macos")]
+fn with_client_folders(path: &OsString, home: Option<&OsString>) -> OsString {
+    let home = home.map(PathBuf::from).filter(|h| h.is_absolute());
+    let mut entries: Vec<PathBuf> = std::env::split_paths(path).collect();
+    for f in CLIENT_FOLDERS {
+        let d = match (f.strip_prefix("~/"), &home) {
+            (Some(rest), Some(h)) => h.join(rest),
+            (Some(_), None) => continue,
+            (None, _) => PathBuf::from(f),
+        };
+        if d.is_dir() && !entries.contains(&d) {
+            entries.push(d);
+        }
+    }
+    std::env::join_paths(entries).unwrap_or_else(|_| path.clone())
+}
+
 /// What a launch runs from: the executable and cwd its confirmation opened, and the check that
 /// they are still what was confirmed.
 pub trait Opened: Send + Sync {
@@ -702,6 +815,12 @@ pub trait Opened: Send + Sync {
     /// Refused once the executable or cwd changed since it was confirmed (replaced, or written
     /// in place).
     fn recheck(&self) -> Result<(), String>;
+    /// Whether a detached launch shows no window itself, so it starts with no console on Windows
+    /// (`confirmation::Authorized::windowless`).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    fn windowless(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(native_stack)]
@@ -717,6 +836,9 @@ impl Opened for crate::confirmation::Authorized {
     }
     fn recheck(&self) -> Result<(), String> {
         crate::confirmation::Authorized::recheck(self)
+    }
+    fn windowless(&self) -> bool {
+        crate::confirmation::Authorized::windowless(self)
     }
 }
 
@@ -904,7 +1026,8 @@ fn command(
         } else {
             Io::Null
         })
-        .secrets(holds_secrets);
+        .secrets(holds_secrets)
+        .windowless(l.lifetime == Lifetime::Detached && l.opened.windowless());
     Ok(cmd)
 }
 
@@ -988,7 +1111,7 @@ fn feed(stdin: Option<impl std::io::Write + Send + 'static>, value: Option<Strin
 pub fn detached(l: &Launch, package: &str, values: &dyn Values) -> Result<(), String> {
     l.opened.recheck()?;
     let r = resolve(l, package, values)?;
-    let env = environment(snapshot(), &l.request, &r.env);
+    let env = launch_env(l, &r.env, system_root().as_deref());
     #[cfg(target_os = "linux")]
     let hold = Hold::new().ok();
     #[cfg(target_os = "linux")]
@@ -1024,7 +1147,7 @@ pub fn detached(l: &Launch, package: &str, values: &dyn Values) -> Result<(), St
 pub fn detached(l: &Launch, package: &str, values: &dyn Values) -> Result<(), String> {
     l.opened.recheck()?;
     let r = resolve(l, package, values)?;
-    let env = environment(snapshot(), &l.request, &r.env);
+    let env = launch_env(l, &r.env, system_root().as_deref());
     let mut cmd = command(l, env, r.holds())?;
     // Checked again now its executable and cwd are pinned (`command`): nothing can change them
     // after this, and a change made since the check above is seen here.
@@ -1488,7 +1611,7 @@ impl Runtimes {
         })?;
         self.0.live(&self.0.list.lock().unwrap(), package, id)?;
         let r = resolve(l, package, &*self.0.values)?;
-        let env = environment(snapshot(), &l.request, &r.env);
+        let env = launch_env(l, &r.env, system_root().as_deref());
         let token = {
             let mut t = self.0.tokens.lock().unwrap();
             *t += 1;

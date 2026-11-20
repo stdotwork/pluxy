@@ -53,6 +53,8 @@ type ExtensionStatus struct {
 // Status is GET /status's reply, and POST /reload's: core's live state.
 type Status struct {
 	SafeMode bool `json:"safe_mode"`
+	// FirstRun is true until POST /setup/done ends first run.
+	FirstRun bool `json:"first_run"`
 	// Desired is the newest config version core has seen; Active is the one serving.
 	Desired    Revision          `json:"desired"`
 	Active     Revision          `json:"active"`
@@ -99,7 +101,15 @@ type Registry struct {
 
 // RegistryPackage is one package a registry offers.
 type RegistryPackage struct {
-	ID       string            `json:"id"`
+	ID string `json:"id"`
+	// Title and Summary say what it is, as the registry describes it; empty when it does not.
+	Title   string `json:"title,omitempty"`
+	Summary string `json:"summary,omitempty"`
+	// Kind is what it adds: "provider", "client", or empty when the registry does not say.
+	Kind string `json:"kind,omitempty"`
+	// Tier is how far the registry vouches for it: "pick" (offered at setup), "verified" or
+	// "unverified" (also when the registry does not say). Core enforces nothing by it.
+	Tier     string            `json:"tier"`
 	Releases []RegistryRelease `json:"releases"`
 }
 
@@ -301,6 +311,26 @@ type QuotaReply struct {
 	Quota     *protocol.Quota `json:"quota"`
 }
 
+// AccountModel is one model an account serves, as GET /accounts/{id}/models lists it: the
+// model by its upstream name, with what the extension says about it, and the names clients ask
+// for it by after the account's exclusions, aliases and prefix.
+type AccountModel struct {
+	protocol.Model
+	// Names are the names clients use for the model on this account; empty when the account's
+	// excluded_models leave it out.
+	Names []string `json:"names"`
+	// Excluded is true when the account's excluded_models leave the model out.
+	Excluded bool `json:"excluded,omitempty"`
+}
+
+// AccountModelsReply is GET /accounts/{id}/models's reply.
+type AccountModelsReply struct {
+	Models []AccountModel `json:"models"`
+	// From says where the list came from: "account" (read from the provider using the account's
+	// credential), "extension" (the extension's built-in list), or omitted.
+	From string `json:"from,omitempty"`
+}
+
 // ModelsReply is GET /models's reply.
 type ModelsReply struct {
 	Models []route.ServedModel `json:"models"`
@@ -322,7 +352,8 @@ type RefreshModelsReply struct {
 
 // ClientKey is a client key as the management API lists it.
 type ClientKey struct {
-	// ID names the key in calls, without showing it. It changes when core restarts.
+	// ID names the key in calls, without showing it. It stays the same across restarts (derived
+	// with the key in state/key-id.key).
 	ID string `json:"id"`
 	// Masked is the key with all but its first and last two characters hidden; a key shorter
 	// than 8 characters is hidden whole.
@@ -423,6 +454,103 @@ type UsageReply struct {
 type UsageEventsReply struct {
 	Enabled bool `json:"enabled"`
 	usage.Page
+}
+
+// Client tool states (SetupClient.State).
+const (
+	ClientStateNotConfigured = "not-configured"
+	ClientStateConfigured    = "configured"
+	ClientStateNeedsUpdate   = "needs-update"
+	// ClientStateRefused is a config file the tool's writer would refuse to change.
+	ClientStateRefused = "refused"
+)
+
+// Setup apply outcomes (SetupApplyResult.Status).
+const (
+	SetupApplyDone  = "done"
+	SetupApplyError = "error"
+)
+
+// Setup is GET /setup's and POST /setup/scan's reply.
+type Setup struct {
+	FirstRun  bool        `json:"first_run"`
+	Scanning  bool        `json:"scanning"`
+	ScannedAt *time.Time  `json:"scanned_at,omitempty"`
+	Found     SetupFound  `json:"found"`
+	Picks     []SetupPick `json:"picks"`
+}
+
+// SetupFound is what core found on the machine it runs on.
+type SetupFound struct {
+	Clients []SetupClient `json:"clients"`
+	SignIns []SetupSignIn `json:"sign_ins"`
+	Imports []SetupImport `json:"imports"`
+	Core    SetupCore     `json:"core"`
+}
+
+// SetupClient is one coding tool core looked for on the machine.
+type SetupClient struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Installed bool   `json:"installed"`
+	Version   string `json:"version,omitempty"`
+	Config    string `json:"config"`
+	State     string `json:"state"`
+}
+
+// SetupSignIn is an existing sign-in core saw on the machine (no token is read).
+type SetupSignIn struct {
+	Provider string `json:"provider"`
+	From     string `json:"from"`
+	Label    string `json:"label"`
+}
+
+// SetupImport is an existing CLIProxyAPI setup core saw on the machine.
+type SetupImport struct {
+	Kind     string `json:"kind"`
+	Config   string `json:"config"`
+	AuthDir  string `json:"auth_dir"`
+	Accounts int    `json:"accounts"`
+}
+
+// SetupCore describes core's own listen address and network reachability.
+type SetupCore struct {
+	Listen               string `json:"listen"`
+	ReachableFromNetwork bool   `json:"reachable_from_network"`
+}
+
+// SetupPick is one package offered at setup.
+type SetupPick struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	Title     string `json:"title"`
+	Summary   string `json:"summary"`
+	Installed bool   `json:"installed"`
+	Suggested bool   `json:"suggested"`
+	Because   string `json:"because,omitempty"`
+}
+
+// SetupApplyRequest is POST /setup/apply's body.
+type SetupApplyRequest struct {
+	Picks []string `json:"picks"`
+}
+
+// SetupApplyResult is one pick's outcome in SetupApplyReply.
+type SetupApplyResult struct {
+	ID      string   `json:"id"`
+	Status  string   `json:"status"`
+	Package *Package `json:"package,omitempty"`
+	Error   string   `json:"error,omitempty"`
+}
+
+// SetupApplyReply is POST /setup/apply's reply.
+type SetupApplyReply struct {
+	Results []SetupApplyResult `json:"results"`
+}
+
+// SetupDoneReply is POST /setup/done's reply.
+type SetupDoneReply struct {
+	FirstRun bool `json:"first_run"`
 }
 
 // ThemeSummary describes one theme stored by core, as GET /themes lists it and PUT returns it.

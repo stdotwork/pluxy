@@ -3,6 +3,7 @@ package route
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -33,16 +34,40 @@ type Step struct {
 	Accounts []string `json:"accounts,omitempty"`
 }
 
-// String is the step as the pluxy command writes it: model[@provider][:account,account].
+// String is the step as the pluxy command writes it: model[@provider][:account,account]. With
+// no provider, a model the command would read otherwise is written with an @ after it
+// (llama3:8b@): one that holds a colon and has no accounts after it, or whose last @ is
+// followed by what reads as a provider (an extension's ID, or nothing).
 func (s Step) String() string {
 	out := s.Model
-	if s.Provider != "" {
+	if s.Provider == "" && needsEscape(s) {
+		out += "@"
+	} else if s.Provider != "" {
 		out += "@" + s.Provider
 	}
 	if len(s.Accounts) > 0 {
 		out += ":" + strings.Join(s.Accounts, ",")
 	}
 	return out
+}
+
+// providerID matches an extension's ID, publisher/name, as the host checks it.
+var providerID = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]*/[a-z0-9][a-z0-9.-]*$`)
+
+// needsEscape reports whether s, a step with no provider, written without the @ escape, would
+// read back as another step: the command takes what follows the last @ as the provider when it
+// is an extension's ID or empty, and else what follows the last colon as the accounts.
+func needsEscape(s Step) bool {
+	text := s.Model
+	if len(s.Accounts) > 0 {
+		text += ":" + strings.Join(s.Accounts, ",")
+	}
+	if i := strings.LastIndexByte(text, '@'); i >= 0 {
+		if p, _, _ := strings.Cut(text[i+1:], ":"); p == "" || providerID.MatchString(p) {
+			return true
+		}
+	}
+	return len(s.Accounts) == 0 && strings.Contains(s.Model, ":")
 }
 
 // MaxChainSteps is the most steps a chain has.
@@ -183,15 +208,26 @@ func rotationKey(model string, chain bool, step int) string {
 	return model + "\x00" + strconv.Itoa(step)
 }
 
-// CheckSteps reports the first of steps that no account the router routes over serves, as a
-// management call that sets a chain refuses it. An account whose model list is not known serves
-// any model, as for a request. A step whose provider is that of held accounts alone is refused
-// too: requests could not use it.
+// CheckSteps reports the first of steps that no account routing uses serves, or that names an
+// account the router does not know or one that does not serve the step, as a management call
+// that sets a chain refuses it. An account whose model list is not known serves any model, as
+// for a request. A step whose provider is that of held accounts alone is refused too: requests
+// could not use it. A named held account that serves the step is accepted.
 func (r *Router) CheckSteps(ctx context.Context, steps []Step) error {
-	accounts, creds := r.knownSnapshot()
+	known, creds := r.knownSnapshot()
+	accounts := r.routed(known)
 	served := r.served(ctx, accounts, creds, r.catalogFunc())
 	for i, s := range steps {
-		if serving, _ := split(r.stepTargets(s, i, accounts, served)); len(serving) == 0 {
+		targets := r.stepTargets(s, i, accounts, served)
+		for _, id := range s.Accounts {
+			switch {
+			case !slices.ContainsFunc(known, func(a *Account) bool { return a.ID == id }):
+				return fmt.Errorf("step %d, %s: no account %q", i+1, s, id)
+			case !slices.ContainsFunc(targets, func(t target) bool { return t.a.ID == id }):
+				return fmt.Errorf("step %d, %s: account %q does not serve it", i+1, s, id)
+			}
+		}
+		if serving, _ := split(targets); len(serving) == 0 {
 			return fmt.Errorf("step %d, %s: no account serves it", i+1, s)
 		}
 	}

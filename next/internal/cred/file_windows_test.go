@@ -18,7 +18,8 @@ import (
 )
 
 // Reading what the file system holds for a path: its owner and access list. Declared here
-// rather than taken from file_windows.go, so the test does not rest on the code it checks.
+// rather than taken from internal/private (private_windows.go), so the test does not rest on the
+// code it checks.
 var (
 	testAdvapi32                     = syscall.NewLazyDLL("advapi32.dll")
 	procGetNamedSecurityInfo         = testAdvapi32.NewProc("GetNamedSecurityInfoW")
@@ -493,4 +494,90 @@ func TestFileBackendWindowsSkipsARecordAnotherAccountOwns(t *testing.T) {
 	if want := "skipped " + planted + `: it is owned by NT AUTHORITY\LOCAL SERVICE (S-1-5-19)`; !strings.Contains(logged.String(), want) {
 		t.Errorf("log:\n%s\nwant a line with %q", logged.String(), want)
 	}
+}
+
+// A file CreatePrivate makes has the private access list from the start, as a record has.
+func TestCreatePrivateWindowsAccessList(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := CreatePrivate(path, []byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+	checkPrivate(t, "created file", path, false)
+}
+
+// letsEveryoneIn reports whether path's access list has an entry for Everyone.
+func letsEveryoneIn(t *testing.T, path string) bool {
+	t.Helper()
+	_, _, entries := accessList(t, path)
+	return slices.ContainsFunc(entries, func(e string) bool { return strings.HasPrefix(e, everyone+" ") })
+}
+
+// loadsPrivately opens the store on dir and checks that the record acct loads, that its file
+// then has exactly the private access list, and that the log says the record was made private.
+func loadsPrivately(t *testing.T, dir, file string) {
+	t.Helper()
+	var logged bytes.Buffer
+	defer log.SetOutput(log.Writer())
+	log.SetOutput(&logged)
+	store, err := Open(FileBackend{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.Get("acct"); !ok {
+		t.Error("the record was not loaded")
+	}
+	checkPrivate(t, "record file after loading", file, false)
+	if want := "made " + file + " private"; !strings.Contains(logged.String(), want) {
+		t.Errorf("log:\n%s\nwant a line with %q", logged.String(), want)
+	}
+}
+
+// A record file with an entry of its own that lets Everyone read it, written before the folder
+// was private, keeps that entry when the folder is made private, since a folder's list reaches
+// only the entries its files inherit. Loading the store writes the record again as a private
+// file.
+func TestFileBackendWindowsMakesARecordWithItsOwnEntriesPrivate(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "credentials")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	icacls(t, dir, "/grant", "*"+everyone+":(OI)(CI)R")
+	file := filepath.Join(dir, "acct.json")
+	writeRecordFile(t, file, recordFor("acct"))
+	icacls(t, file, "/grant", "*"+everyone+":R")
+	if _, _, entries := accessList(t, file); !slices.ContainsFunc(entries, func(e string) bool {
+		return strings.HasPrefix(e, fmt.Sprintf("%s type %d flags %#x ", everyone, aceAllowedType, 0))
+	}) {
+		t.Fatalf("setup: the record file has no entry of its own for Everyone:\n%s", strings.Join(entries, "\n"))
+	}
+	loadsPrivately(t, dir, file)
+}
+
+// A record file moved into the credentials folder from another folder on the same volume keeps
+// the list it had there, inherited entries included, since a move does not make a file inherit
+// again. Loading the store writes the record again as a private file.
+func TestFileBackendWindowsMakesAMovedInRecordPrivate(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "credentials")
+	store, err := Open(FileBackend{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(recordFor("other")); err != nil {
+		t.Fatal(err)
+	}
+	open := filepath.Join(base, "open")
+	if err := os.Mkdir(open, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	icacls(t, open, "/grant", "*"+everyone+":(OI)(CI)R")
+	writeRecordFile(t, filepath.Join(open, "acct.json"), recordFor("acct"))
+	file := filepath.Join(dir, "acct.json")
+	if err := os.Rename(filepath.Join(open, "acct.json"), file); err != nil {
+		t.Fatal(err)
+	}
+	if _, protected, _ := accessList(t, file); protected || !letsEveryoneIn(t, file) {
+		t.Fatalf("setup: want the moved record to inherit nothing new and keep Everyone's entry, protected=%v", protected)
+	}
+	loadsPrivately(t, dir, file)
 }

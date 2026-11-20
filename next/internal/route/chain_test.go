@@ -107,9 +107,9 @@ func TestChainWaitsForAnyStep(t *testing.T) {
 }
 
 // Once the reply has started, a failure goes to the client: no other account and no other
-// step.
+// step, though step 2's account would serve the next request.
 func TestChainNoMoveAfterReplyStarted(t *testing.T) {
-	h := newChainHarness(t, Config{Chains: opusChain()}, Account{ID: "c1", Extension: claudeExt}, Account{ID: "x1", Extension: codexExt})
+	h := newChainHarness(t, Config{Chains: opusChain()}, chainAccounts()[0], chainAccounts()[2])
 	limit := llm.Error{Code: llm.CodeRateLimit, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: 60_000}
 	h.on("c1", script{start(), {Type: llm.EventError, Error: &limit}})
 	evs := h.run(h.req("opus", ""))
@@ -117,10 +117,14 @@ func TestChainNoMoveAfterReplyStarted(t *testing.T) {
 		t.Fatalf("events = %+v, want the reply's start and then its error", evs)
 	}
 	h.wantAttempts("c1")
+	// c1 is cooling now: the next request moves to step 2.
+	if a := h.served("opus", ""); a.Account != "x1" || a.Step != 2 {
+		t.Errorf("next request served by %+v, want x1 at step 2", a)
+	}
 }
 
 // An error about the request itself (a 400, a refusal of its content) ends the request: the
-// next step would refuse it too.
+// next step would refuse it too. Step 2's account serves a request c1 refuses for its limit.
 func TestChainNoMoveForRequestError(t *testing.T) {
 	for _, e := range []llm.Error{
 		{Code: llm.CodeInvalidRequest, Status: 400, Scope: llm.ScopeRequest, Retryable: true},
@@ -128,13 +132,16 @@ func TestChainNoMoveForRequestError(t *testing.T) {
 		{Code: llm.CodeUpstream, Status: 500, Scope: llm.ScopeEndpoint}, // the upstream may have run it
 	} {
 		t.Run(e.Code, func(t *testing.T) {
-			h := newChainHarness(t, Config{Chains: opusChain()}, Account{ID: "c1", Extension: claudeExt}, Account{ID: "x1", Extension: codexExt})
-			h.on("c1", fail(e))
+			h := newChainHarness(t, Config{Chains: opusChain()}, chainAccounts()[0], chainAccounts()[2])
+			h.on("c1", fail(e), rateLimited(time.Minute))
 			evs := h.run(h.req("opus", ""))
 			if got := evs[0].Error; got == nil || got.Code != e.Code {
 				t.Errorf("got %+v, want the %s error", evs[0], e.Code)
 			}
 			h.wantAttempts("c1")
+			if a := h.served("opus", ""); a.Account != "x1" || a.Step != 2 {
+				t.Errorf("with c1 rate limited: served by %+v, want x1 at step 2", a)
+			}
 		})
 	}
 }
@@ -360,43 +367,109 @@ func TestChainErrorNamesEachStep(t *testing.T) {
 	}
 }
 
-// A chain's name may be new: it is then in the model lists, as its first served step's model.
+// A chain's name may be new: it is then in the model lists, as its first step's model.
 func TestChainNameInModelList(t *testing.T) {
-	chains := map[string][]Step{"my-fast": {{Model: "nobody-serves"}, {Model: "sol"}}, "opus": {{Model: "opus"}, {Model: "sol"}}}
+	chains := map[string][]Step{"my-fast": {{Model: "sonnet"}, {Model: "sol"}}, "opus": {{Model: "opus"}, {Model: "sol"}}}
 	h := newChainHarness(t, Config{Chains: chains}, chainAccounts()...)
+	if err := h.r.CheckSteps(context.Background(), chains["my-fast"]); err != nil {
+		t.Fatalf("CheckSteps(my-fast) = %v", err)
+	}
 	var ids []string
 	for _, m := range h.r.ServedModels(context.Background()) {
 		ids = append(ids, m.ID)
-		if m.ID == "my-fast" && (m.Extension != codexExt || m.Upstream != "sol") {
-			t.Errorf("my-fast listed as %+v, want sol on %s", m, codexExt)
+		if m.ID == "my-fast" && (m.Extension != claudeExt || m.Upstream != "sonnet" || !slices.Equal(m.Accounts, []string{"c1", "c2", "x1"})) {
+			t.Errorf("my-fast listed as %+v, want sonnet on %s with c1, c2 and x1", m, claudeExt)
 		}
 	}
 	if want := []string{"my-fast", "opus", "sol", "sonnet"}; !slices.Equal(ids, want) {
 		t.Errorf("models = %v, want %v", ids, want)
 	}
-	if a := h.served("my-fast", ""); a.Account != "x1" || a.Step != 2 {
-		t.Errorf("my-fast served by %+v, want x1 at step 2", a)
+	if a := h.served("my-fast", ""); a.Account != "c1" || a.Step != 1 || a.Model != "sonnet" {
+		t.Errorf("my-fast served by %+v, want c1 with sonnet at step 1", a)
 	}
 }
 
-// CheckSteps refuses a step no account can serve, naming it.
+// A chain's new name whose serving accounts' model lists are unknown is listed too, built from
+// the first serving account.
+func TestChainNameOverUnknownListsInModelList(t *testing.T) {
+	chains := map[string][]Step{"my-fast": {{Model: "m"}}}
+	h := newChainHarness(t, Config{Chains: chains}, Account{ID: "u1", Extension: "U"})
+	h.r.UseCatalog(func(context.Context, Account, *protocol.Credential) (*protocol.ModelList, *llm.Error) {
+		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "list unreadable"}
+	})
+	if err := h.r.CheckSteps(context.Background(), chains["my-fast"]); err != nil {
+		t.Fatalf("CheckSteps(my-fast) = %v", err)
+	}
+	models := h.r.ServedModels(context.Background())
+	if len(models) != 1 || models[0].ID != "my-fast" || models[0].Model.ID != "my-fast" || models[0].Upstream != "m" ||
+		models[0].Extension != "U" || models[0].OwnedBy != "U" || !slices.Equal(models[0].Accounts, []string{"u1"}) {
+		t.Errorf("models = %+v, want my-fast as m on U with u1", models)
+	}
+	if a := h.served("my-fast", ""); a.Account != "u1" || a.Model != "m" {
+		t.Errorf("my-fast served by %+v, want u1 with m", a)
+	}
+}
+
+// CheckSteps refuses a step no account can serve, and one naming an account that is unknown or
+// does not serve it, naming the step or the account.
 func TestCheckSteps(t *testing.T) {
-	h := newChainHarness(t, Config{}, chainAccounts()...)
+	accounts := append(chainAccounts(), Account{ID: "h1", Extension: codexExt, Models: []ModelEntry{{Name: "sol"}}, Held: HealthNeedsLogin})
+	h := newChainHarness(t, Config{}, accounts...)
 	for _, c := range []struct {
 		steps []Step
 		bad   string
 	}{
 		{[]Step{{Model: "opus"}, {Model: "sol"}}, ""},
 		{[]Step{{Model: "opus", Provider: claudeExt, Accounts: []string{"c2"}}}, ""},
+		{[]Step{{Model: "sol", Accounts: []string{"x1", "h1"}}}, ""}, // a held account that serves the step
 		{[]Step{{Model: "opus"}, {Model: "nobody-serves"}}, "nobody-serves"},
 		{[]Step{{Model: "sol", Provider: claudeExt}}, "sol"},
 		{[]Step{{Model: "opus", Accounts: []string{"x1"}}}, "opus"},
 		{[]Step{{Model: "opus", Accounts: []string{"no-such-account"}}}, "opus"},
+		{[]Step{{Model: "opus", Accounts: []string{"c1", "typo"}}}, `"typo"`},
+		{[]Step{{Model: "opus", Accounts: []string{"c1", "x1"}}}, `"x1"`},
+		{[]Step{{Model: "opus", Provider: claudeExt, Accounts: []string{"c1", "h1"}}}, `"h1"`},
 	} {
 		err := h.r.CheckSteps(context.Background(), c.steps)
 		if (err != nil) != (c.bad != "") || err != nil && !strings.Contains(err.Error(), c.bad) {
 			t.Errorf("CheckSteps(%+v) = %v, want an error naming %q", c.steps, err, c.bad)
 		}
+	}
+}
+
+// Under the weighted strategy a weight-0 account serves no request, so the checks and the model
+// lists leave it out as routing does: a step only it serves is refused, its names are not listed,
+// and it does not choose a name's provider.
+func TestWeightZeroIsLeftOutEverywhere(t *testing.T) {
+	m := []ModelEntry{{Name: "m"}}
+	zero := 0
+	only := Account{ID: "z1", Extension: "X", Models: m, Weight: &zero}
+	for _, strategy := range []string{StrategyWeighted, StrategyRoundRobin} {
+		h := newChainHarness(t, Config{Strategy: strategy}, only)
+		err := h.r.CheckSteps(context.Background(), []Step{{Model: "m"}})
+		listed := len(h.r.ServedModels(context.Background())) > 0
+		if weighted := strategy == StrategyWeighted; (err != nil) != weighted || listed == weighted {
+			t.Errorf("%s: CheckSteps = %v, listed %v; want refused and unlisted only under weighted", strategy, err, listed)
+		}
+	}
+
+	h := newChainHarness(t, Config{Strategy: StrategyWeighted}, Account{ID: "z1", Extension: "X", Models: m, Weight: &zero, Priority: 1},
+		Account{ID: "y1", Extension: "Y", Models: m})
+	models := h.r.ServedModels(context.Background())
+	if len(models) != 1 || models[0].Extension != "Y" || !slices.Equal(models[0].Accounts, []string{"y1"}) {
+		t.Errorf("models = %+v, want m on Y with y1", models)
+	}
+	if names := h.r.ModelNames(context.Background(), "X"); len(names) != 0 {
+		t.Errorf("X's names = %+v, want none", names)
+	}
+	if names := h.r.ModelNames(context.Background(), "Y"); len(names) != 1 || names[0].Public != "m" {
+		t.Errorf("Y's names = %+v, want m", names)
+	}
+	if p := h.r.Plan(context.Background(), "m"); len(p.Order) != 1 || p.Order[0].ID != "y1" {
+		t.Errorf("plan = %+v, want y1", p)
+	}
+	if a := h.served("m", ""); a.Account != "y1" {
+		t.Errorf("served by %+v, want y1", a)
 	}
 }
 
@@ -531,13 +604,16 @@ func TestBannedAccountKeepsTheProvider(t *testing.T) {
 }
 
 // Two steps that resolve to the same account and model try it once, even when its refusal set no
-// block.
+// block; the chain then goes on to its next step.
 func TestOverlappingStepsTryAnAccountOnce(t *testing.T) {
-	h := newChainHarness(t, Config{DisableCooling: true, Chains: map[string][]Step{"m": {{Model: "m", Provider: "A"}, {Model: "m"}}}},
-		Account{ID: "a1", Extension: "A", Models: []ModelEntry{{Name: "m"}}})
+	m := []ModelEntry{{Name: "m"}}
+	h := newChainHarness(t, Config{DisableCooling: true, Chains: map[string][]Step{"m": {{Model: "m", Provider: "A"}, {Model: "m"}, {Model: "m", Provider: "B"}}}},
+		Account{ID: "a1", Extension: "A", Models: m}, Account{ID: "b1", Extension: "B", Models: m})
 	h.on("a1", rateLimited(time.Minute))
-	h.run(h.req("m", ""))
-	h.wantAttempts("a1")
+	if a := h.served("m", ""); a.Account != "b1" || a.Step != 3 {
+		t.Errorf("served by %+v, want b1 at step 3", a)
+	}
+	h.wantAttempts("a1", "b1")
 }
 
 // A chain may not repeat a step.
