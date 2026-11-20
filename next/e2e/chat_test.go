@@ -40,11 +40,39 @@ func TestMain(m *testing.M) {
 	code := 1
 	if err := build(dir); err != nil {
 		fmt.Fprintln(os.Stderr, err)
+	} else if err := ownHome(dir); err != nil {
+		fmt.Fprintln(os.Stderr, err)
 	} else {
 		code = m.Run()
 	}
 	os.RemoveAll(dir)
 	os.Exit(code)
+}
+
+// ownHome gives the tests, and every core they start, a home folder of their own under dir, so
+// no test reads or writes the real one (a first start scans the machine's client tools). Go's own
+// caches stay where they are, so a test that builds or runs Go code finds them.
+func ownHome(dir string) error {
+	out, err := exec.Command("go", "env", "GOCACHE", "GOMODCACHE", "GOPATH").Output()
+	if err != nil {
+		return fmt.Errorf("go env: %w", err)
+	}
+	vals := strings.Split(strings.TrimSpace(string(out)), "\n")
+	for i, k := range []string{"GOCACHE", "GOMODCACHE", "GOPATH"} {
+		if i < len(vals) && vals[i] != "" {
+			os.Setenv(k, vals[i])
+		}
+	}
+	home := filepath.Join(dir, "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		return err
+	}
+	os.Setenv("HOME", home)
+	os.Setenv("USERPROFILE", home)
+	for _, k := range []string{"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"} {
+		os.Setenv(k, filepath.Join(home, strings.ToLower(strings.TrimPrefix(k, "XDG_"))))
+	}
+	return nil
 }
 
 // build compiles core and the extensions and writes each extension's manifest next to it.
@@ -58,7 +86,6 @@ func build(dir string) error {
 		{filepath.Join("kimi", "kimi"), "../extensions/kimi"},
 		{filepath.Join("xai", "xai"), "../extensions/xai"},
 		{filepath.Join("gemini", "gemini"), "../extensions/gemini"},
-		{filepath.Join("antigravity", "antigravity"), "../extensions/antigravity"},
 		{filepath.Join("devin", "devin"), "../extensions/devin"},
 		{filepath.Join("meta", "meta"), "../extensions/meta"},
 		{"testext", "./testext"},
@@ -82,7 +109,7 @@ func build(dir string) error {
 		return err
 	}
 	for id, name := range map[string]string{"example/oauth": "oauth", "pluxy/codex": "codex", "pluxy/claude": "claude", "pluxy/gemini": "gemini", "pluxy/kimi": "kimi", "pluxy/xai": "xai",
-		"pluxy/antigravity": "antigravity", "pluxy/devin": "devin", "pluxy/meta": "meta"} {
+		"pluxy/devin": "devin", "pluxy/meta": "meta"} {
 		manifest["id"] = id
 		manifest["programs"] = map[string]string{runtime.GOOS + "/" + runtime.GOARCH: name}
 		b, _ = json.Marshal(manifest)
@@ -308,17 +335,36 @@ func startCoreBin(t *testing.T, bin, path string, args ...string) (string, *core
 // startCoreArgv is startCoreBin with the program's whole command line after its name.
 func startCoreArgv(t *testing.T, bin string, argv ...string) (string, *coreLog, error) {
 	t.Helper()
-	addr, logs, _, err := startCoreStoppable(t, bin, argv...)
-	return addr, logs, err
+	base, logs, _, err := startCoreEnv(t, nil, bin, argv...)
+	return base, logs, err
 }
 
-// startCoreStoppable is startCoreArgv that also returns a function that stops core and waits for
-// it to exit, as the test's cleanup does when it was not called.
-func startCoreStoppable(t *testing.T, bin string, argv ...string) (string, *coreLog, func(), error) {
+// testHomeEnv is the environment that gives a program home as its home, config, data, state and
+// cache folder: core scans those for client tools.
+func testHomeEnv(home string) []string {
+	xdg := filepath.Join(home, ".xdg")
+	return []string{
+		"HOME=" + home,
+		"USERPROFILE=" + home,
+		"XDG_CONFIG_HOME=" + filepath.Join(xdg, "config"),
+		"XDG_DATA_HOME=" + filepath.Join(xdg, "data"),
+		"XDG_STATE_HOME=" + filepath.Join(xdg, "state"),
+		"XDG_CACHE_HOME=" + filepath.Join(xdg, "cache"),
+		"CODEX_HOME=" + filepath.Join(home, ".codex"),
+	}
+}
+
+// startCoreEnv is startCoreArgv with the whole environment env (nil: this process's with a home
+// folder of the test's own) that also returns a stop, which ends core before the test does.
+func startCoreEnv(t *testing.T, env []string, bin string, argv ...string) (string, *coreLog, func(), error) {
 	t.Helper()
+	if env == nil {
+		env = append(os.Environ(), testHomeEnv(t.TempDir())...)
+	}
 	logs := &coreLog{}
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, bin, argv...)
+	cmd.Env = env
 	cmd.Cancel = func() error { return cmd.Process.Signal(os.Interrupt) }
 	cmd.WaitDelay = 10 * time.Second
 	addr := make(chan string, 1)
@@ -364,6 +410,13 @@ func startCoreStoppable(t *testing.T, bin string, argv ...string) (string, *core
 	case <-time.After(15 * time.Second):
 		return "", logs, stop, errors.New("core did not report its listening address")
 	}
+}
+
+// startCoreStoppable is startCoreArgv that also returns a function that stops core and waits for
+// it to exit, as the test's cleanup does when it was not called.
+func startCoreStoppable(t *testing.T, bin string, argv ...string) (string, *coreLog, func(), error) {
+	t.Helper()
+	return startCoreEnv(t, nil, bin, argv...)
 }
 
 // startOnFreePort starts core at bin on the config file at path, which content makes with a port

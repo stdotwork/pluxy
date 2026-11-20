@@ -1182,9 +1182,18 @@ fn install_bundled(app: &AppHandle) -> Result<(), String> {
         let main = wait_for("the window", || app.get_webview(MAIN))?;
         // The window lists extension pages once, when it loads. Wait for the new page: a step
         // that ran on the old one would have its command answered into a page that is gone.
-        main.eval("window.__beforeReload = true; location.reload()")
-            .map_err(|e| e.to_string())?;
+        main.eval(
+            "window.__beforeReload = true; window.__reloadAsked = Date.now(); location.reload()",
+        )
+        .map_err(|e| e.to_string())?;
         wait_for("the window to load again", || {
+            // A reload that has not started yet is dropped when the page changes its own
+            // address meanwhile, as the shell does when it opens Setup on a first run: ask
+            // again when the old page is still there three seconds after the last ask.
+            let _ = main.eval(
+                "if (window.__beforeReload && Date.now() - (window.__reloadAsked ?? 0) > 3000) \
+                 { window.__reloadAsked = Date.now(); location.reload(); }",
+            );
             (eval(
                 &main,
                 "window.__beforeReload === undefined && document.readyState === 'complete' \

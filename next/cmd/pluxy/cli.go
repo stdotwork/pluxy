@@ -19,6 +19,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode/utf16"
 
 	"github.com/stdotwork/pluxy/next/management"
 )
@@ -52,6 +53,9 @@ type opts struct {
 	since, until, by, account, provider, clientKey string
 	after, before                                  string
 	limit                                          int
+	yes                                            bool
+	picks                                          stringSliceFlag
+	keyID                                          string
 	id                                             string
 }
 
@@ -62,7 +66,10 @@ type invocation struct {
 	args   []string
 	opts   opts
 	json   bool
+	stdin  io.Reader
 	stdout io.Writer
+	stderr io.Writer
+	tty    bool
 }
 
 // call makes one management call. With --json the reply's body goes to standard output as it
@@ -108,6 +115,10 @@ func yesNo(b bool) string {
 }
 
 func accountPath(id string) string { return "/accounts/" + url.PathEscape(id) }
+
+func init() {
+	commands = append(commands, setupCommands()...)
+}
 
 // commands are the client subcommands, in the order help lists them.
 var commands = []command{
@@ -583,12 +594,30 @@ func resolveThemeID(flagID, filePath string, raw []byte) string {
 	if flagID != "" {
 		return flagID
 	}
-	var doc struct {
-		ID string `json:"id"`
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) == nil {
+		var id, name string
+		if err := json.Unmarshal(fields["id"], &id); err != nil {
+			id = ""
+		}
+		if err := json.Unmarshal(fields["name"], &name); err != nil {
+			name = ""
+		}
+		if _, pluxyFile := fields["theme_version"]; !pluxyFile {
+			if validT3ThemeID(id) {
+				return "t3/" + id
+			}
+			if strings.TrimSpace(name) != "" {
+				return "t3/" + themeIDFromName(name)
+			}
+		} else if validThemeID(id) {
+			return id
+		}
 	}
-	if json.Unmarshal(raw, &doc) == nil && validThemeID(doc.ID) {
-		return doc.ID
-	}
+	return themeFileID(filePath)
+}
+
+func themeFileID(filePath string) string {
 	base := filepath.Base(filePath)
 	if len(base) >= 5 && strings.EqualFold(base[len(base)-5:], ".json") {
 		base = base[:len(base)-5]
@@ -605,6 +634,53 @@ func resolveThemeID(flagID, filePath string, raw []byte) string {
 		}
 	}
 	return "t3/" + b.String()
+}
+
+func validT3ThemeID(id string) bool {
+	if len(id) < 1 || len(id) > 48 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || (i > 0 && c == '-') {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// themeIDFromName matches themeIdFromName in next/ui/kit/theme/t3.ts.
+func themeIDFromName(name string) string {
+	label := strings.ToLower(strings.TrimSpace(name))
+	var b strings.Builder
+	hyphen := false
+	for _, r := range label {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			hyphen = false
+		} else if b.Len() > 0 && !hyphen {
+			b.WriteByte('-')
+			hyphen = true
+		}
+	}
+	normalized := strings.Trim(b.String(), "-")
+	if len(normalized) > 48 {
+		normalized = normalized[:48]
+	}
+	if normalized != "" {
+		return normalized
+	}
+	if label == "" {
+		return "custom-theme"
+	}
+
+	hash := uint32(2166136261)
+	for _, unit := range utf16.Encode([]rune(label)) {
+		hash ^= uint32(unit)
+		hash *= 16777619
+	}
+	return "theme-" + strconv.FormatUint(uint64(hash), 36)
 }
 
 func validThemeID(id string) bool {
@@ -675,6 +751,9 @@ func printStatus(x *invocation, s management.Status) {
 		x.printf("; revision %d refused: %s", s.Desired.Revision, s.Desired.Error)
 	}
 	x.printf("\n")
+	if s.FirstRun {
+		x.printf("first run: setup has not been completed (run pluxy setup)\n")
+	}
 	if s.SafeMode {
 		x.printf("safe mode: no extension runs\n")
 	}
@@ -764,6 +843,10 @@ func help(w io.Writer, prefix string) {
 
 // runCLI runs one client subcommand and returns its exit code.
 func runCLI(args []string, stdout, stderr io.Writer, getenv func(string) string) int {
+	return runCLIWithInput(args, os.Stdin, stdout, stderr, getenv, isInteractive(os.Stdin))
+}
+
+func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string, tty bool) int {
 	if args[0] == "help" {
 		help(stdout, strings.Join(args[1:], " "))
 		return exitOK
@@ -818,33 +901,56 @@ func runCLI(args []string, stdout, stderr io.Writer, getenv func(string) string)
 	}
 	t, err := findCore(*configPath, cmpOr(*addr, getenv("PLUXY_URL")), cmpOr(*key, getenv("PLUXY_MANAGEMENT_KEY")))
 	if err != nil {
-		fmt.Fprintf(stderr, "pluxy: %v\n", err)
+		printError(stderr, *jsonOut, err)
 		return exitFailed
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	x := &invocation{ctx: ctx, client: &management.Client{URL: t.url, Key: t.key, HTTP: t.http}, args: pos, opts: o, json: *jsonOut, stdout: stdout}
+	x := &invocation{ctx: ctx, client: &management.Client{URL: t.url, Key: t.key, HTTP: t.http}, args: pos, opts: o, json: *jsonOut, stdin: stdin, stdout: stdout, stderr: stderr, tty: tty}
 	err = cmd.run(x)
 	if err == nil {
 		return exitOK
 	}
-	code := exitCode(err)
+	printError(stderr, *jsonOut, err)
+	return exitCode(err)
+}
+
+// printError writes a command's error to stderr: with --json, as the API's error object (the
+// reply's own body when core sent one), otherwise as a line of text.
+func printError(stderr io.Writer, asJSON bool, err error) {
+	if !asJSON {
+		fmt.Fprintf(stderr, "pluxy: %v\n", err)
+		return
+	}
 	var ae *management.APIError
-	if *jsonOut && errors.As(err, &ae) && json.Valid(ae.Body) {
+	if errors.As(err, &ae) && json.Valid(ae.Body) {
 		stderr.Write(ae.Body)
 		if !bytes.HasSuffix(ae.Body, []byte("\n")) {
 			fmt.Fprintln(stderr)
 		}
-	} else {
-		fmt.Fprintf(stderr, "pluxy: %v\n", err)
+		return
 	}
-	return code
+	code, msg := "failed", err.Error()
+	var ue usageError
+	switch {
+	case errors.As(err, &ae):
+		code, msg = ae.Code, ae.Message
+	case errors.As(err, &ue):
+		code = "invalid_request"
+	case management.IsUnreachable(err):
+		code = "unreachable"
+	}
+	b, _ := json.Marshal(map[string]any{"error": map[string]string{"code": code, "message": msg}})
+	fmt.Fprintf(stderr, "%s\n", b)
 }
 
 // exitCode is the exit code for a command's error.
 func exitCode(err error) int {
+	var ue usageError
 	var ae *management.APIError
 	switch {
+	case errors.As(err, &ue):
+		return exitUsage
 	case management.IsUnreachable(err):
 		return exitUnreachable
 	case errors.As(err, &ae):

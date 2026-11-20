@@ -83,8 +83,6 @@ var proxyExtensions = []struct {
 	{"pluxy/xai", filepath.Join("xai", "pluxy-extension.json"), map[string]any{"kind": "api_key", "api_key": upstreamKey}},
 	{"pluxy/devin", filepath.Join("devin", "pluxy-extension.json"), map[string]any{"kind": "api_key", "api_key": upstreamKey}},
 	{"pluxy/meta", filepath.Join("meta", "pluxy-extension.json"), map[string]any{"kind": "api_key", "api_key": upstreamKey}},
-	{"pluxy/antigravity", filepath.Join("antigravity", "pluxy-extension.json"),
-		map[string]any{"kind": "oauth", "access_token": "ya29.e2e-access", "data": map[string]any{"project_id": "e2e-project"}}},
 }
 
 // The slice's check: every provider extension sends an account's upstream traffic through the

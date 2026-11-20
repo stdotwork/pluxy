@@ -95,8 +95,10 @@ type Core struct {
 	creds  *cred.Manager // opened by the first load
 	pkgDir string        // the packages folder, fixed for core's run
 
-	settings  *extconfig.Store // extensions' settings, in the packages folder
-	pagesPort atomic.Int64     // the pages listener's port, once main has it
+	settings   *extconfig.Store // extensions' settings, in the packages folder
+	pagesPort  atomic.Int64     // the pages listener's port, once main has it
+	listenAddr atomic.Value     // the actual bound listen address, once main has it
+	setup      *setupManager    // kept setup scan and first-run flag
 
 	redactor *configdoc.Redactor // hides the config file's secrets from the management API
 	keyIDs   *configdoc.Redactor // derives stable client key IDs from state/key-id.key
@@ -146,6 +148,12 @@ func Start(opts Options) (*Core, error) {
 			return s.Config.ProxyURL
 		}
 		return ""
+	}
+	c.opts.Host.Timeouts = func() *protocol.Timeouts {
+		if s := c.cur.Load(); s != nil {
+			return s.Config.Routing.Timeouts
+		}
+		return nil
 	}
 	// ... and the payload rules of that config.
 	c.opts.Host.Payload = func() *payload.Rules {
@@ -199,6 +207,9 @@ func Start(opts Options) (*Core, error) {
 		return nil, err
 	}
 	c.creds.OnChange(c.accountsChanged)
+	snap := c.cur.Load()
+	inUse := len(snap.pkgs) > 0 || len(snap.Config.Accounts()) > 0 || len(c.creds.Records()) > 0
+	c.setup = newSetupManager(filepath.Join(StateDir(opts.ConfigPath), setupFileName), c.setupCoreTarget, inUse)
 	c.creds.OnCredentialChange(c.credentialChanged)
 	c.startModelRefresh()
 	c.startRouting()
@@ -853,6 +864,9 @@ func (c *Core) Stop() {
 	c.stopped = true
 	c.bgCancel()
 	c.checks.stop()
+	if c.setup != nil {
+		c.setup.stop()
+	}
 	c.stopRouting()
 	c.mu.Lock()
 	gens := append([]*host.Managed(nil), c.draining...)
@@ -896,7 +910,8 @@ type Status = management.Status
 func (c *Core) Status() Status {
 	version, commit, built := buildinfo.Get()
 	c.mu.Lock() // publish switches the snapshot and the revisions under it
-	s := Status{SafeMode: c.opts.SafeMode, Desired: c.desired, Active: c.active, Extensions: []ExtensionStatus{},
+	firstRun := c.setup == nil || c.setup.isFirstRun()
+	s := Status{SafeMode: c.opts.SafeMode, FirstRun: firstRun, Desired: c.desired, Active: c.active, Extensions: []ExtensionStatus{},
 		Version: version, Commit: commit, Built: built}
 	draining := append([]*host.Managed(nil), c.draining...)
 	cur := c.cur.Load()

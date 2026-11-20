@@ -92,7 +92,6 @@ Providers with their own folder of cases, with what the old core ran when each w
 | `kimi` | Kimi extension, a Kimi Code OAuth credential | a Kimi auth file |
 | `meta` | Meta extension, a Muse Code login's OAuth credential (the minted key and its device token) | a Meta auth file with the key and `base_url` |
 | `meta-api-key` | Meta extension, an API key | a `meta` group with `base-url` and an API key |
-| `antigravity` | Antigravity extension, an OAuth credential with its project | an Antigravity auth file with `base_url`, the project and saved model hints. The new core's `fetchAvailableModels` call is answered aside by the fake upstream, so it is not part of a case |
 | `devin` | Devin extension, a session token as an API key credential | a Devin auth file with the token and `base_url`; its `GetUserStatus` calls were answered aside, and the new core makes none. Models are named `devin/<model>`, as today's core lists them; Gemini clients write the slash as `%2F` in the path, with `account_models` naming the model |
 | `xai` | xAI extension, an API key | an `xai` group with `base-url` and an API key |
 | `xai-cli` | xAI extension, a Grok login's OAuth credential with `base_url` | an xAI auth file with `auth_kind` `oauth`, an expiry far ahead and `base_url` |
@@ -347,8 +346,8 @@ text, and an array a repeated field. The provider's `Proto` schema (`cores.go`) 
 message's nested and repeated fields, so a recorded protobuf request is decoded into the same JSON
 form and compared like any body (`connect.go`).
 
-A provider whose core calls the upstream on its own, outside the case (the new core asks Cloud Code
-which models an Antigravity login has when it loads it), sets `Aside` in its entry: the fake
+A provider whose core calls the upstream on its own, outside the case (for example, fetching an
+account's model list when loading it), sets `Aside` in its entry: the fake
 upstream answers those calls with a fixed reply and neither records them nor uses up a scripted
 reply.
 

@@ -424,7 +424,7 @@ models: {catalog: "https://example.com/models.json", codex-catalog: /etc/codex.j
 	}
 	for _, want := range []string{
 		"server.response-compression (", "server.discovery.enabled (", "routing.session-affinity-rebind-on (",
-		"oauth.request-scoped-errors (", "oauth.providers.antigravity (", "oauth.providers.devin (", "api-keys.meta (",
+		"oauth.request-scoped-errors (", "oauth.providers.antigravity (pluxy no longer ships the Antigravity provider)", "oauth.providers.devin (", "api-keys.meta (",
 		"api-keys.openai-compatibility.support-prompt-cache-key", "api-keys.openai-compatibility.connection-pool",
 		"api-keys.openai-compatibility.request-scoped-errors",
 		"api-keys.openai-compatibility.models.display-name", "api-keys.openai-compatibility.models.max-context-length",
@@ -845,6 +845,8 @@ oauth-model-alias:
     - {name: gpt-6-luna, alias: luna, force-mapping: true}
   kimi-ai:
     - {name: kimi-k2, alias: k2}
+  antigravity:
+    - {name: gemini-3.8-flash-high, alias: ag}
   gemini-cli:
     - {name: gemini-2.5-pro, alias: pro}
 oauth-excluded-models:
@@ -890,7 +892,7 @@ openai-compatibility:
 		"credential": {"kind": "api_key", "api_key": "k2"}
 	}]`)
 	n := notices(r)
-	for _, want := range []string{"oauth.model-alias.force-mapping", "oauth.model-alias.gemini-cli: no extension", "oauth.excluded-models.qwen: no extension"} {
+	for _, want := range []string{"oauth.model-alias.force-mapping", "oauth.model-alias.antigravity: no extension", "oauth.model-alias.gemini-cli: no extension", "oauth.excluded-models.qwen: no extension"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("notices lack %q:\n%s", want, n)
 		}

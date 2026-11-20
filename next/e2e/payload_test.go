@@ -154,7 +154,6 @@ var payloadChannels = map[string]struct{ channel, root string }{
 	"pluxy/kimi":              {"kimi", ""},
 	"pluxy/xai":               {"xai", ""},
 	"pluxy/meta":              {"meta", ""},
-	"pluxy/antigravity":       {"antigravity", "request"},
 }
 
 // The slice's check: every provider extension with a JSON upstream body applies the rules core
@@ -210,7 +209,7 @@ payload:
   default: # Default rules only set parameters when they are missing in the payload.
     - models:
         - name: "gemini-2.5-pro" # Supports wildcards (e.g., "gemini-*")
-          protocol: "gemini" # restricts the rule to a specific protocol, options: openai, gemini, claude, codex, antigravity
+          protocol: "gemini" # restricts the rule to a specific protocol, options: openai, gemini, claude, codex
           from-protocol: "responses" # restricts the rule to the source protocol, options: openai, responses, gemini, claude
           headers: # all configured request headers must match; values support "*" wildcards
             X-Client-Tier: "tenant-*-region-*"
@@ -227,7 +226,7 @@ payload:
   default-raw: # Default raw rules set parameters using raw JSON when missing (must be valid JSON).
     - models:
         - name: "gemini-2.5-pro" # Supports wildcards (e.g., "gemini-*")
-          protocol: "gemini" # restricts the rule to a specific protocol, options: openai, gemini, claude, codex, antigravity
+          protocol: "gemini" # restricts the rule to a specific protocol, options: openai, gemini, claude, codex
       params: # JSON path (gjson/sjson syntax) -> raw JSON value (strings are used as-is, must be valid JSON)
         "generationConfig.responseJsonSchema": "{\"type\":\"object\",\"properties\":{\"answer\":{\"type\":\"string\"}}}"
   override: # Override rules always set parameters, overwriting any existing values.
@@ -240,7 +239,7 @@ payload:
         service_tier: priority
     - models:
         - name: "gpt-*" # Supports wildcards (e.g., "gpt-*")
-          protocol: "codex" # restricts the rule to a specific protocol, options: openai, gemini, claude, codex, antigravity
+          protocol: "codex" # restricts the rule to a specific protocol, options: openai, gemini, claude, codex
       params: # JSON path (gjson/sjson syntax) -> value
         "reasoning.effort": "high"
     - models:
@@ -251,13 +250,13 @@ payload:
   override-raw: # Override raw rules always set parameters using raw JSON (must be valid JSON).
     - models:
         - name: "gpt-*" # Supports wildcards (e.g., "gpt-*")
-          protocol: "codex" # restricts the rule to a specific protocol, options: openai, gemini, claude, codex, antigravity
+          protocol: "codex" # restricts the rule to a specific protocol, options: openai, gemini, claude, codex
       params: # JSON path (gjson/sjson syntax) -> raw JSON value (strings are used as-is, must be valid JSON)
         "response_format": "{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"answer\",\"schema\":{\"type\":\"object\"}}}"
   filter: # Filter rules remove specified parameters from the payload.
     - models:
         - name: "gemini-2.5-pro" # Supports wildcards (e.g., "gemini-*")
-          protocol: "gemini" # restricts the rule to a specific protocol, options: openai, gemini, claude, codex, antigravity
+          protocol: "gemini" # restricts the rule to a specific protocol, options: openai, gemini, claude, codex
       params: # JSON paths (gjson/sjson syntax) to remove from the payload
         - "generationConfig.thinkingConfig.thinkingBudget"
         - "generationConfig.responseJsonSchema"

@@ -104,5 +104,6 @@ pub fn confirmation(
         native_tool: false,
         files,
         launch: None,
+        environment: None,
     }
 }

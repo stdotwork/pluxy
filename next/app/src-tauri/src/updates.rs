@@ -127,6 +127,7 @@ pub fn release_source_set(webview: Webview, source: Option<String>) -> Result<()
             native_tool: false,
             files: vec![],
             launch: None,
+            environment: None,
         };
         let id = {
             let mut c = st.confirmations.lock().unwrap();
