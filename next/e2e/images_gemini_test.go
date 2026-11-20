@@ -19,8 +19,9 @@ func TestGeminiImagesGeneration(t *testing.T) {
 			`"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":7,"totalTokenCount":18},"modelVersion":"gemini-test"}`)
 	})
 	base := runCore(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
 		"extension": map[string]any{
 			"manifest": geminiManifest(t),
 			"accounts": []any{map[string]any{
