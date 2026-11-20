@@ -52,6 +52,9 @@ const (
 type Server struct {
 	*httptest.Server
 
+	// Backend, when set, answers /backend-api requests that the fake does not have a more
+	// specific handler for. Tests use it to stand in for the other ChatGPT backend endpoints.
+	Backend http.Handler
 	// DenyBrowser makes the browser sign-in end with error=access_denied.
 	DenyBrowser bool
 	// RefreshFailure "unavailable" makes refresh answer 503.
@@ -114,6 +117,13 @@ func New(t testing.TB) *Server {
 	mux.HandleFunc("GET /backend-api/wham/usage", s.usage)
 	mux.HandleFunc("GET /backend-api/subscriptions", s.quotaExtra)
 	mux.HandleFunc("GET /backend-api/wham/rate-limit-reset-credits", s.quotaExtra)
+	mux.Handle("/backend-api/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.Backend == nil {
+			http.NotFound(w, r)
+			return
+		}
+		s.Backend.ServeHTTP(w, r)
+	}))
 	s.Server = httptest.NewServer(mux)
 	t.Cleanup(s.Close)
 	return s
