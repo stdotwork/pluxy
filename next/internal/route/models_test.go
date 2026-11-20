@@ -237,6 +237,95 @@ func TestModelListRefreshKeepsLastGood(t *testing.T) {
 	}
 }
 
+// A refresh that falls back to the extension's built-in list keeps the account's last live list,
+// as a failed read does: the models only the live list had still route, and the refresh reports
+// the list as kept. A built-in list still replaces one that is not the account's live list, and a
+// live list replaces anything.
+func TestModelListRefreshKeepsLiveListOverFallback(t *testing.T) {
+	live := func(ids ...string) *protocol.ModelList {
+		out := make([]protocol.Model, len(ids))
+		for i, id := range ids {
+			out[i] = protocol.Model{ID: id}
+		}
+		return &protocol.ModelList{From: protocol.ModelListFromAccount, Models: out}
+	}
+	builtin := func(ids ...string) *protocol.ModelList {
+		out := make([]protocol.Model, len(ids))
+		for i, id := range ids {
+			out[i] = protocol.Model{ID: id}
+		}
+		return &protocol.ModelList{From: protocol.ModelListFromExtension, Models: out}
+	}
+	served := func(h *harness) []string {
+		t.Helper()
+		return modelIDs(&protocol.ModelList{Models: h.r.Models(context.Background())})
+	}
+
+	// start makes a router whose first read answers first, returning the list it answers next.
+	start := func(first *protocol.ModelList) (*harness, func(*protocol.ModelList)) {
+		h := newHarness(t, Config{}, Account{ID: "a"})
+		var (
+			mu   sync.Mutex
+			list = first
+		)
+		h.r.UseCatalog(func(_ context.Context, _ Account, _ *protocol.Credential) (*protocol.ModelList, *llm.Error) {
+			mu.Lock()
+			defer mu.Unlock()
+			return list, nil
+		})
+		set := func(l *protocol.ModelList) {
+			mu.Lock()
+			list = l
+			mu.Unlock()
+		}
+		h.runOK(first.Models[0].ID)
+		return h, set
+	}
+
+	t.Run("account then fallback keeps the live list", func(t *testing.T) {
+		h, set := start(live("m1"))
+		set(builtin("f1"))
+		res := h.r.RefreshModels(context.Background(), "a")
+		if len(res) != 1 || res[0].Models != 1 || !res[0].Kept || res[0].Error == "" {
+			t.Fatalf("RefreshModels = %+v, want Models=1 Kept=true Error!=empty", res)
+		}
+		if got := served(h); !slices.Equal(got, []string{"m1"}) {
+			t.Fatalf("models after fallback refresh = %v, want [m1]", got)
+		}
+		h.runOK("m1")
+		if evs := h.run(h.req("f1")); evs[0].Error == nil || evs[0].Error.ProviderCode != "model_not_found" {
+			t.Fatalf("a model only the built-in list had was served: %+v", evs[0])
+		}
+	})
+
+	t.Run("fallback then fallback replaces", func(t *testing.T) {
+		h, set := start(builtin("f1"))
+		h.runOK("f1") // a first read's built-in list is kept as known
+		set(builtin("f2"))
+		res := h.r.RefreshModels(context.Background(), "a")
+		if len(res) != 1 || res[0].Models != 1 || res[0].Kept || res[0].Error != "" {
+			t.Fatalf("RefreshModels = %+v, want Models=1 Kept=false", res)
+		}
+		if got := served(h); !slices.Equal(got, []string{"f2"}) {
+			t.Fatalf("models after fallback refresh = %v, want [f2]", got)
+		}
+		h.runOK("f2")
+	})
+
+	t.Run("account then account replaces", func(t *testing.T) {
+		h, set := start(live("m1"))
+		set(live("m1", "m2"))
+		res := h.r.RefreshModels(context.Background(), "a")
+		if len(res) != 1 || res[0].Models != 2 || res[0].Kept || res[0].Error != "" {
+			t.Fatalf("RefreshModels = %+v, want Models=2 Kept=false", res)
+		}
+		if got := served(h); !slices.Equal(got, []string{"m1", "m2"}) {
+			t.Fatalf("models after live refresh = %v, want [m1 m2]", got)
+		}
+		h.runOK("m2")
+	})
+}
+
 // SetAccounts with a same predicate keeps model lists for unchanged accounts and drops them
 // only for changed or removed accounts.
 func TestSetAccountsRetainsUnchangedModelLists(t *testing.T) {

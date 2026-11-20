@@ -32,14 +32,17 @@ var catalogRefreshJitter = 3 * time.Minute
 
 // catalogTimeout bounds one read of an account's model list: a read that takes longer counts as
 // failed, so requests waiting for a first read go on with the list unknown and a refresh keeps
-// the last good list.
+// the last good list. Extensions bound their own upstream reads and fall back to their built-in
+// list well under this limit, so a provider that hangs still yields a fallback before core gives
+// up on the read.
 var catalogTimeout = 15 * time.Second
 
 // catalogs keeps each account's model list from its extension, keyed by account ID: for the
 // model lists clients ask for, and for routing, which sends an account without models of its
 // own only the models its list names. Known lists refresh every catalogRefresh (with jitter),
 // on credential renewal or login, and on demand via RefreshModels; a read that fails, times out
-// or comes back empty keeps the last good list.
+// or comes back empty keeps the last good list, and so does a fallback to the extension's
+// built-in list when the kept list was read from the account.
 type catalogs struct {
 	mu sync.Mutex
 	// entries are keyed by account ID. All fields of a catalogEntry except done are guarded by
@@ -261,7 +264,11 @@ func (r *Router) startRefreshLocked(e *catalogEntry, acct Account, creds Credent
 // applyReadLocked stores the outcome of a catalog read on e. On a first read (e.list == nil),
 // any non-nil list — including an empty one — is kept as known, while a failed read (list ==
 // nil) records e.at for catalogRetry. On a refresh of a known list (refresh is true and e.list
-// != nil), a failed or empty read keeps the existing list. Caller must hold r.lists.mu.
+// != nil), a failed or empty read keeps the existing list, and so does a list the extension fell
+// back to (From: extension) when the existing list was read from the account (From: account):
+// an account that served a live list keeps it until a live read replaces it. Any non-empty list
+// replaces one that was not read from the account, and a live list replaces anything. Caller
+// must hold r.lists.mu.
 func (r *Router) applyReadLocked(e *catalogEntry, list *protocol.ModelList, errMsg string, doneAt time.Time, refresh bool) {
 	if e.list == nil {
 		if list != nil {
@@ -275,7 +282,11 @@ func (r *Router) applyReadLocked(e *catalogEntry, list *protocol.ModelList, errM
 		e.lastKept = false
 		return
 	}
-	if refresh && list != nil && len(list.Models) > 0 {
+	// A refresh keeps the account's live list when its read fell back to the extension's
+	// built-in list; any other non-empty list replaces the kept one.
+	fellBack := e.list.From == protocol.ModelListFromAccount && list != nil &&
+		list.From != protocol.ModelListFromAccount && len(list.Models) > 0
+	if refresh && list != nil && len(list.Models) > 0 && !fellBack {
 		e.list = list
 		e.refreshAt = r.nextRefresh(doneAt)
 		e.lastError = ""
@@ -284,6 +295,9 @@ func (r *Router) applyReadLocked(e *catalogEntry, list *protocol.ModelList, errM
 	}
 	e.refreshAt = r.nextRefresh(doneAt)
 	e.lastKept = true
+	if errMsg == "" && fellBack {
+		errMsg = "the model list read fell back to the built-in list, so the last live list was kept"
+	}
 	if errMsg == "" && list != nil {
 		errMsg = "extension returned an empty model list"
 	}
@@ -291,7 +305,8 @@ func (r *Router) applyReadLocked(e *catalogEntry, list *protocol.ModelList, errM
 }
 
 // RefreshModels refreshes the model list of accountID (or every routed account when accountID is
-// empty), keeping any previously known list when a read fails, times out or comes back empty.
+// empty), keeping any previously known list when a read fails, times out or comes back empty, and
+// keeping the account's last live list when the read falls back to the extension's built-in one.
 func (r *Router) RefreshModels(ctx context.Context, accountID string) []RefreshResult {
 	r.mu.RLock()
 	catalog := r.catalog
