@@ -5,15 +5,17 @@
 //!
 //! Before any updater plugin call the updater gate (`trust::updater_gate`) passes; the plugin is
 //! registered at all only when it passed at startup (`lib.rs`). Before any download the
-//! installation's provenance is checked: a copy a package manager or an installer keeps, or one in
-//! an unknown format, is refused, with how to update instead, even when the feed has a signed
+//! installation's provenance is checked: a copy a package manager or an .msi keeps, or one in an
+//! unknown format, is refused, with how to update instead, even when the feed has a signed
 //! update. The artifact is downloaded here, read as the feed is, then the plugin checks its
 //! signature (bound to the announced version); the plugin never installs anything. This module
 //! checks the artifact's format and puts it in place itself, one installer per format:
 //!
 //! - Linux (`appimage.rs`): the AppImage, one file, replaced in one rename;
-//! - Windows (`exe.rs`): the program of a folder bundle, one self-contained `.exe`, renamed aside
-//!   (a running program can be renamed, not replaced) and the new one renamed into its place;
+//! - Windows (`exe.rs`): the program set of a folder bundle or of a copy the per-user setup
+//!   program installed (the app's program, the core beside it and its packages, `set.rs`), part by
+//!   part, each part renamed aside (a running program can be renamed, not replaced) and the new
+//!   one renamed into its place;
 //! - macOS (`app.rs`): the `.app` bundle, unpacked from its `.app.tar.gz` next to it and swapped
 //!   with it in one step.
 //!
@@ -45,6 +47,9 @@ mod bundle;
 mod exe;
 #[cfg(any(not(target_os = "linux"), test))]
 mod leftovers;
+mod set;
+#[cfg(any(windows, test))]
+mod uninstall_entry;
 #[cfg(target_os = "macos")]
 use app as format;
 #[cfg(target_os = "linux")]
@@ -58,6 +63,12 @@ use format::TARGET;
 const ACCEPT_WITHIN: Duration = Duration::from_secs(90);
 /// Kept copies of earlier versions, newest first; older ones are deleted.
 const KEEP: usize = 3;
+/// Most entries an update's archive may hold (`bundle.rs`, `set.rs`).
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+const MAX_ENTRIES: usize = 4096;
+/// Most bytes its files may hold, unpacked.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+const MAX_BYTES: u64 = 1 << 30;
 const EVENT: &str = "pluxy-app-update";
 
 /// What the update is doing now.
@@ -93,15 +104,20 @@ pub struct Pinned {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Pending {
     format: u32,
-    /// update or rollback.
+    /// update or rollback; on Windows also put-back, the kept set going back in place of a new
+    /// version that did not start.
     kind: String,
     from: Pinned,
     to: Pinned,
-    /// The installed copy: the AppImage, the program or the app bundle. Its name on disk is the
-    /// one format 1 gave it on Linux.
+    /// The installed copy: the AppImage, the program set's folder or the app bundle. Its name on
+    /// disk is the one format 1 gave it on Linux.
     #[serde(rename = "appimage")]
     installed: PathBuf,
     nonce: String,
+    /// Windows: the parts the install moves and where from (`set::Moves`), recorded before any
+    /// is moved, so a start after a crash can finish or undo them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    moves: Option<set::Moves>,
 }
 
 /// What the new version writes once it accepts itself (`accepted.json`).
@@ -171,11 +187,24 @@ fn sha256(bytes: &[u8]) -> String {
     crate::artifact::hex(&Sha256::digest(bytes))
 }
 
+/// The updates folder: kept copies, the pending install, history. On Windows in the app's local
+/// data folder, on a fixed local drive, so kept program sets stay on this machine when the
+/// profile roams; elsewhere in its data folder.
 fn dir(app: &AppHandle) -> Result<PathBuf, String> {
-    app.path()
-        .app_data_dir()
-        .map(|d| d.join("updates"))
-        .map_err(|e| e.to_string())
+    #[cfg(windows)]
+    let data = app.path().app_local_data_dir();
+    #[cfg(not(windows))]
+    let data = app.path().app_data_dir();
+    let dir = data.map(|d| d.join("updates")).map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    exe::local_fixed(&dir)?;
+    Ok(dir)
+}
+
+/// The updates folder, for the native test.
+#[cfg_attr(not(feature = "native-test"), allow(dead_code))]
+pub(crate) fn updates_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    dir(app)
 }
 
 /// Where the kept copy of p is: `updates/kept/<version>-<digest>` and the format's ending.
@@ -191,8 +220,10 @@ pub(crate) fn installed_here(app: &AppHandle) -> Option<PathBuf> {
     format::here(app)
 }
 
-/// The digest an installed copy is pinned by (see `Pinned`). For the native test.
-#[cfg_attr(not(feature = "native-test"), allow(dead_code))]
+/// The digest an installed copy is pinned by (see `Pinned`). For the native test, and on Windows
+/// for the version an update starts, to check it runs from the copy the update named
+/// (`instance`).
+#[cfg_attr(not(any(windows, feature = "native-test")), allow(dead_code))]
 pub(crate) fn digest(path: &Path) -> Result<String, String> {
     format::digest(path)
 }
@@ -528,15 +559,27 @@ fn install(
     };
     // Checked before the pending record is written, so a refusal leaves none behind.
     provenance(app)?;
-    let pending = pending(&dir, "update", from, to.clone(), installed)?;
-    // The app's own replace of what the plugin just verified: the installed copy is the old one
-    // or the new one (on Windows, see `exe.rs` for the one moment it is neither).
+    let pending = pending(&dir, "update", from, to.clone(), installed, moves(&staged))?;
+    // The app's own replace of what the plugin just verified: on Linux and macOS the installed
+    // copy is the old one or the new one; on Windows the set is a mix of the two while its parts
+    // move, which a failure undoes here and a crash at the next start (`set.rs`).
     if let Err(e) = format::swap_in(installed, staged, &dir) {
-        let _ = fs::remove_file(dir.join("pending.json"));
+        failed(&dir, &pending);
         return Err(format!("The update could not be installed: {e}"));
     }
     evict(&dir);
     Ok(Restart { dir, pending })
+}
+
+/// The move list of staged, which the pending record carries (Windows; none elsewhere).
+#[cfg(windows)]
+fn moves(staged: &format::Staged) -> Option<set::Moves> {
+    Some(staged.moves())
+}
+
+#[cfg(not(windows))]
+fn moves(_: &format::Staged) -> Option<set::Moves> {
+    None
 }
 
 fn pending(
@@ -545,7 +588,10 @@ fn pending(
     from: Pinned,
     to: Pinned,
     installed: &Path,
+    moves: Option<set::Moves>,
 ) -> Result<Pending, String> {
+    #[cfg(windows)]
+    open_record(dir, installed)?;
     let p = Pending {
         format: 1,
         kind: kind.into(),
@@ -553,9 +599,54 @@ fn pending(
         to,
         installed: installed.to_path_buf(),
         nonce: nonce()?,
+        moves,
     };
     write_json(&dir.join("pending.json"), &p)?;
     Ok(p)
+}
+
+/// Windows: refused while `pending.json` records an install that is not finished, which writing
+/// a new one would lose: another install's (two installs of one identifier share the updates
+/// folder; theirs is left alone), or one of this install's with parts still aside. Checked with
+/// the installation (`exe::provenance`), before any download, and again as the record is written.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn open_record(dir: &Path, installed: &Path) -> Result<(), String> {
+    let Some(p) = read_json::<Pending>(&dir.join("pending.json")) else {
+        return Ok(());
+    };
+    if p.installed != installed {
+        return Err(format!(
+            "Another copy of pluxy ({}) has an update or rollback that is not finished, and it \
+             shares this app's update records. Start that copy once to finish it, or, if it is \
+             gone, delete {}.",
+            p.installed.display(),
+            dir.join("pending.json").display()
+        ));
+    }
+    if p.moves
+        .as_ref()
+        .is_none_or(|m| set::unresolved(installed, m))
+    {
+        return Err(format!(
+            "An earlier update or rollback left parts of {} aside, and they were not put back \
+             (see {}); the app's README says how to put them back by hand.",
+            installed.display(),
+            dir.join("pending.json").display()
+        ));
+    }
+    Ok(())
+}
+
+/// After a replace that failed: the pending record goes, unless (Windows) parts it moved are
+/// still aside, which the next start puts back by it.
+fn failed(dir: &Path, p: &Pending) {
+    if p.moves
+        .as_ref()
+        .is_some_and(|m| set::unresolved(&p.installed, m))
+    {
+        return;
+    }
+    let _ = fs::remove_file(dir.join("pending.json"));
 }
 
 fn nonce() -> Result<String, String> {
@@ -618,12 +709,34 @@ fn evict(dir: &Path) {
 }
 
 /// Puts the kept copy of the version an install came from back, if it still has its digest.
-/// The pending install is over either way.
+/// The pending install is over either way. On Windows the put-back moves the set part by part,
+/// so it is recorded first as an install of its own (`put-back`, from the version that did not
+/// start to the kept one, with its move list): should it stop part way, the next start finishes
+/// it (`set::recover`), and its record stays until then.
 fn restore(dir: &Path, p: &Pending) -> Result<(), String> {
     let kept = kept_path(dir, &p.from);
-    let outcome = format::stage_kept(&p.installed, &kept, &p.from, dir)
-        .and_then(|s| format::swap_in(&p.installed, s, dir));
-    let _ = fs::remove_file(dir.join("pending.json"));
+    let mut put_back = None;
+    let outcome = format::stage_kept(&p.installed, &kept, &p.from, dir).and_then(|s| {
+        if let Some(m) = moves(&s) {
+            let _ = fs::remove_file(dir.join("pending.json"));
+            let r = pending(
+                dir,
+                "put-back",
+                p.to.clone(),
+                p.from.clone(),
+                &p.installed,
+                Some(m),
+            )?;
+            put_back = Some(r);
+        }
+        format::swap_in(&p.installed, s, dir)
+    });
+    match (&outcome, &put_back) {
+        (Err(_), Some(r)) => failed(dir, r),
+        _ => {
+            let _ = fs::remove_file(dir.join("pending.json"));
+        }
+    }
     outcome
 }
 
@@ -767,18 +880,30 @@ fn supervise(app: &AppHandle, r: &Restart) {
             ),
             true,
         ),
-        Err(e) => (
-            format!(
-                "{} did not start ({why}), and {} could not be put back: {e}. Nothing was started: \
-                 copy {} to {} to run {} again.",
-                p.to.version,
-                p.from.version,
-                kept_path(&r.dir, &p.from).display(),
-                p.installed.display(),
-                p.from.version
-            ),
-            false,
-        ),
+        Err(e) => {
+            let kept = kept_path(&r.dir, &p.from);
+            // On Windows the kept copy is a folder holding the set's three parts, copied each
+            // into the program's folder.
+            #[cfg(windows)]
+            let how = format!(
+                "copy {}, {} and {} from {} into {}",
+                set::BUNDLED,
+                set::CORE,
+                exe::program_name(),
+                kept.display(),
+                p.installed.display()
+            );
+            #[cfg(not(windows))]
+            let how = format!("copy {} to {}", kept.display(), p.installed.display());
+            (
+                format!(
+                    "{} did not start ({why}), and {} could not be put back: {e}. Nothing was \
+                     started: {how} to run {} again.",
+                    p.to.version, p.from.version, p.from.version
+                ),
+                false,
+            )
+        }
     };
     let _ = write_json(
         &r.dir.join("last.json"),
@@ -801,8 +926,12 @@ fn supervise(app: &AppHandle, r: &Restart) {
 /// At startup, after the profile lock: the version an install started accepts itself once the
 /// installed copy is the one it pinned, which the waiting earlier version reads. What an earlier
 /// install recorded that it left beside the installed copy (`leftovers.rs`) is removed once the
-/// earlier version has ended; nothing else there is looked at.
+/// earlier version has ended; nothing else there is looked at. On Windows, first, a replace of
+/// the program set that stopped part way is undone or finished (`recover`): before that cleanup,
+/// and before this version's start digest is taken (`record_started_from`, called after this).
 pub fn accept(app: &AppHandle) {
+    #[cfg(windows)]
+    recover(app);
     // An AppImage's replace leaves nothing beside it.
     #[cfg(not(target_os = "linux"))]
     if gate(app).is_ok() && format::here(app).is_some() {
@@ -819,7 +948,9 @@ pub fn accept(app: &AppHandle) {
         return;
     };
     let running = app.package_info().version.to_string();
-    if running != p.to.version
+    // A put-back is not a version accepting itself (`recover` finishes one).
+    if p.kind == "put-back"
+        || running != p.to.version
         || format::here(app).as_deref() != Some(p.installed.as_path())
         || format::digest(&p.installed).ok().as_deref() != Some(p.to.sha256.as_str())
     {
@@ -835,7 +966,16 @@ pub fn accept(app: &AppHandle) {
         eprintln!("native-test: update_not_accepting {{}}");
         std::process::exit(3);
     }
+    #[cfg(windows)]
+    let product = app.package_info().name.clone();
     let finish = move || {
+        // Windows: Settings > Apps and the setup program read the installed version from the
+        // uninstall entry the setup wrote, if it wrote one for this folder; this version is the
+        // installed one now. Written before the outcome, which the waiting version reads.
+        #[cfg(windows)]
+        if let Err(e) = uninstall_entry::record(&product, &p.installed, &running) {
+            eprintln!("pluxy-app: the uninstall entry's version was not updated: {e}");
+        }
         let (result, detail) = if p.kind == "rollback" {
             (
                 "rolled-back",
@@ -887,6 +1027,96 @@ pub fn accept(app: &AppHandle) {
         return;
     }
     finish();
+}
+
+/// Windows, at startup: what `pending.json` left part way for this install's program set, undone
+/// or finished by its move list (`set::recover`, which says when). Until a record of this
+/// install's that this start could not finish is resolved, this version takes no start digest,
+/// so nothing is kept or installed (the mixed set is not this version), and the page says why.
+#[cfg(windows)]
+fn recover(app: &AppHandle) {
+    let (Ok(dir), Some(here)) = (dir(app), format::here(app)) else {
+        return;
+    };
+    let Some(p) = read_json::<Pending>(&dir.join("pending.json")) else {
+        return;
+    };
+    let exe = exe::program_name();
+    let running = app.package_info().version.to_string();
+    let r = set::recover(
+        &exe::Moving::new(&dir),
+        &dir,
+        &p,
+        &here,
+        &exe,
+        &running,
+        &here.join(&exe),
+    );
+    if let set::Recovery::Undone | set::Recovery::Left(_) = &r {
+        eprintln!(
+            "pluxy-app: the {} to {} stopped part way and {}",
+            p.kind,
+            p.to.version,
+            match &r {
+                set::Recovery::Left(why) => format!("is left as it is: {why}"),
+                _ => "was undone".into(),
+            }
+        );
+    }
+    let (last, not_started) = recovered(&r, &p, &running, &here);
+    if let Some(detail) = last {
+        let _ = write_json(
+            &dir.join("last.json"),
+            &Last {
+                result: "failed".into(),
+                detail,
+            },
+        );
+    }
+    if let Some(why) = not_started {
+        let _ = app.state::<App>().updater.started_from.set(Err(why));
+    }
+}
+
+/// What a start says after `set::recover` (r, for the pending install p, running version
+/// running, in the folder here): what `last.json` then records, and why this version takes no
+/// start digest (and so installs nothing until a restart), if so.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn recovered(
+    r: &set::Recovery,
+    p: &Pending,
+    running: &str,
+    here: &Path,
+) -> (Option<String>, Option<String>) {
+    match r {
+        set::Recovery::Nothing | set::Recovery::Undone => (None, None),
+        set::Recovery::PutBack => (
+            Some(format!(
+                "{} did not start, and {} was put back.",
+                p.from.version, p.to.version
+            )),
+            (running != p.to.version).then(|| {
+                format!(
+                    "version {} was put back in place of this one ({running}); restart the app \
+                     to run it",
+                    p.to.version
+                )
+            }),
+        ),
+        set::Recovery::Left(why) => (
+            Some(format!(
+                "The {} to {} stopped part way and could not be finished: {why}. Its parts are \
+                 still aside in {}; the app's README says how to put them back.",
+                p.kind,
+                p.to.version,
+                here.display()
+            )),
+            Some(format!(
+                "an earlier {} stopped part way and is not finished ({why})",
+                p.kind
+            )),
+        ),
+    }
 }
 
 /// Returns once the version this one took over from has ended (or after two minutes): on Windows
@@ -1078,9 +1308,16 @@ fn roll_back(
         t.error = None;
     });
     let from = keep(dir, installed, running, &started_from(app)?)?;
-    let pending = pending(dir, "rollback", from, target.clone(), installed)?;
+    let pending = pending(
+        dir,
+        "rollback",
+        from,
+        target.clone(),
+        installed,
+        moves(&staged),
+    )?;
     if let Err(e) = format::swap_in(installed, staged, dir) {
-        let _ = fs::remove_file(dir.join("pending.json"));
+        failed(dir, &pending);
         return Err(format!("The rollback could not be installed: {e}"));
     }
     evict(dir);
@@ -1161,7 +1398,7 @@ pub(super) mod tests {
             version: "0.2.0".into(),
             sha256: "new".into(),
         };
-        let p = pending(&dir, "update", from.clone(), to.clone(), &image).unwrap();
+        let p = pending(&dir, "update", from.clone(), to.clone(), &image, None).unwrap();
         installed(&tmp, "new");
         restore(&dir, &p).unwrap();
         assert_eq!(format::digest(&image).unwrap(), old);

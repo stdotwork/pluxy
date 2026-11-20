@@ -68,7 +68,7 @@ pub struct Release {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes_url: Option<String>,
     /// An app release's signed update artifacts, by the updater's target name
-    /// (`linux-x86_64-appimage`, `windows-x86_64-exe`, `darwin-aarch64-app`: one per system and
+    /// (`linux-x86_64-appimage`, `windows-x86_64-set`, `darwin-aarch64-app`: one per system and
     /// format). Only the app's own updater reads them (`updater`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub update: BTreeMap<String, UpdateArtifact>,
