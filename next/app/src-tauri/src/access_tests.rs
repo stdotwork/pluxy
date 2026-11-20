@@ -987,3 +987,20 @@ fn a_target_that_cannot_be_read_is_unavailable_not_refused() {
     fs::remove_file(t.0.join("gone")).unwrap();
     assert_eq!(fenced(&g, &[t.0.join("app")]), Err(Denial::Unavailable));
 }
+
+/// macOS: the store's folder keeps no extended access list entry, as it keeps no group or other
+/// mode bits, so access.json inherits none however the folder was set up.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_store_folder_passes_no_access_list_on() {
+    let t = tmp();
+    let app = t.0.join("app");
+    fs::create_dir_all(&app).unwrap();
+    crate::private_macos::add_entry(&app, "everyone allow list,file_inherit,directory_inherit");
+    let has = |p: &Path| crate::private_macos::has_entries(&fs::File::open(p).unwrap()).unwrap();
+    assert!(has(&app));
+    // Approving a signer saves the store.
+    let _s = store(&t.0);
+    assert!(!has(&app));
+    assert!(!has(&app.join("access.json")));
+}

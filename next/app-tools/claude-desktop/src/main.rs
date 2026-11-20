@@ -19,7 +19,6 @@ use pluxy_transactions::{
 use serde_json::{json, Value};
 use std::ffi::OsString;
 use std::io::ErrorKind;
-use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 
 /// The one set this tool applies: the deployment file, the gateway profile and the library index,
@@ -28,21 +27,65 @@ const SET: &str = "claude-desktop";
 
 struct ClaudeDesktop;
 
-fn home() -> Result<PathBuf, Error> {
-    std::env::var_os("HOME")
-        .filter(|h| !h.is_empty())
-        .map(PathBuf::from)
-        .ok_or_else(|| Error::unavailable("the app gave no home folder (HOME)"))
+/// What the tool reads of its environment: `std::env::var_os`, or a test's values.
+type Var<'a> = &'a dyn Fn(&str) -> Option<OsString>;
+
+/// A folder the environment names, when it is set and not empty.
+fn folder_of(var: Var, name: &str) -> Option<PathBuf> {
+    var(name).filter(|v| !v.is_empty()).map(PathBuf::from)
 }
 
-/// Claude Desktop's third-party folder in the home folder (the tool's environment has no
-/// XDG_CONFIG_HOME: a person who moved it selects that folder).
-fn threep_in(home: &Path) -> PathBuf {
-    home.join(".config").join("Claude-3p")
+fn home_of(var: Var) -> Result<PathBuf, Error> {
+    folder_of(var, "HOME").ok_or_else(|| Error::unavailable("the app gave no home folder (HOME)"))
+}
+
+fn home() -> Result<PathBuf, Error> {
+    home_of(&|k| std::env::var_os(k))
+}
+
+/// The Windows 10 package of Claude Desktop's MSIX installer keeps its local application data
+/// here, under `%LOCALAPPDATA%` (Anthropic's data-storage page).
+const MSIX_LOCAL: [&str; 4] = ["Packages", "Claude_pzs8sxrjxfjjc", "LocalCache", "Local"];
+
+/// Claude Desktop's third-party folder, `Claude-3p`, where it keeps its data on os (Anthropic's
+/// data-storage and configuration-format pages): `~/.config/Claude-3p` on Linux (the tool's
+/// environment has no XDG_CONFIG_HOME: a person who moved it selects that folder),
+/// `~/Library/Application Support/Claude-3p` on macOS and `%LOCALAPPDATA%\Claude-3p` on Windows.
+/// On Windows 10 the MSIX package keeps it in its own folder instead, which is taken when only
+/// that one exists (after an upgrade to Windows 11 the old one can stay behind).
+fn threep_in(os: &str, var: Var) -> Result<PathBuf, Error> {
+    match os {
+        "windows" => {
+            let local = folder_of(var, "LOCALAPPDATA")
+                .filter(|p| p.is_absolute())
+                .ok_or_else(|| {
+                    Error::unavailable(
+                        "the app gave no local application data folder (LOCALAPPDATA)",
+                    )
+                })?;
+            let plain = local.join("Claude-3p");
+            let packaged = MSIX_LOCAL
+                .iter()
+                .fold(local, |p, part| p.join(part))
+                .join("Claude-3p");
+            let absent =
+                std::fs::symlink_metadata(&plain).is_err_and(|e| e.kind() == ErrorKind::NotFound);
+            Ok(if absent && packaged.is_dir() {
+                packaged
+            } else {
+                plain
+            })
+        }
+        "macos" => Ok(home_of(var)?
+            .join("Library")
+            .join("Application Support")
+            .join("Claude-3p")),
+        _ => Ok(home_of(var)?.join(".config").join("Claude-3p")),
+    }
 }
 
 fn threep() -> Result<PathBuf, Error> {
-    Ok(threep_in(&home()?))
+    threep_in(std::env::consts::OS, &|k| std::env::var_os(k))
 }
 
 /// What a default preview says, and the page looks for, when the library folder is not there:
@@ -68,16 +111,12 @@ fn three<T>(input: &Value, f: fn(&Value) -> Result<T, Error>) -> Result<[T; 3], 
     }
 }
 
-/// The three files in ~/.config/Claude-3p of home, refused with MISSING_LIBRARY when nothing is
-/// at its `configLibrary` yet (and the folders above it are folders or missing too), which the
-/// `folders` operation creates; anything else that is not a folder there (a link to nowhere, a
-/// file) is left to the preview, which names what it found.
-fn default_selections(home: Option<OsString>) -> Result<[Selection; 3], Error> {
-    let home = home
-        .filter(|h| !h.is_empty())
-        .map(PathBuf::from)
-        .ok_or_else(|| Error::unavailable("the app gave no home folder (HOME)"))?;
-    let dir = threep_in(&home);
+/// The three files in Claude Desktop's third-party folder (`threep_in`), refused with
+/// MISSING_LIBRARY when nothing is at its `configLibrary` yet (and the folders above it are
+/// folders or missing too), which the `folders` operation creates; anything else that is not a
+/// folder there (a link to nowhere, a file) is left to the preview, which names what it found.
+fn default_selections(os: &str, var: Var) -> Result<[Selection; 3], Error> {
+    let dir = threep_in(os, var)?;
     let library = dir.join("configLibrary");
     let absent =
         |p: &Path| std::fs::symlink_metadata(p).is_err_and(|e| e.kind() == ErrorKind::NotFound);
@@ -90,10 +129,10 @@ fn default_selections(home: Option<OsString>) -> Result<[Selection; 3], Error> {
     Ok(paths().map(|p| Selection::File(dir.join(p))))
 }
 
-/// The selections a preview names: its three targets, or the files in ~/.config/Claude-3p.
+/// The selections a preview names: its three targets, or the files in the third-party folder.
 fn selections(input: &Value) -> Result<[Selection; 3], Error> {
     match input.get("targets") {
-        None => default_selections(std::env::var_os("HOME")),
+        None => default_selections(std::env::consts::OS, &|k| std::env::var_os(k)),
         Some(_) => three(input, Selection::from_json),
     }
 }
@@ -131,6 +170,51 @@ fn pinned_read(mut read: impl FnMut() -> Result<Read, Error>) -> Result<Read, Er
     ))
 }
 
+/// Makes the library folder: any missing folders above it (on Linux and macOS private, as
+/// `mkdir -p` with 0700; on Windows with what their folder passes down), then the library itself,
+/// private. One made meanwhile by Claude Desktop is taken as it is.
+fn make_library(library: &Path) -> std::io::Result<()> {
+    if let Some(parent) = library.parent() {
+        pluxy_files::create_private_dir_all(parent)?;
+    }
+    match pluxy_files::create_private_dir(library) {
+        Err(e) if e.kind() == ErrorKind::AlreadyExists && library.is_dir() => Ok(()),
+        r => r,
+    }
+}
+
+/// How the launcher starts Claude Desktop, with no arguments, in the home folder: what it needs
+/// is in its files (the old app's launch). On Linux its own command, `claude-desktop`
+/// (code.claude.com's Linux page); on macOS its application bundle, `Claude.app`, in the
+/// system's applications folder (apps, here a parameter for the tests) or else the home folder's
+/// (Anthropic's installation page has it dragged to Applications). On Windows Anthropic names no
+/// program or packaged-app ID for its installer, so there is none to start.
+fn recipe(os: &str, home: &Path, apps: &Path) -> Result<Value, Error> {
+    let program = match os {
+        "windows" => {
+            return Err(Error::unsupported(
+                "pluxy does not know how to start Claude Desktop on Windows yet: start it from the Start menu",
+            ))
+        }
+        "macos" => {
+            let bundles = [apps.join("Claude.app"), home.join("Applications").join("Claude.app")];
+            bundles
+                .iter()
+                .find(|b| b.is_dir())
+                .unwrap_or(&bundles[0])
+                .clone()
+        }
+        _ => PathBuf::from("claude-desktop"),
+    };
+    Ok(json!({
+        "client": "Claude Desktop",
+        "kind": "direct",
+        "program": program,
+        "args": [],
+        "cwd": home,
+    }))
+}
+
 impl Handler for ClaudeDesktop {
     fn call(&self, call: &Call) -> Result<Value, Error> {
         let input = &call.input;
@@ -165,10 +249,7 @@ impl Handler for ClaudeDesktop {
                 if library.is_dir() {
                     return Ok(json!({"created": false, "folder": library}));
                 }
-                std::fs::DirBuilder::new()
-                    .recursive(true)
-                    .mode(0o700)
-                    .create(&library)
+                make_library(&library)
                     .map_err(|e| Error::unavailable(format!("{}: {e}", library.display())))?;
                 Ok(json!({"created": true, "folder": library}))
             }
@@ -204,15 +285,7 @@ impl Handler for ClaudeDesktop {
                 &mut |_| {},
             ),
             "status" => Transactions::new(call, data_dir()?).status(),
-            // Claude Desktop's own command, with no arguments, in the home folder: what it needs
-            // is in its files (the old app's launch).
-            "recipe" => Ok(json!({
-                "client": "Claude Desktop",
-                "kind": "direct",
-                "program": "claude-desktop",
-                "args": [],
-                "cwd": home()?,
-            })),
+            "recipe" => recipe(std::env::consts::OS, &home()?, Path::new("/Applications")),
             op => Err(Error::unsupported(format!("no operation {op}"))),
         }
     }

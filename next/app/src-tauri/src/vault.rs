@@ -25,6 +25,7 @@
 //! again with the same outcome is answered the same: delivery of an open journal may repeat.
 //! Package removal keeps its vault folder: backups stay until they are removed explicitly.
 
+use crate::environments::Instance;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -241,7 +242,8 @@ fn check_name(name: &str) -> Result<(), String> {
 }
 
 /// Whether name is one Windows paths cannot name plainly (see `check_name`); the app's update
-/// refuses such names in a Windows program set too (`updater/set.rs`).
+/// refuses such names in a Windows program set too (`updater/set.rs`), and the core store's
+/// unpacking refuses them too (`cores.rs`).
 pub(crate) fn windows_refuses(name: &str) -> bool {
     windows_device(name)
         || name.ends_with(['.', ' '])
@@ -372,6 +374,10 @@ impl Folder {
             f.set_permissions(fs::Permissions::from_mode(0o700))
                 .map_err(|e| format!("{what}: {e}"))?;
         }
+        // macOS: an extended access list is the mode's twin, so it is emptied too, and nothing
+        // made in the folder inherits an entry (`private_macos.rs`).
+        #[cfg(target_os = "macos")]
+        crate::private_macos::clear_entries(&f).map_err(|e| format!("{what}: {e}"))?;
         Ok(Folder(f))
     }
 
@@ -461,7 +467,14 @@ impl Folder {
         }
         let mut f = unsafe { fs::File::from_raw_fd(fd) };
         let m = f.metadata().map_err(|e| e.to_string())?;
-        if !m.is_file() || m.uid() != unsafe { libc::geteuid() } || m.mode() & 0o077 != 0 {
+        // macOS: a file with any extended access list entry is refused as one too open by its
+        // mode is (`private_macos.rs`).
+        #[cfg(target_os = "macos")]
+        let listed = crate::private_macos::has_entries(&f).map_err(|e| format!("{name}: {e}"))?;
+        #[cfg(not(target_os = "macos"))]
+        let listed = false;
+        if !m.is_file() || m.uid() != unsafe { libc::geteuid() } || m.mode() & 0o077 != 0 || listed
+        {
             return Err(format!(
                 "{name} must be a file of this user's that no one else may read"
             ));
@@ -877,35 +890,40 @@ impl Vault {
         out
     }
 
-    /// Package id's folder's name, under `packages`.
-    fn package_name(id: &str) -> String {
-        Sha256::digest(id.as_bytes())
+    /// The folder name, under `packages`, of package id in the environment whose suffix is
+    /// `environments::Instance::vault_suffix` (empty on this computer): the ID's SHA-256 in hex,
+    /// then the suffix. Each instance of a package has its own records.
+    fn package_name(id: &str, suffix: &str) -> String {
+        let hex: String = Sha256::digest(id.as_bytes())
             .iter()
             .map(|b| format!("{b:02x}"))
-            .collect()
+            .collect();
+        format!("{hex}{suffix}")
     }
 
-    /// Package id's folder, made when create is set; None when it is missing.
-    fn package(&self, id: &str, create: bool) -> Result<Option<Folder>, String> {
+    /// The folder of package id in the environment with suffix, made when create is set; None
+    /// when it is missing.
+    fn package(&self, id: &str, suffix: &str, create: bool) -> Result<Option<Folder>, String> {
         let Some(root) = Folder::root(&self.dir, create)? else {
             return Ok(None);
         };
         let Some(packages) = root.folder("packages", create)? else {
             return Ok(None);
         };
-        packages.folder(&Vault::package_name(id), create)
+        packages.folder(&Vault::package_name(id, suffix), create)
     }
 
-    /// Package id's records and its folder, if it has one. Files there its records do not name
-    /// (a backup whose record was never saved or whose removal failed, a write cut short) are
-    /// removed: nothing in the vault is out of every API's reach.
-    fn load(&self, id: &str) -> Result<(Option<Folder>, PackageFile), String> {
+    /// The records of package id in the environment with suffix, and its folder, if it has one.
+    /// Files there its records do not name (a backup whose record was never saved or whose
+    /// removal failed, a write cut short) are removed: nothing in the vault is out of every API's
+    /// reach.
+    fn load(&self, id: &str, suffix: &str) -> Result<(Option<Folder>, PackageFile), String> {
         let empty = || PackageFile {
             version: VERSION,
             id: id.into(),
             ..Default::default()
         };
-        let Some(dir) = self.package(id, false)? else {
+        let Some(dir) = self.package(id, suffix, false)? else {
             return Ok((None, empty()));
         };
         let f = match dir.read("index.json")? {
@@ -934,11 +952,11 @@ impl Vault {
         )
     }
 
-    /// Package id's open journals, as describe names them; an error when its records cannot be
+    /// Instance's open journals, as describe names them; an error when its records cannot be
     /// read, so the start fails rather than miss one.
-    pub fn open_journals(&self, id: &str) -> Result<Vec<Value>, String> {
+    pub fn open_journals(&self, instance: &Instance) -> Result<Vec<Value>, String> {
         let _st = self.lock();
-        let (_, f) = self.load(id)?;
+        let (_, f) = self.load(&instance.package, &instance.vault_suffix())?;
         Ok(f.journals
             .iter()
             .filter(|j| j.outcome.is_none())
@@ -949,10 +967,15 @@ impl Vault {
             .collect())
     }
 
-    /// Package id's journals, open and recently ended, for its status.
+    /// Package id's journals on this computer, open and recently ended, for its status.
     pub fn journals(&self, id: &str) -> Result<Vec<JournalView>, String> {
+        self.journals_in(&Instance::local(id))
+    }
+
+    /// `journals`, of instance.
+    pub fn journals_in(&self, instance: &Instance) -> Result<Vec<JournalView>, String> {
         let _st = self.lock();
-        let (_, f) = self.load(id)?;
+        let (_, f) = self.load(&instance.package, &instance.vault_suffix())?;
         Ok(f.journals
             .iter()
             .map(|j| JournalView {
@@ -978,6 +1001,19 @@ impl Vault {
         describing: Option<&[String]>,
         req: &Value,
     ) -> Result<Value, Refused> {
+        self.request_in(tool, "", op, describing, req)
+    }
+
+    /// `request`, of tool running in the environment whose vault suffix is suffix
+    /// (`environments::Instance::vault_suffix`): its records are that instance's.
+    pub fn request_in(
+        &self,
+        tool: &Holder,
+        suffix: &str,
+        op: &str,
+        describing: Option<&[String]>,
+        req: &Value,
+    ) -> Result<Value, Refused> {
         let bad = |m: &str| refused("invalid_request", m);
         let id_of = |prefix: &str, field: &str| -> Result<String, Refused> {
             req[field]
@@ -995,7 +1031,7 @@ impl Vault {
         // Text a tool keeps in the vault never holds a secret or a reference: a later release,
         // never given it, would be told of the text in describe.
         let holds_secret = |v: &Value| Vault::holds_secret(&st, v);
-        let (dir, mut f) = self.load(&tool.id).map_err(unavailable)?;
+        let (dir, mut f) = self.load(&tool.id, suffix).map_err(unavailable)?;
         let kind = req["op"].as_str().unwrap_or_default();
         if describing.is_some()
             && !matches!(
@@ -1010,7 +1046,7 @@ impl Vault {
         }
         // Its folder, made for a write; a read of a package with none finds nothing.
         let made = || -> Result<Folder, Refused> {
-            self.package(&tool.id, true)
+            self.package(&tool.id, suffix, true)
                 .map_err(unavailable)?
                 .ok_or_else(|| unavailable(format!("{}'s vault folder", tool.id)))
         };
@@ -1185,8 +1221,8 @@ impl Vault {
 /// The vault as the program host reaches it.
 #[cfg(native_stack)]
 impl crate::program::Private for Vault {
-    fn journals(&self, id: &str) -> Result<Vec<Value>, String> {
-        self.open_journals(id)
+    fn journals(&self, instance: &Instance) -> Result<Vec<Value>, String> {
+        self.open_journals(instance)
     }
 
     #[cfg(feature = "native-test")]
@@ -1201,6 +1237,7 @@ impl crate::program::Private for Vault {
     fn frame(
         &self,
         tool: &crate::program::Hop,
+        instance: &Instance,
         op: &str,
         describing: Option<&[String]>,
         request: &Value,
@@ -1222,7 +1259,14 @@ impl crate::program::Private for Vault {
             sha256: sha256.clone(),
             generation: *generation,
         };
-        self.request(&holder, op, describing, request)
+        if instance.package != *id {
+            return Err(crate::program::CallError {
+                code: "permission".into(),
+                message: format!("{id}'s vault is its own, not {}'s", instance.package),
+                unknown: false,
+            });
+        }
+        self.request_in(&holder, &instance.vault_suffix(), op, describing, request)
             .map_err(|e| crate::program::CallError {
                 code: e.code.into(),
                 message: e.message,

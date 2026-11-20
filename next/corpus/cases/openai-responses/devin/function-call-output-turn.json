@@ -440,7 +440,7 @@
             "1": "chisel",
             "12": "chisel",
             "2": "3000.10.21",
-            "3": "sk-corpus-upstream",
+            "3": "sk-Cq7Vx2Np9Lw4Zr8",
             "31": "(volatile)",
             "4": "en",
             "5": "linux",
@@ -501,7 +501,7 @@
         },
         "headers": {
           "Accept": "*/*",
-          "Authorization": "Basic sk-corpus-upstream-sk-corpus-upstream",
+          "Authorization": "Basic sk-Cq7Vx2Np9Lw4Zr8-sk-Cq7Vx2Np9Lw4Zr8",
           "Connect-Protocol-Version": "1",
           "Content-Type": "application/connect+proto",
           "Sentry-Trace": "(volatile)"

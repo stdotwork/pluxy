@@ -142,7 +142,8 @@ struct State {
     buttons: Vec<(Id, Retained<NSButton>)>,
     check: Option<Retained<NSButton>>,
     secret: Option<Retained<NSSecureTextField>>,
-    /// Every text shown, for the native test (only there: one is the rotated key).
+    /// Every text shown, check box and button titles included, for the native test (only there:
+    /// one is the rotated key).
     #[cfg(feature = "native-test")]
     texts: Vec<String>,
     timers: Vec<Retained<NSTimer>>,
@@ -314,6 +315,8 @@ pub(crate) fn show(
         };
         b.setFrame(NSRect::new(NSPoint::new(MARGIN, y), NSSize::new(inner, h)));
         parts.push((Retained::into_super(Retained::into_super(b.clone())), false));
+        #[cfg(feature = "native-test")]
+        texts.push(crate::confirmation::text::plain(c));
         state_check = Some(b);
         y += h + GAP;
     }
@@ -349,6 +352,8 @@ pub(crate) fn show(
                 NSRect::new(NSPoint::new(0.0, ry), NSSize::new(240.0, 32.0)),
             );
             doc.addSubview(&b);
+            #[cfg(feature = "native-test")]
+            texts.push(crate::confirmation::text::plain(title));
             buttons.push((*id, b));
             ry += 32.0 + GAP;
         }
@@ -375,6 +380,8 @@ pub(crate) fn show(
             b.setEnabled(false);
         }
         parts.push((Retained::into_super(Retained::into_super(b.clone())), false));
+        #[cfg(feature = "native-test")]
+        texts.push(crate::confirmation::text::plain(title));
         buttons.push((*id, b));
         x += bw + 8.0;
     }
@@ -822,6 +829,24 @@ pub(crate) mod inspect {
         // sender, which `pluxyPress:` takes as the `NSButton` it is; the check box has no action.
         unsafe { view.performClick(None) };
         Some("performClick")
+    }
+
+    /// Whether the control of dialog d with access key c (GTK form) is enabled; None when no
+    /// control has that key.
+    pub(crate) fn access_enabled(serial: u64, c: char) -> Option<bool> {
+        let (_, id) = access_keys(serial)
+            .into_iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(&c))?;
+        let st = get(serial)?;
+        let s = st.borrow();
+        match id {
+            Some(id) => s
+                .buttons
+                .iter()
+                .find(|b| b.0 == id)
+                .map(|b| b.1.isEnabled()),
+            None => s.check.as_ref().map(|c| c.isEnabled()),
+        }
     }
 
     /// The access keys (GTK form) of dialog d's buttons and check box: (key, button id or None

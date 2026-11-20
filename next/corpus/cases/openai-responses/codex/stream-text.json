@@ -199,6 +199,12 @@
   ],
   "exceptions": [
     {
+      "path": "upstream[0].body.metadata",
+      "kind": "intended",
+      "reason": "Codex's own request has no metadata field, so the new core's Codex extension does not send the client's metadata; today's core sends it on.",
+      "absent": true
+    },
+    {
       "path": "upstream[*].headers.Accept-Encoding",
       "kind": "intended",
       "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
@@ -440,7 +446,7 @@
         "headers": {
           "Accept": "text/event-stream",
           "Accept-Encoding": "gzip, deflate, br, zstd",
-          "Authorization": "Bearer sk-corpus-upstream",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
           "Content-Type": "application/json",
           "Originator": "codex-tui",
           "Session-Id": "f674c4c7-551b-57dd-ab73-9724cff0fe39",

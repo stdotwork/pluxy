@@ -57,9 +57,8 @@ func upstreamEvent(raw json.RawMessage) string {
 }
 
 // stopReason returns the stop reason to write: the upstream's own when it came from Messages,
-// otherwise the Messages value for the model's finish reason, as today's core maps them (a
-// content filter stop becomes end_turn). hasToolCalls makes a plain stop with tool calls in the
-// reply tool_use.
+// otherwise the Messages value for the model's finish reason (a content filter stop becomes
+// refusal). hasToolCalls makes a plain stop with tool calls in the reply tool_use.
 func stopReason(f *llm.Finish, upFormat string, hasToolCalls bool) string {
 	if f == nil {
 		return "end_turn"
@@ -72,6 +71,8 @@ func stopReason(f *llm.Finish, upFormat string, hasToolCalls bool) string {
 		return "max_tokens"
 	case llm.FinishToolCalls:
 		return "tool_use"
+	case llm.FinishContentFilter:
+		return "refusal"
 	case llm.FinishStop:
 		if hasToolCalls {
 			return "tool_use"
@@ -111,7 +112,8 @@ func encodeUsage(u *llm.Usage) obj {
 }
 
 // usageLosses lists the usage fields of a reply from another format that Messages usage has no
-// place for, nested detail fields included. Token totals and cached input tokens are carried.
+// place for, nested detail fields included. Token totals, cached input tokens and cache-write
+// input tokens are carried.
 func usageLosses(u *llm.Usage, upFormat string) []string {
 	if u == nil || upFormat == format || len(u.Raw) == 0 {
 		return nil
@@ -124,7 +126,7 @@ func usageLosses(u *llm.Usage, upFormat string) []string {
 		case "prompt_tokens_details", "input_tokens_details", "completion_tokens_details", "output_tokens_details":
 			if d := rawjson.Object(v); d != nil {
 				for dk, dv := range d {
-					carried := dk == "cached_tokens" && (k == "prompt_tokens_details" || k == "input_tokens_details") ||
+					carried := (dk == "cached_tokens" || dk == "cache_write_tokens" && u.CacheWriteInputTokens != nil) && (k == "prompt_tokens_details" || k == "input_tokens_details") ||
 						dk == "reasoning_tokens" && u.ReasoningTokens != nil && (k == "completion_tokens_details" || k == "output_tokens_details")
 					if carried || string(dv) == "0" || string(dv) == "null" {
 						continue
@@ -789,7 +791,7 @@ func status(e *llm.Error) int {
 		return http.StatusBadRequest
 	case llm.CodeAuth:
 		return http.StatusUnauthorized
-	case llm.CodePermission:
+	case llm.CodePermission, llm.CodeAccountClosed:
 		return http.StatusForbidden
 	case llm.CodeNotFound:
 		return http.StatusNotFound

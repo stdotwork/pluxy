@@ -1,10 +1,9 @@
 name: Next app tools platforms
 
 # Builds, lints and unit-tests the app tools (next/app-tools, the native programs the desktop app
-# runs on demand) on Windows and macOS. Linux runs them in next-app.yml. The claude-desktop,
-# opencode, omp-setup, grok-setup, hermes-setup and pi-setup writer tools are not ported yet and
-# are left out here. The wsl job runs pluxy/wsl and the Linux side of a WSL instance against real
-# WSL distributions.
+# runs on demand) on Windows and macOS: the whole workspace. Linux runs them in next-app.yml. The
+# wsl job runs pluxy/wsl, the Linux side of a WSL instance and the desktop app's program host and
+# spawn service against real WSL distributions.
 
 on:
   # Pull requests and merge-queue groups run this through ci.yml, which runs it only when
@@ -37,10 +36,6 @@ defaults:
     shell: bash
     working-directory: next/app-tools
 
-env:
-  # The writer tools not ported to Windows and macOS yet, Linux only for now.
-  NOT_PORTED: --exclude claude-desktop --exclude opencode --exclude omp-setup --exclude grok-setup --exclude hermes-setup --exclude pi-setup
-
 jobs:
   tools:
     name: app tools (${{ matrix.os }})
@@ -69,9 +64,11 @@ jobs:
         with:
           workspaces: next/app-tools -> target
           key: ${{ matrix.os }}
-          save-if: ${{ runner.environment == 'github-hosted' }}
+          # Saved from main only: a cache saved on a PR or merge-group ref is usable only there, and
+          # those filled the repo's 10 GB and evicted main's, which every run restores.
+          save-if: ${{ runner.environment == 'github-hosted' && github.ref == 'refs/heads/main' }}
       - name: Clippy
-        run: cargo clippy --locked --workspace $NOT_PORTED --all-targets -- -D warnings
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
       # Unit tests with an empty temporary home, so no test can reach the runner's own.
       - name: Tests
         run: |
@@ -87,7 +84,7 @@ jobs:
           fi
           status=0
           # --show-output prints what passing tests said, so a test's own skip line is seen.
-          cargo test --locked --no-fail-fast --workspace $NOT_PORTED -- --show-output 2>&1 | tee "$RUNNER_TEMP/cargo-test.log" || status=$?
+          cargo test --locked --no-fail-fast --workspace -- --show-output 2>&1 | tee "$RUNNER_TEMP/cargo-test.log" || status=$?
           # Record the counts, with the tests that skipped a part this account may not do (such as
           # making a symbolic link), and refuse a run that ran nothing.
           awk '/^test result:/ { p += $4; f += $6; i += $8 } /^skipped: / { s++ } END {
@@ -141,6 +138,9 @@ jobs:
         with:
           workspaces: next/app-tools -> target
           key: wsl
+          # Saved from main only: a cache saved on a PR or merge-group ref is usable only there, and
+          # those filled the repo's 10 GB and evicted main's, which every run restores.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build the Windows tests and the Linux programs
         run: |
           cargo test --locked -p wsl --test real_wsl --no-run
@@ -357,4 +357,40 @@ jobs:
             printf "pluxy/wsl real-WSL tests: passed %d, failed %d, ignored %d\n", p, f, i
             if (p != 5 || f != 0 || i != 0) exit 1
           }' "$RUNNER_TEMP/real-wsl.log" | tee -a "$GITHUB_STEP_SUMMARY" || status=1
+          exit "$status"
+      # The desktop app's program host and spawn service against the distribution
+      # (next/app/src-tauri/src/wsl_real_tests.rs): pluxy/claude-code's Linux build as a WSL
+      # instance for bob, its Windows build as the local instance, and a managed launch through
+      # wsl.exe. The app crate embeds its built window, as in next-app-platforms.yml.
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.3'
+      - name: Build the app's window
+        working-directory: next/app
+        run: |
+          (cd ../ui && bun install --frozen-lockfile)
+          bun install --frozen-lockfile
+          bun run build
+      - name: Build claude-code for Linux and Windows, and the host's tests
+        run: |
+          cargo build --locked --target x86_64-unknown-linux-musl -p claude-code
+          cargo build --locked -p claude-code
+          mkdir -p /c/pluxy-wsl/claude-code
+          cp target/x86_64-unknown-linux-musl/debug/claude-code target/debug/claude-code.exe /c/pluxy-wsl/claude-code/
+          cd ../app/src-tauri
+          cargo test --locked --lib --no-run
+      - name: Host tests against the distribution
+        working-directory: next/app/src-tauri
+        env:
+          PLUXY_WSL_TEST_CLAUDE_CODE: 'C:\pluxy-wsl\claude-code\claude-code'
+          PLUXY_WSL_TEST_CLAUDE_CODE_WINDOWS: 'C:\pluxy-wsl\claude-code\claude-code.exe'
+        run: |
+          status=0
+          cargo test --locked --lib -- --ignored wsl_real_ --test-threads=1 2>&1 | tee "$RUNNER_TEMP/host-wsl.log" || status=$?
+          # Five tests, each run and passed: none may be skipped or missing.
+          awk '/^test result:/ { p += $4; f += $6; i += $8 } END {
+            printf "host real-WSL tests: passed %d, failed %d, ignored %d\n", p, f, i
+            if (p != 5 || f != 0 || i != 0) exit 1
+          }' "$RUNNER_TEMP/host-wsl.log" | tee -a "$GITHUB_STEP_SUMMARY" || status=1
           exit "$status"

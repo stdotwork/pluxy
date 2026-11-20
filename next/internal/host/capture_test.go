@@ -225,3 +225,132 @@ func TestCaptureHoldsNoSettingsSecret(t *testing.T) {
 		t.Errorf("the capture holds the settings secret, or not each place it was in redacted:\n%s", b)
 	}
 }
+
+// captureStop sends one GET to its settings' base_url with the path /<mode> and reads the
+// response body as mode says: "cut" reads its first MiB, as extensions read an error body; "stop"
+// reads its first settings.read bytes and closes it; "error" and "whole" read it to its end,
+// which for "error" is a broken connection. It fails the call, but for "whole", which finishes
+// it: a failed call's capture also loses every piece of the account's secrets (pieces), which
+// would hide what "whole" checks.
+func captureStop() {
+	err := sdk.Serve(sdk.Extension{
+		ID:      "hosttest/capture-stop",
+		Version: "0.0.0",
+		Generate: func(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
+			var st struct {
+				BaseURL string `json:"base_url"`
+				Mode    string `json:"mode"`
+				Read    int    `json:"read"`
+			}
+			_ = json.Unmarshal(call.Account.Settings, &st)
+			req, err := http.NewRequestWithContext(ctx, "GET", st.BaseURL+"/"+st.Mode, nil)
+			if err != nil {
+				return err
+			}
+			resp, err := (&http.Client{Transport: sdk.Upstream(&http.Transport{})}).Do(req)
+			if err != nil {
+				return err
+			}
+			switch st.Mode {
+			case "cut":
+				_, _ = io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+			case "stop":
+				_, _ = io.ReadFull(resp.Body, make([]byte, st.Read))
+			default:
+				_, _ = io.ReadAll(resp.Body)
+			}
+			resp.Body.Close()
+			if st.Mode == "whole" {
+				if err := out.Start(llm.ResponseInfo{ID: "r", Model: "m"}); err != nil {
+					return err
+				}
+				return out.Finish(llm.Finish{Reason: llm.FinishStop}, nil)
+			}
+			return &llm.Error{Code: llm.CodeUnavailable, Message: "done"}
+		},
+	})
+	if err != nil {
+		os.Exit(1)
+	}
+}
+
+// A captured response body whose read stopped inside the call's credential keeps no start of it
+// at its end, however the read stopped: at an extension's 1 MiB cut, on a broken connection, or
+// where the extension stopped reading. The redaction cannot recognise a credential's start, so
+// core leaves it out where the read stopped. A body read to its end is kept as it was, even where
+// its last bytes look like the credential's start.
+func TestCaptureStoppedReadKeepsNoCredentialStart(t *testing.T) {
+	const secret = "Zq7-stop-credential-0123456789abcdef"
+	const mark = "MARK Bearer "
+	pad := func(n int) string { return strings.Repeat("x", n) }
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/cut": // the first MiB ends 10 bytes into the credential
+			io.WriteString(w, pad(1<<20-10-len(mark))+mark+secret+pad(1<<20))
+		case "/stop": // the extension reads 5000+len(mark)+10 bytes
+			io.WriteString(w, pad(5000)+mark+secret+pad(5000))
+		case "/error": // the connection breaks 10 bytes into the credential
+			conn, buf, err := w.(http.Hijacker).Hijack()
+			if err != nil {
+				return
+			}
+			body := pad(5000) + mark + secret[:10]
+			fmt.Fprintf(buf, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s", len(body)+5000, body)
+			buf.Flush()
+			conn.Close()
+		case "/whole": // read to its end, which looks like the credential's start
+			io.WriteString(w, pad(5000)+mark+secret[:10])
+		}
+	}))
+	defer up.Close()
+	ext, err := Start(filepath.Join(fakePackage(t, "capture-stop"), ManifestFile), Options{Log: io.Discard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ext.Stop()
+	body := func(mode string, read int) string {
+		t.Helper()
+		var mu sync.Mutex
+		var got []protocol.Diagnostic
+		ctx := WithCapture(context.Background(), func(_ string, d protocol.Diagnostic) {
+			mu.Lock()
+			defer mu.Unlock()
+			got = append(got, d)
+		})
+		settings, _ := json.Marshal(map[string]any{"base_url": up.URL, "mode": mode, "read": read})
+		account := protocol.Account{ID: "a", ProxyURL: "none", Settings: settings,
+			Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: secret}}
+		s := ext.Generate(ctx, account, llm.Request{Model: "m"})
+		for ev := s.Next(); ev.Type != llm.EventError && ev.Type != llm.EventFinish; ev = s.Next() {
+		}
+		s.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		if len(got) != 1 || len(got[0].Upstream) != 1 || got[0].Upstream[0].Response == nil {
+			t.Fatalf("%s: captured %+v, want one exchange with its response", mode, got)
+		}
+		b := got[0].Upstream[0].Response.CapturedBody
+		return b.Body + b.BodyEnd
+	}
+	for _, tc := range []struct {
+		mode string
+		read int
+	}{{"cut", 0}, {"stop", 5000 + len(mark) + 10}, {"error", 0}} {
+		t.Run(tc.mode, func(t *testing.T) {
+			got := body(tc.mode, tc.read)
+			if i := strings.Index(got, secret[:4]); i >= 0 {
+				t.Errorf("the body keeps the credential's start where its read stopped: %q", got[max(0, i-len(mark)):])
+			}
+			// What could be part of the credential goes, and only that: the text before it stays.
+			if !strings.HasSuffix(got, mark) {
+				t.Errorf("the body does not end where the credential's start was: it ends %q, want it to end %q",
+					got[max(0, len(got)-40):], mark)
+			}
+		})
+	}
+	t.Run("whole", func(t *testing.T) {
+		if got, want := body("whole", 0), pad(5000)+mark+secret[:10]; got != want {
+			t.Errorf("a body read to its end was changed: it ends %q, want %q", got[max(0, len(got)-40):], want[len(want)-40:])
+		}
+	})
+}

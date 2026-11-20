@@ -1,4 +1,4 @@
-use crate::{config_of, desktop_in, pinned_read};
+use crate::{app, cli, config_of, desktop_in, pinned_read};
 use pluxy_program::Error;
 use pluxy_transactions::sha256_of;
 use serde_json::{json, Value};
@@ -67,5 +67,67 @@ fn the_desktop_app_is_the_2x_executable_else_the_1x_one() {
     assert_eq!(desktop_in(&d), d.join("ai.opencode.desktop"));
     std::fs::write(d.join("ai.opencode"), "").unwrap();
     assert_eq!(desktop_in(&d), d.join("ai.opencode"));
+    std::fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn the_cli_is_the_install_scripts_copy_where_this_system_runs_it_else_the_one_on_path() {
+    let home = tmp().join("cli");
+    let bin = home.join(".opencode").join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    for os in ["linux", "macos", "windows"] {
+        assert_eq!(cli(os, &home), "opencode", "{os}");
+    }
+    // The install script's copies: opencode, and opencode.exe on Windows (under Git Bash).
+    let (unix, windows) = (bin.join("opencode"), bin.join("opencode.exe"));
+    for p in [&unix, &windows] {
+        std::fs::write(p, "MZ").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+    }
+    // A file without an extension is no program on Windows.
+    let unix_cli = if cfg!(unix) {
+        unix.to_str().unwrap()
+    } else {
+        "opencode"
+    };
+    assert_eq!(cli("linux", &home), unix_cli);
+    assert_eq!(cli("macos", &home), unix_cli);
+    assert_eq!(cli("windows", &home), windows.to_str().unwrap());
+    std::fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
+fn the_desktop_app_is_where_opencodes_installer_puts_it_on_each_system() {
+    let d = tmp().join("app");
+    let (home, apps, local) = (d.join("home"), d.join("Applications"), d.join("local"));
+    std::fs::create_dir_all(&home).unwrap();
+    assert_eq!(
+        app("linux", &home, &apps, None).unwrap(),
+        std::path::Path::new("/opt/OpenCode/ai.opencode")
+    );
+    // macOS: OpenCode.app in the system's applications folder, else the home folder's.
+    assert_eq!(
+        app("macos", &home, &apps, None).unwrap(),
+        apps.join("OpenCode.app")
+    );
+    let own = home.join("Applications").join("OpenCode.app");
+    std::fs::create_dir_all(&own).unwrap();
+    assert_eq!(app("macos", &home, &apps, None).unwrap(), own);
+    // Windows: the per-user install in %LOCALAPPDATA%\Programs, named after the app's ID.
+    assert_eq!(
+        app("windows", &home, &apps, Some(local.clone())).unwrap(),
+        local
+            .join("Programs")
+            .join("ai.opencode.desktop")
+            .join("OpenCode.exe")
+    );
+    for none in [None, Some("Programs".into())] {
+        let e = app("windows", &home, &apps, none).unwrap_err();
+        assert!(e.message.contains("LOCALAPPDATA"), "{e}");
+    }
     std::fs::remove_dir_all(d).unwrap();
 }

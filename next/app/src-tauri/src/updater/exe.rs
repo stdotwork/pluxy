@@ -144,21 +144,35 @@ pub(super) fn local_fixed(path: &Path) -> Result<(), String> {
 /// The folder of the program this process runs from, by the path it has now with every link
 /// resolved: the installed copy, the set.
 pub(super) fn here(_app: &AppHandle) -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let f = fs::File::open(exe).ok()?;
-    let path = crate::owned::windows::final_path(&f).ok()?;
-    path.parent().map(Path::to_path_buf)
+    own_path()?.parent().map(Path::to_path_buf)
 }
 
-/// The app program's name, the set's program part: this process's own (in tests, the fixture's).
+/// This process's program by the path it has now with every link resolved, in the names and case
+/// the disk holds (the launch's spelling may differ: other case, an 8.3 name).
+fn own_path() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let f = fs::File::open(exe).ok()?;
+    crate::owned::windows::final_path(&f).ok()
+}
+
+/// The app program's name, the set's program part: this process's own, as the disk holds it (in
+/// tests, the fixture's), or "" if it cannot be read. Kept from the first call that reads it (as
+/// the app starts, and at the latest as an update stages, before any part moves), so it holds
+/// while the program is renamed aside.
 pub(super) fn program_name() -> String {
     #[cfg(test)]
     return set::tests::EXE.into();
     #[cfg(not(test))]
-    std::env::current_exe()
-        .ok()
-        .and_then(|e| e.file_name().map(|n| n.to_string_lossy().into_owned()))
-        .unwrap_or_default()
+    {
+        static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        if let Some(n) = NAME.get() {
+            return n.clone();
+        }
+        match own_path().and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())) {
+            Some(n) => NAME.get_or_init(|| n).clone(),
+            None => String::new(),
+        }
+    }
 }
 
 /// The set digest of the set in the folder at path.
@@ -614,18 +628,38 @@ pub(super) mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    /// Run just before a staging folder made for the folder set here is removed (its record
-    /// failed, or it was dropped), for that folder only (tests run in parallel).
-    static SWAP: Mutex<Option<Swap>> = Mutex::new(None);
+    /// Run just before a staging folder made in the folder a test set it for is removed (its
+    /// record failed, or it was dropped). Tests run in parallel, so each test's swap is an entry
+    /// of its own (`hook_staging`), which no other test replaces or clears.
+    static SWAP: Mutex<Vec<Swap>> = Mutex::new(Vec::new());
 
     /// The folder a swap is for, and the swap.
     type Swap = (PathBuf, fn(&Path));
 
+    /// The swap one test set (`hook_staging`): dropping it removes that entry only.
+    struct Hooked(PathBuf);
+
+    impl Drop for Hooked {
+        fn drop(&mut self) {
+            SWAP.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .retain(|(folder, _)| *folder != self.0);
+        }
+    }
+
+    /// Sets f to run for a staging folder in folder, until the value returned is dropped.
+    fn hook_staging(folder: &Path, f: fn(&Path)) -> Hooked {
+        SWAP.lock().unwrap().push((folder.to_path_buf(), f));
+        Hooked(folder.to_path_buf())
+    }
+
     pub(super) fn before_removing(path: &Path) {
-        let hook = match &*SWAP.lock().unwrap() {
-            Some((folder, f)) if Some(folder.as_path()) == path.parent() => Some(*f),
-            _ => None,
-        };
+        let hook = SWAP
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(folder, _)| Some(folder.as_path()) == path.parent())
+            .map(|(_, f)| *f);
         if let Some(f) = hook {
             f(path);
         }
@@ -895,6 +929,52 @@ pub(super) mod tests {
         fs::remove_dir_all(&tmp).unwrap();
     }
 
+    // A put-back after a new version did not start that stops part way (the core held past the
+    // wait, once bundled\ is back) keeps a record of its own, kind put-back, which the next start
+    // finishes.
+    #[test]
+    fn a_put_back_that_cannot_finish_keeps_its_record_for_the_next_start() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let tmp = super::super::tests::temp("exe-putback");
+        let dir = tmp.join("updates");
+        let folder = fixture(&tmp, "old");
+        let old = digest(&folder).unwrap();
+        let (staged, p) = ready(&folder, &dir, "new");
+        swap_in(&folder, staged, &dir).unwrap();
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(folder.join(set::CORE))
+            .unwrap();
+        assert!(super::super::restore(&dir, &p).is_err());
+        drop(held);
+        let r: Pending =
+            super::super::read_json(&dir.join("pending.json")).expect("the put-back's record");
+        assert_eq!(r.kind, "put-back");
+        assert_eq!(r.from, p.to);
+        assert_eq!(r.to, p.from);
+        assert!(set::unresolved(&folder, r.moves.as_ref().unwrap()));
+        assert_ne!(
+            digest(&folder).unwrap(),
+            old,
+            "bundled\\ back, the rest not"
+        );
+        // The next start (here the version that did not start) finishes it.
+        let done = set::recover(
+            &Moving::new(&dir),
+            &dir,
+            &r,
+            &folder,
+            EXE,
+            "0.2.0",
+            &folder.join(EXE),
+        );
+        assert_eq!(done, set::Recovery::PutBack);
+        assert_eq!(digest(&folder).unwrap(), old);
+        assert!(!dir.join("pending.json").exists());
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
     // A staging folder dropped (a failed or cancelled install) goes only while it is still the
     // folder made: a folder put at its name first stays whole.
     #[test]
@@ -905,9 +985,9 @@ pub(super) mod tests {
         drop(stage(&folder, payload(&program_bytes("new")), "0.2.0", &dir).unwrap());
         assert_eq!(names(&folder), set_names(), "dropped as made: removed");
         let staged = stage(&folder, payload(&program_bytes("new")), "0.2.0", &dir).unwrap();
-        *SWAP.lock().unwrap() = Some((folder.clone(), swap_folder));
+        let hooked = hook_staging(&folder, swap_folder);
         drop(staged);
-        *SWAP.lock().unwrap() = None;
+        drop(hooked);
         let theirs = names(&folder)
             .into_iter()
             .find(|n| n.starts_with(".pluxy-update-") && !n.ends_with(".ours"))
@@ -935,14 +1015,14 @@ pub(super) mod tests {
         )
         .is_err());
         assert_eq!(names(&folder), set_names());
-        *SWAP.lock().unwrap() = Some((folder.clone(), swap_folder));
+        let hooked = hook_staging(&folder, swap_folder);
         let r = stage(
             &folder,
             payload(&program_bytes("new")),
             "0.2.0",
             &tmp.join("updates"),
         );
-        *SWAP.lock().unwrap() = None;
+        drop(hooked);
         assert!(r.is_err());
         assert_eq!(
             names(&folder).len(),

@@ -31,11 +31,11 @@ fn holder(id: &str, generation: u64) -> Holder {
 fn package_dir(d: &Dir, id: &str) -> PathBuf {
     d.0.join("vault")
         .join("packages")
-        .join(Vault::package_name(id))
+        .join(Vault::package_name(id, ""))
 }
 
-/// Asserts p is private to this user: 0700 (a folder) or 0600 (a file) on Unix; on Windows by
-/// the rule of `private_windows.rs`.
+/// Asserts p is private to this user: 0700 (a folder) or 0600 (a file) on Unix, and on macOS
+/// with no extended access list entry; on Windows by the rule of `private_windows.rs`.
 fn assert_private(p: &Path) {
     #[cfg(unix)]
     {
@@ -43,6 +43,12 @@ fn assert_private(p: &Path) {
         let want = if m.is_dir() { 0o700 } else { 0o600 };
         assert_eq!(m.permissions().mode() & 0o777, want, "{}", p.display());
     }
+    #[cfg(target_os = "macos")]
+    assert!(
+        !crate::private_macos::has_entries(&fs::File::open(p).unwrap()).unwrap(),
+        "{} has an access list entry",
+        p.display()
+    );
     #[cfg(windows)]
     assert!(crate::private_windows::tests::private(p), "{}", p.display());
 }
@@ -181,6 +187,53 @@ fn a_vault_folder_others_may_use_is_made_private_again() {
     let again = Vault::open(root.clone());
     assert_eq!(again.value(&id).as_deref(), Some(KEY));
     assert_private(&root);
+}
+
+/// macOS: a 0600 secrets file that an extended access list lets others read is refused like a
+/// 0644 one, and left as it is.
+#[cfg(target_os = "macos")]
+#[test]
+fn secrets_an_access_list_lets_others_read_are_refused() {
+    let (d, v) = vault();
+    v.add_secret("client key", KEY).unwrap();
+    let file = d.0.join("vault").join("secrets.json");
+    let before = fs::read(&file).unwrap();
+    crate::private_macos::add_entry(&file, "everyone allow read");
+    assert_eq!(
+        fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let refused = Vault::open(d.0.join("vault"));
+    assert!(
+        refused.broken().unwrap().contains("no one else may read"),
+        "{:?}",
+        refused.broken()
+    );
+    assert!(refused.secrets().is_empty());
+    assert_eq!(fs::read(&file).unwrap(), before);
+}
+
+/// macOS: a vault folder whose access list others may use, and would pass on to new files, is
+/// emptied when the vault opens it, as a too-open mode is tightened; what is written after has
+/// no entry.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_vault_folder_with_an_access_list_is_emptied_and_passes_nothing_on() {
+    let (d, v) = vault();
+    let id = v.add_secret("client key", KEY).unwrap();
+    let root = d.0.join("vault");
+    crate::private_macos::add_entry(&root, "everyone allow list,file_inherit,directory_inherit");
+    let again = Vault::open(root.clone());
+    assert_eq!(again.value(&id).as_deref(), Some(KEY));
+    assert_private(&root);
+    // A save checks the folder again: an entry added since the open is emptied before the new
+    // secrets file is made in it, so the file takes none.
+    crate::private_macos::add_entry(&root, "everyone allow list,file_inherit,directory_inherit");
+    again
+        .add_secret("another", "sk-vault-test-other-0123456789")
+        .unwrap();
+    assert_private(&root);
+    assert_private(&root.join("secrets.json"));
 }
 
 #[test]
@@ -442,16 +495,25 @@ fn journals_are_begun_ended_once_and_named_until_then() {
     );
     let j = begin(&v).unwrap()["journal"].as_str().unwrap().to_string();
     // Open: named for describe, and no second one begins.
-    assert_eq!(v.open_journals("pluxy/w").unwrap()[0]["id"], j);
     assert_eq!(
-        v.open_journals("pluxy/w").unwrap()[0]["intent"],
+        v.open_journals(&Instance::local("pluxy/w")).unwrap()[0]["id"],
+        j
+    );
+    assert_eq!(
+        v.open_journals(&Instance::local("pluxy/w")).unwrap()[0]["intent"],
         json!({"file": "/x"})
     );
     assert_eq!(begin(&v).unwrap_err().code, "unavailable");
-    assert!(v.open_journals("pluxy/other").unwrap().is_empty());
+    assert!(v
+        .open_journals(&Instance::local("pluxy/other"))
+        .unwrap()
+        .is_empty());
     // Kept on disk, privately: the app's next run names it too.
     let v = Vault::open(d.0.join("vault"));
-    assert_eq!(v.open_journals("pluxy/w").unwrap().len(), 1);
+    assert_eq!(
+        v.open_journals(&Instance::local("pluxy/w")).unwrap().len(),
+        1
+    );
     let told = [j.clone()];
     let end = |outcome: &str| {
         v.request(
@@ -468,7 +530,10 @@ fn journals_are_begun_ended_once_and_named_until_then() {
     // Again with the same outcome: the same answer, marked; another outcome is refused.
     assert_eq!(end("committed").unwrap()["again"], true);
     assert_eq!(end("rolled_back").unwrap_err().code, "invalid_request");
-    assert!(v.open_journals("pluxy/w").unwrap().is_empty());
+    assert!(v
+        .open_journals(&Instance::local("pluxy/w"))
+        .unwrap()
+        .is_empty());
     let views = v.journals("pluxy/w").unwrap();
     assert_eq!(views.len(), 1);
     assert!(views[0].reconciled && views[0].outcome.as_deref() == Some("committed"));
@@ -531,13 +596,19 @@ fn a_journal_intent_or_backup_label_holding_a_secret_or_reference_is_refused() {
         refused_without_naming(e);
     }
     // Nothing was kept, on disk either.
-    assert!(v.open_journals("pluxy/w").unwrap().is_empty());
+    assert!(v
+        .open_journals(&Instance::local("pluxy/w"))
+        .unwrap()
+        .is_empty());
     let listed = v
         .request(&w, "apply", None, &json!({"op": "backup.list"}))
         .unwrap();
     assert_eq!(listed["backups"], json!([]));
     let again = Vault::open(d.0.join("vault"));
-    assert!(again.open_journals("pluxy/w").unwrap().is_empty());
+    assert!(again
+        .open_journals(&Instance::local("pluxy/w"))
+        .unwrap()
+        .is_empty());
     // Text without either is kept as before.
     v.request(
         &w,
@@ -725,7 +796,10 @@ fn describe_reads_backups_and_ends_only_the_journals_it_was_told_of() {
         )
         .unwrap_err();
     assert_eq!(e.code, "not_found");
-    assert_eq!(v.open_journals("pluxy/w").unwrap().len(), 1);
+    assert_eq!(
+        v.open_journals(&Instance::local("pluxy/w")).unwrap().len(),
+        1
+    );
 }
 
 #[test]
@@ -755,7 +829,10 @@ fn files_the_records_do_not_name_are_removed_and_damaged_records_fail() {
     assert_eq!(left, vec!["index.json".to_string()]);
     // Records that cannot be read are an error, not "no journals".
     plant(&dir.join("index.json"), b"{not json");
-    assert!(v.open_journals("pluxy/w").unwrap_err().contains("damaged"));
+    assert!(v
+        .open_journals(&Instance::local("pluxy/w"))
+        .unwrap_err()
+        .contains("damaged"));
     assert!(v.journals("pluxy/w").is_err());
 }
 
@@ -784,7 +861,7 @@ fn a_vault_folder_replaced_by_a_link_is_refused_not_followed() {
         )
         .unwrap_err();
     assert_eq!(e.code, "unavailable");
-    assert!(v.open_journals("pluxy/w").is_err());
+    assert!(v.open_journals(&Instance::local("pluxy/w")).is_err());
     // Nothing was written through the link.
     let mut there: Vec<String> = fs::read_dir(&elsewhere)
         .unwrap()
@@ -797,4 +874,59 @@ fn a_vault_folder_replaced_by_a_link_is_refused_not_followed() {
     fs::rename(&root, d.0.join("moved")).unwrap();
     link_folder(&d.0.join("moved"), &root);
     assert!(Vault::open(root).broken().is_some());
+}
+
+#[test]
+fn each_instance_of_a_package_has_its_own_records() {
+    let (d, v) = vault();
+    let w = holder("pluxy/w", 1);
+    let local = Instance::local("pluxy/w");
+    let bob = Instance {
+        package: "pluxy/w".into(),
+        environment: crate::environments::Environment::wsl("Ubuntu", "bob").unwrap(),
+    };
+    let alice = Instance {
+        package: "pluxy/w".into(),
+        environment: crate::environments::Environment::wsl("Ubuntu", "alice").unwrap(),
+    };
+    let begin = |suffix: &str| {
+        v.request_in(
+            &w,
+            suffix,
+            "apply",
+            None,
+            &json!({"op": "journal.begin", "intent": {"file": "/x"}}),
+        )
+    };
+    // One open journal per instance: bob's does not stop the local one or alice's.
+    let jb = begin(&bob.vault_suffix()).unwrap()["journal"].clone();
+    assert_eq!(begin(&bob.vault_suffix()).unwrap_err().code, "unavailable");
+    let jl = begin("").unwrap()["journal"].clone();
+    assert!(begin(&alice.vault_suffix()).is_ok());
+    assert_ne!(jb, jl);
+    assert_eq!(v.open_journals(&bob).unwrap()[0]["id"], jb);
+    assert_eq!(v.open_journals(&local).unwrap()[0]["id"], jl);
+    assert_eq!(v.journals_in(&bob).unwrap().len(), 1);
+    // In folders of their own, named by digests only: no distribution or user name on disk.
+    let packages = d.0.join("vault").join("packages");
+    let bob_dir = packages.join(Vault::package_name("pluxy/w", &bob.vault_suffix()));
+    assert!(bob_dir.join("index.json").is_file());
+    assert!(package_dir(&d, "pluxy/w").join("index.json").is_file());
+    for e in fs::read_dir(&packages).unwrap() {
+        let name = e.unwrap().file_name().into_string().unwrap();
+        assert!(!name.contains("Ubuntu") && !name.contains("bob"), "{name}");
+    }
+    assert_eq!(fs::read_dir(&packages).unwrap().count(), 3);
+    // Ending bob's journal leaves the local one open.
+    let told = [jb.as_str().unwrap().to_string()];
+    v.request_in(
+        &w,
+        &bob.vault_suffix(),
+        "",
+        Some(&told),
+        &json!({"op": "journal.end", "journal": jb, "outcome": "committed"}),
+    )
+    .unwrap();
+    assert!(v.open_journals(&bob).unwrap().is_empty());
+    assert_eq!(v.open_journals(&local).unwrap().len(), 1);
 }

@@ -1,6 +1,8 @@
-// The native test on Windows and macOS, on the GitHub-hosted runners of those systems
-// (.github/workflows/next-app-platforms.yml). Run from next/app, after the app is built with the
-// native-test feature (`cargo build --locked --features native-test` in src-tauri):
+// The native test on Windows and macOS, on disposable CI runners of those systems
+// (.github/workflows/next-app-platforms.yml, native/runner.ts). Run from next/app, after the app is built with the
+// native-test feature (`cargo build --locked --features native-test` in src-tauri; for the tools
+// shard with `--features native-test,artifact-test-trust --bin pluxy-app --example
+// program_fixture`, and the execution program built into target/app-tools, see platform-tools.ts):
 //
 //   bun native/platform.ts
 //
@@ -27,7 +29,9 @@
 //   app (normal identifier, no test trust) with it, are refused at the gate;
 // - bundle release gate: the release command (package.ts release) passes a clean release build and
 //   a clean bundle of this system's kind around it, and refuses a bundle holding the test-feature
-//   dev app, the test package renamed and the test package itself.
+//   dev app, the test package renamed and the test package itself;
+// - admission, program, routing, launcher, vault: run.ts's sessions of the same names, for signed
+//   tools, in the app built with artifact-test-trust against a test core (native/platform-tools.ts);
 // - app update (the update shard): the test package, installed from its bundle into a folder of
 //   this user's and connected to a test core (`go run ./e2e/panelcore`), updates itself to its
 //   signed newer version and back,
@@ -53,8 +57,8 @@
 //   removing what it points to.
 //
 // These write what a real run writes: the user's registry or LaunchAgents folder, and on Windows
-// the app's own folder in the user's profile. So it runs only on a GitHub-hosted runner, whose user
-// is thrown away, and removes what it made.
+// the app's own folder in the user's profile. So it runs only on a disposable CI runner
+// (native/runner.ts), whose user is thrown away, and removes what it made.
 //
 // Output: `platform: ...` lines, `platform-problem: ...` for each failed check, and a summary with
 // the counts. A run that checked nothing fails.
@@ -81,6 +85,8 @@ import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { MARKER_FILE, PROFILE_FILE } from "./admission";
 import { Launch, type Step } from "./launch";
+import { TOOL_SESSIONS, toolSession } from "./platform-tools";
+import { DISPOSABLE_RUNNER, onDisposableRunner } from "./runner";
 import { SESSIONS, selectShard } from "./shards";
 import {
   checkSteps,
@@ -109,9 +115,9 @@ if (!windows && !mac) {
   console.error("native test setup failed: this is the Windows and macOS test (the Linux one is run.ts)");
   process.exit(1);
 }
-if (process.env.GITHUB_ACTIONS !== "true" || process.env.RUNNER_ENVIRONMENT !== "github-hosted") {
+if (!onDisposableRunner()) {
   console.error(
-    "native test setup failed: it writes the user's registry or LaunchAgents folder and app folder, so it runs only on a GitHub-hosted runner (GITHUB_ACTIONS=true, RUNNER_ENVIRONMENT=github-hosted)",
+    `native test setup failed: it writes the user's registry or LaunchAgents folder and app folder, so it runs only on ${DISPOSABLE_RUNNER}`,
   );
   process.exit(1);
 }
@@ -131,7 +137,7 @@ if (!existsSync(bin)) {
 const shard = process.env.PLUXY_APP_NATIVE_SHARD || "platform";
 let selected: ReadonlySet<string>;
 try {
-  selected = selectShard(shard);
+  selected = selectShard(shard, undefined, undefined, true);
 } catch (e) {
   console.error(`native test setup failed: ${(e as Error).message}`);
   process.exit(1);
@@ -232,8 +238,9 @@ function webviewHolders(folder: string): string[] {
 }
 
 /** Windows: removes path once the WebView2 processes using webview (the app's WebView2 data
- * folder) have exited, retrying while the folder is busy (EBUSY, EPERM, ENOTEMPTY), for at most
- * FREE_MS. Then it fails, naming what still holds the folder. */
+ * folder) have exited, retrying while the folder is busy (EBUSY, ENOTEMPTY) or access is denied
+ * (EPERM, which a file still open for its deletion also gives), for at most FREE_MS. Then it
+ * fails, naming what still holds the folder or that access was denied. */
 function removeWhenFree(path: string, webview: string) {
   const deadline = Date.now() + FREE_MS;
   let holders: string[] = [];
@@ -248,7 +255,9 @@ function removeWhenFree(path: string, webview: string) {
         if (!["EBUSY", "EPERM", "ENOTEMPTY"].includes(code)) throw e;
         if (Date.now() >= deadline)
           throw new Error(
-            `${path} is still in use ${FREE_MS / 1000} s after the app quit: ${(e as Error).message}`,
+            code === "EPERM"
+              ? `access to ${path} was still denied ${FREE_MS / 1000} s after the app quit, with no WebView2 process holding it: ${(e as Error).message}`
+              : `${path} is still in use ${FREE_MS / 1000} s after the app quit: ${(e as Error).message}`,
           );
       }
     } else if (Date.now() >= deadline) {
@@ -754,15 +763,20 @@ function testPackage(): BundlePackage | undefined {
 }
 
 /** A private folder of this user's for the test trust profile, the app's HOME (its updater gate
- * reads the profile from HOME). macOS: the profile's own home, made owner-only. Windows: a folder
- * under the runner's temporary folder whose access list lets in only this user, SYSTEM and
- * Administrators, and is inherited by the files made in it. */
+ * reads the profile from HOME). macOS: the profile's own home, made owner-only. Windows: a new
+ * private folder (privateFolder). */
 function privateHome(p: Profile): string {
   if (mac) {
     const home = p.env.HOME as string;
     chmodSync(home, 0o700);
     return home;
   }
+  return trustFolder();
+}
+
+/** A new folder under the runner's temporary folder that only this user, SYSTEM and Administrators
+ * may use (Windows; mode 700 elsewhere), inherited by what is made in it. */
+function trustFolder(): string {
   return ownFolder(mkdtempSync(join(process.env.RUNNER_TEMP ?? tmpdir(), "pluxy-trust-")));
 }
 
@@ -1264,9 +1278,12 @@ async function update() {
         `asides when the update was ended: ${asides.join(", ")}`,
       );
       check(existsSync(join(updates, "pending.json")), "the ended update left no pending.json");
+      // Launched by a spelling of its name in other case: the program's name in the set is the
+      // one the disk holds, not the launch's.
+      const spelled = join(installed, exe.toUpperCase());
       const undone = await launchChain({
         label: "parts undone",
-        program,
+        program: spelled,
         env: { ...trusted, PLUXY_APP_TEST_UPDATE_CASE: "parts-undone" },
         ms: LAUNCH_MS,
         check,
@@ -1275,6 +1292,8 @@ async function update() {
       for (const n of undone.names) seen.add(n);
       const u = undone.step("update_parts_undone")[0];
       say(`the start after: ${JSON.stringify(u)}`);
+      if (u?.launched_as !== exe.toUpperCase())
+        skip(`the start after was not launched as ${exe.toUpperCase()} but as ${u?.launched_as}`);
       check(u?.version === V1, `the earlier version did not start on the mixed folder: ${JSON.stringify(u)}`);
       check(
         u?.installed_sha === v1 && pinOf(installed) === v1,
@@ -1883,6 +1902,23 @@ async function main() {
     ["bundle release gate", bundleReleaseGate],
     ["app update", update],
     ["install", install],
+    ...TOOL_SESSIONS.map(
+      (name) =>
+        [
+          name,
+          () =>
+            toolSession(name, {
+              bin,
+              targetDir,
+              identifier,
+              check,
+              say,
+              privateFolder: trustFolder,
+              removeWhenFree,
+              powershell,
+            }),
+        ] as [string, () => Promise<void>],
+    ),
   ];
   for (const [name, body] of sessions) {
     if (!runsSession(name)) continue;

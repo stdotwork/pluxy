@@ -560,8 +560,9 @@ fn install(
     // Checked before the pending record is written, so a refusal leaves none behind.
     provenance(app)?;
     let pending = pending(&dir, "update", from, to.clone(), installed, moves(&staged))?;
-    // The app's own replace of what the plugin just verified: the installed copy is the old one
-    // or the new one (on Windows, see `exe.rs` for the one moment it is neither).
+    // The app's own replace of what the plugin just verified: on Linux and macOS the installed
+    // copy is the old one or the new one; on Windows the set is a mix of the two while its parts
+    // move, which a failure undoes here and a crash at the next start (`set.rs`).
     if let Err(e) = format::swap_in(installed, staged, &dir) {
         failed(&dir, &pending);
         return Err(format!("The update could not be installed: {e}"));
@@ -608,7 +609,7 @@ fn pending(
 /// a new one would lose: another install's (two installs of one identifier share the updates
 /// folder; theirs is left alone), or one of this install's with parts still aside. Checked with
 /// the installation (`exe::provenance`), before any download, and again as the record is written.
-#[cfg(windows)]
+#[cfg_attr(not(windows), allow(dead_code))]
 fn open_record(dir: &Path, installed: &Path) -> Result<(), String> {
     let Some(p) = read_json::<Pending>(&dir.join("pending.json")) else {
         return Ok(());
@@ -879,18 +880,30 @@ fn supervise(app: &AppHandle, r: &Restart) {
             ),
             true,
         ),
-        Err(e) => (
-            format!(
-                "{} did not start ({why}), and {} could not be put back: {e}. Nothing was started: \
-                 copy {} to {} to run {} again.",
-                p.to.version,
-                p.from.version,
-                kept_path(&r.dir, &p.from).display(),
-                p.installed.display(),
-                p.from.version
-            ),
-            false,
-        ),
+        Err(e) => {
+            let kept = kept_path(&r.dir, &p.from);
+            // On Windows the kept copy is a folder holding the set's three parts, copied each
+            // into the program's folder.
+            #[cfg(windows)]
+            let how = format!(
+                "copy {}, {} and {} from {} into {}",
+                set::BUNDLED,
+                set::CORE,
+                exe::program_name(),
+                kept.display(),
+                p.installed.display()
+            );
+            #[cfg(not(windows))]
+            let how = format!("copy {} to {}", kept.display(), p.installed.display());
+            (
+                format!(
+                    "{} did not start ({why}), and {} could not be put back: {e}. Nothing was \
+                     started: {how} to run {} again.",
+                    p.to.version, p.from.version, p.from.version
+                ),
+                false,
+            )
+        }
     };
     let _ = write_json(
         &r.dir.join("last.json"),
@@ -1000,7 +1013,11 @@ pub fn accept(app: &AppHandle) {
     {
         std::thread::spawn(move || {
             let _ = fs::write(d.join("gap"), std::process::id().to_string());
-            eprintln!("native-test: update_gap {{\"pid\":{}}}", std::process::id());
+            eprintln!(
+                "native-test: update_gap {{\"pid\":{},\"run\":\"{}\"}}",
+                std::process::id(),
+                crate::update_native::run_id()
+            );
             let until = Instant::now() + Duration::from_secs(60);
             while d.join("hold-gap").exists() && Instant::now() < until {
                 std::thread::sleep(Duration::from_millis(100));
@@ -1035,10 +1052,19 @@ fn recover(app: &AppHandle) {
         &running,
         &here.join(&exe),
     );
-    let not_started = |why: String| {
-        let _ = app.state::<App>().updater.started_from.set(Err(why));
-    };
-    let last = |detail: String| {
+    if let set::Recovery::Undone | set::Recovery::Left(_) = &r {
+        eprintln!(
+            "pluxy-app: the {} to {} stopped part way and {}",
+            p.kind,
+            p.to.version,
+            match &r {
+                set::Recovery::Left(why) => format!("is left as it is: {why}"),
+                _ => "was undone".into(),
+            }
+        );
+    }
+    let (last, not_started) = recovered(&r, &p, &running, &here);
+    if let Some(detail) = last {
         let _ = write_json(
             &dir.join("last.json"),
             &Last {
@@ -1046,43 +1072,50 @@ fn recover(app: &AppHandle) {
                 detail,
             },
         );
-    };
+    }
+    if let Some(why) = not_started {
+        let _ = app.state::<App>().updater.started_from.set(Err(why));
+    }
+}
+
+/// What a start says after `set::recover` (r, for the pending install p, running version
+/// running, in the folder here): what `last.json` then records, and why this version takes no
+/// start digest (and so installs nothing until a restart), if so.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn recovered(
+    r: &set::Recovery,
+    p: &Pending,
+    running: &str,
+    here: &Path,
+) -> (Option<String>, Option<String>) {
     match r {
-        set::Recovery::Nothing => {}
-        set::Recovery::Undone => eprintln!(
-            "pluxy-app: the {} to {} stopped part way and was undone",
-            p.kind, p.to.version
-        ),
-        set::Recovery::PutBack => {
-            last(format!(
+        set::Recovery::Nothing | set::Recovery::Undone => (None, None),
+        set::Recovery::PutBack => (
+            Some(format!(
                 "{} did not start, and {} was put back.",
                 p.from.version, p.to.version
-            ));
-            if running != p.to.version {
-                not_started(format!(
+            )),
+            (running != p.to.version).then(|| {
+                format!(
                     "version {} was put back in place of this one ({running}); restart the app \
                      to run it",
                     p.to.version
-                ));
-            }
-        }
-        set::Recovery::Left(why) => {
-            eprintln!(
-                "pluxy-app: the {} to {} stopped part way and is left as it is: {why}",
-                p.kind, p.to.version
-            );
-            last(format!(
+                )
+            }),
+        ),
+        set::Recovery::Left(why) => (
+            Some(format!(
                 "The {} to {} stopped part way and could not be finished: {why}. Its parts are \
                  still aside in {}; the app's README says how to put them back.",
                 p.kind,
                 p.to.version,
                 here.display()
-            ));
-            not_started(format!(
+            )),
+            Some(format!(
                 "an earlier {} stopped part way and is not finished ({why})",
                 p.kind
-            ));
-        }
+            )),
+        ),
     }
 }
 
@@ -1205,6 +1238,7 @@ fn confirm_rollback(
         native_tool: false,
         files: vec![],
         launch: None,
+        environment: None,
     };
     let id = {
         let mut c = st.confirmations.lock().unwrap();

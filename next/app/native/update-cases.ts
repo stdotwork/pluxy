@@ -525,6 +525,55 @@ export function alive(pid: number): boolean {
   }
 }
 
+/** When process `pid` started, as text that differs between two processes that had the same id
+ * one after the other: the kernel's start tick on Linux (`/proc/<pid>/stat`), `ps`'s start time on
+ * macOS, the start time PowerShell reads on Windows. `undefined` when it cannot be read (the
+ * process is gone, or the system's tool failed). */
+export function startOf(pid: number, platform: NodeJS.Platform = process.platform): string | undefined {
+  try {
+    if (platform === "linux") {
+      // Field 22 of the stat line; the command (field 2) may hold spaces and brackets, so count
+      // from the last ")": what follows starts at field 3.
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] || undefined;
+    }
+    const r =
+      platform === "darwin"
+        ? spawnSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: 20_000 })
+        : platform === "win32"
+          ? spawnSync(
+              "powershell.exe",
+              [
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`,
+              ],
+              { encoding: "utf8", timeout: 20_000 },
+            )
+          : undefined;
+    const text = r?.status === 0 ? r.stdout.trim() : "";
+    return text || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether the process that was `pid` and started at `started` (`startOf`, read while it was known
+ * to run) still runs. An id given to a later process does not count: it started at another time.
+ * Without a start time (`started` unread) or while it cannot be read again, the id alone says. */
+export function stillRuns(
+  pid: number,
+  started: string | undefined,
+  isAlive: (pid: number) => boolean = alive,
+  now: (pid: number) => string | undefined = startOf,
+): boolean {
+  if (!isAlive(pid)) return false;
+  if (started === undefined) return true;
+  const at = now(pid);
+  return at === undefined || at === started;
+}
+
 /** A launch of program on the same profile while the running version holds its acceptance open:
  * as a second launch, it hands over to the running app and exits. It runs as an `instances` app
  * (native_test.rs) would, so one that wrongly came up as an app of its own says `up` and waits;
@@ -576,6 +625,24 @@ export interface Route {
   onStage?: (stage: string, v: Step) => void;
 }
 
+/** Whether the stage reports come from as many different processes. A process id is reused (on
+ * Windows a later stage can get an earlier stage's), so each report carries a value its process made
+ * once, at its start (`run`): two reports with the same one come from the same process. */
+export function stagesAreProcesses(stages: Step[]): boolean {
+  const runs = stages.map((s) => s.run);
+  return (
+    stages.every((s) => typeof s.pid === "number") &&
+    runs.every((r) => typeof r === "string" && r !== "") &&
+    new Set(runs).size === runs.length
+  );
+}
+
+/** Whether two reports come from the same process: both carry the same start value (`run`), which
+ * the process id, reused by later processes, cannot say. */
+export function sameProcess(a: Step | undefined, b: Step | undefined): boolean {
+  return typeof a?.run === "string" && a.run !== "" && a.run === b?.run;
+}
+
 /** The update route (see the top of this file), and its checks. Returns the steps it saw. */
 export async function updateRoute(o: Route): Promise<Set<string>> {
   const { check, say } = o;
@@ -584,6 +651,7 @@ export async function updateRoute(o: Route): Promise<Set<string>> {
   // The installed copy's pin, read here when each stage reported.
   const pins: Record<string, string> = {};
   const pids: Record<string, number> = {};
+  let refusedStart: string | undefined;
   let earlierEnded: boolean | undefined;
   let third: Awaited<ReturnType<typeof thirdLaunch>> | undefined;
   const onStep = async (name: string, v: Step) => {
@@ -596,11 +664,15 @@ export async function updateRoute(o: Route): Promise<Set<string>> {
       }
       pids[stage] = Number(v.pid);
       o.onStage?.(stage, v);
+      // Read while it runs: a process id is reused, so the wait below also compares this.
+      if (stage === "refused") refusedStart = startOf(pids.refused as number);
       // The version that installed the update ends once the new one has accepted itself.
       if (stage === "updated" && pids.refused) {
+        if (refusedStart === undefined)
+          say(`start time of the refused version's process ${pids.refused} unread: waiting on its id alone`);
         const until = Date.now() + 30_000;
-        while (alive(pids.refused) && Date.now() < until) await Bun.sleep(200);
-        earlierEnded = !alive(pids.refused);
+        while (stillRuns(pids.refused, refusedStart) && Date.now() < until) await Bun.sleep(200);
+        earlierEnded = !stillRuns(pids.refused, refusedStart);
       }
     }
     if (name === "update_gap_hidden") {
@@ -649,10 +721,9 @@ export async function updateRoute(o: Route): Promise<Set<string>> {
       `${name}: next to the installed copy: ${JSON.stringify(beside)}, not only ${own.join(", ")}`,
     );
   }
-  const allPids = stages.map((s) => s.pid);
   check(
-    new Set(allPids).size === allPids.length && allPids.every((p) => typeof p === "number"),
-    `each stage is not a process of its own: ${JSON.stringify(allPids)}`,
+    stagesAreProcesses(stages),
+    `each stage is not a process of its own: ${JSON.stringify(stages.map((s) => [s.pid, s.run]))}`,
   );
   check(
     earlierEnded === true,
@@ -696,7 +767,7 @@ export async function updateRoute(o: Route): Promise<Set<string>> {
   // The gap: the new version held its acceptance open, a third launch reached it and exited.
   const gap = r.step("update_gap")[0];
   check(
-    gap && gap.pid === at("updated").pid,
+    sameProcess(gap, at("updated")),
     `the new version did not hold its acceptance open: ${JSON.stringify(gap)}`,
   );
   check(

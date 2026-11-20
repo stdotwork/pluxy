@@ -20,6 +20,7 @@ import {
   useAction,
   useLoad,
 } from "../../ui/kit/ui";
+import type { Selection } from "./environment";
 
 const t = strings("backups", {
   title: "Backup and restore",
@@ -81,15 +82,23 @@ const fill = (s: string, v: Record<string, string | number>) =>
   s.replace(/\{(\w+)\}/g, (_, k) => String(v[k] ?? ""));
 
 /** The backup browser of the writer tool pkg. pins gives the files a backup or restore is of: the
- * pins of the page's last preview (the tool refuses them if a file changed since), or nothing. */
+ * pins of the page's last preview (the tool refuses them if a file changed since), or nothing.
+ * environment, when given, is the environment every call goes to (environment.ts: null for this
+ * computer, or a WSL distribution and user); pages without one leave it out. */
 export function Backups(props: {
   pkg: string;
   pins: () => Promise<unknown[] | undefined>;
   disabled?: boolean;
   onChange?: () => void;
+  environment?: Selection;
 }) {
   const tool = <T,>(op: string, input: Record<string, unknown>) =>
-    reply<T>("program_call", { package: props.pkg, op, input });
+    reply<T>("program_call", {
+      package: props.pkg,
+      op,
+      input,
+      ...(props.environment !== undefined ? { environment: props.environment } : {}),
+    });
   const list = useLoad(() => tool<{ backups: Version[]; keep: number }>("backup-list", {}));
   const [selected, setSelected] = useState<string>();
   const [diff, setDiff] = useState<Diff>();

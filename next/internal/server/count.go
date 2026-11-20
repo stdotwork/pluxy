@@ -175,9 +175,11 @@ func geminiAction(w http.ResponseWriter, r *http.Request, g *Generation) {
 	serve(w, r, g, geminiFormat)
 }
 
-// isCannotCount reports whether e is an account's answer that its upstream cannot count tokens.
+// isCannotCount reports whether e is an account's answer that its upstream cannot count tokens. A
+// refusal under the reject drop policy (one that names what it dropped) is not: the account could
+// count, but the request cannot be carried whole.
 func isCannotCount(e *llm.Error) bool {
-	return e != nil && e.Code == llm.CodeUnsupported && e.Scope != llm.ScopeRequest
+	return e != nil && e.Code == llm.CodeUnsupported && e.Scope != llm.ScopeRequest && len(e.Dropped) == 0
 }
 
 // countWatch is a count attempt's stream that notes when the account answers it cannot count.

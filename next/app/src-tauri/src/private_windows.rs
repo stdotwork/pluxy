@@ -243,6 +243,31 @@ pub(crate) fn owned(f: &File) -> io::Result<bool> {
 
 /// Whether the object open as f (with `READ_CONTROL`) is private by the rule above.
 pub(crate) fn is_private(f: &File) -> io::Result<bool> {
+    private_without(f, 0)
+}
+
+/// Rights that write to a file or folder, add to or remove from it, or change its attributes,
+/// its access list or its owner: what `make_read_only` gives no one.
+const WRITES: u32 = 0x0002 // FILE_WRITE_DATA, FILE_ADD_FILE
+    | 0x0004 // FILE_APPEND_DATA, FILE_ADD_SUBDIRECTORY
+    | 0x0010 // FILE_WRITE_EA
+    | 0x0040 // FILE_DELETE_CHILD
+    | 0x0100 // FILE_WRITE_ATTRIBUTES
+    | 0x0001_0000 // DELETE
+    | 0x0004_0000 // WRITE_DAC
+    | 0x0008_0000 // WRITE_OWNER
+    | 0x1000_0000 // GENERIC_ALL
+    | 0x4000_0000; // GENERIC_WRITE
+
+/// Whether the object open as f (with `READ_CONTROL`) is as `make_read_only` leaves it: private
+/// by the rule above, and no allow entry grants a right that writes to it (`WRITES`). Its owner
+/// may still change the list, as on Unix the owner of a 0400 file may chmod it.
+pub(crate) fn is_read_only(f: &File) -> io::Result<bool> {
+    private_without(f, WRITES)
+}
+
+/// Whether the object open as f is private, with no allow entry granting any of forbidden.
+fn private_without(f: &File, forbidden: u32) -> io::Result<bool> {
     let user = TokenSid::user()?;
     let default_owner = TokenSid::default_owner()?;
     let system = System::sid()?;
@@ -294,7 +319,9 @@ pub(crate) fn is_private(f: &File) -> io::Result<bool> {
             // SAFETY: an allow entry is an ACCESS_ALLOWED_ACE, its SID starting at SidStart.
             let sid = unsafe { std::ptr::addr_of!((*(ace as *const ACCESS_ALLOWED_ACE)).SidStart) }
                 as PSID;
-            if !ours(sid) {
+            // SAFETY: as above.
+            let mask = unsafe { (*(ace as *const ACCESS_ALLOWED_ACE)).Mask };
+            if !ours(sid) || mask & forbidden != 0 {
                 return Ok(false);
             }
         } else if header.AceType != ACCESS_DENIED {
@@ -438,7 +465,7 @@ pub(crate) fn create_private_dir_all(path: &std::path::Path) -> io::Result<()> {
 /// path as a NUL-terminated wide string for the calls that make files and folders: absolute, in
 /// its `\\?\` form (a share as `\\?\UNC\`), which takes any length, as std's own opens do for
 /// a long path. A plain path longer than MAX_PATH fails there with ERROR_PATH_NOT_FOUND.
-fn verbatim(path: &std::path::Path) -> io::Result<Vec<u16>> {
+pub(crate) fn verbatim(path: &std::path::Path) -> io::Result<Vec<u16>> {
     use std::os::windows::ffi::OsStrExt;
     let w: Vec<u16> = std::path::absolute(path)?
         .as_os_str()

@@ -57,6 +57,7 @@ var ClaudeCodeHeaders = []string{
 	"x-claude-code-agent-id",
 	"x-claude-code-parent-agent-id",
 	"x-claude-code-agent-type",
+	"x-claude-code-prompt-id",
 	"x-claude-code-request-class",
 	"x-claude-code-prev-tool-durations",
 	"x-claude-code-compaction",
@@ -66,10 +67,11 @@ var ClaudeCodeHeaders = []string{
 }
 
 // IsClaudeCode reports whether native headers (by lower-case name) are those of a request that
-// names itself as Claude Code: X-App cli, a claude-cli User-Agent and the claude-code-20250219
-// beta, the header signals today's core requires before it takes a client for Claude Code.
+// names itself as Claude Code: X-App cli or cli-bg, a claude-cli User-Agent and the
+// claude-code-20250219 beta, the header signals today's core requires before it takes a client for
+// Claude Code.
 func IsClaudeCode(headers map[string]string) bool {
-	if headers["x-app"] != "cli" || !strings.HasPrefix(headers["user-agent"], "claude-cli/") {
+	if (headers["x-app"] != "cli" && headers["x-app"] != "cli-bg") || !strings.HasPrefix(headers["user-agent"], "claude-cli/") {
 		return false
 	}
 	for _, b := range strings.Split(headers["anthropic-beta"], ",") {
@@ -133,6 +135,8 @@ func ParseRequest(body []byte) (llm.Request, error) {
 	}
 	effort, thinkingRest, configRest := reasoningEffort(top["thinking"], top["output_config"])
 	req.Options.ReasoningEffort = effort
+	rf, configRest := parseOutputConfigFormat(configRest)
+	req.Options.ResponseFormat = rf
 	nested["thinking"], nested["output_config"] = thinkingRest, configRest
 	req.Origin = rawjson.Origin(format, "", top, requestFields, nested)
 
@@ -266,6 +270,35 @@ func reasoningEffort(thinkingRaw, configRaw json.RawMessage) (effort string, thi
 	}
 	// The type is carried by the effort; the budget and anything else are not.
 	return effort, rawjson.Rest(th, "type"), configRest
+}
+
+// parseOutputConfigFormat reads output_config.format (json_schema) into ResponseFormat and returns
+// the fields of output_config it did not carry, so unmodelled settings remain in Origin.Raw.
+func parseOutputConfigFormat(configRaw json.RawMessage) (*llm.ResponseFormat, json.RawMessage) {
+	cfg := rawjson.Object(configRaw)
+	if cfg == nil {
+		return nil, configRaw
+	}
+	formatRaw, ok := cfg["format"]
+	if !ok {
+		return nil, configRaw
+	}
+	fm := rawjson.Object(formatRaw)
+	var f struct {
+		Type   string          `json:"type"`
+		Schema json.RawMessage `json:"schema"`
+	}
+	if fm == nil || json.Unmarshal(formatRaw, &f) != nil || f.Type != llm.ResponseFormatJSONSchema || rawjson.Object(f.Schema) == nil {
+		return nil, configRaw
+	}
+	rest := rawjson.Object(rawjson.Rest(cfg, "format"))
+	if fr := rawjson.Rest(fm, "type", "schema"); fr != nil {
+		if rest == nil {
+			rest = map[string]json.RawMessage{}
+		}
+		rest["format"] = fr
+	}
+	return &llm.ResponseFormat{Type: llm.ResponseFormatJSONSchema, Name: "response", Schema: f.Schema}, rawjson.Encode(rest)
 }
 
 // parseSystem reads the system prompt, a string or a list of text blocks, into one system

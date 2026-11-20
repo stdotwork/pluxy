@@ -1,5 +1,6 @@
-// Command pluxy is the pluxy core: it serves the client APIs and answers through a provider
-// extension.
+// Command pluxy is the pluxy core: pluxy serve (or pluxy with no subcommand) serves the client
+// APIs and answers through a provider extension; every other subcommand is a client of a running
+// core's management API (next/management/README.md).
 package main
 
 import (
@@ -31,14 +32,37 @@ import (
 func main() {
 	log.SetPrefix("pluxy: ")
 	log.SetFlags(0)
-	configPath := flag.String("config", "config.json", "path to the config file")
-	safeMode := flag.Bool("safe-mode", false, "start no extensions: client requests fail, the management API works")
-	watch := flag.Duration("watch-interval", time.Second, "how often to look for config file changes (0: do not watch)")
-	bundled := flag.String("bundled", "", "index of the registry of bundled packages (default: bundled/index.json beside this program, when it exists)")
-	importAuth := flag.String("import-auth", "", "copy the credential files of today's core's auth folder at this path into the credential store, then exit (run it while core is stopped)")
-	version := flag.Bool("version", false, "print the build's version, commit and build date, then exit")
-	listenFD := flag.Int("listen-fd", -1, "serve on the listening TCP socket inherited at this file descriptor instead of binding listen (for a program that starts core and keeps the socket)")
-	flag.Parse()
+	args := os.Args[1:]
+	switch {
+	case len(args) == 0 || strings.HasPrefix(args[0], "-"):
+		serve(args)
+	case args[0] == "serve":
+		serve(args[1:])
+	default:
+		// Every other subcommand is a client of a running core's management API (cli.go).
+		os.Exit(runCLI(args, os.Stdout, os.Stderr, os.Getenv))
+	}
+}
+
+// serve runs core: pluxy serve, or pluxy with no subcommand.
+func serve(args []string) {
+	fs := flag.NewFlagSet("pluxy serve", flag.ExitOnError)
+	configPath := fs.String("config", "config.json", "path to the config file")
+	safeMode := fs.Bool("safe-mode", false, "start no extensions: client requests fail, the management API works")
+	watch := fs.Duration("watch-interval", time.Second, "how often to look for config file changes (0: do not watch)")
+	bundled := fs.String("bundled", "", "index of the registry of bundled packages (default: bundled/index.json beside this program, when it exists)")
+	importAuth := fs.String("import-auth", "", "copy the credential files of today's core's auth folder at this path into the credential store, then exit (run it while core is stopped)")
+	version := fs.Bool("version", false, "print the build's version, commit and build date, then exit")
+	listenFD := fs.Int("listen-fd", -1, "serve on the listening TCP socket inherited at this file descriptor instead of binding listen (for a program that starts core and keeps the socket)")
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), "usage: pluxy [serve] [flags]   run core; pluxy help lists the client commands")
+		fs.PrintDefaults()
+	}
+	_ = fs.Parse(args) // ExitOnError
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "pluxy: unexpected argument %q (pluxy help lists the commands)\n", fs.Arg(0))
+		os.Exit(exitUsage)
+	}
 	if *version {
 		fmt.Println(buildinfo.Line())
 		return
@@ -168,7 +192,9 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string, 
 		if ln != nil {
 			ln.Close()
 		}
-		if !safeMode {
+		// Safe mode opens the credential store too, so it is no way past the store's errors.
+		var store *cred.OpenError
+		if !safeMode && !errors.As(err, &store) {
 			err = fmt.Errorf("%w (start with -safe-mode to run without extensions)", err)
 		}
 		return err
