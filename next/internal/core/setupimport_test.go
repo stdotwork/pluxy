@@ -374,6 +374,42 @@ func TestSetupImportAuthDirRow(t *testing.T) {
 	}
 }
 
+// A pool whose models cannot become valid chains refuses the import, naming the pool, and writes
+// nothing: the models are not written cut, with a row naming a chain that is not there.
+func TestSetupImportRefusedPool(t *testing.T) {
+	setTestHome(t)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	writeTestFile(t, cfgPath, `{"listen":"127.0.0.1:0","client_keys":["fake-client-key-1"],"management_key":"fake-mgmt-key"}`)
+	cpa := t.TempDir()
+	writeTestFile(t, filepath.Join(cpa, "config.yaml"), `openai-compatibility:
+  - name: p
+    base-url: https://compat.example.com/v1
+    api-key-entries: [{api-key: fake-1}]
+    models:
+      - {name: y, alias: x}
+      - {name: z, alias: x}
+      - {name: w, alias: y}
+      - {name: v, alias: y}
+`)
+	c, err := Start(Options{ConfigPath: cfgPath, SafeMode: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Stop()
+	before, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, _, body := importCall(t, c, "fake-mgmt-key", management.SetupImportRequest{Config: filepath.Join(cpa, "config.yaml")})
+	if code != http.StatusUnprocessableEntity || !strings.Contains(body, "api-keys.openai-compatibility[0]") || !strings.Contains(body, "fallback chains") {
+		t.Errorf("import: %d %s", code, body)
+	}
+	if after, err := os.ReadFile(cfgPath); err != nil || !bytes.Equal(before, after) {
+		t.Errorf("the refused import wrote core's config: %v", err)
+	}
+}
+
 // A path that is not absolute, a missing file and a file that is not a config are refused, and
 // the refusal holds none of the file's secrets.
 func TestSetupImportRefusals(t *testing.T) {

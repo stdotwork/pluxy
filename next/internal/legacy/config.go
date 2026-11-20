@@ -1001,7 +1001,9 @@ func (x *translator) run() error {
 	if err := x.oauthModels(); err != nil {
 		return err
 	}
-	x.chains()
+	if err := x.chains(); err != nil {
+		return err
+	}
 	for _, e := range x.pending {
 		path := e.Item
 		if why := x.whyFor[path]; len(why) > 0 {
@@ -2264,7 +2266,7 @@ func (x *translator) classify(path string, v any, inherited *rule, sink sink) {
 // accounts of more than one provider, whose requests today's core shared among them. pluxy
 // serves a name from one provider and one model unless a chain says otherwise, so the chain
 // keeps every model and provider, tried in the file's order rather than in turn.
-func (x *translator) chains() {
+func (x *translator) chains() error {
 	type key struct{ model, ext string }
 	var order []string
 	steps := map[string][]route.Step{}
@@ -2310,7 +2312,7 @@ func (x *translator) chains() {
 		}
 	}
 	if len(order) == 0 {
-		return
+		return nil
 	}
 	out := map[string][]route.Step{}
 	for _, n := range order {
@@ -2342,6 +2344,17 @@ func (x *translator) chains() {
 		x.notes = append(x.notes, "config.yaml: "+why)
 	}
 	if err := route.ValidateChains(out); err != nil {
+		if x.importing {
+			// The accounts' models are already cut for the chains (each model listed under its
+			// own name), so an import that left the chains out would write accounts no chain
+			// serves as the file did. Fail it, naming the pools, as an item in no list does.
+			var at []string
+			for _, n := range order {
+				at = append(at, items[n]...)
+			}
+			return fmt.Errorf("%s: the models pooled as %s cannot become fallback chains: %v",
+				strings.Join(dedupe(at), ", "), quoteAll(order), err)
+		}
 		// A name that is also a step of another chain; leave the chains out rather than refuse
 		// the file.
 		x.notes = append(x.notes, "config.yaml: the fallback chains for pooled models are left out: "+err.Error())
@@ -2350,7 +2363,7 @@ func (x *translator) chains() {
 				x.whyFor[it] = append(x.whyFor[it], "its pooled models could not become a chain: "+err.Error())
 			}
 		}
-		return
+		return nil
 	}
 	r, _ := x.out["routing"].(map[string]any)
 	if r == nil {
@@ -2358,6 +2371,7 @@ func (x *translator) chains() {
 		x.out["routing"] = r
 	}
 	r["chains"] = out
+	return nil
 }
 
 // joinWhy joins reasons into one, each once.
