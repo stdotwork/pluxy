@@ -286,7 +286,21 @@ function all(root: FakeNode, tag: string): FakeNode[] {
 }
 
 function button(root: FakeNode, label: string) {
-  return all(root, "button").find((node) => node.textContent === label);
+  const found = all(root, "button").find((node) => node.textContent === label);
+  if (!found) throw new Error(`no button labelled ${label}`);
+  return found;
+}
+
+function at<T>(items: T[], index: number): T {
+  const item = items[index];
+  if (item === undefined) throw new Error(`no item at ${index}`);
+  return item;
+}
+
+function nextSetup(scans: Setup[]): Setup {
+  const body = scans.shift();
+  if (!body) throw new Error("no setup reply left for this request");
+  return body;
 }
 
 async function tick(milliseconds: number) {
@@ -309,7 +323,7 @@ test("while scanning, the page reads about once a second, stops, and shows what 
   jest.useFakeTimers();
   const scans = [setup(true), setup(true), setup(false, "2026-11-20T00:00:00Z", true)];
   const fake = await mount((call) => {
-    if (call.method === "GET" && call.path === "/setup") return { status: 200, body: scans.shift()! };
+    if (call.method === "GET" && call.path === "/setup") return { status: 200, body: nextSetup(scans) };
     return quiet(call);
   });
   const setupReads = () => fake.calls.filter((call) => call.method === "GET" && call.path === "/setup");
@@ -322,13 +336,13 @@ test("while scanning, the page reads about once a second, stops, and shows what 
   await tick(999);
   expect(setupReads()).toHaveLength(1);
   await tickUntil(() => setupReads().length === 2);
-  expect(setupReads()[1]!.at - setupReads()[0]!.at).toBeGreaterThanOrEqual(999);
-  expect(setupReads()[1]!.at - setupReads()[0]!.at).toBeLessThan(1300);
+  expect(at(setupReads(), 1).at - at(setupReads(), 0).at).toBeGreaterThanOrEqual(999);
+  expect(at(setupReads(), 1).at - at(setupReads(), 0).at).toBeLessThan(1300);
   expect(fake.text()).toContain("pluxy is looking at this machine.");
 
   await tickUntil(() => setupReads().length === 3);
-  expect(setupReads()[2]!.at - setupReads()[1]!.at).toBeGreaterThanOrEqual(999);
-  expect(setupReads()[2]!.at - setupReads()[1]!.at).toBeLessThan(1300);
+  expect(at(setupReads(), 2).at - at(setupReads(), 1).at).toBeGreaterThanOrEqual(999);
+  expect(at(setupReads(), 2).at - at(setupReads(), 1).at).toBeLessThan(1300);
   expect(fake.text()).toContain("Claude Code 2.4.1");
   expect(fake.text()).not.toContain("pluxy is looking at this machine.");
   expect(jest.getTimerCount()).toBe(0);
@@ -341,10 +355,11 @@ test("leaving while core scans stops the re-reads", async () => {
   jest.useFakeTimers();
   const scans = [setup(true), setup(true)];
   const fake = await mount((call) => {
-    if (call.method === "GET" && call.path === "/setup") return { status: 200, body: scans.shift()! };
+    if (call.method === "GET" && call.path === "/setup") return { status: 200, body: nextSetup(scans) };
     return quiet(call);
   });
-  const setupCalls = () => fake.calls.filter((call) => call.method === "GET" && call.path === "/setup").length;
+  const setupCalls = () =>
+    fake.calls.filter((call) => call.method === "GET" && call.path === "/setup").length;
 
   await tickUntil(() => setupCalls() === 2);
   expect(setupCalls()).toBe(2);
@@ -363,11 +378,13 @@ test("Look again asks core to scan once and then reads its answer again", async 
     }
     return quiet(call);
   });
-  const setupCalls = () => fake.calls.filter((call) => call.method === "GET" && call.path === "/setup").length;
-  const scans = () => fake.calls.filter((call) => call.method === "POST" && call.path === "/setup/scan").length;
+  const setupCalls = () =>
+    fake.calls.filter((call) => call.method === "GET" && call.path === "/setup").length;
+  const scans = () =>
+    fake.calls.filter((call) => call.method === "POST" && call.path === "/setup/scan").length;
   expect(setupCalls()).toBe(1);
 
-  button(fake.root, "Look again")!.dispatchEvent(new Event("click"));
+  button(fake.root, "Look again").dispatchEvent(new Event("click"));
   await settle();
   expect(scans()).toBe(1);
   expect(setupCalls()).toBe(2);
@@ -395,7 +412,7 @@ for (const failure of [
     });
     expect(fake.text()).toContain("Claude Code 2.4.1");
 
-    button(fake.root, "Look again")!.dispatchEvent(new Event("click"));
+    button(fake.root, "Look again").dispatchEvent(new Event("click"));
     await settle();
     expect(fake.text()).toContain(failure.shown);
     expect(fake.text()).toContain("Claude Code 2.4.1");
