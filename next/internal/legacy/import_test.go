@@ -47,9 +47,9 @@ var sample = map[string]any{
 	"upstream.claude.model-level-cooling":   true,
 	"upstream.xai.inject-x-search":          true,
 
-	"oauth.auth-dir":                                       "/tmp/auths",
-	"oauth.model-alias":                                    map[string]any{"codex": []any{map[string]any{"name": "gpt-5", "alias": "fast"}}},
-	"oauth.excluded-models":                                map[string]any{"codex": []any{"gpt-4*"}},
+	"oauth.auth-dir":        "/tmp/auths",
+	"oauth.model-alias":     map[string]any{"codex": []any{map[string]any{"name": "gpt-5", "alias": "fast"}}},
+	"oauth.excluded-models": map[string]any{"codex": []any{"gpt-4*"}},
 	"oauth.providers.codex.signin-with-chatgpt-identifier": "me",
 
 	"multimedia.disable-image-generation":          true,
