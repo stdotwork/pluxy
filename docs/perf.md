@@ -137,6 +137,24 @@ level. Another 12% is a second full decode of the body to look for `prompt_cache
 send it to the extension. Core allocates about 1.5 MB per 100 KB request. The added time grows
 with the body: about 13 ms at 100 KB and 84 ms at 800 KB, one request at a time.
 
+### The request goes to the extension once
+
+A generate call used to carry the client's request twice: parsed (`items`, `tools`, `origin`)
+and as the client's own body (`native.body`). Core encoded both into the call's JSON and the
+extension decoded both, though an extension that sends the client's body upstream unchanged never
+reads the parsed form. Later profiles put the largest remaining cost of a request in that
+encoding and decoding, on both sides of the socket.
+
+Since protocol 0.24 an extension can say it parses the body itself (the SDK does), and core then
+leaves the parsed form out whenever the body is still the one it parsed. The extension parses
+the body with the same parsers core uses, so its handler gets the same request as before. The
+tradeoff: core no longer encodes the parsed form for such a call, but the extension parses the
+body in place of decoding it, also when it only passes the body through, since a handler's
+request is a plain value that cannot be filled only when it is read. Core still sends the full
+request when the body changed after parsing (a thinking suffix taken off its model), when the
+body is not valid UTF-8, and to an extension that does not say it parses. The protocol's README
+describes the rule (`next/protocol/README.md`, "Native-only calls").
+
 ## The budget check
 
 `go run ./cmd/pluxy-bench -check` runs `stream-pass`, `stream-translate`, `nonstream-pass` and

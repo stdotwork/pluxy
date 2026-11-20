@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.23
+# pluxy extension protocol, version 0.24
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -34,10 +34,13 @@ manifest's `title`, `summary` and `kind`, and in a [registry index](#registry-in
 the registry's `tier`. Version 0.22 adds the account's
 [`timeouts`](#timeouts): upstream request limits for response headers, stream byte gaps and
 non-streamed completion. Version 0.23 adds [alive frames](#alive-frames): the extension tells core
-its upstream is still sending, and core ends a call that sends nothing at all for too long. It is
+its upstream is still sending, and core ends a call that sends nothing at all for too long.
+Version 0.24 adds [native-only calls](#native-only-calls): an extension that parses the client's
+body itself gets a `generate` call's request without its parsed form, so the request's content
+crosses the socket once. It is
 deliberately small; later versions add capabilities and more operations
 without changing what is described here. An extension written for version 0 works unchanged with a
-core that speaks 0.23 (see
+core that speaks 0.24 (see
 [Versioning](#versioning)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
@@ -260,6 +263,7 @@ Core opens a connection and writes one call frame:
 | `capture` | Since 0.13, for `generate`, `count_tokens` and `endpoint`: true when core asks for the call's [upstream capture](#upstream-capture). Absent: false. |
 | `payload` | Since 0.14, for `generate`, `count_tokens` and `endpoint`, and since 0.15 for a `session.turn`: the [payload rules](#payload-rules) that apply to the call or turn. Absent: none. |
 | `alive` | Since 0.23, for `generate`, `count_tokens` and `endpoint`: true when core takes [alive frames](#alive-frames) on the call. Absent: false. |
+| `native_only` | Since 0.24, for `generate`, to an extension whose describe says `parses_native`: true when core left the request's `items`, `tools` and `origin` out, for the extension to parse from `native.body` (see [Native-only calls](#native-only-calls)). Absent: false. |
 
 An extension that gets an `op` it does not know replies with an `error` event whose code is
 `unsupported`.
@@ -280,7 +284,8 @@ accounts, `session` when it holds [sessions](#sessions), `count_tokens` when it
 `check` when it [checks](#check) its accounts, `quota` when it reads their [quota](#quota), and
 `endpoint` when it serves [endpoint calls](#endpoint). An
 extension that lists `login` also
-lists its `login_methods` (see [Login and refresh](#login-and-refresh)).
+lists its `login_methods` (see [Login and refresh](#login-and-refresh)). Since 0.24,
+`parses_native: true` says the extension takes [native-only calls](#native-only-calls).
 
 ### `generate`
 
@@ -838,6 +843,33 @@ reply's `response.start` how it built it: `response.translation` with `from`, `t
 carried in a different form; `dropped`: left out), `path` (in the client's body) and `detail`.
 Everything not listed was preserved. Core logs the losses, together with what the reply had that
 the client's format cannot hold.
+
+### Native-only calls
+
+Since 0.24. The parsed request (`items`, `tools`, `origin`) and `native.body` are the same content
+twice, each about as large as the client's body, while an extension that sends `native.body`
+upstream needs only the body. So an extension may say in describe that it parses the body itself
+(`parses_native: true`), and core then sends a `generate` call's request without its parsed form,
+with the call's `native_only: true`, when all of these hold:
+
+- `native.format` is `openai.chat`, `openai.responses`, `anthropic.messages` or
+  `gemini.generate_content`;
+- `native.body` is the body core parsed the request from, or that body with its top-level `model`
+  renamed for the account (except in `gemini.generate_content`, where a `model` member of the body
+  is part of the request's `origin`). A body core changed in any other way, such as taking a
+  [thinking suffix](#the-request) off its model, goes in a full call;
+- `native.body` is valid UTF-8 (a frame's JSON would replace an invalid byte in the parsed form's
+  text, so the extension's parse could differ).
+
+Such a request has no `items`, `tools` or `origin`. Its other fields are as in any call, and they
+are core's, not the body's: `model` (which core may have renamed), `stream`, `options`, `native`,
+`drop_policy` and `caller`. On `native_only`, the extension parses `native.body` with core's
+parser for its format (the `next/format` packages; for `gemini.generate_content` with the
+request's `model` and `stream`), takes `items`, `tools` and `origin` from the result and keeps
+the call's other fields. The Go SDK does this before the handler runs (`protocol.ParseNative`),
+so a handler gets the same request as from a full call. An extension built with other parsers
+than core's gets what those make of the body. `count_tokens` and `endpoint` calls and session
+turns always carry the full request.
 
 ## Events
 
@@ -1433,7 +1465,7 @@ extension below 0.23 gets none: it cannot promise alive frames.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.23. An extension reports the minor version it
+raise the minor version: this document is version 0.24. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1464,8 +1496,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.21 | A manifest's optional `title`, `summary` and `kind`, and a [registry index](#registry-index) package's optional `title`, `summary`, `kind` and `tier`. No call or frame changes. |
 | 0.22 | The account's optional [`timeouts`](#timeouts). |
 | 0.23 | [Alive frames](#alive-frames): the call's and turn's `alive` and the `alive` frame; core's `extension_timeout`. |
+| 0.24 | [Native-only calls](#native-only-calls): describe's `parses_native` and the call's `native_only`. |
 
-## What version 0.23 leaves out
+## What version 0.24 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,
