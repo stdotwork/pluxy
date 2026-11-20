@@ -25,7 +25,7 @@ func TestRememberSearchResults(t *testing.T) {
 			t.Errorf("%s: reported as minted for another account", enc)
 		}
 	}
-	if searchOwners.mintedBy("enc-c", "account-a") {
-		t.Error("an unrecorded value is reported as this account's")
+	if !searchOwners.mintedBy("enc-c", "account-a") {
+		t.Error("an unrecorded value is left out")
 	}
 }

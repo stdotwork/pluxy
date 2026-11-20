@@ -12,15 +12,16 @@ import (
 // accounts. This file records which account received each encrypted value, so a replay can leave
 // out the results another account minted. Only a hash of the value is kept, never the value.
 //
-// A value this process has not seen is treated as not the account's: keeping it would bring back
-// the permanent 400 whenever the account changed across a restart, while leaving it out only
-// loses that one search result from the replayed context.
+// A value this process has not seen is kept: it is almost always the account's own, and the old
+// core replayed such results unchanged, so leaving them out would drop results from the context
+// for no reason. Only a value recorded for another account is left out.
 //
 // shortcut: owners live in the extension's memory, so they are gone when core stops the extension
-// after 10 minutes without requests, or restarts it. Move them to a store that outlives the
-// program (the per-extension data folder the protocol plans) if that shows up in use. Requests
-// that arrive in Claude Messages format are passed through unchanged, so their history may hold
-// values this process never saw and this file never filters.
+// after 10 minutes without requests, or restarts it, and after a restart nothing is filtered until
+// the account's replies are seen again. Move them to a store that outlives the program (the
+// per-extension data folder the protocol plans) if that shows up in use. Requests that arrive in
+// Claude Messages format are passed through unchanged, so their history may hold values this
+// process never saw and this file never filters.
 
 // searchOwnerMax bounds the owners kept, as today's core bounds its equivalent cache. Each entry
 // is a 32-byte hash and an account ID.
@@ -59,16 +60,18 @@ func (c *searchOwnersCache) remember(enc, account string) {
 	c.owner[key] = account
 }
 
-// mintedBy reports whether enc was received by account. A value no reply recorded, or one this
-// process dropped from its memory, is not the account's.
+// mintedBy reports whether enc may be sent to account. A value no reply recorded, or one this
+// process dropped from its memory, counts as the account's: it is kept. Only a value recorded for
+// another account is not.
 func (c *searchOwnersCache) mintedBy(enc, account string) bool {
 	if enc == "" || account == "" {
-		return false
+		return true
 	}
 	key := sha256.Sum256([]byte(enc))
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.owner[key] == account
+	owner, recorded := c.owner[key]
+	return !recorded || owner == account
 }
 
 // searchResultBlock is the part of a Messages content_block_start that names a web search result.
