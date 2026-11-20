@@ -98,6 +98,44 @@ export function useAction(done: () => void) {
 
 type Variant = "primary" | "quiet" | "danger";
 
+/** How long a Copy button says it copied. */
+const COPIED_MS = 2000;
+
+/**
+ * Copies value for a Copy button. state is "copied" for about two seconds after a copy, so the
+ * next press shows again; a press within that time copies again and restarts the wait. It is
+ * "failed" when the browser refused, until the next press or another value.
+ */
+export function useCopy(value: string): { state?: "copied" | "failed"; copy: () => Promise<void> } {
+  const [state, setState] = useState<"copied" | "failed">();
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const live = useRef(true);
+  useEffect(() => {
+    live.current = true;
+    return () => {
+      live.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    setState(undefined);
+    return () => clearTimeout(timer.current);
+  }, [value]);
+  const copy = useCallback(async () => {
+    let next: "copied" | "failed" = "copied";
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      next = "failed";
+    }
+    // The button may be gone by the time the browser answers: no timer is left behind it.
+    if (!live.current) return;
+    clearTimeout(timer.current);
+    setState(next);
+    if (next === "copied") timer.current = setTimeout(() => setState(undefined), COPIED_MS);
+  }, [value]);
+  return { state, copy };
+}
+
 export function Button(props: {
   variant?: Variant;
   onClick?: () => void;

@@ -5,6 +5,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -14,26 +15,31 @@ import (
 )
 
 // applyReasoningRef is applyReasoning as it was: it decoded every body into a map to read the
-// effort.
-func applyReasoningRef(body []byte, req llm.Request, target string, levels []string) ([]byte, error) {
+// effort and report a clamped one as a loss.
+func applyReasoningRef(body []byte, req llm.Request, target string, levels []string) ([]byte, []llm.Loss, error) {
 	suffix := req.Options.ThinkingSuffix
 	switch target {
 	case llm.FormatAnthropicMessages:
 		if suffix == "" {
-			return body, nil
+			return body, nil, nil
 		}
 		out, _, err := anthropicmessages.ApplyEffort(body, req.Model, suffix)
-		return out, err
+		return out, nil, err
 	case llm.FormatGeminiGenerate:
 		if suffix == "" {
-			return body, nil
+			return body, nil, nil
 		}
 		out, _, err := geminigenerate.ApplyEffort(body, req.Model, suffix)
-		return out, err
+		return out, nil, err
 	}
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(body, &m); err != nil || m == nil {
-		return body, nil
+		return body, nil, nil
+	}
+	// Where the effort lives: reasoning_effort for Chat, reasoning.effort for Responses.
+	path := "reasoning.effort"
+	if target == llm.FormatOpenAIChat {
+		path = "reasoning_effort"
 	}
 	get := func() string {
 		var e string
@@ -63,11 +69,17 @@ func applyReasoningRef(body []byte, req llm.Request, target string, levels []str
 		effort = llm.ThinkingEffort(suffix)
 	}
 	clamped := clampEffort(effort, levels)
+	var losses []llm.Loss
+	if effort != "" && clamped != effort {
+		losses = []llm.Loss{{Kind: llm.LossApproximated, Path: path,
+			Detail: fmt.Sprintf("reasoning effort %q is not one the account takes; %q was sent", effort, clamped)}}
+	}
 	if clamped == get() {
-		return body, nil
+		return body, losses, nil
 	}
 	set(clamped)
-	return json.Marshal(m)
+	out, err := json.Marshal(m)
+	return out, losses, err
 }
 
 // TestApplyReasoningMatchesReference compares applyReasoning with the reference copy over every
@@ -85,8 +97,8 @@ func TestApplyReasoningMatchesReference(t *testing.T) {
 				for _, lv := range levels {
 					n++
 					req := llm.Request{Model: "m", Options: llm.Options{ThinkingSuffix: suffix}}
-					got := applyOutcome(func() ([]byte, error) { return applyReasoning([]byte(body), req, target, lv) })
-					want := applyOutcome(func() ([]byte, error) { return applyReasoningRef([]byte(body), req, target, lv) })
+					got := applyOutcome(func() ([]byte, error) { b, _, err := applyReasoning([]byte(body), req, target, lv); return b, err })
+					want := applyOutcome(func() ([]byte, error) { b, _, err := applyReasoningRef([]byte(body), req, target, lv); return b, err })
 					if got.panic != want.panic {
 						t.Fatalf("%s/%s/%q/%q: panic = %v, reference %v", name, target, suffix, lv, got.panic, want.panic)
 					}

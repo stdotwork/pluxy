@@ -1,8 +1,12 @@
 use super::*;
 
+/// A launcher on a store of its own: tests run in parallel in one process, so the folder is told
+/// apart by a counter, not by the time (two tests could start in the same millisecond).
 fn launcher() -> Launcher {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!(
-        "pluxy-launcher-{}-{}",
+        "pluxy-launcher-{}-{}-{n}",
         std::process::id(),
         now_ms()
     ));

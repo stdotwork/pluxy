@@ -355,7 +355,8 @@ core.
 - On the Themes page: the "Safe mode" switch.
 - If custom CSS hides that switch: open the panel with `?safe` in the address, for example
   `http://127.0.0.1:8400/panel/?safe`. Safe mode then stays on, also after reloading, until it is
-  turned off on the Themes page.
+  turned off on the Themes page. The panel's sign-in page says so too, with `safeAddress` set on
+  the shell: a host whose address cannot take `?safe`, such as the desktop app, leaves it out.
 
 ## Changes to this contract
 

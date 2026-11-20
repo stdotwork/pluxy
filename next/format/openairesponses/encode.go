@@ -164,6 +164,17 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 			out.Input = append(out.Input, marshal(m, e.kept(it.Origin)))
 		case llm.ItemTypeToolResult:
 			m := map[string]any{"type": "function_call_output", "call_id": it.CallID, "output": it.Output}
+			if len(it.Content) > 0 {
+				// The output's list takes the same parts as a user message's content.
+				if parts, _, _, err := e.content(llm.Item{Role: llm.RoleUser, Content: it.Content}, p); err != nil {
+					return nil, nil, err
+				} else if len(parts) > 0 {
+					m["output"] = parts
+				}
+			}
+			if it.IsError {
+				e.lose(llm.LossDropped, rawjson.Join(p, "is_error"), "Responses has no error flag on a tool result")
+			}
 			out.Input = append(out.Input, marshal(m, e.kept(it.Origin)))
 		case llm.ItemTypeReasoning:
 			if it.Origin != nil && it.Origin.Format == format {

@@ -89,6 +89,27 @@ func TestMixedToolResult(t *testing.T) {
 	}
 }
 
+// A tool result carried as parts (protocol minor 25) keeps its text; its image and its error flag,
+// which Devin cannot take, are listed as dropped.
+func TestToolResultParts(t *testing.T) {
+	req := &llm.Request{Model: "swe-2", Items: []llm.Item{
+		userText("Weather?"),
+		{Type: llm.ItemTypeToolCall, CallID: "call_1", Name: "weather", Arguments: `{}`},
+		{Type: llm.ItemTypeToolResult, CallID: "call_1", Output: "The temperature is 18", IsError: true, Origin: &llm.Origin{Path: "r"},
+			Content: []llm.Part{{Type: llm.PartText, Text: "The temperature is 18"}, {Type: llm.PartImage, URL: "https://example.com/a.png"}}},
+	}}
+	cr, err := buildRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cr.turns[2].content; got != "The temperature is 18" {
+		t.Errorf("tool turn text %q", got)
+	}
+	if got, want := lossPaths(cr), []string{"r.is_error", "r.content[1]"}; !slices.Equal(got, want) {
+		t.Errorf("dropped %v, want %v", got, want)
+	}
+}
+
 // A user turn left with nothing once media Devin cannot take is dropped is refused, as today's
 // core refuses it; a turn that keeps other content loses only the emptied message.
 func TestEmptiedUserTurn(t *testing.T) {

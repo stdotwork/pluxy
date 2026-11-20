@@ -160,12 +160,11 @@ func TestEncodeEmptyAssistantContent(t *testing.T) {
 
 func TestParseRequestRejects(t *testing.T) {
 	for name, body := range map[string]string{
-		"not JSON":      `{`,
-		"no model":      `{"messages":[{"role":"user","content":"hi"}]}`,
-		"no messages":   `{"model":"m","messages":[]}`,
-		"unknown role":  `{"model":"m","messages":[{"role":"wizard","content":"hi"}]}`,
-		"non-text tool": `{"model":"m","messages":[{"role":"tool","tool_call_id":"c","content":[{"type":"image_url","image_url":{"url":"x"}}]}]}`,
-		"bad stop":      `{"model":"m","stop":7,"messages":[{"role":"user","content":"hi"}]}`,
+		"not JSON":     `{`,
+		"no model":     `{"messages":[{"role":"user","content":"hi"}]}`,
+		"no messages":  `{"model":"m","messages":[]}`,
+		"unknown role": `{"model":"m","messages":[{"role":"wizard","content":"hi"}]}`,
+		"bad stop":     `{"model":"m","stop":7,"messages":[{"role":"user","content":"hi"}]}`,
 	} {
 		_, err := ParseRequest([]byte(body))
 		le, ok := err.(*llm.Error)

@@ -8,7 +8,7 @@ import { act } from "preact/test-utils";
 import { api, type ImportReport, type Setup } from "../kit/api";
 import type { Feature, Host, Method, Reply } from "../kit/host";
 import { SetupPage } from "../kit/pages/setup";
-import { type Kit, KitContext } from "../kit/ui";
+import { type Kit, KitContext, useCopy } from "../kit/ui";
 
 interface Call {
   method: Method;
@@ -202,8 +202,37 @@ class FakeDocument {
   removeEventListener() {}
 }
 
+/** The window's listeners, so a test can say the window got focus. */
+class FakeWindow {
+  private listeners = new Map<string, Set<() => void>>();
+
+  addEventListener(name: string, listener: () => void) {
+    const set = this.listeners.get(name) ?? new Set();
+    set.add(listener);
+    this.listeners.set(name, set);
+  }
+
+  removeEventListener(name: string, listener: () => void) {
+    this.listeners.get(name)?.delete(listener);
+  }
+
+  count(name: string) {
+    return this.listeners.get(name)?.size ?? 0;
+  }
+
+  dispatch(name: string) {
+    for (const listener of [...(this.listeners.get(name) ?? [])]) listener();
+  }
+}
+
 const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
+const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
+const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
 afterEach(() => {
+  if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow);
+  else Reflect.deleteProperty(globalThis, "window");
+  if (originalNavigator) Object.defineProperty(globalThis, "navigator", originalNavigator);
+  else Reflect.deleteProperty(globalThis, "navigator");
   clock = 0;
   if (jest.isFakeTimers()) {
     jest.clearAllTimers();
@@ -216,8 +245,11 @@ afterEach(() => {
 function installDocument() {
   const document = new FakeDocument();
   Object.defineProperty(globalThis, "document", { configurable: true, value: document });
+  Object.defineProperty(globalThis, "window", { configurable: true, value: new FakeWindow() });
   return document;
 }
+
+const fakeWindow = () => (globalThis as unknown as { window: FakeWindow }).window;
 
 function fakeHost(answer: (call: Call) => Reply<unknown>, features: Feature[] = ["signOut"]) {
   const calls: Call[] = [];
@@ -400,7 +432,11 @@ test("Look again asks core to scan once and then reads its answer again", async 
 });
 
 for (const failure of [
-  { status: 0, shown: "core could not be reached" },
+  {
+    status: 0,
+    shown:
+      "core could not be reached: pluxy is not running or the address is wrong, so start it, then try again",
+  },
   { status: 500, shown: "core answered 500" },
 ] as const) {
   test(`a ${failure.status} re-read keeps the page and shows ${failure.shown}`, async () => {
@@ -584,4 +620,77 @@ test("a host with no sign-in of its own sends no import that would replace the m
   expect(fake.text()).toContain("sets a management key (management.secret-key)");
   expect(all(fake.root, "button").map((node) => node.textContent)).not.toContain("Bring it across now");
   expect(imports(fake.calls).map((call) => (call.body as { dry_run: boolean }).dry_run)).toEqual([true]);
+});
+
+test("the accounts are read again when the window gets focus, and not after the page is left", async () => {
+  let accounts = 1;
+  const fake = await mount((call) => {
+    if (call.method === "GET" && call.path === "/setup") {
+      return { status: 200, body: setup(false, "2026-11-20T00:00:00Z", true) };
+    }
+    if (call.method === "GET" && call.path === "/accounts") {
+      return {
+        status: 200,
+        body: { accounts: Array.from({ length: accounts }, (_, i) => ({ id: `a${i}` })) },
+      };
+    }
+    return quiet(call);
+  });
+  const accountReads = () => reads(fake.calls, "/accounts");
+  expect(fake.text()).toContain("1 account connected.");
+  expect(accountReads()).toBe(1);
+
+  // A sign-in finished in another window: core has one more account.
+  accounts = 2;
+  await act(async () => fakeWindow().dispatch("focus"));
+  await settle();
+  expect(accountReads()).toBe(2);
+  expect(fake.text()).toContain("2 accounts connected.");
+
+  await fake.unmount();
+  expect(fakeWindow().count("focus")).toBe(0);
+});
+
+test("Copy says Copied for two seconds after the last press, and leaves no timer when it goes", async () => {
+  jest.useFakeTimers();
+  const copies: string[] = [];
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { clipboard: { writeText: async (text: string) => void copies.push(text) } },
+  });
+  const document = installDocument();
+  const root = document.createElement("main");
+  document.body.appendChild(root);
+  function Copy() {
+    const { state, copy } = useCopy("the text");
+    return (
+      <button type="button" onClick={copy}>
+        {state === "copied" ? "Copied" : "Copy"}
+      </button>
+    );
+  }
+  await act(async () => render(<Copy />, root));
+  const pressCopy = async () => {
+    at(all(root, "button"), 0).dispatchEvent(new Event("click"));
+    await settle();
+  };
+
+  await pressCopy();
+  expect(copies).toEqual(["the text"]);
+  expect(root.textContent).toBe("Copied");
+  // A second press within the two seconds copies again and starts the wait again.
+  await tick(1500);
+  await pressCopy();
+  expect(copies).toEqual(["the text", "the text"]);
+  await tick(1500);
+  expect(root.textContent).toBe("Copied");
+  await tick(500);
+  expect(root.textContent).toBe("Copy");
+  expect(jest.getTimerCount()).toBe(0);
+
+  // Gone while it says Copied: its timer goes with it.
+  await pressCopy();
+  expect(jest.getTimerCount()).toBe(1);
+  await act(async () => render(null, root));
+  expect(jest.getTimerCount()).toBe(0);
 });

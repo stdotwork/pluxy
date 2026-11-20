@@ -4,7 +4,7 @@ import { type Login, type LoginInput, type LoginMethod, problem } from "./api";
 import type { Reply } from "./host";
 import { usePrivacy } from "./privacy";
 import { strings } from "./strings";
-import { Button, Notice, useKit } from "./ui";
+import { Button, Notice, useCopy, useKit } from "./ui";
 
 const t = strings("loginFlow", {
   accountId: "Account ID",
@@ -154,28 +154,11 @@ function safeLink(raw?: string): string | undefined {
 }
 
 function CopyButton(props: { value: string; children: string }) {
-  const [copied, setCopied] = useState(false);
-  const [error, setError] = useState(false);
-  useEffect(() => {
-    setCopied(false);
-    setError(false);
-  }, [props.value]);
+  const { state, copy } = useCopy(props.value);
   return (
     <>
-      <Button
-        onClick={async () => {
-          try {
-            await navigator.clipboard.writeText(props.value);
-            setCopied(true);
-            setError(false);
-          } catch {
-            setError(true);
-          }
-        }}
-      >
-        {copied ? t("copied") : props.children}
-      </Button>
-      {error && <Notice tone="danger">{t("copyFailed")}</Notice>}
+      <Button onClick={copy}>{state === "copied" ? t("copied") : props.children}</Button>
+      {state === "failed" && <Notice tone="danger">{t("copyFailed")}</Notice>}
     </>
   );
 }

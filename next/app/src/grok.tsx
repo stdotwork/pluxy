@@ -37,7 +37,7 @@ import {
   withServed,
 } from "./grokForm";
 import { connectionGet } from "./host";
-import { keptTerminal, useDeviceChanged } from "./startCli";
+import { keptTerminal, launcherProblem, useDeviceChanged } from "./startCli";
 
 const t = strings("grok", {
   title: "Grok Build",
@@ -203,8 +203,8 @@ function StartCli(props: { available: boolean }) {
           onChange={setTerminal}
         />
       )}
-      {terminals.error && <Notice tone="warn">{terminals.error}</Notice>}
-      {action.error && <Notice tone="danger">{action.error}</Notice>}
+      {terminals.error && <Notice tone="warn">{launcherProblem(terminals.error)}</Notice>}
+      {action.error && <Notice tone="danger">{launcherProblem(action.error)}</Notice>}
       <Button variant="primary" onClick={start} disabled={action.busy || !props.available || !cwd.trim()}>
         {t("launch")}
       </Button>

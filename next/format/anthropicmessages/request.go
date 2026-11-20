@@ -426,13 +426,17 @@ func parseMessage(raw json.RawMessage, path string) ([]llm.Item, error) {
 		case b.Type == "tool_result" && head.Role == llm.RoleUser:
 			it := llm.Item{Type: llm.ItemTypeToolResult, CallID: b.ToolUseID}
 			modelled := []string{"type", "tool_use_id"}
-			// shortcut: only text results are carried (a string, or text blocks with nothing
-			// else in them, joined); a result holding images, documents or cache_control on
-			// its inner blocks stays in Origin.Raw and is reported as dropped when translated.
-			// Carry it as parts when a provider needs it.
+			// A string, or text blocks with nothing else in them, is the result's text; a list
+			// holding images, documents or fields on its blocks is carried as parts too.
 			if out, ok := textResult(b.Content); ok {
 				it.Output = out
 				modelled = append(modelled, "content")
+			} else if parts, out, ok := partsResult(b.Content, bp+".content"); ok {
+				it.Content, it.Output = parts, out
+				modelled = append(modelled, "content")
+			}
+			if json.Unmarshal(bm["is_error"], &it.IsError) == nil {
+				modelled = append(modelled, "is_error")
 			}
 			it.Origin = rawjson.Origin(format, bp, bm, modelled, nil)
 			item(it)
@@ -541,6 +545,28 @@ func textResult(raw json.RawMessage) (string, bool) {
 		texts = append(texts, b.Text)
 	}
 	return strings.Join(texts, "\n"), true
+}
+
+// partsResult reads a tool result's list of content blocks as parts, with its text blocks joined
+// as textResult joins them.
+func partsResult(raw json.RawMessage, path string) ([]llm.Part, string, bool) {
+	var blocks []json.RawMessage
+	if rawjson.Unmarshal(raw, &blocks) != nil || len(blocks) == 0 {
+		return nil, "", false
+	}
+	parts := make([]llm.Part, 0, len(blocks))
+	var texts []string
+	for i, rb := range blocks {
+		p, err := parsePart(rb, fmt.Sprintf("%s[%d]", path, i))
+		if err != nil {
+			return nil, "", false
+		}
+		if p.Type == llm.PartText {
+			texts = append(texts, p.Text)
+		}
+		parts = append(parts, p)
+	}
+	return parts, strings.Join(texts, "\n"), true
 }
 
 // compactJSON returns a tool_use input as compact JSON text; a missing input is {}.

@@ -136,11 +136,11 @@ pub fn available(source: &str) -> Result<Vec<Available>, String> {
 
 /// One installed file, as unpacked.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-struct FileRecord {
-    path: String,
-    size: u64,
-    executable: bool,
-    sha256: String,
+pub struct FileRecord {
+    pub path: String,
+    pub size: u64,
+    pub executable: bool,
+    pub sha256: String,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -150,6 +150,8 @@ pub enum Kind {
     Signed,
     /// Copied in from a core program the person chose.
     Adopted,
+    /// Copied in from the core that came with the app (`bundled_core.rs`).
+    Bundled,
 }
 
 /// What the app keeps about an installed version, `versions/<id>.json`.
@@ -192,6 +194,15 @@ pub struct Failed {
     pub reason: String,
 }
 
+/// Who made the selection: the app (its bundled core) or the person (an install, a rollback, an
+/// adoption). A selection with none recorded counts as the person's.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Chooser {
+    App,
+    Person,
+}
+
 /// Which version runs, `state.json`. selected is the last version that started and answered;
 /// a candidate is being started in its place, and a crash then leaves it recorded here.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -200,12 +211,19 @@ pub struct State {
     pub format: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected: Option<String>,
+    /// Who chose selected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chosen_by: Option<Chooser>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub candidate: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed: Option<Failed>,
+    /// The app version that last applied its bundled core: set when it tries to, so a bundled
+    /// core that fails to start is not tried again until the app's version changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bundled_for: Option<String>,
 }
 
 /// The app's core versions, `<data>/cores`.
@@ -352,6 +370,16 @@ impl Dir {
         self.0.try_clone().map(Dir)
     }
 
+    /// The folder at path, only to read from; a link there is refused.
+    fn open_read(path: &Path) -> io::Result<Dir> {
+        Dir::open(path)
+    }
+
+    /// The folder name in this one, only to read from.
+    fn sub_read(&self, name: &str) -> io::Result<Dir> {
+        self.sub(name)
+    }
+
     /// Opens name in this folder, following no link.
     fn at(&self, name: &str, flags: libc::c_int, mode: u32) -> io::Result<OwnedFd> {
         let c = c_string(name.as_bytes())?;
@@ -414,6 +442,8 @@ mod win {
         | FILE_ADD_FILE
         | FILE_ADD_SUBDIRECTORY
         | FILE_READ_ATTRIBUTES;
+    /// What a folder only read from is used for: list it and open names in it.
+    pub const READ_FOLDER: u32 = FILE_LIST_DIRECTORY | FILE_TRAVERSE | FILE_READ_ATTRIBUTES;
     /// Others may read a held folder or file, and add to a held folder, but not rename or remove
     /// it.
     pub const SHARE: u32 = FILE_SHARE_READ | FILE_SHARE_WRITE;
@@ -429,6 +459,24 @@ impl Dir {
             .share_mode(win::SHARE)
             .custom_flags(win::FILE_FLAG_BACKUP_SEMANTICS | win::FILE_FLAG_OPEN_REPARSE_POINT)
             .open(path)
+            .and_then(Dir::checked)
+    }
+
+    /// The folder at path, only to list it and open names in it (a folder of the app's install
+    /// the person may not change); a link or other reparse point there is refused.
+    fn open_read(path: &Path) -> io::Result<Dir> {
+        use std::os::windows::fs::OpenOptionsExt;
+        OpenOptions::new()
+            .access_mode(win::READ_FOLDER)
+            .share_mode(win::SHARE)
+            .custom_flags(win::FILE_FLAG_BACKUP_SEMANTICS | win::FILE_FLAG_OPEN_REPARSE_POINT)
+            .open(path)
+            .and_then(Dir::checked)
+    }
+
+    /// The folder name in this one, only to read from.
+    fn sub_read(&self, name: &str) -> io::Result<Dir> {
+        crate::vault::at(&self.0, name, win::READ_FOLDER, win::SHARE, true, None)
             .and_then(Dir::checked)
     }
 
@@ -658,6 +706,106 @@ fn sha256_of(mut r: impl Read) -> io::Result<(String, u64)> {
     Ok((artifact::hex(&h.finalize()), n))
 }
 
+/// A core release's artifact for this computer in a core source's index, its descriptor read and
+/// checked to name that version of the core; nothing of its archive is read yet.
+struct Offered {
+    a: IndexArtifact,
+    signature: [u8; 64],
+    d: artifact::Descriptor,
+    /// The archive, beside the index.
+    archive: PathBuf,
+}
+
+fn offered(source: &str, version: &str) -> Result<Offered, String> {
+    if version.starts_with(ADOPTED) {
+        return Err(format!(
+            "core versions named {ADOPTED}… are reserved for adopted core programs"
+        ));
+    }
+    let platform = platform();
+    let index = read_index(source)?;
+    let release = index
+        .releases
+        .into_iter()
+        .find(|r| r.product == "core" && r.version == version)
+        .ok_or_else(|| format!("the core source offers no core {version}"))?;
+    let a = release
+        .artifacts
+        .into_iter()
+        .find(|a| a.platform == platform)
+        .ok_or_else(|| format!("the core source offers no core {version} for {platform}"))?;
+    let name = Path::new(&a.url);
+    if a.url.is_empty()
+        || name.components().count() != 1
+        || !matches!(name.components().next(), Some(Component::Normal(_)))
+    {
+        return Err("a core archive must be a file name beside the source's index".into());
+    }
+    let signature = artifact::decode_hex::<64>(&a.signature)
+        .map_err(|_| "the core release's signature is not 128 hex digits")?;
+    let d: artifact::Descriptor = serde_json::from_str(&a.descriptor)
+        .map_err(|_| "the core release's descriptor is not valid")?;
+    if d.id != CORE_ID || d.tier != Tier::Native || d.version != version {
+        return Err(format!(
+            "the core source's descriptor names {} {}, not {CORE_ID} {version}",
+            d.id, d.version
+        ));
+    }
+    if d.size > MAX_ARCHIVE {
+        return Err("the core archive is larger than 512 MiB".into());
+    }
+    let archive = source_path(source)?
+        .parent()
+        .ok_or("the core source has no folder")?
+        .join(name);
+    Ok(Offered {
+        a,
+        signature,
+        d,
+        archive,
+    })
+}
+
+/// Package time (`bundled_core::prepare`): checks core version's archive for this computer in the
+/// core source's index against its signed descriptor with keys, as `Store::stage` does, and
+/// unpacks it into dir, which must not exist yet, as `Store::install` does. Returns the SHA-256 of
+/// the signed descriptor and the files unpacked.
+pub fn unpack_release(
+    keys: &impl PublisherKeys,
+    source: &str,
+    version: &str,
+    dir: &Path,
+) -> Result<(String, Vec<FileRecord>), String> {
+    let Offered {
+        a,
+        signature,
+        d: _,
+        archive,
+    } = offered(source, version)?;
+    keys.publisher_key(source, &a.key_id, "pluxy")?;
+    let file = File::open(&archive).map_err(|e| format!("{}: {e}", archive.display()))?;
+    let verified = artifact::verify_trusted_archive(
+        keys,
+        source,
+        &a.key_id,
+        a.descriptor.as_bytes(),
+        &signature,
+        &platform(),
+        file,
+    )?;
+    let descriptor = artifact::hex(&Sha256::digest(verified.descriptor_bytes()));
+    exclusive_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let files = unpack(verified.into_archive(), dir, MAX_UNPACKED)?;
+    let program = files
+        .iter()
+        .find(|f| f.path == PROGRAM)
+        .ok_or_else(|| format!("the core archive has no {PROGRAM} program at its top"))?;
+    if cfg!(unix) && !program.executable {
+        return Err(format!("{PROGRAM} in the core archive is not executable"));
+    }
+    Ok((descriptor, files))
+}
+
 impl Store {
     /// The store in dir, made if missing.
     pub fn open(dir: &Path) -> Result<Store, String> {
@@ -793,6 +941,7 @@ impl Store {
         let again = match r.kind {
             Kind::Signed => "install it again",
             Kind::Adopted => "adopt it again",
+            Kind::Bundled => "the app copies it in again at its next start",
         };
         let folder = self.folder(id);
         let root = Dir::open(&folder).map_err(|e| format!("core {id}: {e}"))?;
@@ -860,49 +1009,15 @@ impl Store {
         source: &str,
         version: &str,
     ) -> Result<Staged, String> {
-        if version.starts_with(ADOPTED) {
-            return Err(format!(
-                "core versions named {ADOPTED}… are reserved for adopted core programs"
-            ));
-        }
+        let Offered {
+            a,
+            signature,
+            d,
+            archive: from,
+        } = offered(source, version)?;
         let platform = platform();
-        let index = read_index(source)?;
-        let release = index
-            .releases
-            .into_iter()
-            .find(|r| r.product == "core" && r.version == version)
-            .ok_or_else(|| format!("the core source offers no core {version}"))?;
-        let a = release
-            .artifacts
-            .into_iter()
-            .find(|a| a.platform == platform)
-            .ok_or_else(|| format!("the core source offers no core {version} for {platform}"))?;
-        let name = Path::new(&a.url);
-        if a.url.is_empty()
-            || name.components().count() != 1
-            || !matches!(name.components().next(), Some(Component::Normal(_)))
-        {
-            return Err("a core archive must be a file name beside the source's index".into());
-        }
-        let signature = artifact::decode_hex::<64>(&a.signature)
-            .map_err(|_| "the core release's signature is not 128 hex digits")?;
-        let d: artifact::Descriptor = serde_json::from_str(&a.descriptor)
-            .map_err(|_| "the core release's descriptor is not valid")?;
-        if d.id != CORE_ID || d.tier != Tier::Native || d.version != version {
-            return Err(format!(
-                "the core source's descriptor names {} {}, not {CORE_ID} {version}",
-                d.id, d.version
-            ));
-        }
-        if d.size > MAX_ARCHIVE {
-            return Err("the core archive is larger than 512 MiB".into());
-        }
         // Trust first: an unknown key or source is refused before the archive is read.
         keys.publisher_key(source, &a.key_id, "pluxy")?;
-        let from = source_path(source)?
-            .parent()
-            .ok_or("the core source has no folder")?
-            .join(name);
         let staged = self.staging().join(format!("{}.tar.gz", random_key()));
         let copied = (|| -> Result<File, String> {
             let src = File::open(&from).map_err(|e| format!("{}: {e}", from.display()))?;
@@ -1145,6 +1260,181 @@ impl Store {
         }
         result.map(|()| (id, true))
     }
+}
+
+/// Why the core that came with the app was not installed (`Store::install_bundled`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BundledRefusal {
+    /// Its files beside the app differ from the manifest.
+    Damaged(String),
+    /// The store holds its version with other files.
+    Conflict(String),
+    /// The store could not take it.
+    Store(String),
+}
+
+impl BundledRefusal {
+    pub fn message(&self) -> &str {
+        match self {
+            BundledRefusal::Damaged(m) | BundledRefusal::Conflict(m) | BundledRefusal::Store(m) => {
+                m
+            }
+        }
+    }
+}
+
+impl Store {
+    /// Installs the core that came with the app (`bundled_core.rs`): manifest lists its files,
+    /// which place says where to find beside the app. Only those files are read, each opened
+    /// without following a link from the folder held open before it, a regular file of the
+    /// listed size, its SHA-256 computed while it is copied into staging; anything else beside
+    /// them is never read. The version is installed under its release version, recorded as
+    /// bundled with app_version.
+    ///
+    /// Nothing is done when the store already holds that version with the same files and they
+    /// still pass their checks; a copy that no longer does is copied in again. When the store
+    /// holds the version with other files (a release of that number installed from somewhere
+    /// else), nothing is installed: a conflict. Returns whether it was copied in now.
+    pub fn install_bundled(
+        &self,
+        manifest: &crate::bundled_manifest::Manifest,
+        place: &crate::bundled_core::Place,
+        app_version: &str,
+    ) -> Result<bool, BundledRefusal> {
+        let id = manifest.version.as_str();
+        let damaged = |why: String| {
+            BundledRefusal::Damaged(format!(
+                "The core that came with the app (core {id}) is damaged ({why}): reinstall or update the app."
+            ))
+        };
+        if !valid_id(id) || id.starts_with(ADOPTED) {
+            return Err(damaged(format!("{id} is not a core version")));
+        }
+        let wanted: Vec<FileRecord> = manifest
+            .files
+            .iter()
+            .map(|f| FileRecord {
+                path: f.path.clone(),
+                size: f.size,
+                executable: f.executable,
+                sha256: f.sha256.clone(),
+            })
+            .collect();
+        if let Ok(r) = self.record(id) {
+            let key = |f: &FileRecord| (f.path.clone(), f.size, f.executable, f.sha256.clone());
+            let mut have: Vec<_> = r.files.iter().map(key).collect();
+            let mut want: Vec<_> = wanted.iter().map(key).collect();
+            have.sort();
+            want.sort();
+            if have != want {
+                return Err(BundledRefusal::Conflict(format!(
+                    "The app's own cores hold a core {id} with other files than the core {id} that came with the app, so the app did not install its own. The one installed stays as it is."
+                )));
+            }
+            if self.program(id).is_ok() {
+                return Ok(false);
+            }
+        }
+        let tmp = self.staging().join(random_key());
+        let result = (|| {
+            exclusive_dir(&tmp)
+                .map_err(|e| BundledRefusal::Store(format!("{}: {e}", tmp.display())))?;
+            let root = Dir::open(&tmp).map_err(|e| BundledRefusal::Store(e.to_string()))?;
+            let open_source =
+                |p: &Path| Dir::open_read(p).map_err(|e| damaged(format!("{}: {e}", p.display())));
+            let program_name = place
+                .program
+                .file_name()
+                .and_then(|n| n.to_str())
+                .ok_or_else(|| damaged("the core program has no name".into()))?;
+            let programs = open_source(place.program.parent().unwrap_or(Path::new("")))?;
+            let mut bundled = None;
+            for f in &wanted {
+                let (from, rel) = if f.path == PROGRAM {
+                    (&programs, program_name)
+                } else {
+                    let rel = f
+                        .path
+                        .strip_prefix("bundled/")
+                        .ok_or_else(|| damaged(format!("{} is not under bundled/", f.path)))?;
+                    if bundled.is_none() {
+                        bundled = Some(open_source(&place.bundled)?);
+                    }
+                    (bundled.as_ref().expect("opened above"), rel)
+                };
+                let missing = |e: io::Error| damaged(format!("{}: {e}", f.path));
+                let (parent, name) = parent_beneath_read(from, rel).map_err(missing)?;
+                let src = parent.read(&name).map_err(missing)?;
+                // Type and size first: never read a device or a FIFO, nor more than listed.
+                let m = src.metadata().map_err(missing)?;
+                if !m.is_file() {
+                    return Err(damaged(format!("{} is not a regular file", f.path)));
+                }
+                if m.len() != f.size {
+                    return Err(damaged(format!(
+                        "{} is {} bytes, not {}",
+                        f.path,
+                        m.len(),
+                        f.size
+                    )));
+                }
+                let (dir, dname) = parent_beneath(&root, &f.path, true)
+                    .map_err(|e| BundledRefusal::Store(format!("{}: {e}", f.path)))?;
+                let mut out = dir
+                    .create(&dname, f.executable)
+                    .map_err(|e| BundledRefusal::Store(format!("{}: {e}", f.path)))?;
+                let mut h = HashingWriter {
+                    inner: &mut out,
+                    hash: Sha256::new(),
+                    size: 0,
+                };
+                io::copy(&mut (&src).take(f.size + 1), &mut h).map_err(missing)?;
+                let (got, copied) = (artifact::hex(&h.hash.finalize()), h.size);
+                if got != f.sha256 || copied != f.size {
+                    return Err(damaged(format!(
+                        "{} differs from what the app lists",
+                        f.path
+                    )));
+                }
+                out.sync_all()
+                    .map_err(|e| BundledRefusal::Store(format!("{}: {e}", f.path)))?;
+            }
+            // Closed before the copy is moved into place.
+            drop((programs, bundled, root));
+            self.finish(
+                &tmp,
+                Record {
+                    format: FORMAT,
+                    id: id.to_string(),
+                    kind: Kind::Bundled,
+                    version: Some(id.to_string()),
+                    source: Some(format!("bundled with app {app_version}")),
+                    key_id: None,
+                    descriptor: None,
+                    signature: None,
+                    adopted_from: None,
+                    files: wanted.clone(),
+                },
+            )
+            .map_err(BundledRefusal::Store)
+        })();
+        if result.is_err() {
+            remove_tree(&tmp);
+        }
+        result.map(|()| true)
+    }
+}
+
+/// The folder holding rel's last part beneath root, for reading, and that part's name: each folder
+/// on the way opened from the one before it, following no link.
+fn parent_beneath_read(root: &Dir, rel: &str) -> io::Result<(Dir, String)> {
+    let parts: Vec<&str> = rel.split('/').collect();
+    let (last, folders) = parts.split_last().expect("split gives one part");
+    let mut cur = root.try_clone()?;
+    for f in folders {
+        cur = cur.sub_read(f)?;
+    }
+    Ok((cur, last.to_string()))
 }
 
 /// Opens the program at path (the person's choice, so a link there is followed) without

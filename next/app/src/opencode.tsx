@@ -35,7 +35,7 @@ import {
   type Secret,
   withModels,
 } from "./opencodeForm";
-import { keptTerminal, useDeviceChanged } from "./startCli";
+import { keptTerminal, launcherProblem, useDeviceChanged } from "./startCli";
 
 const t = strings("opencode", {
   title: "OpenCode",
@@ -187,7 +187,7 @@ function Launch(props: { available: boolean }) {
             onChange={setTerminal}
           />
         )}
-        {terminals.error && <Notice tone="warn">{terminals.error}</Notice>}
+        {terminals.error && <Notice tone="warn">{launcherProblem(terminals.error)}</Notice>}
         <Button
           variant="primary"
           onClick={() =>
@@ -212,7 +212,7 @@ function Launch(props: { available: boolean }) {
         </Button>
         <p class="muted">{t("restartNote")}</p>
       </Card>
-      {action.error && <Notice tone="danger">{action.error}</Notice>}
+      {action.error && <Notice tone="danger">{launcherProblem(action.error)}</Notice>}
     </>
   );
 }
