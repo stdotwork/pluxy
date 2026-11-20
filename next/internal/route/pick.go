@@ -22,10 +22,14 @@ const (
 	// StrategyLeastActive picks the account with the fewest attempts running, taking turns
 	// among ties. It scans every candidate, which suits pools of a few dozen accounts.
 	StrategyLeastActive = "least-active"
+	// StrategySoonestReset picks the account whose longest usage window resets soonest, by the
+	// hour, so allowance about to reset is spent before it is lost; accounts with no known reset
+	// come after, and those with a full window last. Ties take turns. (See Rank.)
+	StrategySoonestReset = "soonest-reset"
 )
 
 // Strategies lists the valid strategy names.
-var Strategies = []string{StrategyRoundRobin, StrategyWeighted, StrategyFillFirst, StrategyLeastActive}
+var Strategies = []string{StrategyRoundRobin, StrategyWeighted, StrategyFillFirst, StrategyLeastActive, StrategySoonestReset}
 
 // picker chooses among eligible accounts. Its memory is kept per model, so rotation for one
 // model does not disturb another, and lives in State, so rotation carries on across a reload.
@@ -116,8 +120,8 @@ func (p *picker) forget(model string) {
 }
 
 // pick returns one of cands, which are in configured order and not empty. active reports the
-// running attempts on an account.
-func (p *picker) pick(model string, cands []*Account, active func(string) int, now time.Time) *Account {
+// running attempts on an account, and rank what soonest-reset ranks it by.
+func (p *picker) pick(model string, cands []*Account, active func(string) int, rank func(*Account, time.Time) Rank, now time.Time) *Account {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.used[model] = now
@@ -140,6 +144,8 @@ func (p *picker) pick(model string, cands []*Account, active func(string) int, n
 			}
 		}
 		a = p.after(model, least)
+	case StrategySoonestReset:
+		a = p.after(model, soonest(cands, rank, now))
 	default:
 		a = p.after(model, cands)
 	}

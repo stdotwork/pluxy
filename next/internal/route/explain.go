@@ -196,6 +196,8 @@ type PlanStep struct {
 	Account  string `json:"account"`
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
+	// Rank is what soonest-reset ranked the account by; absent under the other strategies.
+	Rank *Rank `json:"rank,omitempty"`
 }
 
 // PlanLeftOut is an account a request would leave out.
@@ -258,9 +260,14 @@ func (r *Router) Plan(ctx context.Context, model string) Plan {
 					best = append(best, a)
 				}
 			}
-			a := preview.pick(key, best, r.state.activeCount, now)
+			a := preview.pick(key, best, r.state.activeCount, r.state.rank, now)
 			t := capable[slices.IndexFunc(capable, func(t target) bool { return t.step == i && t.a == a })]
-			p.Order = append(p.Order, PlanStep{ID: a.ID, Step: number(t), Account: r.state.PublicID(a.ID), Provider: a.Extension, Model: t.model})
+			ps := PlanStep{ID: a.ID, Step: number(t), Account: r.state.PublicID(a.ID), Provider: a.Extension, Model: t.model}
+			if r.picker.strategy == StrategySoonestReset {
+				rank := r.state.rank(a, now)
+				ps.Rank = &rank
+			}
+			p.Order = append(p.Order, ps)
 			ordered[t.key()] = true
 			cands = slices.DeleteFunc(cands, func(b *Account) bool { return b == a })
 		}

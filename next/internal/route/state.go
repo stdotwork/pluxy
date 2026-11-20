@@ -158,6 +158,10 @@ type State struct {
 	unbannedSeq map[string]uint64
 	// changes is signalled when the quota blocks or bans Saved/SavedBans return may have changed.
 	changes chan struct{}
+	// usage holds, per account ID, its latest usage reading, which soonest-reset ranks it by;
+	// refreshed is when Router.Refresh last began reading.
+	usage     map[string]usageReading
+	refreshed time.Time
 }
 
 type banState struct {
@@ -301,7 +305,7 @@ func (s *State) reserve(a *Account, model string, now time.Time) (uint64, bool) 
 func NewState() *State {
 	return &State{scopes: map[scopeKey]*scopeState{}, active: map[string]int{}, affinity: newAffinity(), rotation: newRotation(),
 		since: map[scopeKey]uint64{}, revs: map[string]uint64{}, last: map[string]lastFailure{}, running: map[uint64]struct{}{}, rand: rand.Float64,
-		bans: map[string]banState{}, unbannedSeq: map[string]uint64{},
+		bans: map[string]banState{}, unbannedSeq: map[string]uint64{}, usage: map[string]usageReading{},
 		checkEvery: defaultCheckEvery, changes: make(chan struct{}, 1), pubKey: NewPublicKey()}
 }
 
@@ -446,6 +450,11 @@ func (s *State) Retain(prevRouter, nextRouter *Router, same func(old, cur *Accou
 			delete(s.last, id)
 		}
 	}
+	for id := range s.usage {
+		if !kept[id] {
+			delete(s.usage, id)
+		}
+	}
 	s.mu.Unlock()
 
 	s.affinity.retain(kept, changed, gen)
@@ -503,6 +512,7 @@ func (s *State) restart(old, fresh []*Account, kept map[string]bool) {
 	}
 	for id := range revs {
 		delete(s.last, id)
+		delete(s.usage, id)
 	}
 	s.mu.Unlock()
 	for _, a := range fresh {
@@ -544,6 +554,7 @@ func (s *State) forget(id string) {
 		}
 	}
 	delete(s.last, id)
+	delete(s.usage, id)
 	s.revs[id]++
 	rev := s.revs[id]
 	s.mu.Unlock()

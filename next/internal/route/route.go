@@ -37,8 +37,8 @@ import (
 
 // Config is the routing section of core's config. The zero value is valid.
 type Config struct {
-	// Strategy picks among eligible accounts: round-robin (default), weighted, fill-first or
-	// least-active.
+	// Strategy picks among eligible accounts: round-robin (default), weighted, fill-first,
+	// least-active or soonest-reset.
 	Strategy string `json:"strategy,omitempty"`
 	// MaxAttempts bounds upstream attempts per request, counting the first. 0 means no fixed
 	// limit: each account is still tried at most once per round, and a new round needs a
@@ -91,6 +91,10 @@ type Config struct {
 	// Chains are the fallback chains, by the model name a client asks for (see Step). A name
 	// with no chain is served by the accounts of one provider.
 	Chains map[string][]Step `json:"chains,omitempty"`
+	// QuotaRefreshMS is how often soonest-reset reads every account's usage, in milliseconds:
+	// unset, 30 minutes; 0 turns the readings off, and accounts are then ranked only by the
+	// readings the checks of long blocks take.
+	QuotaRefreshMS *int64 `json:"quota_refresh_ms,omitempty"`
 }
 
 // Quota response modes (Config.QuotaResponseMode).
@@ -135,6 +139,9 @@ func (c *Config) Validate() error {
 	}
 	if c.MaxAttempts < 0 || c.MaxAccounts < 0 || c.MaxWaitMS < 0 || c.RequestRetry != nil && *c.RequestRetry < 0 {
 		return fmt.Errorf("routing limits must not be negative")
+	}
+	if c.QuotaRefreshMS != nil && *c.QuotaRefreshMS < 0 {
+		return fmt.Errorf("routing.quota_refresh_ms must not be negative")
 	}
 	if c.SessionAffinity != nil && c.SessionAffinity.TTLMS < 0 {
 		return fmt.Errorf("routing.session_affinity.ttl_ms must not be negative")
@@ -812,7 +819,7 @@ func (c *call) choose(cands []target, now time.Time) target {
 			best = append(best, t.a)
 		}
 	}
-	a := r.picker.pick(rotationKey(c.req.LLM.Model, c.chain, step), best, r.state.activeCount, now)
+	a := r.picker.pick(rotationKey(c.req.LLM.Model, c.chain, step), best, r.state.activeCount, r.state.rank, now)
 	i := slices.IndexFunc(cands, func(t target) bool { return t.step == step && t.a == a })
 	return cands[i]
 }
