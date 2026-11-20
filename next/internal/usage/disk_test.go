@@ -95,6 +95,39 @@ func TestOpenRefillsFromTodayAndYesterdayAndPersistsV1(t *testing.T) {
 	}
 }
 
+func TestServedModelPersistsAndOlderRecordsLoad(t *testing.T) {
+	dir := t.TempDir()
+	c := &clock{t: time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)}
+	path := filepath.Join(dir, "2026-11-19.jsonl")
+	old := Event{Seq: 1, Timestamp: c.now().Add(-2 * time.Minute), Model: "gpt-4o"}
+	line, err := json.Marshal(diskEvent{V: 1, Event: old})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(line, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := openStore(Options{Dir: dir}, c.now, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Add(Event{Timestamp: c.now(), Model: "gpt-4o", ServedModel: "gpt-4o-2024-08-06"})
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s2, err := openStore(Options{Dir: dir}, c.now, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	events := s2.Events(Filter{}, 0, 10).Events
+	if len(events) != 2 || events[0].ServedModel != "" || events[1].ServedModel != "gpt-4o-2024-08-06" {
+		t.Fatalf("served models after reload = %+v", events)
+	}
+}
+
 func TestRefillSkipsTornLastLine(t *testing.T) {
 	for _, tc := range []struct {
 		name string
