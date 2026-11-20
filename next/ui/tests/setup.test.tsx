@@ -362,6 +362,36 @@ test("opened again after setup, the page is a status and offers no Finish", () =
   expect(view(more, { accounts: 2, choices: { "pluxy/gemini": true } })).toContain(">Install</button>");
 });
 
+test("once Start has installed what was ticked, its part goes and the first line stops promising it", () => {
+  const before = view(found);
+  expect(before).toContain(
+    "Nothing is installed until you press Start, and nothing on this page is required.",
+  );
+  expect(before).toContain("<h2>Start</h2>");
+  expect(before).toContain("Start installs: Codex, Claude.");
+
+  const done: Results = { "pluxy/codex": { status: "done" }, "pluxy/claude": { status: "done" } };
+  const after = view(found, { results: done });
+  expect(toInstall(found, {}, done)).toEqual([]);
+  expect(after).not.toContain("<h2>Start</h2>");
+  expect(after).not.toContain("Nothing more to install.");
+  expect(after).not.toContain("until you press Start");
+  expect(after).toContain(
+    "pluxy looks at this machine and offers what fits. Nothing on this page is required.",
+  );
+  expect(primary(after)).toEqual(["Finish"]);
+
+  // With no provider to offer, Start installs nothing either.
+  expect(view({ ...nothingFound, picks: [] })).not.toContain("until you press Start");
+});
+
+test("after setup, what Install will do is said in plain words", () => {
+  const more = { ...allSet, picks: [...allSet.picks, pick("pluxy/gemini", "Gemini")] };
+  const page = view(more, { accounts: 2, choices: { "pluxy/gemini": true } });
+  expect(page).toContain("This installs Gemini.");
+  expect(page).not.toContain("Install installs");
+});
+
 test("the paste text takes a new client key where its placeholder stood", () => {
   const content = '{"env": {"ANTHROPIC_AUTH_TOKEN": "<client-key>"}}';
   expect(withKey(content, "<client-key>")).toBe(content);
