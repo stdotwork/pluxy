@@ -1,10 +1,11 @@
 // The Setup page while core scans: its re-reads, leaving, looking again, and a failed re-read.
+// And bringing a CLIProxyAPI setup across: the dry run, the import, and a refusal.
 // These drive the real page through Preact's DOM renderer against a fake host, using a small DOM
 // that carries only the nodes and events Preact needs.
 import { afterEach, expect, jest, test } from "bun:test";
 import { render } from "preact";
 import { act } from "preact/test-utils";
-import { api, type Setup } from "../kit/api";
+import { api, type ImportReport, type Setup } from "../kit/api";
 import type { Feature, Host, Method, Reply } from "../kit/host";
 import { SetupPage } from "../kit/pages/setup";
 import { type Kit, KitContext, useCopy } from "../kit/ui";
@@ -250,7 +251,7 @@ function installDocument() {
 
 const fakeWindow = () => (globalThis as unknown as { window: FakeWindow }).window;
 
-function fakeHost(answer: (call: Call) => Reply<unknown>) {
+function fakeHost(answer: (call: Call) => Reply<unknown>, features: Feature[] = ["signOut"]) {
   const calls: Call[] = [];
   const host: Host = {
     call: async <T,>(method: Method, path: string, body?: unknown) => {
@@ -262,7 +263,7 @@ function fakeHost(answer: (call: Call) => Reply<unknown>) {
     signIn: async () => undefined,
     signOut: () => {},
     prefs: { get: () => null, set: () => {} },
-    features: new Set<Feature>(),
+    features: new Set<Feature>(features),
     address: "http://127.0.0.1:8317",
   };
   return { host, calls, api: api(host) };
@@ -284,13 +285,16 @@ async function settle() {
   });
 }
 
-async function mount(answer: (call: Call) => Reply<unknown>) {
+async function mount(answer: (call: Call) => Reply<unknown>, features?: Feature[]) {
   const document = installDocument();
-  const fake = fakeHost(answer);
+  const fake = fakeHost(answer, features);
+  const signedOut = { times: 0 };
   const kit = {
     host: fake.host,
     api: fake.api,
-    unauthorized: () => {},
+    unauthorized: () => {
+      signedOut.times++;
+    },
     extensionsChanged: () => {},
   } as Kit;
   const root = document.createElement("main");
@@ -307,6 +311,7 @@ async function mount(answer: (call: Call) => Reply<unknown>) {
   return {
     ...fake,
     root,
+    signedOut,
     text: () => root.textContent,
     unmount: async () => {
       await act(async () => render(null, root));
@@ -457,6 +462,166 @@ for (const failure of [
   });
 }
 
+/** A scanned machine with a CLIProxyAPI setup, and two providers offered with nothing ticked. */
+function withImport(): Setup {
+  const base = setup(false, "2026-11-20T00:00:00Z");
+  return {
+    ...base,
+    found: {
+      ...base.found,
+      imports: [
+        { kind: "cliproxyapi", config: "~/.cli-proxy-api/config.yaml", auth_dir: "~/cpa/auths", accounts: 2 },
+      ],
+    },
+    picks: base.picks.map((p) => ({ ...p, suggested: false })),
+  };
+}
+
+const report = (dry_run: boolean): ImportReport => ({
+  dry_run,
+  brought: [{ what: "auth file", name: "claude-a.json", as: "pluxy/claude account claude-a" }],
+  changed: [],
+  not_brought: [{ what: "debug", why: "this core writes no debug-level log lines" }],
+  needs: [{ pick: "pluxy/claude", why: "1 account needs it" }],
+});
+
+async function press(root: FakeNode, label: string) {
+  await act(async () => {
+    button(root, label).dispatchEvent(new Event("click"));
+  });
+  await settle();
+}
+
+const imports = (calls: Call[]) => calls.filter((call) => call.path === "/setup/import");
+const reads = (calls: Call[], path: string) =>
+  calls.filter((call) => call.method === "GET" && call.path === path).length;
+const tickedBoxes = (root: FakeNode) => all(root, "input").filter((node) => node.checked).length;
+
+test("bringing a setup across is a dry run first, then the import, which re-reads and ticks what is needed", async () => {
+  const fake = await mount((call) => {
+    if (call.method === "GET" && call.path === "/setup") return { status: 200, body: withImport() };
+    if (call.path === "/setup/import") {
+      return { status: 200, body: report((call.body as { dry_run: boolean }).dry_run) };
+    }
+    return quiet(call);
+  });
+  expect(tickedBoxes(fake.root)).toBe(0);
+
+  await press(fake.root, "Bring it across");
+  expect(imports(fake.calls).map((call) => call.body)).toEqual([
+    { config: "~/.cli-proxy-api/config.yaml", auth_dir: "~/cpa/auths", dry_run: true },
+  ]);
+  expect(fake.text()).toContain("Nothing is written yet.");
+  expect(fake.text()).toContain("Comes across (1)");
+  expect(fake.text()).toContain("Does not come across (1)");
+  // A dry run changes nothing on the page either.
+  expect(tickedBoxes(fake.root)).toBe(0);
+  expect(reads(fake.calls, "/setup")).toBe(1);
+
+  // Cancel puts the row back as it was, and sends nothing.
+  await press(fake.root, "Cancel");
+  expect(fake.text()).not.toContain("Comes across (1)");
+  expect(imports(fake.calls)).toHaveLength(1);
+
+  await press(fake.root, "Bring it across");
+  await press(fake.root, "Bring it across now");
+  expect(at(imports(fake.calls), 2).body).toEqual({
+    config: "~/.cli-proxy-api/config.yaml",
+    auth_dir: "~/cpa/auths",
+    dry_run: false,
+  });
+  expect(fake.text()).toContain("Done. This is what was brought across:");
+  expect(fake.text()).toContain("Brought across (1)");
+  expect(fake.text()).toContain(
+    "Claude is not installed, and 1 account needs it. It is ticked under Providers",
+  );
+  // The provider the accounts need is ticked, and Start now installs it.
+  expect(tickedBoxes(fake.root)).toBe(1);
+  expect(fake.text()).toContain("Start installs: Claude.");
+  // Setup, the accounts and the packages are read again: once to see that core still takes the
+  // key, once by the page.
+  expect(reads(fake.calls, "/setup")).toBe(3);
+  expect(reads(fake.calls, "/accounts")).toBe(2);
+  expect(reads(fake.calls, "/packages")).toBe(2);
+  expect(fake.signedOut.times).toBe(0);
+
+  await press(fake.root, "Close");
+  expect(fake.text()).not.toContain("Brought across (1)");
+  expect(tickedBoxes(fake.root)).toBe(1);
+});
+
+test("a refused import says why, drops the report, and can be tried again", async () => {
+  let status = 422;
+  const fake = await mount((call) => {
+    if (call.method === "GET" && call.path === "/setup") return { status: 200, body: withImport() };
+    if (call.path === "/setup/import") {
+      if ((call.body as { dry_run: boolean }).dry_run) return { status: 200, body: report(true) };
+      return {
+        status,
+        error: { code: "refused", message: "tls: a certificate cannot change while core runs" },
+      };
+    }
+    return quiet(call);
+  });
+  await press(fake.root, "Bring it across");
+  await press(fake.root, "Bring it across now");
+  expect(fake.text()).toContain(
+    "pluxy will not bring this setup across: tls: a certificate cannot change while core runs.",
+  );
+  expect(fake.text()).not.toContain("Comes across (1)");
+  expect(fake.text()).not.toContain("Done.");
+  expect(tickedBoxes(fake.root)).toBe(0);
+  expect(reads(fake.calls, "/setup")).toBe(1);
+
+  // The next dry run clears the refusal.
+  await press(fake.root, "Bring it across");
+  expect(fake.text()).not.toContain("pluxy will not bring this setup across");
+  expect(fake.text()).toContain("Comes across (1)");
+
+  // Core refusing the key is not an import's refusal: the shell goes back to signing in.
+  status = 401;
+  await press(fake.root, "Bring it across now");
+  expect(fake.signedOut.times).toBe(1);
+});
+
+test("an import that changed the management key keeps its report on screen until the person signs in again", async () => {
+  let imported = false;
+  const fake = await mount((call) => {
+    if (call.method === "GET" && call.path === "/setup") {
+      return imported ? { status: 401 } : { status: 200, body: withImport() };
+    }
+    if (call.path === "/setup/import") {
+      const dry = (call.body as { dry_run: boolean }).dry_run;
+      imported = !dry;
+      return { status: 200, body: { ...report(dry), brought: [{ what: "management.secret-key" }] } };
+    }
+    return quiet(call);
+  });
+  await press(fake.root, "Bring it across");
+  expect(fake.text()).toContain("it becomes pluxy's management key");
+  await press(fake.root, "Bring it across now");
+  expect(fake.text()).toContain("Done. This is what was brought across:");
+  expect(fake.text()).toContain("it is now the management key of the CLIProxyAPI setup");
+  expect(fake.signedOut.times).toBe(0);
+  expect(reads(fake.calls, "/accounts")).toBe(1);
+  await press(fake.root, "Sign in again");
+  expect(fake.signedOut.times).toBe(1);
+});
+
+test("a host with no sign-in of its own sends no import that would replace the management key", async () => {
+  const fake = await mount((call) => {
+    if (call.method === "GET" && call.path === "/setup") return { status: 200, body: withImport() };
+    if (call.path === "/setup/import") {
+      return { status: 200, body: { ...report(true), brought: [{ what: "management.secret-key" }] } };
+    }
+    return quiet(call);
+  }, []);
+  await press(fake.root, "Bring it across");
+  expect(fake.text()).toContain("sets a management key (management.secret-key)");
+  expect(all(fake.root, "button").map((node) => node.textContent)).not.toContain("Bring it across now");
+  expect(imports(fake.calls).map((call) => (call.body as { dry_run: boolean }).dry_run)).toEqual([true]);
+});
+
 test("the accounts are read again when the window gets focus, and not after the page is left", async () => {
   let accounts = 1;
   const fake = await mount((call) => {
@@ -471,15 +636,15 @@ test("the accounts are read again when the window gets focus, and not after the 
     }
     return quiet(call);
   });
-  const reads = () => fake.calls.filter((call) => call.path === "/accounts").length;
+  const accountReads = () => reads(fake.calls, "/accounts");
   expect(fake.text()).toContain("1 account connected.");
-  expect(reads()).toBe(1);
+  expect(accountReads()).toBe(1);
 
   // A sign-in finished in another window: core has one more account.
   accounts = 2;
   await act(async () => fakeWindow().dispatch("focus"));
   await settle();
-  expect(reads()).toBe(2);
+  expect(accountReads()).toBe(2);
   expect(fake.text()).toContain("2 accounts connected.");
 
   await fake.unmount();
@@ -505,17 +670,17 @@ test("Copy says Copied for two seconds after the last press, and leaves no timer
     );
   }
   await act(async () => render(<Copy />, root));
-  const press = async () => {
+  const pressCopy = async () => {
     at(all(root, "button"), 0).dispatchEvent(new Event("click"));
     await settle();
   };
 
-  await press();
+  await pressCopy();
   expect(copies).toEqual(["the text"]);
   expect(root.textContent).toBe("Copied");
   // A second press within the two seconds copies again and starts the wait again.
   await tick(1500);
-  await press();
+  await pressCopy();
   expect(copies).toEqual(["the text", "the text"]);
   await tick(1500);
   expect(root.textContent).toBe("Copied");
@@ -524,7 +689,7 @@ test("Copy says Copied for two seconds after the last press, and leaves no timer
   expect(jest.getTimerCount()).toBe(0);
 
   // Gone while it says Copied: its timer goes with it.
-  await press();
+  await pressCopy();
   expect(jest.getTimerCount()).toBe(1);
   await act(async () => render(null, root));
   expect(jest.getTimerCount()).toBe(0);
