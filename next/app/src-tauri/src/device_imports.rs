@@ -508,6 +508,7 @@ impl Catalog {
             native_tool: false,
             files: vec![],
             launch: None,
+            environment: None,
         })
     }
 
