@@ -136,6 +136,7 @@ const (
 	HealthNeedsLogin = route.HealthNeedsLogin
 	HealthBanned     = route.HealthBanned
 	HealthDisabled   = route.HealthDisabled
+	HealthBroken     = route.HealthBroken
 
 	SourceProvider   = route.SourceProvider
 	SourceBackoff    = route.SourceBackoff
@@ -195,7 +196,7 @@ type Account struct {
 	SettingsInexact bool `json:"settings_inexact,omitempty"`
 
 	// Health is the account's state in one word, with when and why (route.Health): ok,
-	// cooling, exhausted, needs_login, banned or disabled.
+	// cooling, exhausted, needs_login, banned, disabled or broken.
 	Health Health `json:"health"`
 
 	// What routing knows about the account now (route.Runtime). An account that receives no

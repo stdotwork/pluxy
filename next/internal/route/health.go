@@ -13,7 +13,7 @@ import (
 // credential, its models and its endpoint) and from what a person or the credential store
 // holds against it (Hold).
 type Health struct {
-	// State is ok, cooling, exhausted, needs_login, banned or disabled.
+	// State is ok, cooling, exhausted, needs_login, banned, disabled or broken.
 	State string `json:"state"`
 	// Until is when the block that holds the account ends.
 	Until *time.Time `json:"until,omitempty"`
@@ -33,6 +33,9 @@ const (
 	HealthNeedsLogin = "needs_login" // the provider refused the sign-in
 	HealthBanned     = "banned"      // the provider closed or suspended the account
 	HealthDisabled   = "disabled"    // turned off by a person
+	// HealthBroken: the account's credential file cannot be read, so core knows the account only
+	// by its file name (Why says which file and what is wrong with it). It is never routed to.
+	HealthBroken = "broken"
 )
 
 // Where a block's end came from (Health.Source).

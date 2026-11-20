@@ -229,6 +229,7 @@ is not brought, plain or bcrypt: core keeps its own management key, and its row 
 | `needs_login` | The provider refused the sign-in | `pluxy account login` |
 | `banned` | The provider closed or suspended the account | Only when a person enables it or signs in again |
 | `disabled` | Turned off by a person | `pluxy account enable` |
+| `broken` | Its credential file cannot be read; `why` names the file | When the file is fixed or replaced and core restarts, or the account is removed |
 
 `source` is `provider` when `until` is the provider's own word, `backoff` when core chose it, and
 `unverified` when the provider named a time core does not believe (more than 8 days away); such a block is
@@ -239,6 +240,10 @@ the blocks themselves, that one too, stay in `cooldowns`. When several blocks ho
 usage from its provider; it is absent when no check is due, and while a check of an account without a usage
 reading waits for the one request it lets through. `pluxy account list` shows `state` (with
 `(unverified)`), `until` and `why` as its HEALTH, UNTIL and WHY columns.
+
+A `broken` account is one whose credential file cannot be read: core knows it only by its file's
+name, so `extension`, `kind` and `state` are empty and `why` names the file and the error. It never
+serves a request, `PATCH` on it is a 404, and `DELETE` removes the file.
 
 `public_id` is `acc_` and 8 hex digits, a keyed digest of the account's ID: an ID can be an email address or a label a person typed (an import of today's auth files names an account by its file), and an ID must not leave core in a client reply. The key is made at the first start and kept in `state/account-key` beside the config, so an account keeps its public ID across restarts. `X-Pluxy-Account`, the header a request pins an account by, takes either ID.
 

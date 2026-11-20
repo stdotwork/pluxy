@@ -246,6 +246,17 @@ func (m *Management) view(r cred.Record) AccountView {
 	return v
 }
 
+// brokenView returns the account a record file the store could not read stands for: its ID is
+// the file's name, its health says broken with the file and the error, and nothing core cannot
+// know is filled in.
+func (m *Management) brokenView(b cred.Broken) AccountView {
+	v := AccountView{ID: b.ID, Source: "login", Health: route.Health{State: route.HealthBroken, Why: b.Why()}}
+	if m.state != nil {
+		v.PublicID = m.state.PublicID(b.ID)
+	}
+	return v
+}
+
 // inexact reports whether a JSON text holds a number that a client reading it as a float64 and
 // writing it back as the shortest decimal that reads as the same float64, as a browser does,
 // would change. Values are compared, not text: 1.0 and 2e3 come back as 1 and 2000, unchanged.
@@ -350,6 +361,11 @@ func (m *Management) View(id string) (AccountView, bool) {
 			return m.view(rec), true
 		}
 	}
+	for _, b := range m.creds.Broken() {
+		if b.ID == id {
+			return m.brokenView(b), true
+		}
+	}
 	return AccountView{}, false
 }
 
@@ -362,6 +378,11 @@ func (m *Management) list(w http.ResponseWriter, r *http.Request) {
 	for _, rec := range m.creds.Records() {
 		if _, shadowed := configured(cfg, rec.ID); !shadowed {
 			views = append(views, m.view(rec))
+		}
+	}
+	for _, b := range m.creds.Broken() {
+		if _, shadowed := configured(cfg, b.ID); !shadowed {
+			views = append(views, m.brokenView(b))
 		}
 	}
 	writeJSON(w, http.StatusOK, management.AccountsReply{Accounts: views})
