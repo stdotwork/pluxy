@@ -335,10 +335,13 @@ pluxy theme clear                    # back to the default theme
 pluxy theme remove <id>
 ```
 
-`pluxy theme add` stores the file under `--id`, else under the file's own `id` when it is
-`publisher/name`, else under `t3/<file name>`. The command does not check the file as the UI
-does: a stored file the UI cannot read is listed on the Themes page with the reason and cannot be
-turned on. The built-in themes' IDs are `pluxy/default`, `pluxy/terminal` and `pluxy/paper`.
+`pluxy theme add` stores the file under `--id`. For a pluxy theme file with `theme_version`, it
+uses the file's own `id` when it is `publisher/name`, else `t3/<file name>`. For a T3 Code theme
+file with no `theme_version`, it uses `t3/<id>` when `id` is a valid T3 Code theme ID; otherwise it
+derives the part after `t3/` from `name` as the Themes page does. When neither `id` nor `name` is
+usable, it uses `t3/<file name>`. The command does not check the file as the UI does: a stored file
+the UI cannot read is listed on the Themes page with the reason and cannot be turned on. The
+built-in themes' IDs are `pluxy/default`, `pluxy/terminal` and `pluxy/paper`.
 
 ## Safe mode
 
