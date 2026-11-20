@@ -74,14 +74,15 @@
       "want": {
         "code": "usage_limit_reached",
         "message": "The usage limit has been reached",
-        "type": "rate_limit_error"
+        "type": "rate_limit_error",
+        "pluxy": "(volatile)"
       }
     },
     {
       "path": "then[0].body.error",
       "kind": "gap",
       "reason": "When every account is cooling, today's core names the model, provider, reset time and last upstream error in its own fields; the new core says the same in its message and gives the wait as Retry-After.",
-      "want": {"code":"model_cooldown","message":"(volatile)","type":"rate_limit_error"}
+      "want": {"code":"model_cooldown","message":"(volatile)","type":"rate_limit_error", "pluxy": "(volatile)"}
     }
   ],
   "then": [

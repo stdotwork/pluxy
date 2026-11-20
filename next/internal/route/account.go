@@ -52,6 +52,9 @@ type Account struct {
 	// headers), over the extension's own of the same names. Values of headers about
 	// authentication are secret (package upheader).
 	Headers map[string]string `json:"headers,omitempty"`
+	// Timeouts overrides routing.timeouts for this account (header_ms, idle_ms, total_ms).
+	// Nil fields inherit routing.timeouts or core's defaults; 0 turns a limit off.
+	Timeouts *protocol.Timeouts `json:"timeouts,omitempty"`
 	// Credential is the secret the account presents.
 	Credential *protocol.Credential `json:"credential,omitempty"`
 	// Managed marks an account whose credential core's credential store keeps: each attempt
@@ -60,6 +63,13 @@ type Account struct {
 	// Extension is the ID of the extension that serves the account, set by core. Attempts on
 	// the account go to that extension, and only its credentials are fetched for them.
 	Extension string `json:"-"`
+	// Held, set by core, is why the account serves no requests: HealthDisabled (a person turned
+	// it off) or HealthNeedsLogin (the provider refused its sign-in). The router never sends it a
+	// request, but it counts the account when it chooses the provider of a model name, so an
+	// account going out of service does not move the name to another provider, and names it in
+	// what a request leaves out. It keeps the model list read while it was in service, and its
+	// extension is not called while it is held.
+	Held string `json:"-"`
 
 	// gen is the generation of the router that holds this copy (see State.Retain).
 	gen uint64
@@ -82,6 +92,9 @@ func (a *Account) Check() error {
 	if err := upheader.Check("headers", a.Headers); err != nil {
 		return err
 	}
+	if err := ValidateTimeouts("timeouts", a.Timeouts); err != nil {
+		return err
+	}
 	return a.CheckNames()
 }
 
@@ -101,5 +114,5 @@ func (a *Account) endpoint() string {
 
 // call returns the account as an extension call carries it.
 func (a *Account) call() protocol.Account {
-	return protocol.Account{ID: a.ID, Settings: a.Settings, Credential: a.Credential, ProxyURL: a.ProxyURL, Headers: a.Headers}
+	return protocol.Account{ID: a.ID, Settings: a.Settings, Credential: a.Credential, ProxyURL: a.ProxyURL, Headers: a.Headers, Timeouts: a.Timeouts}
 }

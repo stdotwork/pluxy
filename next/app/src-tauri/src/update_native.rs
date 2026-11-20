@@ -10,9 +10,9 @@
 //!   first launch sets the feed, confirmed natively, for the later ones on the same profile);
 //! - a crafted install the updater must refuse before any download, with how to update instead:
 //!   `deb`, `rpm`, `unknown` (Linux: the program with the bundle type a .deb, an .rpm or no
-//!   package gives it), `msi`, `nsis`, `shared` (Windows: an .msi- or setup-program-patched
-//!   program, a folder others can change), `bare`, `group-writable` (macOS: the program outside
-//!   its app bundle, a bundle others can change);
+//!   package gives it), `msi`, `shared` (Windows: an .msi-patched program, a folder others can
+//!   change), `bare`, `group-writable` (macOS: the program outside its app bundle, a bundle
+//!   others can change);
 //! - `open` (macOS): the test package started by LaunchServices (`/usr/bin/open`): an update is
 //!   offered, so its provenance holds for such a launch; then it quits;
 //! - refusals of the test package in `/Applications` (macOS), each of the session's making:
@@ -23,6 +23,9 @@
 //!   admits (root's and admin's, a deny entry): an update is offered; then it quits;
 //! - `applications` (macOS): the test package in `/Applications`, which restarts itself twice:
 //!   v1→v2, then a confirmed rollback to v1;
+//! - `parts` and `parts-undone` (Windows): the test package starts an update that waits between
+//!   two parts of its program set (`<dir>/hold-parts`), where the session ends it; then, started
+//!   again on the mixed folder, it reports what its start made of it (the replace undone);
 //! - `update`: the test package itself. The app restarts itself on this route, so each process
 //!   reads where it is from `<dir>/stage`: lower feed, bad signature, a signed version that is not
 //!   the announced one and a cancelled download change nothing; an update whose new version does
@@ -36,7 +39,7 @@
 use crate::native_test::ui::{self, Key};
 use crate::native_test::{eval, log, wait_for};
 use crate::release_native::{attr, click, dialog_text, set_source, wait_attr};
-use crate::updater::{digest, installed_here, kept_path, Pinned};
+use crate::updater::{digest, installed_here, kept_path, updates_dir, Pinned};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -59,9 +62,19 @@ fn installed_sha(app: &AppHandle) -> String {
         .unwrap_or_default()
 }
 
-/// What is next to the installed copy, by name (what an install may leave there, and the copy).
+/// The folder an install leaves things in: the installed copy's (the AppImage's or the app
+/// bundle's), or on Windows the program set's own folder.
+fn leftovers_folder(app: &AppHandle) -> Option<PathBuf> {
+    let installed = installed(app)?;
+    if cfg!(windows) {
+        return Some(installed);
+    }
+    installed.parent().map(Path::to_path_buf)
+}
+
+/// What is in that folder, by name (what an install may leave there, and the copy).
 fn beside(app: &AppHandle) -> Vec<String> {
-    let Some(parent) = installed(app).and_then(|p| p.parent().map(Path::to_path_buf)) else {
+    let Some(parent) = leftovers_folder(app) else {
         return vec![];
     };
     let mut names: Vec<String> = fs::read_dir(parent)
@@ -261,10 +274,9 @@ fn report(app: &AppHandle, main: &Webview, dir: &Path, stage: &str) -> Result<Va
         Value::Null
     };
     let shared = installed(app).is_some_and(|p| p.parent() == Some(Path::new("/Applications")));
-    let own = installed(app).and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
     if !shared {
         let _ = soon("only the installed copy next to it", 30, || {
-            (beside(app) == own.iter().cloned().collect::<Vec<_>>()).then_some(())
+            (beside(app) == own(app)).then_some(())
         });
     }
     let r = json!({
@@ -275,6 +287,9 @@ fn report(app: &AppHandle, main: &Webview, dir: &Path, stage: &str) -> Result<Va
         "shown": attr(main, APP_CARD, "installed"),
         "installed": installed(app),
         "installed_sha": installed_sha(app),
+        // The bundle type Tauri's bundler patched into this program, if any (the setup program's
+        // copy reads Nsis until its first update).
+        "bundle_type": tauri::utils::platform::bundle_type().map(|t| format!("{t:?}")),
         "beside": if shared { Value::Null } else { json!(beside(app)) },
         "core_pid": core,
         "last": eval(main, "(e => e ? {result: e.dataset.result, detail: e.dataset.detail} : null)(document.querySelector('[data-part=app-update-last]'))"),
@@ -282,6 +297,28 @@ fn report(app: &AppHandle, main: &Webview, dir: &Path, stage: &str) -> Result<Va
     });
     log("update_stage", r.clone());
     Ok(r)
+}
+
+/// What is in the leftovers folder once nothing an install made is left: the installed copy's
+/// name, or on Windows the program set's parts, and the per-user setup's `uninstall.exe` when the
+/// setup installed this copy (it is the setup's, not the set's).
+fn own(app: &AppHandle) -> Vec<String> {
+    if cfg!(windows) {
+        let exe = std::env::current_exe()
+            .ok()
+            .and_then(|e| e.file_name().map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_default();
+        let mut v = vec!["bundled".to_string(), "pluxy.exe".into(), exe];
+        if leftovers_folder(app).is_some_and(|f| f.join("uninstall.exe").is_file()) {
+            v.push("uninstall.exe".into());
+        }
+        v.sort();
+        return v;
+    }
+    installed(app)
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .into_iter()
+        .collect()
 }
 
 /// Starts the update the page offers and waits for this process to be replaced.
@@ -393,23 +430,19 @@ fn gap(app: &AppHandle, dir: &Path) -> Result<(), String> {
     // Then this version accepts itself (its record of the update written, its pending record
     // gone): what the page says about the last update is read after that. One that never accepts
     // shows in the report the session checks.
-    let pending = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("updates")
-        .join("pending.json");
+    let pending = updates_dir(app)?.join("pending.json");
     let _ = soon("this version to accept itself", 30, || {
         (!pending.exists()).then_some(())
     });
     Ok(())
 }
 
-/// Makes the kept copy at path differ from its pin (a file: one more byte; an app bundle: one
-/// more file) and returns how to undo it.
+/// Makes the kept copy at path differ from its pin (a file: one more byte; an app bundle or a
+/// program set: one more file) and returns how to undo it.
 fn tamper(path: &Path) -> Result<impl FnOnce() -> Result<(), String>, String> {
+    let inside = if cfg!(windows) { "bundled" } else { "Contents" };
     let (file, original) = if path.is_dir() {
-        (path.join("Contents").join("pluxy-tampered"), None)
+        (path.join(inside).join("pluxy-tampered"), None)
     } else {
         let b = fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
         (path.to_path_buf(), Some(b))
@@ -440,10 +473,7 @@ fn updated(app: &AppHandle, main: &Webview, dir: &Path) -> Result<(), String> {
     let no_dialog = !ui::shown(app, DIALOG);
     // Refused without a confirmation: the kept copy no longer has its pinned digest.
     let kept = kept_path(
-        &app.path()
-            .app_data_dir()
-            .map_err(|e| e.to_string())?
-            .join("updates"),
+        &updates_dir(app)?,
         &Pinned {
             version: "0.1.0".into(),
             sha256: v1.into(),
@@ -529,9 +559,9 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, dir: PathBuf) -> Result<(), S
             set_source(app, main, &feed()?)?;
             refused(app, main, &dir, &case)?
         }
-        "deb" | "rpm" | "unknown" | "msi" | "nsis" | "shared" | "bare" | "group-writable"
-        | "linked" | "staff-entry" | "wheel-entry" | "inherited-entry" | "bundle-entry"
-        | "not-yours" | "not-admin" => refused(app, main, &dir, &case)?,
+        "deb" | "rpm" | "unknown" | "msi" | "shared" | "bare" | "group-writable" | "linked"
+        | "staff-entry" | "wheel-entry" | "inherited-entry" | "bundle-entry" | "not-yours"
+        | "not-admin" => refused(app, main, &dir, &case)?,
         "open" | "admitted" => {
             check(main, &dir, "good", "0.2.0")?;
             let available = wait_for("the updater's view", || {
@@ -545,6 +575,37 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, dir: PathBuf) -> Result<(), S
             );
         }
         "applications" => applications(app, main, &dir)?,
+        // Windows: an update ended between two parts of the set, then the start after it.
+        "parts" => {
+            check(main, &dir, "good", "0.2.0")?;
+            fs::write(dir.join("hold-parts"), "").map_err(|e| e.to_string())?;
+            click(main, "[data-part=app-update-now]")?;
+            phase(main, "the update to install", &["installing"])?;
+            std::thread::sleep(Duration::from_secs(150));
+            return Err("the update was not ended between two parts".into());
+        }
+        "parts-undone" => {
+            let updates = updates_dir(app)?;
+            let v1 = fs::read_to_string(dir.join("v1.sha256")).map_err(|e| e.to_string())?;
+            let kept = kept_path(
+                &updates,
+                &Pinned {
+                    version: "0.1.0".into(),
+                    sha256: v1.trim().into(),
+                },
+            );
+            let r = report(app, main, &dir, "parts-undone")?;
+            log(
+                "update_parts_undone",
+                json!({"pending": updates.join("pending.json").exists(),
+                       "kept": kept, "kept_sha": digest(&kept).unwrap_or_default(),
+                       "installed_sha": r["installed_sha"], "beside": r["beside"],
+                       "version": r["version"],
+                       // The name this start was launched as (the session spells it otherwise).
+                       "launched_as": std::env::current_exe().ok()
+                           .and_then(|e| e.file_name().map(|n| n.to_string_lossy().into_owned()))}),
+            );
+        }
         "update" => match stage(&dir).as_str() {
             "" => return first(app, main, &dir),
             "refused" => return after_refused(app, main, &dir),

@@ -25,7 +25,8 @@ const IMPORTED_ID_MASKED = "claude-bo***@e***.com";
 // Two accounts whose IDs mask the same.
 const TWINS = ["aaaa_example_com", "aabb_example_com"];
 const TWIN_MASKED = "a***@e***.com";
-// The masks, worked out by hand from the old app's rules (extensions/app privacyMask.ts):
+// The masks, worked out by hand from the old app's rules (`src/services/privacyMask.ts` in
+// router-for-me/EasyCLIProxyAPI, https://github.com/router-for-me/EasyCLIProxyAPI):
 // opaque values over 10 characters keep 2 at each end, e-mail addresses keep 2 (local part
 // over 4 characters) and 1 (domain) before ***, and values of 4 characters or fewer are ***.
 const AMP_MASKED = "$&***77";

@@ -5,9 +5,11 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 )
@@ -25,9 +27,10 @@ func startCoreAccounts(t *testing.T, u *upstream, routing map[string]any, keys .
 		})
 	}
 	return runCore(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
-		"routing":     routing,
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+		"routing":        routing,
 		"extension": map[string]any{
 			"manifest": filepath.Join(binDir, "pluxy-extension.json"),
 			"accounts": accounts,
@@ -204,22 +207,36 @@ func TestStaleFailureLeavesNoCooldown(t *testing.T) {
 	}
 }
 
-// An account whose upstream speaks another format refuses a request it cannot translate, but
-// that refusal is about the account, not the request: core moves the request on to an account
-// that serves the client's format instead of failing it.
-func TestAccountRefusingTheFormatRotates(t *testing.T) {
+// An account whose upstream speaks another format translates the request instead of rotating it:
+// a Chat request on a Gemini-wire account reaches that account's upstream as generateContent.
+func TestAccountTranslatingTheFormatServesInPlace(t *testing.T) {
 	u := newUpstream(t)
 	u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) { okReply(w) }
+	var mu sync.Mutex
+	var geminiCalls []string
+	gemini := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1beta/models/gpt-test:generateContent" {
+			http.NotFound(w, r)
+			return
+		}
+		mu.Lock()
+		geminiCalls = append(geminiCalls, r.Header.Get("x-goog-api-key"))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}`)
+	}))
+	t.Cleanup(gemini.Close)
 	base := runCore(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
-		"routing":     map[string]any{"strategy": "fill-first"},
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+		"routing":        map[string]any{"strategy": "fill-first"},
 		"extension": map[string]any{
 			"manifest": filepath.Join(binDir, "pluxy-extension.json"),
 			"accounts": []any{
 				map[string]any{
 					"id":         "acct-gemini",
-					"settings":   map[string]any{"base_url": u.URL + "/v1beta", "wire_api": "gemini"},
+					"settings":   map[string]any{"base_url": gemini.URL + "/v1beta", "wire_api": "gemini"},
 					"credential": map[string]any{"kind": "api_key", "api_key": "sk-gemini"},
 				},
 				map[string]any{
@@ -231,8 +248,13 @@ func TestAccountRefusingTheFormatRotates(t *testing.T) {
 		},
 	})
 	postOK(t, base, plainBody)
-	if got, want := usedKeys(u), []string{"sk-chat"}; !slices.Equal(got, want) {
-		t.Errorf("upstream keys = %v, want %v", got, want)
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{"sk-gemini"}; !slices.Equal(geminiCalls, want) {
+		t.Errorf("Gemini upstream keys = %v, want %v", geminiCalls, want)
+	}
+	if got := usedKeys(u); len(got) != 0 {
+		t.Errorf("Chat upstream keys = %v, want none", got)
 	}
 }
 

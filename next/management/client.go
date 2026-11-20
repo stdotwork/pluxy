@@ -162,6 +162,36 @@ func (c *Client) ResetCooldowns(ctx context.Context, id string) (CooldownResetRe
 	return v, err
 }
 
+// Chains is GET /chains: the fallback chains.
+func (c *Client) Chains(ctx context.Context) (ChainsReply, error) {
+	var out ChainsReply
+	err := c.get(ctx, "/chains", nil, &out)
+	return out, err
+}
+
+// SetChain is PUT /chains/{name}: name's fallback chain becomes steps.
+func (c *Client) SetChain(ctx context.Context, name string, steps []ChainStep) (Chain, error) {
+	var out Chain
+	_, err := c.Call(ctx, http.MethodPut, ChainPath(name), nil, ChainRequest{Steps: steps}, &out)
+	return out, err
+}
+
+// RemoveChain is DELETE /chains/{name}: name goes back to the default, one provider's accounts.
+func (c *Client) RemoveChain(ctx context.Context, name string) error {
+	_, err := c.Call(ctx, http.MethodDelete, ChainPath(name), nil, nil, nil)
+	return err
+}
+
+// ChainPath is the path of name's chain, its name escaped as one path segment.
+func ChainPath(name string) string { return "/chains/" + url.PathEscape(name) }
+
+// Route is GET /route: what a request for model would do now, sent to no one.
+func (c *Client) Route(ctx context.Context, model string) (RouteReply, error) {
+	var out RouteReply
+	err := c.get(ctx, "/route", url.Values{"model": {model}}, &out)
+	return out, err
+}
+
 // TestAccount is POST /accounts/{id}/test; an empty model lets core pick one.
 func (c *Client) TestAccount(ctx context.Context, id, model string) (TestResult, error) {
 	var v TestReply
@@ -282,6 +312,44 @@ func (c *Client) Logs(ctx context.Context, q url.Values) (LogLines, error) {
 func (c *Client) Usage(ctx context.Context, q url.Values) (UsageReply, error) {
 	var v UsageReply
 	return v, c.get(ctx, "/usage", q, &v)
+}
+
+// Setup is GET /setup.
+func (c *Client) Setup(ctx context.Context) (Setup, error) {
+	var v Setup
+	return v, c.get(ctx, "/setup", nil, &v)
+}
+
+// SetupScan is POST /setup/scan.
+func (c *Client) SetupScan(ctx context.Context) (Setup, error) {
+	var v Setup
+	_, err := c.Call(ctx, http.MethodPost, "/setup/scan", nil, nil, &v)
+	return v, err
+}
+
+// SetupApply is POST /setup/apply.
+func (c *Client) SetupApply(ctx context.Context, picks []string) (SetupApplyReply, error) {
+	var v SetupApplyReply
+	_, err := c.Call(ctx, http.MethodPost, "/setup/apply", nil, SetupApplyRequest{Picks: picks}, &v)
+	return v, err
+}
+
+// ClientPaste is GET /setup/clients/{id}/paste. keyID, when not empty, names the client key
+// the reply's Key placeholder points at.
+func (c *Client) ClientPaste(ctx context.Context, id, keyID string) (ClientPaste, error) {
+	var q url.Values
+	if keyID != "" {
+		q = url.Values{"key_id": {keyID}}
+	}
+	var v ClientPaste
+	return v, c.get(ctx, "/setup/clients/"+url.PathEscape(id)+"/paste", q, &v)
+}
+
+// SetupDone is POST /setup/done.
+func (c *Client) SetupDone(ctx context.Context) (SetupDoneReply, error) {
+	var v SetupDoneReply
+	_, err := c.Call(ctx, http.MethodPost, "/setup/done", nil, nil, &v)
+	return v, err
 }
 
 // UsageEvents is GET /usage/events; q takes after, before, limit, since, until, model,

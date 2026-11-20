@@ -165,7 +165,8 @@
       "reason": "When every account is cooling, today's core names the model, provider and last upstream error in its own message; the new core says the model and the wait in its message and gives the wait as Retry-After.",
       "want": {
         "message": "every account for model \"claude-test\" is cooling down; try again in 1m0s",
-        "type": "rate_limit_error"
+        "type": "rate_limit_error",
+        "pluxy": "(volatile)"
       }
     }
   ],

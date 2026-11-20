@@ -29,8 +29,11 @@ interface MethodTile {
   method: LoginMethod;
 }
 
-/** onSuccess: called with the new account's ID once a sign-in adds it (Beginner Mode counts it). */
-export function AddAccountPage(props: { onSuccess?: (accountId: string) => void } = {}) {
+/**
+ * onSuccess: called with the new account's ID once a sign-in adds it (Beginner Mode counts it).
+ * embedded: the sign-in without the page's own title, for a page that shows it as one of its parts.
+ */
+export function AddAccountPage(props: { onSuccess?: (accountId: string) => void; embedded?: boolean } = {}) {
   const { api } = useKit();
   const p = usePrivacy();
   const methods = useLoad(api.loginMethods);
@@ -61,7 +64,7 @@ export function AddAccountPage(props: { onSuccess?: (accountId: string) => void 
   const validId = validAccountId(accountId);
   return (
     <>
-      <PageHead title={t("title")} />
+      {!props.embedded && <PageHead title={t("title")} />}
       <div class="add-account stack">
         {methods.error && (
           <>

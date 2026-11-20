@@ -241,8 +241,9 @@ fn check_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Whether name is one Windows paths cannot name plainly (see `check_name`); the core store's
-/// unpacking refuses such names too (`cores.rs`).
+/// Whether name is one Windows paths cannot name plainly (see `check_name`); the app's update
+/// refuses such names in a Windows program set too (`updater/set.rs`), and the core store's
+/// unpacking refuses them too (`cores.rs`).
 pub(crate) fn windows_refuses(name: &str) -> bool {
     windows_device(name)
         || name.ends_with(['.', ' '])
@@ -284,9 +285,9 @@ pub(crate) fn windows_device(name: &str) -> bool {
 #[path = "vault_windows.rs"]
 mod folder_windows;
 #[cfg(windows)]
-pub(crate) use folder_windows::at;
-#[cfg(windows)]
 use folder_windows::Folder;
+#[cfg(windows)]
+pub(crate) use folder_windows::{at, delete, entries};
 
 /// A vault folder, opened without following a link and used only relative to its handle: a
 /// folder replaced by a link (to somewhere else) is refused, not followed.

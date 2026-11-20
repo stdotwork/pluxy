@@ -51,7 +51,8 @@
       "want": {
         "code": "usage_limit_reached",
         "message": "The usage limit has been reached",
-        "type": "rate_limit_error"
+        "type": "rate_limit_error",
+        "pluxy": "(volatile)"
       }
     }
   ],

@@ -159,8 +159,9 @@ func descriptions(m map[string]any) []string {
 func TestPayloadWebSocketTurns(t *testing.T) {
 	u := newPayloadWSUpstream(t)
 	base := runCore(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
 		"payload": map[string]any{
 			"override": []any{map[string]any{
 				"models": []any{map[string]any{"name": "gpt-*", "protocol": "codex"}},
@@ -256,8 +257,9 @@ func TestPayloadWebSocketTurns(t *testing.T) {
 func TestPayloadWebSocketRuleRemovesPreviousResponse(t *testing.T) {
 	u := newPayloadWSUpstream(t)
 	base := runCore(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
 		"payload": map[string]any{
 			"filter": []any{map[string]any{
 				"models": []any{map[string]any{"name": "gpt-*", "protocol": "codex"}},
@@ -317,8 +319,9 @@ func TestPayloadWebSocketRuleRemovesPreviousResponse(t *testing.T) {
 func TestPayloadWebSocketTurnsOverHTTP(t *testing.T) {
 	u := newWSUpstream(t)
 	base := runCore(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
 		"payload": map[string]any{
 			"override": []any{map[string]any{
 				"models": []any{map[string]any{"name": "gpt-*", "protocol": "codex"}},
@@ -378,9 +381,10 @@ func TestPayloadAndUpstreamModelOfAliasedAccount(t *testing.T) {
 	}
 	start := func(t *testing.T, upstreamURL string, websockets bool) string {
 		return runCore(t, map[string]any{
-			"listen":      "127.0.0.1:0",
-			"client_keys": []string{clientKey},
-			"payload":     rules,
+			"listen":         "127.0.0.1:0",
+			"client_keys":    []string{clientKey},
+			"management_key": managementKey,
+			"payload":        rules,
 			"extension": map[string]any{
 				"manifest": filepath.Join(binDir, "codex", "pluxy-extension.json"),
 				"accounts": []any{map[string]any{

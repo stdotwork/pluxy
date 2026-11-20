@@ -5,7 +5,8 @@
 // tries to escape its sandbox; their files are in ui/e2e/fixtures. With -probe, test/probe too:
 // the page the desktop app's native test shows (fixtures/probe).
 //
-// Once core listens and test/beta is disabled, it prints one line of JSON on stdout,
+// Once core listens, the test packages are installed from its bundled registry (a first start
+// installs nothing) and test/beta is disabled, it prints one line of JSON on stdout,
 // {"base":"http://127.0.0.1:port","key":"<management key>","client_key":"<client key>",
 // "config":"<core's config file>"}, and nothing else on stdout. The config file holds core's
 // current management key, also after a rotation. Core writes its log to files (logs.to_file). It runs until stdin reaches
@@ -14,10 +15,15 @@
 // With -tls, core's API is reached through an https proxy whose certificate comes from a new
 // authority: base is https://127.0.0.1:port, and "ca" names the authority's PEM file.
 //
+// With -first-run, core starts as a new install does: nothing installed, no accounts, and its
+// bundled registry offers one pick, pluxy/claude (the test extension under that ID, so setup
+// suggests it). Core runs with a new empty home folder and a PATH that holds only a claude
+// program printing a version, so its scan finds Claude Code and nothing of the machine's own.
+//
 // With -prepare <folder>, it starts nothing: it builds core into <folder>/pluxy and writes the
 // test packages as core's bundled packages, <folder>/bundled/index.json (where core looks for
-// them beside its program), prints {"core":"<folder>/pluxy"} and exits. The folder is the
-// caller's to remove.
+// them beside its program; a core started from there installs none of them until asked), prints
+// {"core":"<folder>/pluxy"} and exits. The folder is the caller's to remove.
 package main
 
 import (
@@ -65,15 +71,25 @@ func main() {
 	prepare := flag.String("prepare", "", "only build core and its bundled test packages into this folder, then exit")
 	withTLS := flag.Bool("tls", false, "reach core's API through an https proxy with a certificate from a new authority")
 	probe := flag.Bool("probe", false, "also offer test/probe, the desktop app's native test page")
+	firstRun := flag.Bool("first-run", false, "start core as a new install: nothing installed, no accounts, a home folder and PATH of its own")
+	// The claude program of -first-run is a copy of this one: asked for its version, it prints one.
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		fmt.Println(fakeClaudeVersion + " (Claude Code)")
+		return
+	}
 	flag.Parse()
 	if *probe {
 		testPackages = append(testPackages, probePackage)
 	}
 	var err error
-	if *prepare != "" {
+	switch {
+	case *prepare != "":
 		err = prepareOnly(*prepare)
-	} else {
-		err = serve(*withTLS)
+	case *firstRun:
+		testPackages = []pkg{firstRunPackage}
+		err = serve(*withTLS, true)
+	default:
+		err = serve(*withTLS, false)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "panelcore:", err)
@@ -114,8 +130,9 @@ func prepareOnly(dir string) error {
 
 // serve builds core and the test extension, starts core with them, prints its address and
 // management key, and runs until stdin ends or a signal arrives. The deferred calls stop core
-// and then remove the temporary folder, also when setup fails.
-func serve(withTLS bool) error {
+// and then remove the temporary folder, also when setup fails. firstRun: core starts as a new
+// install does (see the package comment).
+func serve(withTLS, firstRun bool) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -137,8 +154,10 @@ func serve(withTLS bool) error {
 	if err := buildBinary(root, testext, "./e2e/testext"); err != nil {
 		return err
 	}
-	if _, err := writeLocal(dir, testext); err != nil {
-		return err
+	if !firstRun {
+		if _, err := writeLocal(dir, testext); err != nil {
+			return err
+		}
 	}
 	index, err := writeRegistry(dir, "registry", testext, filepath.Join(root, "ui"))
 	if err != nil {
@@ -152,12 +171,18 @@ func serve(withTLS bool) error {
 	if err != nil {
 		return err
 	}
-	cfgPath, err := writeConfig(dir, clientKey, mgmtKey, withTLS)
+	cfgPath, err := writeConfig(dir, clientKey, mgmtKey, withTLS, firstRun)
 	if err != nil {
 		return err
 	}
+	var env []string
+	if firstRun {
+		if env, err = firstRunEnv(dir); err != nil {
+			return err
+		}
+	}
 
-	c, err := startCore(pluxy, cfgPath, index)
+	c, err := startCore(pluxy, cfgPath, index, env)
 	if err != nil {
 		return err
 	}
@@ -166,8 +191,17 @@ func serve(withTLS bool) error {
 	if err != nil {
 		return err
 	}
-	if err := disablePackage(base, mgmtKey, "test/beta"); err != nil {
-		return err
+	// A first start installs nothing: the test packages are installed from the bundled registry,
+	// as setup would, and test/beta is then turned off. With firstRun that is left to the test.
+	if !firstRun {
+		for _, p := range testPackages {
+			if err := installPackage(base, mgmtKey, p.id); err != nil {
+				return err
+			}
+		}
+		if err := disablePackage(base, mgmtKey, "test/beta"); err != nil {
+			return err
+		}
 	}
 	ready := map[string]string{"base": base, "key": mgmtKey, "client_key": clientKey, "config": cfgPath}
 	if withTLS {
@@ -240,6 +274,8 @@ type pkg struct {
 	id, version, file string
 	ui, config        any
 	fixture           string // folder under ui/e2e/fixtures, copied into the package's ui folder
+	// What the registry says of the package, each left out when empty.
+	title, summary, kind, tier string
 }
 
 var testPackages = []pkg{
@@ -293,6 +329,45 @@ var probePackage = pkg{
 			"report": map[string]any{"type": "string", "title": "Report", "maxLength": 4096},
 		},
 	}},
+}
+
+// firstRunPackage is the one package -first-run's registry offers: the test extension as the
+// pick setup suggests when it finds Claude Code.
+var firstRunPackage = pkg{
+	id: "pluxy/claude", version: "0.1.0", file: "claude.tar.gz",
+	title: "Claude", summary: "Claude subscriptions and API keys", kind: "provider", tier: "pick",
+}
+
+// fakeClaudeVersion is the version -first-run's claude program prints.
+const fakeClaudeVersion = "2.4.1"
+
+// firstRunEnv makes the home folder and the claude program of a -first-run core below dir, and
+// returns the environment core runs with: that home folder, and a PATH that holds only the
+// folder of the claude program.
+func firstRunEnv(dir string) ([]string, error) {
+	home, bin := filepath.Join(dir, "home"), filepath.Join(dir, "bin")
+	for _, d := range []string{home, bin} {
+		if err := os.Mkdir(d, 0o755); err != nil {
+			return nil, err
+		}
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	prog, err := os.ReadFile(self)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(filepath.Join(bin, "claude"+exe), prog, 0o755); err != nil {
+		return nil, err
+	}
+	env := slices.DeleteFunc(os.Environ(), func(kv string) bool {
+		k, _, _ := strings.Cut(kv, "=")
+		k = strings.ToUpper(k) // Windows names are not case-sensitive
+		return k == "HOME" || k == "USERPROFILE" || k == "PATH" || strings.HasPrefix(k, "XDG_")
+	})
+	return append(env, "HOME="+home, "USERPROFILE="+home, "PATH="+bin), nil
 }
 
 // writeLocal puts the test extension in the local folder, with the manifest the config runs from
@@ -349,12 +424,18 @@ func writeRegistry(dir, folder, testext, uiRoot string) (string, error) {
 			return "", err
 		}
 		sum := sha256.Sum256(archive)
-		pkgs[p.id] = map[string]any{"releases": []any{map[string]any{
+		offer := map[string]any{"releases": []any{map[string]any{
 			"version": p.version, "protocol": []int{0},
 			"artifacts": map[string]any{platform: map[string]any{
 				"url": p.file, "sha256": hex.EncodeToString(sum[:]), "size": len(archive),
 			}},
 		}}}
+		for name, value := range map[string]string{"title": p.title, "summary": p.summary, "kind": p.kind, "tier": p.tier} {
+			if value != "" {
+				offer[name] = value
+			}
+		}
+		pkgs[p.id] = offer
 	}
 	index, err := json.Marshal(map[string]any{"registry_version": 0, "packages": pkgs})
 	if err != nil {
@@ -452,7 +533,8 @@ func randomKey() (string, error) {
 // of test/alpha, and returns its path.
 // writeConfig writes core's config. remote: core stands for a remote core behind an https
 // proxy, whose forwarded calls the management API answers only with management_allow_remote.
-func writeConfig(dir, clientKey, mgmtKey string, remote bool) (string, error) {
+// firstRun: the config names no extension and no account.
+func writeConfig(dir, clientKey, mgmtKey string, remote, firstRun bool) (string, error) {
 	cfg := map[string]any{
 		"listen":          "127.0.0.1:0",
 		"client_keys":     []string{clientKey},
@@ -478,6 +560,10 @@ func writeConfig(dir, clientKey, mgmtKey string, remote bool) (string, error) {
 			},
 		}}},
 	}
+	if firstRun {
+		delete(cfg, "extension")
+		delete(cfg, "extensions")
+	}
 	if remote {
 		cfg["management_allow_remote"] = true
 	}
@@ -501,9 +587,11 @@ type core struct {
 }
 
 // startCore runs core with the config at cfgPath and the registry index at index as its bundled
-// packages. Core's stderr goes to this program's stderr, each line prefixed "core: ".
-func startCore(bin, cfgPath, index string) (*core, error) {
+// packages. Core's stderr goes to this program's stderr, each line prefixed "core: ". env, when
+// not nil, is the environment core runs with instead of this program's.
+func startCore(bin, cfgPath, index string, env []string) (*core, error) {
 	cmd := exec.Command(bin, "-config", cfgPath, "-bundled", index, "-watch-interval", "0")
+	cmd.Env = env
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return nil, err
@@ -563,6 +651,28 @@ func (c *core) stop() {
 }
 
 // disablePackage disables installed package id through core's management API.
+// installPackage installs and enables the package id from the bundled registry.
+func installPackage(base, key, id string) error {
+	body := strings.NewReader(`{"id":"` + id + `","registry":"bundled","enable":true}`)
+	req, err := http.NewRequest(http.MethodPost, base+"/v0/management/packages", body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: startTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("install %s: %w", id, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("install %s: status %d: %s", id, resp.StatusCode, b)
+	}
+	return nil
+}
+
 func disablePackage(base, key, id string) error {
 	req, err := http.NewRequest(http.MethodPost, base+"/v0/management/packages/"+id+"/disable", nil)
 	if err != nil {
