@@ -51,11 +51,11 @@ func TestGeminiResponsesCompact(t *testing.T) {
 					"id":         "key",
 					"settings":   map[string]any{"base_url": srv.URL},
 					"credential": map[string]any{"kind": "api_key", "api_key": srv.IssueKey()},
+					"models":     []string{"gemini-2.5-pro"},
 				}},
 			},
 		})
-		// An API-key account serves the models its upstream lists; the fake upstream lists gemini-test.
-		code, reply := clientPost(t, base, "/v1/responses/compact", strings.Replace(reqBody, "gemini-2.5-pro", "gemini-test", 1), codexHeaders)
+		code, reply := clientPost(t, base, "/v1/responses/compact", reqBody, codexHeaders)
 		if code != http.StatusOK {
 			t.Fatalf("status %d: %s", code, reply)
 		}
@@ -137,8 +137,8 @@ func TestGeminiResponsesCompact(t *testing.T) {
 		if err := json.Unmarshal([]byte(reply), &got); err != nil {
 			t.Fatalf("reply %s: %v", reply, err)
 		}
-		if got.Object != "response.compaction" || !strings.HasPrefix(got.ID, "resp_") || got.Model != "gemini-test" {
-			t.Errorf("reply %s; want response.compaction with resp_ id and model gemini-test", reply)
+		if got.Object != "response.compaction" || !strings.HasPrefix(got.ID, "resp_") || got.Model != "gemini-2.5-pro" {
+			t.Errorf("reply %s; want response.compaction with resp_ id and model gemini-2.5-pro", reply)
 		}
 		if len(got.Output) != 1 || got.Output[0].Type != "message" || got.Output[0].Role != "user" ||
 			len(got.Output[0].Content) != 1 || got.Output[0].Content[0].Type != "input_text" {
