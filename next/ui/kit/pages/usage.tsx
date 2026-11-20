@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import { problem, type UsageEvent, type UsageFilters } from "../api";
 import { csvField } from "../csv";
 import { useAccountLabels, usePrivacy } from "../privacy";
+import { useSave } from "../save";
 import type { PageDef } from "../shell";
 import { strings } from "../strings";
 import { Button, Empty, List, Notice, PageHead, useKit, when } from "../ui";
@@ -52,6 +53,7 @@ export function UsagePage() {
   const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
+  const saved = useSave();
   const [error, setError] = useState<string>();
   const [lost, setLost] = useState(false);
   const [capped, setCapped] = useState(false);
@@ -104,7 +106,7 @@ export function UsagePage() {
     };
   }, [filters, revision]);
 
-  const exportCSV = () => {
+  const exportCSV = async () => {
     setExporting(true);
     const selected = events.slice(0, EXPORT_LIMIT);
     setCapped(events.length > EXPORT_LIMIT);
@@ -134,16 +136,11 @@ export function UsagePage() {
         e.id ?? "",
       ]),
     ];
-    const url = URL.createObjectURL(
-      new Blob([rows.map((row) => row.map(csvField).join(",")).join("\r\n") + "\r\n"], {
-        type: "text/csv;charset=utf-8",
-      }),
+    await saved.save(
+      "usage.csv",
+      `${rows.map((row) => row.map(csvField).join(",")).join("\r\n")}\r\n`,
+      "text/csv;charset=utf-8",
     );
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = "usage.csv";
-    link.click();
-    URL.revokeObjectURL(url);
     setExporting(false);
   };
   const field = (name: keyof UsageFilters, label: string) => (
@@ -193,6 +190,7 @@ export function UsagePage() {
           </select>
         </label>
       </div>
+      {saved.notice}
       {error && <Notice tone="danger">{mask(error)}</Notice>}
       {lost && <Notice tone="muted">{t("lost")}</Notice>}
       {capped && <Notice tone="muted">{t("capped", { count: EXPORT_LIMIT })}</Notice>}

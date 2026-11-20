@@ -2,7 +2,7 @@
 // options. A host build passes the pages it offers; the shell knows nothing else about them.
 
 import type { VNode } from "preact";
-import { useCallback, useEffect, useId, useMemo, useState } from "preact/hooks";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "preact/hooks";
 import { api } from "./api";
 import { ExtensionPage, type ExtensionPageProps } from "./extensions/page";
 import type { Host, Reply } from "./host";
@@ -277,6 +277,29 @@ export function Shell(props: {
 
   const active = pages.find((p) => p.id === page);
   const navId = useId();
+  // Laid out as a bar (the theme's top navigation, or any navigation in a narrow window), the
+  // navigation scrolls sideways when it is wider than the window: the current page's entry is
+  // brought into view when the page opens, and when the entries or the bar's size change.
+  const navRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const bar = navRef.current;
+    if (!bar) return;
+    const show = () => {
+      const entry = bar.querySelector('[aria-current="page"]');
+      if (!entry || bar.scrollWidth <= bar.clientWidth) return;
+      const b = bar.getBoundingClientRect();
+      const e = entry.getBoundingClientRect();
+      // Past the entry by a little, so the cue at the bar's edge does not cover it.
+      const margin = 24;
+      if (e.left < b.left + margin) bar.scrollLeft -= b.left + margin - e.left;
+      else if (e.right > b.right - margin) bar.scrollLeft += e.right - (b.right - margin);
+    };
+    show();
+    if (typeof ResizeObserver === "undefined") return;
+    const sizes = new ResizeObserver(show);
+    sizes.observe(bar);
+    return () => sizes.disconnect();
+  }, [page, signedIn, pages]);
   useEffect(() => {
     document.documentElement.dataset.page = signedIn ? page : "signin";
     document.title =
@@ -302,7 +325,7 @@ export function Shell(props: {
     <KitContext.Provider value={kit}>
       <PrivacyContext.Provider value={masks}>
         <div class="shell" data-part="shell">
-          <nav class="nav" data-part="nav" data-slot="sidebar" aria-label={t("navigation")}>
+          <nav class="nav" data-part="nav" data-slot="sidebar" aria-label={t("navigation")} ref={navRef}>
             <a class="brand" href={`#/${pages[0]?.id ?? ""}`}>
               {props.brand ?? "pluxy"}
             </a>
