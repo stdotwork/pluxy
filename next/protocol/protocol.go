@@ -34,8 +34,10 @@ const Version = 0
 // captured body's BodyStopped; minor 18 adds ModelList.From; minor 19 adds a quota limit's
 // Feature; minor 20 adds llm.CodeAccountClosed; minor 21 adds what a package is (title, summary,
 // kind) to the manifest and registry index, and changes no call; minor 22 adds the account's
-// timeouts (Account.Timeouts); minor 23 adds alive frames (Call.Alive and TypeAlive).
-const Minor = 23
+// timeouts (Account.Timeouts); minor 23 adds alive frames (Call.Alive and TypeAlive); minor 24
+// adds model capabilities (Model.Capabilities); minor 25 adds a tool result's parts and error
+// flag (llm.Item.Content and llm.Item.IsError on a tool_result).
+const Minor = 25
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
