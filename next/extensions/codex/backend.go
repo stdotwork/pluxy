@@ -54,7 +54,7 @@ func backend(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "the backend call is not understood: " + err.Error(), Scope: llm.ScopeRequest}
 	}
 	switch c.Method {
-	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete:
+	case http.MethodGet, http.MethodPost, http.MethodPut:
 	default:
 		return &llm.Error{Code: llm.CodeInvalidRequest, Message: fmt.Sprintf("the backend call's method %q is not passed on", c.Method), Scope: llm.ScopeRequest}
 	}

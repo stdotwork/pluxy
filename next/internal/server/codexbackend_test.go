@@ -45,7 +45,7 @@ func TestCodexBackendRoutes(t *testing.T) {
 			t.Errorf("route %q is not a method and a path", route)
 		}
 		switch method {
-		case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete:
+		case http.MethodGet, http.MethodPost, http.MethodPut:
 		default:
 			t.Errorf("route %q has the method %q", route, method)
 		}

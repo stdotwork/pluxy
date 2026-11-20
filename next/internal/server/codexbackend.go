@@ -48,8 +48,10 @@ type codexBackendCall struct {
 // Not listed, on purpose: sign-in and token calls (auth.openai.com, device codes,
 // accounts/switch-workspace-token, wham/agent-identities/jwks), WebSocket and WebRTC calls
 // (realtime, wham/remote/control/server), the telemetry post (codex/analytics-events/events) and
-// the MCP transport at ps/mcp, none of which a one-reply pass-through serves, and the model
-// catalog (codex/models), which is core's own list of the accounts' models, not the backend's.
+// the MCP transport at ps/mcp, none of which a one-reply pass-through serves, the model
+// catalog (codex/models), which is core's own list of the accounts' models, not the backend's, and
+// DELETE public/plugins/workspace/{plugin}, which the CLI accepts only with a 204 reply
+// (core-plugins/src/remote/share.rs:290) where an endpoint reply is always a 200.
 var codexBackendRoutes = []string{
 	// backend-client/src/client.rs (account, tasks, settings and transcription), client/*.rs
 	// (usage and limits).
@@ -101,7 +103,6 @@ var codexBackendRoutes = []string{
 	"PUT /ps/plugins/{plugin}/shares",           // remote/share.rs:321
 	"POST /public/plugins/workspace",            // remote/share.rs:464
 	"POST /public/plugins/workspace/{plugin}",   // remote/share.rs:462
-	"DELETE /public/plugins/workspace/{plugin}", // remote/share.rs:288
 	"POST /public/plugins/workspace/upload-url", // remote/share.rs:406
 	"GET /plugins/featured",                     // remote_legacy.rs:131
 	"POST /plugins/{plugin}/enable",             // remote_legacy.rs:172
