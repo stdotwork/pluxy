@@ -316,7 +316,7 @@ var commands = []command{
 			})
 		}},
 	{words: "chain set", args: []string{"name", "step"}, more: true, routes: []string{"PUT /chains/{name}"},
-		summary: "set a model name's fallback chain; a step is model[@provider][:account,account] (a model with a colon in its name ends with @: llama3:8b@)",
+		summary: "set a model name's fallback chain; a step is model[@provider][:account,account] (a model with a colon in its name ends with @: llama3:8b@; what follows the last @ is a provider only when it is an extension ID, so claude-opus-4-7@20260416 is a model)",
 		run: func(x *invocation) error {
 			var steps []management.ChainStep
 			for _, a := range x.args[1:] {
