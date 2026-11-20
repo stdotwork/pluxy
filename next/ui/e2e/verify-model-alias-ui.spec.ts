@@ -57,9 +57,7 @@ test("an account model alias is saved, followed through GET /models, edited, and
   await aliases.getByLabel("Model name", { exact: true }).fill("fake-model");
   await aliases.getByLabel("Alias", { exact: true }).fill("panel-alias");
   await aliases.getByLabel("Display name", { exact: true }).fill("Panel Alias");
-  const added = page.waitForRequest(
-    (r) => r.method() === "PATCH" && r.url().endsWith(`/accounts/${id}`),
-  );
+  const added = page.waitForRequest((r) => r.method() === "PATCH" && r.url().endsWith(`/accounts/${id}`));
   await form.getByRole("button", { name: "Save", exact: true }).click();
   expect((await added).postDataJSON()).toEqual({
     model_alias: [{ name: "fake-model", alias: "panel-alias", display_name: "Panel Alias" }],
@@ -69,9 +67,7 @@ test("an account model alias is saved, followed through GET /models, edited, and
   // The saved rule is what core uses to name the account's models, rather than only text the
   // form kept in the browser.
   expect(await names("fake-model")).toEqual(["panel-alias"]);
-  await expect(detail.locator('[data-part="account-settings"]')).toContainText(
-    "fake-model → panel-alias",
-  );
+  await expect(detail.locator('[data-part="account-settings"]')).toContainText("fake-model → panel-alias");
   await detail.getByRole("button", { name: "Models", exact: true }).click();
   const listed = detail.locator('[data-part="account-models"]');
   const model = listed.locator('[data-part="item"]').filter({ hasText: "fake-model" });
@@ -85,9 +81,7 @@ test("an account model alias is saved, followed through GET /models, edited, and
   await expect(aliases.getByLabel("Model name", { exact: true })).toHaveValue("fake-model");
   await expect(aliases.getByLabel("Alias", { exact: true })).toHaveValue("panel-alias");
   await aliases.getByLabel("Alias", { exact: true }).fill("panel-alias-v2");
-  const changed = page.waitForRequest(
-    (r) => r.method() === "PATCH" && r.url().endsWith(`/accounts/${id}`),
-  );
+  const changed = page.waitForRequest((r) => r.method() === "PATCH" && r.url().endsWith(`/accounts/${id}`));
   await form.getByRole("button", { name: "Save", exact: true }).click();
   expect((await changed).postDataJSON()).toEqual({
     model_alias: [{ name: "fake-model", alias: "panel-alias-v2", display_name: "Panel Alias" }],
@@ -99,9 +93,7 @@ test("an account model alias is saved, followed through GET /models, edited, and
   // is served again.
   ({ form, aliases } = await edit(page, detail));
   await aliases.getByRole("button", { name: "Remove alias", exact: true }).click();
-  const removed = page.waitForRequest(
-    (r) => r.method() === "PATCH" && r.url().endsWith(`/accounts/${id}`),
-  );
+  const removed = page.waitForRequest((r) => r.method() === "PATCH" && r.url().endsWith(`/accounts/${id}`));
   await form.getByRole("button", { name: "Save", exact: true }).click();
   expect((await removed).postDataJSON()).toEqual({ model_alias: null });
   await expect(form).toHaveCount(0);
