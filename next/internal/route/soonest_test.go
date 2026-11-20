@@ -229,20 +229,22 @@ func TestQuotaRefreshNegativeIsInvalid(t *testing.T) {
 // A reading the checks of long blocks take ranks the account too.
 func TestSoonestResetUsesCheckReadings(t *testing.T) {
 	zero := int64(0)
-	h, rd := soonestHarness(t, nil, Config{QuotaRefreshMS: &zero}, accts("a", "b")...)
+	h, rd := soonestHarness(t, nil, Config{QuotaRefreshMS: &zero}, accts("a", "b", "c")...)
 	h.r.state.SetCheckInterval(15 * time.Minute)
-	h.on("b", quotaOut(3*time.Hour))
-	h.runOK("m") // a
-	h.runOK("m") // b refuses for 3 hours, a serves
-	h.wantAttempts("a", "b", "a")
-	// b's check reads its window free again, its week ending sooner than a's (unknown).
+	h.on("a", quotaOut(3*time.Hour))
+	h.runOK("m") // a refuses for 3 hours, b serves; with no readings the turn goes on to c
+	h.wantAttempts("a", "b")
+	// a's check reads its window free again, its week ending sooner than the others' (unknown).
 	rd.read = func(id string) (*protocol.Quota, *llm.Error) {
-		if id == "b" {
+		if id == "a" {
 			return weeklyReading(h.now, 2*day), nil
 		}
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "no reading"}
 	}
 	h.now = h.now.Add(15 * time.Minute)
 	h.r.Check(context.Background())
-	wantOrder(t, planOrder(h, "m"), "b", "a")
+	if len(rd.calls) != 1 {
+		t.Fatalf("readings %v, want a's check alone", rd.calls)
+	}
+	wantOrder(t, planOrder(h, "m"), "a", "b", "c")
 }
