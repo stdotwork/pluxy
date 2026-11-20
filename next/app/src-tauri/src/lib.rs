@@ -3364,7 +3364,6 @@ pub fn run() {
             // A version an update installed accepts itself, which the earlier one waits for:
             // before the managed core starts and before anything reads the core that came with
             // the app, which the update replaced with the app.
-            #[cfg(unix)]
             updater::accept(app.handle());
             // The core that came with the app, if this build has one (`bundled_core.rs`).
             let bundled = bundled_core::compiled().and_then(|m| {
@@ -3543,8 +3542,6 @@ pub fn run() {
             } else {
                 show_in_dock(&handle, false);
             }
-            // A version an update installed accepts itself, which the earlier one waits for.
-            updater::accept(&handle);
             #[cfg(unix)]
             updater::record_started_from(&handle);
             #[cfg(feature = "native-test")]
