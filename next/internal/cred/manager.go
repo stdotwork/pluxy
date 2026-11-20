@@ -200,6 +200,11 @@ func (m *Manager) Accounts() []route.Account {
 // Records returns every stored account, including unusable ones.
 func (m *Manager) Records() []Record { return m.store.List() }
 
+// Broken returns the record files the store could not read, each the account its file name
+// gives. They are never routed to; they are listed so the account shows as broken, and removing
+// one removes its file.
+func (m *Manager) Broken() []Broken { return m.store.Broken() }
+
 // StoredCredential returns the saved credential of a usable account owned by extension,
 // without renewing it. Local model catalogs can read plan metadata from an expired token.
 func (m *Manager) StoredCredential(extension, id string) (*protocol.Credential, *llm.Error) {

@@ -566,6 +566,13 @@ func TestFirstRunOfAnUpgrade(t *testing.T) {
 		t.Error("setup.json's first_run was not kept")
 	}
 
+	brokenOnly := t.TempDir()
+	writeTestFile(t, filepath.Join(brokenOnly, "config.json"), safeConfig)
+	writeTestFile(t, filepath.Join(brokenOnly, "credentials", "broken.json"), `{"id":`)
+	if start(brokenOnly).Status().FirstRun {
+		t.Error("an install whose only credential file is broken is on its first run")
+	}
+
 	m := newSetupManager(filepath.Join(t.TempDir(), setupFileName), nil, true)
 	if m.isFirstRun() {
 		t.Error("accounts or packages in use, no setup.json: first run")

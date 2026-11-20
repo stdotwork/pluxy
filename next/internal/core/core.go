@@ -213,7 +213,7 @@ func Start(opts Options) (*Core, error) {
 	}
 	c.creds.OnChange(c.accountsChanged)
 	snap := c.cur.Load()
-	inUse := len(snap.pkgs) > 0 || len(snap.Config.Accounts()) > 0 || len(c.creds.Records()) > 0
+	inUse := len(snap.pkgs) > 0 || len(snap.Config.Accounts()) > 0 || len(c.creds.Records()) > 0 || len(c.creds.Broken()) > 0
 	c.setup = newSetupManager(filepath.Join(StateDir(opts.ConfigPath), setupFileName), c.setupCoreTarget, inUse)
 	c.creds.OnCredentialChange(c.credentialChanged)
 	c.startModelRefresh()

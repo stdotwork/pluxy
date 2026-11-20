@@ -67,11 +67,27 @@ type Record struct {
 // Usable reports whether requests may be routed to the account.
 func (r Record) Usable() bool { return r.State == StateActive && !r.Disabled }
 
+// Broken is a record file the backend cannot read as a record: a file that does not parse, or
+// one whose ID is not the file's name. The store keeps it out of its records, so it is never
+// routed to, and reports it, so core can show the account as broken instead of stopping.
+type Broken struct {
+	// ID is the account ID the file name gives. It is what removing the account removes.
+	ID string
+	// Path is the file.
+	Path string
+	// Err says why the file cannot be read.
+	Err error
+}
+
+// Why says what is wrong with the file, for people: its path and the error.
+func (b Broken) Why() string { return b.Path + ": " + b.Err.Error() }
+
 // Backend keeps records durably. Save replaces a record whole and atomically: after a crash
-// the backend holds the old record or the new one, never a mix. Implementations need not be
-// safe for concurrent use; Store serialises calls.
+// the backend holds the old record or the new one, never a mix. Load also returns the record
+// files it could not read, as Broken entries; a backend that keeps no files of its own returns
+// none. Implementations need not be safe for concurrent use; Store serialises calls.
 type Backend interface {
-	Load() ([]Record, error)
+	Load() ([]Record, []Broken, error)
 	Save(Record) error
 	Delete(id string) error
 }
@@ -95,10 +111,11 @@ func ValidID(id string) bool { return idPattern.MatchString(id) && !strings.HasS
 // registration and version, written through to the backend before it is visible. It is safe
 // for concurrent use.
 type Store struct {
-	mu   sync.Mutex
-	b    Backend
-	recs map[string]Record
-	now  func() time.Time
+	mu     sync.Mutex
+	b      Backend
+	recs   map[string]Record
+	broken []Broken
+	now    func() time.Time
 }
 
 // OpenError is the error of an Open that failed. Safe mode opens the store too, so starting
@@ -118,11 +135,11 @@ func Open(b Backend) (*Store, error) {
 }
 
 func open(b Backend) (*Store, error) {
-	recs, err := b.Load()
+	recs, broken, err := b.Load()
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{b: b, recs: map[string]Record{}, now: time.Now}
+	s := &Store{b: b, recs: map[string]Record{}, broken: broken, now: time.Now}
 	for _, r := range recs {
 		if r.Format != RecordFormat {
 			return nil, fmt.Errorf("credential store: account %q has record format %d; this core reads %d", r.ID, r.Format, RecordFormat)
@@ -136,6 +153,7 @@ func open(b Backend) (*Store, error) {
 		}
 		s.recs[r.ID] = r
 	}
+	slices.SortFunc(s.broken, func(a, b Broken) int { return strings.Compare(a.ID, b.ID) })
 	return s, nil
 }
 
@@ -157,6 +175,14 @@ func (s *Store) List() []Record {
 	}
 	slices.SortFunc(out, func(a, b Record) int { return strings.Compare(a.ID, b.ID) })
 	return out
+}
+
+// Broken returns the record files the backend could not read, by ID: accounts core knows only
+// by the name of their file. They are never routed to. Deleting one removes its file.
+func (s *Store) Broken() []Broken {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.broken)
 }
 
 // Create adds a record under a new registration, at version 1.
@@ -181,6 +207,8 @@ func (s *Store) Create(r Record) (Record, error) {
 		return Record{}, err
 	}
 	s.recs[r.ID] = r
+	// Its file is the record now, not the one that could not be read.
+	s.broken = slices.DeleteFunc(s.broken, func(b Broken) bool { return strings.EqualFold(b.ID, r.ID) })
 	return r, nil
 }
 
@@ -210,17 +238,20 @@ func (s *Store) Update(id, registration string, version uint64, change func(*Rec
 	return next, nil
 }
 
-// Delete removes the record for id.
+// Delete removes the record for id, or the unreadable file that stands for it.
 func (s *Store) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.recs[id]; !ok {
+	_, known := s.recs[id]
+	broken := slices.ContainsFunc(s.broken, func(b Broken) bool { return b.ID == id })
+	if !known && !broken {
 		return ErrNotFound
 	}
 	if err := s.b.Delete(id); err != nil {
 		return err
 	}
 	delete(s.recs, id)
+	s.broken = slices.DeleteFunc(s.broken, func(b Broken) bool { return b.ID == id })
 	return nil
 }
 
