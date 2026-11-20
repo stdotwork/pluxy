@@ -440,18 +440,39 @@ pub(super) mod tests {
     use super::*;
     use std::sync::Mutex;
 
-    /// Run by `replace` just before it deletes its new file after a failure, for the folder set
-    /// here only (tests run in parallel).
-    static SWAP_NEW: Mutex<Option<SwapNew>> = Mutex::new(None);
+    /// Run by `replace` just before it deletes its new file after a failure, for the folder a
+    /// test set it for. Tests run in parallel, so each test's swap is an entry of its own
+    /// (`swap_new_in`), which no other test replaces or clears.
+    static SWAP_NEW: Mutex<Vec<SwapNew>> = Mutex::new(Vec::new());
 
     /// The folder a swap is for, and the swap.
     type SwapNew = (PathBuf, fn(&Path));
 
+    /// The swap one test set (`swap_new_in`): dropping it removes that entry only.
+    struct Hooked(PathBuf);
+
+    impl Drop for Hooked {
+        fn drop(&mut self) {
+            SWAP_NEW
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .retain(|(folder, _)| *folder != self.0);
+        }
+    }
+
+    /// Sets f to run for a new file in folder, until the value returned is dropped.
+    fn swap_new_in(folder: &Path, f: fn(&Path)) -> Hooked {
+        SWAP_NEW.lock().unwrap().push((folder.to_path_buf(), f));
+        Hooked(folder.to_path_buf())
+    }
+
     pub(super) fn before_removing_new(new: &Path) {
-        let hook = match &*SWAP_NEW.lock().unwrap() {
-            Some((folder, f)) if Some(folder.as_path()) == new.parent() => Some(*f),
-            _ => None,
-        };
+        let hook = SWAP_NEW
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(folder, _)| Some(folder.as_path()) == new.parent())
+            .map(|(_, f)| *f);
         if let Some(f) = hook {
             f(new);
         }
@@ -623,9 +644,9 @@ pub(super) mod tests {
             .share_mode(windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ)
             .open(&exe)
             .unwrap();
-        *SWAP_NEW.lock().unwrap() = Some((tmp.clone(), swap_new));
+        let hooked = swap_new_in(&tmp, swap_new);
         let r = replace(&exe, &program_bytes("new"), &tmp.join("updates"));
-        *SWAP_NEW.lock().unwrap() = None;
+        drop(hooked);
         drop(held);
         assert!(r.is_err());
         assert_eq!(theirs(&tmp), b"theirs");
@@ -719,9 +740,9 @@ pub(super) mod tests {
         assert_eq!(names(&tmp), ["pluxy.exe"]);
         // The same with the new file's name taken over just before it is deleted: what goes is
         // the file made, through its handle, not the file now at its name.
-        *SWAP_NEW.lock().unwrap() = Some((tmp.clone(), swap_new));
+        let hooked = swap_new_in(&tmp, swap_new);
         let r = replace(&exe, &program_bytes("new"), &tmp.join("updates"));
-        *SWAP_NEW.lock().unwrap() = None;
+        drop(hooked);
         assert!(r.is_err());
         assert_eq!(theirs(&tmp), b"theirs");
         assert_eq!(names(&tmp).len(), 2, "{:?}", names(&tmp));

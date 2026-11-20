@@ -180,6 +180,28 @@ func TestCountTokensEstimateKeepsRealErrors(t *testing.T) {
 	}
 }
 
+// A refusal under the reject drop policy is the account's (another account's format may carry the
+// request) but it is not an account that cannot count: with the estimate on by default, a Gemini
+// or Messages count gets the refusal, never an estimate. The refusal is the one the Claude
+// extension gives a Gemini request asking for JSON output, which Messages has no field for.
+func TestCountTokensDropRefusalIsNotEstimated(t *testing.T) {
+	refused := func(llm.Request) []llm.Event {
+		return []llm.Event{{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
+			Dropped: []string{"response_format"}, Message: "Anthropic Messages cannot carry parts of this request: response_format"}}}
+	}
+	for _, c := range []struct{ path, body string }{
+		{"/v1beta/models/claude-x:countTokens", `{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"responseMimeType":"application/json"}}`},
+		{"/v1/messages/count_tokens", countBody},
+	} {
+		h, _ := countHandlerWith(t, &Config{ClientKeys: []string{"k"}, DropPolicy: llm.DropReject}, refused)
+		w := postCount(h, c.path, c.body)
+		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "cannot carry parts of this request: response_format") ||
+			strings.Contains(w.Body.String(), "input_tokens") || strings.Contains(w.Body.String(), "totalTokens") {
+			t.Errorf("%s answered %d: %s, want the drop refusal", c.path, w.Code, w.Body)
+		}
+	}
+}
+
 // With the estimate off, the client gets the error; an extension's count reply without a count
 // is a protocol error.
 func TestCountTokensFails(t *testing.T) {

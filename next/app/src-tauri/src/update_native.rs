@@ -20,6 +20,8 @@
 //!   `bundle-entry` (one on the bundle), `not-yours` (the bundle another user's) and `not-admin`
 //!   (this user removed from `admin`);
 //! - `dmg` (macOS): the test package run from its mounted disk image, whose volume is not APFS;
+//! - `admitted` (macOS): the test package in `/Applications` with access list entries the rule
+//!   admits (root's and admin's, a deny entry): an update is offered; then it quits;
 //! - `applications` (macOS): the test package in `/Applications` (or, in the install session,
 //!   copied from its disk image into `/Applications` or `~/Applications`), which restarts itself
 //!   twice: v1→v2, then a confirmed rollback to v1;
@@ -235,6 +237,15 @@ fn set_stage(dir: &Path, s: &str) -> Result<(), String> {
     fs::write(dir.join("stage"), s).map_err(|e| e.to_string())
 }
 
+/// A value this process made once, at its first use, from the system's random source. A process id
+/// is reused (on Windows an earlier stage's id can go to a later stage), so the session tells the
+/// stages apart by this value and keeps the id for its logs. The report of the held acceptance
+/// (`update_gap`, in `updater/mod.rs`) carries it too.
+pub(crate) fn run_id() -> &'static str {
+    static RUN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    RUN.get_or_init(crate::managed::random_key)
+}
+
 /// What every process on the update route reports first: its version and process, the installed
 /// copy's digest and what is next to it (once an earlier install's leftovers are gone, or after
 /// 30 s; not in `/Applications`, which holds other apps: the session compares that folder
@@ -262,6 +273,7 @@ fn report(app: &AppHandle, main: &Webview, dir: &Path, stage: &str) -> Result<Va
         "stage": stage,
         "version": app.package_info().version.to_string(),
         "pid": std::process::id(),
+        "run": run_id(),
         "shown": attr(main, APP_CARD, "installed"),
         "installed": installed(app),
         "installed_sha": installed_sha(app),
@@ -523,13 +535,13 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, dir: PathBuf) -> Result<(), S
         "deb" | "rpm" | "unknown" | "msi" | "nsis" | "shared" | "bare" | "group-writable"
         | "linked" | "staff-entry" | "wheel-entry" | "inherited-entry" | "bundle-entry"
         | "not-yours" | "not-admin" | "dmg" => refused(app, main, &dir, &case)?,
-        "open" => {
+        "open" | "admitted" => {
             check(main, &dir, "good", "0.2.0")?;
             let available = wait_for("the updater's view", || {
                 Some(update_attr(main, "available")).filter(|a| !a.is_null())
             })?;
             log(
-                "update_open",
+                &format!("update_{case}"),
                 json!({"available": available, "reason": update_attr(main, "reason"),
                        "installed": installed(app), "installed_sha": installed_sha(app),
                        "pid": std::process::id()}),

@@ -36,6 +36,8 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Webview};
 
 #[cfg(any(target_os = "macos", all(test, unix)))]
+mod acl;
+#[cfg(any(target_os = "macos", all(test, unix)))]
 mod app;
 #[cfg(target_os = "linux")]
 mod appimage;
@@ -232,8 +234,14 @@ fn private_dir(path: &Path) -> Result<(), String> {
 /// manager or another user keeps is not this updater's to replace.
 #[cfg(unix)]
 fn check_owned(path: &Path, folder: bool) -> Result<(), String> {
-    use std::os::unix::fs::MetadataExt;
     let m = fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    owned_as(&m, path, folder)
+}
+
+/// `check_owned` on m, what was read of path (through an open descriptor, say).
+#[cfg(unix)]
+fn owned_as(m: &fs::Metadata, path: &Path, folder: bool) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
     let kind_ok = if folder { m.is_dir() } else { m.is_file() };
     // SAFETY: geteuid has no preconditions.
     let me = unsafe { libc::geteuid() };
@@ -876,7 +884,11 @@ pub fn accept(app: &AppHandle) {
     {
         std::thread::spawn(move || {
             let _ = fs::write(d.join("gap"), std::process::id().to_string());
-            eprintln!("native-test: update_gap {{\"pid\":{}}}", std::process::id());
+            eprintln!(
+                "native-test: update_gap {{\"pid\":{},\"run\":\"{}\"}}",
+                std::process::id(),
+                crate::update_native::run_id()
+            );
             let until = Instant::now() + Duration::from_secs(60);
             while d.join("hold-gap").exists() && Instant::now() < until {
                 std::thread::sleep(Duration::from_millis(100));
@@ -1007,6 +1019,7 @@ fn confirm_rollback(
         native_tool: false,
         files: vec![],
         launch: None,
+        environment: None,
     };
     let id = {
         let mut c = st.confirmations.lock().unwrap();

@@ -1,6 +1,8 @@
-// The native test on Windows and macOS, on the GitHub-hosted runners of those systems
-// (.github/workflows/next-app-platforms.yml). Run from next/app, after the app is built with the
-// native-test feature (`cargo build --locked --features native-test` in src-tauri):
+// The native test on Windows and macOS, on disposable CI runners of those systems
+// (.github/workflows/next-app-platforms.yml, native/runner.ts). Run from next/app, after the app is built with the
+// native-test feature (`cargo build --locked --features native-test` in src-tauri; for the tools
+// shard with `--features native-test,artifact-test-trust --bin pluxy-app --example
+// program_fixture`, and the execution program built into target/app-tools, see platform-tools.ts):
 //
 //   bun native/platform.ts
 //
@@ -26,7 +28,9 @@
 //   app (normal identifier, no test trust) with it, are refused at the gate;
 // - bundle release gate: the release command (package.ts release) passes a clean release build and
 //   a clean bundle of this system's kind around it, and refuses a bundle holding the test-feature
-//   dev app, the test package renamed and the test package itself.
+//   dev app, the test package renamed and the test package itself;
+// - admission, program, routing, launcher, vault: run.ts's sessions of the same names, for signed
+//   tools, in the app built with artifact-test-trust against a test core (native/platform-tools.ts);
 // - app update (the update shard): the test package, installed from its bundle into a folder of
 //   this user's and connected to a test core (`go run ./e2e/panelcore`), updates itself to its
 //   signed newer version and back,
@@ -38,7 +42,8 @@
 //   update; the update route with its third launch in the acceptance gap and its rollback; stand-ins
 //   for installers and elevation first on PATH never ran; macOS: no quarantine on the installed
 //   bundle; macOS: the same package in the stock /Applications (inApplications) updates and rolls
-//   back, and is refused for each access list entry, owner or membership that rule turns away.
+//   back, is offered the update with root's, admin's and deny entries on that folder, and is
+//   refused for each access list entry, owner or membership that rule turns away.
 // - install (the update shard; macOS only, Windows records a skip): the test package's disk image
 //   attached; its volume holds the same bundle and a link to /Applications; the bundle copied out
 //   with `ditto` into /Applications and into ~/Applications starts, updates itself and rolls back
@@ -48,8 +53,8 @@
 //   launchd does with it at the next login recorded.
 //
 // These write what a real run writes: the user's registry or LaunchAgents folder, and on Windows
-// the app's own folder in the user's profile. So it runs only on a GitHub-hosted runner, whose user
-// is thrown away, and removes what it made.
+// the app's own folder in the user's profile. So it runs only on a disposable CI runner
+// (native/runner.ts), whose user is thrown away, and removes what it made.
 //
 // Output: `platform: ...` lines, `platform-problem: ...` for each failed check, and a summary with
 // the counts. A run that checked nothing fails.
@@ -77,6 +82,8 @@ import { basename, dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { MARKER_FILE, PROFILE_FILE } from "./admission";
 import { Launch, type Step } from "./launch";
+import { TOOL_SESSIONS, toolSession } from "./platform-tools";
+import { DISPOSABLE_RUNNER, onDisposableRunner } from "./runner";
 import { SESSIONS, selectShard } from "./shards";
 import {
   CHAIN_MS,
@@ -106,9 +113,9 @@ if (!windows && !mac) {
   console.error("native test setup failed: this is the Windows and macOS test (the Linux one is run.ts)");
   process.exit(1);
 }
-if (process.env.GITHUB_ACTIONS !== "true" || process.env.RUNNER_ENVIRONMENT !== "github-hosted") {
+if (!onDisposableRunner()) {
   console.error(
-    "native test setup failed: it writes the user's registry or LaunchAgents folder and app folder, so it runs only on a GitHub-hosted runner (GITHUB_ACTIONS=true, RUNNER_ENVIRONMENT=github-hosted)",
+    `native test setup failed: it writes the user's registry or LaunchAgents folder and app folder, so it runs only on ${DISPOSABLE_RUNNER}`,
   );
   process.exit(1);
 }
@@ -128,7 +135,7 @@ if (!existsSync(bin)) {
 const shard = process.env.PLUXY_APP_NATIVE_SHARD || "platform";
 let selected: ReadonlySet<string>;
 try {
-  selected = selectShard(shard);
+  selected = selectShard(shard, undefined, undefined, true);
 } catch (e) {
   console.error(`native test setup failed: ${(e as Error).message}`);
   process.exit(1);
@@ -229,8 +236,9 @@ function webviewHolders(folder: string): string[] {
 }
 
 /** Windows: removes path once the WebView2 processes using webview (the app's WebView2 data
- * folder) have exited, retrying while the folder is busy (EBUSY, EPERM, ENOTEMPTY), for at most
- * FREE_MS. Then it fails, naming what still holds the folder. */
+ * folder) have exited, retrying while the folder is busy (EBUSY, ENOTEMPTY) or access is denied
+ * (EPERM, which a file still open for its deletion also gives), for at most FREE_MS. Then it
+ * fails, naming what still holds the folder or that access was denied. */
 function removeWhenFree(path: string, webview: string) {
   const deadline = Date.now() + FREE_MS;
   let holders: string[] = [];
@@ -245,7 +253,9 @@ function removeWhenFree(path: string, webview: string) {
         if (!["EBUSY", "EPERM", "ENOTEMPTY"].includes(code)) throw e;
         if (Date.now() >= deadline)
           throw new Error(
-            `${path} is still in use ${FREE_MS / 1000} s after the app quit: ${(e as Error).message}`,
+            code === "EPERM"
+              ? `access to ${path} was still denied ${FREE_MS / 1000} s after the app quit, with no WebView2 process holding it: ${(e as Error).message}`
+              : `${path} is still in use ${FREE_MS / 1000} s after the app quit: ${(e as Error).message}`,
           );
       }
     } else if (Date.now() >= deadline) {
@@ -751,15 +761,20 @@ function testPackage(): BundlePackage | undefined {
 }
 
 /** A private folder of this user's for the test trust profile, the app's HOME (its updater gate
- * reads the profile from HOME). macOS: the profile's own home, made owner-only. Windows: a folder
- * under the runner's temporary folder whose access list lets in only this user, SYSTEM and
- * Administrators, and is inherited by the files made in it. */
+ * reads the profile from HOME). macOS: the profile's own home, made owner-only. Windows: a new
+ * private folder (privateFolder). */
 function privateHome(p: Profile): string {
   if (mac) {
     const home = p.env.HOME as string;
     chmodSync(home, 0o700);
     return home;
   }
+  return trustFolder();
+}
+
+/** A new folder under the runner's temporary folder that only this user, SYSTEM and Administrators
+ * may use (Windows; mode 700 elsewhere), inherited by what is made in it. */
+function trustFolder(): string {
   return ownFolder(mkdtempSync(join(process.env.RUNNER_TEMP ?? tmpdir(), "pluxy-trust-")));
 }
 
@@ -1268,7 +1283,7 @@ function sudo(args: string[]): string {
  * user taken out of admin. The reason each must give. */
 const IN_APPLICATIONS = {
   ruleA: /is not a folder of yours that only you can change, nor the stock Applications folder/,
-  entry: /entry \d+ of its access list \(`ls -le` shows it\) lets another account change what is in it/,
+  entry: /entry \d+ of its access list \(`ls -le` shows it\) lets another account change it or what is in it/,
   inherited:
     /entry \d+ of its access list \(`ls -le` shows it\) lets another account change what is put in it/,
 };
@@ -1278,7 +1293,7 @@ const IN_APPLICATIONS = {
  * facts the rule rests on, read with the system's tools; then the route (v1 to v2 and a confirmed
  * rollback, `applications` in update_native.rs), after which a folder of the update's naming that
  * this user put in /Applications is still there, the same folder, and /Applications holds the
- * same names as before; then the refusals. The runner's account is an administrator with sudo
+ * same names as before; then the refusals and the admitted entries. The runner's account is an administrator with sudo
  * that asks no password (GitHub's macOS images); the runner is thrown away after the job, and
  * what is changed here is put back. */
 async function inApplications(o: {
@@ -1463,21 +1478,53 @@ async function inApplications(o: {
       label: "bundle entry",
       case: "bundle-entry",
       reason:
-        /pluxy Test\.app is not a folder of yours that only you can change: entry \d+ of its access list/,
+        /pluxy Test\.app is not a folder of yours that only you can change: entry \d+ of its access list .*Remove that entry \(in Terminal: chmod -a# \d+ /s,
     });
     sudo(["chown", "root", installed]);
     try {
       await refuse({
         label: "not yours",
         case: "not-yours",
-        reason: /pluxy Test\.app is not a folder of yours that only you can change \(a package manager/,
+        reason:
+          /pluxy Test\.app is not a folder of yours that only you can change: its owner is user 0, not you\. Copy pluxy to Applications in your home folder/,
       });
     } finally {
       sudo(["chown", user, installed]);
     }
-    // Last: this user out of admin. Only the rule's message is checked: processes started before
-    // still carry the group, so the kernel would still let this session's processes write.
+
+    // Admitted: entries for root and admin, whatever they allow, and a deny entry, read through
+    // the same calls: the update is offered.
+    const admittedEntries = [
+      "user:root allow add_file,delete_child",
+      "group:admin allow add_file,add_subdirectory,delete_child",
+      "everyone deny delete",
+    ];
+    for (const entry of admittedEntries) sudo(["chmod", "+a", entry, apps]);
+    try {
+      say(`admitted entries: ${run("ls", ["-lde", apps]).out.replaceAll("\n", " | ")}`);
+      const r = await launchChain({
+        label: "admitted entries",
+        program,
+        env: { ...env, PLUXY_APP_TEST_UPDATE_CASE: "admitted" },
+        ms: LAUNCH_MS,
+        check,
+        say,
+      });
+      const s = r.step("update_admitted")[0];
+      check(
+        s?.available === "true" && s.installed === installed && s.installed_sha === o.v1,
+        `admitted entries: the update was not offered from /Applications: ${JSON.stringify(s)}`,
+      );
+    } finally {
+      for (const entry of admittedEntries) sudo(["chmod", "-a", entry, apps]);
+    }
+
+    // Last: this user out of admin, with the bundle another account's (as one an administrator
+    // put there): the administrators' message, whoever owns the bundle. Only the rule's message
+    // is checked: processes started before still carry the group, so the kernel would still let
+    // this session's processes write.
     sudo(["dseditgroup", "-o", "edit", "-d", user, "-t", "user", "admin"]);
+    sudo(["chown", "root", installed]);
     try {
       sudo(["dscacheutil", "-flushcache"]);
       say(`not admin: ${member()}`);
@@ -1488,6 +1535,7 @@ async function inApplications(o: {
           /pluxy is in \/Applications, which only administrators can change, and this account is not one/,
       });
     } finally {
+      sudo(["chown", user, installed]);
       sudo(["dseditgroup", "-o", "edit", "-a", user, "-t", "user", "admin"]);
       sudo(["dscacheutil", "-flushcache"]);
     }
@@ -1819,6 +1867,23 @@ async function main() {
     ["bundle release gate", bundleReleaseGate],
     ["app update", update],
     ["install", install],
+    ...TOOL_SESSIONS.map(
+      (name) =>
+        [
+          name,
+          () =>
+            toolSession(name, {
+              bin,
+              targetDir,
+              identifier,
+              check,
+              say,
+              privateFolder: trustFolder,
+              removeWhenFree,
+              powershell,
+            }),
+        ] as [string, () => Promise<void>],
+    ),
   ];
   for (const [name, body] of sessions) {
     if (!runsSession(name)) continue;

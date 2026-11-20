@@ -145,7 +145,7 @@
         "headers": {
           "Accept": "text/event-stream",
           "Accept-Encoding": "gzip, deflate, br, zstd",
-          "Authorization": "Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsInN1YiI6ImNvcnB1cy1zaXdjfHNrLWNvcnB1cy11cHN0cmVhbSJ9.corpus",
+          "Authorization": "Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsInN1YiI6ImNvcnB1cy1zaXdjfHNrLUNxN1Z4Mk5wOUx3NFpyOCJ9.Zx8Kp3Qa",
           "Content-Type": "application/json",
           "Session_id": "b061ee6a-c953-57c4-9a4f-b7f73357799d",
           "User-Agent": "CLIProxyAPI (linux; amd64)",

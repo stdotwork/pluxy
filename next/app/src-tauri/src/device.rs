@@ -20,8 +20,8 @@
 #[cfg(native_stack)]
 pub use admission::main_window;
 pub use admission::{
-    admitted_unlocked, native_candidate_unlocked, Admission, Admitted, OperationDecl, Roots,
-    Signed, StateDecl,
+    admitted_linux_unlocked, admitted_unlocked, native_candidate_unlocked, stage_linux, Admission,
+    Admitted, LinuxCandidate, LinuxTarget, OperationDecl, Roots, Signed, StateDecl,
 };
 pub use imports::{Consent, ConsentTarget, ExportDecl, Grant, ImportDecl, Refused, LAUNCH_FIELDS};
 pub use jobs::{ConsumeDecl, JobGrant, ProduceDecl, Registration};
@@ -148,6 +148,10 @@ pub struct Release {
     pub produces: Vec<ProduceDecl>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub consumes: Vec<ConsumeDecl>,
+    /// Native: where else its program may run, `wsl` (a WSL distribution on Windows, with the
+    /// release's Linux build: `Package::linux`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub environments: Vec<String>,
 }
 
 fn web() -> String {
@@ -168,6 +172,11 @@ pub struct Package {
     /// each target's release.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub consent: Option<Consent>,
+    /// A native tool's Linux builds installed to run it in WSL, by platform (`linux/amd64`,
+    /// `linux/arm64`): the active release's version and signer, each confirmed natively. Dropped
+    /// whenever the active release changes.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub linux: BTreeMap<String, Release>,
 }
 
 /// The catalog format with a native tool in it. A build before native tools reads only version
@@ -433,7 +442,14 @@ fn private_dir(p: &Path) -> Result<(), String> {
         .create(p)
         .map_err(|e| format!("{}: {e}", p.display()))?;
     fs::set_permissions(p, fs::Permissions::from_mode(0o700))
-        .map_err(|e| format!("{}: {e}", p.display()))
+        .map_err(|e| format!("{}: {e}", p.display()))?;
+    // macOS: no extended access list entry either, so what is made in it inherits none
+    // (`private_macos.rs`).
+    #[cfg(target_os = "macos")]
+    fs::File::open(p)
+        .and_then(|d| crate::private_macos::clear_entries(&d))
+        .map_err(|e| format!("{}: {e}", p.display()))?;
+    Ok(())
 }
 #[cfg(windows)]
 fn private_dir(p: &Path) -> Result<(), String> {
@@ -770,7 +786,11 @@ impl Catalog {
         let keep: BTreeSet<String> = self
             .packages
             .values()
-            .flat_map(|p| std::iter::once(&p.active).chain(p.last_good.as_ref()))
+            .flat_map(|p| {
+                std::iter::once(&p.active)
+                    .chain(p.last_good.as_ref())
+                    .chain(p.linux.values())
+            })
             .map(|r| r.sha256.clone())
             .chain(self.holding.values().cloned())
             .collect();
@@ -844,6 +864,7 @@ impl Catalog {
                 active: c.release.clone(),
                 admission: None,
                 consent: None,
+                linux: BTreeMap::new(),
             },
             None => Package {
                 enabled: !native,
@@ -852,6 +873,7 @@ impl Catalog {
                 last_good: None,
                 admission: None,
                 consent: None,
+                linux: BTreeMap::new(),
             },
         };
         self.packages.insert(id.clone(), package);
@@ -955,8 +977,9 @@ impl Catalog {
         let p = self.packages.get_mut(id).unwrap();
         let active = std::mem::replace(&mut p.active, last);
         p.last_good = Some(active);
-        // A native tool's admission named the release that is no longer active.
+        // A native tool's admission and Linux builds named the release that is no longer active.
         let was = (p.enabled, p.admission.take(), p.consent.take());
+        let linux = std::mem::take(&mut p.linux);
         if p.active.tier == "native" || p.last_good.as_ref().is_some_and(|r| r.tier == "native") {
             p.enabled = false;
         }
@@ -966,8 +989,10 @@ impl Catalog {
             let last = std::mem::replace(&mut p.active, p.last_good.take().unwrap());
             p.last_good = Some(last);
             (p.enabled, p.admission, p.consent) = was;
+            p.linux = linux;
             return Err(e);
         }
+        self.collect();
         Ok(())
     }
 
@@ -1202,7 +1227,12 @@ struct App {
     exports: Option<imports::ExportSpec>,
     produces: Option<Vec<jobs::ProduceSpec>>,
     consumes: Option<Vec<jobs::ConsumeSpec>>,
+    environments: Option<Vec<String>>,
 }
+
+/// The environments a native tool may declare besides this computer: `wsl`, a WSL distribution
+/// on Windows running the release's Linux build.
+const ENVIRONMENTS: &[&str] = &["wsl"];
 
 #[derive(Deserialize, Default)]
 #[serde(default)]
@@ -1373,6 +1403,20 @@ impl App {
             c.validate().map_err(|e| format!("app: {e}"))?;
         }
         imports::validate_imports(self.imports.as_deref(), self.tier == "web")?;
+        if self.tier == "web" && self.environments.is_some() {
+            return Err("web app cannot declare environments".into());
+        }
+        let mut seen = BTreeSet::new();
+        for e in self.environments.iter().flatten() {
+            if !ENVIRONMENTS.contains(&e.as_str()) {
+                return Err(format!(
+                    "app.environments names {e}, which this app does not know"
+                ));
+            }
+            if !seen.insert(e.as_str()) {
+                return Err(format!("app.environments names {e} twice"));
+            }
+        }
         if self.tier == "web" {
             if self.programs.is_some()
                 || self.operations.is_some()
@@ -1534,9 +1578,12 @@ fn reserved(id: &str, roots: &dyn Roots) -> Option<String> {
 // ---- Archives ----
 
 /// Unpacks a release archive into dest (which must not exist): regular files and folders only,
-/// no links, devices or names that leave the folder, within the protocol's limits.
-fn unpack(archive: &[u8], dest: &Path) -> Result<(), String> {
+/// no links, devices or names that leave the folder, within the protocol's limits. Returns the
+/// files whose mode in the archive lets them run, by slash-separated path, on every computer:
+/// a file system that keeps no mode (Windows) cannot tell them later.
+fn unpack(archive: &[u8], dest: &Path) -> Result<BTreeSet<String>, String> {
     private_dir(dest)?;
+    let mut executables = BTreeSet::new();
     // Headers add at most a few blocks per entry; past this the stream is over the limit.
     let cap = MAX_UNPACKED + (MAX_ENTRIES as u64 + 16) * 1536;
     let gz = flate2::read::GzDecoder::new(archive).take(cap);
@@ -1578,8 +1625,10 @@ fn unpack(archive: &[u8], dest: &Path) -> Result<(), String> {
         if let Some(parent) = path.parent() {
             private_dir(parent)?;
         }
-        #[cfg(unix)]
         let exec = e.header().mode().map(|m| m & 0o111 != 0).unwrap_or(false);
+        if exec {
+            executables.insert(rel.to_string());
+        }
         let mut o = fs::OpenOptions::new();
         o.write(true).create_new(true);
         #[cfg(unix)]
@@ -1597,7 +1646,8 @@ fn unpack(archive: &[u8], dest: &Path) -> Result<(), String> {
     }
     // The installed tree is read-only, every folder in it too, except the top one until it is
     // in the store: moving a folder into the store needs write access to it (its `..` changes).
-    freeze(dest, false)
+    freeze(dest, false)?;
+    Ok(executables)
 }
 
 /// The files under the ui folder dir, by slash-separated path, with their SHA-256 digests.
@@ -1680,11 +1730,12 @@ pub fn stage(
     expect: Option<&Expect>,
     roots: &dyn Roots,
 ) -> Result<Candidate, String> {
-    stage_signed(dirs, archive, source, expect, None, roots)
+    stage_signed(dirs, archive, source, expect, None, roots, &platform())
 }
 
 /// `stage`, for an archive whose descriptor signing verified against a curated root: it may
-/// claim the root's publisher, and only such an archive may be a native tool.
+/// claim the root's publisher, and only such an archive may be a native tool, whose program is
+/// the one for platform (this computer's, or a Linux build's for WSL).
 fn stage_signed(
     dirs: &Dirs,
     archive: &[u8],
@@ -1692,6 +1743,7 @@ fn stage_signed(
     expect: Option<&Expect>,
     signing: Option<Signing>,
     roots: &dyn Roots,
+    platform: &str,
 ) -> Result<Candidate, String> {
     let sha256 = hex(&Sha256::digest(archive));
     if let Some(x) = expect {
@@ -1734,10 +1786,11 @@ fn stage_signed(
             exports: None,
             produces: vec![],
             consumes: vec![],
+            environments: vec![],
         },
         staged: staged.clone(),
     };
-    unpack(archive, &staged)?;
+    let executables = unpack(archive, &staged)?;
     let bytes = read_bounded(&staged.join(MANIFEST), MAX_MANIFEST)
         .map_err(|_| format!("the archive has no {MANIFEST} at its top"))?;
     let m: Manifest = serde_json::from_slice(&bytes).map_err(|e| format!("{MANIFEST}: {e}"))?;
@@ -1804,7 +1857,7 @@ fn stage_signed(
     (r.produces, r.consumes) = jobs::decls(&m.id, &app)?;
     match signing {
         Some(s) if app.tier == "native" => {
-            admission::native_release(r, &app, &staged, s.signed)?;
+            admission::native_release(r, &app, &staged, s.signed, platform, &executables)?;
         }
         // A curated web package: its signature makes it curated, which native imports need.
         Some(s) => r.signed = Some(s.signed),
@@ -2385,6 +2438,7 @@ pub fn stage_from_registry(
         }),
         signing,
         roots,
+        &platform,
     )?;
     if unvouched_signature.is_some() {
         c.release.signed = unvouched_signature;

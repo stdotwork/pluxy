@@ -36,9 +36,9 @@ func declaration(params string) string {
 // Claude's VALIDATED mode wants a required property in every object, so today's core adds one to
 // each object that requires nothing: "reason" (a string) where there are no properties, "_" (a
 // boolean) where there are some and none is required. The placeholders expected are today's core's
-// (corpus case tool-schema-forms-claude records the nested object); the rest of each schema is
-// what the extension's cleaner gives, which is not always today's core's (it sends allOf as it is
-// where today's core merges it). One difference on purpose: a function's response schema gets no
+// (corpus case tool-schema-forms-claude records the nested object), and so is the rest of each
+// schema, allOf merged as today's core merges it (the allOf cases are its output through its
+// executor's tool cleaning). One difference on purpose: a function's response schema gets no
 // placeholder here (today's core adds one to a declaration's response and responseJsonSchema), as
 // it describes what the client returns, not what the model writes, and nothing would strip it. A
 // site is left out where a client schema at the same path, a union branch (also one Claude's
@@ -108,15 +108,15 @@ func TestPlaceholdersAdded(t *testing.T) {
 			nil},
 		{"an allOf branch requires a property", true, true,
 			`{"type":"object","allOf":[{"properties":{"a":{"type":"string"}},"required":["a"]}]}`,
-			`{"type":"object","allOf":[{"properties":{"a":{"type":"string"}},"required":["a"]}]}`,
+			`{"type":"object","properties":{"a":{"type":"string"}},"required":["a"]}`,
 			nil},
 		{"allOf branches require nothing", true, true,
 			`{"type":"object","allOf":[{"properties":{"a":{"type":"string"}}},{"properties":{"b":{"type":"string"}}}]}`,
-			`{"type":"object","properties":{"_":{"type":"boolean"}},"required":["_"],"allOf":[{"properties":{"a":{"type":"string"}}},{"properties":{"b":{"type":"string"}}}]}`,
+			`{"type":"object","properties":{"_":{"type":"boolean"},"a":{"type":"string"},"b":{"type":"string"}},"required":["_"]}`,
 			[]placeholderSite{{name: "_"}}},
 		{"an allOf branch declares _", true, true,
 			`{"type":"object","allOf":[{"properties":{"_":{"type":"string"}}}]}`,
-			`{"type":"object","required":["_"],"allOf":[{"properties":{"_":{"type":"string"}}}]}`,
+			`{"type":"object","properties":{"_":{"type":"string"}},"required":["_"]}`,
 			nil},
 		{"properties and no type", true, true,
 			`{"properties":{"a":{"type":"string"}}}`,
@@ -132,7 +132,7 @@ func TestPlaceholdersAdded(t *testing.T) {
 			nil},
 		{"no type, properties only from allOf", true, true,
 			`{"allOf":[{"type":"object","properties":{"a":{"type":"string"}}}]}`,
-			`{"type":"object","properties":{"_":{"type":"boolean"}},"required":["_"],"allOf":[{"type":"object","properties":{"a":{"type":"string"}}}]}`,
+			`{"type":"object","properties":{"_":{"type":"boolean"},"a":{"type":"string"}},"required":["_"]}`,
 			[]placeholderSite{{name: "_"}}},
 		{"Claude: a cut union branch declares _", true, true,
 			`{"type":"object","properties":{"u":{"anyOf":[{"type":"object","properties":{"a":{"type":"string"}}},{"type":"object","properties":{"_":{"type":"string"}},"required":["_"]}]}},"required":["u"]}`,

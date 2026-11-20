@@ -175,13 +175,18 @@ func TestAPIKeyLoginWireAPI(t *testing.T) {
 	if _, err := login(context.Background(), call, nil); err == nil {
 		t.Fatal("accepted invalid wire_api")
 	}
+	call = apiKeyCall(srv.URL+"/v1", "made-up-key")
+	call.Input["quota"] = "invalid"
+	if _, err := login(context.Background(), call, nil); err == nil || calls.Load() != 0 {
+		t.Fatalf("accepted invalid quota: error %v, requests %d", err, calls.Load())
+	}
 }
 
 func TestAPIKeyLoginNullSettings(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
 	defer srv.Close()
-	for _, field := range []string{"base_url", "wire_api"} {
+	for _, field := range []string{"base_url", "wire_api", "quota"} {
 		t.Run(field, func(t *testing.T) {
 			settings, _ := json.Marshal(map[string]any{field: nil})
 			call := sdk.LoginCall{Method: "api_key", Account: protocol.Account{Settings: settings}, Input: map[string]string{"base_url": srv.URL, "wire_api": "chat", "api_key": "made-up-key"}}

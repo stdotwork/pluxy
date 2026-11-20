@@ -1291,6 +1291,250 @@ fn a_bus_that_never_answers_holds_a_launch_no_longer_than_the_wait() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// On macOS a launch's program may sit below a folder the `admin` group may write, as in
+/// `/Applications` or Homebrew's folders (`owned::Writers::Admins`): such a launch starts.
+#[cfg(target_os = "macos")]
+#[test]
+fn on_macos_a_launch_from_a_folder_the_admin_group_may_write_starts() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = folder("admin");
+    let bin = dir.join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let out = std::process::Command::new("/usr/bin/chgrp")
+        .arg("admin")
+        .arg(&bin)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "chgrp admin (the test's user must be in admin): {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o775)).unwrap();
+    let program = bin.join("agent");
+    std::fs::write(&program, "#!/bin/sh\necho started > \"$1\"\n").unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let started = dir.join("started");
+    let l = Launch {
+        opened: Box::new(Plain {
+            executable: File::open(&program).unwrap(),
+            cwd: open_dir(&dir),
+        }),
+        named: program.clone(),
+        // Its arguments after its name (`named`, given as argv[0]).
+        argv: vec![started.to_string_lossy().into_owned()],
+        lifetime: Lifetime::Detached,
+        request: Request::default(),
+        secrets: vec![],
+        stdin: None,
+    };
+    let r = detached(&l, "p", &By(none));
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while r.is_ok() && !started.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let ran = started.exists();
+    let _ = std::fs::remove_dir_all(&dir);
+    r.unwrap();
+    assert!(ran, "the launch did not run");
+}
+
+/// A terminal launch as confirmed: the terminal, and the program it runs, opened and as the
+/// launch names it.
+#[cfg(unix)]
+struct InTerminal {
+    plain: Plain,
+    program: File,
+    named: PathBuf,
+}
+
+#[cfg(unix)]
+impl Opened for InTerminal {
+    fn executable(&self) -> &File {
+        &self.plain.executable
+    }
+    fn cwd(&self) -> &File {
+        &self.plain.cwd
+    }
+    fn program(&self) -> Option<(&File, &Path)> {
+        Some((&self.program, &self.named))
+    }
+    fn recheck(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// A shell script at p running body, which only its owner may change or run.
+#[cfg(unix)]
+fn script(p: &Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(p, format!("#!/bin/sh\n{body}\n")).unwrap();
+    std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+/// A folder at p with mode.
+#[cfg(unix)]
+fn mode_dir(p: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir(p).unwrap();
+    std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+/// A detached launch in dir of terminal, a stand-in terminal script running body (its arguments:
+/// the file `go` in dir, then args), with program named as the program it runs.
+#[cfg(unix)]
+fn in_terminal(dir: &Path, body: &str, program: &Path, args: &[&Path]) -> Launch {
+    let terminal = dir.join("terminal");
+    script(&terminal, body);
+    let mut argv = vec![dir.join("go").to_string_lossy().into_owned()];
+    argv.extend(args.iter().map(|a| a.to_string_lossy().into_owned()));
+    Launch {
+        opened: Box::new(InTerminal {
+            plain: Plain {
+                executable: File::open(&terminal).unwrap(),
+                cwd: open_dir(dir),
+            },
+            program: File::open(program).unwrap(),
+            named: program.to_path_buf(),
+        }),
+        named: terminal,
+        argv,
+        lifetime: Lifetime::Detached,
+        request: Request::default(),
+        secrets: vec![],
+        stdin: None,
+    }
+}
+
+/// A terminal as Linux's run a launch's program: once the file go exists, by its path, as
+/// `<program> <out>` after the flag `-e`.
+#[cfg(unix)]
+const BY_PATH: &str = r#"go=$1; shift 2; while [ ! -e "$go" ]; do sleep 0.05; done; exec "$@""#;
+
+/// Another file renamed over p, as another user who may write its folder could: it writes
+/// `swapped` to its first argument.
+#[cfg(unix)]
+fn swap(p: &Path) {
+    let new = p.with_extension("new");
+    script(&new, r#"echo swapped > "$1""#);
+    std::fs::rename(&new, p).unwrap();
+}
+
+/// What file p holds once it exists, within 20 seconds.
+#[cfg(unix)]
+fn wait_for(p: &Path) -> Option<String> {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !p.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    std::fs::read_to_string(p).ok()
+}
+
+/// A terminal runs a launch's program by its path, while it starts, after every check of the
+/// app's: a program another user could swap in that time (here, in a folder anyone may write) is
+/// refused, and nothing runs.
+#[cfg(unix)]
+#[test]
+fn a_terminal_launchs_program_another_user_could_swap_is_refused() {
+    let dir = folder("swap");
+    let open = dir.join("open");
+    mode_dir(&open, 0o777);
+    let program = open.join("agent");
+    script(&program, r#"echo checked > "$1""#);
+    let out = dir.join("out");
+    let l = in_terminal(&dir, BY_PATH, &program, &[Path::new("-e"), &program, &out]);
+    let r = detached(&l, "p", &By(none));
+    swap(&program);
+    std::fs::write(dir.join("go"), "").unwrap();
+    let ran = r.is_ok().then(|| wait_for(&out));
+    let _ = std::fs::remove_dir_all(&dir);
+    let e = r.expect_err(&format!("the launch started, and its terminal ran {ran:?}"));
+    assert!(
+        e.starts_with(&format!("{} may be changed by other users", open.display())),
+        "{e}"
+    );
+}
+
+/// On Linux the terminal resolves the program's path itself: each folder and link on the way must
+/// be one only root or the person can change. A program reached through the person's own link (as
+/// `~/.local/bin/claude`) starts; through a link in, or to, a folder anyone may write, it is
+/// refused, naming that folder.
+#[cfg(target_os = "linux")]
+#[test]
+fn on_linux_a_terminal_launchs_program_is_checked_along_its_links() {
+    use std::os::unix::fs::symlink;
+    let dir = folder("links");
+    let (versions, bin, open) = (dir.join("versions"), dir.join("bin"), dir.join("open"));
+    mode_dir(&versions, 0o755);
+    mode_dir(&bin, 0o755);
+    mode_dir(&open, 0o777);
+    script(&versions.join("agent"), r#"echo checked > "$1""#);
+    symlink("../versions/agent", bin.join("agent")).unwrap();
+    symlink("../versions/agent", open.join("agent")).unwrap();
+    script(&open.join("real"), r#"echo checked > "$1""#);
+    symlink("../open/real", bin.join("other")).unwrap();
+    let out = dir.join("out");
+    let run = |program: &Path| {
+        let l = in_terminal(&dir, BY_PATH, program, &[Path::new("-e"), program, &out]);
+        detached(&l, "p", &By(none))
+    };
+    let own = run(&bin.join("agent"));
+    std::fs::write(dir.join("go"), "").unwrap();
+    let ran = wait_for(&out);
+    let in_open = run(&open.join("agent"));
+    let to_open = run(&bin.join("other"));
+    let _ = std::fs::remove_dir_all(&dir);
+    own.unwrap();
+    assert_eq!(ran.as_deref(), Some("checked\n"));
+    for r in [in_open, to_open] {
+        let e = r.expect_err("a program another user could redirect started");
+        assert!(
+            e.starts_with(&format!("{} may be changed by other users", open.display())),
+            "{e}"
+        );
+    }
+}
+
+/// On macOS the terminal is the execution program, which runs the program in the window from the
+/// descriptor the app gives it (3): the file the app checked, even once another file has been
+/// renamed over its path. A program below a folder the `admin` group may write starts.
+#[cfg(target_os = "macos")]
+#[test]
+fn on_macos_a_terminal_launch_gets_the_checked_program_as_descriptor_3() {
+    let dir = folder("fd");
+    let bin = dir.join("bin");
+    mode_dir(&bin, 0o775);
+    let out = std::process::Command::new("/usr/bin/chgrp")
+        .arg("admin")
+        .arg(&bin)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "chgrp admin (the test's user must be in admin): {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let program = bin.join("agent");
+    script(&program, r#"echo checked > "$1""#);
+    let copy = dir.join("copy");
+    let l = in_terminal(
+        &dir,
+        r#"while [ ! -e "$1" ]; do sleep 0.05; done; cat <&3 > "$2.part" && mv "$2.part" "$2""#,
+        &program,
+        &[&copy],
+    );
+    let r = detached(&l, "p", &By(none));
+    swap(&program);
+    std::fs::write(dir.join("go"), "").unwrap();
+    let got = r.is_ok().then(|| wait_for(&copy));
+    let _ = std::fs::remove_dir_all(&dir);
+    r.unwrap();
+    assert_eq!(
+        got.flatten().as_deref(),
+        Some("#!/bin/sh\necho checked > \"$1\"\n")
+    );
+}
+
 #[test]
 fn an_open_launch_gets_only_the_absolute_path_entries() {
     // Windows separates PATH's entries with `;`, and an absolute one names its drive.
@@ -1311,10 +1555,21 @@ fn an_open_launch_gets_only_the_absolute_path_entries() {
             .find(|(k, _)| k == "PATH")
             .map(|(_, v)| v.to_string_lossy().into_owned())
     };
+    // macOS adds the system-wide client folders that exist (`/home/me` does not, so none of
+    // its own), then keeps the absolute entries.
+    #[cfg(target_os = "macos")]
+    let (all, absolute) = {
+        let added: String = ["/opt/homebrew/bin", "/usr/local/bin"]
+            .iter()
+            .filter(|d| Path::new(d).is_dir())
+            .map(|d| format!(":{d}"))
+            .collect();
+        (format!("{all}{added}"), format!("{absolute}{added}"))
+    };
     let mut r = Request::default();
-    assert_eq!(path(&r).as_deref(), Some(all));
+    assert_eq!(path(&r), Some(all.to_string()));
     r.absolute_path = true;
-    assert_eq!(path(&r).as_deref(), Some(absolute));
+    assert_eq!(path(&r), Some(absolute.to_string()));
 }
 
 /// A launch's files as the confirmation opened them, which records at each check whether its
@@ -1465,4 +1720,144 @@ fn the_runtimes_file_is_private() {
         assert!(std::fs::symlink_metadata(&file).unwrap().is_file());
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_launch_through_wsl_exe_passes_on_the_variables_it_sets_and_nothing_else() {
+    let root = Path::new(r"C:\Windows");
+    for yes in [
+        r"C:\Windows\System32\wsl.exe",
+        r"c:\windows\system32\WSL.EXE",
+        r"\\?\C:\Windows\System32\wsl.exe",
+    ] {
+        assert!(is_wsl_exe(Path::new(yes), Some(root)), "{yes}");
+    }
+    for no in [
+        r"C:\Windows\SysWOW64\wsl.exe",
+        r"C:\tools\wsl.exe",
+        r"C:\Windows\System32\wslg.exe",
+        "wsl.exe",
+    ] {
+        assert!(!is_wsl_exe(Path::new(no), Some(root)), "{no}");
+    }
+    assert!(!is_wsl_exe(Path::new(r"C:\Windows\System32\wsl.exe"), None));
+    assert_eq!(wslenv(&Request::default()), None);
+    let (_, r) = parse(
+        &serde_json::json!({"environment": {"set": {"MODE": "x"}, "inherit": ["LANG"],
+            "secrets": {"API_KEY": "key"}}, "key": "s"}),
+        &|f| f == "key",
+    )
+    .unwrap();
+    // Set and secret names cross; inherited Windows values do not.
+    assert_eq!(wslenv(&r).as_deref(), Some("MODE/u:API_KEY/u"));
+}
+
+/// A managed and a detached launch named as Windows' own `wsl.exe`, with Windows' folder given
+/// (`TEST_SYSTEM_ROOT`; the program run is still this test's agent), each start with `WSLENV`
+/// naming what they set: both launch paths take their environment from `launch_env`. On Windows
+/// the detached one runs only outside the runner's job (`let_go`), as CI's step "Detached launch
+/// outside the runner's job" runs this test; inside it, it is refused before it runs.
+#[test]
+fn managed_and_detached_launches_of_wsl_exe_start_with_wslenv() {
+    *TEST_SYSTEM_ROOT.lock().unwrap() = Some(PathBuf::from(r"C:\Windows"));
+    let dir = folder("wslenv-launch");
+    let as_wsl = |rec: &Path, lifetime| {
+        let mut l = agent(&dir, rec, &[], lifetime);
+        l.named = PathBuf::from(r"C:\Windows\System32\wsl.exe");
+        l.request.set.insert("FIXTURE_SET".into(), "set".into());
+        l
+    };
+    let (rd, rm) = (dir.join("detached"), dir.join("managed"));
+    let ran = let_go(&as_wsl(&rd, Lifetime::Detached), "p", &By(none));
+    let rt = Runtimes::open(None, Box::new(By(none)));
+    let m = rt.start("p", as_wsl(&rm, Lifetime::Managed)).unwrap();
+    let mr = record(&rm, 0);
+    let d = ran.then(|| record(&rd, 0));
+    *TEST_SYSTEM_ROOT.lock().unwrap() = None;
+    let _ = rt.stop("p", m["runtime"].as_str().unwrap());
+    let mut all = vec![pid(&mr, "pid"), pid(&mr, "child")];
+    if let Some(d) = &d {
+        all.extend([pid(d, "pid"), pid(d, "child")]);
+    } else {
+        // Refused before it ran (Windows, in a job it may not leave): nothing started.
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!rd.exists(), "a refused detached launch started");
+    }
+    clean(&all, &dir);
+    for r in d.iter().chain([&mr]) {
+        assert_eq!(r["env"]["WSLENV"], "FIXTURE_SET/u", "{r}");
+        assert_eq!(r["env"]["FIXTURE_SET"], "set", "{r}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Every launch, managed or detached, gets its environment from `launch_env`: one of Windows'
+/// own `wsl.exe` gets `WSLENV` naming what it sets (replacing any it inherited), and no other
+/// launch does.
+#[test]
+fn a_launch_of_wsl_exe_gets_wslenv_in_its_environment_and_no_other_launch_does() {
+    let dir = folder("wslenv");
+    let (lifetime, request) = parse(
+        &serde_json::json!({"environment": {"set": {"MODE": "x"}, "secrets": {"API_KEY": "key"}},
+            "key": "s"}),
+        &|f| f == "key",
+    )
+    .unwrap();
+    let launch = |named: &str| Launch {
+        opened: opened(&dir),
+        named: PathBuf::from(named),
+        argv: vec![],
+        lifetime,
+        request: request.clone(),
+        secrets: vec![("API_KEY".into(), "s-1".into())],
+        stdin: None,
+    };
+    let secrets = [("API_KEY".to_string(), "v".to_string())];
+    let root = Some(Path::new(r"C:\Windows"));
+    let wslenv_of = |env: Vec<(String, OsString)>| -> Vec<OsString> {
+        env.into_iter()
+            .filter(|(k, _)| k.eq_ignore_ascii_case("WSLENV"))
+            .map(|(_, v)| v)
+            .collect()
+    };
+    let wsl = launch(r"C:\Windows\System32\wsl.exe");
+    assert_eq!(
+        wslenv_of(launch_env(&wsl, &secrets, root)),
+        [OsString::from("MODE/u:API_KEY/u")]
+    );
+    // Not wsl.exe, or no Windows folder to find it in: nothing added.
+    assert!(wslenv_of(launch_env(&launch(r"C:\tools\wsl.exe"), &secrets, root)).is_empty());
+    assert!(wslenv_of(launch_env(&wsl, &secrets, None)).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// macOS: a launch's PATH is the app's, then the client folders that exist, each once.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_path_adds_existing_client_folders() {
+    let home = std::env::temp_dir().join(format!("pluxy-path-{}", crate::managed::random_key()));
+    std::fs::create_dir_all(home.join(".local/bin")).unwrap();
+    std::fs::create_dir_all(home.join(".bun/bin")).unwrap();
+    let local = home.join(".local/bin");
+    let snap = Snapshot::of(
+        &[
+            ("PATH", &format!("/usr/bin:/bin:{}", local.display())),
+            ("HOME", home.to_str().unwrap()),
+        ],
+        core_limit(),
+    );
+    let env = environment(&snap, &Request::default(), &[]);
+    let path = env.iter().find(|(k, _)| k == "PATH").unwrap().1.clone();
+    let entries: Vec<PathBuf> = std::env::split_paths(&path).collect();
+    assert_eq!(
+        entries[..3],
+        [PathBuf::from("/usr/bin"), "/bin".into(), local.clone()]
+    );
+    assert!(entries.contains(&home.join(".bun/bin")));
+    assert_eq!(entries.iter().filter(|e| **e == local).count(), 1);
+    assert!(
+        !entries.contains(&home.join(".cargo/bin")),
+        "a missing folder is left out"
+    );
+    std::fs::remove_dir_all(&home).unwrap();
 }

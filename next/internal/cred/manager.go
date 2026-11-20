@@ -92,11 +92,14 @@ type Manager struct {
 	mu sync.Mutex
 	// flights is the per-credential refresh lock: at most one renewal per account runs, and
 	// callers that need the same version renewed wait for it.
-	flights  map[string]*flight
-	renewals map[string]*renewal
-	logins   map[string]*login
-	loginSeq uint64
-	onChange func()
+	flights            map[string]*flight
+	renewals           map[string]*renewal
+	logins             map[string]*login
+	loginSeq           uint64
+	onChange           func()
+	onCredentialChange func(id string)
+	onReauth           func(id string)
+	onRemove           func(id string)
 }
 
 type flight struct {
@@ -124,12 +127,16 @@ type renewal struct {
 type Options struct {
 	// Reserved reports IDs that core's config already uses, which logins may not take.
 	Reserved func(id string) bool
+	// OnReauth is called after an existing account signs in again with a new credential.
+	OnReauth func(id string)
+	// OnRemove is called after an account is deleted from the store.
+	OnRemove func(id string)
 }
 
 // NewManager returns the manager for store's accounts on provs.
 func NewManager(store *Store, provs Providers, opts Options) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{store: store, provs: provs, reserved: opts.Reserved,
+	m := &Manager{store: store, provs: provs, reserved: opts.Reserved, onReauth: opts.OnReauth, onRemove: opts.OnRemove,
 		now: time.Now, ctx: ctx, cancel: cancel,
 		flights: map[string]*flight{}, renewals: map[string]*renewal{}, logins: map[string]*login{}}
 	if m.reserved == nil {
@@ -151,6 +158,23 @@ func (m *Manager) changed() {
 	m.mu.Unlock()
 	if f != nil {
 		f()
+	}
+}
+
+// OnCredentialChange sets f to be called with an account's ID after its credential is renewed
+// or it signs in again.
+func (m *Manager) OnCredentialChange(f func(id string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onCredentialChange = f
+}
+
+func (m *Manager) credentialChanged(id string) {
+	m.mu.Lock()
+	f := m.onCredentialChange
+	m.mu.Unlock()
+	if f != nil {
+		f(id)
 	}
 }
 
@@ -472,6 +496,7 @@ func (m *Manager) apply(cur Record, cred *protocol.Credential, perr *llm.Error) 
 			rn.until = now.Add(ineffectiveBackoff)
 		}
 		m.setRenewal(next, rn)
+		m.credentialChanged(next.ID)
 		return next, nil
 	case rejectedGrant(perr):
 		next, err := m.updateRenewed(cur, true, func(r *Record) {
@@ -645,6 +670,9 @@ func (m *Manager) Remove(id string) error {
 		}
 	}
 	m.mu.Unlock()
+	if m.onRemove != nil {
+		m.onRemove(id)
+	}
 	m.changed()
 	return nil
 }

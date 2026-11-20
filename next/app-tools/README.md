@@ -17,15 +17,15 @@ cargo build --release --locked -p claude-code   # likewise claude-desktop, codex
 cargo build --release --locked -p wsl           # pluxy/wsl, for Windows (bin/pluxy-wsl.exe)
 ```
 
-Platforms: every tool but `wsl` runs on Linux. The usage hub, the usage parsers,
-`codex-sessions`, `execution`, `lib/transactions` with its `fixture-writer`, `claude-code` and
-`codex-setup` also build and are tested on Windows and macOS
-(`.github/workflows/next-app-tools-platforms.yml`), and their manifests name programs for
-`darwin/amd64`, `darwin/arm64` and `windows/amd64`; the app does not run native tools on those
-systems yet. `wsl` is a Windows tool (`windows/amd64`, `windows/arm64`; on other systems it builds
-and answers every operation `unsupported`); that workflow's WSL jobs run it, and `lib/program` and
-`lib/transactions` built for Linux, against real WSL distributions. `claude-desktop`, `opencode`,
-`omp-setup`, `grok-setup`, `hermes-setup` and `pi-setup` are Linux only for now.
+Platforms: every tool but `wsl` runs on Linux, and every tool and library also builds and is
+tested on Windows and macOS (`.github/workflows/next-app-tools-platforms.yml`, the whole
+workspace); their manifests name programs for `darwin/amd64`, `darwin/arm64` and
+`windows/amd64`. The app does not run native tools on those systems yet. `wsl` is a Windows tool
+(`windows/amd64`, `windows/arm64`; on other systems it builds and answers every operation
+`unsupported`); that workflow's WSL jobs run it, and `lib/program` and `lib/transactions` built
+for Linux, against real WSL distributions. Each setup tool finds its client's files and programs
+where that client puts them on each system, as its section says; on Windows the tools read
+`LOCALAPPDATA` where a client keeps its files there, which the app is to pass them with `HOME`.
 
 ## `lib/files`
 
@@ -56,9 +56,21 @@ platform code of its own for them:
   system has them (the name is replaced even while another program has the old file open).
   `create_private_in` makes a new file relative to a folder's handle, private as it is made and
   shared with no other handle.
+- On Windows, `others_may_write` says whether an account other than this user, SYSTEM and
+  Administrators may change a path (its owner is another's, it has no access list, or an allow
+  entry that applies to it gives another account a right to write, add, delete or change the
+  list or owner, or is of a kind it does not read). `others_may_change` says why, for a file or
+  folder open as a handle, with TrustedInstaller trusted too (it owns `C:\` and Windows' own
+  folders), looking for any such change (`Change::Any`) or only for removing or renaming what a
+  folder holds, or the folder, or changing its list or owner (`Change::Entries`): what the
+  execution program's Windows terminal requires of its program and the folders above it.
 - `windows_name_problem` says why Windows would read a path's name as another file (a stream such
   as `a.json:x`, a name ending in a dot or a blank, a device name such as `NUL` or `COM1.json`), a
   plain string check the same on every platform.
+- `executable` says whether a path (a link followed) is a program someone may start by its path:
+  on Linux and macOS a regular file with an execute bit, on Windows a regular file named `….exe` or
+  `….com` that starts with `MZ` (a PE image), as `execution` requires. `sync_dir` flushes a folder, so a rename in it lasts (on Windows it does nothing, as in
+  `lib/transactions`).
 - `open_regular` opens a file for reading only if it is a regular file, checked on the open handle,
   without following a link: on Linux and macOS with `O_NOFOLLOW` and `O_NONBLOCK` (a FIFO is
   refused, never waited on); on Windows the link itself is opened and refused, as is anything that
@@ -87,7 +99,7 @@ The program side of the contract, for any tool (`pluxy-program`):
 | `Error` | The contract's error object: `invalid_request`, `unsupported`, `not_found`, `unavailable`, `internal`, `cancelled`, or any code. |
 | `read_frame`, `write_frame` | The framing: a four-byte big-endian length and UTF-8 JSON; a program's frames are at most `MAX_FRAME` (1 MiB). |
 | `MAX_BATCH` | The largest batch a producer may send, 48 KiB of JSON. |
-| `environment` | `PLUXY_ENVIRONMENT`, which the host sets when it runs a package's Linux program in a WSL distribution: `wsl:<distribution>:<user>`. `Identity::from_env` (so `run`) then checks that `WSL_DISTRO_NAME` is that distribution and that the effective user ID's name in `/etc/passwd` is that user; otherwise the program stops before hello with `pluxy expected WSL <d>/<u>, this is <d'>/<u'>`, so a record of a distribution or user made again under the same name, or a routing mistake, runs nothing. Anywhere but Linux the variable is refused. |
+| `environment` | `PLUXY_ENVIRONMENT`, which the host sets when it runs a package's Linux program in a WSL distribution: `wsl:<distribution>:<user>`, with `PLUXY_ENVIRONMENT_ACCOUNT`, `<user ID>:<home>` as the host's record of the user has them. `Identity::from_env` (so `run`) then checks that `WSL_DISTRO_NAME` is that distribution, that the effective user ID's name in `/etc/passwd` is that user, and that the ID and that entry's home are the ones named; otherwise the program stops before hello with `pluxy expected WSL <d>/<u>, this is <d'>/<u'>` or `pluxy expected <u> with user ID <n> and home <h>, this is user ID <n'> with home <h'>`, so a record of a distribution or user made again under the same name (or of a home since moved), or a routing mistake, runs nothing. A missing or unreadable account is refused too. Anywhere but Linux the variable is refused. |
 
 Each call runs on a thread of its own that ends with the call; the thread that reads stdin
 routes cancels, the answers to a call's own calls, vault and jobs frames, and a job's acks. An
@@ -647,14 +659,30 @@ exports nothing.
 
 | Operation | Effect | Input | Output |
 | --- | --- | --- | --- |
-| `preview` | `read` | `targets`: three selections (`file`, or `root` and `path`), by default `claude_desktop_config.json`, `configLibrary/00000000-0000-4000-8000-000000831700.json` and `configLibrary/_meta.json` in `~/.config/Claude-3p` (the app's `HOME`); `base_url` (optional): the core the state is checked against | The library's preview and `settings`: `state` (`not-configured`, `configured`, `needs-update`), `base_url`, `key_set`, `deployment_mode`, `applied_id`, `hybrid_pointer` and the model rows (`model`, `alias`, `one_m`); never the key. Files Claude Desktop would not take are pinned all the same, with `settings` `{"state": "refused", "reason"}`, so Restore Backup still reaches them. With no `targets` and nothing at `~/.config/Claude-3p/configLibrary`, refused with "Claude Desktop's configuration library does not exist yet" (what `folders` creates) |
-| `folders` | `write` | — | Creates `~/.config/Claude-3p/configLibrary` (mode 0700) when it does not exist: `created`, `folder` |
+| `preview` | `read` | `targets`: three selections (`file`, or `root` and `path`), by default `claude_desktop_config.json`, `configLibrary/00000000-0000-4000-8000-000000831700.json` and `configLibrary/_meta.json` in Claude Desktop's third-party folder (below); `base_url` (optional): the core the state is checked against | The library's preview and `settings`: `state` (`not-configured`, `configured`, `needs-update`), `base_url`, `key_set`, `deployment_mode`, `applied_id`, `hybrid_pointer` and the model rows (`model`, `alias`, `one_m`); never the key. Files Claude Desktop would not take are pinned all the same, with `settings` `{"state": "refused", "reason"}`, so Restore Backup still reaches them. With no `targets` and nothing at `configLibrary` in the third-party folder, refused with "Claude Desktop's configuration library does not exist yet" (what `folders` creates) |
+| `folders` | `write` | — | Creates `configLibrary` in the third-party folder when it does not exist, private (`lib/files`), with the folders above it that are missing (on Linux and macOS private too; on Windows they take their folder's list): `created`, `folder` |
 | `apply` | `write`; secret `key` (value) | Three pins, `base_url`, `key`, `models`: 1 to 16 rows of `model` (what the core serves), `alias` (the name Claude Desktop uses; empty: the model's own) and `one_m` | The library's outcome |
 | `clear` | `write` | Three pins | The library's outcome: the values Apply wrote go, edits made since stay |
 | `restore` | `write` | Three pins | The library's outcome: the original bytes back, files that did not exist removed (Restore Backup) |
 | `status` | `read` | — | The library's status |
-| `recipe` | `read` | — | `{"client": "Claude Desktop", "kind": "direct", "program": "claude-desktop", "args": [], "cwd": <HOME>}`, for the launcher |
+| `recipe` | `read` | — | `{"client": "Claude Desktop", "kind": "direct", "program": …, "args": [], "cwd": <HOME>}`, for the launcher: `program` is `claude-desktop` on Linux and `/Applications/Claude.app` on macOS (or `~/Applications/Claude.app` when only that exists); on Windows `unsupported`, as Anthropic names no program or packaged-app ID to start |
 | `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations, three files per version, diffed with `json_leaves` | The library's answers |
+
+Claude Desktop's third-party folder, where it keeps its data, is `~/.config/Claude-3p` on Linux
+(the tool's environment has no `XDG_CONFIG_HOME`: a person who moved it selects that folder),
+`~/Library/Application Support/Claude-3p` on macOS and `%LOCALAPPDATA%\Claude-3p` on Windows
+(`LOCALAPPDATA` as the app passes it; with none, or one that is not a full path, the default
+preview and `folders` refuse). With the MSIX installer on Windows 10 it can be
+`%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Local\Claude-3p` instead, which the tool
+takes when only that one exists (after an upgrade to Windows 11 the old one can stay behind).
+Anthropic's [data storage](https://claude.com/docs/third-party/claude-desktop/data-storage) and
+[configuration format](https://claude.com/docs/third-party/claude-desktop/configuration-format)
+pages (read 2026-11-17) name these folders and `configLibrary` in them; the older Windows folder,
+`%APPDATA%\Claude-3p` (before 1.5186.0), is not read, as Claude Desktop moves it at its next start.
+They do not name `claude_desktop_config.json`; Claude Desktop is one app on all three systems (its
+[installation](https://claude.com/docs/third-party/claude-desktop/installation) page), and the tool
+takes that file beside `configLibrary` on macOS and Windows as its Linux package keeps it. This is
+not checked on a real macOS or Windows install yet.
 
 The files and keys are Claude Desktop's own, as Anthropic's third-party documentation
 ([configuration](https://claude.com/docs/third-party/claude-desktop/configuration),
@@ -713,11 +741,13 @@ nothing.
 | `clear` | `write` | One pin | The library's outcome: the values Apply wrote go, edits made since stay |
 | `restore` | `write` | One pin | The library's outcome: the original bytes back (Restore Backup) |
 | `status` | `read` | — | The library's status |
-| `recipe` | `read` | `target`: `cli` (the default) or `app` | `{"client": "OpenCode", "kind": "terminal", "program": <~/.opencode/bin/opencode when it is an executable file there, else "opencode">, "args": []}`, or `{"client": "OpenCode Desktop", "kind": "direct", "program": "/opt/OpenCode/ai.opencode" (or `/opt/OpenCode/ai.opencode.desktop`, OpenCode 1's, when only that exists), "args": [], "cwd": <HOME>}`, for the launcher |
+| `recipe` | `read` | `target`: `cli` (the default) or `app` | `{"client": "OpenCode", "kind": "terminal", "program": <~/.opencode/bin/opencode (opencode.exe on Windows) when it is a program there, else "opencode">, "args": []}`, or `{"client": "OpenCode Desktop", "kind": "direct", "program": …, "args": [], "cwd": <HOME>}`, for the launcher: on Linux `/opt/OpenCode/ai.opencode` (or `/opt/OpenCode/ai.opencode.desktop`, OpenCode 1's, when only that exists), on macOS `/Applications/OpenCode.app` (or `~/Applications/OpenCode.app` when only that exists), on Windows `%LOCALAPPDATA%\Programs\ai.opencode.desktop\OpenCode.exe` (refused with no `LOCALAPPDATA`) |
 | `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations (`lib/transactions`), one file per version, diffed by setting name as `json_leaves` reads JSON | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
 
 OpenCode reads its global config from `~/.config/opencode/` (`$XDG_CONFIG_HOME/opencode`, or
-`$OPENCODE_CONFIG_DIR`): `opencode.json` and then `opencode.jsonc`, so the latter's values win
+`$OPENCODE_CONFIG_DIR`), on every system (`%USERPROFILE%\.config\opencode` on Windows: its
+`packages/util/src/global-roots.ts`, and `xdg-basedir` in OpenCode 1, take the home folder's
+`.config` wherever `XDG_CONFIG_HOME` is not set): `opencode.json` and then `opencode.jsonc`, so the latter's values win
 (OpenCode 1.x also reads an older `config.json` first). The default file is the one OpenCode itself
 writes: `opencode.jsonc` if it exists, else `opencode.json` if it exists, else a new
 `opencode.jsonc`. The tool's environment holds no `XDG_CONFIG_HOME` or `OPENCODE_CONFIG*`, so a
@@ -769,10 +799,11 @@ backups (the backup browser). It exports nothing.
 | `clear` | `write` | Two pins | The library's outcome: the values Apply wrote go, edits made since stay |
 | `restore` | `write` | Two pins | The library's outcome: the original bytes back (Restore Backup) |
 | `status` | `read` | — | The library's status |
-| `recipe` | `read` | — | `{"client": "Oh My Pi", "kind": "terminal", "program": <~/.bun/bin/omp, else ~/.local/bin/omp, when an executable file is there, else "omp">, "args": []}`, for the launcher |
+| `recipe` | `read` | — | `{"client": "Oh My Pi", "kind": "terminal", "program": <~/.bun/bin/omp, else ~/.local/bin/omp (on Windows ~/.bun/bin/omp.exe, else omp.exe in %LOCALAPPDATA%\omp, where omp.sh/install.ps1 puts it), when it is a program there, else "omp">, "args": []}`, for the launcher |
 | `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations (`lib/transactions`), both files per version, diffed by setting name (each file's YAML read as its value) | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
 
-Oh My Pi keeps its files in its agent folder, `~/.omp/agent` (`PI_CODING_AGENT_DIR` moves it;
+Oh My Pi keeps its files in its agent folder, `~/.omp/agent` on every system (`os.homedir()`, so
+`%USERPROFILE%\.omp\agent` on Windows: `packages/utils/src/dirs.ts` at v18.21.0) (`PI_CODING_AGENT_DIR` moves it;
 `PI_CONFIG_DIR` renames `.omp`; a profile, `OMP_PROFILE` or `--profile`, uses
 `~/.omp/profiles/<name>/agent`): `models.yml` (or an existing `models.yaml`) holds custom
 providers and models, `config.yml` (or an existing `config.yaml`) the settings, both YAML. The
@@ -829,7 +860,7 @@ nothing.
 | `clear` | `write` | One pin | The library's outcome: the values Apply wrote go, edits made since stay |
 | `restore` | `write` | One pin | The library's outcome: the original bytes back (Restore Backup) |
 | `status` | `read` | — | The library's status |
-| `recipe` | `read` | — | `{"client": "Grok Build", "kind": "terminal", "program": …, "args": []}`, for the launcher: `program` is `~/.grok/bin/grok` when that is an executable file (where Grok Build's install script puts it, often not on a desktop session's PATH), else `grok` |
+| `recipe` | `read` | — | `{"client": "Grok Build", "kind": "terminal", "program": …, "args": []}`, for the launcher: `program` is `~/.grok/bin/grok` (`grok.exe` on Windows, from `install.ps1`) when that is a program (where Grok Build's install script puts it, often not on a desktop session's PATH), else `grok` |
 | `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations (`lib/transactions`), one file per version, diffed by TOML setting path | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
 
 What `apply` writes, editing the file in place with `toml_edit` (comments, formatting, order and
@@ -859,7 +890,8 @@ reports it refused, so Restore Backup reaches it): not UTF-8 or not TOML (Grok B
 table, `models.default` not a string, or a `model."pluxy/…"` entry not a table. Grok Build has no
 version or schema field, and no version bound is assumed. A missing or empty file is an empty one.
 The tool's environment has no `GROK_HOME`: a person who moved Grok Build's folder selects the file
-or folder. A project's `.grok/config.toml` cannot hold models (Grok Build reads only MCP, plugin
+or folder. The folder is `~/.grok` on every system (`%USERPROFILE%\.grok` on Windows: xAI's
+config reference and `xai-dirs`, grok-build main at 2bdd1d6a6369, read 2026-11-17). A project's `.grok/config.toml` cannot hold models (Grok Build reads only MCP, plugin
 and permission settings there), so only the user config is written.
 
 ## `hermes-setup`
@@ -877,13 +909,17 @@ It exports nothing.
 | `clear` | `write` | One pin | The library's outcome: the values Apply wrote go, edits made since stay |
 | `restore` | `write` | One pin | The library's outcome: the original bytes back (Restore Backup) |
 | `status` | `read` | — | The library's status |
-| `recipe` | `read` | — | `{"client": "Hermes Agent", "kind": "terminal", "program": <~/.local/bin/hermes when an executable file is there, else "hermes">, "args": []}`, for the launcher |
+| `recipe` | `read` | — | `{"client": "Hermes Agent", "kind": "terminal", "program": <~/.local/bin/hermes (on Windows hermes.exe in the bin folder of Hermes' home, where install.ps1 puts it) when it is a program there, else "hermes">, "args": []}`, for the launcher |
 | `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations (`lib/transactions`), one file per version, diffed by setting name (the file's YAML read as its value) | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
 
 Hermes Agent keeps its settings in `config.yaml` in its home folder: `HERMES_HOME`, else
-`~/.hermes`; with no `--profile` flag, a profile named in `~/.hermes/active_profile` (other than
-`default`) makes the home `~/.hermes/profiles/<name>`. The tool's environment has no
-`HERMES_HOME`, so by default it uses `~/.hermes/config.yaml`, or the active profile's
+`~/.hermes` on Linux and macOS and `%LOCALAPPDATA%\hermes` on Windows (`AppData\Local\hermes` in
+the home folder when `LOCALAPPDATA` is not set or is blank, as Hermes reads it, or is not a full
+path: `_platform_default_hermes_home` in
+`hermes_constants.py`, main at c664ffdbccd9, read 2026-11-17); with no `--profile` flag, a profile
+named in that folder's `active_profile` (other than `default`) makes the home its
+`profiles/<name>`. The tool's environment has no `HERMES_HOME`, so by default it uses that
+folder's `config.yaml`, or the active profile's
 `config.yaml` (a name that is not a profile ID, or a profile folder that is not there, refuses: the
 person selects the folder); a person who sets `HERMES_HOME` selects that folder. Hermes's own checks
 that a profile folder is a live profile are not repeated. Read at source (NousResearch/hermes-agent
@@ -946,10 +982,12 @@ host's vault, and its manual backups (the backup browser). It exports nothing.
 | `clear` | `write` | Three pins | The library's outcome (the values Apply wrote go, edits made since stay) and `adapter_removed` |
 | `restore` | `write` | Three pins | The library's outcome (the original bytes back: Restore Backup) and `adapter_removed` |
 | `status` | `read` | — | The library's status |
-| `recipe` | `read` | — | `{"client": "Pi", "kind": "terminal", "program": <~/.pi/agent/bin/pi, else ~/.local/bin/pi, when an executable file is there, else "pi">, "args": []}`, for the launcher |
+| `recipe` | `read` | — | `{"client": "Pi", "kind": "terminal", "program": <~/.pi/agent/bin/pi, else ~/.local/bin/pi, when an executable file is there, else "pi">, "args": []}`, for the launcher. On Windows always `pi` from the PATH: `pi.dev/install.ps1` makes `pi.cmd` launchers, not npm's shims, so starting a Pi installed that way is refused at launch (`execution` runs a batch file only as an npm, pnpm or Yarn shim), while an npm install of Pi starts; setting Pi up works either way |
 | `backup-list`, `backup-diff`, `backup-create`, `backup-restore`, `backup-delete` | `read`, `read`, `write`, `write`, `write` | The library's standard backup operations (`lib/transactions`), the three files per version, diffed by setting name | The library's answers: IDs, paths, presence, sizes and setting names, never a value |
 
-Pi keeps its user settings in its agent folder, `~/.pi/agent` (`PI_CODING_AGENT_DIR` moves it; the
+Pi keeps its user settings in its agent folder, `~/.pi/agent` on every system (`getAgentDir` in
+`packages/coding-agent/src/config.ts` at earendil-works/pi v1.5.2 joins `os.homedir()`, so
+`%USERPROFILE%\.pi\agent` on Windows) (`PI_CODING_AGENT_DIR` moves it; the
 tool's environment does not have it, so a person who uses it selects that folder): `settings.json`
 holds Pi's settings, among them `packages` (npm, git or local Pi packages), `defaultProvider` and
 `defaultModel`; Pi reads it as strict JSON. Pi talks to pluxy's core through the CLIProxyAPI
@@ -976,7 +1014,10 @@ and nothing removes it. The review read the plugin's network, process, file and 
 prices) and found one hole, patched in the copy: the plugin wrote a patched copy of a Pi module to
 a fixed name in the shared temporary folder and imported it, so another user of the machine who
 made that folder first could run code as the Pi user; the copy keeps it in its own folder's
-`.cache` (mode 0700) instead. The plugin declares Pi `>=0.82.0` (`@earendil-works/pi-coding-agent`);
+`.cache` (mode 0700) instead. On Windows, where Node ignores the mode, the copy's files and
+`.cache` take the agent folder's access list (in the person's profile, not a shared folder); the
+tool writes the copy's files there with their folder's list, and on Linux and macOS 0644 in 0755
+folders. The plugin declares Pi `>=0.82.0` (`@earendil-works/pi-coding-agent`);
 the tool cannot run `pi --version`, so it does not check.
 
 What `apply` writes:
@@ -1029,7 +1070,20 @@ desktop app's list): `x-terminal-emulator` (System terminal), `gnome-terminal` (
 `xfce4-terminal` (`-x`), `mate-terminal` (`-x`), `kitty`, `alacritty`, `ghostty` and `xterm`, each
 running the program after `-e` unless noted. A terminal launch runs `<terminal> <flag> <program>
 <args>`; a direct one `<program> <args>`. The program must be an executable file, the working folder
-an existing absolute folder.
+an existing absolute folder. The terminal finds the program by that path as it starts, after the
+app's checks, so the app refuses a terminal launch whose program another user could change or
+redirect by then: one below a folder others or a group may write (a sticky folder such as `/tmp`
+aside, and the person's own private group, as Homebrew on Linux and a umask of 002 make them: a
+group no other user in `/etc/passwd` and `/etc/group` has, users and groups from other sources
+such as LDAP being unseen),
+reached through a link such a user could change, through `/proc`, or that such a group may write
+(`../app/app-host/README.md`, "Launches and managed runtimes"). `launch` refuses, before the host
+is asked, a launch of a terminal of the list above whose argv starts with its exec flag but that
+does not name as its `program` the argument right after it, one that names a `program` whose
+argv does not start with that flag, and on Linux and macOS a launch that names a `program` but
+is no terminal's: the app checks `program` as the file the terminal runs. A terminal of the list
+started without its exec flag and naming no `program` (its own window, or its own options) is a
+direct launch of it.
 
 A launch's `lifetime` is `detached` or `managed`, and **`managed` applies to direct launches only**.
 The host keeps and stops a managed runtime through the process it started, and for a terminal
@@ -1077,7 +1131,26 @@ and then waits for Enter (`console`) or stays at a `cmd.exe /D` or `powershell.e
 -NoProfile` prompt, both from the System32 folder Windows reports (never the launch's
 `SystemRoot`). There is no Windows Terminal kind:
 `wt.exe` splits its command line its own way, so the arguments confirmed would not be the ones
-it runs.
+it runs. In the native test's build (feature `native-test`) nobody is at the window, so the
+`console` window does not wait for Enter, and the shell after the program runs one fixed command
+that writes its working folder to `pluxy-after-exit` in that folder, then exits; a normal build
+does neither.
+
+Windows cannot run an open file, so the execution program runs the program by its path, and
+first holds it: it opens the program and every folder above it so that none of them can be
+renamed, removed or replaced, nor the program written, until the program has started. With all of
+them held it checks that the path names exactly what it holds (the program's final path is the
+path named, so no link, junction or short name is on the way, and it is the same file by volume
+serial number and file ID), that the program is a PE image (`.exe` or `.com` starting with `MZ`,
+and no `.com.exe` beside a `.com`), and, through the held handles, that no account but the user,
+SYSTEM, Administrators and TrustedInstaller may change the program or its folder (another
+account's file there would load as one of the program's libraries), nor remove or rename what a
+folder above holds (owner and access list, `pluxy_files::others_may_change`; adding to a folder
+above is allowed, as every account may in `C:\`). So a program another account swapped in after
+the app checked it, or could swap in before it starts, never runs. Otherwise the window says
+`pluxy: will not run "<program>": "<path>" …`, naming the path and why, and the program does not
+start. The user's own processes, and administrators', can still swap the program before it is
+held, as on Linux and macOS.
 
 A program is a PE image (`.exe` or `.com` starting with `MZ`), looked up as `<name>.com`,
 `.exe`, `.bat`, `.cmd` in each search path folder in turn. A batch file runs only as an npm, pnpm
@@ -1107,8 +1180,19 @@ private folder in the per-user temporary folder with a Unix socket and a `.comma
 Terminal open the file (`/usr/bin/open -a`), and hands the program, arguments, folder and
 environment over the socket to the first connection from this user; the file only runs
 `<execution> attach <socket>`, so nothing of the launch is written to a file or read by a shell.
-In the window, the program runs with the launch's environment and the window's own `TERM…`,
-`LC_TERMINAL…` and `PATH`. When macOS holds `open` back for 20 seconds (a quarantine or a
+The program itself goes over the socket too, as the file the app confirmed and checked: the app
+gives it to the execution program as descriptor 3, and a terminal launch without it is refused.
+That refusal is silent today: the app does not read the terminal mode's exit code or error
+output, so an app that gives no descriptor (one older than this execution program) sees its
+terminal launches start and no window open. A terminal launch must name as its `program` the
+argument right after `--`.
+In the window, that file runs, by the path it has then, once no other user but a member of
+`admin` can change it or a folder above it, each on a volume that keeps ownership (not one with
+Finder's "Ignore ownership on this volume"), and that path still names it (the rule the app holds
+a direct launch's program to); otherwise the window says which path another user could change,
+and nothing runs. A file put at the program's path since the app checked it never runs. The
+program runs with the launch's environment and the window's own `TERM…`, `LC_TERMINAL…` and
+`PATH`. When macOS holds `open` back for 20 seconds (a quarantine or a
 permission prompt), the launch fails as blocked; when no window takes it within 60 seconds, as
 expired. A launch whose hand-over would be over 1 MiB (the program, arguments, folder and
 environment) is refused before Terminal opens.
@@ -1128,10 +1212,10 @@ either before the host is asked.
 
 `pluxy/wsl` (program `bin/pluxy-wsl.exe`, Windows only: on any other system every operation answers
 `unsupported`) tells pluxy's desktop app which WSL distributions and users there are, checks one,
-and prepares launches inside it. It is groundwork for the later WSL support: the app does not run
-native tools on Windows yet, so it does not use this tool, and its side (setting a client up in a
-distribution by running the client package's own Linux program there, through `wsl.exe`) is not
-built. This tool only reads. It writes nothing
+and prepares launches inside it. The app uses it to list and check the distributions and users a
+client page offers and to prepare a launch there; it then runs the client package's own Linux
+program in the distribution through `wsl.exe` itself ([Tools in
+WSL](../app/app-host/README.md#tools-in-wsl-windows)). This tool only reads. It writes nothing
 anywhere and never starts a launch. It runs only Windows' own `wsl.exe`, from System32 as
 `GetSystemDirectoryW` reports it: with no window, empty standard input, an environment of
 `SystemRoot`, `WINDIR` and `WSL_UTF8=1` only, its output read while it runs and capped, and a

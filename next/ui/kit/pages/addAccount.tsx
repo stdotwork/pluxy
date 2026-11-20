@@ -78,6 +78,7 @@ export function AddAccountPage(props: { onSuccess?: (accountId: string) => void 
             <label class="field" data-part="field">
               <span class="label">{t("accountId")}</span>
               <input
+                data-slot="input"
                 ref={idField}
                 type="text"
                 required

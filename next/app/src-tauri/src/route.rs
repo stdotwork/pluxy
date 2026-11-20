@@ -49,12 +49,13 @@
 
 use crate::confirmation::{self, Authorized, Gesture};
 use crate::device::{self, Grant, Refused};
+use crate::environments::{Environment, Instance, Record};
 use crate::program::{self, CallError, Cancel, Context, Hop, Outbound};
 use crate::spawn::{self, Lifetime};
 use crate::vault::{Holder, Vault};
 use crate::App;
 use serde_json::{json, Value};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
@@ -84,6 +85,10 @@ struct Origin {
     save: Mutex<Option<(Holder, Vec<u8>)>>,
     /// The remembered approval that authorized the call's launch, or that its confirmation saved.
     approval: Arc<Mutex<Option<String>>>,
+    /// Where the call's target runs (only the window's own call chooses another environment than
+    /// this computer), and the line its native confirmation shows for where the action runs.
+    environment: Environment,
+    shown: Option<String>,
 }
 
 /// Who fills a call's secret fields: the window, with vault secret IDs; a page, never; a tool,
@@ -142,14 +147,93 @@ pub fn call_main_launch(
     input: Value,
     gesture: Option<Gesture>,
 ) -> Result<(Value, Option<String>), CallError> {
+    call_main_in(
+        app,
+        call,
+        &Instance::local(package),
+        op,
+        input,
+        gesture,
+        None,
+    )
+}
+
+/// The line a call's native confirmation shows above its review for where it runs: shown (the
+/// launcher's, for a launch it starts in WSL through a tool on this computer), else the line of
+/// the WSL environment's record it runs in; none on this computer.
+fn shown_line(shown: Option<String>, record: Option<&Record>) -> Option<String> {
+    shown.or_else(|| record.map(Record::confirmation_line))
+}
+
+/// `call_main_launch`, of instance: in a WSL environment the window chose, that the host has a
+/// record of, for a package that runs there (its Linux build installed for WSL), with that
+/// environment's line in the native confirmation; shown is the line to show instead (the
+/// launcher's, for a launch it starts in WSL through a tool on this computer).
+pub fn call_main_in(
+    app: &AppHandle,
+    call: program::Call,
+    instance: &Instance,
+    op: &str,
+    input: Value,
+    gesture: Option<Gesture>,
+    shown: Option<String>,
+) -> Result<(Value, Option<String>), CallError> {
+    let package = instance.package.as_str();
+    // The environment's record and its Linux platform, refused before anything starts when the
+    // host does not know it.
+    let record = match &instance.environment {
+        Environment::Local => None,
+        env => Some(
+            app.state::<App>()
+                .environments
+                .lock()
+                .unwrap()
+                .get(env)
+                .cloned()
+                .ok_or_else(|| {
+                    fail(
+                        "not_found",
+                        format!(
+                            "{} is not a WSL environment this app knows: add it again",
+                            env.label().unwrap_or_default()
+                        ),
+                    )
+                })?,
+        ),
+    };
     let grant = || {
-        app.state::<App>()
+        let st = app.state::<App>();
+        let mut g = st
             .device
             .lock()
             .unwrap()
             .main_grant(package, op, &roots())
-            .map_err(refused)
+            .map_err(refused)?;
+        // In WSL: the same release's Linux build, checked now, and its declaration of op.
+        if let Some(r) = &record {
+            let linux =
+                device::admitted_linux_unlocked(&st.device, package, &r.platform(), &roots())
+                    .map_err(|e| fail("extension_unavailable", e))?;
+            g.op = linux
+                .operations()
+                .iter()
+                .find(|o| o.id == op)
+                .cloned()
+                .ok_or_else(|| {
+                    fail(
+                        "permission",
+                        format!("{package}'s Linux build declares no operation {op}"),
+                    )
+                })?;
+            g.target = linux;
+        }
+        Ok(g)
     };
+    // shortcut: the tests check `shown_line` and `native_action` alone, not that this call passes
+    // its line on: it needs the running app's `AppHandle`, which no test can make; test it once
+    // the app has a test harness for its Tauri state, or once this code takes that state instead
+    // of the handle.
+    let shown = shown_line(shown, record.as_ref());
     let approval: Arc<Mutex<Option<String>>> = Arc::default();
     let origin = Origin {
         packages: vec![device::main_window()],
@@ -158,6 +242,8 @@ pub fn call_main_launch(
         launch: Mutex::new(None),
         save: Mutex::new(None),
         approval: Arc::clone(&approval),
+        environment: instance.environment.clone(),
+        shown,
     };
     let out = dispatch(
         app,
@@ -220,6 +306,8 @@ fn outbound(app: &AppHandle, o: Outbound) -> Result<Value, CallError> {
         launch: Mutex::new(None),
         save: Mutex::new(None),
         approval: Arc::default(),
+        environment: Environment::Local,
+        shown: None,
     };
     let filler = Filler::Tool {
         holder: Holder {
@@ -319,6 +407,8 @@ fn page_call(app: &AppHandle, label: &str, params: &Value) -> Result<Value, Call
                 launch: Mutex::new(None),
                 save: Mutex::new(None),
                 approval: Arc::default(),
+                environment: Environment::Local,
+                shown: None,
             };
             let chain = vec![Hop::Page {
                 id: caller.clone(),
@@ -495,6 +585,10 @@ fn dispatch(
         };
         input[f.field.as_str()] = Value::String(r);
     }
+    let instance = Instance {
+        package: grant.target.id().into(),
+        environment: origin.environment.clone(),
+    };
     let context = Context {
         chain,
         expect: Some((grant.target.sha256().into(), grant.target.installed_at())),
@@ -505,7 +599,7 @@ fn dispatch(
     };
     let r = app.state::<App>().programs.run_call_with(
         call,
-        grant.target.id(),
+        &instance,
         &grant.op.id,
         input,
         Arc::new(context),
@@ -655,6 +749,8 @@ fn start_job(
                     launch: Mutex::new(None),
                     save: Mutex::new(None),
                     approval: Arc::default(),
+                    environment: Environment::Local,
+                    shown: None,
                 };
                 let input = i["input"].clone();
                 // A job's operation has no secret fields (`device::Catalog` refuses them at install),
@@ -797,6 +893,8 @@ fn run_job(
                 launch: Mutex::new(None),
                 save: Mutex::new(None),
                 approval: Arc::default(),
+                environment: Environment::Local,
+                shown: None,
             }),
             feed: None,
             // A consumer busy past the startup limit fails the job rather than hold it.
@@ -814,7 +912,7 @@ fn run_job(
             .and_then(|call| {
                 programs.run_call_with(
                     call,
-                    &c.0,
+                    &Instance::local(&c.0),
                     &g.deliver.id,
                     envelope,
                     Arc::new(context),
@@ -836,7 +934,7 @@ fn run_job(
             let r = programs.begin_call(None).and_then(|registered| {
                 programs.run_call_with(
                     registered,
-                    &producer,
+                    &Instance::local(&producer),
                     &op,
                     input,
                     Arc::new(call),
@@ -853,6 +951,7 @@ fn run_job(
 fn launch_of(
     input: &Value,
     executor: &confirmation::Package,
+    adapter: &Path,
 ) -> Result<confirmation::Launch, CallError> {
     let path = |k: &str| {
         input[k]
@@ -868,17 +967,40 @@ fn launch_of(
                 .collect::<Option<Vec<_>>>()
         })
         .ok_or_else(|| fail("invalid_request", "a launch names its argv, as strings"))?;
-    // The program a terminal runs: bound as the executable is, and it must be what argv runs.
+    // The program a terminal runs: bound as the executable is, and it must be what argv runs,
+    // since the spawn checks it as that (`spawn::command`): on Linux the argument right after the
+    // terminal's exec flag (`-e`, `-x` or `--`, the first argument), on macOS the one right after
+    // `--` (the execution program's terminal mode); elsewhere one of argv. A launch that names no
+    // program is not checked as a terminal's: the app has no list of terminals.
     let program = match input.get("program") {
         None => None,
         Some(v) => {
             let p = v
                 .as_str()
                 .ok_or_else(|| fail("invalid_request", "a launch's program is a path"))?;
-            if !argv.iter().any(|a| a == p) {
+            #[cfg(target_os = "linux")]
+            let runs = argv
+                .first()
+                .is_some_and(|f| ["-e", "-x", "--"].contains(&f.as_str()))
+                && argv.get(1).is_some_and(|a| a == p);
+            #[cfg(target_os = "macos")]
+            let runs = argv
+                .iter()
+                .position(|a| a == "--")
+                .and_then(|i| argv.get(i + 1))
+                .is_some_and(|a| a == p);
+            #[cfg(windows)]
+            let runs = argv.iter().any(|a| a == p);
+            if !runs {
                 return Err(fail(
                     "invalid_request",
-                    "a launch's program must be one of its argv",
+                    if cfg!(target_os = "linux") {
+                        "a launch's program must be the argument right after the terminal's exec flag (-e, -x or --), its first"
+                    } else if cfg!(target_os = "macos") {
+                        "a launch's program must be the argument right after --"
+                    } else {
+                        "a launch's program must be one of its argv"
+                    },
                 ));
             }
             Some(PathBuf::from(p))
@@ -923,6 +1045,7 @@ fn launch_of(
         program,
         opens,
         terminal_adapter: executor.clone(),
+        adapter_program: Some(adapter.to_path_buf()),
         // The caller sets them from the launch's environment request (`spawn::parse`).
         environment_revision: String::new(),
         environment_review: vec![],
@@ -990,7 +1113,7 @@ fn authorize(
                 "a launch's secret fields hold references only, never a secret's value",
             ));
         }
-        let mut l = launch_of(input, &executor)?;
+        let mut l = launch_of(input, &executor, grant.target.program())?;
         let (lifetime, mut request) = spawn::parse(input, &|f| filled.iter().any(|x| x.field == f))
             .map_err(|e| fail("invalid_request", e))?;
         // A launch that opens a file has a fixed shape (the confirmation checks the rest): the
@@ -1058,8 +1181,9 @@ fn authorize(
         .as_ref()
         .map(|(l, ..): &Spawning| format!(" {}", l.review()))
         .unwrap_or_default();
-    let action = confirmation::Action {
-        what: format!(
+    let action = native_action(
+        origin,
+        format!(
             "{} {}: {} ({}). Input: {}{}{}",
             grant.target.id(),
             grant.op.id,
@@ -1069,12 +1193,9 @@ fn authorize(
             secret_text(grant.target.id(), filled),
             lifetime_text
         ),
-        chain: origin.packages.clone(),
         executor,
-        native_tool: true,
-        files: vec![],
         launch,
-    };
+    );
     let refuse = |e: String| fail("permission", e);
     let st = app.state::<App>();
     // A page's or an import's confirmation is queued with the page limits and never remembered.
@@ -1152,6 +1273,26 @@ type Spawning = (
     Vec<String>,
     Option<String>,
 );
+
+/// The native confirmation of a call from origin to a native tool (executor): what it does, the
+/// chain that asked, its launch if any, and the line of where it runs (`shown_line`), which a
+/// remembered approval names too.
+fn native_action(
+    origin: &Origin,
+    what: String,
+    executor: confirmation::Package,
+    launch: Option<confirmation::Launch>,
+) -> confirmation::Action {
+    confirmation::Action {
+        what,
+        chain: origin.packages.clone(),
+        executor,
+        native_tool: true,
+        files: vec![],
+        launch,
+        environment: origin.shown.clone(),
+    }
+}
 
 /// A launch's spawn, from what its confirmation opened (a) and what its input asked.
 fn spawnable(spawning: Option<Spawning>, a: Authorized) -> Option<spawn::Launch> {
@@ -1437,6 +1578,119 @@ fn confirmed_authorized(app: &AppHandle, id: &str, cancel: &Cancel) -> Result<Au
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A call in WSL: its confirmation shows the record's line (or the launcher's own, for a
+    /// launch it starts there), and one on this computer shows none.
+    #[test]
+    fn a_call_in_wsl_shows_where_it_runs_in_its_confirmation() {
+        let bob = Record::from_check(
+            "Ubuntu",
+            "bob",
+            &json!({"distro": "Ubuntu", "user": "bob", "uid": 1001, "home": "/home/bob",
+                "arch": "amd64", "automount": "/mnt/", "drives": []}),
+            0,
+        )
+        .unwrap();
+        let origin = |environment: Environment, shown: Option<String>| Origin {
+            packages: vec![device::main_window()],
+            gesture: Arc::default(),
+            token: 0,
+            launch: Mutex::new(None),
+            save: Mutex::new(None),
+            approval: Arc::default(),
+            environment,
+            shown,
+        };
+        let action = |o: &Origin| native_action(o, "w".into(), device::main_window(), None);
+        let in_wsl = origin(bob.environment(), shown_line(None, Some(&bob)));
+        assert_eq!(
+            action(&in_wsl).environment,
+            Some(r#"Runs in WSL: distribution "Ubuntu", user "bob" (/home/bob)."#.into())
+        );
+        let line = "Starts in WSL: distribution \"Ubuntu\", user \"bob\" (/home/bob).";
+        let launched = origin(Environment::Local, shown_line(Some(line.into()), None));
+        assert_eq!(action(&launched).environment.as_deref(), Some(line));
+        let here = origin(Environment::Local, shown_line(None, None));
+        assert_eq!(action(&here).environment, None);
+    }
+
+    /// A terminal launch's program is the argument its terminal runs, the one the spawn checks:
+    /// on Linux right after the terminal's flag, on macOS right after `--`.
+    #[cfg(unix)]
+    #[test]
+    fn a_launchs_program_must_be_the_argument_its_terminal_runs() {
+        let executor = confirmation::Package {
+            id: "pluxy/execution".into(),
+            source: "test".into(),
+            digest: "d".into(),
+            signer: "s".into(),
+            contract: "1".into(),
+            generation: 1,
+        };
+        let launch = |argv: Value, program: &str| {
+            launch_of(
+                &json!({"executable": "/usr/bin/xterm", "argv": argv, "cwd": "/",
+                    "program": program}),
+                &executor,
+                Path::new("/test/execution"),
+            )
+        };
+        #[cfg(target_os = "linux")]
+        let (runs, other) = (
+            json!(["-e", "/bin/agent", "/bin/other"]),
+            json!(["-e", "/bin/other", "/bin/agent"]),
+        );
+        // Right after a flag that is not the exec flag: the terminal runs what follows `--`.
+        #[cfg(target_os = "linux")]
+        {
+            let e = launch(
+                json!(["--title", "/bin/agent", "--", "/tmp/x"]),
+                "/bin/agent",
+            )
+            .map(|_| ())
+            .unwrap_err();
+            assert!(e.message.contains("exec flag"), "{}", e.message);
+            for flag in ["-e", "-x", "--"] {
+                assert!(
+                    launch(json!([flag, "/bin/agent"]), "/bin/agent").is_ok(),
+                    "{flag}"
+                );
+            }
+        }
+        #[cfg(target_os = "macos")]
+        let (runs, other) = (
+            json!([
+                "terminal",
+                "--with",
+                "terminal",
+                "--app",
+                "/T.app",
+                "--",
+                "/bin/agent",
+                "/bin/other"
+            ]),
+            json!([
+                "terminal",
+                "--with",
+                "terminal",
+                "--app",
+                "/T.app",
+                "--",
+                "/bin/other",
+                "/bin/agent"
+            ]),
+        );
+        let l = launch(runs, "/bin/agent").map_err(|e| e.message).unwrap();
+        assert_eq!(l.program, Some(PathBuf::from("/bin/agent")));
+        let e = launch(other, "/bin/agent").map(|_| ()).unwrap_err();
+        assert_eq!(e.code, "invalid_request");
+        assert!(
+            e.message
+                .starts_with("a launch's program must be the argument right after"),
+            "{}",
+            e.message
+        );
+    }
 
     #[test]
     fn a_launch_delivers_the_secrets_its_environment_gives_the_process() {

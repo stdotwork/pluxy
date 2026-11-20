@@ -210,6 +210,33 @@ pub fn others_may_write(path: &Path) -> io::Result<bool> {
     imp::others_may_write(path)
 }
 
+/// Which changes [`others_may_change`] looks for.
+#[cfg(windows)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Change {
+    /// Any change: the rights [`others_may_write`] looks for (writing a file, adding to or removing
+    /// from a folder, deleting, changing the access list or the owner, generic write or all).
+    Any,
+    /// Removing or renaming what a folder holds, or the folder itself, or changing its access list
+    /// or owner (`FILE_DELETE_CHILD`, `DELETE`, `WRITE_DAC`, `WRITE_OWNER`, generic all): the
+    /// changes that could put something else at a path that goes through it. Adding to it does not
+    /// count, which Windows lets every account do in `C:\` and `C:\ProgramData`.
+    Entries,
+}
+
+/// Why an account other than this user, SYSTEM, the Administrators group and TrustedInstaller
+/// (the account that installs Windows' own files, whose reach matches SYSTEM's) may make a change
+/// of kind change to the file or folder open as file (opened with `READ_CONTROL`), on Windows;
+/// `None` when none may. It is read through the handle, so the object open as file is judged,
+/// wherever its path leads now. The rule is [`others_may_write`]'s, with TrustedInstaller trusted
+/// too: its owner is not this user, the owner this process gives what it makes, SYSTEM,
+/// Administrators or TrustedInstaller; or it has no access list; or an allow entry that applies
+/// to it gives one of change's rights to another account, or is of a kind this does not read.
+#[cfg(windows)]
+pub fn others_may_change(file: &File, change: Change) -> io::Result<Option<String>> {
+    imp::others_may_change(file, change)
+}
+
 /// A lock file this process holds (macOS and Windows): no other process can take it while this
 /// lives. Dropping it releases and removes it.
 #[cfg(any(windows, target_os = "macos"))]
@@ -239,6 +266,49 @@ pub fn create_locked(path: &Path) -> io::Result<Lock> {
 #[cfg(any(windows, target_os = "macos"))]
 pub fn take_lock(path: &Path) -> io::Result<Option<Lock>> {
     imp::take_lock(path)
+}
+
+/// Whether path (a link followed) is a program someone may start by its path: on Linux and macOS
+/// a regular file with an execute permission bit; on Windows, which has no such bit and starts a
+/// file as a program by its name's extension, a regular file named `….exe` or `….com` (in any
+/// case) that is a PE image (starts with `MZ`), the rule the execution program launches by.
+pub fn executable(path: &Path) -> bool {
+    let Ok(m) = fs::metadata(path) else {
+        return false;
+    };
+    if !m.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        m.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(windows)]
+    {
+        use std::io::Read;
+        let named = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("exe") || e.eq_ignore_ascii_case("com"));
+        let mut magic = [0u8; 2];
+        named
+            && File::open(path).is_ok_and(|mut f| f.read_exact(&mut magic).is_ok())
+            && magic == *b"MZ"
+    }
+}
+
+/// Flushes the folder path, so a rename or removal in it lasts. On Windows this does nothing: the
+/// file system logs a folder's entries itself, and a folder cannot be flushed through a handle
+/// opened to read it.
+pub fn sync_dir(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    return File::open(path).and_then(|d| d.sync_all());
+    #[cfg(windows)]
+    {
+        let _ = path;
+        Ok(())
+    }
 }
 
 #[cfg(unix)]
@@ -397,17 +467,18 @@ mod imp {
         STATUS_INVALID_PARAMETER, STATUS_NOT_IMPLEMENTED, STATUS_NOT_SUPPORTED, UNICODE_STRING,
     };
     use windows_sys::Win32::Security::Authorization::{
-        ConvertSecurityDescriptorToStringSecurityDescriptorW,
-        ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SetEntriesInAclW,
-        SetSecurityInfo, EXPLICIT_ACCESS_W, NO_MULTIPLE_TRUSTEE, SDDL_REVISION_1, SET_ACCESS,
-        SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_IS_WELL_KNOWN_GROUP, TRUSTEE_W,
+        ConvertSecurityDescriptorToStringSecurityDescriptorW, ConvertSidToStringSidW,
+        ConvertStringSecurityDescriptorToSecurityDescriptorW, ConvertStringSidToSidW,
+        GetSecurityInfo, SetEntriesInAclW, SetSecurityInfo, EXPLICIT_ACCESS_W, NO_MULTIPLE_TRUSTEE,
+        SDDL_REVISION_1, SET_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_USER,
+        TRUSTEE_IS_WELL_KNOWN_GROUP, TRUSTEE_W,
     };
     use windows_sys::Win32::Security::{
         CreateWellKnownSid, EqualSid, GetAce, GetSecurityDescriptorControl,
         GetSecurityDescriptorDacl, GetTokenInformation, InitializeSecurityDescriptor,
-        SetSecurityDescriptorControl, SetSecurityDescriptorDacl, TokenOwner, TokenUser,
-        WinBuiltinAdministratorsSid, WinLocalSystemSid, ACCESS_ALLOWED_ACE, ACE_HEADER, ACL,
-        DACL_SECURITY_INFORMATION, NO_INHERITANCE, OWNER_SECURITY_INFORMATION,
+        LookupAccountSidW, SetSecurityDescriptorControl, SetSecurityDescriptorDacl, TokenOwner,
+        TokenUser, WinBuiltinAdministratorsSid, WinLocalSystemSid, ACCESS_ALLOWED_ACE, ACE_HEADER,
+        ACL, DACL_SECURITY_INFORMATION, NO_INHERITANCE, OWNER_SECURITY_INFORMATION,
         PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SECURITY_ATTRIBUTES,
         SECURITY_DESCRIPTOR, SECURITY_MAX_SID_SIZE, SE_DACL_PROTECTED,
         SUB_CONTAINERS_AND_OBJECTS_INHERIT, TOKEN_INFORMATION_CLASS, TOKEN_QUERY,
@@ -1010,6 +1081,11 @@ mod imp {
     const WRITE_RIGHTS: u32 =
         0x2 | 0x4 | 0x40 | 0x1_0000 | 0x4_0000 | 0x8_0000 | 0x1000_0000 | 0x4000_0000;
 
+    /// The rights that remove or rename what a folder holds, or the folder itself, or change its
+    /// access list or owner: `FILE_DELETE_CHILD`, `DELETE`, `WRITE_DAC`, `WRITE_OWNER`,
+    /// `GENERIC_ALL`.
+    const ENTRY_RIGHTS: u32 = 0x40 | 0x1_0000 | 0x4_0000 | 0x8_0000 | 0x1000_0000;
+
     /// The Administrators group's SID.
     fn administrators() -> io::Result<System> {
         let mut s = System([0; SECURITY_MAX_SID_SIZE.div_ceil(8) as usize]);
@@ -1025,18 +1101,87 @@ mod imp {
         Ok(s)
     }
 
+    /// TrustedInstaller's SID (the service SID of `NT SERVICE\TrustedInstaller`), which owns and
+    /// may change Windows' own files and folders, `C:\` and `C:\Program Files` among them.
+    const TRUSTED_INSTALLER: &str =
+        "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
+
+    /// TrustedInstaller's SID, in the memory the system allocated for it.
+    fn trusted_installer() -> io::Result<Local<core::ffi::c_void>> {
+        let name: Vec<u16> = TRUSTED_INSTALLER.encode_utf16().chain([0]).collect();
+        let mut sid: PSID = null_mut();
+        ok(unsafe { ConvertStringSidToSidW(name.as_ptr(), &mut sid) })?;
+        Ok(Local(sid))
+    }
+
+    /// sid as a person reads it: `DOMAIN\name (S-1-…)`, or the `S-1-…` form alone when it names
+    /// no account this computer knows.
+    fn shown(sid: PSID) -> String {
+        let mut text: windows_sys::core::PWSTR = null_mut();
+        let id = if unsafe { ConvertSidToStringSidW(sid, &mut text) } != 0 {
+            let _text = Local(text);
+            let len = (0..).take_while(|&i| unsafe { *text.add(i) } != 0).count();
+            String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, len) })
+        } else {
+            "an unreadable SID".to_string()
+        };
+        let (mut name, mut domain) = ([0u16; 256], [0u16; 256]);
+        let (mut name_len, mut domain_len) = (name.len() as u32, domain.len() as u32);
+        let mut kind = 0;
+        let found = unsafe {
+            LookupAccountSidW(
+                null(),
+                sid,
+                name.as_mut_ptr(),
+                &mut name_len,
+                domain.as_mut_ptr(),
+                &mut domain_len,
+                &mut kind,
+            )
+        } != 0;
+        if !found {
+            return id;
+        }
+        let name = String::from_utf16_lossy(&name[..name_len as usize]);
+        let domain = String::from_utf16_lossy(&domain[..domain_len as usize]);
+        if domain.is_empty() {
+            format!("{name} ({id})")
+        } else {
+            format!(r"{domain}\{name} ({id})")
+        }
+    }
+
     pub fn others_may_write(path: &Path) -> io::Result<bool> {
         let f = open_itself(path, FILE_READ_ATTRIBUTES | READ_CONTROL)?;
+        Ok(others(&f, WRITE_RIGHTS, false)?.is_some())
+    }
+
+    pub fn others_may_change(f: &File, change: Change) -> io::Result<Option<String>> {
+        let rights = match change {
+            Change::Any => WRITE_RIGHTS,
+            Change::Entries => ENTRY_RIGHTS,
+        };
+        others(f, rights, true)
+    }
+
+    /// Why an account but this user, SYSTEM and Administrators (and TrustedInstaller, with
+    /// installer) may use one of rights on the object open as f, or `None`.
+    fn others(f: &File, rights: u32, installer: bool) -> io::Result<Option<String>> {
         let user = TokenSid::user()?;
         let default_owner = TokenSid::default_owner()?;
         let system = System::sid()?;
         let admins = administrators()?;
+        let installer = if installer {
+            Some(trusted_installer()?)
+        } else {
+            None
+        };
         let mut owner: PSID = null_mut();
         let mut dacl: *mut ACL = null_mut();
         let mut sd: PSECURITY_DESCRIPTOR = null_mut();
         win32(unsafe {
             GetSecurityInfo(
-                handle(&f),
+                handle(f),
                 SE_FILE_OBJECT,
                 OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
                 &mut owner,
@@ -1047,37 +1192,59 @@ mod imp {
             )
         })?;
         let _sd = Local(sd);
+        let installed = |sid: PSID| {
+            installer
+                .as_ref()
+                .is_some_and(|i| unsafe { EqualSid(sid, i.0) } != 0)
+        };
         let trusted = |sid: PSID| unsafe {
             EqualSid(sid, user.sid()) != 0
                 || EqualSid(sid, system.ptr()) != 0
                 || EqualSid(sid, admins.ptr()) != 0
-        };
+        } || installed(sid);
+        if owner.is_null() {
+            return Ok(Some("has no owner".into()));
+        }
         if !(owner_accepted(owner, &user, &default_owner, &system)
-            || (!owner.is_null() && unsafe { EqualSid(owner, admins.ptr()) } != 0))
-            || dacl.is_null()
+            || unsafe { EqualSid(owner, admins.ptr()) } != 0
+            || installed(owner))
         {
-            return Ok(true);
+            return Ok(Some(format!("is owned by {}", shown(owner))));
+        }
+        if dacl.is_null() {
+            return Ok(Some(
+                "has no access list, which lets everyone change it".into(),
+            ));
         }
         for i in 0..u32::from(unsafe { (*dacl).AceCount }) {
             let mut ace: *mut core::ffi::c_void = null_mut();
             if unsafe { GetAce(dacl, i, &mut ace) } == 0 {
-                return Ok(true);
+                return Ok(Some(format!(
+                    "has an access list entry ({i}) that cannot be read"
+                )));
             }
             let header = unsafe { &*(ace as *const ACE_HEADER) };
             if header.AceFlags & INHERIT_ONLY != 0 || header.AceType == ACCESS_DENIED {
                 continue;
             }
             if header.AceType != ACCESS_ALLOWED {
-                return Ok(true);
+                return Ok(Some(format!(
+                    "has an access list entry of a kind pluxy does not read (type {})",
+                    header.AceType
+                )));
             }
             let allowed = unsafe { &*(ace as *const ACCESS_ALLOWED_ACE) };
             let sid = unsafe { std::ptr::addr_of!((*(ace as *const ACCESS_ALLOWED_ACE)).SidStart) }
                 as PSID;
-            if allowed.Mask & WRITE_RIGHTS != 0 && !trusted(sid) {
-                return Ok(true);
+            if allowed.Mask & rights != 0 && !trusted(sid) {
+                return Ok(Some(format!(
+                    "has an access list entry that lets {} change it (rights {:#x})",
+                    shown(sid),
+                    allowed.Mask
+                )));
             }
         }
-        Ok(false)
+        Ok(None)
     }
 
     pub fn is_private(path: &Path) -> io::Result<bool> {

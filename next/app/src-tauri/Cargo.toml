@@ -46,7 +46,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 ed25519-dalek = { version = "=2.2.0", default-features = false }
 url = "2"
-ureq = { version = "3.5", default-features = false, features = ["rustls"] }
+# ~3.5: the Windows client for the app's core (client.rs, `core_tcp::CoreConnector`, which checks
+# the core's own process accepted each connection) is written against ureq's unversioned transport
+# API, which changes in minor releases.
+ureq = { version = "~3.5", default-features = false, features = ["rustls"] }
 getrandom = "0.3"
 sha2 = "=0.10.9"
 # Release versions compare by semantic version precedence (src/release.rs).
@@ -74,8 +77,10 @@ base64 = "=0.23.1"
 # processes the app starts and holds (src/owned/windows.rs: CreateProcessW, job objects, console
 # control, file identity) and the core's listener check (src/managed.rs); private files
 # (src/private_windows.rs) and the vault's folders (src/vault_windows.rs): access lists, and
-# opening, renaming and listing relative to a held folder. Already in the tree through cap-std and
-# tauri's dirs; the version is the locked one.
+# opening, renaming and listing relative to a held folder; the native test's process and thread
+# listing (src/proc_native.rs, Tool Help); opening an address in the browser (src/updates.rs,
+# ShellExecuteExW). Already in the tree through cap-std and tauri's dirs; the version is the locked
+# one.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.2", features = [
     "Wdk",
@@ -89,12 +94,17 @@ windows-sys = { version = "=0.61.2", features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
     "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_IO",
     "Win32_System_JobObjects",
     "Win32_System_Pipes",
+    # The native test's core steps list processes (src/native_core.rs).
+    "Win32_System_ProcessStatus",
     "Win32_System_Registry",
     "Win32_System_SystemServices",
     "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 # Native key entry and confirmations (src/key_entry_windows.rs, src/confirmation_ui_windows.rs,
 # src/dialog_windows.rs) and the remembered launches' file identities and access checks
@@ -124,7 +134,8 @@ webview2-com = "=0.39.1"
 libc = "0.2"
 
 # Native key entry and confirmations on macOS (src/key_entry_macos.rs,
-# src/confirmation_ui_macos.rs, src/dialog_macos.rs): the AppKit bindings Tauri uses.
+# src/confirmation_ui_macos.rs, src/dialog_macos.rs) and opening an address in the browser
+# (src/updates.rs, NSWorkspace): the AppKit bindings Tauri uses.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 block2 = "0.6"
@@ -139,6 +150,7 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
   "NSString",
   "NSThread",
   "NSTimer",
+  "NSURL",
 ] }
 objc2-app-kit = { version = "0.3", default-features = false, features = [
   "std",
@@ -168,6 +180,7 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
   "NSTextView",
   "NSView",
   "NSWindow",
+  "NSWorkspace",
 ] }
 zeroize = "1"
 
