@@ -77,6 +77,7 @@
     "allow-window-set",
     "allow-window-close",
     "allow-privacy-get",
-    "allow-privacy-set"
+    "allow-privacy-set",
+    "allow-file-save"
   ]
 }

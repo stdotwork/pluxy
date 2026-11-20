@@ -34,7 +34,8 @@
         "error": {
           "code": "invalid_request",
           "message": "a thinking suffix on the model name is not supported for the Interactions API; set generation_config.thinking_level instead",
-          "type": "invalid_request_error"
+          "type": "invalid_request_error",
+          "pluxy": "(volatile)"
         }
       },
       "reason": "The suffix is refused; see client.status."

@@ -63,6 +63,13 @@ type Account struct {
 	// Extension is the ID of the extension that serves the account, set by core. Attempts on
 	// the account go to that extension, and only its credentials are fetched for them.
 	Extension string `json:"-"`
+	// Held, set by core, is why the account serves no requests: HealthDisabled (a person turned
+	// it off) or HealthNeedsLogin (the provider refused its sign-in). The router never sends it a
+	// request, but it counts the account when it chooses the provider of a model name, so an
+	// account going out of service does not move the name to another provider, and names it in
+	// what a request leaves out. It keeps the model list read while it was in service, and its
+	// extension is not called while it is held.
+	Held string `json:"-"`
 
 	// gen is the generation of the router that holds this copy (see State.Retain).
 	gen uint64

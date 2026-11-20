@@ -57,6 +57,10 @@ const maxManagementBody = 1 << 20
 //	POST   /v0/management/accounts/{id}/cooldown/reset  clear an account's cooldowns
 //	GET    /v0/management/accounts/{id}/models  the models an account serves
 //	POST   /v0/management/accounts/{id}/test  send an account one small request
+//	GET    /v0/management/route     what a request for a model would do now (handleRoute)
+//	GET    /v0/management/chains    the fallback chains (handleChains)
+//	PUT    /v0/management/chains/{name}  set a model name's fallback chain
+//	DELETE /v0/management/chains/{name}  remove it
 //	GET    /v0/management/usage     usage totals, breakdowns and a time series (handleUsage)
 //	GET    /v0/management/usage/events  the recorded requests, a page at a time
 //	GET    /v0/management/logs      lines of core's log files (handleLogs)
@@ -118,6 +122,7 @@ func (c *Core) Management() *server.Management {
 		writeJSON(w, http.StatusOK, management.ModelsReply{Models: s.Router.ServedModels(r.Context())})
 	})
 	c.handleSetup(m)
+	c.handleSetupImport(m)
 	m.Handle("POST /models/refresh", func(w http.ResponseWriter, r *http.Request) {
 		var req management.RefreshModelsRequest
 		if !readOptionalJSON(w, r, &req) {
@@ -145,6 +150,8 @@ func (c *Core) Management() *server.Management {
 	})
 	c.handleUI(m)
 	c.handleAccounts(m)
+	c.handleRoute(m)
+	c.handleChains(m)
 	c.handleConfig(m)
 	c.handleUsage(m)
 	c.handleLogs(m)

@@ -9,7 +9,7 @@
 //
 //	{"base_url": "https://api.openai.com/v1", "codex_identity": true, "image_generation_tool": true,
 //	 "callback_listen": true, "websockets": false, "alpha_search": false, "images": true,
-//	 "signin_with_chatgpt_identifier": "pluxy", "codex_client_version": "0.154.0",
+//	 "signin_with_chatgpt_identifier": "pluxy", "codex_client_version": "0.159.0",
 //	 "image_generation_off_models": [], "prompt_cache_retention_passthrough": false}
 //
 // base_url is where requests go ({base_url}/responses); the default is
@@ -32,9 +32,10 @@
 // (default "pluxy") is how a SIWC sign-in names this program: the agent name its login shows the
 // user, and its requests' User-Agent ("<identifier> (<GOOS>; <GOARCH>)"); the other settings
 // above but base_url, callback_listen and websockets do not apply to it (see siwc.go).
-// codex_client_version (default 0.154.0) is the version the User-Agent claims when codex_identity
-// is on. image_generation_off_models lists models (names, or patterns with * and ?) that are not
-// offered the image tool, as a free plan and -spark models are not. prompt_cache_retention_passthrough
+// codex_client_version (default 0.159.0) is the version the User-Agent claims when
+// codex_identity is on, and the model list's client_version. image_generation_off_models lists
+// models (names, or patterns with * and ?) that are not offered the image tool, as a free plan
+// and -spark models are not. prompt_cache_retention_passthrough
 // (default false) sends a client's prompt_cache_retention on, for an upstream that takes it; the
 // ChatGPT backend does not, and a SIWC sign-in never sends it.
 //
@@ -108,7 +109,7 @@ type settings struct {
 	// SIWCIdentifier names this program to a SIWC sign-in (see siwcIdentifier).
 	SIWCIdentifier string `json:"signin_with_chatgpt_identifier"`
 	// CodexClientVersion is the version in the User-Agent sent in place of the client's own
-	// (see userAgent); empty means defaultCodexVersion.
+	// and in the ChatGPT model list's client_version; empty means codexClientVersion.
 	CodexClientVersion string `json:"codex_client_version"`
 	// ImageGenerationOffModels lists the models (names or patterns, see imageOff) that are not
 	// offered the image_generation tool.
@@ -156,7 +157,7 @@ func readSettings(raw json.RawMessage) (settings, error) {
 		return s, &llm.Error{Code: llm.CodeInvalidRequest, Message: "account settings are not valid: signin_with_chatgpt_identifier holds a control character", Scope: llm.ScopeCredential}
 	}
 	if v := s.CodexClientVersion; v != "" && !codexVersionPattern.MatchString(v) {
-		return s, &llm.Error{Code: llm.CodeInvalidRequest, Message: "account settings are not valid: codex_client_version must be a version such as 0.154.0", Scope: llm.ScopeCredential}
+		return s, &llm.Error{Code: llm.CodeInvalidRequest, Message: "account settings are not valid: codex_client_version must be a version such as 0.159.0", Scope: llm.ScopeCredential}
 	}
 	for _, p := range s.ImageGenerationOffModels {
 		if _, err := path.Match(p, ""); err != nil {

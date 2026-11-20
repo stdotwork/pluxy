@@ -35,6 +35,7 @@ mod dialog_macos;
 #[cfg(windows)]
 mod dialog_windows;
 pub mod environments;
+pub mod export;
 pub(crate) mod format_chars;
 pub mod instance;
 mod key_entry;
@@ -759,6 +760,20 @@ async fn privacy_set(webview: Webview, on: bool) -> Result<bool, String> {
     let _saving = SAVING.lock().unwrap();
     privacy::save(&privacy_file(webview.app_handle())?, on)?;
     Ok(on)
+}
+
+/// Saves a file one of the window's own pages made (`export.rs`) in the person's Downloads
+/// folder, and returns its path for the page to show.
+#[tauri::command]
+async fn file_save(webview: Webview, name: String, text: String) -> Result<String, String> {
+    trusted(&webview)?;
+    let paths = webview.app_handle().path();
+    // A desktop with no Downloads folder set up (a bare Linux session): the usual one at home.
+    let folder = paths
+        .download_dir()
+        .or_else(|_| paths.home_dir().map(|home| home.join("Downloads")))
+        .map_err(|e| format!("no Downloads folder: {e}"))?;
+    export::save(&folder, &name, text.as_bytes()).map(|path| path.display().to_string())
 }
 
 #[tauri::command]
@@ -3228,6 +3243,7 @@ pub fn run() {
             window_close,
             privacy_get,
             privacy_set,
+            file_save,
             updater::app_update_get,
             updater::app_update_start,
             updater::app_update_cancel,

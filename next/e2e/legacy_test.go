@@ -13,12 +13,13 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/stdotwork/pluxy/next/extensions/kimi/kimitest"
 )
@@ -141,11 +142,90 @@ func replaceOnce(t *testing.T, s, old, new string) string {
 	return strings.Replace(s, old, new, 1)
 }
 
-// Today's example config, with its listener, management key and auth folder set and one
-// openai-compatibility provider added, starts core after today's auth folder is imported:
-// core serves a request through the provider section's fake upstream and one through an
-// imported Kimi subscription on a fake Kimi, and lists the imported accounts.
-func TestTodaysConfigAndAuthFolder(t *testing.T) {
+// startJSONCore starts core on a JSON config at path, as pluxy init writes one, on a free port,
+// with args, and returns its address.
+func startJSONCore(t *testing.T, path string, args ...string) (string, *coreLog) {
+	t.Helper()
+	base, _, logs := startOnFreePort(t, filepath.Join(binDir, "pluxy"), path, func(port int) []byte {
+		return []byte(`{"listen": "127.0.0.1:` + strconv.Itoa(port) + `", "client_keys": ["` + clientKey + `"], "management_key": "` + managementKey + `"}`)
+	}, args...)
+	return base, logs
+}
+
+// importCPA runs pluxy import cpa against the core whose config is at cfgPath.
+func importCPA(t *testing.T, cfgPath string, args ...string) cliResult {
+	t.Helper()
+	return runCLI(t, nil, append([]string{"import", "cpa", "--config", cfgPath}, args...)...)
+}
+
+// fileKeys returns every key of the YAML file b as the import report names it: the path of
+// each value that is not a mapping, and of each entry of a provider section.
+func fileKeys(t *testing.T, b []byte) []string {
+	t.Helper()
+	var doc yaml.Node
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		t.Fatal(err)
+	}
+	sections := map[string]bool{"openai-compatibility": true}
+	for _, s := range []string{"codex", "claude", "gemini", "vertex", "xai", "meta", "interactions"} {
+		sections[s+"-api-key"] = true
+		sections["api-keys."+s] = true
+	}
+	sections["api-keys.openai-compatibility"] = true
+	var out []string
+	var walk func(path string, n *yaml.Node)
+	walk = func(path string, n *yaml.Node) {
+		switch {
+		case n.Kind == yaml.MappingNode && len(n.Content) > 0 && path != "requests.payload":
+			for i := 0; i < len(n.Content); i += 2 {
+				p := n.Content[i].Value
+				if path != "" {
+					p = path + "." + p
+				}
+				walk(p, n.Content[i+1])
+			}
+		case n.Kind == yaml.SequenceNode && sections[path] && len(n.Content) > 0:
+			for i := range n.Content {
+				out = append(out, path+"["+strconv.Itoa(i)+"]")
+			}
+		default:
+			out = append(out, path)
+		}
+	}
+	walk("", doc.Content[0])
+	return out
+}
+
+// listed returns the WHAT and NAME columns of each row of the three lists pluxy import cpa
+// prints.
+func listed(out string) map[string]bool {
+	got := map[string]bool{}
+	in := false
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(line, "Brought (") || strings.HasPrefix(line, "Changed (") || strings.HasPrefix(line, "Not brought ("):
+			in = true
+		case strings.HasPrefix(line, "Needs ") || line == "":
+			in = false
+		case in && !strings.HasPrefix(line, "WHAT "):
+			cols := strings.Fields(line)
+			if len(cols) >= 3 && cols[0] == "auth" && cols[1] == "file" {
+				got["auth file "+cols[2]] = true
+			} else if len(cols) > 0 {
+				got[cols[0]] = true
+			}
+		}
+	}
+	return got
+}
+
+// Today's example config, with its management key and auth folder set and one
+// openai-compatibility provider added, and today's auth folder, come across to a running core
+// with pluxy import cpa. A dry run prints the three lists, which together name every key of the
+// file and every file of the folder, and writes nothing; the import then serves a request
+// through the provider section's fake upstream and one through an imported Kimi subscription on
+// a fake Kimi, and lists the imported accounts.
+func TestImportCPA(t *testing.T) {
 	u := answeringUpstream(t)
 	kimi := kimitest.New(t)
 	kimiAccess, kimiRefresh := kimi.Grant()
@@ -157,7 +237,7 @@ func TestTodaysConfigAndAuthFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 	expired := time.Now().Add(10 * 24 * time.Hour).UTC().Format(time.RFC3339)
-	for name, v := range map[string]map[string]any{
+	files := map[string]map[string]any{
 		"kimi-1700000000000.json": {"type": "kimi", "access_token": kimiAccess, "refresh_token": kimiRefresh,
 			"token_type": "Bearer", "device_id": "device-e2e", "base_url": kimi.URL + "/coding", "expired": expired},
 		"codex-ab12cd34-user@example.com-plus.json": {"type": "codex", "access_token": "fake-codex-access",
@@ -172,7 +252,8 @@ func TestTodaysConfigAndAuthFolder(t *testing.T) {
 		"meta-muse.json":  {"type": "meta", "auth_kind": "oauth", "api_key": "fake-meta-key", "dca_token": "dca:fake-meta-device"},
 		"devin-user.json": {"type": "devin", "auth_kind": "oauth", "session_token": "fake-devin-token", "user_name": "dev-user"},
 		"gemini-old.json": {"type": "gemini", "access_token": "fake-gemini-access"},
-	} {
+	}
+	for name, v := range files {
 		b, _ := json.Marshal(v)
 		if err := os.WriteFile(filepath.Join(authDir, name), b, 0o600); err != nil {
 			t.Fatal(err)
@@ -180,20 +261,16 @@ func TestTodaysConfigAndAuthFolder(t *testing.T) {
 	}
 	before := folderDigest(t, authDir)
 
-	// Today's example config, changed only where a test must.
+	// Today's example config, changed only where a test must. Its host stays "": every
+	// interface, which today's core listened on; the import keeps core's own listen and says so.
 	example, err := os.ReadFile("../internal/legacy/testdata/config.example.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
-	// cfg is the config of the start that succeeded, so the reload below keeps its port.
-	var cfg string
-	cfgFor := func(port int) []byte {
-		cfg = string(example)
-		cfg = replaceOnce(t, cfg, "\n  host: \"\"\n", "\n  host: \"127.0.0.1\"\n")
-		cfg = replaceOnce(t, cfg, "\n  port: 8317\n", "\n  port: "+strconv.Itoa(port)+"\n")
-		cfg = replaceOnce(t, cfg, "\n  secret-key: \"\"\n", "\n  secret-key: \""+managementKey+"\"\n")
-		cfg = replaceOnce(t, cfg, "\n  auth-dir: \"~/.cli-proxy-api\"\n", "\n  auth-dir: \""+authDir+"\"\n")
-		cfg += `
+	cfg := string(example)
+	cfg = replaceOnce(t, cfg, "\n  secret-key: \"\"\n", "\n  secret-key: \""+managementKey+"\"\n")
+	cfg = replaceOnce(t, cfg, "\n  auth-dir: \"~/.cli-proxy-api\"\n", "\n  auth-dir: \""+authDir+"\"\n")
+	cfg += `
 openai-compatibility:
   - name: "local"
     base-url: "` + u.URL + `/v1"
@@ -202,79 +279,114 @@ openai-compatibility:
     models:
       - name: "gpt-4o"
 `
-		return []byte(cfg)
-	}
-	path := filepath.Join(work, "config.yaml")
-	if err := os.WriteFile(path, cfgFor(freePort(t)), 0o600); err != nil {
+	yamlPath := filepath.Join(work, "config.yaml")
+	if err := os.WriteFile(yamlPath, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
+
 	bundled := bundledRegistry(t, map[string]string{
 		"pluxy/openai-compatible": "openai-compatible",
 		"pluxy/kimi":              filepath.Join("kimi", "kimi"),
 		"pluxy/codex":             filepath.Join("codex", "codex"),
 		"pluxy/claude":            filepath.Join("claude", "claude"),
 	})
-
-	// Import while core is stopped.
-	out, err := exec.Command(filepath.Join(binDir, "pluxy"), "-config", path, "-import-auth", authDir).CombinedOutput()
-	t.Logf("import:\n%s", out)
-	if err != nil {
-		t.Fatal(err)
+	core := filepath.Join(t.TempDir(), "config.json")
+	base, logs := startJSONCore(t, core, "-bundled", bundled)
+	installBundled(t, base, "pluxy/openai-compatible", "pluxy/kimi", "pluxy/codex", "pluxy/claude")
+	coreBefore, _ := os.ReadFile(core)
+	creds := filepath.Join(filepath.Dir(core), "credentials")
+	credsDigest := func() string {
+		if _, err := os.Stat(creds); err != nil {
+			return "none"
+		}
+		return folderDigest(t, creds)
 	}
-	for _, want := range []string{
-		"imported kimi-1700000000000.json as account kimi-1700000000000 (pluxy/kimi)",
-		"imported codex-ab12cd34-user@example.com-plus.json as account codex-ab12cd34-user-example.com-plus (pluxy/codex)",
-		"imported claude-user@example.com.json as account claude-user-example.com (pluxy/claude)",
-		"skipped antigravity-user@example.com.json: pluxy no longer ships the Antigravity provider",
-		"imported xai-grok@example.com.json as account xai-grok-example.com (pluxy/xai)",
-		"imported meta-muse.json as account meta-muse (pluxy/meta)",
-		"imported devin-user.json as account devin-user (pluxy/devin)",
-		"skipped gemini-old.json: today's core does not load it either",
-		"6 imported, 2 skipped",
-	} {
-		if !strings.Contains(string(out), want) {
-			t.Errorf("import output lacks %q", want)
+	credsBefore := credsDigest()
+
+	// The dry run: three lists that together name every key of the file and every file of the
+	// folder; nothing is written.
+	r := importCPA(t, core, "--dry-run", yamlPath)
+	t.Logf("dry run:\n%s", r)
+	if r.code != 0 || !strings.Contains(r.stdout, "Dry run: nothing was written.") {
+		t.Fatalf("dry run: %s", r)
+	}
+	got := listed(r.stdout)
+	keys := fileKeys(t, []byte(cfg))
+	if len(keys) < 50 {
+		t.Fatalf("the example config has %d keys: the walk is wrong", len(keys))
+	}
+	for _, k := range keys {
+		if !got[k] {
+			t.Errorf("the dry run's lists do not name %s", k)
+		}
+	}
+	for name := range files {
+		if !got["auth file "+name] {
+			t.Errorf("the dry run's lists do not name %s", name)
+		}
+	}
+	if b, _ := os.ReadFile(core); !bytes.Equal(b, coreBefore) || credsDigest() != credsBefore {
+		t.Error("the dry run changed core's config or credential store")
+	}
+
+	// The import.
+	r = importCPA(t, core, "--json", yamlPath)
+	if r.code != 0 {
+		t.Fatalf("import: %s", r)
+	}
+	var rep struct {
+		DryRun     bool `json:"dry_run"`
+		Brought    []row
+		Changed    []row
+		NotBrought []row `json:"not_brought"`
+		Needs      []any
+	}
+	if err := json.Unmarshal([]byte(r.stdout), &rep); err != nil || rep.DryRun {
+		t.Fatalf("import reply: %v %s", err, r)
+	}
+	find := func(rows []row, what, name string) *row {
+		for i := range rows {
+			if rows[i].What == what && rows[i].Name == name {
+				return &rows[i]
+			}
+		}
+		return nil
+	}
+	// core listens on 127.0.0.1 with a free port, and the row says it keeps that address.
+	if h := find(rep.Changed, "server.host", ""); h == nil || !strings.HasPrefix(h.To, "127.0.0.1:") || !strings.Contains(h.Why, "core keeps listening on "+h.To) || !strings.Contains(h.KeepWith, "0.0.0.0:8317") {
+		t.Errorf("server.host row %+v", h)
+	}
+	if a := find(rep.NotBrought, "auth file", "antigravity-user@example.com.json"); a == nil || !strings.Contains(a.Why, "Antigravity") {
+		t.Errorf("antigravity row %+v", a)
+	}
+	if g := find(rep.NotBrought, "auth file", "gemini-old.json"); g == nil {
+		t.Error("gemini-old.json is not under not_brought")
+	}
+	for _, name := range []string{"kimi-1700000000000.json", "codex-ab12cd34-user@example.com-plus.json", "claude-user@example.com.json",
+		"xai-grok@example.com.json", "meta-muse.json", "devin-user.json"} {
+		if find(rep.Brought, "auth file", name) == nil {
+			t.Errorf("%s is not under brought", name)
+		}
+	}
+	// Everything the example sets is brought, or asks for nothing here.
+	for _, n := range rep.NotBrought {
+		if n.What != "auth file" && n.What != "config-version" && !strings.Contains(n.Why, "nothing is lost") && !strings.Contains(n.Why, "did nothing") {
+			t.Errorf("the example's %s is not brought: %s", n.What, n.Why)
 		}
 	}
 	if folderDigest(t, authDir) != before {
 		t.Error("the import changed today's auth folder")
 	}
-
-	base, _, logs := startOnFreePort(t, filepath.Join(binDir, "pluxy"), path, cfgFor, "-bundled", bundled)
-	// Everything the example sets is supported, off or at today's default.
-	if all := logs.waitFor(t, "config revision 1 active"); strings.Contains(all, "not supported yet, ignored") {
-		t.Errorf("core named settings it does not support:\n%s", all)
+	if b, _ := os.ReadFile(core); strings.Contains(string(b), "your-api-key-1") {
+		t.Error("the example config's public client keys came across")
 	}
-	installBundled(t, base, "pluxy/openai-compatible", "pluxy/kimi", "pluxy/codex", "pluxy/claude")
+	logs.waitFor(t, "management API: CLIProxyAPI import")
+
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-
-	// The example's own client keys are public: core starts, says so, and refuses every client
-	// request while one is configured (today's core's example API-key safe mode).
-	resp := post(t, ctx, base, "your-api-key-1", `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`)
-	body, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "unsafe_example_api_key") {
-		t.Fatalf("an example key: status %d: %s, want 403 unsafe_example_api_key", resp.StatusCode, body)
-	}
-	if !strings.Contains(logs.waitFor(t, ""), "client_keys still holds the example config's public keys") {
-		t.Error("core did not log that the example keys are configured")
-	}
-	// With the keys replaced, a reload serves.
-	clientKey := "e2e-client-key"
-	cfg = replaceOnce(t, cfg, "\n    - \"your-api-key-1\"\n", "\n    - \""+clientKey+"\"\n")
-	cfg = replaceOnce(t, cfg, "\n    - \"your-api-key-2\"\n", "\n")
-	cfg = replaceOnce(t, cfg, "\n    - \"your-api-key-3\"\n", "\n")
-	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if code := manage(t, base, http.MethodPost, "/reload", nil, nil); code != http.StatusOK {
-		t.Fatalf("POST /reload: %d", code)
-	}
-
 	// A request through the provider section's account.
-	resp = post(t, ctx, base, clientKey, `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`)
-	body, _ = io.ReadAll(resp.Body)
+	resp := post(t, ctx, base, clientKey, `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`)
+	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("gpt-4o: status %d: %s", resp.StatusCode, body)
@@ -303,7 +415,8 @@ openai-compatibility:
 		t.Errorf("fake Kimi saw %d requests: %+v", len(reqs), reqs)
 	}
 
-	// The imported accounts are listed as added by login.
+	// The imported accounts are listed: the provider section's from the config, the auth
+	// folder's as added by login.
 	var accounts struct {
 		Accounts []struct {
 			ID       string `json:"id"`
@@ -315,12 +428,12 @@ openai-compatibility:
 	if code := manage(t, base, http.MethodGet, "/accounts", nil, &accounts); code != http.StatusOK {
 		t.Fatalf("GET /accounts: %d", code)
 	}
-	got := map[string]string{}
+	have := map[string]string{}
 	for _, a := range accounts.Accounts {
-		got[a.ID] = a.Source + " " + a.Kind + " " + strconv.FormatBool(a.Disabled)
+		have[a.ID] = a.Source + " " + a.Kind + " " + strconv.FormatBool(a.Disabled)
 	}
-	if _, ok := got["antigravity-user-example.com"]; ok {
-		t.Errorf("antigravity account was imported: %v", got["antigravity-user-example.com"])
+	if _, ok := have["antigravity-user-example.com"]; ok {
+		t.Errorf("antigravity account was imported: %v", have["antigravity-user-example.com"])
 	}
 	for id, want := range map[string]string{
 		"local":                                "config api_key false",
@@ -331,67 +444,106 @@ openai-compatibility:
 		"meta-muse":                            "login oauth false",
 		"devin-user":                           "login api_key false",
 	} {
-		if got[id] != want {
-			t.Errorf("account %s: %q, want %q (all: %v)", id, got[id], want, got)
+		if have[id] != want {
+			t.Errorf("account %s: %q, want %q (all: %v)", id, have[id], want, have)
 		}
-	}
-	if strings.Contains(logs.waitFor(t, ""), "not imported yet") {
-		t.Error("core says files are not imported yet after the import")
 	}
 }
 
-// -import-auth prints the config's notices (a dropped setting, a bcrypt management key) on standard
-// error and keeps standard output for the counts. A config core would not serve, for want of a
-// usable management key, still imports: it is the way a CPA setup's accounts come across.
-func TestImportAuthPrintsConfigNotices(t *testing.T) {
+type row struct {
+	What     string `json:"what"`
+	Name     string `json:"name"`
+	As       string `json:"as"`
+	From     string `json:"from"`
+	To       string `json:"to"`
+	Why      string `json:"why"`
+	KeepWith string `json:"keep_with"`
+}
+
+// A config whose management key today's core hashed comes across with a new key, shown once
+// in the reply, which the pluxy command then uses; a dropped setting is named, and nothing
+// prints the hash.
+func TestImportCPABcryptKey(t *testing.T) {
 	work := t.TempDir()
-	authDir := filepath.Join(work, "old-auths")
-	if err := os.Mkdir(authDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
 	const hash = "$2a$10$abcdefghijklmnopqrstuuAbCdEfGhIjKlMnOpQrStUvWxYz01234"
+	yamlPath := filepath.Join(work, "config.yaml")
 	cfg := "server: {host: 127.0.0.1, port: 18999, max-request-body-bytes: 1000}\n" +
 		"access: {api-keys: [fake-client-key-e2e]}\n" +
-		"management: {secret-key: \"" + hash + "\"}\n" +
-		"oauth: {auth-dir: \"" + authDir + "\"}\n" +
-		"credentials_dir: \"" + filepath.Join(work, "credentials") + "\"\n"
-	path := filepath.Join(work, "config.yaml")
-	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		"management: {secret-key: \"" + hash + "\"}\n"
+	if err := os.WriteFile(yamlPath, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(filepath.Join(binDir, "pluxy"), "-config", path, "-import-auth", authDir)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("import: %v\nstdout:\n%s\nstderr:\n%s", err, &stdout, &stderr)
+	core := filepath.Join(t.TempDir(), "config.json")
+	startJSONCore(t, core)
+	r := importCPA(t, core, yamlPath)
+	if r.code != 0 {
+		t.Fatalf("import: %s", r)
 	}
-	for _, want := range []string{
-		"dropped, ignored: server.max-request-body-bytes",
-		"remote-management.secret-key is a bcrypt hash: replace it with a new key (pluxy cannot use a bcrypt hash)",
-	} {
-		if !strings.Contains(stderr.String(), want) {
-			t.Errorf("stderr lacks %q:\n%s", want, &stderr)
+	for _, want := range []string{"server.max-request-body-bytes", "requests are capped at 24 MiB", "management.secret-key", "bcrypt"} {
+		if !strings.Contains(r.stdout, want) {
+			t.Errorf("the report lacks %q:\n%s", want, r)
 		}
 	}
-	if !strings.Contains(stdout.String(), "0 imported, 0 skipped") || strings.Contains(stdout.String(), "bcrypt") {
-		t.Errorf("stdout should hold the counts only:\n%s", &stdout)
+	if strings.Contains(r.stdout+r.stderr, hash) {
+		t.Error("the output holds the hash")
 	}
-	if strings.Contains(stderr.String()+stdout.String(), hash) {
-		t.Error("the output holds the management key")
+	b, _ := os.ReadFile(core)
+	var c struct {
+		ManagementKey string `json:"management_key"`
+	}
+	if err := json.Unmarshal(b, &c); err != nil || c.ManagementKey == managementKey || !strings.Contains(r.stdout, c.ManagementKey) {
+		t.Fatalf("the new key %q is not shown once: %v\n%s", c.ManagementKey, err, r)
+	}
+	// The pluxy command reads the new key from the config file.
+	if s := runCLI(t, nil, "status", "--config", core); s.code != 0 {
+		t.Errorf("pluxy status with the new key: %s", s)
 	}
 }
 
-// -import-auth with a config that core refuses prints the reason without the config's secrets.
-func TestImportAuthRefusalShowsNoSecret(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.json")
-	cfg := `{"listen": "127.0.0.1:0", "client_keys": ["fake-client-key-e2e"], "management_key": "fake-management-e2e",
-		"routing": {"strategy": "fake-management-e2e"}}`
-	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+// An import of a file core refuses prints the reason without the file's secrets.
+func TestImportCPARefusalShowsNoSecret(t *testing.T) {
+	work := t.TempDir()
+	yamlPath := filepath.Join(work, "config.yaml")
+	cfg := "management: {secret-key: fake-secret-e2e}\nrouting: {cooldown: {quota-response-mode: fake-secret-e2e}}\n"
+	if err := os.WriteFile(yamlPath, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out, err := exec.Command(filepath.Join(binDir, "pluxy"), "-config", path, "-import-auth", t.TempDir()).CombinedOutput()
-	if err == nil || !strings.Contains(string(out), "routing strategy") || strings.Contains(string(out), "fake-management-e2e") {
-		t.Errorf("import exited with %v:\n%s\nwant a refusal without the management key", err, out)
+	core := filepath.Join(t.TempDir(), "config.json")
+	startJSONCore(t, core)
+	r := importCPA(t, core, "--dry-run", yamlPath)
+	if r.code == 0 || !strings.Contains(r.stderr, "quota-response-mode") || strings.Contains(r.stdout+r.stderr, "fake-secret-e2e") {
+		t.Errorf("import: %s\nwant a refusal without the secret", r)
+	}
+}
+
+// Core also runs on today's example config itself: everything the example sets is supported,
+// off or at today's default, and the example's own client keys, which are public, start core
+// but refuse every client request (today's core's example API-key safe mode).
+func TestTodaysExampleConfigServes(t *testing.T) {
+	example, err := os.ReadFile("../internal/legacy/testdata/config.example.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	base, _, logs := startOnFreePort(t, filepath.Join(binDir, "pluxy"), path, func(port int) []byte {
+		cfg := string(example)
+		cfg = replaceOnce(t, cfg, "\n  host: \"\"\n", "\n  host: \"127.0.0.1\"\n")
+		cfg = replaceOnce(t, cfg, "\n  port: 8317\n", "\n  port: "+strconv.Itoa(port)+"\n")
+		cfg = replaceOnce(t, cfg, "\n  secret-key: \"\"\n", "\n  secret-key: \""+managementKey+"\"\n")
+		return []byte(cfg)
+	})
+	if all := logs.waitFor(t, "config revision 1 active"); strings.Contains(all, "not supported yet, ignored") {
+		t.Errorf("core named settings it does not support:\n%s", all)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	resp := post(t, ctx, base, "your-api-key-1", `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`)
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "unsafe_example_api_key") {
+		t.Fatalf("an example key: status %d: %s, want 403 unsafe_example_api_key", resp.StatusCode, body)
+	}
+	if !strings.Contains(logs.waitFor(t, ""), "client_keys still holds the example config's public keys") {
+		t.Error("core did not log that the example keys are configured")
 	}
 }

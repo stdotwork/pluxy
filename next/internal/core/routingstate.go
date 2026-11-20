@@ -45,7 +45,9 @@ type routing struct {
 	every time.Duration // the check interval
 	stop  context.CancelFunc
 	done  chan struct{}
-	path  string // routing.json
+	// refreshed is closed when the usage readings' loop (runQuotaRefresh) has ended.
+	refreshed chan struct{}
+	path      string // routing.json
 	// saved is what routing.json holds now, when core read or wrote it; nil when there is no
 	// file or core could not read it.
 	saved []byte
@@ -57,7 +59,7 @@ type routing struct {
 // startRouting reads routing.json back into the routing state, then checks blocks on a timer
 // (the blocks read back at once) and writes the file again whenever its blocks change.
 func (c *Core) initRouting() {
-	r := &routing{every: defaultCheckEvery, done: make(chan struct{}), path: filepath.Join(StateDir(c.opts.ConfigPath), routingFile)}
+	r := &routing{every: defaultCheckEvery, done: make(chan struct{}), refreshed: make(chan struct{}), path: filepath.Join(StateDir(c.opts.ConfigPath), routingFile)}
 	if v := os.Getenv(checkIntervalEnv); v != "" {
 		if ms, err := strconv.ParseInt(v, 10, 64); err == nil && ms > 0 {
 			r.every = time.Duration(ms) * time.Millisecond
@@ -75,6 +77,30 @@ func (c *Core) startRouting() {
 	ctx, cancel := context.WithCancel(context.Background())
 	c.routing.stop = cancel
 	go c.runRouting(ctx, c.routing)
+	go c.runQuotaRefresh(ctx, c.routing)
+}
+
+// runQuotaRefresh reads the accounts' usage for soonest-reset (route.Router.Refresh), on a timer
+// of its own so a slow reading never holds up the checks or a request. The router decides on each
+// tick whether a refresh is due (routing.quota_refresh_ms); the first tick comes a tick after
+// start, once core is serving. In safe mode, where no extension runs, it reads nothing.
+func (c *Core) runQuotaRefresh(ctx context.Context, r *routing) {
+	defer close(r.refreshed)
+	if c.opts.SafeMode {
+		return
+	}
+	tick := time.NewTicker(max(r.every/15, 10*time.Millisecond))
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			if s := c.cur.Load(); s != nil && s.Router != nil {
+				s.Router.Refresh(ctx)
+			}
+		}
+	}
 }
 
 // loadRouting puts back the blocks routing.json holds, for the accounts core has. A file that
@@ -133,6 +159,7 @@ func (c *Core) stopRouting() {
 	}
 	c.routing.stop()
 	<-c.routing.done
+	<-c.routing.refreshed
 }
 
 func (c *Core) checkRouting(ctx context.Context) {

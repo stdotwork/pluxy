@@ -5,31 +5,52 @@
     "core/internal/registry/models/models.json vertex",
     "core/sdk/api/handlers/gemini/gemini_handlers.go GeminiModels"
   ],
-  "client": {"method":"GET","path":"/v1beta/models"},
-  "account_models": ["gemini-2.5-pro"],
-  "old_core": {"account":{"models":null}},
-  "new_core": {"account":{"models":null}},
-  "unordered": ["client.body.models"],
+  "client": {
+    "method": "GET",
+    "path": "/v1beta/models"
+  },
+  "account_models": [
+    "gemini-2.5-pro"
+  ],
+  "old_core": {
+    "account": {
+      "models": null
+    }
+  },
+  "new_core": {
+    "account": {
+      "models": null
+    }
+  },
+  "unordered": [
+    "client.body.models"
+  ],
   "exceptions": [
     {
       "path": "client.body.models",
       "kind": "intended",
-      "reason": "Today's core lists Vertex's imagen-* models, whose only method is predict; the Gemini extension serves generateContent only, so it does not list them.",
+      "reason": "Today's core lists Vertex's imagen-* models, whose only method is predict; the Gemini extension serves generateContent only, so it does not list them. The exception also pins each listed model's merged inputTokenLimit and outputTokenLimit; the merge supplies capabilities where Gemini's list has no field for them.",
       "want": [
         {
           "description": "Gemini 3 Pro Image",
           "displayName": "Gemini 3 Pro Image",
-          "inputTokenLimit": 1048576,
+          "inputTokenLimit": 65536,
           "name": "models/gemini-3-pro-image",
-          "outputTokenLimit": 65536,
+          "outputTokenLimit": 32768,
           "supportedGenerationMethods": [
             "generateContent",
             "countTokens",
             "createCachedContent",
             "batchGenerateContent"
           ],
-          "supportedInputModalities": ["text","image"],
-          "supportedOutputModalities": ["text","image"],
+          "supportedInputModalities": [
+            "text",
+            "image"
+          ],
+          "supportedOutputModalities": [
+            "text",
+            "image"
+          ],
           "version": "3.0"
         },
         {
@@ -44,24 +65,37 @@
             "createCachedContent",
             "batchGenerateContent"
           ],
-          "supportedInputModalities": ["text","image","audio","video"],
-          "supportedOutputModalities": ["text"],
+          "supportedInputModalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+          ],
+          "supportedOutputModalities": [
+            "text"
+          ],
           "version": "3.0"
         },
         {
           "description": "Gemini 3.1 Flash Image",
           "displayName": "Gemini 3.1 Flash Image",
-          "inputTokenLimit": 1048576,
+          "inputTokenLimit": 131072,
           "name": "models/gemini-3.1-flash-image",
-          "outputTokenLimit": 65536,
+          "outputTokenLimit": 32768,
           "supportedGenerationMethods": [
             "generateContent",
             "countTokens",
             "createCachedContent",
             "batchGenerateContent"
           ],
-          "supportedInputModalities": ["text","image"],
-          "supportedOutputModalities": ["text","image"],
+          "supportedInputModalities": [
+            "text",
+            "image"
+          ],
+          "supportedOutputModalities": [
+            "text",
+            "image"
+          ],
           "version": "3.1"
         },
         {
@@ -76,8 +110,15 @@
             "createCachedContent",
             "batchGenerateContent"
           ],
-          "supportedInputModalities": ["text","image","audio","video"],
-          "supportedOutputModalities": ["text"],
+          "supportedInputModalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+          ],
+          "supportedOutputModalities": [
+            "text"
+          ],
           "version": "3.1"
         },
         {
@@ -92,8 +133,15 @@
             "createCachedContent",
             "batchGenerateContent"
           ],
-          "supportedInputModalities": ["text","image","audio","video"],
-          "supportedOutputModalities": ["text"],
+          "supportedInputModalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+          ],
+          "supportedOutputModalities": [
+            "text"
+          ],
           "version": "3.1"
         },
         {
@@ -108,8 +156,15 @@
             "createCachedContent",
             "batchGenerateContent"
           ],
-          "supportedInputModalities": ["text","image","audio","video"],
-          "supportedOutputModalities": ["text"],
+          "supportedInputModalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+          ],
+          "supportedOutputModalities": [
+            "text"
+          ],
           "version": "3.5"
         },
         {
@@ -124,8 +179,15 @@
             "createCachedContent",
             "batchGenerateContent"
           ],
-          "supportedInputModalities": ["text","image","audio","video"],
-          "supportedOutputModalities": ["text"],
+          "supportedInputModalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+          ],
+          "supportedOutputModalities": [
+            "text"
+          ],
           "version": "3.6"
         },
         {
@@ -134,19 +196,37 @@
           "inputTokenLimit": 1048576,
           "name": "models/gemini-3.8-flash",
           "outputTokenLimit": 65536,
-          "supportedGenerationMethods": ["generateContent"],
-          "supportedInputModalities": ["text","image","audio","video"],
-          "supportedOutputModalities": ["text"]
+          "supportedGenerationMethods": [
+            "generateContent"
+          ],
+          "supportedInputModalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+          ],
+          "supportedOutputModalities": [
+            "text"
+          ]
         },
         {
           "description": "Gemini 4 Argon",
           "displayName": "Gemini 4 Argon",
           "inputTokenLimit": 1048576,
           "name": "models/gemini-4-argon",
-          "outputTokenLimit": 1048576,
-          "supportedGenerationMethods": ["generateContent"],
-          "supportedInputModalities": ["text","image","audio","video"],
-          "supportedOutputModalities": ["text"]
+          "outputTokenLimit": 65536,
+          "supportedGenerationMethods": [
+            "generateContent"
+          ],
+          "supportedInputModalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+          ],
+          "supportedOutputModalities": [
+            "text"
+          ]
         },
         {
           "description": "Our most intelligent model built for speed, combining frontier intelligence with superior search and grounding.",
@@ -160,8 +240,15 @@
             "createCachedContent",
             "batchGenerateContent"
           ],
-          "supportedInputModalities": ["text","image","audio","video"],
-          "supportedOutputModalities": ["text"],
+          "supportedInputModalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+          ],
+          "supportedOutputModalities": [
+            "text"
+          ],
           "version": "3.0"
         },
         {
@@ -176,8 +263,15 @@
             "createCachedContent",
             "batchGenerateContent"
           ],
-          "supportedInputModalities": ["text","image","audio","video"],
-          "supportedOutputModalities": ["text"],
+          "supportedInputModalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+          ],
+          "supportedOutputModalities": [
+            "text"
+          ],
           "version": "3.5"
         },
         {
@@ -192,8 +286,15 @@
             "createCachedContent",
             "batchGenerateContent"
           ],
-          "supportedInputModalities": ["text","image","audio","video"],
-          "supportedOutputModalities": ["text"],
+          "supportedInputModalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+          ],
+          "supportedOutputModalities": [
+            "text"
+          ],
           "version": "2.5"
         },
         {
@@ -208,24 +309,37 @@
             "createCachedContent",
             "batchGenerateContent"
           ],
-          "supportedInputModalities": ["text","image","audio","video"],
-          "supportedOutputModalities": ["text"],
+          "supportedInputModalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+          ],
+          "supportedOutputModalities": [
+            "text"
+          ],
           "version": "3.1"
         },
         {
           "description": "Our state-of-the-art image generation and editing model.",
           "displayName": "Gemini 2.5 Flash Image",
-          "inputTokenLimit": 1048576,
+          "inputTokenLimit": 32768,
           "name": "models/gemini-2.5-flash-image",
-          "outputTokenLimit": 65536,
+          "outputTokenLimit": 32768,
           "supportedGenerationMethods": [
             "generateContent",
             "countTokens",
             "createCachedContent",
             "batchGenerateContent"
           ],
-          "supportedInputModalities": ["text","image"],
-          "supportedOutputModalities": ["text","image"],
+          "supportedInputModalities": [
+            "text",
+            "image"
+          ],
+          "supportedOutputModalities": [
+            "text",
+            "image"
+          ],
           "version": "001"
         },
         {
@@ -240,8 +354,15 @@
             "createCachedContent",
             "batchGenerateContent"
           ],
-          "supportedInputModalities": ["text","image","audio","video"],
-          "supportedOutputModalities": ["text"],
+          "supportedInputModalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+          ],
+          "supportedOutputModalities": [
+            "text"
+          ],
           "version": "2.5"
         },
         {
@@ -256,8 +377,15 @@
             "createCachedContent",
             "batchGenerateContent"
           ],
-          "supportedInputModalities": ["text","image","audio","video"],
-          "supportedOutputModalities": ["text"],
+          "supportedInputModalities": [
+            "text",
+            "image",
+            "audio",
+            "video"
+          ],
+          "supportedOutputModalities": [
+            "text"
+          ],
           "version": "001"
         }
       ]
@@ -279,8 +407,14 @@
               "createCachedContent",
               "batchGenerateContent"
             ],
-            "supportedInputModalities": ["text","image"],
-            "supportedOutputModalities": ["text","image"],
+            "supportedInputModalities": [
+              "text",
+              "image"
+            ],
+            "supportedOutputModalities": [
+              "text",
+              "image"
+            ],
             "version": "3.0"
           },
           {
@@ -295,8 +429,15 @@
               "createCachedContent",
               "batchGenerateContent"
             ],
-            "supportedInputModalities": ["text","image","audio","video"],
-            "supportedOutputModalities": ["text"],
+            "supportedInputModalities": [
+              "text",
+              "image",
+              "audio",
+              "video"
+            ],
+            "supportedOutputModalities": [
+              "text"
+            ],
             "version": "3.0"
           },
           {
@@ -311,8 +452,14 @@
               "createCachedContent",
               "batchGenerateContent"
             ],
-            "supportedInputModalities": ["text","image"],
-            "supportedOutputModalities": ["text","image"],
+            "supportedInputModalities": [
+              "text",
+              "image"
+            ],
+            "supportedOutputModalities": [
+              "text",
+              "image"
+            ],
             "version": "3.1"
           },
           {
@@ -327,8 +474,15 @@
               "createCachedContent",
               "batchGenerateContent"
             ],
-            "supportedInputModalities": ["text","image","audio","video"],
-            "supportedOutputModalities": ["text"],
+            "supportedInputModalities": [
+              "text",
+              "image",
+              "audio",
+              "video"
+            ],
+            "supportedOutputModalities": [
+              "text"
+            ],
             "version": "3.1"
           },
           {
@@ -343,8 +497,15 @@
               "createCachedContent",
               "batchGenerateContent"
             ],
-            "supportedInputModalities": ["text","image","audio","video"],
-            "supportedOutputModalities": ["text"],
+            "supportedInputModalities": [
+              "text",
+              "image",
+              "audio",
+              "video"
+            ],
+            "supportedOutputModalities": [
+              "text"
+            ],
             "version": "3.1"
           },
           {
@@ -359,8 +520,15 @@
               "createCachedContent",
               "batchGenerateContent"
             ],
-            "supportedInputModalities": ["text","image","audio","video"],
-            "supportedOutputModalities": ["text"],
+            "supportedInputModalities": [
+              "text",
+              "image",
+              "audio",
+              "video"
+            ],
+            "supportedOutputModalities": [
+              "text"
+            ],
             "version": "3.5"
           },
           {
@@ -375,8 +543,15 @@
               "createCachedContent",
               "batchGenerateContent"
             ],
-            "supportedInputModalities": ["text","image","audio","video"],
-            "supportedOutputModalities": ["text"],
+            "supportedInputModalities": [
+              "text",
+              "image",
+              "audio",
+              "video"
+            ],
+            "supportedOutputModalities": [
+              "text"
+            ],
             "version": "3.6"
           },
           {
@@ -385,9 +560,18 @@
             "inputTokenLimit": 1048576,
             "name": "models/gemini-3.8-flash",
             "outputTokenLimit": 65536,
-            "supportedGenerationMethods": ["generateContent"],
-            "supportedInputModalities": ["text","image","audio","video"],
-            "supportedOutputModalities": ["text"]
+            "supportedGenerationMethods": [
+              "generateContent"
+            ],
+            "supportedInputModalities": [
+              "text",
+              "image",
+              "audio",
+              "video"
+            ],
+            "supportedOutputModalities": [
+              "text"
+            ]
           },
           {
             "description": "Gemini 4 Argon",
@@ -395,53 +579,92 @@
             "inputTokenLimit": 1048576,
             "name": "models/gemini-4-argon",
             "outputTokenLimit": 1048576,
-            "supportedGenerationMethods": ["generateContent"],
-            "supportedInputModalities": ["text","image","audio","video"],
-            "supportedOutputModalities": ["text"]
+            "supportedGenerationMethods": [
+              "generateContent"
+            ],
+            "supportedInputModalities": [
+              "text",
+              "image",
+              "audio",
+              "video"
+            ],
+            "supportedOutputModalities": [
+              "text"
+            ]
           },
           {
             "description": "Imagen 3.0 fast image generation model",
             "displayName": "Imagen 3.0 Fast Generate",
             "name": "models/imagen-3.0-fast-generate-001",
-            "supportedGenerationMethods": ["predict"],
-            "supportedInputModalities": ["text"],
-            "supportedOutputModalities": ["image"],
+            "supportedGenerationMethods": [
+              "predict"
+            ],
+            "supportedInputModalities": [
+              "text"
+            ],
+            "supportedOutputModalities": [
+              "image"
+            ],
             "version": "3.0"
           },
           {
             "description": "Imagen 3.0 image generation model",
             "displayName": "Imagen 3.0 Generate",
             "name": "models/imagen-3.0-generate-002",
-            "supportedGenerationMethods": ["predict"],
-            "supportedInputModalities": ["text"],
-            "supportedOutputModalities": ["image"],
+            "supportedGenerationMethods": [
+              "predict"
+            ],
+            "supportedInputModalities": [
+              "text"
+            ],
+            "supportedOutputModalities": [
+              "image"
+            ],
             "version": "3.0"
           },
           {
             "description": "Imagen 4.0 Ultra high-quality image generation model",
             "displayName": "Imagen 4.0 Ultra Generate",
             "name": "models/imagen-4.0-ultra-generate-001",
-            "supportedGenerationMethods": ["predict"],
-            "supportedInputModalities": ["text"],
-            "supportedOutputModalities": ["image"],
+            "supportedGenerationMethods": [
+              "predict"
+            ],
+            "supportedInputModalities": [
+              "text"
+            ],
+            "supportedOutputModalities": [
+              "image"
+            ],
             "version": "4.0"
           },
           {
             "description": "Imagen 4.0 fast image generation model",
             "displayName": "Imagen 4.0 Fast Generate",
             "name": "models/imagen-4.0-fast-generate-001",
-            "supportedGenerationMethods": ["predict"],
-            "supportedInputModalities": ["text"],
-            "supportedOutputModalities": ["image"],
+            "supportedGenerationMethods": [
+              "predict"
+            ],
+            "supportedInputModalities": [
+              "text"
+            ],
+            "supportedOutputModalities": [
+              "image"
+            ],
             "version": "4.0"
           },
           {
             "description": "Imagen 4.0 image generation model",
             "displayName": "Imagen 4.0 Generate",
             "name": "models/imagen-4.0-generate-001",
-            "supportedGenerationMethods": ["predict"],
-            "supportedInputModalities": ["text"],
-            "supportedOutputModalities": ["image"],
+            "supportedGenerationMethods": [
+              "predict"
+            ],
+            "supportedInputModalities": [
+              "text"
+            ],
+            "supportedOutputModalities": [
+              "image"
+            ],
             "version": "4.0"
           },
           {
@@ -456,8 +679,15 @@
               "createCachedContent",
               "batchGenerateContent"
             ],
-            "supportedInputModalities": ["text","image","audio","video"],
-            "supportedOutputModalities": ["text"],
+            "supportedInputModalities": [
+              "text",
+              "image",
+              "audio",
+              "video"
+            ],
+            "supportedOutputModalities": [
+              "text"
+            ],
             "version": "3.0"
           },
           {
@@ -472,8 +702,15 @@
               "createCachedContent",
               "batchGenerateContent"
             ],
-            "supportedInputModalities": ["text","image","audio","video"],
-            "supportedOutputModalities": ["text"],
+            "supportedInputModalities": [
+              "text",
+              "image",
+              "audio",
+              "video"
+            ],
+            "supportedOutputModalities": [
+              "text"
+            ],
             "version": "3.5"
           },
           {
@@ -488,8 +725,15 @@
               "createCachedContent",
               "batchGenerateContent"
             ],
-            "supportedInputModalities": ["text","image","audio","video"],
-            "supportedOutputModalities": ["text"],
+            "supportedInputModalities": [
+              "text",
+              "image",
+              "audio",
+              "video"
+            ],
+            "supportedOutputModalities": [
+              "text"
+            ],
             "version": "2.5"
           },
           {
@@ -504,8 +748,15 @@
               "createCachedContent",
               "batchGenerateContent"
             ],
-            "supportedInputModalities": ["text","image","audio","video"],
-            "supportedOutputModalities": ["text"],
+            "supportedInputModalities": [
+              "text",
+              "image",
+              "audio",
+              "video"
+            ],
+            "supportedOutputModalities": [
+              "text"
+            ],
             "version": "3.1"
           },
           {
@@ -520,8 +771,14 @@
               "createCachedContent",
               "batchGenerateContent"
             ],
-            "supportedInputModalities": ["text","image"],
-            "supportedOutputModalities": ["text","image"],
+            "supportedInputModalities": [
+              "text",
+              "image"
+            ],
+            "supportedOutputModalities": [
+              "text",
+              "image"
+            ],
             "version": "001"
           },
           {
@@ -536,8 +793,15 @@
               "createCachedContent",
               "batchGenerateContent"
             ],
-            "supportedInputModalities": ["text","image","audio","video"],
-            "supportedOutputModalities": ["text"],
+            "supportedInputModalities": [
+              "text",
+              "image",
+              "audio",
+              "video"
+            ],
+            "supportedOutputModalities": [
+              "text"
+            ],
             "version": "2.5"
           },
           {
@@ -552,8 +816,15 @@
               "createCachedContent",
               "batchGenerateContent"
             ],
-            "supportedInputModalities": ["text","image","audio","video"],
-            "supportedOutputModalities": ["text"],
+            "supportedInputModalities": [
+              "text",
+              "image",
+              "audio",
+              "video"
+            ],
+            "supportedOutputModalities": [
+              "text"
+            ],
             "version": "001"
           }
         ]
