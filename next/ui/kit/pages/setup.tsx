@@ -5,7 +5,16 @@
 
 import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { problem, type Setup, type SetupClient, type SetupPick } from "../api";
+import {
+  type ImportReport,
+  type ImportRow,
+  problem,
+  type Setup,
+  type SetupClient,
+  type SetupImport,
+  type SetupPick,
+} from "../api";
+import type { Reply } from "../host";
 import type { PageDef } from "../shell";
 import { rich, strings } from "../strings";
 import { Badge, Button, Card, Empty, Notice, PageHead, useAction, useKit, useLoad, when } from "../ui";
@@ -50,7 +59,59 @@ const t = strings("setup", {
     one: "A CLIProxyAPI setup with {count} account",
     other: "A CLIProxyAPI setup with {count} accounts",
   },
-  importHow: "It is at {config}. To bring it across, run this where pluxy is installed:",
+  importWhere:
+    "It is at {config}. pluxy can bring its settings, client keys and accounts across. It first shows what would change, and writes nothing until you confirm.",
+  importOld: "It is at {config}. To bring it across, run this where pluxy is installed:",
+  importCommand: "Or use the command",
+  importCommandHow:
+    "Run this where pluxy is installed. It does the same, and with --dry-run only reports what it would do.",
+  bring: "Bring it across",
+  bringChecking: "Checking…",
+  bringNow: "Bring it across now",
+  bringing: "Bringing it across…",
+  bringCancel: "Cancel",
+  bringClose: "Close",
+  bringDry: "Nothing is written yet. This is what bringing it across would do:",
+  bringDone: "Done. This is what was brought across:",
+  "list.brought.dry": "Comes across ({count})",
+  "list.brought.done": "Brought across ({count})",
+  "list.changed": "Different in pluxy ({count})",
+  "list.not_brought.dry": "Does not come across ({count})",
+  "list.not_brought.done": "Not brought across ({count})",
+  rowAs: "Becomes",
+  rowFrom: "Was",
+  rowTo: "In pluxy",
+  rowWhy: "Why",
+  rowKeep: "To keep it",
+  keyShownBelow: "(the new management key, shown below)",
+  needPick: "{title} is not installed, and {why}.",
+  needLater: "You can install it once the setup is across.",
+  needTicked: "It is ticked under Providers: press {button} to install it.",
+  needElsewhere: "Install it on the Extensions page.",
+  keyWillBeNew:
+    "This replaces pluxy's management key, the one you signed in with. The new key is shown once, when the import runs, and you sign in again with it.",
+  keyMayChange:
+    "If the CLIProxyAPI setup has a management key, it becomes pluxy's management key, and you sign in again with it.",
+  keyFixed:
+    "This CLIProxyAPI setup sets a management key ({what}). Bringing it across would replace the key this app keeps for its own pluxy, and the app could not reach pluxy afterwards. To bring the rest across, remove that line from the CLIProxyAPI config, then press {button} again.",
+  keyChangedNew:
+    "pluxy's management key changed with the import. Copy the new key now: it is not shown again. Then sign in again with it.",
+  keyChanged:
+    "pluxy's management key changed with the import: it is now the management key of the CLIProxyAPI setup. Sign in again with it.",
+  newManagementKey: "New management key",
+  signInAgain: "Sign in again",
+  "refused.400":
+    "pluxy could not read the CLIProxyAPI setup: {message}. Check that the file is still there and that pluxy may read it, then press {look}. Nothing was changed.",
+  "refused.422":
+    "pluxy will not bring this setup across: {message}. Change that in the CLIProxyAPI setup, then try again. Nothing was changed.",
+  "refused.409":
+    "This pluxy runs on a config.yaml, which it already reads in CLIProxyAPI's own format, and an import writes pluxy's JSON config. To move over, make that config with the command below, start pluxy on it, then bring the setup across. Nothing was changed.",
+  "refused.404": "This pluxy is an older one that cannot bring a setup across from this page.",
+  "refused.0.dry":
+    "pluxy did not answer, so nothing was read or changed. Check that it is running, then try again.",
+  "refused.0.real":
+    "pluxy did not answer, so this page cannot tell whether the import ran. Check that pluxy is running, then press {button} again: it shows what is left to bring.",
+  refusedOther: "pluxy could not bring the setup across: {message}.",
   listens: "pluxy listens on {address}.",
   reachable: "Other machines on the network can reach pluxy at this address.",
   lookedAt: "Looked {when}.",
@@ -154,12 +215,265 @@ function Code(props: { value: string }) {
   );
 }
 
+/** The command that does what the row's button does. */
+export function importCommand(found: SetupImport): string {
+  return `pluxy import cpa ${found.config}${authDir(found) ? ` --auth-dir ${authDir(found)}` : ""}`;
+}
+
+/**
+ * The auth folder to name in an import: the one the scan counted accounts in. With none counted
+ * the import reads the folder the config names, and says so when it is not there.
+ */
+function authDir(found: SetupImport): string | undefined {
+  return found.accounts > 0 ? found.auth_dir : undefined;
+}
+
+/** Where bringing a found CLIProxyAPI setup across stands. */
+export interface ImportState {
+  /** The config of the setup this is about. */
+  config: string;
+  busy?: "checking" | "importing";
+  /** The dry run's report, or once done the import's. */
+  report?: ImportReport;
+  done?: boolean;
+  /** Core no longer takes the key this page calls with: the import changed it. */
+  keyChanged?: boolean;
+  /** Why core refused, in words. */
+  problem?: string;
+  /** What the refusal's words point to: the import command, or the one that makes a JSON config. */
+  show?: "command" | "init";
+}
+
+/** A refused import in words a person can act on; nothing for a reply that is no refusal. */
+export function importProblem(reply: Reply<unknown>, dryRun: boolean): Pick<ImportState, "problem" | "show"> {
+  if (reply.status >= 200 && reply.status < 300) return {};
+  const message = (reply.error?.message ?? problem(reply) ?? "").replace(/\.$/, "");
+  switch (reply.status) {
+    case 0:
+      return { problem: t(dryRun ? "refused.0.dry" : "refused.0.real", { button: t("bring") }) };
+    case 400:
+      return { problem: t("refused.400", { message, look: t("lookAgain") }) };
+    case 404:
+      return { problem: t("refused.404"), show: "command" };
+    case 409:
+      return { problem: t("refused.409"), show: "init" };
+    case 422:
+      return { problem: t("refused.422", { message }) };
+    default:
+      return { problem: t("refusedOther", { message }) };
+  }
+}
+
+/** A report row that names the management key of the CLIProxyAPI setup. */
+const isManagementKey = (row: ImportRow) => /(^|\.)secret-key$/.test(row.what);
+
+/**
+ * The new management key an import made, which its report holds once; nothing when it made none
+ * (a dry run makes none).
+ */
+export function newManagementKey(report: ImportReport): string | undefined {
+  return report.dry_run ? undefined : report.changed.find((row) => isManagementKey(row) && row.to)?.to;
+}
+
+/** The provider picks a report says the imported accounts need, as the page can tick them. */
+export function neededPicks(setup: Setup, report: ImportReport): Choices {
+  const offered = new Set(providerPicks(setup).map((pick) => pick.id));
+  return Object.fromEntries(
+    report.needs.filter((need) => offered.has(need.pick)).map((need) => [need.pick, true]),
+  );
+}
+
+function ReportList(props: { title: string; rows: ImportRow[]; hideKey: boolean }) {
+  if (props.rows.length === 0) return null;
+  const line = (label: string, value?: string) =>
+    value && (
+      <span>
+        <span class="muted">{label}:</span> {value}
+      </span>
+    );
+  return (
+    <details open>
+      <summary>{props.title}</summary>
+      <ul class="setup-report-rows">
+        {props.rows.map((row) => (
+          <li key={`${row.what}/${row.name ?? ""}`}>
+            <strong class="mono">{[row.what, row.name].filter(Boolean).join(" ")}</strong>
+            {line(t("rowAs"), row.as)}
+            {line(t("rowFrom"), row.from)}
+            {line(t("rowTo"), props.hideKey && isManagementKey(row) && row.to ? t("keyShownBelow") : row.to)}
+            {line(t("rowWhy"), row.why)}
+            {line(t("rowKeep"), row.keep_with)}
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+/**
+ * The management key row of a report, when the import would replace core's management key and
+ * the host could not follow: it keeps the key itself and has no sign-in to give a new one to.
+ */
+export function keyInTheWay(report: ImportReport, keyFixed?: boolean): ImportRow | undefined {
+  return keyFixed ? [...report.changed, ...report.brought].find(isManagementKey) : undefined;
+}
+
+/** An import report in its own three lists, and what the imported accounts still need. */
+function Report(props: { setup: Setup; report: ImportReport; done?: boolean; keyFixed?: boolean }) {
+  const { report, setup } = props;
+  const when = props.done ? "done" : "dry";
+  const button = setup.first_run ? t("start") : t("install");
+  const hideKey = !report.dry_run;
+  const keyRow = (rows: ImportRow[]) => rows.some(isManagementKey);
+  const inTheWay = props.done ? undefined : keyInTheWay(report, props.keyFixed);
+  return (
+    <div class="setup-report stack" data-part="setup-report" data-state={when}>
+      <span role="status">{props.done ? t("bringDone") : t("bringDry")}</span>
+      <ReportList
+        title={t(`list.brought.${when}`, { count: report.brought.length })}
+        rows={report.brought}
+        hideKey={hideKey}
+      />
+      <ReportList
+        title={t("list.changed", { count: report.changed.length })}
+        rows={report.changed}
+        hideKey={hideKey}
+      />
+      <ReportList
+        title={t(`list.not_brought.${when}`, { count: report.not_brought.length })}
+        rows={report.not_brought}
+        hideKey={hideKey}
+      />
+      {report.needs.map((need) => {
+        const pick = providerPicks(setup).find((p) => p.id === need.pick);
+        return (
+          <Notice key={need.pick} tone="warn">
+            {t("needPick", { title: pick?.title || need.pick, why: need.why })}{" "}
+            {!props.done ? t("needLater") : pick ? t("needTicked", { button }) : t("needElsewhere")}
+          </Notice>
+        );
+      })}
+      {inTheWay && <Notice tone="warn">{t("keyFixed", { what: inTheWay.what, button: t("bring") })}</Notice>}
+      {!props.done && !inTheWay && keyRow(report.changed) && <Notice tone="warn">{t("keyWillBeNew")}</Notice>}
+      {!props.done && !inTheWay && !keyRow(report.changed) && keyRow(report.brought) && (
+        <Notice tone="warn">{t("keyMayChange")}</Notice>
+      )}
+    </div>
+  );
+}
+
+/** A found CLIProxyAPI setup: where it is, and bringing it across in two steps. */
+function FoundImport(props: {
+  setup: Setup;
+  found: SetupImport;
+  state?: ImportState;
+  onBring?: (found: SetupImport, dryRun: boolean) => void;
+  onClose?: () => void;
+  onSignIn?: () => void;
+  keyFixed?: boolean;
+}) {
+  const { found, state } = props;
+  const old = state?.show === "command";
+  const key = state?.done && state.report ? newManagementKey(state.report) : undefined;
+  return (
+    <li data-part="setup-import" data-state={state?.done ? "done" : state?.report ? "report" : "found"}>
+      <div class="setup-row-head">
+        <span class="setup-pick-text">
+          <strong>{t("importFound", { count: found.accounts })}</strong>
+          <span class="muted">
+            {rich(t(old || !props.onBring ? "importOld" : "importWhere"), {
+              config: <span class="mono">{found.config}</span>,
+            })}
+          </span>
+        </span>
+        {props.onBring && !old && !state?.report && (
+          <div class="actions">
+            <Button disabled={state?.busy !== undefined} onClick={() => props.onBring?.(found, true)}>
+              {state?.busy ? t("bringChecking") : t("bring")}
+            </Button>
+          </div>
+        )}
+      </div>
+      {state?.problem && <Notice tone="danger">{state.problem}</Notice>}
+      {state?.show === "init" && <Code value="pluxy init" />}
+      {state?.report && (
+        <Report setup={props.setup} report={state.report} done={state.done} keyFixed={props.keyFixed} />
+      )}
+      {state?.report && !state.done && (
+        <div class="actions">
+          {!keyInTheWay(state.report, props.keyFixed) && (
+            <Button disabled={state.busy !== undefined} onClick={() => props.onBring?.(found, false)}>
+              {state.busy ? t("bringing") : t("bringNow")}
+            </Button>
+          )}
+          <Button variant="quiet" disabled={state.busy !== undefined} onClick={props.onClose}>
+            {t("bringCancel")}
+          </Button>
+        </div>
+      )}
+      {state?.done && state.keyChanged && (
+        <>
+          <Notice tone="warn">{t(key ? "keyChangedNew" : "keyChanged")}</Notice>
+          {key && (
+            <section
+              class="stack config-key-notice"
+              data-part="key-notice"
+              aria-label={t("newManagementKey")}
+            >
+              <strong>{t("newManagementKey")}</strong>
+              <code data-part="key-value">{key}</code>
+              <div class="actions">
+                <Copy value={key} />
+              </div>
+            </section>
+          )}
+          <div class="actions">
+            <Button onClick={props.onSignIn}>{t("signInAgain")}</Button>
+          </div>
+        </>
+      )}
+      {state?.done && !state.keyChanged && (
+        <div class="actions">
+          <Button onClick={props.onClose}>{t("bringClose")}</Button>
+        </div>
+      )}
+      {old || !props.onBring ? (
+        <Code value={importCommand(found)} />
+      ) : (
+        !state?.report && (
+          <details class="setup-others">
+            <summary>{t("importCommand")}</summary>
+            <div class="setup-code-how stack">
+              <span class="muted">{t("importCommandHow")}</span>
+              <Code value={importCommand(found)} />
+            </div>
+          </details>
+        )
+      )}
+    </li>
+  );
+}
+
+/** What the Found part needs to bring a CLIProxyAPI setup across. */
+export interface ImportProps {
+  state?: ImportState;
+  onBring: (found: SetupImport, dryRun: boolean) => void;
+  onClose: () => void;
+  onSignIn: () => void;
+  /**
+   * The host keeps the management key itself and has no sign-in to give a new one to (the desktop
+   * app running its own pluxy): an import that would replace the key is not offered.
+   */
+  keyFixed?: boolean;
+}
+
 /** What core found: clients, sign-ins, an earlier setup, and where core listens. */
 export function Found(props: {
   setup: Setup;
   remote: boolean;
   busy?: boolean;
   error?: string;
+  bring?: ImportProps;
   onLook: () => void;
 }) {
   const { setup } = props;
@@ -194,13 +508,16 @@ export function Found(props: {
             </li>
           ))}
           {setup.found.imports.map((found) => (
-            <li key={`import/${found.config}`}>
-              <strong>{t("importFound", { count: found.accounts })}</strong>
-              <span class="muted">
-                {rich(t("importHow"), { config: <span class="mono">{found.config}</span> })}
-              </span>
-              <Code value={`pluxy import cpa ${found.config}`} />
-            </li>
+            <FoundImport
+              key={`import/${found.config}`}
+              setup={setup}
+              found={found}
+              state={props.bring?.state?.config === found.config ? props.bring.state : undefined}
+              onBring={props.bring?.onBring}
+              onClose={props.bring?.onClose}
+              onSignIn={props.bring?.onSignIn}
+              keyFixed={props.bring?.keyFixed}
+            />
           ))}
           {nothing && <li class="muted">{state === "never" ? t("neverLooked") : t("nothingFound")}</li>}
           {setup.found.core.listen && (
@@ -569,6 +886,7 @@ export function SetupPage(props: { options?: SetupOptions }) {
   const [results, setResults] = useState<Results>({});
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string>();
+  const [bringing, setBringing] = useState<ImportState>();
   const look = useAction(loaded.reload);
   const finish = useAction(() => {
     loaded.reload();
@@ -619,6 +937,37 @@ export function SetupPage(props: { options?: SetupOptions }) {
     extensionsChanged();
   };
 
+  // A host with no sign-out has no sign-in to take a new management key: it keeps the key itself.
+  const keyFixed = !host.features.has("signOut");
+  // A dry run first, whose report the page shows; then, when the person confirms, the import.
+  const onBring = async (found: SetupImport, dryRun: boolean) => {
+    if (!setup || bringing?.busy) return;
+    if (!dryRun && (!bringing?.report || keyInTheWay(bringing.report, keyFixed))) return;
+    const config = found.config;
+    setBringing((s) => ({
+      config,
+      report: s?.config === config ? s.report : undefined,
+      busy: dryRun ? "checking" : "importing",
+    }));
+    const reply = await api.importSetup(config, authDir(found), dryRun);
+    if (reply.status === 401) return unauthorized();
+    const report = reply.body;
+    if (!report || reply.status >= 300) {
+      // The report goes too: what a later try would do is for a new dry run to say.
+      return setBringing({ config, ...importProblem(reply, dryRun) });
+    }
+    if (dryRun) return setBringing({ config, report });
+    // An import can change the management key. Core then refuses this page's calls, and re-reading
+    // through the page would go to the sign-in before the person has read the report.
+    const keyChanged = (await api.setup()).status === 401;
+    setBringing({ config, report, done: true, keyChanged });
+    setChoices((c) => ({ ...c, ...neededPicks(setup, report) }));
+    if (keyChanged) return;
+    loaded.reload();
+    accounts.reload();
+    packages.reload();
+  };
+
   if (!setup) {
     return (
       <>
@@ -652,6 +1001,13 @@ export function SetupPage(props: { options?: SetupOptions }) {
         accounts: accounts.error,
         finish: finish.error,
       }}
+      bring={{
+        state: bringing,
+        onBring,
+        onClose: () => setBringing(undefined),
+        onSignIn: unauthorized,
+        keyFixed,
+      }}
       onLook={() => look.run(api.scanSetup)}
       onTick={(id, ticked) => setChoices((c) => ({ ...c, [id]: ticked }))}
       onStart={onStart}
@@ -678,6 +1034,8 @@ export function SetupView(props: {
   finishing?: boolean;
   looking?: boolean;
   errors?: { look?: string; apply?: string; accounts?: string; finish?: string };
+  /** Bringing a found CLIProxyAPI setup across; without it the row names only the command. */
+  bring?: ImportProps;
   onLook: () => void;
   onTick: (id: string, ticked: boolean) => void;
   onStart: () => void;
@@ -697,6 +1055,7 @@ export function SetupView(props: {
           remote={props.remote}
           busy={props.looking}
           error={errors?.look}
+          bring={props.bring}
           onLook={props.onLook}
         />
         <Providers
