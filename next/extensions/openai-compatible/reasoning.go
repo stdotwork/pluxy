@@ -46,7 +46,7 @@ func applyReasoning(body []byte, req llm.Request, target string, levels []string
 	}
 	have, ok := bodyEffort(body, target)
 	if !ok {
-		return body, nil // not one JSON object: today's decode leaves it as it is too
+		return body, nil // not one JSON object: the answer the full decode gave
 	}
 	effort := have
 	if suffix != "" {
@@ -95,8 +95,8 @@ func bodyEffort(body []byte, target string) (effort string, ok bool) {
 }
 
 // names reports whether a member's name, as written, is name in the sense a map key has: as it
-// stands, or with its escapes decoded. A name encoding/json repairs (invalid UTF-8) names
-// nothing here, since no such name is name.
+// stands, or with its escapes decoded. A name encoding/json repairs (invalid UTF-8) matches
+// nothing: no repair spells name.
 func names(key []byte, name string) bool {
 	if bytes.IndexByte(key, '\\') < 0 {
 		return string(key[1:len(key)-1]) == name
@@ -108,6 +108,9 @@ func names(key []byte, name string) bool {
 // setEffort sets the body's reasoning effort to e and returns the body as today's core writes it:
 // decoded into a map and encoded again. It is only reached for a body whose effort changes, so
 // its bytes, and their cost, stay what they were.
+//
+// A body whose reasoning is null keeps today's answer here, which is a panic: decoding null into
+// the map empties it, and setting a field of it fails.
 func setEffort(body []byte, target string, e string) ([]byte, error) {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(body, &m); err != nil || m == nil {
