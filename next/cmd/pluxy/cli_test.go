@@ -38,8 +38,6 @@ var laterCommands = []string{
 	"DELETE /accounts/{id}",
 	// pluxy account refresh <id>
 	"POST /accounts/{id}/refresh",
-	// pluxy account models <id>
-	"GET /accounts/{id}/models",
 	// pluxy account import <file>
 	"POST /accounts/import", "POST /vertex/import",
 	// pluxy usage events
@@ -113,6 +111,14 @@ func TestCLIOutput(t *testing.T) {
 				return
 			}
 			w.Write([]byte(`{"account":{"id":"a/b","source":"login","state":"active","disabled":true,"refreshable":false}}`))
+		case "GET /v0/management/accounts/a1/models":
+			w.Write([]byte(`{"models":[{"id":"m1","names":["m1"],"owned_by":"anthropic","context_length":200000,"max_completion_tokens":64000},{"id":"m2","names":[],"excluded":true,"owned_by":"anthropic"}],"from":"account"}` + "\n"))
+		case "GET /v0/management/accounts/a%2Fb/models", "GET /v0/management/accounts/a/b/models":
+			if r.URL.EscapedPath() != "/v0/management/accounts/a%2Fb/models" {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			w.Write([]byte(`{"models":[{"id":"m1","names":["m1"]}],"from":"extension"}` + "\n"))
 		case "POST /v0/management/reload":
 			w.WriteHeader(http.StatusUnprocessableEntity)
 			w.Write([]byte(`{"desired":{"revision":2,"at":"2026-11-19T00:00:00Z","error":"bad listen"},"active":{"revision":1,"at":"2026-11-19T00:00:00Z"},"extensions":[]}`))
@@ -178,6 +184,12 @@ func TestCLIOutput(t *testing.T) {
 	if _, _, code := run("model", "refresh", "--account", "nobody"); code != 5 {
 		t.Errorf("model refresh --account nobody: %d, want 5", code)
 	}
+	if out, errOut, code := run("account", "models", "a1"); code != 0 || !strings.Contains(out, "from: account") || !strings.Contains(out, "m1") || !strings.Contains(out, "200000") || !strings.Contains(out, "64000") || !strings.Contains(out, "m2") {
+		t.Errorf("account models a1: %d %q %q", code, out, errOut)
+	}
+	if out, errOut, code := run("account", "models", "a/b", "--json"); code != 0 || out != `{"models":[{"id":"m1","names":["m1"]}],"from":"extension"}`+"\n" {
+		t.Errorf("account models a/b --json: %d %q %q", code, out, errOut)
+	}
 	if out, _, code := run("help"); code != 0 || !strings.Contains(out, "account enable <id>") {
 		t.Errorf("help: %d %q", code, out)
 	}
@@ -203,5 +215,20 @@ func TestFindCore(t *testing.T) {
 	}
 	if _, err := findCore(filepath.Join(t.TempDir(), "none.json"), "", ""); err == nil || !strings.Contains(err.Error(), "--url") {
 		t.Errorf("no config and no address: %v", err)
+	}
+}
+
+func TestResolveThemeID(t *testing.T) {
+	if got := resolveThemeID("acme/custom", "/tmp/Foo.json", []byte(`{"id":"other/id"}`)); got != "acme/custom" {
+		t.Errorf("flag wins: got %q", got)
+	}
+	if got := resolveThemeID("", "/tmp/Foo.json", []byte(`{"id":"acme/from-file"}`)); got != "acme/from-file" {
+		t.Errorf("valid file id: got %q", got)
+	}
+	if got := resolveThemeID("", "/tmp/My Theme_v2.JSON", []byte(`{"id":"not-two-parts"}`)); got != "t3/my-theme-v2" {
+		t.Errorf("fallback from filename: got %q", got)
+	}
+	if got := resolveThemeID("", "/tmp/Café.json", []byte(`{"name":"No ID"}`)); got != "t3/caf-" {
+		t.Errorf("non-ascii filename: got %q", got)
 	}
 }

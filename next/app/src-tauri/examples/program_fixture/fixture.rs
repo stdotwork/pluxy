@@ -44,7 +44,9 @@
 //!   for op `spawn`, a spawn request for that call), and answering with the host's answer;
 //! - `serve`, the client-key check's agent (`src/client_key_native.rs`): sends `GET /v1/models` to
 //!   the core at `base` (plain HTTP) with the secret delivered for `key` as its bearer token, writes
-//!   the status core answered to `out` and answers with it and its process ID;
+//!   the status core answered to `out` and answers with it and its process ID; on Windows, where the
+//!   check cannot read another process's environment, it also writes its own to `<out>.process`,
+//!   one per line;
 //! - `export`, the save check's exporter (`src/save_native.rs`): reads the file `source` and hands
 //!   its bytes to the host's save service for the call, in `files` frames: `append` frames of at
 //!   most `chunk` bytes (default 700,000) at their offsets, then one `save` with `name` and the
@@ -53,11 +55,14 @@
 //!   refused append (with `save_anyway`, it still asks the `save` after it).
 //!
 //! Started with `AGENT` as its first argument it is the spawn check's agent instead (`agent`).
+//! Started with `RUN` and a file it is the Windows launcher session's starter (`run`): it starts
+//! the program that file names as its child, and stops it when asked.
 //! Started as `x-terminal-emulator` (the launcher check's stand-in terminal, `terminal`) it writes
 //! its arguments, folder and environment to the file `FIXTURE_TERMINAL_RECORD` names and runs the
 //! command after its `-e`, as a terminal would. Started as `xdg-open` (the open check's stand-in
 //! opener, `opener`) it appends its arguments and folder to `opened.jsonl` beside itself and
-//! exits.
+//! exits; started with `OPENED` first (the Windows open check's stand-in app for `.jsonl` files,
+//! `opened`) it does the same.
 //!
 //! In describe, it reconciles each open vault journal the host names, never redoing it: it ends it
 //! as `committed` when the file holds the bytes the journal names, `rolled_back` otherwise, and
@@ -106,6 +111,11 @@ pub const HEARTBEAT: &str = "pluxy-fixture-heartbeat";
 /// argument names, if any (Windows, `handle_path`), and exit: the program check's control for
 /// handle inheritance.
 pub const HANDLE: &str = "pluxy-fixture-handle";
+/// The first argument that makes it the Windows launcher session's starter (`run`).
+pub const RUN: &str = "pluxy-fixture-run";
+/// The first argument that makes it the Windows and macOS open check's stand-in app for a file
+/// type (`opened`): the type's `open` command runs it with this, then the file.
+pub const OPENED: &str = "pluxy-fixture-opened";
 
 /// How the unit tests make it misbehave, from `fixture.json`. Absent: it behaves.
 #[derive(Default)]
@@ -245,6 +255,17 @@ fn windows_seen(out: &mut Value) {
     // SAFETY: GetStdHandle returns this process's handle or none; GetFileType takes either.
     out["std_pipes"] = json!([STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE]
         .map(|which| unsafe { GetFileType(GetStdHandle(which)) } == FILE_TYPE_PIPE));
+}
+
+/// Its own environment, one entry per line. On Windows the client-key check reads the environment
+/// here, since Windows gives no supported way to read another process's; the argv it reads as
+/// Windows has it (`Win32_Process.CommandLine`).
+#[cfg(windows)]
+fn own_process() -> String {
+    std::env::vars_os()
+        .map(|(k, v)| format!("{}={}", k.to_string_lossy(), v.to_string_lossy()))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The file this process's handle with value names (`GetFinalPathNameByHandleW`), if it has such
@@ -984,13 +1005,138 @@ fn pdeathsig() -> i64 {
     }
 }
 
+/// The terminal its standard input is (`ttyname`), or null when it is none.
+#[cfg(unix)]
+fn tty() -> Value {
+    // SAFETY: isatty and ttyname take any descriptor; ttyname's string is copied before any other
+    // call could reuse it.
+    unsafe {
+        if libc::isatty(0) != 1 {
+            return Value::Null;
+        }
+        let name = libc::ttyname(0);
+        if name.is_null() {
+            return Value::Null;
+        }
+        json!(std::ffi::CStr::from_ptr(name).to_string_lossy())
+    }
+}
+
+/// Its console: whether it has a window (`GetConsoleWindow`: a pseudo window when another
+/// terminal app, such as Windows Terminal, shows the console) and the processes attached to it
+/// (`GetConsoleProcessList`, empty when it has no console).
+#[cfg(windows)]
+fn console_seen() -> Value {
+    use windows_sys::Win32::System::Console::{GetConsoleProcessList, GetConsoleWindow};
+    // SAFETY: no arguments; the window handle is only compared with null.
+    let window = !unsafe { GetConsoleWindow() }.is_null();
+    let mut ids = [0u32; 64];
+    // SAFETY: ids holds the count given.
+    let n = unsafe { GetConsoleProcessList(ids.as_mut_ptr(), ids.len() as u32) } as usize;
+    // More than fit: the list is the count needed, and nothing was written.
+    if n > ids.len() {
+        return json!({"window": window, "error": format!("{n} processes on its console")});
+    }
+    json!({"window": window, "processes": ids[..n]})
+}
+
+/// Whether it runs in a job (`IsProcessInJob`), null when that cannot be read.
+#[cfg(windows)]
+fn in_job() -> Option<bool> {
+    use windows_sys::Win32::System::JobObjects::IsProcessInJob;
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    let mut r = 0;
+    // SAFETY: the pseudo handle of this process; a null job asks about any job.
+    (unsafe { IsProcessInJob(GetCurrentProcess(), std::ptr::null_mut(), &mut r) } != 0)
+        .then_some(r != 0)
+}
+
+/// The Windows launcher session's starter, started as `<program> RUN <spec>` (by WMI, so that it
+/// and what it starts run outside the job the runner's steps run in, which no detached launch may
+/// leave). spec is a JSON file naming the program to start, its `args`, `cwd` and whole
+/// environment (`env`), the files its standard output and error go to (`stdout`, `stderr`), and
+/// the files this writes: the program's process ID (`pid`), and once it ended, its exit code
+/// (`exit`, or `killed`). It starts the program as its child, with no input, and stops that child
+/// (its own) once the file `kill` names exists; then it exits.
+fn run(args: &[String]) -> ! {
+    let spec: Value = match args
+        .get(2)
+        .ok_or("no spec".to_string())
+        .and_then(|p| std::fs::read(p).map_err(|e| e.to_string()))
+        .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()))
+    {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("{RUN}: {e}");
+            std::process::exit(2);
+        }
+    };
+    let s = |k: &str| spec[k].as_str().unwrap_or_default().to_string();
+    let file = |k: &str| std::fs::File::create(s(k)).map(std::process::Stdio::from);
+    let mut c = std::process::Command::new(s("program"));
+    c.args(
+        spec["args"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str),
+    )
+    .current_dir(s("cwd"))
+    .env_clear()
+    .envs(
+        spec["env"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter_map(|(k, v)| Some((k, v.as_str()?))),
+    )
+    .stdin(std::process::Stdio::null());
+    let child = match (file("stdout"), file("stderr")) {
+        (Ok(out), Ok(err)) => c.stdout(out).stderr(err).spawn(),
+        (Err(e), _) | (_, Err(e)) => Err(e),
+    };
+    let mut child = match child {
+        Ok(c) => c,
+        Err(e) => {
+            put(&s("exit"), format!("not started: {e}"));
+            std::process::exit(1);
+        }
+    };
+    put(&s("pid"), child.id().to_string());
+    let kill = std::path::PathBuf::from(s("kill"));
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let code = status
+                    .code()
+                    .map_or("no exit code".to_string(), |c| c.to_string());
+                put(&s("exit"), code);
+                std::process::exit(0);
+            }
+            Ok(None) if kill.exists() => {
+                let _ = child.kill();
+                let _ = child.wait();
+                put(&s("exit"), "killed".into());
+                std::process::exit(0);
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+            Err(e) => {
+                put(&s("exit"), format!("waiting: {e}"));
+                std::process::exit(1);
+            }
+        }
+    }
+}
+
 /// The spawn check's agent, started as `<program> AGENT <record> [orphan]`: it starts its group
 /// member (itself again, with the record's path, which waits in its process group) and, with
 /// `orphan` (unix), a descendant that starts a session of its own and ignores SIGTERM (as an
 /// agent's helper may), which writes its process ID to `<record>.orphan`. Then it writes what it
 /// sees of itself to record (written whole, then renamed into place): its process ID, arguments,
 /// working folder, environment and its group member's process ID; on unix its parent, group and
-/// session IDs and its core file size limits; on Linux its open descriptors and where each leads.
+/// session IDs, its core file size limits and the terminal its standard input is (`tty`, null
+/// when it is none); on Linux its open descriptors and where each leads; on Windows its console
+/// (`console`, `console_seen`) and whether it is in a job (`in_job`).
 /// With `FIXTURE_READ_STDIN` in its environment it first reads its stdin to its end (at most
 /// 64 KiB), as a credential bridge takes its key, and records that too (`stdin`). Then it waits
 /// until it is killed, or until a file named `stop` is in the record's folder, as do its group
@@ -1043,8 +1189,6 @@ fn agent(args: &[String]) -> ! {
             )
         })
         .collect();
-    // Windows adds nothing to it.
-    #[cfg_attr(windows, allow(unused_mut))]
     let mut seen = json!({
         "pid": std::process::id(),
         "argv": std::env::args_os().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>(),
@@ -1084,6 +1228,12 @@ fn agent(args: &[String]) -> ! {
         seen["pgid"] = json!(unsafe { libc::getpgrp() });
         seen["sid"] = json!(unsafe { libc::getsid(0) });
         seen["core"] = json!([limit(core.rlim_cur), limit(core.rlim_max)]);
+        seen["tty"] = tty();
+    }
+    #[cfg(windows)]
+    {
+        seen["console"] = console_seen();
+        seen["in_job"] = json!(in_job());
     }
     let tmp = format!("{record}.tmp");
     if std::fs::write(&tmp, seen.to_string()).is_ok() {
@@ -1153,8 +1303,35 @@ fn opener(args: &[String]) -> ! {
     std::process::exit(0);
 }
 
-/// Runs the fixture: as its child when started with `CHILD`, as the spawn check's agent when
-/// started with `AGENT`, as the launcher check's terminal when started as `x-terminal-emulator`,
+/// The open check's stand-in app for a file type off Linux, started as `<it> OPENED <file>` by
+/// the type's `open` command (`open_platform_native.rs`): it appends one line of what it was
+/// started with (process ID, arguments, folder) to `opened.jsonl` beside its own program and
+/// exits, as an app that has the file open would.
+fn opened(args: &[String]) -> ! {
+    use std::io::Write as _;
+    let seen = json!({
+        "pid": std::process::id(),
+        "argv": args,
+        "cwd": std::env::current_dir().ok(),
+    });
+    if let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+    {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("opened.jsonl"))
+        {
+            let _ = writeln!(f, "{seen}");
+        }
+    }
+    std::process::exit(0);
+}
+
+/// Runs the fixture: as its child when started with `CHILD`, as the Windows launcher session's
+/// starter when started with `RUN`, as the spawn check's agent when started with `AGENT`, as the
+/// launcher check's terminal when started as `x-terminal-emulator`,
 /// as the open check's opener when started as `xdg-open`, else as the tool.
 pub fn main() -> ! {
     if std::env::var_os(CHILD).is_some() {
@@ -1164,6 +1341,9 @@ pub fn main() -> ! {
         let args: Vec<String> = std::env::args().collect();
         if args.get(1).is_some_and(|a| a == HEARTBEAT) {
             heartbeat(&args);
+        }
+        if args.get(1).is_some_and(|a| a == OPENED) {
+            opened(&args);
         }
         if args.get(1).is_some_and(|a| a == HANDLE) {
             #[cfg(windows)]
@@ -1175,6 +1355,9 @@ pub fn main() -> ! {
                 println!("{p}");
             }
             std::process::exit(0);
+        }
+        if args.get(1).is_some_and(|a| a == RUN) {
+            run(&args);
         }
         if args.get(1).is_some_and(|a| a.starts_with(AGENT)) {
             agent(&args);
@@ -1613,6 +1796,8 @@ pub fn main() -> ! {
                             let status = serve(f["input"]["base"].as_str().unwrap_or(""), &key);
                             if let Some(out) = f["input"]["out"].as_str() {
                                 let _ = std::fs::write(out, status.to_string());
+                                #[cfg(windows)]
+                                let _ = std::fs::write(format!("{out}.process"), own_process());
                             }
                             write_frame(
                                 &mut output,

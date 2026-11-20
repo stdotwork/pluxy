@@ -1555,10 +1555,21 @@ fn an_open_launch_gets_only_the_absolute_path_entries() {
             .find(|(k, _)| k == "PATH")
             .map(|(_, v)| v.to_string_lossy().into_owned())
     };
+    // macOS adds the system-wide client folders that exist (`/home/me` does not, so none of
+    // its own), then keeps the absolute entries.
+    #[cfg(target_os = "macos")]
+    let (all, absolute) = {
+        let added: String = ["/opt/homebrew/bin", "/usr/local/bin"]
+            .iter()
+            .filter(|d| Path::new(d).is_dir())
+            .map(|d| format!(":{d}"))
+            .collect();
+        (format!("{all}{added}"), format!("{absolute}{added}"))
+    };
     let mut r = Request::default();
-    assert_eq!(path(&r).as_deref(), Some(all));
+    assert_eq!(path(&r), Some(all.to_string()));
     r.absolute_path = true;
-    assert_eq!(path(&r).as_deref(), Some(absolute));
+    assert_eq!(path(&r), Some(absolute.to_string()));
 }
 
 /// A launch's files as the confirmation opened them, which records at each check whether its
@@ -1818,4 +1829,35 @@ fn a_launch_of_wsl_exe_gets_wslenv_in_its_environment_and_no_other_launch_does()
     assert!(wslenv_of(launch_env(&launch(r"C:\tools\wsl.exe"), &secrets, root)).is_empty());
     assert!(wslenv_of(launch_env(&wsl, &secrets, None)).is_empty());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// macOS: a launch's PATH is the app's, then the client folders that exist, each once.
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_path_adds_existing_client_folders() {
+    let home = std::env::temp_dir().join(format!("pluxy-path-{}", crate::managed::random_key()));
+    std::fs::create_dir_all(home.join(".local/bin")).unwrap();
+    std::fs::create_dir_all(home.join(".bun/bin")).unwrap();
+    let local = home.join(".local/bin");
+    let snap = Snapshot::of(
+        &[
+            ("PATH", &format!("/usr/bin:/bin:{}", local.display())),
+            ("HOME", home.to_str().unwrap()),
+        ],
+        core_limit(),
+    );
+    let env = environment(&snap, &Request::default(), &[]);
+    let path = env.iter().find(|(k, _)| k == "PATH").unwrap().1.clone();
+    let entries: Vec<PathBuf> = std::env::split_paths(&path).collect();
+    assert_eq!(
+        entries[..3],
+        [PathBuf::from("/usr/bin"), "/bin".into(), local.clone()]
+    );
+    assert!(entries.contains(&home.join(".bun/bin")));
+    assert_eq!(entries.iter().filter(|e| **e == local).count(), 1);
+    assert!(
+        !entries.contains(&home.join(".cargo/bin")),
+        "a missing folder is left out"
+    );
+    std::fs::remove_dir_all(&home).unwrap();
 }

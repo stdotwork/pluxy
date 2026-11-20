@@ -295,6 +295,7 @@ pub(crate) struct Command {
     stderr: Io,
     kind: Kind,
     secrets: bool,
+    windowless: bool,
     keep_program: bool,
     kept: Vec<Pinned>,
 }
@@ -314,6 +315,7 @@ impl Command {
             stderr: Io::Null,
             kind,
             secrets: false,
+            windowless: false,
             keep_program: false,
             kept: Vec::new(),
         }
@@ -382,6 +384,15 @@ impl Command {
     /// It is given a secret: no error report of it (see the module).
     pub(crate) fn secrets(&mut self, secrets: bool) -> &mut Self {
         self.secrets = secrets;
+        self
+    }
+
+    /// A detached process that shows no window itself: started with no console, not a new one,
+    /// so none flashes (the execution program's `open` and `app` modes).
+    // shortcut: no test sees the flag reach the process: the unit tests run in a runner's job,
+    // which a detached launch may not leave (README, "Limits").
+    pub(crate) fn windowless(&mut self, windowless: bool) -> &mut Self {
+        self.windowless = windowless;
         self
     }
 
@@ -506,7 +517,7 @@ impl Command {
         };
         // A detached launch without a piped stdin gets a console of its own and none of the app's
         // handles at all.
-        let own_console = self.kind == Kind::Detached && self.stdin == Io::Null;
+        let own_console = self.kind == Kind::Detached && self.stdin == Io::Null && !self.windowless;
         let mut parent: [Option<File>; 3] = [None, None, None];
         let mut child: Vec<File> = Vec::new();
         let mut std_handles: [HANDLE; 3] = [ptr::null_mut(); 3];

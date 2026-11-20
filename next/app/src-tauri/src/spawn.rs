@@ -640,8 +640,9 @@ fn outside(s: &OsString, dir: &OsString) -> OsString {
 
 /// A launch's environment: the snapshot's session values (`BASE`, `LC_*`) but those request
 /// removes, with the AppImage's own folder taken out of PATH and the XDG folder lists when the app
-/// runs as one; then the variables request inherits from the snapshot, those it sets, and the
-/// resolved secrets (variable name, value).
+/// runs as one, and on macOS the client folders that exist added to the end of PATH
+/// (`with_client_folders`); then the variables request inherits from the snapshot, those it sets,
+/// and the resolved secrets (variable name, value).
 pub fn environment(
     snap: &Snapshot,
     request: &Request,
@@ -661,6 +662,10 @@ pub fn environment(
                 *v = outside(v, appdir);
             }
         }
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(v) = env.get_mut("PATH") {
+        *v = with_client_folders(v, snap.get("HOME"));
     }
     for n in &request.inherit {
         if let Some(v) = snap.get(n) {
@@ -762,6 +767,41 @@ fn system_root() -> Option<PathBuf> {
 #[cfg(test)]
 pub(crate) static TEST_SYSTEM_ROOT: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
 
+/// The folders people's command-line clients are installed in on macOS, under the home folder
+/// and then system-wide: npm, Bun, Cargo, Volta, pnpm and Homebrew put them there.
+#[cfg(target_os = "macos")]
+const CLIENT_FOLDERS: &[&str] = &[
+    "~/.local/bin",
+    "~/.npm-global/bin",
+    "~/.bun/bin",
+    "~/.cargo/bin",
+    "~/.volta/bin",
+    "~/Library/pnpm",
+    "~/bin",
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+];
+
+/// PATH value path followed by the folders of `CLIENT_FOLDERS` that exist and it lacks (`~` is
+/// home, when it is absolute): an app started from the Finder or the Dock has launchd's PATH,
+/// `/usr/bin:/bin:/usr/sbin:/sbin`, which finds no client a person installed.
+#[cfg(target_os = "macos")]
+fn with_client_folders(path: &OsString, home: Option<&OsString>) -> OsString {
+    let home = home.map(PathBuf::from).filter(|h| h.is_absolute());
+    let mut entries: Vec<PathBuf> = std::env::split_paths(path).collect();
+    for f in CLIENT_FOLDERS {
+        let d = match (f.strip_prefix("~/"), &home) {
+            (Some(rest), Some(h)) => h.join(rest),
+            (Some(_), None) => continue,
+            (None, _) => PathBuf::from(f),
+        };
+        if d.is_dir() && !entries.contains(&d) {
+            entries.push(d);
+        }
+    }
+    std::env::join_paths(entries).unwrap_or_else(|_| path.clone())
+}
+
 /// What a launch runs from: the executable and cwd its confirmation opened, and the check that
 /// they are still what was confirmed.
 pub trait Opened: Send + Sync {
@@ -775,6 +815,12 @@ pub trait Opened: Send + Sync {
     /// Refused once the executable or cwd changed since it was confirmed (replaced, or written
     /// in place).
     fn recheck(&self) -> Result<(), String>;
+    /// Whether a detached launch shows no window itself, so it starts with no console on Windows
+    /// (`confirmation::Authorized::windowless`).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    fn windowless(&self) -> bool {
+        false
+    }
 }
 
 #[cfg(native_stack)]
@@ -790,6 +836,9 @@ impl Opened for crate::confirmation::Authorized {
     }
     fn recheck(&self) -> Result<(), String> {
         crate::confirmation::Authorized::recheck(self)
+    }
+    fn windowless(&self) -> bool {
+        crate::confirmation::Authorized::windowless(self)
     }
 }
 
@@ -977,7 +1026,8 @@ fn command(
         } else {
             Io::Null
         })
-        .secrets(holds_secrets);
+        .secrets(holds_secrets)
+        .windowless(l.lifetime == Lifetime::Detached && l.opened.windowless());
     Ok(cmd)
 }
 

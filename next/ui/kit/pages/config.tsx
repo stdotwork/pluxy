@@ -229,6 +229,7 @@ export function ConfigPage() {
             <div class="stack">
               <label class="field" data-part="field">
                 <input
+                  data-slot="input"
                   type="search"
                   aria-label={t("searchSettings")}
                   placeholder={t("searchSettings")}

@@ -75,6 +75,13 @@ const ALLOWED: &[(&str, Part, &str, usize, &str)] = &[
         "test: kills the core the test started and holds, to see its exit before it is reaped",
     ),
     (
+        "open_platform_native.rs",
+        Part::Code,
+        "WM_CLOSE",
+        2,
+        "native test (Windows, feature native-test): posts WM_CLOSE, as a close box does, only to the visible top-level windows of the processes the open session started (Notepad with the session's file, the browser with the session's address); it ends no process itself",
+    ),
+    (
         "native_core.rs",
         Part::Code,
         "OpenProcess",
@@ -1194,7 +1201,12 @@ mod macos {
         folder(&f, 0o700);
         let p = f.join("prog");
         file(&p, 0o700);
-        crate::private_macos::set_raw_entry(if on_folder { &f } else { &p }, "user:daemon", rights);
+        crate::private_macos::set_raw_entry(
+            if on_folder { &f } else { &p },
+            "user:daemon",
+            rights,
+            None,
+        );
         let part = if on_folder { &f } else { &p };
         let got = [secure(&p, Writers::Nobody), secure(&p, Writers::Admins)];
         for e in got.iter().filter_map(|r| r.as_ref().err()) {
@@ -1364,6 +1376,160 @@ mod macos {
         refused(&q, &q, Writers::Nobody);
         let e = secure(&q, Writers::Nobody).unwrap_err();
         assert!(e.contains("user:daemon change it (write)"), "{e}");
+    }
+
+    /// An entry for a UUID no account has, which macOS cannot turn into a user or group number
+    /// (`mbr_uuid_to_id` fails), is refused, shown by that UUID.
+    #[test]
+    fn secure_refuses_an_entry_for_an_unknown_account_naming_its_uuid() {
+        let t = Temp::new("acl-unknown");
+        let dir = real(&t);
+        let p = dir.join("prog");
+        file(&p, 0o700);
+        // A random UUID, of no account.
+        let uuid = [
+            0x5b, 0x2e, 0x91, 0x0c, 0x7d, 0x43, 0x4a, 0x6f, 0x9e, 0x18, 0x32, 0xc4, 0xa7, 0x55,
+            0xe0, 0x1d,
+        ];
+        crate::private_macos::set_raw_entry(&p, "user:daemon", 1 << 2, Some(uuid));
+        refused(&p, &p, Writers::Nobody);
+        let e = secure(&p, Writers::Admins).unwrap_err();
+        assert!(
+            e.contains("lets unknown 5B2E910C-7D43-4A6F-9E18-32C4A755E01D change it (write)"),
+            "{e}"
+        );
+    }
+
+    /// Runs `hdiutil` with args, up to three times (it now and then fails to take a new image's
+    /// device at once), and panics with its output if it never succeeds.
+    fn hdiutil(args: &[&std::ffi::OsStr]) {
+        let mut last = None;
+        for _ in 0..3 {
+            let out = std::process::Command::new("/usr/bin/hdiutil")
+                .args(args)
+                .output()
+                .expect("/usr/bin/hdiutil");
+            if out.status.success() {
+                return;
+            }
+            last = Some(out);
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+        panic!("hdiutil {args:?}: {last:?}");
+    }
+
+    /// A new disk image of its own, in image_dir, attached at mnt for this user (`hdiutil` needs
+    /// no root) with ownership kept or ignored (`-owners on` or `off`), its top folder made 0755;
+    /// detached when dropped, before the folder that holds it is removed.
+    struct Volume {
+        mnt: PathBuf,
+    }
+
+    impl Volume {
+        fn attach(image_dir: &Path, mnt: &Path, owners: bool) -> Volume {
+            let name = mnt.file_name().unwrap();
+            let image = image_dir.join(name).with_extension("dmg");
+            let s = |s: &'static str| std::ffi::OsStr::new(s);
+            hdiutil(&[
+                s("create"),
+                s("-size"),
+                s("8m"),
+                s("-fs"),
+                s("HFS+"),
+                s("-volname"),
+                name,
+                image.as_os_str(),
+            ]);
+            fs::create_dir(mnt).unwrap();
+            hdiutil(&[
+                s("attach"),
+                s("-nobrowse"),
+                s("-noautoopen"),
+                s("-noverify"),
+                s("-owners"),
+                s(if owners { "on" } else { "off" }),
+                s("-mountpoint"),
+                mnt.as_os_str(),
+                image.as_os_str(),
+            ]);
+            let v = Volume {
+                mnt: mnt.to_path_buf(),
+            };
+            // Read back by mount(8), not by the check under test: `noowners` is how it names
+            // MNT_IGNORE_OWNERSHIP.
+            let out = std::process::Command::new("/sbin/mount").output().unwrap();
+            let listed = String::from_utf8_lossy(&out.stdout).into_owned();
+            let line = listed
+                .lines()
+                .find(|l| l.contains(&format!(" on {} (", mnt.display())))
+                .unwrap_or_else(|| panic!("{} is not mounted: {listed}", mnt.display()));
+            // Only the options in the brackets: the mount point may hold the word too.
+            let options = &line[line.rfind(" (").unwrap() + 2..];
+            let noowners = options
+                .trim_end_matches(')')
+                .split(", ")
+                .any(|o| o == "noowners");
+            assert_eq!(noowners, !owners, "{line}");
+            fs::set_permissions(mnt, fs::Permissions::from_mode(0o755)).unwrap();
+            v
+        }
+    }
+
+    impl Drop for Volume {
+        fn drop(&mut self) {
+            for force in [false, true] {
+                let mut c = std::process::Command::new("/usr/bin/hdiutil");
+                c.arg("detach").arg(&self.mnt);
+                if force {
+                    c.arg("-force");
+                }
+                if c.output().is_ok_and(|o| o.status.success()) {
+                    return;
+                }
+            }
+        }
+    }
+
+    /// On a volume that ignores ownership, where macOS shows every file as this user's, a program
+    /// is refused for the volume's top folder, the first part of its path there, and so is a
+    /// program on a volume that keeps ownership mounted below it. The same kind of image with
+    /// ownership kept passes.
+    #[test]
+    fn secure_refuses_a_program_on_a_volume_that_ignores_ownership() {
+        let t = Temp::new("noowners");
+        let dir = real(&t);
+        let kept = Volume::attach(&dir, &dir.join("kept"), true);
+        let p = kept.mnt.join("prog");
+        file(&p, 0o700);
+        assert_eq!(secure(&p, Writers::Nobody), Ok(()));
+
+        let ignored = Volume::attach(&dir, &dir.join("ignored"), false);
+        let q = ignored.mnt.join("prog");
+        file(&q, 0o700);
+        assert_eq!(fs::metadata(&q).unwrap().uid(), unsafe { libc::geteuid() });
+        let below = Volume::attach(&dir, &ignored.mnt.join("below"), true);
+        let r = below.mnt.join("prog");
+        file(&r, 0o700);
+        let v = crate::owned::shell_quoted(&ignored.mnt);
+        for (path, writers) in [
+            (&q, Writers::Nobody),
+            (&q, Writers::Admins),
+            (&r, Writers::Admins),
+        ] {
+            let e = secure(path, writers).expect_err(&path.display().to_string());
+            assert!(
+                e.starts_with(&format!(
+                    "{v} is on the volume at {v}, which ignores ownership, so any user may change it: "
+                )),
+                "{e}"
+            );
+            assert!(
+                e.contains(&format!("`sudo diskutil enableOwnership {v}`")),
+                "{e}"
+            );
+        }
+        let e = exec_target(&fs::File::open(&q).unwrap(), Writers::Admins).unwrap_err();
+        assert!(e.contains("which ignores ownership"), "{e}");
     }
 }
 

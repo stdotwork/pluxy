@@ -2,19 +2,20 @@ use super::*;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
-/// The fixture's program: a shell script, or on Windows a command script, which its extension
-/// makes a program.
-const TOOL: &str = if cfg!(windows) { "tool.cmd" } else { "tool" };
+/// The fixture's program: a shell script, or on Windows a file named `.exe` that starts `MZ`, which
+/// makes it a program for review (it never runs).
+const TOOL: &str = if cfg!(windows) { "tool.exe" } else { "tool" };
 #[cfg(unix)]
 const EXIT_0: &[u8] = b"#!/bin/sh\nexit 0\n";
 #[cfg(unix)]
 const EXIT_1: &[u8] = b"#!/bin/sh\nexit 1\n";
 #[cfg(windows)]
-const EXIT_0: &[u8] = b"@exit /b 0\r\n";
+const EXIT_0: &[u8] = b"MZ fixture 0";
 #[cfg(windows)]
-const EXIT_1: &[u8] = b"@exit /b 1\r\n";
+const EXIT_1: &[u8] = b"MZ fixture 1";
 
-/// Writes a program at path: executable by its owner (on Windows its extension makes it one).
+/// Writes a program at path: executable by its owner (on Windows its `.exe` or `.com` name and its
+/// first bytes, `MZ`, make it one).
 fn program(path: &Path, bytes: &[u8]) {
     fs::write(path, bytes).unwrap();
     #[cfg(unix)]
@@ -89,6 +90,7 @@ fn fixture_in(root: &Path) -> (PathBuf, Confirmations, Action) {
             program: None,
             opens: None,
             terminal_adapter: package,
+            adapter_program: None,
             environment_revision: "1".into(),
             environment_review: vec![],
             secret_uses: vec![],
@@ -222,7 +224,7 @@ fn remembered_identity_binds_every_field_and_caches_only_unchanged_metadata() {
         )
         .is_err());
     fs::rename(exe, dir.join("old")).unwrap();
-    program(exe, b"replacement");
+    program(exe, b"MZ replacement");
     let p = c.prepare(a.clone(), Origin::NativeUi).unwrap();
     assert_eq!(c.hashes, 3);
     assert!(c
@@ -875,20 +877,6 @@ fn the_remember_text_names_the_secrets_a_launch_uses() {
     let _ = fs::remove_dir_all(dir);
 }
 
-/// Off Linux a launch that opens a file is refused before review: nothing yet checks the file
-/// and folder there.
-#[cfg(not(target_os = "linux"))]
-#[test]
-fn a_launch_that_opens_a_file_is_refused_off_linux() {
-    let (dir, mut c, mut a) = fixture();
-    let file = dir.join("file.txt");
-    fs::write(&file, b"x").unwrap();
-    a.launch.as_mut().unwrap().opens = Some((file.clone(), dir.clone()));
-    let e = c.prepare(a, Origin::NativeUi).err().unwrap();
-    assert!(e.contains("Linux only"), "{e}");
-    remove(&dir);
-}
-
 /// Action a opening file f, which its argv names, inside folder w, with opener in f's folder.
 #[cfg(target_os = "linux")]
 fn opening(a: &Action, opener: &Path, f: &Path, w: &Path) -> Action {
@@ -1230,5 +1218,540 @@ fn where_an_action_runs_is_shown_first_and_bound_into_a_remembered_approval() {
     }
     let p = c.prepare(bob, Origin::NativeUi).unwrap();
     assert!(c.remembered(p, gesture()).is_ok());
+    remove(&dir);
+}
+
+/// Windows starts only program images: a file named `.exe` or `.com` that starts `MZ`. A batch
+/// file, or a file named `.exe` that is not an image, is no program for review.
+#[cfg(windows)]
+#[test]
+fn only_program_images_are_programs() {
+    let (dir, mut c, action) = fixture();
+    for (name, bytes, ok) in [
+        ("p.exe", b"MZ image".as_slice(), true),
+        ("p.com", b"MZ".as_slice(), true),
+        ("p.cmd", b"MZ".as_slice(), false),
+        ("p.bat", b"@exit /b 0\r\n".as_slice(), false),
+        ("q.exe", b"not an image".as_slice(), false),
+    ] {
+        let p = dir.join(name);
+        program(&p, bytes);
+        let mut a = action.clone();
+        a.launch.as_mut().unwrap().executable = p;
+        let r = c.prepare(a, Origin::NativeUi);
+        assert_eq!(r.is_ok(), ok, "{name}: {:?}", r.err());
+    }
+    remove(&dir);
+}
+
+/// Makes action's launch open file inside within, as the execution program prepares it here: on
+/// Windows its own program (the fixture's, as `pluxy/execution`'s) in its `open` mode, on macOS
+/// `/usr/bin/open`.
+#[cfg(not(target_os = "linux"))]
+fn opening(action: &mut Action, file: &Path, within: &Path) {
+    let shown = |p: &Path| PathBuf::from(open_os::plain(&fs::canonicalize(p).unwrap()).unwrap());
+    opening_named(action, &shown(file), &shown(within));
+}
+
+/// `opening`, with file and within named exactly as given, not as a person reads them resolved.
+#[cfg(not(target_os = "linux"))]
+fn opening_named(action: &mut Action, file: &Path, within: &Path) {
+    let (f, w) = (file.to_path_buf(), within.to_path_buf());
+    let l = action.launch.as_mut().unwrap();
+    #[cfg(windows)]
+    {
+        l.argv = vec!["open".into(), "--".into(), f.to_string_lossy().into_owned()];
+        l.adapter_program = Some(l.executable.clone());
+        l.terminal_adapter.id = crate::launcher::PACKAGE.into();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        l.executable = "/usr/bin/open".into();
+        l.argv = vec![f.to_string_lossy().into_owned()];
+    }
+    l.cwd = f.parent().unwrap().into();
+    l.opens = Some((f, w));
+}
+
+/// Windows and macOS: a launch opens a file by its extension's type, with the system's opener,
+/// and says so; another extension, another opener, other arguments and a root as the within
+/// folder are refused.
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn opens_a_file_by_its_extension() {
+    let (dir, mut c, action) = fixture();
+    let within = dir.join("sessions");
+    fs::create_dir(&within).unwrap();
+    // Its content does not decide its type: the extension does.
+    let file = within.join("rollout.jsonl");
+    fs::write(&file, "<html><script></script></html>").unwrap();
+    let mut a = action.clone();
+    opening(&mut a, &file, &within);
+    let p = c.prepare(a.clone(), Origin::NativeUi).unwrap();
+    let review = p.review().unwrap();
+    let system = if cfg!(windows) { "Windows" } else { "macOS" };
+    assert!(
+        review.contains("(application/jsonl, inside")
+            && review.contains(&format!("with the app {system} opens .jsonl files with")),
+        "{review}"
+    );
+    #[cfg(windows)]
+    assert!(p.windowless, "the open mode starts with no console");
+
+    let html = within.join("page.html");
+    fs::write(&html, "x").unwrap();
+    let mut b = action.clone();
+    opening(&mut b, &html, &within);
+    let e = c.prepare(b, Origin::NativeUi).err().expect("refused");
+    assert!(
+        e.contains("must be .txt, .json, .jsonl, .ndjson, .md or .log"),
+        "{e}"
+    );
+
+    let mut b = a.clone();
+    b.launch.as_mut().unwrap().argv.push("--extra".into());
+    let e = c.prepare(b, Origin::NativeUi).err().expect("refused");
+    assert!(e.contains("an open launch runs exactly"), "{e}");
+
+    let mut b = a.clone();
+    #[cfg(windows)]
+    {
+        b.launch.as_mut().unwrap().adapter_program = None;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        b.launch.as_mut().unwrap().executable = dir.join(TOOL);
+    }
+    let e = c.prepare(b, Origin::NativeUi).err().expect("refused");
+    assert!(e.contains("a launch that opens a file runs"), "{e}");
+
+    let mut b = a.clone();
+    let root = fs::canonicalize(&within).unwrap();
+    let root = PathBuf::from(open_os::plain(root.ancestors().last().unwrap()).unwrap());
+    b.launch.as_mut().unwrap().opens.as_mut().unwrap().1 = root;
+    let e = c.prepare(b, Origin::NativeUi).err().expect("refused");
+    assert!(e.contains("cannot be a root"), "{e}");
+    remove(&within);
+    remove(&dir);
+}
+
+/// The open launch of a file `rollout.jsonl` in a folder `2026` inside the within folder
+/// `sessions` of a fixture: the fixture, its confirmations, the launch, the within folder, the
+/// folder between and the file.
+#[cfg(not(target_os = "linux"))]
+fn nested_open() -> (PathBuf, Confirmations, Action, PathBuf, PathBuf, PathBuf) {
+    let (dir, c, mut a) = fixture();
+    let within = dir.join("sessions");
+    let between = within.join("2026");
+    fs::create_dir_all(&between).unwrap();
+    let file = between.join("rollout.jsonl");
+    fs::write(&file, "{}\n").unwrap();
+    opening(&mut a, &file, &within);
+    (dir, c, a, within, between, file)
+}
+
+/// Lets others write path (on: a folder, file or the within folder), or takes that back: on
+/// Windows an Everyone write entry; on macOS group write on a folder between, otherwise an access
+/// list entry. What the refusal then says.
+#[cfg(not(target_os = "linux"))]
+fn others_write(path: &Path, kind: &str, on: bool) -> &'static str {
+    #[cfg(windows)]
+    {
+        let _ = kind;
+        let args: &[&str] = if on {
+            &["/grant", "*S-1-1-0:(W)"]
+        } else {
+            &["/remove:g", "*S-1-1-0"]
+        };
+        assert!(crate::private_windows::tests::icacls(path, args));
+        "must be your own, writable by no one else"
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let chmod = |args: &[&str]| {
+            let ok = std::process::Command::new("/bin/chmod")
+                .args(args)
+                .arg(path)
+                .status()
+                .unwrap()
+                .success();
+            assert!(ok, "chmod {args:?} {}", path.display());
+        };
+        match (kind, on) {
+            ("between", true) => chmod(&["775"]),
+            ("between", false) => chmod(&["755"]),
+            ("file", true) => chmod(&["+a", "group:everyone allow write"]),
+            (_, true) => chmod(&["+a", "group:everyone allow add_file"]),
+            (_, false) => chmod(&["-N"]),
+        }
+        if kind == "between" {
+            "must be your own, writable by no one else"
+        } else {
+            "has an access list, which may let others write it"
+        }
+    }
+}
+
+/// Windows and macOS: the file a launch opens, the folder it must be inside and every folder
+/// between them must be the person's own and writable by no one else.
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn every_folder_of_an_opened_file_must_be_writable_by_no_one_else() {
+    let (dir, mut c, a, within, between, file) = nested_open();
+    assert!(c.prepare(a.clone(), Origin::NativeUi).is_ok());
+    let shown = |p: &Path| open_os::plain(&fs::canonicalize(p).unwrap()).unwrap();
+    for (path, kind, what) in [
+        (
+            &between,
+            "between",
+            format!("the folder {}", shown(&between)),
+        ),
+        (&within, "within", "a launch's within folder".to_string()),
+        (&file, "file", "the file a launch opens".to_string()),
+    ] {
+        let says = others_write(path, kind, true);
+        let r = c.prepare(a.clone(), Origin::NativeUi);
+        others_write(path, kind, false);
+        let e = r
+            .err()
+            .unwrap_or_else(|| panic!("{kind} others may write was accepted"));
+        assert!(e.contains(&what) && e.contains(says), "{kind}: {e}");
+        assert!(
+            c.prepare(a.clone(), Origin::NativeUi).is_ok(),
+            "{kind} put back"
+        );
+    }
+    remove(&within);
+    remove(&dir);
+}
+
+/// Windows and macOS: a confirmed open is refused at its use once a folder between its file and
+/// the folder it must be inside turned writable by others after the confirmation: by the folder
+/// rule, which names that folder, the file itself untouched.
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn a_confirmed_open_is_refused_once_a_folder_between_turns_writable() {
+    let (dir, mut c, a, within, between, file) = nested_open();
+    #[cfg(not(windows))]
+    let _ = &file;
+    let (id, t) = approve(&mut c, a.clone(), false);
+    assert!(c.consume(&id, &t).is_ok());
+    let (id, t) = approve(&mut c, a, false);
+    #[cfg(windows)]
+    let (before, undo) = (file_state(&file), everyone_writes_only(&between));
+    #[cfg(target_os = "macos")]
+    others_write(&between, "between", true);
+    #[cfg(windows)]
+    let after = file_state(&file);
+    let r = c.consume(&id, &t);
+    #[cfg(windows)]
+    undo();
+    #[cfg(target_os = "macos")]
+    others_write(&between, "between", false);
+    #[cfg(windows)]
+    assert_eq!(before, after, "the folder's change touched the file");
+    let e = r.err().expect("refused");
+    let folder = open_os::plain(&fs::canonicalize(&between).unwrap()).unwrap();
+    assert!(
+        e.contains(&format!(
+            "the folder {folder} of the file a launch opens must be your own, writable by no one else"
+        )),
+        "{e}"
+    );
+    remove(&within);
+    remove(&dir);
+}
+
+/// Windows: file's access list (`icacls`, without its path) and its change and last-write times,
+/// as `Metadata` compares them.
+#[cfg(windows)]
+fn file_state(file: &Path) -> (String, i64, i64) {
+    let out = std::process::Command::new("icacls")
+        .arg(file)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    let shown = file.display().to_string();
+    let acl: Vec<&str> = text
+        .lines()
+        .map(|l| l.strip_prefix(&shown).unwrap_or(l).trim())
+        .filter(|l| !l.is_empty() && !l.starts_with("Successfully processed"))
+        .collect();
+    let i = windows_files::info(&windows_files::open_any(file).unwrap()).unwrap();
+    (acl.join("; "), i.ctime, i.mtime)
+}
+
+/// Windows: adds to folder's access list an entry letting Everyone write it (`FILE_WRITE_DATA`,
+/// adding files), inherited by nothing, with `SetFileSecurityW`, which sets only the folder's own
+/// list (unlike `SetNamedSecurityInfo`, it does not go through what is inside). Returns what puts
+/// the folder's list back.
+#[cfg(windows)]
+fn everyone_writes_only(folder: &Path) -> impl FnOnce() {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Security::Authorization::{
+        SetEntriesInAclW, EXPLICIT_ACCESS_W, GRANT_ACCESS, NO_MULTIPLE_TRUSTEE, TRUSTEE_IS_SID,
+        TRUSTEE_IS_WELL_KNOWN_GROUP, TRUSTEE_W,
+    };
+    use windows_sys::Win32::Security::{
+        CreateWellKnownSid, GetFileSecurityW, GetSecurityDescriptorDacl,
+        InitializeSecurityDescriptor, SetFileSecurityW, SetSecurityDescriptorDacl, WinWorldSid,
+        ACL, DACL_SECURITY_INFORMATION, NO_INHERITANCE, SECURITY_DESCRIPTOR, SECURITY_MAX_SID_SIZE,
+    };
+    let name: Vec<u16> = folder.as_os_str().encode_wide().chain([0]).collect();
+    // The folder's descriptor (its list only) as it is, to put back.
+    let mut n = 0u32;
+    // SAFETY: asks for the size only.
+    unsafe {
+        GetFileSecurityW(
+            name.as_ptr(),
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            0,
+            &mut n,
+        )
+    };
+    let mut old = vec![0u64; (n as usize).div_ceil(8)];
+    // SAFETY: old holds n bytes, aligned for a descriptor.
+    let got = unsafe {
+        GetFileSecurityW(
+            name.as_ptr(),
+            DACL_SECURITY_INFORMATION,
+            old.as_mut_ptr().cast(),
+            n,
+            &mut n,
+        )
+    };
+    assert_ne!(got, 0, "{}", std::io::Error::last_os_error());
+    let (mut present, mut defaulted, mut list) = (0, 0, std::ptr::null_mut::<ACL>());
+    // SAFETY: old is a self-relative descriptor; list points into it.
+    let got = unsafe {
+        GetSecurityDescriptorDacl(
+            old.as_mut_ptr().cast(),
+            &mut present,
+            &mut list,
+            &mut defaulted,
+        )
+    };
+    assert!(got != 0 && present != 0, "the folder has no access list");
+    let mut sid = [0u8; SECURITY_MAX_SID_SIZE as usize];
+    let mut size = sid.len() as u32;
+    // SAFETY: sid holds size bytes.
+    let got = unsafe {
+        CreateWellKnownSid(
+            WinWorldSid,
+            std::ptr::null_mut(),
+            sid.as_mut_ptr().cast(),
+            &mut size,
+        )
+    };
+    assert_ne!(got, 0, "{}", std::io::Error::last_os_error());
+    let entry = EXPLICIT_ACCESS_W {
+        grfAccessPermissions: 0x0002, // FILE_WRITE_DATA, FILE_ADD_FILE
+        grfAccessMode: GRANT_ACCESS,
+        grfInheritance: NO_INHERITANCE,
+        Trustee: TRUSTEE_W {
+            pMultipleTrustee: std::ptr::null_mut(),
+            MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+            TrusteeForm: TRUSTEE_IS_SID,
+            TrusteeType: TRUSTEE_IS_WELL_KNOWN_GROUP,
+            ptstrName: sid.as_mut_ptr().cast(),
+        },
+    };
+    let mut new: *mut ACL = std::ptr::null_mut();
+    // SAFETY: one valid entry and the folder's list; the new list is LocalAlloc'd into new.
+    let r = unsafe { SetEntriesInAclW(1, &entry, list, &mut new) };
+    assert_eq!(r, 0, "SetEntriesInAclW: {r}");
+    let mut sd = SECURITY_DESCRIPTOR::default();
+    let psd: *mut core::ffi::c_void = (&mut sd as *mut SECURITY_DESCRIPTOR).cast();
+    // SAFETY: psd points at sd, which lives past the call that uses it; new too.
+    let got = unsafe {
+        InitializeSecurityDescriptor(psd, 1) != 0
+            && SetSecurityDescriptorDacl(psd, 1, new, 0) != 0
+            && SetFileSecurityW(name.as_ptr(), DACL_SECURITY_INFORMATION, psd) != 0
+    };
+    let e = std::io::Error::last_os_error();
+    // SAFETY: new came from SetEntriesInAclW and is not used after this.
+    unsafe { windows_sys::Win32::Foundation::LocalFree(new.cast()) };
+    assert!(got, "setting the folder's access list: {e}");
+    move || {
+        // SAFETY: old is the folder's descriptor as it was, self-relative.
+        let got = unsafe {
+            SetFileSecurityW(
+                name.as_ptr(),
+                DACL_SECURITY_INFORMATION,
+                old.as_mut_ptr().cast(),
+            )
+        };
+        assert_ne!(got, 0, "{}", std::io::Error::last_os_error());
+    }
+}
+
+/// Windows: the file a launch opens is on a local drive, named by its plain path (`C:\…`, which
+/// Windows reads as the same file), names no alternate data stream and has a path shorter than
+/// 260 characters.
+#[cfg(windows)]
+#[test]
+fn an_opened_file_is_named_by_a_plain_short_local_path() {
+    let (dir, mut c, action) = fixture();
+    let within = dir.join("sessions");
+    fs::create_dir(&within).unwrap();
+    let file = within.join("notes.txt");
+    fs::write(&file, "x").unwrap();
+    let mut a = action.clone();
+    opening(&mut a, &file, &within);
+    assert!(c.prepare(a, Origin::NativeUi).is_ok());
+    let resolved = fs::canonicalize(&within).unwrap();
+    let plain = PathBuf::from(open_os::plain(&resolved).unwrap());
+    // A stream of notes.txt named as a .txt file.
+    let stream = PathBuf::from(format!("{}:x.txt", plain.join("notes.txt").display()));
+    fs::write(&stream, "y").unwrap();
+    let mut long = plain.clone();
+    while long.as_os_str().len() < 260 {
+        long = long.join("a".repeat(60));
+    }
+    fs::create_dir_all(&long).unwrap();
+    fs::write(long.join("notes.txt"), "z").unwrap();
+    // A folder name ending in a dot, which only `\\?\` names: without it, Windows drops the dot.
+    let dotted = resolved.join("odd.");
+    fs::create_dir(&dotted).unwrap();
+    fs::write(dotted.join("notes.txt"), "w").unwrap();
+    for (f, says) in [
+        (stream, "must not name an alternate data stream"),
+        (long.join("notes.txt"), "shorter than 260 characters"),
+        (fs::canonicalize(&file).unwrap(), "by their resolved paths"),
+        (dotted.join("notes.txt"), "Windows reads the same without"),
+    ] {
+        let mut b = action.clone();
+        opening_named(&mut b, &f, &plain);
+        let e = c
+            .prepare(b, Origin::NativeUi)
+            .err()
+            .unwrap_or_else(|| panic!("{} was accepted", f.display()));
+        assert!(e.contains(says), "{}: {e}", f.display());
+    }
+    fs::remove_file(dotted.join("notes.txt")).unwrap();
+    fs::remove_dir(&dotted).unwrap();
+    fs::remove_dir_all(&within).unwrap();
+    remove(&dir);
+}
+
+/// macOS: the file a launch opens has no execute bit and none of the attributes that can choose
+/// another app for it; another attribute is no matter.
+#[cfg(target_os = "macos")]
+#[test]
+fn an_opened_file_has_no_execute_bit_or_app_choosing_attribute() {
+    use std::os::unix::ffi::OsStrExt;
+    let (dir, mut c, a, within, _, file) = nested_open();
+    assert!(c.prepare(a.clone(), Origin::NativeUi).is_ok());
+    let path = std::ffi::CString::new(file.as_os_str().as_bytes()).unwrap();
+    let set = |name: &str, value: &[u8]| {
+        let n = std::ffi::CString::new(name).unwrap();
+        // SAFETY: path and n are NUL-terminated; value holds value.len() bytes.
+        let r = unsafe {
+            libc::setxattr(
+                path.as_ptr(),
+                n.as_ptr(),
+                value.as_ptr().cast(),
+                value.len(),
+                0,
+                0,
+            )
+        };
+        assert_eq!(r, 0, "setxattr {name}: {}", std::io::Error::last_os_error());
+    };
+    let unset = |name: &str| {
+        let n = std::ffi::CString::new(name).unwrap();
+        // SAFETY: path and n are NUL-terminated.
+        let r = unsafe { libc::removexattr(path.as_ptr(), n.as_ptr(), 0) };
+        assert_eq!(
+            r,
+            0,
+            "removexattr {name}: {}",
+            std::io::Error::last_os_error()
+        );
+    };
+    // Finder's information is 32 bytes, and all zeros reads as none: a type and a creator.
+    let mut finder = [0u8; 32];
+    finder[..8].copy_from_slice(b"TEXTttxt");
+    for (name, value) in [
+        ("com.apple.FinderInfo", &finder[..]),
+        ("com.apple.ResourceFork", b"fork".as_slice()),
+        ("com.apple.LaunchServices.OpenWith", b"bplist00".as_slice()),
+    ] {
+        set(name, value);
+        let r = c.prepare(a.clone(), Origin::NativeUi);
+        unset(name);
+        let e = r.err().unwrap_or_else(|| panic!("{name} was accepted"));
+        assert!(e.contains(&format!("carries {name}")), "{name}: {e}");
+        assert!(
+            c.prepare(a.clone(), Origin::NativeUi).is_ok(),
+            "{name} removed"
+        );
+    }
+    set("com.example.note", b"x");
+    assert!(
+        c.prepare(a.clone(), Origin::NativeUi).is_ok(),
+        "another attribute"
+    );
+    unset("com.example.note");
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o744)).unwrap();
+    let r = c.prepare(a.clone(), Origin::NativeUi);
+    fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+    let e = r.err().expect("an execute bit refused");
+    assert!(e.contains("must not be executable"), "{e}");
+    assert!(c.prepare(a, Origin::NativeUi).is_ok());
+    remove(&within);
+    remove(&dir);
+}
+
+/// Windows: only `pluxy/execution`'s own program opens a file, and only it starts with no
+/// console in its `open` or `app` mode; another package's own program does neither.
+#[cfg(windows)]
+#[test]
+fn only_the_execution_programs_own_program_opens_files_or_starts_windowless() {
+    let (dir, mut c, a, within, _, _) = nested_open();
+    assert!(c.prepare(a.clone(), Origin::NativeUi).unwrap().windowless);
+    let mut other = a.clone();
+    other.launch.as_mut().unwrap().terminal_adapter.id = "example/other".into();
+    let e = c.prepare(other, Origin::NativeUi).err().expect("refused");
+    assert!(
+        e.contains("runs pluxy/execution's own program in its open mode")
+            && e.contains("example/other"),
+        "{e}"
+    );
+    // Its `app` mode, which opens no file.
+    let mut app = a.clone();
+    let l = app.launch.as_mut().unwrap();
+    l.argv = vec!["app".into(), "--".into(), "example".into()];
+    l.cwd = dir.clone();
+    l.opens = None;
+    assert!(c.prepare(app.clone(), Origin::NativeUi).unwrap().windowless);
+    app.launch.as_mut().unwrap().terminal_adapter.id = "example/other".into();
+    assert!(!c.prepare(app, Origin::NativeUi).unwrap().windowless);
+    remove(&within);
+    remove(&dir);
+}
+
+/// Windows and macOS: the within folder may not be a root, the home folder or a folder above it,
+/// and is refused when the home folder cannot be resolved to check that.
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn the_within_folder_is_refused_when_the_home_folder_cannot_be_resolved() {
+    let (dir, _, _) = fixture();
+    let w = fs::canonicalize(&dir).unwrap();
+    let home = w.parent().unwrap();
+    assert!(open_os::root_or_home(&w, Some(home)).is_ok());
+    for within in [home, home.parent().unwrap()] {
+        let e = open_os::root_or_home(within, Some(home)).unwrap_err();
+        assert!(e.contains("a folder above it"), "{}: {e}", within.display());
+    }
+    // A root, against a stand-in home on no root at all, so that only the root rule can refuse
+    // it (every real home is below a root, which the home rule refuses too).
+    let root = w.ancestors().last().unwrap();
+    assert!(open_os::root_or_home(&w, Some(Path::new("stand-in-home"))).is_ok());
+    let e = open_os::root_or_home(root, Some(Path::new("stand-in-home"))).unwrap_err();
+    assert!(e.contains("cannot be a root"), "{}: {e}", root.display());
+    let e = open_os::root_or_home(&w, None).unwrap_err();
+    assert!(e.contains("home folder could not be resolved"), "{e}");
     remove(&dir);
 }
