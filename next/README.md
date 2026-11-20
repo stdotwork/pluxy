@@ -55,7 +55,9 @@ Go extensions build each upstream client's transport with `sdk.Upstream(base)`, 
 their configured `*http.Transport`. This includes login, token refresh and WebSocket handshake
 clients. The wrapper sends a request through the account's proxy and with its extra headers
 and payload rules, records it when core asks for a capture, and sends a request tracked with
-`sdk.TrackSend` on a connection of its own; see `sdk.Upstream`. Build requests with the
+`sdk.TrackSend` on a connection of its own; see `sdk.Upstream`. When `base` sets `MaxIdleConns`
+and not `MaxIdleConnsPerHost`, the wrapper sets the per-host limit to `MaxIdleConns`, so a burst
+of concurrent requests to one upstream keeps its connections for the next one. Build requests with the
 handler's context: it carries core's cancellation and `sdk.UpstreamInfo(ctx)`, which exposes the
 account ID and settings, request model and native format, and operation, without the credential.
 
