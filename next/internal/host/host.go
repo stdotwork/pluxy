@@ -570,11 +570,15 @@ func (e *Extension) CountTokens(ctx context.Context, account protocol.Account, r
 	return e.call(ctx, protocol.OpCountTokens, account, req)
 }
 
+// nativeOnlyMinor is the minor version that adds native-only generate calls
+// (protocol.Call.NativeOnly; package nativeonly holds their rule).
+const nativeOnlyMinor = 24
+
 // ParsesNative reports whether an extension that described itself with info takes native-only
 // generate calls (protocol.Call.NativeOnly): it implements minor version 24 or later and says
 // it parses a request's native body itself.
 func ParsesNative(info protocol.Info) bool {
-	return info.ProtocolMinor >= protocol.NativeOnlyMinor && info.ParsesNative
+	return info.ProtocolMinor >= nativeOnlyMinor && info.ParsesNative
 }
 
 // ServesEndpoints reports whether an extension that described itself with info serves endpoint

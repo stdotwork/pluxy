@@ -53,10 +53,6 @@ const (
 // when it is set; an extension honours such settings only when it holds it (sdk.TestLoginHost).
 const EnvTestLoginHosts = "PLUXY_TEST_LOGIN_HOSTS"
 
-// NativeOnlyMinor is the minor version that adds native-only generate calls (Call.NativeOnly;
-// package nativeonly holds their rule).
-const NativeOnlyMinor = 24
-
 // HandshakeMarker starts the handshake line.
 const HandshakeMarker = "pluxy"
 

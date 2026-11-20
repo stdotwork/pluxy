@@ -44,7 +44,7 @@ func TestNativeOnlyFrameGivesTheSameRequest(t *testing.T) {
 	reqs = append(reqs, nativeOnlyEdgeRequests("a<b>&c\u2028d\u2029e\\ud800f\\u0000g\U0001F600 \\\"q\\\"")...)
 	reqs = append(reqs, nativeOnlyEdgeRequests("a<b>&c\xff\xfeg")...)
 
-	parses := protocol.Info{ProtocolMinor: protocol.NativeOnlyMinor, ParsesNative: true}
+	parses := protocol.Info{ProtocolMinor: protocol.Minor, ParsesNative: true}
 	ran, nativeOnly := 0, 0
 	read := map[string]int{}
 	for _, c := range reqs {

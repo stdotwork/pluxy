@@ -66,8 +66,8 @@ func TestDescribeParsesNative(t *testing.T) {
 	if err := protocol.ReadFrame(conn, &r); err != nil || r.Info == nil {
 		t.Fatalf("describe: %+v, %v", r, err)
 	}
-	if !r.Info.ParsesNative || r.Info.ProtocolMinor < protocol.NativeOnlyMinor {
-		t.Errorf("info = %+v, want parses_native and minor >= %d", r.Info, protocol.NativeOnlyMinor)
+	if !r.Info.ParsesNative || r.Info.ProtocolMinor < 24 { // minor 24 adds native-only calls
+		t.Errorf("info = %+v, want parses_native and minor >= 24", r.Info)
 	}
 }
 
