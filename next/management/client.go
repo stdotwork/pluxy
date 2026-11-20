@@ -284,6 +284,44 @@ func (c *Client) Usage(ctx context.Context, q url.Values) (UsageReply, error) {
 	return v, c.get(ctx, "/usage", q, &v)
 }
 
+// Setup is GET /setup.
+func (c *Client) Setup(ctx context.Context) (Setup, error) {
+	var v Setup
+	return v, c.get(ctx, "/setup", nil, &v)
+}
+
+// SetupScan is POST /setup/scan.
+func (c *Client) SetupScan(ctx context.Context) (Setup, error) {
+	var v Setup
+	_, err := c.Call(ctx, http.MethodPost, "/setup/scan", nil, nil, &v)
+	return v, err
+}
+
+// SetupApply is POST /setup/apply.
+func (c *Client) SetupApply(ctx context.Context, picks []string) (SetupApplyReply, error) {
+	var v SetupApplyReply
+	_, err := c.Call(ctx, http.MethodPost, "/setup/apply", nil, SetupApplyRequest{Picks: picks}, &v)
+	return v, err
+}
+
+// ClientPaste is GET /setup/clients/{id}/paste. keyID, when not empty, names the client key
+// the reply's Key placeholder points at.
+func (c *Client) ClientPaste(ctx context.Context, id, keyID string) (ClientPaste, error) {
+	var q url.Values
+	if keyID != "" {
+		q = url.Values{"key_id": {keyID}}
+	}
+	var v ClientPaste
+	return v, c.get(ctx, "/setup/clients/"+url.PathEscape(id)+"/paste", q, &v)
+}
+
+// SetupDone is POST /setup/done.
+func (c *Client) SetupDone(ctx context.Context) (SetupDoneReply, error) {
+	var v SetupDoneReply
+	_, err := c.Call(ctx, http.MethodPost, "/setup/done", nil, nil, &v)
+	return v, err
+}
+
 // UsageEvents is GET /usage/events; q takes after, before, limit, since, until, model,
 // provider, account, key, key_id and failed.
 func (c *Client) UsageEvents(ctx context.Context, q url.Values) (UsageEventsReply, error) {

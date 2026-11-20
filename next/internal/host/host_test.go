@@ -85,6 +85,11 @@ func fakeExtension(mode string) {
 		echoParts()
 		return
 	}
+	if minor, ok := strings.CutPrefix(mode, "watch-"); ok {
+		n, _ := strconv.Atoi(minor)
+		watchFake(n)
+		return
+	}
 	if mode == "models-from-17" {
 		modelsFrom(17)
 		return

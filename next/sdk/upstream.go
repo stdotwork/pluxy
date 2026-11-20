@@ -102,6 +102,9 @@ func (t upstreamTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		}
 		return nil, err
 	}
+	if sink := aliveFrom(req.Context()); sink != nil {
+		rt = aliveTransport{next: rt, sink: sink}
+	}
 	if len(info.Headers) > 0 {
 		req = withHeaders(req, info.Headers)
 	}
@@ -109,6 +112,9 @@ func (t upstreamTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 		if req, err = withPayload(req); err != nil {
 			return nil, err
 		}
+	}
+	if hasTimeouts(info) {
+		rt = timeoutTransport{next: rt, info: info}
 	}
 	if info.capture != nil {
 		return info.capture.roundTrip(rt, req)
@@ -436,6 +442,11 @@ type Info struct {
 	// version 14, 15 for a turn), which Upstream applies to each JSON request body and
 	// ApplyPayload to a message; nil for none. Read-only.
 	Payload *payload.Rules
+	// Stream is true when the call's model request asked for streaming.
+	Stream bool
+	// Timeouts holds the upstream timeouts core resolved for the account (minor version 19).
+	// Nil uses the SDK defaults when hasTimeouts is set.
+	Timeouts *protocol.Timeouts
 
 	capture *captureLog // the call's capture, when core asked for one
 }
@@ -478,10 +489,12 @@ func withUpstreamInfo(ctx context.Context, call protocol.Call) (context.Context,
 	if call.Account != nil {
 		info.AccountID, info.Settings, info.ProxyURL = call.Account.ID, call.Account.Settings, call.Account.ProxyURL
 		info.Headers = call.Account.Headers
+		info.Timeouts = call.Account.Timeouts
 	}
 	info.Payload = call.Payload
 	if call.Request != nil {
 		info.Model = call.Request.Model
+		info.Stream = call.Request.Stream
 		if call.Request.Native != nil {
 			info.Format = call.Request.Native.Format
 		}

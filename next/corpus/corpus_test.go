@@ -213,8 +213,8 @@ func newCoreModels(c *Case) []string {
 	return caseModels(c)
 }
 
-// managementKey is the management key the new core gets for the case: the corpus's when the case
-// calls its management API, else none (the management API is off).
+// managementKey is the management key a case uses: the corpus's when the case calls its management
+// API, else none. The new core always gets a key, a placeholder when this returns none.
 func managementKey(c *Case) string {
 	if c.UsesManagement() {
 		return ManagementKey

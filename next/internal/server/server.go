@@ -1,6 +1,7 @@
 package server
 
 import (
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -59,6 +60,9 @@ type clientFormat struct {
 	// googleKeys accepts the client key where Google's clients send it: in x-goog-api-key or
 	// the key query parameter.
 	googleKeys bool
+	// noKeepAlive keeps keep-alive comments off the format's streams: Google's clients read
+	// every SSE line as JSON, and Google's API never sends a comment.
+	noKeepAlive bool
 }
 
 // bodyOnly adapts a parser for a format whose request is all in its body.
@@ -128,10 +132,11 @@ var geminiFormat = clientFormat{
 		}
 		return geminigenerate.ParseRequest(model, method == "streamGenerateContent", body)
 	},
-	stream:     func(w io.Writer, _ llm.Request) eventWriter { return geminigenerate.NewStreamWriter(w) },
-	aggregate:  func(llm.Request) aggregator { return geminigenerate.NewAggregator() },
-	errorBody:  geminigenerate.ErrorResponse,
-	googleKeys: true,
+	stream:      func(w io.Writer, _ llm.Request) eventWriter { return geminigenerate.NewStreamWriter(w) },
+	aggregate:   func(llm.Request) aggregator { return geminigenerate.NewAggregator() },
+	errorBody:   geminigenerate.ErrorResponse,
+	googleKeys:  true,
+	noKeepAlive: true,
 }
 
 // Generation is what one request runs on from start to end: a config snapshot and the router
@@ -195,10 +200,21 @@ func NewHandler(src Source) http.Handler {
 		mux.HandleFunc("GET "+path, accessLog(func(w http.ResponseWriter, r *http.Request) { serveResponsesWebSocket(w, r, src) }))
 	}
 	serveModels(mux, src)
+	// Claude Code probes its configured Anthropic endpoint before sending Messages. Answer the
+	// routes locally: the hello probe needs no account, and telemetry is accepted and dropped.
+	mux.HandleFunc("GET /api/hello", serveClaudeCodeProbe)
+	mux.HandleFunc("POST /api/event_logging/batch", serveClaudeCodeProbe)
 	// The health probe a container or load balancer sends. It takes no key and reads no config,
 	// so it is not refused, counted or logged as a client request.
 	mux.HandleFunc("GET /healthz", serveHealthz)
 	return withCORS(src, mux)
+}
+
+// serveClaudeCodeProbe answers a Claude Code probe with the status it expects. A GET pattern
+// also matches HEAD; net/http sends HEAD's headers and no body.
+func serveClaudeCodeProbe(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = io.WriteString(w, `{"status":"ok"}`)
 }
 
 // serveHealthz answers 200 with the text "ok". A GET pattern also matches HEAD; net/http sends
@@ -290,14 +306,13 @@ func (f clientFormat) writeError(w http.ResponseWriter, e *llm.Error) int {
 
 func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat) {
 	arrived := time.Now()
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxRequestBody))
-	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			f.writeError(w, &llm.Error{Code: llm.CodeInvalidRequest, Message: "request body is too large", Status: http.StatusRequestEntityTooLarge})
-			return
-		}
-		return // the client went away
+	body, e, ok := readRequestBody(w, r)
+	if !ok {
+		return
+	}
+	if e != nil {
+		f.writeError(w, e)
+		return
 	}
 	keepBody(r, body)
 	req, err := f.parse(r, body)
@@ -392,15 +407,26 @@ func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat
 		m.sent = http.StatusOK
 	}
 	rc := http.NewResponseController(w)
-	sw := f.stream(w, req)
+	var out io.Writer = w
+	flush := rc.Flush
+	var ka *keepAlive
+	if !f.noKeepAlive {
+		ka = startKeepAlive(w, rc)
+		defer ka.stop()
+		out, flush = ka, ka.Flush
+	}
+	sw := f.stream(out, req)
 	defer func() { logTranslation(r, request, sw) }()
 	for {
 		// Writes block while the client is slow, and the next event is not read until the
 		// write is done: that is the backpressure path to the extension.
+		if ev.Terminal() && ka != nil {
+			ka.finish()
+		}
 		if err := sw.Write(ev); err != nil {
 			return
 		}
-		if err := rc.Flush(); err != nil {
+		if err := flush(); err != nil {
 			return
 		}
 		if ev.Terminal() {
@@ -414,6 +440,63 @@ func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat
 		}
 		ev = stream.Next()
 	}
+}
+
+// readRequestBody reads a client request body within MaxRequestBody after undoing gzip content
+// encoding. A gzip body that expands past the limit is refused before it can reach the parser.
+func readRequestBody(w http.ResponseWriter, r *http.Request) ([]byte, *llm.Error, bool) {
+	encoding, supported := requestContentEncoding(r.Header)
+	if !supported {
+		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusUnsupportedMediaType, Scope: llm.ScopeRequest,
+			Message: fmt.Sprintf("unsupported Content-Encoding %q", encoding)}, true
+	}
+
+	var reader io.Reader = r.Body
+	if strings.EqualFold(encoding, "gzip") {
+		zr, err := gzip.NewReader(r.Body)
+		if err != nil {
+			return nil, &llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusBadRequest, Scope: llm.ScopeRequest,
+				Message: "request body is not valid gzip"}, true
+		}
+		defer zr.Close()
+		reader = zr
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, io.NopCloser(reader), MaxRequestBody))
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "request body is too large", Status: http.StatusRequestEntityTooLarge}, true
+		}
+		if strings.EqualFold(encoding, "gzip") && r.Context().Err() == nil {
+			return nil, &llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusBadRequest, Scope: llm.ScopeRequest,
+				Message: "request body is not valid gzip"}, true
+		}
+		return nil, nil, false // the client went away
+	}
+	r.Header.Del("Content-Encoding")
+	r.ContentLength = int64(len(body))
+	return body, nil, true
+}
+
+// requestContentEncoding returns the one content coding core decodes or the name to refuse.
+// Repeated identity codings add nothing, and one gzip coding is supported.
+func requestContentEncoding(h http.Header) (string, bool) {
+	var codings []string
+	for _, value := range h.Values("Content-Encoding") {
+		for _, coding := range strings.Split(value, ",") {
+			coding = strings.TrimSpace(coding)
+			if coding != "" && !strings.EqualFold(coding, "identity") {
+				codings = append(codings, coding)
+			}
+		}
+	}
+	if len(codings) == 0 {
+		return "", true
+	}
+	if len(codings) == 1 && strings.EqualFold(codings[0], "gzip") {
+		return "gzip", true
+	}
+	return strings.Join(codings, ", "), false
 }
 
 func asLLMError(err error) *llm.Error {

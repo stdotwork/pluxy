@@ -366,6 +366,13 @@ func (s *server) generate(conn net.Conn, call protocol.Call, h Handler, none str
 	}()
 
 	out := &Stream{w: conn, capture: capture}
+	if call.Alive {
+		out.startAlive()
+		sink := &aliveSink{}
+		sink.set(out)
+		defer sink.set(nil)
+		ctx = withAlive(ctx, sink)
+	}
 	c := Call{ID: call.ID}
 	if call.Account != nil {
 		c.Account = *call.Account
@@ -379,7 +386,7 @@ func (s *server) generate(conn net.Conn, call protocol.Call, h Handler, none str
 	} else {
 		err = runHandler(ctx, h, c, out)
 	}
-	if out.broken || out.seq.Done() {
+	if out.ended() {
 		return
 	}
 	if err == nil {
@@ -436,6 +443,10 @@ func (s *server) session(conn net.Conn, call protocol.Call) {
 		}
 	}()
 
+	// Upstream bytes of the session's connection reach the running turn's stream, whichever
+	// context the extension made the connection with.
+	sink := &aliveSink{}
+	ctx = withAlive(ctx, sink)
 	sc := SessionCall{ID: call.ID}
 	if call.Account != nil {
 		sc.Account = *call.Account
@@ -493,17 +504,22 @@ func (s *server) session(conn net.Conn, call protocol.Call) {
 		}
 		turnCtx, capture := withUpstreamInfo(ctx, f)
 		out.capture = capture
+		if f.Alive {
+			out.startAlive()
+			sink.set(out)
+		}
 		mu.Lock()
 		running = true
 		mu.Unlock()
 		err := runTurn(turnCtx, sess, c, out)
+		sink.set(nil)
 		mu.Lock()
 		running = false
 		mu.Unlock()
-		if out.broken {
+		if out.isBroken() {
 			return
 		}
-		if !out.seq.Done() {
+		if !out.done() {
 			if err == nil {
 				err = &llm.Error{Code: llm.CodeInternal, Message: "the extension returned without finishing the turn"}
 			}
@@ -852,9 +868,15 @@ func runHandler(ctx context.Context, h Handler, c Call, out *Stream) (err error)
 // the protocol's ordering rules or the connection to core is gone; the handler should then
 // return.
 type Stream struct {
+	// mu orders the handler's events with the alive frames upstream reads send (alive.go).
+	mu     sync.Mutex
 	w      io.Writer
 	seq    llm.Sequence
 	broken bool
+	// alive is set when core takes alive frames on this call; last is when the stream last
+	// wrote a frame, or the call started.
+	alive bool
+	last  time.Time
 	// capture is the call's, sent as a diagnostic frame before the terminal event; nil when core
 	// asked for none.
 	capture *captureLog
@@ -862,6 +884,8 @@ type Stream struct {
 
 // Send writes one event after checking it against the ordering rules.
 func (s *Stream) Send(ev llm.Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err := s.seq.Check(ev); err != nil {
 		return fmt.Errorf("sdk: %w", err)
 	}
@@ -869,12 +893,35 @@ func (s *Stream) Send(ev llm.Event) error {
 }
 
 func (s *Stream) send(ev llm.Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err := s.seq.Check(ev); err != nil {
 		return err
 	}
 	return s.write(ev)
 }
 
+// ended reports whether the reply has ended: its terminal event was sent or the connection to
+// core is gone.
+func (s *Stream) ended() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.broken || s.seq.Done()
+}
+
+func (s *Stream) isBroken() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.broken
+}
+
+func (s *Stream) done() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.seq.Done()
+}
+
+// write writes one event, and before a terminal one the capture's diagnostic frame. s.mu is held.
 func (s *Stream) write(ev llm.Event) error {
 	if s.broken {
 		return errors.New("sdk: connection to core is closed")
@@ -887,10 +934,12 @@ func (s *Stream) write(ev llm.Event) error {
 			}
 		}
 	}
+	now := aliveClock()
 	if err := protocol.WriteFrame(s.w, protocol.Reply{Event: ev}); err != nil {
 		s.broken = true
 		return err
 	}
+	s.last = now
 	return nil
 }
 
@@ -901,7 +950,9 @@ func (s *Stream) Start(info llm.ResponseInfo) error {
 
 // StartItem opens the next output item and returns its index.
 func (s *Stream) StartItem(item llm.ItemStart) (int, error) {
+	s.mu.Lock()
 	i := s.seq.NextIndex()
+	s.mu.Unlock()
 	return i, s.Send(llm.Event{Type: llm.EventItemStart, Index: i, Item: &item})
 }
 

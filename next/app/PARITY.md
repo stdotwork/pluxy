@@ -5,7 +5,7 @@ This page is a reference for two questions about the desktop app in this folder:
 - **Which agent clients and usage sources does it set up or read, and how?** For each one: the
   optional tool that does the work, the files it writes or reads, their format and how they are
   written, the platforms, and the native test session that checks it.
-- **What happened to each feature of the old desktop app** (`extensions/app/` in this repository):
+- **What happened to each feature of the old desktop app** (the desktop app of router-for-me/EasyCLIProxyAPI, <https://github.com/router-for-me/EasyCLIProxyAPI>, which this repository carried before `next/app/` replaced it):
   kept, dropped or deferred, with the reason in one line and where a kept feature lives now.
 
 The app's [README](README.md) describes what each page and command does, and the
@@ -161,7 +161,7 @@ drops are proposals the owner has not reviewed yet; their rows say so.
 | --- | --- | --- | --- |
 | Claude Code, Codex, Claude Desktop, OpenCode, Oh My Pi, Grok Build, Hermes Agent and Pi setup and launch | Kept | The main clients | A window page and a tool for each ([above](#agent-clients)) |
 | Kimi Code, OpenClaw, ZCode, DeepSeek Harness, WorkBuddy, Antigravity CLI, Copilot CLI and VSCode Copilot setup and launch | Deferred | The rebuild covers the main clients first; these follow later | Not in the app yet |
-| Client setup inside WSL distributions | Deferred | Part of the later Windows work | `pluxy/wsl` lists distributions and users and prepares launches, but the app's side is not built |
+| Client setup inside WSL distributions | Deferred | Part of the later Windows work; the Claude Code page is the first, in part | On the Claude Code page: its Linux build runs in a WSL distribution and user the app knows (`pluxy/wsl` lists, checks and prepares them), and Start CLI starts it there; Apply does not work there yet (the vault's secrets and client keys are Linux only), and the other clients follow later ([README](README.md), "In WSL") |
 | Executable and folder overrides, terminal choice and recent working folders | Kept | They let a launch use the person's own install and folders | Each client's Start CLI and the Launcher page |
 | Showing, hiding, searching and resetting the list of clients | Kept | The person chooses which clients the navigation shows | The Manage Clients page ([README](README.md#manage-clients)): by default the navigation lists the clients whose tool is installed |
 | Codex's OAuth sign-in method and its OpenAI provider-identity switch | Deferred | Not built now: the core takes no ChatGPT login from a client, so the sign-in could not reach it. A later change could add a separate Codex profile for it | Codex uses a client key |

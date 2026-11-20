@@ -52,6 +52,7 @@ func setFields(v *AccountView, a route.Account, state *route.State, hold route.H
 	v.Priority, v.Weight, v.MaxConcurrency, v.Prefix = a.Priority, a.Weight, a.MaxConcurrency, a.Prefix
 	v.DisableCooling, v.RequestRetry = a.DisableCooling, a.RequestRetry
 	v.Models, v.ExcludedModels, v.ModelAlias, v.Endpoint = a.Models, a.ExcludedModels, a.ModelAlias, a.Endpoint
+	v.Timeouts = a.Timeouts
 	v.ProxyURL = proxyurl.Redact(a.ProxyURL)
 	if red != nil {
 		v.Headers = red.Headers(a.Headers)
@@ -81,8 +82,7 @@ func setFields(v *AccountView, a route.Account, state *route.State, hold route.H
 }
 
 // Management is the management API, version 0. Every call needs the management key of the
-// config active when it arrives, as a bearer token; while that config sets none, the API is not
-// served.
+// config active when it arrives, as a bearer token.
 type Management struct {
 	mux   *http.ServeMux
 	cfg   func() *Config
@@ -156,10 +156,6 @@ func (m *Management) Handle(pattern string, h http.HandlerFunc) {
 
 func (m *Management) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	cfg := m.cfg()
-	if cfg.ManagementKey == "" {
-		http.NotFound(w, r)
-		return
-	}
 	// The gate comes first, so calls it refuses are not counted for the lockout.
 	if !cfg.ManagementAllowRemote && !FromThisMachine(r) {
 		writeManagementError(w, http.StatusForbidden, "remote_disabled",
@@ -411,6 +407,10 @@ func (m *Management) add(w http.ResponseWriter, r *http.Request) {
 		writeManagementError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
+	if err := route.ValidateTimeouts("timeouts", req.Timeouts); err != nil {
+		writeManagementError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
 	m.startLogin(w, r, cred.LoginRequest{Account: req.Account, Extension: req.Extension, Method: req.Method, Input: req.Input})
 }
 
@@ -527,6 +527,13 @@ var patchFields = map[string]func(a *route.Account, raw json.RawMessage) error{
 	},
 	// headers is set by Management.patchHeaders, which needs the management API's redactor.
 	"headers": nil,
+	"timeouts": func(a *route.Account, raw json.RawMessage) error {
+		a.Timeouts = nil
+		if err := unmarshalSet(raw, &a.Timeouts); err != nil {
+			return err
+		}
+		return route.ValidateTimeouts("value", a.Timeouts)
+	},
 }
 
 // patchHeaders sets a.Headers to raw. A placeholder GET /accounts shows for a secret value,
