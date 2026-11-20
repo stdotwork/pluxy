@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/configdoc"
 	"github.com/stdotwork/pluxy/next/internal/packages"
 	"github.com/stdotwork/pluxy/next/internal/server"
+	"github.com/stdotwork/pluxy/next/management"
 )
 
 // ManagementPrefix is where the management API is served.
@@ -27,6 +29,10 @@ const maxManagementBody = 1 << 20
 //	POST   /v0/management/reload    reload the config file now; 200 with the status when the
 //	                                new revision is active, 422 with the status (desired.error
 //	                                says why) when it was refused and the active revision stays
+//	GET    /v0/management/setup     kept setup scan, first-run flag and suggested picks
+//	POST   /v0/management/setup/scan   start a background setup scan now
+//	POST   /v0/management/setup/apply  install and enable setup picks
+//	POST   /v0/management/setup/done   end first run
 //	GET    /v0/management/packages  installed packages
 //	GET    /v0/management/registries  what each registry offers
 //	POST   /v0/management/packages  install a package (InstallRequest)
@@ -44,6 +50,7 @@ const maxManagementBody = 1 << 20
 //	POST   /v0/management/management-key/rotate  replace the management key with a new one
 //	GET    /v0/management/models    the models served, as GET /v1/models lists them, each with its
 //	                                extension, upstream name and the IDs of the accounts that serve it
+//	POST   /v0/management/models/refresh  ask providers for their model lists again now
 //	GET    /v0/management/settings  the basic and routing settings, by today's core's names
 //	PATCH  /v0/management/settings  change them
 //	GET    /v0/management/login-methods  each extension's login methods (handleAccounts)
@@ -56,10 +63,15 @@ const maxManagementBody = 1 << 20
 //	DELETE /v0/management/logs      empty main.log and delete its rotated files
 //	GET    /v0/management/request-error-logs  the error logs; .../{name} one of them
 //	GET    /v0/management/request-log-by-id/{id}  the request log of a trace ID
+//	GET    /v0/management/themes  selected theme ID and stored themes
+//	GET    /v0/management/themes/{publisher}/{name}  one stored theme's JSON unchanged
+//	PUT    /v0/management/themes/{publisher}/{name}  store a theme JSON object
+//	DELETE /v0/management/themes/{publisher}/{name}  remove a stored theme
+//	PUT    /v0/management/theme   set or clear the selected theme ID
 //
 // Every call needs the active config's management_key as a bearer token. Without a key in the
 // config the API is not served.
-func (c *Core) Management() http.Handler {
+func (c *Core) Management() *server.Management {
 	m := server.NewManagement(c.Config, c.creds, c.state)
 	m.Check = c.checks.result
 	m.Redactor = accountRedactor{c.redactor}
@@ -74,10 +86,10 @@ func (c *Core) Management() http.Handler {
 		writeJSON(w, code, c.Status())
 	})
 	m.Handle("GET /packages", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"packages": c.Packages()})
+		writeJSON(w, http.StatusOK, management.PackagesReply{Packages: c.Packages()})
 	})
 	m.Handle("GET /registries", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"registries": c.Registries(r.Context())})
+		writeJSON(w, http.StatusOK, management.RegistriesReply{Registries: c.Registries(r.Context())})
 	})
 	m.Handle("POST /packages", func(w http.ResponseWriter, r *http.Request) {
 		var req InstallRequest
@@ -103,13 +115,40 @@ func (c *Core) Management() http.Handler {
 	m.Handle("GET /models", func(w http.ResponseWriter, r *http.Request) {
 		s, release := c.acquire()
 		defer release()
-		writeJSON(w, http.StatusOK, map[string]any{"models": s.Router.ServedModels(r.Context())})
+		writeJSON(w, http.StatusOK, management.ModelsReply{Models: s.Router.ServedModels(r.Context())})
+	})
+	c.handleSetup(m)
+	m.Handle("POST /models/refresh", func(w http.ResponseWriter, r *http.Request) {
+		var req management.RefreshModelsRequest
+		if !readOptionalJSON(w, r, &req) {
+			return
+		}
+		s, release := c.acquire()
+		defer release()
+		if req.Account != "" {
+			if _, ok := c.account(s, req.Account); !ok {
+				writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("no account %q", req.Account))
+				return
+			}
+		}
+		var accounts []management.RefreshAccountResult
+		if !c.opts.SafeMode {
+			accounts = s.Router.RefreshModels(r.Context(), req.Account)
+		}
+		if accounts == nil {
+			accounts = []management.RefreshAccountResult{}
+		}
+		writeJSON(w, http.StatusOK, management.RefreshModelsReply{
+			Models:   s.Router.ServedModels(r.Context()),
+			Accounts: accounts,
+		})
 	})
 	c.handleUI(m)
 	c.handleAccounts(m)
 	c.handleConfig(m)
 	c.handleUsage(m)
 	c.handleLogs(m)
+	c.handleThemes(m)
 	return m
 }
 
@@ -119,7 +158,7 @@ func packageID(r *http.Request) string { return r.PathValue("publisher") + "/" +
 // when it is installed all the same.
 func writePackage(w http.ResponseWriter, v PackageView, err error) {
 	if err == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"package": v})
+		writeJSON(w, http.StatusOK, management.PackageReply{Package: v})
 		return
 	}
 	code, kind := http.StatusInternalServerError, "internal"
@@ -138,6 +177,29 @@ func writePackage(w http.ResponseWriter, v PackageView, err error) {
 		body["package"] = v
 	}
 	writeJSON(w, code, body)
+}
+
+func readOptionalJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxManagementBody))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "invalid_request", "message": "request body is not valid JSON: " + err.Error()}})
+		return false
+	}
+	if len(bytes.TrimSpace(b)) == 0 {
+		return true
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "invalid_request", "message": "request body is not valid JSON: " + err.Error()}})
+		return false
+	}
+	var extra any
+	if dec.Decode(&extra) != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "invalid_request", "message": "request body must be one JSON object"}})
+		return false
+	}
+	return true
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {

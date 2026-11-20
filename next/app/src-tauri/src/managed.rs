@@ -3,7 +3,7 @@
 //! another mode.
 
 use crate::owned::Child;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::VecDeque;
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Write};
@@ -147,11 +147,15 @@ fn create_temp(tmp: &Path) -> io::Result<fs::File> {
     crate::private_windows::create_new_private(tmp)
 }
 
-/// The core config the app keeps, `<dir>/config.json`. The app writes it once, the first time,
-/// with a free loopback port that then stays the core's, fresh keys and folders under dir; after
-/// that it is the person's to edit (core reloads it), and the app only reads the management key.
-/// On macOS dir is first emptied of extended access list entries (`clear_core_folder`).
-pub fn ensure_config(dir: &Path) -> Result<PathBuf, String> {
+/// The core config the app keeps, `<dir>/config.json`. The core writes it, the first time, with
+/// its `init` (`init(path)` runs it, `init_config`): listening on this computer, on a free port
+/// that then stays the core's, with fresh keys; its folders are beside it. After that it is the person's to edit (core
+/// reloads it), and the app only reads the management key. On macOS dir is first emptied of
+/// extended access list entries (`clear_core_folder`).
+fn prepare_config(
+    dir: &Path,
+    init: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<PathBuf, String> {
     let path = dir.join("config.json");
     #[cfg(target_os = "macos")]
     fs::create_dir_all(dir)
@@ -161,20 +165,110 @@ pub fn ensure_config(dir: &Path) -> Result<PathBuf, String> {
         return Ok(path);
     }
     fs::create_dir_all(dir).map_err(|e| format!("creating {}: {e}", dir.display()))?;
-    let port = TcpListener::bind("127.0.0.1:0")
-        .and_then(|l| l.local_addr())
-        .map_err(|e| format!("finding a free port: {e}"))?
-        .port();
-    let cfg = json!({
-        "listen": format!("127.0.0.1:{port}"),
-        "client_keys": [random_key()],
-        "management_key": random_key(),
-        "credentials_dir": dir.join("credentials"),
-        "packages": {"dir": dir.join("packages")},
-    });
-    let text = serde_json::to_vec_pretty(&cfg).expect("a JSON value");
-    write_private(&path, &text).map_err(|e| format!("writing {}: {e}", path.display()))?;
+    init(&path)?;
+    if !path.exists() {
+        return Err(format!("the core wrote no config at {}", path.display()));
+    }
     Ok(path)
+}
+
+/// For tests whose core is a script that writes no config: `prepare_config` with a config like
+/// the one the core's `init` writes, on a free port.
+#[cfg(test)]
+pub fn ensure_config(dir: &Path) -> Result<PathBuf, String> {
+    prepare_config(dir, |path| {
+        let port = TcpListener::bind("127.0.0.1:0")
+            .and_then(|l| l.local_addr())
+            .map_err(|e| format!("finding a free port: {e}"))?
+            .port();
+        let cfg = serde_json::json!({
+            "listen": format!("127.0.0.1:{port}"),
+            "client_keys": [random_key()],
+            "management_key": random_key(),
+        });
+        let text = serde_json::to_vec_pretty(&cfg).expect("a JSON value");
+        write_private(path, &text).map_err(|e| format!("writing {}: {e}", path.display()))
+    })
+}
+
+/// The core program, opened as `program` and named name in messages, ready to run, before its
+/// arguments: on Unix from that open file (on Linux it keeps the file open across exec, so a #!
+/// script's interpreter can read it); on Windows pinned, in a job of its own, with the app's
+/// environment.
+#[cfg(unix)]
+fn core_command(program: &File, name: &Path) -> Result<Command, String> {
+    use std::os::unix::process::CommandExt;
+    let mut cmd = Command::new(crate::owned::exec_target(
+        program,
+        crate::owned::Writers::Nobody,
+    )?);
+    cmd.arg0(name);
+    // On Linux the child keeps the open program across exec, which a #! script's interpreter
+    // then reads (as /dev/fd/N); the app's own copy closes on exec as usual.
+    #[cfg(target_os = "linux")]
+    unsafe {
+        use std::os::fd::AsRawFd;
+        let fd = program.as_raw_fd();
+        cmd.pre_exec(move || {
+            if libc::fcntl(fd, libc::F_SETFD, 0) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    Ok(cmd)
+}
+#[cfg(windows)]
+fn core_command(program: &File, name: &Path) -> Result<crate::owned::windows::Command, String> {
+    use crate::owned::windows::{self as w, Io, Kind};
+    let mut c = w::Command::new(w::pin_file(program)?, Kind::Managed);
+    // Its environment is the app's, as on Unix, where it inherits it.
+    c.arg0(name)
+        .envs(std::env::vars_os())
+        .stdin(Io::Null)
+        .stdout(Io::Null)
+        .stderr(Io::Piped);
+    Ok(c)
+}
+
+/// Runs the core program `init -port 0 -config <path>`, which writes a first config at path and
+/// never replaces one, and waits for it. Its message is the error when it fails. Port 0 is a free
+/// port, as the app's own core has always had: it never takes 8317 from a core the person runs
+/// themselves.
+fn init_config(program: &File, name: &Path, path: &Path) -> Result<(), String> {
+    let mut cmd = core_command(program, name)?;
+    cmd.args(["init", "-port", "0", "-config"].map(std::ffi::OsStr::new))
+        .args([path.as_os_str()]);
+    #[cfg(unix)]
+    let (status, said) = {
+        cmd.stdin(Stdio::null()).stdout(Stdio::null());
+        let out = start_when_free(BUSY_PAUSE, || cmd.output())
+            .map_err(|e| format!("starting {}: {e}", name.display()))?;
+        (
+            out.status,
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
+    };
+    #[cfg(windows)]
+    let (status, said) = {
+        use std::io::Read;
+        let mut child = start_when_free(BUSY_PAUSE, || cmd.spawn())
+            .map_err(|e| format!("starting {}: {e}", name.display()))?;
+        let mut said = String::new();
+        if let Some(mut e) = child.stderr.take() {
+            let _ = e.read_to_string(&mut said);
+        }
+        (child.wait().map_err(|e| e.to_string())?, said)
+    };
+    if status.success() {
+        return Ok(());
+    }
+    let said = said.trim();
+    Err(if said.is_empty() {
+        format!("{} init: {status}", name.display())
+    } else {
+        said.to_string()
+    })
 }
 
 /// macOS: the app's core folder holds the core's keys (config.json) and its credentials, so it
@@ -319,47 +413,13 @@ impl ManagedCore {
         dir: &Path,
         on_exit: Option<OnExit>,
     ) -> Result<ManagedCore, String> {
-        let cfg = ensure_config(dir)?;
+        let cfg = prepare_config(dir, |path| init_config(&program, name, path))?;
         let key = management_key(&cfg)?;
         #[cfg(unix)]
         let hold: Option<Hold> = Some(Arc::new(bind(listen_addr(&cfg)?)?));
         #[cfg(not(unix))]
         let hold: Option<Hold> = None;
-        #[cfg(unix)]
-        let mut cmd = Command::new(crate::owned::exec_target(
-            &program,
-            crate::owned::Writers::Nobody,
-        )?);
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            cmd.arg0(name);
-            // On Linux the child keeps the open program across exec, which a #! script's
-            // interpreter then reads (as /dev/fd/N); the app's own copy closes on exec as usual.
-            #[cfg(target_os = "linux")]
-            unsafe {
-                use std::os::fd::AsRawFd;
-                let fd = program.as_raw_fd();
-                cmd.pre_exec(move || {
-                    if libc::fcntl(fd, libc::F_SETFD, 0) != 0 {
-                        return Err(io::Error::last_os_error());
-                    }
-                    Ok(())
-                });
-            }
-        }
-        // Its environment is the app's, as on Unix, where it inherits it.
-        #[cfg(windows)]
-        let mut cmd = {
-            use crate::owned::windows::{self as w, Io, Kind};
-            let mut c = w::Command::new(w::pin_file(&program)?, Kind::Managed);
-            c.arg0(name)
-                .envs(std::env::vars_os())
-                .stdin(Io::Null)
-                .stdout(Io::Null)
-                .stderr(Io::Piped);
-            c
-        };
+        let mut cmd = core_command(&program, name)?;
         cmd.args([std::ffi::OsStr::new("-config"), cfg.as_os_str()]);
         #[cfg(unix)]
         if let Some(l) = &hold {
@@ -546,6 +606,18 @@ impl ManagedCore {
         self.pid
     }
 
+    /// On Windows, a handle on the core's process that keeps its process ID from passing to
+    /// another process for as long as it is held, past this `ManagedCore` too; it cannot end the
+    /// core (`owned::Child::pin`).
+    #[cfg(windows)]
+    pub(crate) fn pin(&self) -> Result<crate::owned::Pin, String> {
+        self.child
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pin()
+            .map_err(|e| format!("holding the core's process: {e}"))
+    }
+
     /// Set once this core is being stopped or has exited.
     pub fn gone(&self) -> Gone {
         Arc::clone(&self.gone)
@@ -709,13 +781,38 @@ pub fn owns_listener(core: &ManagedCore, base: &str) -> Result<(), String> {
 /// The process IDs owning each TCP socket listening on port, IPv4 and IPv6, on any address.
 #[cfg(windows)]
 fn listener_owners(port: u16) -> io::Result<Vec<u32>> {
+    use windows_sys::Win32::NetworkManagement::IpHelper::TCP_TABLE_OWNER_PID_LISTENER;
+    Ok(tcp_table(TCP_TABLE_OWNER_PID_LISTENER)?
+        .into_iter()
+        .filter(|r| r.local.port() == port)
+        .map(|r| r.pid)
+        .collect())
+}
+
+/// One row of the system's TCP table: its two ends, its state and the process that owns it.
+#[cfg(windows)]
+struct TcpRow {
+    local: std::net::SocketAddr,
+    remote: std::net::SocketAddr,
+    state: u32,
+    pid: u32,
+}
+
+/// The system's TCP table of class (`TCP_TABLE_OWNER_PID_*`), IPv4 and IPv6, every user's.
+#[cfg(windows)]
+fn tcp_table(class: i32) -> io::Result<Vec<TcpRow>> {
+    use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
     use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, NO_ERROR};
     use windows_sys::Win32::NetworkManagement::IpHelper::{
         GetExtendedTcpTable, MIB_TCP6TABLE_OWNER_PID, MIB_TCPTABLE_OWNER_PID,
-        TCP_TABLE_OWNER_PID_LISTENER,
     };
     use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6};
-    let mut found = Vec::new();
+    // Ports are in network byte order, in the low 16 bits; IPv4 addresses in network order too.
+    let port = |p: u32| u16::from_be(p as u16);
+    let v4 = |a: u32, p: u32| SocketAddr::from((Ipv4Addr::from(a.to_ne_bytes()), port(p)));
+    let v6 =
+        |a: [u8; 16], p: u32| SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::from(a), port(p), 0, 0));
+    let mut rows = Vec::new();
     for family in [AF_INET, AF_INET6] {
         // u64s, so the table is aligned as its rows need.
         let mut buf: Vec<u64> = Vec::new();
@@ -727,7 +824,7 @@ fn listener_owners(port: u16) -> io::Result<Vec<u32>> {
                     &mut size,
                     0,
                     u32::from(family),
-                    TCP_TABLE_OWNER_PID_LISTENER,
+                    class,
                     0,
                 )
             };
@@ -741,29 +838,80 @@ fn listener_owners(port: u16) -> io::Result<Vec<u32>> {
         if buf.is_empty() {
             continue;
         }
-        // The port is in network byte order, in the low 16 bits.
-        let ours = |p: u32| u16::from_be(p as u16) == port;
+        // SAFETY: GetExtendedTcpTable wrote a table of this family's rows into buf.
         unsafe {
             if family == AF_INET {
                 let t = &*(buf.as_ptr() as *const MIB_TCPTABLE_OWNER_PID);
-                let rows = std::slice::from_raw_parts(t.table.as_ptr(), t.dwNumEntries as usize);
-                found.extend(
-                    rows.iter()
-                        .filter(|r| ours(r.dwLocalPort))
-                        .map(|r| r.dwOwningPid),
-                );
+                let t = std::slice::from_raw_parts(t.table.as_ptr(), t.dwNumEntries as usize);
+                rows.extend(t.iter().map(|r| TcpRow {
+                    local: v4(r.dwLocalAddr, r.dwLocalPort),
+                    remote: v4(r.dwRemoteAddr, r.dwRemotePort),
+                    state: r.dwState,
+                    pid: r.dwOwningPid,
+                }));
             } else {
                 let t = &*(buf.as_ptr() as *const MIB_TCP6TABLE_OWNER_PID);
-                let rows = std::slice::from_raw_parts(t.table.as_ptr(), t.dwNumEntries as usize);
-                found.extend(
-                    rows.iter()
-                        .filter(|r| ours(r.dwLocalPort))
-                        .map(|r| r.dwOwningPid),
-                );
+                let t = std::slice::from_raw_parts(t.table.as_ptr(), t.dwNumEntries as usize);
+                rows.extend(t.iter().map(|r| TcpRow {
+                    local: v6(r.ucLocalAddr, r.dwLocalPort),
+                    remote: v6(r.ucRemoteAddr, r.dwRemotePort),
+                    state: r.dwState,
+                    pid: r.dwOwningPid,
+                }));
             }
         }
     }
-    Ok(found)
+    Ok(rows)
+}
+
+/// On Windows, where the app holds no copy of its core's listening socket: checks that the
+/// connection this process just made from local to peer was accepted by process pid, its core,
+/// before anything is sent on it (`client::Client::for_core`). The system's table of
+/// connections lists both ends of each, with the process that owns each end, every user's; the
+/// connection's other end is the row from peer to local. Another program on the core's port
+/// gets nothing, not even the request line: one listening on the core's address since the core
+/// ended, or one that was listening on a wildcard address over it all along (Windows lets
+/// another account bind `0.0.0.0` beside a loopback listener), which gets the core's
+/// connections as soon as the core's socket closes. The caller holds a handle on the core's
+/// process (`owned::Pin`), so pid is not another process's meanwhile.
+#[cfg(windows)]
+pub(crate) fn accepted_by(
+    pid: u32,
+    local: std::net::SocketAddr,
+    peer: std::net::SocketAddr,
+) -> Result<(), String> {
+    use windows_sys::Win32::NetworkManagement::IpHelper::TCP_TABLE_OWNER_PID_CONNECTIONS;
+    // MIB_TCP_STATE_SYN_RCVD and MIB_TCP_STATE_ESTAB: the other end is still a live connection
+    // (its closing states can be listed as no process's, and nothing sent there is read).
+    const SYN_RCVD: u32 = 4;
+    const ESTABLISHED: u32 = 5;
+    let same = |a: &std::net::SocketAddr, b: &std::net::SocketAddr| {
+        a.ip().to_canonical() == b.ip().to_canonical() && a.port() == b.port()
+    };
+    // A connection the system has just made can be missing its other end in the table for a
+    // moment, or show it before the core's process is set as its owner: look again, for at
+    // least a second, before refusing.
+    let mut why = format!("the other end of {local} -> {peer} is not in this computer's table");
+    for _ in 0..100 {
+        let rows = tcp_table(TCP_TABLE_OWNER_PID_CONNECTIONS)
+            .map_err(|e| format!("reading this computer's connections: {e}"))?;
+        let other = rows.iter().find(|r| {
+            same(&r.local, &peer)
+                && same(&r.remote, &local)
+                && matches!(r.state, SYN_RCVD | ESTABLISHED)
+        });
+        match other {
+            Some(r) if r.pid == pid => return Ok(()),
+            Some(r) => {
+                let by = r.pid;
+                why =
+                    format!("{local} -> {peer} was accepted by process {by}, not the core ({pid})");
+            }
+            None => {}
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    Err(why)
 }
 
 /// On macOS: core still runs and base is the address of the socket the app bound and gave it,
@@ -986,39 +1134,52 @@ mod tests {
         d
     }
 
+    /// The core writes the first config (`init -port 0 -config <path>`); the app runs it only
+    /// when there is none, and a failed init says why.
+    #[cfg(unix)]
     #[test]
-    fn the_config_is_written_once_and_kept_private() {
+    fn the_core_writes_the_first_config_once() {
         let dir = temp("config");
-        let path = ensure_config(&dir).unwrap();
-        let key = management_key(&path).unwrap();
-        assert_eq!(key.len(), 64);
-        let cfg: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        let listen = cfg["listen"].as_str().unwrap();
-        assert!(
-            listen.starts_with("127.0.0.1:") && !listen.ends_with(":0"),
-            "{listen}"
+        let args = dir.join("args");
+        let core = script(
+            &dir,
+            &format!(
+                "echo \"$@\" >> '{}'\n[ \"$1\" = init ] || exit 2\nprintf '{{\"listen\":\"127.0.0.1:1\",\"management_key\":\"from-init\"}}' > \"$5\"",
+                args.display()
+            ),
         );
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-                0o600
-            );
-        }
-        // A second start keeps the person's config, edits and all.
+        let program = File::open(&core).unwrap();
+        let init = |path: &Path| init_config(&program, Path::new("pluxy"), path);
+        let path = prepare_config(&dir.join("core"), init).unwrap();
+        assert_eq!(management_key(&path).unwrap(), "from-init");
+        assert_eq!(
+            fs::read_to_string(&args).unwrap(),
+            format!("init -port 0 -config {}\n", path.display())
+        );
+        // A second start keeps the person's config, edits and all, and runs no init.
         fs::write(
             &path,
             br#"{"listen":"127.0.0.1:1","management_key":"mine"}"#,
         )
         .unwrap();
-        ensure_config(&dir).unwrap();
+        prepare_config(&dir.join("core"), init).unwrap();
         assert_eq!(management_key(&path).unwrap(), "mine");
+        assert_eq!(fs::read_to_string(&args).unwrap().lines().count(), 1);
         fs::write(&path, br#"{"listen":"127.0.0.1:1"}"#).unwrap();
         assert!(management_key(&path)
             .unwrap_err()
             .contains("no management_key"));
+        // An init that fails: its message is the error.
+        let other = temp("config-fails");
+        let failing = script(&other, "echo 'pluxy: cannot write there' >&2\nexit 1");
+        let program = File::open(&failing).unwrap();
+        let err = prepare_config(&other.join("core"), |path| {
+            init_config(&program, Path::new("pluxy"), path)
+        })
+        .unwrap_err();
+        assert_eq!(err, "pluxy: cannot write there");
         fs::remove_dir_all(dir).unwrap();
+        fs::remove_dir_all(other).unwrap();
     }
 
     #[test]
@@ -1164,12 +1325,101 @@ mod tests {
             assert!(owns_listener(&core, &elsewhere).is_err());
             assert!(owns_listener(&core, &format!("http://[::1]:{port}")).is_err());
         }
+        // On Windows, where the app holds no copy of the core's socket, a client for the core
+        // checks the core's own process accepted each connection: it reaches the core, and is
+        // refused when another process (this test) is named as the core.
+        #[cfg(windows)]
+        {
+            use crate::client::Client;
+            let r =
+                Client::for_core(&base, &core)
+                    .unwrap()
+                    .call(core.key(), "GET", "/status", None);
+            assert_eq!(r.status, 200, "{r:?}");
+            let this = crate::owned::Pin::this_process_as(std::process::id());
+            let r = Client::with_pin(&base, this).call(core.key(), "GET", "/status", None);
+            assert_eq!(r.status, 0, "{r:?}");
+        }
         core.stop();
         let why = core.exited().expect("the core stopped");
         assert!(cfg!(windows) || why.contains("exit status: 0"), "{why}");
         assert!(
             owns_listener(&core, &base).is_err(),
             "a stopped core still owns {base}"
+        );
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// On Windows, where the app holds no copy of the core's socket: another program (this
+    /// test) listening all along on the wildcard address over the core's port, as Windows lets
+    /// another account do, gets the core's connections once the core has ended. A client for
+    /// the core, made while it ran and kept past its `ManagedCore`, sends that program nothing.
+    #[cfg(windows)]
+    #[test]
+    fn a_core_client_sends_nothing_to_a_listener_beside_the_core_once_it_ends() {
+        use std::io::Read;
+        let program = real_core();
+        let dir = temp("beside");
+        let mut core =
+            ManagedCore::start(File::open(&program).unwrap(), &program, &dir, None).unwrap();
+        let base = core.base().to_string();
+        let port = url::Url::parse(&base).unwrap().port().unwrap();
+        let key = core.key().to_string();
+        let client = crate::client::Client::for_core(&base, &core).unwrap();
+        let r = client.call(&key, "GET", "/status", None);
+        assert_eq!(r.status, 200, "{r:?}");
+        let other = TcpListener::bind(("0.0.0.0", port))
+            .expect("another listener on the wildcard address beside the core's");
+        let r = client.call(&key, "GET", "/status", None);
+        assert_eq!(
+            r.status, 200,
+            "with the wildcard listening beside the core: {r:?}"
+        );
+        // A new client, so a new connection: the running core still takes it.
+        let fresh = crate::client::Client::for_core(&base, &core).unwrap();
+        let r = fresh.call(&key, "GET", "/status", None);
+        assert_eq!(
+            r.status, 200,
+            "a new connection with the wildcard listening beside the core: {r:?}"
+        );
+        drop(fresh);
+        core.stop();
+        assert!(core.exited().is_some(), "the core stopped");
+        // The client's own handle on the core's process keeps its process ID from now on.
+        drop(core);
+        other.set_nonblocking(true).unwrap();
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(15);
+            let mut s = loop {
+                match other.accept() {
+                    Ok((s, _)) => break s,
+                    Err(e)
+                        if e.kind() == io::ErrorKind::WouldBlock && Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    Err(e) => return Err(format!("no connection reached the wildcard: {e}")),
+                }
+            };
+            s.set_nonblocking(false).unwrap();
+            s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut got = Vec::new();
+            let _ = s.read_to_end(&mut got);
+            Ok(got.len())
+        });
+        let r = client.call(&key, "GET", "/status", None);
+        let got = server.join().unwrap();
+        assert_eq!(
+            got,
+            Ok(0),
+            "what the other program read, the call answered {r:?}"
+        );
+        assert_eq!(r.status, 0, "{r:?}");
+        let why = r.error.unwrap().message;
+        assert!(
+            why.starts_with("nothing sent to the app's core: ")
+                && why.contains(&format!("was accepted by process {}", std::process::id())),
+            "{why}"
         );
         fs::remove_dir_all(dir).unwrap();
     }

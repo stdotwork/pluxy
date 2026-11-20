@@ -2,7 +2,9 @@ package route
 
 import (
 	"container/heap"
+	"log"
 	"math/rand/v2"
+	"strings"
 	"sync"
 	"time"
 
@@ -60,7 +62,21 @@ type block struct {
 	// reply needs.
 	told   bool
 	window int64
+	// source says where until came from: SourceProvider, SourceBackoff or SourceUnverified.
+	source string
+	// exhausted marks a quota block that health shows as exhausted rather than cooling.
+	exhausted bool
+	// check is when the block is next checked (Router.Check); zero when it is not checked.
+	check time.Time
+	// pass lets one request through the block: its check found no usage reading to make.
+	pass bool
+	// why, when set, says why the account is held in place of the failure that set the block.
+	why string
 }
+
+// live reports whether b keeps its scope from serving at now: it has not ended, and no check
+// let a request through it.
+func (b *block) live(now time.Time) bool { return b.until.After(now) && !b.pass }
 
 type scopeState struct {
 	blocks [numBlockKinds]block
@@ -129,6 +145,22 @@ type State struct {
 	running map[uint64]struct{}
 	order   seqHeap
 	rand    func() float64
+	// checkEvery is how often a long block is checked (see Router.Check).
+	checkEvery time.Duration
+	// bans holds accounts the provider closed or suspended, until a person enables or signs in again.
+	bans map[string]banState
+	// unbannedSeq records the highest sequence number seen when each account was unbanned, so
+	// outcomes from attempts started before the unban record nothing.
+	unbannedSeq map[string]uint64
+	// changes is signalled when the quota blocks or bans Saved/SavedBans return may have changed.
+	changes chan struct{}
+}
+
+type banState struct {
+	why    string
+	mark   uint64
+	at     time.Time
+	reason *llm.Error
 }
 
 // seqHeap is a min-heap of attempt sequence numbers.
@@ -188,8 +220,12 @@ func (st *scopeState) lastEnd() time.Time {
 
 // drop removes the entry for k. Call with s.mu held.
 func (s *State) drop(k scopeKey) {
-	if _, ok := s.scopes[k]; !ok {
+	st, ok := s.scopes[k]
+	if !ok {
 		return
+	}
+	if !st.blocks[kindIndex(blockQuota)].until.IsZero() {
+		s.notify()
 	}
 	delete(s.scopes, k)
 	if k.kind == scopeModel {
@@ -222,14 +258,33 @@ func (s *State) maybeSweep(now time.Time) {
 func (s *State) reserve(a *Account, model string, now time.Time) (uint64, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, banned := s.bans[a.ID]; banned {
+		return 0, false
+	}
 	s.maybeSweep(now)
-	for _, k := range keysFor(a, model) {
-		if st := s.scopes[k]; st != nil && st.lastEnd().After(now) {
-			return 0, false
+	keys := keysFor(a, model)
+	for _, k := range keys {
+		if st := s.scopes[k]; st != nil {
+			for i := range st.blocks {
+				if st.blocks[i].live(now) {
+					return 0, false
+				}
+			}
 		}
 	}
 	if a.MaxConcurrency > 0 && s.active[a.ID] >= a.MaxConcurrency {
 		return 0, false
+	}
+	// This attempt is the one request a check lets through: the next check is due an interval on,
+	// when more than an interval is left.
+	for _, k := range keys {
+		if st := s.scopes[k]; st != nil {
+			for i := range st.blocks {
+				if b := &st.blocks[i]; b.pass && b.until.After(now) {
+					b.pass, b.check = false, s.nextCheck(b.until, now)
+				}
+			}
+		}
 	}
 	s.seq++
 	s.active[a.ID]++
@@ -241,7 +296,89 @@ func (s *State) reserve(a *Account, model string, now time.Time) (uint64, bool) 
 // NewState returns empty state.
 func NewState() *State {
 	return &State{scopes: map[scopeKey]*scopeState{}, active: map[string]int{}, affinity: newAffinity(), rotation: newRotation(),
-		since: map[scopeKey]uint64{}, revs: map[string]uint64{}, last: map[string]lastFailure{}, running: map[uint64]struct{}{}, rand: rand.Float64}
+		since: map[scopeKey]uint64{}, revs: map[string]uint64{}, last: map[string]lastFailure{}, running: map[uint64]struct{}{}, rand: rand.Float64,
+		bans: map[string]banState{}, unbannedSeq: map[string]uint64{},
+		checkEvery: defaultCheckEvery, changes: make(chan struct{}, 1)}
+}
+
+// RetainBans drops bans for accounts that known reports no longer exist (deleted accounts),
+// keeping bans for accounts that merely left routing temporarily (such as a stopped extension
+// or reauth_required).
+func (s *State) RetainBans(known func(id string) bool) {
+	if known == nil {
+		return
+	}
+	s.mu.Lock()
+	if len(s.bans) == 0 {
+		s.mu.Unlock()
+		return
+	}
+	ids := make([]string, 0, len(s.bans))
+	for id := range s.bans {
+		ids = append(ids, id)
+	}
+	s.mu.Unlock()
+
+	var drop []string
+	for _, id := range ids {
+		if !known(id) {
+			drop = append(drop, id)
+		}
+	}
+	if len(drop) == 0 {
+		return
+	}
+	s.mu.Lock()
+	changed := false
+	for _, id := range drop {
+		if ban, ok := s.bans[id]; ok && !known(id) {
+			delete(s.bans, id)
+			s.unbannedSeq[id] = max(s.unbannedSeq[id], s.seq, ban.mark)
+			changed = true
+		}
+	}
+	if changed {
+		s.notify()
+	}
+	s.mu.Unlock()
+}
+
+// IsBanned reports whether account id is currently banned.
+func (s *State) IsBanned(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.bans[id]
+	return ok
+}
+
+// Unban clears any ban on account id so it can serve again, ignoring outcomes from attempts
+// started before the unban. It reports whether the account was banned.
+func (s *State) Unban(id string) bool {
+	s.mu.Lock()
+	ban, wasBanned := s.bans[id]
+	if !wasBanned {
+		s.mu.Unlock()
+		return false
+	}
+	delete(s.bans, id)
+	delete(s.last, id)
+	for k := range s.scopes {
+		if k.kind != scopeEndpoint && k.id == id {
+			s.drop(k)
+		}
+	}
+	s.unbannedSeq[id] = max(s.unbannedSeq[id], s.seq, ban.mark)
+	s.notify()
+	s.mu.Unlock()
+	log.Printf("routing: account %q unbanned", id)
+	return true
+}
+
+func singleLine(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	return strings.TrimSpace(s)
 }
 
 // nextGen returns the generation for a new router.
@@ -391,17 +528,22 @@ func (s *State) end(a *Account, seq uint64) {
 	}
 }
 
-// forget drops the state kept on account id's credential and models. Endpoint state stays: other
-// accounts may share the endpoint.
+// forget drops the state kept on account id's credential and models, and its session bindings.
+// Endpoint state stays: other accounts may share the endpoint. The account gets a new revision,
+// so outcomes that attempts on its copies until now see afterwards record nothing and bind no
+// session: added again, it starts clean.
 func (s *State) forget(id string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for k := range s.scopes {
 		if k.kind != scopeEndpoint && k.id == id {
 			s.drop(k)
 		}
 	}
 	delete(s.last, id)
+	s.revs[id]++
+	rev := s.revs[id]
+	s.mu.Unlock()
+	s.affinity.unbind(map[string]uint64{id: rev})
 }
 
 func (s *State) activeCount(id string) int {
@@ -430,7 +572,7 @@ func (s *State) availability(a *Account, model string, now time.Time) (until tim
 			continue
 		}
 		for _, b := range st.blocks {
-			if b.until.After(now) && b.until.After(until) {
+			if b.live(now) && b.until.After(until) {
 				until, reason = b.until, b.reason
 			}
 		}
@@ -440,11 +582,41 @@ func (s *State) availability(a *Account, model string, now time.Time) (until tim
 }
 
 // failure records what the failed attempt with sequence number seq on account a for model says
-// about the account. Failures about the request or the caller record nothing, and so does a
-// failure on a scope where an attempt that started after this one has already succeeded: the
-// newest result wins. transient replaces the backoff for a failing upstream or endpoint: above
-// 0 it is the block's length, below 0 no block is kept.
+// about the account. account_closed always bans the account; other failures about the request
+// or the caller record nothing, and so does a failure on a scope where an attempt that started
+// after this one has already succeeded: the newest result wins. transient replaces the backoff
+// for a failing upstream or endpoint: above 0 it is the block's length, below 0 no block is
+// kept.
 func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now time.Time, transient time.Duration) {
+	if e == nil {
+		return
+	}
+	if e.Code == llm.CodeAccountClosed {
+		s.mu.Lock()
+		if s.stale(scopeKey{kind: scopeCredential, id: a.ID}, a) || (seq > 0 && seq <= s.unbannedSeq[a.ID]) {
+			s.mu.Unlock()
+			return
+		}
+		if _, banned := s.bans[a.ID]; banned {
+			s.mu.Unlock()
+			return
+		}
+		why := strings.TrimSpace(e.Message)
+		if why == "" {
+			why = "the provider closed or suspended the account"
+		}
+		s.bans[a.ID] = banState{why: why, mark: seq, at: now.UTC(), reason: e}
+		s.last[a.ID] = lastFailure{at: now, mark: seq, err: e}
+		for k := range s.scopes {
+			if k.kind != scopeEndpoint && k.id == a.ID {
+				s.drop(k)
+			}
+		}
+		s.notify()
+		s.mu.Unlock()
+		log.Printf("routing: account %q banned: %s", a.ID, singleLine(why))
+		return
+	}
 	kind, scope, fixed, base, max := classify(e)
 	if kind == "" {
 		return
@@ -470,7 +642,10 @@ func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.stale(key, a) {
+	if s.stale(key, a) || (seq > 0 && seq <= s.unbannedSeq[a.ID]) {
+		return
+	}
+	if _, banned := s.bans[a.ID]; banned {
 		return
 	}
 	st := s.scopes[key]
@@ -504,10 +679,17 @@ func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now 
 	}
 	b := &st.blocks[kindIndex(kind)]
 	var until time.Time
+	source, why, word := SourceBackoff, "", false
 	switch {
 	case e.RetryAfterMS > 0:
-		// The upstream said when: never try this scope earlier (RFC 9110 §10.2.3).
-		until = now.Add(time.Duration(e.RetryAfterMS) * time.Millisecond)
+		// The upstream said when: never try this scope earlier (RFC 9110 §10.2.3), within the
+		// bounds resetFor puts on what is believed.
+		var d time.Duration
+		d, source = s.resetFor(e.RetryAfterMS)
+		if source == SourceUnverified {
+			why = unverifiedWhy
+		}
+		until, word = now.Add(d), true
 	case fixed > 0:
 		until = now.Add(fixed)
 	default:
@@ -530,14 +712,18 @@ func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now 
 		d = d/2 + time.Duration(s.rand()*float64(d/2))
 		until = now.Add(d)
 	}
-	// A deadline only ever moves later; a new failure never shortens a live block.
-	if until.After(b.until) {
-		b.until = until
-		b.told = kind == blockQuota && e.RetryAfterMS > 0
+	// The upstream's newest word replaces the block's, sooner or later. A time core chose
+	// itself, or the word of an attempt that started before the one that set the block, only
+	// moves it later.
+	if word && seq >= b.mark || until.After(b.until) {
+		s.set(b, key, kind, until, source, why, now)
 		b.window = e.QuotaWindowMinutes
 	}
 	if seq >= b.mark {
 		b.mark, b.reason = seq, e
+	}
+	if kind == blockQuota {
+		s.notify()
 	}
 }
 
@@ -592,6 +778,9 @@ func (s *State) quotaLast(keys []scopeKey, now time.Time) (last block, ok bool) 
 func (s *State) success(a *Account, model string, seq uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, banned := s.bans[a.ID]; banned {
+		return
+	}
 	if l, ok := s.last[a.ID]; ok && l.mark < seq && !s.stale(scopeKey{kind: scopeCredential, id: a.ID}, a) {
 		delete(s.last, a.ID)
 	}
@@ -622,6 +811,9 @@ func (s *State) success(a *Account, model string, seq uint64) {
 		for i := range st.blocks {
 			b := &st.blocks[i]
 			if b.mark < seq {
+				if i == kindIndex(blockQuota) && !b.until.IsZero() {
+					s.notify()
+				}
 				*b = block{}
 			}
 			if !b.until.IsZero() || b.level > 0 {

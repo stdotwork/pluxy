@@ -258,12 +258,15 @@ var notID = regexp.MustCompile(`[^a-z0-9]+`)
 
 // limits turns the reply into the plan's limits, in the order the old panel shows them: the plan's
 // own windows, code review's, each extra rate limit's (for example one model's), then the credit
-// balance.
+// balance. Code review's windows and the extra rate limits count a metered feature, not the
+// account's requests in general, and say so (protocol.QuotaLimit.Feature): the reply names an
+// extra limit's model only for people, so the extension cannot list its models.
 func (u *usagePayload) limits(now time.Time) []protocol.QuotaLimit {
 	out := []protocol.QuotaLimit{}
 	seen := map[string]bool{}
-	// group adds the 5-hour and the longer window of r, under ids made from prefix.
-	group := func(r *rateLimit, prefix string, labels [3]string) {
+	// group adds the 5-hour and the longer window of r, under ids made from prefix; feature
+	// marks them as a feature's.
+	group := func(r *rateLimit, prefix string, labels [3]string, feature bool) {
 		if r == nil {
 			return
 		}
@@ -285,11 +288,13 @@ func (u *usagePayload) limits(now time.Time) []protocol.QuotaLimit {
 				id = prefix + c.id + "_" + strconv.Itoa(n)
 			}
 			seen[id] = true
-			out = append(out, c.w.limit(id, c.label, reached, now))
+			l := c.w.limit(id, c.label, reached, now)
+			l.Feature = feature
+			out = append(out, l)
 		}
 	}
-	group(u.RateLimit, "", [3]string{"5-hour limit", "Weekly limit", "Monthly limit"})
-	group(u.CodeReviewRateLimit, "code_review_", [3]string{"Code review 5-hour limit", "Code review weekly limit", "Code review monthly limit"})
+	group(u.RateLimit, "", [3]string{"5-hour limit", "Weekly limit", "Monthly limit"}, false)
+	group(u.CodeReviewRateLimit, "code_review_", [3]string{"Code review 5-hour limit", "Code review weekly limit", "Code review monthly limit"}, true)
 	for i, x := range u.Additional {
 		name := strings.TrimSpace(x.LimitName)
 		if name == "" {
@@ -302,7 +307,7 @@ func (u *usagePayload) limits(now time.Time) []protocol.QuotaLimit {
 		if name == "" {
 			name = "Additional"
 		}
-		group(x.RateLimit, prefix+"_", [3]string{name + " 5-hour limit", name + " weekly limit", name + " monthly limit"})
+		group(x.RateLimit, prefix+"_", [3]string{name + " 5-hour limit", name + " weekly limit", name + " monthly limit"}, true)
 	}
 	if c := u.Credits; c != nil {
 		switch {

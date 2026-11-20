@@ -15,7 +15,7 @@
     }
   },
   "upstream": [
-    {"body":{"access_token":"ya29.corpus-token","expires_in":3599,"token_type":"Bearer"}},
+    {"body":{"access_token":"ya29.Hk3Rt8Bw2Mz5","expires_in":3599,"token_type":"Bearer"}},
     {
       "sse": [
         {"data":{"candidates":[{"content":{"role":"model","parts":[{"text":"thinking...","thought":true}]},"index":0}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus"}},
@@ -34,7 +34,7 @@
     {
       "path": "client.events",
       "kind": "intended",
-      "reason": "The new core writes a Responses stream from a Gemini reply with Gemini's responseId as the response id (today's core prefixes it with resp_), item ids built from it, call ids as call_<n> when Gemini sends none (today's core makes them from the time), and each thought signature as its own reasoning item holding the signature unchanged in encrypted_content, before the part it came on, with an empty summary part (today's core wraps it in its own carrier string, cpa-gemini-responses-carrier-v1:, that records which part it belongs to).",
+      "reason": "The new core writes a Responses stream from a Gemini reply with Gemini's responseId as the response id (today's core prefixes it with resp_), item ids built from it, call ids as call_<responseId>_<n>, unique across replies, when Gemini sends none (today's core makes them from the time), and each thought signature as its own reasoning item holding the signature unchanged in encrypted_content, before the part it came on, with an empty summary part (today's core wraps it in its own carrier string, cpa-gemini-responses-carrier-v1:, that records which part it belongs to).",
       "want": [
         {
           "data": {
@@ -407,7 +407,7 @@
         },
         "headers": {
           "Accept-Encoding": "gzip",
-          "Authorization": "Bearer ya29.corpus-token",
+          "Authorization": "Bearer ya29.Hk3Rt8Bw2Mz5",
           "Content-Type": "application/json",
           "User-Agent": "Go-http-client/1.1"
         },

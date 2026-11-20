@@ -23,9 +23,11 @@ import (
 	"github.com/stdotwork/pluxy/next/extensions/kimi/kimitest"
 )
 
-// Fake values for the header tests. The gateway keys are secrets by their header's name.
+// Fake values for the header tests. The gateway keys are secrets by their header's name. Like the
+// other fake secrets, they hold no word of the errors the tests read: core removes from an error
+// every run that shares 4 characters with an account's secret (protocol.RemovePieces).
 const (
-	gatewayKey   = "fake-gateway-key-e2e-7f3a"
+	gatewayKey   = "gk-Vb7Nq2Lx9Ps4Jd3f"
 	overrideType = "application/json; pluxy-e2e=override"
 )
 
@@ -118,8 +120,9 @@ func TestUpstreamHeadersEveryExtension(t *testing.T) {
 				return a
 			}
 			base := runCore(t, map[string]any{
-				"listen":      "127.0.0.1:0",
-				"client_keys": []string{clientKey},
+				"listen":         "127.0.0.1:0",
+				"client_keys":    []string{clientKey},
+				"management_key": managementKey,
 				"extension": map[string]any{
 					"manifest": filepath.Join(binDir, ext.manifest),
 					"accounts": []any{
@@ -161,8 +164,9 @@ func TestUpstreamHeadersEveryExtension(t *testing.T) {
 func TestUpstreamHeadersWebSocket(t *testing.T) {
 	u := newWSUpstream(t)
 	base := runCore(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
 		"extension": map[string]any{
 			"manifest": filepath.Join(binDir, "codex", "pluxy-extension.json"),
 			"accounts": []any{map[string]any{"id": "ws", "models": []string{"gpt-test"},
@@ -276,8 +280,9 @@ func TestUpstreamHeadersRefusedNames(t *testing.T) {
 	for _, name := range []string{"Host", "content-length", "Transfer-Encoding", "CONNECTION"} {
 		t.Run(name, func(t *testing.T) {
 			b, _ := json.Marshal(map[string]any{
-				"listen":      "127.0.0.1:0",
-				"client_keys": []string{clientKey},
+				"listen":         "127.0.0.1:0",
+				"client_keys":    []string{clientKey},
+				"management_key": managementKey,
 				"extension": map[string]any{
 					"manifest": filepath.Join(binDir, "pluxy-extension.json"),
 					"accounts": []any{map[string]any{"id": "a", "headers": map[string]string{"X-Fine": "ok", name: value},
@@ -324,10 +329,10 @@ api-keys:
 // is in no reply, log or request log, also when the upstream's error repeats it.
 func TestUpstreamHeadersImportedAndSecret(t *testing.T) {
 	const (
-		claudeKey = "fake-claude-gateway-e2e-11"
-		groupKey  = "fake-group-token-e2e-22"
-		kimiKey   = "fake-kimi-gateway-e2e-33"
-		kimi2Key  = "fake-kimi-two-gateway-e2e-44"
+		claudeKey = "gk-Cl4Wv9Xs2Tn7-11"
+		groupKey  = "gk-Gr8Jy3Pk6Hm1-22"
+		kimiKey   = "gk-Ty5Rc8Hn1Zw6-33"
+		kimi2Key  = "gk-Mu3Ef9Ka2Qd7Yb-44"
 		// What the client's requests send as X-Client-Header: kimi-1's "X-Copy": "$X-Client-Header"
 		// must not copy it.
 		clientHeader = "fake-client-header-e2e-5d1c"
@@ -382,7 +387,7 @@ api-keys:
         - name: m-headers
       keys:
         - api-key: ` + upstreamKey + `
-        - api-key: sk-upstream-e2e-2
+        - api-key: sk-Hq4Tz8Wm2Rx6-2
           headers: {}
   openai-compatibility:
     - name: compat
@@ -416,6 +421,7 @@ api-keys:
 	})
 	base, _, logs := startOnFreePort(t, filepath.Join(binDir, "pluxy"), path, cfg, "-bundled", bundled)
 	logs.waitFor(t, "config revision 1 active")
+	installBundled(t, base, "pluxy/openai-compatible", "pluxy/claude", "pluxy/kimi")
 
 	var replies []string
 	for _, r := range []struct{ id, model string }{{"gw-1", "m-headers"}, {"gw-2", "m-headers"}, {"compat", "m-compat"}, {"kimi-1", "kimi-k2.8"}} {
@@ -431,7 +437,7 @@ api-keys:
 	// The two claude keys share the group's base-url: told apart by their API key.
 	var gw1, gw2 []headerRequest
 	for _, r := range up.posts("/claude") {
-		if strings.Contains(r.header.Get("X-Api-Key")+r.header.Get("Authorization"), "sk-upstream-e2e-2") {
+		if strings.Contains(r.header.Get("X-Api-Key")+r.header.Get("Authorization"), "sk-Hq4Tz8Wm2Rx6-2") {
 			gw2 = append(gw2, r)
 		} else {
 			gw1 = append(gw1, r)

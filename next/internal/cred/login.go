@@ -251,7 +251,11 @@ func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 			delete(m.renewals, l.account)
 			m.mu.Unlock()
 			log.Printf("credentials: account %q signed in again", l.account)
+			if m.onReauth != nil {
+				m.onReauth(l.account)
+			}
 			m.changed()
+			m.credentialChanged(l.account)
 			return nil
 		}
 	}

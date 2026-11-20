@@ -12,7 +12,7 @@ func TestApplyEffort(t *testing.T) {
 		want          string // thinking and output_config as JSON, "" when not applied
 	}{
 		{"claude-opus-4-6", "high", 32000, `{"thinking":{"type":"adaptive"},"output_config":{"effort":"high"}}`},
-		{"claude-sonnet-5-5-20261001", "xhigh", 32000, `{"thinking":{"type":"adaptive"},"output_config":{"effort":"max"}}`},
+		{"claude-sonnet-5-5-20261001", "xhigh", 32000, `{"thinking":{"type":"adaptive"},"output_config":{"effort":"xhigh"}}`},
 		{"claude-fable-5-1", "minimal", 32000, `{"thinking":{"type":"adaptive"},"output_config":{"effort":"low"}}`},
 		{"claude-mythos-5", "high", 32000, `{"thinking":{"type":"adaptive"},"output_config":{"effort":"high"}}`},
 		{"claude-opus-4-7[1m]", "high", 32000, `{"thinking":{"type":"adaptive"},"output_config":{"effort":"high"}}`},
@@ -59,6 +59,25 @@ func TestApplyEffort(t *testing.T) {
 				t.Errorf("%s %s: %s = %s, want %s", c.model, c.effort, k, got[k], v)
 			}
 		}
+	}
+}
+
+func TestApplyEffortKeepsOutputConfigFormat(t *testing.T) {
+	body := []byte(`{"model":"claude-opus-4-6","max_tokens":32000,"output_config":{"format":{"type":"json_schema","schema":{"type":"object"}}}}`)
+	out, applied, err := ApplyEffort(body, "claude-opus-4-6", "high")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !applied {
+		t.Fatal("applied = false, want true")
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	wantConfig := json.RawMessage(`{"effort":"high","format":{"type":"json_schema","schema":{"type":"object"}}}`)
+	if !jsonEqual(got["output_config"], wantConfig) {
+		t.Errorf("output_config = %s, want %s", got["output_config"], wantConfig)
 	}
 }
 

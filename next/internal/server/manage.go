@@ -22,100 +22,33 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/internal/upheader"
 	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/management"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 // ManagementPrefix is where the management API is served. The 0 is its version.
-const ManagementPrefix = "/v0/management"
+const ManagementPrefix = management.Prefix
 
 // maxManagementBody limits a management request body.
 const maxManagementBody = 1 << 20
 
-// AccountView is an account as the management API lists it. It never holds a secret.
-type AccountView struct {
-	ID string `json:"id"`
-	// Source is "config" for an account set in core's config, "login" for one added by login.
-	Source    string `json:"source"`
-	Extension string `json:"extension,omitempty"`
-	// Kind is the credential's kind, for example api_key or oauth.
-	Kind     string `json:"kind,omitempty"`
-	State    string `json:"state"`
-	Disabled bool   `json:"disabled,omitempty"`
-	// Reason says why the account needs a new login.
-	Reason      string `json:"reason,omitempty"`
-	Label       string `json:"label,omitempty"`
-	Version     uint64 `json:"version,omitempty"`
-	ExpiresAt   int64  `json:"expires_at,omitempty"`
-	Refreshable bool   `json:"refreshable"`
-	// RenewalError is why the last automatic renewal failed, while core waits before trying
-	// again.
-	RenewalError *llm.Error `json:"renewal_error,omitempty"`
-	CreatedAt    *time.Time `json:"created_at,omitempty"`
-	UpdatedAt    *time.Time `json:"updated_at,omitempty"`
-	// The account's routing fields, as its config entry or its login set them (route.Account).
-	Priority       int                `json:"priority,omitempty"`
-	Weight         *int               `json:"weight,omitempty"`
-	DisableCooling *bool              `json:"disable_cooling,omitempty"`
-	MaxConcurrency int                `json:"max_concurrency,omitempty"`
-	RequestRetry   *int               `json:"request_retry,omitempty"`
-	Prefix         string             `json:"prefix,omitempty"`
-	Models         []route.ModelEntry `json:"models,omitempty"`
-	ExcludedModels []string           `json:"excluded_models,omitempty"`
-	ModelAlias     []route.ModelAlias `json:"model_alias,omitempty"`
-	Endpoint       string             `json:"endpoint,omitempty"`
-	// ProxyURL is the account's own proxy_url, with "redacted" in place of its user name and
-	// password (proxyurl.Redact).
-	ProxyURL string `json:"proxy_url,omitempty"`
-	// Headers are the account's headers, with a placeholder in place of each secret value, the
-	// one GET /config shows for it (configdoc.Redactor.Headers).
-	Headers map[string]string `json:"headers,omitempty"`
-	// Timeouts overrides routing.timeouts for this account (header_ms, idle_ms, total_ms).
-	Timeouts *protocol.Timeouts `json:"timeouts,omitempty"`
-	// Settings are an account added by login's settings, with a placeholder in place of each
-	// secret (Management.Redactor), as GET /config shows the config file.
-	Settings json.RawMessage `json:"settings,omitempty"`
-	// SettingsInexact marks settings that hold a number a float64 does not hold exactly (a long
-	// fraction, a very large or very small exponent, an integer past 2^53), which a client that
-	// reads JSON numbers as float64, as a browser does, would write back changed.
-	SettingsInexact bool `json:"settings_inexact,omitempty"`
-
-	// What routing knows about the account now (route.Runtime). An account that receives no
-	// requests (disabled, or waiting for a new login) has none of it.
-	CooldownUntil  *time.Time       `json:"cooldown_until,omitempty"`
-	Cooldowns      []route.Cooldown `json:"cooldowns,omitempty"`
-	LastError      *llm.Error       `json:"last_error,omitempty"`
-	LastErrorAt    *time.Time       `json:"last_error_at,omitempty"`
-	ActiveRequests int              `json:"active_requests,omitempty"`
-
-	// Check is the result of core's last check of the account; absent while core has none.
-	Check *AccountCheck `json:"check,omitempty"`
-}
+// AccountView is an account as the management API lists it (management.Account).
+type AccountView = management.Account
 
 // Account check states (AccountCheck.State).
 const (
-	CheckRunning    = "checking"
-	CheckOK         = "ok"
-	CheckFailed     = "failed"
-	CheckNotChecked = "not_checked"
+	CheckRunning    = management.CheckRunning
+	CheckOK         = management.CheckOK
+	CheckFailed     = management.CheckFailed
+	CheckNotChecked = management.CheckNotChecked
 )
 
-// AccountCheck is the result of core's check of an account: the extension's check call, which
-// asks the upstream something that costs the account nothing. Core checks an account when it
-// starts, and when a reload or a login adds or changes one.
-type AccountCheck struct {
-	// State is checking, ok, failed, or not_checked when the extension cannot check the account.
-	State string `json:"state"`
-	// Detail says what was checked (ok) or why the account was not checked (not_checked).
-	Detail string `json:"detail,omitempty"`
-	// Error is why the check failed (failed).
-	Error *llm.Error `json:"error,omitempty"`
-	// At is when the check ended.
-	At *time.Time `json:"at,omitempty"`
-}
+// AccountCheck is the result of core's check of an account (management.AccountCheck).
+type AccountCheck = management.AccountCheck
 
-// fields sets v's routing fields from a, with its secret header values replaced by red's
-// placeholders, and its runtime state from state.
-func (v *AccountView) fields(a route.Account, state *route.State, red AccountRedactor) {
+// setFields sets v's routing fields from a, with its secret header values replaced by red's
+// placeholders, and its runtime state and health from state and hold.
+func setFields(v *AccountView, a route.Account, state *route.State, hold route.Hold, red AccountRedactor) {
 	v.Priority, v.Weight, v.MaxConcurrency, v.Prefix = a.Priority, a.Weight, a.MaxConcurrency, a.Prefix
 	v.DisableCooling, v.RequestRetry = a.DisableCooling, a.RequestRetry
 	v.Models, v.ExcludedModels, v.ModelAlias, v.Endpoint = a.Models, a.ExcludedModels, a.ModelAlias, a.Endpoint
@@ -132,10 +65,13 @@ func (v *AccountView) fields(a route.Account, state *route.State, red AccountRed
 			v.Headers[k] = val
 		}
 	}
+	now := time.Now()
 	if state == nil {
+		v.Health = route.NewState().Health(a, now, hold)
 		return
 	}
-	rt := state.Runtime(a, time.Now())
+	v.Health = state.Health(a, now, hold)
+	rt := state.Runtime(a, now)
 	if !rt.CooldownUntil.IsZero() {
 		v.CooldownUntil = &rt.CooldownUntil
 	}
@@ -157,6 +93,8 @@ type Management struct {
 	state *route.State
 	// lockout blocks a client that keeps sending a wrong key.
 	lockout *lockout
+	// routes are the patterns added with Handle, in order.
+	routes []string
 	// Redactor hides the secrets in accounts' headers and settings and puts them back from the
 	// placeholders a PATCH sends; core sets the one its config reads use, so an account shows
 	// the same placeholders in both. Nil: secret header values show as protocol.Redacted,
@@ -206,9 +144,13 @@ func NewManagement(cfg func() *Config, creds *cred.Manager, state *route.State) 
 	return m
 }
 
+// Routes returns the calls added with Handle, as their patterns, such as "GET /accounts".
+func (m *Management) Routes() []string { return slices.Clone(m.routes) }
+
 // Handle adds a call: pattern is a method and a path under ManagementPrefix, such as
 // "GET /accounts".
 func (m *Management) Handle(pattern string, h http.HandlerFunc) {
+	m.routes = append(m.routes, pattern)
 	method, path, _ := strings.Cut(pattern, " ")
 	m.mux.HandleFunc(method+" "+ManagementPrefix+path, h)
 }
@@ -225,9 +167,26 @@ func (m *Management) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"remote management is off: the management API answers only this machine (management_allow_remote turns on other machines)")
 		return
 	}
-	client := ClientIP(r)
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	right := ok && token != "" && sameKey(token, cfg.managementKeyDigest())
+	if !ok || token == "" {
+		// No key at all is not a guess, so it does not count toward the lockout: a proxy or a
+		// page that forgets the key must not lock out everyone behind its address.
+		writeManagementError(w, http.StatusUnauthorized, "unauthorized", "missing management key")
+		return
+	}
+	right := sameKey(token, cfg.managementKeyDigest())
+	// A caller on this machine is never blocked, so the person at the keyboard can always get
+	// back in; anyone who can call from here can read the config file anyway.
+	if FromThisMachine(r) {
+		if !right {
+			writeManagementError(w, http.StatusUnauthorized, "unauthorized", "invalid management key")
+			return
+		}
+		w.Header().Set("Cache-Control", "no-store")
+		m.mux.ServeHTTP(w, r)
+		return
+	}
+	client := ClientIP(r)
 	left, blockedNow := m.lockout.attempt(client, right)
 	if left > 0 {
 		wait := llm.WholeSeconds(left)
@@ -240,7 +199,7 @@ func (m *Management) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if blockedNow {
 			log.Printf("management: %d failed management keys in a row from %s; refusing it for %s", lockoutFailures, client, lockoutFor)
 		}
-		writeManagementError(w, http.StatusUnauthorized, "unauthorized", "missing or invalid management key")
+		writeManagementError(w, http.StatusUnauthorized, "unauthorized", "invalid management key")
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
@@ -276,7 +235,7 @@ func (m *Management) view(r cred.Record) AccountView {
 	v.CreatedAt, v.UpdatedAt = &created, &updated
 	a := r.Account
 	a.ID = r.ID
-	v.fields(a, m.state, m.Redactor)
+	setFields(&v, a, m.state, route.Hold{Disabled: r.Disabled, NeedsLogin: r.State == cred.StateReauth, Why: r.Reason}, m.Redactor)
 	if len(a.Settings) > 0 && m.Redactor != nil {
 		s, err := m.Redactor.RedactSettings(a.Settings)
 		if err != nil {
@@ -378,7 +337,7 @@ func (m *Management) configView(a route.Account) AccountView {
 	if a.Credential != nil {
 		v.Kind = a.Credential.Kind
 	}
-	v.fields(a, m.state, m.Redactor)
+	setFields(&v, a, m.state, route.Hold{}, m.Redactor)
 	v.Check = m.check(a.ID)
 	return v
 }
@@ -408,7 +367,7 @@ func (m *Management) list(w http.ResponseWriter, r *http.Request) {
 			views = append(views, m.view(rec))
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"accounts": views})
+	writeJSON(w, http.StatusOK, management.AccountsReply{Accounts: views})
 }
 
 // addRequest is the body of POST /accounts: the account's fields (as in the config, without a
@@ -614,7 +573,21 @@ func unmarshalSet(raw json.RawMessage, v any) error {
 func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var req map[string]json.RawMessage
-	if !readJSON(w, r, &req) || !m.stored(w, id) {
+	if !readJSON(w, r, &req) {
+		return
+	}
+	if cfgAcct, ok := m.configured(id); ok {
+		var disabled *bool
+		if len(req) == 1 {
+			if raw, has := req["disabled"]; has && json.Unmarshal(raw, &disabled) == nil && disabled != nil && !*disabled {
+				if m.state != nil {
+					m.state.Unban(id)
+				}
+				writeJSON(w, http.StatusOK, management.AccountReply{Account: m.configView(cfgAcct)})
+				return
+			}
+		}
+		m.stored(w, id)
 		return
 	}
 	var disabled *bool
@@ -692,7 +665,10 @@ func (m *Management) patch(w http.ResponseWriter, r *http.Request) {
 		writeCredError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"account": m.view(rec)})
+	if disabled != nil && !*disabled && m.state != nil {
+		m.state.Unban(id)
+	}
+	writeJSON(w, http.StatusOK, management.AccountReply{Account: m.view(rec)})
 }
 
 // restoreSettings sets a's settings to sent, with each placeholder replaced by the secret it
@@ -737,7 +713,7 @@ func (m *Management) refresh(w http.ResponseWriter, r *http.Request) {
 		writeCredError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"account": m.view(rec)})
+	writeJSON(w, http.StatusOK, management.AccountReply{Account: m.view(rec)})
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
@@ -760,7 +736,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeManagementError(w http.ResponseWriter, status int, code, msg string) {
-	writeJSON(w, status, map[string]any{"error": map[string]string{"code": code, "message": msg}})
+	writeJSON(w, status, management.ErrorBody{Error: management.ErrorDetail{Code: code, Message: msg}})
 }
 
 // writeCredError writes an error from the credential manager. A provider's failure is a 502

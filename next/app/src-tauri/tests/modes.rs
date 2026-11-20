@@ -186,6 +186,15 @@ fn managed_runs_its_own_core_and_stops_it() {
     assert!(target.starts_with("http://127.0.0.1:"), "{target}");
     let pid = c.core_pid().unwrap();
     assert_eq!(c.caller().call("GET", "/status", None).status, 200);
+    // A first start installs nothing; the test packages that came beside the core's program
+    // install when asked for.
+    assert!(page_extensions(&c).is_empty());
+    let r = c.caller().call(
+        "POST",
+        "/packages",
+        Some(&serde_json::json!({"id": "test/alpha", "registry": "bundled", "enable": true})),
+    );
+    assert_eq!(r.status, 200, "{r:?}");
     assert!(page_extensions(&c).contains(&"test/alpha".to_string()));
     // The person cannot sign out of the app's own core, nor sign in with another key.
     c.sign_out().unwrap();

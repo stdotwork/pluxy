@@ -1,6 +1,7 @@
 package core
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/internal/packages"
 	"github.com/stdotwork/pluxy/next/internal/server"
+	"github.com/stdotwork/pluxy/next/management"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
@@ -20,46 +22,14 @@ import (
 var ErrNotStarted = errors.New("not applied")
 
 // loadPackages reads the record of installed packages at start, after clearing what an
-// interrupted install left behind. With no record yet and a bundled registry, it installs and
-// enables every package the bundled registry lists, through the same steps as any install.
-func (c *Core) loadPackages(cfg *server.Config) (packages.State, error) {
+// interrupted install left behind. A first start installs nothing: the bundled registry is a
+// source to install from, like any other.
+func (c *Core) loadPackages() (packages.State, error) {
 	if err := packages.ClearStaging(c.pkgDir); err != nil {
 		return nil, err
 	}
-	st, ok, err := packages.LoadState(c.pkgDir)
-	if err != nil || ok || c.opts.Bundled == "" {
-		return st, err
-	}
-	bundled := packages.Registry{Name: server.BundledRegistry, URL: c.opts.Bundled}
-	in := c.installer(nil)
-	in.Registries = []packages.Registry{bundled}
-	ctx := context.Background()
-	ix, err := packages.ReadIndex(ctx, in.Client, bundled)
-	if err != nil {
-		log.Printf("bundled packages not installed: %v", err)
-		return st, nil
-	}
-	for _, id := range slices.Sorted(maps.Keys(ix.Packages)) {
-		staged, err := in.Fetch(ctx, packages.Request{ID: id, Registry: bundled.Name})
-		if err != nil {
-			log.Printf("bundled package %s not installed: %v", id, err)
-			continue
-		}
-		p, err := staged.Commit(nil)
-		if err != nil {
-			log.Printf("bundled package %s not installed: %v", id, err)
-			continue
-		}
-		p.Enabled = true
-		st[id] = p
-		log.Printf("bundled package %s %s installed", id, p.Version)
-	}
-	// Saved even when empty: the first start is over, and a removed bundled package stays
-	// removed.
-	if err := packages.SaveState(c.pkgDir, st); err != nil {
-		return nil, err
-	}
-	return st, nil
+	st, _, err := packages.LoadState(c.pkgDir)
+	return st, err
 }
 
 // installer returns an installer for the packages folder with cfg's registries, then the
@@ -79,21 +49,10 @@ func (c *Core) installer(cfg *server.Config) *packages.Installer {
 }
 
 // InstallRequest is what POST /packages asks for.
-type InstallRequest struct {
-	ID       string `json:"id"`
-	Version  string `json:"version,omitempty"`
-	Registry string `json:"registry,omitempty"`
-	Enable   bool   `json:"enable,omitempty"`
-}
+type InstallRequest = management.InstallRequest
 
 // PackageView is an installed package as management shows it.
-type PackageView struct {
-	packages.Installed
-	// State is "disabled", the running extension's state, "failed" (enabled but it could not
-	// start; Error says why) or "stopped" (enabled, in safe mode).
-	State string `json:"state"`
-	Error string `json:"error,omitempty"`
-}
+type PackageView = management.Package
 
 // Packages returns the installed packages.
 func (c *Core) Packages() []PackageView {
@@ -290,24 +249,13 @@ func (c *Core) inUseLocked(dir string) bool {
 }
 
 // RegistryView is what one registry offers, as management shows it.
-type RegistryView struct {
-	packages.Registry
-	Packages []RegistryPackage `json:"packages,omitempty"`
-	Error    string            `json:"error,omitempty"`
-}
+type RegistryView = management.Registry
 
 // RegistryPackage is one package a registry offers.
-type RegistryPackage struct {
-	ID       string            `json:"id"`
-	Releases []RegistryRelease `json:"releases"`
-}
+type RegistryPackage = management.RegistryPackage
 
 // RegistryRelease is one release a registry offers.
-type RegistryRelease struct {
-	Version   string   `json:"version"`
-	Protocol  []int    `json:"protocol"`
-	Platforms []string `json:"platforms"`
-}
+type RegistryRelease = management.RegistryRelease
 
 // Registries reads every registry core installs from.
 func (c *Core) Registries(ctx context.Context) []RegistryView {
@@ -323,8 +271,10 @@ func (c *Core) Registries(ctx context.Context) []RegistryView {
 			continue
 		}
 		for _, id := range slices.Sorted(maps.Keys(ix.Packages)) {
-			p := RegistryPackage{ID: id, Releases: []RegistryRelease{}}
-			for _, rel := range ix.Packages[id].Releases {
+			ip := ix.Packages[id]
+			p := RegistryPackage{ID: id, Title: ip.Title, Summary: ip.Summary, Kind: ip.Kind, Tier: cmp.Or(ip.Tier, packages.TierUnverified),
+				Releases: []RegistryRelease{}}
+			for _, rel := range ip.Releases {
 				p.Releases = append(p.Releases, RegistryRelease{Version: rel.Version, Protocol: rel.Protocol,
 					Platforms: slices.Sorted(maps.Keys(rel.Artifacts))})
 			}

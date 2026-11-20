@@ -9,7 +9,8 @@
 //
 //	{"base_url": "https://api.openai.com/v1", "codex_identity": true, "image_generation_tool": true,
 //	 "callback_listen": true, "websockets": false, "alpha_search": false, "images": true,
-//	 "signin_with_chatgpt_identifier": "pluxy"}
+//	 "signin_with_chatgpt_identifier": "pluxy", "codex_client_version": "0.154.0",
+//	 "image_generation_off_models": [], "prompt_cache_retention_passthrough": false}
 //
 // base_url is where requests go ({base_url}/responses); the default is
 // https://api.openai.com/v1 for an API key and a SIWC sign-in, and
@@ -31,6 +32,11 @@
 // (default "pluxy") is how a SIWC sign-in names this program: the agent name its login shows the
 // user, and its requests' User-Agent ("<identifier> (<GOOS>; <GOARCH>)"); the other settings
 // above but base_url, callback_listen and websockets do not apply to it (see siwc.go).
+// codex_client_version (default 0.154.0) is the version the User-Agent claims when codex_identity
+// is on. image_generation_off_models lists models (names, or patterns with * and ?) that are not
+// offered the image tool, as a free plan and -spark models are not. prompt_cache_retention_passthrough
+// (default false) sends a client's prompt_cache_retention on, for an upstream that takes it; the
+// ChatGPT backend does not, and a SIWC sign-in never sends it.
 //
 // Every request is sent in the shape the Codex endpoint takes: streamed, not stored, encrypted
 // reasoning included, sampling settings removed (see shape). Requests in Chat Completions,
@@ -42,6 +48,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
+	"regexp"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/llm"
@@ -99,11 +107,35 @@ type settings struct {
 	Images *bool `json:"images"`
 	// SIWCIdentifier names this program to a SIWC sign-in (see siwcIdentifier).
 	SIWCIdentifier string `json:"signin_with_chatgpt_identifier"`
+	// CodexClientVersion is the version in the User-Agent sent in place of the client's own
+	// (see userAgent); empty means defaultCodexVersion.
+	CodexClientVersion string `json:"codex_client_version"`
+	// ImageGenerationOffModels lists the models (names or patterns, see imageOff) that are not
+	// offered the image_generation tool.
+	ImageGenerationOffModels []string `json:"image_generation_off_models"`
+	// PromptCacheRetentionPassthrough sends the client's prompt_cache_retention on, where the
+	// upstream takes it.
+	PromptCacheRetentionPassthrough bool `json:"prompt_cache_retention_passthrough"`
 }
 
 func (s settings) identity() bool  { return s.CodexIdentity == nil || *s.CodexIdentity }
 func (s settings) imageTool() bool { return s.ImageGenerationTool == nil || *s.ImageGenerationTool }
 func (s settings) imagesAPI() bool { return s.Images == nil || *s.Images }
+
+// imageOff reports whether the account's image_generation_off_models names model: an exact name
+// or a pattern with * and ?, in any case.
+func (s settings) imageOff(model string) bool {
+	model = strings.ToLower(model)
+	for _, p := range s.ImageGenerationOffModels {
+		if ok, _ := path.Match(strings.ToLower(p), model); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// codexVersionPattern is what a codex_client_version may be: it goes into a header.
+var codexVersionPattern = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._+-]*$`)
 
 func (s settings) authBase() string {
 	if v := sdk.TestLoginHost(s.AuthBaseURL); v != "" {
@@ -122,6 +154,14 @@ func readSettings(raw json.RawMessage) (settings, error) {
 	// The identifier goes into a header and a sign-in URL.
 	if strings.ContainsFunc(s.SIWCIdentifier, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
 		return s, &llm.Error{Code: llm.CodeInvalidRequest, Message: "account settings are not valid: signin_with_chatgpt_identifier holds a control character", Scope: llm.ScopeCredential}
+	}
+	if v := s.CodexClientVersion; v != "" && !codexVersionPattern.MatchString(v) {
+		return s, &llm.Error{Code: llm.CodeInvalidRequest, Message: "account settings are not valid: codex_client_version must be a version such as 0.154.0", Scope: llm.ScopeCredential}
+	}
+	for _, p := range s.ImageGenerationOffModels {
+		if _, err := path.Match(p, ""); err != nil {
+			return s, &llm.Error{Code: llm.CodeInvalidRequest, Message: "account settings are not valid: image_generation_off_models has a malformed pattern " + fmt.Sprintf("%q", p), Scope: llm.ScopeCredential}
+		}
 	}
 	return s, nil
 }

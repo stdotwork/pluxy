@@ -136,7 +136,6 @@ fn trusted_start(app: &tauri::AppHandle, a: &Action) -> Result<(bool, String), S
 /// Shows a native window titled title with one button and presses it with native input: its
 /// press handler calls f with a gesture made there, as a trusted native launcher's would. For
 /// other native checks that start a trusted call (`routing_native.rs`).
-#[cfg(target_os = "linux")]
 pub(crate) fn click(
     app: &tauri::AppHandle,
     title: &str,
@@ -150,8 +149,8 @@ pub(crate) fn click(
     })
 }
 
-/// A program the fixture launch names, which ends at once with code: a shell script, or a
-/// command script on Windows.
+/// A program the fixture launch names (reviewed, never run): a shell script that ends at once with
+/// code, or on Windows a file named `.exe` that starts `MZ`, the only kind a launch starts there.
 fn fixture_program(path: &Path, code: u8) -> Result<(), String> {
     #[cfg(unix)]
     {
@@ -161,7 +160,7 @@ fn fixture_program(path: &Path, code: u8) -> Result<(), String> {
     }
     #[cfg(windows)]
     {
-        fs::write(path, format!("@exit /b {code}\r\n")).map_err(|e| e.to_string())
+        fs::write(path, format!("MZ fixture {code}\r\n")).map_err(|e| e.to_string())
     }
 }
 
@@ -189,7 +188,7 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
     fs::create_dir(&dir).map_err(|e| e.to_string())?;
     let checked = (|| {
         let name = if cfg!(windows) {
-            "fixture-script.cmd"
+            "fixture-program.exe"
         } else {
             "fixture-script"
         };
@@ -216,10 +215,12 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
                 program: None,
                 opens: None,
                 terminal_adapter: pkg,
+                adapter_program: None,
                 environment_revision: "1".into(),
                 environment_review: vec![],
                 secret_uses: vec![],
             }),
+            environment: None,
         };
         let id = ask(app, main, &a)?;
         let snapshot = || {

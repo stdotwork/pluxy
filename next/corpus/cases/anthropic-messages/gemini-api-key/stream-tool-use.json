@@ -266,7 +266,7 @@
           "Accept-Encoding": "gzip",
           "Content-Type": "application/json",
           "User-Agent": "Go-http-client/1.1",
-          "X-Goog-Api-Key": "sk-corpus-upstream"
+          "X-Goog-Api-Key": "sk-Cq7Vx2Np9Lw4Zr8"
         },
         "method": "POST",
         "path": "/v1beta/models/gemini-corpus:streamGenerateContent?alt=sse"
@@ -277,7 +277,7 @@
     {
       "path": "client.events",
       "kind": "intended",
-      "reason": "The new core writes a Messages stream from a Gemini reply with each thought signature as a thinking block of its own holding the signature, before the part it came on, as today's core does, but without the empty text block today's core adds after a signature that came on an empty text part, and tool_use ids as call_<n> when Gemini sends none (today's core uses the function name and a counter).",
+      "reason": "The new core writes a Messages stream from a Gemini reply with each thought signature as a thinking block of its own holding the signature, before the part it came on, as today's core does, but without the empty text block today's core adds after a signature that came on an empty text part, and tool_use ids as call_<responseId>_<n>, unique across replies, when Gemini sends none (today's core uses the function name and a counter).",
       "want": [
         {
           "data": {
@@ -330,7 +330,7 @@
         {
           "data": {
             "content_block": {
-              "id": "call_1",
+              "id": "call_resp-corpus_1",
               "input": {},
               "name": "get_weather",
               "type": "tool_use"

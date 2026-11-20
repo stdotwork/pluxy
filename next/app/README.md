@@ -30,7 +30,7 @@ server and to the person's other computers.
 
 | Mode | What the app does | When the app quits |
 | --- | --- | --- |
-| Run core here (`managed`) | Runs one of its own core versions ([below](#the-apps-own-core)) with a config of its own, `core/config.json` in the app's data folder. The first start writes that config with a free loopback port, which then stays the core's, new random keys, and folders for credentials and packages beside it. After that the file is yours to edit; the app only reads its `management_key`. | Stops that core (SIGTERM, then a kill after 10 seconds). On Linux the core also gets SIGTERM if the app dies without stopping it; on macOS it runs on, holding its port, until it is stopped. |
+| Run core here (`managed`) | Runs one of its own core versions ([below](#the-apps-own-core)) with a config of its own, `core/config.json` in the app's data folder. The first start has the core write that config (`pluxy init -port 0`): a free loopback port, which then stays the core's, new random keys, and folders for credentials and packages beside it. After that the file is yours to edit; the app only reads its `management_key`. | Stops that core (SIGTERM, then a kill after 10 seconds). On Linux the core also gets SIGTERM if the app dies without stopping it; on macOS it runs on, holding its port, until it is stopped. |
 | Core on this computer (`local`) | Connects to a core that already runs on a loopback address (`127.0.0.0/8`, `::1` or `localhost`), such as a system service. You give its address and management key. | Leaves it running. The app never starts or stops it. |
 | Remote core (`remote`) | Connects over https only, so the key is never sent in the clear. You can name a PEM file of certificate authorities to trust for that core, for a certificate you made yourself; without one, the usual public roots are used. The core's address is shown next to the app's name. | Leaves it running. |
 
@@ -164,10 +164,19 @@ mark: then the next start puts the same config back once more. If the app stops 
 starts, it does the same at its next start, also when that was a reinstall or rollback of the
 selected version; a copy it cannot read is an error, and the config is left as it is. From the
 moment the app begins to stop its core, or sees it exit, it sends nothing more to that address.
-On Windows the core binds the address itself and the app keeps no copy of the socket: between
-a crash of the core and the moment the app sees it exit (up to a tenth of a second: it checks
-every 100 ms), any call the app makes still goes to that address with the management key, where
-another user's program could have started listening ([Limits](#limits)). On Linux and macOS the app keeps its
+On Windows the core binds the address itself and the app keeps no copy of the socket. Another
+user's program can then get the core's connections: one that starts listening on that address
+between a crash of the core and the moment the app sees it exit (up to a tenth of a second: it
+checks every 100 ms), or one that stays bound to the wildcard address `0.0.0.0` on that port the
+whole time the core holds its loopback address, which Windows allows another account, and which
+receives the connections as soon as the core's socket closes. So before the app sends anything
+on a new connection to its core, it reads the system's TCP table: the other end of that very
+connection (its own addresses and ports) must belong to the core's own process. If it does not,
+or the table does not show it for at least a second, the app sends nothing on it, and the call
+fails with the reason (addresses and process IDs only): which process accepted the connection, or
+that the connection is not in this computer's table. Each client of the core holds its own
+handle on the core's process for as long as it lives, so the core's process ID cannot pass to
+another process meanwhile, even after the core has ended. On Linux and macOS the app keeps its
 own copy of the core's listening socket for as long as anything in the app could still send
 there, so no other program can listen on that address in between: not while a crashed
 core's exit is being noticed, and not while the core drains after a stop, the app's or a SIGTERM
@@ -186,7 +195,7 @@ once confirmed, the app copies it into a version of its own, `custom-<its SHA-25
 still a regular file of that size and digest (at most 512 MiB; a FIFO or device is refused
 without being read; on Unix it must be executable, on Windows a program image named `.exe` or
 `.com`), and runs the copy. Only the program is copied, nothing beside it (such as
-`bundled/`), so an adopted core starts without the bundled packages a release brings. An adopted
+`bundled/`), so an adopted core has none of the bundled packages a release brings to install. An adopted
 program has no signature.
 
 The app only ever stops the core process it started. A core it did not start, such as a system
@@ -357,6 +366,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `device_list` | This device's extension catalog |
 | `device_registries` | What the registries in `device-registries.json` offer this computer |
 | `device_install` | Installs or updates a package from one of those registries |
+| `device_install_wsl` | Installs a native tool's Linux build (`linux/amd64` or `linux/arm64`) for its active release, through a native confirmation ([Linux build for WSL](app-host/README.md#linux-build-for-wsl)) |
 | `device_install_file` | Opens the native file chooser and installs or updates the package chosen there (Linux) |
 | `device_enable`, `device_remove`, `device_rollback` | Enables or disables (a native tool only through its native confirmation), removes, or rolls back a package on this device |
 | `device_imports` | Allows a curated web package's native imports, through a native confirmation, or revokes them |
@@ -365,16 +375,18 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `access_signer` | Opens a native confirmation to approve a device package's signer for its source |
 | `access_grant` | Opens the native file chooser for a package's declared resource, then a native confirmation, and keeps the grant |
 | `access_revoke` | Revokes a grant, answering once the reads under it have finished |
-| `program_call`, `program_cancel` | Calls an operation of an admitted native tool, starting it if it is not running; cancels a call by the ticket it was given |
+| `program_call`, `program_cancel` | Calls an operation of an admitted native tool, starting it if it is not running, on this computer or in a WSL environment the window names (`environment`, Windows); cancels a call by the ticket it was given |
 | `program_status` | Whether a native tool runs, its leases, how it last stopped, its crashes in a row and backoff, calls of unknown outcome, replaced releases still draining, its vault journals, open and recently ended, or why they cannot be read, and its managed runtimes, running, ended or `unknown` (left running by a run of the app that did not stop them) |
-| `vault_secret_add` | Opens native key entry and keeps the secret typed there in the vault under a label; returns only its ID (Linux) |
-| `vault_secrets`, `vault_secret_remove` | The vault's secrets, by ID and label (and a client key's binding), never their values; removes one (Linux) |
-| `client_key_capture` | After a native confirmation, asks the connected core for a new client key for a native tool and keeps it in the vault, bound to that core and tool; returns its ID, label and binding, never the key (Linux) |
-| `client_key_enter` | Opens native key entry for an existing client key of the connected core and keeps it the same way once core accepts it (Linux) |
+| `vault_secret_add` | Opens native key entry and keeps the secret typed there in the vault under a label; returns only its ID |
+| `vault_secrets`, `vault_secret_remove` | The vault's secrets, by ID and label (and a client key's binding), never their values; removes one |
+| `client_key_capture` | After a native confirmation, asks the connected core for a new client key for a native tool and keeps it in the vault, bound to that core and tool; returns its ID, label and binding, never the key |
+| `client_key_enter` | Opens native key entry for an existing client key of the connected core and keeps it the same way once core accepts it |
 | `core_alias_create` | After a native confirmation, adds a model alias (`fork`, so the model keeps its name) to the `model_alias` of each account added by login that serves the model in the connected core; refuses an alias core already serves for anything else and a model only accounts set in core's config serve, and takes the alias out again when core then does not serve it; returns the accounts that have it (Linux) |
 | `launcher_state` | The launcher's state: whether the execution program can be used, the remembered launches with their source, the recent folders and the notice setting |
 | `launcher_terminals` | The terminals the execution program finds, Automatic first |
-| `launcher_launch` | A new launch, prepared by the execution program; it always opens the native confirmation |
+| `launcher_launch` | A new launch, prepared by the execution program (in a WSL environment the window names, by `pluxy/wsl`); it always opens the native confirmation |
+| `environments_get` | The WSL environments the app knows, and whether WSL can be used here (Windows only) |
+| `environment_add`, `environment_remove` | Adds a WSL distribution and user, as `pluxy/wsl` checks them (which starts the distribution), or checks one again; forgets one, stopping the tools running there |
 | `launcher_start` | Starts a remembered launch again in one click, from the window only, with its remembered approval |
 | `launcher_forget` | Forgets a remembered launch, revoking its approval |
 | `launcher_settings` | Whether a one-click start shows a launch notice |
@@ -597,6 +609,25 @@ In this order:
    - macOS: the unpacked bundle and the installed one swap places in one step (`renamex_np` with
      `RENAME_SWAP`): the bundle is the old one or the new one. The old one, now in the
      `.pluxy-update-<hex>` folder, is removed once the new version runs and the old one has ended.
+
+   What an install leaves beside the installed copy is recorded in `updates/leftovers.json` before
+   the install goes on, with what identifies it beyond its name: on Windows the new program right
+   after it is created and the aside copy just before the rename (each by its volume serial number
+   and file ID), on macOS the `.pluxy-update-<hex>` folder right after it is created (by its device
+   and inode, read through the open folder, which must be empty and yours alone). When the record
+   cannot be written, the install deletes what it just made and stops. Should the app stop in the
+   moment between making one and recording it, that empty folder or file stays unrecorded, and no
+   later start removes it. Removal at a later start goes through the record only. An entry that is
+   still the recorded file or folder (and, on macOS, a folder of yours) is removed without
+   following a link: on Windows through its open handle; on macOS what is in it through the open
+   folder, never entering a folder in it whose device differs from its own (a file system mounted
+   there; a mount that keeps the device, as a bind mount from the same file system does, is not
+   seen), then the emptied folder by its name only while that name still holds it. An entry whose
+   name is gone or now holds something else (on Windows a folder too) is dropped from the record
+   and nothing at that name is deleted; one still in use, or with a file system mounted in it,
+   stays recorded for the next start. A failed or cancelled install removes what it made the same
+   way, only while it is still what it made. The folder the installed copy is in is never listed,
+   so whatever someone else put there, even under one of these names, stays.
 7. The app stops as Quit does (its native tools, its managed runtimes and its own core stop, in
    that order; detached launches run on) and hides its window, but keeps its profile and starts the
    new version as its successor, handing the profile over so no other launch takes it meanwhile
@@ -900,7 +931,9 @@ requester, action and outcome, including refusals. Page/Import pending entries h
 limit of 16; trusted requests have a separate limit of 64. Page dialogs focus Cancel and keep
 Confirm disabled for one second after mapping. (On macOS a button takes the keyboard focus only
 with full keyboard access turned on; Cancel is the default button there, which Return presses.)
-A launch that opens a file in the person's own app is refused before review off Linux. Non-UTF-8 paths are refused before review;
+A launch that opens a file in the person's own app takes the app the system picks: on Linux by
+the file's content type, on Windows and macOS by its extension
+([Launches and managed runtimes](app-host/README.md#launches-and-managed-runtimes)). Non-UTF-8 paths are refused before review;
 Unicode format characters (including bidi and zero-width characters), control characters and
 Pango line separators (U+2028/U+2029) are displayed as escaped Unicode.
 
@@ -941,6 +974,17 @@ approval; so does revoking it in the tray's **Remembered launches…**, which al
 the menu. The list, the recent folders and the notice setting are in `launcher.json` beside
 `connection.json`, readable only by your user; it holds no secret (a secret field holds a vault
 secret's ID), and a damaged file is moved aside as `launcher.json.corrupt-<time>`.
+
+On Windows, a launch can also start **in WSL**, in a distribution and as a user the app knows
+([Tools in WSL](app-host/README.md#tools-in-wsl-windows)): `pluxy/wsl` prepares it inside the
+distribution (the program found on the `PATH` that `wsl.exe --exec` gives, with no login shell, or
+the full path given; the folder in the distribution, by default the user's home), and the execution
+program launches that `wsl.exe` command. It opens in the Windows console (no other terminal is
+offered there); a terminal launch takes no standard input and is detached only. The confirmation
+shows where it starts and that the program inside the distribution is found when it starts, not
+checked by the app, which cannot hold a file there. Its recent folders and its remembered launch go
+by the client and the environment, such as **Claude Code (WSL Ubuntu/bob)**; a launch remembered
+for one distribution or user never starts in another.
 
 Detached launches keep running after the app quits, each in a transient systemd scope of its own
 when a systemd user manager runs ([Launches](app-host/README.md#launches-and-managed-runtimes)). The
@@ -983,6 +1027,23 @@ settings. The card's terminal list loads again whenever this device's packages c
 (`pluxy-device`), such as when the launcher is enabled from Beginner Mode; a chosen terminal the
 list no longer offers falls back to Automatic (`src/startCli.ts`). Every client page's Start CLI
 does the same.
+
+**In WSL** (Windows): the page's **Environment / configuration directory** block
+(`src/environmentBlock.tsx`, shared by client pages) chooses **Windows local** or **WSL
+subsystem**, then a **Distribution** and a **User**. Choosing WSL lists the distributions without
+starting any (`pluxy/wsl`, which must be installed and enabled); reading a distribution's users
+starts it, which the block says. Picking a user has the app check that distribution and user and
+keep its record ([Tools in WSL](app-host/README.md#tools-in-wsl-windows)); **Detect again** lists
+them again. Every call of the page then goes to Claude Code's Linux build running in that
+distribution as that user, so the default file is that user's `~/.claude/settings.json` and typed
+paths are paths in the distribution (a `\\wsl.localhost\<distribution>\…` or `\\wsl$\…` path of the
+chosen distribution becomes its Linux path; any other network path is refused there). The first
+use asks to **Install the Linux build for WSL**, in its own native confirmation. **Start CLI**
+starts Claude Code in that distribution through the launcher, in the Windows console. The page
+keeps its last choice for the window; the app checks it against its records on every call.
+**Apply** does not work in WSL yet: it needs a client key or one of the vault's secrets, and the
+vault's secrets, client key capture and native key entry are Linux only for now, so on Windows
+there is no key to give. Reading, previewing, backups and **Start CLI** work there.
 
 **Backup and restore** (`src/backups.tsx`, the backup browser every writer's page shows) keeps
 manual backups of the previewed file in the app's vault through the tool's standard backup
@@ -1283,7 +1344,7 @@ first; a tool a registry only offers is not listed, since Beginner Mode is where
 **Manage Clients** page (Control group) has a checkbox for every client with a search box, **Restore
 automatic display** and **Save**; Save is off for an empty selection ("Keep at least one client
 visible."). The choice is kept in the window's prefs (`pluxy.agent-clients`, on this device, like the
-theme), and saving automatic removes it. Whichever client page is open stays listed while it is
+Themes page's layout choices), and saving automatic removes it. Whichever client page is open stays listed while it is
 open, so hiding it never strands the person. Beginner Mode still offers every client, and the list
 logic is in `src/clientListItems.ts`.
 
@@ -1313,7 +1374,8 @@ started by `go run ./e2e/panelcore` from `next/`, on random loopback ports in te
 a fresh HOME and XDG folders, once in each mode. The app runs only a core in its own store, so
 each managed run but the core steps' (below) starts with one there: the signed test release 2.0.0,
 installed as a confirmed install would (`session_probe install-core`), whose bundled test
-packages the sign-ins and pages need beside the core's program; the startup runs and the
+packages the sign-ins and pages need beside the core's program (a core's first start installs
+none: the session installs them from the bundled registry before its steps); the startup runs and the
 early-exit run instead adopt their core program first (`session_probe adopt-core`), which copies
 the program alone. In each it checks that the window's webview
 reaches every command, that at the top of an extension page's webview Tauri refuses every app
@@ -1431,6 +1493,13 @@ stops the app's own core; the next launch opens where the window was. A pending 
 polls are counted while the window shows, while it is unmapped (as a window manager minimizes it;
 GDK then reports it minimized) and once it is mapped again. Without a tray watcher, closing quits
 without asking, with Minimize to Tray or Ask saved.
+
+One more session in managed mode (`native/privacy.ts`) runs the privacy mode checks
+(`src-tauri/src/native_privacy.rs`) and then the themes checks (`src-tauri/src/native_themes.rs`):
+the T3 Code theme file `ui/tests/fixtures/t3-docs-nightfall.json`, pasted on the Themes page and
+added, paints the window in its canvas colour with the root's `dark` class, the picker lists it,
+`GET /themes` through the app's host has it as `current`, and the next launch paints in it. The
+session ends on the Themes page in that theme.
 
 Then, in a session of its own (`native/instances-session.ts`), with the core program adopted in
 each profile, it launches the app again and again on one profile and checks that each later launch exits 0 within 10 seconds, starts no app or core of its own (it counts the
@@ -1637,11 +1706,36 @@ app supported there:
 - The management key's native entry and rotation, and the native confirmations, have Win32
   dialogs on Windows and AppKit dialogs on macOS ([How the app reaches core](#how-the-app-reaches-core),
   [Native confirmations](#native-confirmations)).
-- Four parts of the native test run there:
+- Six parts of the native test run there:
   - the platform session (`native/platform.ts`, `PLATFORM_SHARDS` in `native/shards.ts`): one app
     per profile (a named pipe on Windows, a Unix socket on macOS), the login item (the `Run` key on
     Windows, a LaunchAgent on macOS), the tray and the close preference;
   - the package session: the test package and the release gate ([Packages](#packages));
+  - the tools sessions (`native/platform-tools.ts`, the `tools` shard): the signed tool sessions
+    run.ts runs on Linux (admission, the program host with its swaps, routing with jobs, the vault
+    with client keys), and a launcher check of its own
+    (`src-tauri/src/launcher_platform_native.rs`), in the app built with the test trust, in local
+    mode against a test core. The client keys are made on that test core, not on the app's own core
+    as on Linux. On Windows the client-key check reads the agent's command line from Windows, but
+    its environment is the agent's own report, as Windows gives no supported way to read another
+    process's. The launcher check starts a stand-in agent in each terminal kind (Console window,
+    Command Prompt and PowerShell on Windows; a real Terminal window on macOS), through an npm
+    command shim run by the runner's Node (Windows), directly with a vault secret by reference and
+    on its stdin, and managed; starts a remembered terminal launch from the tray; and checks the
+    refusals of Windows' program rules and of a terminal launch with stdin or a managed lifetime.
+    It leaves out Linux's key consumers and its crash, chain, page, changed and idle steps, which
+    wait for their own slices; on macOS its tray step calls the menu's event handler with the
+    item's ID, as no menu shows without a person holding it open (on Windows it sends the menu's
+    own command message);
+  - the open session (`native/platform-tools.ts`, the `open` shard, on the tools shard's build):
+    a tool's opening of a file through the system's own route
+    (`src-tauri/src/open_platform_native.rs`: on Windows the execution program's `open` mode, on
+    macOS `/usr/bin/open`) and the open rules' refusals, and the app's opening of an address in
+    the system's handler for https addresses (normally the default browser), with the session's
+    own https server on 127.0.0.1. It opens a `.txt` file
+    in Notepad or TextEdit, and on Windows a `.jsonl` file in the fixture program, through a
+    per-user file type of the check's own that it removes again; on macOS no app opens `.jsonl`
+    files on GitHub's image, so it checks that refusal there ([Limits](#limits));
   - the update session: the test package (a folder bundle on Windows, an app bundle on macOS)
     updates itself to its signed newer version and rolls back, and crafted installs are refused
     ([Application update](#application-update));
@@ -1653,7 +1747,8 @@ app supported there:
     repaired, the running version installed again), each change through the native confirmation,
     whose text is checked to show what will run; a core the runner started before the app must
     still answer afterwards, untouched. [Limits](#limits) says how its input is made.
-- The vault's private storage is built and unit tested there ([Limits](#limits)).
+- The vault's private storage is built there, and its unit tests and the tools shard's vault
+  session check it ([Limits](#limits)).
 - How the app starts, holds and stops processes is built there (`src-tauri/src/owned/`: a job
   object on Windows, a process group on macOS), and CI checks that each of its lifetime tests ran
   and passed ([Windows and macOS](app-host/README.md#windows-and-macos)). Native tools, their
@@ -1661,12 +1756,12 @@ app supported there:
   version, held until it accepts itself) reach it at run time there, and so does the app's own
   core ([The app's own core](#the-apps-own-core)), its changes confirmed natively.
 - Native tools run there as on Linux: enabling a package and its native imports, the router, the
-  program host, the launch service and the launcher, and the vault for tools' backups and
-  journals, with the differences [Windows and macOS](app-host/README.md#windows-and-macos) lists.
-  A client page reaches its writer tool only where that tool has a program for the system
-  ([app tools](../app-tools/README.md) says which do). Clippy and the Rust tests check this there;
-  no native session starts a tool on those systems yet, and outside tests nothing can be
-  installed to run, as there are no production trust roots ([Limits](#limits)).
+  program host, the launch service and the launcher, and the vault for tools' backups and journals,
+  secret entry and client keys, with the differences
+  [Windows and macOS](app-host/README.md#windows-and-macos) lists. A client page reaches its writer
+  tool only where that tool has a program for the system ([app tools](../app-tools/README.md) says
+  which do). Clippy, the Rust tests and the tools sessions check this there; outside tests nothing
+  can be installed to run, as there are no production trust roots ([Limits](#limits)).
 - On Windows, the page document's address is `http://pluxy-page.localhost/`, and the app holds a
   page's frame to its site through WebView2's frame navigation event (`src-tauri/src/page_frames.rs`).
 - The app tools' readers, usage parsers and execution program, the writer library and the
@@ -1677,11 +1772,10 @@ Access gives no page anything there: approving a signer and making a grant are L
 signer or grant can be made. On Windows its commands and a page's Access calls are refused; on
 macOS its list, revocation and a page's calls answer, with nothing granted.
 
-Still refused at run time there: a native tool's `files` frames (saving a file), the vault's
-secret entry and list, client keys and core aliases, installing a package from a file, a launch
-that opens a file and opening an address in the browser. Changing the release feed works there
-through the native confirmation. The app updates itself, with test updater trust only, as an
-AppImage on Linux, as a folder bundle's program on Windows and as an app bundle on macOS
+Still refused at run time there: a native tool's `files` frames (saving a file), core aliases and
+installing a package from a file. Changing the release feed works there through the native
+confirmation. The app updates itself, with test updater trust only, as an AppImage on Linux, as a
+folder bundle's program on Windows and as an app bundle on macOS
 ([Application update](#application-update)).
 
 ## Limits
@@ -1701,6 +1795,10 @@ AppImage on Linux, as a folder bundle's program on Windows and as an app bundle 
   from them (Homebrew's libraries, a script's interpreter). A script's interpreter opens the
   checked script again by its path, as for a direct launch. The app's
   own core and native tools never run from such a folder: the app refuses them there.
+- On macOS the app refuses a program, the app's own core and native tools included, that is on a
+  volume that ignores ownership (Finder's "Ignore ownership on this volume", the default for many
+  external drives), or that lies below a folder on one: there macOS shows every file as yours and
+  lets any user change it. Turn ownership on for that volume, or move the program.
 - On Linux a terminal finds a launch's program by its path as it starts, so the app refuses a
   terminal launch whose program another user could change or redirect by then: a program below a
   folder that others, or a group other than your own private group, may write, one reached
@@ -1711,8 +1809,15 @@ AppImage on Linux, as a folder bundle's program on Windows and as an app bundle 
   `/etc/group`: ones from LDAP, sssd or systemd-userdb are not seen. The refusal names the path and a
   `chmod g-w,o-w` that fixes it. Nothing stops your own processes from swapping the program
   before the terminal starts it. A direct launch runs the file the app checked, wherever it is.
-- Vault: on Windows and macOS only native tools use it, for their backups and journals; secret
-  entry, the secrets list, client keys and core aliases are Linux only. On Windows it is in the
+- On Windows the terminal (the execution program) runs a launch's program by its path, so it
+  refuses a program that another account may change, or whose folder it may change, or that it
+  could swap by removing or renaming what a folder above holds: only you, SYSTEM,
+  Administrators and TrustedInstaller may. The app does not check this before the launch, so the
+  refusal shows in the terminal's window, naming the path and why. A folder whose access list
+  has an entry of a kind the terminal does not read (such as a conditional entry) is refused
+  too. Nothing stops your own processes, or an
+  administrator's, from swapping the program before the terminal holds it.
+- Vault: on Windows it is in the
   local data folder, private by its access list. Secrets are kept in a file only the user may read
   (0600 on Linux and macOS) in the app's data folder, not in the system keyring, and only exact
   values are redacted. On macOS, where an extended access list can let others in whatever the mode,
@@ -1733,16 +1838,43 @@ AppImage on Linux, as a folder bundle's program on Windows and as an app bundle 
   mount ID), so no page gets access elsewhere ([Platforms](#platforms)); web packages only; reads only (no writes or watchers); a signature only
   from a registry, not for a package installed from a file; document portal grants last one
   session.
-- The native test runs on Linux, except its platform, package, update and dialogs sessions, which
-  CI runs on Windows and macOS ([Platforms](#platforms) says what they check and what still
+- The native test runs on Linux, except its platform, package, tools, open, update and dialogs sessions,
+  which CI runs on Windows and macOS ([Platforms](#platforms) says what they check and what still
   refuses there).
+- On Windows the launcher and open sessions start the app outside the job the runner's steps
+  run in, which lets no detached launch leave it: WMI's `Win32_Process.Create` starts the fixture
+  program, which starts the app as its child, with the app's output in files the session reads.
+  Its terminal launches run the execution program's test build, whose Console window does not wait
+  for Enter and whose Command Prompt or PowerShell after the agent runs one fixed command and exits,
+  so the session does not see the prompt a person gets there.
+- The open session runs only on GitHub-hosted runners, and its steps that change the machine (the
+  `.jsonl` file type, the browser, and on macOS the test certificate authority) fail anywhere
+  else. On macOS the browser asks for the session's address only from a server it
+  trusts, so the session adds a test authority made for the run to the System keychain's trust,
+  then deletes the authority's certificate; its trust setting stays, as removing that asks for a
+  password, but nothing can use it: the authority's key is never written down. The step closes
+  only the browser it started: on Windows the windows of the processes started with the session's
+  address, on macOS the default browser, which must not be running before. On Windows the opens
+  of `.txt` and `.jsonl` files are detached launches, which the app refuses while it runs in a
+  job that keeps what it starts, so the session starts the app outside the runner's job as the
+  launcher session does.
+- On Windows the execution program's `open` and `app` modes start with no console
+  (`CREATE_NO_WINDOW` instead of a console of their own), so none flashes. No test checks that
+  the flag reaches the process: the unit tests cannot start a detached launch inside the job
+  GitHub's runners run them in, and the native open session checks the app that opened the file,
+  not the opener's console.
+- On Windows the program session does not check which processes hold the tool's pipes, as it
+  does on Linux and macOS: Windows lists no process's handles to an unprivileged one. It checks
+  instead that the tool's three standard handles are pipes and that a file the app holds through
+  an inheritable handle is not open in the tool.
 - The dialogs session runs only on disposable CI runners (`native/runner.ts`): on Windows the app's
   folders are the account's known folders, which no environment variable redirects, so it refuses to
-  start when they exist and removes only the ones it made. Its input does not come from a keyboard:
-  on Windows it is `SendInput` when the dialog has the foreground, otherwise the same key messages
-  posted to the focused control; on macOS key and mouse events made in the app and given to AppKit.
-  Both go through the app's real message handling and the dialogs' controls, but miss what only a
-  person at the machine would hit, such as another app taking the keyboard. The session's summary
+  start when they exist and removes only the ones it made. Its input, and the keys the tools shard's
+  vault session types into native key entry, do not come from a keyboard: on Windows they are
+  `SendInput` when the dialog has the foreground, otherwise the same key messages posted to the
+  focused control; on macOS key and mouse events made in the app and given to AppKit. Both go
+  through the app's real message handling and the dialogs' controls, but miss what only a person at
+  the machine would hit, such as another app taking the keyboard. The dialogs session's summary
   counts which way each input went.
 - No installer or bundled core yet: the only packages are the test AppImage, the test folder
   bundle (Windows) and the test app bundle (macOS), which are not for release.
@@ -1758,23 +1890,25 @@ AppImage on Linux, as a folder bundle's program on Windows and as an app bundle 
   `updates/kept/` in the app's data folder in place of the installed one to run it again. On
   Windows a new version waits at most 120 seconds for the old one to end and free the profile,
   then exits.
-- Opening an address in the browser works on Linux only.
+- Opening an address in the system's handler for https addresses (normally the default browser; an
+  app that claims the address's domain may take it instead) works on all three systems: GIO on
+  Linux, the `https` class's `open` verb (`ShellExecuteExW`) on Windows, `NSWorkspace` on macOS;
+  only an https address reaches it.
 - Release notes tables show their columns left-aligned whatever alignment the Markdown asks for:
   the renderer writes alignment as inline style, which the notes' policy refuses.
 - The app's own core comes only from a local index file for now; an https source joins with the
   release feed. On Windows and macOS its steps run in the dialogs session's core run; the
   managed-core client-key check runs on Linux only. The store's Windows rules are checked by its
   unit tests on the Windows CI runner.
-- On Windows the app holds no copy of its core's listening socket, so in the moment between a
-  crash of the core and the app seeing it exit (up to a tenth of a second), any call the app
-  makes sends the management key to that address, where another user's program could have
-  started listening. Linux and macOS hold the socket and have no such gap.
+- On Windows, other programs that call the app's core, such as agents with client keys, are not
+  covered by the app's check: after a crash of the core, another user's program listening on
+  the core's port (on its address, or on the wildcard address all along) gets their calls and
+  the client keys in them. Only the app's own calls are checked.
 - Recovery history lasts for the current app process; quitting the app ends its recovery window.
   A supervisor thread starts the core and stays until it exits, since on Linux the parent-death
   signal follows the thread that started it.
 - Native key entry and confirmations have no webview entry fallback on any system
-  ([Platforms](#platforms) says where they run). Secret entry for the vault and client keys stays
-  Linux only, with the vault.
+  ([Platforms](#platforms) says where they run).
 - The native dialogs on Windows and macOS are not modal to the whole app: only key entry is modal,
   to the window. No dialog runs a modal loop of its own, which would hold the app's other work.
 - Hidden native entry keeps keys out of the webview API. It does not isolate them from another

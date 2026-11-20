@@ -90,6 +90,26 @@ func fakeExtension(mode string) {
 		watchFake(n)
 		return
 	}
+	if mode == "models-from-17" {
+		modelsFrom(17)
+		return
+	}
+	if mode == "models-from-18" {
+		modelsFrom(18)
+		return
+	}
+	if mode == "account-closed-19" {
+		accountClosedExtension(19)
+		return
+	}
+	if mode == "account-closed-20" {
+		accountClosedExtension(20)
+		return
+	}
+	if mode == "echo-pieces" {
+		echoPieces()
+		return
+	}
 	if mode != "sleep-child" { // the child shares its parent's folder
 		_ = os.WriteFile("pid", []byte(strconv.Itoa(os.Getpid())), 0o644)
 		_ = os.WriteFile("env", []byte(strings.Join(os.Environ(), "\n")), 0o644)
@@ -657,6 +677,169 @@ func TestStartPassesOnlyTheTestLoginHostsVariable(t *testing.T) {
 		}
 		if strings.Contains(env, "PLUXY_HOSTTEST_OTHER") {
 			t.Errorf("another variable of core's reached the extension:\n%s", b)
+		}
+	}
+}
+
+func accountClosedExtension(minor int) {
+	socket := os.Getenv(protocol.EnvSocket)
+	ln, err := net.Listen("unix", socket)
+	if err != nil {
+		os.Exit(1)
+	}
+	fmt.Print(protocol.HandshakeLine(protocol.Version, socket))
+	closedReply := protocol.Reply{Event: llm.Event{
+		Type:  llm.EventError,
+		Error: &llm.Error{Code: llm.CodeAccountClosed, Status: 403, Retryable: true, Scope: llm.ScopeCredential, Message: "Account suspended."},
+	}}
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			os.Exit(0)
+		}
+		go func() {
+			defer conn.Close()
+			var call protocol.Call
+			if protocol.ReadFrame(conn, &call) != nil {
+				return
+			}
+			switch call.Op {
+			case protocol.OpDescribe:
+				_ = protocol.WriteFrame(conn, protocol.Reply{
+					Event: llm.Event{Type: protocol.TypeDescribeResult},
+					Info: &protocol.Info{
+						ID: os.Getenv(protocol.EnvExtensionID), Version: "0.0.0",
+						Protocol: protocol.Version, ProtocolMinor: minor,
+						Operations: []string{protocol.OpGenerate, protocol.OpSession, protocol.OpCheck, protocol.OpModels, protocol.OpQuota, protocol.OpLogin, protocol.OpRefresh},
+					},
+				})
+			case protocol.OpSession:
+				_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: protocol.TypeSessionReady}})
+				var turn protocol.Call
+				if protocol.ReadFrame(conn, &turn) != nil {
+					return
+				}
+				_ = protocol.WriteFrame(conn, closedReply)
+				_, _ = io.Copy(io.Discard, conn)
+			default:
+				_ = protocol.WriteFrame(conn, closedReply)
+				_, _ = io.Copy(io.Discard, conn)
+			}
+		}()
+	}
+}
+
+// Core acts on account_closed only from an extension whose describe reports minor 20 or later;
+// from an older extension it is downgraded to permission.
+func TestAccountClosedRequiresProtocolMinor19(t *testing.T) {
+	for _, c := range []struct {
+		mode string
+		want string
+	}{
+		{"account-closed-19", llm.CodePermission},
+		{"account-closed-20", llm.CodeAccountClosed},
+	} {
+		t.Run(c.mode, func(t *testing.T) {
+			ext, err := Start(filepath.Join(fakePackage(t, c.mode), ManifestFile), Options{Log: io.Discard})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ext.Stop()
+			ctx := context.Background()
+			acct := protocol.Account{ID: "a", Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-1"}}
+
+			s := ext.Generate(ctx, acct, llm.Request{Model: "m"})
+			ev := s.Next()
+			s.Close()
+			if ev.Type != llm.EventError || ev.Error.Code != c.want {
+				t.Errorf("generate: %+v, want code %s", ev, c.want)
+			}
+
+			if _, e := ext.Check(ctx, acct); e == nil || e.Code != c.want {
+				t.Errorf("check: %+v, want code %s", e, c.want)
+			}
+			if _, e := ext.Models(ctx, acct); e == nil || e.Code != c.want {
+				t.Errorf("models: %+v, want code %s", e, c.want)
+			}
+			if _, e := ext.Quota(ctx, acct); e == nil || e.Code != c.want {
+				t.Errorf("quota: %+v, want code %s", e, c.want)
+			}
+			if _, e := ext.Refresh(ctx, acct); e == nil || e.Code != c.want {
+				t.Errorf("refresh: %+v, want code %s", e, c.want)
+			}
+			login := ext.Login(ctx, acct, protocol.Login{Method: "api_key"})
+			lev := login.Next()
+			login.Close()
+			if lev.Type != llm.EventError || lev.Error.Code != c.want {
+				t.Errorf("login: %+v, want code %s", lev, c.want)
+			}
+
+			sess, e := ext.OpenSession(ctx, acct, protocol.SessionInfo{Format: protocol.SessionOpenAIResponses})
+			if e != nil {
+				t.Fatalf("OpenSession: %+v", e)
+			}
+			defer sess.Close()
+			turn := sess.Turn(ctx, acct, llm.Request{Model: "m"})
+			tev := turn.Next()
+			turn.Close()
+			if tev.Type != llm.EventError || tev.Error.Code != c.want {
+				t.Errorf("session turn: %+v, want code %s", tev, c.want)
+			}
+		})
+	}
+}
+
+func modelsFrom(minor int) {
+	socket := os.Getenv(protocol.EnvSocket)
+	ln, err := net.Listen("unix", socket)
+	if err != nil {
+		os.Exit(1)
+	}
+	fmt.Print(protocol.HandshakeLine(protocol.Version, socket))
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		go func() {
+			defer conn.Close()
+			var call protocol.Call
+			if protocol.ReadFrame(conn, &call) != nil {
+				return
+			}
+			switch call.Op {
+			case protocol.OpDescribe:
+				_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: protocol.TypeDescribeResult},
+					Info: &protocol.Info{ID: os.Getenv(protocol.EnvExtensionID), Version: "0.0.0", Protocol: protocol.Version, ProtocolMinor: minor,
+						Operations: []string{protocol.OpGenerate, protocol.OpModels}}})
+			case protocol.OpModels:
+				_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: protocol.TypeModelsResult},
+					Models: &protocol.ModelList{OwnedBy: "test", From: protocol.ModelListFromAccount, Models: []protocol.Model{{ID: "m1"}}}})
+			}
+		}()
+	}
+}
+
+// ModelList.From is kept only when the extension reports protocol minor 18 or later.
+func TestModelsFromMinorVersionGating(t *testing.T) {
+	for _, tc := range []struct {
+		mode string
+		want string
+	}{
+		{"models-from-17", ""},
+		{"models-from-18", protocol.ModelListFromAccount},
+	} {
+		ext, err := Start(filepath.Join(fakePackage(t, tc.mode), ManifestFile), Options{Log: io.Discard})
+		if err != nil {
+			t.Fatal(err)
+		}
+		list, le := ext.Models(context.Background(), protocol.Account{ID: "a"})
+		ext.Stop()
+		if le != nil {
+			t.Fatalf("%s: %v", tc.mode, le)
+		}
+		if list.From != tc.want {
+			t.Errorf("%s: From = %q, want %q", tc.mode, list.From, tc.want)
 		}
 	}
 }

@@ -121,10 +121,12 @@
 
   .notice[data-tone="danger"] {
     color: var(--px-color-danger);
+    background: var(--px-color-danger-surface);
   }
 
   .notice[data-tone="warn"] {
     color: var(--px-color-warn);
+    background: var(--px-color-warn-surface);
   }
 
   .notice[data-tone="ok"] {
@@ -269,9 +271,13 @@
     transition: background var(--t);
   }
 
-  .item[data-clickable]:hover,
-  .item[aria-current="true"] {
+  .item[data-clickable]:hover {
     background: var(--px-color-surface-raised);
+  }
+
+  .item[aria-current="true"] {
+    background: var(--px-color-selected);
+    color: var(--px-color-selected-text);
   }
 
   .table .item[aria-current="true"] > :first-child {
@@ -370,10 +376,17 @@
     font: inherit;
     color: var(--px-color-text);
     background: var(--px-color-surface-raised);
-    border: var(--px-shape-border) solid var(--px-color-border);
+    border: var(--px-shape-border) solid var(--px-color-input-border);
     border-radius: var(--px-shape-radius);
     padding: calc(var(--s) * 2) calc(var(--s) * 2.5);
     width: 100%;
+  }
+
+  /* One colour in every browser: each has its own default, and Firefox also fades it. */
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--px-color-placeholder);
+    opacity: 1;
   }
 
   textarea.mono {

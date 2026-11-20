@@ -52,6 +52,24 @@ pub struct Client {
     agent: ureq::Agent,
 }
 
+/// The calls core takes as PUT: the config, the theme that is on, and one stored theme, whose
+/// ID parts are 1 to 64 of a-z, 0-9 and "-".
+fn put_allowed(path: &str) -> bool {
+    fn part(s: &str) -> bool {
+        (1..=64).contains(&s.len())
+            && s.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    }
+    if path == "/config" || path == "/theme" {
+        return true;
+    }
+    let mut parts = path.strip_prefix("/themes/").unwrap_or("").split('/');
+    matches!(
+        (parts.next(), parts.next(), parts.next()),
+        (Some(publisher), Some(name), None) if part(publisher) && part(name)
+    )
+}
+
 /// Why path may not be sent: it must be an absolute path under the management API, with no `..`
 /// segment, no fragment and no characters a URL cannot hold as they are.
 pub fn path_problem(path: &str) -> Option<String> {
@@ -128,6 +146,23 @@ pub fn certificates(pem: &[u8]) -> Result<Vec<Certificate<'static>>, String> {
     Ok(certs)
 }
 
+/// What a failed call's reply says: the reason when the app refused a connection the core's
+/// process did not accept (addresses and process IDs only), otherwise a fixed text, since a
+/// library error may include request data.
+fn transport_message(error: &ureq::Error) -> String {
+    #[cfg(windows)]
+    if let ureq::Error::Io(e) = error {
+        if let Some(why) = e
+            .get_ref()
+            .and_then(|e| e.downcast_ref::<core_tcp::NotTheCore>())
+        {
+            return format!("nothing sent to the app's core: {why}");
+        }
+    }
+    let _ = error;
+    "core transport failed".into()
+}
+
 // Classify transport failures without formatting library errors: those may include request data.
 fn transport_kind(error: &ureq::Error) -> &'static str {
     match error {
@@ -150,11 +185,229 @@ fn transport_kind(error: &ureq::Error) -> &'static str {
     }
 }
 
+/// The Windows client for the app's own core: its own plain TCP connector and transport, since
+/// ureq's TCP transport keeps its socket private and the check needs the socket's two ends.
+/// Written against ureq's unversioned transport API, which changes in minor releases (ureq is
+/// pinned to 3.5 in Cargo.toml for this).
+#[cfg(windows)]
+mod core_tcp {
+    use std::io::{self, Read, Write};
+    use std::net::TcpStream;
+    use std::sync::{Arc, Weak};
+    use ureq::unversioned::transport::{
+        Buffers, ConnectionDetails, Connector, LazyBuffers, NextTimeout, ShutdownHandle, Transport,
+    };
+
+    /// Connects to the app's core and passes the connection on only once
+    /// `managed::accepted_by` says the core's own process accepted that very connection (its
+    /// own local and remote address and port). The pin keeps the core's process ID from passing
+    /// to another process for as long as this client lives.
+    #[derive(Debug)]
+    pub(super) struct CoreConnector(pub(super) Arc<crate::owned::Pin>);
+
+    fn refused(why: String) -> ureq::Error {
+        ureq::Error::Io(io::Error::new(io::ErrorKind::PermissionDenied, why))
+    }
+
+    /// Why a connection was refused because the core's process did not accept it: addresses and
+    /// process IDs only, so the reply may carry it (`refusal`).
+    #[derive(Debug)]
+    pub(super) struct NotTheCore(pub(super) String);
+
+    impl std::fmt::Display for NotTheCore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(&self.0)
+        }
+    }
+
+    impl std::error::Error for NotTheCore {}
+
+    fn timed_out(e: io::Error, reason: ureq::Timeout) -> ureq::Error {
+        match e.kind() {
+            io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => ureq::Error::Timeout(reason),
+            _ => ureq::Error::Io(e),
+        }
+    }
+
+    impl Connector for CoreConnector {
+        type Out = Box<dyn Transport>;
+
+        fn connect(
+            &self,
+            details: &ConnectionDetails,
+            _chained: Option<()>,
+        ) -> Result<Option<Self::Out>, ureq::Error> {
+            if details.uri.scheme_str() != Some("http") {
+                return Err(refused(
+                    "the app's core is reached over plain http on this computer only".into(),
+                ));
+            }
+            let wait = details.timeout.not_zero().map(|t| *t);
+            let mut last = None;
+            let mut stream = None;
+            for addr in details.addrs.iter() {
+                let tried = match wait {
+                    Some(t) => TcpStream::connect_timeout(addr, t),
+                    None => TcpStream::connect(addr),
+                };
+                match tried {
+                    Ok(s) => {
+                        stream = Some(s);
+                        break;
+                    }
+                    Err(e) => last = Some(e),
+                }
+            }
+            let stream = match (stream, last) {
+                (Some(s), _) => s,
+                (None, Some(e)) => return Err(timed_out(e, ureq::Timeout::Connect)),
+                (None, None) => {
+                    return Err(refused("the core's address resolved to nothing".into()))
+                }
+            };
+            if details.config.no_delay() {
+                stream.set_nodelay(true)?;
+            }
+            let (local, peer) = (stream.local_addr()?, stream.peer_addr()?);
+            if let Err(why) = crate::managed::accepted_by(self.0.id(), local, peer) {
+                // Addresses and process IDs only.
+                eprintln!("pluxy-app: nothing sent to the app's core: {why}");
+                return Err(ureq::Error::Io(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    NotTheCore(why),
+                )));
+            }
+            let stream = Arc::new(stream);
+            (details.register_shutdown)(Arc::downgrade(&stream) as Weak<dyn ShutdownHandle>)?;
+            Ok(Some(Box::new(CoreStream {
+                stream,
+                buffers: LazyBuffers::new(
+                    details.config.input_buffer_size(),
+                    details.config.output_buffer_size(),
+                ),
+            })))
+        }
+    }
+
+    /// A plain TCP connection to the core, as ureq's own TCP transport is.
+    struct CoreStream {
+        stream: Arc<TcpStream>,
+        buffers: LazyBuffers,
+    }
+
+    impl std::fmt::Debug for CoreStream {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("CoreStream")
+                .field("peer", &self.stream.peer_addr().ok())
+                .finish()
+        }
+    }
+
+    /// The time left, or a timeout once none is.
+    fn left(t: NextTimeout) -> Result<Option<std::time::Duration>, ureq::Error> {
+        if t.after.is_zero() {
+            return Err(ureq::Error::Timeout(t.reason));
+        }
+        Ok(t.not_zero().map(|d| *d))
+    }
+
+    impl Transport for CoreStream {
+        fn buffers(&mut self) -> &mut dyn Buffers {
+            &mut self.buffers
+        }
+
+        fn transmit_output(
+            &mut self,
+            amount: usize,
+            timeout: NextTimeout,
+        ) -> Result<(), ureq::Error> {
+            let timeout = timeout.for_write();
+            self.stream.set_write_timeout(left(timeout)?)?;
+            let output = &self.buffers.output()[..amount];
+            (&*self.stream)
+                .write_all(output)
+                .map_err(|e| timed_out(e, timeout.reason))
+        }
+
+        fn await_input(&mut self, timeout: NextTimeout) -> Result<bool, ureq::Error> {
+            let timeout = timeout.for_read();
+            self.stream.set_read_timeout(left(timeout)?)?;
+            let input = self.buffers.input_append_buf();
+            let amount = loop {
+                match (&*self.stream).read(input) {
+                    Ok(n) => break n,
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(e) => return Err(timed_out(e, timeout.reason)),
+                }
+            };
+            self.buffers.input_appended(amount);
+            Ok(amount > 0)
+        }
+
+        fn is_open(&mut self) -> bool {
+            // Open while nothing waits to be read and the connection is not closed.
+            let mut s = &*self.stream;
+            if s.set_nonblocking(true).is_err() {
+                return false;
+            }
+            let open =
+                matches!(s.read(&mut [0u8]), Err(e) if e.kind() == io::ErrorKind::WouldBlock);
+            s.set_nonblocking(false).is_ok() && open
+        }
+    }
+}
+
 impl Client {
     /// A client for the core at base (an origin, such as `http://127.0.0.1:8400`). With certs,
     /// https replies are checked against those certificates only; otherwise against the usual
     /// public roots.
     pub fn new(base: &str, certs: Option<Vec<Certificate<'static>>>) -> Client {
+        Client::build(base, certs)
+    }
+
+    /// A client for the core the app started, at base on this computer. On Windows, where the
+    /// app holds no copy of the core's listening socket, each new connection is checked to be
+    /// the core's own before anything is sent on it (`managed::accepted_by`): another program
+    /// on the core's port (one listening there since the core ended, or one on a wildcard
+    /// address over it all along) gets no request, management key and all, the call fails as
+    /// `io`, and the app's log says why. The client holds a handle on the core's process for
+    /// as long as it lives (`ManagedCore::pin`), so the process ID it checks against is never
+    /// another process's. Elsewhere the app holds the core's socket while it calls
+    /// (`managed::ManagedCore::hold`).
+    pub fn for_core(base: &str, core: &crate::managed::ManagedCore) -> Result<Client, String> {
+        #[cfg(windows)]
+        {
+            Ok(Client::with_pin(base, core.pin()?))
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = core;
+            Ok(Client::build(base, None))
+        }
+    }
+
+    /// A client that sends only on connections the pinned process accepted (`for_core`).
+    #[cfg(windows)]
+    pub(crate) fn with_pin(base: &str, pin: crate::owned::Pin) -> Client {
+        use ureq::unversioned::resolver::DefaultResolver;
+        Client {
+            base: base.trim_end_matches('/').to_string(),
+            agent: ureq::Agent::with_parts(
+                Client::config(base, None),
+                core_tcp::CoreConnector(Arc::new(pin)),
+                DefaultResolver::default(),
+            ),
+        }
+    }
+
+    fn build(base: &str, certs: Option<Vec<Certificate<'static>>>) -> Client {
+        Client {
+            base: base.trim_end_matches('/').to_string(),
+            agent: Client::config(base, certs).into(),
+        }
+    }
+
+    fn config(base: &str, certs: Option<Vec<Certificate<'static>>>) -> ureq::config::Config {
         let roots = match certs {
             Some(c) => RootCerts::Specific(Arc::new(c)),
             None => RootCerts::WebPki,
@@ -167,7 +420,7 @@ impl Client {
         } else {
             ureq::Proxy::try_from_env()
         };
-        let agent: ureq::Agent = ureq::Agent::config_builder()
+        ureq::Agent::config_builder()
             .proxy(proxy)
             .http_status_as_error(false)
             .max_redirects(0)
@@ -177,11 +430,6 @@ impl Client {
             .user_agent("pluxy-app")
             .tls_config(TlsConfig::builder().root_certs(roots).build())
             .build()
-            .into();
-        Client {
-            base: base.trim_end_matches('/').to_string(),
-            agent,
-        }
     }
 
     pub fn base(&self) -> &str {
@@ -258,11 +506,11 @@ impl Client {
                 .header("Authorization", &auth)
                 .call(),
             "POST" | "PATCH" | "PUT" => {
-                if method == "PUT" && path != "/config" {
+                if method == "PUT" && !put_allowed(path) {
                     return Reply::failed(
                         400,
                         "invalid_request",
-                        "PUT is only allowed for /config",
+                        "PUT is only allowed for /config, /theme and /themes/{publisher}/{name}",
                     );
                 }
                 let req = within(
@@ -285,7 +533,7 @@ impl Client {
         };
         let mut resp = match result {
             Ok(r) => r,
-            Err(e) => return Reply::failed(0, transport_kind(&e), "core transport failed"),
+            Err(e) => return Reply::failed(0, transport_kind(&e), transport_message(&e)),
         };
         let status = resp.status().as_u16();
         let bytes = match resp.body_mut().with_config().limit(MAX_REPLY).read_to_vec() {
@@ -382,11 +630,109 @@ mod tests {
         assert_eq!(r.error.unwrap().code, "io");
     }
 
+    /// On Windows a client for the app's core sends nothing on a connection another process
+    /// accepted, on IPv4 and IPv6 loopback, and sends as usual on one the core accepted. The
+    /// listener is this test's own: the client's pin holds this process, said to be process 4
+    /// (Windows' System process) for "another process" and this one's own ID for the core.
+    /// `managed.rs` checks the same with real processes, against the real core.
+    #[cfg(windows)]
+    #[test]
+    fn a_core_client_sends_only_on_connections_the_core_accepted() {
+        use std::io::{Read, Write};
+        for bind in ["127.0.0.1:0", "[::1]:0"] {
+            let listener = std::net::TcpListener::bind(bind).unwrap();
+            let addr = listener.local_addr().unwrap();
+            // The bytes each of two connections brought; a whole request is answered.
+            let server = std::thread::spawn(move || {
+                let mut got = Vec::new();
+                for _ in 0..2 {
+                    let (mut s, _) = listener.accept().unwrap();
+                    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+                    let mut head = Vec::new();
+                    let mut buf = [0u8; 4096];
+                    while let Ok(n @ 1..) = s.read(&mut buf) {
+                        head.extend_from_slice(&buf[..n]);
+                        if head.windows(4).any(|w| w == b"\r\n\r\n") {
+                            s.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}")
+                                .unwrap();
+                            break;
+                        }
+                    }
+                    got.push(head.len());
+                }
+                got
+            });
+            let base = format!("http://{addr}");
+            let other = crate::owned::Pin::this_process_as(4);
+            let refused = Client::with_pin(&base, other).call("k", "GET", "/status", None);
+            let this = crate::owned::Pin::this_process_as(std::process::id());
+            let taken = Client::with_pin(&base, this).call("k", "GET", "/status", None);
+            let got = server.join().unwrap();
+            assert_eq!(refused.status, 0, "{bind}: {refused:?}");
+            let error = refused.error.unwrap();
+            assert_eq!(error.code, "io", "{bind}");
+            // The reply says which process accepted it instead (a release build has no stderr).
+            assert!(
+                error
+                    .message
+                    .starts_with("nothing sent to the app's core: ")
+                    && error.message.contains(&format!(
+                        "was accepted by process {}, not the core (4)",
+                        std::process::id()
+                    )),
+                "{bind}: {}",
+                error.message
+            );
+            assert_eq!(
+                got[0], 0,
+                "{bind}: the request went to a listener not the core's"
+            );
+            assert_eq!(taken.status, 200, "{bind}: {taken:?}");
+            assert!(got[1] > 0, "{bind}");
+        }
+    }
+
     #[test]
     fn bad_methods_and_pem_are_refused() {
         // Refused before anything is sent.
         let c = Client::new("http://127.0.0.1:1", None);
         assert_eq!(c.call("k", "PUT", "/status", None).status, 400);
+        for path in [
+            "/themes",
+            "/themes/t3",
+            "/themes/t3/a/b",
+            "/themes/T3/night",
+            "/themes/t3/",
+            "/themes//night",
+            "/themes/t3/..",
+            "/themes/t3/a.b",
+            "/themes/t3/a_b",
+            "/themes/t3/a%2fb",
+            "/themes/t3/%2e%2e",
+            "/themes/t3/night?x=1",
+            "/themes/t3/n\u{e9}",
+            "/theme/x",
+            "/theme?x=1",
+            "/config?x=1",
+        ] {
+            assert!(!put_allowed(path), "{path}");
+            assert_eq!(c.call("k", "PUT", path, None).status, 400, "{path}");
+        }
+        let long = "a".repeat(65);
+        assert!(!put_allowed(&format!("/themes/{long}/night")));
+        assert!(!put_allowed(&format!("/themes/t3/{long}")));
+        assert!(put_allowed(&format!("/themes/t3/{}", "a".repeat(64))));
+        // The theme calls are sent: nothing listens there, so the reply is status 0, not a refusal.
+        assert_eq!(c.call("k", "PUT", "/theme", None).status, 0);
+        assert_eq!(c.call("k", "PUT", "/themes/t3/nightfall", None).status, 0);
+        for path in [
+            "/config",
+            "/theme",
+            "/themes/t3/nightfall",
+            "/themes/a-1/b-2",
+        ] {
+            assert!(put_allowed(path), "{path}");
+        }
         assert_eq!(c.call("k", "TRACE", "/config", None).status, 400);
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();

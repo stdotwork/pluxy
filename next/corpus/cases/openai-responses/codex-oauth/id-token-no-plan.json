@@ -38,14 +38,14 @@
   "old_core": {
     "account": {
       "plan_type": null,
-      "id_token": "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJlbWFpbCI6InNrLWNvcnB1cy11cHN0cmVhbUBleGFtcGxlLmludmFsaWQiLCJleHAiOjQxMDI0NDQ4MDAsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJjaGF0Z3B0X2FjY291bnRfaWQiOiJhY2N0LXNrLWNvcnB1cy11cHN0cmVhbSJ9fQ.corpus"
+      "id_token": "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJlbWFpbCI6InNrLUNxN1Z4Mk5wOUx3NFpyOEBleGFtcGxlLmludmFsaWQiLCJleHAiOjQxMDI0NDQ4MDAsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJjaGF0Z3B0X2FjY291bnRfaWQiOiJhY2N0LXNrLUNxN1Z4Mk5wOUx3NFpyOCJ9fQ.Zx8Kp3Qa"
     }
   },
   "new_core": {
     "account": {
       "credential": {
         "data": {
-          "id_token": "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJlbWFpbCI6InNrLWNvcnB1cy11cHN0cmVhbUBleGFtcGxlLmludmFsaWQiLCJleHAiOjQxMDI0NDQ4MDAsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJjaGF0Z3B0X2FjY291bnRfaWQiOiJhY2N0LXNrLWNvcnB1cy11cHN0cmVhbSJ9fQ.corpus"
+          "id_token": "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJlbWFpbCI6InNrLUNxN1Z4Mk5wOUx3NFpyOEBleGFtcGxlLmludmFsaWQiLCJleHAiOjQxMDI0NDQ4MDAsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJjaGF0Z3B0X2FjY291bnRfaWQiOiJhY2N0LXNrLUNxN1Z4Mk5wOUx3NFpyOCJ9fQ.Zx8Kp3Qa"
         }
       }
     }
@@ -84,8 +84,8 @@
         "headers": {
           "Accept": "text/event-stream",
           "Accept-Encoding": "gzip, deflate, br, zstd",
-          "Authorization": "Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsInN1YiI6ImNvcnB1c3xzay1jb3JwdXMtdXBzdHJlYW0ifQ.corpus",
-          "Chatgpt-Account-Id": "acct-sk-corpus-upstream",
+          "Authorization": "Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsInN1YiI6ImNvcnB1c3xzay1DcTdWeDJOcDlMdzRacjgifQ.Zx8Kp3Qa",
+          "Chatgpt-Account-Id": "acct-sk-Cq7Vx2Np9Lw4Zr8",
           "Content-Type": "application/json",
           "Originator": "codex-tui",
           "Session-Id": "f674c4c7-551b-57dd-ab73-9724cff0fe39",

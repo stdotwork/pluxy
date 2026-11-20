@@ -52,13 +52,17 @@ proxied.
 
 The generated config is the same for every case:
 
-- one provider account pointed at the fake upstream, with the API key `sk-corpus-upstream`
+- one provider account pointed at the fake upstream, with the API key `sk-Cq7Vx2Np9Lw4Zr8`
   (not a secret); a case with `accounts` above 1 gets more accounts, keyed
-  `sk-corpus-upstream-2`, `sk-corpus-upstream-3` and so on, all pointed at the same upstream;
+  `sk-Cq7Vx2Np9Lw4Zr8-2`, `sk-Cq7Vx2Np9Lw4Zr8-3` and so on, all pointed at the same upstream.
+  The fake account secrets hold no words: the new core removes from an error every run of text
+  that shares 4 characters with one of the account's secrets, so a word in a fake key would
+  vanish from the error messages the cores are compared on;
 - the client key `corpus-client-key`;
 - routing that never waits: the new core runs its default routing, which never waits, and still
   moves a request on to another account within one round;
-- the management API off unless the case calls it (see [Management API cases](#management-api-cases));
+- a management key the case never sends, unless the case calls the management API (see
+  [Management API cases](#management-api-cases)): core always has one;
 - the models the account lists: the request's model (`account_models` in a case overrides this).
   A provider marked `CatalogModels` in `cores.go`, one the old core took from auth files, lists
   none, so its extension serves its own catalog.
@@ -88,7 +92,6 @@ Providers with their own folder of cases, with what the old core ran when each w
 | `kimi` | Kimi extension, a Kimi Code OAuth credential | a Kimi auth file |
 | `meta` | Meta extension, a Muse Code login's OAuth credential (the minted key and its device token) | a Meta auth file with the key and `base_url` |
 | `meta-api-key` | Meta extension, an API key | a `meta` group with `base-url` and an API key |
-| `antigravity` | Antigravity extension, an OAuth credential with its project | an Antigravity auth file with `base_url`, the project and saved model hints. The new core's `fetchAvailableModels` call is answered aside by the fake upstream, so it is not part of a case |
 | `devin` | Devin extension, a session token as an API key credential | a Devin auth file with the token and `base_url`; its `GetUserStatus` calls were answered aside, and the new core makes none. Models are named `devin/<model>`, as today's core lists them; Gemini clients write the slash as `%2F` in the path, with `account_models` naming the model |
 | `xai` | xAI extension, an API key | an `xai` group with `base-url` and an API key |
 | `xai-cli` | xAI extension, a Grok login's OAuth credential with `base_url` | an xAI auth file with `auth_kind` `oauth`, an expiry far ahead and `base_url` |
@@ -343,8 +346,8 @@ text, and an array a repeated field. The provider's `Proto` schema (`cores.go`) 
 message's nested and repeated fields, so a recorded protobuf request is decoded into the same JSON
 form and compared like any body (`connect.go`).
 
-A provider whose core calls the upstream on its own, outside the case (the new core asks Cloud Code
-which models an Antigravity login has when it loads it), sets `Aside` in its entry: the fake
+A provider whose core calls the upstream on its own, outside the case (for example, fetching an
+account's model list when loading it), sets `Aside` in its entry: the fake
 upstream answers those calls with a fixed reply and neither records them nor uses up a scripted
 reply.
 

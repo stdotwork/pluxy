@@ -639,7 +639,7 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 		}
 		return failed(llm.CodeExtensionUnavailable, fmt.Sprintf("extension %s is not reachable: %v", e.manifest.ID, err))
 	}
-	s := &Stream{conn: conn, ctx: ctx, ext: e, redact: redact, capture: capture(ctx, e.info), account: account.ID}
+	s := &Stream{conn: conn, ctx: ctx, ext: e, redact: redact, pieces: e.accountPieces(account), capture: capture(ctx, e.info), account: account.ID}
 	alive := e.info.ProtocolMinor >= aliveMinor
 	if alive {
 		s.watch = watchdog(account.Timeouts, req.Stream)
@@ -688,6 +688,11 @@ type Stream struct {
 	watch   time.Duration
 	started bool
 	alives  atomic.Int64
+	// pieces are the account's secrets, whose pieces are removed from the upstream's error text.
+	pieces pieces
+	// held is the call's capture, redacted, until the call ends: whether it ended in an error
+	// says how much of it loses the pieces (pieces.diagnostic).
+	held heldCapture
 }
 
 // Alives returns how many alive frames the extension has sent on the call so far. It may be
@@ -722,7 +727,7 @@ func (s *Stream) Next() llm.Event {
 		} else if reply.Type != protocol.TypeDiagnostic {
 			break
 		} else if s.capture != nil && reply.Diagnostic != nil {
-			s.capture(s.account, redactDiagnostic(s.redact, *reply.Diagnostic))
+			s.held.hold(redactDiagnostic(s.redact, *reply.Diagnostic))
 		}
 		reply = protocol.Reply{}
 	}
@@ -747,8 +752,11 @@ func (s *Stream) Next() llm.Event {
 		}
 		return ev
 	}
-	ev := s.redact.Event(reply.Event)
+	ev := s.ext.normalizeEvent(s.pieces.event(s.redact.Event(reply.Event)))
 	if ev.Terminal() {
+		if ev.Type == llm.EventFinish {
+			s.held.succeed()
+		}
 		s.final = &ev
 		s.Close()
 		return s.last()
@@ -806,6 +814,10 @@ func (s *Stream) readError(err error) *llm.Error {
 func (s *Stream) Close() {
 	if s.onClose != nil {
 		defer s.onClose()
+	}
+	ds, failed := s.held.take()
+	for _, d := range ds {
+		s.capture(s.account, s.pieces.diagnostic(d, failed))
 	}
 	if s.stop != nil {
 		s.stop()
@@ -994,4 +1006,21 @@ func (l *lineLogger) Write(p []byte) (int, error) {
 
 func (l *lineLogger) longLine() {
 	l.out.line(l.prefix, fmt.Sprintf("(a line longer than %d bytes, not logged)", maxLogLine))
+}
+
+// accountClosedMinor is the protocol minor version that adds llm.CodeAccountClosed.
+const accountClosedMinor = 20
+
+// normalizeEvent downgrades error codes that require a newer protocol minor version than e
+// reported in describe.
+func (e *Extension) normalizeEvent(ev llm.Event) llm.Event {
+	if e == nil || ev.Type != llm.EventError || ev.Error == nil {
+		return ev
+	}
+	if e.info.ProtocolMinor < accountClosedMinor && ev.Error.Code == llm.CodeAccountClosed {
+		errCopy := *ev.Error
+		errCopy.Code = llm.CodePermission
+		ev.Error = &errCopy
+	}
+	return ev
 }

@@ -25,7 +25,8 @@ type usage struct {
 	InputTokens        *int64 `json:"input_tokens"`
 	OutputTokens       *int64 `json:"output_tokens"`
 	InputTokensDetails *struct {
-		CachedTokens *int64 `json:"cached_tokens"`
+		CachedTokens     *int64 `json:"cached_tokens"`
+		CacheWriteTokens *int64 `json:"cache_write_tokens"`
 	} `json:"input_tokens_details"`
 	OutputTokensDetails *struct {
 		ReasoningTokens *int64 `json:"reasoning_tokens"`
@@ -43,6 +44,7 @@ func decodeUsage(raw json.RawMessage) *llm.Usage {
 	out := &llm.Usage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, Raw: append(json.RawMessage(nil), raw...)}
 	if u.InputTokensDetails != nil {
 		out.CachedInputTokens = u.InputTokensDetails.CachedTokens
+		out.CacheWriteInputTokens = u.InputTokensDetails.CacheWriteTokens
 	}
 	if u.OutputTokensDetails != nil {
 		out.ReasoningTokens = u.OutputTokensDetails.ReasoningTokens
@@ -368,13 +370,15 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 }
 
 // OpaqueOutput lists, by path in the Response, the output data a client in another format has no
-// place for: a reasoning item's encrypted content and the annotations on output text. raw is an
-// output_item.done event, a terminal event or a Response object.
+// place for: a reasoning item's encrypted content, an assistant message's phase (commentary or
+// final_answer, which Codex asks clients to send back) and the annotations on output text. raw is
+// an output_item.done event, a terminal event or a Response object.
 func OpaqueOutput(raw json.RawMessage) []string {
 	var out []string
 	outputItems(raw, func(i int, item json.RawMessage) {
 		var it struct {
 			EncryptedContent string `json:"encrypted_content"`
+			Phase            string `json:"phase"`
 			Content          []struct {
 				Annotations []json.RawMessage `json:"annotations"`
 			} `json:"content"`
@@ -384,6 +388,9 @@ func OpaqueOutput(raw json.RawMessage) []string {
 		}
 		if it.EncryptedContent != "" {
 			out = append(out, fmt.Sprintf("output[%d].encrypted_content", i))
+		}
+		if it.Phase != "" {
+			out = append(out, fmt.Sprintf("output[%d].phase", i))
 		}
 		for j, c := range it.Content {
 			if len(c.Annotations) > 0 {

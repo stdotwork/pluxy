@@ -2,6 +2,8 @@
   "manifest_version": 0,
   "id": "pluxy/codex",
   "version": "0.1.0",
+  "title": "Codex and ChatGPT",
+  "summary": "OpenAI's Codex models with a ChatGPT subscription or an OpenAI API key.",
   "protocol": [0],
   "programs": {
     "linux/amd64": "codex",

@@ -17,7 +17,11 @@
 // Interactions clients, as endpoint calls (interactions.go); any other account answers them
 // unsupported.
 //
-// A Gemini GenerateContent request is sent unchanged, thought signatures included. Requests in
+// A Gemini GenerateContent request is sent as the client wrote it, thought signatures included,
+// apart from the repairs Google needs (tool schemas in schema.go; turns and the order of function
+// responses in turns.go). A reply that ends with MALFORMED_FUNCTION_CALL before the client has been
+// sent any content (a thought, answer text or a call) is asked for once more (relayReply); a
+// stream is never held back past its first content, so reasoning streams live. Requests in
 // other formats (Chat Completions, Responses, Messages) are translated to GenerateContent, with
 // the client's reasoning effort turned into Gemini's thinking settings (thinking.go).
 package main
@@ -33,6 +37,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -62,6 +67,7 @@ func main() {
 		CountTokens:  countTokens,
 		Models:       listModels,
 		Check:        check,
+		Quota:        quota,
 		Endpoint:     endpoint,
 	})
 	if err != nil {
@@ -163,7 +169,16 @@ func resolveMethod(ctx context.Context, s settings, cred *protocol.Credential, m
 	}, nil
 }
 
-func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
+func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
+	return generateTo(ctx, call, out)
+}
+
+// sender takes the events of a reply: the call's stream, or a test's recorder.
+type sender interface{ Send(llm.Event) error }
+
+// generateTo answers a generate call, sending the reply's events to out.
+func generateTo(ctx context.Context, call sdk.Call, out sender) (err error) {
+	ctx = withAccountID(ctx, call.Account.ID)
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
 		return err
@@ -172,8 +187,9 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 	if err != nil {
 		return err
 	}
+	body = cleanToolSchemas(body)
 	body = fixTurns(body, s.Vertex != nil, call.Request.Stream, !tr.Passthrough)
-	send := &reporting{Stream: out, tr: tr}
+	send := &reporting{out: out, tr: tr}
 	t, err := resolve(ctx, s, call.Account.Credential, call.Request.Model, call.Request.Stream)
 	if err != nil {
 		return err
@@ -191,27 +207,99 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 	if s.Vertex != nil && !vertexCallIDs(tr.From) {
 		body = stripCallIDs(body)
 	}
-	resp, err := postBody(ctx, t, body, call.Request.Stream, call.Request.Model)
-	if err != nil {
+	// A reply that ends with MALFORMED_FUNCTION_CALL (the model wrote a function call Gemini
+	// could not parse) is asked for once more, as long as the client has seen none of it.
+	for first := true; ; first = false {
+		resp, err := postBody(ctx, t, body, call.Request.Stream, call.Request.Model)
+		if err != nil {
+			return err
+		}
+		again, err := relayReply(ctx, resp, send, first)
+		if again {
+			continue
+		}
+		var e *llm.Error
+		if !first && geminigenerate.IsMalformedCall(err) && errors.As(err, &e) {
+			e.Message += "; it was asked for again once, and that reply ended the same way"
+		}
+		if err != nil && errors.As(err, &e) && len(e.Raw) > 0 &&
+			(e.Status == http.StatusTooManyRequests || e.Code == llm.CodeRateLimit || e.Code == llm.CodeQuota) {
+			observeRateLimit(ctx, nil, e.Raw, nil, false, call.Request.Model, send.redact, time.Now())
+		}
 		return err
 	}
+}
+
+// relayReply sends one upstream reply to send and closes its body. With mayRetry, a reply that
+// ends with MALFORMED_FUNCTION_CALL before send has been given any content is not sent: again
+// reports that it should be asked for once more. A stream is held back from send only until its
+// first content event (holding), so a reply that fails before that can still be asked for again,
+// while one that fails after content went out reaches the client as the error.
+func relayReply(ctx context.Context, resp *http.Response, send sender, mayRetry bool) (again bool, err error) {
 	defer resp.Body.Close()
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
-		return relayStream(ctx, resp.Body, send)
+		if !mayRetry {
+			return false, relayStream(ctx, resp.Body, send)
+		}
+		h := &holding{out: send}
+		err := relayStream(ctx, resp.Body, h)
+		if !h.open {
+			if geminigenerate.IsMalformedCall(err) {
+				return true, nil
+			}
+			if ferr := h.flush(); ferr != nil {
+				return false, ferr
+			}
+		}
+		return false, err
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
 	if err != nil {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return false, ctx.Err()
 		}
-		return &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
+		return false, &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
 	}
 	events, err := geminigenerate.DecodeResponse(raw)
 	if err != nil {
-		return err
+		return mayRetry && geminigenerate.IsMalformedCall(err), err
 	}
 	for _, ev := range events {
 		if err := send.Send(ev); err != nil {
+			return false, err
+		}
+	}
+	return false, nil
+}
+
+// holding keeps back from out the events that carry no content (the response start and native
+// chunks that decode to nothing) until the first content event of any kind (a thought, answer
+// text or a call) or the end of the reply; then it sends what it held and every event after it.
+// Until then the reply can be dropped and asked for again without the client seeing any of it.
+type holding struct {
+	out  sender
+	held []llm.Event
+	open bool // the held events have been sent
+}
+
+func (h *holding) Send(ev llm.Event) error {
+	if h.open {
+		return h.out.Send(ev)
+	}
+	h.held = append(h.held, ev)
+	if ev.Type == llm.EventResponseStart || ev.Type == llm.EventNative {
+		return nil
+	}
+	return h.flush()
+}
+
+// flush sends the held events and lets every later one through.
+func (h *holding) flush() error {
+	h.open = true
+	held := h.held
+	h.held = nil
+	for _, ev := range held {
+		if err := h.out.Send(ev); err != nil {
 			return err
 		}
 	}
@@ -240,7 +328,11 @@ func postBody(ctx context.Context, t target, body []byte, stream bool, model str
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		defer resp.Body.Close()
-		e := upstreamError(resp, model)
+		var redact *protocol.Redactor
+		if resp.StatusCode == http.StatusTooManyRequests && t.token != "" {
+			redact = protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: t.token})
+		}
+		e := upstreamErrorFor(ctx, resp, model, redact)
 		if t.sa != nil && resp.StatusCode == http.StatusUnauthorized {
 			tokens.invalidate(t.sa, t.token)
 		}
@@ -251,9 +343,10 @@ func postBody(ctx context.Context, t target, body []byte, stream bool, model str
 
 // buildBody returns the GenerateContent body for req and how it was built. A GenerateContent
 // request is sent unchanged; any other is rebuilt from the model, with its reasoning effort as
-// thinking settings. A thinking suffix on the model name sets the thinking settings either way,
-// in place of the request's own. Under the reject drop policy a translation that drops anything
-// is refused.
+// thinking settings and any Messages thinking.display or Responses reasoning.summary as
+// includeThoughts. A thinking suffix on the model name sets the thinking settings either way, in
+// place of the request's own. Under the reject drop policy a translation that drops anything is
+// refused.
 func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	tr := &llm.Translation{To: llm.FormatGeminiGenerate}
 	if n := req.Native; n != nil {
@@ -262,9 +355,13 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 			tr.Passthrough = true
 			body := n.Body
 			if s := req.Options.ThinkingSuffix; s != "" {
+				var losses []llm.Loss
 				var err error
-				if body, _, err = geminigenerate.ApplyEffort(body, req.Model, s); err != nil {
+				if body, losses, _, err = geminigenerate.ApplyEffortReport(body, req.Model, s); err != nil {
 					return nil, nil, err
+				}
+				for _, l := range losses {
+					tr.Losses = llm.AddLoss(tr.Losses, l)
 				}
 			}
 			return body, tr, nil
@@ -288,15 +385,32 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	if s := req.Options.ThinkingSuffix; s != "" {
 		effort = s
 	}
+	var more []llm.Loss
 	if effort != "" {
 		var applied bool
-		body, applied, err = geminigenerate.ApplyEffort(body, req.Model, effort)
+		body, more, applied, err = geminigenerate.ApplyEffortReport(body, req.Model, effort)
 		if err != nil {
 			return nil, nil, err
 		}
 		if applied {
 			losses = dropLoss(losses, "reasoning_effort")
 		}
+	}
+	var summary []llm.Loss
+	var carried bool
+	if body, summary, carried, err = geminigenerate.ApplySummary(body, req.Model, req); err != nil {
+		return nil, nil, err
+	}
+	if carried && req.Origin != nil {
+		switch req.Origin.Format {
+		case llm.FormatAnthropicMessages:
+			losses = dropLoss(losses, "thinking")
+		case llm.FormatOpenAIResponses:
+			losses = dropLoss(losses, "reasoning")
+		}
+	}
+	for _, l := range slices.Concat(more, summary) {
+		losses = llm.AddLoss(losses, l)
 	}
 	tr.Losses = losses
 	if req.DropPolicy == llm.DropReject && tr.Dropped() {
@@ -320,7 +434,7 @@ func dropLoss(losses []llm.Loss, path string) []llm.Loss {
 
 // reporting adds the translation report to the reply's response.start event.
 type reporting struct {
-	*sdk.Stream
+	out    sender
 	tr     *llm.Translation
 	redact *protocol.Redactor // nil, or what else to remove from upstream data
 }
@@ -331,12 +445,12 @@ func (r *reporting) Send(ev llm.Event) error {
 		info.Translation = r.tr
 		ev.Response = &info
 	}
-	return r.Stream.Send(r.redact.Event(ev))
+	return r.out.Send(r.redact.Event(ev))
 }
 
 // relayStream decodes the upstream GenerateContent stream and sends each event as soon as it is
 // decoded. A blocked send blocks the next upstream read.
-func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Event) error }) error {
+func relayStream(ctx context.Context, body io.Reader, out sender) error {
 	r := sse.NewReader(body)
 	dec := geminigenerate.NewStreamDecoder()
 	for {
@@ -374,47 +488,13 @@ func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Ev
 	}
 }
 
-// googleError is the error body Google's APIs answer with.
-type googleError struct {
-	Error struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-		Status  string `json:"status"`
-		Details []struct {
-			Type       string `json:"@type"`
-			Reason     string `json:"reason"`
-			RetryDelay string `json:"retryDelay"`
-		} `json:"details"`
-	} `json:"error"`
-}
-
-// reason returns the ErrorInfo reason in the error's details, such as API_KEY_INVALID.
-func (g *googleError) reason() string {
-	for _, d := range g.Error.Details {
-		if d.Reason != "" {
-			return d.Reason
-		}
-	}
-	return ""
-}
-
-// retryDelay returns the RetryInfo delay in the error's details, in milliseconds, or 0.
-func (g *googleError) retryDelay() int64 {
-	for _, d := range g.Error.Details {
-		if d.RetryDelay == "" {
-			continue
-		}
-		if dur, err := time.ParseDuration(d.RetryDelay); err == nil && dur > 0 {
-			return dur.Milliseconds()
-		}
-	}
-	return 0
-}
+// parseGoogleError / reason / retryDelay are defined in quota.go.
 
 // check asks the Gemini API for its model list with an API key, which costs nothing and generates
 // nothing. A Vertex account, or a credential of another kind, is answered unsupported without a
 // request.
 func check(ctx context.Context, call sdk.CheckCall) (*protocol.CheckResult, error) {
+	ctx = withAccountID(ctx, call.Account.ID)
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
 		return nil, err
@@ -443,7 +523,7 @@ func check(ctx context.Context, call sdk.CheckCall) (*protocol.CheckResult, erro
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "the upstream has no model list to check the key with", Scope: llm.ScopeCredential}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, upstreamError(resp, "")
+		return nil, upstreamErrorFor(ctx, resp, "", nil)
 	}
 	var list struct {
 		Models []json.RawMessage `json:"models"`
@@ -458,9 +538,16 @@ func check(ctx context.Context, call sdk.CheckCall) (*protocol.CheckResult, erro
 // upstreamError turns a non-2xx GenerateContent response into a structured error. model is the
 // model the request asked for.
 func upstreamError(resp *http.Response, model string) *llm.Error {
+	var ctx context.Context
+	if resp != nil && resp.Request != nil {
+		ctx = resp.Request.Context()
+	}
+	return upstreamErrorFor(ctx, resp, model, nil)
+}
+
+func upstreamErrorFor(ctx context.Context, resp *http.Response, model string, redact *protocol.Redactor) *llm.Error {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	var parsed googleError
-	_ = json.Unmarshal(raw, &parsed)
+	parsed, hasParsed := parseGoogleError(raw)
 	e := &llm.Error{Status: resp.StatusCode, Message: parsed.Error.Message, ProviderCode: parsed.Error.Status}
 	if e.Message == "" {
 		e.Message = fmt.Sprintf("upstream returned %s", resp.Status)
@@ -473,6 +560,10 @@ func upstreamError(resp *http.Response, model string) *llm.Error {
 		// A redirect sameOrigin refused to follow.
 		e.Code, e.Scope, e.Status = llm.CodeUpstream, llm.ScopeEndpoint, http.StatusBadGateway
 		e.Message = fmt.Sprintf("upstream redirected (%s) to another host; not followed", resp.Status)
+	case s == http.StatusForbidden && parsed.hasReason("CONSUMER_SUSPENDED"):
+		e.Code, e.Scope, e.Retryable = llm.CodeAccountClosed, llm.ScopeCredential, true
+	case isAccountClosed(s, e.Message):
+		e.Code, e.Scope, e.Retryable = llm.CodeAccountClosed, llm.ScopeCredential, true
 	case s == http.StatusUnauthorized:
 		e.Code, e.Scope, e.Retryable = llm.CodeAuth, llm.ScopeCredential, true
 	case s == http.StatusBadRequest && (parsed.reason() == "API_KEY_INVALID" || strings.Contains(e.Message, "API key not valid")):
@@ -486,6 +577,8 @@ func upstreamError(resp *http.Response, model string) *llm.Error {
 		// another account may serve the model.
 		e.Retryable = model != "" && strings.Contains(e.Message, model)
 	case s == http.StatusTooManyRequests:
+		now := time.Now()
+		observeRateLimit(ctx, resp.Header, raw, &parsed, hasParsed, model, redact, now)
 		// Only the model waits on this account, as today's core cools only the model that answered.
 		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeModel, true
 		if model == "" {
@@ -496,7 +589,7 @@ func upstreamError(resp *http.Response, model string) *llm.Error {
 			// A quota is used up, not a request rate exceeded (RATE_LIMIT_EXCEEDED).
 			e.Code = llm.CodeQuota
 		}
-		e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"), time.Now())
+		e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"), now)
 		if e.RetryAfterMS == 0 {
 			e.RetryAfterMS = parsed.retryDelay()
 		}
@@ -527,4 +620,25 @@ func retryAfter(v string, now time.Time) int64 {
 		}
 	}
 	return 0
+}
+
+// isAccountClosed reports whether a 401 or 403 reply says the account itself has been
+// deactivated, disabled or suspended (distinct from VALIDATION_REQUIRED verification prompts).
+func isAccountClosed(status int, msg string) bool {
+	if status != http.StatusUnauthorized && status != http.StatusForbidden {
+		return false
+	}
+	m := strings.ToLower(msg)
+	for _, s := range []string{
+		"account_deactivated",
+		"account has been deactivated",
+		"this account is deactivated",
+		"account has been disabled",
+		"your account has been suspended",
+	} {
+		if strings.Contains(m, s) {
+			return true
+		}
+	}
+	return false
 }

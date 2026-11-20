@@ -3,27 +3,58 @@ package main
 import (
 	"encoding/json"
 	"slices"
+	"strings"
+
+	"github.com/stdotwork/pluxy/next/llm"
 )
 
 // Prompt caching. A Messages client places its own cache_control markers, and its body is sent as
-// it wrote it. A client in another format cannot place them, so a request translated to Messages
+// it wrote it. A Chat Completions client's valid cache_control markers are carried over by
+// anthropicmessages.EncodeRequest, and a Responses client can ask for prompt_cache_retention
+// ("in_memory" -> "5m", "24h" -> "1h") or prompt_cache_options.ttl. Otherwise a translated request
 // gets the breakpoints today's core gives it: the end of the system prompt (or, without one, the
-// last tool) and the last block of the last message that can hold one. Each breakpoint caches
-// everything before it (https://docs.claude.com/en/docs/build-with-claude/prompt-caching); three
-// stay within Messages' limit of four.
+// last tool) and the last block of the last message that can hold one, with the account's
+// cache_ttl ("5m" default, or "1h"). Each breakpoint caches everything before it
+// (https://platform.claude.com/docs/en/build-with-claude/prompt-caching); three stay within
+// Messages' limit of four.
+
+const (
+	cacheTTL5m = "5m"
+	cacheTTL1h = "1h"
+)
 
 // ephemeral is the default cache marker: Anthropic's five-minute cache.
-var ephemeral = json.RawMessage(`{"type":"ephemeral"}`)
+var (
+	ephemeral     = json.RawMessage(`{"type":"ephemeral"}`)
+	ephemeralHour = json.RawMessage(`{"type":"ephemeral","ttl":"1h"}`)
+)
 
 // uncacheable are block types that cannot carry cache_control.
 var uncacheable = map[string]bool{"thinking": true, "redacted_thinking": true}
 
-// addCacheBreakpoints adds cache breakpoints to a translated Messages body that has none: where
-// Messages takes cache_control (system blocks, tools, message content blocks), none is set.
+func cacheMarker(ttl string) json.RawMessage {
+	if ttl == cacheTTL1h {
+		return ephemeralHour
+	}
+	return ephemeral
+}
+
+// addCacheBreakpoints adds default 5-minute cache breakpoints to a translated Messages body that
+// has none.
 func addCacheBreakpoints(body []byte) ([]byte, error) {
+	return addCacheBreakpointsTTL(body, cacheTTL5m)
+}
+
+// addCacheBreakpointsTTL adds cache breakpoints with ttl ("5m" or "1h") to a translated Messages
+// body that has none: where Messages takes cache_control (top-level, system blocks, tools, message
+// content blocks), none is set.
+func addCacheBreakpointsTTL(body []byte, ttl string) ([]byte, error) {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(body, &m); err != nil {
 		return nil, err
+	}
+	if _, ok := m["cache_control"]; ok {
+		return body, nil
 	}
 	var system, tools []map[string]json.RawMessage
 	_ = json.Unmarshal(m["system"], &system)
@@ -53,15 +84,16 @@ func addCacheBreakpoints(body []byte) ([]byte, error) {
 		return body, nil
 	}
 
+	marker := cacheMarker(ttl)
 	set := func(key string, v any) {
 		b, _ := json.Marshal(v)
 		m[key] = b
 	}
 	if len(system) > 0 {
-		system[len(system)-1]["cache_control"] = ephemeral
+		system[len(system)-1]["cache_control"] = marker
 		set("system", system)
 	} else if len(tools) > 0 {
-		tools[len(tools)-1]["cache_control"] = ephemeral
+		tools[len(tools)-1]["cache_control"] = marker
 		set("tools", tools)
 	}
 	for i := len(messages) - 1; i >= 0; i-- {
@@ -77,11 +109,106 @@ func addCacheBreakpoints(body []byte) ([]byte, error) {
 		if j < 0 {
 			continue
 		}
-		content[j]["cache_control"] = ephemeral
+		content[j]["cache_control"] = marker
 		b, _ := json.Marshal(content)
 		messages[i]["content"] = b
 		set("messages", messages)
 		break
 	}
 	return json.Marshal(m)
+}
+
+// applyClientCache applies Responses prompt_cache_retention / prompt_cache_options.ttl before
+// automatic breakpoints are added.
+func applyClientCache(body []byte, req llm.Request, losses []llm.Loss, defaultTTL string) ([]byte, []llm.Loss, string, error) {
+	if req.Native == nil || req.Native.Format != llm.FormatOpenAIResponses {
+		return body, losses, defaultTTL, nil
+	}
+	losses, ttl := applyResponsesCache(req, losses, defaultTTL)
+	return body, losses, ttl, nil
+}
+
+func applyResponsesCache(req llm.Request, losses []llm.Loss, defaultTTL string) ([]llm.Loss, string) {
+	ttl := defaultTTL
+	if req.Origin == nil || req.Origin.Format != llm.FormatOpenAIResponses {
+		return losses, ttl
+	}
+	rawObj := jsonObject(req.Origin.Raw)
+	if rawObj == nil {
+		return losses, ttl
+	}
+	hasRetention := false
+	if raw, ok := rawObj["prompt_cache_retention"]; ok {
+		var ret string
+		if json.Unmarshal(raw, &ret) == nil {
+			switch strings.ToLower(strings.TrimSpace(ret)) {
+			case "in_memory":
+				ttl = cacheTTL5m
+				hasRetention = true
+				losses = dropLossAt(losses, "prompt_cache_retention")
+			case "24h":
+				ttl = cacheTTL1h
+				hasRetention = true
+				losses = dropLossAt(losses, "prompt_cache_retention")
+				losses = llm.AddLoss(losses, llm.Loss{
+					Kind:   llm.LossApproximated,
+					Path:   "prompt_cache_retention",
+					Detail: "Messages' longest cache TTL is 1h; sent with ttl 1h",
+				})
+			}
+		}
+	}
+	if raw, ok := rawObj["prompt_cache_options"]; ok {
+		if opts := jsonObject(raw); opts != nil {
+			if ttlRaw, ok := opts["ttl"]; ok {
+				var optTTL string
+				if json.Unmarshal(ttlRaw, &optTTL) == nil {
+					mapped := ""
+					approx := false
+					switch strings.ToLower(strings.TrimSpace(optTTL)) {
+					case "in_memory", cacheTTL5m:
+						mapped = cacheTTL5m
+					case cacheTTL1h:
+						mapped = cacheTTL1h
+					case "24h":
+						mapped = cacheTTL1h
+						approx = true
+					}
+					if mapped != "" {
+						if !hasRetention {
+							ttl = mapped
+						}
+						if len(opts) == 1 {
+							losses = dropLossAt(losses, "prompt_cache_options")
+							if approx && !hasRetention {
+								losses = llm.AddLoss(losses, llm.Loss{
+									Kind:   llm.LossApproximated,
+									Path:   "prompt_cache_options",
+									Detail: "Messages' longest cache TTL is 1h; sent with ttl 1h",
+								})
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return losses, ttl
+}
+
+func jsonObject(raw json.RawMessage) map[string]json.RawMessage {
+	if len(raw) == 0 {
+		return nil
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil {
+		return nil
+	}
+	return m
+}
+
+func dropLossAt(losses []llm.Loss, path string) []llm.Loss {
+	return slices.DeleteFunc(losses, func(l llm.Loss) bool {
+		return l.Kind == llm.LossDropped && l.Path == path
+	})
 }

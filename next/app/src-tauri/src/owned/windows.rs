@@ -65,7 +65,8 @@ use windows_sys::Win32::System::Threading::{
     WaitForSingleObject, CREATE_BREAKAWAY_FROM_JOB, CREATE_DEFAULT_ERROR_MODE, CREATE_NEW_CONSOLE,
     CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
     EXTENDED_STARTUPINFO_PRESENT, INFINITE, LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION,
-    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+    STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW,
 };
 
 pub(crate) type ChildStdin = File;
@@ -172,7 +173,7 @@ pub(crate) fn final_path(f: &File) -> Result<PathBuf, String> {
 }
 
 /// Volume serial number and file ID.
-fn file_id(f: &File) -> io::Result<[u8; 24]> {
+pub(crate) fn file_id(f: &File) -> io::Result<[u8; 24]> {
     let mut info: FILE_ID_INFO = unsafe { std::mem::zeroed() };
     if unsafe {
         GetFileInformationByHandleEx(
@@ -294,6 +295,7 @@ pub(crate) struct Command {
     stderr: Io,
     kind: Kind,
     secrets: bool,
+    windowless: bool,
     keep_program: bool,
     kept: Vec<Pinned>,
 }
@@ -313,6 +315,7 @@ impl Command {
             stderr: Io::Null,
             kind,
             secrets: false,
+            windowless: false,
             keep_program: false,
             kept: Vec::new(),
         }
@@ -384,6 +387,15 @@ impl Command {
         self
     }
 
+    /// A detached process that shows no window itself: started with no console, not a new one,
+    /// so none flashes (the execution program's `open` and `app` modes).
+    // shortcut: no test sees the flag reach the process: the unit tests run in a runner's job,
+    // which a detached launch may not leave (README, "Limits").
+    pub(crate) fn windowless(&mut self, windowless: bool) -> &mut Self {
+        self.windowless = windowless;
+        self
+    }
+
     /// Keeps the program's pin (and its folder's) for as long as the returned child is held, not
     /// only until it runs. Tools and managed processes only.
     // No caller outside the tests yet.
@@ -396,8 +408,6 @@ impl Command {
     /// Keeps pin, another file the process uses by its path (`pin_other`), from being written,
     /// renamed or removed for as long as the returned child is held. Tools and managed processes
     /// only.
-    // No caller outside the tests yet.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn keep(&mut self, pin: Pinned) -> &mut Self {
         self.kept.push(pin);
         self
@@ -507,7 +517,7 @@ impl Command {
         };
         // A detached launch without a piped stdin gets a console of its own and none of the app's
         // handles at all.
-        let own_console = self.kind == Kind::Detached && self.stdin == Io::Null;
+        let own_console = self.kind == Kind::Detached && self.stdin == Io::Null && !self.windowless;
         let mut parent: [Option<File>; 3] = [None, None, None];
         let mut child: Vec<File> = Vec::new();
         let mut std_handles: [HANDLE; 3] = [ptr::null_mut(); 3];
@@ -878,6 +888,42 @@ pub(crate) fn environment_block(vars: &[(OsString, OsString)]) -> io::Result<Vec
     Ok(out)
 }
 
+/// A handle on a process the host started that only waits for it or asks about it
+/// (`Child::pin`): while it is held, the process's ID is not another process's.
+#[derive(Debug)]
+pub(crate) struct Pin {
+    _process: OwnedHandle,
+    pid: u32,
+}
+
+impl Pin {
+    pub(crate) fn id(&self) -> u32 {
+        self.pid
+    }
+
+    /// For tests: a pin holding this process, said to be process pid.
+    #[cfg(test)]
+    pub(crate) fn this_process_as(pid: u32) -> Pin {
+        let mut out: HANDLE = ptr::null_mut();
+        let ok = unsafe {
+            DuplicateHandle(
+                GetCurrentProcess(),
+                GetCurrentProcess(),
+                GetCurrentProcess(),
+                &mut out,
+                PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+                0,
+                0,
+            )
+        };
+        assert_ne!(ok, 0, "{}", io::Error::last_os_error());
+        Pin {
+            _process: unsafe { OwnedHandle::from_raw_handle(out as _) },
+            pid,
+        }
+    }
+}
+
 /// A process the host started and holds: its process handle (its process ID is never another
 /// process's while this is held) and its job.
 pub(crate) struct Child {
@@ -895,6 +941,31 @@ pub(crate) struct Child {
 impl Child {
     pub(crate) fn id(&self) -> u32 {
         self.pid
+    }
+
+    /// A second handle on this process that can only wait for it and ask about it, never end
+    /// it: while any copy is held, its process ID is not another process's, even after this
+    /// `Child` is gone. Its job stays this `Child`'s alone.
+    pub(crate) fn pin(&self) -> io::Result<Pin> {
+        let mut out: HANDLE = ptr::null_mut();
+        let ok = unsafe {
+            DuplicateHandle(
+                GetCurrentProcess(),
+                self.process.as_raw_handle() as HANDLE,
+                GetCurrentProcess(),
+                &mut out,
+                PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION,
+                0,
+                0,
+            )
+        };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Pin {
+            _process: unsafe { OwnedHandle::from_raw_handle(out as _) },
+            pid: self.pid,
+        })
     }
 
     fn exit_code(&mut self) -> io::Result<ExitStatus> {

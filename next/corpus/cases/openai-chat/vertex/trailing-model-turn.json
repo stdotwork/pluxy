@@ -17,7 +17,7 @@
     }
   },
   "upstream": [
-    {"body":{"access_token":"ya29.corpus-token","expires_in":3599,"token_type":"Bearer"}},
+    {"body":{"access_token":"ya29.Hk3Rt8Bw2Mz5","expires_in":3599,"token_type":"Bearer"}},
     {
       "sse": [
         {"data":{"candidates":[{"content":{"role":"model","parts":[{"text":"thinking...","thought":true}]},"index":0}],"modelVersion":"gemini-corpus-upstream","responseId":"resp-corpus"}},
@@ -32,7 +32,7 @@
     {
       "path": "client.events",
       "kind": "intended",
-      "reason": "The new core writes a Chat stream from a Gemini reply as OpenAI's API does: content \"\" with the role in the first chunk, only the delta fields that are set (today's core sends content, reasoning_content and tool_calls as null and a non-standard native_finish_reason), every text part (today's core loses text that shares a chunk with a part carrying a thought signature), the finish reason in its own chunk, tool call ids as call_<n> when Gemini sends none, and usage only when the client asks for it with stream_options.include_usage (today's core always adds it).",
+      "reason": "The new core writes a Chat stream from a Gemini reply as OpenAI's API does: content \"\" with the role in the first chunk, only the delta fields that are set (today's core sends content, reasoning_content and tool_calls as null and a non-standard native_finish_reason), every text part (today's core loses text that shares a chunk with a part carrying a thought signature), the finish reason in its own chunk, tool call ids as call_<responseId>_<n>, unique across replies, when Gemini sends none, and usage only when the client asks for it with stream_options.include_usage (today's core always adds it).",
       "want": [
         {
           "data": {
@@ -148,7 +148,7 @@
         },
         "headers": {
           "Accept-Encoding": "gzip",
-          "Authorization": "Bearer ya29.corpus-token",
+          "Authorization": "Bearer ya29.Hk3Rt8Bw2Mz5",
           "Content-Type": "application/json",
           "User-Agent": "Go-http-client/1.1"
         },

@@ -1,0 +1,901 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"slices"
+	"sort"
+	"strconv"
+	"strings"
+	"text/tabwriter"
+	"time"
+
+	"github.com/stdotwork/pluxy/next/management"
+)
+
+// Exit codes of the client subcommands (next/management/README.md).
+const (
+	exitOK          = 0
+	exitFailed      = 1
+	exitUsage       = 2
+	exitUnreachable = 3
+	exitRefused     = 4
+	exitNotFound    = 5
+	exitChange      = 6
+)
+
+// command is one client subcommand: the words that name it, its arguments, the management
+// calls it makes (as the API's patterns, which the route table test checks) and what it does.
+type command struct {
+	words   string
+	args    []string
+	routes  []string
+	summary string
+	// flags adds the command's own flags.
+	flags func(fs *flag.FlagSet, o *opts)
+	run   func(x *invocation) error
+}
+
+// opts are the values of the commands' own flags.
+type opts struct {
+	model, version, registry                       string
+	since, until, by, account, provider, clientKey string
+	after, before                                  string
+	limit                                          int
+	yes                                            bool
+	picks                                          stringSliceFlag
+	keyID                                          string
+	id                                             string
+}
+
+// invocation is one run of a command.
+type invocation struct {
+	ctx    context.Context
+	client *management.Client
+	args   []string
+	opts   opts
+	json   bool
+	stdin  io.Reader
+	stdout io.Writer
+	stderr io.Writer
+	tty    bool
+}
+
+// call makes one management call. With --json the reply's body goes to standard output as it
+// came; otherwise out is decoded and show prints it.
+func (x *invocation) call(method, path string, q url.Values, in, out any, show func()) error {
+	body, err := x.client.Call(x.ctx, method, path, q, in, out)
+	if err != nil {
+		return err
+	}
+	if x.json {
+		_, err := x.stdout.Write(body)
+		return err
+	}
+	if show != nil {
+		show()
+	}
+	return nil
+}
+
+// table writes rows as aligned columns, the first row a header.
+func (x *invocation) table(rows [][]string) {
+	tw := tabwriter.NewWriter(x.stdout, 0, 0, 2, ' ', 0)
+	for _, r := range rows {
+		fmt.Fprintln(tw, strings.Join(r, "\t"))
+	}
+	tw.Flush()
+}
+
+func (x *invocation) printf(format string, a ...any) { fmt.Fprintf(x.stdout, format, a...) }
+
+func dash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
+}
+
+func yesNo(b bool) string {
+	if b {
+		return "yes"
+	}
+	return "no"
+}
+
+func accountPath(id string) string { return "/accounts/" + url.PathEscape(id) }
+
+func init() {
+	commands = append(commands, setupCommands()...)
+}
+
+// commands are the client subcommands, in the order help lists them.
+var commands = []command{
+	{words: "status", routes: []string{"GET /status"}, summary: "core's state: config versions, extensions, build",
+		run: func(x *invocation) error {
+			var s management.Status
+			return x.call(http.MethodGet, "/status", nil, nil, &s, func() { printStatus(x, s) })
+		}},
+	{words: "reload", routes: []string{"POST /reload"}, summary: "reload the config file now",
+		run: func(x *invocation) error {
+			var s management.Status
+			err := x.call(http.MethodPost, "/reload", nil, nil, &s, func() { x.printf("config revision %d is active\n", s.Active.Revision) })
+			var ae *management.APIError
+			if errors.As(err, &ae) && ae.Status == http.StatusUnprocessableEntity && json.Unmarshal(ae.Body, &s) == nil && s.Desired.Error != "" {
+				ae.Message = "core refused the config: " + s.Desired.Error
+			}
+			return err
+		}},
+	{words: "config show", routes: []string{"GET /config"}, summary: "the config file, with its secrets replaced by placeholders",
+		run: func(x *invocation) error {
+			var c management.Config
+			return x.call(http.MethodGet, "/config", nil, nil, &c, func() {
+				x.printf("%s", c.Content)
+				if !strings.HasSuffix(c.Content, "\n") {
+					x.printf("\n")
+				}
+			})
+		}},
+	{words: "settings", routes: []string{"GET /settings"}, summary: "the basic and routing settings by name",
+		run: func(x *invocation) error {
+			var s management.Settings
+			return x.call(http.MethodGet, "/settings", nil, nil, &s, func() { printFlat(x, s) })
+		}},
+	{words: "key list", routes: []string{"GET /client-keys"}, summary: "the client keys, masked",
+		run: func(x *invocation) error {
+			var r management.ClientKeysReply
+			return x.call(http.MethodGet, "/client-keys", nil, nil, &r, func() {
+				rows := [][]string{{"ID", "KEY"}}
+				for _, k := range r.Keys {
+					rows = append(rows, []string{k.ID, k.Masked})
+				}
+				x.table(rows)
+			})
+		}},
+	{words: "key add", routes: []string{"POST /client-keys"}, summary: "add a new client key and print it once",
+		run: func(x *invocation) error {
+			var r management.NewClientKeyReply
+			return x.call(http.MethodPost, "/client-keys", nil, nil, &r, func() {
+				x.printf("%s\n", r.Value)
+			})
+		}},
+	{words: "key remove", args: []string{"id"}, routes: []string{"DELETE /client-keys/{id}"}, summary: "remove a client key",
+		run: func(x *invocation) error {
+			return x.call(http.MethodDelete, "/client-keys/"+url.PathEscape(x.args[0]), nil, nil, nil, func() {
+				x.printf("client key %s removed\n", x.args[0])
+			})
+		}},
+	{words: "logs", routes: []string{"GET /logs"}, summary: "lines of core's log files",
+		flags: func(fs *flag.FlagSet, o *opts) {
+			fs.StringVar(&o.after, "after", "", "only lines after this time (Unix seconds, as a reply's latest-timestamp)")
+			fs.IntVar(&o.limit, "limit", 0, "at most this many lines (default: core's, 1000)")
+		},
+		run: func(x *invocation) error {
+			q := url.Values{}
+			if x.opts.after != "" {
+				q.Set("after", x.opts.after)
+			}
+			if x.opts.limit > 0 {
+				q.Set("limit", strconv.Itoa(x.opts.limit))
+			}
+			var l management.LogLines
+			return x.call(http.MethodGet, "/logs", q, nil, &l, func() {
+				for _, line := range l.Lines {
+					x.printf("%s\n", line)
+				}
+			})
+		}},
+	{words: "ext list", routes: []string{"GET /packages"}, summary: "installed extension packages and their state",
+		run: func(x *invocation) error {
+			var r management.PackagesReply
+			return x.call(http.MethodGet, "/packages", nil, nil, &r, func() {
+				rows := [][]string{{"ID", "VERSION", "ENABLED", "STATE", "REGISTRY"}}
+				for _, p := range r.Packages {
+					state := p.State
+					if p.Error != "" {
+						state += ": " + p.Error
+					}
+					rows = append(rows, []string{p.ID, p.Version, yesNo(p.Enabled), state, dash(p.Registry)})
+				}
+				x.table(rows)
+			})
+		}},
+	{words: "ext available", routes: []string{"GET /registries"}, summary: "what each registry offers",
+		run: func(x *invocation) error {
+			var r management.RegistriesReply
+			return x.call(http.MethodGet, "/registries", nil, nil, &r, func() {
+				rows := [][]string{{"REGISTRY", "PACKAGE", "TITLE", "KIND", "TIER", "VERSIONS"}}
+				for _, reg := range r.Registries {
+					if reg.Error != "" {
+						rows = append(rows, []string{reg.Name, "-", "-", "-", "-", "error: " + reg.Error})
+					}
+					for _, p := range reg.Packages {
+						var versions []string
+						for _, rel := range p.Releases {
+							versions = append(versions, rel.Version)
+						}
+						rows = append(rows, []string{reg.Name, p.ID, dash(p.Title), dash(p.Kind), dash(p.Tier), strings.Join(versions, ", ")})
+					}
+				}
+				x.table(rows)
+			})
+		}},
+	{words: "ext install", args: []string{"id"}, routes: []string{"POST /packages"}, summary: "install a package and enable it",
+		flags: func(fs *flag.FlagSet, o *opts) {
+			fs.StringVar(&o.version, "version", "", "the release to install (default: the newest this core can run)")
+			fs.StringVar(&o.registry, "registry", "", "the registry to install from (default: the first that has it)")
+		},
+		run: func(x *invocation) error {
+			var r management.PackageReply
+			req := management.InstallRequest{ID: x.args[0], Version: x.opts.version, Registry: x.opts.registry, Enable: true}
+			return x.call(http.MethodPost, "/packages", nil, req, &r, func() {
+				x.printf("%s %s installed: %s\n", r.Package.ID, r.Package.Version, r.Package.State)
+			})
+		}},
+	packageVerb("enable", "start routing to an installed package"),
+	packageVerb("disable", "stop routing to an installed package"),
+	{words: "ext remove", args: []string{"id"}, routes: []string{"DELETE /packages/{publisher}/{name}"}, summary: "remove a package's files; its accounts stay",
+		run: func(x *invocation) error {
+			return x.call(http.MethodDelete, management.PackagePath(x.args[0]), nil, nil, nil, func() {
+				x.printf("%s removed\n", x.args[0])
+			})
+		}},
+	{words: "account list", routes: []string{"GET /accounts"}, summary: "every account and its state",
+		run: func(x *invocation) error {
+			var r management.AccountsReply
+			return x.call(http.MethodGet, "/accounts", nil, nil, &r, func() {
+				rows := [][]string{{"ID", "EXTENSION", "SOURCE", "HEALTH", "UNTIL", "WHY"}}
+				for _, a := range r.Accounts {
+					health := dash(a.Health.State)
+					if a.Health.Source == management.SourceUnverified {
+						health += " (unverified)"
+					}
+					until := "-"
+					if a.Health.Until != nil {
+						until = a.Health.Until.Local().Format(time.DateTime)
+					}
+					rows = append(rows, []string{a.ID, dash(a.Extension), a.Source, health, until, dash(a.Health.Why)})
+				}
+				x.table(rows)
+			})
+		}},
+	accountSwitch("enable", false, "turn an account on"),
+	accountSwitch("disable", true, "turn an account off"),
+	{words: "account clear", args: []string{"id"}, routes: []string{"POST /accounts/{id}/cooldown/reset"}, summary: "forget what routing holds against an account",
+		run: func(x *invocation) error {
+			var r management.CooldownResetReply
+			return x.call(http.MethodPost, accountPath(x.args[0])+"/cooldown/reset", nil, nil, &r, func() {
+				x.printf("account %s: %d cooldowns cleared\n", x.args[0], r.Cleared)
+			})
+		}},
+	{words: "account test", args: []string{"id"}, routes: []string{"POST /accounts/{id}/test"}, summary: "send one small request through an account",
+		flags: func(fs *flag.FlagSet, o *opts) {
+			fs.StringVar(&o.model, "model", "", "the model to ask (default: one the account serves)")
+		},
+		run: func(x *invocation) error {
+			var r management.TestReply
+			err := x.call(http.MethodPost, accountPath(x.args[0])+"/test", nil, management.TestRequest{Model: x.opts.model}, &r, func() {
+				res := r.Result
+				if res.OK {
+					x.printf("ok: %s answered in %d ms: %q\n", cmpOr(res.Served, res.Model), res.LatencyMS, res.Reply)
+				}
+			})
+			if err == nil && !r.Result.OK {
+				msg := "the test request failed"
+				if r.Result.Error != nil {
+					msg += ": " + r.Result.Error.Message
+				}
+				return errors.New(msg)
+			}
+			return err
+		}},
+	{words: "account quota", args: []string{"id"}, routes: []string{"GET /accounts/{id}/quota"}, summary: "an account's usage windows, as its provider reports them",
+		run: func(x *invocation) error {
+			var r management.QuotaReply
+			return x.call(http.MethodGet, accountPath(x.args[0])+"/quota", nil, nil, &r, func() { printFlat(x, r.Quota) })
+		}},
+	{words: "account models", args: []string{"id"}, routes: []string{"GET /accounts/{id}/models"}, summary: "the models an account serves",
+		run: func(x *invocation) error {
+			var r management.AccountModelsReply
+			return x.call(http.MethodGet, accountPath(x.args[0])+"/models", nil, nil, &r, func() {
+				if r.From != "" {
+					x.printf("from: %s\n", r.From)
+				}
+				rows := [][]string{{"ID", "NAMES", "OWNED BY", "CONTEXT", "MAX OUTPUT", "EXCLUDED"}}
+				for _, m := range r.Models {
+					names := strings.Join(m.Names, ",")
+					if names == "" {
+						names = "-"
+					}
+					ctxLen := m.ContextLength
+					if ctxLen == 0 {
+						ctxLen = m.InputTokenLimit
+					}
+					maxOut := m.MaxCompletionTokens
+					if maxOut == 0 {
+						maxOut = m.OutputTokenLimit
+					}
+					ctxStr, outStr := "-", "-"
+					if ctxLen > 0 {
+						ctxStr = strconv.Itoa(ctxLen)
+					}
+					if maxOut > 0 {
+						outStr = strconv.Itoa(maxOut)
+					}
+					rows = append(rows, []string{m.ID, names, dash(m.OwnedBy), ctxStr, outStr, yesNo(m.Excluded)})
+				}
+				x.table(rows)
+			})
+		}},
+	{words: "model list", routes: []string{"GET /models"}, summary: "every model clients can ask for, and the accounts that serve it",
+		run: func(x *invocation) error {
+			var r management.ModelsReply
+			return x.call(http.MethodGet, "/models", nil, nil, &r, func() {
+				rows := [][]string{{"MODEL", "EXTENSION", "UPSTREAM", "ACCOUNTS"}}
+				for _, m := range r.Models {
+					rows = append(rows, []string{m.ID, dash(m.Extension), dash(m.Upstream), strings.Join(m.Accounts, ",")})
+				}
+				x.table(rows)
+			})
+		}},
+	{words: "model refresh", routes: []string{"POST /models/refresh"}, summary: "ask providers for their model lists again now",
+		flags: func(fs *flag.FlagSet, o *opts) {
+			fs.StringVar(&o.account, "account", "", "refresh only this account (default: every account)")
+		},
+		run: func(x *invocation) error {
+			var in any
+			if x.opts.account != "" {
+				in = management.RefreshModelsRequest{Account: x.opts.account}
+			}
+			var r management.RefreshModelsReply
+			return x.call(http.MethodPost, "/models/refresh", nil, in, &r, func() {
+				if len(r.Accounts) == 0 {
+					x.printf("no accounts to refresh (%d models served)\n", len(r.Models))
+					return
+				}
+				rows := [][]string{{"ACCOUNT", "MODELS", "STATUS"}}
+				for _, a := range r.Accounts {
+					status := "ok"
+					if a.Error != "" {
+						if a.Kept {
+							status = "kept previous list: " + a.Error
+						} else {
+							status = "failed: " + a.Error
+						}
+					}
+					rows = append(rows, []string{a.Account, strconv.Itoa(a.Models), status})
+				}
+				x.table(rows)
+			})
+		}},
+	{words: "usage", routes: []string{"GET /usage"}, summary: "request and token totals, broken down by model, account, key or provider",
+		flags: func(fs *flag.FlagSet, o *opts) {
+			fs.StringVar(&o.since, "since", "", "from this time (RFC 3339) or this long ago (such as 24h or 7d)")
+			fs.StringVar(&o.until, "until", "", "up to this time (RFC 3339)")
+			fs.StringVar(&o.by, "by", "", "breakdown to show: model, account, key or provider (default: model)")
+			fs.StringVar(&o.model, "model", "", "only this model")
+			fs.StringVar(&o.account, "account", "", "only this account")
+			fs.StringVar(&o.provider, "provider", "", "only this provider (extension)")
+			fs.StringVar(&o.clientKey, "client-key", "", "only this client key ID")
+		},
+		run: func(x *invocation) error {
+			q := url.Values{}
+			for k, v := range map[string]string{
+				"since":    x.opts.since,
+				"until":    x.opts.until,
+				"by":       x.opts.by,
+				"model":    x.opts.model,
+				"account":  x.opts.account,
+				"provider": x.opts.provider,
+				"key":      x.opts.clientKey,
+			} {
+				if v != "" {
+					q.Set(k, v)
+				}
+			}
+			var u management.UsageReply
+			return x.call(http.MethodGet, "/usage", q, nil, &u, func() {
+				if !u.Enabled {
+					x.printf("usage is not recorded (usage-statistics-enabled is off)\n")
+				}
+				x.printf("%d requests, %d failed, %d input and %d output tokens\n", u.Requests, u.Failure, u.Tokens.Input, u.Tokens.Output)
+				header := "MODEL"
+				groups := u.Models
+				switch u.By {
+				case "account":
+					header = "ACCOUNT"
+					groups = u.Breakdown
+				case "key":
+					header = "KEY"
+					groups = u.Breakdown
+				case "provider":
+					header = "PROVIDER"
+					groups = u.Breakdown
+				case "model":
+					header = "MODEL"
+					groups = u.Breakdown
+				}
+				if len(groups) == 0 {
+					return
+				}
+				var rows [][]string
+				if header == "ACCOUNT" {
+					rows = [][]string{{"ACCOUNT", "PROVIDER", "REQUESTS", "FAILED", "INPUT", "OUTPUT"}}
+					for _, g := range groups {
+						rows = append(rows, []string{g.Name, dash(g.Provider), strconv.FormatInt(g.Requests, 10), strconv.FormatInt(g.Failure, 10),
+							strconv.FormatInt(g.Tokens.Input, 10), strconv.FormatInt(g.Tokens.Output, 10)})
+					}
+				} else {
+					rows = [][]string{{header, "REQUESTS", "FAILED", "INPUT", "OUTPUT"}}
+					for _, g := range groups {
+						rows = append(rows, []string{g.Name, strconv.FormatInt(g.Requests, 10), strconv.FormatInt(g.Failure, 10),
+							strconv.FormatInt(g.Tokens.Input, 10), strconv.FormatInt(g.Tokens.Output, 10)})
+					}
+				}
+				x.table(rows)
+			})
+		}},
+	{words: "usage events", routes: []string{"GET /usage/events"}, summary: "recorded requests, oldest first or newest first with --before",
+		flags: func(fs *flag.FlagSet, o *opts) {
+			fs.StringVar(&o.after, "after", "", "oldest first: only events with seq above this")
+			fs.StringVar(&o.before, "before", "", "newest first: only events with seq below this (0 or no value for the latest page)")
+			fs.IntVar(&o.limit, "limit", 0, "at most this many events (default: core's, 100)")
+			fs.StringVar(&o.since, "since", "", "from this time (RFC 3339) or this long ago (such as 24h or 7d)")
+			fs.StringVar(&o.until, "until", "", "up to this time (RFC 3339)")
+			fs.StringVar(&o.model, "model", "", "only this model")
+			fs.StringVar(&o.account, "account", "", "only this account")
+			fs.StringVar(&o.provider, "provider", "", "only this provider (extension)")
+			fs.StringVar(&o.clientKey, "client-key", "", "only this client key ID")
+		},
+		run: func(x *invocation) error {
+			q := url.Values{}
+			for k, v := range map[string]string{
+				"after":    x.opts.after,
+				"before":   x.opts.before,
+				"since":    x.opts.since,
+				"until":    x.opts.until,
+				"model":    x.opts.model,
+				"account":  x.opts.account,
+				"provider": x.opts.provider,
+				"key":      x.opts.clientKey,
+			} {
+				if v != "" {
+					q.Set(k, v)
+				}
+			}
+			if x.opts.limit > 0 {
+				q.Set("limit", strconv.Itoa(x.opts.limit))
+			}
+			var r management.UsageEventsReply
+			return x.call(http.MethodGet, "/usage/events", q, nil, &r, func() {
+				if !r.Enabled {
+					x.printf("usage is not recorded (usage-statistics-enabled is off)\n")
+				}
+				if len(r.Events) == 0 {
+					x.printf("no matching events\n")
+					return
+				}
+				rows := [][]string{{"SEQ", "TIME", "MODEL", "ACCOUNT", "KEY", "STATUS", "LATENCY", "TOKENS"}}
+				for _, ev := range r.Events {
+					status := strconv.Itoa(ev.Status)
+					if ev.Status == 0 {
+						status = "-"
+					}
+					if ev.Failed {
+						if ev.ErrorCode != "" {
+							status = status + " (" + ev.ErrorCode + ")"
+						} else {
+							status = status + " (failed)"
+						}
+					}
+					tokens := "-"
+					if ev.Tokens.Total != nil {
+						tokens = strconv.FormatInt(*ev.Tokens.Total, 10)
+					}
+					rows = append(rows, []string{
+						strconv.FormatUint(ev.Seq, 10),
+						ev.Timestamp.Local().Format(time.DateTime),
+						dash(ev.Model),
+						dash(ev.Account),
+						dash(ev.KeyID),
+						status,
+						fmt.Sprintf("%dms", ev.LatencyMS),
+						tokens,
+					})
+				}
+				x.table(rows)
+			})
+		}},
+	{words: "theme list", routes: []string{"GET /themes"}, summary: "the selected theme and stored themes",
+		run: func(x *invocation) error {
+			var r management.ThemesReply
+			return x.call(http.MethodGet, "/themes", nil, nil, &r, func() {
+				x.printf("current: %s\n", dash(r.Current))
+				if len(r.Themes) == 0 {
+					return
+				}
+				rows := [][]string{{"ID", "NAME", "BYTES"}}
+				for _, t := range r.Themes {
+					rows = append(rows, []string{t.ID, dash(t.Name), strconv.Itoa(t.Bytes)})
+				}
+				x.table(rows)
+			})
+		}},
+	{words: "theme show", args: []string{"id"}, routes: []string{"GET /themes/{publisher}/{name}"}, summary: "a stored theme's JSON",
+		run: func(x *invocation) error {
+			body, err := x.client.Call(x.ctx, http.MethodGet, management.ThemePath(x.args[0]), nil, nil, nil)
+			if err != nil {
+				return err
+			}
+			if _, err := x.stdout.Write(body); err != nil {
+				return err
+			}
+			if !x.json && !bytes.HasSuffix(body, []byte("\n")) {
+				x.printf("\n")
+			}
+			return nil
+		}},
+	{words: "theme add", args: []string{"file"}, routes: []string{"PUT /themes/{publisher}/{name}"}, summary: "store a theme JSON file",
+		flags: func(fs *flag.FlagSet, o *opts) {
+			fs.StringVar(&o.id, "id", "", "theme ID (publisher/name)")
+		},
+		run: func(x *invocation) error {
+			raw, err := os.ReadFile(x.args[0])
+			if err != nil {
+				return err
+			}
+			id := resolveThemeID(x.opts.id, x.args[0], raw)
+			var summary management.ThemeSummary
+			body, err := x.client.CallBytes(x.ctx, http.MethodPut, management.ThemePath(id), nil, raw, &summary)
+			if err != nil {
+				return err
+			}
+			if x.json {
+				_, err := x.stdout.Write(body)
+				return err
+			}
+			x.printf("%s\n", summary.ID)
+			return nil
+		}},
+	{words: "theme remove", args: []string{"id"}, routes: []string{"DELETE /themes/{publisher}/{name}"}, summary: "remove a stored theme",
+		run: func(x *invocation) error {
+			return x.call(http.MethodDelete, management.ThemePath(x.args[0]), nil, nil, nil, func() {
+				x.printf("theme %s removed\n", x.args[0])
+			})
+		}},
+	{words: "theme set", args: []string{"id"}, routes: []string{"PUT /theme"}, summary: "select a theme ID",
+		run: func(x *invocation) error {
+			var r management.ThemeSelection
+			return x.call(http.MethodPut, "/theme", nil, management.ThemeSelection{ID: x.args[0]}, &r, func() {
+				x.printf("theme %s selected\n", r.ID)
+			})
+		}},
+	{words: "theme clear", routes: []string{"PUT /theme"}, summary: "clear the selected theme",
+		run: func(x *invocation) error {
+			var r management.ThemeSelection
+			return x.call(http.MethodPut, "/theme", nil, management.ThemeSelection{ID: ""}, &r, func() {
+				x.printf("theme cleared\n")
+			})
+		}},
+}
+
+func resolveThemeID(flagID, filePath string, raw []byte) string {
+	if flagID != "" {
+		return flagID
+	}
+	var doc struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(raw, &doc) == nil && validThemeID(doc.ID) {
+		return doc.ID
+	}
+	base := filepath.Base(filePath)
+	if len(base) >= 5 && strings.EqualFold(base[len(base)-5:], ".json") {
+		base = base[:len(base)-5]
+	}
+	var b strings.Builder
+	for _, r := range strings.ToLower(base) {
+		if b.Len() >= 64 {
+			break
+		}
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	return "t3/" + b.String()
+}
+
+func validThemeID(id string) bool {
+	pub, name, ok := strings.Cut(id, "/")
+	if !ok || pub == "current" {
+		return false
+	}
+	return validThemePart(pub) && validThemePart(name)
+}
+
+func validThemePart(s string) bool {
+	if len(s) == 0 || len(s) > 64 {
+		return false
+	}
+	for i := range len(s) {
+		c := s[i]
+		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+func cmpOr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}
+
+func normalizeOptionalFlagValue(args []string, name, def string) []string {
+	out := make([]string, len(args))
+	copy(out, args)
+	for i, a := range out {
+		if a == "--"+name || a == "-"+name {
+			if i+1 == len(out) || strings.HasPrefix(out[i+1], "-") {
+				out[i] = a + "=" + def
+			}
+		}
+	}
+	return out
+}
+
+func packageVerb(verb, summary string) command {
+	return command{words: "ext " + verb, args: []string{"id"}, routes: []string{"POST /packages/{publisher}/{name}/" + verb}, summary: summary,
+		run: func(x *invocation) error {
+			var r management.PackageReply
+			return x.call(http.MethodPost, management.PackagePath(x.args[0])+"/"+verb, nil, nil, &r, func() {
+				x.printf("%s %sd: %s\n", r.Package.ID, verb, r.Package.State)
+			})
+		}}
+}
+
+func accountSwitch(verb string, disabled bool, summary string) command {
+	return command{words: "account " + verb, args: []string{"id"}, routes: []string{"PATCH /accounts/{id}"}, summary: summary,
+		run: func(x *invocation) error {
+			var r management.AccountReply
+			return x.call(http.MethodPatch, accountPath(x.args[0]), nil, management.AccountPatch{Disabled: &disabled}, &r, func() {
+				x.printf("account %s %sd\n", r.Account.ID, verb)
+			})
+		}}
+}
+
+func printStatus(x *invocation, s management.Status) {
+	x.printf("pluxy %s (%s, %s)\n", s.Version, s.Commit, s.Built)
+	x.printf("config revision %d active", s.Active.Revision)
+	if s.Desired.Revision != s.Active.Revision {
+		x.printf("; revision %d refused: %s", s.Desired.Revision, s.Desired.Error)
+	}
+	x.printf("\n")
+	if s.FirstRun {
+		x.printf("first run: setup has not been completed (run pluxy setup)\n")
+	}
+	if s.SafeMode {
+		x.printf("safe mode: no extension runs\n")
+	}
+	if len(s.Extensions) == 0 {
+		return
+	}
+	rows := [][]string{{"EXTENSION", "VERSION", "STATE", "GENERATION", "CURRENT", "ACTIVE REQUESTS"}}
+	for _, e := range s.Extensions {
+		state := e.State
+		if e.LastError != "" {
+			state += ": " + e.LastError
+		}
+		rows = append(rows, []string{e.ID, e.Version, state, strconv.FormatUint(e.Generation, 10), yesNo(e.Current), strconv.Itoa(e.ActiveRequests)})
+	}
+	x.table(rows)
+}
+
+// printFlat prints v's JSON as one "name value" line per leaf, names joined with dots, in
+// sorted order.
+func printFlat(x *invocation, v any) {
+	b, _ := json.Marshal(v)
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.UseNumber()
+	var tree any
+	if d.Decode(&tree) != nil {
+		return
+	}
+	var rows [][]string
+	var walk func(prefix string, t any)
+	walk = func(prefix string, t any) {
+		switch t := t.(type) {
+		case map[string]any:
+			for k, v := range t {
+				walk(strings.TrimPrefix(prefix+"."+k, "."), v)
+			}
+		case []any:
+			if len(t) == 0 {
+				rows = append(rows, []string{prefix, "[]"})
+			}
+			for i, v := range t {
+				walk(fmt.Sprintf("%s[%d]", prefix, i), v)
+			}
+		case nil:
+			rows = append(rows, []string{prefix, "null"})
+		default:
+			rows = append(rows, []string{prefix, fmt.Sprint(t)})
+		}
+	}
+	walk("", tree)
+	sort.Slice(rows, func(i, j int) bool { return rows[i][0] < rows[j][0] })
+	x.table(rows)
+}
+
+// find returns the command args start with, and the arguments after its words.
+func find(args []string) (*command, []string) {
+	var best *command
+	n := 0
+	for i := range commands {
+		w := strings.Fields(commands[i].words)
+		if len(w) > len(args) || len(w) <= n || !slices.Equal(w, args[:len(w)]) {
+			continue
+		}
+		best, n = &commands[i], len(w)
+	}
+	return best, args[n:]
+}
+
+// help writes the list of commands whose words start with prefix.
+func help(w io.Writer, prefix string) {
+	fmt.Fprintln(w, "usage: pluxy serve [-config file] [flags]   run core (pluxy with no subcommand does too)")
+	fmt.Fprintln(w, "       pluxy init [-config file] [-port n]  write a first config (pluxy serve does when there is none)")
+	fmt.Fprintln(w, "       pluxy <command> [--json] [--config file | --url address --key key]")
+	fmt.Fprintln(w)
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	for _, c := range commands {
+		if !strings.HasPrefix(c.words+" ", prefix) {
+			continue
+		}
+		line := c.words
+		for _, a := range c.args {
+			line += " <" + a + ">"
+		}
+		fmt.Fprintf(tw, "  %s\t%s\n", line, c.summary)
+	}
+	tw.Flush()
+}
+
+// runCLI runs one client subcommand and returns its exit code.
+func runCLI(args []string, stdout, stderr io.Writer, getenv func(string) string) int {
+	return runCLIWithInput(args, os.Stdin, stdout, stderr, getenv, isInteractive(os.Stdin))
+}
+
+func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string, tty bool) int {
+	if args[0] == "help" {
+		help(stdout, strings.Join(args[1:], " "))
+		return exitOK
+	}
+	cmd, rest := find(args)
+	if cmd == nil {
+		// A group's word alone (pluxy account) lists the group's commands.
+		if prefix := args[0] + " "; slices.ContainsFunc(commands, func(c command) bool { return strings.HasPrefix(c.words, prefix) }) {
+			fmt.Fprintf(stderr, "pluxy: %q needs a command\n", args[0])
+			help(stderr, prefix)
+		} else {
+			fmt.Fprintf(stderr, "pluxy: unknown command %q\n", args[0])
+			help(stderr, "")
+		}
+		return exitUsage
+	}
+	fs := flag.NewFlagSet("pluxy "+cmd.words, flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var o opts
+	jsonOut := fs.Bool("json", false, "print the API's reply body unchanged")
+	configPath := fs.String("config", "config.json", "the config file to read core's address and management key from")
+	addr := fs.String("url", "", "core's address, such as http://127.0.0.1:8317 (default: $PLUXY_URL, else from the config)")
+	key := fs.String("key", "", "the management key (default: $PLUXY_MANAGEMENT_KEY, else from the config)")
+	if cmd.flags != nil {
+		cmd.flags(fs, &o)
+	}
+	if cmd.words == "usage events" {
+		rest = normalizeOptionalFlagValue(rest, "before", "0")
+	}
+	// Flags may come before, between and after the arguments.
+	var pos []string
+	for {
+		if err := fs.Parse(rest); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return exitOK
+			}
+			return exitUsage
+		}
+		if fs.NArg() == 0 {
+			break
+		}
+		pos = append(pos, fs.Arg(0))
+		rest = fs.Args()[1:]
+	}
+	if len(pos) != len(cmd.args) {
+		want := ""
+		for _, a := range cmd.args {
+			want += " <" + a + ">"
+		}
+		fmt.Fprintf(stderr, "pluxy: usage: pluxy %s%s [flags]\n", cmd.words, want)
+		return exitUsage
+	}
+	t, err := findCore(*configPath, cmpOr(*addr, getenv("PLUXY_URL")), cmpOr(*key, getenv("PLUXY_MANAGEMENT_KEY")))
+	if err != nil {
+		printError(stderr, *jsonOut, err)
+		return exitFailed
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	x := &invocation{ctx: ctx, client: &management.Client{URL: t.url, Key: t.key, HTTP: t.http}, args: pos, opts: o, json: *jsonOut, stdin: stdin, stdout: stdout, stderr: stderr, tty: tty}
+	err = cmd.run(x)
+	if err == nil {
+		return exitOK
+	}
+	printError(stderr, *jsonOut, err)
+	return exitCode(err)
+}
+
+// printError writes a command's error to stderr: with --json, as the API's error object (the
+// reply's own body when core sent one), otherwise as a line of text.
+func printError(stderr io.Writer, asJSON bool, err error) {
+	if !asJSON {
+		fmt.Fprintf(stderr, "pluxy: %v\n", err)
+		return
+	}
+	var ae *management.APIError
+	if errors.As(err, &ae) && json.Valid(ae.Body) {
+		stderr.Write(ae.Body)
+		if !bytes.HasSuffix(ae.Body, []byte("\n")) {
+			fmt.Fprintln(stderr)
+		}
+		return
+	}
+	code, msg := "failed", err.Error()
+	var ue usageError
+	switch {
+	case errors.As(err, &ae):
+		code, msg = ae.Code, ae.Message
+	case errors.As(err, &ue):
+		code = "invalid_request"
+	case management.IsUnreachable(err):
+		code = "unreachable"
+	}
+	b, _ := json.Marshal(map[string]any{"error": map[string]string{"code": code, "message": msg}})
+	fmt.Fprintf(stderr, "%s\n", b)
+}
+
+// exitCode is the exit code for a command's error.
+func exitCode(err error) int {
+	var ue usageError
+	var ae *management.APIError
+	switch {
+	case errors.As(err, &ue):
+		return exitUsage
+	case management.IsUnreachable(err):
+		return exitUnreachable
+	case errors.As(err, &ae):
+		switch ae.Status {
+		case http.StatusUnauthorized, http.StatusForbidden:
+			return exitRefused
+		case http.StatusNotFound:
+			return exitNotFound
+		case http.StatusConflict, http.StatusUnprocessableEntity:
+			return exitChange
+		}
+	}
+	return exitFailed
+}

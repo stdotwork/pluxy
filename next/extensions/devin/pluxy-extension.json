@@ -2,6 +2,8 @@
   "manifest_version": 0,
   "id": "pluxy/devin",
   "version": "0.1.0",
+  "title": "Devin",
+  "summary": "The models a Devin (formerly Windsurf) account gets.",
   "protocol": [0],
   "programs": {
     "linux/amd64": "devin",

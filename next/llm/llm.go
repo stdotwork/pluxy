@@ -441,6 +441,7 @@ const (
 	CodeInvalidRequest = "invalid_request"
 	CodeAuth           = "auth"
 	CodePermission     = "permission"
+	CodeAccountClosed  = "account_closed"
 	CodeNotFound       = "not_found"
 	CodeRateLimit      = "rate_limit"
 	CodeQuota          = "quota"
