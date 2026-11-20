@@ -423,7 +423,7 @@ func refGeneratedRequests() []refCase {
 		{Type: llm.ItemTypeMessage, Role: llm.RoleUser, Content: []llm.Part{{Type: llm.PartText, Text: "hi"}}, TextContent: true},
 	}
 	for _, effort := range efforts {
-		for _, tc := range choice {
+		for ci, tc := range choice {
 			for _, stream := range []bool{false, true} {
 				req := llm.Request{Model: "m", Stream: stream, Items: base, Options: llm.Options{
 					ReasoningEffort: effort, ToolChoice: tc, ParallelToolCalls: &strict,
@@ -432,14 +432,14 @@ func refGeneratedRequests() []refCase {
 				if tc != nil {
 					req.Tools = []llm.Tool{{Name: "f", Parameters: json.RawMessage(`{"type":"object"}`)}}
 				}
-				add("options/"+effort+"/"+fmt.Sprint(tc)+"/"+fmt.Sprint(stream), req)
+				add(fmt.Sprintf("options/%s/choice%d/stream%v", effort, ci, stream), req)
 			}
 		}
 	}
-	for _, rf := range formats {
+	for fi, rf := range formats {
 		for _, stream := range []bool{false, true} {
 			req := llm.Request{Model: "m", Stream: stream, Items: base, Options: llm.Options{ResponseFormat: rf}}
-			add("format/"+fmt.Sprint(rf)+"/"+fmt.Sprint(stream), req)
+			add(fmt.Sprintf("format/%d/stream%v", fi, stream), req)
 		}
 	}
 	// A request's own kept fields, merged into the body last.
