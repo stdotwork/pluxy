@@ -334,9 +334,7 @@
         },
         "tool_call": true,
         "reasoning": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2025-08-05"
+        "attachment": true
       },
       "claude-opus-4-5": {
         "limit": {
@@ -635,9 +633,7 @@
         },
         "tool_call": true,
         "reasoning": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2025-05-22"
+        "attachment": true
       },
       "claude-opus-5": {
         "limit": {
@@ -785,9 +781,7 @@
         "tool_call": true,
         "reasoning": true,
         "structured_output": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2025-09-29"
+        "attachment": true
       },
       "claude-sonnet-4-5-20250929": {
         "limit": {
@@ -807,9 +801,7 @@
         "tool_call": true,
         "reasoning": true,
         "structured_output": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2025-09-29"
+        "attachment": true
       },
       "claude-sonnet-4-5@20250929": {
         "limit": {
@@ -829,9 +821,7 @@
         "tool_call": true,
         "reasoning": true,
         "structured_output": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2025-09-29"
+        "attachment": true
       },
       "claude-sonnet-4-6": {
         "limit": {
@@ -912,9 +902,7 @@
         },
         "tool_call": true,
         "reasoning": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2025-05-22"
+        "attachment": true
       },
       "claude-sonnet-5": {
         "limit": {
@@ -1147,9 +1135,7 @@
             "image"
           ]
         },
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2025-08-26"
+        "attachment": true
       },
       "gemini-2.5-flash-lite": {
         "limit": {
@@ -1404,9 +1390,7 @@
           }
         ],
         "structured_output": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2026-03-03"
+        "attachment": true
       },
       "gemini-3.1-flash-live-preview": {
         "limit": {
@@ -2217,9 +2201,7 @@
         },
         "tool_call": true,
         "reasoning": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2025-08-05"
+        "attachment": true
       },
       "claude-opus-4-5@20251101": {
         "limit": {
@@ -2363,9 +2345,7 @@
         },
         "tool_call": true,
         "reasoning": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2025-05-22"
+        "attachment": true
       },
       "claude-opus-5-5@default": {
         "limit": {
@@ -2449,9 +2429,7 @@
         "tool_call": true,
         "reasoning": true,
         "structured_output": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2025-09-29"
+        "attachment": true
       },
       "claude-sonnet-4-6@default": {
         "limit": {
@@ -2501,9 +2479,7 @@
         },
         "tool_call": true,
         "reasoning": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2025-05-22"
+        "attachment": true
       },
       "claude-sonnet-5-5@default": {
         "limit": {
@@ -2600,9 +2576,7 @@
         },
         "tool_call": true,
         "reasoning": true,
-        "structured_output": true,
-        "status": "deprecated",
-        "last_updated": "2025-08-28"
+        "structured_output": true
       },
       "deepseek-ai/deepseek-v3.2-maas": {
         "limit": {
@@ -2619,9 +2593,7 @@
         },
         "tool_call": true,
         "reasoning": true,
-        "structured_output": true,
-        "status": "deprecated",
-        "last_updated": "2026-04-04"
+        "structured_output": true
       },
       "gemini-2.5-flash": {
         "limit": {
@@ -2643,9 +2615,7 @@
         "tool_call": true,
         "reasoning": true,
         "structured_output": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2025-06-17"
+        "attachment": true
       },
       "gemini-2.5-flash-image": {
         "limit": {
@@ -2685,9 +2655,7 @@
         "tool_call": true,
         "reasoning": true,
         "structured_output": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2025-06-17"
+        "attachment": true
       },
       "gemini-2.5-flash-tts": {
         "limit": {
@@ -2724,9 +2692,7 @@
         "tool_call": true,
         "reasoning": true,
         "structured_output": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2025-06-17"
+        "attachment": true
       },
       "gemini-2.5-pro-tts": {
         "limit": {
@@ -3048,9 +3014,7 @@
           }
         ],
         "structured_output": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2026-07-21"
+        "attachment": true
       },
       "gemini-3.7-flash": {
         "limit": {
@@ -3323,9 +3287,7 @@
           ]
         },
         "tool_call": true,
-        "structured_output": true,
-        "status": "deprecated",
-        "last_updated": "2025-04-29"
+        "structured_output": true
       },
       "meta/llama-4-maverick-17b-128e-instruct-maas": {
         "limit": {
@@ -3413,9 +3375,7 @@
         },
         "tool_call": true,
         "reasoning": true,
-        "structured_output": true,
-        "status": "deprecated",
-        "last_updated": "2025-11-13"
+        "structured_output": true
       },
       "openai/gpt-oss-120b-maas": {
         "limit": {
@@ -3469,9 +3429,7 @@
             ]
           }
         ],
-        "structured_output": true,
-        "status": "deprecated",
-        "last_updated": "2025-08-05"
+        "structured_output": true
       },
       "qwen/qwen3-235b-a22b-instruct-2507-maas": {
         "limit": {
@@ -3487,9 +3445,7 @@
           ]
         },
         "tool_call": true,
-        "structured_output": true,
-        "status": "deprecated",
-        "last_updated": "2025-08-13"
+        "structured_output": true
       },
       "xai/grok-4.1-fast-non-reasoning": {
         "limit": {
@@ -3507,9 +3463,7 @@
         },
         "tool_call": true,
         "structured_output": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2025-11-19"
+        "attachment": true
       },
       "xai/grok-4.1-fast-reasoning": {
         "limit": {
@@ -3528,9 +3482,7 @@
         "tool_call": true,
         "reasoning": true,
         "structured_output": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2025-11-19"
+        "attachment": true
       },
       "xai/grok-4.20-non-reasoning": {
         "limit": {
@@ -3661,9 +3613,7 @@
         },
         "tool_call": true,
         "reasoning": true,
-        "structured_output": true,
-        "status": "deprecated",
-        "last_updated": "2026-01-06"
+        "structured_output": true
       },
       "zai-org/glm-5-maas": {
         "limit": {
@@ -3680,9 +3630,7 @@
         },
         "tool_call": true,
         "reasoning": true,
-        "structured_output": true,
-        "status": "deprecated",
-        "last_updated": "2026-02-12"
+        "structured_output": true
       },
       "zai-org/glm-5.2-maas": {
         "limit": {
@@ -4286,9 +4234,7 @@
           "output": [
             "text"
           ]
-        },
-        "status": "deprecated",
-        "last_updated": "2023-11-06"
+        }
       },
       "gpt-4": {
         "limit": {
@@ -4303,9 +4249,7 @@
             "text"
           ]
         },
-        "tool_call": true,
-        "status": "deprecated",
-        "last_updated": "2024-04-09"
+        "tool_call": true
       },
       "gpt-4-turbo": {
         "limit": {
@@ -4322,9 +4266,7 @@
           ]
         },
         "tool_call": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2024-04-09"
+        "attachment": true
       },
       "gpt-4.1": {
         "limit": {
@@ -4380,9 +4322,7 @@
         },
         "tool_call": true,
         "structured_output": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2025-04-14"
+        "attachment": true
       },
       "gpt-4o": {
         "limit": {
@@ -4419,9 +4359,7 @@
         },
         "tool_call": true,
         "structured_output": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2024-05-13"
+        "attachment": true
       },
       "gpt-4o-2024-08-06": {
         "limit": {
@@ -5445,9 +5383,7 @@
           }
         ],
         "structured_output": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2024-12-05"
+        "attachment": true
       },
       "o1-pro": {
         "limit": {
@@ -5476,9 +5412,7 @@
           }
         ],
         "structured_output": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2025-03-19"
+        "attachment": true
       },
       "o3": {
         "limit": {
@@ -5535,9 +5469,7 @@
             ]
           }
         ],
-        "structured_output": true,
-        "status": "deprecated",
-        "last_updated": "2025-01-29"
+        "structured_output": true
       },
       "o3-pro": {
         "limit": {
@@ -5595,9 +5527,7 @@
           }
         ],
         "structured_output": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2025-04-16"
+        "attachment": true
       },
       "text-embedding-3-large": {
         "limit": {

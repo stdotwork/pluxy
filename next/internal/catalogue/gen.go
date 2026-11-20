@@ -6,7 +6,6 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -34,9 +33,7 @@ type rawModel struct {
 	ReasoningOptions []rawReasoningOpt `json:"reasoning_options,omitempty"`
 	StructuredOutput bool              `json:"structured_output,omitempty"`
 	Attachment       bool              `json:"attachment,omitempty"`
-	Status           string            `json:"status,omitempty"`
-	LastUpdated      string            `json:"last_updated,omitempty"`
-	ReleaseDate      string            `json:"release_date,omitempty"`
+	DeprecatedAt     string            `json:"deprecated_at,omitempty"`
 }
 
 type rawLimit struct {
@@ -90,10 +87,7 @@ func trimModel(m rawModel) rawModel {
 			break
 		}
 	}
-	if m.Status == "deprecated" {
-		out.Status = "deprecated"
-		out.LastUpdated = cmp.Or(m.LastUpdated, m.ReleaseDate)
-	}
+	out.DeprecatedAt = strings.TrimSpace(m.DeprecatedAt)
 	return out
 }
 

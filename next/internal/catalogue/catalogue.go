@@ -331,9 +331,7 @@ type rawModel struct {
 	ReasoningOptions []rawReasoningOpt `json:"reasoning_options,omitempty"`
 	StructuredOutput bool              `json:"structured_output,omitempty"`
 	Attachment       bool              `json:"attachment,omitempty"`
-	Status           string            `json:"status,omitempty"`
-	LastUpdated      string            `json:"last_updated,omitempty"`
-	ReleaseDate      string            `json:"release_date,omitempty"`
+	DeprecatedAt     string            `json:"deprecated_at,omitempty"`
 }
 
 type rawLimit struct {
@@ -486,10 +484,7 @@ func trimRawModel(m rawModel) rawModel {
 			break
 		}
 	}
-	if m.Status == "deprecated" {
-		out.Status = "deprecated"
-		out.LastUpdated = cmp.Or(m.LastUpdated, m.ReleaseDate)
-	}
+	out.DeprecatedAt = strings.TrimSpace(m.DeprecatedAt)
 	return out
 }
 
@@ -529,13 +524,10 @@ func toProtocolModel(id string, rm rawModel) protocol.Model {
 		}
 	}
 	var deprecatedAt int64
-	if rm.Status == "deprecated" {
-		dateStr := cmp.Or(rm.LastUpdated, rm.ReleaseDate)
-		if t, err := time.Parse("2006-01-02", dateStr); err == nil {
-			deprecatedAt = t.UTC().Unix()
-		} else if t, err := time.Parse(time.RFC3339, dateStr); err == nil {
-			deprecatedAt = t.UTC().Unix()
-		}
+	if t, err := time.Parse("2006-01-02", rm.DeprecatedAt); err == nil {
+		deprecatedAt = t.UTC().Unix()
+	} else if t, err := time.Parse(time.RFC3339, rm.DeprecatedAt); err == nil {
+		deprecatedAt = t.UTC().Unix()
 	}
 	return protocol.Model{
 		ID:                  id,

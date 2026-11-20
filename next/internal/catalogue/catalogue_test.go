@@ -165,6 +165,16 @@ func TestCatalogueRefresh(t *testing.T) {
 					"reasoning": true,
 					"reasoning_options": [{"type": "effort", "values": ["low", "medium", "high"]}],
 					"structured_output": true
+				},
+				"gpt-status-only-deprecated": {
+					"limit": {"context": 1000, "output": 100},
+					"status": "deprecated",
+					"last_updated": "2026-01-02",
+					"release_date": "2025-01-02"
+				},
+				"gpt-dated-deprecated": {
+					"limit": {"context": 1000, "output": 100},
+					"deprecated_at": "2026-02-03"
 				}
 			}
 		}
@@ -194,6 +204,9 @@ func TestCatalogueRefresh(t *testing.T) {
 			case <-r.Context().Done():
 			case <-hangWait:
 			}
+		case 6: // a payload with no provider core keeps
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"reseller":{"models":{"gpt-refresh-test":{"limit":{"context":1}}}}}`)
 		}
 	}))
 	t.Cleanup(srv.Close)
@@ -223,6 +236,12 @@ func TestCatalogueRefresh(t *testing.T) {
 		!m.Capabilities.Vision || !m.Capabilities.Reasoning ||
 		!slices.Equal(m.Capabilities.ReasoningLevels, []string{"low", "medium", "high"}) {
 		t.Errorf("capabilities = %+v", m.Capabilities)
+	}
+	if m, ok := cat.LookupFor("pluxy/codex", nil, "gpt-status-only-deprecated"); !ok || m.Capabilities == nil || m.Capabilities.DeprecatedAt != 0 {
+		t.Errorf("status-only deprecated model = %+v, present=%v; want an empty deprecated_at", m, ok)
+	}
+	if m, ok := cat.LookupFor("pluxy/codex", nil, "gpt-dated-deprecated"); !ok || m.Capabilities == nil || m.Capabilities.DeprecatedAt != time.Date(2026, 2, 3, 0, 0, 0, 0, time.UTC).Unix() {
+		t.Errorf("dated deprecated model = %+v, present=%v; want its deprecated_at", m, ok)
 	}
 	savedAfter200, err := os.ReadFile(statePath)
 	if err != nil || len(savedAfter200) == 0 {
@@ -273,7 +292,20 @@ func TestCatalogueRefresh(t *testing.T) {
 		}
 	}
 
-	// 5. Timeout limit cancels a hanging server and keeps the last good file.
+	// 5. A payload with no kept provider is unknown, not a new catalogue, and keeps the file.
+	mode.Store(6)
+	if err := cat.Refresh(context.Background()); err == nil {
+		t.Error("Refresh (unknown provider): expected an error, got nil")
+	}
+	savedAfterUnknown, err := os.ReadFile(statePath)
+	if err != nil || string(savedAfterUnknown) != string(savedAfter200) {
+		t.Error("state file changed on a payload with no kept provider")
+	}
+	if _, ok := cat.LookupFor("pluxy/codex", nil, "gpt-refresh-test"); !ok {
+		t.Error("gpt-refresh-test lost after an unknown-provider payload")
+	}
+
+	// 6. Timeout limit cancels a hanging server and keeps the last good file.
 	fastCat := New(Options{
 		StatePath: statePath,
 		URL:       srv.URL,
