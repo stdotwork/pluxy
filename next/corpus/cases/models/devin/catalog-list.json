@@ -31,377 +31,89 @@
       "reason": "The new core enriches GET /v1/models entries with context_length, max_output_tokens, capabilities and from merged across the account's list, core's models.dev catalogue and the extension's built-in list (with the smaller positive limit winning); today's core lists only id, object, created and owned_by.",
       "want": [
         {
-          "capabilities": {
-            "pdf": false,
-            "reasoning": true,
-            "reasoning_levels": [
-              "low",
-              "high",
-              "max"
-            ],
-            "structured_output": true,
-            "tools": true,
-            "vision": true
-          },
-          "context_length": 1048576,
-          "from": "catalogue",
-          "id": "devin/kimi-k3",
-          "max_output_tokens": 64000,
-          "object": "model",
-          "owned_by": "moonshot"
-        },
-        {
-          "capabilities": {
-            "pdf": true,
-            "reasoning": true,
-            "reasoning_levels": [
-              "low",
-              "medium",
-              "high",
-              "max"
-            ],
-            "structured_output": true,
-            "tools": true,
-            "vision": true
-          },
           "context_length": 1000000,
-          "from": "catalogue",
-          "id": "devin/claude-opus-4-6-1m",
-          "max_output_tokens": 64000,
-          "object": "model",
-          "owned_by": "anthropic"
-        },
-        {
-          "capabilities": {
-            "pdf": true,
-            "reasoning": true,
-            "reasoning_levels": [
-              "low",
-              "medium",
-              "high",
-              "max"
-            ],
-            "structured_output": true,
-            "tools": true,
-            "vision": true
-          },
-          "context_length": 1000000,
-          "from": "catalogue",
-          "id": "devin/claude-sonnet-4-6-1m",
-          "max_output_tokens": 64000,
-          "object": "model",
-          "owned_by": "anthropic"
-        },
-        {
-          "capabilities": {
-            "pdf": true,
-            "reasoning": true,
-            "reasoning_levels": [
-              "low",
-              "medium",
-              "high",
-              "max"
-            ],
-            "structured_output": true,
-            "tools": true,
-            "vision": true
-          },
-          "context_length": 200000,
           "from": "extension",
-          "id": "devin/claude-opus-4-6",
+          "id": "devin/claude-5-fable",
           "max_output_tokens": 64000,
           "object": "model",
           "owned_by": "anthropic"
         },
         {
-          "capabilities": {
-            "pdf": true,
-            "reasoning": true,
-            "reasoning_levels": [
-              "low",
-              "medium",
-              "high",
-              "max"
-            ],
-            "structured_output": true,
-            "tools": true,
-            "vision": true
-          },
-          "context_length": 200000,
-          "from": "extension",
-          "id": "devin/claude-sonnet-4-6",
-          "max_output_tokens": 64000,
-          "object": "model",
-          "owned_by": "anthropic"
-        },
-        {
-          "capabilities": {
-            "pdf": true,
-            "reasoning": true,
-            "reasoning_levels": [
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ],
-            "structured_output": true,
-            "tools": true,
-            "vision": true
-          },
           "context_length": 1000000,
-          "from": "catalogue",
+          "from": "extension",
           "id": "devin/claude-fable-5-1",
           "max_output_tokens": 64000,
           "object": "model",
           "owned_by": "anthropic"
         },
         {
-          "capabilities": {
-            "pdf": true,
-            "reasoning": true,
-            "reasoning_levels": [
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ],
-            "structured_output": true,
-            "tools": true,
-            "vision": true
-          },
           "context_length": 1000000,
-          "from": "catalogue",
+          "from": "extension",
           "id": "devin/claude-haiku-5-5",
           "max_output_tokens": 64000,
           "object": "model",
           "owned_by": "anthropic"
         },
         {
-          "capabilities": {
-            "pdf": true,
-            "reasoning": true,
-            "reasoning_levels": [
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ],
-            "structured_output": true,
-            "tools": true,
-            "vision": true
-          },
           "context_length": 1000000,
-          "from": "catalogue",
+          "from": "extension",
+          "id": "devin/claude-opus-4-6-1m",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "anthropic"
+        },
+        {
+          "context_length": 1000000,
+          "from": "extension",
           "id": "devin/claude-opus-4-7",
           "max_output_tokens": 64000,
           "object": "model",
           "owned_by": "anthropic"
         },
         {
-          "capabilities": {
-            "pdf": true,
-            "reasoning": true,
-            "reasoning_levels": [
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ],
-            "structured_output": true,
-            "tools": true,
-            "vision": true
-          },
           "context_length": 1000000,
-          "from": "catalogue",
+          "from": "extension",
           "id": "devin/claude-opus-4-8",
           "max_output_tokens": 64000,
           "object": "model",
           "owned_by": "anthropic"
         },
         {
-          "capabilities": {
-            "pdf": true,
-            "reasoning": true,
-            "reasoning_levels": [
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ],
-            "structured_output": true,
-            "tools": true,
-            "vision": true
-          },
           "context_length": 1000000,
-          "from": "catalogue",
+          "from": "extension",
           "id": "devin/claude-opus-5",
           "max_output_tokens": 64000,
           "object": "model",
           "owned_by": "anthropic"
         },
         {
-          "capabilities": {
-            "pdf": true,
-            "reasoning": true,
-            "reasoning_levels": [
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ],
-            "structured_output": true,
-            "tools": true,
-            "vision": true
-          },
           "context_length": 1000000,
-          "from": "catalogue",
+          "from": "extension",
           "id": "devin/claude-opus-5-5",
           "max_output_tokens": 64000,
           "object": "model",
           "owned_by": "anthropic"
         },
         {
-          "capabilities": {
-            "pdf": true,
-            "reasoning": true,
-            "reasoning_levels": [
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ],
-            "structured_output": true,
-            "tools": true,
-            "vision": true
-          },
           "context_length": 1000000,
-          "from": "catalogue",
+          "from": "extension",
+          "id": "devin/claude-sonnet-4-6-1m",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "anthropic"
+        },
+        {
+          "context_length": 1000000,
+          "from": "extension",
           "id": "devin/claude-sonnet-5",
           "max_output_tokens": 64000,
           "object": "model",
           "owned_by": "anthropic"
         },
         {
-          "capabilities": {
-            "pdf": true,
-            "reasoning": true,
-            "reasoning_levels": [
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ],
-            "structured_output": true,
-            "tools": true,
-            "vision": true
-          },
-          "context_length": 1000000,
-          "from": "catalogue",
-          "id": "devin/claude-sonnet-5-5",
-          "max_output_tokens": 64000,
-          "object": "model",
-          "owned_by": "anthropic"
-        },
-        {
-          "capabilities": {
-            "pdf": true,
-            "reasoning": true,
-            "reasoning_levels": [
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ],
-            "structured_output": true,
-            "tools": true,
-            "vision": true
-          },
-          "context_length": 922000,
-          "from": "catalogue",
-          "id": "devin/gpt-6-astra",
-          "max_output_tokens": 64000,
-          "object": "model",
-          "owned_by": "openai"
-        },
-        {
-          "capabilities": {
-            "pdf": true,
-            "reasoning": true,
-            "reasoning_levels": [
-              "low",
-              "medium",
-              "high"
-            ],
-            "structured_output": true,
-            "tools": true,
-            "vision": true
-          },
-          "context_length": 1048576,
-          "from": "catalogue",
-          "id": "devin/gemini-4-argon",
-          "max_output_tokens": 32768,
-          "object": "model",
-          "owned_by": "google"
-        },
-        {
-          "capabilities": {
-            "pdf": true,
-            "reasoning": true,
-            "reasoning_levels": [
-              "none",
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ],
-            "structured_output": true,
-            "tools": true,
-            "vision": true
-          },
-          "context_length": 922000,
-          "from": "catalogue",
-          "id": "devin/gpt-6-luna",
-          "max_output_tokens": 64000,
-          "object": "model",
-          "owned_by": "openai"
-        },
-        {
-          "capabilities": {
-            "pdf": true,
-            "reasoning": true,
-            "reasoning_levels": [
-              "none",
-              "low",
-              "medium",
-              "high",
-              "xhigh",
-              "max"
-            ],
-            "structured_output": true,
-            "tools": true,
-            "vision": true
-          },
-          "context_length": 922000,
-          "from": "catalogue",
-          "id": "devin/gpt-6-sol",
-          "max_output_tokens": 64000,
-          "object": "model",
-          "owned_by": "openai"
-        },
-        {
           "context_length": 1000000,
           "from": "extension",
-          "id": "devin/claude-5-fable",
+          "id": "devin/claude-sonnet-5-5",
           "max_output_tokens": 64000,
           "object": "model",
           "owned_by": "anthropic"
@@ -450,6 +162,30 @@
           "context_length": 1000000,
           "from": "extension",
           "id": "devin/gpt-6-1-sol",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "context_length": 1000000,
+          "from": "extension",
+          "id": "devin/gpt-6-astra",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "context_length": 1000000,
+          "from": "extension",
+          "id": "devin/gpt-6-luna",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "context_length": 1000000,
+          "from": "extension",
+          "id": "devin/gpt-6-sol",
           "max_output_tokens": 64000,
           "object": "model",
           "owned_by": "openai"
@@ -521,6 +257,14 @@
         {
           "context_length": 1048576,
           "from": "extension",
+          "id": "devin/gemini-4-argon",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "google"
+        },
+        {
+          "context_length": 1048576,
+          "from": "extension",
           "id": "devin/glm-5-3",
           "max_output_tokens": 64000,
           "object": "model",
@@ -529,10 +273,34 @@
         {
           "context_length": 1048576,
           "from": "extension",
+          "id": "devin/kimi-k3",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "moonshot"
+        },
+        {
+          "context_length": 1048576,
+          "from": "extension",
           "id": "devin/muse-wonder-1-0",
           "max_output_tokens": 64000,
           "object": "model",
           "owned_by": "devin"
+        },
+        {
+          "context_length": 200000,
+          "from": "extension",
+          "id": "devin/claude-opus-4-6",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "anthropic"
+        },
+        {
+          "context_length": 200000,
+          "from": "extension",
+          "id": "devin/claude-sonnet-4-6",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "anthropic"
         },
         {
           "context_length": 200000,

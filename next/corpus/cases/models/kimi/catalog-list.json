@@ -33,22 +33,6 @@
         {
           "capabilities": {
             "pdf": false,
-            "reasoning": false,
-            "structured_output": false,
-            "tools": true,
-            "vision": false
-          },
-          "context_length": 131072,
-          "created": 1752192000,
-          "from": "catalogue",
-          "id": "kimi-k2",
-          "max_output_tokens": 32768,
-          "object": "model",
-          "owned_by": "moonshot"
-        },
-        {
-          "capabilities": {
-            "pdf": false,
             "reasoning": true,
             "reasoning_levels": [
               "low",
@@ -106,38 +90,6 @@
           "from": "catalogue",
           "id": "kimi-k3.1-pro-highspeed",
           "max_output_tokens": 65536,
-          "object": "model",
-          "owned_by": "moonshot"
-        },
-        {
-          "capabilities": {
-            "pdf": false,
-            "reasoning": true,
-            "structured_output": false,
-            "tools": true,
-            "vision": false
-          },
-          "context_length": 131072,
-          "created": 1762387200,
-          "from": "extension",
-          "id": "kimi-k2-thinking",
-          "max_output_tokens": 32768,
-          "object": "model",
-          "owned_by": "moonshot"
-        },
-        {
-          "capabilities": {
-            "pdf": false,
-            "reasoning": true,
-            "structured_output": true,
-            "tools": true,
-            "vision": true
-          },
-          "context_length": 262144,
-          "created": 1769472000,
-          "from": "catalogue",
-          "id": "kimi-k2.5",
-          "max_output_tokens": 32768,
           "object": "model",
           "owned_by": "moonshot"
         },
@@ -204,6 +156,33 @@
           "from": "extension",
           "id": "kimi-k2.8-code",
           "max_output_tokens": 65536,
+          "object": "model",
+          "owned_by": "moonshot"
+        },
+        {
+          "context_length": 131072,
+          "created": 1752192000,
+          "from": "extension",
+          "id": "kimi-k2",
+          "max_output_tokens": 32768,
+          "object": "model",
+          "owned_by": "moonshot"
+        },
+        {
+          "context_length": 131072,
+          "created": 1762387200,
+          "from": "extension",
+          "id": "kimi-k2-thinking",
+          "max_output_tokens": 32768,
+          "object": "model",
+          "owned_by": "moonshot"
+        },
+        {
+          "context_length": 262144,
+          "created": 1769472000,
+          "from": "extension",
+          "id": "kimi-k2.5",
+          "max_output_tokens": 32768,
           "object": "model",
           "owned_by": "moonshot"
         },

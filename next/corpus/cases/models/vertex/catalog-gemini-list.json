@@ -34,9 +34,9 @@
         {
           "description": "Gemini 3 Pro Image",
           "displayName": "Gemini 3 Pro Image",
-          "inputTokenLimit": 1048576,
+          "inputTokenLimit": 65536,
           "name": "models/gemini-3-pro-image",
-          "outputTokenLimit": 65536,
+          "outputTokenLimit": 32768,
           "supportedGenerationMethods": [
             "generateContent",
             "countTokens",
@@ -79,9 +79,9 @@
         {
           "description": "Gemini 3.1 Flash Image",
           "displayName": "Gemini 3.1 Flash Image",
-          "inputTokenLimit": 1048576,
+          "inputTokenLimit": 131072,
           "name": "models/gemini-3.1-flash-image",
-          "outputTokenLimit": 65536,
+          "outputTokenLimit": 32768,
           "supportedGenerationMethods": [
             "generateContent",
             "countTokens",
@@ -214,7 +214,7 @@
           "displayName": "Gemini 4 Argon",
           "inputTokenLimit": 1048576,
           "name": "models/gemini-4-argon",
-          "outputTokenLimit": 32768,
+          "outputTokenLimit": 65536,
           "supportedGenerationMethods": [
             "generateContent"
           ],
@@ -323,9 +323,9 @@
         {
           "description": "Our state-of-the-art image generation and editing model.",
           "displayName": "Gemini 2.5 Flash Image",
-          "inputTokenLimit": 1048576,
+          "inputTokenLimit": 32768,
           "name": "models/gemini-2.5-flash-image",
-          "outputTokenLimit": 65536,
+          "outputTokenLimit": 32768,
           "supportedGenerationMethods": [
             "generateContent",
             "countTokens",
