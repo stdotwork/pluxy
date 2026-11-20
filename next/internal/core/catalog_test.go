@@ -4,15 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/internal/catalogue"
 	"github.com/stdotwork/pluxy/next/internal/cred"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/internal/server"
@@ -147,4 +150,123 @@ func TestModelRefreshLoopAndCredentialChange(t *testing.T) {
 			t.Fatalf("decoding empty-body reply: %v", err)
 		}
 	}
+}
+
+func TestCatalogueRefreshUsesStateAge(t *testing.T) {
+	const body = `{
+		"openai": {"models": {"gpt-refresh-age": {
+			"limit": {"context": 100000, "output": 10000},
+			"tool_call": true
+		}}}
+	}`
+	writeState := func(t *testing.T, path string, modTime time.Time) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, modTime, modTime); err != nil {
+			t.Fatal(err)
+		}
+	}
+	start := func(t *testing.T, statePath string, interval time.Duration, now func() time.Time) (*Core, *atomic.Int32) {
+		t.Helper()
+		var calls atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			calls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, body)
+		}))
+		t.Cleanup(srv.Close)
+		cat := catalogue.New(catalogue.Options{StatePath: statePath, URL: srv.URL, Timeout: time.Second})
+		ctx, cancel := context.WithCancel(context.Background())
+		c := &Core{bgCtx: ctx, bgCancel: cancel, catalogue: cat, catalogueNow: now}
+		c.bgWG.Add(1)
+		go c.catalogueRefreshLoop(interval)
+		t.Cleanup(func() {
+			cancel()
+			c.bgWG.Wait()
+		})
+		return &calls
+	}
+
+	t.Run("stale file refreshes soon after start without waiting for the poll", func(t *testing.T) {
+		now := time.Now()
+		statePath := filepath.Join(t.TempDir(), "state", "catalogue.json")
+		writeState(t, statePath, now.Add(-25*time.Hour))
+		calls := start(t, statePath, 2*time.Second, func() time.Time { return now })
+		deadline := time.Now().Add(time.Second)
+		for calls.Load() == 0 && time.Now().Before(deadline) {
+			time.Sleep(5 * time.Millisecond)
+		}
+		if got := calls.Load(); got != 1 {
+			t.Fatalf("refreshes after start with a stale file = %d, want 1", got)
+		}
+	})
+
+	t.Run("fresh file is not refreshed by the poll", func(t *testing.T) {
+		now := time.Now()
+		statePath := filepath.Join(t.TempDir(), "state", "catalogue.json")
+		writeState(t, statePath, now.Add(-time.Hour))
+		calls := start(t, statePath, 25*time.Millisecond, func() time.Time { return now })
+		time.Sleep(250 * time.Millisecond)
+		if got := calls.Load(); got != 0 {
+			t.Fatalf("refreshes of a fresh file = %d, want 0", got)
+		}
+	})
+
+	t.Run("age passing 24 hours refreshes once", func(t *testing.T) {
+		base := time.Now()
+		var offset atomic.Int64
+		now := func() time.Time { return base.Add(time.Duration(offset.Load())) }
+		statePath := filepath.Join(t.TempDir(), "state", "catalogue.json")
+		writeState(t, statePath, base.Add(-time.Hour))
+
+		var calls atomic.Int32
+		refreshed := make(chan struct{}, 1)
+		release := make(chan struct{})
+		var releaseOnce sync.Once
+		unblock := func() { releaseOnce.Do(func() { close(release) }) }
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			refreshed <- struct{}{}
+			select {
+			case <-release:
+			case <-r.Context().Done():
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, body)
+		}))
+		t.Cleanup(srv.Close)
+		t.Cleanup(unblock)
+		cat := catalogue.New(catalogue.Options{StatePath: statePath, URL: srv.URL, Timeout: time.Second})
+		ctx, cancel := context.WithCancel(context.Background())
+		c := &Core{bgCtx: ctx, bgCancel: cancel, catalogue: cat, catalogueNow: now}
+		c.bgWG.Add(1)
+		go c.catalogueRefreshLoop(25 * time.Millisecond)
+		t.Cleanup(func() {
+			cancel()
+			c.bgWG.Wait()
+		})
+
+		time.Sleep(250 * time.Millisecond)
+		if got := calls.Load(); got != 0 {
+			t.Fatalf("refreshes before the file is 24 hours old = %d, want 0", got)
+		}
+		offset.Store(int64(25 * time.Hour))
+		select {
+		case <-refreshed:
+		case <-time.After(time.Second):
+			t.Fatal("no refresh after the file passed 24 hours")
+		}
+		offset.Store(int64(time.Since(base)))
+		unblock()
+		time.Sleep(250 * time.Millisecond)
+		if got := calls.Load(); got != 1 {
+			t.Fatalf("refreshes after one successful stale refresh = %d, want 1", got)
+		}
+	})
 }

@@ -103,10 +103,11 @@ type Core struct {
 
 	checks *checks // each account's last check
 
-	usage     *usage.Store         // the usage record, kept across reloads
-	logs      *logfile.Files       // the logs folder
-	themes    *themeStore          // stored UI themes and selected theme ID in state/themes
-	catalogue *catalogue.Catalogue // the models.dev snapshot and daily refresh
+	usage        *usage.Store         // the usage record, kept across reloads
+	logs         *logfile.Files       // the logs folder
+	themes       *themeStore          // stored UI themes and selected theme ID in state/themes
+	catalogue    *catalogue.Catalogue // the models.dev snapshot and refresh
+	catalogueNow func() time.Time     // tests can move the refresh clock
 
 	bgCtx    context.Context
 	bgCancel context.CancelFunc
@@ -138,7 +139,7 @@ func Start(opts Options) (*Core, error) {
 	opts.Host.SettingsSecrets = configdoc.SettingsSecrets
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), checks: newChecks(), usage: usage.NewStore(),
-		bgCtx: bgCtx, bgCancel: bgCancel}
+		bgCtx: bgCtx, bgCancel: bgCancel, catalogueNow: time.Now}
 	// Every extension call carries the proxy of the config active when it is sent.
 	c.opts.Host.ProxyURL = func() string {
 		if s := c.cur.Load(); s != nil {

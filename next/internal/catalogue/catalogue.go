@@ -168,10 +168,23 @@ func stripDate(id string) string {
 	return dateSuffixRE.ReplaceAllString(id, "")
 }
 
+// Stale reports whether the saved catalogue is missing or has not been successfully checked
+// for RefreshInterval. A missing state path counts as stale.
+func (c *Catalogue) Stale(now time.Time) bool {
+	if c.statePath == "" {
+		return true
+	}
+	info, err := os.Stat(c.statePath)
+	if err != nil {
+		return true
+	}
+	return now.Sub(info.ModTime()) >= RefreshInterval
+}
+
 // Refresh fetches the remote catalogue with a 10 s timeout (or Options.Timeout) and
 // If-None-Match. A 200 response with at least one valid model updates the in-memory
-// catalogue and atomically replaces Options.StatePath; a 304, an error, or an empty
-// response keeps the last good data and file.
+// catalogue and atomically replaces Options.StatePath; a 304 keeps the data and marks the
+// file checked; an error or empty response keeps the last good data and file.
 func (c *Catalogue) Refresh(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
@@ -195,6 +208,12 @@ func (c *Catalogue) Refresh(ctx context.Context) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotModified {
+		if c.statePath != "" {
+			now := time.Now()
+			if err := os.Chtimes(c.statePath, now, now); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {

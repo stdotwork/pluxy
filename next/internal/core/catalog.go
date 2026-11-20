@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/stdotwork/pluxy/next/internal/catalogue"
 	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/llm"
@@ -16,8 +15,9 @@ import (
 // 30-minute refresh interval (with jitter) has elapsed.
 var modelRefreshPoll = time.Minute
 
-// catalogueRefreshInterval is how often core refreshes state/catalogue.json in the background.
-var catalogueRefreshInterval = catalogue.RefreshInterval
+// catalogueRefreshPoll is how often core checks whether state/catalogue.json is old enough to
+// refresh. The first check runs immediately in the refresh goroutine.
+var catalogueRefreshPoll = time.Hour
 
 // catalog returns the route.CatalogFunc that asks the extensions exts for an account's model
 // list (the router keeps the lists).
@@ -45,12 +45,25 @@ func (c *Core) startModelRefresh() {
 	go c.modelRefreshLoop(modelRefreshPoll)
 	if c.catalogue != nil {
 		c.bgWG.Add(1)
-		go c.catalogueRefreshLoop(catalogueRefreshInterval)
+		go c.catalogueRefreshLoop(catalogueRefreshPoll)
 	}
 }
 
 func (c *Core) catalogueRefreshLoop(interval time.Duration) {
 	defer c.bgWG.Done()
+	refreshIfStale := func() {
+		if c.bgCtx.Err() != nil || c.catalogue == nil {
+			return
+		}
+		now := time.Now
+		if c.catalogueNow != nil {
+			now = c.catalogueNow
+		}
+		if c.catalogue.Stale(now()) {
+			_ = c.catalogue.Refresh(c.bgCtx)
+		}
+	}
+	refreshIfStale()
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -58,9 +71,7 @@ func (c *Core) catalogueRefreshLoop(interval time.Duration) {
 		case <-c.bgCtx.Done():
 			return
 		case <-t.C:
-			if c.bgCtx.Err() == nil && c.catalogue != nil {
-				_ = c.catalogue.Refresh(c.bgCtx)
-			}
+			refreshIfStale()
 		}
 	}
 }
