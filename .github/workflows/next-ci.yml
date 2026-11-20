@@ -166,11 +166,12 @@ jobs:
           if-no-files-found: ignore
 
   # Core's private folders on Windows (internal/private/private_windows.go): the access lists of
-  # the credentials folder, the extensions' settings folder and the logs folder, and of the files
-  # in them, and of the config file a change writes again, read back from the file system, which
-  # the Linux job cannot do. internal/cred's tests run whole; internal/core, internal/extconfig,
-  # internal/logfile and internal/server run only their Windows tests, the rest of their tests
-  # being Linux's. Pure Go, so no C compiler is needed.
+  # the credentials folder, the extensions' settings folder, the logs folder and the usage folder,
+  # and of the files in them, and of the config file a change writes again and the client-key-ID
+  # key, read back from the file system, which the Linux job cannot do. internal/cred's tests run
+  # whole; internal/core, internal/extconfig, internal/logfile, internal/server, internal/usage and
+  # internal/configdoc run only their Windows tests, the rest of their tests being Linux's. Pure
+  # Go, so no C compiler is needed.
   private-windows:
     name: private files (windows)
     runs-on: windows-latest
@@ -188,12 +189,12 @@ jobs:
           cache: true
           cache-dependency-path: next/go.mod
       - name: Vet
-        run: go vet ./internal/cred/ ./internal/private/... ./internal/core/ ./internal/extconfig/ ./internal/logfile/ ./internal/server/
+        run: go vet ./internal/cred/ ./internal/private/... ./internal/core/ ./internal/extconfig/ ./internal/logfile/ ./internal/server/ ./internal/usage/ ./internal/configdoc/
       # -v lists each test, so the log shows the Windows access-list tests ran.
       - name: Test
         run: go test -count=1 -v ./internal/cred/
-      - name: Test the config file and the settings and logs folders
-        run: go test -count=1 -v -run Windows ./internal/core/ ./internal/extconfig/ ./internal/logfile/ ./internal/server/
+      - name: Test the config file, usage files, and the settings and logs folders
+        run: go test -count=1 -v -run Windows ./internal/core/ ./internal/extconfig/ ./internal/logfile/ ./internal/server/ ./internal/usage/ ./internal/configdoc/
 
   bench:
     name: Benchmark check
