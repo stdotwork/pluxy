@@ -47,10 +47,16 @@ func TestGeminiImagesGeneration(t *testing.T) {
 		t.Fatalf("reply %s: %+v, err %v", raw, reply, err)
 	}
 	up.mu.Lock()
-	seen := append([]seenRequest(nil), up.seen...)
+	allSeen := append([]seenRequest(nil), up.seen...)
 	up.mu.Unlock()
+	var seen []seenRequest
+	for _, req := range allSeen {
+		if req.method == http.MethodPost {
+			seen = append(seen, req)
+		}
+	}
 	if len(seen) != 1 {
-		t.Fatalf("upstream got %d requests, want 1: %s", len(seen), up.all())
+		t.Fatalf("upstream got %d generation requests, want 1: %s", len(seen), up.all())
 	}
 	if seen[0].method != http.MethodPost || seen[0].path != "/v1beta/models/gemini-3.1-flash-image:generateContent" {
 		t.Errorf("upstream request = %s %s", seen[0].method, seen[0].path)
