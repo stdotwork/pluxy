@@ -155,6 +155,10 @@ const (
 	// FormatCodexAlphaSearch is Codex's search endpoint, POST /v1/alpha/search: a search request
 	// in Codex's own shape, which may name no model, answered with one JSON object.
 	FormatCodexAlphaSearch = "codex.alpha_search"
+	// FormatCodexBackend is a Codex CLI call to the ChatGPT backend beyond generation and search
+	// (its usage, tasks, plugins and files): the request's method, path, query and body in
+	// Native.Body, answered with the backend's reply.
+	FormatCodexBackend = "codex.backend"
 	// FormatGeminiInteractions is Gemini's Interactions API, POST /v1beta/interactions: an
 	// Interactions request in Google's own shape, which names a model or an agent; the reply is
 	// one JSON object, or server-sent events when it asks for "stream": true.

@@ -237,6 +237,11 @@ The Codex CLI sends its requests to `POST /backend-api/codex/responses` and open
 both paths are aliases of `/v1/responses` and its WebSocket: the same handlers and the same client
 key check.
 
+The CLI's other calls to the ChatGPT backend (account, usage, tasks, settings, files, transcription
+and the plugin service) pass through to that account's ChatGPT backend with its token, on whichever
+account routing picks, and only the calls the CLI makes: `protocol/README.md`'s endpoint table
+lists them. An API key account has no such backend and does not serve them.
+
 When an upstream ends a Responses stream with a `response.completed`, `response.incomplete` or
 `response.failed` whose `output` is empty, core fills it with the items the stream's
 `response.output_item.done` events finished, as today's core does.
@@ -526,7 +531,8 @@ may name no model, and then any such account may serve it; one that names a mode
 other requests do. The extension sends the body to `{base_url}/alpha/search` as it came, but with
 `prompt_cache_key` and `prompt_cache_retention` removed and the model renamed for the account
 (today's core renames it only for an API key). It sends `originator: codex_cli_rs`, the bearer token, a sign-in's `Chatgpt-Account-Id`
-and the client's `Version`, `User-Agent`, `Session_id` and `X-Client-Request-Id` as they came; the
+and the client's `Version`, `User-Agent`, `Session_id`, `X-Client-Request-Id` and `X-OpenAI-Fedramp`
+as they came; the
 upstream's JSON reply comes back to the client whole, with its content type. An upstream error
 reaches the client as an error in OpenAI's shape (a 404 blocks no model on the account), and an API key without `alpha_search`, or
 without a `base_url` of its own (today's core keeps no Codex API key without one), is skipped

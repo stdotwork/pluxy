@@ -61,10 +61,12 @@ var compactEndpoint = endpoint{
 }
 
 // alphaSearchEndpoint is Codex's search endpoint. Its body is Codex's own shape, which core passes
-// on as it came; the model is optional. The headers are those today's core passes on.
+// on as it came; the model is optional. The headers are those today's core passes on, and the
+// FedRAMP routing header the Codex CLI sends when its account is one; a backend call
+// (codexBackendEndpoint) passes the same list.
 var alphaSearchEndpoint = endpoint{
 	format:        llm.FormatCodexAlphaSearch,
-	headers:       []string{"version", "user-agent", "session_id", "x-client-request-id"},
+	headers:       []string{"version", "user-agent", "session_id", "x-client-request-id", "x-openai-fedramp"},
 	modelOptional: true,
 }
 
@@ -181,6 +183,12 @@ func serveEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep end
 	}
 	req := llm.Request{Model: model, Stream: string(fields["stream"]) == "true", Native: &llm.Native{Format: ep.format, Body: body}}
 	takeThinkingSuffix(&req)
+	routeEndpoint(w, r, g, ep, f, req, body, arrived)
+}
+
+// routeEndpoint routes an endpoint call to the accounts that serve it and writes the reply. body
+// is the client's request body, which request tracing keeps; arrived is when the request came.
+func routeEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep endpoint, f clientFormat, req llm.Request, body []byte, arrived time.Time) {
 	clientFormat{headers: ep.headers}.nativeHeaders(r, &req)
 
 	r, t := requestTrace(r)

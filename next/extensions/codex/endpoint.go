@@ -42,6 +42,8 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return compact(ctx, call, out)
 	case llm.FormatCodexAlphaSearch:
 		return alphaSearch(ctx, call, out)
+	case llm.FormatCodexBackend:
+		return backend(ctx, call, out)
 	case llm.FormatOpenAIImagesGenerations:
 		return images(ctx, call, out, "/images/generations")
 	case llm.FormatOpenAIImagesEdits:
@@ -255,8 +257,10 @@ func alphaSearch(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 const alphaSearchOriginator = "codex_cli_rs"
 
 // alphaSearchHeaders are the client's request headers a search request carries on (lower-case,
-// as the request's native headers name them), the ones today's core passes.
-var alphaSearchHeaders = []string{"version", "user-agent", "session_id", "x-client-request-id"}
+// as the request's native headers name them), the ones today's core passes on, and the FedRAMP
+// routing header the Codex CLI sends when its account is one (codex-rs
+// backend-client/src/client.rs, which sends it on every backend call).
+var alphaSearchHeaders = []string{"version", "user-agent", "session_id", "x-client-request-id", "x-openai-fedramp"}
 
 // readReply reads an upstream's whole endpoint reply; what names the reply in an error message.
 func readReply(ctx context.Context, resp *http.Response, what string) ([]byte, error) {
