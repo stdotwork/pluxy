@@ -300,6 +300,16 @@ theme snapshot. The app keeps the choice natively, in `privacy-mode.json` beside
 `connection.json` (readable only by your user), not in the window's storage, so losing that
 storage cannot turn it off. A file that cannot be read or parsed counts as on.
 
+## Files the window saves
+
+The Themes page's **Export**, the Logs page's downloads and the Usage page's **Export** save
+a file. In the panel that is a browser download. The app's window opens no address but the app's
+own, so a download link, whose address starts with `blob:`, does nothing there; these pages hand
+the file to the `file_save` command instead (`src-tauri/src/export.rs`). It saves the file in
+your Downloads folder (`Downloads` in your home folder when the desktop names none) under the
+page's name for it, and the page shows `Saved to <path>`. A name already there is kept, and the
+new file gets ` (1)`, ` (2)` and so on before its extension.
+
 ## Startup preferences
 
 The Connection page has three startup choices:
@@ -398,6 +408,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `window_get`, `window_set` | Reads or saves the Close behavior, and whether there is a usable tray |
 | `window_close` | Answers the close prompt: Exit App or Minimize to Tray, and whether to remember it |
 | `privacy_get`, `privacy_set` | Reads or saves privacy mode |
+| `file_save` | Saves a file one of the window's own pages made (a theme file, a log, the usage table) in the Downloads folder, never over another file, and returns its path |
 
 The window may also listen to the app's events. To add a command: add it to
 `command_names.rs`, to `generate_handler!` in `lib.rs`, and its `allow-<name>` permission to
@@ -1559,8 +1570,9 @@ One more session in managed mode (`native/privacy.ts`) runs the privacy mode che
 (`src-tauri/src/native_privacy.rs`) and then the themes checks (`src-tauri/src/native_themes.rs`):
 the T3 Code theme file `ui/tests/fixtures/t3-docs-nightfall.json`, pasted on the Themes page and
 added, paints the window in its canvas colour with the root's `dark` class, the picker lists it,
-`GET /themes` through the app's host has it as `current`, and the next launch paints in it. The
-session ends on the Themes page in that theme.
+`GET /themes` through the app's host has it as `current`, Export saves `nightfall.json` in the
+session's Downloads folder with the theme file's JSON (read from disk at the path the page shows),
+and the next launch paints in it. The session ends on the Themes page in that theme.
 
 One more managed session (`native/setup.ts`, with the stages in `src-tauri/src/native_setup.rs`)
 walks [Setup](../management/README.md#setup) on the app's first start, on the build with
