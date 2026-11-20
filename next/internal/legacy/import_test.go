@@ -435,23 +435,31 @@ server: {tls: {enable: off, cert: c.pem}}
 	}
 }
 
-// A bcrypt management key cannot be brought: the import makes a new key and names the change;
-// a config.yaml core runs on has none.
-func TestImportBcryptKey(t *testing.T) {
-	const doc = "remote-management: {secret-key: \"$2a$10$abcdefghijklmnopqrstuuAbCdEfGhIjKlMnOpQrStUvWxYz01234\"}\n"
-	res := importYAML(t, doc)
-	if len(res.NewManagementKey) < 20 || res.Config["management_key"] != res.NewManagementKey {
-		t.Errorf("new key %q, config %v", res.NewManagementKey, res.Config["management_key"])
+// A management key is never brought, plain or bcrypt: the import keeps core's own key, which
+// guards every client of core, and says so with the way to change it. A config.yaml core runs
+// on keeps today's reading: a plain key exactly as written, a bcrypt hash noted and left out.
+func TestImportKeepsManagementKey(t *testing.T) {
+	const hashed = "remote-management: {secret-key: \"$2a$10$abcdefghijklmnopqrstuuAbCdEfGhIjKlMnOpQrStUvWxYz01234\"}\n"
+	const plain = "management: {secret-key: fake-management-key}\n"
+	for _, tc := range []struct{ name, doc, item string }{
+		{"plain", plain, "management.secret-key"},
+		{"bcrypt", hashed, "remote-management.secret-key"},
+	} {
+		res := importYAML(t, tc.doc)
+		if got, ok := res.Config["management_key"]; ok {
+			t.Errorf("%s: the import wrote management_key %v", tc.name, got)
+		}
+		row, list := rowOf(t, res, tc.item)
+		if list != NotBrought || !strings.Contains(row.Why, "pluxy keeps its own management key") ||
+			!strings.Contains(row.Why, "pluxy key rotate-management") {
+			t.Errorf("%s: row %d %+v", tc.name, list, row)
+		}
 	}
-	row, list := rowOf(t, res, "remote-management.secret-key")
-	if list != Changed || !strings.Contains(row.Why, "bcrypt") || strings.Contains(row.To, "$2a$") {
-		t.Errorf("row %d %+v", list, row)
+	if r, err := Translate([]byte(plain)); err != nil || r.Config["management_key"] != "fake-management-key" {
+		t.Errorf("Translate plain: %v %v", r.Config["management_key"], err)
 	}
-	if again := importYAML(t, doc); again.NewManagementKey == res.NewManagementKey {
-		t.Error("two imports made the same key")
-	}
-	if r, err := Translate([]byte(doc)); err != nil || r.Config["management_key"] != nil || !r.HashedManagementKey {
-		t.Errorf("Translate: %v %v", r.Config["management_key"], err)
+	if r, err := Translate([]byte(hashed)); err != nil || r.Config["management_key"] != nil || !r.HashedManagementKey {
+		t.Errorf("Translate bcrypt: %v %v", r.Config["management_key"], err)
 	}
 }
 

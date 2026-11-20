@@ -2453,9 +2453,10 @@ before anything is written.
 
 A migrated config needs its management key set again once. Today's core writes a bcrypt hash over
 `management.secret-key` in the file after it reads the key, and this core cannot use a hash: it
-refuses the config and says so. Replace the hash with the key itself, in plain text, or bring the
-setup across with `pluxy import cpa`, which makes a new key. A config with no management key at all
-is refused too, with a message saying how to add one.
+refuses the config and says so. Replace the hash with the key itself, in plain text. A config with
+no management key at all is refused too, with a message saying how to add one. `pluxy import cpa`
+does not bring the file's management key, plain or hashed: core keeps its own (see
+[moving from CLIProxyAPI](#moving-from-cliproxyapi-pluxy-import-cpa)).
 
 Settings only this core has keep their JSON names in a `config.yaml`: `packages`, `extensions`,
 `extension`, `extension_pages`, `drop_policy`, `token_count_estimate`, `credentials_dir` and `cors`
@@ -2629,11 +2630,14 @@ What the import changes, each under **changed**:
   `keep_with` gives the `"listen"` value to write and restart core with. A file with no
   `server.host` (or an empty one) is one of these: today's core listened on every interface then,
   and pluxy listens on `127.0.0.1` unless told otherwise.
-- A `management.secret-key` that today's core replaced with its bcrypt hash cannot be used: the import
-  makes a new management key, which the row shows once. The `pluxy` command reads it from the config
-  file.
 - The example config's public client keys (`your-api-key-1` and the rest) are left out.
 - Pooled models become fallback chains, as [Provider key sections](#provider-key-sections) describes.
+
+A `management.secret-key` is not brought, neither a plain key nor the bcrypt hash today's core may
+have written over it: core keeps its own management key, which guards every client of it, the
+desktop app's core among them, so an import does not change who may manage core. Its **not
+brought** row says so. Change core's key with `pluxy key rotate-management`, which prints the new
+key once.
 
 Each file of the auth folder becomes an account added by login, with the file's name (less
 `.json`) as its ID. A file whose account ID the config or the store already uses is not brought,
