@@ -4,28 +4,363 @@
     "core/internal/registry/models/models.json codex",
     "core/sdk/cliproxy/service_models.go"
   ],
-  "client": {"method":"GET","path":"/v1/models"},
-  "old_core": {"account":{"models":null}},
-  "new_core": {"account":{"models":null}},
-  "unordered": ["client.body.data"],
+  "client": {
+    "method": "GET",
+    "path": "/v1/models"
+  },
+  "old_core": {
+    "account": {
+      "models": null
+    }
+  },
+  "new_core": {
+    "account": {
+      "models": null
+    }
+  },
+  "unordered": [
+    "client.body.data"
+  ],
+  "exceptions": [
+    {
+      "path": "client.body.data",
+      "kind": "intended",
+      "reason": "The new core enriches GET /v1/models entries with context_length, max_output_tokens, capabilities and from merged across the account's list, core's models.dev catalogue and the extension's built-in list (with the smaller positive limit winning); today's core lists only id, object, created and owned_by.",
+      "want": [
+        {
+          "capabilities": {
+            "pdf": false,
+            "reasoning": true,
+            "reasoning_levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 272000,
+          "created": 1776902400,
+          "from": "catalogue",
+          "id": "codex-auto-review",
+          "max_output_tokens": 128000,
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 272000,
+          "created": 1783616400,
+          "from": "extension",
+          "id": "gpt-6-astra",
+          "max_output_tokens": 128000,
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 272000,
+          "created": 1790640000,
+          "from": "extension",
+          "id": "gpt-6.1-sol",
+          "max_output_tokens": 128000,
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 272000,
+          "created": 1790035200,
+          "from": "extension",
+          "id": "gpt-6-luna",
+          "max_output_tokens": 128000,
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 272000,
+          "created": 1790035200,
+          "from": "extension",
+          "id": "gpt-6-sol",
+          "max_output_tokens": 128000,
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 500000,
+          "created": 1792972800,
+          "from": "extension",
+          "id": "gpt-6.1-terra",
+          "max_output_tokens": 128000,
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 921000,
+          "created": 1783616400,
+          "from": "extension",
+          "id": "gpt-5.6-luna",
+          "max_output_tokens": 128000,
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 921000,
+          "created": 1783616400,
+          "from": "extension",
+          "id": "gpt-5.6-sol",
+          "max_output_tokens": 128000,
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 921000,
+          "created": 1783616400,
+          "from": "extension",
+          "id": "gpt-5.6-terra",
+          "max_output_tokens": 128000,
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "created": 1704067200,
+          "id": "gpt-image-1.5",
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "created": 1704067200,
+          "id": "gpt-image-2",
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "created": 1704067200,
+          "id": "gpt-image-2.5",
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "created": 1704067200,
+          "id": "gpt-image-2.5-flare",
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "created": 1704067200,
+          "id": "gpt-image-2.5-sunburst",
+          "object": "model",
+          "owned_by": "openai"
+        }
+      ]
+    }
+  ],
   "recorded_old_core": {
     "client": {
       "body": {
         "data": [
-          {"created":1704067200,"id":"gpt-image-1.5","object":"model","owned_by":"openai"},
-          {"created":1704067200,"id":"gpt-image-2","object":"model","owned_by":"openai"},
-          {"created":1704067200,"id":"gpt-image-2.5","object":"model","owned_by":"openai"},
-          {"created":1704067200,"id":"gpt-image-2.5-flare","object":"model","owned_by":"openai"},
-          {"created":1704067200,"id":"gpt-image-2.5-sunburst","object":"model","owned_by":"openai"},
-          {"created":1776902400,"id":"codex-auto-review","object":"model","owned_by":"openai"},
-          {"created":1783616400,"id":"gpt-5.6-luna","object":"model","owned_by":"openai"},
-          {"created":1783616400,"id":"gpt-5.6-sol","object":"model","owned_by":"openai"},
-          {"created":1783616400,"id":"gpt-5.6-terra","object":"model","owned_by":"openai"},
-          {"created":1783616400,"id":"gpt-6-astra","object":"model","owned_by":"openai"},
-          {"created":1790035200,"id":"gpt-6-luna","object":"model","owned_by":"openai"},
-          {"created":1790035200,"id":"gpt-6-sol","object":"model","owned_by":"openai"},
-          {"created":1790640000,"id":"gpt-6.1-sol","object":"model","owned_by":"openai"},
-          {"created":1792972800,"id":"gpt-6.1-terra","object":"model","owned_by":"openai"}
+          {
+            "created": 1704067200,
+            "id": "gpt-image-1.5",
+            "object": "model",
+            "owned_by": "openai"
+          },
+          {
+            "created": 1704067200,
+            "id": "gpt-image-2",
+            "object": "model",
+            "owned_by": "openai"
+          },
+          {
+            "created": 1704067200,
+            "id": "gpt-image-2.5",
+            "object": "model",
+            "owned_by": "openai"
+          },
+          {
+            "created": 1704067200,
+            "id": "gpt-image-2.5-flare",
+            "object": "model",
+            "owned_by": "openai"
+          },
+          {
+            "created": 1704067200,
+            "id": "gpt-image-2.5-sunburst",
+            "object": "model",
+            "owned_by": "openai"
+          },
+          {
+            "created": 1776902400,
+            "id": "codex-auto-review",
+            "object": "model",
+            "owned_by": "openai"
+          },
+          {
+            "created": 1783616400,
+            "id": "gpt-5.6-luna",
+            "object": "model",
+            "owned_by": "openai"
+          },
+          {
+            "created": 1783616400,
+            "id": "gpt-5.6-sol",
+            "object": "model",
+            "owned_by": "openai"
+          },
+          {
+            "created": 1783616400,
+            "id": "gpt-5.6-terra",
+            "object": "model",
+            "owned_by": "openai"
+          },
+          {
+            "created": 1783616400,
+            "id": "gpt-6-astra",
+            "object": "model",
+            "owned_by": "openai"
+          },
+          {
+            "created": 1790035200,
+            "id": "gpt-6-luna",
+            "object": "model",
+            "owned_by": "openai"
+          },
+          {
+            "created": 1790035200,
+            "id": "gpt-6-sol",
+            "object": "model",
+            "owned_by": "openai"
+          },
+          {
+            "created": 1790640000,
+            "id": "gpt-6.1-sol",
+            "object": "model",
+            "owned_by": "openai"
+          },
+          {
+            "created": 1792972800,
+            "id": "gpt-6.1-terra",
+            "object": "model",
+            "owned_by": "openai"
+          }
         ],
         "object": "list"
       },

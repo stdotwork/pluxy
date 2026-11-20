@@ -4,62 +4,882 @@
     "core/sdk/cliproxy/service_models.go",
     "core/internal/registry/models/devin_models.json"
   ],
-  "client": {"method":"GET","path":"/v1/models"},
-  "account_models": ["devin/swe-2"],
-  "old_core": {"account":{"models":null}},
-  "new_core": {"account":{"models":null}},
-  "unordered": ["client.body.data"],
+  "client": {
+    "method": "GET",
+    "path": "/v1/models"
+  },
+  "account_models": [
+    "devin/swe-2"
+  ],
+  "old_core": {
+    "account": {
+      "models": null
+    }
+  },
+  "new_core": {
+    "account": {
+      "models": null
+    }
+  },
+  "unordered": [
+    "client.body.data"
+  ],
+  "exceptions": [
+    {
+      "path": "client.body.data",
+      "kind": "intended",
+      "reason": "The new core enriches GET /v1/models entries with context_length, max_output_tokens, capabilities and from merged across the account's list, core's models.dev catalogue and the extension's built-in list (with the smaller positive limit winning); today's core lists only id, object, created and owned_by.",
+      "want": [
+        {
+          "capabilities": {
+            "pdf": false,
+            "reasoning": true,
+            "reasoning_levels": [
+              "low",
+              "high",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 1048576,
+          "from": "catalogue",
+          "id": "devin/kimi-k3",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "moonshot"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "low",
+              "medium",
+              "high",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 1000000,
+          "from": "catalogue",
+          "id": "devin/claude-opus-4-6-1m",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "anthropic"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "low",
+              "medium",
+              "high",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 1000000,
+          "from": "catalogue",
+          "id": "devin/claude-sonnet-4-6-1m",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "anthropic"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "low",
+              "medium",
+              "high",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 200000,
+          "from": "extension",
+          "id": "devin/claude-opus-4-6",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "anthropic"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "low",
+              "medium",
+              "high",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 200000,
+          "from": "extension",
+          "id": "devin/claude-sonnet-4-6",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "anthropic"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 1000000,
+          "from": "catalogue",
+          "id": "devin/claude-fable-5-1",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "anthropic"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 1000000,
+          "from": "catalogue",
+          "id": "devin/claude-haiku-5-5",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "anthropic"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 1000000,
+          "from": "catalogue",
+          "id": "devin/claude-opus-4-7",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "anthropic"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 1000000,
+          "from": "catalogue",
+          "id": "devin/claude-opus-4-8",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "anthropic"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 1000000,
+          "from": "catalogue",
+          "id": "devin/claude-opus-5",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "anthropic"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 1000000,
+          "from": "catalogue",
+          "id": "devin/claude-opus-5-5",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "anthropic"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 1000000,
+          "from": "catalogue",
+          "id": "devin/claude-sonnet-5",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "anthropic"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 1000000,
+          "from": "catalogue",
+          "id": "devin/claude-sonnet-5-5",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "anthropic"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 922000,
+          "from": "catalogue",
+          "id": "devin/gpt-6-astra",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 1048576,
+          "from": "catalogue",
+          "id": "devin/gemini-4-argon",
+          "max_output_tokens": 32768,
+          "object": "model",
+          "owned_by": "google"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 922000,
+          "from": "catalogue",
+          "id": "devin/gpt-6-luna",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 922000,
+          "from": "catalogue",
+          "id": "devin/gpt-6-sol",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "context_length": 1000000,
+          "from": "extension",
+          "id": "devin/claude-5-fable",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "anthropic"
+        },
+        {
+          "context_length": 1000000,
+          "from": "extension",
+          "id": "devin/glm-5-2-1m",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "zhipu"
+        },
+        {
+          "context_length": 1000000,
+          "from": "extension",
+          "id": "devin/glm-5-3-flash",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "zhipu"
+        },
+        {
+          "context_length": 1000000,
+          "from": "extension",
+          "id": "devin/gpt-5-6-luna",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "context_length": 1000000,
+          "from": "extension",
+          "id": "devin/gpt-5-6-sol",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "context_length": 1000000,
+          "from": "extension",
+          "id": "devin/gpt-5-6-terra",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "context_length": 1000000,
+          "from": "extension",
+          "id": "devin/gpt-6-1-sol",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "context_length": 1000000,
+          "from": "extension",
+          "id": "devin/nemotron-3-ultra",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "nvidia"
+        },
+        {
+          "context_length": 1048576,
+          "from": "extension",
+          "id": "devin/deepseek-v4-1-flash-1017",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "deepseek"
+        },
+        {
+          "context_length": 1048576,
+          "from": "extension",
+          "id": "devin/deepseek-v4-flash",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "deepseek"
+        },
+        {
+          "context_length": 1048576,
+          "from": "extension",
+          "id": "devin/deepseek-v4-pro",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "deepseek"
+        },
+        {
+          "context_length": 1048576,
+          "from": "extension",
+          "id": "devin/gemini-3-5-flash",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "google"
+        },
+        {
+          "context_length": 1048576,
+          "from": "extension",
+          "id": "devin/gemini-3-6-flash",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "google"
+        },
+        {
+          "context_length": 1048576,
+          "from": "extension",
+          "id": "devin/gemini-3-7-flash",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "google"
+        },
+        {
+          "context_length": 1048576,
+          "from": "extension",
+          "id": "devin/gemini-3-8-flash",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "google"
+        },
+        {
+          "context_length": 1048576,
+          "from": "extension",
+          "id": "devin/glm-5-3",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "zhipu"
+        },
+        {
+          "context_length": 1048576,
+          "from": "extension",
+          "id": "devin/muse-wonder-1-0",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "devin"
+        },
+        {
+          "context_length": 200000,
+          "from": "extension",
+          "id": "devin/glm-5-2",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "zhipu"
+        },
+        {
+          "context_length": 200000,
+          "from": "extension",
+          "id": "devin/swe-1-6",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "cognition"
+        },
+        {
+          "context_length": 200000,
+          "from": "extension",
+          "id": "devin/swe-1-6-slow",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "cognition"
+        },
+        {
+          "context_length": 262000,
+          "from": "extension",
+          "id": "devin/swe-1-7",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "cognition"
+        },
+        {
+          "context_length": 262000,
+          "from": "extension",
+          "id": "devin/swe-2",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "cognition"
+        },
+        {
+          "context_length": 262144,
+          "from": "extension",
+          "id": "devin/kimi-k2-6",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "moonshot"
+        },
+        {
+          "context_length": 262144,
+          "from": "extension",
+          "id": "devin/kimi-k2-7",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "moonshot"
+        },
+        {
+          "context_length": 262144,
+          "from": "extension",
+          "id": "devin/swe-2-lightning",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "cognition"
+        },
+        {
+          "context_length": 272000,
+          "from": "extension",
+          "id": "devin/gpt-5-4",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "context_length": 272000,
+          "from": "extension",
+          "id": "devin/gpt-5-5",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "context_length": 400000,
+          "from": "extension",
+          "id": "devin/gpt-5-4-mini",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "openai"
+        },
+        {
+          "context_length": 500000,
+          "from": "extension",
+          "id": "devin/grok-4-6",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "xai"
+        },
+        {
+          "context_length": 500000,
+          "from": "extension",
+          "id": "devin/grok-4-7",
+          "max_output_tokens": 64000,
+          "object": "model",
+          "owned_by": "xai"
+        }
+      ]
+    }
+  ],
   "recorded_old_core": {
     "client": {
       "body": {
         "data": [
-          {"id":"devin/claude-5-fable","object":"model","owned_by":"anthropic"},
-          {"id":"devin/claude-fable-5-1","object":"model","owned_by":"anthropic"},
-          {"id":"devin/claude-haiku-5-5","object":"model","owned_by":"anthropic"},
-          {"id":"devin/claude-opus-4-6","object":"model","owned_by":"anthropic"},
-          {"id":"devin/claude-opus-4-6-1m","object":"model","owned_by":"anthropic"},
-          {"id":"devin/claude-opus-4-7","object":"model","owned_by":"anthropic"},
-          {"id":"devin/claude-opus-4-8","object":"model","owned_by":"anthropic"},
-          {"id":"devin/claude-opus-5","object":"model","owned_by":"anthropic"},
-          {"id":"devin/claude-opus-5-5","object":"model","owned_by":"anthropic"},
-          {"id":"devin/claude-sonnet-4-6","object":"model","owned_by":"anthropic"},
-          {"id":"devin/claude-sonnet-4-6-1m","object":"model","owned_by":"anthropic"},
-          {"id":"devin/claude-sonnet-5","object":"model","owned_by":"anthropic"},
-          {"id":"devin/claude-sonnet-5-5","object":"model","owned_by":"anthropic"},
-          {"id":"devin/deepseek-v4-1-flash-1017","object":"model","owned_by":"deepseek"},
-          {"id":"devin/deepseek-v4-flash","object":"model","owned_by":"deepseek"},
-          {"id":"devin/deepseek-v4-pro","object":"model","owned_by":"deepseek"},
-          {"id":"devin/gemini-3-5-flash","object":"model","owned_by":"google"},
-          {"id":"devin/gemini-3-6-flash","object":"model","owned_by":"google"},
-          {"id":"devin/gemini-3-7-flash","object":"model","owned_by":"google"},
-          {"id":"devin/gemini-3-8-flash","object":"model","owned_by":"google"},
-          {"id":"devin/gemini-4-argon","object":"model","owned_by":"google"},
-          {"id":"devin/glm-5-2","object":"model","owned_by":"zhipu"},
-          {"id":"devin/glm-5-2-1m","object":"model","owned_by":"zhipu"},
-          {"id":"devin/glm-5-3","object":"model","owned_by":"zhipu"},
-          {"id":"devin/glm-5-3-flash","object":"model","owned_by":"zhipu"},
-          {"id":"devin/gpt-5-4","object":"model","owned_by":"openai"},
-          {"id":"devin/gpt-5-4-mini","object":"model","owned_by":"openai"},
-          {"id":"devin/gpt-5-5","object":"model","owned_by":"openai"},
-          {"id":"devin/gpt-5-6-luna","object":"model","owned_by":"openai"},
-          {"id":"devin/gpt-5-6-sol","object":"model","owned_by":"openai"},
-          {"id":"devin/gpt-5-6-terra","object":"model","owned_by":"openai"},
-          {"id":"devin/gpt-6-1-sol","object":"model","owned_by":"openai"},
-          {"id":"devin/gpt-6-astra","object":"model","owned_by":"openai"},
-          {"id":"devin/gpt-6-luna","object":"model","owned_by":"openai"},
-          {"id":"devin/gpt-6-sol","object":"model","owned_by":"openai"},
-          {"id":"devin/grok-4-6","object":"model","owned_by":"xai"},
-          {"id":"devin/grok-4-7","object":"model","owned_by":"xai"},
-          {"id":"devin/kimi-k2-6","object":"model","owned_by":"moonshot"},
-          {"id":"devin/kimi-k2-7","object":"model","owned_by":"moonshot"},
-          {"id":"devin/kimi-k3","object":"model","owned_by":"moonshot"},
-          {"id":"devin/muse-wonder-1-0","object":"model","owned_by":"devin"},
-          {"id":"devin/nemotron-3-ultra","object":"model","owned_by":"nvidia"},
-          {"id":"devin/swe-1-6","object":"model","owned_by":"cognition"},
-          {"id":"devin/swe-1-6-slow","object":"model","owned_by":"cognition"},
-          {"id":"devin/swe-1-7","object":"model","owned_by":"cognition"},
-          {"id":"devin/swe-2","object":"model","owned_by":"cognition"},
-          {"id":"devin/swe-2-lightning","object":"model","owned_by":"cognition"}
+          {
+            "id": "devin/claude-5-fable",
+            "object": "model",
+            "owned_by": "anthropic"
+          },
+          {
+            "id": "devin/claude-fable-5-1",
+            "object": "model",
+            "owned_by": "anthropic"
+          },
+          {
+            "id": "devin/claude-haiku-5-5",
+            "object": "model",
+            "owned_by": "anthropic"
+          },
+          {
+            "id": "devin/claude-opus-4-6",
+            "object": "model",
+            "owned_by": "anthropic"
+          },
+          {
+            "id": "devin/claude-opus-4-6-1m",
+            "object": "model",
+            "owned_by": "anthropic"
+          },
+          {
+            "id": "devin/claude-opus-4-7",
+            "object": "model",
+            "owned_by": "anthropic"
+          },
+          {
+            "id": "devin/claude-opus-4-8",
+            "object": "model",
+            "owned_by": "anthropic"
+          },
+          {
+            "id": "devin/claude-opus-5",
+            "object": "model",
+            "owned_by": "anthropic"
+          },
+          {
+            "id": "devin/claude-opus-5-5",
+            "object": "model",
+            "owned_by": "anthropic"
+          },
+          {
+            "id": "devin/claude-sonnet-4-6",
+            "object": "model",
+            "owned_by": "anthropic"
+          },
+          {
+            "id": "devin/claude-sonnet-4-6-1m",
+            "object": "model",
+            "owned_by": "anthropic"
+          },
+          {
+            "id": "devin/claude-sonnet-5",
+            "object": "model",
+            "owned_by": "anthropic"
+          },
+          {
+            "id": "devin/claude-sonnet-5-5",
+            "object": "model",
+            "owned_by": "anthropic"
+          },
+          {
+            "id": "devin/deepseek-v4-1-flash-1017",
+            "object": "model",
+            "owned_by": "deepseek"
+          },
+          {
+            "id": "devin/deepseek-v4-flash",
+            "object": "model",
+            "owned_by": "deepseek"
+          },
+          {
+            "id": "devin/deepseek-v4-pro",
+            "object": "model",
+            "owned_by": "deepseek"
+          },
+          {
+            "id": "devin/gemini-3-5-flash",
+            "object": "model",
+            "owned_by": "google"
+          },
+          {
+            "id": "devin/gemini-3-6-flash",
+            "object": "model",
+            "owned_by": "google"
+          },
+          {
+            "id": "devin/gemini-3-7-flash",
+            "object": "model",
+            "owned_by": "google"
+          },
+          {
+            "id": "devin/gemini-3-8-flash",
+            "object": "model",
+            "owned_by": "google"
+          },
+          {
+            "id": "devin/gemini-4-argon",
+            "object": "model",
+            "owned_by": "google"
+          },
+          {
+            "id": "devin/glm-5-2",
+            "object": "model",
+            "owned_by": "zhipu"
+          },
+          {
+            "id": "devin/glm-5-2-1m",
+            "object": "model",
+            "owned_by": "zhipu"
+          },
+          {
+            "id": "devin/glm-5-3",
+            "object": "model",
+            "owned_by": "zhipu"
+          },
+          {
+            "id": "devin/glm-5-3-flash",
+            "object": "model",
+            "owned_by": "zhipu"
+          },
+          {
+            "id": "devin/gpt-5-4",
+            "object": "model",
+            "owned_by": "openai"
+          },
+          {
+            "id": "devin/gpt-5-4-mini",
+            "object": "model",
+            "owned_by": "openai"
+          },
+          {
+            "id": "devin/gpt-5-5",
+            "object": "model",
+            "owned_by": "openai"
+          },
+          {
+            "id": "devin/gpt-5-6-luna",
+            "object": "model",
+            "owned_by": "openai"
+          },
+          {
+            "id": "devin/gpt-5-6-sol",
+            "object": "model",
+            "owned_by": "openai"
+          },
+          {
+            "id": "devin/gpt-5-6-terra",
+            "object": "model",
+            "owned_by": "openai"
+          },
+          {
+            "id": "devin/gpt-6-1-sol",
+            "object": "model",
+            "owned_by": "openai"
+          },
+          {
+            "id": "devin/gpt-6-astra",
+            "object": "model",
+            "owned_by": "openai"
+          },
+          {
+            "id": "devin/gpt-6-luna",
+            "object": "model",
+            "owned_by": "openai"
+          },
+          {
+            "id": "devin/gpt-6-sol",
+            "object": "model",
+            "owned_by": "openai"
+          },
+          {
+            "id": "devin/grok-4-6",
+            "object": "model",
+            "owned_by": "xai"
+          },
+          {
+            "id": "devin/grok-4-7",
+            "object": "model",
+            "owned_by": "xai"
+          },
+          {
+            "id": "devin/kimi-k2-6",
+            "object": "model",
+            "owned_by": "moonshot"
+          },
+          {
+            "id": "devin/kimi-k2-7",
+            "object": "model",
+            "owned_by": "moonshot"
+          },
+          {
+            "id": "devin/kimi-k3",
+            "object": "model",
+            "owned_by": "moonshot"
+          },
+          {
+            "id": "devin/muse-wonder-1-0",
+            "object": "model",
+            "owned_by": "devin"
+          },
+          {
+            "id": "devin/nemotron-3-ultra",
+            "object": "model",
+            "owned_by": "nvidia"
+          },
+          {
+            "id": "devin/swe-1-6",
+            "object": "model",
+            "owned_by": "cognition"
+          },
+          {
+            "id": "devin/swe-1-6-slow",
+            "object": "model",
+            "owned_by": "cognition"
+          },
+          {
+            "id": "devin/swe-1-7",
+            "object": "model",
+            "owned_by": "cognition"
+          },
+          {
+            "id": "devin/swe-2",
+            "object": "model",
+            "owned_by": "cognition"
+          },
+          {
+            "id": "devin/swe-2-lightning",
+            "object": "model",
+            "owned_by": "cognition"
+          }
         ],
         "object": "list"
       },
