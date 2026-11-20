@@ -473,8 +473,9 @@ func modelIDs(list *protocol.ModelList) []string {
 // for it by, sorted by name; a name two accounts serve is listed once, as the first account in
 // order lists it. A model the account's config lists itself shows its upstream name as its
 // display name, when the router was made as created and the owner its extension names; one from
-// the extension's list shows what the extension says about it. An account whose list cannot be
-// read lists only its config's models.
+// the extension's list shows what the extension says about it. A model with no owner from the
+// extension is owned by the extension, never by the account: an account ID can be an email
+// address or a label. An account whose list cannot be read lists only its config's models.
 func (r *Router) Models(ctx context.Context) []protocol.Model {
 	served := r.ServedModels(ctx)
 	out := make([]protocol.Model, len(served))
@@ -513,7 +514,7 @@ func (r *Router) ServedModels(ctx context.Context) []ServedModel {
 		}
 		owner := list.OwnedBy
 		if owner == "" {
-			owner = a.ID
+			owner = a.Extension
 		}
 		byID := map[string]protocol.Model{}
 		for _, m := range list.Models {
