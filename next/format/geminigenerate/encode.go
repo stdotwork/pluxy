@@ -227,9 +227,18 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 				e.lose(llm.LossApproximated, p, "a tool result with no call before it, named after its call ID")
 				name = it.CallID
 			}
-			resp := map[string]any{"name": name, "response": map[string]any{"result": it.Output}}
+			// A failure goes under the response's error key, as GenerateContent's FunctionResponse
+			// documents it.
+			key := "result"
+			if it.IsError {
+				key = "error"
+			}
+			resp := map[string]any{"name": name, "response": map[string]any{key: it.Output}}
 			if it.CallID != "" {
 				resp["id"] = it.CallID
+			}
+			if media := e.responseParts(it, p); len(media) > 0 {
+				resp["parts"] = media
 			}
 			add("user", marshalWith(map[string]any{"functionResponse": resp}, e.kept(it.Origin)))
 		case llm.ItemTypeReasoning:
@@ -342,6 +351,29 @@ func (e *encoder) parts(it llm.Item, msgPath string) (parts []json.RawMessage, s
 		sendable = true
 	}
 	return parts, sendable, dropped
+}
+
+// responseParts encodes a tool result's images and files as a functionResponse's parts; its text
+// is in Output, the response.
+func (e *encoder) responseParts(it llm.Item, itemPath string) []json.RawMessage {
+	var media []llm.Part
+	for i, p := range it.Content {
+		if p.Type == llm.PartText {
+			e.kept(p.Origin)
+			continue
+		}
+		if p.Origin == nil || p.Origin.Path == "" {
+			o := llm.Origin{}
+			if p.Origin != nil {
+				o = *p.Origin
+			}
+			o.Path = fmt.Sprintf("%s.content[%d]", itemPath, i)
+			p.Origin = &o
+		}
+		media = append(media, p)
+	}
+	parts, _, _ := e.parts(llm.Item{Content: media}, itemPath)
+	return parts
 }
 
 // media returns the inlineData part for an image or file given as a base64 data URL, or the

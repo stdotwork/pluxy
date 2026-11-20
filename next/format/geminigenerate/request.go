@@ -607,10 +607,23 @@ func (p *parser) response(pm map[string]json.RawMessage, ci, pi int, path string
 	if !isNull(out) {
 		output = string(out)
 	}
-	// The name is carried by the call the result pairs with.
-	nested := map[string]json.RawMessage{"functionResponse": rawjson.Rest(fm, "id", "name", "response")}
-	return llm.Item{Type: llm.ItemTypeToolResult, CallID: id, Output: output,
-		Origin: rawjson.Origin(format, path, pm, []string{"functionResponse"}, nested)}, nil
+	it := llm.Item{Type: llm.ItemTypeToolResult, CallID: id, Output: output}
+	// The name is carried by the call the result pairs with. Media in the response's parts
+	// follow its text as the result's parts.
+	modelled := []string{"id", "name", "response"}
+	var media []json.RawMessage
+	if rawjson.Unmarshal(fm["parts"], &media) == nil && len(media) > 0 {
+		if output != "" {
+			it.Content = append(it.Content, llm.Part{Type: llm.PartText, Text: output})
+		}
+		for i, raw := range media {
+			it.Content = append(it.Content, parsePart(raw, object(raw), fmt.Sprintf("%s.functionResponse.parts[%d]", path, i)))
+		}
+		modelled = append(modelled, "parts")
+	}
+	nested := map[string]json.RawMessage{"functionResponse": rawjson.Rest(fm, modelled...)}
+	it.Origin = rawjson.Origin(format, path, pm, []string{"functionResponse"}, nested)
+	return it, nil
 }
 
 // parsePart reads a text, inlineData or fileData part. Inline data and file URIs are images when
