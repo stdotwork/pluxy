@@ -365,9 +365,9 @@ func parseContent(raw json.RawMessage, path string) (parts []llm.Part, textConte
 					Origin: &llm.Origin{Format: format, Path: pp}})
 				break
 			}
-			// The flat spelling is the one Responses sends upstream; data and format inside
-			// input_audio are read too, and their part's other fields are not kept, since a
-			// Responses part of this kind has no nested object to put them back in.
+			// OpenAI's InputAudio nests data and format inside input_audio, which is how the
+			// encoder writes it; the flat spelling today's clients also send is read too. The
+			// part's other fields are not kept.
 			parts = append(parts, llm.Part{Type: llm.PartFile, FileData: audioinput.DataURL(audioinput.MIME(audioFormat), data),
 				Origin: rawjson.Origin(format, pp, m, []string{"type", "data", "format", "input_audio"}, nil)})
 		default:

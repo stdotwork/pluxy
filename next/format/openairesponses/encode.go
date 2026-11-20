@@ -242,10 +242,11 @@ func (e *encoder) content(it llm.Item, msgPath string) (content []json.RawMessag
 			content = append(content, marshal(m, e.kept(p.Origin)))
 			sendable = true
 		case p.Type == llm.PartFile && it.Role != llm.RoleAssistant:
-			// Responses takes audio as input_audio, with its bytes inline; a file part holding
+			// Responses takes audio as input_audio, with its bytes inline in OpenAI's InputAudio
+			// shape ({"type":"input_audio","input_audio":{"data","format"}}); a file part holding
 			// audio is that audio however the client sent it.
 			if mediaType, data, ok := audioinput.Inline(p); ok {
-				m := map[string]string{"type": "input_audio", "data": data, "format": audioinput.Format(mediaType)}
+				m := map[string]any{"type": "input_audio", "input_audio": map[string]string{"data": data, "format": audioinput.Format(mediaType)}}
 				content = append(content, marshal(m, e.kept(p.Origin)))
 				sendable = true
 				break

@@ -104,7 +104,7 @@ func TestInputAudioPart(t *testing.T) {
 	if len(back.Input) != 1 || len(back.Input[0].Content) != 2 {
 		t.Fatalf("Responses body = %s, want the text and the audio part", body)
 	}
-	if got, want := string(back.Input[0].Content[1]), `{"data":"UklGRg==","format":"wav","type":"input_audio"}`; got != want {
+	if got, want := string(back.Input[0].Content[1]), `{"input_audio":{"data":"UklGRg==","format":"wav"},"type":"input_audio"}`; got != want {
 		t.Errorf("Responses part\n got %s\nwant %s", got, want)
 	}
 
@@ -156,7 +156,7 @@ func TestInputAudioPart(t *testing.T) {
 		if len(out.Input) != 1 || len(out.Input[0].Content) != 1 {
 			t.Fatalf("%s: body %s", name, body)
 		}
-		samePart(t, name, out.Input[0].Content[0], `{"type":"input_audio","data":"UklGRg==","format":"wav"}`)
+		samePart(t, name, out.Input[0].Content[0], `{"type":"input_audio","input_audio":{"data":"UklGRg==","format":"wav"}}`)
 	}
 }
 
