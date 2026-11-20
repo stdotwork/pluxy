@@ -116,8 +116,9 @@ func hasEmptyFunctionName(input []any) bool {
 func TestVerifyMessagesEmptyToolNameOnCodex(t *testing.T) {
 	up := newResponsesUpstream(t, "gpt-test")
 	base := runCore(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
+		"listen":         "127.0.0.1:0",
+		"management_key": managementKey,
+		"client_keys":    []string{clientKey},
 		"extension": map[string]any{
 			"manifest": filepath.Join(binDir, "codex", "pluxy-extension.json"),
 			"accounts": []any{map[string]any{
@@ -163,9 +164,10 @@ func TestVerifyGeminiClientRoutesModelToServingAccount(t *testing.T) {
 	other := newResponsesUpstream(t, "gemini-test")
 	wanted := newResponsesUpstream(t, "gpt-test")
 	base := runCore(t, map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{clientKey},
-		"routing":     map[string]any{"strategy": "fill-first"},
+		"listen":         "127.0.0.1:0",
+		"management_key": managementKey,
+		"client_keys":    []string{clientKey},
+		"routing":        map[string]any{"strategy": "fill-first"},
 		"extension": map[string]any{
 			"manifest": filepath.Join(binDir, "codex", "pluxy-extension.json"),
 			"accounts": []any{
