@@ -52,6 +52,9 @@ type Account struct {
 	// headers), over the extension's own of the same names. Values of headers about
 	// authentication are secret (package upheader).
 	Headers map[string]string `json:"headers,omitempty"`
+	// Timeouts overrides routing.timeouts for this account (header_ms, idle_ms, total_ms).
+	// Nil fields inherit routing.timeouts or core's defaults; 0 turns a limit off.
+	Timeouts *protocol.Timeouts `json:"timeouts,omitempty"`
 	// Credential is the secret the account presents.
 	Credential *protocol.Credential `json:"credential,omitempty"`
 	// Managed marks an account whose credential core's credential store keeps: each attempt
@@ -89,6 +92,9 @@ func (a *Account) Check() error {
 	if err := upheader.Check("headers", a.Headers); err != nil {
 		return err
 	}
+	if err := ValidateTimeouts("timeouts", a.Timeouts); err != nil {
+		return err
+	}
 	return a.CheckNames()
 }
 
@@ -108,5 +114,5 @@ func (a *Account) endpoint() string {
 
 // call returns the account as an extension call carries it.
 func (a *Account) call() protocol.Account {
-	return protocol.Account{ID: a.ID, Settings: a.Settings, Credential: a.Credential, ProxyURL: a.ProxyURL, Headers: a.Headers}
+	return protocol.Account{ID: a.ID, Settings: a.Settings, Credential: a.Credential, ProxyURL: a.ProxyURL, Headers: a.Headers, Timeouts: a.Timeouts}
 }
