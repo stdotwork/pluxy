@@ -106,6 +106,13 @@ func fakeExtension(mode string) {
 		accountClosedExtension(20)
 		return
 	}
+	if rest, ok := strings.CutPrefix(mode, "native-only-"); ok {
+		// native-only-<minor>[-parses]: describes that minor, with parses_native when asked.
+		minor, parses, _ := strings.Cut(rest, "-")
+		n, _ := strconv.Atoi(minor)
+		nativeOnlyExtension(n, parses == "parses")
+		return
+	}
 	if mode == "echo-pieces" {
 		echoPieces()
 		return
