@@ -114,10 +114,10 @@ path case and a job for it in `ci.yml`, and add the job to `gate`'s `needs`.
 By default every job runs on GitHub's own runners. Two repository variables send some jobs to
 the maintainers' own machines instead:
 
-- `PLUXY_LINUX_RUNNER` takes the Linux jobs of `next-app.yml`'s `checks`. It never takes the
-  native test shards, since the document portal they start needs `/dev/fuse`, which the runner
-  containers don't get, nor `native-build`, which runs on GitHub's runners or
-  `PLUXY_LINUX_CLOUD_RUNNER`'s below. `next-ci.yml` never uses it.
+- `PLUXY_LINUX_RUNNER` takes `next-app.yml`'s `checks` job. It never takes the native test
+  shards, since the document portal they start needs `/dev/fuse`, which the runner containers
+  don't get, nor `native-build`, which runs on GitHub's runners or `PLUXY_LINUX_CLOUD_RUNNER`'s
+  below. `next-ci.yml` never uses it.
 - `PLUXY_WINDOWS_RUNNER` takes the Windows leg of the `tools` job in
   `next-app-tools-platforms.yml`. The `app` job in `next-app-platforms.yml` (its registry tests
   only run on GitHub's runners), macOS jobs, the `native` job in `next-app-platforms.yml` and the
