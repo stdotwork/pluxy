@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"slices"
 
 	"github.com/stdotwork/pluxy/next/format/anthropicmessages"
 	"github.com/stdotwork/pluxy/next/format/geminigenerate"
+	"github.com/stdotwork/pluxy/next/internal/jsonscan"
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
@@ -42,43 +44,84 @@ func applyReasoning(body []byte, req llm.Request, target string, levels []string
 		out, _, err := geminigenerate.ApplyEffort(body, req.Model, suffix)
 		return out, err
 	}
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(body, &m); err != nil || m == nil {
-		return body, nil
+	have, ok := bodyEffort(body, target)
+	if !ok {
+		return body, nil // not one JSON object: today's decode leaves it as it is too
 	}
-	// Where the effort lives: reasoning_effort for Chat, reasoning.effort for Responses.
-	get := func() string {
-		var e string
-		if target == llm.FormatOpenAIChat {
-			_ = json.Unmarshal(m["reasoning_effort"], &e)
-			return e
-		}
-		var r struct {
-			Effort string `json:"effort"`
-		}
-		_ = json.Unmarshal(m["reasoning"], &r)
-		return r.Effort
-	}
-	set := func(e string) {
-		v, _ := json.Marshal(e)
-		if target == llm.FormatOpenAIChat {
-			m["reasoning_effort"] = v
-			return
-		}
-		r := map[string]json.RawMessage{}
-		_ = json.Unmarshal(m["reasoning"], &r)
-		r["effort"] = v
-		m["reasoning"], _ = json.Marshal(r)
-	}
-	effort := get()
+	effort := have
 	if suffix != "" {
 		effort = llm.ThinkingEffort(suffix)
 	}
 	clamped := clampEffort(effort, levels)
-	if clamped == get() {
+	if clamped == have {
+		return body, nil // the usual case: the body is sent as it was built
+	}
+	return setEffort(body, target, clamped)
+}
+
+// bodyEffort reads the reasoning effort a built body carries: reasoning_effort for Chat,
+// reasoning.effort for Responses. It finds it without decoding the body, so the usual case, a
+// body that already has the effort it is given, costs one scan. A name written twice counts as
+// the last one, as a map read takes it, and a value the effort cannot be read from counts as
+// none, as decoding it into a string leaves it. ok is false when body is not one JSON object.
+func bodyEffort(body []byte, target string) (effort string, ok bool) {
+	members, ok := jsonscan.Object(body)
+	if !ok {
+		return "", false
+	}
+	name := "reasoning_effort"
+	if target != llm.FormatOpenAIChat {
+		name = "reasoning"
+	}
+	var value []byte
+	for _, m := range members {
+		if names(m.Key, name) {
+			value = m.Value
+		}
+	}
+	if value == nil {
+		return "", true
+	}
+	if target == llm.FormatOpenAIChat {
+		var s string
+		_ = jsonscan.Unmarshal(value, &s)
+		return s, true
+	}
+	var r struct {
+		Effort string `json:"effort"`
+	}
+	_ = jsonscan.Unmarshal(value, &r)
+	return r.Effort, true
+}
+
+// names reports whether a member's name, as written, is name in the sense a map key has: as it
+// stands, or with its escapes decoded. A name encoding/json repairs (invalid UTF-8) names
+// nothing here, since no such name is name.
+func names(key []byte, name string) bool {
+	if bytes.IndexByte(key, '\\') < 0 {
+		return string(key[1:len(key)-1]) == name
+	}
+	k, ok := jsonscan.Unquote(key)
+	return ok && k == name
+}
+
+// setEffort sets the body's reasoning effort to e and returns the body as today's core writes it:
+// decoded into a map and encoded again. It is only reached for a body whose effort changes, so
+// its bytes, and their cost, stay what they were.
+func setEffort(body []byte, target string, e string) ([]byte, error) {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(body, &m); err != nil || m == nil {
 		return body, nil
 	}
-	set(clamped)
+	v, _ := json.Marshal(e)
+	if target == llm.FormatOpenAIChat {
+		m["reasoning_effort"] = v
+		return json.Marshal(m)
+	}
+	r := map[string]json.RawMessage{}
+	_ = json.Unmarshal(m["reasoning"], &r)
+	r["effort"] = v
+	m["reasoning"], _ = json.Marshal(r)
 	return json.Marshal(m)
 }
 
