@@ -69,8 +69,6 @@ go generate ./internal/panel   # builds the web panel core embeds; needs Bun (sk
 go run ./cmd/pluxy-pack -out dist   # packs the provider extensions and their registry index for this platform
 go build -o pluxy ./cmd/pluxy
 go build -ldflags "-X github.com/stdotwork/pluxy/next/internal/buildinfo.Version=1.2.3 -X github.com/stdotwork/pluxy/next/internal/buildinfo.Commit=$(git rev-parse HEAD) -X github.com/stdotwork/pluxy/next/internal/buildinfo.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o pluxy ./cmd/pluxy   # sets the build info; without -ldflags the version is dev, and a git checkout still records its commit and time
-go build -o extensions/openai-compatible/openai-compatible ./extensions/openai-compatible
-go build -o extensions/claude/claude ./extensions/claude
 ```
 
 `config.json`:
@@ -79,17 +77,7 @@ go build -o extensions/claude/claude ./extensions/claude
 {
   "listen": "127.0.0.1:8400",
   "client_keys": ["choose-a-client-key"],
-  "management_key": "choose-a-management-key",
-  "extension": {
-    "manifest": "extensions/openai-compatible/pluxy-extension.json",
-    "accounts": [
-      {
-        "id": "openai",
-        "settings": {"base_url": "https://api.openai.com/v1"},
-        "credential": {"kind": "api_key", "api_key": "sk-..."}
-      }
-    ]
-  }
+  "management_key": "choose-a-management-key"
 }
 ```
 
