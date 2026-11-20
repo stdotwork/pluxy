@@ -478,4 +478,7 @@ func TestMergeModelLimitsAndCapabilities(t *testing.T) {
 		t.Errorf("custom-only = (ctx=%d, out=%d, from=%q), want (64000, 8192, extension)",
 			custom.ContextLength, custom.MaxOutputTokens, custom.From)
 	}
+	if custom.Capabilities != nil {
+		t.Errorf("custom-only capabilities = %+v, want nil because models.dev does not carry it", custom.Capabilities)
+	}
 }
