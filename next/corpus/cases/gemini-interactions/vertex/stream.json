@@ -8,7 +8,7 @@
   "old_core": {"account":{"interactions":true}},
   "new_core": {"account":{"settings":{"interactions":true}}},
   "upstream": [
-    {"body":{"access_token":"ya29.corpus-token","expires_in":3599,"token_type":"Bearer"}},
+    {"body":{"access_token":"ya29.Hk3Rt8Bw2Mz5","expires_in":3599,"token_type":"Bearer"}},
     {
       "sse": [
         {"event":"interaction.start","data":{"event_type":"interaction.start","interaction":{"id":"int-corpus","object":"interaction","model":"gemini-2.5-flash","status":"in_progress"}}},
@@ -58,7 +58,7 @@
         "headers": {
           "Accept-Encoding": "gzip",
           "Api-Revision": "2026-05-20",
-          "Authorization": "Bearer ya29.corpus-token",
+          "Authorization": "Bearer ya29.Hk3Rt8Bw2Mz5",
           "Content-Type": "application/json",
           "User-Agent": "Go-http-client/1.1"
         },

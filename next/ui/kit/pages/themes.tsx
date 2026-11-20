@@ -1,21 +1,42 @@
-import { useId, useState } from "preact/hooks";
+import { useEffect, useId, useState } from "preact/hooks";
 import type { PageDef } from "../shell";
 import { rich, strings } from "../strings";
-import type { Layout, LayoutOption } from "../theme/contract";
+import { type Layout, type LayoutOption, MAX_THEME_BYTES } from "../theme/contract";
 import { resolve } from "../theme/engine";
-import { Button, Card, type Choice, Choices, Notice, PageHead, Switch, useThemeState } from "../ui";
+import type { Listed } from "../theme/state";
+import {
+  Button,
+  Card,
+  type Choice,
+  Choices,
+  ConfirmButton,
+  Notice,
+  PageHead,
+  Switch,
+  useThemeState,
+} from "../ui";
 
 const t = strings("themes", {
   title: "Themes",
   short: "Theme",
   theme: "Theme",
-  imported: "{id} · imported",
-  yourThemes: "Your themes",
-  importFile: "Import a theme file",
-  notImported: "Not imported: {error}",
-  importHelp:
-    "A theme is a JSON file of tokens, layout options and optional CSS. It cannot run code. The theme contract in pluxy's source, {path}, lists everything a theme can set.",
+  notRead: "Themes could not be read from core: {error}",
+  notTurnedOn: "{name} was not turned on: {error}",
+  unusable: "Cannot be used: {error}",
+  export: "Export",
+  exportLabel: "Export {name} as a theme file",
   remove: "Remove {name}",
+  notRemoved: "{name} was not removed: {error}",
+  add: "Add a theme",
+  addHelp:
+    "pluxy theme files and T3 Code theme files both work. {path} in pluxy's source lists everything a theme file can set.",
+  file: "Theme file",
+  paste: "Or paste a theme file's JSON",
+  addButton: "Add",
+  adding: "Adding…",
+  added: "{name} was added and turned on.",
+  notAdded: "Not added: {error}",
+  tooLarge: "the file is over {limit} KiB",
   appearance: "Appearance",
   darkOnly: "Dark only",
   lightOnly: "Light only",
@@ -108,83 +129,183 @@ function noted<V extends string>(choices: Choice<V>[], themeValue: string | unde
   return choices.map((c) => (c.value === themeValue ? { ...c, note: t("themeNote") } : c));
 }
 
-function ThemePicker() {
+function saveFile(name: string, text: string) {
+  const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = name;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  // Allow the browser to start consuming the Blob before releasing it.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/** A theme's own colours in its light (or only) appearance; none until its file has been read. */
+function Swatch(props: { listed: Listed }) {
+  const theme = props.listed.offered?.theme;
+  if (!theme) return <span class="swatch" data-empty aria-hidden="true" />;
+  const tokens = resolve(
+    theme,
+    { appearance: "system", layout: {}, css: "", safe: true },
+    { systemDark: theme.appearance === "dark", reducedMotion: false },
+  ).tokens;
+  return (
+    <span
+      class="swatch"
+      aria-hidden="true"
+      style={{ background: tokens["color.bg"], borderColor: tokens["color.border"] }}
+    >
+      <span style={{ background: tokens["color.surface"] }} />
+      <span style={{ background: tokens["color.accent"] }} />
+      <span style={{ background: tokens["color.text"] }} />
+    </span>
+  );
+}
+
+function ThemePicker(props: { onProblem: (problem: string | undefined) => void }) {
   const themes = useThemeState();
   const id = useId();
+  const listed = themes.listed;
+  // The stored themes' previews need their files: read when the page opens, and when one is new.
+  const unread = listed
+    .filter((l) => !l.offered && !l.problem)
+    .map((l) => l.id)
+    .join(" ");
+  useEffect(() => {
+    void themes.loadFiles();
+  }, [themes, unread]);
   return (
     <div class="themes" role="radiogroup" aria-labelledby={`${id}-l`}>
       <span class="label" id={`${id}-l`}>
         {t("theme")}
       </span>
       <div class="theme-grid">
-        {themes.offered.map((o) => {
-          // Each card previews the theme's own colours in its light (or only) appearance.
-          const tokens = resolve(
-            o.theme,
-            { appearance: "system", layout: {}, css: "", safe: true },
-            {
-              systemDark: o.theme.appearance === "dark",
-              reducedMotion: false,
-            },
-          ).tokens;
-          return (
-            <label key={o.theme.id} class="theme-card" data-part="card">
-              <input
-                type="radio"
-                name={id}
-                checked={themes.current.theme.id === o.theme.id}
-                onChange={() => themes.select(o.theme.id)}
-              />
-              <span
-                class="swatch"
-                aria-hidden="true"
-                style={{ background: tokens["color.bg"], borderColor: tokens["color.border"] }}
-              >
-                <span style={{ background: tokens["color.surface"] }} />
-                <span style={{ background: tokens["color.accent"] }} />
-                <span style={{ background: tokens["color.text"] }} />
-              </span>
-              <span class="theme-name">{o.theme.name}</span>
-              <small class="muted">{o.theme.description ?? o.theme.id}</small>
-              {!o.builtIn && <small class="muted mono">{t("imported", { id: o.theme.id })}</small>}
-            </label>
-          );
-        })}
+        {listed.map((l) => (
+          <label key={l.id} class="theme-card" data-part="card" data-unusable={l.problem ? "" : undefined}>
+            <input
+              type="radio"
+              name={id}
+              checked={themes.current.theme.id === l.id}
+              disabled={l.problem !== undefined}
+              onChange={async () => {
+                props.onProblem(undefined);
+                const error = await themes.select(l.id);
+                if (error) props.onProblem(t("notTurnedOn", { name: l.name, error }));
+              }}
+            />
+            <Swatch listed={l} />
+            <span class="theme-name">{l.name}</span>
+            <small class="muted">
+              {l.problem ? t("unusable", { error: l.problem }) : (l.offered?.theme.description ?? l.id)}
+            </small>
+          </label>
+        ))}
       </div>
     </div>
   );
 }
 
-function ImportTheme() {
+/** Export and Remove, for the theme that is on. */
+function CurrentTheme(props: { onProblem: (problem: string | undefined) => void }) {
   const themes = useThemeState();
-  const [error, setError] = useState<string>();
-  const current = themes.current;
+  const { theme, builtIn } = themes.current;
   return (
-    <Card title={t("yourThemes")}>
+    <div class="actions">
+      <Button
+        label={t("exportLabel", { name: theme.name })}
+        onClick={() => {
+          const file = themes.exportFile();
+          saveFile(file.name, file.text);
+        }}
+      >
+        {t("export")}
+      </Button>
+      {!builtIn && (
+        <ConfirmButton
+          key={theme.id}
+          onConfirm={async () => {
+            props.onProblem(undefined);
+            const error = await themes.removeTheme(theme.id);
+            if (error) props.onProblem(t("notRemoved", { name: theme.name, error }));
+          }}
+        >
+          {t("remove", { name: theme.name })}
+        </ConfirmButton>
+      )}
+    </div>
+  );
+}
+
+function AddTheme() {
+  const themes = useThemeState();
+  const id = useId();
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ error: string } | { added: string }>();
+
+  /** A chosen file and pasted JSON go the same way. Returns whether the theme was added. */
+  const add = async (source: string) => {
+    setBusy(true);
+    setResult(undefined);
+    const error = await themes.addTheme(source);
+    setBusy(false);
+    setResult(error === undefined ? { added: themes.current.theme.name } : { error });
+    return error === undefined;
+  };
+
+  return (
+    <Card title={t("add")}>
+      <p class="muted">{rich(t("addHelp"), { path: <span class="mono">next/ui/themes/README.md</span> })}</p>
       <label class="field" data-part="field">
-        <span class="label">{t("importFile")}</span>
+        <span class="label">{t("file")}</span>
         <input
           type="file"
           accept=".json,application/json"
+          disabled={busy}
           onChange={async (e) => {
             const file = e.currentTarget.files?.[0];
             e.currentTarget.value = "";
             if (!file) return;
-            setError(themes.importTheme(await file.text()));
+            // Checked before the file is read: a theme file is a few KiB.
+            if (file.size > MAX_THEME_BYTES) {
+              setResult({ error: t("tooLarge", { limit: MAX_THEME_BYTES / 1024 }) });
+              return;
+            }
+            await add(await file.text());
           }}
         />
       </label>
-      {error && <Notice tone="danger">{t("notImported", { error })}</Notice>}
-      <p class="muted">
-        {rich(t("importHelp"), { path: <span class="mono">next/ui/themes/README.md</span> })}
-      </p>
-      {!current.builtIn && (
+      <form
+        class="field"
+        data-part="field"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          if (await add(text)) setText("");
+        }}
+      >
+        <label class="label" for={`${id}-json`}>
+          {t("paste")}
+        </label>
+        <textarea
+          id={`${id}-json`}
+          class="mono"
+          rows={6}
+          spellcheck={false}
+          placeholder={
+            '{\n  "name": "Nightfall",\n  "appearance": "dark",\n  "canvas": "#1a1b26",\n  "accent": "#7aa2f7"\n}'
+          }
+          value={text}
+          onInput={(e) => setText(e.currentTarget.value)}
+        />
         <div class="actions">
-          <Button variant="danger" onClick={() => themes.removeTheme(current.theme.id)}>
-            {t("remove", { name: current.theme.name })}
+          <Button type="submit" variant="primary" disabled={busy || text.trim() === ""}>
+            {busy ? t("adding") : t("addButton")}
           </Button>
         </div>
-      )}
+      </form>
+      {result && "error" in result && <Notice tone="danger">{t("notAdded", { error: result.error })}</Notice>}
+      {result && "added" in result && <Notice tone="ok">{t("added", { name: result.added })}</Notice>}
     </Card>
   );
 }
@@ -196,19 +317,25 @@ export function ThemesPage() {
   const single = theme.appearance !== "both";
   const allWarnings = [...warnings, ...r.warnings];
   const layout = layoutChoices();
+  const [problem, setProblem] = useState<string>();
 
   return (
     <>
       <PageHead title={t("title")} />
       <div class="stack">
         <Card>
-          <ThemePicker />
+          <ThemePicker onProblem={setProblem} />
+          {themes.problem && <Notice tone="danger">{t("notRead", { error: themes.problem })}</Notice>}
+          {problem && <Notice tone="danger">{problem}</Notice>}
           {allWarnings.length > 0 && (
             <Notice tone="warn">
               {theme.name}: {allWarnings.join("; ")}
             </Notice>
           )}
+          <CurrentTheme onProblem={setProblem} />
         </Card>
+
+        <AddTheme />
 
         <Card>
           <Choices
@@ -280,8 +407,6 @@ export function ThemesPage() {
             <small class="hint">{t("cssHint")}</small>
           </label>
         </Card>
-
-        <ImportTheme />
       </div>
     </>
   );

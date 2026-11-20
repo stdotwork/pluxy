@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/stdotwork/pluxy/next/internal/private"
 )
 
 // Main is the file the log is written to; rotated files are named main-<time>.log.
@@ -29,6 +31,13 @@ const timeLayout = "2006-01-02 15:04:05.000"
 
 // rotatedLayout names a rotated file by the time it was rotated; names sort in time order.
 const rotatedLayout = "2006-01-02T15-04-05.000"
+
+// afterCreate runs in open between making main.log and opening it, and beforeRotate in rotate
+// after main.log is closed. Tests remove main.log, or swap the folder, there.
+var (
+	afterCreate  = func(dir string) {}
+	beforeRotate = func(dir string) {}
+)
 
 // ErrOff is returned when the log is read while logging to file is off.
 var ErrOff = errors.New("logging to file is off")
@@ -86,26 +95,54 @@ func (l *Files) Configure(on bool, maxTotalMB int) error {
 	return nil
 }
 
+// open checks the logs folder, making it when it is missing (private.Dir.Open), and opens
+// main.log in it for appending. The folder and a new main.log can be read only by core's user
+// (and, on Windows, SYSTEM); a rotated file keeps main.log's access.
 func (l *Files) open() error {
-	if err := os.MkdirAll(l.dir, 0o700); err != nil {
+	root, err := private.Dir{Path: l.dir}.OpenRoot(true)
+	if err != nil {
 		return err
 	}
+	defer root.Close()
 	path := filepath.Join(l.dir, Main)
 	// main.log must be a file of its own: a link there would send the log somewhere else. The
 	// file opened must be the regular file at the path, so a link swapped in while opening is
 	// refused too.
-	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
+	if info, err := root.Lstat(Main); err == nil && !info.Mode().IsRegular() {
 		return fmt.Errorf("%s is not a regular file", path)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	// main.log is made private (private.Create) and then opened for appending without
+	// O_CREATE, so one removed in between is made private again, not made with the folder's
+	// list.
+	var f *os.File
+	for range 3 {
+		if f, err = private.Create(root, l.dir, Main); err == nil {
+			f.Close()
+		} else if !os.IsExist(err) {
+			return err
+		}
+		afterCreate(l.dir)
+		if f, err = root.OpenFile(Main, os.O_WRONLY|os.O_APPEND, 0); !os.IsNotExist(err) {
+			break
+		}
+	}
 	if err != nil {
 		return err
 	}
 	st, err := f.Stat()
 	if err == nil {
 		var at os.FileInfo
-		if at, err = os.Lstat(path); err == nil && (!at.Mode().IsRegular() || !os.SameFile(st, at)) {
+		if at, err = root.Lstat(Main); err == nil && (!at.Mode().IsRegular() || !os.SameFile(st, at)) {
 			err = fmt.Errorf("%s is not a regular file", path)
+		}
+	}
+	if err == nil {
+		// One another account owns (put there before the folder was private) could be read by
+		// it.
+		var ok bool
+		var owner string
+		if ok, owner, err = private.Owner(f); err == nil && !ok {
+			err = fmt.Errorf("%s is owned by %s, not by this user; move it away", path, owner)
 		}
 	}
 	if err != nil {
@@ -156,20 +193,29 @@ func (l *Files) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// rotate renames main.log after the time and starts a new one. l.mu is held.
+// rotate renames main.log after the time and starts a new one. The rename is made in the
+// folder as checked again (private.Dir.OpenRoot), so a folder swapped for a link since main.log
+// was opened is not renamed through. l.mu is held.
 func (l *Files) rotate() {
 	l.f.Close()
 	l.f = nil
+	beforeRotate(l.dir)
+	root, err := private.Dir{Path: l.dir}.OpenRoot(false)
+	if err != nil {
+		l.open() // refused again, most likely; logging to file stops then
+		return
+	}
+	defer root.Close()
 	// Two rotations in one millisecond must not give the same name: a rename replaces the file.
 	stamp := l.now().UTC().Format(rotatedLayout)
 	name := "main-" + stamp + ".log"
 	for i := 1; ; i++ {
-		if _, err := os.Lstat(filepath.Join(l.dir, name)); os.IsNotExist(err) {
+		if _, err := root.Lstat(name); os.IsNotExist(err) {
 			break
 		}
 		name = fmt.Sprintf("main-%s-%d.log", stamp, i)
 	}
-	if err := os.Rename(filepath.Join(l.dir, Main), filepath.Join(l.dir, name)); err != nil {
+	if err := root.Rename(Main, name); err != nil {
 		// Keep writing to main.log past the limit rather than lose lines.
 		l.open()
 		return

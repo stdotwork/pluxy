@@ -1,8 +1,6 @@
 package cred
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,13 +11,16 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/stdotwork/pluxy/next/internal/private"
 )
 
 // FileBackend keeps each record in its own JSON file in one folder: the minimal portable
 // backend. Each file can be read only by core's user (and, on Windows, SYSTEM), and the folder is
 // made private on each save: on unix by their modes (0700 and 0600); on Windows, where Go applies
-// only the read-only bit, by a protected access list (file_windows.go), and there the folder is
-// also checked and made private when the records are loaded, before any is read. A save writes a
+// only the read-only bit, by a protected access list (internal/private), and there the folder is
+// also checked and made private when the records are loaded, before any is read, and a record
+// whose own list is not private is then written again as a private file. A save writes a
 // temporary file in the same folder, syncs it and renames it over the old one, so a crash leaves
 // the old record or the new one.
 //
@@ -33,44 +34,32 @@ type FileBackend struct {
 }
 
 const (
-	dirMode   fs.FileMode = 0o700
-	fileMode  fs.FileMode = 0o600
-	ext                   = ".json"
-	tmpPrefix             = ".tmp-"
+	ext       = ".json"
+	tmpPrefix = ".tmp-"
 )
 
 // beforeRoot runs between the folder's check and its opening as a root. Tests swap the folder
 // there.
 var beforeRoot = func(dir string) {}
 
-// open checks the folder (openChecked, which makes it first when create is set) and opens it as
-// a root. The root must be the folder the check judged: one swapped in between is refused.
+// open checks the folder (private.Dir.Open, which makes it first when create is set) and opens
+// it as a root. The root must be the folder the check judged: one swapped in between is refused.
 func (f FileBackend) open(create bool) (*os.Root, error) {
-	checked, err := openChecked(f.Dir, create)
+	dir := private.Dir{Path: f.Dir, Setting: "credentials_dir", Redo: "sign the accounts in again"}
+	checked, err := dir.Open(create)
 	if err != nil {
 		return nil, err
 	}
 	defer checked.Close()
+	// On unix a save also sets the folder's mode, which mkdir left to the umask or which an
+	// existing folder had. Loading changes nothing: each file is 0600 from the moment it is made.
+	if create && runtime.GOOS != "windows" {
+		if err := checked.Chmod(private.DirMode); err != nil {
+			return nil, err
+		}
+	}
 	beforeRoot(f.Dir)
-	root, err := os.OpenRoot(f.Dir)
-	if err != nil {
-		return nil, err
-	}
-	d, err := root.Open(".")
-	if err != nil {
-		root.Close()
-		return nil, err
-	}
-	same, err := sameDir(checked, d)
-	d.Close()
-	if err == nil && !same {
-		err = fmt.Errorf("%s was replaced while it was being opened; try again", f.Dir)
-	}
-	if err != nil {
-		root.Close()
-		return nil, err
-	}
-	return root, nil
+	return dir.Root(checked)
 }
 
 // storeError gives an error of the file backend the credential store's prefix.
@@ -139,9 +128,12 @@ func (f FileBackend) load() ([]Record, error) {
 }
 
 // readRecord reads the record file name in root. A file that is not a regular file (a link, say),
-// or one owned by an account the folder's check would not accept (recordOwner), is skipped with a
+// or one owned by an account the folder's check would not accept (private.Owner), is skipped with a
 // notice in the log, and nil is returned: core did not make it, and another account may have put
-// it there before the folder was private.
+// it there before the folder was private. A record whose own access list is not private
+// (private.FilePrivate: on Windows, one made before the folder was private or moved in from
+// another folder) is written again as a private file, with a notice in the log, before it is
+// returned.
 func (f FileBackend) readRecord(root *os.Root, name string) ([]byte, error) {
 	path := filepath.Join(f.Dir, name)
 	skip := func(why string) ([]byte, error) {
@@ -165,22 +157,27 @@ func (f FileBackend) readRecord(root *os.Root, name string) ([]byte, error) {
 	} else if !st.Mode().IsRegular() {
 		return skip("it is not a regular file (a link?); core reads only the record files it wrote")
 	}
-	if ok, owner, err := recordOwner(file); err != nil {
+	if ok, owner, err := private.Owner(file); err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	} else if !ok {
 		return skip("it is owned by " + owner + ", not by this user. Take ownership of it from an elevated prompt " +
 			"(for example: takeown /f \"" + path + "\"), or remove it and sign the account in again")
 	}
-	return io.ReadAll(file)
-}
-
-// tempName returns a new name for a temporary file: tmpPrefix and 16 random hex digits.
-func tempName() (string, error) {
-	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", err
+	ok, err := private.FilePrivate(file)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
 	}
-	return tmpPrefix + hex.EncodeToString(b[:]), nil
+	b, err := io.ReadAll(file)
+	if err != nil || ok {
+		return b, err
+	}
+	// Closed first: Windows does not replace a file that is open.
+	file.Close()
+	if err := private.WriteFile(root, f.Dir, tmpPrefix, name, b); err != nil {
+		return nil, fmt.Errorf("making %s private: %w", name, err)
+	}
+	log.Printf("credential store: made %s private: its own access list let in more than this user and SYSTEM", path)
+	return b, nil
 }
 
 // Save writes r atomically.
@@ -201,31 +198,7 @@ func (f FileBackend) save(r Record) error {
 		return err
 	}
 	defer root.Close()
-	tmp, name, err := createTemp(root, f.Dir)
-	if err != nil {
-		return err
-	}
-	done := false
-	defer func() {
-		if !done {
-			tmp.Close()
-			root.Remove(name)
-		}
-	}()
-	if _, err := tmp.Write(b); err != nil {
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := root.Rename(name, r.ID+ext); err != nil {
-		return err
-	}
-	done = true
-	return syncDir(root)
+	return private.WriteFile(root, f.Dir, tmpPrefix, r.ID+ext, b)
 }
 
 // Delete removes the record for id.
@@ -248,19 +221,5 @@ func (f FileBackend) delete(id string) error {
 	if err := root.Remove(id + ext); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	return syncDir(root)
-}
-
-// syncDir makes a rename or removal in root durable. Windows cannot sync a folder; its renames
-// are durable once they return.
-func syncDir(root *os.Root) error {
-	if runtime.GOOS == "windows" {
-		return nil
-	}
-	d, err := root.Open(".")
-	if err != nil {
-		return err
-	}
-	defer d.Close()
-	return d.Sync()
+	return private.SyncDir(root)
 }

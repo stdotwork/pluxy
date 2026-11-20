@@ -71,7 +71,7 @@
       {
         "body": null,
         "headers": {
-          "Authorization": "Bearer sk-corpus-upstream",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
           "Conversation_id": "corpus-ws",
           "Openai-Beta": "responses_websockets=2026-02-06",
           "Originator": "codex-tui",

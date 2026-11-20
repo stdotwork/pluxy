@@ -177,7 +177,7 @@
         "headers": {
           "Accept": "text/event-stream",
           "Accept-Encoding": "gzip, deflate, br, zstd",
-          "Authorization": "Bearer sk-corpus-upstream",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
           "Content-Type": "application/json",
           "Originator": "codex-tui",
           "Session-Id": "0bb04468-244c-51fa-8540-e4ce1d784add",

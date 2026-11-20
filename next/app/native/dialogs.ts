@@ -8,6 +8,15 @@
 // app's output. run.ts's sessions need Xvfb, a session bus and the AppImage, so this is a runner
 // of its own; on Linux run.ts's local and remote sessions run the same checks.
 //
+// Then a second run, the core run: the app built with artifact-test-trust too, in managed mode with
+// a fresh profile, against signed test core releases made for this run (core-steps.ts), runs the
+// managed-core steps (native_core.rs) through the native confirmation, each dialog checked to show
+// what will run (the version, and an install's archive SHA-256 or an adoption's path and SHA-256):
+// install, a bad signature refused, update, a failed start put back, rollback (cancelled, then
+// confirmed), adopt, a changed version refused and repaired, and the running version installed
+// again. A sentinel core this runner started before the app must still answer afterwards, its
+// config and program unchanged. On Linux run.ts's core steps session runs the same steps.
+//
 // It runs only on a disposable CI runner (native/runner.ts). On Windows the app's folders come
 // from the account's known folders, which no environment variable redirects: it refuses to start
 // when the app's roaming or local folder already exists, and afterwards removes only the folders
@@ -16,19 +25,23 @@
 // Usage, from next/app after `bun run build`: bun native/dialogs.ts
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import {
   appendFileSync,
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve as resolvePath } from "node:path";
 import { createInterface } from "node:readline";
+import { MARKER_FILE, PROFILE_FILE } from "./admission";
+import { coreProblems, coreSource, sentinelProblems, startSentinel, stopSentinel } from "./core-steps";
 import { DISPOSABLE_RUNNER, onDisposableRunner } from "./runner";
 
 const app = resolvePath(import.meta.dir, "..");
@@ -129,6 +142,147 @@ async function startCore(): Promise<{ proc: ChildProcess; base: string; key: str
     if (proc.stdout) createInterface({ input: proc.stdout }).once("line", resolve);
   });
   return { proc, ...JSON.parse(line) };
+}
+
+/** Removes the app's folder d, which this run made, retrying for up to a minute while a file in it
+ * is still held (WebView2's helper processes can outlive the app for a moment). */
+async function removeMade(d: string) {
+  for (let i = 0; ; i++) {
+    try {
+      rmSync(d, { recursive: true, force: true });
+      return;
+    } catch (e) {
+      if (i >= 60) throw e;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+}
+
+/** A private folder of this user's for the test trust profile, the app's HOME (trust.rs reads the
+ * profile only from the process HOME). macOS: a new folder, owner-only. Windows: a folder under
+ * the runner's temporary folder whose access list lets in only this user, SYSTEM and
+ * Administrators, inherited by the files made in it (as platform.ts makes it). */
+function trustHome(root: string): string {
+  if (platform === "macos") {
+    const home = join(root, "core-home");
+    mkdirSync(home, { mode: 0o700 });
+    chmodSync(home, 0o700);
+    return home;
+  }
+  const home = mkdtempSync(join(process.env.RUNNER_TEMP ?? tmpdir(), "pluxy-core-trust-"));
+  const user = run("whoami", [], app).trim();
+  run(
+    "icacls",
+    [
+      home,
+      "/inheritance:r",
+      "/grant:r",
+      `${user}:(OI)(CI)F`,
+      "*S-1-5-18:(OI)(CI)F",
+      "*S-1-5-32-544:(OI)(CI)F",
+    ],
+    app,
+  );
+  return home;
+}
+
+/**
+ * The core run: the app at bin (built with artifact-test-trust) in managed mode, its profile's
+ * connection in localDir, against test core releases signed by a key made for this run. The
+ * install with no trust roots must be refused first; the run's root joins the profile once it has
+ * been (core_no_roots). Returns what is wrong, and the number of step reports.
+ */
+async function coreRun(
+  root: string,
+  bin: string,
+  localDir: string,
+): Promise<{ problems: string[]; steps: number }> {
+  const problems: string[] = [];
+  const prepared = join(root, "core");
+  mkdirSync(prepared);
+  console.log("dialogs: core run: building the test cores and their releases");
+  run("go", ["run", "./e2e/panelcore", "-probe", "-prepare", prepared], next);
+  const releases = join(prepared, "releases");
+  mkdirSync(releases);
+  const source = coreSource(releases, prepared);
+  // A core this run starts, not the app: it must outlive the app's run, untouched.
+  const sentinel = await startSentinel(join(prepared, "sentinel"), join(releases, "core-1.0.0"));
+  const home = trustHome(root);
+  writeFileSync(join(home, PROFILE_FILE), JSON.stringify({ roots: [] }), { mode: 0o600 });
+  const nonce = randomBytes(32).toString("hex");
+  writeFileSync(
+    join(home, MARKER_FILE),
+    JSON.stringify({
+      format: 1,
+      home: realpathSync.native(home),
+      purpose: "pluxy-artifact-test-trust",
+      nonce,
+    }),
+    { mode: 0o600 },
+  );
+  mkdirSync(localDir, { recursive: true });
+  writeFileSync(
+    join(localDir, "connection.json"),
+    JSON.stringify({ mode: "managed", core_source: source.index }),
+    {
+      mode: 0o600,
+    },
+  );
+  const ready = join(root, "core-trust-ready");
+  const env: Record<string, string> = {
+    ...(process.env as Record<string, string>),
+    HOME: home,
+    PLUXY_TEST_TRUST_NONCE: nonce,
+    PLUXY_APP_TEST_CORE_SOURCE: source.index,
+    PLUXY_APP_TEST_CORE_CUSTOM: source.custom,
+    PLUXY_APP_TEST_TRUST_READY: ready,
+  };
+  console.log(`dialogs: core run: running ${bin}`);
+  const proc = spawn(bin, [], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
+  // biome-ignore lint/suspicious/noExplicitAny: the app's JSON evidence, checked field by field in core-steps.ts
+  const steps = new Map<string, any>();
+  const onLine = (line: string) => {
+    console.log(`  core | ${line}`);
+    const m = /^native-test: (\S+) (.*)$/.exec(line);
+    if (!m) return;
+    const [, step, json] = m as unknown as [string, string, string];
+    try {
+      steps.set(step, JSON.parse(json));
+    } catch {
+      steps.set(step, json);
+    }
+    if (step === "core_no_roots") {
+      writeFileSync(join(home, PROFILE_FILE), JSON.stringify({ roots: [source.root] }), { mode: 0o600 });
+      writeFileSync(ready, "");
+    }
+    if (step === "stalled") {
+      problems.push(`the app stalled: ${json}`);
+      if (proc.pid !== undefined) stacks(proc.pid, dirname(bin));
+      proc.kill();
+    }
+  };
+  if (proc.stdout) createInterface({ input: proc.stdout }).on("line", onLine);
+  if (proc.stderr) createInterface({ input: proc.stderr }).on("line", onLine);
+  const timer = setTimeout(() => {
+    problems.push(`the app did not finish within ${TIMEOUT / 1000} s; stopped it`);
+    if (proc.pid !== undefined) stacks(proc.pid, dirname(bin));
+    // Only the process this run started.
+    proc.kill();
+  }, TIMEOUT);
+  const exit = await new Promise<number | null>((resolve) => proc.once("exit", (code) => resolve(code)));
+  clearTimeout(timer);
+  try {
+    problems.push(...(await sentinelProblems(sentinel, (line) => console.log(`dialogs: core run: ${line}`))));
+  } finally {
+    await stopSentinel(sentinel);
+  }
+  if (steps.has("failed"))
+    problems.push(`the app's core steps failed: ${JSON.stringify(steps.get("failed"))}`);
+  if (exit !== 0) problems.push(`the app exited with ${exit}`);
+  if (!steps.has("quit")) problems.push("the app did not reach its quit step");
+  problems.push(...coreProblems(steps, source));
+  if (platform === "windows") rmSync(home, { recursive: true, force: true });
+  return { problems, steps: steps.size };
 }
 
 type Probe = { internals?: boolean; calls: Record<string, { ok: boolean; detail: string }> } & Record<
@@ -552,9 +706,25 @@ async function main(): Promise<number> {
       `webviews left after closing: ${JSON.stringify(closed?.webviews)}`,
     );
 
+    // The core run, with a fresh profile: on Windows the main run's folders are removed first.
+    console.log("dialogs: building the app with artifact-test-trust for the core run");
+    run(
+      "cargo",
+      ["build", "--locked", "--features", "native-test,artifact-test-trust", "--bin", "pluxy-app"],
+      tauri,
+    );
+    if (platform === "windows") for (const d of made) await removeMade(d);
+    const coreLocal =
+      platform === "windows"
+        ? localDir
+        : join(root, "core-home", "Library", "Application Support", identifier);
+    const coreResult = await coreRun(root, bin, coreLocal);
+    check("core steps", coreResult.problems.length === 0, `the core run: ${coreResult.problems.join("; ")}`);
+
     const summary =
       `dialogs (${platform}): ${passed} checks passed, ${expected.length} expected failures, ` +
-      `${problems.length} problems; steps ${order.length}; native input ${JSON.stringify(input)}`;
+      `${problems.length} problems; steps ${order.length}; core steps ${coreResult.steps}; ` +
+      `native input ${JSON.stringify(input)}`;
     console.log(`\n${summary}`);
     for (const x of expected) console.log(`expected failure: ${x}`);
     if (process.env.GITHUB_STEP_SUMMARY) {
@@ -568,7 +738,7 @@ async function main(): Promise<number> {
       if (proc.exitCode === null) await new Promise((r) => proc.once("exit", r));
     }
     rmSync(root, { recursive: true, force: true });
-    for (const d of made) rmSync(d, { recursive: true, force: true });
+    for (const d of made) await removeMade(d);
   }
   if (problems.length > 0) {
     console.error(`\n${problems.length} problems:\n- ${problems.join("\n- ")}`);
