@@ -111,11 +111,12 @@ func (d *Doc) SetManagementKey(key string) error {
 }
 
 // Strategies are the routing strategies by today's core's names, and the names it also takes
-// for them; least-active is this core's own.
+// for them; least-active and soonest-reset are this core's own.
 var strategies = map[string]string{
 	"round-robin": "round-robin", "fill-first": "fill-first", "fillfirst": "fill-first", "ff": "fill-first",
 	"weighted-round-robin": "weighted-round-robin", "weightedroundrobin": "weighted-round-robin",
 	"wrr": "weighted-round-robin", "weighted": "weighted-round-robin", "least-active": "least-active",
+	"soonest-reset": "soonest-reset",
 }
 
 // SettingsPatch is a change to the basic and routing settings, with today's core's names for
@@ -161,7 +162,7 @@ type UsagePatch struct {
 
 // RoutingPatch is a change to the routing settings.
 type RoutingPatch struct {
-	// Strategy is round-robin, fill-first, weighted-round-robin or least-active.
+	// Strategy is round-robin, fill-first, weighted-round-robin, least-active or soonest-reset.
 	Strategy *string `json:"strategy"`
 	// SessionAffinity sends requests of one session to the same account.
 	SessionAffinity *bool `json:"session-affinity"`
@@ -333,7 +334,7 @@ func (d *Doc) applyRouting(r *RoutingPatch) error {
 	if r.Strategy != nil {
 		s, ok := strategies[strings.ToLower(strings.TrimSpace(*r.Strategy))]
 		if !ok {
-			return fmt.Errorf("%w: routing.strategy %q: use round-robin, fill-first, weighted-round-robin or least-active", ErrInvalid, *r.Strategy)
+			return fmt.Errorf("%w: routing.strategy %q: use round-robin, fill-first, weighted-round-robin, least-active or soonest-reset", ErrInvalid, *r.Strategy)
 		}
 		if !d.YAML && s == "weighted-round-robin" {
 			s = "weighted"

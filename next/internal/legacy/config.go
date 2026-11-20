@@ -975,6 +975,8 @@ func (x *translator) routing() error {
 		r["strategy"] = "fill-first"
 	case "least-active":
 		r["strategy"] = "least-active"
+	case "soonest-reset":
+		r["strategy"] = "soonest-reset"
 	default:
 		// Today's core uses round-robin for a name it does not know.
 		x.notes = append(x.notes, fmt.Sprintf("config.yaml: routing.strategy %q is not known: using round-robin", s))

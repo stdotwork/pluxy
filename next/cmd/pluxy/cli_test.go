@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stdotwork/pluxy/next/internal/core"
 )
@@ -143,6 +144,10 @@ func TestCLIOutput(t *testing.T) {
 				return
 			}
 			w.Write([]byte(`{"account":{"id":"a/b","source":"login","state":"active","disabled":true,"refreshable":false}}`))
+		case "GET /v0/management/route":
+			w.Write([]byte(`{"model":"m","order":[{"id":"soon","account":"acc_1","provider":"p","model":"m","rank":{"reset":"2026-11-21T10:00:00Z","window_seconds":604800}},` +
+				`{"id":"unread","account":"acc_2","provider":"p","model":"m","rank":{}},` +
+				`{"id":"spent","account":"acc_3","provider":"p","model":"m","rank":{"reset":"2026-11-20T10:00:00Z","window_seconds":604800,"full_until":"2026-11-20T08:00:00Z"}}],"left_out":[]}`))
 		case "POST /v0/management/reload":
 			w.WriteHeader(http.StatusUnprocessableEntity)
 			w.Write([]byte(`{"desired":{"revision":2,"at":"2026-11-19T00:00:00Z","error":"bad listen"},"active":{"revision":1,"at":"2026-11-19T00:00:00Z"},"extensions":[]}`))
@@ -207,6 +212,14 @@ func TestCLIOutput(t *testing.T) {
 	}
 	if _, _, code := run("model", "refresh", "--account", "nobody"); code != 5 {
 		t.Errorf("model refresh --account nobody: %d, want 5", code)
+	}
+	// Under soonest-reset each account shows the reset it was ranked by.
+	out, _, code := run("route", "m")
+	soon := time.Date(2026, 11, 21, 10, 0, 0, 0, time.UTC).Local().Format("2006-01-02 15:04") + " (7d window)"
+	spent := "used up until " + time.Date(2026, 11, 20, 8, 0, 0, 0, time.UTC).Local().Format(time.DateTime)
+	if lines := strings.Split(out, "\n"); code != 0 || len(lines) < 4 || !strings.Contains(lines[0], "RESET") ||
+		!strings.Contains(lines[1], soon) || !strings.Contains(lines[2], "none known") || !strings.Contains(lines[3], spent) {
+		t.Errorf("route m: %d %q, want each account's reset", code, out)
 	}
 	if out, _, code := run("help"); code != 0 || !strings.Contains(out, "account enable <id>") {
 		t.Errorf("help: %d %q", code, out)

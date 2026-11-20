@@ -279,9 +279,33 @@ var commands = []command{
 				if len(r.Order) == 0 {
 					x.printf("no account would be tried for %s\n", r.Model)
 				} else {
-					rows := [][]string{row("STEP", "TRY", "PUBLIC ID", "ID", "PROVIDER", "MODEL")}
+					// Under soonest-reset each account also shows the reset it was ranked by.
+					ranked := false
+					for _, s := range r.Order {
+						ranked = ranked || s.Rank != nil
+					}
+					head := row("STEP", "TRY", "PUBLIC ID", "ID", "PROVIDER", "MODEL")
+					if ranked {
+						head = append(head, "RESET")
+					}
+					rows := [][]string{head}
 					for i, s := range r.Order {
-						rows = append(rows, row(strconv.Itoa(s.Step), strconv.Itoa(i+1), s.Account, s.ID, s.Provider, s.Model))
+						cells := row(strconv.Itoa(s.Step), strconv.Itoa(i+1), s.Account, s.ID, s.Provider, s.Model)
+						if ranked {
+							reset := "none known"
+							switch k := s.Rank; {
+							case k == nil:
+							case k.FullUntil != nil:
+								reset = "used up until " + k.FullUntil.Local().Format(time.DateTime)
+							case k.Reset != nil:
+								reset = k.Reset.Local().Format("2006-01-02 15:04")
+								if k.WindowSeconds > 0 {
+									reset += " (" + windowText(k.WindowSeconds) + " window)"
+								}
+							}
+							cells = append(cells, reset)
+						}
+						rows = append(rows, cells)
 					}
 					x.table(rows)
 				}
@@ -565,6 +589,19 @@ func validThemePart(s string) bool {
 		}
 	}
 	return true
+}
+
+// windowText writes a usage window's length in whole days or hours where it has them, such as
+// 7d or 5h.
+func windowText(seconds int64) string {
+	d := time.Duration(seconds) * time.Second
+	switch {
+	case d%(24*time.Hour) == 0:
+		return strconv.FormatInt(int64(d/(24*time.Hour)), 10) + "d"
+	case d%time.Hour == 0:
+		return strconv.FormatInt(int64(d/time.Hour), 10) + "h"
+	}
+	return d.String()
 }
 
 // chainText writes a chain's steps as chain set takes them.
