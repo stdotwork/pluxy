@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -771,16 +772,26 @@ func (k *kit) quota(t *testing.T) {
 // call has sent core nothing for 10 seconds.
 const aliveWait = 20 * time.Second
 
+// aliveMinorError says an extension is too old for a target that promised ScenarioQuiet. Such a
+// target cannot skip the check: its fixture opted into it, and only a protocol minor that carries
+// alive frames can pass.
+func aliveMinorError(info protocol.Info, quiet bool) error {
+	if !quiet || info.ProtocolMinor >= protocol.Minor {
+		return nil
+	}
+	return fmt.Errorf("the extension reports protocol 0.%d; a quiet target must report at least 0.%d for alive frames", info.ProtocolMinor, protocol.Minor)
+}
+
 // alive checks that an extension that reports protocol 0.19 sends an alive frame while its upstream
 // sends bytes the extension passes nothing on for, and that cancelling the call then ends the reply
 // with the cancelled error. It does not check what else the extension sends in the quiet.
 func (k *kit) alive(t *testing.T) {
 	ext := k.start(t)
-	if ext.Info().ProtocolMinor < 19 {
-		t.Skipf("the extension reports protocol 0.%d; alive frames came in 0.19", ext.Info().ProtocolMinor)
-	}
 	if !k.target.Quiet {
 		t.Skip("the fixture does not arrange ScenarioQuiet (Target.Quiet)")
+	}
+	if err := aliveMinorError(ext.Info(), k.target.Quiet); err != nil {
+		t.Fatal(err)
 	}
 	setup := k.target.Prepare(t, ScenarioQuiet)
 	ctx, cancel := context.WithCancel(context.Background())
