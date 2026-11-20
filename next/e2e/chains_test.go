@@ -146,6 +146,12 @@ func TestChainServesFromTheNextStep(t *testing.T) {
 			t.Errorf("%q: %s; want exit 6 (core refused it)", args, r)
 		}
 	}
+	// A provider that is not an extension's ID: chain list could not write it back.
+	if code := manage(t, base, http.MethodPut, "/chains/x", map[string]any{
+		"steps": []map[string]any{{"model": "gpt-6.1-sol", "provider": "bad"}},
+	}, nil); code != http.StatusUnprocessableEntity {
+		t.Errorf("PUT a step with provider %q: %d, want 422", "bad", code)
+	}
 
 	if r := runCLI(t, env, "chain", "remove", "claude-opus-5-5"); r.code != 0 {
 		t.Fatalf("chain remove: %s", r)

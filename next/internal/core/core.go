@@ -730,8 +730,9 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 	c.sweep()
 }
 
-// logUnservedSteps logs a line for each chain of s with a step no account serves, as a request
-// through it would find. It reads the accounts' model lists in the background and returns at once.
+// logUnservedSteps logs a line for each chain of s with a step CheckSteps refuses (no account
+// serves it, or it names an account that is unknown or does not serve it), as a request through
+// it would find. It reads the accounts' model lists in the background and returns at once.
 func (c *Core) logUnservedSteps(s *snapshot) {
 	chains := s.Config.Routing.Chains
 	if len(chains) == 0 {
