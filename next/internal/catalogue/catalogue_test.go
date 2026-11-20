@@ -171,10 +171,6 @@ func TestCatalogueRefresh(t *testing.T) {
 					"status": "deprecated",
 					"last_updated": "2026-01-02",
 					"release_date": "2025-01-02"
-				},
-				"gpt-dated-deprecated": {
-					"limit": {"context": 1000, "output": 100},
-					"deprecated_at": "2026-02-03"
 				}
 			}
 		}
@@ -238,10 +234,7 @@ func TestCatalogueRefresh(t *testing.T) {
 		t.Errorf("capabilities = %+v", m.Capabilities)
 	}
 	if m, ok := cat.LookupFor("pluxy/codex", nil, "gpt-status-only-deprecated"); !ok || m.Capabilities == nil || m.Capabilities.DeprecatedAt != 0 {
-		t.Errorf("status-only deprecated model = %+v, present=%v; want an empty deprecated_at", m, ok)
-	}
-	if m, ok := cat.LookupFor("pluxy/codex", nil, "gpt-dated-deprecated"); !ok || m.Capabilities == nil || m.Capabilities.DeprecatedAt != time.Date(2026, 2, 3, 0, 0, 0, 0, time.UTC).Unix() {
-		t.Errorf("dated deprecated model = %+v, present=%v; want its deprecated_at", m, ok)
+		t.Errorf("status-only deprecated model = %+v, present=%v; want no deprecated_at (models.dev has no such field)", m, ok)
 	}
 	savedAfter200, err := os.ReadFile(statePath)
 	if err != nil || len(savedAfter200) == 0 {

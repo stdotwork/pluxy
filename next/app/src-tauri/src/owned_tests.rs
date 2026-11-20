@@ -75,6 +75,13 @@ const ALLOWED: &[(&str, Part, &str, usize, &str)] = &[
         "test: kills the core the test started and holds, to see its exit before it is reaped",
     ),
     (
+        "open_platform_native.rs",
+        Part::Code,
+        "WM_CLOSE",
+        2,
+        "native test (Windows, feature native-test): posts WM_CLOSE, as a close box does, only to the visible top-level windows of the processes the open session started (Notepad with the session's file, the browser with the session's address); it ends no process itself",
+    ),
+    (
         "native_core.rs",
         Part::Code,
         "OpenProcess",

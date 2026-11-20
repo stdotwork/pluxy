@@ -28,7 +28,7 @@ func catalog(exts map[string]*host.Managed) route.CatalogFunc {
 			return nil, &llm.Error{Code: llm.CodeExtensionUnavailable, Message: fmt.Sprintf("extension %s does not run", a.Extension)}
 		}
 		list, err := g.Models(ctx, protocol.Account{ID: a.ID, Settings: a.Settings, Credential: credential, ProxyURL: a.ProxyURL, Headers: a.Headers})
-		if list != nil && g.Info().ProtocolMinor < 19 {
+		if list != nil && g.Info().ProtocolMinor < host.CapabilitiesMinor {
 			for i := range list.Models {
 				list.Models[i].Capabilities = nil
 			}

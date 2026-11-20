@@ -120,12 +120,11 @@ const openAICompatible = "pluxy/openai-compatible"
 // An extension with no entry has no catalogue section: its models must not inherit another
 // provider's limits or capabilities.
 var extensionProviders = map[string][]string{
-	"pluxy/claude":      {"anthropic"},
-	"pluxy/codex":       {"openai"},
-	"pluxy/antigravity": {"google", "anthropic"},
-	"pluxy/kimi":        {"moonshotai"},
-	"pluxy/xai":         {"xai"},
-	"pluxy/meta":        {"meta"},
+	"pluxy/claude": {"anthropic"},
+	"pluxy/codex":  {"openai"},
+	"pluxy/kimi":   {"moonshotai"},
+	"pluxy/xai":    {"xai"},
+	"pluxy/meta":   {"meta"},
 }
 
 // LookupFor returns the limits and capabilities of model id for an account of extension with
@@ -331,7 +330,6 @@ type rawModel struct {
 	ReasoningOptions []rawReasoningOpt `json:"reasoning_options,omitempty"`
 	StructuredOutput bool              `json:"structured_output,omitempty"`
 	Attachment       bool              `json:"attachment,omitempty"`
-	DeprecatedAt     string            `json:"deprecated_at,omitempty"`
 }
 
 type rawLimit struct {
@@ -484,7 +482,6 @@ func trimRawModel(m rawModel) rawModel {
 			break
 		}
 	}
-	out.DeprecatedAt = strings.TrimSpace(m.DeprecatedAt)
 	return out
 }
 
@@ -523,12 +520,6 @@ func toProtocolModel(id string, rm rawModel) protocol.Model {
 			break
 		}
 	}
-	var deprecatedAt int64
-	if t, err := time.Parse("2006-01-02", rm.DeprecatedAt); err == nil {
-		deprecatedAt = t.UTC().Unix()
-	} else if t, err := time.Parse(time.RFC3339, rm.DeprecatedAt); err == nil {
-		deprecatedAt = t.UTC().Unix()
-	}
 	return protocol.Model{
 		ID:                  id,
 		ContextLength:       ctxLen,
@@ -542,7 +533,6 @@ func toProtocolModel(id string, rm rawModel) protocol.Model {
 			PDF:              pdf,
 			Reasoning:        rm.Reasoning || len(levels) > 0,
 			ReasoningLevels:  levels,
-			DeprecatedAt:     deprecatedAt,
 		},
 	}
 }

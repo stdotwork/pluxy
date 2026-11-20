@@ -31,8 +31,11 @@ const Version = 0
 // minor 12 adds the account's headers; minor 13 adds upstream capture (Call.Capture and the
 // diagnostic frame); minor 14 adds payload rules (Call.Payload); minor 15 has a session turn
 // carry them too; minor 16 adds an error's dropped (llm.Error.Dropped); minor 17 adds a
-// captured body's BodyStopped; minor 18 adds ModelList.From; minor 19 adds Model.Capabilities.
-const Minor = 19
+// captured body's BodyStopped; minor 18 adds ModelList.From; minor 19 adds a quota limit's
+// Feature; minor 20 adds llm.CodeAccountClosed; minor 21 adds what a package is (title, summary,
+// kind) to the manifest and registry index, and changes no call; minor 22 adds
+// Model.Capabilities.
+const Minor = 22
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
@@ -379,11 +382,11 @@ type Model struct {
 	GenerationMethods []string `json:"generation_methods,omitempty"`
 	InputModalities   []string `json:"input_modalities,omitempty"`
 	OutputModalities  []string `json:"output_modalities,omitempty"`
-	// Capabilities is what the model supports and when it was deprecated (minor version 19).
+	// Capabilities is what the model supports and when it was deprecated (minor version 22).
 	Capabilities *ModelCapabilities `json:"capabilities,omitempty"`
 }
 
-// ModelCapabilities is what a model supports and when it was deprecated (minor version 19).
+// ModelCapabilities is what a model supports and when it was deprecated (minor version 22).
 type ModelCapabilities struct {
 	Tools            bool     `json:"tools"`
 	StructuredOutput bool     `json:"structured_output"`
@@ -441,6 +444,11 @@ type QuotaLimit struct {
 	WindowSeconds int64 `json:"window_seconds,omitempty"`
 	// Models are the models the limit applies to, when not all of the account's.
 	Models []string `json:"models,omitempty"`
+	// Feature is true when the limit counts one feature of the plan (code review, another
+	// app's allowance, a credit pool for one product) rather than the account's requests to its
+	// models (minor version 18). Core never holds an account or a model on such a limit. A
+	// feature's limit lists no Models.
+	Feature bool `json:"feature,omitempty"`
 }
 
 // Diagnostic is what a captured call reports about its upstream exchanges (minor version 13),

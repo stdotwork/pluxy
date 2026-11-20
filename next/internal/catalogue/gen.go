@@ -33,7 +33,6 @@ type rawModel struct {
 	ReasoningOptions []rawReasoningOpt `json:"reasoning_options,omitempty"`
 	StructuredOutput bool              `json:"structured_output,omitempty"`
 	Attachment       bool              `json:"attachment,omitempty"`
-	DeprecatedAt     string            `json:"deprecated_at,omitempty"`
 }
 
 type rawLimit struct {
@@ -87,7 +86,6 @@ func trimModel(m rawModel) rawModel {
 			break
 		}
 	}
-	out.DeprecatedAt = strings.TrimSpace(m.DeprecatedAt)
 	return out
 }
 

@@ -203,7 +203,7 @@ func (l *LoginCall) Next() protocol.Reply {
 		l.Close()
 		return done
 	case r.Type == llm.EventError && r.Error != nil:
-		ev := l.errorPieces().event(l.redactor().Event(r.Event))
+		ev := l.ext.normalizeEvent(l.errorPieces().event(l.redactor().Event(r.Event)))
 		l.final = &protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: ev.Error}}
 		l.Close()
 		return *l.final
@@ -278,7 +278,7 @@ func (e *Extension) Refresh(ctx context.Context, account protocol.Account) (*pro
 		e.held.add(account.ID, r.Grant.Credential)
 		return r.Grant.Credential, nil
 	case r.Type == llm.EventError && r.Error != nil:
-		return nil, e.accountPieces(account).event(redact.Event(r.Event)).Error
+		return nil, e.normalizeEvent(e.accountPieces(account).event(redact.Event(r.Event))).Error
 	}
 	return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a refresh", e.manifest.ID, redact.String(r.Type))}
 }

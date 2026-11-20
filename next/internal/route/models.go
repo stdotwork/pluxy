@@ -422,6 +422,11 @@ func isClosed(ch chan struct{}) bool {
 // readList asks a's extension for its model list; nil when it cannot be read, along with the
 // error message for reporting.
 func (r *Router) readList(ctx context.Context, a *Account, creds Credentials, catalog CatalogFunc) (*protocol.ModelList, string) {
+	if r.state.IsBanned(a.ID) {
+		// A banned account sends nothing upstream, not even a list read; a list read before the
+		// ban stays in place, as after any failed read.
+		return nil, "the account is banned"
+	}
 	credential := a.Credential
 	if a.Managed {
 		if creds == nil {

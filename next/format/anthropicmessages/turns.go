@@ -148,11 +148,12 @@ func RepairTurns(body []byte, model string) ([]byte, []llm.Loss, error) {
 	return out2, e.losses, err
 }
 
-// repairTurns makes the repairs RepairTurns describes on msgs, reporting each in e.
+// repairTurns makes the repairs RepairTurns describes on msgs, reporting each in e, keeping the
+// trailing assistant turns when e.keepModelTurn says so.
 func (e *encoder) repairTurns(msgs []*outMessage, model string) ([]*outMessage, error) {
 	msgs = e.pairToolCalls(msgs)
 	e.fillEmptyUserTurns(msgs)
-	if refusesPrefill(model) {
+	if refusesPrefill(model) && !e.keepModelTurn {
 		n := len(msgs)
 		for n > 0 && msgs[n-1].role == llm.RoleAssistant && !(n == len(msgs) && pausedOnServerTool(msgs[n-1])) {
 			e.lose(llm.LossDropped, msgs[n-1].path, "this model refuses a conversation that ends on an assistant turn (prefill)")

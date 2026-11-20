@@ -236,7 +236,7 @@ func reasoningEffort(raw json.RawMessage) (string, json.RawMessage) {
 	if json.Unmarshal(b, &t) != nil {
 		return "", nil
 	}
-	if level := strings.ToLower(strings.TrimSpace(t.Level)); level != "" {
+	if level := strings.ToLower(strings.TrimSpace(t.Level)); level != "" && level != "thinking_level_unspecified" {
 		return level, rawjson.Rest(m, "thinkingLevel")
 	}
 	if t.Budget == nil {

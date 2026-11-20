@@ -53,6 +53,8 @@ type ExtensionStatus struct {
 // Status is GET /status's reply, and POST /reload's: core's live state.
 type Status struct {
 	SafeMode bool `json:"safe_mode"`
+	// FirstRun is true until POST /setup/done ends first run.
+	FirstRun bool `json:"first_run"`
 	// Desired is the newest config version core has seen; Active is the one serving.
 	Desired    Revision          `json:"desired"`
 	Active     Revision          `json:"active"`
@@ -99,7 +101,15 @@ type Registry struct {
 
 // RegistryPackage is one package a registry offers.
 type RegistryPackage struct {
-	ID       string            `json:"id"`
+	ID string `json:"id"`
+	// Title and Summary say what it is, as the registry describes it; empty when it does not.
+	Title   string `json:"title,omitempty"`
+	Summary string `json:"summary,omitempty"`
+	// Kind is what it adds: "provider", "client", or empty when the registry does not say.
+	Kind string `json:"kind,omitempty"`
+	// Tier is how far the registry vouches for it: "pick" (offered at setup), "verified" or
+	// "unverified" (also when the registry does not say). Core enforces nothing by it.
+	Tier     string            `json:"tier"`
 	Releases []RegistryRelease `json:"releases"`
 }
 
@@ -114,6 +124,23 @@ type RegistryRelease struct {
 type RegistriesReply struct {
 	Registries []Registry `json:"registries"`
 }
+
+// Health is an account's health (Account.Health; the README's "Accounts").
+type Health = route.Health
+
+// Health states (Health.State) and where a block's end came from (Health.Source).
+const (
+	HealthOK         = route.HealthOK
+	HealthCooling    = route.HealthCooling
+	HealthExhausted  = route.HealthExhausted
+	HealthNeedsLogin = route.HealthNeedsLogin
+	HealthBanned     = route.HealthBanned
+	HealthDisabled   = route.HealthDisabled
+
+	SourceProvider   = route.SourceProvider
+	SourceBackoff    = route.SourceBackoff
+	SourceUnverified = route.SourceUnverified
+)
 
 // Account is an account as the management API lists it. It never holds a secret.
 type Account struct {
@@ -160,6 +187,10 @@ type Account struct {
 	// fraction, a very large or very small exponent, an integer past 2^53), which a client that
 	// reads JSON numbers as float64, as a browser does, would write back changed.
 	SettingsInexact bool `json:"settings_inexact,omitempty"`
+
+	// Health is the account's state in one word, with when and why (route.Health): ok,
+	// cooling, exhausted, needs_login, banned or disabled.
+	Health Health `json:"health"`
 
 	// What routing knows about the account now (route.Runtime). An account that receives no
 	// requests (disabled, or waiting for a new login) has none of it.
@@ -293,7 +324,8 @@ type RefreshModelsReply struct {
 
 // ClientKey is a client key as the management API lists it.
 type ClientKey struct {
-	// ID names the key in calls, without showing it. It changes when core restarts.
+	// ID names the key in calls, without showing it. It stays the same across restarts (derived
+	// with the key in state/key-id.key).
 	ID string `json:"id"`
 	// Masked is the key with all but its first and last two characters hidden; a key shorter
 	// than 8 characters is hidden whole.
@@ -394,6 +426,103 @@ type UsageReply struct {
 type UsageEventsReply struct {
 	Enabled bool `json:"enabled"`
 	usage.Page
+}
+
+// Client tool states (SetupClient.State).
+const (
+	ClientStateNotConfigured = "not-configured"
+	ClientStateConfigured    = "configured"
+	ClientStateNeedsUpdate   = "needs-update"
+	// ClientStateRefused is a config file the tool's writer would refuse to change.
+	ClientStateRefused = "refused"
+)
+
+// Setup apply outcomes (SetupApplyResult.Status).
+const (
+	SetupApplyDone  = "done"
+	SetupApplyError = "error"
+)
+
+// Setup is GET /setup's and POST /setup/scan's reply.
+type Setup struct {
+	FirstRun  bool        `json:"first_run"`
+	Scanning  bool        `json:"scanning"`
+	ScannedAt *time.Time  `json:"scanned_at,omitempty"`
+	Found     SetupFound  `json:"found"`
+	Picks     []SetupPick `json:"picks"`
+}
+
+// SetupFound is what core found on the machine it runs on.
+type SetupFound struct {
+	Clients []SetupClient `json:"clients"`
+	SignIns []SetupSignIn `json:"sign_ins"`
+	Imports []SetupImport `json:"imports"`
+	Core    SetupCore     `json:"core"`
+}
+
+// SetupClient is one coding tool core looked for on the machine.
+type SetupClient struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Installed bool   `json:"installed"`
+	Version   string `json:"version,omitempty"`
+	Config    string `json:"config"`
+	State     string `json:"state"`
+}
+
+// SetupSignIn is an existing sign-in core saw on the machine (no token is read).
+type SetupSignIn struct {
+	Provider string `json:"provider"`
+	From     string `json:"from"`
+	Label    string `json:"label"`
+}
+
+// SetupImport is an existing CLIProxyAPI setup core saw on the machine.
+type SetupImport struct {
+	Kind     string `json:"kind"`
+	Config   string `json:"config"`
+	AuthDir  string `json:"auth_dir"`
+	Accounts int    `json:"accounts"`
+}
+
+// SetupCore describes core's own listen address and network reachability.
+type SetupCore struct {
+	Listen               string `json:"listen"`
+	ReachableFromNetwork bool   `json:"reachable_from_network"`
+}
+
+// SetupPick is one package offered at setup.
+type SetupPick struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	Title     string `json:"title"`
+	Summary   string `json:"summary"`
+	Installed bool   `json:"installed"`
+	Suggested bool   `json:"suggested"`
+	Because   string `json:"because,omitempty"`
+}
+
+// SetupApplyRequest is POST /setup/apply's body.
+type SetupApplyRequest struct {
+	Picks []string `json:"picks"`
+}
+
+// SetupApplyResult is one pick's outcome in SetupApplyReply.
+type SetupApplyResult struct {
+	ID      string   `json:"id"`
+	Status  string   `json:"status"`
+	Package *Package `json:"package,omitempty"`
+	Error   string   `json:"error,omitempty"`
+}
+
+// SetupApplyReply is POST /setup/apply's reply.
+type SetupApplyReply struct {
+	Results []SetupApplyResult `json:"results"`
+}
+
+// SetupDoneReply is POST /setup/done's reply.
+type SetupDoneReply struct {
+	FirstRun bool `json:"first_run"`
 }
 
 // ThemeSummary describes one theme stored by core, as GET /themes lists it and PUT returns it.

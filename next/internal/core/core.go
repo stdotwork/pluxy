@@ -67,8 +67,8 @@ type Options struct {
 	// so. Nil: core uses the folder logs beside the config file, without writing to it.
 	Logs *logfile.Files
 	// Bundled is the index of the registry of packages this install ships with (absolute), or
-	// empty for none. On the first start with a packages folder that has no record yet, every
-	// package it lists is installed and enabled.
+	// empty for none. It is a registry like any other, named bundled: core installs nothing
+	// from it by itself, on a first start or later.
 	Bundled string
 }
 
@@ -96,12 +96,17 @@ type Core struct {
 	creds  *cred.Manager // opened by the first load
 	pkgDir string        // the packages folder, fixed for core's run
 
-	settings  *extconfig.Store // extensions' settings, in the packages folder
-	pagesPort atomic.Int64     // the pages listener's port, once main has it
+	settings   *extconfig.Store // extensions' settings, in the packages folder
+	pagesPort  atomic.Int64     // the pages listener's port, once main has it
+	listenAddr atomic.Value     // the actual bound listen address, once main has it
+	setup      *setupManager    // kept setup scan and first-run flag
 
 	redactor *configdoc.Redactor // hides the config file's secrets from the management API
+	keyIDs   *configdoc.Redactor // derives stable client key IDs from state/key-id.key
 
 	checks *checks // each account's last check
+
+	routing *routing // routing's checks and saved blocks, from start
 
 	usage        *usage.Store         // the usage record, kept across reloads
 	logs         *logfile.Files       // the logs folder
@@ -138,7 +143,7 @@ func Start(opts Options) (*Core, error) {
 	// the account's settings: the values the management API shows as placeholders.
 	opts.Host.SettingsSecrets = configdoc.SettingsSecrets
 	bgCtx, bgCancel := context.WithCancel(context.Background())
-	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), checks: newChecks(), usage: usage.NewStore(),
+	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), checks: newChecks(),
 		bgCtx: bgCtx, bgCancel: bgCancel, catalogueNow: time.Now}
 	// Every extension call carries the proxy of the config active when it is sent.
 	c.opts.Host.ProxyURL = func() string {
@@ -157,6 +162,23 @@ func Start(opts Options) (*Core, error) {
 	cfg, err := server.LoadConfig(opts.ConfigPath)
 	if err != nil {
 		bgCancel()
+		return nil, &ConfigError{c.scrubbed(err)}
+	}
+	keyIDs, err := configdoc.LoadKeyID(filepath.Join(StateDir(opts.ConfigPath), "key-id.key"))
+	if err != nil {
+		bgCancel()
+		return nil, c.scrubbed(err)
+	}
+	c.keyIDs = keyIDs
+	u := cfg.Usage
+	c.usage, err = usage.Open(usage.Options{
+		Dir:       UsageDir(opts.ConfigPath),
+		MaxEvents: u.MaxEvents,
+		MaxAge:    time.Duration(u.MaxAgeMS) * time.Millisecond,
+		KeepDays:  u.KeepDays,
+	})
+	if err != nil {
+		bgCancel()
 		return nil, c.scrubbed(err)
 	}
 	if c.logs = opts.Logs; c.logs == nil {
@@ -169,21 +191,28 @@ func Start(opts Options) (*Core, error) {
 	c.pkgDir = cfg.Packages.Dir
 	// No publisher's folder can be called .settings: IDs start with a letter or digit.
 	c.settings = extconfig.NewStore(filepath.Join(c.pkgDir, ".settings"))
-	if c.initial, err = c.loadPackages(cfg); err != nil {
+	if c.initial, err = c.loadPackages(); err != nil {
+		_ = c.usage.Close()
 		bgCancel()
 		return nil, err
 	}
+	c.initRouting()
 	if err := c.reload(true, "start"); err != nil {
 		bgCancel()
 		c.checks.stop()
 		if c.creds != nil {
 			c.creds.Close()
 		}
+		_ = c.usage.Close()
 		return nil, err
 	}
 	c.creds.OnChange(c.accountsChanged)
+	snap := c.cur.Load()
+	inUse := len(snap.pkgs) > 0 || len(snap.Config.Accounts()) > 0 || len(c.creds.Records()) > 0
+	c.setup = newSetupManager(filepath.Join(StateDir(opts.ConfigPath), setupFileName), c.setupCoreTarget, inUse)
 	c.creds.OnCredentialChange(c.credentialChanged)
 	c.startModelRefresh()
+	c.startRouting()
 	return c, nil
 }
 
@@ -214,22 +243,27 @@ func configSecrets(cfg *server.Config) *protocol.Redactor {
 	return protocol.NewRedactor(cs...)
 }
 
-// LogsDir returns the logs folder of the config file at configPath: logs beside it.
-func LogsDir(configPath string) string {
+func configDir(configPath string) string {
 	dir := filepath.Dir(configPath)
 	if abs, err := filepath.Abs(dir); err == nil {
 		dir = abs
 	}
-	return filepath.Join(dir, "logs")
+	return dir
+}
+
+// LogsDir returns the logs folder of the config file at configPath: logs beside it.
+func LogsDir(configPath string) string {
+	return filepath.Join(configDir(configPath), "logs")
+}
+
+// UsageDir returns the usage folder of the config file at configPath: usage beside it.
+func UsageDir(configPath string) string {
+	return filepath.Join(configDir(configPath), "usage")
 }
 
 // StateDir returns the state folder of the config file at configPath: state beside it.
 func StateDir(configPath string) string {
-	dir := filepath.Dir(configPath)
-	if abs, err := filepath.Abs(dir); err == nil {
-		dir = abs
-	}
-	return filepath.Join(dir, "state")
+	return filepath.Join(configDir(configPath), "state")
 }
 
 // Config returns the active config.
@@ -570,7 +604,7 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 		}
 		return hostSession{s}, nil
 	}
-	next.Generation = server.Generation{Config: cfg, Attempt: attempt, Count: count, Endpoint: endpoint, OpenSession: openSession, KeyID: c.redactor.ID}
+	next.Generation = server.Generation{Config: cfg, Attempt: attempt, Count: count, Endpoint: endpoint, OpenSession: openSession, KeyID: c.keyID}
 	if cfg.Usage.On() {
 		next.Usage = c.usage
 	}
@@ -594,9 +628,10 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 			c.discard(next, prev)
 			return nil, err
 		}
-		c.creds = cred.NewManager(store, providers{c}, cred.Options{Reserved: c.reserved})
+		c.creds = cred.NewManager(store, providers{c}, cred.Options{Reserved: c.reserved, OnReauth: func(id string) { c.state.Unban(id) }, OnRemove: func(id string) { c.state.Unban(id) }})
 	}
 	router.UseCredentials(c.creds)
+	router.UseReadings(readings{c})
 	pp, err := openPprof(cfg, prev)
 	if err != nil {
 		c.discard(next, prev)
@@ -664,12 +699,14 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 	if prev != nil {
 		next.Router.CarryLists(prev.Router, sameAccountAndCred)
 		c.state.Retain(prev.Router, next.Router, sameAccount)
+		c.state.RetainBans(func(id string) bool { _, ok := c.account(next, id); return ok })
 	}
 	for id, g := range next.exts {
 		g.SetPolicy(policy(c.extensionConfig(next, id)))
 	}
 	u := next.Config.Usage
 	c.usage.SetLimits(u.MaxEvents, time.Duration(u.MaxAgeMS)*time.Millisecond)
+	c.usage.SetKeepDays(u.KeepDaysValue())
 	if err := c.logs.Configure(next.Config.Logs.ToFile, next.Config.Logs.MaxTotalSizeMB); err != nil {
 		log.Printf("logs: %v", err)
 	}
@@ -687,6 +724,9 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 	}
 	c.draining = append(c.draining, old...)
 	c.mu.Unlock()
+	if prev == nil && c.routing != nil {
+		c.loadRouting(c.routing)
+	}
 	swapPprof(next, prev)
 	c.checkAccounts(next, accounts)
 	for _, g := range old {
@@ -827,6 +867,10 @@ func (c *Core) Stop() {
 	c.stopped = true
 	c.bgCancel()
 	c.checks.stop()
+	if c.setup != nil {
+		c.setup.stop()
+	}
+	c.stopRouting()
 	c.mu.Lock()
 	gens := append([]*host.Managed(nil), c.draining...)
 	c.mu.Unlock()
@@ -845,6 +889,18 @@ func (c *Core) Stop() {
 		s.pprof.close()
 	}
 	c.creds.Close()
+	if c.usage != nil {
+		if err := c.usage.Close(); err != nil {
+			log.Printf("usage: %v", err)
+		}
+	}
+}
+
+func (c *Core) keyID(k string) string {
+	if c.keyIDs != nil {
+		return c.keyIDs.ID(k)
+	}
+	return c.redactor.ID(k)
 }
 
 // ExtensionStatus is a generation's status as management shows it.
@@ -857,7 +913,8 @@ type Status = management.Status
 func (c *Core) Status() Status {
 	version, commit, built := buildinfo.Get()
 	c.mu.Lock() // publish switches the snapshot and the revisions under it
-	s := Status{SafeMode: c.opts.SafeMode, Desired: c.desired, Active: c.active, Extensions: []ExtensionStatus{},
+	firstRun := c.setup == nil || c.setup.isFirstRun()
+	s := Status{SafeMode: c.opts.SafeMode, FirstRun: firstRun, Desired: c.desired, Active: c.active, Extensions: []ExtensionStatus{},
 		Version: version, Commit: commit, Built: built}
 	draining := append([]*host.Managed(nil), c.draining...)
 	cur := c.cur.Load()
