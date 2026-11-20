@@ -144,12 +144,12 @@ func drain(t *testing.T, next func() llm.Event, d time.Duration) (llm.Event, tim
 	}
 }
 
-// For an extension that reports protocol 0.19, core ends a call that sends nothing for the
+// For an extension that reports protocol 0.23, core ends a call that sends nothing for the
 // limits plus the grace with extension_timeout: retry-safe before response.start, not after;
 // and it logs a line naming the code and the account.
 func TestWatchdogEndsSilentCall(t *testing.T) {
 	opts := shortWatchdog(t)
-	ext := startWatchFake(t, 19, opts)
+	ext := startWatchFake(t, AliveMinor, opts)
 	for _, tc := range []struct {
 		model     string
 		retryable bool
@@ -174,7 +174,7 @@ func TestWatchdogEndsSilentCall(t *testing.T) {
 
 // Alive frames keep a quiet call open past the watchdog's limit, and never reach the caller.
 func TestWatchdogAliveKeepsCallOpen(t *testing.T) {
-	ext := startWatchFake(t, 19, shortWatchdog(t))
+	ext := startWatchFake(t, AliveMinor, shortWatchdog(t))
 	s := ext.Generate(context.Background(), protocol.Account{ID: "a"}, llm.Request{Model: "alive", Stream: true})
 	defer s.Close()
 	var types []string
@@ -193,16 +193,16 @@ func TestWatchdogAliveKeepsCallOpen(t *testing.T) {
 	}
 }
 
-// An extension below protocol 0.19 is not told it may send alive frames and gets no watchdog;
-// one that reports 0.19 is told. With the idle limit turned off, there is no watchdog either.
+// An extension below protocol 0.23 is not told it may send alive frames and gets no watchdog;
+// one that reports 0.23 is told. With the idle limit turned off, there is no watchdog either.
 func TestWatchdogOnlyForAliveExtensions(t *testing.T) {
 	for _, tc := range []struct {
 		minor int
 		opts  func(t *testing.T) Options
 		alive string
 	}{
-		{18, shortWatchdog, "alive=false"},
-		{19, func(t *testing.T) Options {
+		{AliveMinor - 1, shortWatchdog, "alive=false"},
+		{AliveMinor, func(t *testing.T) Options {
 			o := shortWatchdog(t)
 			zero := int64(0)
 			o.Timeouts = func() *protocol.Timeouts { return &protocol.Timeouts{IdleMS: &zero} }
@@ -234,7 +234,7 @@ func TestWatchdogOnlyForAliveExtensions(t *testing.T) {
 // The watchdog covers session turns too: a turn whose alive frames keep coming finishes; a
 // silent turn ends with extension_timeout and the session with it.
 func TestWatchdogSessionTurn(t *testing.T) {
-	ext := startWatchFake(t, 19, shortWatchdog(t))
+	ext := startWatchFake(t, AliveMinor, shortWatchdog(t))
 	account := protocol.Account{ID: "acct-s"}
 	s, e := ext.OpenSession(context.Background(), account, responsesSession)
 	if e != nil {

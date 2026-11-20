@@ -9,10 +9,10 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// aliveMinor is the protocol minor version that adds alive frames: an extension that reports it
+// AliveMinor is the protocol minor version that adds alive frames: an extension that reports it
 // is told it may send them (protocol.Call.Alive), and core ends a call or turn on which it has
 // received nothing at all for longer than the watchdog allows.
-const aliveMinor = 19
+const AliveMinor = 23
 
 // watchdogGrace is what the watchdog adds to the account's limit: the SDK sends an alive frame
 // at most every 10 seconds while upstream bytes arrive, and ends the upstream request itself

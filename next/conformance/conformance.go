@@ -59,7 +59,7 @@ const (
 	// ScenarioQuiet: the upstream starts a streamed reply with some text, then until the request
 	// is cancelled sends only bytes that carry nothing the extension passes on (such as SSE
 	// comments or pings), at least every 2 seconds. The alive check cancels once an alive frame
-	// arrives, about 10 seconds after the quiet starts. An extension that reports protocol 0.19
+	// arrives, about 10 seconds after the quiet starts. An extension that reports protocol 0.23
 	// must send core alive frames meanwhile (sdk.Upstream does). Only used when Target.Quiet is
 	// set.
 	ScenarioQuiet Scenario = "quiet"
@@ -814,10 +814,10 @@ const aliveWait = 20 * time.Second
 // target cannot skip the check: its fixture opted into it, and only a protocol minor that carries
 // alive frames can pass.
 func aliveMinorError(info protocol.Info, quiet bool) error {
-	if !quiet || info.ProtocolMinor >= protocol.Minor {
+	if !quiet || info.ProtocolMinor >= host.AliveMinor {
 		return nil
 	}
-	return fmt.Errorf("the extension reports protocol 0.%d; a quiet target must report at least 0.%d for alive frames", info.ProtocolMinor, protocol.Minor)
+	return fmt.Errorf("the extension reports protocol 0.%d; a quiet target must report at least 0.%d for alive frames", info.ProtocolMinor, host.AliveMinor)
 }
 
 // alive checks that a quiet target's extension reports the alive minor or later and sends an alive

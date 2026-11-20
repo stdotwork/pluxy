@@ -55,14 +55,14 @@ func TestAliveCheck(t *testing.T) {
 // A quiet target promises the alive scenario, so an extension that reports a minor version before
 // alive frames must fail the check rather than skip it.
 func TestAliveMinorForQuietTarget(t *testing.T) {
-	old := protocol.Info{ProtocolMinor: protocol.Minor - 1}
+	old := protocol.Info{ProtocolMinor: host.AliveMinor - 1}
 	if err := aliveMinorError(old, true); err == nil || !strings.Contains(err.Error(), "protocol 0.") {
 		t.Fatalf("old quiet target: error = %v, want a failure naming its protocol minor", err)
 	}
 	if err := aliveMinorError(old, false); err != nil {
 		t.Fatalf("old non-quiet target: error = %v, want a skip path", err)
 	}
-	current := protocol.Info{ProtocolMinor: protocol.Minor}
+	current := protocol.Info{ProtocolMinor: host.AliveMinor}
 	if err := aliveMinorError(current, true); err != nil {
 		t.Fatalf("current quiet target: error = %v", err)
 	}

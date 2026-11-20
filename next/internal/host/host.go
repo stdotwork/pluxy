@@ -640,7 +640,7 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 		return failed(llm.CodeExtensionUnavailable, fmt.Sprintf("extension %s is not reachable: %v", e.manifest.ID, err))
 	}
 	s := &Stream{conn: conn, ctx: ctx, ext: e, redact: redact, pieces: e.accountPieces(account), capture: capture(ctx, e.info), account: account.ID}
-	alive := e.info.ProtocolMinor >= aliveMinor
+	alive := e.info.ProtocolMinor >= AliveMinor
 	if alive {
 		s.watch = watchdog(account.Timeouts, req.Stream)
 	}

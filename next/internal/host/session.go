@@ -189,7 +189,7 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 		return refuse(perr)
 	}
 	s.ext.resolveTimeouts(&account)
-	alive := s.ext.info.ProtocolMinor >= aliveMinor
+	alive := s.ext.info.ProtocolMinor >= AliveMinor
 	if alive {
 		t.watch = watchdog(account.Timeouts, req.Stream)
 	}
