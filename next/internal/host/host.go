@@ -1008,8 +1008,9 @@ func (l *lineLogger) longLine() {
 	l.out.line(l.prefix, fmt.Sprintf("(a line longer than %d bytes, not logged)", maxLogLine))
 }
 
-// accountClosedMinor is the protocol minor version that adds llm.CodeAccountClosed.
-const accountClosedMinor = 20
+// AccountClosedMinor is the protocol minor version that adds llm.CodeAccountClosed. Core
+// downgrades that code to llm.CodePermission for an extension that reports an earlier version.
+const AccountClosedMinor = 20
 
 // normalizeEvent downgrades error codes that require a newer protocol minor version than e
 // reported in describe.
@@ -1017,7 +1018,7 @@ func (e *Extension) normalizeEvent(ev llm.Event) llm.Event {
 	if e == nil || ev.Type != llm.EventError || ev.Error == nil {
 		return ev
 	}
-	if e.info.ProtocolMinor < accountClosedMinor && ev.Error.Code == llm.CodeAccountClosed {
+	if e.info.ProtocolMinor < AccountClosedMinor && ev.Error.Code == llm.CodeAccountClosed {
 		errCopy := *ev.Error
 		errCopy.Code = llm.CodePermission
 		ev.Error = &errCopy

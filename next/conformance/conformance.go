@@ -415,8 +415,8 @@ func (k *kit) wantError(t *testing.T, s Scenario, want llm.Error, otherScopes ..
 
 func (k *kit) accountClosed(t *testing.T) {
 	ext := k.start(t)
-	if info := ext.Info(); info.ProtocolMinor < 19 {
-		t.Errorf("describe says protocol_minor %d, want at least 19 for account_closed", info.ProtocolMinor)
+	if err := accountClosedMinorError(ext.Info()); err != nil {
+		t.Error(err)
 	}
 	setup := k.target.PrepareAccountClosed(t)
 	st := ext.Generate(context.Background(), setup.Account, request(true))
@@ -838,6 +838,16 @@ func (k *kit) quota(t *testing.T) {
 // aliveWait is how long the alive check waits for an alive frame: the SDK sends one once the
 // call has sent core nothing for 10 seconds.
 const aliveWait = 20 * time.Second
+
+// accountClosedMinorError says an extension is too old to report account_closed: core downgrades
+// that code to permission for an extension below the protocol minor that adds it, so an
+// extension that reports less would pass a check whose bans core then loses.
+func accountClosedMinorError(info protocol.Info) error {
+	if info.ProtocolMinor >= host.AccountClosedMinor {
+		return nil
+	}
+	return fmt.Errorf("the extension reports protocol 0.%d; account_closed needs at least 0.%d", info.ProtocolMinor, host.AccountClosedMinor)
+}
 
 // aliveMinorError says an extension is too old for a target that promised ScenarioQuiet. Such a
 // target cannot skip the check: its fixture opted into it, and only a protocol minor that carries

@@ -67,3 +67,16 @@ func TestAliveMinorForQuietTarget(t *testing.T) {
 		t.Fatalf("current quiet target: error = %v", err)
 	}
 }
+
+// An extension that reports the account_closed minor passes the kit's gate; one a minor before it
+// fails, since core drops the code for an extension that old and its bans are lost.
+func TestAccountClosedMinor(t *testing.T) {
+	old := protocol.Info{ProtocolMinor: host.AccountClosedMinor - 1}
+	if err := accountClosedMinorError(old); err == nil || !strings.Contains(err.Error(), "protocol 0.") {
+		t.Fatalf("old extension: error = %v, want a failure naming its protocol minor", err)
+	}
+	current := protocol.Info{ProtocolMinor: host.AccountClosedMinor}
+	if err := accountClosedMinorError(current); err != nil {
+		t.Fatalf("current extension: error = %v", err)
+	}
+}
