@@ -73,6 +73,13 @@ removed when the new core in `next/` replaced it. `next/` keeps from it:
   `internal/translator/claude/openai/responses/claude_openai-responses_request.go`: a tool call
   with no result gets an error result, a result that answers no call is sent as text, and results go
   first in their user turn. The error result's text is copied;
+- adapted: the audio format and MIME type table of `next/format/internal/audioinput/audioinput.go`,
+  from `openAIInputAudioMimeType` in
+  `internal/translator/gemini/openai/chat-completions/gemini_openai_request.go`, and its inline
+  audio data URL, which that translator builds in `geminiInlineDataPart`;
+- follows: the reading of a Responses `input_audio` part in either spelling (flat `data` and
+  `format`, or inside `input_audio`), from `responsesInputAudioToChatPart` in
+  `internal/translator/openai/openai/responses/openai_openai-responses_request.go`;
 - the replies recorded in the cases of `next/corpus/` are what this core answered, and a few of
   them hold model lists from its catalog.
 
