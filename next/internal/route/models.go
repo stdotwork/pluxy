@@ -3,6 +3,7 @@ package route
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"log"
 	"slices"
 	"strings"
@@ -72,8 +73,9 @@ func (r *Router) UseCatalog(f CatalogFunc) {
 	r.lists.clear()
 }
 
-// CatalogueFunc looks up a model's limits and capabilities in core's model catalogue.
-type CatalogueFunc func(id string) (protocol.Model, bool)
+// CatalogueFunc looks up a model's limits and capabilities in core's model catalogue for an
+// account of extension with settings.
+type CatalogueFunc func(extension string, settings json.RawMessage, id string) (protocol.Model, bool)
 
 // UseCatalogue sets how the router reads model limits and capabilities from the catalogue.
 func (r *Router) UseCatalogue(f CatalogueFunc) {
@@ -556,10 +558,10 @@ func (r *Router) ServedModels(ctx context.Context) []ServedModel {
 				}
 			}
 			if catalogue != nil {
-				if cm, ok := catalogue(n.Upstream); ok {
+				if cm, ok := catalogue(a.Extension, a.Settings, n.Upstream); ok {
 					catModel = &cm
 				} else if n.Public != n.Upstream {
-					if cm, ok := catalogue(n.Public); ok {
+					if cm, ok := catalogue(a.Extension, a.Settings, n.Public); ok {
 						catModel = &cm
 					}
 				}

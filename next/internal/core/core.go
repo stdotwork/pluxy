@@ -582,7 +582,7 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	if c.catalogue != nil {
-		router.UseCatalogue(c.catalogue.Lookup)
+		router.UseCatalogue(c.catalogue.LookupFor)
 	}
 	if !c.opts.SafeMode {
 		router.UseCatalog(catalog(next.exts))

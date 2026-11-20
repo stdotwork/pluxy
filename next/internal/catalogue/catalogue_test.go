@@ -23,14 +23,16 @@ func TestEmbeddedSnapshotCoversBuiltinLists(t *testing.T) {
 	t.Parallel()
 	cat := New(Options{})
 
-	files := []string{
-		"../../extensions/claude/models.json",
-		"../../extensions/codex/models.json",
-		"../../extensions/gemini/models.json",
-		"../../extensions/gemini/vertex-models.json",
-		"../../extensions/kimi/models.json",
-		"../../extensions/xai/models.json",
-		"../../extensions/meta/models.json",
+	files := []struct {
+		path, extension, settings string
+	}{
+		{"../../extensions/claude/models.json", "pluxy/claude", ""},
+		{"../../extensions/codex/models.json", "pluxy/codex", ""},
+		{"../../extensions/gemini/models.json", "pluxy/gemini", ""},
+		{"../../extensions/gemini/vertex-models.json", "pluxy/gemini", `{"vertex":{}}`},
+		{"../../extensions/kimi/models.json", "pluxy/kimi", ""},
+		{"../../extensions/xai/models.json", "pluxy/xai", ""},
+		{"../../extensions/meta/models.json", "pluxy/meta", ""},
 	}
 
 	// Model IDs present in pluxy's built-in fallback lists that models.dev does not carry today.
@@ -48,33 +50,33 @@ func TestEmbeddedSnapshotCoversBuiltinLists(t *testing.T) {
 	}
 	seenMissing := map[string]bool{}
 
-	for _, rel := range files {
-		raw, err := os.ReadFile(rel)
+	for _, file := range files {
+		raw, err := os.ReadFile(file.path)
 		if err != nil {
-			t.Fatalf("read %s: %v", rel, err)
+			t.Fatalf("read %s: %v", file.path, err)
 		}
-		ids := extractBuiltinModelIDs(t, rel, raw)
+		ids := extractBuiltinModelIDs(t, file.path, raw)
 		if len(ids) == 0 {
-			t.Fatalf("%s: extracted 0 model IDs", rel)
+			t.Fatalf("%s: extracted 0 model IDs", file.path)
 		}
 		for _, id := range ids {
-			m, ok := cat.Lookup(id)
+			m, ok := cat.LookupFor(file.extension, json.RawMessage(file.settings), id)
 			if !ok {
 				if wantMissing[id] {
 					seenMissing[id] = true
 					continue
 				}
-				t.Errorf("%s: model %q missing from embedded snapshot", rel, id)
+				t.Errorf("%s: model %q missing from embedded snapshot", file.path, id)
 				continue
 			}
 			if wantMissing[id] {
-				t.Errorf("%s: model %q is now present in embedded snapshot; remove it from wantMissing", rel, id)
+				t.Errorf("%s: model %q is now present in embedded snapshot; remove it from wantMissing", file.path, id)
 			}
 			if m.ContextLength <= 0 {
-				t.Errorf("%s: model %q has context_length %d, want > 0", rel, id, m.ContextLength)
+				t.Errorf("%s: model %q has context_length %d, want > 0", file.path, id, m.ContextLength)
 			}
 			if m.Capabilities == nil {
-				t.Errorf("%s: model %q has nil capabilities", rel, id)
+				t.Errorf("%s: model %q has nil capabilities", file.path, id)
 			}
 		}
 	}
@@ -201,7 +203,7 @@ func TestCatalogueRefresh(t *testing.T) {
 	if err := cat.Refresh(context.Background()); err != nil {
 		t.Fatalf("Refresh (200): %v", err)
 	}
-	m, ok := cat.Lookup("gpt-refresh-test")
+	m, ok := cat.LookupFor("pluxy/codex", nil, "gpt-refresh-test")
 	if !ok {
 		t.Fatalf("gpt-refresh-test missing after 200 refresh")
 	}
@@ -230,7 +232,7 @@ func TestCatalogueRefresh(t *testing.T) {
 	if err != nil || string(savedAfter304) != string(savedAfter200) {
 		t.Errorf("state file changed on 304")
 	}
-	if _, ok := cat.Lookup("gpt-refresh-test"); !ok {
+	if _, ok := cat.LookupFor("pluxy/codex", nil, "gpt-refresh-test"); !ok {
 		t.Errorf("gpt-refresh-test lost after 304")
 	}
 
@@ -243,7 +245,7 @@ func TestCatalogueRefresh(t *testing.T) {
 	if err != nil || string(savedAfter500) != string(savedAfter200) {
 		t.Errorf("state file changed on 500")
 	}
-	if _, ok := cat.Lookup("gpt-refresh-test"); !ok {
+	if _, ok := cat.LookupFor("pluxy/codex", nil, "gpt-refresh-test"); !ok {
 		t.Errorf("gpt-refresh-test lost after 500")
 	}
 
@@ -257,7 +259,7 @@ func TestCatalogueRefresh(t *testing.T) {
 		if err != nil || string(savedAfterEmpty) != string(savedAfter200) {
 			t.Errorf("state file changed on empty mode %d", mCode)
 		}
-		if _, ok := cat.Lookup("gpt-refresh-test"); !ok {
+		if _, ok := cat.LookupFor("pluxy/codex", nil, "gpt-refresh-test"); !ok {
 			t.Errorf("gpt-refresh-test lost after empty mode %d", mCode)
 		}
 	}
@@ -272,7 +274,35 @@ func TestCatalogueRefresh(t *testing.T) {
 	if err := fastCat.Refresh(context.Background()); err == nil {
 		t.Errorf("Refresh (timeout): expected error, got nil")
 	}
-	if _, ok := fastCat.Lookup("gpt-refresh-test"); !ok {
+	if _, ok := fastCat.LookupFor("pluxy/codex", nil, "gpt-refresh-test"); !ok {
 		t.Errorf("reloaded catalogue from statePath missing gpt-refresh-test after timeout")
+	}
+}
+
+func TestLookupForUsesTheExtensionsProviders(t *testing.T) {
+	cat := New(Options{})
+
+	gemini, ok := cat.LookupFor("pluxy/gemini", nil, "gemini-4-argon")
+	if !ok {
+		t.Fatal("gemini-4-argon missing from the Gemini API catalogue")
+	}
+	if gemini.MaxCompletionTokens != 32768 {
+		t.Errorf("Gemini API gemini-4-argon max output = %d, want 32768", gemini.MaxCompletionTokens)
+	}
+
+	vertex, ok := cat.LookupFor("pluxy/gemini", json.RawMessage(`{"vertex":{}}`), "gemini-4-argon")
+	if !ok {
+		t.Fatal("gemini-4-argon missing from the Vertex catalogue")
+	}
+	if vertex.MaxCompletionTokens != 65536 {
+		t.Errorf("Vertex gemini-4-argon max output = %d, want 65536", vertex.MaxCompletionTokens)
+	}
+
+	if _, ok := cat.LookupFor("pluxy/devin", nil, "devin/gpt-6-luna"); ok {
+		t.Error("devin/gpt-6-luna found in another provider's models.dev section")
+	}
+
+	if _, ok := cat.LookupFor("pluxy/openai-compatible", nil, "gpt-6-luna"); !ok {
+		t.Error("openai-compatible name-only lookup did not find gpt-6-luna")
 	}
 }

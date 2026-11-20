@@ -75,10 +75,10 @@ type Catalogue struct {
 	client    *http.Client
 	timeout   time.Duration
 
-	mu   sync.RWMutex
-	base map[string]protocol.Model
-	byID map[string]protocol.Model
-	etag string
+	mu         sync.RWMutex
+	base       map[string]map[string]protocol.Model
+	byProvider map[string]map[string]protocol.Model
+	etag       string
 }
 
 // New creates a Catalogue initialized from the embedded snapshot and, when Options.StatePath
@@ -98,19 +98,15 @@ func New(opts Options) *Catalogue {
 	}
 	base, _, _, err := parseCatalogueJSON(embeddedSnapshot)
 	if err != nil {
-		base = map[string]protocol.Model{}
+		base = map[string]map[string]protocol.Model{}
 	}
 	c.base = base
-	c.byID = cloneMap(base)
+	c.byProvider = cloneProviders(base)
 
 	if c.statePath != "" {
 		if raw, err := os.ReadFile(c.statePath); err == nil && len(raw) > 0 {
 			if diskModels, etag, _, err := parseCatalogueJSON(raw); err == nil && len(diskModels) > 0 {
-				merged := cloneMap(c.base)
-				for k, v := range diskModels {
-					merged[k] = v
-				}
-				c.byID = merged
+				c.byProvider = mergeProviders(c.base, diskModels)
 				c.etag = etag
 			}
 		}
@@ -118,30 +114,69 @@ func New(opts Options) *Catalogue {
 	return c
 }
 
-// Lookup returns the limits and capabilities of model id from the catalogue.
-func (c *Catalogue) Lookup(id string) (protocol.Model, bool) {
+const openAICompatible = "pluxy/openai-compatible"
+
+// extensionProviders names the models.dev sections each built-in extension's upstream serves.
+// An extension with no entry has no catalogue section: its models must not inherit another
+// provider's limits or capabilities.
+var extensionProviders = map[string][]string{
+	"pluxy/claude":      {"anthropic"},
+	"pluxy/codex":       {"openai"},
+	"pluxy/antigravity": {"google", "anthropic"},
+	"pluxy/kimi":        {"moonshotai"},
+	"pluxy/xai":         {"xai"},
+	"pluxy/meta":        {"meta"},
+}
+
+// LookupFor returns the limits and capabilities of model id for an account of extension with
+// settings. It searches only the models.dev provider sections that extension's upstream serves.
+// openai-compatible accounts may name any upstream, so theirs are the only name-only lookup.
+func (c *Catalogue) LookupFor(extension string, settings json.RawMessage, id string) (protocol.Model, bool) {
 	key := strings.ToLower(strings.TrimSpace(id))
 	key = strings.TrimPrefix(key, "models/")
 	if key == "" {
 		return protocol.Model{}, false
 	}
 
+	providers := providersFor(extension, settings)
+	if len(providers) == 0 {
+		return protocol.Model{}, false
+	}
+
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-
-	if m, ok := c.lookupLocked(key); ok {
-		return cloneModel(m), true
-	}
-	if i := strings.LastIndexByte(key, '/'); i >= 0 && i+1 < len(key) {
-		if m, ok := c.lookupLocked(key[i+1:]); ok {
+	for _, provider := range providers {
+		models := c.byProvider[provider]
+		if m, ok := lookupModel(models, key); ok {
 			return cloneModel(m), true
+		}
+		if i := strings.LastIndexByte(key, '/'); i >= 0 && i+1 < len(key) {
+			if m, ok := lookupModel(models, key[i+1:]); ok {
+				return cloneModel(m), true
+			}
 		}
 	}
 	return protocol.Model{}, false
 }
 
-func (c *Catalogue) lookupLocked(key string) (protocol.Model, bool) {
-	if m, ok := c.byID[key]; ok {
+func providersFor(extension string, settings json.RawMessage) []string {
+	if extension == openAICompatible {
+		return keptProviders
+	}
+	if extension == "pluxy/gemini" {
+		var account struct {
+			Vertex json.RawMessage `json:"vertex"`
+		}
+		if json.Unmarshal(settings, &account) == nil && len(account.Vertex) > 0 && string(account.Vertex) != "null" {
+			return []string{"google-vertex"}
+		}
+		return []string{"google"}
+	}
+	return extensionProviders[extension]
+}
+
+func lookupModel(models map[string]protocol.Model, key string) (protocol.Model, bool) {
+	if m, ok := models[key]; ok {
 		return m, true
 	}
 	for _, trimmed := range []string{
@@ -151,13 +186,13 @@ func (c *Catalogue) lookupLocked(key string) (protocol.Model, bool) {
 		key + "-preview",
 	} {
 		if trimmed != key && trimmed != "" {
-			if m, ok := c.byID[trimmed]; ok {
+			if m, ok := models[trimmed]; ok {
 				return m, true
 			}
 		}
 	}
 	if undated := stripDate(key); undated != key && undated != "" {
-		if m, ok := c.byID[undated]; ok {
+		if m, ok := models[undated]; ok {
 			return m, true
 		}
 	}
@@ -250,11 +285,7 @@ func (c *Catalogue) Refresh(ctx context.Context) error {
 	}
 
 	c.mu.Lock()
-	merged := cloneMap(c.base)
-	for k, v := range parsed {
-		merged[k] = v
-	}
-	c.byID = merged
+	c.byProvider = mergeProviders(c.base, parsed)
 	if newETag != "" {
 		c.etag = newETag
 	}
@@ -321,7 +352,7 @@ type rawReasoningOpt struct {
 	Values []string `json:"values,omitempty"`
 }
 
-func parseCatalogueJSON(raw []byte) (models map[string]protocol.Model, etag string, trimmed []byte, err error) {
+func parseCatalogueJSON(raw []byte) (models map[string]map[string]protocol.Model, etag string, trimmed []byte, err error) {
 	var top map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &top); err != nil {
 		return nil, "", nil, err
@@ -331,24 +362,15 @@ func parseCatalogueJSON(raw []byte) (models map[string]protocol.Model, etag stri
 		delete(top, "_etag")
 	}
 
-	// Prefer the canonical provider priority order so primary vendor entries take precedence.
+	// Keep only the providers this product serves, in canonical order.
 	order := make([]string, 0, len(top))
-	seenProvider := map[string]bool{}
 	for _, p := range keptProviders {
 		if _, ok := top[p]; ok {
 			order = append(order, p)
-			seenProvider[p] = true
 		}
-	}
-	// If none of keptProviders were in top (e.g. a small synthetic test payload), accept all keys.
-	if len(order) == 0 {
-		for p := range top {
-			order = append(order, p)
-		}
-		slices.Sort(order)
 	}
 
-	models = map[string]protocol.Model{}
+	models = map[string]map[string]protocol.Model{}
 	trimmedProviders := map[string]rawProvider{}
 
 	for _, p := range order {
@@ -362,20 +384,21 @@ func parseCatalogueJSON(raw []byte) (models map[string]protocol.Model, etag stri
 		}
 		slices.Sort(ids)
 		keptMap := make(map[string]rawModel, len(ids))
+		providerModels := map[string]protocol.Model{}
 		for _, id := range ids {
 			rm := trimRawModel(rp.Models[id])
 			keptMap[id] = rm
 			pm := toProtocolModel(id, rm)
 			for _, key := range indexKeys(id) {
-				if _, exists := models[key]; !exists {
-					models[key] = pm
+				if _, exists := providerModels[key]; !exists {
+					providerModels[key] = pm
 				}
 			}
 		}
 		if len(keptMap) > 0 {
+			models[p] = providerModels
 			trimmedProviders[p] = rawProvider{Models: keptMap}
 		}
-		_ = seenProvider
 	}
 
 	if len(trimmedProviders) > 0 {
@@ -542,6 +565,27 @@ func cloneModel(m protocol.Model) protocol.Model {
 		m.Capabilities = &c
 	}
 	return m
+}
+
+func cloneProviders(src map[string]map[string]protocol.Model) map[string]map[string]protocol.Model {
+	dst := make(map[string]map[string]protocol.Model, len(src))
+	for provider, models := range src {
+		dst[provider] = cloneMap(models)
+	}
+	return dst
+}
+
+func mergeProviders(base, overlay map[string]map[string]protocol.Model) map[string]map[string]protocol.Model {
+	merged := cloneProviders(base)
+	for provider, models := range overlay {
+		if merged[provider] == nil {
+			merged[provider] = map[string]protocol.Model{}
+		}
+		for key, model := range models {
+			merged[provider][key] = cloneModel(model)
+		}
+	}
+	return merged
 }
 
 func cloneMap(src map[string]protocol.Model) map[string]protocol.Model {

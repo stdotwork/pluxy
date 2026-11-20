@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/internal/catalogue"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
@@ -368,7 +369,7 @@ func TestMergeModelLimitsAndCapabilities(t *testing.T) {
 		Account{ID: "claude-builtin", Extension: "pluxy/claude"},
 		Account{ID: "custom-ext", Extension: "pluxy/custom"},
 	)
-	h.r.UseCatalogue(func(id string) (protocol.Model, bool) {
+	h.r.UseCatalogue(func(_ string, _ json.RawMessage, id string) (protocol.Model, bool) {
 		m, ok := catModels[id]
 		return m, ok
 	})
@@ -480,5 +481,36 @@ func TestMergeModelLimitsAndCapabilities(t *testing.T) {
 	}
 	if custom.Capabilities != nil {
 		t.Errorf("custom-only capabilities = %+v, want nil because models.dev does not carry it", custom.Capabilities)
+	}
+}
+
+func TestDevinModelsDoNotBorrowOpenAICatalogueData(t *testing.T) {
+	h := newHarness(t, Config{}, Account{ID: "devin", Extension: "pluxy/devin"})
+	h.r.UseCatalogue(catalogue.New(catalogue.Options{}).LookupFor)
+	h.r.UseCatalog(func(context.Context, Account, *protocol.Credential) (*protocol.ModelList, *llm.Error) {
+		return &protocol.ModelList{
+			OwnedBy: "openai",
+			From:    protocol.ModelListFromExtension,
+			Models: []protocol.Model{{
+				ID:                  "devin/gpt-6-luna",
+				ContextLength:       1000000,
+				MaxCompletionTokens: 64000,
+			}},
+		}, nil
+	})
+
+	var got *ServedModel
+	for _, m := range h.r.ServedModels(context.Background()) {
+		if m.ID == "devin/gpt-6-luna" {
+			m := m
+			got = &m
+			break
+		}
+	}
+	if got == nil {
+		t.Fatal("devin/gpt-6-luna missing from ServedModels")
+	}
+	if got.ContextLength != 1000000 || got.MaxOutputTokens != 64000 || got.Capabilities != nil || got.From != protocol.ModelListFromExtension {
+		t.Errorf("devin/gpt-6-luna = %+v, want only its extension's 1000000/64000 limits and no capabilities", got)
 	}
 }
