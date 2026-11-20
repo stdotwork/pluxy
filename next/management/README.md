@@ -143,8 +143,8 @@ The import report:
   "dry_run": true,
   "brought": [{"what": "auth file", "name": "codex-work@example.com.json", "as": "pluxy/codex account codex-work-example.com"},
               {"what": "routing.strategy"}],
-  "changed": [{"what": "server.host", "from": "(not set: every interface)", "to": "127.0.0.1",
-               "why": "pluxy listens on this machine only unless told otherwise",
+  "changed": [{"what": "server.host", "from": "(not set: every interface)", "to": "127.0.0.1:8317",
+               "why": "core keeps listening on 127.0.0.1:8317: listen cannot change while core runs",
                "keep_with": "\"listen\": \"0.0.0.0:8317\" in pluxy's config file, then restart core"}],
   "not_brought": [{"what": "auth file", "name": "gemini-user.json", "why": "today's core does not load it either"}],
   "needs": [{"pick": "pluxy/codex", "why": "3 accounts need it"}]
@@ -154,8 +154,11 @@ The import report:
 Every key of the config and every file of the auth folder is in exactly one of `brought`, `changed` and
 `not_brought`. An import whose report could not account for an item fails instead of dropping it. A key is
 named by its path in the file (`server.port`, or `port` in the older spelling); a list is one key, and a
-provider section's entry is one key (`api-keys.codex[0]`) whose row names the accounts it became. A row may
-also name a key the file does not set, such as the missing `server.host`. `needs` lists the provider packages
+provider section's entry is one key (`api-keys.codex[0]`) whose row names the accounts it became. Every
+`not_brought` row says why. A row may also name a key the file does not set: a file with no `server.host`
+gets a row for it (today's core then listened on every interface), and every listen row, that one included,
+says core keeps listening on its own address while it runs, with the file's reach in `from` and core's in
+`to`. `needs` lists the provider packages
 the imported accounts need that core has not installed; core installs nothing by itself. A bcrypt management
 key's `changed` row holds the new key in `to`, once, in the reply that made it (a dry run makes none).
 

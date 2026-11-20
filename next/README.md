@@ -2462,11 +2462,13 @@ upstream knows, and its `alias` the name clients use; the account serves only th
 entries share a name clients use, the first wins in every section, as in today's core, except
 `openai-compatibility`: there today's core treats them as a pool and rotates requests over them,
 and falls back to the next on a failure. This core makes the pool a fallback chain
-(`routing.chains`) named by the alias, with one step per upstream model in the file's order, each
-served by the group's accounts; the account lists each model under its own name for the steps,
-and the log names the chain (a model listed twice adds no step). A name that accounts of more than
-one provider serve, by their `models` lists or an `oauth.model-alias` alias, which today's core
-shared among them, becomes a chain too, with one step per provider in the file's order. A chain
+(`routing.chains`) named by the alias, with one step per upstream model in the order the group
+lists them, each served by the group's accounts; the account lists each model under its own name
+for the steps, and the log names the chain (a model listed twice adds no step). A name that
+accounts of more than one provider serve, by their `models` lists or an `oauth.model-alias` alias,
+which today's core shared among them, becomes a chain too, with one step per provider in the order
+core reads the provider sections (`codex`, `claude`, `gemini`, Vertex, `xai`,
+`openai-compatibility`, `interactions`), not the file's. A chain
 tries its steps in order rather than in turn: see [Fallback chains](#fallback-chains). A group's or key's `prefix` is the account's
 `prefix`, and its `excluded-models` its `excluded_models` (today's core has no
 `excluded-models` for `openai-compatibility`, so it is accepted there and does nothing). See
@@ -2598,8 +2600,11 @@ takes dry runs only.
 
 What the import changes, each under **changed**:
 
-- No `server.host` (or an empty one) listened on every interface; pluxy listens on `127.0.0.1`. The
-  row says how to keep the old reach (`"listen": "0.0.0.0:8317"`).
+- `server.host` and `server.port`: core keeps its own `listen` while it runs, so every listen row
+  is under **changed**: it names the file's reach in `from` and core's address in `to`, and
+  `keep_with` gives the `"listen"` value to write and restart core with. A file with no
+  `server.host` (or an empty one) is one of these: today's core listened on every interface then,
+  and pluxy listens on `127.0.0.1` unless told otherwise.
 - A `management.secret-key` that today's core replaced with its bcrypt hash cannot be used: the import
   makes a new management key, which the row shows once. The `pluxy` command reads it from the config
   file.

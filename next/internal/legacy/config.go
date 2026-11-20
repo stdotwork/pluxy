@@ -2276,7 +2276,8 @@ func (x *translator) classify(path string, v any, inherited *rule, sink sink) {
 // pooled: an openai-compatibility alias over several models, taken in turn, and a name served by
 // accounts of more than one provider, whose requests today's core shared among them. pluxy
 // serves a name from one provider and one model unless a chain says otherwise, so the chain
-// keeps every model and provider, tried in the file's order rather than in turn.
+// keeps every model and provider, tried in the order the group lists its models and then the
+// order core reads the provider sections, rather than in turn.
 func (x *translator) chains() error {
 	type key struct{ model, ext string }
 	var order []string
