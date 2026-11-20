@@ -757,7 +757,8 @@ stream or request with an error instead.
 
 A request is an ordered list of typed items plus options. It is modelled on the prompt types of
 Vercel's AI SDK Language Model Specification and on the items of Open Responses, kept small for
-version 0.
+version 0. A [native-only call](#native-only-calls) (since 0.24) carries it without its `items`,
+`tools` and `origin`, which the extension parses from `native.body`.
 
 ```json
 {
@@ -781,7 +782,7 @@ version 0.
 | --- | --- |
 | `model` | The model name the client asked for. |
 | `stream` | Whether the client asked for a streamed reply. Core always receives events; this only tells the extension how the client is being served, in case the upstream call should match. |
-| `items` | The conversation, in order. |
+| `items` | The conversation, in order. Absent in a [native-only call](#native-only-calls), as are `tools` and `origin`. |
 | `tools` | Function tools the model may call. `parameters` is a JSON Schema. |
 | `options` | Generation options; any field may be absent: `max_output_tokens`, `temperature`, `top_p`, `stop`, `tool_choice` (`mode`: `auto`, `none`, `required` or `tool` with `name`), `parallel_tool_calls`, `response_format` (`type`: `text`, `json_object` or `json_schema` with `name`, `description`, `schema`, `strict`), `reasoning_effort` (as the client named it), `thinking_suffix` (version 0.2; see below). |
 | `native` | The client's original request body and its format, when core received one; `headers` holds the client's request headers that belong to that format, by lower-case name (for `anthropic.messages`: `anthropic-version` and `anthropic-beta`, and the headers the client names itself with: `user-agent`, `x-app`, `anthropic-dangerous-direct-browser-access`, `x-claude-code-session-id`, `x-client-request-id`, the `x-stainless-*` headers of Anthropic's SDKs, `x-client-app` and `x-anthropic-additional-protection`; and Claude Code's subagent, request and remote-session headers (`x-claude-code-agent-id`, `x-claude-code-parent-agent-id`, `x-claude-code-agent-type`, `x-claude-code-request-class`, `x-claude-code-prev-tool-durations`, `x-claude-code-compaction`, `x-claude-code-context-compacted`, `x-claude-remote-container-id`, `x-claude-remote-session-id`), which an extension should send upstream only for a request that names itself as Claude Code (`anthropicmessages.IsClaudeCode`: `x-app: cli`, a `claude-cli/` User-Agent and the `claude-code-20250219` beta); for `openai.responses`: the headers the Codex CLI sends, such as `session-id`, `x-codex-window-id`, `x-codex-turn-metadata`, `version`, `originator` and `user-agent`). |
