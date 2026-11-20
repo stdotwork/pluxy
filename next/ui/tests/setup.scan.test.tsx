@@ -219,7 +219,7 @@ function installDocument() {
   return document;
 }
 
-function fakeHost(answer: (call: Call) => Reply<unknown>) {
+function fakeHost(answer: (call: Call) => Reply<unknown>, features: Feature[] = ["signOut"]) {
   const calls: Call[] = [];
   const host: Host = {
     call: async <T,>(method: Method, path: string, body?: unknown) => {
@@ -231,7 +231,7 @@ function fakeHost(answer: (call: Call) => Reply<unknown>) {
     signIn: async () => undefined,
     signOut: () => {},
     prefs: { get: () => null, set: () => {} },
-    features: new Set<Feature>(),
+    features: new Set<Feature>(features),
     address: "http://127.0.0.1:8317",
   };
   return { host, calls, api: api(host) };
@@ -253,9 +253,9 @@ async function settle() {
   });
 }
 
-async function mount(answer: (call: Call) => Reply<unknown>) {
+async function mount(answer: (call: Call) => Reply<unknown>, features?: Feature[]) {
   const document = installDocument();
-  const fake = fakeHost(answer);
+  const fake = fakeHost(answer, features);
   const signedOut = { times: 0 };
   const kit = {
     host: fake.host,
@@ -570,4 +570,18 @@ test("an import that changed the management key keeps its report on screen until
   expect(reads(fake.calls, "/accounts")).toBe(1);
   await press(fake.root, "Sign in again");
   expect(fake.signedOut.times).toBe(1);
+});
+
+test("a host with no sign-in of its own sends no import that would replace the management key", async () => {
+  const fake = await mount((call) => {
+    if (call.method === "GET" && call.path === "/setup") return { status: 200, body: withImport() };
+    if (call.path === "/setup/import") {
+      return { status: 200, body: { ...report(true), brought: [{ what: "management.secret-key" }] } };
+    }
+    return quiet(call);
+  }, []);
+  await press(fake.root, "Bring it across");
+  expect(fake.text()).toContain("sets a management key (management.secret-key)");
+  expect(all(fake.root, "button").map((node) => node.textContent)).not.toContain("Bring it across now");
+  expect(imports(fake.calls).map((call) => (call.body as { dry_run: boolean }).dry_run)).toEqual([true]);
 });

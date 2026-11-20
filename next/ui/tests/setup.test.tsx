@@ -161,6 +161,8 @@ function view(
     remote?: boolean;
     options?: SetupOptions;
     bringing?: ImportState | "offered";
+    /** The host has no sign-in of its own to give a new management key to. */
+    keyFixed?: boolean;
   } = {},
 ) {
   const results = more.results ?? {};
@@ -179,6 +181,7 @@ function view(
           onBring: nothing,
           onClose: nothing,
           onSignIn: nothing,
+          keyFixed: more.keyFixed,
         }
       }
       onLook={nothing}
@@ -557,4 +560,26 @@ test("each refusal is said in words a person can act on", () => {
   );
   expect(onOld).not.toContain(">Bring it across</button>");
   expect(onOld).not.toContain("Or use the command");
+});
+
+test("a host that cannot sign in again does not offer an import that would replace the management key", () => {
+  // The desktop app running its own pluxy keeps the key itself: no sign-in could take a new one.
+  for (const report of [
+    dryReport,
+    { ...dryReport, changed: [], brought: [{ what: "remote-management.secret-key" }] },
+  ]) {
+    const page = view(found, { bringing: { config, report }, keyFixed: true });
+    expect(page).toContain("<summary>Comes across (");
+    expect(page).toContain("sets a management key (");
+    expect(page).toContain("the app could not reach pluxy afterwards");
+    expect(page).toContain("remove that line from the CLIProxyAPI config");
+    expect(page).not.toContain(">Bring it across now</button>");
+    expect(page).not.toContain("you sign in again");
+    expect(page).toContain(">Cancel</button>");
+  }
+  // A setup with no management key comes across there as anywhere.
+  const plain = { ...dryReport, changed: [] };
+  const page = view(found, { bringing: { config, report: plain }, keyFixed: true });
+  expect(page).toContain(">Bring it across now</button>");
+  expect(page).not.toContain("sets a management key");
 });

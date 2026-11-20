@@ -92,6 +92,8 @@ const t = strings("setup", {
     "This replaces pluxy's management key, the one you signed in with. The new key is shown once, when the import runs, and you sign in again with it.",
   keyMayChange:
     "If the CLIProxyAPI setup has a management key, it becomes pluxy's management key, and you sign in again with it.",
+  keyFixed:
+    "This CLIProxyAPI setup sets a management key ({what}). Bringing it across would replace the key this app keeps for its own pluxy, and the app could not reach pluxy afterwards. To bring the rest across, remove that line from the CLIProxyAPI config, then press {button} again.",
   keyChangedNew:
     "pluxy's management key changed with the import. Copy the new key now: it is not shown again. Then sign in again with it.",
   keyChanged:
@@ -303,13 +305,22 @@ function ReportList(props: { title: string; rows: ImportRow[]; hideKey: boolean 
   );
 }
 
+/**
+ * The management key row of a report, when the import would replace core's management key and
+ * the host could not follow: it keeps the key itself and has no sign-in to give a new one to.
+ */
+export function keyInTheWay(report: ImportReport, keyFixed?: boolean): ImportRow | undefined {
+  return keyFixed ? [...report.changed, ...report.brought].find(isManagementKey) : undefined;
+}
+
 /** An import report in its own three lists, and what the imported accounts still need. */
-function Report(props: { setup: Setup; report: ImportReport; done?: boolean }) {
+function Report(props: { setup: Setup; report: ImportReport; done?: boolean; keyFixed?: boolean }) {
   const { report, setup } = props;
   const when = props.done ? "done" : "dry";
   const button = setup.first_run ? t("start") : t("install");
   const hideKey = !report.dry_run;
   const keyRow = (rows: ImportRow[]) => rows.some(isManagementKey);
+  const inTheWay = props.done ? undefined : keyInTheWay(report, props.keyFixed);
   return (
     <div class="setup-report stack" data-part="setup-report" data-state={when}>
       <span role="status">{props.done ? t("bringDone") : t("bringDry")}</span>
@@ -337,8 +348,9 @@ function Report(props: { setup: Setup; report: ImportReport; done?: boolean }) {
           </Notice>
         );
       })}
-      {!props.done && keyRow(report.changed) && <Notice tone="warn">{t("keyWillBeNew")}</Notice>}
-      {!props.done && !keyRow(report.changed) && keyRow(report.brought) && (
+      {inTheWay && <Notice tone="warn">{t("keyFixed", { what: inTheWay.what, button: t("bring") })}</Notice>}
+      {!props.done && !inTheWay && keyRow(report.changed) && <Notice tone="warn">{t("keyWillBeNew")}</Notice>}
+      {!props.done && !inTheWay && !keyRow(report.changed) && keyRow(report.brought) && (
         <Notice tone="warn">{t("keyMayChange")}</Notice>
       )}
     </div>
@@ -353,6 +365,7 @@ function FoundImport(props: {
   onBring?: (found: SetupImport, dryRun: boolean) => void;
   onClose?: () => void;
   onSignIn?: () => void;
+  keyFixed?: boolean;
 }) {
   const { found, state } = props;
   const old = state?.show === "command";
@@ -378,12 +391,16 @@ function FoundImport(props: {
       </div>
       {state?.problem && <Notice tone="danger">{state.problem}</Notice>}
       {state?.show === "init" && <Code value="pluxy init" />}
-      {state?.report && <Report setup={props.setup} report={state.report} done={state.done} />}
+      {state?.report && (
+        <Report setup={props.setup} report={state.report} done={state.done} keyFixed={props.keyFixed} />
+      )}
       {state?.report && !state.done && (
         <div class="actions">
-          <Button disabled={state.busy !== undefined} onClick={() => props.onBring?.(found, false)}>
-            {state.busy ? t("bringing") : t("bringNow")}
-          </Button>
+          {!keyInTheWay(state.report, props.keyFixed) && (
+            <Button disabled={state.busy !== undefined} onClick={() => props.onBring?.(found, false)}>
+              {state.busy ? t("bringing") : t("bringNow")}
+            </Button>
+          )}
           <Button variant="quiet" disabled={state.busy !== undefined} onClick={props.onClose}>
             {t("bringCancel")}
           </Button>
@@ -438,6 +455,11 @@ export interface ImportProps {
   onBring: (found: SetupImport, dryRun: boolean) => void;
   onClose: () => void;
   onSignIn: () => void;
+  /**
+   * The host keeps the management key itself and has no sign-in to give a new one to (the desktop
+   * app running its own pluxy): an import that would replace the key is not offered.
+   */
+  keyFixed?: boolean;
 }
 
 /** What core found: clients, sign-ins, an earlier setup, and where core listens. */
@@ -489,6 +511,7 @@ export function Found(props: {
               onBring={props.bring?.onBring}
               onClose={props.bring?.onClose}
               onSignIn={props.bring?.onSignIn}
+              keyFixed={props.bring?.keyFixed}
             />
           ))}
           {nothing && <li class="muted">{state === "never" ? t("neverLooked") : t("nothingFound")}</li>}
@@ -891,9 +914,12 @@ export function SetupPage(props: { options?: SetupOptions }) {
     extensionsChanged();
   };
 
+  // A host with no sign-out has no sign-in to take a new management key: it keeps the key itself.
+  const keyFixed = !host.features.has("signOut");
   // A dry run first, whose report the page shows; then, when the person confirms, the import.
   const onBring = async (found: SetupImport, dryRun: boolean) => {
     if (!setup || bringing?.busy) return;
+    if (!dryRun && (!bringing?.report || keyInTheWay(bringing.report, keyFixed))) return;
     const config = found.config;
     setBringing((s) => ({
       config,
@@ -952,7 +978,13 @@ export function SetupPage(props: { options?: SetupOptions }) {
         accounts: accounts.error,
         finish: finish.error,
       }}
-      bring={{ state: bringing, onBring, onClose: () => setBringing(undefined), onSignIn: unauthorized }}
+      bring={{
+        state: bringing,
+        onBring,
+        onClose: () => setBringing(undefined),
+        onSignIn: unauthorized,
+        keyFixed,
+      }}
       onLook={() => look.run(api.scanSetup)}
       onTick={(id, ticked) => setChoices((c) => ({ ...c, [id]: ticked }))}
       onStart={onStart}
