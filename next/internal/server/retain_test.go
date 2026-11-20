@@ -15,11 +15,11 @@ import (
 )
 
 // probe is a reply that, once its first event has gone to the client, collects garbage and
-// reports whether the request parsed from the body is still alive.
+// reports whether a part of the request parsed from the body is still alive.
 type probe struct {
-	parsed weak.Pointer[llm.Native]
-	n      int
-	alive  chan bool
+	part  weak.Pointer[llm.Part]
+	n     int
+	alive chan bool
 }
 
 func (p *probe) Next() llm.Event {
@@ -31,7 +31,7 @@ func (p *probe) Next() llm.Event {
 		for range 3 {
 			runtime.GC()
 		}
-		p.alive <- p.parsed.Value() != nil
+		p.alive <- p.part.Value() != nil
 		return llm.Event{Type: llm.EventItemStart, Index: 0, Item: &llm.ItemStart{Kind: llm.ItemMessage}}
 	case 3:
 		return llm.Event{Type: llm.EventTextDelta, Index: 0, Delta: "hi"}
@@ -55,10 +55,10 @@ func TestStreamingReplyLetsTheParsedRequestGo(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			alive := make(chan bool, 1)
 			attempt := func(_ context.Context, _ string, _ protocol.Account, req llm.Request) route.Stream {
-				if req.Native == nil {
-					t.Fatal("the attempt got no parsed native request")
+				if len(req.Items) == 0 || len(req.Items[0].Content) == 0 {
+					t.Fatal("the attempt got no parsed request part")
 				}
-				return &probe{parsed: weak.Make(req.Native), alive: alive}
+				return &probe{part: weak.Make(&req.Items[0].Content[0]), alive: alive}
 			}
 			router, err := route.New(route.Config{}, []route.Account{{ID: "work"}}, attempt, nil)
 			if err != nil {
