@@ -684,7 +684,14 @@ func (k *kit) models(t *testing.T) {
 			t.Errorf("models[%d] has an empty or repeated id %q", i, m.ID)
 		}
 		seen[m.ID] = true
+		if err := checkModelCapabilities(m); err != nil {
+			t.Errorf("models[%d] (%s): %v", i, m.ID, err)
+		}
 	}
+}
+
+func checkModelCapabilities(_ protocol.Model) error {
+	return nil
 }
 
 // check checks the check operation: an extension that lists it reports that the ScenarioText

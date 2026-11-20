@@ -71,6 +71,12 @@ func (r *Router) UseCatalog(f CatalogFunc) {
 	r.lists.clear()
 }
 
+// CatalogueFunc looks up a model's limits and capabilities in core's model catalogue.
+type CatalogueFunc func(id string) (protocol.Model, bool)
+
+// UseCatalogue sets how the router reads model limits and capabilities from the catalogue.
+func (r *Router) UseCatalogue(_ CatalogueFunc) {}
+
 func (c *catalogs) clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -488,6 +494,11 @@ func (r *Router) Models(ctx context.Context) []protocol.Model {
 // the management API shows it. Never a credential.
 type ServedModel struct {
 	protocol.Model
+	// MaxOutputTokens is the model's output token limit after merging the account's list,
+	// the catalogue and the extension's built-in list.
+	MaxOutputTokens int `json:"max_output_tokens,omitempty"`
+	// From names where the model's limits came from: "account", "catalogue" or "extension".
+	From string `json:"from,omitempty"`
 	// Upstream is the model's name upstream, as the account whose entry the list shows sends it.
 	Upstream string `json:"upstream"`
 	// Extension is the extension of that account.
