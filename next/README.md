@@ -1389,13 +1389,16 @@ An account is eligible when it serves the model, no block covers it and it is un
 concurrency limit. Refusals block what they are about, for as long as the upstream said
 (`Retry-After`) or else by backoff: a rate limit or quota on one model (a plain 429, as today's
 core cools only the model that answered) or on the whole credential (when the provider says the
-account's allowance is used up, such as a subscription's usage window), a refused key for 30 minutes, a missing model for 12 hours, a failing endpoint with backoff up
-to a minute. Results count in the order their requests started on the account: a success
-clears the blocks that failures of earlier-started requests left on its account (its credential,
-its model and its endpoint), and a failure that ends after a later-started request succeeded on
-the same scope leaves no block and no last error. Among eligible accounts, core prefers the
-session's account (session affinity is on unless the config turns it off), then the highest `priority`, then picks by
-strategy.
+account's allowance is used up, such as a subscription's usage window) backs off from 1 second,
+doubling, to 30 minutes; a failing endpoint or other transient upstream failure back off from 1
+second, doubling, to 1 minute; a refused key is left alone for 30 minutes, and a missing model for
+12 hours. Results count in the order their requests started on the account: a success clears the
+blocks that failures of earlier-started requests left on its account (its credential, its model
+and its endpoint), and a failure that ends after a later-started request succeeded on the same
+scope leaves no block and no last error. Clearing a block clears its backoff step too; a scope
+with no live block for an hour is forgotten, and its step with it. Among eligible accounts, core
+prefers the session's account (session affinity is on unless the config turns it off), then the
+highest `priority`, then picks by strategy.
 
 A reset the upstream names is used when it is between 1 second and 8 days away (the longest usage
 window of any supported provider is 7 days). A shorter one is held for 1 second. A longer one is
@@ -1412,10 +1415,16 @@ request through at the check instead, and that request's outcome decides. A real
 the check where a reading exists. A check that cannot be made leaves the block and is made again
 15 minutes later. Quota blocks are saved to `state/routing.json` beside the config file (mode
 0600) and read back at start, where each is checked at once, so a restart sends no requests to
-accounts whose usage ran out. A file core cannot read, or that another version wrote, is not
-loaded and is left as it is until a block must be saved; it is then moved to `routing.json.bad`. `pluxy account clear` (`POST /accounts/{id}/cooldown/reset`)
-still clears an account's blocks at once. Each account's `health` in `GET /accounts` sums this
-up in one word (see `management/README.md`, "Accounts").
+accounts whose usage ran out. Bans are saved in the same file and read back at start too: for
+each, the account, the provider's reason and when it was banned. A saved ban whose account the
+config no longer has is dropped, at start and on a reload; one for an account that is only out of
+routing for now, such as an extension that is stopped or a login still due, is kept. A ban has no
+expiry: it ends when the account signs in again, is removed, or is turned back on (`pluxy account
+enable`), and `pluxy account clear` does not lift it. A file core cannot read, or that another
+version wrote, is not loaded and is left as it is until a block must be saved; it is then moved to
+`routing.json.bad`. `pluxy account clear` (`POST /accounts/{id}/cooldown/reset`) still clears an
+account's blocks at once. Each account's `health` in `GET /accounts` sums this up in one word (see
+`management/README.md`, "Accounts").
 
 When every account is blocked, the reply tells the client how long is left in whole seconds,
 rounded up and at least 1 while anything is left: the message's "try again in 1s" (or `1m1s`),
@@ -1719,6 +1728,15 @@ any request:
 | `GET /v1/models/{id}` | One model from that list, or a 404 with code `model_not_found`. |
 | `GET /v1beta/models` | Gemini's list, `{"models": [...]}`: each model's `name` (`models/{id}`), `displayName`, `description`, token limits and `supportedGenerationMethods` (`["generateContent"]` when not known). |
 | `GET /v1beta/models/{name}` | One model, named with or without `models/`, or a 404. |
+
+For each name, core merges what the account's upstream list, its `models.dev` catalogue and the
+extension's built-in list say, taking the smallest positive token limit, read in that order so
+that an equal limit stays with the earlier source. Every other field, such as the display name,
+description, owner, version and modalities, comes from the first source that sets it, the
+account's list before the extension's list and that before the catalogue, except the capabilities,
+which come from the first of the account's list, the catalogue and the extension that has any, a
+later source adding only the reasoning levels and deprecation time an earlier one lacked. `from`
+names the source that gave the context limit, else the output limit, else the capabilities.
 
 A list holds each model the accounts serve, once under each name a client can ask for it by,
 and the name of each fallback chain no account serves, sorted by name. An account whose config lists `models` lists those. An account without `models`
