@@ -145,7 +145,24 @@ A Chat or Responses account sends a reasoning effort the upstream may not take a
 it does, as today's core does: `"reasoning_levels"` in its `settings` lists the efforts the
 upstream accepts (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`), by default `low`,
 `medium` and `high`, so `xhigh` and `max` go as `high`, `minimal` and `none` as `low`, and `auto`
-as `medium`. Today's core refuses `minimal` with a 400 instead.
+as `medium`. Today's core refuses `minimal` with a 400 instead. A client that asked for an effort the
+account moved is told in the translation report: an approximated loss naming the effort asked and
+the effort sent.
+
+A Chat account shapes the requests it sends with three more settings, for upstreams stricter than
+OpenAI's own. `"developer_role"` is `"developer"` (the default) or `"system"`, the role a developer
+message goes as. `"string_content"`, when true, sends a message whose content is only text parts as
+one string. `"reasoning_passback"` decides what happens to the `reasoning_content` of earlier assistant
+turns: true sends it back (for DeepSeek's thinking mode with tools, which answers 400 to a turn
+without it, a blank one is sent for a turn that kept none, reported as an approximated loss; a
+request without tools or with `thinking` disabled is left alone), false sends none, and unset leaves
+what the client sent. A setting left unset takes its vendor's preset by `base_url` host, and a
+setting you give always wins: `api.deepseek.com` takes `developer_role` `"system"`,
+`string_content` true and `reasoning_passback` true (its messages have no developer role, a system or
+assistant message's content is a string, and thinking mode wants the reasoning back);
+`api.mistral.ai` takes `developer_role` `"system"` and `reasoning_passback` false (its messages have
+no developer role and an assistant message takes no `reasoning_content`). Other hosts, OpenRouter and
+Groq included, have no preset: their documentation names nothing they need shaped.
 
 Gemini clients call `POST /v1beta/models/{model}:generateContent` or `:streamGenerateContent`
 (a stream is server-sent events, with or without `alt=sse`), and `:countTokens`.
