@@ -308,6 +308,20 @@ func TestLateHandshakeFailsWithTheStartLimitError(t *testing.T) {
 	}
 }
 
+// A program that is slow to start (on Windows, a new program scanned before it runs took over 10s
+// in CI) still gets the whole limit for its handshake and describe: the limit counts from the
+// program running.
+func TestStartLimitCountsFromTheProgramRunning(t *testing.T) {
+	const startTimeout = 2 * time.Second
+	dir := fakePackage(t, "serve")
+	slow := func() { time.Sleep(startTimeout + 500*time.Millisecond) }
+	ext, err := Start(filepath.Join(dir, ManifestFile), Options{StartTimeout: startTimeout, Log: io.Discard, beforeProgramStart: slow})
+	if err != nil {
+		t.Fatalf("Start of a program slow to start: %v", err)
+	}
+	ext.Stop()
+}
+
 // fakePackage writes a package folder whose program is this test binary.
 func fakePackage(t *testing.T, mode string) string {
 	t.Helper()
