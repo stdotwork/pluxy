@@ -1546,7 +1546,12 @@ func (x *translator) providers(v8 tree) error {
 				if quiet || status == supported {
 					return
 				}
-				why = append(why, display(trail(p, path+"[]")[1:])+" not brought ("+cmp.Or(note, statusWhy(status))+")")
+				field := display(trail(p, path+"[]")[1:])
+				if status == partly {
+					why = append(why, field+": "+note+" not brought")
+					return
+				}
+				why = append(why, field+" not brought ("+cmp.Or(note, statusWhy(status))+")")
 			}
 			x.classify(path+"[]", rest, nil, collect)
 			for _, kv := range keys {
@@ -2116,8 +2121,12 @@ var falseAsks = map[string]bool{
 // the rule's note, and whether the value asks for nothing (quiet).
 type sink func(path string, v any, status int, note string, quiet bool)
 
-// unknown is the status of a key no rule names.
-const unknown = dead + 1
+// unknown is the status of a key no rule names; partly that of a list whose entries hold
+// settings that are not brought, which the note names.
+const (
+	unknown = dead + 1
+	partly  = dead + 2
+)
 
 // statusWhy is why a setting of status is not brought, when its rule gives no note.
 func statusWhy(status int) string {
@@ -2141,6 +2150,9 @@ func (x *translator) markRule(path string, v any, status int, note string, quiet
 		return
 	case later:
 		why = "not supported yet: " + why
+	case partly:
+		x.markAll(Changed, path, v, Row{Why: "not brought from its entries: " + why})
+		return
 	}
 	if quiet && status != dead {
 		why += "; it is off, empty or at today's default here, so nothing is lost"
@@ -2194,22 +2206,36 @@ func (x *translator) classify(path string, v any, inherited *rule, sink sink) {
 			x.classify(p, v[k], nil, sink)
 		}
 	case []any:
-		// A list is one setting; the rules below its entries name what they hold.
-		quiet := true
+		// A list is one setting. The rules below its entries say what they hold: when some of
+		// that is not brought, the list is brought in part.
+		var scalars bool
+		var part []string
 		for _, c := range v {
 			if _, isMap := c.(tree); isMap {
 				p := path
 				if !strings.HasSuffix(p, "[]") {
 					p += "[]"
 				}
-				x.classify(p, c, nil, func(string, any, int, string, bool) {})
-				quiet = false
+				x.classify(p, c, nil, func(cp string, _ any, st int, note string, quiet bool) {
+					if !quiet && st != supported {
+						part = append(part, display(strings.TrimPrefix(trail(cp, p), "."))+" ("+cmp.Or(note, statusWhy(st))+")")
+					}
+				})
 			} else if !isZero(c) {
 				x.unknownKeys = append(x.unknownKeys, display(path))
-				quiet = false
+				scalars = true
 			}
 		}
-		sink(path, v, unknown, "", quiet)
+		switch {
+		case scalars:
+			sink(path, v, unknown, "", false)
+		case len(part) > 0:
+			sink(path, v, partly, joinWhy(part), false)
+		case rulesBelow(path + "[]"):
+			sink(path, v, supported, "", len(v) == 0)
+		default:
+			sink(path, v, unknown, "", true)
+		}
 	default:
 		quiet := asksNothing(path, v)
 		sink(path, v, unknown, "", quiet)
@@ -2348,8 +2374,14 @@ func plural(n int, one, many string) string {
 
 // rulesBelow reports whether a setting below path has a rule of its own.
 func rulesBelow(path string) bool {
+	star := ""
+	if rest, ok := strings.CutPrefix(path, "api-keys."); ok {
+		if section, tail, _ := strings.Cut(rest, "."); strings.HasSuffix(section, "[]") && tail != "" {
+			star = "api-keys.*[]." + tail + "."
+		}
+	}
 	for k := range rules {
-		if strings.HasPrefix(k, path+".") {
+		if strings.HasPrefix(k, path+".") || star != "" && strings.HasPrefix(k, star) {
 			return true
 		}
 	}

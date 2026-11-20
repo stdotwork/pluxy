@@ -317,9 +317,9 @@ func runImportCPA(x *invocation) error {
 		}
 		x.table(rows)
 		x.printf("\nChanged (%d):\n", len(r.Changed))
-		rows = [][]string{{"WHAT", "NAME", "FROM", "TO", "WHY", "KEEP WITH"}}
+		rows = [][]string{{"WHAT", "NAME", "AS", "FROM", "TO", "WHY", "KEEP WITH"}}
 		for _, c := range r.Changed {
-			rows = append(rows, []string{c.What, dash(c.Name), dash(c.From), dash(c.To), dash(c.Why), dash(c.KeepWith)})
+			rows = append(rows, []string{c.What, dash(c.Name), dash(c.As), dash(c.From), dash(c.To), dash(c.Why), dash(c.KeepWith)})
 		}
 		x.table(rows)
 		x.printf("\nNot brought (%d):\n", len(r.NotBrought))
