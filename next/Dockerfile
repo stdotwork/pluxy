@@ -5,7 +5,7 @@
 #   docker build -t pluxy .
 #
 # It holds a static pluxy with the web panel built in, and every extension packed by
-# pluxy-pack as the bundled packages, so the first start installs and enables them. See
+# pluxy-pack as the bundled packages, which core installs only when asked. See
 # "Run it in a container" in README.md.
 
 ARG BUN_VERSION=1.4.3

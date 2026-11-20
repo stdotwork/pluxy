@@ -30,7 +30,7 @@ server and to the person's other computers.
 
 | Mode | What the app does | When the app quits |
 | --- | --- | --- |
-| Run core here (`managed`) | Runs one of its own core versions ([below](#the-apps-own-core)) with a config of its own, `core/config.json` in the app's data folder. The first start writes that config with a free loopback port, which then stays the core's, new random keys, and folders for credentials and packages beside it. After that the file is yours to edit; the app only reads its `management_key`. | Stops that core (SIGTERM, then a kill after 10 seconds). On Linux the core also gets SIGTERM if the app dies without stopping it; on macOS it runs on, holding its port, until it is stopped. |
+| Run core here (`managed`) | Runs one of its own core versions ([below](#the-apps-own-core)) with a config of its own, `core/config.json` in the app's data folder. The first start has the core write that config (`pluxy init -port 0`): a free loopback port, which then stays the core's, new random keys, and folders for credentials and packages beside it. After that the file is yours to edit; the app only reads its `management_key`. | Stops that core (SIGTERM, then a kill after 10 seconds). On Linux the core also gets SIGTERM if the app dies without stopping it; on macOS it runs on, holding its port, until it is stopped. |
 | Core on this computer (`local`) | Connects to a core that already runs on a loopback address (`127.0.0.0/8`, `::1` or `localhost`), such as a system service. You give its address and management key. | Leaves it running. The app never starts or stops it. |
 | Remote core (`remote`) | Connects over https only, so the key is never sent in the clear. You can name a PEM file of certificate authorities to trust for that core, for a certificate you made yourself; without one, the usual public roots are used. The core's address is shown next to the app's name. | Leaves it running. |
 
@@ -195,7 +195,7 @@ once confirmed, the app copies it into a version of its own, `custom-<its SHA-25
 still a regular file of that size and digest (at most 512 MiB; a FIFO or device is refused
 without being read; on Unix it must be executable, on Windows a program image named `.exe` or
 `.com`), and runs the copy. Only the program is copied, nothing beside it (such as
-`bundled/`), so an adopted core starts without the bundled packages a release brings. An adopted
+`bundled/`), so an adopted core has none of the bundled packages a release brings to install. An adopted
 program has no signature.
 
 The app only ever stops the core process it started. A core it did not start, such as a system
@@ -366,6 +366,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `device_list` | This device's extension catalog |
 | `device_registries` | What the registries in `device-registries.json` offer this computer |
 | `device_install` | Installs or updates a package from one of those registries |
+| `device_install_wsl` | Installs a native tool's Linux build (`linux/amd64` or `linux/arm64`) for its active release, through a native confirmation ([Linux build for WSL](app-host/README.md#linux-build-for-wsl)) |
 | `device_install_file` | Opens the native file chooser and installs or updates the package chosen there (Linux) |
 | `device_enable`, `device_remove`, `device_rollback` | Enables or disables (a native tool only through its native confirmation), removes, or rolls back a package on this device |
 | `device_imports` | Allows a curated web package's native imports, through a native confirmation, or revokes them |
@@ -374,7 +375,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `access_signer` | Opens a native confirmation to approve a device package's signer for its source |
 | `access_grant` | Opens the native file chooser for a package's declared resource, then a native confirmation, and keeps the grant |
 | `access_revoke` | Revokes a grant, answering once the reads under it have finished |
-| `program_call`, `program_cancel` | Calls an operation of an admitted native tool, starting it if it is not running; cancels a call by the ticket it was given |
+| `program_call`, `program_cancel` | Calls an operation of an admitted native tool, starting it if it is not running, on this computer or in a WSL environment the window names (`environment`, Windows); cancels a call by the ticket it was given |
 | `program_status` | Whether a native tool runs, its leases, how it last stopped, its crashes in a row and backoff, calls of unknown outcome, replaced releases still draining, its vault journals, open and recently ended, or why they cannot be read, and its managed runtimes, running, ended or `unknown` (left running by a run of the app that did not stop them) |
 | `vault_secret_add` | Opens native key entry and keeps the secret typed there in the vault under a label; returns only its ID |
 | `vault_secrets`, `vault_secret_remove` | The vault's secrets, by ID and label (and a client key's binding), never their values; removes one |
@@ -383,7 +384,9 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `core_alias_create` | After a native confirmation, adds a model alias (`fork`, so the model keeps its name) to the `model_alias` of each account added by login that serves the model in the connected core; refuses an alias core already serves for anything else and a model only accounts set in core's config serve, and takes the alias out again when core then does not serve it; returns the accounts that have it (Linux) |
 | `launcher_state` | The launcher's state: whether the execution program can be used, the remembered launches with their source, the recent folders and the notice setting |
 | `launcher_terminals` | The terminals the execution program finds, Automatic first |
-| `launcher_launch` | A new launch, prepared by the execution program; it always opens the native confirmation |
+| `launcher_launch` | A new launch, prepared by the execution program (in a WSL environment the window names, by `pluxy/wsl`); it always opens the native confirmation |
+| `environments_get` | The WSL environments the app knows, and whether WSL can be used here (Windows only) |
+| `environment_add`, `environment_remove` | Adds a WSL distribution and user, as `pluxy/wsl` checks them (which starts the distribution), or checks one again; forgets one, stopping the tools running there |
 | `launcher_start` | Starts a remembered launch again in one click, from the window only, with its remembered approval |
 | `launcher_forget` | Forgets a remembered launch, revoking its approval |
 | `launcher_settings` | Whether a one-click start shows a launch notice |
@@ -972,6 +975,17 @@ the menu. The list, the recent folders and the notice setting are in `launcher.j
 `connection.json`, readable only by your user; it holds no secret (a secret field holds a vault
 secret's ID), and a damaged file is moved aside as `launcher.json.corrupt-<time>`.
 
+On Windows, a launch can also start **in WSL**, in a distribution and as a user the app knows
+([Tools in WSL](app-host/README.md#tools-in-wsl-windows)): `pluxy/wsl` prepares it inside the
+distribution (the program found on the `PATH` that `wsl.exe --exec` gives, with no login shell, or
+the full path given; the folder in the distribution, by default the user's home), and the execution
+program launches that `wsl.exe` command. It opens in the Windows console (no other terminal is
+offered there); a terminal launch takes no standard input and is detached only. The confirmation
+shows where it starts and that the program inside the distribution is found when it starts, not
+checked by the app, which cannot hold a file there. Its recent folders and its remembered launch go
+by the client and the environment, such as **Claude Code (WSL Ubuntu/bob)**; a launch remembered
+for one distribution or user never starts in another.
+
 Detached launches keep running after the app quits, each in a transient systemd scope of its own
 when a systemd user manager runs ([Launches](app-host/README.md#launches-and-managed-runtimes)). The
 page lists the managed runtimes the execution program started, with **Stop** and **Restart** (each
@@ -1013,6 +1027,23 @@ settings. The card's terminal list loads again whenever this device's packages c
 (`pluxy-device`), such as when the launcher is enabled from Beginner Mode; a chosen terminal the
 list no longer offers falls back to Automatic (`src/startCli.ts`). Every client page's Start CLI
 does the same.
+
+**In WSL** (Windows): the page's **Environment / configuration directory** block
+(`src/environmentBlock.tsx`, shared by client pages) chooses **Windows local** or **WSL
+subsystem**, then a **Distribution** and a **User**. Choosing WSL lists the distributions without
+starting any (`pluxy/wsl`, which must be installed and enabled); reading a distribution's users
+starts it, which the block says. Picking a user has the app check that distribution and user and
+keep its record ([Tools in WSL](app-host/README.md#tools-in-wsl-windows)); **Detect again** lists
+them again. Every call of the page then goes to Claude Code's Linux build running in that
+distribution as that user, so the default file is that user's `~/.claude/settings.json` and typed
+paths are paths in the distribution (a `\\wsl.localhost\<distribution>\…` or `\\wsl$\…` path of the
+chosen distribution becomes its Linux path; any other network path is refused there). The first
+use asks to **Install the Linux build for WSL**, in its own native confirmation. **Start CLI**
+starts Claude Code in that distribution through the launcher, in the Windows console. The page
+keeps its last choice for the window; the app checks it against its records on every call.
+**Apply** does not work in WSL yet: it needs a client key or one of the vault's secrets, and the
+vault's secrets, client key capture and native key entry are Linux only for now, so on Windows
+there is no key to give. Reading, previewing, backups and **Start CLI** work there.
 
 **Backup and restore** (`src/backups.tsx`, the backup browser every writer's page shows) keeps
 manual backups of the previewed file in the app's vault through the tool's standard backup
@@ -1286,6 +1317,26 @@ extension pages once their package is installed and enabled: **Agent usage**, fr
 ([app tools](../app-tools/README.md#codex-sessions)). They are extension pages in page webviews,
 as above, and reach their tools only through the router.
 
+## Setup
+
+On a first run of a core (a new "Run core here" core is one), the window opens the kit's Setup
+page ([`../ui`](../ui/README.md), `#/setup`) in place of the Dashboard, as the web panel does:
+what core found on its machine, the providers to install, an account, the clients, and Finish. It
+opens once the app is connected and signed in, so the Connection page still comes first. After
+Finish the page stays in the navigation and shows the same things as they are now.
+
+The app adds one thing to the page. Under "Point a client at pluxy", a client core found gets a
+**Set up** button beside "Show what to paste" when the window has a page for it and its optional
+tool is installed on this device or offered by a registry, which is the list Beginner Mode
+offers. Set up opens the client's own page, where the app writes the client's settings itself
+after its native confirmation; a tool that is not installed or enabled yet is named there. The
+paste text stays for every client. With a remote core the button is left out: the page then lists
+the clients on core's machine, and the app sets a client up on this computer only.
+
+`SETUP_CLIENT_PAGES` in `src/agentPages.ts` maps core's ID for each client to the ID of its
+page here, and `setupClientAction` beside it decides which clients get the button. Beginner Mode
+is still there and unchanged.
+
 ## Beginner Mode
 
 Beginner Mode (`src/easyMode.tsx`, in the Operate group) is the guided setup of the old app's Easy
@@ -1343,7 +1394,8 @@ started by `go run ./e2e/panelcore` from `next/`, on random loopback ports in te
 a fresh HOME and XDG folders, once in each mode. The app runs only a core in its own store, so
 each managed run but the core steps' (below) starts with one there: the signed test release 2.0.0,
 installed as a confirmed install would (`session_probe install-core`), whose bundled test
-packages the sign-ins and pages need beside the core's program; the startup runs and the
+packages the sign-ins and pages need beside the core's program (a core's first start installs
+none: the session installs them from the bundled registry before its steps); the startup runs and the
 early-exit run instead adopt their core program first (`session_probe adopt-core`), which copies
 the program alone. In each it checks that the window's webview
 reaches every command, that at the top of an extension page's webview Tauri refuses every app

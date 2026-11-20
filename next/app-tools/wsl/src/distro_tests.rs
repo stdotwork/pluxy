@@ -158,3 +158,16 @@ fn of_mounts_stacked_on_one_folder_the_last_counts() {
     assert_eq!(d, json!([{"letter": "d", "path": "/mnt/d", "exec": false}]));
     assert_eq!(root, "/mnt/");
 }
+
+/// The host makes its record of an environment from `check`'s answer (`Record::from_check` in
+/// `next/app/src-tauri`, whose test reads this same file). This is that answer for the output
+/// below, with the `wsl` version `check` adds on Windows, so a change to either side's fields
+/// breaks one of the two tests.
+#[test]
+fn check_answers_what_the_hosts_record_reads() {
+    let out = format!("bob\n1001\n/home/bob\nx86_64\nUbuntu\n{MOUNTINFO}");
+    let mut v = check(&out, "Ubuntu", "bob").unwrap();
+    v["wsl"] = serde_json::json!(2);
+    let want: Value = serde_json::from_str(include_str!("../testdata/check.json")).unwrap();
+    assert_eq!(v, want, "{}", serde_json::to_string_pretty(&v).unwrap());
+}

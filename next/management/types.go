@@ -53,6 +53,8 @@ type ExtensionStatus struct {
 // Status is GET /status's reply, and POST /reload's: core's live state.
 type Status struct {
 	SafeMode bool `json:"safe_mode"`
+	// FirstRun is true until POST /setup/done ends first run.
+	FirstRun bool `json:"first_run"`
 	// Desired is the newest config version core has seen; Active is the one serving.
 	Desired    Revision          `json:"desired"`
 	Active     Revision          `json:"active"`
@@ -99,7 +101,15 @@ type Registry struct {
 
 // RegistryPackage is one package a registry offers.
 type RegistryPackage struct {
-	ID       string            `json:"id"`
+	ID string `json:"id"`
+	// Title and Summary say what it is, as the registry describes it; empty when it does not.
+	Title   string `json:"title,omitempty"`
+	Summary string `json:"summary,omitempty"`
+	// Kind is what it adds: "provider", "client", or empty when the registry does not say.
+	Kind string `json:"kind,omitempty"`
+	// Tier is how far the registry vouches for it: "pick" (offered at setup), "verified" or
+	// "unverified" (also when the registry does not say). Core enforces nothing by it.
+	Tier     string            `json:"tier"`
 	Releases []RegistryRelease `json:"releases"`
 }
 
@@ -170,6 +180,8 @@ type Account struct {
 	// Headers are the account's headers, with a placeholder in place of each secret value, the
 	// one GET /config shows for it.
 	Headers map[string]string `json:"headers,omitempty"`
+	// Timeouts overrides routing.timeouts for this account (header_ms, idle_ms, total_ms).
+	Timeouts *protocol.Timeouts `json:"timeouts,omitempty"`
 	// Settings are an account added by login's settings, with a placeholder in place of each
 	// secret, as GET /config shows the config file.
 	Settings json.RawMessage `json:"settings,omitempty"`
@@ -416,6 +428,125 @@ type UsageReply struct {
 type UsageEventsReply struct {
 	Enabled bool `json:"enabled"`
 	usage.Page
+}
+
+// Client tool states (SetupClient.State).
+const (
+	ClientStateNotConfigured = "not-configured"
+	ClientStateConfigured    = "configured"
+	ClientStateNeedsUpdate   = "needs-update"
+	// ClientStateRefused is a config file the tool's writer would refuse to change.
+	ClientStateRefused = "refused"
+)
+
+// Setup apply outcomes (SetupApplyResult.Status).
+const (
+	SetupApplyDone  = "done"
+	SetupApplyError = "error"
+)
+
+// Setup is GET /setup's and POST /setup/scan's reply.
+type Setup struct {
+	FirstRun  bool        `json:"first_run"`
+	Scanning  bool        `json:"scanning"`
+	ScannedAt *time.Time  `json:"scanned_at,omitempty"`
+	Found     SetupFound  `json:"found"`
+	Picks     []SetupPick `json:"picks"`
+}
+
+// SetupFound is what core found on the machine it runs on.
+type SetupFound struct {
+	Clients []SetupClient `json:"clients"`
+	SignIns []SetupSignIn `json:"sign_ins"`
+	Imports []SetupImport `json:"imports"`
+	Core    SetupCore     `json:"core"`
+}
+
+// SetupClient is one coding tool core looked for on the machine.
+type SetupClient struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Installed bool   `json:"installed"`
+	Version   string `json:"version,omitempty"`
+	Config    string `json:"config"`
+	State     string `json:"state"`
+}
+
+// SetupSignIn is an existing sign-in core saw on the machine (no token is read).
+type SetupSignIn struct {
+	Provider string `json:"provider"`
+	From     string `json:"from"`
+	Label    string `json:"label"`
+}
+
+// SetupImport is an existing CLIProxyAPI setup core saw on the machine.
+type SetupImport struct {
+	Kind     string `json:"kind"`
+	Config   string `json:"config"`
+	AuthDir  string `json:"auth_dir"`
+	Accounts int    `json:"accounts"`
+}
+
+// SetupCore describes core's own listen address and network reachability.
+type SetupCore struct {
+	Listen               string `json:"listen"`
+	ReachableFromNetwork bool   `json:"reachable_from_network"`
+}
+
+// SetupPick is one package offered at setup.
+type SetupPick struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	Title     string `json:"title"`
+	Summary   string `json:"summary"`
+	Installed bool   `json:"installed"`
+	Suggested bool   `json:"suggested"`
+	Because   string `json:"because,omitempty"`
+}
+
+// SetupApplyRequest is POST /setup/apply's body.
+type SetupApplyRequest struct {
+	Picks []string `json:"picks"`
+}
+
+// SetupApplyResult is one pick's outcome in SetupApplyReply.
+type SetupApplyResult struct {
+	ID      string   `json:"id"`
+	Status  string   `json:"status"`
+	Package *Package `json:"package,omitempty"`
+	Error   string   `json:"error,omitempty"`
+}
+
+// SetupApplyReply is POST /setup/apply's reply.
+type SetupApplyReply struct {
+	Results []SetupApplyResult `json:"results"`
+}
+
+// SetupDoneReply is POST /setup/done's reply.
+type SetupDoneReply struct {
+	FirstRun bool `json:"first_run"`
+}
+
+// ClientPaste is GET /setup/clients/{id}/paste's reply: what to paste into a client tool's
+// config files to point it at this core.
+type ClientPaste struct {
+	// Tool is the tool's canonical ID (SetupClient.ID), whatever name the call used.
+	Tool string `json:"tool"`
+	Name string `json:"name"`
+	// BaseURL is core's address as a program on core's machine reaches it.
+	BaseURL string `json:"base_url"`
+	// Key is a placeholder for a client key, never its value.
+	Key   string            `json:"key"`
+	Files []ClientPasteFile `json:"files"`
+	// Note says what the files need besides themselves; left out when nothing.
+	Note string `json:"note,omitempty"`
+}
+
+// ClientPasteFile is one file of a ClientPaste: where it goes (from the home folder, ~) and
+// the settings to put in it.
+type ClientPasteFile struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
 }
 
 // ThemeSummary describes one theme stored by core, as GET /themes lists it and PUT returns it.

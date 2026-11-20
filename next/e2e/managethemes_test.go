@@ -220,26 +220,27 @@ func TestCLIThemes(t *testing.T) {
 	base, _, _ := startOnFreePort(t, filepath.Join(binDir, "pluxy"), cfgPath, cfgContent, "-watch-interval=0")
 	env := []string{"PLUXY_URL=" + base, "PLUXY_MANAGEMENT_KEY=" + managementKey}
 
-	// 1. add with no --id and no id field -> derived t3/<lowercased sanitized basename>.
+	// 1. {"name":"Solarized Dark"} has no theme_version: the T3 name wins over the file name.
 	fileNoID := filepath.Join(dir, "Solarized Dark_v2.json")
 	rawNoID := []byte("{\n  \"name\": \"Solarized Dark\"\n}")
 	if err := os.WriteFile(fileNoID, rawNoID, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	r := runCLI(t, env, "theme", "add", fileNoID)
-	if r.code != 0 || strings.TrimSpace(r.stdout) != "t3/solarized-dark-v2" {
-		t.Fatalf("theme add derived: %s", r)
+	if r.code != 0 || strings.TrimSpace(r.stdout) != "t3/solarized-dark" {
+		t.Fatalf("theme add derived from name: %s", r)
 	}
 
-	// 2. add with valid publisher/name id in file, and override with --id + --json.
+	// 2. {"id":"acme/amber","name":"Amber"} has no theme_version: acme/amber is not a T3 ID,
+	// so it derives from the name; --id still wins.
 	fileWithID := filepath.Join(dir, "ignored.json")
 	rawWithID := []byte(`{"id":"acme/amber","name":"Amber"}`)
 	if err := os.WriteFile(fileWithID, rawWithID, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	r = runCLI(t, env, "theme", "add", fileWithID)
-	if r.code != 0 || strings.TrimSpace(r.stdout) != "acme/amber" {
-		t.Fatalf("theme add from file id: %s", r)
+	if r.code != 0 || strings.TrimSpace(r.stdout) != "t3/amber" {
+		t.Fatalf("theme add invalid T3 id: %s", r)
 	}
 	r = runCLI(t, env, "theme", "add", fileWithID, "--id", "acme/custom", "--json")
 	var sum mgmt.ThemeSummary
@@ -247,35 +248,70 @@ func TestCLIThemes(t *testing.T) {
 		t.Fatalf("theme add --id --json: %s", r)
 	}
 
-	// 3. show prints stored JSON unchanged.
-	r = runCLI(t, env, "theme", "show", "t3/solarized-dark-v2", "--json")
+	// 3. {"name":"Night Fall"} in my-file.json becomes t3/night-fall; a pluxy file with
+	// {"theme_version":0,"id":"Bad_ID","name":"Ignored Name"} falls back to its file name.
+	fileT3Name := filepath.Join(dir, "my-file.json")
+	rawT3Name := []byte(`{"name":"Night Fall"}`)
+	if err := os.WriteFile(fileT3Name, rawT3Name, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r = runCLI(t, env, "theme", "add", fileT3Name)
+	if r.code != 0 || strings.TrimSpace(r.stdout) != "t3/night-fall" {
+		t.Fatalf("theme add T3 name over file name: %s", r)
+	}
+
+	filePluxyInvalidID := filepath.Join(dir, "Old File Name.json")
+	rawPluxyInvalidID := []byte(`{"theme_version":0,"id":"Bad_ID","name":"Ignored Name"}`)
+	if err := os.WriteFile(filePluxyInvalidID, rawPluxyInvalidID, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r = runCLI(t, env, "theme", "add", filePluxyInvalidID)
+	if r.code != 0 || strings.TrimSpace(r.stdout) != "t3/old-file-name" {
+		t.Fatalf("theme add pluxy file fallback: %s", r)
+	}
+
+	// 4. show prints stored JSON unchanged.
+	r = runCLI(t, env, "theme", "show", "t3/solarized-dark", "--json")
 	if r.code != 0 || !bytes.Equal([]byte(r.stdout), rawNoID) {
 		t.Fatalf("theme show --json: %s, want exact %q", r, rawNoID)
 	}
-	r = runCLI(t, env, "theme", "show", "acme/amber")
+	r = runCLI(t, env, "theme", "show", "t3/amber")
 	if r.code != 0 || strings.TrimSpace(r.stdout) != string(rawWithID) {
 		t.Fatalf("theme show: %s", r)
 	}
+	r = runCLI(t, env, "theme", "show", "t3/night-fall", "--json")
+	if r.code != 0 || !bytes.Equal([]byte(r.stdout), rawT3Name) {
+		t.Fatalf("theme show T3 name --json: %s, want exact %q", r, rawT3Name)
+	}
+	r = runCLI(t, env, "theme", "show", "t3/old-file-name", "--json")
+	if r.code != 0 || !bytes.Equal([]byte(r.stdout), rawPluxyInvalidID) {
+		t.Fatalf("theme show pluxy fallback --json: %s, want exact %q", r, rawPluxyInvalidID)
+	}
 
-	// 4. set + list + list --json.
+	// 5. set + list + list --json.
 	if r = runCLI(t, env, "theme", "set", "pluxy/paper"); r.code != 0 || !strings.Contains(r.stdout, "pluxy/paper") {
 		t.Fatalf("theme set: %s", r)
 	}
 	r = runCLI(t, env, "theme", "list")
-	if r.code != 0 || !strings.Contains(r.stdout, "current: pluxy/paper") || !strings.Contains(r.stdout, "acme/amber") {
+	if r.code != 0 || !strings.Contains(r.stdout, "current: pluxy/paper") {
 		t.Fatalf("theme list: %s", r)
+	}
+	for _, id := range []string{"t3/solarized-dark", "t3/amber", "acme/custom", "t3/night-fall", "t3/old-file-name"} {
+		if !strings.Contains(r.stdout, id) {
+			t.Fatalf("theme list is missing %s: %s", id, r)
+		}
 	}
 	r = runCLI(t, env, "theme", "list", "--json")
 	var listReply mgmt.ThemesReply
-	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &listReply) != nil || listReply.Current != "pluxy/paper" || len(listReply.Themes) != 3 {
+	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &listReply) != nil || listReply.Current != "pluxy/paper" || len(listReply.Themes) != 5 {
 		t.Fatalf("theme list --json: %s", r)
 	}
 
-	// 5. clear + remove.
+	// 6. clear + remove.
 	if r = runCLI(t, env, "theme", "clear"); r.code != 0 {
 		t.Fatalf("theme clear: %s", r)
 	}
-	if r = runCLI(t, env, "theme", "remove", "acme/amber"); r.code != 0 {
+	if r = runCLI(t, env, "theme", "remove", "t3/amber"); r.code != 0 {
 		t.Fatalf("theme remove: %s", r)
 	}
 	if r = runCLI(t, env, "theme", "remove", "acme/missing"); r.code != 5 {
