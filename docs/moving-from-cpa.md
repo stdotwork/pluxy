@@ -14,7 +14,7 @@ never changed, so you can go back at any point.
 - Find CPA's `config.yaml` and its auth folder. The folder is the config's `auth-dir`
   (`oauth.auth-dir` in the newer layout), by default `~/.cli-proxy-api`.
 - Read [Running both side by side](#running-both-side-by-side) first if you want to keep CPA
-  serving while you try pluxy. Otherwise stop CPA now: both use port 8317.
+  serving while you try pluxy. Otherwise stop CPA now: pluxy takes its port from the same config.
 
 ## Move
 
@@ -169,8 +169,9 @@ A `config.yaml` keeps CPA's names. The names on the right are the ones in pluxy'
   said. For a block with more than 15 minutes left, it reads the account's usage from the
   provider every 15 minutes and ends the block once the limit is no longer full. A reset more
   than 8 days away is not believed: the account is held for 30 minutes and then checked.
-- **A failing upstream is retried sooner.** With `transient-error-cooldown-seconds` at 0, pluxy
-  backs off from one second up to a minute, where CPA waits a fixed minute.
+- **A failing upstream is retried sooner.** After a server error from the upstream (a 5xx), with
+  `transient-error-cooldown-seconds` at 0, pluxy backs off from one second up to a minute, where
+  CPA waits a fixed minute.
 - **Quota blocks survive a restart, and are checked at once when pluxy starts**, so a restart
   sends no requests to an account whose usage ran out.
 - **A bad `proxy-url` stops the load.** CPA logs it and goes on without the proxy.
