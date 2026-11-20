@@ -37,11 +37,20 @@ func TestEmbeddedSnapshotCoversBuiltinLists(t *testing.T) {
 
 	// Model IDs present in pluxy's built-in fallback lists that models.dev does not carry today.
 	wantMissing := map[string]bool{
+		"claude-3-7-sonnet-20250219":       true,
+		"claude-3-5-haiku-20241022":        true,
 		"codex-auto-review":                true,
+		"gemini-3-pro-preview":             true,
+		"gemini-3-pro":                     true,
+		"kimi-k2":                          true,
+		"kimi-k2-thinking":                 true,
+		"kimi-k2.5":                        true,
 		"kimi-k2.8":                        true,
 		"kimi-k2.8-code":                   true,
 		"kimi-k3-256k":                     true,
 		"grok-4.7-build-fast":              true,
+		"grok-build-0.1":                   true,
+		"grok-3-mini":                      true,
 		"grok-3-mini-fast":                 true,
 		"grok-composer-2.5-fast":           true,
 		"muse-wonder-1.0-contributor":      true,

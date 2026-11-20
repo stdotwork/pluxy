@@ -1,47 +1,6 @@
 {
   "anthropic": {
     "models": {
-      "claude-3-5-haiku": {
-        "limit": {
-          "context": 200000,
-          "output": 8192
-        },
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "pdf"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "tool_call": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2024-10-22"
-      },
-      "claude-3-7-sonnet-20250219": {
-        "limit": {
-          "context": 200000,
-          "output": 64000
-        },
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "pdf"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "tool_call": true,
-        "reasoning": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2025-02-19"
-      },
       "claude-fable-5": {
         "limit": {
           "context": 1000000,
@@ -1322,23 +1281,6 @@
             ]
           }
         ],
-        "attachment": true
-      },
-      "gemini-3-pro-preview": {
-        "limit": {
-          "context": 1000000,
-          "output": 64000
-        },
-        "modalities": {
-          "input": [
-            "text",
-            "image"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "tool_call": true,
         "attachment": true
       },
       "gemini-3.1-flash-image": {
@@ -2834,39 +2776,6 @@
         "structured_output": true,
         "attachment": true
       },
-      "gemini-3-pro": {
-        "limit": {
-          "context": 1048576,
-          "output": 65536
-        },
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "video",
-            "audio",
-            "pdf"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "tool_call": true,
-        "reasoning": true,
-        "reasoning_options": [
-          {
-            "type": "effort",
-            "values": [
-              "low",
-              "high"
-            ]
-          }
-        ],
-        "structured_output": true,
-        "attachment": true,
-        "status": "deprecated",
-        "last_updated": "2025-11-18"
-      },
       "gemini-3-pro-image": {
         "limit": {
           "context": 65536,
@@ -4195,57 +4104,6 @@
         "limit": {
           "context": 262144,
           "output": 32768
-        },
-        "modalities": {
-          "input": [
-            "text",
-            "image",
-            "video"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "tool_call": true,
-        "reasoning": true,
-        "structured_output": true,
-        "attachment": true
-      },
-      "kimi-k2": {
-        "limit": {
-          "context": 131072,
-          "output": 98304
-        },
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "tool_call": true
-      },
-      "kimi-k2-thinking": {
-        "limit": {
-          "context": 262144,
-          "output": 262144
-        },
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "tool_call": true,
-        "reasoning": true
-      },
-      "kimi-k2.5": {
-        "limit": {
-          "context": 262144,
-          "output": 262144
         },
         "modalities": {
           "input": [
@@ -5787,21 +5645,6 @@
   },
   "xai": {
     "models": {
-      "grok-3-mini": {
-        "limit": {
-          "context": 131072,
-          "output": 131072
-        },
-        "modalities": {
-          "input": [
-            "text"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "tool_call": true
-      },
       "grok-4.20-0309-non-reasoning": {
         "limit": {
           "context": 1000000,
@@ -5993,25 +5836,6 @@
             ]
           }
         ],
-        "structured_output": true,
-        "attachment": true
-      },
-      "grok-build-0.1": {
-        "limit": {
-          "context": 256000,
-          "output": 256000
-        },
-        "modalities": {
-          "input": [
-            "text",
-            "image"
-          ],
-          "output": [
-            "text"
-          ]
-        },
-        "tool_call": true,
-        "reasoning": true,
         "structured_output": true,
         "attachment": true
       },
