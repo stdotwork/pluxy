@@ -39,7 +39,7 @@
     {
       "path": "client.events",
       "kind": "intended",
-      "reason": "The new core writes a Messages stream from a Gemini reply with each thought signature as a thinking block of its own holding the signature, before the part it came on, as today's core does, but without the empty text block today's core adds after a signature that came on an empty text part, and tool_use ids as call_<n> when Gemini sends none (today's core uses the function name and a counter). Today's Antigravity Messages translator makes the tool_use id from the time, so it is volatile here.",
+      "reason": "The new core writes a Messages stream from a Gemini reply with each thought signature as a thinking block of its own holding the signature, before the part it came on, as today's core does, but without the empty text block today's core adds after a signature that came on an empty text part, and tool_use ids as call_<responseId>_<n>, unique across replies, when Gemini sends none (today's core uses the function name and a counter). Today's Antigravity Messages translator makes the tool_use id from the time, so it is volatile here.",
       "want": [
         {
           "data": {

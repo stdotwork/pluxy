@@ -401,10 +401,10 @@ fn prepare_answers_the_exact_launch_and_that_launch_runs_as_the_user() {
 
 /// The fixture writer's Linux program started in distro as user, as the host starts a WSL
 /// instance: `wsl.exe -d -u --cd <package> --exec <program>`, the contract's variables crossing by
-/// `WSLENV`, with `PLUXY_ENVIRONMENT` naming environment. Its first frame (None: it ended without
-/// one) and, when it ended, what it wrote (wsl.exe's own errors go to standard output) and the
-/// command line.
-fn writer(distro: &str, user: &str, environment: &str) -> (Option<Program>, String) {
+/// `WSLENV`, with `PLUXY_ENVIRONMENT` naming environment and `PLUXY_ENVIRONMENT_ACCOUNT` account
+/// (`<user ID>:<home>`). Its first frame (None: it ended without one) and, when it ended, what it
+/// wrote (wsl.exe's own errors go to standard output) and the command line.
+fn writer(distro: &str, user: &str, environment: &str, account: &str) -> (Option<Program>, String) {
     let (prog, dir) = (
         linux_path("PLUXY_WSL_TEST_WRITER"),
         linux_path("PLUXY_WSL_TEST_WRITER_DIR"),
@@ -423,10 +423,11 @@ fn writer(distro: &str, user: &str, environment: &str) -> (Option<Program>, Stri
                 "/home/bob/.local/state/pluxy-wsl-test/w",
             )
             .env("PLUXY_ENVIRONMENT", environment)
+            .env("PLUXY_ENVIRONMENT_ACCOUNT", account)
             .env(
                 "WSLENV",
                 "PLUXY_APP_CONTRACT_VERSIONS/u:PLUXY_EXTENSION_ID/u:PLUXY_APP_ARTIFACT_SHA256/u:\
-                 PLUXY_TOOL_DATA_DIR/u:PLUXY_ENVIRONMENT/u",
+                 PLUXY_TOOL_DATA_DIR/u:PLUXY_ENVIRONMENT/u:PLUXY_ENVIRONMENT_ACCOUNT/u",
             )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -481,13 +482,21 @@ fn writer(distro: &str, user: &str, environment: &str) -> (Option<Program>, Stri
     unreachable!()
 }
 
+/// user's account in the test distribution as a host's record has it: `<user ID>:<home>`.
+fn account(user: &str) -> String {
+    as_root(&format!(
+        "printf '%s:%s' \"$(id -u {user})\" \"$(getent passwd {user} | cut -d: -f6)\""
+    ))
+}
+
 #[test]
 #[ignore = "needs real WSL distributions (the WSL job)"]
 fn a_linux_program_says_hello_only_in_its_distribution_as_its_user() {
     let d = distro();
     as_root("rm -rf /home/bob/.local/state/pluxy-wsl-test");
+    let bob = account("bob");
     // The right pair: hello, and a preview of bob's file.
-    let (p, err) = writer(&d, "bob", &format!("wsl:{d}:bob"));
+    let (p, err) = writer(&d, "bob", &format!("wsl:{d}:bob"), &bob);
     let mut p = p.unwrap_or_else(|| panic!("no hello: {err}"));
     let v = p.ok(
         "preview",
@@ -512,12 +521,35 @@ fn a_linux_program_says_hello_only_in_its_distribution_as_its_user() {
         (format!("wsl:{d}:alice"), format!("{d}/bob")),
         (format!("wsl:{}:bob", other()), format!("{d}/bob")),
     ] {
-        let (p, err) = writer(&d, "bob", &environment);
+        let (p, err) = writer(&d, "bob", &environment, &bob);
         assert!(p.is_none(), "{environment} said hello");
         let expected = environment.trim_start_matches("wsl:").replacen(':', "/", 1);
         assert!(
             err.contains(&format!("pluxy expected WSL {expected}, this is {now}")),
             "{environment}: {err}"
+        );
+    }
+    // bob's names, but another account than bob's (a record of a bob made again, or of a home
+    // since moved): it stops before hello too.
+    let (uid, home) = bob.split_once(':').unwrap();
+    let other_uid = uid.parse::<u32>().unwrap() + 4242;
+    for (account, expected) in [
+        (
+            format!("{other_uid}:{home}"),
+            format!("user ID {other_uid} and home {home}"),
+        ),
+        (
+            format!("{uid}:/nonexistent-home"),
+            format!("user ID {uid} and home /nonexistent-home"),
+        ),
+    ] {
+        let (p, err) = writer(&d, "bob", &format!("wsl:{d}:bob"), &account);
+        assert!(p.is_none(), "{account} said hello");
+        assert!(
+            err.contains(&format!(
+                "pluxy expected bob with {expected}, this is user ID {uid} with home {home}"
+            )),
+            "{account}: {err}"
         );
     }
 }
