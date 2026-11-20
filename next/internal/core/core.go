@@ -66,8 +66,8 @@ type Options struct {
 	// so. Nil: core uses the folder logs beside the config file, without writing to it.
 	Logs *logfile.Files
 	// Bundled is the index of the registry of packages this install ships with (absolute), or
-	// empty for none. On the first start with a packages folder that has no record yet, every
-	// package it lists is installed and enabled.
+	// empty for none. It is a registry like any other, named bundled: core installs nothing
+	// from it by itself, on a first start or later.
 	Bundled string
 }
 
@@ -95,8 +95,10 @@ type Core struct {
 	creds  *cred.Manager // opened by the first load
 	pkgDir string        // the packages folder, fixed for core's run
 
-	settings  *extconfig.Store // extensions' settings, in the packages folder
-	pagesPort atomic.Int64     // the pages listener's port, once main has it
+	settings   *extconfig.Store // extensions' settings, in the packages folder
+	pagesPort  atomic.Int64     // the pages listener's port, once main has it
+	listenAddr atomic.Value     // the actual bound listen address, once main has it
+	setup      *setupManager    // kept setup scan and first-run flag
 
 	redactor *configdoc.Redactor // hides the config file's secrets from the management API
 	keyIDs   *configdoc.Redactor // derives stable client key IDs from state/key-id.key
@@ -140,12 +142,19 @@ func Start(opts Options) (*Core, error) {
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), checks: newChecks(),
 		bgCtx: bgCtx, bgCancel: bgCancel}
+	c.loadPublicKey()
 	// Every extension call carries the proxy of the config active when it is sent.
 	c.opts.Host.ProxyURL = func() string {
 		if s := c.cur.Load(); s != nil {
 			return s.Config.ProxyURL
 		}
 		return ""
+	}
+	c.opts.Host.Timeouts = func() *protocol.Timeouts {
+		if s := c.cur.Load(); s != nil {
+			return s.Config.Routing.Timeouts
+		}
+		return nil
 	}
 	// ... and the payload rules of that config.
 	c.opts.Host.Payload = func() *payload.Rules {
@@ -157,7 +166,7 @@ func Start(opts Options) (*Core, error) {
 	cfg, err := server.LoadConfig(opts.ConfigPath)
 	if err != nil {
 		bgCancel()
-		return nil, c.scrubbed(err)
+		return nil, &ConfigError{c.scrubbed(err)}
 	}
 	keyIDs, err := configdoc.LoadKeyID(filepath.Join(StateDir(opts.ConfigPath), "key-id.key"))
 	if err != nil {
@@ -183,7 +192,7 @@ func Start(opts Options) (*Core, error) {
 	c.pkgDir = cfg.Packages.Dir
 	// No publisher's folder can be called .settings: IDs start with a letter or digit.
 	c.settings = extconfig.NewStore(filepath.Join(c.pkgDir, ".settings"))
-	if c.initial, err = c.loadPackages(cfg); err != nil {
+	if c.initial, err = c.loadPackages(); err != nil {
 		_ = c.usage.Close()
 		bgCancel()
 		return nil, err
@@ -199,6 +208,9 @@ func Start(opts Options) (*Core, error) {
 		return nil, err
 	}
 	c.creds.OnChange(c.accountsChanged)
+	snap := c.cur.Load()
+	inUse := len(snap.pkgs) > 0 || len(snap.Config.Accounts()) > 0 || len(c.creds.Records()) > 0
+	c.setup = newSetupManager(filepath.Join(StateDir(opts.ConfigPath), setupFileName), c.setupCoreTarget, inUse)
 	c.creds.OnCredentialChange(c.credentialChanged)
 	c.startModelRefresh()
 	c.startRouting()
@@ -714,7 +726,8 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 		c.loadRouting(c.routing)
 	}
 	swapPprof(next, prev)
-	c.checkAccounts(next, accounts)
+	c.checkAccounts(next, inService(accounts))
+	c.logUnservedSteps(next)
 	for _, g := range old {
 		g.Drain(func() {
 			c.mu.Lock()
@@ -726,6 +739,25 @@ func (c *Core) publish(next, prev *snapshot, hash string) {
 		})
 	}
 	c.sweep()
+}
+
+// logUnservedSteps logs a line for each chain of s with a step CheckSteps refuses (no account
+// serves it, or it names an account that is unknown or does not serve it), as a request through
+// it would find. It reads the accounts' model lists in the background and returns at once.
+func (c *Core) logUnservedSteps(s *snapshot) {
+	chains := s.Config.Routing.Chains
+	if len(chains) == 0 {
+		return
+	}
+	c.bgWG.Add(1)
+	go func() {
+		defer c.bgWG.Done()
+		for _, name := range slices.Sorted(maps.Keys(chains)) {
+			if err := s.Router.CheckSteps(c.bgCtx, chains[name]); err != nil && c.bgCtx.Err() == nil {
+				log.Printf("routing.chains.%s: %v", name, err)
+			}
+		}
+	}()
 }
 
 // extensionConfig returns the config section of extension id in s.
@@ -750,24 +782,40 @@ func (c *Core) configured(s *snapshot) []route.Account {
 
 // routed returns the accounts s routes over: the config's, then those the credential store
 // holds, for the extensions s runs. A stored account whose ID the config also uses is left out.
+// A stored account turned off by a person or waiting for a new login is among them, held
+// (route.Account.Held): the router sends it nothing, but it keeps its provider's model names.
 func (c *Core) routed(s *snapshot) []route.Account {
 	accounts := c.configured(s)
 	all := s.Config.Accounts()
-	kinds := map[string]string{}
 	for _, r := range c.creds.Records() {
-		kinds[r.ID] = r.Credential.Kind
-	}
-	for _, a := range c.creds.Accounts() {
-		if s.exts[a.Extension] == nil {
+		held := ""
+		switch {
+		case r.Disabled:
+			held = route.HealthDisabled
+		case r.State == cred.StateReauth:
+			held = route.HealthNeedsLogin
+		case !r.Usable():
 			continue
 		}
-		if slices.ContainsFunc(all, func(x route.Account) bool { return x.ID == a.ID }) {
-			log.Printf("account %q is both in the config and added by login; using the config's", a.ID)
+		if s.exts[r.Extension] == nil {
 			continue
 		}
-		accounts = append(accounts, c.extensionConfig(s, a.Extension).LoginDefaults(a, kinds[a.ID]))
+		if slices.ContainsFunc(all, func(x route.Account) bool { return x.ID == r.ID }) {
+			if held == "" {
+				log.Printf("account %q is both in the config and added by login; using the config's", r.ID)
+			}
+			continue
+		}
+		a := r.Account
+		a.ID, a.Credential, a.Managed, a.Extension, a.Held = r.ID, nil, true, r.Extension, held
+		accounts = append(accounts, c.extensionConfig(s, r.Extension).LoginDefaults(a, r.Credential.Kind))
 	}
 	return accounts
+}
+
+// inService returns the accounts of accounts that are not held.
+func inService(accounts []route.Account) []route.Account {
+	return slices.DeleteFunc(slices.Clone(accounts), func(a route.Account) bool { return a.Held != "" })
 }
 
 // accountsChanged gives the active router the credential store's accounts after they changed.
@@ -779,7 +827,7 @@ func (c *Core) accountsChanged() {
 	if err := s.Router.SetAccounts(accounts, sameAccount); err != nil {
 		log.Printf("updating accounts: %v", err)
 	}
-	c.checkAccounts(s, accounts)
+	c.checkAccounts(s, inService(accounts))
 }
 
 // reserved reports whether the active config sets an account with ID id, which a login may
@@ -853,6 +901,9 @@ func (c *Core) Stop() {
 	c.stopped = true
 	c.bgCancel()
 	c.checks.stop()
+	if c.setup != nil {
+		c.setup.stop()
+	}
 	c.stopRouting()
 	c.mu.Lock()
 	gens := append([]*host.Managed(nil), c.draining...)
@@ -896,7 +947,8 @@ type Status = management.Status
 func (c *Core) Status() Status {
 	version, commit, built := buildinfo.Get()
 	c.mu.Lock() // publish switches the snapshot and the revisions under it
-	s := Status{SafeMode: c.opts.SafeMode, Desired: c.desired, Active: c.active, Extensions: []ExtensionStatus{},
+	firstRun := c.setup == nil || c.setup.isFirstRun()
+	s := Status{SafeMode: c.opts.SafeMode, FirstRun: firstRun, Desired: c.desired, Active: c.active, Extensions: []ExtensionStatus{},
 		Version: version, Commit: commit, Built: built}
 	draining := append([]*host.Managed(nil), c.draining...)
 	cur := c.cur.Load()

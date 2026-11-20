@@ -119,6 +119,10 @@ var (
 // session bindings and the rotation among accounts. It is shared by every request and safe for concurrent use. It is kept
 // against account IDs and endpoint names, not against one config, so it outlives a reload.
 type State struct {
+	// keyMu guards pubKey, the key public IDs are made with (SetPublicKey).
+	keyMu  sync.RWMutex
+	pubKey []byte
+
 	mu        sync.Mutex
 	seq       uint64
 	scopes    map[scopeKey]*scopeState
@@ -154,6 +158,10 @@ type State struct {
 	unbannedSeq map[string]uint64
 	// changes is signalled when the quota blocks or bans Saved/SavedBans return may have changed.
 	changes chan struct{}
+	// usage holds, per account ID, its latest usage reading, which soonest-reset ranks it by;
+	// refreshed is when Router.Refresh last began reading.
+	usage     map[string]usageReading
+	refreshed time.Time
 }
 
 type banState struct {
@@ -297,8 +305,8 @@ func (s *State) reserve(a *Account, model string, now time.Time) (uint64, bool) 
 func NewState() *State {
 	return &State{scopes: map[scopeKey]*scopeState{}, active: map[string]int{}, affinity: newAffinity(), rotation: newRotation(),
 		since: map[scopeKey]uint64{}, revs: map[string]uint64{}, last: map[string]lastFailure{}, running: map[uint64]struct{}{}, rand: rand.Float64,
-		bans: map[string]banState{}, unbannedSeq: map[string]uint64{},
-		checkEvery: defaultCheckEvery, changes: make(chan struct{}, 1)}
+		bans: map[string]banState{}, unbannedSeq: map[string]uint64{}, usage: map[string]usageReading{},
+		checkEvery: defaultCheckEvery, changes: make(chan struct{}, 1), pubKey: NewPublicKey()}
 }
 
 // RetainBans drops bans for accounts that known reports no longer exist (deleted accounts),
@@ -442,6 +450,11 @@ func (s *State) Retain(prevRouter, nextRouter *Router, same func(old, cur *Accou
 			delete(s.last, id)
 		}
 	}
+	for id := range s.usage {
+		if !kept[id] {
+			delete(s.usage, id)
+		}
+	}
 	s.mu.Unlock()
 
 	s.affinity.retain(kept, changed, gen)
@@ -499,6 +512,7 @@ func (s *State) restart(old, fresh []*Account, kept map[string]bool) {
 	}
 	for id := range revs {
 		delete(s.last, id)
+		delete(s.usage, id)
 	}
 	s.mu.Unlock()
 	for _, a := range fresh {
@@ -540,6 +554,7 @@ func (s *State) forget(id string) {
 		}
 	}
 	delete(s.last, id)
+	delete(s.usage, id)
 	s.revs[id]++
 	rev := s.revs[id]
 	s.mu.Unlock()
@@ -857,14 +872,16 @@ func classify(e *llm.Error) (kind, scope string, fixed, base, max time.Duration)
 		if scope == "" {
 			scope = scopeModel
 		}
-	case llm.CodeUpstream, llm.CodeUnavailable:
+	case llm.CodeUpstream, llm.CodeUnavailable, llm.CodeExtensionTimeout:
+		// An extension that stopped answering is treated as the account's endpoint failing,
+		// so a retry-safe one moves the request to another account.
 		kind, base, max = blockCooldown, failureBackoffBase, failureBackoffMax
 		if scope == "" {
 			scope = scopeEndpoint
 		}
 	default:
-		// invalid_request, unsupported, cancelled, internal and core's extension_* codes are
-		// about the request, the caller or the extension process, not the account.
+		// invalid_request, unsupported, cancelled, internal and core's other extension_* codes
+		// are about the request, the caller or the extension process, not the account.
 		return "", "", 0, 0, 0
 	}
 	if scope == llm.ScopeRequest {

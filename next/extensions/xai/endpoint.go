@@ -4,9 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
-	"net"
 	"net/http"
 	"strings"
 
@@ -111,8 +109,7 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		var op *net.OpError
-		return &llm.Error{Code: llm.CodeUnavailable, Scope: llm.ScopeEndpoint, Retryable: errors.As(err, &op) && op.Op == "dial", Message: "upstream unreachable: " + err.Error()}
+		return &llm.Error{Code: llm.CodeUnavailable, Scope: llm.ScopeEndpoint, Retryable: sdk.Retryable(err), Message: "upstream unreachable: " + err.Error()}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {

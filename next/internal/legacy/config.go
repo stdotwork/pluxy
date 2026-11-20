@@ -36,6 +36,9 @@ type Result struct {
 	AuthDir string
 	// Import says how accounts imported from AuthDir are set up.
 	Import ImportOptions
+	// HashedManagementKey: management.secret-key holds a bcrypt hash of the key, which today's
+	// core writes over the key and this core cannot use. The config then has no management_key.
+	HashedManagementKey bool
 }
 
 // ImportOptions are the settings of a config.yaml that apply to accounts imported from today's
@@ -74,7 +77,6 @@ const (
 	Gemini           = "pluxy/gemini"
 	Kimi             = "pluxy/kimi"
 	XAI              = "pluxy/xai"
-	Antigravity      = "pluxy/antigravity"
 	Meta             = "pluxy/meta"
 	Devin            = "pluxy/devin"
 	OpenAICompatible = "pluxy/openai-compatible"
@@ -85,7 +87,7 @@ const (
 // OAuthModelAliasChannel); a channel without one has no extension here.
 var channels = map[string]string{
 	"codex": Codex, "claude": Claude, "vertex": Gemini, "kimi": Kimi, "kimi-ai": Kimi, "kimi.ai": Kimi,
-	"kimi.com": Kimi, "xai": XAI, "meta": Meta, "antigravity": Antigravity, "devin": Devin,
+	"kimi.com": Kimi, "xai": XAI, "meta": Meta, "devin": Devin,
 }
 
 // newKeys are this core's own settings, which keep their JSON names in a config.yaml.
@@ -282,7 +284,7 @@ var rules = map[string]rule{
 	"oauth.providers.aistudio.ws-auth":                     {dropped, "the AI Studio relay needs a long-lived listener the extension protocol does not have"},
 	"oauth.providers.codex.live-media-relay":               {dropped, "realtime and WebRTC are out of scope"},
 	"oauth.providers.codex.signin-with-chatgpt-identifier": {supported, ""}, // reported in options
-	"oauth.providers.antigravity":                          {dropped, "no need found; the credits fallback would spend paid credits unasked"},
+	"oauth.providers.antigravity":                          {dropped, "pluxy no longer ships the Antigravity provider"},
 	"oauth.providers.devin":                                {dropped, "rewriting words to get past a content filter is out of scope"},
 
 	"multimedia.disable-image-generation":                     {supported, ""},
@@ -949,7 +951,7 @@ func (x *translator) server() error {
 	// The key is used as written, as today's core uses it: a space in it is part of it.
 	switch {
 	case bcryptHash.MatchString(secret):
-		x.notes = append(x.notes, "config.yaml: management.secret-key is a bcrypt hash, which is not supported yet: the management API stays off; set the key itself")
+		x.res.HashedManagementKey = true
 	case secret != "":
 		x.out["management_key"] = secret
 	}
@@ -975,6 +977,8 @@ func (x *translator) routing() error {
 		r["strategy"] = "fill-first"
 	case "least-active":
 		r["strategy"] = "least-active"
+	case "soonest-reset":
+		r["strategy"] = "soonest-reset"
 	default:
 		// Today's core uses round-robin for a name it does not know.
 		x.notes = append(x.notes, fmt.Sprintf("config.yaml: routing.strategy %q is not known: using round-robin", s))
@@ -989,6 +993,10 @@ func (x *translator) routing() error {
 			ttl = max(d, time.Second) // as today's core reads it
 		}
 		r["session_affinity"] = map[string]any{"ttl_ms": ttl.Milliseconds()}
+	} else {
+		// Today's core has it off unless the file turns it on; a JSON config has it on unless
+		// it says otherwise.
+		r["session_affinity"] = map[string]any{"enabled": false}
 	}
 	if on, err := flag(x.t, "routing.force-model-prefix"); err != nil {
 		return err

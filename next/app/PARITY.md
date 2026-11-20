@@ -5,7 +5,7 @@ This page is a reference for two questions about the desktop app in this folder:
 - **Which agent clients and usage sources does it set up or read, and how?** For each one: the
   optional tool that does the work, the files it writes or reads, their format and how they are
   written, the platforms, and the native test session that checks it.
-- **What happened to each feature of the old desktop app** (`extensions/app/` in this repository):
+- **What happened to each feature of the old desktop app** (the desktop app of router-for-me/EasyCLIProxyAPI, <https://github.com/router-for-me/EasyCLIProxyAPI>, which this repository carried before `next/app/` replaced it):
   kept, dropped or deferred, with the reason in one line and where a kept feature lives now.
 
 The app's [README](README.md) describes what each page and command does, and the
@@ -204,6 +204,7 @@ drops are proposals the owner has not reviewed yet; their rows say so.
 | Release feed, release notes, channels, signed app update and rollback | Kept | | [README](README.md#version-management-and-release-notes) |
 | Portable replacement helper, upstream release addresses, the kernel version picker and preset mirrors | Dropped | The app updates only through the signed updater, from a feed address the person sets, which replaces the old app's core-version page (its `versions` page) | — |
 | MCP server and skills management | Dropped | The owner's decision; app packages are not agent skills | — |
+| Windows installers: the old app's NSIS setup and MSI package (`bundle.targets` `all`), which its updater ran to update | Replaced | One per-user NSIS setup program, no administrator rights; the MSI is dropped: it installs machine-wide, for managed deployment, which is not a goal. The app updates the installed program set itself and never runs the setup, and the setup refuses while the app runs instead of closing it by force. Test package only until release signing | [README](README.md#packages) |
 | Windows and macOS | Deferred | Later platform work. Some groundwork is merged (native key entry and confirmations, login items, one app per profile, test packages), but no native tool runs there | [README](README.md#platforms) |
 
 ### Smaller old features not carried

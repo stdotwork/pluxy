@@ -87,7 +87,7 @@
       "path": "client.body.error",
       "kind": "intended",
       "reason": "The new core answers upstream errors with an error body it builds itself (message, type and code), not the upstream's JSON passed through; recorded as a deliberate difference when the core skeleton was built.",
-      "want": {"code":"server_error","message":"upstream overloaded","type":"server_error"}
+      "want": {"code":"server_error","message":"upstream overloaded","type":"server_error", "pluxy": "(volatile)"}
     },
     {
       "path": "then[0].status",
@@ -102,7 +102,8 @@
       "want": {
         "code": "model_cooldown",
         "message": "every account for model \"gpt-test\" is cooling down; try again in 30s",
-        "type": "rate_limit_error"
+        "type": "rate_limit_error",
+        "pluxy": "(volatile)"
       }
     }
   ]

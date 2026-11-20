@@ -20,7 +20,8 @@
         "error": {
           "code": "upstream",
           "message": "upstream sent a malformed response",
-          "type": "server_error"
+          "type": "server_error",
+          "pluxy": "(volatile)"
         }
       }
     }

@@ -6,6 +6,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -144,9 +146,10 @@ func runMain() error {
 		chunksFlag         = flag.Int("chunks", 0, "override number of text deltas")
 		intervalFlag       = flag.Duration("interval", 0, "override interval between text deltas")
 		latencyFlag        = flag.Duration("latency", 0, "override non-streamed reply latency")
+		requestsFlag       = flag.Int("requests", 0, "override the request count of scenarios that send a fixed number (not agents or throughput); not with -check")
 		bodyKBFlag         = flag.Int("body-kb", 100, "request body size in KB for standard scenarios")
 		tlsFlag            = flag.Bool("tls", false, "attempt TLS upstream (note: extensions clear env and do not inherit SSL_CERT_FILE)")
-		profileDirFlag     = flag.String("profile", "", "write CPU and heap pprof files for agents and throughput into DIR using go build -overlay")
+		profileDirFlag     = flag.String("profile", "", "write CPU and heap pprof files for the selected scenarios (default agents and throughput) into DIR using go build -overlay")
 		jsonFileFlag       = flag.String("json", "", "write full report including raw per-run values as JSON to FILE")
 		proxyURLFlag       = flag.String("proxy-url", "", "measure an already-running proxy at URL instead of starting pluxy")
 		proxyKeyFlag       = flag.String("proxy-key", "", "API key for -proxy-url")
@@ -171,6 +174,10 @@ func runMain() error {
 		setFlags[f.Name] = true
 	})
 
+	if err := checkRequestsFlag(*checkFlag, setFlags["requests"], *requestsFlag); err != nil {
+		return err
+	}
+
 	runs := *runsFlag
 	if *checkFlag && !setFlags["runs"] {
 		runs = 3
@@ -194,8 +201,13 @@ func runMain() error {
 	}
 	defer mock.Close()
 
+	specs := buildScenarios(*checkFlag, *bodyKBFlag, setFlags, *ttftFlag, *chunksFlag, *intervalFlag, *latencyFlag, *requestsFlag)
 	if *profileDirFlag != "" {
-		written, err := RunProfileMode(ctx, nextRoot, *profileDirFlag, *bodyKBFlag, mock)
+		specs, err = selectProfileScenarios(specs, *scenariosFlag)
+		if err != nil {
+			return err
+		}
+		written, err := RunProfileMode(ctx, nextRoot, *profileDirFlag, specs, mock)
 		if err != nil {
 			return err
 		}
@@ -204,17 +216,14 @@ func runMain() error {
 			fmt.Printf("  %s\n", p)
 		}
 		return nil
-	}
-
-	host := CollectHostInfo(repoRoot)
-
-	specs := buildScenarios(*checkFlag, *bodyKBFlag, setFlags, *ttftFlag, *chunksFlag, *intervalFlag, *latencyFlag)
-	if *scenariosFlag != "" {
+	} else if *scenariosFlag != "" {
 		specs, err = filterScenarios(specs, *scenariosFlag)
 		if err != nil {
 			return err
 		}
 	}
+
+	host := CollectHostInfo(repoRoot)
 
 	var (
 		proxyURL     = strings.TrimRight(*proxyURLFlag, "/")
@@ -416,6 +425,21 @@ func runMain() error {
 	return nil
 }
 
+// checkRequestsFlag rejects -requests with -check (it could lower the gate's sample size) and
+// values below 1.
+func checkRequestsFlag(check, set bool, requests int) error {
+	if !set {
+		return nil
+	}
+	if check {
+		return errors.New("-requests cannot be combined with -check: the gate's request counts are fixed")
+	}
+	if requests < 1 {
+		return fmt.Errorf("-requests must be >= 1, got %d", requests)
+	}
+	return nil
+}
+
 func buildScenarios(
 	check bool,
 	bodyKB int,
@@ -424,6 +448,7 @@ func buildScenarios(
 	chunks int,
 	interval time.Duration,
 	latency time.Duration,
+	requests int,
 ) []ScenarioSpec {
 	var specs []ScenarioSpec
 	if check {
@@ -542,6 +567,11 @@ func buildScenarios(
 	}
 
 	for i := range specs {
+		// Only scenarios with a fixed request count take it; agents and throughput run for a
+		// duration and keep theirs.
+		if setFlags["requests"] && specs[i].Requests > 0 {
+			specs[i].Requests = requests
+		}
 		if specs[i].Stream {
 			if setFlags["ttft"] {
 				specs[i].TTFT = ttft
@@ -904,9 +934,16 @@ func writeExtensionManifest(binDir string) error {
 }
 
 func writeCoreConfig(cfgPath, manifestPath, mockBaseURL string) error {
+	// Core always has a management key; the bench never calls the management API, so a random
+	// one made for this run is enough.
+	mgmt := make([]byte, 16)
+	if _, err := rand.Read(mgmt); err != nil {
+		return err
+	}
 	cfg := map[string]any{
-		"listen":      "127.0.0.1:0",
-		"client_keys": []string{benchClientKey},
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{benchClientKey},
+		"management_key": hex.EncodeToString(mgmt),
 		"extension": map[string]any{
 			"manifest": manifestPath,
 			"accounts": []any{

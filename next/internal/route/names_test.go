@@ -156,7 +156,7 @@ func TestRoutingUsesUpstreamNames(t *testing.T) {
 
 func TestRouterModels(t *testing.T) {
 	h := newHarness(t, Config{ForceModelPrefix: true},
-		Account{ID: "cfg", Models: []ModelEntry{{Name: "up-a", Alias: "pub-a"}, {Name: "shared"}}},
+		Account{ID: "cfg", Extension: "pluxy/test", Models: []ModelEntry{{Name: "up-a", Alias: "pub-a"}, {Name: "shared"}}},
 		Account{ID: "cat", Prefix: "team", ModelAlias: []ModelAlias{{Name: "gemini-x", Alias: "gx", DisplayName: "GX"}}},
 		Account{ID: "broken", Models: []ModelEntry{{Name: "shared"}}},
 	)
@@ -186,9 +186,9 @@ func TestRouterModels(t *testing.T) {
 		gb, _ := json.MarshalIndent(got, "", " ")
 		t.Errorf("models:\n%s", gb)
 	}
-	// Without a catalog, accounts list the models their config names, owned by the account.
+	// Without a catalog, accounts list the models their config names, owned by the extension.
 	h.r.UseCatalog(nil)
-	if got := h.r.Models(context.Background()); len(got) != 2 || got[0].OwnedBy != "cfg" {
+	if got := h.r.Models(context.Background()); len(got) != 2 || got[0].OwnedBy != "pluxy/test" {
 		t.Errorf("models without a catalog: %+v", got)
 	}
 }
@@ -315,8 +315,8 @@ func TestOldAccountsLeaveNoModelList(t *testing.T) {
 	}
 }
 
-// Catalog endpoint names retain upstream IDs and use the same cache and naming rules as
-// ordinary lists, while flagging names that other extensions can also serve.
+// Catalog endpoint names retain upstream IDs and use the same cache, naming rules and provider
+// choice as ordinary lists.
 func TestModelNames(t *testing.T) {
 	h := newHarness(t, Config{ForceModelPrefix: true},
 		Account{ID: "other", Extension: "other", Models: []ModelEntry{{Name: "wrong", Alias: "one"}}},
@@ -328,13 +328,15 @@ func TestModelNames(t *testing.T) {
 		reads++
 		return &protocol.ModelList{Models: []protocol.Model{{ID: "up"}, {ID: "excluded"}}}, nil
 	})
-	want := []Name{{Public: "one", Upstream: "up", Base: "up", DisplayName: "up", NonCodex: true}, {Public: "team/coding", Upstream: "up", Base: "up", DisplayName: "Coding"}}
+	// "one" is also listed on another extension, and that extension comes first, so routing
+	// chooses it for the name and the Codex catalogue leaves the name out.
+	want := []Name{{Public: "team/coding", Upstream: "up", Base: "up", DisplayName: "Coding"}}
 	for range 2 {
 		if got := h.r.ModelNames(t.Context(), "codex"); !reflect.DeepEqual(got, want) {
 			t.Fatalf("names = %+v, want %+v", got, want)
 		}
 	}
-	if reads != 3 {
-		t.Fatalf("catalog reads = %d, want 3 cached accounts", reads)
+	if reads != 1 {
+		t.Fatalf("catalog reads = %d, want the one catalog-backed account", reads)
 	}
 }

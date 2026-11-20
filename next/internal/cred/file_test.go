@@ -3,6 +3,8 @@ package cred
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stdotwork/pluxy/next/internal/private"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
@@ -161,5 +164,27 @@ func TestFileBackendSkipsALinkedRecord(t *testing.T) {
 	}
 	if want := "skipped " + link + ": it is not a regular file"; !strings.Contains(logged.String(), want) {
 		t.Errorf("log:\n%s\nwant a line with %q", logged.String(), want)
+	}
+}
+
+// CreatePrivate writes a new file only its user can read, never over an existing one, and leaves
+// no temporary file behind either way.
+func TestCreatePrivate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := CreatePrivate(path, []byte("first")); err != nil {
+		t.Fatal(err)
+	}
+	if err := CreatePrivate(path, []byte("second")); !errors.Is(err, fs.ErrExist) {
+		t.Errorf("over an existing file: %v, want fs.ErrExist", err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != "first" {
+		t.Errorf("the file holds %q", b)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Errorf("the folder holds %d entries, want the file only", len(entries))
+	}
+	if info, _ := os.Stat(path); runtime.GOOS != "windows" && info.Mode().Perm() != private.FileMode {
+		t.Errorf("mode %v, want %v", info.Mode().Perm(), private.FileMode)
 	}
 }

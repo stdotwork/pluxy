@@ -32,8 +32,10 @@ const Version = 0
 // diagnostic frame); minor 14 adds payload rules (Call.Payload); minor 15 has a session turn
 // carry them too; minor 16 adds an error's dropped (llm.Error.Dropped); minor 17 adds a
 // captured body's BodyStopped; minor 18 adds ModelList.From; minor 19 adds a quota limit's
-// Feature; minor 20 adds llm.CodeAccountClosed.
-const Minor = 20
+// Feature; minor 20 adds llm.CodeAccountClosed; minor 21 adds what a package is (title, summary,
+// kind) to the manifest and registry index, and changes no call; minor 22 adds the account's
+// timeouts (Account.Timeouts); minor 23 adds alive frames (Call.Alive and TypeAlive).
+const Minor = 23
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
@@ -106,6 +108,10 @@ const (
 	// TypeDiagnostic is a frame an extension sends before a captured call's terminal event: its
 	// upstream exchanges (minor version 13). It is not an event.
 	TypeDiagnostic = "diagnostic"
+	// TypeAlive is a frame an extension sends during a call or turn whose Alive is set (minor
+	// version 23): upstream bytes arrived and the extension had sent core nothing else for a
+	// while. It carries nothing else, and core never passes it on.
+	TypeAlive = "alive"
 )
 
 // Session kinds (SessionInfo.Format).
@@ -145,6 +151,10 @@ type Call struct {
 	// core matched their models to the call already, so each model holds only its body
 	// conditions (payload.Select). Nil: none.
 	Payload *payload.Rules `json:"payload,omitempty"`
+	// Alive says core takes alive frames (TypeAlive) on a generate, count_tokens or endpoint
+	// call or a session.turn (minor version 23), and ends one on which it has received nothing
+	// at all for as long as the account's timeouts let the upstream stay quiet, plus a minute.
+	Alive bool `json:"alive,omitempty"`
 }
 
 // Login is the subject of a login call.
@@ -169,6 +179,18 @@ type Account struct {
 	// 12), set over the extension's own headers of the same names. Values of headers whose names
 	// are about authentication are secret.
 	Headers map[string]string `json:"headers,omitempty"`
+	// Timeouts bounds how long an upstream request waits for response headers, gaps between
+	// raw body bytes or completion (minor version 18). Nil fields use core's defaults; 0 turns a
+	// limit off.
+	Timeouts *Timeouts `json:"timeouts,omitempty"`
+}
+
+// Timeouts bounds how long an upstream request waits for response headers, gaps between raw
+// body bytes or completion (minor version 18). Zero turns a limit off.
+type Timeouts struct {
+	HeaderMS *int64 `json:"header_ms,omitempty"`
+	IdleMS   *int64 `json:"idle_ms,omitempty"`
+	TotalMS  *int64 `json:"total_ms,omitempty"`
 }
 
 // ParseProxyURL parses an account's ProxyURL: an http, https, socks5 or socks5h URL with a
@@ -505,8 +527,8 @@ type CapturedBody struct {
 	BodyStopped bool `json:"body_stopped,omitempty"`
 }
 
-// Reply is a frame an extension sends: an event, the result of describe, models, check or quota,
-// a login or refresh frame, or a diagnostic frame.
+// Reply is a frame an extension sends: an event, an alive frame, the result of describe, models,
+// check or quota, a login or refresh frame, or a diagnostic frame.
 type Reply struct {
 	llm.Event
 	Info       *Info        `json:"info,omitempty"`

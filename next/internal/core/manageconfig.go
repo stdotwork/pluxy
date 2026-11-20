@@ -262,14 +262,8 @@ func settings(cfg *server.Config) settingsView {
 	case route.StrategyWeighted:
 		v.Strategy = "weighted-round-robin"
 	}
-	ttl := time.Hour
-	if a := r.SessionAffinity; a != nil {
-		v.SessionAffinity = true
-		if a.TTLMS > 0 {
-			ttl = time.Duration(a.TTLMS) * time.Millisecond
-		}
-	}
-	v.SessionAffinityTTL = shortDuration(ttl)
+	v.SessionAffinity = r.AffinityOn()
+	v.SessionAffinityTTL = shortDuration(r.AffinityTTL())
 	return settingsView{TokenCountEstimate: cfg.TokenCountEstimateOn(), ProxyURL: proxyurl.Redact(cfg.ProxyURL), Payload: cfg.Payload, Routing: v, Observability: observabilityView{
 		Logs: logsView{LoggingToFile: cfg.Logs.ToFile, LogsMaxTotalSizeMB: cfg.Logs.MaxTotalSizeMB,
 			RequestLog: cfg.Logs.RequestLog, ErrorLogsMaxFiles: cfg.Logs.ErrorLogs()},
