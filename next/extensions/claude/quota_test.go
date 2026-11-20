@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -293,5 +294,69 @@ func TestLoginGrantsCarryIdentity(t *testing.T) {
 	bare.Account.EmailAddress = "someone@example.invalid"
 	if got := bare.identity(); len(got) != 1 || got["email"] != "someone@example.invalid" {
 		t.Errorf("identity of a reply with only an e-mail address = %v", got)
+	}
+}
+
+// Each window says what it counts, so that routing holds an account only on a window that covers
+// the block it checks: the shared 5-hour and weekly windows count the whole account; a model
+// family's weekly window counts the catalogue's models of that family; the windows of other apps
+// and the credit pools count a feature of the plan.
+func TestQuotaWindowsSayWhatTheyCount(t *testing.T) {
+	srv := claudetest.New(t)
+	srv.Usage = `{
+	  "five_hour": {"utilization": 100, "resets_at": "2026-11-14T09:00:00Z"},
+	  "seven_day": {"utilization": 10, "resets_at": "2026-11-15T09:00:00Z"},
+	  "seven_day_oauth_apps": {"utilization": 100, "resets_at": "2026-11-15T09:00:00Z"},
+	  "seven_day_opus": {"utilization": 100, "resets_at": "2026-11-15T09:00:00Z"},
+	  "seven_day_sonnet": {"utilization": 100, "resets_at": "2026-11-15T09:00:00Z"},
+	  "seven_day_cowork": {"utilization": 100, "resets_at": "2026-11-15T09:00:00Z"},
+	  "iguana_necktie": {"utilization": 100, "resets_at": "2026-11-20T00:00:00Z", "limit_dollars": 100, "used_dollars": 100, "remaining_dollars": 0},
+	  "monthly_pool": {"utilization": 100, "resets_at": "2026-12-01T00:00:00Z", "limit_dollars": 10, "used_dollars": 10, "remaining_dollars": 0},
+	  "extra_usage": {"is_enabled": true, "monthly_limit": 5000, "used_credits": 100, "utilization": 2},
+	  "limits": [{"kind": "weekly_scoped", "percent": 100, "resets_at": "2026-11-15T00:00:00Z", "is_active": true, "scope": {"model": {"display_name": "Fable"}}}]
+	}`
+	q, e := readQuota(t, subscriptionAccount(srv))
+	if e != nil {
+		t.Fatalf("quota failed: %+v", e)
+	}
+	l := limitsByID(t, q)
+	if len(l) != 10 {
+		t.Fatalf("limits = %+v, want 10", q.Limits)
+	}
+	for _, id := range []string{"five_hour", "seven_day", "extra_usage"} {
+		if x := l[id]; x.Feature || len(x.Models) != 0 {
+			t.Errorf("%s = %+v, want a limit of the whole account", id, x)
+		}
+	}
+	for _, id := range []string{"seven_day_oauth_apps", "seven_day_cowork", "cloud_session_credits", "monthly_pool"} {
+		if x := l[id]; !x.Feature || len(x.Models) != 0 {
+			t.Errorf("%s = %+v, want a feature's limit", id, x)
+		}
+	}
+	families := map[string][]string{
+		"seven_day_sonnet": {"claude-sonnet-4-6", "claude-sonnet-4-5-20250929", "claude-3-7-sonnet-20250219"},
+		"seven_day_opus":   {"claude-opus-4-6", "claude-opus-4-20250514"},
+		"seven_day_fable":  {"claude-fable-5"},
+	}
+	for id, some := range families {
+		x := l[id]
+		if x.Feature {
+			t.Errorf("%s = %+v, want a limit of some models, not a feature's", id, x)
+		}
+		for _, m := range some {
+			if !slices.Contains(x.Models, m) {
+				t.Errorf("%s models = %v, want %s among them", id, x.Models, m)
+			}
+		}
+		for other, theirs := range families {
+			for _, m := range theirs {
+				if other != id && slices.Contains(x.Models, m) {
+					t.Errorf("%s models = %v, want no %s", id, x.Models, m)
+				}
+			}
+		}
+		if slices.Contains(x.Models, "claude-haiku-4-5-20251001") {
+			t.Errorf("%s models = %v, want no Haiku", id, x.Models)
+		}
 	}
 }

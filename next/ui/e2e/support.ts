@@ -62,6 +62,12 @@ export function useCore(options: { firstRun?: boolean } = {}): Core {
     core.clientKey = r.client_key;
   });
 
+  // Core keeps which theme is on, so one test's choice would show in the next test's new browser:
+  // each test starts in the default theme.
+  test.beforeEach(async () => {
+    await core.mgmt("PUT", "/theme", { id: "" });
+  });
+
   test.afterAll(async () => {
     const p = proc;
     if (!p || p.exitCode !== null) return;

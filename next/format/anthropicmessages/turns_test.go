@@ -1,7 +1,9 @@
 package anthropicmessages
 
 import (
+	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stdotwork/pluxy/next/llm"
@@ -99,6 +101,62 @@ func TestRepairTurns(t *testing.T) {
 				t.Errorf("losses %v, want %v", got, want)
 			}
 		})
+	}
+}
+
+// EncodeOptions.KeepModelTurn keeps a trailing assistant turn on a model that refuses prefill,
+// for requests such as compaction that Anthropic takes ending on the model's turn; the other
+// repairs still run (here the unanswered tool call gets its error result). Without the option
+// the turn is still dropped.
+func TestEncodeKeepModelTurn(t *testing.T) {
+	text := func(role, s string) llm.Item {
+		return llm.Item{Type: llm.ItemTypeMessage, Role: role, Content: []llm.Part{{Type: llm.PartText, Text: s}}}
+	}
+	req := llm.Request{Model: "claude-opus-4-6", Items: []llm.Item{
+		text(llm.RoleUser, "List the files."),
+		{Type: llm.ItemTypeToolCall, CallID: "toolu_1", Name: "shell", Arguments: "{}"},
+		text(llm.RoleUser, "Go on."),
+		text(llm.RoleAssistant, "There is one file, a.txt."),
+	}}
+	type sent struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	read := func(body []byte) sent {
+		t.Helper()
+		var s sent
+		if err := json.Unmarshal(body, &s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+
+	body, losses, err := EncodeRequestWith(req, EncodeOptions{KeepModelTurn: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kept := read(body)
+	if n := len(kept.Messages); n != 4 || kept.Messages[3].Role != llm.RoleAssistant || kept.Messages[3].Content[0].Text != "There is one file, a.txt." {
+		t.Errorf("kept: messages %s, want them to end on the assistant's reply", body)
+	}
+	if n := len(kept.Messages); n < 3 || kept.Messages[2].Content[0].Type != "tool_result" {
+		t.Errorf("kept: messages %s, want the unanswered tool call answered in the next user turn", body)
+	}
+	if slices.ContainsFunc(losses, func(l llm.Loss) bool { return strings.Contains(l.Detail, "prefill") }) {
+		t.Errorf("kept: losses %v, want no dropped turn", lossList(losses))
+	}
+
+	body, _, err = EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def := read(body); len(def.Messages) != 3 || def.Messages[2].Role != llm.RoleUser {
+		t.Errorf("default: messages %s, want the trailing assistant turn dropped", body)
 	}
 }
 
