@@ -1713,8 +1713,8 @@ its feed's downloads and the versions that ran itself.
 Then, in another session (`native/bundled.ts`, `native/bundled-session.ts`,
 `native/bundled-steps.ts`, `bundled_native.rs`), the [core the test package comes
 with](#the-core-the-app-comes-with), each case on a fresh profile in managed mode: the AppImage
-runs its core from the app's own cores, with no confirmation, and that core has installed the
-packages its `bundled/index.json` lists; the 0.2.0 build moves the app's own selection to its
+runs its core from the app's own cores, with no confirmation, and that core's bundled registry
+offers the packages its `bundled/index.json` lists (a first start installs none); the 0.2.0 build moves the app's own selection to its
 core, the person rolls back to 0.1.0's core through the native confirmation, and that choice
 stays when 0.1.0 and then 0.2.0 run again; in a copy of the package (the AppImage extracted, run
 through its `AppRun`) a file added to `bundled/` is not copied, and a changed `bundled/index.json`

@@ -5,7 +5,8 @@
 //
 // - a fresh profile in managed mode runs the core the app came with, with no confirmation: the
 //   running core's program is in the app's own cores (not beside the app), as a version that came
-//   with the app, and the packages its bundled/index.json lists are installed;
+//   with the app, and its bundled registry offers the packages its bundled/index.json lists (a
+//   first start installs none);
 // - the update build (another app version, with another core) moves the selection the app made
 //   to its own core; the person then rolls back to the earlier core through the native
 //   confirmation; that choice stays when the earlier app runs again and when the update build
@@ -150,7 +151,7 @@ async function versions(o: BundledRun) {
       o.check(r.versions.outcome === undefined, "a core change was asked of the person");
       o.check(
         o.first.packages.length > 0 && o.first.packages.every((id) => r.packages.includes(id)),
-        `the running core has not installed its bundled packages ${o.first.packages.join(", ")}: it has ${r.packages.join(", ")}`,
+        `the running core's bundled registry does not offer its bundled packages ${o.first.packages.join(", ")}: it offers ${r.packages.join(", ")}`,
       );
       o.check(
         r.state?.chosen_by === "app",

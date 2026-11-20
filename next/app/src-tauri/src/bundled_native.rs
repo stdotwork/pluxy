@@ -33,14 +33,20 @@ fn files(dir: &Path) -> Vec<String> {
     out
 }
 
-/// The IDs of the packages the running core has installed, once it has installed at least want
-/// of them (the core installs its bundled packages as it starts); none without a running core.
+/// The IDs of the packages the running core's bundled registry offers (`GET /registries`: core
+/// reads it from `bundled/index.json` beside its program, and a first start installs none of
+/// them), once it offers at least want of them; none without a running core.
 fn packages(app: &AppHandle, want: usize) -> Vec<String> {
     let ids = || -> Option<Vec<String>> {
         let caller = app.state::<App>().conn.lock().unwrap().caller();
-        let r = caller.call("GET", "/packages", None);
-        let list = r.body.as_ref()?["packages"].as_array()?.clone();
-        let mut ids: Vec<String> = list
+        let r = caller.call("GET", "/registries", None);
+        let bundled = r.body.as_ref()?["registries"]
+            .as_array()?
+            .iter()
+            .find(|g| g["name"] == "bundled")?
+            .clone();
+        let mut ids: Vec<String> = bundled["packages"]
+            .as_array()?
             .iter()
             .filter_map(|p| p["id"].as_str().map(String::from))
             .collect();
