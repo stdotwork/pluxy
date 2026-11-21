@@ -97,9 +97,9 @@ Straight to the mock, chunk delay p99 is 0.12 to 0.17 ms and the request path 0.
 | Start, to the first request answered | 68 ms |
 | Binary sizes as released (`-trimpath -ldflags=-s -w`) | `pluxy` 10.5 MiB, `openai-compatible` 6.8 MiB |
 
-On GitHub's ubuntu-latest runner (4 vCPU AMD EPYC 7763), `-check` measured an added TTFT of 8.2 ms
-in `stream-pass` and 11.1 ms in `stream-translate`, 44 MB idle and about 1 MB per open stream
-(median of 3 runs, run 44524386342).
+On GitHub's ubuntu-latest runners (4 vCPU), `-check` measured an added TTFT of 3.5 ms in
+`stream-pass` and 4.0 ms in `stream-translate`, 45 MB idle and about 0.7 MB per open stream
+(median of 3 runs: 44852547274 on `main` at `d9d1ee2d9`, 44850768612 and 44848492287).
 
 ## Compared with CLIProxyAPI
 
@@ -173,10 +173,11 @@ Time budgets are ratios of the proxy to the direct path in the same run, so the 
 timing and the client's costs cancel out and the check needs no absolute times. The machine's
 speed does not cancel out: a slower runner adds more on the proxy side. So each budget leaves
 room for two to three times today's overhead on CI's runner (for `stream-pass`, 1.10 against
-measured ratios of 1.025 and 1.034, that is a 10 ms budget against 2.5 to 3.4 ms overhead in two
-CI runs): a change that adds about 7 ms or more to a request fails, the spread between runners
-does not. Chunk delay is bounded as a fraction of the mock's chunk interval, since the direct
-chunk delay is too close to zero to divide by. Memory budgets are in MB and KB per open stream.
+measured ratios of 1.030, 1.034 and 1.047, that is a 10 ms budget against 3.0 to 4.7 ms overhead
+in three CI runs): a change that adds about 6 ms or more to a request fails, the spread between
+runners does not. Chunk delay is bounded as a fraction of the mock's chunk interval, since the
+direct chunk delay is too close to zero to divide by. Memory budgets are in MB and KB per open
+stream.
 Binary sizes, start time and throughput are reported, not checked: new features grow them on
 purpose.
 

@@ -6,53 +6,64 @@ import (
 	"strings"
 )
 
-// Check-mode budgets. The ratio budgets were reset from the parse-once baseline on GitHub's
-// ubuntu-latest runner (4 vCPU); the chunk-delay and memory budgets remain from main at
-// 35ad0d646 (docs/perf.md), because parse-once did not halve their measured values. Time budgets
+// Check-mode budgets. They were set from the median of three `-check` runs on main after
+// performance fixes 1 to 5 (#518, #522, #535, #552, #559), on GitHub's ubuntu-latest runners
+// (4 vCPU): runs 44852547274 (main at d9d1ee2d9), 44850768612 and 44848492287. Time budgets
 // are ratios to the direct path in the same run, so the mock's timing and the client's own costs
 // cancel out; machine speed does not, so each leaves room for two to three times the overhead
-// measured on CI. Lower a budget when a fix lowers its measured value.
+// measured on CI, and these take three. Where three times the median overhead is above the
+// budget a fix already set, the budget stays. Lower a budget when a fix lowers its measured
+// value.
 const (
 	// BudgetStreamPassTTFTRatio bounds proxy p50 TTFT / direct p50 TTFT in stream-pass (mock
-	// TTFT 100 ms). Parse-once baseline 1.034 (CI run 44677562763) and 1.025 (CI run
-	// 44676556514); 8 vCPU: CI only. At a 100 KB body, pluxy adds 3.4 ms in the higher sample.
+	// TTFT 100 ms). Median of three CI runs: 1.034 (run 44852547274, main at d9d1ee2d9), 1.047
+	// (run 44850768612) and 1.030 (run 44848492287); at a 100 KB body, pluxy adds 3.5 ms in the
+	// median run. Three times that overhead is 1.102, so the budget stays at 1.10.
 	BudgetStreamPassTTFTRatio = 1.10
 
 	// BudgetStreamTranslateTTFTRatio bounds the same ratio in stream-translate (Messages to
-	// Chat Completions). Parse-once baseline 1.053 (CI run 44677562763) and 1.040 (CI run
-	// 44676556514); 8 vCPU: CI only.
-	BudgetStreamTranslateTTFTRatio = 1.15
+	// Chat Completions). Median of three CI runs: 1.039 (run 44852547274, main at d9d1ee2d9),
+	// 1.052 (run 44850768612) and 1.033 (run 44848492287): 3.9 ms at a 100 KB body in the
+	// median run. Three times that overhead is 1.117, down from 1.15.
+	BudgetStreamTranslateTTFTRatio = 1.12
 
 	// BudgetStreamPassChunkDelayFraction bounds proxy p99 chunk delay / the mock's chunk
-	// interval (10 ms) in stream-pass. Parse-once baseline 0.044 (CI run 44676556514) and 0.036
-	// (CI run 44677562763); 8 vCPU: CI only. It did not halve, so the budget stays.
-	BudgetStreamPassChunkDelayFraction = 0.2
+	// interval (10 ms) in stream-pass. Median of three CI runs: 0.050 (run 44852547274, main
+	// at d9d1ee2d9), 0.052 (run 44850768612) and 0.046 (run 44848492287), about 0.5 ms. Three
+	// times the median is 0.15, down from 0.2; the widest run measured 0.064.
+	BudgetStreamPassChunkDelayFraction = 0.15
 
-	// BudgetStreamTranslateChunkDelayFraction is the same bound in stream-translate. Parse-once
-	// baseline 0.046 (CI run 44677562763) and 0.038 (CI run 44676556514); 8 vCPU: CI only. It did
-	// not halve, so the budget stays.
-	BudgetStreamTranslateChunkDelayFraction = 0.2
+	// BudgetStreamTranslateChunkDelayFraction is the same bound in stream-translate. Median of
+	// three CI runs: 0.051 (run 44852547274, main at d9d1ee2d9), 0.061 (run 44850768612) and
+	// 0.053 (run 44848492287). Three times the median is 0.159, down from 0.2; the widest run
+	// measured 0.079.
+	BudgetStreamTranslateChunkDelayFraction = 0.16
 
 	// BudgetNonstreamPassTotalRatio bounds proxy p50 total / direct p50 total in
-	// nonstream-pass (mock latency 100 ms). Parse-once baseline 1.035 (CI run 44677562763) and
-	// 1.025 (CI run 44676556514); 8 vCPU: CI only. At a 100 KB body, pluxy adds 3.5 ms in the
-	// higher sample.
+	// nonstream-pass (mock latency 100 ms). Median of three CI runs: 1.036 (run 44852547274,
+	// main at d9d1ee2d9), 1.049 (run 44850768612) and 1.033 (run 44848492287); at a 100 KB
+	// body, pluxy adds 3.6 ms in the median run. Three times that overhead is 1.108, so the
+	// budget stays at 1.10.
 	BudgetNonstreamPassTotalRatio = 1.10
 
 	// BudgetAgentsTotalP99Ratio bounds proxy p99 total / direct p99 total with 80 streams open
-	// at once (about 3.3 s each). Parse-once baseline 1.037 (CI run 44677562763) and 1.028 (CI
-	// run 44676556514); 8 vCPU: CI only.
+	// at once (about 3.3 s each). Median of three CI runs: 1.032 (run 44852547274, main at
+	// d9d1ee2d9), 1.053 (run 44850768612) and 1.031 (run 44848492287). Three times that
+	// overhead is 1.096, so the budget stays at 1.10.
 	BudgetAgentsTotalP99Ratio = 1.10
 
 	// BudgetIdleRSSMB bounds the resident memory (MB) of core and its extension processes,
-	// started and idle, before any request. Parse-once baseline 44.73 (CI run 44677562763) and
-	// 44.57 (CI run 44676556514); 8 vCPU: CI only. It did not halve, so the budget stays.
+	// started and idle, before any request. Median of three CI runs: 45.74 MB (run 44852547274,
+	// main at d9d1ee2d9), 45.45 MB (run 44850768612) and 43.77 MB (run 44848492287). Three
+	// times the median is 136 MB, so the budget stays at 100.
 	BudgetIdleRSSMB = 100.0
 
 	// BudgetAgentsRSSPerStreamKB bounds (peak RSS under agents - idle RSS) / 80 streams, in KB,
-	// at a 100 KB request body. Parse-once baseline 816.40 (CI run 44677562763) and 799.40 (CI
-	// run 44676556514); 8 vCPU: CI only. It did not halve, so the budget stays.
-	BudgetAgentsRSSPerStreamKB = 3072.0
+	// at a 100 KB request body. Median of three CI runs: 632.40 KB (run 44852547274, main at
+	// d9d1ee2d9), 754.55 KB (run 44850768612) and 710.80 KB (run 44848492287), against about
+	// 800 KB before the fixes. Three times the median is 2,132, so the budget is 2,200, down
+	// from 3,072.
+	BudgetAgentsRSSPerStreamKB = 2200.0
 )
 
 // GateResult captures one check gate's measured value, budget limit, and pass/fail outcome.
