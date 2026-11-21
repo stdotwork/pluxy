@@ -440,7 +440,7 @@ func TestCLISetupAndClientShow(t *testing.T) {
 	}
 
 	// client show for all 5 tools, never printing the management key.
-	const placeholderHint = "Replace <client-key> with a client key: the first is in client_keys in core's config.json, and \"pluxy key add\" makes another.\n"
+	const placeholderHint = "Replace <client-key> with a client key: core's config file holds them, and \"pluxy key add\" makes another.\n"
 	for _, tool := range []string{"claude-code", "codex", "opencode", "pi", "omp"} {
 		out, errOut, code := runWith("", false, "client", "show", tool)
 		if code != 0 || errOut != placeholderHint || !strings.Contains(out, srv.URL) || strings.Contains(out, "mgmt-secret") || strings.Contains(out, "Replace") {
@@ -464,7 +464,7 @@ func TestCLISetupAndClientShow(t *testing.T) {
 		}
 	}
 	// --key-id valid vs unknown.
-	const storedHint = "Replace <client-key:k1 (sk******ab)> with that key's full value from client_keys in core's config.json: pluxy never prints a stored key.\n"
+	const storedHint = "Replace <client-key:k1 (sk******ab)> with that key's full value from core's config file: pluxy never prints a stored key.\n"
 	if out, errOut, code := runWith("", false, "client", "show", "claude-code", "--key-id", "k1"); code != 0 || errOut != storedHint || !strings.Contains(out, "k1") || !strings.Contains(out, "sk******ab") || strings.Contains(out, "mgmt-secret") {
 		t.Errorf("client show --key-id k1: code=%d err=%q out=%q", code, errOut, out)
 	}

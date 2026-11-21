@@ -292,7 +292,7 @@ func TestCLISetupAndClientShow(t *testing.T) {
 	}
 
 	r = runCLI(t, cliEnv, "client", "show", "claude-code")
-	if r.code != 0 || r.stderr != "Replace <client-key> with a client key: the first is in client_keys in core's config.json, and \"pluxy key add\" makes another.\n" {
+	if r.code != 0 || r.stderr != "Replace <client-key> with a client key: core's config file holds them, and \"pluxy key add\" makes another.\n" {
 		t.Fatalf("pluxy client show claude-code: %s", r)
 	}
 	if !strings.Contains(r.stdout, base) || !strings.Contains(r.stdout, "ANTHROPIC_BASE_URL") || !strings.Contains(r.stdout, "ANTHROPIC_AUTH_TOKEN") {
