@@ -31,6 +31,7 @@ export const SHARDS: Record<string, readonly string[]> = {
     "early exit",
     "instances",
     "update",
+    "bundled core",
     "local",
     "remote",
     "packaged",
@@ -46,9 +47,9 @@ export const SHARDS: Record<string, readonly string[]> = {
  * Linux, platform.ts on Windows and macOS). */
 export const PLATFORM_SHARDS: Record<string, readonly string[]> = {
   platform: ["single instance", "login item", "window and tray"],
-  // The test package and the release gate on these systems: a job of its own, since it builds the
-  // test package twice and the release app.
-  package: ["bundle", "bundle release gate"],
+  // The test package, its bundled core and the release gate on these systems: a job of its own,
+  // since it builds the test package twice and the release app.
+  package: ["bundle", "bundle release gate", "bundle core"],
   // The signed tool sessions in the real app (native/platform-tools.ts), on the build with
   // artifact-test-trust: a job of its own, since it builds that app, the fixture tool and the
   // execution program, and starts a test core.

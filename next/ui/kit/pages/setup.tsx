@@ -17,7 +17,19 @@ import {
 import type { Reply } from "../host";
 import type { PageDef } from "../shell";
 import { rich, strings } from "../strings";
-import { Badge, Button, Card, Empty, Notice, PageHead, useAction, useKit, useLoad, when } from "../ui";
+import {
+  Badge,
+  Button,
+  Card,
+  Empty,
+  Notice,
+  PageHead,
+  useAction,
+  useCopy,
+  useKit,
+  useLoad,
+  when,
+} from "../ui";
 import { AddAccountPage } from "./addAccount";
 import { KeyNotice } from "./configKeys";
 import {
@@ -32,6 +44,7 @@ import {
   signInsToName,
   splitClients,
   start,
+  startInstalls,
   toInstall,
   withKey,
 } from "./setup.helpers";
@@ -40,8 +53,9 @@ const t = strings("setup", {
   title: "Set up pluxy",
   short: "Setup",
   tip: "What pluxy found, and what is still missing",
-  introFirst:
-    "pluxy looks at this machine and offers what fits. Nothing is installed until you press Start, and nothing on this page is required.",
+  introFirst: "pluxy looks at this machine and offers what fits.",
+  introUntilStart: "Nothing is installed until you press Start, and nothing on this page is required.",
+  introOptional: "Nothing on this page is required.",
   introLater: "Setup is finished. This page shows the same things as they are now.",
   loading: "Loading…",
   retry: "Retry",
@@ -129,6 +143,7 @@ const t = strings("setup", {
   install: "Install",
   startWithout: "Start without a provider",
   willInstall: "{button} installs: {names}.",
+  willInstallLater: "This installs {names}.",
   installing: "Installing…",
   nothingTicked:
     "Nothing is ticked, so pluxy will run with no provider. You can add one later on the Extensions page.",
@@ -164,6 +179,8 @@ const t = strings("setup", {
   pasteLoading: "Loading the text…",
   pasteInto: "Put this in {path}:",
   pasteAddress: "The text uses {address}, the address of pluxy on its own machine.",
+  pasteModel:
+    "Where the text says {placeholder}, a model's name goes: one your accounts serve. An account's Models button on Accounts lists them, and so does {command}.",
   copy: "Copy",
   copied: "Copied",
   copyFailed: "Could not copy. Select the text and copy it yourself.",
@@ -182,22 +199,10 @@ const t = strings("setup", {
 
 /** A button that copies text, and says so. */
 function Copy(props: { value: string }) {
-  const [state, setState] = useState<"copied" | "failed">();
-  useEffect(() => setState(undefined), [props.value]);
+  const { state, copy } = useCopy(props.value);
   return (
     <>
-      <Button
-        onClick={async () => {
-          try {
-            await navigator.clipboard.writeText(props.value);
-            setState("copied");
-          } catch {
-            setState("failed");
-          }
-        }}
-      >
-        {state === "copied" ? t("copied") : t("copy")}
-      </Button>
+      <Button onClick={copy}>{state === "copied" ? t("copied") : t("copy")}</Button>
       {state === "failed" && <Notice tone="danger">{t("copyFailed")}</Notice>}
     </>
   );
@@ -636,7 +641,12 @@ export function Start(props: {
   let line: string;
   let action: ComponentChildren = null;
   if (ids.length > 0) {
-    line = props.busy ? t("installing") : t("willInstall", { button, names: names.join(", ") });
+    const list = names.join(", ");
+    line = props.busy
+      ? t("installing")
+      : setup.first_run
+        ? t("willInstall", { button, names: list })
+        : t("willInstallLater", { names: list });
     action = (
       <Button variant="primary" disabled={props.busy} onClick={props.onStart}>
         {button}
@@ -652,10 +662,11 @@ export function Start(props: {
         {t("startWithout")}
       </Button>
     );
-  } else if (setup.first_run) {
+  } else if (props.error) {
     line = t("nothingMore");
   } else {
-    // After setup the part has nothing to say until a provider is ticked.
+    // With nothing left to install the part has nothing to say: the picks say "Installed", and
+    // after setup it comes back when a provider is ticked.
     return null;
   }
   return (
@@ -737,6 +748,9 @@ export interface SetupOptions {
   clientActionHint?: string;
 }
 
+/** What core's paste text holds where a model's name goes (next/internal/core/setup_clients.go). */
+const MODEL_PLACEHOLDER = "<model-id>";
+
 /** The files to paste for one client, and a button that makes the client key they need. */
 function PasteText(props: { client: SetupClient }) {
   const { api, unauthorized } = useKit();
@@ -777,6 +791,14 @@ function PasteText(props: { client: SetupClient }) {
           <small class="hint">
             {rich(t("pasteAddress"), { address: <span class="mono">{data.base_url}</span> })}
           </small>
+          {data.files.some((file) => file.content.includes(MODEL_PLACEHOLDER)) && (
+            <small class="hint">
+              {rich(t("pasteModel"), {
+                placeholder: <span class="mono">{MODEL_PLACEHOLDER}</span>,
+                command: <span class="mono">pluxy model list</span>,
+              })}
+            </small>
+          )}
           {error && <Notice tone="danger">{error}</Notice>}
           {key ? (
             <>
@@ -893,9 +915,19 @@ export function SetupPage(props: { options?: SetupOptions }) {
     location.hash = "#/";
   });
 
-  // The page after this one opens at its top. The window keeps its scroll position from one page
-  // to the next, and this page's ways out (Finish, a client's button, its links) are far down it.
-  useEffect(() => () => window.scrollTo(0, 0), []);
+  // A sign-in can finish somewhere else (a browser tab, another window): the accounts are read
+  // again when this page is looked at again.
+  useEffect(() => {
+    const again = () => {
+      if (document.visibilityState === "visible") accounts.reload();
+    };
+    window.addEventListener("focus", again);
+    document.addEventListener("visibilitychange", again);
+    return () => {
+      window.removeEventListener("focus", again);
+      document.removeEventListener("visibilitychange", again);
+    };
+  }, [accounts.reload]);
 
   // While core scans, read its answer again every second, as long as the page is visible.
   const scanning = setup?.scanning === true;
@@ -1049,7 +1081,11 @@ export function SetupView(props: {
     <>
       <PageHead title={t("title")} />
       <div class="setup stack">
-        <p class="muted setup-hint">{setup.first_run ? t("introFirst") : t("introLater")}</p>
+        <p class="muted setup-hint">
+          {!setup.first_run
+            ? t("introLater")
+            : `${t("introFirst")} ${t(startInstalls(setup, results) ? "introUntilStart" : "introOptional")}`}
+        </p>
         <Found
           setup={setup}
           remote={props.remote}

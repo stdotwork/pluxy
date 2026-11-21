@@ -161,6 +161,19 @@ test.describe("review regressions", () => {
     expect((await notice.locator('[data-part="key-value"]').textContent()) === key).toBe(true);
     await notice.getByRole("button", { name: "Copy", exact: true }).click();
     expect((await page.evaluate(() => navigator.clipboard.readText())) === key).toBe(true);
+    // "Copied" goes about two seconds after the last press, so the next press shows again.
+    await page.clock.install();
+    await page.clock.pauseAt(await page.evaluate(() => Date.now() + 100));
+    const copied = notice.getByText("Copied", { exact: true });
+    await notice.getByRole("button", { name: "Copy", exact: true }).click();
+    await expect(copied).toBeVisible();
+    await page.clock.runFor(1500);
+    await notice.getByRole("button", { name: "Copy", exact: true }).click();
+    await page.clock.runFor(1500);
+    await expect(copied).toBeVisible();
+    await page.clock.runFor(600);
+    await expect(copied).toHaveCount(0);
+    await page.clock.resume();
     await search.fill("");
     const removed = clients.locator('[data-part="item"]').last();
     await removed.getByRole("button", { name: "Delete", exact: true }).click();

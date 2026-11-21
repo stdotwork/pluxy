@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/stdotwork/pluxy/next/format/internal/audioinput"
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
 	"github.com/stdotwork/pluxy/next/llm"
 )
@@ -88,6 +89,14 @@ type chatPart struct {
 		FileData string `json:"file_data"`
 		Filename string `json:"filename"`
 	} `json:"file"`
+	InputAudio *chatInputAudio `json:"input_audio"`
+}
+
+// chatInputAudio is Chat's input_audio part: the base64 bytes of an audio blob and the format
+// token that names them.
+type chatInputAudio struct {
+	Data   string `json:"data"`
+	Format string `json:"format,omitempty"`
 }
 
 func invalid(msg string, args ...any) *llm.Error {
@@ -196,6 +205,16 @@ func parseTool(raw json.RawMessage, path string) (llm.Tool, error) {
 	}, nil
 }
 
+// chatAllowedTool is one entry of a tool choice's allowed_tools list: a function, named in
+// function.name as Chat writes it or, as some clients write it, in name.
+type chatAllowedTool struct {
+	Type     string `json:"type"`
+	Function struct {
+		Name string `json:"name"`
+	} `json:"function"`
+	Name string `json:"name"`
+}
+
 func parseToolChoice(raw json.RawMessage) *llm.ToolChoice {
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
@@ -210,12 +229,47 @@ func parseToolChoice(raw json.RawMessage) *llm.ToolChoice {
 		Function struct {
 			Name string `json:"name"`
 		} `json:"function"`
+		AllowedTools *struct {
+			Mode  string            `json:"mode"`
+			Tools []chatAllowedTool `json:"tools"`
+		} `json:"allowed_tools"`
 	}
-	if json.Unmarshal(raw, &o) == nil && o.Type == "function" && o.Function.Name != "" && len(rawjson.Object(raw)) == 2 &&
+	if json.Unmarshal(raw, &o) != nil {
+		return nil
+	}
+	if o.Type == "allowed_tools" {
+		return allowedToolChoice(o.AllowedTools)
+	}
+	if o.Type == "function" && o.Function.Name != "" && len(rawjson.Object(raw)) == 2 &&
 		len(rawjson.Object(rawjson.Object(raw)["function"])) == 1 {
 		return &llm.ToolChoice{Mode: llm.ToolChoiceTool, Name: o.Function.Name}
 	}
 	return nil
+}
+
+// allowedToolChoice reads a tool choice's allowed_tools object: its mode (auto or required) and
+// the function tools it names, as the model's allowed list. One that names anything else, or no
+// tool, is nil, so the choice stays whole in the request's fields rather than losing the entries
+// the model has no place for.
+func allowedToolChoice(o *struct {
+	Mode  string            `json:"mode"`
+	Tools []chatAllowedTool `json:"tools"`
+}) *llm.ToolChoice {
+	if o == nil || len(o.Tools) == 0 || (o.Mode != llm.ToolChoiceAuto && o.Mode != llm.ToolChoiceRequired) {
+		return nil
+	}
+	names := make([]string, 0, len(o.Tools))
+	for _, t := range o.Tools {
+		name := t.Function.Name
+		if name == "" {
+			name = t.Name
+		}
+		if t.Type != "function" || name == "" {
+			return nil
+		}
+		names = append(names, name)
+	}
+	return &llm.ToolChoice{Mode: o.Mode, Allowed: names}
 }
 
 func parseResponseFormat(raw json.RawMessage) *llm.ResponseFormat {
@@ -253,12 +307,24 @@ func parseMessage(raw json.RawMessage, path string) ([]llm.Item, error) {
 	switch m.Role {
 	case llm.RoleSystem, llm.RoleDeveloper, llm.RoleUser, llm.RoleAssistant:
 	case "tool":
-		text, err := plainText(m.Content)
+		// Text parts are the result's text; a result that holds images, files or other parts
+		// keeps them all, in order, as its parts.
+		parts, _, err := parseContent(m.Content, path+".content")
 		if err != nil {
 			return nil, err
 		}
-		return []llm.Item{{Type: llm.ItemTypeToolResult, CallID: m.ToolCallID, Output: text,
-			Origin: rawjson.Origin(format, path, obj, []string{"role", "content", "tool_call_id"}, nil)}}, nil
+		it := llm.Item{Type: llm.ItemTypeToolResult, CallID: m.ToolCallID,
+			Origin: rawjson.Origin(format, path, obj, []string{"role", "content", "tool_call_id"}, nil)}
+		var text strings.Builder
+		for _, p := range parts {
+			if p.Type == llm.PartText {
+				text.WriteString(p.Text)
+			} else {
+				it.Content = parts
+			}
+		}
+		it.Output = text.String()
+		return []llm.Item{it}, nil
 	default:
 		return nil, fmt.Errorf("unsupported role %q", m.Role)
 	}
@@ -345,28 +411,17 @@ func parseContent(raw json.RawMessage, path string) (parts []llm.Part, textConte
 			file := rawjson.Rest(rawjson.Object(obj["file"]), "file_id", "file_data", "filename")
 			parts = append(parts, llm.Part{Type: llm.PartFile, FileID: p.File.FileID, FileData: p.File.FileData, Filename: p.File.Filename,
 				Origin: rawjson.Origin(format, pp, obj, []string{"type", "file"}, map[string]json.RawMessage{"file": file})})
+		case p.Type == "input_audio" && p.InputAudio != nil && p.InputAudio.Data != "":
+			audio := rawjson.Rest(rawjson.Object(obj["input_audio"]), "data", "format")
+			parts = append(parts, llm.Part{Type: llm.PartFile,
+				FileData: audioinput.DataURL(audioinput.MIME(p.InputAudio.Format), p.InputAudio.Data),
+				Origin:   rawjson.Origin(format, pp, obj, []string{"type", "input_audio"}, map[string]json.RawMessage{"input_audio": audio})})
 		default:
 			parts = append(parts, llm.Part{Type: llm.PartNative, Format: format, Data: append(json.RawMessage(nil), rp...),
 				Origin: &llm.Origin{Format: format, Path: pp}})
 		}
 	}
 	return parts, false, nil
-}
-
-// plainText reads content that must be text: a string or a list of text parts.
-func plainText(raw json.RawMessage) (string, error) {
-	parts, _, err := parseContent(raw, "")
-	if err != nil {
-		return "", err
-	}
-	var b bytes.Buffer
-	for _, p := range parts {
-		if p.Type != llm.PartText {
-			return "", fmt.Errorf("tool message content must be text")
-		}
-		b.WriteString(p.Text)
-	}
-	return b.String(), nil
 }
 
 type outMessage struct {
@@ -391,6 +446,7 @@ type outPart struct {
 		FileData string `json:"file_data,omitempty"`
 		Filename string `json:"filename,omitempty"`
 	} `json:"file,omitempty"`
+	InputAudio *chatInputAudio `json:"input_audio,omitempty"`
 }
 
 type outRequest struct {
@@ -510,8 +566,21 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 			reasoning = ""
 		}
 	}
+	// Chat Completions takes only text in a tool message, so a tool result's images and files
+	// wait for the first item after the run of tool results: a user message takes them at its
+	// start, anything else gets a user message of its own before it.
+	var relay toolMedia
+	flushRelay := func() {
+		if content := relay.take(); content != nil {
+			msgs = append(msgs, &outMessage{Role: llm.RoleUser, Content: content})
+		}
+	}
 	for i, it := range req.Items {
 		p := path(it.Origin, fmt.Sprintf("items[%d]", i))
+		intoUser := it.Type == llm.ItemTypeMessage && it.Role == llm.RoleUser && !emptyForeign(it, format)
+		if it.Type != llm.ItemTypeToolResult && !intoUser {
+			flushRelay()
+		}
 		// Reasoning waits for the assistant message or tool call it belongs to. Native items are
 		// dropped, so they do not end the wait (an Anthropic redacted thinking block sits between
 		// thinking and the text or tool call it leads to).
@@ -538,6 +607,9 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 			content, sendable, dropped, err := e.content(it, p)
 			if err != nil {
 				return nil, nil, err
+			}
+			if media := relay.take(); media != nil {
+				content, sendable = joinContent(media, content), true
 			}
 			if it.Role == llm.RoleUser && dropped && !sendable {
 				return nil, nil, invalid("%s: nothing in this user turn can be sent to Chat Completions", p)
@@ -585,7 +657,11 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 			}
 			last.ToolCalls = append(last.ToolCalls, marshal(tc, raw))
 		case llm.ItemTypeToolResult:
-			msgs = append(msgs, &outMessage{Role: "tool", Content: it.Output, ToolCallID: it.CallID, raw: e.kept(it.Origin)})
+			content, err := e.toolResult(it, p, &relay)
+			if err != nil {
+				return nil, nil, err
+			}
+			msgs = append(msgs, &outMessage{Role: "tool", Content: content, ToolCallID: it.CallID, raw: e.kept(it.Origin)})
 		case llm.ItemTypeNative:
 			e.lose(llm.LossDropped, p, "Chat Completions has no such item")
 		default:
@@ -593,6 +669,7 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 		}
 	}
 	flushReasoning()
+	flushRelay()
 	for _, m := range msgs {
 		if m.Role == llm.RoleAssistant && m.Content == nil && len(m.ToolCalls) == 0 {
 			m.Content = "" // Chat Completions needs content when there are no tool calls
@@ -642,6 +719,98 @@ func encodeBody(out *outRequest) ([]byte, error) {
 	// the messages' array after a comma.
 	b = append(b, ',')
 	return append(b, tail[1:]...), nil
+}
+
+// toolResult returns a tool message's content for a tool result: its text. Its images, files and
+// other parts go to relay, for the user message after the tool messages, as CLIProxyAPI sends
+// them; a result that had nothing but those says so in its text. Chat Completions has no place
+// for the error flag.
+func (e *encoder) toolResult(it llm.Item, itemPath string, relay *toolMedia) (string, error) {
+	if it.IsError {
+		e.lose(llm.LossDropped, rawjson.Join(itemPath, "is_error"), "Chat Completions has no error flag on a tool result")
+	}
+	var mine toolMedia
+	for i, p := range it.Content {
+		pp := path(p.Origin, fmt.Sprintf("%s.content[%d]", itemPath, i))
+		if p.Type == llm.PartText {
+			// Its text is in Output.
+			e.kept(p.Origin)
+			continue
+		}
+		if p.Origin == nil || p.Origin.Path == "" {
+			o := llm.Origin{Path: pp}
+			if p.Origin != nil {
+				o = *p.Origin
+				o.Path = pp
+			}
+			p.Origin = &o
+		}
+		content, _, dropped, err := e.content(llm.Item{Role: llm.RoleUser, Content: []llm.Part{p}}, itemPath)
+		if err != nil {
+			return "", err
+		}
+		if dropped {
+			continue
+		}
+		parts, _ := content.([]json.RawMessage)
+		mine.add(p.Type == llm.PartImage, parts)
+		e.lose(llm.LossApproximated, pp, "a tool result's "+partFormat(p)+", sent in a user message after the tool messages")
+	}
+	relay.parts = append(relay.parts, mine.parts...)
+	relay.images, relay.files = relay.images || mine.images, relay.files || mine.files
+	if it.Output == "" && len(mine.parts) > 0 {
+		return "[The tool returned " + mine.what() + "; they follow in the next user message.]", nil
+	}
+	return it.Output, nil
+}
+
+func partFormat(p llm.Part) string {
+	if p.Type == llm.PartNative {
+		return p.Format + " part"
+	}
+	return p.Type
+}
+
+// toolMedia collects the images and files of tool results for the user message that follows them.
+type toolMedia struct {
+	parts         []json.RawMessage
+	images, files bool
+}
+
+func (m *toolMedia) add(image bool, parts []json.RawMessage) {
+	if len(parts) == 0 {
+		return
+	}
+	m.parts = append(m.parts, parts...)
+	if image {
+		m.images = true
+	} else {
+		m.files = true
+	}
+}
+
+func (m *toolMedia) what() string {
+	switch {
+	case m.images && m.files:
+		return "images and files"
+	case m.images:
+		return "images"
+	}
+	return "files"
+}
+
+// take returns the collected parts after a line that says where they came from, or nil when there
+// are none, and empties m.
+func (m *toolMedia) take() any {
+	if len(m.parts) == 0 {
+		return nil
+	}
+	what := m.what()
+	text := strings.ToUpper(what[:1]) + what[1:] + " returned by the preceding tool call(s):"
+	notice := marshal(outPart{Type: "text", Text: &text}, nil)
+	out := append([]json.RawMessage{notice}, m.parts...)
+	*m = toolMedia{}
+	return out
 }
 
 // geminiSignature takes the thought signature off a function call from a Gemini request and
@@ -708,6 +877,13 @@ func joinReasoning(have, next string) string {
 }
 
 func encodeToolChoice(tc *llm.ToolChoice) any {
+	if len(tc.Allowed) > 0 {
+		tools := make([]any, 0, len(tc.Allowed))
+		for _, name := range tc.Allowed {
+			tools = append(tools, map[string]any{"type": "function", "function": map[string]string{"name": name}})
+		}
+		return map[string]any{"type": "allowed_tools", "allowed_tools": map[string]any{"mode": tc.Mode, "tools": tools}}
+	}
 	if tc.Mode == llm.ToolChoiceTool {
 		return map[string]any{"type": "function", "function": map[string]string{"name": tc.Name}}
 	}
@@ -768,6 +944,14 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 			out = append(out, marshal(op, e.kept(p.Origin)))
 			sendable = true
 		case llm.PartFile:
+			// Chat takes audio as input_audio, with its bytes inline; a file part holding audio
+			// is that audio however the client sent it.
+			if mediaType, data, ok := audioinput.Inline(p); ok {
+				op := outPart{Type: "input_audio", InputAudio: &chatInputAudio{Data: data, Format: audioinput.Format(mediaType)}}
+				out = append(out, marshal(op, e.kept(p.Origin)))
+				sendable = true
+				continue
+			}
 			if p.FileID == "" && p.FileData == "" {
 				// Chat Completions takes a file id or inline data, not a URL.
 				e.lose(llm.LossDropped, pp, "Chat Completions cannot take a file by URL")

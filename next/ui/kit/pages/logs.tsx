@@ -56,6 +56,8 @@ const t = strings("logs", {
   empty: "No Logs Available",
   noMatch: "No matching logs found",
   off: "Logging to file is off. Enable logging to file in the Config Panel's Logging tab, then refresh.",
+  noRequestLog:
+    "A request has a log of its own only when request logging was on while it ran. Switch it on in the Config Panel's Logging tab; requests after that get one.",
   config: "Config Panel — Logging",
   retained: "Showing the latest 10,000 loaded lines. Older lines are no longer searched or downloaded here.",
 });
@@ -99,6 +101,8 @@ export function LogsPage() {
   const [requested, setRequested] = useState("");
   const [request, setRequest] = useState<LogContent>();
   const [requestError, setRequestError] = useState<string>();
+  /** Core holds no request log under the trace asked for. */
+  const [requestMissing, setRequestMissing] = useState(false);
   const [requestBusy, setRequestBusy] = useState(false);
   const mounted = useRef(true);
   const inFlight = useRef(false);
@@ -140,6 +144,7 @@ export function LogsPage() {
     setRequested(trace);
     setRequest(undefined);
     setRequestError(undefined);
+    setRequestMissing(false);
     setRequestBusy(!!trace);
     if (!trace) return;
     const r = await api.requestLog(trace);
@@ -147,6 +152,7 @@ export function LogsPage() {
     setRequestBusy(false);
     if (r.status === 401) return unauthorized();
     setRequestError(problem(r));
+    setRequestMissing(r.status === 404);
     if (!problem(r)) setRequest(r.body);
   };
   useEffect(() => {
@@ -391,6 +397,14 @@ export function LogsPage() {
             <h3>{t("viewRequest", { id: requested })}</h3>
             {requestBusy && <Notice tone="muted">{t("loading")}</Notice>}
             {requestError && <Notice tone="danger">{mask(requestError)}</Notice>}
+            {requestMissing && (
+              <p class="hint">
+                {t("noRequestLog")}{" "}
+                <a href="#/config/logging" data-part="button">
+                  {t("config")}
+                </a>
+              </p>
+            )}
             {request && (
               <>
                 <Button onClick={() => saveLog(request.name, request.content)}>{t("download")}</Button>

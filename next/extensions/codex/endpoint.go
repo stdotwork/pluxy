@@ -17,6 +17,13 @@ import (
 // maxEndpointReply limits what is read of an upstream's whole (not streamed) endpoint reply.
 const maxEndpointReply = 64 << 20
 
+// inputTokensBody is the part of sdk.Stream an input-token count writes its reply through.
+type inputTokensBody interface {
+	StartBody(format, contentType string) error
+	Body(chunk string) error
+	Finish(f llm.Finish, usage *llm.Usage) error
+}
+
 // endpoint serves endpoint calls: requests to Codex endpoints beyond generation.
 func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	format := ""
@@ -40,6 +47,8 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	switch format {
 	case llm.FormatOpenAIResponsesCompact:
 		return compact(ctx, call, out)
+	case llm.FormatOpenAIResponsesInputTokens:
+		return inputTokens(ctx, call, out)
 	case llm.FormatCodexAlphaSearch:
 		return alphaSearch(ctx, call, out)
 	case llm.FormatOpenAIImagesGenerations:
@@ -153,6 +162,78 @@ func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return err
 	}
 	return out.Finish(llm.Finish{Reason: llm.FinishStop}, responseUsage(r.Usage))
+}
+
+// inputTokens counts a Responses request's input tokens on an API-key account. OpenAI's API
+// takes the same request at {base_url}/responses/input_tokens. A ChatGPT subscription has no
+// such endpoint; an account that cannot count answers unsupported so core estimates it.
+func inputTokens(ctx context.Context, call sdk.Call, out inputTokensBody) error {
+	s, err := readSettings(call.Account.Settings)
+	if err != nil {
+		return err
+	}
+	a, err := accountOf(call.Account.Credential)
+	if err != nil {
+		return err
+	}
+	if a.subscription {
+		return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
+			Message: "a ChatGPT subscription has no Responses input token count endpoint"}
+	}
+	req := call.Request
+	body := []byte(req.Native.Body)
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(body, &m); err != nil || m == nil {
+		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "the request body is not a JSON object", Scope: llm.ScopeRequest}
+	}
+	var named string
+	_ = json.Unmarshal(m["model"], &named)
+	if req.Model != "" && named != req.Model {
+		// The account may know the model by another name (an alias or prefix): the upstream
+		// counts for the model routing chose.
+		m["model"] = raw(req.Model)
+		if body, err = json.Marshal(m); err != nil {
+			return err
+		}
+	}
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL(s, a)+"/responses/input_tokens", bytes.NewReader(body))
+	if err != nil {
+		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
+	}
+	h := hreq.Header
+	h.Set("Content-Type", "application/json")
+	h.Set("Accept", "application/json")
+	h.Set("Authorization", "Bearer "+a.token)
+	sent := req.Native.Headers
+	for _, name := range passedHeaders {
+		if v := sent[name]; v != "" {
+			h.Set(name, v)
+		}
+	}
+	setIdentity(h, sent, s, a)
+	resp, err := client.Do(hreq)
+	if err != nil {
+		return requestFailed(ctx, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return endpointStatusError(resp, req.Model)
+	}
+	reply, err := readReply(ctx, resp, "input token count")
+	if err != nil {
+		return err
+	}
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	if err := out.StartBody(llm.FormatOpenAIResponsesInputTokens, contentType); err != nil {
+		return err
+	}
+	if err := out.Body(string(reply)); err != nil {
+		return err
+	}
+	return out.Finish(llm.Finish{Reason: llm.FinishStop}, nil)
 }
 
 // endpointStatusError is statusError for an endpoint call. A 404 that does not name a missing
@@ -335,10 +416,11 @@ func imageModel(name string) string {
 
 // images serves the Images API (generations and edits) through the account's Codex upstream:
 // the client's JSON body goes to {base_url}{path}, the model named as the upstream knows it and
-// stream left out unless it is true, and the upstream's reply (JSON, or server-sent events for a
-// stream) comes back as it is, as today's core sends both. A multipart edit arrives in its JSON
-// form (core reads it), as today's core also sends it. A free ChatGPT plan, and an account whose
-// "images" setting is false, do not serve it.
+// stream left out unless it is true, and the upstream's reply comes back as it is: JSON, or
+// server-sent events for a stream. An upstream that ignores stream=true and answers JSON to a
+// streaming client gets its images turned into the streaming events (imageStreamEvents). A
+// multipart edit arrives in its JSON form (core reads it), as today's core also sends it. A free
+// ChatGPT plan, and an account whose "images" setting is false, do not serve it.
 func images(ctx context.Context, call sdk.Call, out *sdk.Stream, path string) error {
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
@@ -412,6 +494,12 @@ func images(ctx context.Context, call sdk.Call, out *sdk.Stream, path string) er
 			ct = "text/event-stream"
 		}
 	}
+	// Codex's native edits endpoint can ignore stream=true and answer with one JSON Images API
+	// document. A client that asked to stream gets the events OpenAI defines for it instead.
+	convert := stream && !strings.HasPrefix(ct, "text/event-stream")
+	if convert {
+		ct = "text/event-stream"
+	}
 	if err := out.StartBody(call.Request.Native.Format, ct); err != nil {
 		return err
 	}
@@ -419,7 +507,9 @@ func images(ctx context.Context, call sdk.Call, out *sdk.Stream, path string) er
 	var kept bytes.Buffer
 	var dst io.Writer = out.BodyWriter()
 	bw := dst.(*sdk.BodyWriter)
-	if !strings.HasPrefix(ct, "text/event-stream") {
+	if convert {
+		dst = &limitedBuffer{b: &kept, max: maxEndpointReply}
+	} else if !strings.HasPrefix(ct, "text/event-stream") {
 		dst = io.MultiWriter(bw, &limitedBuffer{b: &kept, max: maxEndpointReply})
 	}
 	if _, err := io.Copy(dst, resp.Body); err != nil {
@@ -427,6 +517,15 @@ func images(ctx context.Context, call sdk.Call, out *sdk.Stream, path string) er
 			return ctx.Err()
 		}
 		return &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
+	}
+	if convert {
+		events, err := imageStreamEvents(path, kept.Bytes())
+		if err != nil {
+			return &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream image reply: " + err.Error(), Scope: llm.ScopeEndpoint}
+		}
+		if _, err := io.WriteString(bw, events); err != nil {
+			return err
+		}
 	}
 	if err := bw.Close(); err != nil {
 		return err
@@ -436,6 +535,53 @@ func images(ctx context.Context, call sdk.Call, out *sdk.Stream, path string) er
 	}
 	_ = json.Unmarshal(kept.Bytes(), &r)
 	return out.Finish(llm.Finish{Reason: llm.FinishStop}, responseUsage(r.Usage))
+}
+
+// imageStreamEvents turns an Images API JSON reply into the server-sent events OpenAI's Images
+// API streaming defines for the endpoint: one image_edit.completed (or
+// image_generation.completed) per image, carrying the image, the reply's own fields and its
+// usage. Codex's native edits endpoint answers so when it ignores stream=true.
+func imageStreamEvents(path string, raw []byte) (string, error) {
+	var r struct {
+		Created      int64           `json:"created"`
+		Background   string          `json:"background"`
+		OutputFormat string          `json:"output_format"`
+		Quality      string          `json:"quality"`
+		Size         string          `json:"size"`
+		Usage        json.RawMessage `json:"usage"`
+		Data         []struct {
+			B64JSON string `json:"b64_json"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return "", err
+	}
+	kind := "image_generation"
+	if path == "/images/edits" {
+		kind = "image_edit"
+	}
+	var b strings.Builder
+	for _, image := range r.Data {
+		event := map[string]any{"type": kind + ".completed", "b64_json": image.B64JSON}
+		if r.Created != 0 {
+			event["created_at"] = r.Created
+		}
+		for name, value := range map[string]string{"background": r.Background, "output_format": r.OutputFormat,
+			"quality": r.Quality, "size": r.Size} {
+			if value != "" {
+				event[name] = value
+			}
+		}
+		if len(r.Usage) > 0 {
+			event["usage"] = r.Usage
+		}
+		data, err := json.Marshal(event)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&b, "event: %s\ndata: %s\n\n", kind+".completed", data)
+	}
+	return b.String(), nil
 }
 
 // limitedBuffer keeps at most max bytes of what is written to it and drops the rest, never

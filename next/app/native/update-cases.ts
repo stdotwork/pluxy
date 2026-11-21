@@ -529,7 +529,10 @@ export function alive(pid: number): boolean {
  * one after the other: the kernel's start tick on Linux (`/proc/<pid>/stat`), `ps`'s start time on
  * macOS, the start time PowerShell reads on Windows. `undefined` when it cannot be read (the
  * process is gone, or the system's tool failed). */
-export function startOf(pid: number, platform: NodeJS.Platform = process.platform): string | undefined {
+export async function startOf(
+  pid: number,
+  platform: NodeJS.Platform = process.platform,
+): Promise<string | undefined> {
   try {
     if (platform === "linux") {
       // Field 22 of the stat line; the command (field 2) may hold spaces and brackets, so count
@@ -537,40 +540,48 @@ export function startOf(pid: number, platform: NodeJS.Platform = process.platfor
       const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
       return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] || undefined;
     }
-    const r =
+    const command =
       platform === "darwin"
-        ? spawnSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf8", timeout: 20_000 })
+        ? ["/bin/ps", "-o", "lstart=", "-p", String(pid)]
         : platform === "win32"
-          ? spawnSync(
+          ? [
               "powershell.exe",
-              [
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`,
-              ],
-              { encoding: "utf8", timeout: 20_000 },
-            )
+              "-NoProfile",
+              "-NonInteractive",
+              "-Command",
+              `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks`,
+            ]
           : undefined;
-    const text = r?.status === 0 ? r.stdout.trim() : "";
-    return text || undefined;
+    return command ? await outputOf(command, 20_000) : undefined;
   } catch {
     return undefined;
   }
 }
 
+/** What command writes to stdout, trimmed, if it exits 0 within ms; `undefined` otherwise. It runs
+ * without holding up this process: the session serves the update feed from it, and a cold
+ * PowerShell on a loaded Windows runner took close to 20 s, longer than the app waits to connect
+ * to the feed (10 s). */
+export async function outputOf(command: string[], ms: number): Promise<string | undefined> {
+  const p = Bun.spawn(command, { stdout: "pipe", stderr: "ignore", stdin: "ignore", timeout: ms });
+  const out = new Response(p.stdout).text();
+  // A tool ended for its time may leave a child holding its output: not waited for then.
+  if ((await p.exited) !== 0) return undefined;
+  return (await out).trim() || undefined;
+}
+
 /** Whether the process that was `pid` and started at `started` (`startOf`, read while it was known
  * to run) still runs. An id given to a later process does not count: it started at another time.
  * Without a start time (`started` unread) or while it cannot be read again, the id alone says. */
-export function stillRuns(
+export async function stillRuns(
   pid: number,
   started: string | undefined,
   isAlive: (pid: number) => boolean = alive,
-  now: (pid: number) => string | undefined = startOf,
-): boolean {
+  now: (pid: number) => Promise<string | undefined> = startOf,
+): Promise<boolean> {
   if (!isAlive(pid)) return false;
   if (started === undefined) return true;
-  const at = now(pid);
+  const at = await now(pid);
   return at === undefined || at === started;
 }
 
@@ -651,7 +662,8 @@ export async function updateRoute(o: Route): Promise<Set<string>> {
   // The installed copy's pin, read here when each stage reported.
   const pins: Record<string, string> = {};
   const pids: Record<string, number> = {};
-  let refusedStart: string | undefined;
+  // The refused version's start time, read while it runs (startOf).
+  let refusedStart: Promise<string | undefined> = Promise.resolve(undefined);
   let earlierEnded: boolean | undefined;
   let third: Awaited<ReturnType<typeof thirdLaunch>> | undefined;
   const onStep = async (name: string, v: Step) => {
@@ -668,11 +680,12 @@ export async function updateRoute(o: Route): Promise<Set<string>> {
       if (stage === "refused") refusedStart = startOf(pids.refused as number);
       // The version that installed the update ends once the new one has accepted itself.
       if (stage === "updated" && pids.refused) {
-        if (refusedStart === undefined)
+        const started = await refusedStart;
+        if (started === undefined)
           say(`start time of the refused version's process ${pids.refused} unread: waiting on its id alone`);
         const until = Date.now() + 30_000;
-        while (stillRuns(pids.refused, refusedStart) && Date.now() < until) await Bun.sleep(200);
-        earlierEnded = !stillRuns(pids.refused, refusedStart);
+        while ((await stillRuns(pids.refused, started)) && Date.now() < until) await Bun.sleep(200);
+        earlierEnded = !(await stillRuns(pids.refused, started));
       }
     }
     if (name === "update_gap_hidden") {

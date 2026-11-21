@@ -66,10 +66,9 @@ account ID and settings, request model and native format, and operation, without
 
 ```bash
 go generate ./internal/panel   # builds the web panel core embeds; needs Bun (skip it for a core without the panel)
+go run ./cmd/pluxy-pack -out dist   # packs the provider extensions and their registry index for this platform
 go build -o pluxy ./cmd/pluxy
 go build -ldflags "-X github.com/stdotwork/pluxy/next/internal/buildinfo.Version=1.2.3 -X github.com/stdotwork/pluxy/next/internal/buildinfo.Commit=$(git rev-parse HEAD) -X github.com/stdotwork/pluxy/next/internal/buildinfo.Date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o pluxy ./cmd/pluxy   # sets the build info; without -ldflags the version is dev, and a git checkout still records its commit and time
-go build -o extensions/openai-compatible/openai-compatible ./extensions/openai-compatible
-go build -o extensions/claude/claude ./extensions/claude
 ```
 
 `config.json`:
@@ -78,32 +77,30 @@ go build -o extensions/claude/claude ./extensions/claude
 {
   "listen": "127.0.0.1:8400",
   "client_keys": ["choose-a-client-key"],
-  "management_key": "choose-a-management-key",
-  "extension": {
-    "manifest": "extensions/openai-compatible/pluxy-extension.json",
-    "accounts": [
-      {
-        "id": "openai",
-        "settings": {"base_url": "https://api.openai.com/v1"},
-        "credential": {"kind": "api_key", "api_key": "sk-..."}
-      }
-    ]
-  }
+  "management_key": "choose-a-management-key"
 }
 ```
 
 ```bash
-./pluxy serve -config config.json
+./pluxy serve -config config.json -bundled dist/bundled/index.json
 ```
 
-`pluxy -config config.json`, with no subcommand, serves too. With no file at the config's path,
-`pluxy serve` writes a first config there and starts on it: it listens on `127.0.0.1` port 8317,
-or a free port when 8317 is taken, with one new client key and a new management key, in a file
-only its user can read. Core logs the file's path and the address, never the keys; read them in
-the file. `pluxy init [-config file] [-port n]` writes the same config without starting core
-(`-port 0`: a free port), and never replaces a file. A config with no management key is refused
-at start, with a message saying how to add one. A first start installs no package: install the
-providers you use from the bundled registry ([Packages](#packages)) or the panel. Flags:
+`pluxy-pack` gives a source build the same provider packages a release ships. Without
+`-bundled` (or a `bundled` folder beside the program), core has no registry: Setup has no
+providers to offer and Extensions has nothing to install. Add Account has no sign-in methods
+unless the config names an extension directly. After starting core, open Setup in the panel and
+tick the providers you use, or install one by ID from the terminal with
+`./pluxy setup apply --pick pluxy/claude`.
+
+`pluxy -config config.json -bundled dist/bundled/index.json`, with no subcommand, serves too.
+With no file at the config's path, `pluxy serve -bundled dist/bundled/index.json` writes a first
+config there and starts on it: it listens on `127.0.0.1` port 8317, or a free port when 8317 is
+taken, with one new client key and a new management key, in a file only its user can read. Core
+logs the file's path and the address, never the keys; read them in the file. `pluxy init
+[-config file] [-port n]` writes the same config without starting core (`-port 0`: a free port),
+and never replaces a file. A config with no management key is refused at start, with a message
+saying how to add one. A first start installs no package: install the providers you use from the
+bundled registry ([Packages](#packages)) or the panel. Flags:
 
 - `-config`: the config file (default `config.json`).
 - `-version`: print the build's version, commit and build date on one line, `pluxy <version> (<commit>, <date>)`, and exit. It does not read the config. Core logs the same line when it starts.
@@ -154,7 +151,24 @@ A Chat or Responses account sends a reasoning effort the upstream may not take a
 it does, as today's core does: `"reasoning_levels"` in its `settings` lists the efforts the
 upstream accepts (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`), by default `low`,
 `medium` and `high`, so `xhigh` and `max` go as `high`, `minimal` and `none` as `low`, and `auto`
-as `medium`. Today's core refuses `minimal` with a 400 instead.
+as `medium`. Today's core refuses `minimal` with a 400 instead. A client that asked for an effort the
+account moved is told in the translation report: an approximated loss naming the effort asked and
+the effort sent.
+
+A Chat account shapes the requests it sends with three more settings, for upstreams stricter than
+OpenAI's own. `"developer_role"` is `"developer"` (the default) or `"system"`, the role a developer
+message goes as. `"string_content"`, when true, sends a message whose content is only text parts as
+one string. `"reasoning_passback"` decides what happens to the `reasoning_content` of earlier assistant
+turns: true sends it back (for DeepSeek's thinking mode with tools, which answers 400 to a turn
+without it, a blank one is sent for a turn that kept none, reported as an approximated loss; a
+request without tools or with `thinking` disabled is left alone), false sends none, and unset leaves
+what the client sent. A setting left unset takes its vendor's preset by `base_url` host, and a
+setting you give always wins: `api.deepseek.com` takes `developer_role` `"system"`,
+`string_content` true and `reasoning_passback` true (its messages have no developer role, a system or
+assistant message's content is a string, and thinking mode wants the reasoning back);
+`api.mistral.ai` takes `developer_role` `"system"` and `reasoning_passback` false (its messages have
+no developer role and an assistant message takes no `reasoning_content`). Other hosts, OpenRouter and
+Groq included, have no preset: their documentation names nothing they need shaped.
 
 For an OpenAI-compatible account whose vendor offers a usage or balance endpoint for a normal API
 key, `GET /v0/management/accounts/{id}/quota` reads it: OpenRouter's `GET /api/v1/key` (reporting
@@ -248,7 +262,8 @@ socket. `response.append`,
 The Codex CLI sends its requests to `POST /backend-api/codex/responses` and opens its WebSocket on
 `GET /backend-api/codex/responses` when its `chatgpt_base_url` points at core. As in today's core,
 both paths are aliases of `/v1/responses` and its WebSocket: the same handlers and the same client
-key check.
+key check. The bare `/responses` (and its WebSocket) is the same alias, for clients such as Droid's
+OpenAI provider that post to it.
 
 When an upstream ends a Responses stream with a `response.completed`, `response.incomplete` or
 `response.failed` whose `output` is empty, core fills it with the items the stream's
@@ -1294,7 +1309,8 @@ are the CLI's: the token twice as Basic credentials, Connect's version, a Sentry
 User-Agent and no compression. What Devin has no place for is reported as dropped (and refused
 under `drop_policy` `reject`): a client's fields kept beside the model (such as a Chat message's
 `name` or `seed`), parallel tool calls turned off, strict tool arguments, and parts other than
-text and base64 images. A tool result given as content blocks keeps its text. A user turn left
+text and base64 images. A tool result given as content blocks keeps its text; its images and
+error flag are reported as dropped. A user turn left
 with nothing once media Devin cannot take is dropped is refused, as today's core refuses it.
 
 The reply's frames become the reply's events as they arrive: reasoning, text, tool calls and
@@ -1748,7 +1764,8 @@ account serves is refused without calling an upstream, as today's core refuses i
 one, or one it could not read within 15 seconds serves any model, and core asks again a minute
 later. Core asks again for each known list every 30 minutes with jitter, when an account's
 credential is renewed or it signs in again, and on `POST /v0/management/models/refresh`; a
-refresh that fails, times out or comes back empty keeps the last good list.
+refresh that fails, times out or comes back empty keeps the last good list, and so does one that
+falls back to the extension's built-in list when the account's list was read from the provider.
 
 ### Codex client catalog
 
@@ -1858,9 +1875,13 @@ SYSTEM). A folder made by pluxy run as administrator is owned by the Administrat
 without administrator rights refuses it: take ownership of the folder and its files from an
 elevated prompt (`takeown /f <folder> /r`), or move the folder away and sign the accounts in again.
 A file in the folder that is a link, or that another account owns, is skipped with a notice in the
-log rather than loaded. A record file with a list of its own that lets in more (one written before
-the folder was private, or moved in from another folder), which making the folder private does not
-reach, is written again as a private file when the accounts are loaded, with a notice in the log.
+log rather than loaded. A file that does not read as a record (it is not JSON, or its `id` is not
+its file name) is skipped the same way, and the account its file name gives is listed as `broken`
+([management API](management/README.md#accounts)) until the file is fixed or the account is
+removed, rather than stopping core. A record file with a list of its own that lets in more (one
+written before the folder was private, or moved in from another folder), which making the folder
+private does not reach, is written again as a private file when the accounts are loaded, with a
+notice in the log.
 The same access list and folder checks keep the extensions' settings ([extension pages](ui/extension-pages/README.md)) and the [log files](#log-files) private.
 
 An extension may return non-secret account settings with a login grant. When adding an
@@ -1875,7 +1896,7 @@ at start and on a reload. Send it as a bearer token. The config may set no accou
 | Request | Does |
 | --- | --- |
 | `GET /accounts` | Lists every account (`source` `config` or `login`), its credential `kind`, `state` (`active`, or `reauth_required` when the provider refused the grant), `disabled`, `expires_at`, the last renewal error and the last [account check](#account-checks); its routing fields (`priority`, `weight`, `disable_cooling`, `max_concurrency`, `request_retry`, `prefix`, `models`, `excluded_models`, `model_alias`, `endpoint`), its own `proxy_url`, with `redacted` in place of a user name and password, and its
-[`headers`](#upstream-headers), with a placeholder in place of each secret value; its `health` (`state` `ok`, `cooling`, `exhausted`, `needs_login`, `banned` or `disabled`, with `until`, `why`, `source` and `next_check`; see `management/README.md`, "Accounts"); and what routing knows about it now: `cooldowns` (each live block's `scope`, `credential`, `model` with its `model`, or `endpoint`; `kind`, `rate_limit`, `quota` or `cooldown` for failures without a reset time; `until`; `backoff_level`; and the `error` that set it), `cooldown_until` (when the latest block on the whole account ends; model blocks do not count), `last_error` and `last_error_at` (the latest failure that set a block, until a request on the account that started after it succeeds; like a cooldown, it is not cleared by a request that started earlier, and a failure from a request that started before a success on the account sets none) and `active_requests`. An account that gets no requests (disabled, or waiting for a login) has no routing state. An account added by login also shows its `settings`, with each secret replaced by a placeholder in the same form as `GET /config` (see [Changing the config through management](#changing-the-config-through-management)), by the same rules made stricter: everything below a key named like a secret is a secret, however deep; `settings_inexact` is `true` when they hold a number that a client reading numbers as float64 and writing back the shortest decimal for each, as a browser does, would change (such as `0.10000000000000001`, `1e-400` or `9007199254740993`). Never a secret. |
+[`headers`](#upstream-headers), with a placeholder in place of each secret value; its `health` (`state` `ok`, `cooling`, `exhausted`, `needs_login`, `banned`, `disabled` or `broken`, with `until`, `why`, `source` and `next_check`; see `management/README.md`, "Accounts"); and what routing knows about it now: `cooldowns` (each live block's `scope`, `credential`, `model` with its `model`, or `endpoint`; `kind`, `rate_limit`, `quota` or `cooldown` for failures without a reset time; `until`; `backoff_level`; and the `error` that set it), `cooldown_until` (when the latest block on the whole account ends; model blocks do not count), `last_error` and `last_error_at` (the latest failure that set a block, until a request on the account that started after it succeeds; like a cooldown, it is not cleared by a request that started earlier, and a failure from a request that started before a success on the account sets none) and `active_requests`. An account that gets no requests (disabled, broken, or waiting for a login) has no routing state. An account added by login also shows its `settings`, with each secret replaced by a placeholder in the same form as `GET /config` (see [Changing the config through management](#changing-the-config-through-management)), by the same rules made stricter: everything below a key named like a secret is a secret, however deep; `settings_inexact` is `true` when they hold a number that a client reading numbers as float64 and writing back the shortest decimal for each, as a browser does, would change (such as `0.10000000000000001`, `1e-400` or `9007199254740993`). Never a secret. |
 | `POST /accounts` | Starts a login that adds an account: `{"id": "work", "extension": "pluxy/codex", "method": "device", "input": {...}, ...}` plus any account fields from the config (`settings`, `models`, `priority`, ...). `extension` names the extension that signs in and owns the account; it may be left out while only one extension runs. Replies 202 with the login, usually carrying its first prompt (a URL or a device code). |
 | `GET /logins/{id}` | The login's state (`pending`, `done`, `failed`, `cancelled`), prompt or error. |
 | `POST /logins/{id}/input` | `{"input": {...}}`: what the user entered for the prompt, such as the redirect URL of a browser login. |
@@ -2027,7 +2048,7 @@ its keys and its indent. `PUT /config` writes the document as sent.
 | `DELETE /v0/management/client-keys/{id}` | Removes the client key. 204; 404 when no key has the ID; 409 for the last key, since core refuses a config without client keys. |
 | `POST /v0/management/management-key/rotate` | Replaces the management key with a new random one and returns it as `value`. The old key stops working as the reply is sent. |
 | `GET /v0/management/models` | The models `GET /v1/models` lists, as one list in the same order: `models`, each with `id` (the name clients use), what the account, the catalogue and the extension say about the model (`owned_by`, `display_name`, `context_length`, `max_output_tokens`, `capabilities`, `from`, ...), `upstream` (its name upstream), `extension` (the extension of the account whose entry the list shows) and `accounts` (the IDs of the accounts a request for the name uses, as routing chooses them: one provider's, or with a fallback chain each step's in step order, highest priority first within a step). An account that serves any model because its list is not known adds no name, but is among the accounts of the names its provider serves; a fallback chain that only such accounts serve is listed as the first of them, with its step's model as `upstream`. Under the `weighted` strategy an account of `weight` 0 is in no entry. A name whose accounts all wait for a login or are turned off is left out. Never a credential. |
-| `POST /v0/management/models/refresh` | Ask providers for their model lists again now; optional JSON body `{"account": "<id>"}` for one account. Returns the updated `models` list and per-account `accounts` results (`models`, `kept`, `error`). A read that fails, times out or comes back empty keeps the last good list. |
+| `POST /v0/management/models/refresh` | Ask providers for their model lists again now; optional JSON body `{"account": "<id>"}` for one account. Returns the updated `models` list and per-account `accounts` results (`models`, `kept`, `error`). A read that fails, times out, comes back empty or falls back to the extension's built-in list keeps the last good list (the last live one, when it was read from the provider). |
 | `GET /v0/management/settings` | The basic and routing settings, by today's core's names, and `token_count_estimate`, this core's own, under its own name (below). |
 | `PATCH /v0/management/settings` | Changes the settings the body names (`{"routing": {"strategy": "fill-first"}}`) and replies with them all. 400 for a name or value it does not take. |
 
@@ -2110,8 +2131,9 @@ WebSocket turns. A WebSocket warmup (`generate: false`) that core answers itself
 upstream and is not recorded. Token counts (`count_tokens`, `:countTokens`) generate nothing
 and are not recorded. An event holds the request's trace ID (`id`, the `X-CPA-TRACE-ID` of its reply),
 when it arrived, the `endpoint`, whether it streamed, the `model` the client asked for (without a
-thinking suffix) and the account's own name for it when that differs (`upstream_model`: an alias
-or prefix resolved), the `provider` (extension) and `account` its last attempt went to, the
+thinking suffix), the account's own name for it when that differs (`upstream_model`: an alias
+or prefix resolved) and the model the upstream reply says served it when the reply names one
+(`served_model`), the `provider` (extension) and `account` its last attempt went to, the
 client key's `key_id` (the `id` `GET /client-keys` lists it under, never the key), the
 `client_ip` it came from (the connection's peer, or the client a trusted proxy names; see
 `trusted_proxies`), whether it `failed` with which `error_code`, the HTTP `status` of the reply, `latency_ms`, and the `tokens`
@@ -2471,9 +2493,10 @@ before anything is written.
 
 A migrated config needs its management key set again once. Today's core writes a bcrypt hash over
 `management.secret-key` in the file after it reads the key, and this core cannot use a hash: it
-refuses the config and says so. Replace the hash with the key itself, in plain text, or bring the
-setup across with `pluxy import cpa`, which makes a new key. A config with no management key at all
-is refused too, with a message saying how to add one.
+refuses the config and says so. Replace the hash with the key itself, in plain text. A config with
+no management key at all is refused too, with a message saying how to add one. `pluxy import cpa`
+does not bring the file's management key, plain or hashed: core keeps its own (see
+[moving from CLIProxyAPI](#moving-from-cliproxyapi-pluxy-import-cpa)).
 
 Settings only this core has keep their JSON names in a `config.yaml`: `packages`, `extensions`,
 `extension`, `extension_pages`, `drop_policy`, `token_count_estimate`, `credentials_dir` and `cors`
@@ -2647,11 +2670,14 @@ What the import changes, each under **changed**:
   `keep_with` gives the `"listen"` value to write and restart core with. A file with no
   `server.host` (or an empty one) is one of these: today's core listened on every interface then,
   and pluxy listens on `127.0.0.1` unless told otherwise.
-- A `management.secret-key` that today's core replaced with its bcrypt hash cannot be used: the import
-  makes a new management key, which the row shows once. The `pluxy` command reads it from the config
-  file.
 - The example config's public client keys (`your-api-key-1` and the rest) are left out.
 - Pooled models become fallback chains, as [Provider key sections](#provider-key-sections) describes.
+
+A `management.secret-key` is not brought, neither a plain key nor the bcrypt hash today's core may
+have written over it: core keeps its own management key, which guards every client of it, the
+desktop app's core among them, so an import does not change who may manage core. Its **not
+brought** row says so. Change core's key with `POST /v0/management/management-key/rotate`, which
+returns the new key once.
 
 Each file of the auth folder becomes an account added by login, with the file's name (less
 `.json`) as its ID. A file whose account ID the config or the store already uses is not brought,

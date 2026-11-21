@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/stdotwork/pluxy/next/format/internal/audioinput"
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
 	"github.com/stdotwork/pluxy/next/llm"
 )
@@ -111,9 +112,16 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 		out.Text = map[string]any{"format": f}
 	}
 	if tc := o.ToolChoice; tc != nil {
-		if tc.Mode == llm.ToolChoiceTool {
+		switch {
+		case len(tc.Allowed) > 0:
+			tools := make([]any, 0, len(tc.Allowed))
+			for _, name := range tc.Allowed {
+				tools = append(tools, map[string]any{"type": "function", "name": name})
+			}
+			out.ToolChoice = map[string]any{"type": "allowed_tools", "mode": tc.Mode, "tools": tools}
+		case tc.Mode == llm.ToolChoiceTool:
 			out.ToolChoice = map[string]string{"type": "function", "name": tc.Name}
-		} else {
+		default:
 			out.ToolChoice = tc.Mode
 		}
 	}
@@ -164,6 +172,17 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 			out.Input = append(out.Input, marshal(m, e.kept(it.Origin)))
 		case llm.ItemTypeToolResult:
 			m := map[string]any{"type": "function_call_output", "call_id": it.CallID, "output": it.Output}
+			if len(it.Content) > 0 {
+				// The output's list takes the same parts as a user message's content.
+				if parts, _, _, err := e.content(llm.Item{Role: llm.RoleUser, Content: it.Content}, p); err != nil {
+					return nil, nil, err
+				} else if len(parts) > 0 {
+					m["output"] = parts
+				}
+			}
+			if it.IsError {
+				e.lose(llm.LossDropped, rawjson.Join(p, "is_error"), "Responses has no error flag on a tool result")
+			}
 			out.Input = append(out.Input, marshal(m, e.kept(it.Origin)))
 		case llm.ItemTypeReasoning:
 			if it.Origin != nil && it.Origin.Format == format {
@@ -241,6 +260,15 @@ func (e *encoder) content(it llm.Item, msgPath string) (content []json.RawMessag
 			content = append(content, marshal(m, e.kept(p.Origin)))
 			sendable = true
 		case p.Type == llm.PartFile && it.Role != llm.RoleAssistant:
+			// Responses takes audio as input_audio, with its bytes inline in OpenAI's InputAudio
+			// shape ({"type":"input_audio","input_audio":{"data","format"}}); a file part holding
+			// audio is that audio however the client sent it.
+			if mediaType, data, ok := audioinput.Inline(p); ok {
+				m := map[string]any{"type": "input_audio", "input_audio": map[string]string{"data": data, "format": audioinput.Format(mediaType)}}
+				content = append(content, marshal(m, e.kept(p.Origin)))
+				sendable = true
+				break
+			}
 			m := map[string]string{"type": "input_file"}
 			for k, v := range map[string]string{"file_id": p.FileID, "file_data": p.FileData, "file_url": p.URL, "filename": p.Filename} {
 				if v != "" {

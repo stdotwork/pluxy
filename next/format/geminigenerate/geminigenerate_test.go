@@ -210,8 +210,9 @@ func TestToolParametersAsJSONSchema(t *testing.T) {
 	}
 }
 
-// functionCallingConfig maps to a tool choice; ANY with several names is required, and the names
-// stay in the request's Origin.
+// A functionCallingConfig mode becomes a tool choice, and the allowed function names become its
+// allowed list: ANY with several as required, VALIDATED as auto, the modes that name more than
+// one function. Names are not left in the request's Origin.
 func TestToolConfigChoice(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -221,15 +222,24 @@ func TestToolConfigChoice(t *testing.T) {
 		{"AUTO", `{"functionCallingConfig":{"mode":"AUTO"}}`, llm.ToolChoice{Mode: llm.ToolChoiceAuto}},
 		{"NONE", `{"functionCallingConfig":{"mode":"NONE"}}`, llm.ToolChoice{Mode: llm.ToolChoiceNone}},
 		{"ANY with one name", `{"functionCallingConfig":{"mode":"ANY","allowedFunctionNames":["f"]}}`, llm.ToolChoice{Mode: llm.ToolChoiceTool, Name: "f"}},
-		{"ANY with two names", `{"functionCallingConfig":{"mode":"ANY","allowedFunctionNames":["f","g"]}}`, llm.ToolChoice{Mode: llm.ToolChoiceRequired}},
+		{"ANY with two names", `{"functionCallingConfig":{"mode":"ANY","allowedFunctionNames":["f","g"]}}`, llm.ToolChoice{Mode: llm.ToolChoiceRequired, Allowed: []string{"f", "g"}}},
+		{"VALIDATED with two names", `{"functionCallingConfig":{"mode":"VALIDATED","allowedFunctionNames":["f","g"]}}`, llm.ToolChoice{Mode: llm.ToolChoiceAuto, Allowed: []string{"f", "g"}}},
+		{"VALIDATED without names", `{"functionCallingConfig":{"mode":"VALIDATED"}}`, llm.ToolChoice{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := mustParse(t, `{"contents":[],"toolConfig":`+tc.cfg+`}`)
-			if req.Options.ToolChoice == nil || *req.Options.ToolChoice != tc.want {
+			if tc.want.Mode == "" {
+				// A VALIDATED mode with no names has nothing the model reads; it stays as it was.
+				if req.Options.ToolChoice != nil || !strings.Contains(string(req.Origin.Raw), `"VALIDATED"`) {
+					t.Errorf("ToolChoice = %+v, Origin.Raw = %s; want the mode kept and no choice", req.Options.ToolChoice, req.Origin.Raw)
+				}
+				return
+			}
+			if req.Options.ToolChoice == nil || !reflect.DeepEqual(*req.Options.ToolChoice, tc.want) {
 				t.Errorf("ToolChoice = %+v, want %+v", req.Options.ToolChoice, tc.want)
 			}
-			if tc.name == "ANY with two names" && !strings.Contains(string(req.Origin.Raw), `"allowedFunctionNames":["f","g"]`) {
-				t.Errorf("Origin.Raw = %s, want the allowedFunctionNames kept", req.Origin.Raw)
+			if strings.Contains(string(req.Origin.Raw), `"allowedFunctionNames"`) {
+				t.Errorf("Origin.Raw = %s, want the allowedFunctionNames read, not kept", req.Origin.Raw)
 			}
 		})
 	}
@@ -533,11 +543,35 @@ func TestErrorResponseGoogleShape(t *testing.T) {
 	}
 }
 
-// A response that holds more than content is sent whole, so fields such as error are not lost.
+// A response with an error key is a failed call whose output is the error's value; its other
+// fields still reach GenerateContent unchanged.
 func TestFunctionResponseWithMoreThanContentIsWhole(t *testing.T) {
-	req := mustParse(t, `{"contents":[{"role":"user","parts":[{"functionResponse":{"name":"f",`+
+	req := mustParse(t, `{"contents":[
+	 {"role":"model","parts":[{"functionCall":{"name":"f","args":{}}}]},
+	 {"role":"user","parts":[{"functionResponse":{"name":"f",`+
 		`"response":{"content":"partial","error":"permission denied"}}}]}]}`)
-	sameJSON(t, "Output", []byte(req.Items[0].Output), `{"content":"partial","error":"permission denied"}`)
+	it := req.Items[len(req.Items)-1]
+	if !it.IsError || it.Output != "permission denied" {
+		t.Fatalf("tool result = %+v, want the error value as output and is_error", it)
+	}
+	body, _, err := EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Contents []struct {
+			Parts []struct {
+				FunctionResponse struct {
+					Response json.RawMessage `json:"response"`
+				} `json:"functionResponse"`
+			} `json:"parts"`
+		} `json:"contents"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	sameJSON(t, "functionResponse.response", got.Contents[1].Parts[0].FunctionResponse.Response,
+		`{"content":"partial","error":"permission denied"}`)
 }
 
 // Gemini Schema becomes JSON Schema: nullable as a null type, int64 limits written as strings as

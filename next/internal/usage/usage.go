@@ -80,9 +80,11 @@ type Event struct {
 	Endpoint string `json:"endpoint"`
 	Stream   bool   `json:"stream"`
 	// Model is the model as the client asked for it; UpstreamModel the account's name for it,
-	// when that differs (an alias, a prefix).
+	// when that differs (an alias, a prefix); ServedModel the model the upstream reply says
+	// served it, when the reply names one.
 	Model         string `json:"model"`
 	UpstreamModel string `json:"upstream_model,omitempty"`
+	ServedModel   string `json:"served_model,omitempty"`
 	// Provider is the extension the last attempt went to, Account its account.
 	Provider string `json:"provider,omitempty"`
 	Account  string `json:"account,omitempty"`

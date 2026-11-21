@@ -102,13 +102,6 @@ func checkUnread(h *harness, rd *fakeReadings) {
 	h.r.Check(context.Background())
 }
 
-// backedOff sends a request that the account refuses for a used-up quota without naming a reset,
-// so core backs off: 1s for the first step, held half of it with the harness's jitter.
-func backedOff(h *harness, _ *fakeReadings) {
-	h.on("a", fail(llm.Error{Code: llm.CodeQuota, Status: 429, Retryable: true, Scope: llm.ScopeCredential}))
-	h.run(h.req("m"))
-}
-
 func refused(reset time.Duration) func(h *harness, rd *fakeReadings) {
 	return func(h *harness, rd *fakeReadings) {
 		h.on("a", quotaOut(reset))

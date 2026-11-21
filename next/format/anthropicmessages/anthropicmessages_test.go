@@ -78,7 +78,6 @@ func TestTranslationToChatReportsLosses(t *testing.T) {
 		"approximated messages[1].content[0]",          // thinking text becomes reasoning_content
 		"dropped messages[1].content[0].signature",     // only Anthropic can check it
 		"dropped messages[1].content[1]",               // redacted thinking
-		"dropped messages[2].content[1].is_error",      // no error flag on a Chat tool message
 		"dropped messages[2].content[2].cache_control", // no cache breakpoints in Chat
 		"dropped metadata",
 		"dropped system[1].cache_control",
@@ -118,7 +117,6 @@ func TestTranslationToResponsesReportsLosses(t *testing.T) {
 	want := []string{
 		"dropped messages[1].content[0]", // thinking
 		"dropped messages[1].content[1]", // redacted thinking
-		"dropped messages[2].content[1].is_error",
 		"dropped messages[2].content[2].cache_control",
 		"dropped metadata",
 		"dropped system[1].cache_control",
@@ -1455,4 +1453,24 @@ func TestRefusalStopReasonBothWays(t *testing.T) {
 			t.Errorf("body = %s, want stop_reason refusal", body)
 		}
 	})
+}
+
+// Messages has no audio block, so an audio part is dropped and reported rather than turning into
+// a document, and the text beside it still reaches Claude.
+func TestEncodeAudioInputIsReported(t *testing.T) {
+	req, err := openaichat.ParseRequest([]byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":[
+		{"type":"text","text":"Transcribe this."},
+		{"type":"input_audio","input_audio":{"data":"UklGRg==","format":"wav"}}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, losses, err := EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameJSON(t, "body", body, `{"model":"claude-sonnet-4-6","stream":false,"max_tokens":32000,
+		"messages":[{"role":"user","content":[{"type":"text","text":"Transcribe this."}]}]}`)
+	if got, want := lossList(losses), []string{"dropped messages[0].content[1]"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("losses:\n got %q\nwant %q", got, want)
+	}
 }

@@ -8,7 +8,6 @@ package legacy
 import (
 	"bytes"
 	"cmp"
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,10 +39,8 @@ type Result struct {
 	// Import says how accounts imported from AuthDir are set up.
 	Import ImportOptions
 	// HashedManagementKey: management.secret-key holds a bcrypt hash of the key, which today's
-	// core writes over the key and this core cannot use. The config then has no management_key,
-	// except in an import (ImportConfig), which makes a new one: NewManagementKey.
+	// core writes over the key and this core cannot use. The config then has no management_key.
 	HashedManagementKey bool
-	NewManagementKey    string
 	// Ledger accounts for every key of the file in an import report.
 	Ledger *Ledger
 	// OldListen is the address today's core listened on: every interface (0.0.0.0) without a host.
@@ -759,8 +756,8 @@ func Translate(b []byte) (*Result, error) { return translateFile(b, "", false) }
 
 // ImportConfig turns a config.yaml written for today's core into this core's config for an import
 // (pluxy import cpa), as Translate does, with the import's own changes: no server.host listens on
-// 127.0.0.1, a bcrypt management key is replaced by a new key, the example config's client keys
-// are left out, this core's own settings that belong to the config core already runs on
+// 127.0.0.1, the management key is not brought (pluxy keeps its own), the example config's client
+// keys are left out, this core's own settings that belong to the config core already runs on
 // (credentials_dir and the like) are not brought, and relative TLS file paths are taken from
 // dir, the file's folder. Result.Ledger then names every key of the file in a report row; it
 // fails when it does not account for one.
@@ -1069,6 +1066,10 @@ func mappingsOn(t tree, path string) error {
 // bcryptHash matches a bcrypt hash, which today's core may have written as its management key.
 var bcryptHash = regexp.MustCompile(`^\$2[abxy]?\$\d{2}\$[./A-Za-z0-9]{53}$`)
 
+// managementKeyWhy is why an import does not bring the file's management key: it guards every
+// client of core, so the owner changes core's own with pluxy's command instead.
+const managementKeyWhy = "pluxy keeps its own management key: it guards every client of core, and an import does not change it; change it with POST /v0/management/management-key/rotate"
+
 func (x *translator) server() error {
 	host, err := str(x.t, "server.host")
 	if err != nil {
@@ -1188,14 +1189,13 @@ func (x *translator) server() error {
 	}
 	// The key is used as written, as today's core uses it: a space in it is part of it.
 	switch {
+	case x.importing && secret != "":
+		// An import never brings the key, plain or hashed: the key guards every client of core,
+		// the importing one included, so an import does not change who may manage it.
+		x.res.HashedManagementKey = bcryptHash.MatchString(secret)
+		x.mark(NotBrought, "management.secret-key", Row{Why: managementKeyWhy})
 	case bcryptHash.MatchString(secret):
 		x.res.HashedManagementKey = true
-		if x.importing {
-			x.res.NewManagementKey = rand.Text()
-			x.out["management_key"] = x.res.NewManagementKey
-			x.mark(Changed, "management.secret-key", Row{From: "(a bcrypt hash of the key)", To: "(a new key, shown once when the import runs)",
-				Why: "today's core keeps only a bcrypt hash of its management key, which pluxy cannot use"})
-		}
 	case secret != "":
 		x.out["management_key"] = secret
 	}
@@ -2287,7 +2287,6 @@ func (x *translator) classify(path string, v any, inherited *rule, sink sink) {
 // keeps every model and provider, tried in the order the group lists its models and then the
 // order core reads the provider sections, rather than in turn.
 func (x *translator) chains() error {
-	type key struct{ model, ext string }
 	var order []string
 	steps := map[string][]route.Step{}
 	exts := map[string][]string{}

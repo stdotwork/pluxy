@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -17,6 +18,8 @@ func TestRedactNestedKeyLists(t *testing.T) {
 	}
 }
 
+var placeholderText = regexp.MustCompile(regexp.QuoteMeta(PlaceholderPrefix) + `[0-9a-z]+`)
+
 // In account settings, everything below a key named like a secret is a secret, however deep,
 // and the rest stays as it is.
 func TestRedactSettings(t *testing.T) {
@@ -28,8 +31,11 @@ func TestRedactSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A placeholder ends in random hex digits, which can spell a short secret such as 1234 by
+	// chance, so the secrets are looked for outside the placeholders.
+	outside := placeholderText.ReplaceAllString(string(out), "")
 	for _, h := range hidden {
-		if strings.Contains(string(out), h) {
+		if strings.Contains(outside, h) {
 			t.Errorf("%s is in the redacted settings: %s", h, out)
 		}
 	}

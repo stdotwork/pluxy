@@ -1307,6 +1307,27 @@ fn release_config_checks_windows_and_macos_forms() {
         validate_alone(&f, &[&folder]),
         Some("test file name in package"),
     );
+    // The test package renamed: its program's test name refuses it, not the bundled core's
+    // archives in bundled\ beside it, wherever the folder lists them. The archives are made
+    // first and named before the program, so a folder listed in the order its entries were
+    // made (btrfs) or by name (NTFS) shows them first.
+    tree(
+        &folder,
+        &[
+            ("bundled/alpha.tar.gz", b"\x1f\x8b\x08\x00"),
+            ("bundled/beta.tar.gz", b"\x1f\x8b\x08\x00"),
+            ("bundled/index.json", b"{}"),
+            ("a/archive.tar.gz", b"\x1f\x8b\x08\x00"),
+            ("pluxy.exe", b"core"),
+            ("pluxy-app-test.exe", &clean_exe),
+        ],
+    );
+    expect_on(
+        &mut wrong,
+        "a folder bundle holding a test program and archives",
+        validate_alone(&f, &[&folder]),
+        Some("pluxy!pluxy-app-test.exe: test file name in package"),
+    );
     tree(&folder, &[("pluxy-app.exe", &clean_exe)]);
     expect_on(
         &mut wrong,

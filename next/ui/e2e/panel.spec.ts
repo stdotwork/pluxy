@@ -344,6 +344,82 @@ test("with the navigation on top in a narrow window, the current page's entry is
   await expect(bar.getByRole("link", { name: "Dashboard", exact: true })).toBeInViewport({ ratio: 1 });
 });
 
+test("a change of page opens the new page at its top; a change inside a page keeps the place", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 500 });
+  await open(page);
+  await signIn(page, core);
+  const scrolled = () => page.evaluate(() => window.scrollY);
+  const scrollDown = async () => {
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await expect.poll(scrolled).toBeGreaterThan(100);
+  };
+
+  // A tab of the Config page is in the address, and is the same page: the window stays put.
+  await page.evaluate(() => {
+    location.hash = "#/config";
+  });
+  await expect(page.getByRole("tab", { name: "Common", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await scrollDown();
+  await page.evaluate(() => {
+    location.hash = "#/config/network";
+  });
+  await expect(page.getByRole("tab", { name: "Network", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  // The Network tab is shorter, so the window may move up to its end, but not to its top.
+  expect(await scrolled()).toBeGreaterThan(100);
+
+  // Another page, by a navigation entry and by the address: each opens at its top.
+  await scrollDown();
+  await nav(page).getByRole("link", { name: "Accounts", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Accounts", level: 1 })).toBeInViewport();
+  expect(await scrolled()).toBe(0);
+  await page.evaluate(() => {
+    location.hash = "#/themes";
+  });
+  await expect(page.getByRole("heading", { name: "Themes", level: 1 })).toBeVisible();
+  await scrollDown();
+  await page.evaluate(() => {
+    location.hash = "#/system";
+  });
+  await expect(page.getByRole("heading", { name: "System", level: 1 })).toBeInViewport();
+  expect(await scrolled()).toBe(0);
+});
+
+test("the sign-in page fills the window, says how to open the panel without custom CSS, and the rail's sign-out has its name", async ({
+  page,
+}) => {
+  await open(page);
+  // The card is in the middle of the window at its own width, not in the navigation's column.
+  const card = page.locator('[data-part="card"]');
+  const box = await card.boundingBox();
+  if (!box) throw new Error("no sign-in card");
+  expect(box.width).toBeGreaterThan(300);
+  expect(Math.abs(box.x + box.width / 2 - 640)).toBeLessThan(2);
+  await expect(card).toContainText("add ?safe to the end of its address");
+
+  // The rail shows short labels: the sign-out control still has its whole name.
+  await signIn(page, core);
+  await goTo(page, "Themes");
+  await page.getByRole("radiogroup", { name: "Theme" }).getByRole("radio", { name: "Terminal" }).check();
+  await expect(root(page)).toHaveAttribute("data-nav", "rail");
+  const out = nav(page).locator(".signout");
+  await expect(out).toHaveAccessibleName("Sign out");
+  await expect(out).toHaveAttribute("title", "Sign out");
+  await out.click();
+  // Signed out in a theme with the navigation on top or in a rail, the card is in the middle too.
+  const again = await card.boundingBox();
+  if (!again) throw new Error("no sign-in card");
+  expect(Math.abs(again.x + again.width / 2 - 640)).toBeLessThan(2);
+  expect(Math.abs(again.y + again.height / 2 - 400)).toBeLessThan(2);
+});
+
 test("screenshots in two themes", async ({ page }) => {
   const dir = process.env.PANEL_SHOTS_DIR;
   test.skip(!dir, "set PANEL_SHOTS_DIR to take screenshots");

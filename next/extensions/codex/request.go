@@ -13,14 +13,6 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// formatNames name client formats in messages.
-var formatNames = map[string]string{
-	llm.FormatOpenAIChat:        "Chat Completions",
-	llm.FormatOpenAIResponses:   "OpenAI Responses",
-	llm.FormatAnthropicMessages: "Anthropic Messages",
-	llm.FormatGeminiGenerate:    "Gemini GenerateContent",
-}
-
 // upstreamRequest is what one generate call sends.
 type upstreamRequest struct {
 	body []byte

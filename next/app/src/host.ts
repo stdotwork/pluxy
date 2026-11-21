@@ -49,7 +49,12 @@ export interface Versions {
   source?: string;
   available: { version: string }[];
   source_error?: string;
-  installed: { id: string; kind: "signed" | "adopted"; version?: string; adopted_from?: string }[];
+  installed: {
+    id: string;
+    kind: "signed" | "adopted" | "bundled";
+    version?: string;
+    adopted_from?: string;
+  }[];
   selected?: string;
   previous?: string;
   failed?: { version: string; reason: string };
@@ -60,6 +65,9 @@ export interface Versions {
     result: "done" | "cancelled" | "failed";
     detail?: string;
   };
+  /** The core that came with the app, and why it was not installed (damaged, or a conflict with
+   * a version of that number already installed). */
+  bundled?: { version: string; problem?: string };
 }
 
 export const connectionGet = () => invoke<Connection>("connection_get");

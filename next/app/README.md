@@ -82,7 +82,8 @@ address or key can always be fixed there.
 In managed mode the app runs only core versions it installed itself, each in a folder of its own
 under `cores/versions/` in the app's data folder (on Windows the local application data folder,
 which stays on this computer; a store there that is not on a fixed local drive, such as a network
-share, is refused). Until one is installed, the app runs no core
+share, is refused). A packaged app installs the core it comes with
+([below](#the-core-the-app-comes-with)). Until one is installed, the app runs no core
 and the window shows only the Connection page, with **Core versions**. There, the app lists
 what is installed, which version runs and which ran before it, and what the core source offers.
 
@@ -186,11 +187,11 @@ for other programs calling the core too: a new connection in that time is no lon
 once, but waits (up to the core's drain, 10 seconds or more) and is then closed, possibly after
 its request was sent. The core takes the socket before it starts any extension, so no program it
 starts holds it. The
-app keeps the running version and the one before it, and removes older ones after a switch. Rolling
-back reaches only an installed version.
+app keeps the running version, the one before it and the core it came with, and removes older
+ones after a switch. Rolling back reaches only an installed version.
 
-A **core program** you name on the Connection page (or `pluxy` beside the app) is never run in
-place. **Adopt this core program** shows its path, size and SHA-256 in the native confirmation;
+A **core program** you name on the Connection page (or `pluxy` beside the app, unless that is the
+core the app came with) is never run in place. **Adopt this core program** shows its path, size and SHA-256 in the native confirmation;
 once confirmed, the app copies it into a version of its own, `custom-<its SHA-256>`, if it is
 still a regular file of that size and digest (at most 512 MiB; a FIFO or device is refused
 without being read; on Unix it must be executable, on Windows a program image named `.exe` or
@@ -212,6 +213,55 @@ computer. They do not guard against your own user account. A program running as 
 rewrite the app's core store, as it can replace the app itself: the installed records and version
 folders (or the folders above them), a staged archive between its check and its unpacking, and a
 checked program, or the files beside it, before the core runs or reads them.
+
+### The core the app comes with
+
+A packaged app comes with a core: a tagged core's signed release, of the version the app names in
+`core-release.json`, pinned file by file. When the app is packaged, `bundle-core`
+(`src-tauri/examples/bundle-core.rs`) finds that release for the target system in a core source's
+index, checks its archive against its signed descriptor with the publisher key, as an install
+from a core source does, and unpacks it with the same rules. It writes a manifest of what it
+unpacked: the core version, the SHA-256 of the signed descriptor, and each file's path, size,
+SHA-256 and execute bit. `build.rs` checks the manifest and compiles it into the app's program
+(`PLUXY_BUNDLED_CORE` names it), so whatever covers the app's program covers the manifest too. A
+build without one, such as a dev build, has no bundled core. The package carries the files:
+
+| System | Core program | Its packages (`bundled/`) |
+| --- | --- | --- |
+| Windows (folder bundle) | `pluxy.exe` beside the app's program | `bundled\` beside it |
+| macOS | `Contents/MacOS/pluxy` | `Contents/Resources/core/bundled/` |
+| Linux (AppImage) | `usr/bin/pluxy`, beside the app's program | `usr/lib/<product name>/core/bundled/` |
+
+In managed mode, each time it starts its core, the app copies the core it came with into its own
+cores, unless they hold it already, as a version named after the core version, listed as one that
+came with the app. It reads only the files the manifest lists, each opened without following a
+link from the folder opened before it, a regular file of the listed size, its SHA-256 computed
+while it is copied. Anything else beside them is never read or copied. There is no confirmation:
+installing the app was the consent, and the files are checked against the manifest in the app's
+own program. The app never runs the files beside it, only the copy, with the checks every version
+gets before it starts. A copy that no longer passes them is copied in again at the next start.
+
+- A file that differs from the manifest, is missing or is a link: nothing is installed, and the
+  Connection page says that the core that came with the app is damaged, and to reinstall or
+  update the app.
+- The app's cores already hold that version with other files (a release of the same number from
+  another core source): nothing is installed, the installed one stays, and the Connection page
+  says that the app's cores hold that version with other files than the one that came with the
+  app.
+
+Which version runs: `state.json` records who chose the selected version, the app or you, and the
+app version that last applied the core it came with. On a fresh profile, and at the first start
+after the app's version changes (an update, or an older app), the app moves a selection it made
+to its own core, with the switch above, which puts back the earlier version if the new one does
+not start. A core it came with that does not start is not tried again until the app's version
+changes. A version you chose stays: an install, an adoption, a rollback, also to the core an
+earlier app came with. **Roll back to** the core the app came with switches to it as any rollback
+does, with the native confirmation. A selection made before the app recorded who made it counts
+as yours.
+
+`pluxy` beside the app is not offered to adopt when it is the core the app came with (its size
+and SHA-256 are the manifest's): the app installs that itself. A program you name still goes
+through Adopt.
 
 ## The window and the tray
 
@@ -1660,6 +1710,17 @@ and exits, and 0.1.0's process has ended once 0.2.0 runs), refuses rollbacks to 
 copy without a dialog, cancels one in the native confirmation, and rolls back to 0.1.0. The
 session checks the installed AppImage's digest after each step, that nothing is left beside it,
 its feed's downloads and the versions that ran itself.
+Then, in another session (`native/bundled.ts`, `native/bundled-session.ts`,
+`native/bundled-steps.ts`, `bundled_native.rs`), the [core the test package comes
+with](#the-core-the-app-comes-with), each case on a fresh profile in managed mode: the AppImage
+runs its core from the app's own cores, with no confirmation, and that core's bundled registry
+offers the packages its `bundled/index.json` lists (a first start installs none); the 0.2.0 build moves the app's own selection to its
+core, the person rolls back to 0.1.0's core through the native confirmation, and that choice
+stays when 0.1.0 and then 0.2.0 run again; in a copy of the package (the AppImage extracted, run
+through its `AppRun`) a file added to `bundled/` is not copied, and a changed `bundled/index.json`
+is refused with the damaged message, nothing installed; and a version in the app's cores with the
+bundled core's number and other files gives the conflict message and stays as it was. The same
+scenario runs on Windows and macOS in the package session.
 The `native-test` feature is for that test alone; release builds never have it.
 
 In local and remote modes, the test also drives the real GTK dialog with `xdotool`: good keys
@@ -1781,7 +1842,18 @@ trusted comment, as Tauri's updater reads it: `native/minisign.ts`), for the nat
 to. It checks that each result is an AppImage of type 2 (an ELF file with `AI\x02` at offset 8)
 and writes `<out-dir>/pluxy-test_<version>_amd64.AppImage` for each, the first build's program as
 built (`pluxy-app-test`, before the bundler patches its bundle type) and `test-package.json` (the
-paths, the public key and the update's signature). Tauri's AppImage bundler would download the tools it runs
+paths, the public key and the update's signature).
+
+Each of the two builds comes with a core ([The core the app comes with](#the-core-the-app-comes-with)):
+the app's version with the version `core-release.json` names, 0.2.0 with core 0.2.0. Each is a
+test release made by the command, never published: a core built with Go at that version as a
+release builds it (no cgo, `-trimpath`), with the test packages of `go run ./e2e/panelcore -probe
+-prepare` as its `bundled/`, packed, described and signed with a publisher key made for the
+command, whose private key stays in its memory. `bundle-core` checks each against its signed
+descriptor with that key before the build, and the build compiles its manifest and carries its
+files (on Linux and macOS through Tauri's `externalBin` and `resources`; on Windows copied into
+the folder bundle). `test-package.json` names each build's core version and the package IDs its
+`bundled/index.json` lists. Tauri's AppImage bundler would download the tools it runs
 (linuxdeploy, its AppImage plugin and AppRun) into its tools folder when they are missing there,
 unpinned. The test command puts pinned copies there first, each checked against its SHA-256
 (`BUNDLER_TOOLS` in `package.ts`), and gives the AppImage plugin the pinned AppImage runtime
@@ -1797,13 +1869,12 @@ the `app` bundle on macOS. On macOS the first build is also bundled as Tauri's d
 the bundle and a link to `/Applications` on an HFS+ volume, unsigned), copied to
 `<out-dir>/pluxy-test_<version>_<arch>.dmg`. On Windows each build's program goes into a plain
 folder bundle of its own, `<out-dir>/pluxy Test/` and `<out-dir>/update/pluxy Test/`, each holding the program set the
-updater replaces: `pluxy-app-test.exe` and, until the app bundles its core, a stub `pluxy.exe` and
-`bundled\stub.txt` (text files that say the version; nothing runs them). The update is the second
+updater replaces: `pluxy-app-test.exe`, and its core's `pluxy.exe` and `bundled\`. The update is the second
 folder's set as a `.tar.gz` the command makes (`native/set-archive.ts`: its parts at the top,
 folders and regular files only, no owner or time), signed. The first Windows build is also
 bundled as the per-user setup program, `<out-dir>/pluxy-test_<version>_x64-setup.exe` (Tauri's
 NSIS bundle, `installMode` `currentUser`, with no code signing, as the test package has no
-identity to sign with). It installs the same program set, its stubs through Tauri's `externalBin`
+identity to sign with). It installs the same program set, its core through Tauri's `externalBin`
 (`pluxy.exe`) and `resources` (`bundled\`), without administrator rights: its manifest asks to run
 as the user who starts it, and it writes only to that user's folders and registry. It installs
 into `%LOCALAPPDATA%\pluxy Test`, with an uninstall entry under `HKEY_CURRENT_USER`, a Start menu
@@ -1828,7 +1899,7 @@ The app updates such a copy itself and never runs the setup for it
 ([Application update](#application-update)). Tauri's NSIS bundler would download NSIS 3.13 and
 its `nsis_tauri_utils` plugin; the command puts pinned copies, each checked against its SHA-256
 (`NSIS_TOOLS` in `package.ts`), in the bundler's tools folder in the target folder first
-(`bundle.useLocalToolsDir`), and removes the copies of the stubs Tauri's build leaves next to the
+(`bundle.useLocalToolsDir`), and removes the copies of the core Tauri's build leaves next to the
 program in the target folder. On
 macOS each build's bundle is copied to `<out-dir>/pluxy Test.app` and
 `<out-dir>/update/pluxy Test.app` (with `ditto`, keeping modes and the program's signature, no
@@ -1877,7 +1948,8 @@ app supported there:
   - the platform session (`native/platform.ts`, `PLATFORM_SHARDS` in `native/shards.ts`): one app
     per profile (a named pipe on Windows, a Unix socket on macOS), the login item (the `Run` key on
     Windows, a LaunchAgent on macOS), the tray and the close preference;
-  - the package session: the test package and the release gate ([Packages](#packages));
+  - the package session: the test package, the core it comes with (the Linux bundled core
+    session's scenario) and the release gate ([Packages](#packages));
   - the tools sessions (`native/platform-tools.ts`, the `tools` shard): the signed tool sessions
     run.ts runs on Linux (admission, the program host with its swaps, routing with jobs, the vault
     with client keys), and a launcher check of its own
@@ -2065,10 +2137,12 @@ installed, and as an app bundle on macOS
   through the app's real message handling and the dialogs' controls, but miss what only a person at
   the machine would hit, such as another app taking the keyboard. The dialogs session's summary
   counts which way each input went.
-- No release installer or bundled core yet: the only packages are the test AppImage, the test
-  folder bundle and per-user setup program (Windows; their `pluxy.exe` and `bundled\` are stubs,
-  and nothing is code-signed) and the test app bundle and its disk image (macOS), which are not
-  for release. How Windows SmartScreen treats the unsigned setup program is not tested.
+- No release installer yet: the only packages are the test AppImage, the test folder bundle and
+  per-user setup program (Windows; nothing is code-signed) and the test app bundle and its disk
+  image (macOS), which are not for release. They come with test-signed cores; the release gate
+  builds no package with a core yet, since the core release the app names and a production
+  publisher key do not exist yet. How Windows SmartScreen treats the unsigned setup program is not
+  tested.
   The app updates only itself: as an AppImage on Linux x86_64, on Windows x86_64 as the program
   set of a folder bundle or of a copy the per-user setup program installed, and as an app bundle
   on macOS, and only with test updater trust until release

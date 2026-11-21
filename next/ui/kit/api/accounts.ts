@@ -53,6 +53,30 @@ export interface Account {
   last_error?: AccountError;
   last_error_at?: string;
   active_requests?: number;
+  /** What routing holds against the account now, as core judges it. */
+  health?: AccountHealth;
+}
+
+/** An account's health in GET /accounts: `state` is ok, cooling, exhausted, needs_login, banned or disabled. */
+export interface AccountHealth {
+  state: string;
+  /** When the block ends, if core knows. */
+  until?: string;
+  why?: string;
+  source?: string;
+}
+
+const LEFT_OUT = ["banned", "exhausted", "needs_login"] as const;
+export type LeftOut = (typeof LEFT_OUT)[number];
+
+/**
+ * The health state that keeps every request away from an account a person has left on: its
+ * provider closed it, its usage window ran out, or it needs a new sign-in. Nothing for an account
+ * that serves, one a person turned off, and one cooling (a short block, often of one model).
+ */
+export function leftOut(a: Account): LeftOut | undefined {
+  if (a.disabled) return undefined;
+  return LEFT_OUT.find((state) => state === a.health?.state);
 }
 
 export interface AccountModelEntry {

@@ -70,6 +70,10 @@ panel that `extensions/panel` held) that each one replaces. A page's ID is its a
 (`#/<id>`) and its theme hook `data-page`. Why the pages have these names, and the other
 decisions behind them, is in [docs/panel.md](../../docs/panel.md).
 
+A change of page opens the new page at its top: the shell scrolls the window there, so a page
+opened from a button far down another one shows from its start. A change inside a page (a tab or
+a filter in its address) keeps the place.
+
 Two pages add to their address. `#/logs/<trace ID>` opens that request's log in the Logs Viewer.
 `#/config/<tab>` opens a tab of the Config Panel: `common` (what `#/config` opens),
 `connectivity`, `network`, `logging`, `advanced` or `source`. `#/config/source?account=<id>`
@@ -82,8 +86,6 @@ shell asks core for `GET /setup`: on a first run (`first_run`), when the address
 Setup opens in place of the Dashboard. The shell does not wait for the answer, so the Dashboard
 may show for an instant. A core without the call (it answers 404) gets no Setup page and nothing
 opens by itself. The page stays in the navigation after setup, as a status of the same things.
-Leaving the page scrolls the window to its top, so a page opened from a button far down Setup
-(Finish, a client's button) shows from its start.
 
 When core's scan found a CLIProxyAPI setup, its row on the page has "Bring it across". The button
 sends `POST /setup/import` as a dry run and shows core's report in its three lists (what comes

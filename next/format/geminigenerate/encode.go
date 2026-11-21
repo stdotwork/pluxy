@@ -227,9 +227,18 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 				e.lose(llm.LossApproximated, p, "a tool result with no call before it, named after its call ID")
 				name = it.CallID
 			}
-			resp := map[string]any{"name": name, "response": map[string]any{"result": it.Output}}
+			// A failure goes under the response's error key, as GenerateContent's FunctionResponse
+			// documents it.
+			key := "result"
+			if it.IsError {
+				key = "error"
+			}
+			resp := map[string]any{"name": name, "response": map[string]any{key: it.Output}}
 			if it.CallID != "" {
 				resp["id"] = it.CallID
+			}
+			if media := e.responseParts(it, p); len(media) > 0 {
+				resp["parts"] = media
 			}
 			add("user", marshalWith(map[string]any{"functionResponse": resp}, e.kept(it.Origin)))
 		case llm.ItemTypeReasoning:
@@ -280,9 +289,12 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 	return rawjson.Merge(b, e.kept(req.Origin)), e.losses, nil
 }
 
-// functionCalling returns the functionCallingConfig for a tool choice. Gemini cannot limit a reply
-// to one call, so parallel_tool_calls false turns function calling off (mode NONE), as today's
-// core does rather than risk several calls the client said it cannot take; it is reported.
+// functionCalling returns the functionCallingConfig for a tool choice. A choice that names the
+// tools the model may call, and not just one, is ANY or VALIDATED with allowedFunctionNames, the
+// only modes Gemini takes them with: required as ANY, auto as VALIDATED, in which the model picks
+// from the allowed functions. Gemini cannot limit a reply to one call, so parallel_tool_calls
+// false turns function calling off (mode NONE), as today's core does rather than risk several
+// calls the client said it cannot take; it is reported.
 func (e *encoder) functionCalling(tc *llm.ToolChoice, parallel *bool) map[string]any {
 	if parallel != nil && !*parallel {
 		e.lose(llm.LossApproximated, "parallel_tool_calls", "GenerateContent cannot limit a reply to one function call; function calling is turned off")
@@ -293,10 +305,16 @@ func (e *encoder) functionCalling(tc *llm.ToolChoice, parallel *bool) map[string
 	}
 	switch tc.Mode {
 	case llm.ToolChoiceAuto:
+		if len(tc.Allowed) > 0 {
+			return map[string]any{"mode": "VALIDATED", "allowedFunctionNames": tc.Allowed}
+		}
 		return map[string]any{"mode": "AUTO"}
 	case llm.ToolChoiceNone:
 		return map[string]any{"mode": "NONE"}
 	case llm.ToolChoiceRequired:
+		if len(tc.Allowed) > 0 {
+			return map[string]any{"mode": "ANY", "allowedFunctionNames": tc.Allowed}
+		}
 		return map[string]any{"mode": "ANY"}
 	case llm.ToolChoiceTool:
 		return map[string]any{"mode": "ANY", "allowedFunctionNames": []string{tc.Name}}
@@ -342,6 +360,35 @@ func (e *encoder) parts(it llm.Item, msgPath string) (parts []json.RawMessage, s
 		sendable = true
 	}
 	return parts, sendable, dropped
+}
+
+// responseParts encodes a tool result's images and files as a functionResponse's parts. Its text
+// is in Output, the response, and functionResponse.parts cannot hold a text part: a text part
+// that is that text is kept as already sent, and one that is not is reported dropped.
+func (e *encoder) responseParts(it llm.Item, itemPath string) []json.RawMessage {
+	var media []llm.Part
+	for i, p := range it.Content {
+		if p.Type == llm.PartText {
+			pp := pathOf(p.Origin, fmt.Sprintf("%s.content[%d]", itemPath, i))
+			if !strings.Contains(it.Output, p.Text) {
+				e.lose(llm.LossDropped, pp, "GenerateContent cannot take a text part beside a tool result's text; this one is not in its output")
+				continue
+			}
+			e.kept(p.Origin)
+			continue
+		}
+		if p.Origin == nil || p.Origin.Path == "" {
+			o := llm.Origin{}
+			if p.Origin != nil {
+				o = *p.Origin
+			}
+			o.Path = fmt.Sprintf("%s.content[%d]", itemPath, i)
+			p.Origin = &o
+		}
+		media = append(media, p)
+	}
+	parts, _, _ := e.parts(llm.Item{Content: media}, itemPath)
+	return parts
 }
 
 // media returns the inlineData part for an image or file given as a base64 data URL, or the

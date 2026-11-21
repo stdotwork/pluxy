@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.24
+# pluxy extension protocol, version 0.26
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -38,8 +38,9 @@ its upstream is still sending, and core ends a call that sends nothing at all fo
 Version 0.24 adds a model's `capabilities`: what the model supports and when it was deprecated. It
 is deliberately small; later versions add more capabilities and operations without changing what
 is described here. An extension written for version 0 works unchanged with a core that speaks 0.24
-(see
-[Versioning](#versioning)).
+(see [Versioning](#versioning)). Version 0.25 adds a [tool result](#the-request)'s `content` parts
+and its `is_error` flag. Version 0.26 adds a [tool choice](#the-request)'s allowed tool list: the
+tools the model may choose from, where the client named a set rather than one tool.
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
@@ -208,8 +209,9 @@ SDK's `sdk.TestLoginHost` applies the rule.
 If `PLUXY_PROTOCOL_VERSIONS` is not set, the program was not started by pluxy: it should say so on
 stderr and exit with a non-zero status.
 
-Core waits for the handshake line for a limited time (10 seconds by default); this startup check
-is the only timeout in the protocol. After the line, core sends a `describe` call and checks that
+Core waits for the handshake line for a limited time (10 seconds by default, counted from the
+program running, so the time the system takes to start it does not count); this startup check is
+the only timeout in the protocol. After the line, core sends a `describe` call and checks that
 the reply's `id` matches the manifest.
 
 Anything the extension writes to stderr goes to core's log, prefixed with the extension ID. Never
@@ -480,6 +482,7 @@ with `native.format` naming the endpoint:
 | `native.format` | Client route | Body |
 | --- | --- | --- |
 | `openai.responses.compact` | `POST /v1/responses/compact` (and `/backend-api/codex/responses/compact`) | A Responses request; the reply is one JSON object. Core refuses `"stream": true` itself. |
+| `openai.responses.input_tokens` | `POST /v1/responses/input_tokens` | A Responses token-count request; the reply is `{"object":"response.input_tokens","input_tokens":N}`. OpenAI-compatible accounts on the Responses wire and Codex API-key accounts send it to their upstream; when no account can count, core answers with its estimate. |
 | `codex.models` | `GET /v1/models?client_version=<version>` | Core builds `{"client_version":"<version>","models":[{"name":"team/coding","upstream":"gpt-6.1-sol","display_name":"Coding","non_codex":true}]}`. Presence of the query key selects this endpoint, even with an empty value. Core lists accounts of `pluxy/codex` under their normal aliases, exclusions and prefixes, keeps the first mapping of a repeated public name, and sorts by public name. `display_name` is omitted when empty. `non_codex` is true when any other extension's account can also serve that public name, including an account with an unknown model list; the extension then clears the Codex-only options as described below. The GET body is ignored. One direct call goes to the first enabled, usable `pluxy/codex` account in account order, carrying only its `account.id` (no settings or credential), with `request.model` empty. No routing reservation, cooldown, concurrency limit, credential renewal, result, rotation or usage event is involved; there are no retries. Without such an account core returns 200 `{"models":[]}` itself. The extension returns one JSON object in the Codex catalog shape, omitting unknown templates and replacing each slug with `name`. No upstream request or remote refresh is made. |
 | `codex.alpha_search` | `POST /v1/alpha/search` (and `/backend-api/codex/alpha/search`) | Codex's search request, in Codex's own shape; the reply is one JSON object. Its `model` is optional: a request without one is sent to any account, with `request.model` empty. |
 | `openai.images.generations` | `POST /v1/images/generations` | An Images API request; the reply is one JSON object, or server-sent events when it asks for `"stream": true`. Core refuses a request without a `prompt` and names `gpt-image-2` as the model when it names none. |
@@ -783,10 +786,10 @@ version 0.
 | `stream` | Whether the client asked for a streamed reply. Core always receives events; this only tells the extension how the client is being served, in case the upstream call should match. |
 | `items` | The conversation, in order. |
 | `tools` | Function tools the model may call. `parameters` is a JSON Schema. |
-| `options` | Generation options; any field may be absent: `max_output_tokens`, `temperature`, `top_p`, `stop`, `tool_choice` (`mode`: `auto`, `none`, `required` or `tool` with `name`), `parallel_tool_calls`, `response_format` (`type`: `text`, `json_object` or `json_schema` with `name`, `description`, `schema`, `strict`), `reasoning_effort` (as the client named it), `thinking_suffix` (version 0.2; see below). |
+| `options` | Generation options; any field may be absent: `max_output_tokens`, `temperature`, `top_p`, `stop`, `tool_choice` (`mode`: `auto`, `none`, `required` or `tool` with `name`; since 0.26 `allowed`: the tool names the model may choose from, with `mode` `auto` or `required`), `parallel_tool_calls`, `response_format` (`type`: `text`, `json_object` or `json_schema` with `name`, `description`, `schema`, `strict`), `reasoning_effort` (as the client named it), `thinking_suffix` (version 0.2; see below). An extension below 0.26 cannot read `tool_choice.allowed`: core sends the choice without the list and keeps only the function tools the list names in `tools`, so the model can still call only those, and refuses the request as invalid when the list names none of them. |
 | `native` | The client's original request body and its format, when core received one; `headers` holds the client's request headers that belong to that format, by lower-case name (for `anthropic.messages`: `anthropic-version` and `anthropic-beta`, and the headers the client names itself with: `user-agent`, `x-app`, `anthropic-dangerous-direct-browser-access`, `x-claude-code-session-id`, `x-client-request-id`, the `x-stainless-*` headers of Anthropic's SDKs, `x-client-app` and `x-anthropic-additional-protection`; and Claude Code's subagent, request and remote-session headers (`x-claude-code-agent-id`, `x-claude-code-parent-agent-id`, `x-claude-code-agent-type`, `x-claude-code-request-class`, `x-claude-code-prev-tool-durations`, `x-claude-code-compaction`, `x-claude-code-context-compacted`, `x-claude-remote-container-id`, `x-claude-remote-session-id`), which an extension should send upstream only for a request that names itself as Claude Code (`anthropicmessages.IsClaudeCode`: `x-app: cli`, a `claude-cli/` User-Agent and the `claude-code-20250219` beta); for `openai.responses`: the headers the Codex CLI sends, such as `session-id`, `x-codex-window-id`, `x-codex-turn-metadata`, `version`, `originator` and `user-agent`). |
 | `origin` | The request's top-level fields that have no place in the model (see Origin below). |
-| `drop_policy` | What to do when building the upstream request would drop part of this one: `report` (default: send it and report the losses) or `reject` (refuse with `unsupported`; since 0.16 the error's `dropped` names what could not be carried, which the message may name too). |
+| `drop_policy` | What to do when building a request would drop part of this one, whether core is building it for an extension below a minor version it needs (0.25's tool result parts) or the extension is building the upstream request: `report` (default: send what can be sent and report the losses) or `reject` (refuse with `unsupported`; since 0.16 the error's `dropped` names what could not be carried, which the message may name too). |
 | `caller` | Version 0.8. A value that stands for the client key the request came with: the same for every request with that key to this extension, different for another key or another extension, and not derivable from the key (core derives it with a secret it makes each time it starts, so it changes when core restarts). Absent when the client sent no key. Core sends it with `generate`, `count_tokens` and `endpoint` calls, to every extension. An extension that keeps state from replies across requests, such as reasoning to put back into a later turn, keys that state by `caller`, so one client never gets another's. |
 
 Item types:
@@ -795,7 +798,7 @@ Item types:
 | --- | --- |
 | `message` | `role` (`system`, `developer`, `user`, `assistant`), `content`: a list of parts; `text_content` is true when the client gave the content as a plain string. |
 | `tool_call` | `call_id`, `name`, `arguments` (the raw argument string, not parsed); `custom` (default false) marks a call to a custom (freeform) tool, whose `arguments` is the tool's raw input rather than JSON. |
-| `tool_result` | `call_id`, `output` (string). |
+| `tool_result` | `call_id`, `output` (string). Since 0.25, `content`: a list of parts as a message's, when the result holds more than text (images, files or parts core could not interpret), with `output` still holding its text parts joined; and `is_error`, true when the tool reported a failure. An extension below 0.25 cannot take them: core sends the result's text only, lists the `content` parts and `is_error` it left out as dropped losses, and refuses the request when its `drop_policy` is `reject`. |
 | `reasoning` | `text`: reasoning text or summary the client replayed. Opaque reasoning data (such as an OpenAI encrypted blob or an Anthropic thinking signature) stays in `origin.raw`. |
 | `native` | An item core could not interpret (for example a hosted tool call or Anthropic redacted thinking); `origin.raw` holds it whole, in its place in the conversation. |
 
@@ -1439,7 +1442,7 @@ extension below 0.23 gets none: it cannot promise alive frames.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.24. An extension reports the minor version it
+raise the minor version: this document is version 0.26. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1471,8 +1474,10 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.22 | The account's optional [`timeouts`](#timeouts). |
 | 0.23 | [Alive frames](#alive-frames): the call's and turn's `alive` and the `alive` frame; core's `extension_timeout`. |
 | 0.24 | A model's `capabilities` ([`models`](#models)). |
+| 0.25 | A [tool result](#the-request)'s `content` parts and `is_error`. |
+| 0.26 | A [tool choice](#the-request)'s `allowed` tool list. |
 
-## What version 0.24 leaves out
+## What version 0.26 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

@@ -21,8 +21,9 @@ const (
 	// codexClientVersion is the default Codex CLI version in the User-Agent and the ChatGPT
 	// backend model list's client_version; older or missing versions omit newer models.
 	codexClientVersion = "0.159.0"
-	modelsTimeout      = 15 * time.Second
-	modelsMaxBody      = 8 << 20
+	// modelsTimeout stays under core's 15 s model-list read, so a hung provider still yields the built-in list.
+	modelsTimeout = 10 * time.Second
+	modelsMaxBody = 8 << 20
 )
 
 // modelsJSON holds the model list of each ChatGPT plan, copied from the codex-free, codex-team,

@@ -194,13 +194,6 @@ func (s *Server) setDevice(userCode, status string) {
 	}
 }
 
-// RevokeAccess makes an access token fail with 401 from now on.
-func (s *Server) RevokeAccess(tok string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.access[tok] = "auth_failed"
-}
-
 // RefreshCalls returns how many refresh requests arrived.
 func (s *Server) RefreshCalls() int {
 	s.mu.Lock()

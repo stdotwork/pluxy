@@ -6,6 +6,17 @@ import { nav, openPanel, signIn, useCore } from "./support";
 
 const core = useCore({ firstRun: true });
 
+test("with no account, Accounts names the page that adds one", async ({ page }) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await page.goto(`${core.base}/panel/#/accounts`);
+  await expect(page.getByRole("heading", { level: 1, name: "Accounts" })).toBeVisible();
+  const empty = page.locator("main .empty");
+  await expect(empty).toContainText("No accounts yet.");
+  await empty.getByRole("link", { name: "Add Account", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Add Account" })).toBeVisible();
+});
+
 test("a first run opens Setup, installs the suggested provider, adds an account, shows what to paste and finishes", async ({
   page,
 }) => {
@@ -72,4 +83,22 @@ test("a first run opens Setup, installs the suggested provider, adds an account,
   await nav(page).getByRole("link", { name: "Set up pluxy" }).click();
   await expect(page.getByRole("region", { name: "Providers" })).toContainText("Installed");
   await expect(page.getByRole("button", { name: "Finish", exact: true })).toBeHidden();
+});
+
+test("the text for a client says what goes where a model's name stands", async ({ page }) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await page.goto(`${core.base}/panel/#/setup`);
+  const clients = page.getByRole("region", { name: "Point a client at pluxy", exact: true });
+  // Claude Code's text names no model.
+  const claude = clients.locator('[data-part="setup-client"]').filter({ hasText: "Claude Code" });
+  await claude.getByRole("button", { name: "Show what to paste" }).click();
+  await expect(claude.locator("pre")).toContainText("ANTHROPIC_BASE_URL");
+  await expect(claude).not.toContainText("a model's name goes");
+  // OpenCode's does, as <model-id>.
+  await clients.getByText(/^Other clients/).click();
+  const opencode = clients.locator('[data-part="setup-client"]').filter({ hasText: "OpenCode" });
+  await opencode.getByRole("button", { name: "Show what to paste" }).click();
+  await expect(opencode.locator("pre")).toContainText("<model-id>");
+  await expect(opencode).toContainText("Where the text says <model-id>, a model's name goes");
 });

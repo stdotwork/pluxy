@@ -79,7 +79,10 @@ type settings struct {
 	WireAPI string `json:"wire_api"`
 	// ReasoningLevels are the reasoning efforts the upstream accepts; an effort outside them
 	// moves to the nearest. Default low, medium and high.
-	ReasoningLevels []string `json:"reasoning_levels"`
+	ReasoningLevels   []string `json:"reasoning_levels"`
+	DeveloperRole     string   `json:"developer_role"`
+	StringContent     *bool    `json:"string_content"`
+	ReasoningPassback *bool    `json:"reasoning_passback"`
 	// Quota names the vendor quota endpoint to read ("openrouter", "deepseek" or "none");
 	// when empty, it is chosen from base_url's host.
 	Quota string `json:"quota"`
@@ -163,6 +166,9 @@ func account(call sdk.Call) (settings, wireInfo, string, error) {
 	if s.WireAPI == "" {
 		s.WireAPI = wireChat
 	}
+	if reason := checkShaping(s); reason != "" {
+		return s, wireInfo{}, "", &llm.Error{Code: llm.CodeInvalidRequest, Message: reason, Scope: llm.ScopeCredential}
+	}
 	wire, ok := wires[s.WireAPI]
 	if !ok {
 		return s, wireInfo{}, "", &llm.Error{Code: llm.CodeInvalidRequest, Message: fmt.Sprintf("account setting wire_api must be %q, %q, %q or %q", wireChat, wireResponses, wireMessages, wireGemini), Scope: llm.ScopeCredential}
@@ -182,11 +188,8 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
-	body, tr, err := buildBody(call.Request, wire.format)
+	body, tr, err := upstreamBody(call.Request, wire.format, s)
 	if err != nil {
-		return err
-	}
-	if body, err = applyReasoning(body, call.Request, wire.format, s.ReasoningLevels); err != nil {
 		return err
 	}
 	// The report travels on the reply's first event.
@@ -216,6 +219,37 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		}
 	}
 	return nil
+}
+
+// upstreamBody returns the body to send for req to an upstream speaking format, and how it was
+// built: the client's body or its translation (buildBody), with the account's reasoning levels
+// (applyReasoning) and, for a Chat upstream, its shaping settings (shapeChat) applied.
+func upstreamBody(req llm.Request, format string, s settings) ([]byte, *llm.Translation, error) {
+	body, tr, err := buildBody(req, format)
+	if err != nil {
+		return nil, nil, err
+	}
+	sent := body
+	var losses []llm.Loss
+	if body, losses, err = applyReasoning(body, req, format, s.ReasoningLevels); err != nil {
+		return nil, nil, err
+	}
+	for _, l := range losses {
+		tr.Losses = llm.AddLoss(tr.Losses, l)
+	}
+	if format == llm.FormatOpenAIChat {
+		if body, losses, err = shapeChat(body, s); err != nil {
+			return nil, nil, err
+		}
+		for _, l := range losses {
+			tr.Losses = llm.AddLoss(tr.Losses, l)
+		}
+	}
+	// A client's own body that was changed here, or lost something, was not sent as it came.
+	if tr.Passthrough && (len(tr.Losses) > 0 || !bytes.Equal(sent, body)) {
+		tr.Passthrough = false
+	}
+	return body, tr, nil
 }
 
 // listModels reads the account's model list from GET {base_url}/models (OpenAI's list shape)

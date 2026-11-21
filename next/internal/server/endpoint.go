@@ -2,11 +2,13 @@ package server
 
 import (
 	"cmp"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/stdotwork/pluxy/next/format/geminigenerate"
@@ -15,6 +17,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 // endpoint is a client route served by endpoint calls (protocol minor version 7): a provider
@@ -43,6 +46,9 @@ type endpoint struct {
 	googleKeys bool
 	// errorBody returns the status and body of an error reply; nil means the OpenAI shape.
 	errorBody func(e *llm.Error) (int, []byte)
+	// estimate builds the endpoint's reply when no account can serve it. It is called with the
+	// client's body after every capable account has answered unsupported.
+	estimate func(body []byte) ([]byte, *llm.Error)
 }
 
 // compactEndpoint is OpenAI's Responses compaction, which the Codex CLI calls to shorten a long
@@ -70,6 +76,30 @@ var alphaSearchEndpoint = endpoint{
 	format:        llm.FormatCodexAlphaSearch,
 	headers:       []string{"version", "user-agent", "session_id", "x-client-request-id"},
 	modelOptional: true,
+}
+
+// inputTokensEndpoint is OpenAI's Responses input token count. Codex API-key accounts and
+// OpenAI-compatible accounts whose wire_api is responses count it upstream; every other account
+// answers unsupported, and core estimates its input with the same counter as the other count
+// routes.
+var inputTokensEndpoint = endpoint{
+	format:  llm.FormatOpenAIResponsesInputTokens,
+	headers: openairesponses.Headers,
+	estimate: func(body []byte) ([]byte, *llm.Error) {
+		req, err := openairesponses.ParseRequest(body)
+		if err != nil {
+			return nil, asLLMError(err)
+		}
+		n := estimateInputTokens(req)
+		reply, err := json.Marshal(map[string]any{
+			"object":       "response.input_tokens",
+			"input_tokens": n,
+		})
+		if err != nil {
+			return nil, &llm.Error{Code: llm.CodeInternal, Message: err.Error()}
+		}
+		return reply, nil
+	},
 }
 
 // interactionsEndpoint is Gemini's Interactions API. A request names a model or an agent (a
@@ -119,6 +149,7 @@ func interactionsError(e *llm.Error) (int, []byte) {
 // it.
 var endpointRoutes = map[string]endpoint{
 	"/v1/responses/compact":                compactEndpoint,
+	"/v1/responses/input_tokens":           inputTokensEndpoint,
 	"/backend-api/codex/responses/compact": compactEndpoint,
 	"/v1/alpha/search":                     alphaSearchEndpoint,
 	"/backend-api/codex/alpha/search":      alphaSearchEndpoint,
@@ -194,7 +225,10 @@ func serveEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep end
 	r, t := requestTrace(r)
 	m := g.newMeter(r, arrived, req, clientToken(r, ep.googleKeys))
 	rr := routeRequest(r, req, body)
-	rr.Attempt = g.Endpoint
+	var cannot atomic.Bool
+	rr.Attempt = func(ctx context.Context, ext string, a protocol.Account, req llm.Request) route.Stream {
+		return &countWatch{Stream: g.Endpoint(ctx, ext, a, req), cannot: &cannot}
+	}
 	rr.Endpoint = true
 	rr.AnyModel = ep.modelOptional
 	rr.Attempting = func(a route.Attempt) {
@@ -202,11 +236,17 @@ func serveEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep end
 		m.attempt(a, t.id)
 	}
 	stream := meterStream(g.Router.Generate(host.WithPayloadClient(r.Context(), req.Model, r.Header), rr), m)
-	writeEndpointReply(w, r, stream, ep.format, f, m, g.Config.Routing.ExplainOn())
+	writeEndpointReplyFor(w, r, stream, ep, f, m, body, &cannot, g.Config.TokenCountEstimateOn(), g.Config.Routing.ExplainOn())
 }
 
 // writeEndpointReply checks and writes an endpoint's events. A nil meter records nothing.
 func writeEndpointReply(w http.ResponseWriter, r *http.Request, stream Stream, format string, f clientFormat, m *meter, explain bool) {
+	writeEndpointReplyFor(w, r, stream, endpoint{format: format}, f, m, nil, nil, false, explain)
+}
+
+// writeEndpointReplyFor is writeEndpointReply with the endpoint's estimate fallback. A nil cannot
+// means the endpoint has no estimate.
+func writeEndpointReplyFor(w http.ResponseWriter, r *http.Request, stream Stream, ep endpoint, f clientFormat, m *meter, body []byte, cannot *atomic.Bool, estimateOn, explain bool) {
 	r, t := requestTrace(r)
 	defer stream.Close()
 	fail := func(e *llm.Error) {
@@ -217,6 +257,18 @@ func writeEndpointReply(w http.ResponseWriter, r *http.Request, stream Stream, f
 	ev := stream.Next()
 	t.setHeaders(w, explain)
 	if ev.Type == llm.EventError {
+		if ep.estimate != nil && cannot != nil && cannot.Load() && estimateOn {
+			reply, e := ep.estimate(body)
+			if e != nil {
+				fail(e)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(reply)
+			m.finish(llm.Event{})
+			return
+		}
 		fail(ev.Error)
 		return
 	}
@@ -225,14 +277,14 @@ func writeEndpointReply(w http.ResponseWriter, r *http.Request, stream Stream, f
 		fail(&llm.Error{Code: llm.CodeExtensionProtocol, Message: "the extension's endpoint reply does not start with its content type"})
 		return
 	}
-	if ev.Response.Format != format {
+	if ev.Response.Format != ep.format {
 		// A reply for another endpoint must not reach this one's client.
-		fail(&llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("the extension answered a %s request with a %s reply", format, ev.Response.Format)})
+		fail(&llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("the extension answered a %s request with a %s reply", ep.format, ev.Response.Format)})
 		return
 	}
 	sse := strings.HasPrefix(reply.ContentType, "text/event-stream")
-	comments := sse && format != llm.FormatGeminiInteractions
-	binary := audioBodyIsBase64(format, reply.ContentType)
+	comments := sse && ep.format != llm.FormatGeminiInteractions
+	binary := audioBodyIsBase64(ep.format, reply.ContentType)
 	w.Header().Set("Content-Type", reply.ContentType)
 	if sse {
 		w.Header().Set("Cache-Control", "no-cache")

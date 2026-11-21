@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import { problem } from "../api";
 import { strings } from "../strings";
-import { Button, Card, ConfirmButton, Empty, List, Notice, useKit, useLoad } from "../ui";
+import { Button, Card, ConfirmButton, Empty, List, Notice, useCopy, useKit, useLoad } from "../ui";
 
 const t = strings("configKeys", {
   clients: "Client API Keys (access.api-keys)",
@@ -119,8 +119,7 @@ type KeysState = ReturnType<typeof useConfigKeys>;
 
 /** A new key, shown once: its value, Copy and Close. The Setup page shows a new client key with it too. */
 export function KeyNotice(props: { title: string; value: string; close: () => void; seen: () => void }) {
-  const [copied, setCopied] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const { state, copy } = useCopy(props.value);
   const ref = useRef<HTMLElement>(null);
   useEffect(() => {
     ref.current?.focus();
@@ -138,23 +137,11 @@ export function KeyNotice(props: { title: string; value: string; close: () => vo
       <span>{t("once")}</span>
       <code data-part="key-value">{props.value}</code>
       <div class="actions">
-        <Button
-          onClick={async () => {
-            try {
-              await navigator.clipboard.writeText(props.value);
-              setCopied(true);
-              setFailed(false);
-            } catch {
-              setFailed(true);
-            }
-          }}
-        >
-          {t("copy")}
-        </Button>
+        <Button onClick={copy}>{t("copy")}</Button>
         <Button onClick={props.close}>{t("close")}</Button>
-        {copied && <span role="status">{t("copied")}</span>}
+        {state === "copied" && <span role="status">{t("copied")}</span>}
       </div>
-      {failed && <Notice tone="danger">{t("copyFailed")}</Notice>}
+      {state === "failed" && <Notice tone="danger">{t("copyFailed")}</Notice>}
     </section>
   );
 }

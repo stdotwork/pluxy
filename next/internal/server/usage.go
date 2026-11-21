@@ -36,6 +36,14 @@ func (g *Generation) newMeter(r *http.Request, start time.Time, req llm.Request,
 	return m
 }
 
+// response notes the model the upstream reply says served the request.
+func (m *meter) response(ev llm.Event) {
+	if m == nil || m.done || ev.Type != llm.EventResponseStart || ev.Response == nil || ev.Response.Model == "" {
+		return
+	}
+	m.ev.ServedModel = ev.Response.Model
+}
+
 // attempt notes the account an attempt went to; the last one is the request's.
 func (m *meter) attempt(a route.Attempt, trace string) {
 	if m == nil {
@@ -94,6 +102,12 @@ func (m *meter) event(status int) usage.Event {
 type metered struct {
 	Stream
 	m *meter
+}
+
+func (s metered) Next() llm.Event {
+	ev := s.Stream.Next()
+	s.m.response(ev)
+	return ev
 }
 
 func (s metered) Close() {

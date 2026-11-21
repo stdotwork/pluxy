@@ -15,6 +15,10 @@ import (
 	"github.com/stdotwork/pluxy/next/management"
 )
 
+// managementKeyWhy is what an import says about the file's management key: core keeps its own,
+// and the owner changes it with pluxy's own command.
+const managementKeyWhy = "pluxy keeps its own management key: it guards every client of core, and an import does not change it; change it with POST /v0/management/management-key/rotate"
+
 // importCall sends POST /setup/import with body to c and returns the status and the reply.
 func importCall(t *testing.T, c *Core, key string, body any) (int, management.ImportReport, string) {
 	t.Helper()
@@ -93,17 +97,13 @@ claude-api-key:
 		}
 		return out
 	}
-	// wantRows is the report of the dry run (dry) or of the import whose new management key is
-	// key: every field of every row.
-	wantRows := func(dry bool, key string) map[string][]management.ImportRow {
+	// wantRows is the report of the dry run and of the import: every field of every row. The
+	// file's management key is named as not brought either way: core keeps its own.
+	wantRows := func() map[string][]management.ImportRow {
 		keepWith := `"listen": "0.0.0.0:8317" in pluxy's config file, then restart core`
 		listen := func(what, from string) management.ImportRow {
 			return management.ImportRow{What: what, From: from, To: "127.0.0.1:0",
 				Why: "core keeps listening on 127.0.0.1:0: listen cannot change while core runs", KeepWith: keepWith}
-		}
-		to := "(a new key, shown once when the import runs)"
-		if !dry {
-			to = key
 		}
 		return map[string][]management.ImportRow{
 			"brought": {
@@ -114,20 +114,19 @@ claude-api-key:
 			},
 			"changed": {
 				listen("server.host", "(not set: every interface)"),
-				{What: "remote-management.secret-key", From: "(a bcrypt hash of the key)", To: to,
-					Why: "today's core keeps only a bcrypt hash of its management key, which pluxy cannot use"},
 				listen("port", "0.0.0.0:8317"),
 			},
 			"not_brought": {
+				{What: "remote-management.secret-key", Why: managementKeyWhy},
 				{What: "debug", Why: "this core writes no debug-level log lines"},
 				{What: "auth file", Name: "antigravity-a.json", Why: "pluxy no longer ships the Antigravity provider"},
 				{What: "auth file", Name: "claude-api-key-1.json", Why: `the config already has an account "claude-api-key-1"`},
 			},
 		}
 	}
-	check := func(rep management.ImportReport, key string) {
+	check := func(rep management.ImportReport) {
 		t.Helper()
-		want := wantRows(rep.DryRun, key)
+		want := wantRows()
 		for list, got := range map[string][]management.ImportRow{"brought": rep.Brought, "changed": rep.Changed, "not_brought": rep.NotBrought} {
 			if !reflect.DeepEqual(got, want[list]) {
 				t.Errorf("%s:\ngot  %+v\nwant %+v", list, got, want[list])
@@ -137,7 +136,7 @@ claude-api-key:
 			t.Errorf("needs %+v", rep.Needs)
 		}
 	}
-	check(rep, "")
+	check(rep)
 	if strings.Contains(body, "$2a$") || strings.Contains(body, "fake-claude") || strings.Contains(body, "fake-cpa-client-key") {
 		t.Errorf("the report holds a secret: %s", body)
 	}
@@ -146,18 +145,10 @@ claude-api-key:
 	if code != http.StatusOK || rep.DryRun {
 		t.Fatalf("import: %d %s", code, body)
 	}
-	i := slices.IndexFunc(rep.Changed, func(r management.ImportRow) bool { return r.What == "remote-management.secret-key" })
-	if i < 0 {
-		t.Fatalf("the import has no management key row: %s", body)
-	}
-	key := rep.Changed[i].To
-	if len(key) < 20 {
-		t.Errorf("the new management key %q", key)
-	}
-	check(rep, key)
+	check(rep)
 	got := c.Config()
-	if got.ManagementKey != key {
-		t.Errorf("the new management key %q is not core's (%q)", key, got.ManagementKey)
+	if got.ManagementKey != "fake-mgmt-key" {
+		t.Errorf("core's management key became %q, want the one it had", got.ManagementKey)
 	}
 	if !slices.Contains(got.ClientKeys, "fake-cpa-client-key") || !slices.Contains(got.ClientKeys, "fake-client-key-1") {
 		t.Errorf("client keys %v", got.ClientKeys)
@@ -186,6 +177,67 @@ claude-api-key:
 		if !slices.Contains(names(rep.NotBrought), it) {
 			t.Errorf("second import: %s is not under not_brought: %s", it, body)
 		}
+	}
+}
+
+// The import never brings CLIProxyAPI's management key, plain or bcrypt: core keeps the key it
+// has, which guards every client of core (the desktop app among them), and the import names the
+// file's key as not brought with the way to change core's own.
+func TestSetupImportKeepsManagementKey(t *testing.T) {
+	for _, tc := range []struct{ name, doc string }{
+		{"plain", "remote-management: {secret-key: fake-cpa-key}\n"},
+		{"bcrypt", "remote-management: {secret-key: \"$2a$10$abcdefghijklmnopqrstuuAbCdEfGhIjKlMnOpQrStUvWxYz01234\"}\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setTestHome(t)
+			dir := t.TempDir()
+			cfgPath := filepath.Join(dir, "config.json")
+			writeTestFile(t, cfgPath, `{"listen":"127.0.0.1:0","client_keys":["fake-client-key-1"],"management_key":"fake-mgmt-key"}`)
+			cpa := t.TempDir()
+			writeTestFile(t, filepath.Join(cpa, "config.yaml"), tc.doc)
+			c, err := Start(Options{ConfigPath: cfgPath, SafeMode: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Stop()
+
+			code, rep, body := importCall(t, c, "fake-mgmt-key", management.SetupImportRequest{Config: filepath.Join(cpa, "config.yaml")})
+			if code != http.StatusOK || rep.DryRun {
+				t.Fatalf("import: %d %s", code, body)
+			}
+			if got := c.Config().ManagementKey; got != "fake-mgmt-key" {
+				t.Errorf("core's management key became %q, want the one it had", got)
+			}
+			b, err := os.ReadFile(cfgPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(b), `"management_key":"fake-mgmt-key"`) {
+				t.Errorf("the config file wrote another management key: %s", b)
+			}
+			i := slices.IndexFunc(rep.NotBrought, func(r management.ImportRow) bool { return r.What == "remote-management.secret-key" })
+			if i < 0 {
+				t.Fatalf("the file's management key has no not-brought row: %s", body)
+			}
+			if why := rep.NotBrought[i].Why; !strings.Contains(why, "pluxy keeps its own management key") || !strings.Contains(why, "POST /v0/management/management-key/rotate") {
+				t.Errorf("why %q", why)
+			}
+			for _, r := range rep.Changed {
+				if r.What == "remote-management.secret-key" {
+					t.Errorf("the file's management key is reported changed, to %q", r.To)
+				}
+			}
+
+			// The key core had still authorizes management requests after the import.
+			greq := httptest.NewRequest(http.MethodGet, "/v0/management/config", nil)
+			greq.Header.Set("Authorization", "Bearer fake-mgmt-key")
+			greq.RemoteAddr = "127.0.0.1:12345"
+			rec := httptest.NewRecorder()
+			c.Management().ServeHTTP(rec, greq)
+			if rec.Code != http.StatusOK {
+				t.Errorf("a management call with the key core had: %d %s", rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 

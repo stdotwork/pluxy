@@ -76,11 +76,6 @@ func StartMock(addr string) (*MockServer, error) {
 	return m, nil
 }
 
-// Addr returns the mock's listening host:port.
-func (m *MockServer) Addr() string {
-	return m.addr
-}
-
 // RootURL returns the mock's http://host:port root URL.
 func (m *MockServer) RootURL() string {
 	return "http://" + m.addr

@@ -160,6 +160,10 @@ const (
 	// Interactions request in Google's own shape, which names a model or an agent; the reply is
 	// one JSON object, or server-sent events when it asks for "stream": true.
 	FormatGeminiInteractions = "gemini.interactions"
+	// FormatOpenAIResponsesInputTokens is OpenAI's Responses input token count, POST
+	// /v1/responses/input_tokens: a Responses request body, answered with
+	// {"object":"response.input_tokens","input_tokens":N}.
+	FormatOpenAIResponsesInputTokens = "openai.responses.input_tokens"
 	// FormatOpenAIImagesGenerations is OpenAI's Images API generation, POST
 	// /v1/images/generations: a JSON body, answered with one JSON object, or server-sent events
 	// when it asks for a stream.
@@ -220,7 +224,11 @@ type Item struct {
 	ID string `json:"id,omitempty"`
 
 	// message
-	Role    string `json:"role,omitempty"`
+	Role string `json:"role,omitempty"`
+	// Content is a message's parts. On a tool_result (protocol minor 25) it is the result's parts
+	// when the result holds more than text: images, files or parts core could not interpret, in
+	// the order the client gave them. Output then still holds the result's text parts joined, for
+	// an encoder or extension that can send only text.
 	Content []Part `json:"content,omitempty"`
 	// TextContent is true when the source gave the content as a plain string rather than a list
 	// of parts; an encoder that has both forms keeps the source's.
@@ -236,6 +244,8 @@ type Item struct {
 	Custom bool `json:"custom,omitempty"`
 	// tool_result
 	Output string `json:"output,omitempty"`
+	// IsError marks a tool result that reports the tool failed (protocol minor 25).
+	IsError bool `json:"is_error,omitempty"`
 	// reasoning: the reasoning text or summary the client replayed. Opaque reasoning data, such
 	// as an encrypted blob, stays in Origin.Raw.
 	Text string `json:"text,omitempty"`
@@ -321,6 +331,14 @@ const (
 type ToolChoice struct {
 	Mode string `json:"mode"`
 	Name string `json:"name,omitempty"`
+	// Allowed is the set of tools the model may choose from, when the client named a set instead
+	// of one tool (OpenAI's allowed_tools, Gemini's allowedFunctionNames). Mode is then auto or
+	// required, and Name is empty. A format that has no allowed list carries the narrowing by
+	// defining only these tools. An extension below protocol minor 0.26 cannot read it: core
+	// sends the choice without the list and cuts the request's tools to the function tools it
+	// names, so the narrowing still holds, and refuses the request as invalid when it names none
+	// of them (see internal/host).
+	Allowed []string `json:"allowed,omitempty"`
 }
 
 // Response format types.

@@ -70,33 +70,36 @@ func storeError(err error) error {
 	return fmt.Errorf("credential store: %w", err)
 }
 
-// Load reads every record in the folder. A missing folder holds no records.
-func (f FileBackend) Load() ([]Record, error) {
-	recs, err := f.load()
-	return recs, storeError(err)
+// Load reads every record in the folder. A missing folder holds no records. A record file that
+// does not read as a record is skipped with a notice in the log and returned as Broken, so one
+// bad file does not keep the other accounts from being read.
+func (f FileBackend) Load() ([]Record, []Broken, error) {
+	recs, broken, err := f.load()
+	return recs, broken, storeError(err)
 }
 
-func (f FileBackend) load() ([]Record, error) {
+func (f FileBackend) load() ([]Record, []Broken, error) {
 	// A record that is never renewed is never saved again, so the folder is checked (and on
 	// Windows made private) here too, not only by the next save.
 	root, err := f.open(false)
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer root.Close()
 	d, err := root.Open(".")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	entries, err := d.ReadDir(-1)
 	d.Close()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var out []Record
+	var broken []Broken
 	for _, e := range entries {
 		name := e.Name()
 		if strings.HasPrefix(name, tmpPrefix) {
@@ -110,21 +113,32 @@ func (f FileBackend) load() ([]Record, error) {
 		}
 		b, err := f.readRecord(root, name)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if b == nil {
 			continue
 		}
 		var r Record
 		if err := json.Unmarshal(b, &r); err != nil {
-			return nil, fmt.Errorf("%s: %w", name, err)
+			broken = append(broken, f.broken(name, fmt.Errorf("%s: %w", name, err)))
+			continue
 		}
 		if r.ID+ext != name {
-			return nil, fmt.Errorf("%s holds account %q", name, r.ID)
+			broken = append(broken, f.broken(name, fmt.Errorf("%s holds account %q", name, r.ID)))
+			continue
 		}
 		out = append(out, r)
 	}
-	return out, nil
+	return out, broken, nil
+}
+
+// broken makes the Broken entry for file name, which could not be read as a record, and says so
+// in the log as readRecord does for the files it skips: one bad file must not keep core from
+// reading the others.
+func (f FileBackend) broken(name string, err error) Broken {
+	path := filepath.Join(f.Dir, name)
+	log.Printf("credential store: skipped %s: %v", path, err)
+	return Broken{ID: strings.TrimSuffix(name, ext), Path: path, Err: err}
 }
 
 // readRecord reads the record file name in root. A file that is not a regular file (a link, say),

@@ -62,6 +62,22 @@ func TestDroppedFields(t *testing.T) {
 	}
 }
 
+// Devin takes no allowed tool list: an auto choice narrowed to named tools is reported dropped,
+// so a client is not told the model was limited to them.
+func TestDroppedAllowedToolList(t *testing.T) {
+	req := &llm.Request{Model: "swe-2",
+		Options: llm.Options{ToolChoice: &llm.ToolChoice{Mode: llm.ToolChoiceAuto, Allowed: []string{"f"}}},
+		Tools:   []llm.Tool{{Type: llm.ToolFunction, Name: "f", Parameters: json.RawMessage(`{"type":"object"}`)}},
+		Items:   []llm.Item{userText("Hi")}}
+	c, err := buildRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := lossPaths(c); !slices.Contains(got, "tool_choice") {
+		t.Errorf("dropped %v, missing tool_choice", got)
+	}
+}
+
 // A tool result given as content blocks keeps its text; its images, which Devin cannot take in a
 // result, are listed as dropped.
 func TestMixedToolResult(t *testing.T) {
@@ -86,6 +102,27 @@ func TestMixedToolResult(t *testing.T) {
 		if got := lossPaths(cr); !slices.Contains(got, c.dropped) {
 			t.Errorf("%s: dropped %v, want %s", c.name, got, c.dropped)
 		}
+	}
+}
+
+// A tool result carried as parts (protocol minor 25) keeps its text; its image and its error flag,
+// which Devin cannot take, are listed as dropped.
+func TestToolResultParts(t *testing.T) {
+	req := &llm.Request{Model: "swe-2", Items: []llm.Item{
+		userText("Weather?"),
+		{Type: llm.ItemTypeToolCall, CallID: "call_1", Name: "weather", Arguments: `{}`},
+		{Type: llm.ItemTypeToolResult, CallID: "call_1", Output: "The temperature is 18", IsError: true, Origin: &llm.Origin{Path: "r"},
+			Content: []llm.Part{{Type: llm.PartText, Text: "The temperature is 18"}, {Type: llm.PartImage, URL: "https://example.com/a.png"}}},
+	}}
+	cr, err := buildRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cr.turns[2].content; got != "The temperature is 18" {
+		t.Errorf("tool turn text %q", got)
+	}
+	if got, want := lossPaths(cr), []string{"r.is_error", "r.content[1]"}; !slices.Equal(got, want) {
+		t.Errorf("dropped %v, want %v", got, want)
 	}
 }
 
