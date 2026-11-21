@@ -707,6 +707,9 @@ func (c *call) attempts() llm.Event {
 				return errorEvent(&llm.Error{Code: llm.CodeRateLimit, Status: 429, ProviderCode: "accounts_busy",
 					Message: fmt.Sprintf("every account for model %q is at its concurrency limit", model)})
 			}
+			if e := c.banned(); e != nil {
+				return errorEvent(e)
+			}
 			return errorEvent(&llm.Error{Code: llm.CodeUnavailable, Message: fmt.Sprintf("no account can serve model %q", model)})
 		}
 		wait := max(next.Sub(now), 0)
@@ -1019,6 +1022,27 @@ func coolingError(model string, wait time.Duration, reason *llm.Error) *llm.Erro
 		e.Code = llm.CodeQuota
 	}
 	return e
+}
+
+// banned is the error that ends a request because every account that serves its model is
+// banned: the ban's own error, with the provider's words, as the request that got the account
+// banned was answered with it. It is nil when some account that serves the model is not banned.
+func (c *call) banned() *llm.Error {
+	var reason *llm.Error
+	for _, t := range c.capable {
+		e := c.r.state.banReason(t.a.ID)
+		if e == nil {
+			return nil
+		}
+		if reason == nil {
+			reason = e
+		}
+	}
+	if reason == nil {
+		return nil
+	}
+	ban := *reason
+	return &ban
 }
 
 // noAccountEvent is how an endpoint call ends when every account that serves its model refused

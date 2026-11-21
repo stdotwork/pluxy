@@ -73,6 +73,20 @@ func TestLogTranslationCutsOnRuneBoundary(t *testing.T) {
 	}
 }
 
+// A request the extension sent as the client's own body (passthrough) can still lose something
+// to its endpoint's repairs (Codex's history repairs, an effort clamp, a thinking fit): those
+// losses are logged like any other, so a client is never left without a sign of what changed.
+func TestLogTranslationLogsPassthroughLosses(t *testing.T) {
+	out := captureLog(t)
+	r := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	logTranslation(r, &llm.Translation{From: llm.FormatOpenAIResponses, To: llm.FormatOpenAIResponses, Passthrough: true,
+		Losses: []llm.Loss{{Kind: llm.LossDropped, Path: "input[0].id", Detail: "an item reference no longer on the endpoint"}}}, nil)
+	line := strings.TrimSuffix(out.String(), "\n")
+	if !strings.Contains(line, "translation: request dropped input[0].id (an item reference no longer on the endpoint)") {
+		t.Fatalf("log line = %q, want the passthrough translation's loss", line)
+	}
+}
+
 // The request path is client input too, so the log line cuts it like a loss's path: to 200 bytes
 // on a UTF-8 boundary.
 func TestLogTranslationCutsThePath(t *testing.T) {

@@ -115,6 +115,10 @@ type Core struct {
 	bgCtx    context.Context
 	bgCancel context.CancelFunc
 	bgWG     sync.WaitGroup
+	// bgMu and bgClosed hold background work off once Stop waits: work added under bgMu before
+	// bgClosed is set is counted, and none can be added after it, which sync.WaitGroup needs.
+	bgMu     sync.Mutex
+	bgClosed bool
 
 	// accounts serialises setting the accounts a router routes over: a change in the
 	// credential store and a publish never interleave.
@@ -883,6 +887,11 @@ func (c *Core) Stop() {
 	defer c.reloading.Unlock()
 	c.stopped = true
 	c.bgCancel()
+	// No background work starts once Stop waits: an Add during the wait is a WaitGroup misuse
+	// (a credential renewal can land at any moment, see credentialChanged).
+	c.bgMu.Lock()
+	c.bgClosed = true
+	c.bgMu.Unlock()
 	c.checks.stop()
 	if c.setup != nil {
 		c.setup.stop()

@@ -845,12 +845,14 @@ settings for the model, and a budget as a budget where the upstream takes one, o
 level it falls in (up to 512 tokens `minimal`, 1024 `low`, 8192 `medium`, 24576 `high`, more
 `xhigh`). An extension that ignores it serves the model without the suffix's setting.
 
-**Translation report.** When the extension rebuilds the body in another format, it reports in the
-reply's `response.start` how it built it: `response.translation` with `from`, `to`, `passthrough`
-(true when the client's body was sent unchanged) and `losses`, each with `kind` (`approximated`:
-carried in a different form; `dropped`: left out), `path` (in the client's body) and `detail`.
-Everything not listed was preserved. Core logs the losses, together with what the reply had that
-the client's format cannot hold.
+**Translation report.** The extension reports in the reply's `response.start` how it built its
+upstream request: `response.translation` with `from`, `to`, `passthrough` (true when the client's
+body went upstream rather than a body rebuilt from `items`) and `losses`, each with `kind`
+(`approximated`: carried in a different form; `dropped`: left out), `path` (in the client's body)
+and `detail`. A passthrough body can still lose something: an extension that repairs it for its
+endpoint, as Codex does with a response's history, reports what the repair changed. Everything not
+listed was preserved. Core logs the losses, together with what the reply had that the client's
+format cannot hold.
 
 ### Native-only calls
 

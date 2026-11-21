@@ -542,8 +542,10 @@ func logField(s string) string {
 }
 
 // logTranslation logs what translation lost on the way to the upstream (request) and back to
-// the client (reply), when anything was lost. The line names at most logLossLimit losses, with
-// their paths and details cut by logField, and says how many more there were.
+// the client (reply), when anything was lost. A passthrough request can lose something too: its
+// endpoint's repairs (Codex's history repairs, an effort clamp, a thinking fit) change the body
+// the client sent. The line names at most logLossLimit losses, with their paths and details cut
+// by logField, and says how many more there were.
 func logTranslation(r *http.Request, request *llm.Translation, reply any) {
 	var parts []string
 	n := 0
@@ -553,7 +555,7 @@ func logTranslation(r *http.Request, request *llm.Translation, reply any) {
 			parts = append(parts, fmt.Sprintf("%s %s %s (%s)", side, l.Kind, logField(l.Path), logField(l.Detail)))
 		}
 	}
-	if request != nil && !request.Passthrough {
+	if request != nil {
 		for _, l := range request.Losses {
 			add("request", l)
 		}
