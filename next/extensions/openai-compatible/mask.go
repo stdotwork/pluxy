@@ -52,7 +52,8 @@ func maskGoogle(h sdk.Handler) sdk.Handler {
 }
 
 // googleBaseURL reports whether the account's base_url host is googleapis.com or a subdomain of
-// it, and returns the project in its /projects/<id>/ path, if any, as a known name to mask.
+// it, and returns the project in its /projects/<id>/ path, if any, as known names to mask (both
+// the decoded and escaped forms). When base_url has no scheme, it is parsed with https://.
 func googleBaseURL(a protocol.Account) (bool, []string) {
 	if len(a.Settings) == 0 {
 		return false, nil
@@ -63,7 +64,11 @@ func googleBaseURL(a protocol.Account) (bool, []string) {
 	if json.Unmarshal(a.Settings, &s) != nil || s.BaseURL == "" {
 		return false, nil
 	}
-	u, err := url.Parse(strings.TrimSpace(s.BaseURL))
+	raw := strings.TrimSpace(s.BaseURL)
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	u, err := url.Parse(raw)
 	if err != nil {
 		return false, nil
 	}
@@ -72,9 +77,15 @@ func googleBaseURL(a protocol.Account) (bool, []string) {
 		return false, nil
 	}
 	parts := strings.Split(u.Path, "/")
+	escapedParts := strings.Split(u.EscapedPath(), "/")
 	for i := 0; i+1 < len(parts); i++ {
 		if parts[i] == "projects" && parts[i+1] != "" {
-			return true, []string{parts[i+1]}
+			decoded := parts[i+1]
+			known := []string{decoded}
+			if i+1 < len(escapedParts) && escapedParts[i+1] != "" && escapedParts[i+1] != decoded {
+				known = append(known, escapedParts[i+1])
+			}
+			return true, known
 		}
 	}
 	return true, nil

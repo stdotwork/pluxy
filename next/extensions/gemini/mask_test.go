@@ -182,6 +182,18 @@ func TestMaskReplyOnlyErrors(t *testing.T) {
 			t.Errorf("got  %s\nwant %s", got, want)
 		}
 	})
+	t.Run("failed interaction masks error at any depth and inside arrays", func(t *testing.T) {
+		in := []byte(`{"status":"failed","outputs":[{"type":"x","detail":{"error":{"message":"project 987654 is off"}}}]}`)
+		want := `{"status":"failed","outputs":[{"type":"x","detail":{"error":{"message":"project [redacted] is off"}}}]}`
+		if got := maskReply(in, "", nil); string(got) != want {
+			t.Errorf("got  %s\nwant %s", got, want)
+		}
+		inNested := []byte(`{"event_type":"interaction.complete","interaction":{"id":"v1_x","status":"failed","outputs":[{"type":"text","text":"keep model text projects/keep"},{"type":"tool_result","error":{"message":"projects/123"}}]}}`)
+		wantNested := `{"event_type":"interaction.complete","interaction":{"id":"v1_x","status":"failed","outputs":[{"type":"text","text":"keep model text projects/keep"},{"type":"tool_result","error":{"message":"projects/[redacted]"}}]}}`
+		if got := maskReply(inNested, "", nil); string(got) != wantNested {
+			t.Errorf("got  %s\nwant %s", got, wantNested)
+		}
+	})
 	t.Run("two object levels down or inside array stays byte-identical", func(t *testing.T) {
 		for _, raw := range []string{
 			`{"a":{"b":{"error":{"message":"projects/123"}}}}`,

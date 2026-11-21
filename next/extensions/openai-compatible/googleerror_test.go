@@ -142,6 +142,56 @@ func TestMaskGoogleHostErrors(t *testing.T) {
 			t.Errorf("got %#v, want masked internal error", got)
 		}
 	})
+	t.Run("schemeless googleapis base_url", func(t *testing.T) {
+		call := sdk.Call{Account: protocol.Account{
+			Settings: json.RawMessage(`{"base_url":"us-central1-aiplatform.googleapis.com/v1/projects/acme-prod-4821/locations/us-central1/endpoints/openapi"}`),
+		}}
+		e := &llm.Error{
+			Code:    llm.CodeUnavailable,
+			Message: `upstream unreachable: Post "us-central1-aiplatform.googleapis.com/v1/projects/acme-prod-4821/locations/us-central1/endpoints/openapi/models/x:generateContent": unsupported protocol scheme ""`,
+		}
+		got := maskGoogle(failWith(e))(context.Background(), call, nil)
+		var le *llm.Error
+		if !errors.As(got, &le) {
+			t.Fatalf("got %v, want *llm.Error", got)
+		}
+		if strings.Contains(le.Message, "acme-prod-4821") {
+			t.Errorf("project leaked in message: %q", le.Message)
+		}
+		if !strings.Contains(le.Message, "/projects/[redacted]/locations") {
+			t.Errorf("unexpected message: %q", le.Message)
+		}
+	})
+	t.Run("escaped project in base_url", func(t *testing.T) {
+		call := sdk.Call{Account: protocol.Account{
+			Settings: json.RawMessage(`{"base_url":"https://us-central1-aiplatform.googleapis.com/v1/projects/acme%2Dprod%2D4821/locations/us-central1/endpoints/openapi"}`),
+		}}
+		e := &llm.Error{
+			Code:    llm.CodeUnavailable,
+			Message: `upstream unreachable: Post "https://us-central1-aiplatform.googleapis.com/v1/projects/acme%2Dprod%2D4821/locations/us-central1/endpoints/openapi/chat/completions": connection refused`,
+		}
+		got := maskGoogle(failWith(e))(context.Background(), call, nil)
+		var le *llm.Error
+		if !errors.As(got, &le) {
+			t.Fatalf("got %v, want *llm.Error", got)
+		}
+		if strings.Contains(le.Message, "acme%2Dprod%2D4821") || strings.Contains(le.Message, "acme-prod-4821") {
+			t.Errorf("project leaked in message: %q", le.Message)
+		}
+		if !strings.Contains(le.Message, "/projects/[redacted]/locations") {
+			t.Errorf("unexpected message: %q", le.Message)
+		}
+	})
+	t.Run("schemeless other vendor host stays byte-identical", func(t *testing.T) {
+		call := sdk.Call{Account: protocol.Account{
+			Settings: json.RawMessage(`{"base_url":"api.example.com/v1/projects/acme-prod-4821/v1"}`),
+		}}
+		raw := `{"error":{"message":"Project acme-prod-4821 is over budget","type":"insufficient_quota","code":"insufficient_quota"}}`
+		e := &llm.Error{Code: llm.CodeQuota, Message: "Project acme-prod-4821 is over budget", Raw: json.RawMessage(raw)}
+		if got := maskGoogle(failWith(e))(context.Background(), call, nil); got != e || string(e.Raw) != raw {
+			t.Errorf("got %+v, want byte-identical error", got)
+		}
+	})
 	t.Run("other vendor host stays byte-identical", func(t *testing.T) {
 		for _, base := range []string{
 			"https://notgoogleapis.com/v1/projects/acme-prod-4821/v1",

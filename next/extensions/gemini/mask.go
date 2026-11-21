@@ -72,10 +72,12 @@ func knownNames(a protocol.Account) []string {
 }
 
 // maskReply masks a reply or an event an Interactions client gets as the upstream sent it: the
-// data of an event named "error" is masked whole, and otherwise only the value of an "error"
-// member (an object or a string) at the top level of the JSON or one object level down (such as
-// {"interaction":{"status":"failed","error":{...}}}), never inside an array. Everything outside
-// those values keeps its bytes, and a reply with nothing to mask is returned as it is.
+// data of an event named "error" is masked whole. When the reply's status (at the top level or in
+// a top-level object member such as interaction) is "failed", the value of every "error" member at
+// any depth, inside arrays too, is masked. Any other reply keeps today's rule: only the value of an
+// "error" member (an object or a string) at the top level of the JSON or one object level down,
+// never inside an array. Everything outside those values keeps its bytes, and a reply with nothing
+// to mask is returned as it is.
 func maskReply(data []byte, event string, known []string) []byte {
 	if event == "error" {
 		return geminigenerate.MaskBody(data, known...)
@@ -84,7 +86,11 @@ func maskReply(data []byte, event string, known []string) []byte {
 		return data
 	}
 	var spans [][2]int
-	collectErrorSpans(data, 0, len(data), 0, &spans)
+	if isFailedReply(data) {
+		collectAllErrorSpans(data, 0, len(data), &spans)
+	} else {
+		collectErrorSpans(data, 0, len(data), 0, &spans)
+	}
 	if len(spans) == 0 {
 		return data
 	}
@@ -106,6 +112,144 @@ func maskReply(data []byte, event string, known []string) []byte {
 		return data
 	}
 	return append(out, data[last:]...)
+}
+
+func isFailedReply(raw []byte) bool {
+	if !bytes.Contains(raw, []byte(`"failed"`)) {
+		return false
+	}
+	i := skipWS(raw, 0)
+	if i >= len(raw) || raw[i] != '{' {
+		return false
+	}
+	i++
+	for {
+		i = skipWS(raw, i)
+		if i >= len(raw) || raw[i] == '}' {
+			return false
+		}
+		ke := skipString(raw, i)
+		var k string
+		_ = json.Unmarshal(raw[i:ke], &k)
+		i = skipWS(raw, ke)
+		if i >= len(raw) || raw[i] != ':' {
+			return false
+		}
+		vs := skipWS(raw, i+1)
+		ve := skipValue(raw, vs)
+		if vs < ve {
+			if k == "status" && isStatusFailed(raw[vs:ve]) {
+				return true
+			}
+			if raw[vs] == '{' && hasStatusFailed(raw[vs:ve]) {
+				return true
+			}
+		}
+		i = skipWS(raw, ve)
+		if i < len(raw) && raw[i] == ',' {
+			i++
+		} else {
+			return false
+		}
+	}
+}
+
+func hasStatusFailed(obj []byte) bool {
+	i := skipWS(obj, 0)
+	if i >= len(obj) || obj[i] != '{' {
+		return false
+	}
+	i++
+	for {
+		i = skipWS(obj, i)
+		if i >= len(obj) || obj[i] == '}' {
+			return false
+		}
+		ke := skipString(obj, i)
+		var k string
+		_ = json.Unmarshal(obj[i:ke], &k)
+		i = skipWS(obj, ke)
+		if i >= len(obj) || obj[i] != ':' {
+			return false
+		}
+		vs := skipWS(obj, i+1)
+		ve := skipValue(obj, vs)
+		if vs < ve && k == "status" && isStatusFailed(obj[vs:ve]) {
+			return true
+		}
+		i = skipWS(obj, ve)
+		if i < len(obj) && obj[i] == ',' {
+			i++
+		} else {
+			return false
+		}
+	}
+}
+
+func isStatusFailed(val []byte) bool {
+	var s string
+	return json.Unmarshal(val, &s) == nil && s == "failed"
+}
+
+// collectAllErrorSpans appends the [start, end) byte ranges of "error" member values (objects or
+// strings) at any depth, descending into arrays and objects.
+func collectAllErrorSpans(raw []byte, start, end int, spans *[][2]int) {
+	i := skipWS(raw, start)
+	if i >= end {
+		return
+	}
+	switch raw[i] {
+	case '{':
+		i++
+		for {
+			i = skipWS(raw, i)
+			if i >= end || raw[i] == '}' {
+				return
+			}
+			ke := skipString(raw, i)
+			var k string
+			_ = json.Unmarshal(raw[i:ke], &k)
+			i = skipWS(raw, ke)
+			if i >= end || raw[i] != ':' {
+				return
+			}
+			vs := skipWS(raw, i+1)
+			ve := skipValue(raw, vs)
+			if vs < ve {
+				if k == "error" && (raw[vs] == '{' || raw[vs] == '"') {
+					*spans = append(*spans, [2]int{vs, ve})
+				} else if raw[vs] == '{' || raw[vs] == '[' {
+					collectAllErrorSpans(raw, vs, ve, spans)
+				}
+			}
+			i = skipWS(raw, ve)
+			if i < end && raw[i] == ',' {
+				i++
+			} else {
+				return
+			}
+		}
+	case '[':
+		i++
+		for {
+			vs := skipWS(raw, i)
+			if vs >= end || raw[vs] == ']' {
+				return
+			}
+			ve := skipValue(raw, vs)
+			if vs < ve {
+				if raw[vs] == '{' || raw[vs] == '[' {
+					collectAllErrorSpans(raw, vs, ve, spans)
+				}
+			}
+			i = skipWS(raw, ve)
+			if i < end && raw[i] == ',' {
+				i++
+			} else {
+				return
+			}
+		}
+	}
 }
 
 // collectErrorSpans appends the [start, end) byte ranges of "error" member values that are JSON

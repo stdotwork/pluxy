@@ -1070,7 +1070,8 @@ The client's `Api-Revision` header goes with it (default `2026-05-20`). A Gemini
 to `{base_url}/v1beta/interactions`; a Vertex service account to
 `/v1beta1/projects/{project}/locations/global/interactions` on the Vertex host (always `global`, as
 in today's core), and an express key to `/v1beta1/interactions` (or the project path when
-`vertex.project` is set). The upstream's reply comes back as it is: one JSON object, or, for
+`vertex.project` is set). The upstream's reply comes back as it is except that any error's
+Google project or account names are masked: one JSON object, or, for
 `"stream": true` (Vertex is also asked with `alt=sse`), each server-sent event with its name as soon
 as it arrives. Its `usage` counts toward usage statistics.
 

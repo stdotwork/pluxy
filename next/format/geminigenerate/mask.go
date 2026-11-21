@@ -29,7 +29,7 @@ type namePattern struct {
 	ok func(name string) bool
 }
 
-const nameToken = `([\w-]+(?:\.[\w-]+)*)`
+const nameToken = `([\w%-]+(?:\.[\w%-]+)*)`
 
 var namePatterns = []namePattern{
 	{re: regexp.MustCompile(`(?i)\b(?:projects|organizations|folders|billingAccounts)/` + nameToken)},
@@ -43,9 +43,10 @@ var namePatterns = []namePattern{
 	// "Permission denied on resource project my-proj-1." or "... resource project myproject.": a
 	// project ID after the words, which prose ("resource project has been denied") must not be
 	// taken for. An ID is all digits, or at least six characters with a hyphen or a digit, or 6 to
-	// 30 lowercase letters, digits and hyphens followed by end of text or ., ; : quote or ).
+	// 30 lowercase letters, digits and hyphens followed by end of text, trailing spaces, newline,
+	// \r\n, " (", or ., ; : quote or ).
 	{re: regexp.MustCompile(`(?i:\bresource project) ([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)`), ok: looksLikeProjectID},
-	{re: regexp.MustCompile("(?i:\\bresource project) ([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)(?:$|[.,;:'\"`)])"), ok: func(id string) bool {
+	{re: regexp.MustCompile("(?i:\\bresource project) ([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)(?:\\s*$|\\r?\\n| \\(|[.,;:'\"`)])"), ok: func(id string) bool {
 		return len(id) >= 6 && len(id) <= 30
 	}},
 }
@@ -65,8 +66,8 @@ var serviceAccountProject = regexp.MustCompile(`@([a-z][a-z0-9-]*)\.iam\.gservic
 // account's project and address); the structured fields of Google's error details and the text
 // patterns above add the rest. A non-empty QuotaFailure violation's subject and ResourceInfo's
 // owner, found by the detail's @type, go whole in their own field, whatever they say; one that
-// looks like an identifier (contains :, / or @) is also masked where another string repeats it,
-// while a plain word (such as "global") stays elsewhere. A PreconditionFailure's subject, and the
+// looks like an identifier (contains :, / or @) or a project ID is also masked where another
+// string repeats it, while a plain word (such as "global") stays elsewhere. A PreconditionFailure's subject, and the
 // quota metric, ID, value and dimensions, stay. Each collected name is replaced as a whole token
 // in the message and in every string value of the raw body (an object, or the array a Google API
 // wraps one in); the keys, numbers, types, reasons, quota facts and everything else stay, and a
@@ -374,8 +375,8 @@ func (d *names) learnQuotaSubjects(raw []byte, start, end int, whole *map[int]bo
 
 // recordWhole marks the string at off to be replaced whole in its own field, and adds s to the
 // token list when it looks like an identifier (contains :, / or @ alongside an alphanumeric
-// character) so repetitions in the message or other strings are masked as whole tokens. Empty
-// values are skipped.
+// character) or a project ID (looksLikeProjectID) so repetitions in the message or other strings
+// are masked as whole tokens. Empty values are skipped.
 func (d *names) recordWhole(off int, s string, whole *map[int]bool) {
 	if strings.TrimSpace(s) == "" {
 		return
@@ -384,7 +385,7 @@ func (d *names) recordWhole(off int, s string, whole *map[int]bool) {
 		*whole = map[int]bool{}
 	}
 	(*whole)[off] = true
-	if looksLikeIdentifier(s) {
+	if looksLikeIdentifier(s) || looksLikeProjectID(s) {
 		d.add(s)
 	}
 }

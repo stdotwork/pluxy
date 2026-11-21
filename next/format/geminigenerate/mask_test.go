@@ -225,6 +225,8 @@ func TestMaskMorePatterns(t *testing.T) {
 		"in organizations/555000/x and folders/666000":                  "in organizations/[redacted]/x and folders/[redacted]",
 		"billingAccounts/0123-ABCD-4567 is closed":                      "billingAccounts/[redacted] is closed",
 		"organization:555000 folder:666000 billingAccount:0123-ABCD":    "organization:[redacted] folder:[redacted] billingAccount:[redacted]",
+		"see projects/acme%2Dprod%2D4821/locations":                     "see projects/[redacted]/locations",
+		"in project:acme%2Dprod%2D4821 here":                            "in project:[redacted] here",
 		"owner group:team@example.com is gone":                          "owner group:[redacted] is gone",
 		"Caller foo@my-proj-2.iam.gserviceaccount.com lacks permission": "Caller [redacted] lacks permission",
 		"default 123-compute@developer.gserviceaccount.com":             "default [redacted]",
@@ -342,6 +344,10 @@ func TestMaskResourceProjectAllLetterID(t *testing.T) {
 	over31 := strings.Repeat("a", 31)
 	for in, want := range map[string]string{
 		"Permission denied on resource project myproject.":                           "Permission denied on resource project [redacted].",
+		"Permission denied on resource project myproject\n":                          "Permission denied on resource project [redacted]\n",
+		"Permission denied on resource project myproject\r\n":                        "Permission denied on resource project [redacted]\r\n",
+		"Permission denied on resource project myproject ":                           "Permission denied on resource project [redacted] ",
+		"Permission denied on resource project myproject (or it may not exist).":     "Permission denied on resource project [redacted] (or it may not exist).",
 		"Permission denied on resource project myproject":                            "Permission denied on resource project [redacted]",
 		"Permission denied on resource project myproject, check billing":             "Permission denied on resource project [redacted], check billing",
 		"Permission denied on resource project myproject; retry":                     "Permission denied on resource project [redacted]; retry",
@@ -363,5 +369,27 @@ func TestMaskResourceProjectAllLetterID(t *testing.T) {
 		if got := MaskProject(&llm.Error{Message: in}).Message; got != want {
 			t.Errorf("%q\n got  %q\n want %q", in, got, want)
 		}
+	}
+}
+
+// A subject or owner that is a bare project ID (looksLikeProjectID) is masked in its own field
+// and added to the token list so repetitions in the message are masked; global stays elsewhere.
+func TestMaskBareProjectIDInOwnerRepeatedInMessage(t *testing.T) {
+	raw := `{"error":{"code":403,"message":"The consumer acme-prod-4821 is suspended.","details":[` +
+		`{"@type":"type.googleapis.com/google.rpc.ResourceInfo","owner":"acme-prod-4821"},` +
+		`{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"subject":"global"}]}` +
+		`]}}`
+	e := &llm.Error{Code: llm.CodePermission, Message: "The consumer acme-prod-4821 is suspended in global.", Raw: json.RawMessage(raw)}
+	got := MaskProject(e)
+	wantMsg := "The consumer [redacted] is suspended in global."
+	if got.Message != wantMsg {
+		t.Errorf("got message %q, want %q", got.Message, wantMsg)
+	}
+	wantRaw := `{"error":{"code":403,"message":"The consumer [redacted] is suspended.","details":[` +
+		`{"@type":"type.googleapis.com/google.rpc.ResourceInfo","owner":"[redacted]"},` +
+		`{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"subject":"[redacted]"}]}` +
+		`]}}`
+	if string(got.Raw) != wantRaw {
+		t.Errorf("got raw:\n%s\nwant:\n%s", got.Raw, wantRaw)
 	}
 }
