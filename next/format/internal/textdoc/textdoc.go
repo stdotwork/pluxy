@@ -35,9 +35,10 @@ func FromAnthropic(raw []byte) (text, title string, ok bool) {
 }
 
 // Wrap returns text delimited as a document, naming title when there is one. A title is put on
-// one line, line breaks becoming spaces, so it cannot end the delimiter early.
+// one line, its line breaks (and the other separators a line break can be written with) becoming
+// spaces, so it cannot end the delimiter early.
 func Wrap(title, text string) string {
-	name := strings.NewReplacer("\r", " ", "\n", " ").Replace(title)
+	name := strings.NewReplacer("\r", " ", "\n", " ", "\u2028", " ", "\u2029", " ", "\u0085", " ").Replace(title)
 	if name != "" {
 		return "[Document: " + name + "]\n" + text + "\n[End of document: " + name + "]"
 	}
