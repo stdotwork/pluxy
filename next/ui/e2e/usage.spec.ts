@@ -87,3 +87,55 @@ test("filters recorded requests and exports the matching rows", async ({ page })
   expect(csv).not.toContain("fake-model");
   expect(csv.trim().split(/\r?\n/)).toHaveLength(2);
 });
+
+test("a request that fell back says how many tries it took, and its detail what each came to", async ({
+  page,
+}) => {
+  // Two accounts for one model, the first to be tried already out of its usage window.
+  const add = async (id: string, priority: number, settings?: Record<string, unknown>) => {
+    const started = await core.mgmt<{ login: { id: string } }>("POST", "/accounts", {
+      id,
+      models: ["fake-model"],
+      priority,
+      settings,
+      extension: "test/local",
+      method: "api_key",
+      input: { api_key: "test-" + id },
+    });
+    expect(started.status).toBe(202);
+    await expect
+      .poll(
+        async () =>
+          (await core.mgmt<{ login: { state: string } }>("GET", "/logins/" + started.body.login.id)).body
+            .login.state,
+      )
+      .toBe("done");
+  };
+  await add("tries-first", 9, { exhausted_until: Math.floor(Date.now() / 1000) + 3600 });
+  await add("tries-second", 8);
+  const response = await fetch(core.base + "/v1/chat/completions", {
+    method: "POST",
+    headers: { Authorization: "Bearer " + core.clientKey, "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "fake-model", messages: [{ role: "user", content: "hi" }] }),
+  });
+  expect(response.status).toBe(200);
+  expect(response.headers.get("X-Pluxy-Attempts")).toBe("2");
+  const trace = response.headers.get("X-CPA-TRACE-ID") ?? "";
+  await response.text();
+
+  await openPanel(page, core);
+  await signIn(page, core);
+  await page.goto(core.base + "/panel/#/usage");
+  const row = page.locator('[data-part="item"]').filter({ hasText: trace });
+  await expect(row).toContainText("tries-second");
+  await expect(row).toContainText("2 tries");
+  await row.getByRole("button").first().click();
+  const detail = page.getByRole("complementary");
+  await expect(detail).toContainText("What pluxy tried");
+  const tried = detail.getByRole("listitem");
+  await expect(tried).toHaveCount(2);
+  await expect(tried.nth(0)).toContainText("tries-first");
+  await expect(tried.nth(0)).toContainText("failed: ");
+  await expect(tried.nth(1)).toContainText("tries-second");
+  await expect(tried.nth(1)).toContainText("answered");
+});

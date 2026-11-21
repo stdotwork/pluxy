@@ -1,11 +1,24 @@
 import { useEffect, useRef, useState } from "preact/hooks";
-import { problem, type UsageEvent, type UsageFilters } from "../api";
+import { type Account, problem, type UsageEvent, type UsageFilters } from "../api";
 import { csvField } from "../csv";
-import { useAccountLabels, usePrivacy } from "../privacy";
+import { type Masker, useAccountLabels, usePrivacy } from "../privacy";
 import { useSave } from "../save";
 import type { PageDef } from "../shell";
 import { strings } from "../strings";
-import { Badge, Button, Empty, List, Notice, PageHead, useKit, when } from "../ui";
+import {
+  Badge,
+  Button,
+  Detail,
+  Empty,
+  Facts,
+  List,
+  MasterDetail,
+  Notice,
+  PageHead,
+  useKit,
+  useLoad,
+  when,
+} from "../ui";
 
 const t = strings("usage", {
   title: "Usage",
@@ -40,6 +53,14 @@ const t = strings("usage", {
   exportError: "Could not export requests.",
   fallbackStep: "Fallback step {step}",
   fallbackStepTitle: "Ended on step {step} of this model's fallback chain",
+  tries: "{count} tries",
+  triesTitle: "pluxy sent this request {count} times. Open the row to see what each try came to.",
+  request: "Request {time}",
+  triesFact: "Tries",
+  tried: "What pluxy tried",
+  triedHint: "In order. The last line is the try that ended the request.",
+  answered: "answered",
+  failedWith: "failed: {result}",
 });
 
 const initial: UsageFilters = { since: "", model: "", provider: "", account: "", key_id: "", failed: "" };
@@ -57,6 +78,78 @@ export function fallbackStep(e: UsageEvent) {
   );
 }
 
+/** How many times the request was sent upstream, when it was more than once. */
+export function tries(e: UsageEvent) {
+  const count = e.attempts ?? 0;
+  if (count < 2) return null;
+  return (
+    <span title={t("triesTitle", { count })}>
+      <Badge tone="muted">{t("tries", { count })}</Badge>
+    </span>
+  );
+}
+
+/**
+ * One recorded request: what the row shows, and each try in order with its account, provider,
+ * model and what it came to. name turns an account's public ID into what the page calls it.
+ */
+export function UsageDetail(props: {
+  event: UsageEvent;
+  name: (account: string) => string;
+  mask: Masker;
+  onClose: () => void;
+}) {
+  const { event: e, mask } = props;
+  return (
+    <Detail title={t("request", { time: when(e.timestamp) ?? e.timestamp })} onClose={props.onClose}>
+      <Facts
+        rows={[
+          [t("model"), e.model],
+          [t("account"), mask(e.account)],
+          [
+            t("status"),
+            <>
+              {(e.status ? String(e.status) : t("missing")) + (e.failed ? " · " + t("yes") : "")}{" "}
+              {fallbackStep(e)}
+            </>,
+          ],
+          [t("triesFact"), e.attempts ? String(e.attempts) : undefined],
+          [t("latency"), t("milliseconds", { value: e.latency_ms })],
+          [t("tokens"), e.tokens.total_tokens?.toLocaleString()],
+          [t("trace"), e.id && <a href={"#/logs/" + encodeURIComponent(e.id)}>{e.id}</a>],
+        ]}
+      />
+      {e.tried && e.tried.length > 0 && (
+        <section aria-label={t("tried")}>
+          <h3>{t("tried")}</h3>
+          <small class="hint">{t("triedHint")}</small>
+          <ol class="usage-tried">
+            {e.tried.map((a, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: the tries of one request never reorder
+              <li key={i}>
+                <span class="mono">{mask(props.name(a.account))}</span>
+                <small class="muted">
+                  {" "}
+                  {a.provider}
+                  {a.model ? " · " + a.model : ""}
+                </small>
+                <br />
+                {a.result === "ok" ? t("answered") : t("failedWith", { result: a.result })}
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
+    </Detail>
+  );
+}
+
+/** Turns an account's public ID into its ID, when core lists the account; else the public ID stays. */
+export function accountNames(accounts: Account[] | undefined): (account: string) => string {
+  const byPublic = new Map((accounts ?? []).flatMap((a) => (a.public_id ? [[a.public_id, a.id]] : [])));
+  return (account) => byPublic.get(account) ?? account;
+}
+
 export function UsagePage() {
   const { api, unauthorized } = useKit();
   const p = usePrivacy();
@@ -64,6 +157,10 @@ export function UsagePage() {
   const [events, setEvents] = useState<UsageEvent[]>([]);
   const mask = p.masker(useAccountLabels(events));
   const [page, setPage] = useState(0);
+  const [selected, setSelected] = useState<string>();
+  // The tries of a request name accounts by public ID: the accounts say which is which.
+  const accounts = useLoad(api.accounts);
+  const chosen = events.find((e) => String(e.seq) === selected);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const saved = useSave();
@@ -213,31 +310,50 @@ export function UsagePage() {
         <Empty>{t("empty")}</Empty>
       ) : (
         <>
-          <List<UsageEvent>
-            label={t("title")}
-            items={events.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)}
-            id={(e) => String(e.seq)}
-            columns={[
-              { label: t("time"), value: (e) => <time dateTime={e.timestamp}>{when(e.timestamp)}</time> },
-              { label: t("model"), value: (e) => e.model },
-              { label: t("account"), value: (e) => mask(e.account) || t("missing") },
-              {
-                label: t("status"),
-                value: (e) => (
-                  <>
-                    {(e.status ? String(e.status) : t("missing")) + (e.failed ? " · " + t("yes") : "")}{" "}
-                    {fallbackStep(e)}
-                  </>
-                ),
-              },
-              { label: t("latency"), value: (e) => t("milliseconds", { value: e.latency_ms }) },
-              { label: t("tokens"), value: (e) => e.tokens.total_tokens?.toLocaleString() ?? t("missing") },
-              {
-                label: t("trace"),
-                value: (e) =>
-                  e.id ? <a href={"#/logs/" + encodeURIComponent(e.id)}>{e.id}</a> : t("missing"),
-              },
-            ]}
+          <MasterDetail
+            detail={
+              chosen && (
+                <UsageDetail
+                  event={chosen}
+                  name={accountNames(accounts.data?.accounts)}
+                  mask={mask}
+                  onClose={() => setSelected(undefined)}
+                />
+              )
+            }
+            list={
+              <List<UsageEvent>
+                label={t("title")}
+                items={events.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)}
+                id={(e) => String(e.seq)}
+                selected={selected}
+                onSelect={setSelected}
+                columns={[
+                  { label: t("time"), value: (e) => <time dateTime={e.timestamp}>{when(e.timestamp)}</time> },
+                  { label: t("model"), value: (e) => e.model },
+                  { label: t("account"), value: (e) => mask(e.account) || t("missing") },
+                  {
+                    label: t("status"),
+                    value: (e) => (
+                      <>
+                        {(e.status ? String(e.status) : t("missing")) + (e.failed ? " · " + t("yes") : "")}{" "}
+                        {fallbackStep(e)} {tries(e)}
+                      </>
+                    ),
+                  },
+                  { label: t("latency"), value: (e) => t("milliseconds", { value: e.latency_ms }) },
+                  {
+                    label: t("tokens"),
+                    value: (e) => e.tokens.total_tokens?.toLocaleString() ?? t("missing"),
+                  },
+                  {
+                    label: t("trace"),
+                    value: (e) =>
+                      e.id ? <a href={"#/logs/" + encodeURIComponent(e.id)}>{e.id}</a> : t("missing"),
+                  },
+                ]}
+              />
+            }
           />
           <div class="usage-paging">
             <Button onClick={() => setPage(page - 1)} disabled={page === 0}>
