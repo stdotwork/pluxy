@@ -99,12 +99,12 @@ func NewRedactor(cs ...*Credential) *Redactor {
 // removes each part of 8 bytes or more (shorter ones would match unrelated text), besides s. With
 // a smaller min, a caller tells a secret whose parts are all short, which has some, from one with
 // no structure, which has none. These structures are split, and each part split again, up to 4
-// times; of what is still left to split then, the last word is a part too, so a token behind more
-// schemes or prefixes than that is still found:
+// times; of what is still left to split then, the last word and the parts nothing splits further
+// are parts too, so a token behind more schemes or prefixes than that is still found:
 //
 //   - an authorization value, "Bearer <token>" or "Basic <base64>" (the scheme in any letter case):
 //     the token, or the base64 text (standard or URL-safe, padded or not), what it decodes to when
-//     that is text ("user:password", also with a password that is not UTF-8) and the password, or
+//     that is text or holds a ":" ("user:password", in any encoding) and the password, or
 //     the user name when the password is empty, as a key sent as Basic's user name is;
 //   - a token behind a public prefix, "<prefix>$<token>" or "<prefix>:<token>" (such as Devin's
 //     "devin-session-token$<jwt>", Meta's "dca:<token>" or a header line "Name: value"), where
@@ -134,6 +134,9 @@ func SecretParts(s string, min int) []string {
 		if depth == maxPartDepth {
 			if len(shape.parts) > 0 {
 				add(lastWord(s))
+				for _, p := range shape.leafParts() {
+					add(p)
+				}
 			}
 			return
 		}
@@ -223,16 +226,20 @@ func directParts(s string) secretShape {
 	return shape
 }
 
-// basicParts returns what Basic's base64 text decodes to, when it is text: the decoded value, and
-// the password, or the user name when the password is empty.
+// basicParts returns what Basic's base64 text decodes to, when that is text or holds the ":" of a
+// user name and password, in any encoding: the decoded value, and the password, or the user name
+// when the password is empty.
 func basicParts(text string) []secretPart {
 	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
 		b, err := enc.DecodeString(text)
-		if err != nil || !encodedText(b) {
+		if err != nil {
 			continue
 		}
 		decoded := string(b)
 		user, pass, ok := strings.Cut(decoded, ":")
+		if !ok && !utf8.Valid(b) {
+			continue
+		}
 		switch {
 		case !ok:
 			return []secretPart{{decoded, partWrapped}}
@@ -242,6 +249,18 @@ func basicParts(text string) []secretPart {
 		return []secretPart{{decoded, partForm}, {pass, partValue}}
 	}
 	return nil
+}
+
+// leafParts returns the parts of a value that nothing splits further, but for a decoded
+// "user:password", whose user name is no secret: what a value at the depth limit still holds.
+func (shape secretShape) leafParts() []string {
+	var out []string
+	for _, p := range shape.parts {
+		if p.kind != partForm && len(directParts(p.text).parts) == 0 {
+			out = append(out, p.text)
+		}
+	}
+	return out
 }
 
 // lastWord returns what follows the last space, tab, ":", "$" or "=" of s, base64 padding at its

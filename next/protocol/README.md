@@ -644,7 +644,7 @@ word is a part too, so a token behind more schemes or prefixes than that is stil
 
 - an authorization value, `Bearer <token>` or `Basic <base64>` (the scheme in any letter case):
   the token, or the base64 text (standard or URL-safe, padded or not), what it decodes to when
-  that is text (`user:password`, also with a password that is not UTF-8) and the password, or the
+  that is text or holds a `:` (`user:password`, in any encoding) and the password, or the
   user name when the password is empty, as a key sent as Basic's user name is;
 - a token behind a public prefix, `<prefix>$<token>` or `<prefix>:<token>`, such as Devin's
   `devin-session-token$<jwt>`, Meta's `dca:<token>` or `Name: value`, where the prefix is a letter

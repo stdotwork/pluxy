@@ -158,8 +158,9 @@ type partCount struct {
 	past   bool     // the value is nested deeper than SecretParts splits
 }
 
-// countedParts reads s by its structure (directParts) for what it counts by: the words a scheme, a
-// public prefix or a real cookie list's names leave out are the only bytes in none of them. With
+// countedParts reads s by its structure (directParts) for what it counts by: a scheme, a public
+// prefix, a real cookie list's names and Basic's user name beside a password are the only bytes in
+// none of them. With
 // cookie set, s is the Cookie header's value, whose single pair counts by its value.
 func countedParts(s string, cookie bool) partCount {
 	var c partCount
@@ -177,7 +178,7 @@ func countedParts(s string, cookie bool) partCount {
 		}
 		if depth == maxPartDepth {
 			c.past = true
-			c.leaves = append(c.leaves, lastWord(s))
+			c.leaves = append(append(c.leaves, lastWord(s)), shape.leafParts()...)
 			return
 		}
 		if shape.mixed {

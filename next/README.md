@@ -1796,8 +1796,8 @@ settings secret shorter than 8 bytes is left in text, since removing every occur
 short a string would mangle unrelated text. An error's message and the string values of its raw
 body, from every extension and for every call (requests, checks, quota and model reads,
 refreshes, sessions and logins), also lose every run of token characters (letters, digits and
-`_-.+/=~`, and any other character such a secret holds, but whitespace, quotes, brackets, commas
-and backslashes; read as written and with JSON and percent escapes decoded) that holds 4 or more
+`_-.+/=~`, and any other character such a secret holds, but whitespace, control characters,
+quotes, brackets, commas and backslashes; read as written and with JSON and percent escapes decoded) that holds 4 or more
 consecutive characters of one of the account's secrets, or 8 or more of a long token (trimmed, one
 run of 32 or more token characters that is not base64 of text): an upstream that refuses a key often
 echoes its start (`invalid x-api-key: sk-ant-api03-AbCdEf...`), which whole-secret redaction
@@ -1809,8 +1809,8 @@ parts, so only a scheme, a public prefix, a real cookie list's names and Basic's
 a password stay out of the pieces. A value that is one `name=value`, or holds one behind a scheme
 or prefix, counts that pair whole as well as by its value, except in the `Cookie` header; a list
 with anything in it but pairs with values counts whole too. A header, proxy or settings secret of
-8 bytes or more whose parts are all shorter counts whole, so a word that shares 4 characters with
-its scheme or cookie name goes too. A known vendor's
+8 bytes or more with no part of 8 bytes or more that nothing else splits counts whole, so a word
+that shares 4 characters with its scheme or cookie name goes too. A known vendor's
 public key prefix (`sk-proj-`, `sk-kimi-`, `xai-` and the others listed there) gives no piece,
 so `project` or `kimi` stays in an error for such a key; a secret of under 16 bytes after its
 prefix keeps every piece. Any other word of the error that shares 4 characters with a secret

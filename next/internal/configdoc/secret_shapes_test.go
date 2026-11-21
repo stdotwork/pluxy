@@ -83,12 +83,12 @@ func TestSecretShapesCoreSettings(t *testing.T) {
 						}
 					}
 				}
-				// Core also counts a URL's "user:password" together, so a password under 8 bytes
-				// is covered through that form where the extension side leaves it.
-				if f.kind == secretshapes.InUserinfo && len(row.Value) < MinTextSecret {
-					return
-				}
 				for _, word := range want.Stay {
+					// Core also counts a URL's "user:password" together, so a password under 8
+					// bytes is covered through that form where the extension side leaves it.
+					if f.kind == secretshapes.InUserinfo && word == row.Value && len(row.Value) < MinTextSecret {
+						continue
+					}
 					if !keptInError(word, secrets) {
 						t.Errorf("public word %q was removed; secrets %q", word, secrets)
 					}

@@ -136,6 +136,8 @@ func Rows() []Row {
 	basicNone := b64(tok)
 	basicColon := b64("fake-user:Qx7Rv2:Lm9Tz4Wp")
 	basicLatin := b64("fake-user:Qx7R\xe9v2Lm9Tz4")
+	basicLatinNoUser := b64(":Qx7R\xe9v2Lm9Tz4")
+	basicLatinUser := b64("f\xfcser:Qx7R\xe9v2Lm9Tz4")
 	basicSafe := b64url("fake-user:Qx7>Rv2?Lm9Tz4")
 
 	return []Row{
@@ -222,6 +224,10 @@ func Rows() []Row {
 			redacts(basicColon, "Qx7Rv2:Lm9Tz4Wp"),
 		shape("Basic, Latin-1 password", "Basic "+basicLatin, at4(basicLatin, "Qx7R", "v2Lm9Tz4").keep("fake-user")).
 			redacts(basicLatin, "Qx7R\xe9v2Lm9Tz4"),
+		shape("Basic, Latin-1 password, no user name", "Basic "+basicLatinNoUser, at4(basicLatinNoUser, "Qx7R", "v2Lm9Tz4")).
+			redacts(basicLatinNoUser, "Qx7R\xe9v2Lm9Tz4"),
+		shape("Basic, Latin-1 password and user name", "Basic "+basicLatinUser, at4(basicLatinUser, "Qx7R", "v2Lm9Tz4")).
+			redacts(basicLatinUser, "Qx7R\xe9v2Lm9Tz4"),
 		shape("Basic, URL-safe", "Basic "+basicSafe, at4(basicSafe, "Qx7>Rv2?Lm9Tz4").keep("fake-user")).
 			redacts(basicSafe, "Qx7>Rv2?Lm9Tz4"),
 
@@ -254,6 +260,8 @@ func Rows() []Row {
 		shape("nine schemes", strings.Repeat("Bearer ", 9)+tok, at4(tok)).redacts(tok),
 		shape("six prefixes", "aa:bb:cc:dd:ee:ff:"+tok, at4(tok)).redacts(tok),
 		shape("six pairs", "aa=bb=cc=dd=ee=ff="+tok, at4(tok)).redacts(tok),
+		shape("a list past the limit", "Bearer Bearer Bearer Bearer sid="+tok+"; x="+oth, at4(tok, oth)).redacts(tok, oth),
+		shape("Basic past the limit", "Bearer Bearer Bearer Bearer Basic "+basicPass, at4(basicPass, tok)).redacts(basicPass, tok),
 
 		// JSON, whitespace, line breaks and PEM keys.
 		shape("JSON value", `{"api_key":"`+tok+`","user":"svc-fake"}`, at4(tok, "svc-fake")),
