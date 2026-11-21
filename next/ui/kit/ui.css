@@ -75,6 +75,16 @@
     margin-bottom: calc(var(--s) * 5);
   }
 
+  /* Inside a stack the stack's gap already follows the head: together they keep the same
+     distance to the page's first part as a head outside one. */
+  .stack > .page-head {
+    margin-bottom: var(--s);
+  }
+
+  .stack > .page-head + p {
+    margin-top: 0;
+  }
+
   .actions {
     display: flex;
     gap: calc(var(--s) * 2);
