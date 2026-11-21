@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -186,7 +187,12 @@ func TestProviderAPIKeyLogin(t *testing.T) {
 			// The credential store is outside this config folder. Nothing written beside the
 			// config, including config.json or any config.yaml, may contain the account's key.
 			files := 0
+			// Core's setup makes and removes temporary folders under state while this walks, so a
+			// path that has gone by the time it is read holds nothing to check.
 			err := filepath.WalkDir(filepath.Dir(configPath), func(path string, entry fs.DirEntry, err error) error {
+				if errors.Is(err, fs.ErrNotExist) {
+					return nil
+				}
 				if err != nil {
 					return err
 				}
@@ -194,6 +200,9 @@ func TestProviderAPIKeyLogin(t *testing.T) {
 					return nil
 				}
 				raw, err := os.ReadFile(path)
+				if errors.Is(err, fs.ErrNotExist) {
+					return nil
+				}
 				if err != nil {
 					return err
 				}
