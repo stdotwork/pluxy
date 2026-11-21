@@ -257,7 +257,7 @@ func TestLogsClear(t *testing.T) {
 	none := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"removed":0}`)) }))
 	defer none.Close()
 	if out, _, _ := runLogs(none, false, "logs", "clear"); !strings.Contains(out, "0 rotated log files deleted") || strings.Contains(out, "no rotated") {
-		t.Errorf("logs clear that deleted none: %q, want the count: core gives 0 also when a delete failed", out)
+		t.Errorf("logs clear that deleted none: %q, want the count", out)
 	}
 	off := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
