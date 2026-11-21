@@ -38,6 +38,8 @@ const t = strings("usage", {
   milliseconds: "{value} ms",
   missing: "—",
   exportError: "Could not export requests.",
+  exportReal:
+    "Privacy mode hides names on this page only. An exported file holds them as core recorded them.",
   fallbackStep: "Fallback step {step}",
   fallbackStepTitle: "Ended on step {step} of this model's fallback chain",
 });
@@ -183,6 +185,7 @@ export function UsagePage() {
           </>
         }
       />
+      {p.on && <p class="hint">{t("exportReal")}</p>}
       <div class="usage-controls">
         {field("since", t("since"))}
         {field("model", t("model"))}
