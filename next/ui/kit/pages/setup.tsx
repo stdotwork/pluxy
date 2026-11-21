@@ -12,6 +12,7 @@ import {
   type Setup,
   type SetupClient,
   type SetupImport,
+  type SetupLastImport,
   type SetupPick,
 } from "../api";
 import type { Reply } from "../host";
@@ -79,6 +80,15 @@ const t = strings("setup", {
   importCommand: "Or use the command",
   importCommandHow:
     "Run this where pluxy is installed. It does the same, and with --dry-run only reports what it would do.",
+  importDone: "Brought across",
+  importDoneWhere: "It is at {config}, and was brought across on {when}.",
+  importDoneCounts: "Of its settings and auth files: {counts}.",
+  "importDone.brought": "{count} brought across",
+  "importDone.changed": "{count} different in pluxy",
+  "importDone.not_brought": "{count} not brought across",
+  importAgain: "Bring it across again",
+  importAgainHow:
+    "Run this where pluxy is installed. It writes the file's settings over any you changed in pluxy since, and adds the client keys, accounts and chains pluxy does not have: the ones it has stay as they are. With --dry-run it only reports what it would do.",
   bring: "Bring it across",
   bringChecking: "Checking…",
   bringNow: "Bring it across now",
@@ -319,7 +329,18 @@ function Report(props: { setup: Setup; report: ImportReport; done?: boolean }) {
   );
 }
 
-/** A found CLIProxyAPI setup: where it is, and bringing it across in two steps. */
+/** What core kept of a setup's import, in words: each list's count, a list with no row left out. */
+function importCounts(last: SetupLastImport): string {
+  return (["brought", "changed", "not_brought"] as const)
+    .filter((list) => list === "brought" || last[list] > 0)
+    .map((list) => t(`importDone.${list}`, { count: last[list] }))
+    .join(", ");
+}
+
+/**
+ * A found CLIProxyAPI setup: where it is, and bringing it across in two steps. Once core has a
+ * record of its import the row says so and offers no button: the command can still run it again.
+ */
 function FoundImport(props: {
   setup: Setup;
   found: SetupImport;
@@ -329,18 +350,30 @@ function FoundImport(props: {
 }) {
   const { found, state } = props;
   const old = state?.show === "command";
+  // What this page is in the middle of comes first: its report stays until it is closed.
+  const last = state ? undefined : found.last_import;
+  const where = <span class="mono">{found.config}</span>;
   return (
-    <li data-part="setup-import" data-state={state?.done ? "done" : state?.report ? "report" : "found"}>
+    <li
+      data-part="setup-import"
+      data-state={state?.done ? "done" : state?.report ? "report" : last ? "brought" : "found"}
+    >
       <div class="setup-row-head">
         <span class="setup-pick-text">
           <strong>{t("importFound", { count: found.accounts })}</strong>
-          <span class="muted">
-            {rich(t(old || !props.onBring ? "importOld" : "importWhere"), {
-              config: <span class="mono">{found.config}</span>,
-            })}
-          </span>
+          {last ? (
+            <span class="muted">
+              {rich(t("importDoneWhere"), { config: where, when: when(last.at) ?? last.at })}{" "}
+              {t("importDoneCounts", { counts: importCounts(last) })}
+            </span>
+          ) : (
+            <span class="muted">
+              {rich(t(old || !props.onBring ? "importOld" : "importWhere"), { config: where })}
+            </span>
+          )}
         </span>
-        {props.onBring && !old && !state?.report && (
+        {last && <Badge tone="ok">{t("importDone")}</Badge>}
+        {!last && props.onBring && !old && !state?.report && (
           <div class="actions">
             <Button disabled={state?.busy !== undefined} onClick={() => props.onBring?.(found, true)}>
               {state?.busy ? t("bringChecking") : t("bring")}
@@ -366,14 +399,14 @@ function FoundImport(props: {
           <Button onClick={props.onClose}>{t("bringClose")}</Button>
         </div>
       )}
-      {old || !props.onBring ? (
+      {!last && (old || !props.onBring) ? (
         <Code value={importCommand(found)} />
       ) : (
         !state?.report && (
           <details class="setup-others">
-            <summary>{t("importCommand")}</summary>
+            <summary>{t(last ? "importAgain" : "importCommand")}</summary>
             <div class="setup-code-how stack">
-              <span class="muted">{t("importCommandHow")}</span>
+              <span class="muted">{t(last ? "importAgainHow" : "importCommandHow")}</span>
               <Code value={importCommand(found)} />
             </div>
           </details>

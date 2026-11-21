@@ -96,7 +96,10 @@ the accounts need; nothing is written until the person confirms. After the impor
 Setup, the accounts and the packages again and ticks the providers the report says are needed, so
 Start installs them. The row also names the command that does the same, `pluxy import cpa`. A
 refusal is shown in the row with what to do about it; a core without the call (404) gets the
-command only. An import never changes core's management key: a management key in the CLIProxyAPI
+command only. Once core has a record of the import (the row's `last_import`), and the report is
+closed, the row says the setup was brought across, when, and how many of its settings and auth
+files each list of the report held. It then has no button: the command is how to bring it across
+again, and the row says what that does. An import never changes core's management key: a management key in the CLIProxyAPI
 setup stays behind, and the report says why in its "does not come across" list.
 
 A host can add one button to each client the page lists as found:
