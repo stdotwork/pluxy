@@ -428,10 +428,17 @@ fn open_window(app: &AppHandle) -> tauri::Result<()> {
     }
     let w = builder.build()?;
     let size = w.inner_size()?.to_logical::<f64>(w.scale_factor()?);
+    let handle = app.clone();
     let main = WebviewBuilder::new(MAIN, WebviewUrl::App("index.html".into()))
         .auto_resize()
         .on_navigation(is_app_url)
-        .on_new_window(|_, _| NewWindowResponse::Deny)
+        // A new window the page asks for, such as a sign-in page's "Open Link": the person's
+        // browser gets the address, and only an https one (`updates::open_external` refuses
+        // every other before any system call). The app opens no window of its own.
+        .on_new_window(move |url, _| {
+            updates::open_external(&handle, url.to_string());
+            NewWindowResponse::Deny
+        })
         .on_page_load(|wv, p| {
             // A reload of the window's document leaves no page webview behind.
             if p.event() == PageLoadEvent::Started {
