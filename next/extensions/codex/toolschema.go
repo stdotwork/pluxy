@@ -30,9 +30,13 @@ import (
 //     `required` and its schema is made nullable (null is added to every keyword that limits the
 //     value, or the schema is wrapped in an `anyOf` with a null branch), and every object schema
 //     with `properties` gets `additionalProperties: false`, as OpenAI's strict mode requires. A
-//     schema that accepts more than its properties (`additionalProperties` true or a schema, or an
-//     object type without `properties`) cannot be made strict without changing what the tool
-//     accepts: the tool is sent with `strict: false` and none of the strict rewrites.
+//     schema that cannot be closed without changing what the tool accepts cannot be made strict:
+//     the tool is sent with `strict: false` and none of the strict rewrites. Such a schema either
+//     accepts more than its properties (`additionalProperties` true or a schema, or an object type
+//     without `properties`), or combines its objects with other schemas (an `allOf` of more than
+//     one branch, `if`, `then`, `else`, `not`, `dependentSchemas`, `dependencies`, or `properties`
+//     beside `$ref`, `allOf`, `anyOf` or `oneOf`), where closing each object would refuse input
+//     the combination accepts. A single-branch `allOf` combines nothing and stays closable.
 
 // unionToEnumBranches is how many branches a union needs before it becomes an enum. Smaller
 // unions are left as written.
@@ -43,6 +47,10 @@ var boundKeywords = [...]string{"minimum", "maximum", "exclusiveMinimum", "exclu
 
 // subschemaMaps are keywords whose value is an object of subschemas.
 var subschemaMaps = [...]string{"properties", "$defs", "definitions", "dependentSchemas", "dependencies"}
+
+// combinedKeywords are the keywords that test a schema's object against other schemas or against
+// the negation of one. An object under one of them cannot be closed (see schemaIsOpen).
+var combinedKeywords = [...]string{"if", "then", "else", "not", "dependentSchemas", "dependencies"}
 
 // subschemas are keywords whose value is a subschema or a list of them.
 var subschemas = [...]string{
@@ -74,7 +82,7 @@ func fixToolSchemas(tools []json.RawMessage, path string, lose func(path, detail
 				if strictOff {
 					o["strict"] = raw(false)
 					if lose != nil {
-						lose(path+"["+strconv.Itoa(i)+"]", "strict mode was turned off: the schema accepts more than its properties, which strict mode cannot express")
+						lose(path+"["+strconv.Itoa(i)+"]", "strict mode was turned off: the schema cannot be closed without changing what it accepts, which strict mode cannot express")
 					}
 				}
 				tools[i] = raw(o)
@@ -649,9 +657,12 @@ func eachSchema(v any, fn func(map[string]any) bool) bool {
 	return changed
 }
 
-// schemaIsOpen reports whether a schema under v accepts keys beyond its properties, which strict
-// mode cannot express: `additionalProperties` true or a schema, or an object type with no
-// `properties` (a free-form map).
+// schemaIsOpen reports whether a schema under v cannot be closed without changing what it accepts,
+// which strict mode cannot express. That is a schema that accepts keys beyond its properties:
+// `additionalProperties` true or a schema, or an object type with no `properties` (a free-form
+// map). It is also a schema that combines its object with other schemas, where closing the object
+// would refuse input the combination accepts: an `allOf` of more than one branch, any of the
+// `combinedKeywords`, or `properties` beside `$ref`, `allOf`, `anyOf` or `oneOf`.
 func schemaIsOpen(v any) bool {
 	open := false
 	eachSchema(v, func(s map[string]any) bool {
@@ -660,6 +671,21 @@ func schemaIsOpen(v any) bool {
 		}
 		if _, ok := s["properties"]; !ok && hasObjectType(s["type"]) {
 			open = true
+		}
+		if branches, ok := s["allOf"].([]any); ok && len(branches) > 1 {
+			open = true
+		}
+		for _, k := range combinedKeywords {
+			if _, ok := s[k]; ok {
+				open = true
+			}
+		}
+		if _, ok := s["properties"]; ok {
+			for _, k := range [...]string{"$ref", "allOf", "anyOf", "oneOf"} {
+				if _, ok := s[k]; ok {
+					open = true
+				}
+			}
 		}
 		return false
 	})

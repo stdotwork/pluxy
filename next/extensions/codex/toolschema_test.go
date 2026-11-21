@@ -804,6 +804,15 @@ func TestStrictOpenSchemaGoesNonStrict(t *testing.T) {
 		"additionalProperties":           `{"type":"object","properties":{"a":{"type":"string"}},"additionalProperties":true}`,
 		"an additionalProperties schema": `{"type":"object","properties":{"a":{"type":"string"}},"additionalProperties":{"type":"string"}}`,
 		"a nested open object":           `{"type":"object","properties":{"o":{"type":"object","properties":{"k":{"type":"string"}},"additionalProperties":{}}}}`,
+		"a two-branch allOf in $defs":    `{"type":"object","properties":{"x":{"$ref":"#/$defs/W"}},"$defs":{"B":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]},"W":{"allOf":[{"$ref":"#/$defs/B"},{"type":"object","properties":{"n":{"type":"string"}},"required":["n"]}]}}}`,
+		"a root two-branch allOf":        `{"allOf":[{"$ref":"#/$defs/B"},{"type":"object","properties":{"n":{"type":"string"}},"required":["n"]}],"$defs":{"B":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}}}`,
+		"if and then":                    `{"type":"object","properties":{"kind":{"type":"string"},"v":{"type":"string"}},"if":{"properties":{"kind":{"const":"a"}}},"then":{"required":["v"]}}`,
+		"if and else":                    `{"type":"object","properties":{"kind":{"type":"string"},"v":{"type":"string"}},"if":{"properties":{"kind":{"const":"a"}}},"else":{"required":["v"]}}`,
+		"not":                            `{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"}},"not":{"required":["a","b"]}}`,
+		"dependentSchemas":               `{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"}},"dependentSchemas":{"a":{"required":["b"]}}}`,
+		"dependencies":                   `{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"}},"dependencies":{"a":["b"]}}`,
+		"properties beside $ref":         `{"type":"object","properties":{"a":{"$ref":"#/$defs/X","properties":{"k":{"type":"string"}}}},"$defs":{"X":{"type":"object","properties":{"j":{"type":"string"}}}}}`,
+		"properties beside anyOf":        `{"type":"object","properties":{"a":{"anyOf":[{"type":"object","properties":{"x":{"type":"string"}}},{"type":"string"}],"properties":{"k":{"type":"string"}}}}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			tools, tr := strictTools(t, `[{"type":"function","name":"f","strict":true,"parameters":`+params+`}]`)
@@ -811,12 +820,10 @@ func TestStrictOpenSchemaGoesNonStrict(t *testing.T) {
 				t.Fatalf("sent strict: %s", tools[0]["parameters"])
 			}
 			// What the non-strict rules leave: nothing added to required, no nullability, and
-			// the missing array items still filled in.
+			// the missing array items still filled in. Equal to that result means no strict
+			// rewrite was applied, whether or not the input already has required lists.
 			want, _ := fixed(t, params)
 			sameJSON(t, mustJSON(t, tools[0]["parameters"]), mustMarshal(t, want))
-			if strings.Contains(string(tools[0]["parameters"]), `"required"`) {
-				t.Errorf("strict rewrite applied: %s", tools[0]["parameters"])
-			}
 			if len(tr.Losses) != 1 {
 				t.Fatalf("losses = %+v, want one", tr.Losses)
 			}
@@ -825,6 +832,35 @@ func TestStrictOpenSchemaGoesNonStrict(t *testing.T) {
 				t.Errorf("loss = %+v", l)
 			}
 		})
+	}
+}
+
+// A single-branch allOf of a $ref combines nothing, so the tool stays strict and the referenced
+// object is closed like any other.
+func TestStrictSingleBranchAllOfStaysStrict(t *testing.T) {
+	in := `{"type":"object","properties":{"c":{"allOf":[{"$ref":"#/$defs/Foo"}],"description":"x"}},"$defs":{"Foo":{"type":"object","properties":{"f":{"type":"string"}}}}}`
+	tools, tr := strictTools(t, `[{"type":"function","name":"f","strict":true,"parameters":`+in+`}]`)
+	if !strictFlag(t, tools[0]) {
+		t.Fatalf("a single-branch allOf was sent non-strict: %s", tools[0]["parameters"])
+	}
+	var bad []string
+	unclosedObjects(mustJSON(t, tools[0]["parameters"]), "$", &bad)
+	if len(bad) > 0 {
+		t.Errorf("objects left open: %v\n%s", bad, tools[0]["parameters"])
+	}
+	var got struct {
+		Defs struct {
+			Foo map[string]json.RawMessage `json:"Foo"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(tools[0]["parameters"], &got); err != nil {
+		t.Fatal(err)
+	}
+	if string(got.Defs.Foo["additionalProperties"]) != "false" {
+		t.Errorf("Foo is not closed: %s", tools[0]["parameters"])
+	}
+	if len(tr.Losses) != 0 {
+		t.Errorf("losses = %+v, want none", tr.Losses)
 	}
 }
 
