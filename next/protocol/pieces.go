@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"net/url"
@@ -23,7 +24,7 @@ const minSideSecret = 8
 //   - the credential's api_key, access_token and refresh_token;
 //   - the value of each header whose name is secret (SecretName);
 //   - the user name and password of proxy_url;
-//   - in settings, every string below a key whose name is secret (SecretName), and the
+//   - in settings, every string or number below a key whose name is secret (SecretName), and the
 //     user name, password and secret query or fragment values (secretQueryName) of every URL; a
 //     URL below a secret key counts by those parts only, as core's own rule for settings has it.
 //
@@ -52,8 +53,11 @@ const minSideSecret = 8
 func AccountSecrets(a Account) []string {
 	var plain, values []string
 	if len(a.Settings) > 0 {
+		// A number keeps its exact digits: a float64 would change a long one.
+		dec := json.NewDecoder(bytes.NewReader(a.Settings))
+		dec.UseNumber()
 		var v any
-		if json.Unmarshal(a.Settings, &v) == nil {
+		if json.Valid(a.Settings) && dec.Decode(&v) == nil {
 			settingsSecrets(v, false, func(s string) { plain = append(plain, s) }, func(s string) { values = append(values, s) })
 		}
 	}
@@ -201,9 +205,9 @@ func countedParts(s string, cookie bool) partCount {
 	return c
 }
 
-// settingsSecrets calls add with each secret in the settings value v, each string below a key
-// whose name is secret (secret says v is) but an absolute URL, and value with the secrets of each
-// URL (urlSecrets).
+// settingsSecrets calls add with each secret in the settings value v, each string or number below
+// a key whose name is secret (secret says v is) but an absolute URL, and value with the secrets of
+// each URL (urlSecrets).
 func settingsSecrets(v any, secret bool, add, value func(string)) {
 	switch v := v.(type) {
 	case string:
@@ -212,6 +216,10 @@ func settingsSecrets(v any, secret bool, add, value func(string)) {
 		}
 		for _, s := range urlSecrets(v, false) {
 			value(s)
+		}
+	case json.Number:
+		if secret {
+			add(v.String())
 		}
 	case map[string]any:
 		for k, x := range v {
@@ -257,17 +265,29 @@ func urlSecrets(s string, proxy bool) []string {
 	if proxy {
 		return out
 	}
-	// A value is read up to the next "&", and again up to a ";" in it: some servers split on both.
-	var params []string
+	return append(out, SecretURLValues(u, secretQueryName)...)
+}
+
+// SecretURLValues returns the non-empty values of the parameters of u whose names secret reports,
+// as written and decoded. Parameters are read in the query and in the fragment, where an OAuth
+// redirect carries them, up to the next "&", and again up to a ";" in them, as some servers split
+// on both. A name may follow a page's route in the fragment ("#/callback?code=..."). It is the one
+// definition of a URL's secret parameters, for AccountSecrets and core's rules for settings.
+func SecretURLValues(u *url.URL, secret func(name string) bool) []string {
+	var params, out []string
 	for _, kv := range slices.Concat(strings.Split(u.RawQuery, "&"), strings.Split(u.EscapedFragment(), "&")) {
 		params = append(params, kv)
 		if strings.Contains(kv, ";") {
 			params = append(params, strings.Split(kv, ";")...)
 		}
 	}
+	named := func(k string) bool {
+		name, err := url.QueryUnescape(k)
+		return err == nil && secret(name)
+	}
 	for _, kv := range params {
 		k, v, _ := strings.Cut(kv, "=")
-		if name, err := url.QueryUnescape(k); err != nil || !secretQueryName(name) {
+		if v == "" || !named(k) && !named(k[strings.LastIndexByte(k, '?')+1:]) {
 			continue
 		}
 		out = append(out, v)

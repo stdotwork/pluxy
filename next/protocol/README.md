@@ -625,10 +625,11 @@ especially short ones, out of the credential. Core removes the secrets in the ac
 whatever joins their words, or none, and may end in a number or a word such as `value` or
 `pem`), header values about authentication or named like a secret in an object whose name holds
 `header` (`extra_headers`, `headers_override`), and any URL
-with a user name, password or query (a `base_url` with a token in it), as its management API
+with a user name, password or query (a `base_url` with a token in it), or with a parameter named
+like a secret in its fragment, as its management API
 hides them; of such a URL also its user name, its password, the two together (in Basic form
-too) and the value of each query parameter named like a secret (`key`, `token`, `sig`, ...), as
-written and decoded, on their own. Below a key named like a secret, `true`, `false`, `null` and the empty string are
+too) and the value of each parameter named like a secret (`key`, `token`, `sig`, ...) in its query
+or fragment, split on `&` or `;`, as written and decoded, on their own. Below a key named like a secret, `true`, `false`, `null` and the empty string are
 not secrets: they carry none. Unlike a credential's strings, a settings secret shorter than 8
 bytes is left in text, since removing every occurrence of so short a string would mangle
 unrelated text; the management API still shows it as a placeholder. When the settings change,
@@ -722,8 +723,10 @@ In Go, `protocol.RemovePieces(s, secrets...)` applies the rule. `protocol.Accoun
 returns an account's secrets with the settings secrets given, as core passes them;
 `protocol.AccountSecrets(account)` finds those in `settings` itself, by rules close to core's (a
 key named like a secret by `protocol.SecretName`, which also takes names core's rules do not,
-such as `monkey`, and query parameter names without core's letter folding), for an extension:
+such as `monkey`, and parameter names without core's letter folding), for an extension:
 `sdk.UpstreamText` applies the rule with the other cleaning an extension's error text needs.
+`protocol.SecretURLValues(u, secret)` is the one reading of a URL's secret parameters, which both
+sets of rules use.
 
 ### Proxy
 

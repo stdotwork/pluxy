@@ -49,17 +49,20 @@ const MaxUpstreamText = 1000
 // else, so a caller passes the secrets it knows, AccountSecrets of the call's account and any it
 // holds itself: first, every run of token characters that holds 4 or more consecutive characters
 // of one, not all of them in its public vendor prefix such as "sk-proj-" (protocol.RemovePieces),
-// is replaced, and 8 or more of a long token or of a PEM private key's body. A run is read
-// with its escapes decoded too (JSON's \/, \\ and \uXXXX and percent-encoding's %XX, nested up to 8
+// is replaced, and 8 or more of a long token or of a PEM private key's body. A run also takes any
+// other character one of secrets holds, such as a password's "@" or ":", but never whitespace,
+// control characters, quotes, brackets, commas or backslashes, so all of a URL in the text can go
+// when it holds such a piece. A run is read with its escapes decoded too (JSON's \/, \\ and \uXXXX and percent-encoding's %XX, nested up to 8
 // times), so a piece written with escapes between its characters is replaced, and so is a run whose
 // decoded text holds 24 or more token characters in a row.
 func UpstreamText(s string, secrets ...string) string {
 	return boundText(s, MaxUpstreamText, secrets)
 }
 
-// cleanRuns replaces in s every run of token characters and escapes that, with its escapes
-// decoded, holds a piece of one of secrets (protocol.RemovePieces: 4 or more consecutive
-// characters of one, or 8 of a long token or of a PEM private key's body), and every run with
+// cleanRuns replaces in s every run that, with its escapes decoded, holds a piece of one of secrets
+// (protocol.RemovePieces: 4 or more consecutive characters of one, or 8 of a long token or of a
+// PEM private key's body; a run is token characters, escapes and any other character the secrets
+// hold, but whitespace, control characters, quotes, brackets, commas and backslashes), and every run with
 // escapes whose decoded text holds a run opaqueRun matches.
 func cleanRuns(s string, secrets []string) string {
 	s = protocol.RemovePieces(s, secrets...)
