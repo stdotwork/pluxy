@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"net"
 	"slices"
 	"strconv"
 	"strings"
@@ -333,7 +334,16 @@ func (m *Manager) LoginInput(id string, input map[string]string) error {
 	case call == nil:
 		return fmt.Errorf("%w: login %s is still starting; try again", ErrConflict, id)
 	}
-	return call.Send(input)
+	if err := call.Send(input); err != nil {
+		// The call's connection closed between the check above and the send — the extension
+		// finished, or the login was cancelled — so the login has ended, as it would be marked
+		// a moment later. Another send failure stays as it is.
+		if errors.Is(err, net.ErrClosed) {
+			return fmt.Errorf("%w: login %s has finished", ErrConflict, id)
+		}
+		return err
+	}
+	return nil
 }
 
 // CancelLogin cancels a running login.

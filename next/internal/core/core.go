@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -1046,6 +1047,10 @@ func (l *leasedLogin) Close() {
 // failedLogin is a login call that is one error.
 type failedLogin struct{ final protocol.Reply }
 
-func (l *failedLogin) Next() protocol.Reply         { return l.final }
-func (l *failedLogin) Send(map[string]string) error { return errors.New("the login is not running") }
-func (l *failedLogin) Close()                       {}
+func (l *failedLogin) Next() protocol.Reply { return l.final }
+func (l *failedLogin) Send(map[string]string) error {
+	// A login that never started has ended: input to it is reported as a closed connection, as
+	// host.LoginCall.Send reports input to a login that ended.
+	return fmt.Errorf("the login is not running: %w", net.ErrClosed)
+}
+func (l *failedLogin) Close() {}
