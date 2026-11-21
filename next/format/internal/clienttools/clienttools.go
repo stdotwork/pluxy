@@ -26,6 +26,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -716,7 +717,7 @@ func CustomInput(arguments string) (input string, ok bool) {
 // NotWholeError is the error that ends a reply whose custom tool call is not whole, on a finish
 // that does not explain it. It names the tool and never repeats the arguments.
 func NotWholeError(name string, usage *llm.Usage) *llm.Error {
-	return &llm.Error{Code: llm.CodeUpstream, Scope: llm.ScopeEndpoint, Usage: usage,
+	return &llm.Error{Code: llm.CodeUpstream, Status: http.StatusBadGateway, Scope: llm.ScopeRequest, Usage: usage,
 		Message: "invalid arguments for custom tool " + name + " received from upstream"}
 }
 

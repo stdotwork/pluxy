@@ -569,6 +569,26 @@ func TestCodexCustomToolCallNotWholeFailsAtTheHTTPSeam(t *testing.T) {
 	}
 }
 
+// A call that is not whole fails that one reply and leaves the account usable: the next request
+// gets the same answer, not a cooldown.
+func TestCodexCustomToolCallNotWholeKeepsAccountUsable(t *testing.T) {
+	const args = `{"patch":"x"}`
+	for _, tg := range toolTargets {
+		t.Run(tg.name, func(t *testing.T) {
+			u := newToolUpstream(t, tg.wire, "apply_patch", args, false)
+			base := startToolCore(t, tg.manifest, tg.settings(u.URL))
+			for i := range 2 {
+				resp := postPath(t, context.Background(), base, "/v1/responses", clientKey, customBody(false))
+				raw, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if resp.StatusCode != http.StatusBadGateway || !strings.Contains(string(raw), "apply_patch") {
+					t.Fatalf("request %d: status %d: %s", i+1, resp.StatusCode, raw)
+				}
+			}
+		})
+	}
+}
+
 // A name past the upstream's limit is repaired there, and the client gets its own name back.
 func TestCodexToolNameRepairAtTheHTTPSeam(t *testing.T) {
 	long := strings.Repeat("a", 150)
