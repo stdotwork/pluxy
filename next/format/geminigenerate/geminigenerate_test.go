@@ -747,3 +747,52 @@ func TestDevinReasoningSignature(t *testing.T) {
 		t.Errorf("losses = %+v, want the signature reported as dropped", l)
 	}
 }
+
+// A count the upstream did not report stays absent from usageMetadata instead of becoming zero,
+// and one it reported as zero is written as zero (Google's UsageMetadata fields are all optional).
+func TestRenderUsageUnknownStaysAbsent(t *testing.T) {
+	render := func(u *llm.Usage) string {
+		t.Helper()
+		a := NewAggregator()
+		a.Add(llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "r1", Model: "m", Format: llm.FormatOpenAIChat}})
+		a.Add(llm.Event{Type: llm.EventItemStart, Index: 0, Item: &llm.ItemStart{Kind: llm.ItemMessage}})
+		a.Add(llm.Event{Type: llm.EventTextDelta, Index: 0, Delta: "ok"})
+		a.Add(llm.Event{Type: llm.EventItemEnd, Index: 0})
+		a.Add(llm.Event{Type: llm.EventFinish, Finish: &llm.Finish{Reason: llm.FinishStop}, Usage: u})
+		b, err := a.Response()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out struct {
+			Usage json.RawMessage `json:"usageMetadata"`
+		}
+		if err := json.Unmarshal(b, &out); err != nil {
+			t.Fatal(err)
+		}
+		return string(out.Usage)
+	}
+
+	cases := []struct {
+		name string
+		u    *llm.Usage
+		want string
+	}{
+		{"only output known", &llm.Usage{OutputTokens: llm.Int64(5)}, `{"candidatesTokenCount":5}`},
+		{"only input known", &llm.Usage{InputTokens: llm.Int64(7)}, `{"promptTokenCount":7}`},
+		{"nothing known", &llm.Usage{}, ``},
+		{"real zeros", &llm.Usage{InputTokens: llm.Int64(0), OutputTokens: llm.Int64(0)},
+			`{"promptTokenCount":0,"candidatesTokenCount":0,"totalTokenCount":0}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := render(c.u)
+			if c.want == "" {
+				if got != "" {
+					t.Fatalf("usageMetadata = %s, want none", got)
+				}
+				return
+			}
+			sameJSON(t, "usageMetadata", []byte(got), c.want)
+		})
+	}
+}

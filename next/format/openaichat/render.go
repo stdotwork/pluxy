@@ -118,7 +118,10 @@ func (u upstream) usage(us *llm.Usage) any {
 	if u.native && len(us.Raw) > 0 {
 		return us.Raw
 	}
-	return encodeUsage(us)
+	if out := encodeUsage(us); out != nil {
+		return out
+	}
+	return nil
 }
 
 // choices returns the choices kept in a native event.
@@ -133,25 +136,28 @@ func (u upstream) choices(ev llm.Event) []json.RawMessage {
 	return n.Choices
 }
 
+// encodeUsage writes model usage as Chat Completions usage. When any count is known, all three
+// counts CompletionUsage requires are written, a missing one as 0; a usage with no counts at all
+// is left out, and a count the upstream reported as zero stays zero.
 func encodeUsage(u *llm.Usage) *outUsage {
-	if u == nil {
+	if u == nil || !reportsAnyCount(u) {
 		return nil
 	}
-	v := func(p *int64) int64 {
+	val := func(p *int64) int64 {
 		if p == nil {
 			return 0
 		}
 		return *p
 	}
-	out := &outUsage{PromptTokens: v(u.InputTokens), CompletionTokens: v(u.OutputTokens)}
-	out.TotalTokens = out.PromptTokens + out.CompletionTokens
-	if u.CachedInputTokens != nil || v(u.CacheWriteInputTokens) > 0 {
+	in, outTok := val(u.InputTokens), val(u.OutputTokens)
+	out := &outUsage{PromptTokens: in, CompletionTokens: outTok, TotalTokens: in + outTok}
+	if u.CachedInputTokens != nil || val(u.CacheWriteInputTokens) > 0 {
 		out.PromptTokensDetails = &struct {
 			CachedTokens     *int64 `json:"cached_tokens,omitempty"`
 			CacheWriteTokens int64  `json:"cache_write_tokens,omitempty"`
 		}{
 			CachedTokens:     u.CachedInputTokens,
-			CacheWriteTokens: max(0, v(u.CacheWriteInputTokens)),
+			CacheWriteTokens: max(0, val(u.CacheWriteInputTokens)),
 		}
 	}
 	if u.ReasoningTokens != nil {
@@ -160,6 +166,12 @@ func encodeUsage(u *llm.Usage) *outUsage {
 		}{*u.ReasoningTokens}
 	}
 	return out
+}
+
+// reportsAnyCount reports whether the usage carries any count at all, the upstream's or 0.
+func reportsAnyCount(u *llm.Usage) bool {
+	return u.InputTokens != nil || u.OutputTokens != nil || u.CachedInputTokens != nil ||
+		u.CacheWriteInputTokens != nil || u.ReasoningTokens != nil
 }
 
 func finishReason(f *llm.Finish) string {

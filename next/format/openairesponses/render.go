@@ -241,24 +241,26 @@ func (b *builder) response(stream bool) obj {
 		}
 	}
 	r["output"] = output
-	if u := b.usage; u != nil {
+	if u := b.usage; u != nil && usageKnown(u) {
 		v := func(p *int64) int64 {
 			if p == nil {
 				return 0
 			}
 			return *p
 		}
-		total := v(u.InputTokens) + v(u.OutputTokens)
+		// When any count is known, every field OpenAI's ResponseUsage requires is written, a
+		// missing input or output count as 0; a usage with no counts at all is left out.
+		in, outTok := v(u.InputTokens), v(u.OutputTokens)
 		inDetails := obj{"cached_tokens": v(u.CachedInputTokens)}
 		if w := v(u.CacheWriteInputTokens); w > 0 {
 			inDetails["cache_write_tokens"] = w
 		}
 		r["usage"] = obj{
-			"input_tokens":          v(u.InputTokens),
+			"input_tokens":          in,
 			"input_tokens_details":  inDetails,
-			"output_tokens":         v(u.OutputTokens),
+			"output_tokens":         outTok,
 			"output_tokens_details": obj{"reasoning_tokens": v(u.ReasoningTokens)},
-			"total_tokens":          total,
+			"total_tokens":          in + outTok,
 		}
 		if b.upFormat != format && len(u.Raw) > 0 {
 			for _, k := range unmodelledUsage(u.Raw) {
@@ -267,6 +269,13 @@ func (b *builder) response(stream bool) obj {
 		}
 	}
 	return r
+}
+
+// usageKnown reports whether the upstream reported any count at all: a usage with none is left
+// out of a Response rather than written as an object of zeros.
+func usageKnown(u *llm.Usage) bool {
+	return u.InputTokens != nil || u.OutputTokens != nil || u.CachedInputTokens != nil ||
+		u.CacheWriteInputTokens != nil || u.ReasoningTokens != nil
 }
 
 // unmodelledUsage lists Chat usage fields a Response's usage has no place for.

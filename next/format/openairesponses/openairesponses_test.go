@@ -859,3 +859,55 @@ func TestRenderUsageCacheWrite(t *testing.T) {
 		t.Errorf("usage with zero cache write:\n got %s\nwant %s", zero, wantZero)
 	}
 }
+
+// A Response's usage with any count at all carries every field OpenAI's ResponseUsage requires,
+// a missing input or output count as 0; a usage with no counts is left out, and a count reported as
+// zero stays zero.
+func TestRenderUsageUnknownStaysAbsent(t *testing.T) {
+	req, err := ParseRequest([]byte(`{"model":"m","input":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	render := func(u *llm.Usage) string {
+		a := NewAggregator(req)
+		a.Add(llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "r1", Model: "m", Format: llm.FormatOpenAIChat}})
+		a.Add(llm.Event{Type: llm.EventItemStart, Index: 0, Item: &llm.ItemStart{Kind: llm.ItemMessage}})
+		a.Add(llm.Event{Type: llm.EventTextDelta, Index: 0, Delta: "ok"})
+		a.Add(llm.Event{Type: llm.EventItemEnd, Index: 0})
+		a.Add(llm.Event{Type: llm.EventFinish, Finish: &llm.Finish{Reason: llm.FinishStop}, Usage: u})
+		b, err := a.Response()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out struct {
+			Usage json.RawMessage `json:"usage"`
+		}
+		if err := json.Unmarshal(b, &out); err != nil {
+			t.Fatal(err)
+		}
+		return string(out.Usage)
+	}
+	same := func(t *testing.T, got, want string) {
+		t.Helper()
+		var g, w any
+		if err := json.Unmarshal([]byte(got), &g); err != nil {
+			t.Fatalf("got %s: %v", got, err)
+		}
+		if err := json.Unmarshal([]byte(want), &w); err != nil {
+			t.Fatalf("want %s: %v", want, err)
+		}
+		if !reflect.DeepEqual(g, w) {
+			t.Errorf("usage:\n got %s\nwant %s", got, want)
+		}
+	}
+
+	same(t, render(&llm.Usage{OutputTokens: llm.Int64(5)}),
+		`{"input_tokens":0,"output_tokens":5,"total_tokens":5,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}`)
+	same(t, render(&llm.Usage{InputTokens: llm.Int64(7)}),
+		`{"input_tokens":7,"output_tokens":0,"total_tokens":7,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}`)
+	if got := render(&llm.Usage{}); got != "" {
+		t.Errorf("usage = %s, want none", got)
+	}
+	same(t, render(&llm.Usage{InputTokens: llm.Int64(0), OutputTokens: llm.Int64(0)}),
+		`{"input_tokens":0,"output_tokens":0,"total_tokens":0,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}`)
+}

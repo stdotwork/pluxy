@@ -56,6 +56,17 @@ func decodeUsage(raw json.RawMessage) *llm.Usage {
 	return out
 }
 
+// reportsTokens reports whether the usage carries a count the upstream measured, as opposed to an
+// empty or zero-filled object some upstreams send after the usage they counted.
+func reportsTokens(u *llm.Usage) bool {
+	for _, p := range []*int64{u.InputTokens, u.OutputTokens, u.CachedInputTokens, u.CacheWriteInputTokens, u.ReasoningTokens} {
+		if p != nil && *p > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func decodeFinish(raw string) llm.Finish {
 	reason := llm.FinishOther
 	switch raw {
@@ -384,7 +395,10 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return nil, d.withUsage(malformed("upstream sent a malformed stream chunk", data))
 	}
-	if u := decodeUsage(c.Usage); u != nil {
+	// Chat usage is cumulative and the last chunk usually carries it, but some upstreams send an
+	// empty or zero-filled usage after the real one. Such a chunk does not replace what the
+	// upstream already reported; one with counts does.
+	if u := decodeUsage(c.Usage); u != nil && (d.usage == nil || reportsTokens(u)) {
 		d.usage = u
 	}
 	if hasError(c.Error) {
