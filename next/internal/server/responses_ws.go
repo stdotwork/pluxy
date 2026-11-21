@@ -241,6 +241,9 @@ func (s *wsSocket) sendError(e *llm.Error) error {
 		}
 		m["headers"] = h
 	}
+	if e == errClientKey {
+		m["headers"] = map[string]string{"X-Should-Retry": "false"}
+	}
 	msg, _ := json.Marshal(m)
 	return s.send(msg)
 }
