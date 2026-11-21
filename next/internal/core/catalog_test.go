@@ -24,7 +24,11 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-func TestModelRefreshLoopAndCredentialChange(t *testing.T) {
+// The refresh after a credential is renewed, the account's kept list as accountModels reads it,
+// and the management calls that read and refresh model lists. The refresh loop itself is not
+// started here: safe mode leaves it out (startModelRefresh), and its due refreshes are covered by
+// TestModelListRefreshTimerAndJitter in the route package.
+func TestCredentialChangeRefreshesModelListAndManagementAPI(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	cfg := `{"listen": "127.0.0.1:0", "client_keys": ["fake-client-key-1"], "management_key": "fake-management-key"}`
 	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {

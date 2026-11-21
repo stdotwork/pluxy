@@ -96,8 +96,10 @@ func TestCLIExitCodes(t *testing.T) {
 		}
 	}
 
-	// 3: no core answers at the address.
-	stopped := fmt.Sprintf("http://127.0.0.1:%d", freePort(t))
+	// 3: no core answers at the address. Port 0 is never served: a listener given port 0 takes
+	// another free port, so this address stays closed for the whole run, unlike a freePort that
+	// something else may take between choosing it and the CLI calling it.
+	stopped := "http://127.0.0.1:0"
 	if r := runCLI(t, nil, "status", "--json", "--url", stopped, "--key", managementKey); r.code != 3 || r.stdout != "" {
 		t.Errorf("status with no core: %s; want exit 3 and nothing on standard output", r)
 	}

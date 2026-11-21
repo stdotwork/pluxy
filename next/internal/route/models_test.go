@@ -37,8 +37,9 @@ func TestRefreshMidStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var flip atomic.Int64
+	var flip, reads atomic.Int64
 	catalog := func(ctx context.Context, a Account, c *protocol.Credential) (*protocol.ModelList, *llm.Error) {
+		reads.Add(1)
 		if flip.Add(1)%2 == 0 {
 			return &protocol.ModelList{Models: []protocol.Model{{ID: "other"}}}, nil
 		}
@@ -61,6 +62,14 @@ func TestRefreshMidStream(t *testing.T) {
 			}
 		}
 	})
+
+	// Read both accounts' lists first, so a read from here on is a refresh doing its work, not a
+	// first read.
+	r.Models(context.Background())
+	readsBefore := reads.Load()
+	if readsBefore == 0 {
+		t.Fatalf("reading the model list read no account")
+	}
 
 	var wg sync.WaitGroup
 	var served, refused, torn atomic.Int64
@@ -88,14 +97,22 @@ func TestRefreshMidStream(t *testing.T) {
 		})
 	}
 	wg.Wait()
+	readsDuring := reads.Load() - readsBefore
 	close(stop)
 	refreshWG.Wait()
-	t.Logf("served whole=%d refused before start=%d torn=%d refreshes=%d", served.Load(), refused.Load(), torn.Load(), refreshes.Load())
+	t.Logf("served whole=%d refused before start=%d torn=%d refreshes=%d list reads during the streams=%d",
+		served.Load(), refused.Load(), torn.Load(), refreshes.Load(), readsDuring)
 	if torn.Load() != 0 {
 		t.Fatalf("%d streams were cut or changed mid-reply", torn.Load())
 	}
 	if served.Load() == 0 {
 		t.Fatalf("expected at least one served stream, got 0")
+	}
+	// RefreshModels ran throughout, and each run re-read both accounts' lists: the streams stayed
+	// whole while the lists they route over were replaced, which is what this test is about. A
+	// refresh that does nothing would leave the count at 0.
+	if readsDuring < 2 {
+		t.Fatalf("%d account model list reads while the streams ran, want a refresh of both accounts: no refresh did anything", readsDuring)
 	}
 }
 
