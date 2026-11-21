@@ -5,9 +5,9 @@ import (
 	"strings"
 )
 
-// ProviderContextLengthExceeded is the provider code of an error that says the prompt does not fit the
-// model's context window. It is OpenAI's code, and the one the Codex CLI compacts on, with status
-// 400 or in a stream.
+// ProviderContextLengthExceeded is the provider code of an error that says the prompt does not
+// fit the model's context window. It is OpenAI's code, and the one the Codex CLI compacts on, with
+// status 400 or in a stream.
 const ProviderContextLengthExceeded = "context_length_exceeded"
 
 // contextOverflowMessages are the upstream messages, in lower case, that say the prompt does not

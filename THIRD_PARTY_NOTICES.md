@@ -478,7 +478,8 @@ LiteLLM, from <https://github.com/BerriAI/litellm> (commit
   `searchOutput` are that file's `_search_output_text`.
 - adapted: in `next/llm/overflow.go`, the list of upstream messages that say a prompt does not fit
   the model's context window, and the checks beside it, follow
-  `is_error_str_context_window_exceeded` in `litellm/litellm_core_utils/exception_mapping_utils.py`.
+  `is_error_str_context_window_exceeded` in `litellm/litellm_core_utils/exception_mapping_utils.py`,
+  except the phrase `input context is too long`, which comes from Google's Gemini API error table.
 
 Licence text, for content outside `litellm/enterprise/`, as it is in `LICENSE`:
 
