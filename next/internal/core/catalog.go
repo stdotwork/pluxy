@@ -96,8 +96,14 @@ func (c *Core) modelRefreshLoop(interval time.Duration) {
 
 // credentialChanged refreshes account id's kept model list after its credential is renewed or
 // it signs in again. Runs in the background so a renewal inside a request never waits on or
-// deadlocks with the model list read.
+// deadlocks with the model list read. A renewal can finish while Stop is waiting for background
+// work, so the work is added under bgMu, which Stop closes first.
 func (c *Core) credentialChanged(id string) {
+	c.bgMu.Lock()
+	defer c.bgMu.Unlock()
+	if c.bgClosed {
+		return
+	}
 	c.bgWG.Add(1)
 	go func() {
 		defer c.bgWG.Done()

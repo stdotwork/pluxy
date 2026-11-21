@@ -88,9 +88,10 @@ func AddLoss(losses []Loss, l Loss) []Loss {
 }
 
 // Translation reports how an upstream request was built from the client's request. When
-// Passthrough is true the client's body was sent unchanged and nothing was lost; otherwise the
-// body was rebuilt from the model in format To, and Losses lists what did not carry over.
-// Everything not listed was preserved.
+// Passthrough is true the client's body went upstream rather than a body rebuilt from the model
+// in format To; the extension may still have fitted it to its endpoint, and Losses then lists
+// what that changed or dropped. Otherwise the body was rebuilt, and Losses lists what did not
+// carry over. Everything not listed was preserved.
 type Translation struct {
 	From        string `json:"from"`
 	To          string `json:"to"`

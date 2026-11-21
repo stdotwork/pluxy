@@ -672,6 +672,27 @@ func TestAccountClosedSiblingRule(t *testing.T) {
 	})
 }
 
+// When every account that serves a model is banned, a request answers with the ban, as the
+// request that got the account banned did: the provider's words, not a 503 that says only that
+// no account could serve the model.
+func TestEveryAccountBannedAnswersWithTheBan(t *testing.T) {
+	h := newHarness(t, Config{}, accts("a")...)
+	h.on("a", fail(llm.Error{Code: llm.CodeAccountClosed, Status: 403, Retryable: true, Scope: llm.ScopeCredential, Message: "Your account has been suspended."}))
+	first := h.run(h.req("m"))
+	if last := first[len(first)-1]; last.Error == nil || last.Error.Code != llm.CodeAccountClosed {
+		t.Fatalf("first request = %+v, want the ban", last.Error)
+	}
+	evs := h.run(h.req("m"))
+	last := evs[len(evs)-1]
+	if last.Type != llm.EventError || last.Error == nil || last.Error.Code != llm.CodeAccountClosed {
+		t.Fatalf("second request = %+v, want the ban", last.Error)
+	}
+	if last.Error.Message != "Your account has been suspended." {
+		t.Errorf("second request's message = %q, want the provider's words", last.Error.Message)
+	}
+	h.wantAttempts("a") // a banned account is not tried again
+}
+
 // A ban ends only when a person enables the account, signs in again, or deletes it: leaving
 // the router (e.g. a failed refresh or an extension not running at reload) or a settings
 // change keeps the account banned when it returns.
