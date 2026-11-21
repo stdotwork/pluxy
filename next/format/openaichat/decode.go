@@ -9,6 +9,22 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
+// toolCall is one tool call of a streamed reply, open or waiting for its name.
+//
+// Chat streams identify a call by its tool_calls index, but some upstreams leave the index out
+// or reuse it for a later call, and some send a call's name in a later chunk than its id. A call
+// is therefore kept by the index it came with (a call without one is the last call opened until
+// a new id shows), and its item.start waits until the name is known: core rejects an item.start
+// without a name.
+type toolCall struct {
+	index int    // the upstream's tool_calls index, or -1 when it left the index out
+	id    string // the call's id, or one made for it
+	name  string
+	item  int // the item.start's index, or -1 until the name is known
+	args  []string
+	extra json.RawMessage
+}
+
 type chatUsage struct {
 	PromptTokens        *int64 `json:"prompt_tokens"`
 	CompletionTokens    *int64 `json:"completion_tokens"`
@@ -122,7 +138,7 @@ type streamChoice struct {
 		Content          *string `json:"content"`
 		ReasoningContent *string `json:"reasoning_content"`
 		ToolCalls        []struct {
-			Index    int    `json:"index"`
+			Index    *int   `json:"index"`
 			ID       string `json:"id"`
 			Function struct {
 				Name      string `json:"name"`
@@ -143,16 +159,19 @@ type StreamDecoder struct {
 	next      int
 	text      int // open message item, or -1
 	reasoning int // open reasoning item, or -1
-	tools     map[int]int
+	tools     map[int]*toolCall
+	last      *toolCall               // the tool call opened last, for chunks that leave the index out
 	extra     map[int]json.RawMessage // extra_content that came after a tool call opened, by item
 	choices   map[int]bool            // every choice index seen, true once it carried a finish reason
 	finish    *llm.Finish
 	usage     *llm.Usage
+	calls     int // tool calls made an id so far
+	losses    []llm.Loss
 }
 
 // NewStreamDecoder returns a decoder for one stream.
 func NewStreamDecoder() *StreamDecoder {
-	return &StreamDecoder{text: -1, reasoning: -1, tools: map[int]int{}, extra: map[int]json.RawMessage{}, choices: map[int]bool{}}
+	return &StreamDecoder{text: -1, reasoning: -1, tools: map[int]*toolCall{}, extra: map[int]json.RawMessage{}, choices: map[int]bool{}}
 }
 
 func (d *StreamDecoder) open(kind string, ev *[]llm.Event, item llm.ItemStart) int {
@@ -173,18 +192,84 @@ func (d *StreamDecoder) closeItem(idx *int, ev *[]llm.Event) {
 func (d *StreamDecoder) closeAll(ev *[]llm.Event) {
 	d.closeItem(&d.reasoning, ev)
 	d.closeItem(&d.text, ev)
-	open := make([]int, 0, len(d.tools))
-	for _, idx := range d.tools {
-		open = append(open, idx)
+	all := make([]*toolCall, 0, len(d.tools)+1)
+	for _, c := range d.tools {
+		all = append(all, c)
+	}
+	seen := false
+	for _, c := range all {
+		if c == d.last {
+			seen = true
+		}
+	}
+	if d.last != nil && !seen {
+		all = append(all, d.last)
+	}
+	open := make([]int, 0, len(all))
+	for _, c := range all {
+		if c.item >= 0 {
+			open = append(open, c.item)
+		}
 	}
 	slices.Sort(open)
 	for _, idx := range open {
 		// extra_content sent after the call opened rides on its item.end.
 		*ev = append(*ev, llm.Event{Type: llm.EventItemEnd, Index: idx, Raw: d.extra[idx]})
 	}
+	for _, c := range all {
+		d.dropNameless(c)
+	}
 	clear(d.tools)
 	clear(d.extra)
+	d.last = nil
 }
+
+// openCall opens the item of a tool call whose name is now known, writing first the arguments
+// that arrived before it.
+func (d *StreamDecoder) openCall(c *toolCall, ev *[]llm.Event) {
+	c.item = d.open(llm.ItemToolCall, ev, llm.ItemStart{CallID: c.id, Name: c.name})
+	if c.extra != nil {
+		(*ev)[len(*ev)-1].Raw = c.extra
+		c.extra = nil
+	}
+	for _, a := range c.args {
+		*ev = append(*ev, llm.Event{Type: llm.EventToolInputDelta, Index: c.item, Delta: a})
+	}
+	c.args = nil
+}
+
+// closeCall ends an open tool call that a new call takes the place of.
+func (d *StreamDecoder) closeCall(c *toolCall, ev *[]llm.Event) {
+	if c.item >= 0 {
+		*ev = append(*ev, llm.Event{Type: llm.EventItemEnd, Index: c.item, Raw: d.extra[c.item]})
+		delete(d.extra, c.item)
+	}
+	d.dropNameless(c)
+	if c.index >= 0 && d.tools[c.index] == c {
+		delete(d.tools, c.index)
+	}
+	if d.last == c {
+		d.last = nil
+	}
+}
+
+// dropNameless records the loss of a tool call that never named its function: core refuses an
+// item.start without a name, so the call is left out of the reply.
+func (d *StreamDecoder) dropNameless(c *toolCall) {
+	if c.item >= 0 || c.name != "" {
+		return
+	}
+	path := "choices[0].delta.tool_calls"
+	if c.index >= 0 {
+		path = fmt.Sprintf("%s[%d]", path, c.index)
+	}
+	d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path,
+		Detail: "a streamed tool call that never named its function"})
+}
+
+// Losses returns what the reply had that the model could not carry, the calls that never named
+// their function, one loss each.
+func (d *StreamDecoder) Losses() []llm.Loss { return d.losses }
 
 // Decode takes the data of one SSE event and returns the events it produces. After "[DONE]" it
 // returns the finish event and the decoder is done; a "[DONE]" before every choice the upstream
@@ -253,22 +338,55 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			out = append(out, llm.Event{Type: llm.EventTextDelta, Index: d.text, Delta: *t})
 		}
 		for _, tc := range ch.Delta.ToolCalls {
-			idx, ok := d.tools[tc.Index]
-			if !ok {
+			index := -1
+			if tc.Index != nil {
+				index = *tc.Index
+			}
+			// A call is continued by a chunk that names no new id (or the same one); a
+			// different id on the same index, or on the last call when the index is left
+			// out, is a new call.
+			var call *toolCall
+			if index >= 0 {
+				call = d.tools[index]
+			} else {
+				call = d.last
+			}
+			if call == nil || (tc.ID != "" && tc.ID != call.id) {
+				if call != nil {
+					d.closeCall(call, &out)
+				}
 				d.closeItem(&d.reasoning, &out)
 				d.closeItem(&d.text, &out)
-				id := tc.ID
-				if id == "" {
-					id = "call_" + strconv.Itoa(tc.Index)
+				call = &toolCall{index: index, id: tc.ID, item: -1}
+				if call.id == "" {
+					call.id = "call_" + strconv.Itoa(d.calls)
+					d.calls++
 				}
-				idx = d.open(llm.ItemToolCall, &out, llm.ItemStart{CallID: id, Name: tc.Function.Name})
-				out[len(out)-1].Raw = extraContent(tc.ExtraContent)
-				d.tools[tc.Index] = idx
-			} else if raw := extraContent(tc.ExtraContent); raw != nil {
-				d.extra[idx] = raw
+				if index >= 0 {
+					d.tools[index] = call
+				}
+				d.last = call
+			}
+			if call.item < 0 && call.name == "" && tc.Function.Name != "" {
+				// The name arrived in a later chunk than the call: the item starts now.
+				call.name = tc.Function.Name
+				d.closeItem(&d.reasoning, &out)
+				d.closeItem(&d.text, &out)
+				d.openCall(call, &out)
+			}
+			if raw := extraContent(tc.ExtraContent); raw != nil {
+				if call.item >= 0 {
+					d.extra[call.item] = raw
+				} else {
+					call.extra = raw
+				}
 			}
 			if tc.Function.Arguments != "" {
-				out = append(out, llm.Event{Type: llm.EventToolInputDelta, Index: idx, Delta: tc.Function.Arguments})
+				if call.item >= 0 {
+					out = append(out, llm.Event{Type: llm.EventToolInputDelta, Index: call.item, Delta: tc.Function.Arguments})
+				} else {
+					call.args = append(call.args, tc.Function.Arguments)
+				}
 			}
 		}
 		if ch.FinishReason != nil && *ch.FinishReason != "" {
