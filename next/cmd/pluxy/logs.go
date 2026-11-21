@@ -156,6 +156,7 @@ var usageExportCommand = command{words: "usage export", routes: []string{"GET /u
 		fs.StringVar(&o.account, "account", "", "only this account")
 		fs.StringVar(&o.provider, "provider", "", "only this provider (extension)")
 		fs.StringVar(&o.clientKey, "client-key", "", "only this client key ID")
+		fs.StringVar(&o.failed, "failed", "", "only failed requests (true) or only successful ones (false)")
 	},
 	run: func(x *invocation) error {
 		if x.json {
@@ -169,18 +170,20 @@ var usageExportCommand = command{words: "usage export", routes: []string{"GET /u
 			"account":  x.opts.account,
 			"provider": x.opts.provider,
 			"key":      x.opts.clientKey,
+			"failed":   x.opts.failed,
 		} {
 			if v != "" {
 				q.Set(k, v)
 			}
 		}
-		// Oldest first with after, until the last page: core reports Lost relative to after, so
-		// on the first page (after 0) it only says old events left the record before this read,
-		// which is not a gap in the export. On a later page it says events after the last page's
-		// were pushed out while this read was under way, which is.
+		// Oldest first with after, until the last page. Core's Lost says events newer than after
+		// have left its record: on the first page, requests gone before this export began; on a
+		// later page, requests pushed out between two pages. Either way the export cannot hold
+		// them, and the panel says so too. Lost ignores the filters, so they may not be ones the
+		// filters would have kept.
 		var events []usage.Event
 		var after uint64
-		gap, noted := false, false
+		lost, noted := false, false
 		for {
 			q.Set("after", strconv.FormatUint(after, 10))
 			var r management.UsageEventsReply
@@ -191,9 +194,7 @@ var usageExportCommand = command{words: "usage export", routes: []string{"GET /u
 				noted = true
 				x.eprintf("usage is not recorded (usage-statistics-enabled is off)\n")
 			}
-			if after > 0 && r.Lost {
-				gap = true
-			}
+			lost = lost || r.Lost
 			events = append(events, r.Events...)
 			if !r.More {
 				break
@@ -203,8 +204,8 @@ var usageExportCommand = command{words: "usage export", routes: []string{"GET /u
 			}
 			after = r.Next
 		}
-		if gap {
-			x.eprintf("pluxy: some requests may be missing from this export: core's record pushed out events while it was being read\n")
+		if lost {
+			x.eprintf("pluxy: some older requests are no longer available, so this export may not include them\n")
 		}
 		var out bytes.Buffer
 		writeCSVRow(&out, "Time", "Model", "Provider", "Account", "Client key", "Failed", "Status", "Latency", "Tokens", "Trace ID")

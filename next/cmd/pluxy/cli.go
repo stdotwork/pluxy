@@ -63,7 +63,7 @@ type command struct {
 type opts struct {
 	model, version, registry                       string
 	since, until, by, account, provider, clientKey string
-	after, before                                  string
+	after, before, failed                          string
 	limit                                          int
 	yes                                            bool
 	picks                                          stringSliceFlag

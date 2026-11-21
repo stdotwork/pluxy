@@ -293,7 +293,7 @@ const (
 	usagePage1 = `{"enabled":true,"events":[` +
 		`{"seq":1,"id":"t1","timestamp":"2026-11-20T01:02:03Z","model":"gpt-4o","provider":"pluxy/openai-compatible","account":"acc_1","key_id":"k1","failed":false,"status":200,"latency_ms":120,"tokens":{"input_tokens":10,"output_tokens":5,"total_tokens":15}},` +
 		`{"seq":2,"timestamp":"2026-11-20T01:02:04.5+02:00","model":"=SUM(A1)","account":"a\"b,c","failed":true,"latency_ms":7,"tokens":{}}` +
-		`],"next":2,"more":true,"lost":true}`
+		`],"next":2,"more":true,"lost":false}`
 	usagePage2 = `{"enabled":true,"events":[` +
 		`{"seq":3,"id":"t3","timestamp":"2026-11-20T01:02:05Z","model":"  -x","provider":"p","account":"line\nbreak","key_id":"+k","failed":false,"status":429,"latency_ms":1,"tokens":{"total_tokens":0}}` +
 		`],"next":3,"more":false,"lost":false}`
@@ -309,13 +309,12 @@ func TestUsageExport(t *testing.T) {
 	srv := usageServer(map[string]string{"0": usagePage1, "2": usagePage2}, &queries)
 	defer srv.Close()
 	out, errOut, code := runLogs(srv, false, "usage", "export", "--since", "7d", "--until", "2026-11-21T00:00:00Z",
-		"--model", "gpt-4o", "--account", "acc_1", "--provider", "p", "--client-key", "k1")
+		"--model", "gpt-4o", "--account", "acc_1", "--provider", "p", "--client-key", "k1", "--failed", "false")
 	if code != 0 || out != usageCSV {
 		t.Errorf("usage export: %d\n got %q\nwant %q", code, out, usageCSV)
 	}
-	// Lost on the first page is old events that left the record before the export began.
 	if errOut != "" {
-		t.Errorf("usage export warned %q although nothing went missing during it", errOut)
+		t.Errorf("usage export warned %q although core lost nothing", errOut)
 	}
 	if len(queries) != 2 {
 		t.Fatalf("usage export made %d calls, want 2", len(queries))
@@ -323,21 +322,29 @@ func TestUsageExport(t *testing.T) {
 	for i, after := range []string{"0", "2"} {
 		q := queries[i]
 		if q.Get("after") != after || q.Get("limit") != "1000" || q.Get("since") != "7d" || q.Get("until") != "2026-11-21T00:00:00Z" ||
-			q.Get("model") != "gpt-4o" || q.Get("account") != "acc_1" || q.Get("provider") != "p" || q.Get("key") != "k1" {
+			q.Get("model") != "gpt-4o" || q.Get("account") != "acc_1" || q.Get("provider") != "p" || q.Get("key") != "k1" || q.Get("failed") != "false" {
 			t.Errorf("call %d asked %v", i+1, q)
 		}
 	}
 }
 
-// A real gap is events pushed out between two pages: the export is written and says so.
-func TestUsageExportWarnsOfAGapDuringTheExport(t *testing.T) {
-	var queries []url.Values
-	page2 := strings.Replace(usagePage2, `"lost":false`, `"lost":true`, 1)
-	srv := usageServer(map[string]string{"0": usagePage1, "2": page2}, &queries)
-	defer srv.Close()
-	out, errOut, code := runLogs(srv, false, "usage", "export")
-	if code != 0 || out != usageCSV || !strings.Contains(errOut, "missing") || strings.Count(errOut, "\n") != 1 {
-		t.Errorf("usage export with a gap: %d %q %q, want the CSV and one warning line", code, out, errOut)
+// Core's lost flag on any page means requests the export cannot include, as the panel's notice
+// says: those gone before it began, and those pushed out between two of its pages.
+func TestUsageExportSaysWhenOlderRequestsAreGone(t *testing.T) {
+	const notice = "pluxy: some older requests are no longer available, so this export may not include them\n"
+	lost := func(page string) string { return strings.Replace(page, `"lost":false`, `"lost":true`, 1) }
+	for name, pages := range map[string]map[string]string{
+		"first page": {"0": lost(usagePage1), "2": usagePage2},
+		"later page": {"0": usagePage1, "2": lost(usagePage2)},
+		"both, once": {"0": lost(usagePage1), "2": lost(usagePage2)},
+	} {
+		var queries []url.Values
+		srv := usageServer(pages, &queries)
+		out, errOut, code := runLogs(srv, false, "usage", "export")
+		srv.Close()
+		if code != 0 || out != usageCSV || errOut != notice {
+			t.Errorf("%s: %d %q %q, want the CSV and the notice once", name, code, out, errOut)
+		}
 	}
 }
 
