@@ -30,3 +30,23 @@ func TestErrorDetailsOnlyFromGoogle(t *testing.T) {
 		}
 	}
 }
+
+// An overflow keeps the status name a Google upstream gave it, and any other upstream's overflow
+// is INVALID_ARGUMENT.
+func TestOverflowStatusName(t *testing.T) {
+	for raw, want := range map[string]string{
+		`{"error":{"code":400,"message":"m","status":"FAILED_PRECONDITION"}}`:     "FAILED_PRECONDITION",
+		`{"type":"error","error":{"type":"invalid_request_error","message":"m"}}`: "INVALID_ARGUMENT",
+	} {
+		_, body := ErrorResponse(&llm.Error{Code: llm.CodeInvalidRequest, Status: 400, ProviderCode: "context_length_exceeded", Message: "m", Raw: json.RawMessage(raw)})
+		var got struct {
+			Error struct{ Status string } `json:"error"`
+		}
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Error.Status != want {
+			t.Errorf("%s: body = %s, want status %s", raw, body, want)
+		}
+	}
+}

@@ -43,6 +43,7 @@ import (
 	"time"
 
 	"github.com/stdotwork/pluxy/next/format/geminigenerate"
+	"github.com/stdotwork/pluxy/next/format/openaichat"
 	"github.com/stdotwork/pluxy/next/format/openairesponses"
 	"github.com/stdotwork/pluxy/next/format/sse"
 	"github.com/stdotwork/pluxy/next/llm"
@@ -269,7 +270,7 @@ func relayReply(ctx context.Context, resp *http.Response, send sender, mayRetry 
 	}
 	events, err := geminigenerate.DecodeResponse(raw)
 	if err != nil {
-		return mayRetry && geminigenerate.IsMalformedCall(err), err
+		return mayRetry && geminigenerate.IsMalformedCall(err), openaichat.MarkContextOverflow(err)
 	}
 	for _, ev := range events {
 		if err := send.Send(ev); err != nil {
@@ -520,7 +521,7 @@ func relayStream(ctx context.Context, body io.Reader, out sender) error {
 		default:
 			events, err = dec.Decode([]byte(e.Data))
 			if err != nil {
-				return err
+				return openaichat.MarkContextOverflow(err)
 			}
 		}
 		for _, ev := range events {
@@ -651,6 +652,7 @@ func upstreamErrorFor(ctx context.Context, resp *http.Response, model string, re
 		e.Code, e.Scope = llm.CodeUpstream, llm.ScopeEndpoint
 	default:
 		e.Code, e.Scope = llm.CodeInvalidRequest, llm.ScopeRequest
+		_ = openaichat.MarkContextOverflow(e)
 	}
 	return e
 }

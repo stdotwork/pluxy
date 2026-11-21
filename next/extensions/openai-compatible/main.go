@@ -212,7 +212,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	}
 	events, losses, err := decodeResponse(wire.format, raw)
 	if err != nil {
-		return err
+		return openaichat.MarkContextOverflow(err)
 	}
 	for _, l := range losses {
 		logReplyLoss(l)
@@ -675,7 +675,7 @@ func relayStream(ctx context.Context, body io.Reader, out eventSender, upstreamF
 		default:
 			events, err = dec.Decode([]byte(e.Data))
 			if err != nil {
-				return err
+				return openaichat.MarkContextOverflow(err)
 			}
 		}
 		for _, ev := range events {
@@ -784,6 +784,7 @@ func upstreamError(resp *http.Response, model string) *llm.Error {
 		e.Code, e.Scope = llm.CodeUpstream, llm.ScopeEndpoint
 	default:
 		e.Code, e.Scope = llm.CodeInvalidRequest, llm.ScopeRequest
+		_ = openaichat.MarkContextOverflow(e)
 	}
 	return e
 }

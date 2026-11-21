@@ -38,3 +38,23 @@ func TestErrorKeepsMessagesFields(t *testing.T) {
 		}
 	}
 }
+
+// Another upstream's overflow reaches a Messages client with Anthropic's words before its own; an
+// Anthropic message is left as it came.
+func TestOverflowMessage(t *testing.T) {
+	for in, want := range map[string]string{
+		"The input token count (9) exceeds the maximum number of tokens allowed (8).": "prompt is too long: The input token count (9) exceeds the maximum number of tokens allowed (8).",
+		"prompt is too long: 9 tokens > 8 maximum":                                    "prompt is too long: 9 tokens > 8 maximum",
+	} {
+		st, body := ErrorResponse(&llm.Error{Code: llm.CodeInvalidRequest, Status: 400, ProviderCode: "context_length_exceeded", Message: in})
+		var got struct {
+			Error struct{ Type, Message string } `json:"error"`
+		}
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatal(err)
+		}
+		if st != 400 || got.Error.Type != "invalid_request_error" || got.Error.Message != want {
+			t.Errorf("%q: %d %s, want %q", in, st, body, want)
+		}
+	}
+}
