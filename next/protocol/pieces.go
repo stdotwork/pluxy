@@ -215,15 +215,24 @@ func secretQueryName(name string) bool {
 	return false
 }
 
-// minPiece is the shortest piece of a secret RemovePieces replaces, as TrimCut counts one, for a
-// secret other than a PEM private key (minLinePiece for one).
+// minPiece is the shortest piece of a secret RemovePieces replaces, for a secret that is neither
+// a long token (longToken) nor a PEM private key. It matches the shortest cut TrimCut removes
+// (minCutFragment), but is its own rule: a long token and a PEM key keep longPiece.
 const minPiece = minCutFragment
 
-// minLinePiece is the shortest piece RemovePieces takes from a PEM private key. Its lines are long and random, so 4 bytes of one are a coincidence in most errors,
-// and would redact an ordinary word such as "Signature" for a key whose body spells "Sign", while a
-// fragment that short of a key is of no use. minFragment is the shortest line NewRedactor keeps as
+// longSecret is the length, in bytes and with the whitespace around it trimmed (a token read from a
+// file can end in a newline), from which a single token counts by longPiece instead of minPiece
+// (longToken). A key that long is almost always random, so 4 bytes of it are a coincidence in most
+// errors, and would redact an ordinary word such as "test" for a key that spells it; a shorter
+// secret, which may be hand-picked, keeps the shorter piece.
+const longSecret = 32
+
+// longPiece is the shortest piece RemovePieces takes from a long token and from a PEM private
+// key. Both are almost always random, so 4 bytes of one would redact an ordinary word such as
+// "Signature" for a key whose body spells "Sign", while a fragment that short of a key is of no
+// use. minFragment is the shortest line NewRedactor keeps as
 // a secret of its own, so it is the shortest piece of a line here too.
-const minLinePiece = minFragment
+const longPiece = minFragment
 
 // maxDecode bounds how many layers of escapes ReplaceRuns decodes.
 const maxDecode = 8
@@ -233,8 +242,8 @@ const maxDecode = 8
 var escapedRun = regexp.MustCompile(`(?:[A-Za-z0-9_\-.+/=~]|\\u[0-9A-Fa-f]{4}|\\[\\/]|%[0-9A-Fa-f]{2})+`)
 
 // RemovePieces returns s with every run of token characters (letters, digits and "_-.+/=~") that
-// holds minPiece or more consecutive characters of one of secrets replaced by Redacted. A run is
-// read as written and with its escapes decoded (ReplaceRuns), so a piece written with escapes
+// holds minPiece or more consecutive characters of one of secrets replaced by Redacted, or
+// longPiece or more for a long token (longToken). A run is read as written and with its escapes decoded (ReplaceRuns), so a piece written with escapes
 // between its characters is replaced, and so is one of a secret that holds such an escape itself.
 // An upstream that refuses a credential often echoes a piece of it, such as its first 24
 // characters and "...", which a NewRedactor's whole forms and parts miss.
@@ -243,50 +252,97 @@ var escapedRun = regexp.MustCompile(`(?:[A-Za-z0-9_\-.+/=~]|\\u[0-9A-Fa-f]{4}|\\
 // own: a piece counts only when it holds at least one byte after the prefix, so words such as
 // "project" stay.
 //
-// A PEM private key counts by its lines and its unwrapped body, at minLinePiece bytes: its
-// body is long and random, so 4 bytes of it would be a coincidence in an error of any length, and
-// a key's fragment that short is of no use, while the error's own words are lost. So a key is
-// redacted whole for a fragment of minLinePiece bytes or more of its body, a shorter run
-// of its body being kept.
+// A long token counts at longPiece bytes, each secret by its own length: a part of a longer value
+// (AccountSecrets) that is shorter stays at minPiece. Such a key is almost always random, so 4
+// bytes of it are a coincidence in an error of any length and would take the error's own words,
+// such as "test"; a run of its bytes shorter than longPiece is kept. Any other secret keeps
+// minPiece: it may be hand-picked, or hold a shorter secret, and a few bytes of it can be a large
+// share of that.
+//
+// A PEM private key counts by its lines and its unwrapped body, at longPiece bytes too: its body
+// is long and random, so a key is redacted whole for a fragment of longPiece bytes or more of
+// its body, a shorter run of its body being kept.
 //
 // Text with words in it, such as a model's reply, would lose every word that shares minPiece
 // characters with a secret, so this is for error text: core applies it to an upstream's error
 // with the account's secrets (AccountSecrets).
 func RemovePieces(s string, secrets ...string) string {
 	pieces := map[string]bool{}
-	var linePieces map[string]bool
+	var longPieces map[string]bool
 	for _, secret := range secrets {
 		if isPEMPrivateKey(secret) {
-			if linePieces == nil {
-				linePieces = map[string]bool{}
+			if longPieces == nil {
+				longPieces = map[string]bool{}
 			}
 			var body strings.Builder
 			for _, line := range strings.Split(secret, "\n") {
 				line = strings.TrimSpace(line)
-				addPieces(linePieces, line, minLinePiece)
+				addPieces(longPieces, line, longPiece)
 				if !strings.HasPrefix(line, "-----") {
 					body.WriteString(line)
 				}
 			}
 			// An upstream that unwraps the key echoes runs across its line breaks.
-			addPieces(linePieces, body.String(), minLinePiece)
+			addPieces(longPieces, body.String(), longPiece)
+			continue
+		}
+		if longToken(secret) {
+			if longPieces == nil {
+				longPieces = map[string]bool{}
+			}
+			addPieces(longPieces, secret, longPiece)
 			continue
 		}
 		addPieces(pieces, secret, minPiece)
 	}
-	if len(pieces) == 0 && len(linePieces) == 0 {
+	if len(pieces) == 0 && len(longPieces) == 0 {
 		return s
 	}
 	holds := func(t string) bool {
 		return len(pieces) > 0 && holdsPieces(pieces, t, minPiece) ||
-			len(linePieces) > 0 && holdsPieces(linePieces, t, minLinePiece)
+			len(longPieces) > 0 && holdsPieces(longPieces, t, longPiece)
 	}
 	return ReplaceRuns(s, func(run, d string) bool { return holds(d) || d != run && holds(run) })
 }
 
+// longToken reports whether secret, with the whitespace around it trimmed, is one run of token
+// characters of longSecret bytes or more that is not base64 (standard or URL-safe, padded or not)
+// of text (encodedText). A value with anything else in it (a scheme SecretParts does not split, a
+// JSON object, a line break) can hold a shorter secret, and base64 of text is a form of what it
+// encodes, such as Basic's user:password, so 4 bytes of either can be a large share of a short
+// secret.
+func longToken(secret string) bool {
+	s := strings.TrimSpace(secret)
+	if len(s) < longSecret || strings.IndexFunc(s, func(r rune) bool { return !pieceChar(r) }) >= 0 {
+		return false
+	}
+	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+		if b, err := enc.DecodeString(s); err == nil && encodedText(b) {
+			return false
+		}
+	}
+	return true
+}
+
+// encodedText reports whether b, decoded from base64, is text rather than random bytes: valid
+// UTF-8, or Basic's user:password with a password in another encoding, which shows as a printable
+// ASCII user name before the first colon.
+func encodedText(b []byte) bool {
+	if utf8.Valid(b) {
+		return true
+	}
+	user, _, ok := strings.Cut(string(b), ":")
+	return ok && user != "" && strings.IndexFunc(user, func(r rune) bool { return r < ' ' || r > '~' }) < 0
+}
+
+// pieceChar reports whether r is a token character of the runs RemovePieces reads.
+func pieceChar(r rune) bool {
+	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_-.+/=~", r)
+}
+
 // isPEMPrivateKey reports whether secret is a PEM private key, the one kind of secret that counts
-// by its lines. Any other secret keeps minPiece, a line break in it or not: a token read from a
-// file can end in one, and an upstream may echo its first characters.
+// by its lines. Any other secret counts as a long token or by minPiece, a line break at its end or
+// not: a token read from a file can end in one, and an upstream may echo its first characters.
 func isPEMPrivateKey(secret string) bool {
 	return strings.Contains(secret, "\n") && strings.Contains(secret, "-----BEGIN ") &&
 		strings.Contains(secret, "PRIVATE KEY-----")

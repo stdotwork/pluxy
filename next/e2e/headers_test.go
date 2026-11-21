@@ -25,7 +25,7 @@ import (
 
 // Fake values for the header tests. The gateway keys are secrets by their header's name. Like the
 // other fake secrets, they hold no word of the errors the tests read: core removes from an error
-// every run that shares 4 characters with an account's secret (protocol.RemovePieces).
+// every run that shares 4 characters with a short account secret (protocol.RemovePieces).
 const (
 	gatewayKey   = "gk-Vb7Nq2Lx9Ps4Jd3f"
 	overrideType = "application/json; pluxy-e2e=override"

@@ -139,7 +139,7 @@ func echoSecrets() {
 // not removed on its own: it would also scrub "password", "bypass", "reverse proxy" and the number
 // 1. A user name with no password is removed on its own only from 8 bytes; its Basic login is
 // always removed. The reply, an error, also loses a word that shares 4 characters with a secret
-// of 8 bytes or more (protocol.RemovePieces), which the extension's log line keeps.
+// of 8 to 31 bytes (protocol.RemovePieces), which the extension's log line keeps.
 func TestProxySecretRedaction(t *testing.T) {
 	const keep = `keep: password bypass reverse proxy {"n": 1}`
 	for _, c := range []struct{ name, proxy, want string }{
