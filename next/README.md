@@ -364,7 +364,9 @@ take `key`, since some Gemini clients send it there (n8n's Gemini credential doe
 URL ends up in logs and browser history. `client_keys` must hold
 at least one key: core does not start on a config without one, and a reload or a management
 change that would leave none is refused, keeping the running config. Today's core serves anyone
-who reaches it when it has no client keys.
+who reaches it when it has no client keys. A missing or wrong client key gets a 401 with
+`X-Should-Retry: false`, in every client format and in the error message of an open Responses
+WebSocket; an upstream's own 401 does not carry that header.
 
 The example config's client keys (`your-api-key-1`, `your-api-key-2` and `your-api-key-3`) are
 public, so as in today's core (its example API-key safe mode) core starts with one in
@@ -462,6 +464,21 @@ An account that is turned off or waits for a login is named when its own `models
 when it shares its extension with an account that serves it. The member holds codes and times,
 never the words of an upstream's reply. `routing.explain` `false` leaves out the `X-Pluxy-*` headers
 and the member, and keeps the trace ID.
+
+An upstream's error keeps the fields the client's format shares with the upstream's. A Messages
+client keeps `request_id` and `error.details` from a Messages upstream, a Chat or Responses client
+keeps `param` from an OpenAI-format upstream, and a Gemini client keeps `details` from a Google
+upstream; no field is copied into a format that does not define it. `param` is the upstream's own
+path, so on a translated request it can name a field in the upstream's shape. A 429, 503 or 529
+carries `Retry-After` when the upstream said how long to wait.
+
+When an upstream says the prompt does not fit the model's context window, the client gets it in
+the shape it acts on: status 400 with code `context_length_exceeded` on Chat, Responses and the
+Responses WebSocket; a 400 `invalid_request_error` whose message says `prompt is too long` on
+Messages; a 400 `INVALID_ARGUMENT` on Gemini. The Claude, Codex, Gemini and OpenAI-compatible
+extensions recognise it by that code or by the upstream messages LiteLLM's exception mapping
+lists. It fails that request only: it blocks no account or model and is not tried on another
+account.
 
 `pluxy route <model>` (`GET /v0/management/route?model=<name>`) says what a request for the model
 would do now without sending one: the accounts in the order it would try them (the step of the
