@@ -17,8 +17,8 @@ import (
 )
 
 // toolResultEcho is an extension that reports protocol minor version minor and answers a
-// generate call or a session turn with the request's items in response.start's raw, and a
-// translation report with one loss of its own.
+// generate call or a session turn with the request's items and options in response.start's raw,
+// and a translation report with one loss of its own.
 func toolResultEcho(minor int, passthrough bool) {
 	socket := os.Getenv(protocol.EnvSocket)
 	ln, err := net.Listen("unix", socket)
@@ -27,7 +27,7 @@ func toolResultEcho(minor int, passthrough bool) {
 	}
 	fmt.Print(protocol.HandshakeLine(protocol.Version, socket))
 	reply := func(conn net.Conn, req *llm.Request) {
-		raw, _ := json.Marshal(map[string]any{"items": req.Items})
+		raw, _ := json.Marshal(map[string]any{"items": req.Items, "options": req.Options})
 		tr := &llm.Translation{From: llm.FormatAnthropicMessages, To: llm.FormatOpenAIChat, Passthrough: passthrough,
 			Losses: []llm.Loss{{Kind: llm.LossDropped, Path: "metadata"}}}
 		_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: llm.EventResponseStart,

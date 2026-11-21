@@ -205,6 +205,11 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 	if allowedErr != nil {
 		return refuse(allowedErr)
 	}
+	req, tierLost := downgradeServiceTier(s.ext.info.ProtocolMinor, s.ext.manifest.ID, req)
+	if perr := refuseServiceTier(s.ext.manifest.ID, s.ext.info.ProtocolMinor, req, tierLost); perr != nil {
+		return refuse(perr)
+	}
+	t.lost = append(t.lost, tierLost...)
 	s.mu.Lock()
 	switch {
 	case s.closed:

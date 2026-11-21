@@ -38,8 +38,9 @@ const Version = 0
 // adds model capabilities (Model.Capabilities); minor 25 adds a tool result's parts and error
 // flag (llm.Item.Content and llm.Item.IsError on a tool_result); minor 26 adds a tool choice's
 // allowed tool list (llm.ToolChoice.Allowed); minor 27 adds native-only generate calls
-// (Info.NativeParser and Call.NativeOnly).
-const Minor = 27
+// (Info.NativeParser and Call.NativeOnly); minor 28 adds the request's service tier and
+// verbosity (llm.Options.ServiceTier and llm.Options.Verbosity).
+const Minor = 28
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20

@@ -667,6 +667,13 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 		s.fail(allowedErr)
 		return s
 	}
+	req, tierLost := downgradeServiceTier(e.info.ProtocolMinor, e.manifest.ID, req)
+	if perr := refuseServiceTier(e.manifest.ID, e.info.ProtocolMinor, req, tierLost); perr != nil {
+		s := &Stream{}
+		s.fail(perr)
+		return s
+	}
+	lost = append(lost, tierLost...)
 	redact := protocol.NewRedactor(append(e.holdAccount(account), proxy)...)
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", e.socket)
@@ -736,7 +743,7 @@ type Stream struct {
 	// says how much of it loses the pieces (pieces.diagnostic).
 	held heldCapture
 	// lost is what core left out of the request for an extension too old to take it
-	// (downgradeToolResults); response.start's translation report gets it.
+	// (downgradeToolResults, downgradeServiceTier); response.start's translation report gets it.
 	lost []llm.Loss
 }
 
