@@ -67,6 +67,8 @@ func TestEncodeInlineImageValidation(t *testing.T) {
 		{"invalid base64", "data:image/png;base64,not base64", false},
 		{"empty data", "data:image/png;base64,", false},
 		{"not an image type", "data:text/plain;base64,aGVsbG8=", false},
+		{"upper-case scheme and marker", "DATA:image/png;BASE64,aGVsbG8=", true},
+		{"upper-case scheme, bad base64", "DATA:image/png;base64,%%%", false},
 	} {
 		body, losses, err := EncodeRequest(imageRequest(c.url, ""))
 		if err != nil {

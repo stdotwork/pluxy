@@ -420,7 +420,7 @@ func media(p llm.Part) (map[string]any, string) {
 	if p.Type == llm.PartFile && p.FileData != "" {
 		url = p.FileData
 	}
-	if strings.HasPrefix(url, "data:") {
+	if mediainput.IsDataURL(url) {
 		mediaType, data, ok := mediainput.DataURL(url)
 		if !ok {
 			return nil, "it is not a base64 data URL"

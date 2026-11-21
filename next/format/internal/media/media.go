@@ -6,19 +6,31 @@ package media
 
 import "strings"
 
+const dataScheme = "data:"
+
+// IsDataURL reports whether s starts with the data URL scheme. RFC 3986 section 3.1 makes the
+// scheme case-insensitive, so DATA: and Data: are data URLs too.
+func IsDataURL(s string) bool {
+	return len(s) >= len(dataScheme) && strings.EqualFold(s[:len(dataScheme)], dataScheme)
+}
+
 // DataURL splits a data: URL into its media type and base64 data. It does not decode the data.
-// ok is false for anything that is not a data URL carrying base64.
+// ok is false for anything that is not a data URL carrying base64; the scheme and the ;base64
+// marker are matched case-insensitively, and data goes back as written.
 func DataURL(s string) (mediaType, data string, ok bool) {
-	rest, found := strings.CutPrefix(s, "data:")
+	if !IsDataURL(s) {
+		return "", "", false
+	}
+	meta, data, found := strings.Cut(s[len(dataScheme):], ",")
 	if !found {
 		return "", "", false
 	}
-	meta, data, found := strings.Cut(rest, ",")
-	if !found {
+	const marker = ";base64"
+	if len(meta) < len(marker) || !strings.EqualFold(meta[len(meta)-len(marker):], marker) {
 		return "", "", false
 	}
-	mediaType, found = strings.CutSuffix(meta, ";base64")
-	if !found || mediaType == "" {
+	mediaType = meta[:len(meta)-len(marker)]
+	if mediaType == "" {
 		return "", "", false
 	}
 	return mediaType, data, true

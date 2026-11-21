@@ -475,7 +475,7 @@ func source(p llm.Part) map[string]any {
 		url = p.FileData
 	}
 	switch {
-	case strings.HasPrefix(url, "data:"):
+	case mediainput.IsDataURL(url):
 		mediaType, data, ok := mediainput.DataURL(url)
 		if !ok {
 			return nil

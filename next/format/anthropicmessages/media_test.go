@@ -63,6 +63,8 @@ func TestEncodeInlineImageValidation(t *testing.T) {
 		{"webp", "data:image/webp;base64,aGVsbG8=", "image/webp", true},
 		{"upper-case media type", "data:IMAGE/PNG;base64,aGVsbG8=", "image/png", true},
 		{"media type parameters", "data:image/png;charset=utf-8;base64,aGVsbG8=", "image/png", true},
+		{"upper-case scheme and marker", "DATA:image/png;BASE64,aGVsbG8=", "image/png", true},
+		{"upper-case scheme, bad base64", "DATA:image/png;base64,%%%", "image/png", false},
 		{"invalid base64", "data:image/png;base64,not base64", "image/png", false},
 		{"empty data", "data:image/png;base64,", "image/png", false},
 		{"unsupported media type", "data:image/tiff;base64,aGVsbG8=", "image/tiff", false},

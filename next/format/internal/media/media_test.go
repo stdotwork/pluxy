@@ -48,6 +48,8 @@ func TestDataURL(t *testing.T) {
 	}{
 		{"data:image/png;base64,AAAA", "image/png", "AAAA", true},
 		{"data:image/svg+xml;base64,PHN2Zz4=", "image/svg+xml", "PHN2Zz4=", true},
+		{"DATA:image/png;BASE64,AAAA", "image/png", "AAAA", true},
+		{"Data:image/png;base64,AAAA", "image/png", "AAAA", true},
 		{"data:image/png,AAAA", "", "", false},
 		{"data:;base64,AAAA", "", "", false},
 		{"data:image/png;base64", "", "", false},
@@ -77,6 +79,22 @@ func TestInlineImage(t *testing.T) {
 	} {
 		if _, problem := InlineImage(c.in, allowed); problem != c.problem {
 			t.Errorf("InlineImage(%q) = %q, want %q", c.in, problem, c.problem)
+		}
+	}
+}
+
+// The data URL scheme is case-insensitive (RFC 3986 section 3.1).
+func TestIsDataURL(t *testing.T) {
+	for s, want := range map[string]bool{
+		"data:image/png;base64,AAAA": true,
+		"DATA:image/png;base64,AAAA": true,
+		"Data:image/png;base64,AAAA": true,
+		"data:":                      true,
+		"data":                       false,
+		"https://example.com":        false,
+	} {
+		if got := IsDataURL(s); got != want {
+			t.Errorf("IsDataURL(%q) = %v, want %v", s, got, want)
 		}
 	}
 }

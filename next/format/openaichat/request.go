@@ -963,7 +963,7 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 				dropped = true
 				continue
 			}
-			if (p.Origin == nil || p.Origin.Format != format) && strings.HasPrefix(p.URL, "data:") {
+			if (p.Origin == nil || p.Origin.Format != format) && mediainput.IsDataURL(p.URL) {
 				// Only a part translated from another format is checked: a Chat client's own
 				// image is what its upstream takes.
 				if _, problem := mediainput.AnyImage(p.URL); problem != "" {
@@ -994,7 +994,7 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 				dropped = true
 				continue
 			}
-			if (p.Origin == nil || p.Origin.Format != format) && strings.HasPrefix(p.FileData, "data:") {
+			if (p.Origin == nil || p.Origin.Format != format) && mediainput.IsDataURL(p.FileData) {
 				if _, data, ok := mediainput.DataURL(p.FileData); !ok || !mediainput.Base64(data) {
 					e.lose(llm.LossDropped, pp, "Chat Completions cannot take this file data: it is not a valid base64 data URL")
 					dropped = true
