@@ -191,6 +191,7 @@ func Run(t *testing.T, target Target) {
 	t.Run("no_stream", func(t *testing.T) { k.text(t, false) })
 	t.Run("tool_result", k.toolResult)
 	t.Run("allowed_tools", k.allowedTools)
+	t.Run("service_tier", k.serviceTier)
 	t.Run("cancel", k.cancel)
 	t.Run("errors/rate_limited", func(t *testing.T) {
 		k.wantError(t, ScenarioRateLimited, llm.Error{Code: llm.CodeRateLimit, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: 20000}, llm.ScopeModel)
@@ -416,6 +417,39 @@ func (k *kit) allowedTools(t *testing.T) {
 	}
 	if text.String() != ReplyText {
 		t.Errorf("text = %q, want %q", text.String(), ReplyText)
+	}
+}
+
+// serviceTier checks that an extension accepts a request that names a service tier and a
+// verbosity (protocol 0.28), each of the tiers in turn: it carries them where its upstream has the
+// same setting and reports the rest as dropped, and the call still finishes with the normal reply.
+// The kit cannot see the extension's upstream request, so it does not check what reaches it.
+func (k *kit) serviceTier(t *testing.T) {
+	ext := k.start(t)
+	for _, tier := range []string{llm.ServiceTierAuto, llm.ServiceTierDefault, llm.ServiceTierFlex, llm.ServiceTierPriority,
+		llm.ServiceTierScale, llm.ServiceTierUltrafast, "fast", "no-such-tier"} {
+		t.Run(tier, func(t *testing.T) {
+			setup := k.target.Prepare(t, ScenarioText)
+			req := request(true)
+			req.Options.ServiceTier = tier
+			req.Options.Verbosity = "low"
+			s := ext.Generate(context.Background(), setup.Account, req)
+			defer s.Close()
+			evs := collect(t, s)
+			last := evs[len(evs)-1]
+			if last.Type != llm.EventFinish {
+				t.Fatalf("ended with %s: %v", last.Type, last.Error)
+			}
+			var text strings.Builder
+			for _, ev := range evs {
+				if ev.Type == llm.EventTextDelta {
+					text.WriteString(ev.Delta)
+				}
+			}
+			if text.String() != ReplyText {
+				t.Errorf("text = %q, want %q", text.String(), ReplyText)
+			}
+		})
 	}
 }
 
