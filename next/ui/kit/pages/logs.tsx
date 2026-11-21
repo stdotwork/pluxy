@@ -47,6 +47,8 @@ const t = strings("logs", {
   actions: "Actions",
   open: "Open",
   download: "Download",
+  downloadReal:
+    "Privacy mode hides names on this page only. A downloaded log holds the text as core wrote it.",
   errorDetail: "Error Request Log Details",
   requestId: "Request ID",
   request: "Request log",
@@ -242,6 +244,7 @@ export function LogsPage() {
         }
       />
       {saved.notice}
+      {p.on && <p class="hint">{t("downloadReal")}</p>}
       <Card title={t("content")}>
         {error && <Notice tone="danger">{mask(error)}</Notice>}
         {off && (

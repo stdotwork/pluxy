@@ -154,7 +154,7 @@ test("privacy mode masks identities, survives a reload, reaches extension pages 
   await page.getByPlaceholder(/^Search name, account/).fill("");
 
   // Log views: the core log's lines and an error request log.
-  await goTo(page, "Logs Viewer");
+  await page.goto(`${core.base}/panel/#/logs`);
   const coreLog = page.getByRole("region", { name: "Core logs", exact: true });
   await expect(coreLog).toContainText(`account "${EMAIL_MASKED}" added`);
   const errors = page.getByRole("region", { name: "Error Request Logs", exact: true });
@@ -282,4 +282,20 @@ test("the Dashboard hides the upstream proxy's login while privacy mode is on", 
   } finally {
     await core.mgmt("PATCH", "/settings", { "proxy-url": "" });
   }
+});
+
+test("with privacy mode on, Usage and Logs say that a saved file holds the real text", async ({ page }) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  const usage = page.getByText("An exported file holds them as core recorded them.");
+  const logs = page.getByText("A downloaded log holds the text as core wrote it.");
+  await page.goto(`${core.base}/panel/#/usage`);
+  await expect(page.getByRole("button", { name: "Export", exact: true })).toBeVisible();
+  await expect(usage).toHaveCount(0);
+  await toggle(page).click();
+  await expect(usage).toBeVisible();
+  await page.goto(`${core.base}/panel/#/logs`);
+  await expect(logs).toBeVisible();
+  await toggle(page).click();
+  await expect(logs).toHaveCount(0);
 });
