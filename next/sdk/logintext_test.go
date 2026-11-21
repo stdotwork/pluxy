@@ -60,14 +60,15 @@ func TestUpstreamText(t *testing.T) {
 }
 
 // A secret the caller passes is removed in pieces: every run of token characters that holds 4 or
-// more consecutive characters of it, however short, and only those.
+// more consecutive characters of it (8 or more for one of 32 bytes or more), and only those.
 func TestUpstreamTextSecretPieces(t *testing.T) {
 	const secret = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1In0.c2lnbmF0dXJl"
 	for in, want := range map[string]string{
 		"token was eyJhbGciOiJIUzI":              "token was [redacted]",
-		"bad credential c2ln given":              "bad credential [redacted] given",
-		"joined XJl-devin-ses":                   "joined XJl-devin-ses", // 3 characters of it: not a piece
-		"joined dXJl-devin-ses":                  "joined [redacted]",    // 4 characters of it
+		"bad credential c2lnbmF0 given":          "bad credential [redacted] given",
+		"bad credential c2lnbmF given":           "bad credential c2lnbmF given", // 7 characters of a 49-byte secret: not a piece
+		"joined F0dXJl-devin-ses":                "joined F0dXJl-devin-ses",      // 6 characters of it: not a piece
+		"joined bmF0dXJl-devin-ses":              "joined [redacted]",            // 8 characters of it
 		"invalid session token, try again later": "invalid session token, try again later",
 	} {
 		if got := UpstreamText(in, secret); got != want {

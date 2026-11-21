@@ -1417,8 +1417,8 @@ too. Core removes whole copies of an account's secrets everywhere, and pieces of
 4-character rule from every extension's errors (see [Account checks](#account-checks)), but not
 the other rules or the bound, so the extension keeps its own cleaning. Otherwise the message
 names only the status (`Devin answered 500 Internal Server Error`), or, for a quota read whose
-reply broke off, says that it broke off. The 4-character rule can also replace a word that shares
-4 characters with one of the secrets, such as `proxy` for a proxy user name `proxy-user-1`.
+reply broke off, says that it broke off. The 4-character rule (8 for a secret of 32 bytes or more)
+can also replace a word that shares 4 characters with one of the secrets, such as `proxy` for a proxy user name `proxy-user-1`.
 
 Not built, from today's core: removing Claude Code's and Codex's attribution lines from the system
 prompt and `devin.sensitive-words`; rewriting tool descriptions; encoding tool call IDs (they pass
@@ -1774,7 +1774,7 @@ extension protocol's [Accounts](protocol/README.md#accounts) says which). A know
 public key prefix (`sk-proj-`, `sk-kimi-`, `xai-` and the others listed there) gives no piece,
 so `project` or `kimi` stays in an error for such a key; a secret of under 16 bytes after its
 prefix keeps every piece. Any other word of the error that shares 4 characters with a secret
-goes too, such as `token` for a header `Bearer gw-token-12345`; a reply that succeeded is never
+(8 with one of 32 bytes or more) goes too, such as `token` for a header `Bearer gw-token-12345`; a reply that succeeded is never
 changed by the rule.
 Each
 extension checks with its upstream's model list, and only accounts with an API key:
@@ -2412,7 +2412,7 @@ sections come from the extension with the account's own credential, the secrets 
 its proxy's password and its secret header values already removed, and an error's text and the
 body of an upstream reply with an error status (400 or more), or of every reply of a request
 that failed, without the pieces of the account's secrets (see [Account checks](#account-checks)):
-a failed request's log can lose words of the model's text that share 4 characters with a secret;
+a failed request's log can lose words of the model's text that share 4 characters (8 for a secret of 32 bytes or more) with a secret;
 in the upstream sections the
 values of headers and query parameters whose names hold `auth`, `key`, `token`, `secret`,
 `cookie`, `session`, `password`, `passphrase` or `signature` are masked too, the URL's user name and password

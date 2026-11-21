@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// A run of token characters that holds 4 or more characters of a secret in a row is replaced,
+// A run of token characters that holds 4 or more characters of a secret under 32 bytes in a row is replaced,
 // also where escapes spell them; the words around it, a run that shares only 3 characters and
 // text without any piece are kept.
 func TestRemovePieces(t *testing.T) {
@@ -64,7 +64,7 @@ func TestRemovePiecesKeyFileLines(t *testing.T) {
 			t.Errorf("RemovePieces(%q) = %q, want %q", line, got, Redacted)
 		}
 	}
-	// A PEM's boundary lines are public words, so of them only what a run holds minLinePiece bytes
+	// A PEM's boundary lines are public words, so of them only what a run holds longPiece bytes
 	// of goes: "PRIVATE", 7 bytes, is no piece, and the key's body is gone whole.
 	whole := "private_key: " + key
 	want := "private_key: [redacted] PRIVATE [redacted]\n" + strings.Repeat(Redacted+"\n", 3) + "[redacted] PRIVATE [redacted]\n"
@@ -191,11 +191,11 @@ func TestReplaceRuns(t *testing.T) {
 	}
 }
 
-// Only a PEM private key counts by its lines. Any other secret keeps the 4-byte rule, even with a
-// line break in it, such as a token read from a file with its final newline: an upstream that
-// echoes a refused key cut to its first characters must not get them through.
+// Only a PEM private key counts by its lines. Any other secret under 32 bytes keeps the 4-byte
+// rule, even with a line break in it, such as a token read from a file with its final newline: an
+// upstream that echoes a refused key cut to its first characters must not get them through.
 func TestRemovePiecesOnlyPEMCountsByLines(t *testing.T) {
-	for _, secret := range []string{"tok-abcdefghijklmnopqrstuvwxyz\n", "first-line-secret\nsecond-line-secret"} {
+	for _, secret := range []string{"tok-abcdefghijklmnopqrstuvwxyz\n", "first-line\nsecond-line"} {
 		if got := RemovePieces("key tok-a... refused", secret); strings.HasPrefix(secret, "tok-") && got != "key [redacted] refused" {
 			t.Errorf("RemovePieces with %q = %q, want the 5-byte cut removed", secret, got)
 		}
@@ -215,5 +215,97 @@ func TestRemovePiecesPEMAcrossLines(t *testing.T) {
 	key := "-----BEGIN PRIVATE KEY-----\n" + line1 + "\n" + line2 + "\n-----END PRIVATE KEY-----\n"
 	if in := "cut " + line1[len(line1)-5:] + line2[:5]; RemovePieces(in, key) != "cut "+Redacted {
 		t.Errorf("RemovePieces(%q) = %q, want the fragment across the line break removed", in, RemovePieces(in, key))
+	}
+}
+
+// A secret of 32 bytes or more counts at 8 bytes: a 7-byte run of it stays, an 8-byte run is
+// replaced, also written with escapes. A shorter one counts at 4, and a trailing newline (a token
+// read from a file) is not part of its length.
+func TestRemovePiecesLongSecretCountsAtEightBytes(t *testing.T) {
+	const long = "Qx7Rv2Lm9Tz4Wp8Ys3Nk6Df1Gh5Jc0Bv" // 32 bytes
+	if len(long) != 32 {
+		t.Fatalf("test key is %d bytes", len(long))
+	}
+	short := long[:31]
+	for _, c := range []struct {
+		name, secret, in, want string
+	}{
+		{"7 bytes stay", long, "key Qx7Rv2L given", "key Qx7Rv2L given"},
+		{"4 bytes stay", long, "key Qx7R given", "key Qx7R given"},
+		{"8 bytes go", long, "key Qx7Rv2Lm given", "key [redacted] given"},
+		{"8 bytes go, mid-key", long, "key Lm9Tz4Wp given", "key [redacted] given"},
+		{"8 bytes with unicode escapes", long, `key Qx7Rv2Lm given`, "key [redacted] given"},
+		{"7 bytes with unicode escapes stay", long, `key Qx7Rv2L given`, `key Qx7Rv2L given`},
+		{"8 bytes with percent escapes", long, "key Qx7Rv2L%6d given", "key [redacted] given"},
+		{"7 bytes with percent escapes stay", long, "key Qx7Rv2%4c given", "key Qx7Rv2%4c given"},
+		{"31 bytes: 4 bytes go", short, "key Qx7R given", "key [redacted] given"},
+		{"31 bytes and a newline: 4 bytes go", short + "\n", "key Qx7R given", "key [redacted] given"},
+		{"31 bytes and a newline: 3 bytes stay", short + "\n", "key Qx7 given", "key Qx7 given"},
+		{"32 bytes and a newline: 7 bytes stay", long + "\n", "key Qx7Rv2L given", "key Qx7Rv2L given"},
+		{"32 bytes and a newline: 8 bytes go", long + "\r\n", "key Qx7Rv2Lm given", "key [redacted] given"},
+		{"31 bytes and spaces around: 4 bytes go", "  " + short + "  ", "key Qx7R given", "key [redacted] given"},
+	} {
+		if got := RemovePieces(c.in, c.secret); got != c.want {
+			t.Errorf("%s: RemovePieces(%q) = %q, want %q", c.name, c.in, got, c.want)
+		}
+	}
+}
+
+// The word "test" in an error stays for a long key that holds it, the way an account's last error
+// shows it; a short key that holds it still takes it.
+func TestRemovePiecesLongKeyKeepsOrdinaryWords(t *testing.T) {
+	const long = "sk-live-test-Qx7Rv2Lm9Tz4Wp8Ys3Nk6Df1"
+	in := "test request failed: invalid x-api-key"
+	if got := RemovePieces(in, long); got != in {
+		t.Errorf("RemovePieces(%q) = %q, want it kept", in, got)
+	}
+	if got, want := RemovePieces("test request failed", "my-test-key-12"), "[redacted] request failed"; got != want {
+		t.Errorf("short key: RemovePieces(%q) = %q, want %q", "test request failed", got, want)
+	}
+}
+
+// A secret made of parts counts each part by its own length: a part under 32 bytes of a value
+// over 32 still counts at 4.
+func TestRemovePiecesPartOfLongValueCountsByItsOwnLength(t *testing.T) {
+	const part = "Qx7Rv2Lm9Tz4"
+	const longPart = "Ab3Cd5Ef7Gh9Ij1Kl3Mn5Op7Qr9St1Uv3Wx"
+	a := Account{Headers: map[string]string{"Cookie": "sid=" + part + "; auth=" + longPart}}
+	if v := a.Headers["Cookie"]; len(v) <= 32 {
+		t.Fatalf("value is %d bytes, want over 32", len(v))
+	}
+	secrets := AccountSecrets(a)
+	if !slices.Contains(secrets, part) || !slices.Contains(secrets, longPart) {
+		t.Fatalf("AccountSecrets = %q, want both parts", secrets)
+	}
+	for in, want := range map[string]string{
+		"key Qx7R given":     "key [redacted] given",
+		"key Ab3Cd5E given":  "key Ab3Cd5E given",
+		"key Ab3Cd5Ef given": "key [redacted] given",
+	} {
+		if got := RemovePieces(in, secrets...); got != want {
+			t.Errorf("RemovePieces(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A long key with a public prefix: a run inside the prefix stays, and an 8-byte run with one byte
+// after the prefix is replaced.
+func TestRemovePiecesLongKeyWithPrefix(t *testing.T) {
+	const key = "sk-proj-Qx7Rv2Lm9Tz4Wp8Ys3Nk6Df1Gh5Jc0Bv"
+	for in, want := range map[string]string{
+		"project not found":             "project not found",
+		"key sk-proj- given":            "key sk-proj- given",
+		"key sk-proj-Q given":           "key [redacted] given",
+		"key roj-Qx7R given":            "key [redacted] given",
+		"key -proj-Q given":             "key -proj-Q given",
+		"key k-proj-Q given":            "key [redacted] given",
+		"key proj-Qx7 given":            "key [redacted] given",
+		"key Qx7Rv2L given":             "key Qx7Rv2L given",
+		"key Qx7Rv2Lm given":            "key [redacted] given",
+		"key sk-proj-Qx7Rv2Lm9Tz given": "key [redacted] given",
+	} {
+		if got := RemovePieces(in, key); got != want {
+			t.Errorf("RemovePieces(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

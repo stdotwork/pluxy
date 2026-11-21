@@ -656,12 +656,17 @@ from one with none of these structures, which has none.
 An upstream that refuses a credential often echoes a piece of it, such as its first 24
 characters and `...`, which none of the forms above is. So from an upstream's error text core also
 removes every run of token characters (letters, digits and `_-.+/=~`) that holds 4 or more
-consecutive characters of one of the account's secrets, reading a run as written and with its
+consecutive characters of one of the account's secrets, or 8 or more of a secret of 32 bytes or
+more (each secret by its own length, trimmed of the whitespace around it, so a short part of a long
+header value stays at 4), reading a run as written and with its
 escapes decoded (JSON's `\/`, `\\` and `\uXXXX` and percent-encoding's `%XX`, nested up to 8
 times); a `[redacted]` already there stays as it is. A PEM private key
-counts by its lines and its unwrapped body, at 8 bytes or more in a row: its body is long and random, so 4 bytes of it
-would be a coincidence in most errors and would redact an ordinary word of them, such as
-`Signature` for a key whose body spells `Sign`, while a fragment that short of a key is of no use.
+counts by its lines and its unwrapped body, at 8 bytes or more in a row, as does a secret of 32
+bytes or more: a long key is random, so 4 bytes of it would be a coincidence in most errors and
+would redact an ordinary word of them, such as `test` for a key that spells it, or `Signature` for
+a PEM key whose body spells `Sign`, while a fragment that short of a key is of no use. A secret
+under 32 bytes, such as a hand-picked one, stays at 4, so a 4 to 7 byte cut of a key of 32 bytes
+or more is not removed.
 The rule runs on an [error](#errors)'s `message` and on each string value of its `raw` (object keys
 are names, and stay), on every call on an account and on a [login](#login), and on a
 [captured](#upstream-capture) upstream reply's body whose status is 400 or more, or of every reply
@@ -679,8 +684,8 @@ known vendor's public key prefix (`sk-proj-`, `sk-svcacct-`, `sk-admin-`, `sk-an
 `xai-` or `gsk_`, the longest that fits) gives no piece: a piece counts only when it holds a byte
 after the prefix, and only when 16 bytes or more of the secret follow the prefix, so a short
 secret keeps every piece. The rule still replaces any other word of the error that shares 4
-characters with a secret, or 8 with a PEM private key's body, so core never applies it to a
-reply that succeeded.
+characters with a secret, or 8 with a secret of 32 bytes or more or a PEM private key's body, so
+core never applies it to a reply that succeeded.
 
 In Go, `protocol.RemovePieces(s, secrets...)` applies the rule. `protocol.AccountSecretsWith`
 returns an account's secrets with the settings secrets given, as core passes them;

@@ -41,7 +41,7 @@ const MaxUpstreamText = 1000
 // it as text or as the message of a JSON error: one line, cut after MaxUpstreamText characters
 // with an ellipsis. Such text can hold part of a secret the upstream echoed, split across lines or
 // cut short. Core itself removes the pieces of the account's secrets (protocol.AccountSecrets)
-// from an error's message and raw body by the 4-character rule below (protocol.RemovePieces); the
+// from an error's message and raw body by the piece rule below (protocol.RemovePieces); the
 // other rules, the bound and the secrets core does not know are this function's. The text is
 // cleaned as
 // LoginText cleans it: Bearer and Basic values, the values of fields named like a secret, and runs
@@ -49,7 +49,7 @@ const MaxUpstreamText = 1000
 // else, so a caller passes the secrets it knows, AccountSecrets of the call's account and any it
 // holds itself: first, every run of token characters that holds 4 or more consecutive characters
 // of one, not all of them in its public vendor prefix such as "sk-proj-" (protocol.RemovePieces),
-// is replaced, and 8 or more of a PEM private key's body. A run is read
+// is replaced, and 8 or more of one of 32 bytes or more or of a PEM private key's body. A run is read
 // with its escapes decoded too (JSON's \/, \\ and \uXXXX and percent-encoding's %XX, nested up to 8
 // times), so a piece written with escapes between its characters is replaced, and so is a run whose
 // decoded text holds 24 or more token characters in a row.
@@ -59,7 +59,7 @@ func UpstreamText(s string, secrets ...string) string {
 
 // cleanRuns replaces in s every run of token characters and escapes that, with its escapes
 // decoded, holds a piece of one of secrets (protocol.RemovePieces: 4 or more consecutive
-// characters of one, or 8 of a PEM private key's body), and every run with escapes whose
+// characters of one, or 8 of one of 32 bytes or more or of a PEM private key's body), and every run with escapes whose
 // decoded text holds a run opaqueRun matches.
 func cleanRuns(s string, secrets []string) string {
 	s = protocol.RemovePieces(s, secrets...)

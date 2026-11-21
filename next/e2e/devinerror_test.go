@@ -86,8 +86,8 @@ func checkNoTokenPart(t *testing.T, got string, logs *coreLog, part string) {
 
 // An upstream refusal whose body is longer than the extension reads is cut. If the upstream
 // echoes the session token and the cut falls inside it, the cut text must not become the error:
-// the token's start would reach the client and core's log, cleaned only by core's 4-character
-// rule (protocol.RemovePieces), which the extension does not rely on.
+// the token's start would reach the client and core's log, cleaned only by core's piece rule
+// (protocol.RemovePieces, at 4 bytes, or 8 for a secret of 32 bytes or more), which the extension does not rely on.
 func TestDevinCutErrorBodyKeepsNoCredential(t *testing.T) {
 	// Text, not JSON, so the extension can't take a message out of it; the token straddles the
 	// read limit.
@@ -172,8 +172,8 @@ func TestDevinTextErrorIsCleaned(t *testing.T) {
 		{"short middle cut by the upstream", token, "invalid session token " + jwt[40:60] + "… (truncated)",
 			`"invalid session token [redacted]… (truncated)"`, []string{jwt[40:60]}},
 		// A piece joined to the public prefix, as the Basic credential (token-token) sends it.
-		{"short end joined to the prefix", token, "header was …" + jwt[n-6:] + "-" + token[:10] + "… (truncated)",
-			`"header was …[redacted]… (truncated)"`, []string{jwt[n-6:]}},
+		{"short end joined to the prefix", token, "header was …" + jwt[n-8:] + "-" + token[:10] + "… (truncated)",
+			`"header was …[redacted]… (truncated)"`, []string{jwt[n-8:]}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			status, got, logs := devinChatError(t, tc.token, textRefusal(tc.body))
