@@ -22,6 +22,12 @@ func setConsoleMode(h syscall.Handle, mode uint32) error {
 
 var procSetConsoleMode = syscall.NewLazyDLL("kernel32.dll").NewProc("SetConsoleMode")
 
+// isTerminalFile reports whether f is a Windows console.
+func isTerminalFile(f *os.File) bool {
+	var mode uint32
+	return syscall.GetConsoleMode(syscall.Handle(f.Fd()), &mode) == nil
+}
+
 // terminalNoEcho keeps the console's own echo of what is typed on f off, so a secret value is not
 // shown as it is typed, and returns the call that turns it back on. It returns nil when f is not a
 // console.

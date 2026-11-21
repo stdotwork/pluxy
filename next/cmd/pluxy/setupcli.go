@@ -36,14 +36,10 @@ func (s *stringSliceFlag) Set(v string) error {
 // isInteractive reports whether r is a terminal (e.g. os.Stdin on a TTY).
 var isInteractive = func(r io.Reader) bool {
 	f, ok := r.(*os.File)
-	if !ok {
+	if !ok || f == nil {
 		return false
 	}
-	fi, err := f.Stat()
-	if err != nil {
-		return false
-	}
-	return (fi.Mode() & os.ModeCharDevice) != 0
+	return isTerminalFile(f)
 }
 
 func setupCommands() []command {

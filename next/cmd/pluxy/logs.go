@@ -20,7 +20,7 @@ import (
 // stdoutIsTerminal reports whether w, a command's standard output, is a terminal. It is not
 // invocation.tty, which describes standard input.
 var stdoutIsTerminal = func(w io.Writer) bool {
-	r, ok := w.(io.Reader) // an *os.File, which isInteractive reads the mode of
+	r, ok := w.(io.Reader) // an *os.File, which isInteractive checks
 	return ok && isInteractive(r)
 }
 
