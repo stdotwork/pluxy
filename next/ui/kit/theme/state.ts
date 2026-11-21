@@ -40,6 +40,9 @@ export interface Listed {
 /** What the state needs of the window: the system's settings, and when the person comes back. */
 export type ThemeWindow = Pick<Window, "matchMedia" | "addEventListener" | "removeEventListener">;
 
+/** What adding a theme came to: why it was not added, or whether it took a stored theme's place. */
+export type AddOutcome = { error: string } | { replaced: boolean };
+
 const DEFAULT_THEME = "pluxy/default";
 const PREF_APPLIED = "applied-theme";
 const PREF_CHOICES = "choices";
@@ -467,25 +470,41 @@ export class ThemeState {
   /**
    * Adds a theme from a theme file's text: the reader checks it first, so a file it refuses never
    * reaches core; then core stores it and it is turned on. Returns why it was not added, or
-   * undefined.
+   * whether it took the place of a stored theme with the same ID whose file was different.
    */
-  async addTheme(text: string): Promise<string | undefined> {
+  async addTheme(text: string): Promise<AddOutcome> {
     const r = parseThemeText(text);
-    if (!r.ok) return r.error;
+    if (!r.ok) return { error: r.error };
     const id = r.theme.id;
-    if (this.builtInFiles.has(id)) return BUILT_IN_ID(id);
+    if (this.builtInFiles.has(id)) return { error: BUILT_IN_ID(id) };
     return this.queue(async () => {
       const file: unknown = JSON.parse(text);
+      // Compared before the store, which overwrites the file: the same file again replaces nothing.
+      const replaced = await this.takesPlaceOf(id, file);
       const put = await this.api.storeTheme(id, file);
-      if (!ok(put)) return this.failure(put);
+      if (!ok(put)) return { error: this.failure(put) ?? `core answered ${put.status}` };
       const summary = put.body ?? { id, name: r.theme.name, bytes: 0 };
       this.stored = [...this.stored.filter((s) => s.id !== id), summary].sort((a, b) =>
         a.id < b.id ? -1 : a.id > b.id ? 1 : 0,
       );
       this.files.set(id, { file, offered: { theme: r.theme, builtIn: false, warnings: r.warnings } });
       const why = await this.turnOn(id);
-      return why === undefined ? undefined : `it was added, but could not be turned on: ${why}`;
+      return why === undefined ? { replaced } : { error: `it was added, but could not be turned on: ${why}` };
     });
+  }
+
+  /**
+   * Whether adding file under id takes the place of a stored theme: it does when core stores a
+   * different file under that ID. A stored file this state has not read is read first.
+   */
+  private async takesPlaceOf(id: string, file: unknown): Promise<boolean> {
+    if (!this.stored.some((s) => s.id === id)) return false;
+    if (!this.files.has(id)) await this.fetchFile(id, true);
+    if (!this.stored.some((s) => s.id === id)) return false;
+    const read = this.files.get(id);
+    // A stored file the reader refuses is not the file being added.
+    if (!read || !("file" in read)) return true;
+    return JSON.stringify(read.file) !== JSON.stringify(file);
   }
 
   /**

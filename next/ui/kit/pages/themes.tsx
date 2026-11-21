@@ -30,6 +30,7 @@ const t = strings("themes", {
   addButton: "Add",
   adding: "Adding…",
   added: "{name} was added and turned on.",
+  replaced: "{name} was added and turned on. It replaced a theme with the same name.",
   notAdded: "Not added: {error}",
   tooLarge: "the file is over {limit} KiB",
   appearance: "Appearance",
@@ -265,8 +266,8 @@ function CurrentTheme(props: Acts & { onExport: (name: string, text: string) => 
   );
 }
 
-/** What the last add came to: why not, or the theme it added. */
-type AddResult = { error: string } | { added: string; id: string };
+/** What the last add came to: why not, or the theme it added and whether it took another's place. */
+type AddResult = { error: string } | { added: string; id: string; replaced: boolean };
 
 function AddTheme(props: {
   result: AddResult | undefined;
@@ -283,11 +284,11 @@ function AddTheme(props: {
   const add = async (source: string) => {
     setBusy(true);
     props.onAct();
-    const error = await themes.addTheme(source);
+    const outcome = await themes.addTheme(source);
     setBusy(false);
     const { name, id: added } = themes.current.theme;
-    props.onResult(error === undefined ? { added: name, id: added } : { error });
-    return error === undefined;
+    props.onResult("error" in outcome ? outcome : { added: name, id: added, replaced: outcome.replaced });
+    return !("error" in outcome);
   };
 
   return (
@@ -348,7 +349,7 @@ function AddTheme(props: {
       {result && "error" in result && <Notice tone="danger">{t("notAdded", { error: result.error })}</Notice>}
       {/* True only while the theme it added is the one that is on. */}
       {result && "added" in result && result.id === themes.current.theme.id && (
-        <Notice tone="ok">{t("added", { name: result.added })}</Notice>
+        <Notice tone="ok">{t(result.replaced ? "replaced" : "added", { name: result.added })}</Notice>
       )}
     </Card>
   );
