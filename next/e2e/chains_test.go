@@ -210,6 +210,18 @@ func TestNeedsLoginKeepsTheProvider(t *testing.T) {
 	if l := b.Error.Pluxy.LeftOut; len(l) != 1 || l[0].State != "needs_login" {
 		t.Errorf("left_out = %+v, want the Claude login as needs_login", l)
 	}
+	var msg struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(raw, &msg)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", resp.StatusCode)
+	}
+	if want := `no account can serve model "claude-opus-5-5": every account that serves it needs a new sign-in`; msg.Error.Message != want {
+		t.Errorf("message = %q, want %q", msg.Error.Message, want)
+	}
 	if n := len(codex.Requests()); n != 0 {
 		t.Errorf("Codex got %d requests; the name stays on Claude while its login waits", n)
 	}
