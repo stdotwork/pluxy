@@ -94,11 +94,8 @@ the accounts need; nothing is written until the person confirms. After the impor
 Setup, the accounts and the packages again and ticks the providers the report says are needed, so
 Start installs them. The row also names the command that does the same, `pluxy import cpa`. A
 refusal is shown in the row with what to do about it; a core without the call (404) gets the
-command only. An import can change core's management key: the page then keeps the report on
-screen, shows a new key once if core made one, and offers to sign in again. A host without the
-`signOut` feature keeps the key itself and could not follow the change (the desktop app running
-its own core): there the page shows the dry run and does not offer the import while the report
-has a management key row.
+command only. An import never changes core's management key: a management key in the CLIProxyAPI
+setup stays behind, and the report says why in its "does not come across" list.
 
 A host can add one button to each client the page lists as found:
 `corePages({ setup: { clientAction, clientActionHint } })` (`SetupOptions` in `kit/pages/setup.tsx`). `clientAction` takes the client's ID from core's
