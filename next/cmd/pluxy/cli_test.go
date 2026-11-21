@@ -167,6 +167,9 @@ func TestCLIOutput(t *testing.T) {
 		case "GET /v0/management/config":
 			w.WriteHeader(http.StatusUnprocessableEntity)
 			w.Write([]byte(`{"error":{"code":"invalid_config","message":"the config file does not parse, so it cannot be shown with its secrets hidden: bad"}}`))
+		case "GET /v0/management/settings":
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			w.Write([]byte(`{"error":{"code":"invalid_config","message":"the settings do not parse"}}`))
 		case "PUT /v0/management/themes/t3/f":
 			// A newer core that counts a theme's bytes differently.
 			w.Write([]byte(`{"id":"t3/f","bytes":"12"}` + "\n"))
@@ -232,6 +235,10 @@ func TestCLIOutput(t *testing.T) {
 	// A 422 on a command that changes nothing did not refuse a change.
 	if _, errOut, code := run("config", "show"); code != 1 || !strings.Contains(errOut, "does not parse") {
 		t.Errorf("config show on a config that does not parse: %d %q, want 1 and the reason", code, errOut)
+	}
+	// So does any other command that only reads, with no mark of its own.
+	if _, errOut, code := run("settings"); code != 1 || !strings.Contains(errOut, "do not parse") {
+		t.Errorf("settings on settings that do not parse: %d %q, want 1 and the reason", code, errOut)
 	}
 	// A one-part theme ID is a usage error, not a path with an empty part.
 	for _, args := range [][]string{{"theme", "show", "default"}, {"theme", "remove", "default"}} {

@@ -46,8 +46,9 @@ type command struct {
 	more    bool
 	routes  []string
 	summary string
-	// readOnly: the command changes nothing, so a 409 or 422 from core did not refuse a change
-	// (a config that does not parse cannot be shown, but nothing was refused).
+	// readOnly: the command changes nothing though its route is not a GET (a command whose routes
+	// are all GETs needs no mark, see changesNothing), so a 409 or 422 did not refuse a change
+	// (an account test the extension cannot run refused nothing).
 	readOnly bool
 	// flags adds the command's own flags.
 	flags func(fs *flag.FlagSet, o *opts)
@@ -156,7 +157,7 @@ var commands = []command{
 			}
 			return err
 		}},
-	{words: "config show", routes: []string{"GET /config"}, summary: "the config file, with its secrets replaced by placeholders", readOnly: true,
+	{words: "config show", routes: []string{"GET /config"}, summary: "the config file, with its secrets replaced by placeholders",
 		run: func(x *invocation) error {
 			var c management.Config
 			return x.call(http.MethodGet, "/config", nil, nil, &c, func() {
@@ -1156,7 +1157,7 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 		return exitOK
 	}
 	printError(stderr, *jsonOut, err)
-	return exitCode(err, cmd.readOnly)
+	return exitCode(err, cmd.changesNothing())
 }
 
 // printError writes a command's error to stderr: with --json, as the API's error object (the
@@ -1186,6 +1187,20 @@ func printError(stderr io.Writer, asJSON bool, err error) {
 	}
 	b, _ := json.Marshal(map[string]any{"error": map[string]string{"code": code, "message": msg}})
 	fmt.Fprintf(stderr, "%s\n", b)
+}
+
+// changesNothing reports whether the command only reads: it is marked readOnly, or every route it
+// calls is a GET.
+func (c command) changesNothing() bool {
+	if c.readOnly {
+		return true
+	}
+	for _, r := range c.routes {
+		if !strings.HasPrefix(r, "GET ") {
+			return false
+		}
+	}
+	return len(c.routes) > 0
 }
 
 // exitCode is the exit code for a command's error. readOnly says the command changes nothing,
