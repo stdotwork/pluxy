@@ -36,8 +36,9 @@ const Version = 0
 // kind) to the manifest and registry index, and changes no call; minor 22 adds the account's
 // timeouts (Account.Timeouts); minor 23 adds alive frames (Call.Alive and TypeAlive); minor 24
 // adds model capabilities (Model.Capabilities); minor 25 adds a tool result's parts and error
-// flag (llm.Item.Content and llm.Item.IsError on a tool_result); minor 27 adds native-only
-// generate calls (Info.NativeParser and Call.NativeOnly).
+// flag (llm.Item.Content and llm.Item.IsError on a tool_result); minor 26 adds a tool choice's
+// allowed tool list (llm.ToolChoice.Allowed); minor 27 adds native-only generate calls
+// (Info.NativeParser and Call.NativeOnly).
 const Minor = 27
 
 // MaxFrame is the largest frame either side may send.

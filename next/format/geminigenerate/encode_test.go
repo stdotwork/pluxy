@@ -144,3 +144,27 @@ func TestIsThoughtSignature(t *testing.T) {
 		}
 	}
 }
+
+// An audio part from a Chat client reaches Gemini as inline data with the audio MIME type its
+// format names.
+func TestEncodeChatAudioInput(t *testing.T) {
+	req, err := openaichat.ParseRequest([]byte(`{"model":"gemini-x","messages":[{"role":"user","content":[
+		{"type":"text","text":"Transcribe this."},
+		{"type":"input_audio","input_audio":{"data":"SUQzBA==","format":"mp3"}}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, losses, err := EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct{ Contents []json.RawMessage }
+	_ = json.Unmarshal(body, &got)
+	if len(got.Contents) != 1 {
+		t.Fatalf("contents = %s", body)
+	}
+	sameJSON(t, "parts", got.Contents[0], `{"role":"user","parts":[{"text":"Transcribe this."},{"inlineData":{"mimeType":"audio/mpeg","data":"SUQzBA=="}}]}`)
+	if len(losses) != 0 {
+		t.Errorf("losses = %+v, want none", losses)
+	}
+}

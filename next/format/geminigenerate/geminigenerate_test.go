@@ -210,8 +210,9 @@ func TestToolParametersAsJSONSchema(t *testing.T) {
 	}
 }
 
-// functionCallingConfig maps to a tool choice; ANY with several names is required, and the names
-// stay in the request's Origin.
+// A functionCallingConfig mode becomes a tool choice, and the allowed function names become its
+// allowed list: ANY with several as required, VALIDATED as auto, the modes that name more than
+// one function. Names are not left in the request's Origin.
 func TestToolConfigChoice(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -221,15 +222,24 @@ func TestToolConfigChoice(t *testing.T) {
 		{"AUTO", `{"functionCallingConfig":{"mode":"AUTO"}}`, llm.ToolChoice{Mode: llm.ToolChoiceAuto}},
 		{"NONE", `{"functionCallingConfig":{"mode":"NONE"}}`, llm.ToolChoice{Mode: llm.ToolChoiceNone}},
 		{"ANY with one name", `{"functionCallingConfig":{"mode":"ANY","allowedFunctionNames":["f"]}}`, llm.ToolChoice{Mode: llm.ToolChoiceTool, Name: "f"}},
-		{"ANY with two names", `{"functionCallingConfig":{"mode":"ANY","allowedFunctionNames":["f","g"]}}`, llm.ToolChoice{Mode: llm.ToolChoiceRequired}},
+		{"ANY with two names", `{"functionCallingConfig":{"mode":"ANY","allowedFunctionNames":["f","g"]}}`, llm.ToolChoice{Mode: llm.ToolChoiceRequired, Allowed: []string{"f", "g"}}},
+		{"VALIDATED with two names", `{"functionCallingConfig":{"mode":"VALIDATED","allowedFunctionNames":["f","g"]}}`, llm.ToolChoice{Mode: llm.ToolChoiceAuto, Allowed: []string{"f", "g"}}},
+		{"VALIDATED without names", `{"functionCallingConfig":{"mode":"VALIDATED"}}`, llm.ToolChoice{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := mustParse(t, `{"contents":[],"toolConfig":`+tc.cfg+`}`)
-			if req.Options.ToolChoice == nil || *req.Options.ToolChoice != tc.want {
+			if tc.want.Mode == "" {
+				// A VALIDATED mode with no names has nothing the model reads; it stays as it was.
+				if req.Options.ToolChoice != nil || !strings.Contains(string(req.Origin.Raw), `"VALIDATED"`) {
+					t.Errorf("ToolChoice = %+v, Origin.Raw = %s; want the mode kept and no choice", req.Options.ToolChoice, req.Origin.Raw)
+				}
+				return
+			}
+			if req.Options.ToolChoice == nil || !reflect.DeepEqual(*req.Options.ToolChoice, tc.want) {
 				t.Errorf("ToolChoice = %+v, want %+v", req.Options.ToolChoice, tc.want)
 			}
-			if tc.name == "ANY with two names" && !strings.Contains(string(req.Origin.Raw), `"allowedFunctionNames":["f","g"]`) {
-				t.Errorf("Origin.Raw = %s, want the allowedFunctionNames kept", req.Origin.Raw)
+			if strings.Contains(string(req.Origin.Raw), `"allowedFunctionNames"`) {
+				t.Errorf("Origin.Raw = %s, want the allowedFunctionNames read, not kept", req.Origin.Raw)
 			}
 		})
 	}

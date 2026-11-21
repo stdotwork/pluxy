@@ -47,6 +47,11 @@ func fakeExtension(mode string) {
 		toolResultEcho(minor)
 		return
 	}
+	if m, ok := strings.CutPrefix(mode, "allowed-tools-"); ok {
+		minor, _ := strconv.Atoi(m)
+		toolChoiceEcho(minor)
+		return
+	}
 	if mode == "echo-credential" {
 		echoCredential()
 		return
@@ -766,7 +771,7 @@ func accountClosedExtension(minor int) {
 
 // Core acts on account_closed only from an extension whose describe reports minor 20 or later;
 // from an older extension it is downgraded to permission.
-func TestAccountClosedRequiresProtocolMinor19(t *testing.T) {
+func TestAccountClosedRequiresProtocolMinor20(t *testing.T) {
 	for _, c := range []struct {
 		mode string
 		want string

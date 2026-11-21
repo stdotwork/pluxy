@@ -414,9 +414,15 @@ func logged(w http.ResponseWriter, r *http.Request, g *Generation, h func(w http
 		r = r.WithContext(t.captureUpstream(r.Context(), g.RequestLog.Redact))
 	}
 	rec := &recorder{ResponseWriter: w, body: g.RequestLog.newCapture()}
+	// Written whether h returns or panics, and the panic then continues unchanged
+	// (http.ErrAbortHandler included): a handler that crashed is the one whose log is most
+	// needed. A status of 0 is shown as no status, the way the log already shows a reply that
+	// never began.
+	defer func() {
+		g.RequestLog.write(&requestEntry{at: at, method: r.Method, url: r.URL, client: ClientIP(r), headers: r.Header, body: t.body, trace: t,
+			status: rec.status, rHeaders: rec.header, reply: rec.body, replyTitle: "RESPONSE"})
+	}()
 	h(rec, r)
-	g.RequestLog.write(&requestEntry{at: at, method: r.Method, url: r.URL, client: ClientIP(r), headers: r.Header, body: t.body, trace: t,
-		status: rec.status, rHeaders: rec.header, reply: rec.body, replyTitle: "RESPONSE"})
 }
 
 // requestTrace returns r's trace, adding a new one when it has none. The request's access line

@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/stdotwork/pluxy/next/format/internal/audioinput"
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
 	"github.com/stdotwork/pluxy/next/llm"
 )
@@ -185,13 +186,54 @@ func parseToolChoice(raw json.RawMessage) *llm.ToolChoice {
 		return nil
 	}
 	var o struct {
-		Type string `json:"type"`
-		Name string `json:"name"`
+		Type  string                 `json:"type"`
+		Name  string                 `json:"name"`
+		Mode  string                 `json:"mode"`
+		Tools []responsesAllowedTool `json:"tools"`
 	}
-	if json.Unmarshal(raw, &o) == nil && o.Type == "function" && o.Name != "" && len(rawjson.Object(raw)) == 2 {
+	if json.Unmarshal(raw, &o) != nil {
+		return nil
+	}
+	if o.Type == "allowed_tools" {
+		return allowedToolChoice(o.Mode, o.Tools)
+	}
+	if o.Type == "function" && o.Name != "" && len(rawjson.Object(raw)) == 2 {
 		return &llm.ToolChoice{Mode: llm.ToolChoiceTool, Name: o.Name}
 	}
 	return nil
+}
+
+// responsesAllowedTool is one entry of a tool choice's allowed_tools list: a function tool, named
+// in name, as Responses writes it. Responses writes the name flat, but function.name is read too,
+// as clients that share code with Chat write it.
+type responsesAllowedTool struct {
+	Type     string `json:"type"`
+	Name     string `json:"name"`
+	Function struct {
+		Name string `json:"name"`
+	} `json:"function"`
+}
+
+// allowedToolChoice reads a tool choice's allowed_tools list: its mode (auto or required) and the
+// function tools it names, as the model's allowed list. One that names anything else, or no tool,
+// is nil, so the choice stays whole in the request's fields rather than losing the entries the
+// model has no place for.
+func allowedToolChoice(mode string, tools []responsesAllowedTool) *llm.ToolChoice {
+	if len(tools) == 0 || (mode != llm.ToolChoiceAuto && mode != llm.ToolChoiceRequired) {
+		return nil
+	}
+	names := make([]string, 0, len(tools))
+	for _, t := range tools {
+		name := t.Name
+		if name == "" {
+			name = t.Function.Name
+		}
+		if t.Type != "function" || name == "" {
+			return nil
+		}
+		names = append(names, name)
+	}
+	return &llm.ToolChoice{Mode: mode, Allowed: names}
 }
 
 func parseTextFormat(raw json.RawMessage) *llm.ResponseFormat {
@@ -355,6 +397,13 @@ func parseContent(raw json.RawMessage, path string) (parts []llm.Part, textConte
 			FileData string `json:"file_data"`
 			FileURL  string `json:"file_url"`
 			Filename string `json:"filename"`
+			// input_audio: the flat spelling, or data and format inside input_audio.
+			Data   string `json:"data"`
+			Format string `json:"format"`
+			Audio  *struct {
+				Data   string `json:"data"`
+				Format string `json:"format"`
+			} `json:"input_audio"`
 		}
 		if m == nil || json.Unmarshal(rp, &p) != nil {
 			return nil, false, fmt.Errorf("content[%d] must be an object", i)
@@ -375,6 +424,27 @@ func parseContent(raw json.RawMessage, path string) (parts []llm.Part, textConte
 		case "input_file":
 			parts = append(parts, llm.Part{Type: llm.PartFile, FileID: p.FileID, FileData: p.FileData, URL: p.FileURL, Filename: p.Filename,
 				Origin: rawjson.Origin(format, pp, m, []string{"type", "file_id", "file_data", "file_url", "filename"}, nil)})
+		case "input_audio":
+			data, audioFormat := p.Data, p.Format
+			if p.Audio != nil {
+				if data == "" {
+					data = p.Audio.Data
+				}
+				if audioFormat == "" {
+					audioFormat = p.Audio.Format
+				}
+			}
+			if data == "" {
+				// No bytes to carry; kept whole so a Responses target sends it as it came.
+				parts = append(parts, llm.Part{Type: llm.PartNative, Format: format, Data: append(json.RawMessage(nil), rp...),
+					Origin: &llm.Origin{Format: format, Path: pp}})
+				break
+			}
+			// OpenAI's InputAudio nests data and format inside input_audio, which is how the
+			// encoder writes it; the flat spelling today's clients also send is read too. The
+			// part's other fields are not kept.
+			parts = append(parts, llm.Part{Type: llm.PartFile, FileData: audioinput.DataURL(audioinput.MIME(audioFormat), data),
+				Origin: rawjson.Origin(format, pp, m, []string{"type", "data", "format", "input_audio"}, nil)})
 		default:
 			parts = append(parts, llm.Part{Type: llm.PartNative, Format: format, Data: append(json.RawMessage(nil), rp...),
 				Origin: &llm.Origin{Format: format, Path: pp}})

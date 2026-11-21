@@ -1454,3 +1454,23 @@ func TestRefusalStopReasonBothWays(t *testing.T) {
 		}
 	})
 }
+
+// Messages has no audio block, so an audio part is dropped and reported rather than turning into
+// a document, and the text beside it still reaches Claude.
+func TestEncodeAudioInputIsReported(t *testing.T) {
+	req, err := openaichat.ParseRequest([]byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":[
+		{"type":"text","text":"Transcribe this."},
+		{"type":"input_audio","input_audio":{"data":"UklGRg==","format":"wav"}}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, losses, err := EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameJSON(t, "body", body, `{"model":"claude-sonnet-4-6","stream":false,"max_tokens":32000,
+		"messages":[{"role":"user","content":[{"type":"text","text":"Transcribe this."}]}]}`)
+	if got, want := lossList(losses), []string{"dropped messages[0].content[1]"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("losses:\n got %q\nwant %q", got, want)
+	}
+}

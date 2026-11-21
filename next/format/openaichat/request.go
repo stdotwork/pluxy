@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/stdotwork/pluxy/next/format/internal/audioinput"
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
 	"github.com/stdotwork/pluxy/next/llm"
 )
@@ -88,6 +89,14 @@ type chatPart struct {
 		FileData string `json:"file_data"`
 		Filename string `json:"filename"`
 	} `json:"file"`
+	InputAudio *chatInputAudio `json:"input_audio"`
+}
+
+// chatInputAudio is Chat's input_audio part: the base64 bytes of an audio blob and the format
+// token that names them.
+type chatInputAudio struct {
+	Data   string `json:"data"`
+	Format string `json:"format,omitempty"`
 }
 
 func invalid(msg string, args ...any) *llm.Error {
@@ -196,6 +205,16 @@ func parseTool(raw json.RawMessage, path string) (llm.Tool, error) {
 	}, nil
 }
 
+// chatAllowedTool is one entry of a tool choice's allowed_tools list: a function, named in
+// function.name as Chat writes it or, as some clients write it, in name.
+type chatAllowedTool struct {
+	Type     string `json:"type"`
+	Function struct {
+		Name string `json:"name"`
+	} `json:"function"`
+	Name string `json:"name"`
+}
+
 func parseToolChoice(raw json.RawMessage) *llm.ToolChoice {
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
@@ -210,12 +229,47 @@ func parseToolChoice(raw json.RawMessage) *llm.ToolChoice {
 		Function struct {
 			Name string `json:"name"`
 		} `json:"function"`
+		AllowedTools *struct {
+			Mode  string            `json:"mode"`
+			Tools []chatAllowedTool `json:"tools"`
+		} `json:"allowed_tools"`
 	}
-	if json.Unmarshal(raw, &o) == nil && o.Type == "function" && o.Function.Name != "" && len(rawjson.Object(raw)) == 2 &&
+	if json.Unmarshal(raw, &o) != nil {
+		return nil
+	}
+	if o.Type == "allowed_tools" {
+		return allowedToolChoice(o.AllowedTools)
+	}
+	if o.Type == "function" && o.Function.Name != "" && len(rawjson.Object(raw)) == 2 &&
 		len(rawjson.Object(rawjson.Object(raw)["function"])) == 1 {
 		return &llm.ToolChoice{Mode: llm.ToolChoiceTool, Name: o.Function.Name}
 	}
 	return nil
+}
+
+// allowedToolChoice reads a tool choice's allowed_tools object: its mode (auto or required) and
+// the function tools it names, as the model's allowed list. One that names anything else, or no
+// tool, is nil, so the choice stays whole in the request's fields rather than losing the entries
+// the model has no place for.
+func allowedToolChoice(o *struct {
+	Mode  string            `json:"mode"`
+	Tools []chatAllowedTool `json:"tools"`
+}) *llm.ToolChoice {
+	if o == nil || len(o.Tools) == 0 || (o.Mode != llm.ToolChoiceAuto && o.Mode != llm.ToolChoiceRequired) {
+		return nil
+	}
+	names := make([]string, 0, len(o.Tools))
+	for _, t := range o.Tools {
+		name := t.Function.Name
+		if name == "" {
+			name = t.Name
+		}
+		if t.Type != "function" || name == "" {
+			return nil
+		}
+		names = append(names, name)
+	}
+	return &llm.ToolChoice{Mode: o.Mode, Allowed: names}
 }
 
 func parseResponseFormat(raw json.RawMessage) *llm.ResponseFormat {
@@ -357,6 +411,11 @@ func parseContent(raw json.RawMessage, path string) (parts []llm.Part, textConte
 			file := rawjson.Rest(rawjson.Object(obj["file"]), "file_id", "file_data", "filename")
 			parts = append(parts, llm.Part{Type: llm.PartFile, FileID: p.File.FileID, FileData: p.File.FileData, Filename: p.File.Filename,
 				Origin: rawjson.Origin(format, pp, obj, []string{"type", "file"}, map[string]json.RawMessage{"file": file})})
+		case p.Type == "input_audio" && p.InputAudio != nil && p.InputAudio.Data != "":
+			audio := rawjson.Rest(rawjson.Object(obj["input_audio"]), "data", "format")
+			parts = append(parts, llm.Part{Type: llm.PartFile,
+				FileData: audioinput.DataURL(audioinput.MIME(p.InputAudio.Format), p.InputAudio.Data),
+				Origin:   rawjson.Origin(format, pp, obj, []string{"type", "input_audio"}, map[string]json.RawMessage{"input_audio": audio})})
 		default:
 			parts = append(parts, llm.Part{Type: llm.PartNative, Format: format, Data: append(json.RawMessage(nil), rp...),
 				Origin: &llm.Origin{Format: format, Path: pp}})
@@ -387,6 +446,7 @@ type outPart struct {
 		FileData string `json:"file_data,omitempty"`
 		Filename string `json:"filename,omitempty"`
 	} `json:"file,omitempty"`
+	InputAudio *chatInputAudio `json:"input_audio,omitempty"`
 }
 
 type outRequest struct {
@@ -817,6 +877,13 @@ func joinReasoning(have, next string) string {
 }
 
 func encodeToolChoice(tc *llm.ToolChoice) any {
+	if len(tc.Allowed) > 0 {
+		tools := make([]any, 0, len(tc.Allowed))
+		for _, name := range tc.Allowed {
+			tools = append(tools, map[string]any{"type": "function", "function": map[string]string{"name": name}})
+		}
+		return map[string]any{"type": "allowed_tools", "allowed_tools": map[string]any{"mode": tc.Mode, "tools": tools}}
+	}
 	if tc.Mode == llm.ToolChoiceTool {
 		return map[string]any{"type": "function", "function": map[string]string{"name": tc.Name}}
 	}
@@ -877,6 +944,14 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 			out = append(out, marshal(op, e.kept(p.Origin)))
 			sendable = true
 		case llm.PartFile:
+			// Chat takes audio as input_audio, with its bytes inline; a file part holding audio
+			// is that audio however the client sent it.
+			if mediaType, data, ok := audioinput.Inline(p); ok {
+				op := outPart{Type: "input_audio", InputAudio: &chatInputAudio{Data: data, Format: audioinput.Format(mediaType)}}
+				out = append(out, marshal(op, e.kept(p.Origin)))
+				sendable = true
+				continue
+			}
 			if p.FileID == "" && p.FileData == "" {
 				// Chat Completions takes a file id or inline data, not a URL.
 				e.lose(llm.LossDropped, pp, "Chat Completions cannot take a file by URL")

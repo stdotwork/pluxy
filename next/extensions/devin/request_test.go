@@ -62,6 +62,22 @@ func TestDroppedFields(t *testing.T) {
 	}
 }
 
+// Devin takes no allowed tool list: an auto choice narrowed to named tools is reported dropped,
+// so a client is not told the model was limited to them.
+func TestDroppedAllowedToolList(t *testing.T) {
+	req := &llm.Request{Model: "swe-2",
+		Options: llm.Options{ToolChoice: &llm.ToolChoice{Mode: llm.ToolChoiceAuto, Allowed: []string{"f"}}},
+		Tools:   []llm.Tool{{Type: llm.ToolFunction, Name: "f", Parameters: json.RawMessage(`{"type":"object"}`)}},
+		Items:   []llm.Item{userText("Hi")}}
+	c, err := buildRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := lossPaths(c); !slices.Contains(got, "tool_choice") {
+		t.Errorf("dropped %v, missing tool_choice", got)
+	}
+}
+
 // A tool result given as content blocks keeps its text; its images, which Devin cannot take in a
 // result, are listed as dropped.
 func TestMixedToolResult(t *testing.T) {

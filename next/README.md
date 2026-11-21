@@ -265,7 +265,8 @@ socket. `response.append`,
 The Codex CLI sends its requests to `POST /backend-api/codex/responses` and opens its WebSocket on
 `GET /backend-api/codex/responses` when its `chatgpt_base_url` points at core. As in today's core,
 both paths are aliases of `/v1/responses` and its WebSocket: the same handlers and the same client
-key check.
+key check. The bare `/responses` (and its WebSocket) is the same alias, for clients such as Droid's
+OpenAI provider that post to it.
 
 When an upstream ends a Responses stream with a `response.completed`, `response.incomplete` or
 `response.failed` whose `output` is empty, core fills it with the items the stream's
@@ -2129,8 +2130,9 @@ WebSocket turns. A WebSocket warmup (`generate: false`) that core answers itself
 upstream and is not recorded. Token counts (`count_tokens`, `:countTokens`) generate nothing
 and are not recorded. An event holds the request's trace ID (`id`, the `X-CPA-TRACE-ID` of its reply),
 when it arrived, the `endpoint`, whether it streamed, the `model` the client asked for (without a
-thinking suffix) and the account's own name for it when that differs (`upstream_model`: an alias
-or prefix resolved), the `provider` (extension) and `account` its last attempt went to, the
+thinking suffix), the account's own name for it when that differs (`upstream_model`: an alias
+or prefix resolved) and the model the upstream reply says served it when the reply names one
+(`served_model`), the `provider` (extension) and `account` its last attempt went to, the
 client key's `key_id` (the `id` `GET /client-keys` lists it under, never the key), the
 `client_ip` it came from (the connection's peer, or the client a trusted proxy names; see
 `trusted_proxies`), whether it `failed` with which `error_code`, the HTTP `status` of the reply, `latency_ms`, and the `tokens`
@@ -2490,9 +2492,10 @@ before anything is written.
 
 A migrated config needs its management key set again once. Today's core writes a bcrypt hash over
 `management.secret-key` in the file after it reads the key, and this core cannot use a hash: it
-refuses the config and says so. Replace the hash with the key itself, in plain text, or bring the
-setup across with `pluxy import cpa`, which makes a new key. A config with no management key at all
-is refused too, with a message saying how to add one.
+refuses the config and says so. Replace the hash with the key itself, in plain text. A config with
+no management key at all is refused too, with a message saying how to add one. `pluxy import cpa`
+does not bring the file's management key, plain or hashed: core keeps its own (see
+[moving from CLIProxyAPI](#moving-from-cliproxyapi-pluxy-import-cpa)).
 
 Settings only this core has keep their JSON names in a `config.yaml`: `packages`, `extensions`,
 `extension`, `extension_pages`, `drop_policy`, `token_count_estimate`, `credentials_dir` and `cors`
@@ -2666,11 +2669,14 @@ What the import changes, each under **changed**:
   `keep_with` gives the `"listen"` value to write and restart core with. A file with no
   `server.host` (or an empty one) is one of these: today's core listened on every interface then,
   and pluxy listens on `127.0.0.1` unless told otherwise.
-- A `management.secret-key` that today's core replaced with its bcrypt hash cannot be used: the import
-  makes a new management key, which the row shows once. The `pluxy` command reads it from the config
-  file.
 - The example config's public client keys (`your-api-key-1` and the rest) are left out.
 - Pooled models become fallback chains, as [Provider key sections](#provider-key-sections) describes.
+
+A `management.secret-key` is not brought, neither a plain key nor the bcrypt hash today's core may
+have written over it: core keeps its own management key, which guards every client of it, the
+desktop app's core among them, so an import does not change who may manage core. Its **not
+brought** row says so. Change core's key with `POST /v0/management/management-key/rotate`, which
+returns the new key once.
 
 Each file of the auth folder becomes an account added by login, with the file's name (less
 `.json`) as its ID. A file whose account ID the config or the store already uses is not brought,

@@ -56,7 +56,6 @@ openai-compatibility:
 func TestPoolsBecomeChainsTheRouterAccepts(t *testing.T) {
 	res, err := legacy.ImportConfig([]byte(`
 access: {api-keys: [fake-client-key]}
-management: {secret-key: fake-management-key}
 openai-compatibility:
   - name: compat
     base-url: https://compat.example.com/v1
@@ -72,6 +71,9 @@ claude-api-key:
 	if err != nil {
 		t.Fatal(err)
 	}
+	// An import writes into core's config, which always has a management key: the import does
+	// not bring one, so the test's config carries core's own.
+	res.Config["management_key"] = "fake-management-key"
 	b, err := json.Marshal(res.Config)
 	if err != nil {
 		t.Fatal(err)

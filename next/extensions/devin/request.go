@@ -166,8 +166,13 @@ func buildRequest(req *llm.Request) (*chatRequest, error) {
 	if len(o.Stop) > 0 {
 		lose(llm.LossDropped, "stop", "Devin takes no stop sequences")
 	}
-	if o.ToolChoice != nil && o.ToolChoice.Mode != llm.ToolChoiceAuto {
-		lose(llm.LossDropped, "tool_choice", "Devin takes no tool choice")
+	if tc := o.ToolChoice; tc != nil {
+		switch {
+		case tc.Mode != llm.ToolChoiceAuto:
+			lose(llm.LossDropped, "tool_choice", "Devin takes no tool choice")
+		case len(tc.Allowed) > 0:
+			lose(llm.LossDropped, "tool_choice", "Devin cannot limit a request to an allowed tool list")
+		}
 	}
 	if o.ResponseFormat != nil && o.ResponseFormat.Type != llm.ResponseFormatText {
 		lose(llm.LossDropped, "response_format", "Devin takes no response format")
