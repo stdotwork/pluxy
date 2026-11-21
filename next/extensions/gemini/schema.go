@@ -12,7 +12,9 @@ import (
 
 // Tool parameter schema cleaner for Gemini API and Vertex AI function declarations
 // (parametersJsonSchema / parameters_json_schema / parameters, including inside a countTokens
-// generateContentRequest wrapper). Keeps wire field names and valid uppercase OpenAPI types.
+// generateContentRequest wrapper). Keeps wire field names and the case of the types a client
+// wrote (such as uppercase OpenAPI ones); the types it adds or replaces itself ("object",
+// "array", "string", "integer", "number", "null") are lowercase.
 
 const maxRefDepth = 16
 
@@ -787,6 +789,23 @@ func cleanEnum(m map[string]any, openAPI bool) {
 		delete(m, "enum")
 		return
 	}
+	if !openAPI {
+		if numberType, ok := numericEnumType(m["type"], nonNull); ok {
+			var numbers []any
+			seen := map[string]bool{}
+			for _, v := range nonNull {
+				if s := valueString(v); !seen[s] {
+					seen[s] = true
+					numbers = append(numbers, v)
+				}
+			}
+			m["enum"], m["type"] = numbers, numberType
+			if hasNull {
+				makeNullable(m, false)
+			}
+			return
+		}
+	}
 	var out []any
 	seen := map[string]bool{}
 	for _, v := range nonNull {
@@ -802,6 +821,50 @@ func cleanEnum(m map[string]any, openAPI bool) {
 	if hasNull {
 		makeNullable(m, openAPI)
 	}
+}
+
+// numericEnumType says whether a JSON Schema mode enum keeps its numbers, and the type it keeps
+// them under: every value is a JSON number and the declared type is integer or number (alone or in
+// a list with null), or absent, in which case it is integer unless a value has a ".", "e" or "E".
+func numericEnumType(declared any, values []any) (any, bool) {
+	whole := true
+	for _, v := range values {
+		n, ok := v.(json.Number)
+		if !ok {
+			return nil, false
+		}
+		if strings.ContainsAny(n.String(), ".eE") {
+			whole = false
+		}
+	}
+	var base any
+	switch t := declared.(type) {
+	case nil:
+		base = "number"
+		if whole {
+			base = "integer"
+		}
+		return base, true
+	case string:
+		base = t
+	case []any:
+		var nonNull []any
+		for _, x := range t {
+			if x != "null" {
+				nonNull = append(nonNull, x)
+			}
+		}
+		if len(nonNull) != 1 {
+			return nil, false
+		}
+		base = nonNull[0]
+	default:
+		return nil, false
+	}
+	if s, ok := base.(string); ok && (strings.EqualFold(s, "integer") || strings.EqualFold(s, "number")) {
+		return declared, true
+	}
+	return nil, false
 }
 
 func enforceObjectAndItems(m map[string]any, openAPI bool) {
