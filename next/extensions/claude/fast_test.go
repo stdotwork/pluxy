@@ -2,11 +2,18 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/stdotwork/pluxy/next/format/anthropicmessages"
+	"github.com/stdotwork/pluxy/next/format/geminigenerate"
+	"github.com/stdotwork/pluxy/next/format/openaichat"
+	"github.com/stdotwork/pluxy/next/format/openairesponses"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 	"github.com/stdotwork/pluxy/next/sdk"
@@ -131,18 +138,111 @@ func TestPostSeesFastModeBeforeBetasAreStripped(t *testing.T) {
 	}
 }
 
-func TestPriorityTier(t *testing.T) {
+// A client's explicit priority tier reaches Claude as fast mode whatever its format: Chat and
+// Responses priority or fast, Gemini priority. The tiers that are not the priority tier, an absent
+// tier and a tier Messages cannot say never do; one it cannot say is reported as dropped, at the
+// client's field, and refuses the request under the reject drop policy.
+func TestServiceTierToFastMode(t *testing.T) {
+	chat := func(extra string) llm.Request {
+		r, err := openaichat.ParseRequest([]byte(`{"model":"claude-opus-4-8","messages":[{"role":"user","content":"hi"}]` + extra + `}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	responses := func(extra string) llm.Request {
+		r, err := openairesponses.ParseRequest([]byte(`{"model":"claude-opus-4-8","input":"hi"` + extra + `}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	gemini := func(extra string) llm.Request {
+		r, err := geminigenerate.ParseRequest("claude-opus-4-8", false, []byte(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}]`+extra+`}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
 	for _, c := range []struct {
-		n    *llm.Native
-		want bool
+		name     string
+		req      llm.Request
+		speed    string // the body's speed; "" for none
+		tier     string // the body's service_tier; "" for none
+		dropped  []string
+		rejected bool
 	}{
-		{&llm.Native{Format: llm.FormatOpenAIResponses, Body: []byte(`{"service_tier":"priority"}`)}, true},
-		{&llm.Native{Format: llm.FormatOpenAIResponses, Body: []byte(`{"service_tier":"flex"}`)}, false},
-		{&llm.Native{Format: llm.FormatOpenAIChat, Body: []byte(`{"service_tier":"priority"}`)}, false},
-		{nil, false},
+		{"chat priority", chat(`,"service_tier":"priority"`), "fast", "", nil, false},
+		{"chat fast", chat(`,"service_tier":"fast"`), "fast", "", nil, false},
+		{"responses priority", responses(`,"service_tier":"priority"`), "fast", "", nil, false},
+		{"responses fast", responses(`,"service_tier":"fast"`), "fast", "", nil, false},
+		{"gemini priority", gemini(`,"serviceTier":"priority"`), "fast", "", nil, false},
+		{"chat auto", chat(`,"service_tier":"auto"`), "", "auto", nil, false},
+		{"chat default", chat(`,"service_tier":"default"`), "", "standard_only", nil, false},
+		{"gemini standard", gemini(`,"serviceTier":"standard"`), "", "standard_only", nil, false},
+		{"gemini unspecified", gemini(`,"serviceTier":"unspecified"`), "", "", nil, false},
+		{"chat flex", chat(`,"service_tier":"flex"`), "", "", []string{"service_tier"}, true},
+		{"responses scale", responses(`,"service_tier":"scale"`), "", "", []string{"service_tier"}, true},
+		{"responses ultrafast", responses(`,"service_tier":"ultrafast"`), "", "", []string{"service_tier"}, true},
+		{"gemini flex", gemini(`,"serviceTier":"flex"`), "", "", []string{"serviceTier"}, true},
+		{"chat unknown", chat(`,"service_tier":"turbo"`), "", "", []string{"service_tier"}, true},
+		{"chat none", chat(``), "", "", nil, false},
 	} {
-		if got := priorityTier(c.n); got != c.want {
-			t.Errorf("priorityTier(%+v) = %v, want %v", c.n, got, c.want)
+		t.Run(c.name, func(t *testing.T) {
+			body, tr, err := buildBody(c.req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got struct {
+				Speed       string `json:"speed"`
+				ServiceTier string `json:"service_tier"`
+			}
+			if err := json.Unmarshal(body, &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Speed != c.speed || got.ServiceTier != c.tier {
+				t.Errorf("body has speed %q and service_tier %q, want %q and %q: %s", got.Speed, got.ServiceTier, c.speed, c.tier, body)
+			}
+			if d := tr.DroppedPaths(); !slices.Equal(d, c.dropped) {
+				t.Errorf("dropped %q, want %q", d, c.dropped)
+			}
+			rej := c.req
+			rej.DropPolicy = llm.DropReject
+			_, _, err = buildBody(rej)
+			var le *llm.Error
+			if got := errors.As(err, &le) && le.Code == llm.CodeUnsupported; got != c.rejected {
+				t.Errorf("reject policy: error %v, want refused: %v", err, c.rejected)
+			}
+		})
+	}
+}
+
+// A Messages client's own speed still goes as it is sent, and a Messages client's service tier
+// keeps going as sent, with the fast-mode beta added when the body asks for fast mode.
+func TestServiceTierMessagesUnchanged(t *testing.T) {
+	for _, in := range []string{
+		`{"model":"claude-opus-4-8","max_tokens":5,"speed":"fast","messages":[{"role":"user","content":"hi"}]}`,
+		`{"model":"claude-opus-4-8","max_tokens":5,"service_tier":"standard_only","messages":[{"role":"user","content":"hi"}]}`,
+	} {
+		req, err := anthropicmessages.ParseRequest([]byte(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, tr, err := buildBody(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var sent, want map[string]json.RawMessage
+		if json.Unmarshal(body, &sent) != nil || json.Unmarshal([]byte(in), &want) != nil {
+			t.Fatal("not JSON")
+		}
+		for _, k := range []string{"speed", "service_tier"} {
+			if string(sent[k]) != string(want[k]) {
+				t.Errorf("%s = %s, want %s", k, sent[k], want[k])
+			}
+		}
+		if !tr.Passthrough {
+			t.Errorf("a Messages request was not passed through")
 		}
 	}
 }

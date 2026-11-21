@@ -435,13 +435,23 @@ func (h *shaper) streamOptions() {
 }
 
 // serviceTier keeps the service tiers the Codex endpoint takes: fast and priority become
-// priority, ultrafast stays, anything else is removed.
+// priority, ultrafast stays, anything else is removed. The tier is in the body whatever the
+// client's format: a translated request's comes from the model's service tier (the Responses
+// encoder writes it), and the routing hint a subscription's request gets is made from this body
+// (setClientHeaders). A request translated from another format that asked for a tier Codex cannot
+// take is reported as dropped, at the client's field: flex, scale and any tier the model does
+// not know. Auto and default ask for the standard service Codex gives every request. A body sent
+// as the client wrote it loses nothing it did not lose before.
 func (h *shaper) serviceTier() {
 	switch t := h.str("service_tier"); t {
 	case "fast", "priority":
 		h.m["service_tier"] = raw("priority")
 	case "ultrafast":
 	default:
+		if t != "" && t != llm.ServiceTierAuto && t != llm.ServiceTierDefault && !h.passthrough() {
+			h.tr.Losses = llm.AddLoss(h.tr.Losses, llm.Loss{Kind: llm.LossDropped, Path: llm.ServiceTierPath(h.req),
+				Detail: fmt.Sprintf("the Codex endpoint has no %q service tier", t)})
+		}
 		delete(h.m, "service_tier")
 	}
 }

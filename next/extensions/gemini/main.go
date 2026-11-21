@@ -184,7 +184,7 @@ func generateTo(ctx context.Context, call sdk.Call, out sender) (err error) {
 	if err != nil {
 		return err
 	}
-	body, tr, err := buildBody(call.Request)
+	body, tr, err := buildBodyOn(call.Request, s.Vertex != nil)
 	if err != nil {
 		return err
 	}
@@ -355,6 +355,13 @@ func postBody(ctx context.Context, t target, body []byte, stream bool, model str
 // place of the request's own. Under the reject drop policy a translation that drops anything is
 // refused.
 func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
+	return buildBodyOn(req, false)
+}
+
+// buildBodyOn builds the body as buildBody does for the Gemini API, or for Vertex AI when vertex
+// is set. Vertex's GenerateContent request has no service tier (Google documents the field for
+// the Gemini API only), so a translated request's tier is left out of it and reported as dropped.
+func buildBodyOn(req llm.Request, vertex bool) ([]byte, *llm.Translation, error) {
 	tr := &llm.Translation{To: llm.FormatGeminiGenerate}
 	if n := req.Native; n != nil {
 		tr.From = n.Format
@@ -386,6 +393,11 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	body, losses, err := geminigenerate.EncodeRequest(req)
 	if err != nil {
 		return nil, nil, err
+	}
+	if vertex {
+		if body, losses, err = withoutServiceTier(body, losses, req); err != nil {
+			return nil, nil, err
+		}
 	}
 	losses = append(extra, losses...)
 	effort := req.Options.ReasoningEffort
@@ -426,6 +438,24 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 			Message: "Gemini GenerateContent cannot carry parts of this request: " + strings.Join(paths, ", ")}
 	}
 	return body, tr, nil
+}
+
+// withoutServiceTier removes the service tier the encoder wrote into body, for an upstream that
+// has none, and adds the loss it is.
+func withoutServiceTier(body []byte, losses []llm.Loss, req llm.Request) ([]byte, []llm.Loss, error) {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(body, &m); err != nil {
+		return nil, nil, err
+	}
+	if _, ok := m["serviceTier"]; !ok {
+		return body, losses, nil
+	}
+	delete(m, "serviceTier")
+	body, err := json.Marshal(m)
+	if err != nil {
+		return nil, nil, err
+	}
+	return body, append(losses, llm.Loss{Kind: llm.LossDropped, Path: llm.ServiceTierPath(req), Detail: "Vertex AI's GenerateContent request has no service tier"}), nil
 }
 
 // dropLoss removes the loss at path from losses.

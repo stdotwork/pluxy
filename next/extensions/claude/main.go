@@ -519,6 +519,8 @@ func buildBodyWith(req llm.Request, cacheTTL string, opts anthropicmessages.Enco
 			return body, tr, nil
 		}
 	}
+	// A priority service tier goes as fast mode: post adds the beta header it needs.
+	opts.FastMode = true
 	body, losses, err := anthropicmessages.EncodeRequestWith(req, opts)
 	if err != nil {
 		return nil, nil, err
@@ -536,11 +538,6 @@ func buildBodyWith(req llm.Request, cacheTTL string, opts anthropicmessages.Enco
 	}
 	if body, err = fixBody(body); err != nil {
 		return nil, nil, err
-	}
-	if priorityTier(req.Native) {
-		if body, err = withFastSpeed(body); err != nil {
-			return nil, nil, err
-		}
 	}
 	effort := req.Options.ReasoningEffort
 	if s := req.Options.ThinkingSuffix; s != "" {

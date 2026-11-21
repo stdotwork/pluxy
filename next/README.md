@@ -884,9 +884,10 @@ characters becomes `cpa_tid_v1_` and the ID in URL-safe base64, the same ID the 
 whose base64 form would pass 64 bytes becomes the prefix and a SHA-256 digest of the ID instead,
 so every ID stays within the 64 bytes Anthropic's upstreams take.
 
-**Fast mode.** A request whose body has `"speed": "fast"` (a Messages client's own, or a
-Responses client's `"service_tier": "priority"`, which becomes it as in today's core; Chat
-Completions has no such mapping) gets the `fast-mode-2026-02-01` beta in `anthropic-beta`, which
+**Fast mode.** A request whose body has `"speed": "fast"` (a Messages client's own, or any other
+client format's priority service tier, which becomes it: Chat Completions' and Responses'
+`"service_tier"` of `priority` or `fast`, Gemini's `"serviceTier": "priority"`; `auto`, `default`,
+`flex` and an absent tier never do) gets the `fast-mode-2026-02-01` beta in `anthropic-beta`, which
 Anthropic requires with that field, also on a token count. A request that names that beta itself,
 in its `anthropic-beta` header or in the `betas` list of its body, is a fast-mode request too, as in
 today's core. A 429 saying fast mode needs usage credits is the request's: it blocks nothing and
