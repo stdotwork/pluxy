@@ -56,6 +56,9 @@ type setupStateFile struct {
 	FirstRun  bool                  `json:"first_run"`
 	ScannedAt *time.Time            `json:"scanned_at,omitempty"`
 	Found     management.SetupFound `json:"found"`
+	// Imported is what core kept of each import, by importKey of the config. It is kept apart from
+	// Found, which every scan replaces.
+	Imported map[string]management.SetupLastImport `json:"imported,omitempty"`
 }
 
 // setupManager keeps the kept scan and the first-run flag in memory and in state/setup.json,
@@ -72,6 +75,7 @@ type setupManager struct {
 	rescan    bool
 	scannedAt *time.Time // nil until the first scan ends: there is no kept scan
 	found     management.SetupFound
+	imported  map[string]management.SetupLastImport
 	// statesFor is the address the kept client states were read against (coreAddress of the
 	// listen address and tlsEnable); empty when it is not known, as when the kept scan came
 	// from another run.
@@ -133,6 +137,7 @@ func (m *setupManager) load() {
 		m.found.Imports = f.Found.Imports
 	}
 	m.found.Core = f.Found.Core
+	m.imported = f.Imported
 }
 
 // saveLocked writes state/setup.json, made with mode 0600 the first time.
@@ -145,6 +150,7 @@ func (m *setupManager) saveLocked() error {
 		FirstRun:  m.firstRun,
 		ScannedAt: m.scannedAt,
 		Found:     m.found,
+		Imported:  m.imported,
 	}, "", "  ")
 	if err != nil {
 		return err
@@ -259,7 +265,37 @@ func (m *setupManager) snapshot() (firstRun, scanning bool, scannedAt *time.Time
 	f.Clients = slices.Clone(f.Clients)
 	f.SignIns = slices.Clone(f.SignIns)
 	f.Imports = slices.Clone(f.Imports)
+	for i, r := range f.Imports {
+		if rec, ok := m.imported[importKey(r.Config)]; ok {
+			f.Imports[i].LastImport = &rec
+		}
+	}
 	return m.firstRun, m.scanning, at, f
+}
+
+// importKey names a config file for the record of its import: the home folder expanded and
+// symbolic links resolved, or, when the file cannot be resolved, the cleaned path. The scan's row
+// spells the file with ~, an import by an absolute path, so both sides go through it.
+func importKey(config string) string {
+	p, err := server.ExpandHome(config)
+	if err != nil {
+		p = config
+	}
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return filepath.Clean(p)
+}
+
+// recordImport keeps that an import ran from config, and saves it with the rest of the state.
+func (m *setupManager) recordImport(config string, rec management.SetupLastImport) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.imported == nil {
+		m.imported = map[string]management.SetupLastImport{}
+	}
+	m.imported[importKey(config)] = rec
+	return m.saveLocked()
 }
 
 func (m *setupManager) stop() {
