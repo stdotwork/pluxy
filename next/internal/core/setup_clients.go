@@ -34,9 +34,11 @@ const (
 
 var errNoFile = errors.New("no file")
 
-// readClientFile reads a client tool's config file: errNoFile when there is none.
+// readClientFile reads a client tool's config file: errNoFile when there is none, and anything
+// but a regular file refused without reading it, since reading a FIFO waits for a writer and
+// would hold the scan and core's stop.
 func readClientFile(path string) ([]byte, error) {
-	f, err := os.Open(path)
+	f, err := openClientFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, errNoFile
 	}
@@ -44,6 +46,13 @@ func readClientFile(path string) ([]byte, error) {
 		return nil, err
 	}
 	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a file", path)
+	}
 	b, err := io.ReadAll(io.LimitReader(f, maxClientConfig+1))
 	if err == nil && len(b) > maxClientConfig {
 		err = fmt.Errorf("%s is larger than %d bytes", path, maxClientConfig)
@@ -377,7 +386,10 @@ func inspectOpenCode(home, coreURL string) (string, string) {
 	case blank(b):
 		return display, stateNotConfigured
 	}
-	clean := cleanJSONC(b)
+	clean, ok := cleanJSONC(b)
+	if !ok {
+		return display, stateRefused
+	}
 	root, ok := jsonObject(clean)
 	if !ok || hasDuplicateKey(clean) {
 		return display, stateRefused
@@ -484,8 +496,10 @@ func hasDuplicateKey(b []byte) bool {
 	return walk()
 }
 
-// cleanJSONC strips // and /* */ comments and trailing commas from JSONC input.
-func cleanJSONC(in []byte) []byte {
+// cleanJSONC strips // and /* */ comments and trailing commas from JSONC input. An unclosed
+// block comment is false, not a comment running to the end of the file: a reader that parses
+// the whole file refuses one, so the file is not one to call configured.
+func cleanJSONC(in []byte) ([]byte, bool) {
 	var noComments bytes.Buffer
 	noComments.Grow(len(in))
 	inString := false
@@ -520,11 +534,11 @@ func cleanJSONC(in []byte) []byte {
 				continue
 			}
 			if in[i+1] == '*' {
-				i += 2
-				for i+1 < len(in) && !(in[i] == '*' && in[i+1] == '/') {
-					i++
+				end := bytes.Index(in[i+2:], []byte("*/"))
+				if end < 0 {
+					return nil, false
 				}
-				i++
+				i += end + 3
 				continue
 			}
 		}
@@ -565,7 +579,7 @@ func cleanJSONC(in []byte) []byte {
 		}
 		out.WriteByte(c)
 	}
-	return out.Bytes()
+	return out.Bytes(), true
 }
 
 // The Pi adapter: its folder in Pi's agent folder, the marker file that makes the folder
@@ -661,7 +675,7 @@ func piAdapterReady(agent string) bool {
 	if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
 		return false
 	}
-	b, err := os.ReadFile(filepath.Join(dir, piAdapterMarker))
+	b, err := readClientFile(filepath.Join(dir, piAdapterMarker))
 	if err != nil {
 		return false
 	}

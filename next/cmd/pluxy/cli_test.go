@@ -435,6 +435,26 @@ func TestCLISetupAndClientShow(t *testing.T) {
 	}
 }
 
+// A setup line says when no scan has run, rather than claiming one finished.
+func TestPrintSetupScanLine(t *testing.T) {
+	var out bytes.Buffer
+	x := &invocation{stdout: &out}
+	for _, tc := range []struct {
+		name string
+		s    management.Setup
+		want string
+	}{
+		{"no scan yet", management.Setup{}, "scan: not scanned"},
+		{"scanning", management.Setup{Scanning: true}, "scan: scanning"},
+	} {
+		out.Reset()
+		printSetup(x, tc.s)
+		if !strings.Contains(out.String(), tc.want) {
+			t.Errorf("%s: %q, want %q", tc.name, out.String(), tc.want)
+		}
+	}
+}
+
 func TestUsageCLI(t *testing.T) {
 	var seenQueries []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

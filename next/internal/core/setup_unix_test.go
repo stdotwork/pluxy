@@ -12,7 +12,48 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/stdotwork/pluxy/next/management"
 )
+
+// A client's config at a FIFO is refused, not opened for reading: reading one waits for a
+// writer, which would hold the scan, and core's stop, until one comes.
+func TestClientConfigAtAFIFOIsRefusedNotRead(t *testing.T) {
+	home := setTestHome(t)
+	t.Setenv("PATH", t.TempDir())
+	path := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Skipf("no FIFO on this machine: %v", err)
+	}
+
+	states := make(chan string, 1)
+	go func() {
+		_, state := inspectClaudeCode(home, "http://127.0.0.1:8317")
+		states <- state
+	}()
+	select {
+	case state := <-states:
+		if state != management.ClientStateRefused {
+			t.Errorf("state %q for a config at a FIFO, want refused", state)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("reading a client's config at a FIFO blocked: the scan would hang")
+	}
+
+	scanned := make(chan struct{})
+	go func() {
+		scanMachine(context.Background(), t.TempDir(), "127.0.0.1:8317", false, time.Second)
+		close(scanned)
+	}()
+	select {
+	case <-scanned:
+	case <-time.After(10 * time.Second):
+		t.Fatal("a scan with a client's config at a FIFO did not finish")
+	}
+}
 
 // A probe that does not answer is cut at the 4 s limit, and a child it started goes with it.
 func TestProbeTimeoutEndsTheProbesChildren(t *testing.T) {
