@@ -154,6 +154,17 @@ reply's calls go back to the client under its own name. A replayed call whose ar
 JSON object is sent as `{}` and reported as an approximated loss; a custom tool's free-form input
 is left as it is.
 
+A Chat Completions reply's reasoning is read from `reasoning_content`, `reasoning` or
+`reasoning_details` (OpenRouter's list, whose `reasoning.text` and `reasoning.summary` entries are
+taken and whose encrypted entries are not shown), in that order from the first field that has any,
+so the same text in two fields is shown once; `reasoning_content` may be a list of parts. A
+reasoning run that opens the reply's content in a `think` tag, and its closing tag, becomes
+reasoning as well, including when a tag is split across stream chunks, while a tag later in the
+text stays text. A `refusal` on the message or a delta becomes the reply's text and finishes the
+reply as a content filter, which a Messages client gets as `stop_reason` `"refusal"`. A Chat client
+whose reply came from a Chat upstream gets the upstream's `logprobs` back, on each chunk or joined
+into the message's when the reply is not streamed.
+
 A Chat or Responses account sends a reasoning effort the upstream may not take as the nearest one
 it does, as today's core does: `"reasoning_levels"` in its `settings` lists the efforts the
 upstream accepts (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`), by default `low`,
