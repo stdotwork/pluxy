@@ -152,9 +152,9 @@ type requestEntry struct {
 	panicked bool
 }
 
-// failed reports whether the request counts as failed for an error log: a reply status of 400
-// or more, a failure after the reply began, or a handler that panicked. A client that went away
-// is not a failure.
+// failed reports whether the request counts as failed for an error log: as in today's core, a
+// reply status of 400 or more or a failure after the reply began, and also a handler that
+// panicked. A client that went away is not a failure.
 func (e *requestEntry) failed() bool {
 	return e.status >= 400 || e.panicked || e.trace != nil && e.trace.failed
 }
