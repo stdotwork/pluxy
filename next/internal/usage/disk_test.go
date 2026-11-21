@@ -3,12 +3,15 @@ package usage
 import (
 	"cmp"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -740,4 +743,240 @@ func TestLateClosedDayEventInvalidatesSummary(t *testing.T) {
 	if sum2.Requests != 2 {
 		t.Fatalf("after late closed-day event: requests = %d, want 2", sum2.Requests)
 	}
+}
+
+// appendEvents adds records to a day file behind the store's back, as a late event's append or
+// another process would.
+func appendEvents(t *testing.T, path string, events ...Event) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	for _, e := range events {
+		b, err := json.Marshal(diskEvent{V: 1, Event: e})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.Write(append(b, '\n')); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A closed day's totals and its series hold the same requests: a query whose first step starts
+// inside a closed hour counts that hour in the first step instead of nowhere.
+func TestSeriesCountsClosedDayHourTheRangeCutsShort(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 19, 1, 0, 0, 0, time.UTC) // yesterday is a closed day
+	c := &clock{t: now}
+	appendEvents(t, filepath.Join(dir, "2026-11-18"+daySuffix),
+		Event{Seq: 1, Timestamp: time.Date(2026, 11, 18, 21, 45, 0, 0, time.UTC), Model: "m"},
+		Event{Seq: 2, Timestamp: time.Date(2026, 11, 18, 22, 30, 0, 0, time.UTC), Model: "m"},
+	)
+	s, err := openStore(Options{Dir: dir}, c.now, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	// The 200-minute window starts at 21:40, so the series' first 10-minute step starts at
+	// 21:50, inside the closed 21:00 hour.
+	sum := s.Summarize(Filter{Since: now.Add(-200 * time.Minute)}, 10*time.Minute, 20)
+	if sum.Requests != 2 {
+		t.Fatalf("totals = %d requests, want 2", sum.Requests)
+	}
+	if got := sum.Series[0]; got.Requests != 1 {
+		t.Errorf("first step %+v, want the closed 21:00 hour counted there", got)
+	}
+	if got := sum.Series[1]; got.Requests != 1 {
+		t.Errorf("second step %+v, want the closed 22:00 hour counted there", got)
+	}
+	var inSeries int64
+	for _, b := range sum.Series {
+		inSeries += b.Requests
+	}
+	if inSeries != sum.Requests {
+		t.Errorf("series counts %d requests, totals %d", inSeries, sum.Requests)
+	}
+}
+
+// The sequence never goes back on a restart, including one whose day files retention has since
+// deleted, so a poller's after cursor keeps working.
+func TestSeqSurvivesPrunedDayFiles(t *testing.T) {
+	t.Run("after a clean shutdown and a longer idle than retention keeps", func(t *testing.T) {
+		dir := t.TempDir()
+		c := &clock{t: time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)}
+		s, err := openStore(Options{Dir: dir}, c.now, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range 3 {
+			s.Add(Event{Timestamp: c.now(), Model: "before"})
+		}
+		if err := s.Close(); err != nil {
+			t.Fatal(err)
+		}
+
+		c.add(72 * time.Hour) // the day files are now older than keep_days keeps
+		s2, err := openStore(Options{Dir: dir, KeepDays: intPtr(1)}, c.now, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s2.Close()
+		if seq := s2.Add(Event{Timestamp: c.now(), Model: "after"}); seq != 4 {
+			t.Fatalf("first seq after the day files were pruned = %d, want 4", seq)
+		}
+	})
+
+	t.Run("after a crash, from the newest day file retention would delete", func(t *testing.T) {
+		dir := t.TempDir()
+		c := &clock{t: time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)}
+		appendEvents(t, filepath.Join(dir, "2026-11-15"+daySuffix),
+			Event{Seq: 9, Timestamp: time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC), Model: "old"})
+
+		s, err := openStore(Options{Dir: dir, KeepDays: intPtr(3)}, c.now, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s.Close()
+		if seq := s.Add(Event{Timestamp: c.now(), Model: "after"}); seq != 10 {
+			t.Fatalf("first seq after a crash and a prune = %d, want 10", seq)
+		}
+	})
+
+	t.Run("after a run whose last day file retention deleted", func(t *testing.T) {
+		dir := t.TempDir()
+		c := &clock{t: time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)}
+		s, err := openStore(Options{Dir: dir, KeepDays: intPtr(1)}, c.now, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.Add(Event{Timestamp: c.now(), Model: "before"})
+		s.Add(Event{Timestamp: c.now(), Model: "before"})
+		s.flushWriter()
+
+		// The run goes on and prunes its only day file, then the process dies, so Close never
+		// records the seq: the store is left open here as a crash leaves it.
+		c.add(72 * time.Hour)
+		s.prune()
+
+		s2, err := openStore(Options{Dir: dir, KeepDays: intPtr(1)}, c.now, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer s2.Close()
+		if seq := s2.Add(Event{Timestamp: c.now(), Model: "after"}); seq != 3 {
+			t.Fatalf("first seq after the last day file was pruned = %d, want 3", seq)
+		}
+	})
+}
+
+// A closed day whose file grew after its summary was built is rebuilt from the file, whether the
+// summary is the one in memory or one a restart read back.
+func TestLateClosedDayEventRebuildsAStaleSummary(t *testing.T) {
+	now := time.Date(2026, 11, 19, 0, 5, 0, 0, time.UTC)
+	yesterday := time.Date(2026, 11, 18, 23, 50, 0, 0, time.UTC)
+	f := Filter{Since: now.Add(-48 * time.Hour)}
+
+	for _, tc := range []struct {
+		name   string
+		reopen bool
+	}{
+		{"from the summary in memory", false},
+		{"from the summary file after a restart", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			c := &clock{t: now}
+			path := filepath.Join(dir, "2026-11-18"+daySuffix)
+			appendEvents(t, path, Event{Seq: 1, Timestamp: yesterday, Model: "m1"})
+
+			s, err := openStore(Options{Dir: dir}, c.now, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sum := s.Summarize(f, 0, 0); sum.Requests != 1 {
+				s.Close()
+				t.Fatalf("initial summary = %d requests, want 1", sum.Requests)
+			}
+
+			// The crash window between appending a late event to a closed day and invalidating
+			// its summary.
+			appendEvents(t, path, Event{Seq: 2, Timestamp: yesterday.Add(5 * time.Minute), Model: "m2"})
+			if tc.reopen {
+				if err := s.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if s, err = openStore(Options{Dir: dir}, c.now, nil); err != nil {
+					t.Fatal(err)
+				}
+			}
+			defer s.Close()
+			if sum := s.Summarize(f, 0, 0); sum.Requests != 2 {
+				t.Fatalf("summary after the closed day grew = %d requests, want 2", sum.Requests)
+			}
+		})
+	}
+}
+
+// A day file the disk refuses is counted apart from a full queue and logged with its error; the
+// event stays in the record.
+func TestDiskWriteErrorIsCountedAndLogged(t *testing.T) {
+	dir := t.TempDir()
+	c := &clock{t: time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)}
+	var logged lockedBuffer
+	log.SetOutput(&logged)
+	defer log.SetOutput(os.Stderr)
+
+	s, err := openStore(Options{Dir: dir}, c.now, func(string, []byte) error {
+		return errors.New("no space left on device")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.Add(Event{Timestamp: c.now(), Model: "m"})
+	s.flushWriter()
+
+	sum := s.Summarize(Filter{}, time.Minute, 1)
+	if sum.Requests != 1 {
+		t.Errorf("requests = %d, want the event kept in the record", sum.Requests)
+	}
+	raw, err := json.Marshal(sum)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reply map[string]any
+	if err := json.Unmarshal(raw, &reply); err != nil {
+		t.Fatal(err)
+	}
+	if got := reply["dropped"]; got != float64(0) {
+		t.Errorf("dropped = %v, want 0: a write error is not a full queue", got)
+	}
+	if got := reply["write_errors"]; got != float64(1) {
+		t.Errorf("write_errors = %v, want 1", got)
+	}
+	if line := logged.String(); !strings.Contains(line, "usage:") || !strings.Contains(line, "no space left on device") {
+		t.Errorf("logged %q, want the failed write and its error", line)
+	}
+}
+
+// lockedBuffer is a log destination a test reads while a store's writer writes to it.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
 }
