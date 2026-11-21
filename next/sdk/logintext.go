@@ -49,17 +49,18 @@ const MaxUpstreamText = 1000
 // else, so a caller passes the secrets it knows, AccountSecrets of the call's account and any it
 // holds itself: first, every run of token characters that holds 4 or more consecutive characters
 // of one, not all of them in its public vendor prefix such as "sk-proj-" (protocol.RemovePieces),
-// is replaced. A run is read with its escapes decoded too (JSON's \/, \\ and \uXXXX and
-// percent-encoding's %XX, nested up to 8 times), so a piece written with escapes between its
-// characters is replaced, and so is a run whose decoded text holds 24 or more token characters
-// in a row.
+// is replaced, and 8 or more of a PEM private key's body. A run is read
+// with its escapes decoded too (JSON's \/, \\ and \uXXXX and percent-encoding's %XX, nested up to 8
+// times), so a piece written with escapes between its characters is replaced, and so is a run whose
+// decoded text holds 24 or more token characters in a row.
 func UpstreamText(s string, secrets ...string) string {
 	return boundText(s, MaxUpstreamText, secrets)
 }
 
 // cleanRuns replaces in s every run of token characters and escapes that, with its escapes
-// decoded, holds 4 or more consecutive characters of one of secrets (protocol.RemovePieces), and
-// every run with escapes whose decoded text holds a run opaqueRun matches.
+// decoded, holds a piece of one of secrets (protocol.RemovePieces: 4 or more consecutive
+// characters of one, or 8 of a PEM private key's body), and every run with escapes whose
+// decoded text holds a run opaqueRun matches.
 func cleanRuns(s string, secrets []string) string {
 	s = protocol.RemovePieces(s, secrets...)
 	if !strings.ContainsAny(s, `\%`) {
