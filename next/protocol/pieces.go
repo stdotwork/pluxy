@@ -27,8 +27,8 @@ const minSideSecret = 8
 //     user name, password and secret query values (secretQueryName) of every URL; a URL below a
 //     secret key counts by those parts only, as core's own rule for settings has it.
 //
-// A secret made of parts (SecretParts) counts by its parts only, not whole: the words of a
-// public prefix, scheme or cookie name ("devin-session-token$", "Bearer", "sid=") are not pieces,
+// A secret made of parts (SecretParts) counts by its parts, not whole, unless none of them is
+// long enough (below): the words of a public prefix, scheme or cookie name ("devin-session-token$", "Bearer", "sid=") are not pieces,
 // and neither is a part that is only such words around another part (a header line's
 // "Bearer <token>"), nor Basic's decoded "user:password" when its password is a part. A secret
 // other than the credential's that is shorter than 8 bytes is left out, as core leaves it in
@@ -124,8 +124,8 @@ func accountSecrets(a Account, settings []string) []string {
 // part too or empty. A part that merely holds another, such as a cookie's value that holds
 // another cookie's, is not one. Whether the parts it wraps are kept does not matter: a wrapper is
 // never a secret of its own, so a token that has the shape of one ("name:abcd") counts by its
-// inner part only; when that part is too short, a header, proxy or settings secret counts whole
-// instead (accountSecrets).
+// inner part only; when no kept part reaches 8 bytes, a header, proxy or settings secret counts
+// whole instead (accountSecrets).
 func wrapper(p string, parts []string) bool {
 	if len(SecretParts(p, 1)) > 0 {
 		return true

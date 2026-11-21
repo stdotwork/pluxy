@@ -681,7 +681,8 @@ URL counting by its user name, password and the values of its query parameters n
 secret only; on a login, also each input the login method or prompt marks `secret`, and the user
 name, password and secret query values of an input that is a URL. A secret made of parts counts
 by its parts, and one other than the credential's or an input's under 8 bytes adds nothing. One
-of 8 bytes or more with no part that reaches 8 bytes counts whole, so short parts never leave it
+of 8 bytes or more whose kept parts are all shorter (a part that only wraps another, such as a
+scheme or header line around a token, is not kept) counts whole, so short parts never leave it
 unprotected; the words around its parts, such as its scheme, then count too. A
 known vendor's public key prefix (`sk-proj-`, `sk-svcacct-`, `sk-admin-`, `sk-ant-api03-`,
 `sk-ant-admin01-`, `sk-ant-oat01-`, `sk-ant-ort01-`, `sk-ant-`, `sk-kimi-`, `sk-or-v1-`, `sk-`,

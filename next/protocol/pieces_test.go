@@ -348,23 +348,18 @@ func TestRemovePiecesLongKeyWithPrefix(t *testing.T) {
 }
 
 // A header, proxy or settings secret whose kept parts are all under 8 bytes counts whole, so it is
-// never left unprotected for being made of short parts. The fake value splits at "=" into two
-// parts of 7 bytes each.
+// never left unprotected for being made of short parts. The fake value is one cookie pair whose
+// only part is the 7-byte "d29ybGQ"; the bytes before its "=" are no part, so only the whole value
+// covers them.
 func TestAccountSecretsShortPartsCountWhole(t *testing.T) {
 	const value = "aGVsbG8=d29ybGQ"
+	// The proxy's user name, "user", is under 8 bytes and adds nothing.
 	for name, got := range map[string][]string{
 		"header":   AccountSecrets(Account{Headers: map[string]string{"X-Api-Key": value}}),
 		"proxy":    AccountSecrets(Account{ProxyURL: "http://user:" + value + "@proxy.example:8080"}),
 		"settings": AccountSecrets(Account{Settings: []byte(`{"api_key":"` + value + `"}`)}),
 		"with":     AccountSecretsWith(Account{}, []string{value}),
 	} {
-		if name == "proxy" {
-			// The user name "user" is under 8 bytes and adds nothing; the password is the value.
-			if !slices.Equal(got, []string{value}) {
-				t.Errorf("%s: AccountSecrets = %q, want [%q]", name, got, value)
-			}
-			continue
-		}
 		if !slices.Equal(got, []string{value}) {
 			t.Errorf("%s: AccountSecrets = %q, want [%q]", name, got, value)
 		}

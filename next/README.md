@@ -1803,7 +1803,9 @@ echoes its start (`invalid x-api-key: sk-ant-api03-AbCdEf...`), which whole-secr
 misses. The secrets are the credential's key and tokens, secret header values, the proxy's user
 name and password and the secrets core finds in the settings (a URL by its user name, password
 and secret query values only), by their parts, and on a login the inputs it marks secret (the
-extension protocol's [Accounts](protocol/README.md#accounts) says which). A known vendor's
+extension protocol's [Accounts](protocol/README.md#accounts) says which). A header, proxy or
+settings secret of 8 bytes or more whose kept parts are all shorter counts whole, so a word that
+shares 4 characters with its scheme or cookie name goes too. A known vendor's
 public key prefix (`sk-proj-`, `sk-kimi-`, `xai-` and the others listed there) gives no piece,
 so `project` or `kimi` stays in an error for such a key; a secret of under 16 bytes after its
 prefix keeps every piece. Any other word of the error that shares 4 characters with a secret
@@ -2442,8 +2444,7 @@ user info as written and decoded, its base64 `Proxy-Authorization` login, and th
 password alone when each is 8 bytes or more), in the forms the credential redaction finds (JSON
 escapes, percent-encoding and the rest). A secret made of parts, such as a session token behind a
 public prefix (`devin-session-token$<jwt>`), the token of a `Bearer` value or a cookie's value, has
-each part of 8 bytes or more removed on its own too, or the whole value when no part reaches 8
-bytes (the extension protocol's
+each part of 8 bytes or more removed on its own too (the extension protocol's
 [Accounts](protocol/README.md#accounts) lists the structures). Replies and upstream
 sections come from the extension with the account's own credential, the secrets in its settings,
 its proxy's password and its secret header values already removed, and an error's text and the
