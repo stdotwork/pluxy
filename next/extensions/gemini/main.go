@@ -190,6 +190,12 @@ func generateTo(ctx context.Context, call sdk.Call, out sender) (err error) {
 	body = cleanToolSchemas(body)
 	body = fixTurns(body, s.Vertex != nil, call.Request.Stream, !tr.Passthrough)
 	send := &reporting{out: out, tr: tr, names: replyNames(call.Request, tr)}
+	if !tr.Passthrough {
+		// Gemini's function arguments are a protobuf Struct, so an integer parameter comes
+		// back as a double; the request's schemas say which ones are integers.
+		send.schemas = toolSchemas(call.Request)
+		send.callNames = map[int]string{}
+	}
 	t, err := resolve(ctx, s, call.Account.Credential, call.Request.Model, call.Request.Stream)
 	if err != nil {
 		return err
@@ -439,6 +445,10 @@ type reporting struct {
 	tr     *llm.Translation
 	redact *protocol.Redactor // nil, or what else to remove from upstream data
 	names  map[string]string  // GenerateContent name -> the client's
+	// schemas are the request's function schemas by the client's tool name, and callNames the
+	// client's name of each open call, for integralArguments; both nil on a passthrough body.
+	schemas   map[string]json.RawMessage
+	callNames map[int]string
 }
 
 func (r *reporting) Send(ev llm.Event) error {
@@ -448,10 +458,22 @@ func (r *reporting) Send(ev llm.Event) error {
 		ev.Response = &info
 	}
 	if ev.Type == llm.EventItemStart && ev.Item != nil && ev.Item.Kind == llm.ItemToolCall {
-		if name, ok := r.names[ev.Item.Name]; ok {
+		name := ev.Item.Name
+		if client, ok := r.names[name]; ok {
+			name = client
 			item := *ev.Item
 			item.Name = name
 			ev.Item = &item
+		}
+		if r.callNames != nil {
+			r.callNames[ev.Index] = name
+		}
+	}
+	if ev.Type == llm.EventToolInputDelta && r.callNames != nil {
+		if name, ok := r.callNames[ev.Index]; ok {
+			if schema := r.schemas[name]; schema != nil {
+				ev.Delta = string(integralArguments([]byte(ev.Delta), schema))
+			}
 		}
 	}
 	return r.out.Send(r.redact.Event(ev))
