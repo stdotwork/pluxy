@@ -38,6 +38,9 @@ const (
 	ptySwitch     = "switch"     // the prompt changes to a secret field while a plain one is read
 	ptyJSON       = "json"       // --json on a terminal, which asks nothing and reads nothing
 	ptySlowCancel = "slowcancel" // SIGTERM while core does not answer the cancel at all
+	ptyPaste      = "paste"      // a multi-line JSON key pasted into its field
+	ptyBack       = "back"       // a secret field, then a plain one
+	ptyStartTerm  = "startterm"  // SIGTERM while a value is read before the sign-in starts
 )
 
 // TestCLIAccountTerminal is the test in the parent, and the command's run in the child it starts.
@@ -112,14 +115,61 @@ func TestCLIAccountTerminal(t *testing.T) {
 		p := startPTY(t, ptySwitch)
 		p.waitEcho(true)  // the address field, which is not secret
 		p.waitEcho(false) // the key field, once core asks for it
-		p.write(t, "stale-line\n"+p.secret+"\n")
+		p.waitOutput("API key: ")
+		p.write(t, p.secret+"\n")
 		p.waitExit(t, 0)
 		p.waitEcho(true)
 		p.wantSecretKept(t)
-		if strings.Contains(p.echoedText(), "stale-line") {
-			t.Errorf("the line read for the old prompt was echoed: %q", p.echoedText())
+		p.wantChild(t, "code=0", "cancelled=0", "inputs=1", "input=api_key:answer")
+	})
+	// A key pasted in small pieces, thirteen lines of it, shows on the terminal at no point: the
+	// echo stays off from its first line to its last.
+	t.Run("paste", func(t *testing.T) {
+		for run := range 25 {
+			p := startPTY(t, ptyPaste)
+			p.waitEcho(false)
+			p.waitOutput("Service account key: ")
+			for typed := p.secret + "\n"; typed != ""; {
+				n := min(64, len(typed))
+				p.write(t, typed[:n])
+				typed = typed[n:]
+			}
+			p.waitExit(t, 0)
+			p.waitEcho(true)
+			for _, line := range strings.Split(p.secret, "\n") {
+				if value := strings.Trim(line, " {},"); value != "" && strings.Contains(p.echoedText(), value) {
+					t.Fatalf("run %d: the terminal showed a line of the key: %q", run, value)
+				}
+			}
+			p.wantChild(t, "code=0", "cancelled=0", "start=answer")
 		}
-		p.wantChild(t, "code=0", "cancelled=0", "input=api_key:answer")
+	})
+	// Moving from a secret field to a plain one turns the echo back on, so what is typed there
+	// shows.
+	t.Run("back", func(t *testing.T) {
+		p := startPTY(t, ptyBack)
+		p.waitEcho(false)
+		p.waitOutput("API key: ")
+		p.write(t, p.secret+"\n")
+		p.waitOutput("Note: ")
+		p.waitEcho(true)
+		p.write(t, "plain-note\n")
+		p.waitExit(t, 0)
+		p.wantSecretKept(t)
+		if !strings.Contains(p.echoedText(), "plain-note") {
+			t.Errorf("the plain field was not echoed: %q", p.echoedText())
+		}
+		p.wantChild(t, "code=0", "cancelled=0", "inputs=2")
+	})
+	// A signal while a value is read before the sign-in starts: no sign-in to cancel, so only the
+	// reader's close puts the echo back.
+	t.Run("startterm", func(t *testing.T) {
+		p := startPTY(t, ptyStartTerm)
+		p.waitEcho(false)
+		p.signal(t, syscall.SIGTERM)
+		p.waitExit(t, 1)
+		p.waitEcho(true)
+		p.wantChild(t, "code=1", "cancelled=0")
 	})
 	// --json on a terminal is a usage error and nothing is read: a silent wait for a line is not a
 	// prompt.
@@ -141,6 +191,14 @@ func ptyChild(t *testing.T, scenario string) {
 	if scenario == ptySwitch {
 		method = "switch"
 	}
+	switch scenario {
+	case ptyPaste:
+		method = "service_account"
+	case ptyBack:
+		method = "back"
+	case ptyStartTerm:
+		method = "api_key"
+	}
 	args := []string{"account", "add", "test/ext", "--id", "pty-1", "--method", method,
 		"--url", f.srv.URL, "--key", "k"}
 	if scenario == ptyJSON {
@@ -158,6 +216,9 @@ func ptyChild(t *testing.T, scenario string) {
 			}
 			summary += fmt.Sprintf(" input=%s:%s", name, answer)
 		}
+	}
+	if len(f.starts) == 1 && fakeInput(f.starts[0])["service_account"] == os.Getenv(ptySecretEnv) {
+		summary += " start=answer"
 	}
 	f.mu.Unlock()
 	fmt.Fprintln(os.Stderr, summary)
@@ -182,7 +243,11 @@ func startPTY(t *testing.T, scenario string) *ptySession {
 	if err != nil {
 		t.Fatalf("a terminal: %v", err)
 	}
-	p := &ptySession{t: t, master: master, secret: ptyValue(t), echoed: &syncBuffer{}, child: &syncBuffer{}, done: make(chan error, 1)}
+	secret := ptyValue(t)
+	if scenario == ptyPaste {
+		secret = ptyJSONKey(secret)
+	}
+	p := &ptySession{t: t, master: master, secret: secret, echoed: &syncBuffer{}, child: &syncBuffer{}, done: make(chan error, 1)}
 	read, write, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -237,6 +302,32 @@ func startPTY(t *testing.T, scenario string) *ptySession {
 func ptyValue(t *testing.T) string {
 	t.Helper()
 	return fmt.Sprintf("fake-key-%x", time.Now().UnixNano())
+}
+
+// ptyJSONKey is a made-up pretty-printed key of 13 lines and about 2,200 bytes, each of whose
+// values holds the run's own value, so a line that reaches the screen can be recognised.
+func ptyJSONKey(value string) string {
+	lines := []string{"{"}
+	for i := range 11 {
+		comma := ","
+		if i == 10 {
+			comma = ""
+		}
+		lines = append(lines, fmt.Sprintf("  \"field_%02d\": \"%s-%02d-%s\"%s", i, value, i, strings.Repeat("x", 150), comma))
+	}
+	return strings.Join(append(lines, "}"), "\n")
+}
+
+// waitOutput waits until the command has written text: a person answers what they can read.
+func (p *ptySession) waitOutput(text string) {
+	p.t.Helper()
+	deadline := time.Now().Add(20 * time.Second)
+	for !strings.Contains(p.childOutput(), text) {
+		if time.Now().After(deadline) {
+			p.t.Fatalf("the command did not write %q; it wrote %q", text, p.childOutput())
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
 }
 
 // waitEcho waits until the terminal echoes what is typed or stops doing so.

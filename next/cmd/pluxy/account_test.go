@@ -146,6 +146,17 @@ func fakePrompt(method string) map[string]any {
 	case "switch":
 		return map[string]any{"kind": "input", "message": "Paste the address the browser ended on.",
 			"inputs": []any{map[string]any{"name": "url", "label": "Address"}}}
+	case "back":
+		return fakeSwitchPrompt()
+	case "changing":
+		return fakeChangingPrompt(0)
+	case "req_opt":
+		return map[string]any{"kind": "input", "message": "Two values.", "inputs": []any{
+			map[string]any{"name": "req", "label": "Required"},
+			map[string]any{"name": "opt", "label": "Optional", "optional": true}}}
+	case "repeat":
+		return map[string]any{"kind": "input", "message": "Enter the code.",
+			"inputs": []any{map[string]any{"name": "code", "label": "Code"}}}
 	}
 	return nil
 }
@@ -155,6 +166,12 @@ func fakePrompt(method string) map[string]any {
 func fakeSwitchPrompt() map[string]any {
 	return map[string]any{"kind": "input", "message": "Enter the key.",
 		"inputs": []any{map[string]any{"name": "api_key", "label": "API key", "secret": true}}}
+}
+
+// fakeChangingPrompt is the nth prompt of a sign-in that moves on by itself.
+func fakeChangingPrompt(n int) map[string]any {
+	return map[string]any{"kind": "input", "message": fmt.Sprintf("Step %d.", n),
+		"inputs": []any{map[string]any{"name": fmt.Sprintf("step_%d", n), "label": fmt.Sprintf("Step %d", n)}}}
 }
 
 func fakeInput(body map[string]any) map[string]string {
@@ -209,6 +226,10 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 			map[string]any{"method": "optional", "kind": "input", "label": "Optional note"},
 			map[string]any{"method": "secret_prompt", "kind": "input", "label": "Secret prompt"},
 			map[string]any{"method": "switch", "kind": "input", "label": "Two prompts"},
+			map[string]any{"method": "back", "kind": "input", "label": "A secret, then a plain value"},
+			map[string]any{"method": "changing", "kind": "input", "label": "A prompt that keeps changing"},
+			map[string]any{"method": "req_opt", "kind": "input", "label": "A required and an optional value"},
+			map[string]any{"method": "repeat", "kind": "input", "label": "The same prompt after a wrong answer"},
 			map[string]any{"method": "service_account", "kind": "api_key", "label": "Service account",
 				"inputs": []any{map[string]any{"name": "service_account", "label": "Service account key", "secret": true}}},
 			map[string]any{"method": "kept", "kind": "api_key", "label": "Base URL",
@@ -287,6 +308,13 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 			l.prompt = map[string]any{"kind": "input", "message": "Enter the code.",
 				"inputs": []any{map[string]any{"name": "code", "label": "Code"}}}
 		}
+		if l.state == management.LoginPending && l.method == "changing" {
+			if l.polls >= 4 {
+				l.state, l.prompt = "done", nil
+			} else {
+				l.prompt = fakeChangingPrompt(l.polls)
+			}
+		}
 		if l.doneAfter > 0 && l.polls >= l.doneAfter {
 			l.state, l.prompt = "done", nil
 		}
@@ -323,8 +351,21 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 			default:
 				l.prompt["message"] = "That address holds no sign-in code."
 			}
-		case "input", "optional", "secret_prompt":
+		case "input", "optional", "secret_prompt", "req_opt":
 			l.late = func() { l.state, l.prompt = "done", nil }
+		case "repeat":
+			if in["code"] == "right" {
+				l.late = func() { l.state, l.prompt = "done", nil }
+			}
+		case "back":
+			if in["api_key"] != "" {
+				l.late = func() {
+					l.prompt = map[string]any{"kind": "input", "message": "Add a note.",
+						"inputs": []any{map[string]any{"name": "note", "label": "Note"}}}
+				}
+			} else {
+				l.late = func() { l.state, l.prompt = "done", nil }
+			}
 		case "switch":
 			if in["api_key"] != "" {
 				l.late = func() { l.state, l.prompt = "done", nil }
@@ -959,6 +1000,186 @@ func TestFollowLoginCancelsOnInterrupt(t *testing.T) {
 	f.mu.Unlock()
 	if len(cancelled) != 1 || cancelled[0] != reply.Login.ID {
 		t.Errorf("core's sign-ins cancelled: %v, want %s", cancelled, reply.Login.ID)
+	}
+}
+
+// runBounded is one command that must end within limit, on a standard input the test holds.
+func (f *fakeAccountCore) runBounded(t *testing.T, stdin io.Reader, limit time.Duration, args ...string) (string, string, int) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	env := func(k string) string {
+		return map[string]string{"PLUXY_URL": f.srv.URL, "PLUXY_MANAGEMENT_KEY": "k"}[k]
+	}
+	done := make(chan int, 1)
+	go func() { done <- runCLIWithInput(args, stdin, &out, &errOut, env, false) }()
+	select {
+	case code := <-done:
+		return out.String(), errOut.String(), code
+	case <-time.After(limit):
+		t.Fatalf("%v did not end within %s", args, limit)
+		return "", "", 0
+	}
+}
+
+// A sign-in whose prompt keeps changing is read to its end while standard input stays open and
+// silent: waiting for a line never stops the polling.
+func TestFollowLoginPollsThroughPromptChanges(t *testing.T) {
+	shortLoginWait(t)
+	f := newFakeAccountCore(t)
+	read, write := io.Pipe()
+	defer write.Close()
+	out, errOut, code := f.runBounded(t, read, 5*time.Second, "account", "add", "test/ext", "--method", "changing", "--id", "chg-1")
+	if code != 0 || !strings.Contains(out, "account chg-1 added") {
+		t.Fatalf("a sign-in that changes its prompt: code=%d out=%q err=%q", code, out, errOut)
+	}
+	if !strings.Contains(errOut, "Step 3.") {
+		t.Errorf("the prompts were not followed: %q", errOut)
+	}
+}
+
+// At the end of standard input the answers collected are sent when every required field has one,
+// and the sign-in is cancelled with a usage error when one does not.
+func TestFollowLoginAtEndOfInput(t *testing.T) {
+	shortLoginWait(t)
+	t.Run("required given, optional left out", func(t *testing.T) {
+		f := newFakeAccountCore(t)
+		out, errOut, code := f.runBounded(t, strings.NewReader("value\n"), 5*time.Second, "account", "add", "test/ext", "--method", "req_opt", "--id", "eof-1")
+		if code != 0 || !strings.Contains(out, "account eof-1 added") {
+			t.Fatalf("code=%d out=%q err=%q", code, out, errOut)
+		}
+		if sent := f.sent(); len(sent) != 1 || len(sent[0]) != 1 || sent[0]["req"] != "value" {
+			t.Fatalf("core was sent %v, want req alone", sent)
+		}
+	})
+	t.Run("all optional on empty input", func(t *testing.T) {
+		f := newFakeAccountCore(t)
+		out, errOut, code := f.runBounded(t, strings.NewReader(""), 5*time.Second, "account", "add", "test/ext", "--method", "optional", "--id", "eof-2")
+		if code != 0 || !strings.Contains(out, "account eof-2 added") {
+			t.Fatalf("code=%d out=%q err=%q", code, out, errOut)
+		}
+		if sent := f.sent(); len(sent) != 1 || len(sent[0]) != 0 {
+			t.Fatalf("core was sent %v, want one empty answer", sent)
+		}
+	})
+	t.Run("required missing", func(t *testing.T) {
+		f := newFakeAccountCore(t)
+		_, errOut, code := f.runBounded(t, strings.NewReader(""), 5*time.Second, "account", "add", "test/ext", "--method", "req_opt", "--id", "eof-3")
+		if code != 2 || !strings.Contains(errOut, "Required") {
+			t.Fatalf("code=%d err=%q, want 2 and what it needs", code, errOut)
+		}
+		if _, cancelled := f.start(); len(cancelled) != 1 {
+			t.Errorf("the sign-in was not cancelled: %v", cancelled)
+		}
+	})
+	t.Run("an empty answer core refuses is not sent for ever", func(t *testing.T) {
+		f := newFakeAccountCore(t)
+		f.onCreate = func(l *fakeAccountLogin) { l.failInputs = 1 << 30 }
+		_, errOut, code := f.runBounded(t, strings.NewReader(""), 5*time.Second, "account", "add", "test/ext", "--method", "optional", "--id", "eof-4")
+		if code == 0 || !strings.Contains(errOut, "did not take") {
+			t.Fatalf("code=%d err=%q, want the refusal", code, errOut)
+		}
+		if _, cancelled := f.start(); len(cancelled) != 1 {
+			t.Errorf("the sign-in was not cancelled: %v", cancelled)
+		}
+	})
+}
+
+// Only a field that takes a JSON file reads a document: a secret that starts with a brace is the
+// one line it is.
+func TestCLIAccountAddBraceSecretIsOneLine(t *testing.T) {
+	f := newFakeAccountCore(t)
+	const key = "{not-json-key"
+	out, errOut, code := f.runBounded(t, strings.NewReader(key+"\n"), 5*time.Second, "account", "add", "test/ext", "--method", "api_key", "--id", "brace-1")
+	if code != 0 || !strings.Contains(out, "account brace-1 added") {
+		t.Fatalf("a secret that starts with a brace: code=%d out=%q err=%q", code, out, errOut)
+	}
+	if starts, _ := f.start(); len(starts) != 1 || fakeInput(starts[0])["api_key"] != key {
+		t.Fatalf("core was sent %v, want the one line", starts)
+	}
+}
+
+// A document's reading does not grow with the square of its size, and one over 1 MiB is refused
+// as soon as it passes the limit.
+func TestCLIAccountAddRefusesOversizedDocumentPromptly(t *testing.T) {
+	f := newFakeAccountCore(t)
+	doc := "{\"a\": [\n" + strings.Repeat("1,\n", (maxInputValue/3)+10)
+	began := time.Now()
+	_, errOut, code := f.runBounded(t, strings.NewReader(doc), 30*time.Second, "account", "add", "test/ext", "--method", "service_account", "--id", "big-1")
+	if took := time.Since(began); took > 2*time.Second {
+		t.Fatalf("a document over 1 MiB took %s to refuse", took)
+	}
+	if code != 2 || !strings.Contains(errOut, "KiB") {
+		t.Fatalf("a document over 1 MiB: code=%d err=%q, want 2 and the limit", code, errOut)
+	}
+	if starts, _ := f.start(); len(starts) != 0 {
+		t.Errorf("a sign-in was started with it: %d", len(starts))
+	}
+}
+
+// A document whose braces close but which is not JSON is refused at its end, and its text is not
+// repeated in the error.
+func TestCLIAccountAddRefusesBrokenDocument(t *testing.T) {
+	f := newFakeAccountCore(t)
+	_, errOut, code := f.runBounded(t, strings.NewReader("{\n  \"private\": oops\n}\nnever-read\n"), 5*time.Second,
+		"account", "add", "test/ext", "--method", "service_account", "--id", "broken-1")
+	if code != 2 || !strings.Contains(errOut, "JSON") || strings.Contains(errOut, "oops") {
+		t.Fatalf("a broken document: code=%d err=%q, want 2 and no value", code, errOut)
+	}
+}
+
+// The same prompt shown again after a wrong answer can be answered again.
+func TestFollowLoginAnswersARepeatedPrompt(t *testing.T) {
+	shortLoginWait(t)
+	f := newFakeAccountCore(t)
+	out, errOut, code := f.runBounded(t, strings.NewReader("wrong\nright\n"), 5*time.Second, "account", "add", "test/ext", "--method", "repeat", "--id", "again-1")
+	if code != 0 || !strings.Contains(out, "account again-1 added") {
+		t.Fatalf("a prompt repeated after a wrong answer: code=%d out=%q err=%q", code, out, errOut)
+	}
+	if sent := f.sent(); len(sent) != 2 || sent[0]["code"] != "wrong" || sent[1]["code"] != "right" {
+		t.Fatalf("core was sent %v, want both answers", sent)
+	}
+}
+
+// A sign-in still working on the only answer standard input had is not cancelled for showing the
+// same prompt; one that never moves on is, after a bounded wait.
+func TestFollowLoginRepeatedPromptAtEndOfInput(t *testing.T) {
+	shortLoginWait(t)
+	t.Run("finishes", func(t *testing.T) {
+		f := newFakeAccountCore(t)
+		f.onCreate = func(l *fakeAccountLogin) { l.doneAfter = 5 }
+		out, errOut, code := f.runBounded(t, strings.NewReader("wrong\n"), 5*time.Second, "account", "add", "test/ext", "--method", "repeat", "--id", "slow-1")
+		if code != 0 || !strings.Contains(out, "account slow-1 added") {
+			t.Fatalf("code=%d out=%q err=%q", code, out, errOut)
+		}
+		if sent := f.sent(); len(sent) != 1 {
+			t.Fatalf("core was sent %v, want the one answer", sent)
+		}
+	})
+	t.Run("never moves on", func(t *testing.T) {
+		old := accountAnswerWait
+		accountAnswerWait = 50 * time.Millisecond
+		t.Cleanup(func() { accountAnswerWait = old })
+		f := newFakeAccountCore(t)
+		_, errOut, code := f.runBounded(t, strings.NewReader("wrong\n"), 5*time.Second, "account", "add", "test/ext", "--method", "repeat", "--id", "slow-2")
+		if code != 2 || !strings.Contains(errOut, "Code") {
+			t.Fatalf("code=%d err=%q, want 2 and what it needs", code, errOut)
+		}
+		if _, cancelled := f.start(); len(cancelled) != 1 {
+			t.Errorf("the sign-in was not cancelled: %v", cancelled)
+		}
+	})
+}
+
+// A command that needs no value leaves standard input alone, for whatever reads it next.
+func TestCLIAccountAddLeavesUnusedInputUnread(t *testing.T) {
+	f := newFakeAccountCore(t)
+	stdin := strings.NewReader("for the next command\n")
+	_, errOut, code := f.runBounded(t, stdin, 5*time.Second, "account", "add", "test/ext", "--method", "device", "--id", "unread-1")
+	if code != 0 {
+		t.Fatalf("code=%d err=%q", code, errOut)
+	}
+	if stdin.Len() != len("for the next command\n") {
+		t.Errorf("the command read %d bytes it had no use for", len("for the next command\n")-stdin.Len())
 	}
 }
 

@@ -82,11 +82,15 @@ management API of a core that is already running. `pluxy -config ...` with no su
   that `--input name=value` did not give is read from standard input, one line for each value, in
   the order the sign-in asks for them; on a terminal each value is asked for by its label. A blank
   line leaves an optional field out, and `account login` also leaves out a non-secret value the
-  account's settings already hold. A value that starts with a brace is a JSON document, such as a
-  Vertex service account key, and is read until the document is whole; one that never ends is
-  refused rather than sent cut short. A secret's value is never taken from `--input`, where the
-  shell's history and the process list keep it, and no value is printed back; a terminal also keeps
-  a secret off the screen while it is typed, whichever field it was asked to read before. With
+  account's settings already hold. A field that takes a JSON file, Vertex's service account key, is
+  read until the document is whole, and one that never ends or passes 1 MiB is refused rather than
+  sent cut short; any other value is one line, whatever it starts with. At the end of standard
+  input the values read are sent if every required field has one. A secret's value is never taken
+  from `--input`, where the shell's history and the process list keep it, and no value is printed
+  back; a terminal keeps a secret or a JSON file off the screen until the whole value is read, and
+  drops lines typed for a prompt the sign-in has moved past. A prompt that is still up after its
+  answer and a further read of the sign-in may be answered again, as may one core refused an
+  answer for; with no more input the command waits a minute for it to move on, then cancels. With
   `--json` nothing is read from a terminal: the values come from `--input` or from a pipe, or the
   command says what it needs with exit code 2. A sign-in that needs a value it did not get is
   cancelled in core, with exit code 2, and so is one `--no-wait` leaves waiting on a prompt. A read

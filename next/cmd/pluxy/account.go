@@ -41,6 +41,11 @@ var accountLoginWait = 2 * time.Second
 // up on it: the panel tries three times (next/ui/kit/loginFlow.tsx).
 const accountLoginAttempts = 3
 
+// accountAnswerWait is how long a sign-in may go on showing the prompt it was answered on once
+// standard input has nothing more to give: an extension may still be checking that answer, and a
+// wrong one leaves the same prompt up for ever. A test sets it shorter.
+var accountAnswerWait = time.Minute
+
 // accountLoginTimeout bounds a sign-in the command follows, so a provider that never ends one
 // does not hold the terminal for ever. A sign-in's own prompt expires long before.
 const accountLoginTimeout = 30 * time.Minute
@@ -311,7 +316,10 @@ func (x *invocation) afterLoginStart(l management.Login, body []byte, in signInI
 	return x.followLogin(l, body, in, lines, again)
 }
 
-// followLogin reads a sign-in again until it ends, asking for what its prompts want.
+// followLogin reads a sign-in again until it ends, asking for what its prompts want. It alone
+// decides which field is being answered and what the terminal's echo is: a line belongs to the
+// field current when it is received here, and waiting for one never holds up the reads of the
+// sign-in.
 func (x *invocation) followLogin(l management.Login, body []byte, in signInInputs, lines *lineReader, again bool) error {
 	ctx, stop := context.WithTimeout(x.ctx, accountLoginTimeout)
 	defer stop()
@@ -322,9 +330,15 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 
 	shown := ""
 	var prompt *promptInput
-	input := lines.lines
-	// asked is the read in flight, as the reader numbered it; 0 when the prompt waits for none.
-	asked := uint64(0)
+	// answered says core has an answer to the prompt shown, and reshown that a later read still
+	// shows that prompt, so the person may answer it again. The read made right after an answer
+	// does not count: the extension may not have updated its prompt yet.
+	answered, reshown := false, false
+	// ended says standard input has ended. giveUp is the bounded wait on a prompt that was answered
+	// and is still up with nothing left to answer it, and unanswered the field it still wants.
+	ended := false
+	var giveUp <-chan time.Time
+	var unanswered protocol.LoginInput
 	// failures counts reads of the sign-in in a row that failed, as the panel does: three and the
 	// command gives up on the sign-in, waiting longer between each try.
 	failures := 0
@@ -334,27 +348,40 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 		if l.State != management.LoginPending {
 			return x.loginEnded(l, body, again)
 		}
-		if key := promptKey(l.Prompt); l.Prompt != nil && key != shown {
-			shown = key
-			// A line read for the prompt before this one answers nothing here: its number is
-			// forgotten, and the line is dropped when it comes.
-			asked = 0
-			x.loginPrompt(l.Prompt)
+		if key := promptKey(l.Prompt); l.Prompt != nil && (key != shown || reshown) {
+			repeated := key == shown
+			shown, answered, reshown, giveUp = key, false, false, nil
 			var err error
 			if prompt, err = x.newPromptInput(l.Prompt, in); err != nil {
 				return x.cancelLogin(l.ID, err)
 			}
+			prompt.repeated = repeated
+			// The echo is set first and what was typed for the old prompt dropped next, both before
+			// the new prompt is on the screen: what is typed after reading it is its answer.
+			lines.field(prompt.next())
+			lines.dropTyped()
+			if repeated {
+				x.eprintf("the sign-in is still asking; give the value again if the last one was wrong\n")
+			}
+			x.loginPrompt(l.Prompt)
 		}
-		if prompt != nil && prompt.next() == nil {
+		var field *protocol.LoginInput
+		if prompt != nil {
+			field = prompt.next()
+		}
+		lines.field(field)
+		if prompt != nil && field == nil {
 			// The prompt wants nothing more: send what a flag, its settings or standard input
 			// gave, or, with nothing to send, wait below for the sign-in to finish by itself. The
 			// prompt stays the one shown: core's extension may not have moved on yet, and another
 			// line read now would answer the prompt that comes next with this one's value.
-			answered := prompt
+			answer := prompt
 			prompt = nil
-			if answered.answerable() {
-				if err := x.sendInput(ctx, l.ID, answered.got); err != nil {
-					if !loginRetryable(ctx, err) {
+			if answer.answerable() {
+				if err := x.sendInput(ctx, l.ID, answer.got); err != nil {
+					// With standard input ended no other value can come, so the same answer would
+					// only be refused again.
+					if ended || !loginRetryable(ctx, err) {
 						return x.cancelLogin(l.ID, err)
 					}
 					// A person may give the value again: the prompt is shown once more, with what
@@ -363,6 +390,8 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 					shown = ""
 					continue
 				}
+				answered = true
+				timer.Reset(accountLoginWait)
 				// The answer is in. Reading the sign-in now says at once whether it ended; a read
 				// that fails is left to the next one, since the answer is already sent.
 				if next, nextBody, err := x.readLogin(ctx, l.ID); err == nil {
@@ -371,32 +400,17 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 				continue
 			}
 		}
-		if prompt != nil && prompt.next() != nil {
+		// Lines are received only for a field, so piped lines wait for the field they are for.
+		var input <-chan lineRead
+		if field != nil {
+			if err := x.asks(*field); err != nil {
+				return x.cancelLogin(l.ID, err)
+			}
 			if x.prompts() {
 				prompt.ask(x)
 			}
-			if asked == 0 {
-				if err := x.asks(*prompt.next()); err != nil {
-					return x.cancelLogin(l.ID, err)
-				}
-				// The terminal's echo is set for the field now asked: a prompt that changed while
-				// the field before it was being read leaves nothing of that read behind.
-				gen, err := lines.askLine(ctx, prompt.next().Secret)
-				switch {
-				case err == nil:
-					asked = gen
-				case errors.Is(err, errEndOfInput):
-					// Standard input has ended: the prompt answers with what it has, or the
-					// sign-in is cancelled.
-					input = nil
-					if err := prompt.endOfInput(x, l.ID); err != nil {
-						return err
-					}
-					continue
-				default:
-					return x.cancelLogin(l.ID, err)
-				}
-			}
+			lines.start()
+			input = lines.lines
 		}
 		select {
 		case <-ctx.Done():
@@ -404,37 +418,45 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 				return x.cancelLogin(l.ID, fmt.Errorf("the sign-in did not finish in %s", accountLoginTimeout))
 			}
 			return x.cancelLogin(l.ID, errors.New("sign-in cancelled"))
+		case <-giveUp:
+			return x.cancelLogin(l.ID, usageError{fmt.Sprintf("the sign-in still asks for %s and standard input has no more lines: %s", fieldName(unanswered), inputHint(unanswered))})
 		case r := <-input:
-			switch {
-			case !r.ok:
-				// Standard input has ended, and the reader is gone.
-				input = nil
-				asked = 0
-				if prompt != nil {
-					if err := prompt.endOfInput(x, l.ID); err != nil {
-						return err
-					}
-				}
-			case r.gen != asked:
-				// A line read for a prompt the sign-in has moved past answers nothing; the echo
-				// the field now asked for stays as it is.
-			default:
-				asked = 0
-				if r.hidden {
+			if !r.ok {
+				ended = true
+				if lines.hidden() {
 					x.eprintf("\n")
 				}
-				lines.show()
-				if prompt != nil {
-					if err := prompt.take(r.text); err != nil {
-						return x.cancelLogin(l.ID, err)
+				if prompt.repeated && len(prompt.done) == 0 {
+					// Nothing new to answer a prompt that already has an answer: the extension may
+					// still be working on it, so it gets a while to move on. A browser prompt can
+					// also end by its callback, and stays until the sign-in's own limit.
+					if prompt.kind == protocol.PromptInput {
+						unanswered = *field
+						giveUp = time.After(accountAnswerWait)
 					}
+					prompt = nil
+					continue
 				}
+				if err := prompt.endOfInput(x, l.ID); err != nil {
+					return err
+				}
+				continue
+			}
+			complete, err := prompt.take(r)
+			if err != nil {
+				return x.cancelLogin(l.ID, err)
+			}
+			if complete && lines.hidden() {
+				x.eprintf("\n")
 			}
 		case <-timer.C:
 			next, nextBody, err := x.readLogin(ctx, l.ID)
 			switch {
 			case err == nil:
 				failures = 0
+				if answered && promptKey(next.Prompt) == shown {
+					reshown = true
+				}
 				l, body = next, nextBody
 				timer.Reset(accountLoginWait)
 			case !loginRetryable(ctx, err) || failures+1 >= accountLoginAttempts:
@@ -487,9 +509,11 @@ type promptInput struct {
 	done  map[string]bool
 	asked map[string]bool
 	eof   bool
-	// partial is a value that is not complete yet: a JSON document, such as a pretty-printed
-	// service account key, spans several lines.
-	partial string
+	// value is the field's value while it is not complete yet: a JSON document, such as a
+	// pretty-printed service account key, spans several lines.
+	value *inputValue
+	// repeated says this is a prompt already answered once, shown again.
+	repeated bool
 }
 
 // newPromptInput is the gathering for p: each value a flag gave is taken, except a secret's,
@@ -544,57 +568,117 @@ func (g *promptInput) ask(x *invocation) {
 // never end.
 const maxInputValue = 1 << 20
 
-// jsonValue extends the value a field has so far with one more line and says whether it is
-// complete. A value that starts with a brace is a JSON document, such as the service account key
-// a Vertex sign-in reads, and a pretty-printed one spans several lines: it is complete when it
-// parses, so a document is never sent cut short at its first line.
-func jsonValue(sofar, line string) (string, bool, error) {
-	v := line
-	if sofar != "" {
-		v = sofar + "\n" + line
-	}
-	if len(v) > maxInputValue {
-		return "", false, usageError{fmt.Sprintf("a value is over the %d KiB a sign-in takes", maxInputValue>>10)}
-	}
-	if !strings.HasPrefix(strings.TrimSpace(v), "{") || json.Valid([]byte(v)) {
-		return v, true, nil
-	}
-	return v, false, nil
+// documentField says a field takes a JSON file, whose value may span several lines. The protocol
+// has no mark for it, so it is the one such input the extensions have: Vertex's service account
+// key. Any other value is one line, whatever it starts with.
+func documentField(f protocol.LoginInput) bool { return f.Name == "service_account" }
+
+// hiddenField says the terminal's echo stays off while the field is read.
+func hiddenField(f protocol.LoginInput) bool { return f.Secret || documentField(f) }
+
+// inputValue gathers one field's value from its lines. A document is scanned once, as it comes,
+// for where its outer brace closes, and only then parsed, so a long one costs no more per line
+// than a short one.
+type inputValue struct {
+	document bool
+	text     strings.Builder
+	open     bool
+	depth    int
+	inString bool
+	escaped  bool
 }
 
-// take is one line of standard input: the value of the field that waits for it, or one more line
-// of a value that is a JSON document. An empty line answers a field that may be left empty with
-// nothing, which is not sent.
-func (g *promptInput) take(line string) error {
+func newInputValue(f protocol.LoginInput) *inputValue {
+	return &inputValue{document: documentField(f)}
+}
+
+// add is one more line of the value: the value and true when it is complete.
+func (v *inputValue) add(r lineRead) (string, bool, error) {
+	size := len(r.text)
+	if v.open {
+		size += v.text.Len() + 1
+	}
+	if r.tooLong || size > maxInputValue {
+		return "", false, usageError{fmt.Sprintf("a value is over the %d KiB a sign-in takes", maxInputValue>>10)}
+	}
+	if !v.open {
+		if !v.document || !strings.HasPrefix(strings.TrimSpace(r.text), "{") {
+			return r.text, true, nil
+		}
+		v.open = true
+	} else {
+		v.text.WriteByte('\n')
+	}
+	v.text.WriteString(r.text)
+	if !v.closes(r.text) {
+		return "", false, nil
+	}
+	s := v.text.String()
+	if !json.Valid([]byte(s)) {
+		return "", false, usageError{"the value is not a valid JSON document"}
+	}
+	return s, true, nil
+}
+
+// closes reads one line of a document and says whether its outermost brace closed in it.
+func (v *inputValue) closes(line string) bool {
+	for i := 0; i < len(line); i++ {
+		switch c := line[i]; {
+		case v.escaped:
+			v.escaped = false
+		case v.inString:
+			if c == '\\' {
+				v.escaped = true
+			} else if c == '"' {
+				v.inString = false
+			}
+		case c == '"':
+			v.inString = true
+		case c == '{' || c == '[':
+			v.depth++
+		case c == '}' || c == ']':
+			v.depth--
+			if v.depth == 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// take is one line of standard input for the field that waits for it, and says whether it
+// completed that field's value. An empty line answers a field that may be left empty with nothing,
+// which is not sent.
+func (g *promptInput) take(r lineRead) (bool, error) {
 	f := g.next()
 	if f == nil {
-		return nil
+		return false, nil
 	}
-	v, complete, err := jsonValue(g.partial, line)
-	if err != nil {
-		return err
+	if g.value == nil {
+		g.value = newInputValue(*f)
 	}
-	if !complete {
-		g.partial = v
-		return nil
+	v, complete, err := g.value.add(r)
+	if err != nil || !complete {
+		return false, err
 	}
-	g.partial = ""
+	g.value = nil
 	g.done[f.Name] = true
 	if v != "" || !optionalInput(*f, g.kept) {
 		g.got[f.Name] = v
 	}
-	return nil
+	return true, nil
 }
 
-// endOfInput is standard input's end: a sign-in that must have an input it did not get cannot go
-// on, so it is cancelled with a usage error; one that can finish by itself goes on.
+// endOfInput is standard input's end. A prompt that can finish by itself goes on. One whose
+// required fields all have a value is left complete, so what it has is sent; one that must have a
+// value it did not get cannot go on, and the sign-in is cancelled with a usage error.
 func (g *promptInput) endOfInput(x *invocation, login string) error {
 	f := g.next()
-	g.eof = true
 	if g.kind != protocol.PromptInput {
+		g.eof = true
 		return nil
 	}
-	if g.partial != "" && f != nil {
+	if g.value != nil && f != nil {
 		return x.cancelLogin(login, usageError{fmt.Sprintf("%s is not a complete JSON document, and standard input ended before its end", fieldName(*f))})
 	}
 	for _, f := range g.fields {
@@ -602,6 +686,9 @@ func (g *promptInput) endOfInput(x *invocation, login string) error {
 			continue
 		}
 		return x.cancelLogin(login, usageError{fmt.Sprintf("the sign-in needs %s and standard input has no more lines: %s", fieldName(f), inputHint(f))})
+	}
+	for _, f := range g.fields {
+		g.done[f.Name] = true
 	}
 	return nil
 }
@@ -752,22 +839,23 @@ func (x *invocation) startInputs(fields []protocol.LoginInput, in signInInputs, 
 		if err := x.asks(f); err != nil {
 			return nil, err
 		}
+		// The echo is set before the label is shown, and stays as it is until the value is whole.
+		lines.field(&f)
 		if x.prompts() {
 			x.eprintf("%s: ", fieldName(f))
 		}
-		var value string
+		value := newInputValue(f)
+		var text string
 		for {
-			r, err := lines.readline(x.ctx, f.Secret)
+			r, err := lines.next(x.ctx)
 			if err != nil {
 				return nil, err
 			}
-			hidden := lines.hidden()
-			lines.show()
-			if hidden {
-				x.eprintf("\n")
-			}
 			if !r.ok {
-				if value != "" {
+				if lines.hidden() {
+					x.eprintf("\n")
+				}
+				if value.open {
 					return nil, usageError{fmt.Sprintf("%s is not a complete JSON document, and standard input ended before its end", fieldName(f))}
 				}
 				if optionalInput(f, in.kept) {
@@ -775,19 +863,23 @@ func (x *invocation) startInputs(fields []protocol.LoginInput, in signInInputs, 
 				}
 				return nil, usageError{fmt.Sprintf("the sign-in needs %s: %s", fieldName(f), inputHint(f))}
 			}
-			// A value that is a JSON document takes more lines than its first one.
 			var complete bool
-			if value, complete, err = jsonValue(value, r.text); err != nil {
+			if text, complete, err = value.add(r); err != nil {
 				return nil, err
 			}
 			if complete {
+				if lines.hidden() {
+					x.eprintf("\n")
+				}
 				break
 			}
 		}
-		if value != "" || !optionalInput(f, in.kept) {
-			out[f.Name] = value
+		if text != "" || !optionalInput(f, in.kept) {
+			out[f.Name] = text
 		}
 	}
+	// Core may take a while to answer, and nothing is being typed for it.
+	lines.show()
 	return out, nil
 }
 
@@ -807,95 +899,94 @@ func inputHint(f protocol.LoginInput) string {
 	return fmt.Sprintf("give it with --input %s=<value>, or on standard input, one line for each value the sign-in asks for", f.Name)
 }
 
-// lineReader reads standard input one line at a time, on a goroutine of its own, so a sign-in can
-// be read again while a person types. The command asks for each line, so it can name a secret one
-// before it is typed: a terminal then keeps it off the screen. Each ask is numbered, and the line
-// it reads answers that number, so a line typed for a prompt the sign-in has moved past is told
-// apart from the line the prompt now waits for. close ends the reader and turns the terminal's
-// echo back on.
+// lineReader reads standard input one line at a time, on a goroutine of its own that takes no
+// requests and never touches the terminal, so a sign-in can be read again while a person types.
+// The goroutine starts with the first value asked for: a command that needs none leaves standard
+// input to whatever reads it next. The terminal's echo is set by the one goroutine that follows the
+// sign-in, through field, and close turns it back on.
 type lineReader struct {
-	src      *bufio.Reader
-	term     *os.File
-	ask      chan uint64
-	lines    chan lineRead
-	done     chan struct{}
-	finished chan struct{}
-	once     sync.Once
-	mu       sync.Mutex
-	closed   bool
-	ended    bool
-	asked    uint64
-	// restore turns the terminal's echo back on while a secret line is read; nil otherwise.
+	src     *bufio.Reader
+	term    *os.File
+	lines   chan lineRead
+	done    chan struct{}
+	started sync.Once
+	closed  sync.Once
+	// restore turns the terminal's echo back on while it is off; nil otherwise.
 	restore func()
 }
 
-// lineRead is one line of standard input, or its end (ok false); gen is the ask it answers, and
-// hidden says the terminal's echo was off while it was typed, so a line ending has to be written.
+// lineRead is one line of standard input, or its end (ok false, as a closed channel gives).
+// tooLong is a line over the most a value may be, of which the text is not kept.
 type lineRead struct {
-	gen    uint64
-	text   string
-	ok     bool
-	hidden bool
+	text    string
+	ok      bool
+	tooLong bool
 }
 
-// errEndOfInput is standard input's end where a line was asked for: the reader is gone, and no
-// line will come.
-var errEndOfInput = errors.New("standard input has ended")
+// typedAhead is how many lines may wait to be received, each at most maxInputValue.
+const typedAhead = 16
 
 // newLineReader reads r's lines. term is standard input when it is a terminal, whose echo a
-// secret line is kept from; nil when there is none.
+// secret value is kept from; nil when there is none.
 func newLineReader(r io.Reader, term *os.File) *lineReader {
-	l := &lineReader{src: bufio.NewReaderSize(r, 64<<10), term: term, ask: make(chan uint64, 1),
-		lines: make(chan lineRead), done: make(chan struct{}), finished: make(chan struct{})}
-	go func() {
-		defer close(l.finished)
-		defer close(l.lines)
-		for {
-			var gen uint64
-			select {
-			case gen = <-l.ask:
-			case <-l.done:
-				return
-			}
-			hidden := l.hidden()
-			line, err := l.src.ReadString('\n')
-			if err != nil && line == "" {
-				// The end is told before the end of input is delivered, so an ask made after
-				// that delivery is answered as end-of-input, never as a line that never comes.
-				l.mu.Lock()
-				l.ended = true
-				l.mu.Unlock()
-				select {
-				case l.lines <- lineRead{}:
-				case <-l.done:
-				}
-				return
-			}
-			select {
-			case l.lines <- lineRead{gen: gen, text: strings.TrimRight(line, "\r\n"), ok: true, hidden: hidden}:
-			case <-l.done:
-				return
-			}
-		}
-	}()
-	return l
+	return &lineReader{src: bufio.NewReaderSize(r, 64<<10), term: term,
+		lines: make(chan lineRead, typedAhead), done: make(chan struct{})}
 }
 
-// echo turns the terminal's echo off while a secret value is typed, and back on otherwise. Only
-// the command that asks changes it, never the reader: a reader that turned it off after close
-// would hand the shell that follows a terminal that shows nothing.
-func (l *lineReader) echo(secret bool) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if l.closed {
-		return
-	}
-	if secret {
-		if l.restore == nil && l.term != nil {
-			l.restore = terminalNoEcho(l.term)
+// start begins reading, once.
+func (l *lineReader) start() { l.started.Do(func() { go l.read() }) }
+
+// read sends each line, and closes the channel at the end of input or after a line too long.
+func (l *lineReader) read() {
+	defer close(l.lines)
+	for {
+		text, tooLong, err := readBoundedLine(l.src)
+		if err != nil && text == "" && !tooLong {
+			return
 		}
+		select {
+		case l.lines <- lineRead{text: text, ok: true, tooLong: tooLong}:
+		case <-l.done:
+			return
+		}
+		if tooLong || err != nil {
+			return
+		}
+	}
+}
+
+// readBoundedLine is the next line without its ending. It stops at a line over maxInputValue
+// rather than holding all of one that may never end.
+func readBoundedLine(src *bufio.Reader) (string, bool, error) {
+	var line []byte
+	for {
+		part, err := src.ReadSlice('\n')
+		line = append(line, part...)
+		if len(line) > maxInputValue+len("\r\n") {
+			return "", true, nil
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return strings.TrimRight(string(line), "\r\n"), false, err
+	}
+}
+
+// field sets the terminal's echo for the field now being read, or for none: off for a value that
+// must not show, on otherwise. It changes the terminal only when that differs from what it is, so
+// the echo stays off across all the lines of one value.
+func (l *lineReader) field(f *protocol.LoginInput) {
+	if f == nil || !hiddenField(*f) {
+		l.show()
 		return
 	}
+	if l.restore == nil && l.term != nil {
+		l.restore = terminalNoEcho(l.term)
+	}
+}
+
+// show turns the terminal's echo back on.
+func (l *lineReader) show() {
 	if l.restore != nil {
 		restore := l.restore
 		l.restore = nil
@@ -903,71 +994,42 @@ func (l *lineReader) echo(secret bool) {
 	}
 }
 
-// show turns the terminal's echo back on after a line.
-func (l *lineReader) show() { l.echo(false) }
+// hidden says whether the terminal's echo is off now, so a line ending has to be written.
+func (l *lineReader) hidden() bool { return l.restore != nil }
 
-// hidden says whether the terminal's echo is off now: a secret line is being typed.
-func (l *lineReader) hidden() bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.restore != nil
-}
-
-func (l *lineReader) close() {
-	l.once.Do(func() {
-		l.mu.Lock()
-		l.closed = true
-		restore := l.restore
-		l.restore = nil
-		l.mu.Unlock()
-		close(l.done)
-		if restore != nil {
-			restore()
-		}
-	})
-}
-
-// askLine asks for the next line, naming it a secret one to keep off the terminal, and returns the
-// number the line will answer. It says standard input has ended once the reader is gone, so no
-// caller waits on a line no one will read.
-func (l *lineReader) askLine(ctx context.Context, secret bool) (uint64, error) {
-	l.echo(secret)
-	l.mu.Lock()
-	if l.closed || l.ended {
-		l.mu.Unlock()
-		return 0, errEndOfInput
-	}
-	l.asked++
-	gen := l.asked
-	l.mu.Unlock()
-	select {
-	case <-ctx.Done():
-		return 0, ctx.Err()
-	case <-l.finished:
-		return 0, errEndOfInput
-	case l.ask <- gen:
-		return gen, nil
-	}
-}
-
-// readline is the next line; ok is false when standard input has ended.
-func (l *lineReader) readline(ctx context.Context, secret bool) (lineRead, error) {
-	gen, err := l.askLine(ctx, secret)
-	if err != nil {
-		if errors.Is(err, errEndOfInput) {
-			return lineRead{}, nil
-		}
-		return lineRead{}, err
+// dropTyped drops the lines already waiting on a terminal: they were typed for the prompt before
+// this one. Piped lines are never dropped, since they go to the fields in order.
+func (l *lineReader) dropTyped() {
+	if l.term == nil {
+		return
 	}
 	for {
 		select {
-		case <-ctx.Done():
-			return lineRead{}, ctx.Err()
-		case r := <-l.lines:
-			if !r.ok || r.gen == gen {
-				return r, nil
+		case _, open := <-l.lines:
+			if !open {
+				return
 			}
+		default:
+			return
 		}
+	}
+}
+
+func (l *lineReader) close() {
+	l.closed.Do(func() {
+		close(l.done)
+		l.show()
+	})
+}
+
+// next is the next line; ok is false when standard input has ended.
+func (l *lineReader) next(ctx context.Context) (lineRead, error) {
+	l.start()
+	select {
+	case <-ctx.Done():
+		return lineRead{}, ctx.Err()
+	case r := <-l.lines:
+		return r, nil
 	}
 }
 
