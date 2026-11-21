@@ -168,6 +168,7 @@ type StreamDecoder struct {
 	calls     int             // tool calls made an id so far
 	opened    int             // tool calls whose item started
 	used      map[string]bool // tool call ids the stream has used or sent
+	think     thinkFilter     // a leading think tag in the content, split across chunks
 	losses    []llm.Loss
 }
 
@@ -224,6 +225,39 @@ func (d *StreamDecoder) closeAll(ev *[]llm.Event) {
 	clear(d.tools)
 	clear(d.extra)
 	d.last = nil
+}
+
+// content feeds a content delta through the leading think tag's filter and writes what it
+// settles as reasoning or text, closing and opening the items as it goes.
+func (d *StreamDecoder) content(s string, ev *[]llm.Event) {
+	for _, p := range d.think.feed(s) {
+		d.piece(p, ev)
+	}
+}
+
+// piece writes one run of content as the reasoning or the text it turned out to be.
+func (d *StreamDecoder) piece(p thinkPiece, ev *[]llm.Event) {
+	if p.reasoning {
+		d.closeItem(&d.text, ev)
+		if d.reasoning < 0 {
+			d.reasoning = d.open(llm.ItemReasoning, ev, llm.ItemStart{})
+		}
+		*ev = append(*ev, llm.Event{Type: llm.EventReasoningDelta, Index: d.reasoning, Delta: p.text})
+		return
+	}
+	d.closeItem(&d.reasoning, ev)
+	if d.text < 0 {
+		d.text = d.open(llm.ItemMessage, ev, llm.ItemStart{})
+	}
+	*ev = append(*ev, llm.Event{Type: llm.EventTextDelta, Index: d.text, Delta: p.text})
+}
+
+// flushThink writes what the think filter still holds when the reply ends: reasoning short of its
+// closing tag, or content that never became the opening tag.
+func (d *StreamDecoder) flushThink(ev *[]llm.Event) {
+	for _, p := range d.think.flush() {
+		d.piece(p, ev)
+	}
 }
 
 // openCall opens the item of a tool call whose name is now known, writing first the arguments
@@ -352,11 +386,7 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			out = append(out, llm.Event{Type: llm.EventReasoningDelta, Index: d.reasoning, Delta: r})
 		}
 		if t := ch.Delta.Content; t != nil && *t != "" {
-			d.closeItem(&d.reasoning, &out)
-			if d.text < 0 {
-				d.text = d.open(llm.ItemMessage, &out, llm.ItemStart{})
-			}
-			out = append(out, llm.Event{Type: llm.EventTextDelta, Index: d.text, Delta: *t})
+			d.content(*t, &out)
 		}
 		for _, tc := range ch.Delta.ToolCalls {
 			index := -1
@@ -413,6 +443,7 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		if ch.FinishReason != nil && *ch.FinishReason != "" {
 			f := decodeFinish(*ch.FinishReason)
 			d.finish = &f
+			d.flushThink(&out)
 			d.closeAll(&out)
 		}
 	}
@@ -438,6 +469,7 @@ func (d *StreamDecoder) end() []llm.Event {
 	if !d.started {
 		out = append(out, llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{}})
 	}
+	d.flushThink(&out)
 	d.closeAll(&out)
 	f := llm.Finish{Reason: llm.FinishOther}
 	if d.finish != nil {
@@ -597,11 +629,20 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 			continue
 		}
 		m := ch.Message
-		if r := m.text(); r != "" {
-			item(llm.ItemStart{Kind: llm.ItemReasoning}, r, llm.EventReasoningDelta, nil)
+		content := ""
+		if m.Content != nil {
+			content = *m.Content
 		}
-		if m.Content != nil && *m.Content != "" {
-			item(llm.ItemStart{Kind: llm.ItemMessage}, *m.Content, llm.EventTextDelta, nil)
+		reasoning := m.text()
+		tagged, text := parseThink(content)
+		if reasoning != "" {
+			item(llm.ItemStart{Kind: llm.ItemReasoning}, reasoning, llm.EventReasoningDelta, nil)
+		}
+		if tagged != "" && tagged != reasoning {
+			item(llm.ItemStart{Kind: llm.ItemReasoning}, tagged, llm.EventReasoningDelta, nil)
+		}
+		if text != "" {
+			item(llm.ItemStart{Kind: llm.ItemMessage}, text, llm.EventTextDelta, nil)
 		}
 		for i, tc := range m.ToolCalls {
 			if tc.Function.Name == "" {
