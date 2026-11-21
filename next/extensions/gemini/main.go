@@ -189,7 +189,7 @@ func generateTo(ctx context.Context, call sdk.Call, out sender) (err error) {
 	}
 	body = cleanToolSchemas(body)
 	body = fixTurns(body, s.Vertex != nil, call.Request.Stream, !tr.Passthrough)
-	send := &reporting{out: out, tr: tr}
+	send := &reporting{out: out, tr: tr, names: replyNames(call.Request, tr)}
 	t, err := resolve(ctx, s, call.Account.Credential, call.Request.Model, call.Request.Stream)
 	if err != nil {
 		return err
@@ -432,11 +432,13 @@ func dropLoss(losses []llm.Loss, path string) []llm.Loss {
 	return out
 }
 
-// reporting adds the translation report to the reply's response.start event.
+// reporting adds the translation report to the reply's response.start event, and gives each tool
+// call the client's own name for the tool when the request was sent under another (names).
 type reporting struct {
 	out    sender
 	tr     *llm.Translation
 	redact *protocol.Redactor // nil, or what else to remove from upstream data
+	names  map[string]string  // GenerateContent name -> the client's
 }
 
 func (r *reporting) Send(ev llm.Event) error {
@@ -445,7 +447,27 @@ func (r *reporting) Send(ev llm.Event) error {
 		info.Translation = r.tr
 		ev.Response = &info
 	}
+	if ev.Type == llm.EventItemStart && ev.Item != nil && ev.Item.Kind == llm.ItemToolCall {
+		if name, ok := r.names[ev.Item.Name]; ok {
+			item := *ev.Item
+			item.Name = name
+			ev.Item = &item
+		}
+	}
 	return r.out.Send(r.redact.Event(ev))
+}
+
+// replyNames maps each tool name a translated request was sent under back to the client's
+// (geminigenerate.ToolNames). A GenerateContent body passed through keeps the client's names.
+func replyNames(req llm.Request, tr *llm.Translation) map[string]string {
+	if tr.Passthrough {
+		return nil
+	}
+	back := map[string]string{}
+	for from, to := range geminigenerate.ToolNames(req) {
+		back[to] = from
+	}
+	return back
 }
 
 // relayStream decodes the upstream GenerateContent stream and sends each event as soon as it is

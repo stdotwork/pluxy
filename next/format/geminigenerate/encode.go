@@ -113,6 +113,7 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 		e.lose(llm.LossDropped, "reasoning_effort", "GenerateContent takes thinking settings, which depend on the model")
 	}
 
+	toolNameMap := ToolNames(req)
 	var decls []json.RawMessage
 	var tools []json.RawMessage
 	for i, t := range req.Tools {
@@ -125,7 +126,7 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 			}
 			continue
 		}
-		fd := map[string]any{"name": t.Name}
+		fd := map[string]any{"name": ToolName(toolNameMap, t.Name)}
 		if t.Description != "" {
 			fd["description"] = t.Description
 		}
@@ -142,7 +143,7 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 	}
 	if len(tools) > 0 {
 		out["tools"] = tools
-		if fc := e.functionCalling(o.ToolChoice, o.ParallelToolCalls); fc != nil {
+		if fc := e.functionCalling(o.ToolChoice, o.ParallelToolCalls, toolNameMap); fc != nil {
 			out["toolConfig"] = map[string]any{"functionCallingConfig": fc}
 		}
 	}
@@ -175,7 +176,7 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 		}
 		put(role, part)
 	}
-	names := map[string]string{} // call ID to function name
+	callName := map[string]string{} // call ID to function name
 	for i, it := range req.Items {
 		p := pathOf(it.Origin, fmt.Sprintf("items[%d]", i))
 		switch it.Type {
@@ -202,7 +203,7 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 				e.lose(llm.LossDropped, p, "GenerateContent has no custom tool calls")
 				break
 			}
-			names[it.CallID] = it.Name
+			callName[it.CallID] = ToolName(toolNameMap, it.Name)
 			args := json.RawMessage(it.Arguments)
 			var m map[string]json.RawMessage
 			if json.Unmarshal(args, &m) != nil || m == nil {
@@ -211,7 +212,7 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 				}
 				args = json.RawMessage("{}")
 			}
-			call := map[string]any{"name": it.Name, "args": args}
+			call := map[string]any{"name": callName[it.CallID], "args": args}
 			if it.CallID != "" {
 				call["id"] = it.CallID
 			}
@@ -222,10 +223,10 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 			}
 			add("model", marshalWith(part, raw))
 		case llm.ItemTypeToolResult:
-			name, ok := names[it.CallID]
+			name, ok := callName[it.CallID]
 			if !ok {
 				e.lose(llm.LossApproximated, p, "a tool result with no call before it, named after its call ID")
-				name = it.CallID
+				name = ToolName(toolNameMap, it.CallID)
 			}
 			// A failure goes under the response's error key, as GenerateContent's FunctionResponse
 			// documents it.
@@ -295,7 +296,7 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 // from the allowed functions. Gemini cannot limit a reply to one call, so parallel_tool_calls
 // false turns function calling off (mode NONE), as today's core does rather than risk several
 // calls the client said it cannot take; it is reported.
-func (e *encoder) functionCalling(tc *llm.ToolChoice, parallel *bool) map[string]any {
+func (e *encoder) functionCalling(tc *llm.ToolChoice, parallel *bool, names map[string]string) map[string]any {
 	if parallel != nil && !*parallel {
 		e.lose(llm.LossApproximated, "parallel_tool_calls", "GenerateContent cannot limit a reply to one function call; function calling is turned off")
 		return map[string]any{"mode": "NONE"}
@@ -306,20 +307,29 @@ func (e *encoder) functionCalling(tc *llm.ToolChoice, parallel *bool) map[string
 	switch tc.Mode {
 	case llm.ToolChoiceAuto:
 		if len(tc.Allowed) > 0 {
-			return map[string]any{"mode": "VALIDATED", "allowedFunctionNames": tc.Allowed}
+			return map[string]any{"mode": "VALIDATED", "allowedFunctionNames": e.allowedNames(tc.Allowed, names)}
 		}
 		return map[string]any{"mode": "AUTO"}
 	case llm.ToolChoiceNone:
 		return map[string]any{"mode": "NONE"}
 	case llm.ToolChoiceRequired:
 		if len(tc.Allowed) > 0 {
-			return map[string]any{"mode": "ANY", "allowedFunctionNames": tc.Allowed}
+			return map[string]any{"mode": "ANY", "allowedFunctionNames": e.allowedNames(tc.Allowed, names)}
 		}
 		return map[string]any{"mode": "ANY"}
 	case llm.ToolChoiceTool:
-		return map[string]any{"mode": "ANY", "allowedFunctionNames": []string{tc.Name}}
+		return map[string]any{"mode": "ANY", "allowedFunctionNames": []string{ToolName(names, tc.Name)}}
 	}
 	return nil
+}
+
+// allowedNames returns the GenerateContent names of an allowed tool list.
+func (e *encoder) allowedNames(allowed []string, names map[string]string) []string {
+	out := make([]string, len(allowed))
+	for i, name := range allowed {
+		out[i] = ToolName(names, name)
+	}
+	return out
 }
 
 // parts encodes a message's content as GenerateContent parts. sendable reports whether any part

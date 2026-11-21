@@ -193,7 +193,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return err
 	}
 	// The report travels on the reply's first event.
-	send := &reporting{Stream: out, tr: tr}
+	send := &reporting{Stream: out, tr: tr, names: replyNames(call.Request, tr)}
 	resp, err := postBody(ctx, call, s, wire, key, endpoint(s.WireAPI, call.Request), body)
 	if err != nil {
 		return err
@@ -522,10 +522,12 @@ func buildBody(req llm.Request, target string) ([]byte, *llm.Translation, error)
 	return body, tr, nil
 }
 
-// reporting adds the translation report to the reply's response.start event.
+// reporting adds the translation report to the reply's response.start event, and gives each tool
+// call the client's own name for the tool when the request was sent under another (names).
 type reporting struct {
 	*sdk.Stream
-	tr *llm.Translation
+	tr    *llm.Translation
+	names map[string]string // the upstream's name -> the client's
 }
 
 func (r *reporting) Send(ev llm.Event) error {
@@ -534,7 +536,43 @@ func (r *reporting) Send(ev llm.Event) error {
 		info.Translation = r.tr
 		ev.Response = &info
 	}
+	r.restore(&ev)
 	return r.Stream.Send(ev)
+}
+
+// restore gives a tool call the client's own name for the tool.
+func (r *reporting) restore(ev *llm.Event) {
+	if ev.Type != llm.EventItemStart || ev.Item == nil || ev.Item.Kind != llm.ItemToolCall {
+		return
+	}
+	if name, ok := r.names[ev.Item.Name]; ok {
+		item := *ev.Item
+		item.Name = name
+		ev.Item = &item
+	}
+}
+
+// replyNames maps each tool name a translated request was sent under back to the client's
+// (openaichat.ToolNames or geminigenerate.ToolNames). A body in the upstream's own format passed
+// through keeps the client's names.
+func replyNames(req llm.Request, tr *llm.Translation) map[string]string {
+	if tr.Passthrough {
+		return nil
+	}
+	var changed map[string]string
+	switch tr.To {
+	case llm.FormatOpenAIChat:
+		changed = openaichat.ToolNames(req)
+	case llm.FormatGeminiGenerate:
+		changed = geminigenerate.ToolNames(req)
+	default:
+		return nil
+	}
+	back := map[string]string{}
+	for from, to := range changed {
+		back[to] = from
+	}
+	return back
 }
 
 // eventSender is what the reply is sent to.
