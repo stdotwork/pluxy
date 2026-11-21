@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -460,8 +461,8 @@ func TestCleanEnumsAndBooleanSubschemas(t *testing.T) {
 	}
 
 	ie := props["intEnum"].(map[string]any)
-	if ie["type"] != "string" || !reflect.DeepEqual(ie["enum"], []any{"1", "2"}) {
-		t.Errorf("intEnum = %#v, want type:string enum:[1 2]", ie)
+	if ie["type"] != "integer" || !reflect.DeepEqual(ie["enum"], []any{float64(1), float64(2)}) {
+		t.Errorf("intEnum = %#v, want type:integer enum:[1 2] (numbers)", ie)
 	}
 
 	ne := props["nullableEnum"].(map[string]any)
@@ -632,5 +633,195 @@ func TestRootUnionKeepsEveryBranchsValues(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+// TestNumericEnums checks that JSON Schema mode (parametersJsonSchema) keeps an enum of numbers
+// and its type, and that OpenAPI mode (parameters), whose enum is a list of strings, still turns it
+// into a string enum.
+func TestNumericEnums(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		json    string // the property "p" after cleaning in JSON Schema mode
+		openAPI string // and in OpenAPI mode
+	}{
+		{
+			name:    "integer",
+			in:      `{"type":"integer","enum":[1,2,3]}`,
+			json:    `{"enum":[1,2,3],"type":"integer"}`,
+			openAPI: `{"enum":["1","2","3"],"type":"string"}`,
+		},
+		{
+			name:    "number keeps decimals",
+			in:      `{"type":"number","enum":[0.5,1,2.25]}`,
+			json:    `{"enum":[0.5,1,2.25],"type":"number"}`,
+			openAPI: `{"enum":["0.5","1","2.25"],"type":"string"}`,
+		},
+		{
+			name:    "duplicates are removed by their text",
+			in:      `{"type":"integer","enum":[1,2,1,2,3]}`,
+			json:    `{"enum":[1,2,3],"type":"integer"}`,
+			openAPI: `{"enum":["1","2","3"],"type":"string"}`,
+		},
+		{
+			name:    "a null goes through makeNullable",
+			in:      `{"type":"integer","enum":[1,null,2]}`,
+			json:    `{"enum":[1,2],"type":["integer","null"]}`,
+			openAPI: `{"enum":["1","2"],"nullable":true,"type":"string"}`,
+		},
+		{
+			name:    "a type list with one non-null member",
+			in:      `{"type":["number","null"],"enum":[1.5,2]}`,
+			json:    `{"enum":[1.5,2],"type":["number","null"]}`,
+			openAPI: `{"enum":["1.5","2"],"nullable":true,"type":"string"}`,
+		},
+		{
+			name:    "no type, whole numbers: integer",
+			in:      `{"enum":[1,2]}`,
+			json:    `{"enum":[1,2],"type":"integer"}`,
+			openAPI: `{"enum":["1","2"],"type":"string"}`,
+		},
+		{
+			name:    "no type, a decimal point: number",
+			in:      `{"enum":[1,2.5]}`,
+			json:    `{"enum":[1,2.5],"type":"number"}`,
+			openAPI: `{"enum":["1","2.5"],"type":"string"}`,
+		},
+		{
+			name:    "no type, an exponent: number",
+			in:      `{"enum":[1,2e3]}`,
+			json:    `{"enum":[1,2e3],"type":"number"}`,
+			openAPI: `{"enum":["1","2e3"],"type":"string"}`,
+		},
+		{
+			name:    "no type with a null",
+			in:      `{"enum":[1,null]}`,
+			json:    `{"enum":[1],"type":["integer","null"]}`,
+			openAPI: `{"enum":["1"],"nullable":true,"type":"string"}`,
+		},
+		{
+			name:    "const",
+			in:      `{"type":"integer","const":7}`,
+			json:    `{"enum":[7],"type":"integer"}`,
+			openAPI: `{"enum":["7"],"type":"string"}`,
+		},
+		{
+			name:    "numbers under type string stay strings",
+			in:      `{"type":"string","enum":[1,2]}`,
+			json:    `{"enum":["1","2"],"type":"string"}`,
+			openAPI: `{"enum":["1","2"],"type":"string"}`,
+		},
+		{
+			name:    "mixed values become strings",
+			in:      `{"type":"integer","enum":[1,"a"]}`,
+			json:    `{"enum":["1","a"],"type":"string"}`,
+			openAPI: `{"enum":["1","a"],"type":"string"}`,
+		},
+		{
+			name:    "strings stay strings",
+			in:      `{"type":"string","enum":["a","b","a"]}`,
+			json:    `{"enum":["a","b"],"type":"string"}`,
+			openAPI: `{"enum":["a","b"],"type":"string"}`,
+		},
+		{
+			name:    "no type, booleans become strings",
+			in:      `{"enum":[true,false]}`,
+			json:    `{"enum":["true","false"],"type":"string"}`,
+			openAPI: `{"enum":["true","false"],"type":"string"}`,
+		},
+	}
+	for _, tc := range cases {
+		for _, openAPI := range []bool{false, true} {
+			want := tc.json
+			mode := "json"
+			if openAPI {
+				want, mode = tc.openAPI, "openapi"
+			}
+			t.Run(tc.name+"/"+mode, func(t *testing.T) {
+				in := `{"type":"object","properties":{"p":` + tc.in + `}}`
+				first, _ := cleanToolSchema(json.RawMessage(in), openAPI)
+				// Numbers are decoded as json.Number so that 2e3 is compared as written.
+				var m struct {
+					Properties map[string]any `json:"properties"`
+				}
+				dec := json.NewDecoder(bytes.NewReader(first))
+				dec.UseNumber()
+				if err := dec.Decode(&m); err != nil {
+					t.Fatal(err)
+				}
+				if got, _ := json.Marshal(m.Properties["p"]); string(got) != want {
+					t.Errorf("p = %s, want %s", got, want)
+				}
+				if again, changed := cleanToolSchema(first, openAPI); changed {
+					t.Errorf("second pass changed the schema:\n%s\n%s", first, again)
+				}
+			})
+		}
+	}
+}
+
+// TestRequestPathKeepsNumericEnum sends a Chat Completions tool with an integer enum and checks
+// that the mock upstream receives the type and the numbers in parametersJsonSchema. That Google's
+// own API accepts this shape is not checked here.
+func TestRequestPathKeepsNumericEnum(t *testing.T) {
+	for _, kind := range []string{kindGemini, kindVertexSA} {
+		t.Run(kind, func(t *testing.T) {
+			tokens = &tokenCache{entries: map[string]*tokenEntry{}}
+			srv := geminitest.New(t)
+			var gotBody []byte
+			srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
+				gotBody = req.Body
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(`{"error":{"code":400,"message":"stop","status":"INVALID_ARGUMENT"}}`))
+			}
+			cred := &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: srv.IssueKey()}
+			if kind == kindVertexSA {
+				cred = &protocol.Credential{Kind: CredentialServiceAccount, Data: srv.ServiceAccount("proj-1", true)}
+			}
+			call := sdk.Call{
+				Account: protocol.Account{ID: "a", Settings: settingsFor(srv, kind), Credential: cred},
+				Request: llm.Request{
+					Model:  "gemini-2.5-pro",
+					Native: &llm.Native{Format: llm.FormatOpenAIChat},
+					Items: []llm.Item{{
+						Type:    llm.ItemTypeMessage,
+						Role:    llm.RoleUser,
+						Content: []llm.Part{{Type: llm.PartText, Text: "set the level"}},
+					}},
+					Tools: []llm.Tool{{
+						Type: llm.ToolFunction,
+						Name: "set_level",
+						Parameters: json.RawMessage(`{"type":"object","properties":{
+							"level":{"type":"integer","enum":[1,2,3]},
+							"scale":{"type":"number","enum":[0.5,1.5]}
+						},"required":["level"]}`),
+					}},
+				},
+			}
+			if err := generate(context.Background(), call, nil); err == nil {
+				t.Fatal("generate succeeded against a server that refuses")
+			}
+			var sent struct {
+				Tools []struct {
+					FunctionDeclarations []struct {
+						ParametersJSONSchema struct {
+							Properties map[string]map[string]any `json:"properties"`
+						} `json:"parametersJsonSchema"`
+					} `json:"functionDeclarations"`
+				} `json:"tools"`
+			}
+			if err := json.Unmarshal(gotBody, &sent); err != nil || len(sent.Tools) != 1 || len(sent.Tools[0].FunctionDeclarations) != 1 {
+				t.Fatalf("unexpected upstream body (%v): %s", err, gotBody)
+			}
+			props := sent.Tools[0].FunctionDeclarations[0].ParametersJSONSchema.Properties
+			if got := props["level"]; got["type"] != "integer" || !reflect.DeepEqual(got["enum"], []any{float64(1), float64(2), float64(3)}) {
+				t.Errorf("level = %#v, want type integer and enum [1 2 3] as numbers", got)
+			}
+			if got := props["scale"]; got["type"] != "number" || !reflect.DeepEqual(got["enum"], []any{0.5, 1.5}) {
+				t.Errorf("scale = %#v, want type number and enum [0.5 1.5] as numbers", got)
+			}
+		})
 	}
 }
