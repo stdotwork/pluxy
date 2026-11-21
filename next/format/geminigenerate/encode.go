@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	mediainput "github.com/stdotwork/pluxy/next/format/internal/media"
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
 	"github.com/stdotwork/pluxy/next/llm"
 )
@@ -346,9 +347,10 @@ func (e *encoder) parts(it llm.Item, msgPath string) (parts []json.RawMessage, s
 			}
 			part = map[string]any{"text": p.Text}
 		case llm.PartImage, llm.PartFile:
-			part = media(p)
-			if part == nil {
-				e.lose(llm.LossDropped, pp, "GenerateContent cannot take this "+p.Type+": only inline data (a base64 data URL) is sent")
+			var problem string
+			part, problem = media(p)
+			if problem != "" {
+				e.lose(llm.LossDropped, pp, "GenerateContent cannot take this "+p.Type+": "+problem)
 				dropped = true
 				continue
 			}
@@ -401,26 +403,56 @@ func (e *encoder) responseParts(it llm.Item, itemPath string) []json.RawMessage 
 	return parts
 }
 
-// media returns the inlineData part for an image or file given as a base64 data URL, or the
-// fileData part for one read from GenerateContent with its file URI, or nil.
-func media(p llm.Part) map[string]any {
+// geminiImages are the image media types GenerateContent's inlineData documents
+// (https://ai.google.dev/api/generate-content#Blob; the vision guide lists the same formats).
+var geminiImages = []string{"image/png", "image/jpeg", "image/jpg", "image/webp", "image/heic", "image/heif", "image/gif", "image/avif"}
+
+// media returns the GenerateContent part for an image or file, and the reason when it cannot be
+// sent: an inline image whose data is not base64 or whose media type Gemini does not document,
+// or a URL that is not one of the file URI forms Gemini documents. It never fetches the URL.
+func media(p llm.Part) (map[string]any, string) {
 	url := p.URL
 	if p.Type == llm.PartFile && p.FileData != "" {
 		url = p.FileData
 	}
 	if strings.HasPrefix(url, "data:") {
-		meta, data, ok := strings.Cut(strings.TrimPrefix(url, "data:"), ",")
-		mediaType, isBase64 := strings.CutSuffix(meta, ";base64")
-		if !ok || !isBase64 || mediaType == "" {
-			return nil
+		mediaType, data, ok := mediainput.DataURL(url)
+		if !ok {
+			return nil, "it is not a base64 data URL"
 		}
-		return map[string]any{"inlineData": map[string]any{"mimeType": mediaType, "data": data}}
+		if p.Type == llm.PartImage || strings.HasPrefix(mediaType, "image/") {
+			if _, problem := mediainput.InlineImage(url, geminiImages); problem != "" {
+				return nil, problem
+			}
+		}
+		return map[string]any{"inlineData": map[string]any{"mimeType": mediaType, "data": data}}, ""
 	}
 	if url != "" && p.Origin != nil && p.Origin.Format == format {
 		// The MIME type is in the kept fields.
-		return map[string]any{"fileData": map[string]any{"fileUri": url}}
+		return map[string]any{"fileData": map[string]any{"fileUri": url}}, ""
 	}
-	return nil
+	if !geminiFileURI(url) {
+		return nil, "GenerateContent takes a URL only as a Files API URI (/v1/files/ or /v1beta/files/) or a Cloud Storage (gs://) URI"
+	}
+	return map[string]any{"fileData": map[string]any{"fileUri": url}}, ""
+}
+
+// geminiFileURI reports whether url is one of the file URI forms Google documents for
+// fileData.fileUri: a Files API file URI, which files.upload and files.get return
+// (https://ai.google.dev/gemini-api/docs/files), or a Cloud Storage URI, which Vertex AI takes
+// (https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/send-multimodal-prompts).
+// Nothing else is documented for GenerateContent, and pluxy never fetches the URL itself.
+func geminiFileURI(url string) bool {
+	const api = "https://generativelanguage.googleapis.com/"
+	if rest, ok := strings.CutPrefix(url, api); ok {
+		for _, v := range []string{"v1/", "v1beta/", "v1alpha/"} {
+			if path, ok := strings.CutPrefix(rest, v); ok {
+				return strings.HasPrefix(path, "files/") && len(path) > len("files/")
+			}
+		}
+		return false
+	}
+	return strings.HasPrefix(url, "gs://") && len(url) > len("gs://")
 }
 
 // withSignature puts sig on part as its thoughtSignature, replacing SkipSignature.
