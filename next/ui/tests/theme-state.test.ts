@@ -243,16 +243,11 @@ test("a theme core cannot turn on goes back to the one before, and so does a fai
 });
 
 test("themes kept in prefs by an earlier version go to core once", async () => {
-  const refused = { ...dawn, name: "Refused By Core" };
   const s = setup({
     theme: "t3/nightfall",
-    themes: JSON.stringify([nightfallText, "{ not a theme", JSON.stringify(refused)]),
+    themes: JSON.stringify([nightfallText, "{ not a theme"]),
     choices: JSON.stringify({ appearance: "dark" }),
   });
-  s.core.instead = (method, path) =>
-    method === "PUT" && path === "/themes/t3/refused-by-core"
-      ? { status: 422, error: { code: "refused", message: "at most 64 themes can be stored" } }
-      : undefined;
   const themes = s.state();
   // Before sign-in the old choice still paints.
   expect(themes.current.theme.id).toBe("t3/nightfall");
@@ -274,6 +269,36 @@ test("themes kept in prefs by an earlier version go to core once", async () => {
   s.state().connect();
   await until(() => s.core.count("GET /themes") >= 3);
   expect(s.core.calls.filter((c) => c.startsWith("PUT")).length).toBe(puts);
+});
+
+test("old themes core refuses stay in prefs, and the next start stores them", async () => {
+  const refused = { ...dawn, name: "Refused By Core" };
+  const imported = JSON.stringify([nightfallText, JSON.stringify(refused)]);
+  const s = setup({ theme: "t3/refused-by-core", themes: imported });
+  s.core.instead = (method, path) =>
+    method === "PUT" && path === "/themes/t3/refused-by-core"
+      ? { status: 422, error: { code: "refused", message: "at most 64 themes can be stored" } }
+      : undefined;
+  const themes = s.state();
+  themes.connect();
+  await until(() => s.core.count("GET /themes") === 2);
+
+  // Core took the theme it could; the refused one is only in prefs, so both prefs stay.
+  expect([...s.core.files.keys()]).toEqual(["t3/nightfall"]);
+  expect(s.core.count("PUT /themes/t3/refused-by-core")).toBe(1);
+  expect(s.kept.get("themes")).toBe(imported);
+  expect(s.kept.get("theme")).toBe("t3/refused-by-core");
+  expect(themes.problem).toBeUndefined();
+
+  // The next start: core answers this time, so the theme goes to core and the prefs go.
+  s.core.instead = () => undefined;
+  s.state().connect();
+  await until(() => !s.kept.has("themes"));
+  expect([...s.core.files.keys()].sort()).toEqual(["t3/nightfall", "t3/refused-by-core"]);
+  // The theme core already held was not sent again.
+  expect(s.core.count("PUT /themes/t3/nightfall")).toBe(1);
+  expect(s.kept.has("theme")).toBe(false);
+  expect(s.core.current).toBe("t3/refused-by-core");
 });
 
 test("old prefs stay when core cannot be reached, for the next time", async () => {
