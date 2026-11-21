@@ -229,7 +229,8 @@ is not brought, plain or bcrypt: core keeps its own management key, and its row 
 | `broken` | Its credential file cannot be read; `why` names the file | When the file is fixed or replaced and core restarts, or the account is removed |
 
 `source` is `provider` when `until` is the provider's own word, `backoff` when core chose it, and
-`unverified` when the provider named a time core does not believe (more than 8 days away); such a block is
+`unverified` when the provider named a time core does not believe (more than 8 days away, or more
+than an hour past the usage window's own length when the provider named it); such a block is
 held 30 minutes and checked within 15. A block on one of the account's models counts too, and `why` then
 names the model, except a model the account does not have (a 404), which says nothing about the account;
 the blocks themselves, that one too, stay in `cooldowns`. When several blocks hold the account, an

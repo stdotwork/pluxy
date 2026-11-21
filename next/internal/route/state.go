@@ -706,9 +706,9 @@ func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now 
 	switch {
 	case e.RetryAfterMS > 0:
 		// The upstream said when: never try this scope earlier (RFC 9110 §10.2.3), within the
-		// bounds resetFor puts on what is believed.
+		// bounds resetFor puts on what is believed, which the window's length raises.
 		var d time.Duration
-		d, source = s.resetFor(e.RetryAfterMS)
+		d, source = s.resetFor(e.RetryAfterMS, e.QuotaWindowMinutes)
 		if source == SourceUnverified {
 			why = unverifiedWhy
 		}

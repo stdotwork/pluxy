@@ -1416,8 +1416,9 @@ with no live block for an hour is forgotten, and its step with it. Among eligibl
 prefers the session's account (session affinity is on unless the config turns it off), then the
 highest `priority`, then picks by strategy.
 
-A reset the upstream names is used when it is between 1 second and 8 days away (the longest usage
-window of any supported provider is 7 days). A shorter one is held for 1 second. A longer one is
+A reset the upstream names is used when it is between 1 second and 8 days away, or, when the
+upstream also names the usage window's length, up to that length plus an hour (Codex's monthly
+window, 28 to 31 days, resets a month off). A shorter one is held for 1 second. A longer one is
 not believed: the account is held for 30 minutes and checked after 15. The upstream's newest word
 replaces the block's end, sooner or later; a backoff core chose itself only moves a block later.
 A rate limit or quota block on an account or one of its models with more than 15 minutes left is
