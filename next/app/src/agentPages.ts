@@ -12,6 +12,7 @@ import type { AgentPage } from "./easyMode";
 import { items } from "./easyModeItems";
 import { grokPage } from "./grok";
 import { hermesPage } from "./hermes";
+import type { Connection } from "./host";
 import { ompPage } from "./omp";
 import { opencodePage } from "./opencode";
 import { piPage } from "./pi";
@@ -63,4 +64,13 @@ export function setupClientAction(
     },
     clientActionHint: t("hint"),
   };
+}
+
+/**
+ * Whether the window reads what the registries offer for the Setup page: only when it shows that
+ * page (connected and signed in) and core runs on this computer, since "Set up" is offered only
+ * then. Reading them fetches every registry's index, so a window that is not signed in does not.
+ */
+export function setupOffersNeeded(conn: Pick<Connection, "mode" | "target" | "signed_in">): boolean {
+  return Boolean(conn.target) && conn.signed_in && conn.mode !== "remote";
 }

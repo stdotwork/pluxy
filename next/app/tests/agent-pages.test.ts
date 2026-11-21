@@ -3,7 +3,9 @@
 // And what the Setup page gets from them: each client of core's scan has a page here, and "Set up"
 // is offered for the ones Beginner Mode would list.
 import { describe, expect, test } from "bun:test";
-import { agentPages, SETUP_CLIENT_PAGES, setupClientAction } from "../src/agentPages";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { agentPages, SETUP_CLIENT_PAGES, setupClientAction, setupOffersNeeded } from "../src/agentPages";
 import type { DeviceCatalog, DevicePackage } from "../src/device";
 
 describe("agentPages", () => {
@@ -36,9 +38,14 @@ describe("setupClientAction", () => {
   });
 
   test("every client of core's scan names a page that exists", () => {
+    // The clients core's scan looks for, read from its table (clientSpecs), so a client core adds
+    // or renames fails here until this window names its page.
+    const source = readFileSync(join(import.meta.dir, "../../internal/core/setup.go"), "utf8");
+    const table = /\nvar clientSpecs = \[\]clientProbeSpec\{\n([\s\S]*?)\n\}\n/.exec(source)?.[1] ?? "";
+    const scanned = [...table.matchAll(/^\t\tid:\s+"([^"]+)",$/gm)].map((m) => m[1]);
+    expect(scanned.length).toBeGreaterThan(0);
+    expect(Object.keys(SETUP_CLIENT_PAGES).sort()).toEqual(scanned.sort());
     const ids = agentPages().map((p) => p.id);
-    // Core's scan looks for these five (next/internal/core/setup_clients.go).
-    expect(Object.keys(SETUP_CLIENT_PAGES).sort()).toEqual(["claude-code", "codex", "omp", "opencode", "pi"]);
     for (const page of Object.values(SETUP_CLIENT_PAGES)) expect(ids).toContain(page);
   });
 
@@ -59,5 +66,19 @@ describe("setupClientAction", () => {
     expect(clientActionHint).toContain("Set up opens the client's own page");
     // With no tool on this device and no registry, nothing is offered.
     expect(setupClientAction(agents).clientAction?.("claude-code")).toBeUndefined();
+  });
+});
+
+describe("setupOffersNeeded", () => {
+  test("the registries are read only for a signed-in window whose core runs on this computer", () => {
+    expect(setupOffersNeeded({ target: "http://127.0.0.1:1", signed_in: true, mode: "managed" })).toBe(true);
+    expect(setupOffersNeeded({ target: "http://127.0.0.1:1", signed_in: true, mode: "local" })).toBe(true);
+    // Not signed in or not connected: the window shows no Setup page.
+    expect(setupOffersNeeded({ target: "http://127.0.0.1:1", signed_in: false, mode: "local" })).toBe(false);
+    expect(setupOffersNeeded({ signed_in: true, mode: "local" })).toBe(false);
+    // Core on another machine: Setup offers no "Set up" there.
+    expect(setupOffersNeeded({ target: "https://core.example", signed_in: true, mode: "remote" })).toBe(
+      false,
+    );
   });
 });

@@ -68,7 +68,8 @@ Core keeps a record of recent requests, in memory and within the limits `usage.m
 `usage.max_age_ms`. The panel's Usage page lists these requests, newest first, with filters,
 paging and a CSV export, and links each request's trace ID to its request log in the Logs Viewer.
 The Dashboard shows the totals, the traffic chart and the providers; it has no breakdown by
-model, account or key.
+model, account or key. When core could not write some requests to its usage files (`write_errors`
+in `GET /usage`), it says how many.
 
 The page is in the panel, not only in the desktop app, because core keeps the record and no other
 page lists requests. It shows only what core records: tokens, with no prices or cost views, and the
