@@ -32,11 +32,13 @@ const timeLayout = "2006-01-02 15:04:05.000"
 // rotatedLayout names a rotated file by the time it was rotated; names sort in time order.
 const rotatedLayout = "2006-01-02T15-04-05.000"
 
-// afterCreate runs in open between making main.log and opening it, and beforeRotate in rotate
-// after main.log is closed. Tests remove main.log, or swap the folder, there.
+// afterCreate runs in open between making main.log and opening it, beforeRotate in rotate
+// after main.log is closed, and beforeRemove in Clear before removing a rotated file. Tests
+// remove files, or swap them, there.
 var (
 	afterCreate  = func(dir string) {}
 	beforeRotate = func(dir string) {}
+	beforeRemove = func(dir, name string) {}
 )
 
 // ErrOff is returned when the log is read while logging to file is off.
@@ -409,8 +411,9 @@ func lineTime(line string) (float64, bool) {
 	return float64(t.UnixMilli()) / 1000, true
 }
 
-// Clear empties main.log and deletes its rotated files, and returns how many files it deleted.
-// Request logs and error logs stay.
+// Clear empties main.log and deletes its rotated files, and returns how many rotated files it
+// deleted. It tries every rotated file and main.log even if one fails, and returns an error
+// naming each file it could not delete or empty. Request logs and error logs stay.
 func (l *Files) Clear() (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -418,19 +421,50 @@ func (l *Files) Clear() (int, error) {
 		return 0, ErrOff
 	}
 	removed := 0
+	var notDeleted []string
 	for _, n := range l.logFiles() {
 		if n == Main {
 			continue
 		}
-		if os.Remove(filepath.Join(l.dir, n)) == nil {
+		beforeRemove(l.dir, n)
+		if err := os.Remove(filepath.Join(l.dir, n)); err == nil {
 			removed++
+		} else if !os.IsNotExist(err) {
+			notDeleted = append(notDeleted, n)
 		}
 	}
+	mainFailed := false
 	if l.f != nil {
 		if err := l.f.Truncate(0); err != nil {
-			return removed, err
+			mainFailed = true
+		} else {
+			l.size = 0
 		}
-		l.size = 0
+	} else {
+		path := filepath.Join(l.dir, Main)
+		if info, err := os.Lstat(path); err == nil {
+			if !info.Mode().IsRegular() {
+				mainFailed = true
+			} else if err := os.Truncate(path, 0); err != nil && !os.IsNotExist(err) {
+				mainFailed = true
+			} else {
+				l.size = 0
+			}
+		} else if os.IsNotExist(err) {
+			l.size = 0
+		} else {
+			mainFailed = true
+		}
+	}
+	var parts []string
+	if len(notDeleted) > 0 {
+		parts = append(parts, "could not delete "+strings.Join(notDeleted, ", "))
+	}
+	if mainFailed {
+		parts = append(parts, "could not empty "+Main)
+	}
+	if len(parts) > 0 {
+		return removed, errors.New(strings.Join(parts, "; "))
 	}
 	return removed, nil
 }

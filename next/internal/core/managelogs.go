@@ -87,7 +87,12 @@ func (c *Core) handleLogs(m *server.Management) {
 				writeLogsError(w, err)
 				return
 			}
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]string{"code": "internal", "message": err.Error()}})
+			rotated := fmt.Sprintf("%d rotated log files deleted", removed)
+			if removed == 1 {
+				rotated = "1 rotated log file deleted"
+			}
+			msg := fmt.Sprintf("could not clear all logs (%s): %s", rotated, err)
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": map[string]string{"code": "internal", "message": msg}})
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"removed": removed})
