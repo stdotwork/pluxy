@@ -811,3 +811,55 @@ func TestRenderUsageCacheWrite(t *testing.T) {
 		t.Errorf("usage with zero cache write:\n got %s\nwant %s", zero, wantZero)
 	}
 }
+
+// A later Chat chunk whose usage is empty, all zeros or null does not overwrite the usage the
+// upstream reported before it. A later chunk with counts does replace it, because Chat usage is
+// cumulative.
+func TestStreamUsageLaterChunks(t *testing.T) {
+	const head = `"id":"chatcmpl-u1","object":"chat.completion.chunk","created":1700000000,"model":"m"`
+	chunk := func(fields string) string { return `{` + head + `,"choices":[],` + fields + `}` }
+	real := chunk(`"usage":{"prompt_tokens":20,"completion_tokens":9,"total_tokens":29}`)
+	finishOf := func(t *testing.T, chunks []string) *llm.Usage {
+		t.Helper()
+		d := NewStreamDecoder()
+		var usage *llm.Usage
+		for _, c := range chunks {
+			evs, err := d.Decode([]byte(c))
+			if err != nil {
+				t.Fatalf("Decode(%s): %v", c, err)
+			}
+			for i := range evs {
+				if evs[i].Type == llm.EventFinish {
+					usage = evs[i].Usage
+				}
+			}
+		}
+		return usage
+	}
+	before := []string{
+		`{` + head + `,"choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":null}]}`,
+		`{` + head + `,"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		real,
+	}
+	cases := []struct{ name, later string }{
+		{"empty usage object", chunk(`"usage":{}`)},
+		{"zero-filled usage", chunk(`"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}`)},
+		{"null usage", chunk(`"usage":null`)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			u := finishOf(t, append(append([]string{}, before...), c.later, `[DONE]`))
+			if u == nil || u.InputTokens == nil || *u.InputTokens != 20 || u.OutputTokens == nil || *u.OutputTokens != 9 {
+				t.Fatalf("usage = %+v, want the 20 prompt and 9 completion tokens reported before the %s", u, c.name)
+			}
+		})
+	}
+
+	t.Run("later real counts replace", func(t *testing.T) {
+		later := chunk(`"usage":{"prompt_tokens":21,"completion_tokens":10,"total_tokens":31}`)
+		u := finishOf(t, append(append([]string{}, before...), later, `[DONE]`))
+		if u == nil || u.InputTokens == nil || *u.InputTokens != 21 || u.OutputTokens == nil || *u.OutputTokens != 10 {
+			t.Fatalf("usage = %+v, want the later 21 prompt and 10 completion tokens", u)
+		}
+	})
+}
