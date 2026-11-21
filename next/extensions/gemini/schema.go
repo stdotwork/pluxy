@@ -569,7 +569,7 @@ func cleanUnions(m map[string]any, isToolRoot, openAPI bool) {
 			}
 		}
 		for k, schemas := range branchSchemas {
-			props[k] = mergeBranchSchemas(schemas)
+			props[k] = mergeBranchSchemas(schemas, openAPI)
 		}
 		if len(props) > 0 || m["type"] == nil {
 			m["type"], m["properties"] = "object", props
@@ -628,8 +628,8 @@ func cleanUnions(m map[string]any, isToolRoot, openAPI bool) {
 // branch order. Identical schemas keep one. Schemas that differ only in enum and description, all
 // with an enum, become one schema whose enum holds every branch's values (first-seen order, no
 // duplicates) and whose description is the first non-empty one. Anything else becomes an anyOf of
-// the distinct schemas, which loses nothing.
-func mergeBranchSchemas(schemas []any) any {
+// the distinct schemas, which loses nothing, cleaned as a union is (a null branch is nullability).
+func mergeBranchSchemas(schemas []any, openAPI bool) any {
 	var distinct []any
 	for _, s := range schemas {
 		if !slices.ContainsFunc(distinct, func(d any) bool { return reflect.DeepEqual(d, s) }) {
@@ -642,7 +642,9 @@ func mergeBranchSchemas(schemas []any) any {
 	if merged, ok := mergeEnumSchemas(distinct); ok {
 		return merged
 	}
-	return map[string]any{"anyOf": distinct}
+	// Cleaned like any other union, so that a null branch becomes nullability and a second
+	// cleaning changes nothing.
+	return cleanSchemaNode(map[string]any{"anyOf": distinct}, false, openAPI)
 }
 
 func mergeEnumSchemas(schemas []any) (map[string]any, bool) {
