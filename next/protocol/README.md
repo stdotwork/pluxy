@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.26
+# pluxy extension protocol, version 0.27
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -40,7 +40,10 @@ is deliberately small; later versions add more capabilities and operations witho
 is described here. An extension written for version 0 works unchanged with a core that speaks 0.24
 (see [Versioning](#versioning)). Version 0.25 adds a [tool result](#the-request)'s `content` parts
 and its `is_error` flag. Version 0.26 adds a [tool choice](#the-request)'s allowed tool list: the
-tools the model may choose from, where the client named a set rather than one tool.
+tools the model may choose from, where the client named a set rather than one tool. Version 0.27
+adds [native-only calls](#native-only-calls): an extension that parses the client's body itself gets
+a `generate` call's request without its parsed form, so the request's content crosses the socket
+once.
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
@@ -263,6 +266,7 @@ Core opens a connection and writes one call frame:
 | `capture` | Since 0.13, for `generate`, `count_tokens` and `endpoint`: true when core asks for the call's [upstream capture](#upstream-capture). Absent: false. |
 | `payload` | Since 0.14, for `generate`, `count_tokens` and `endpoint`, and since 0.15 for a `session.turn`: the [payload rules](#payload-rules) that apply to the call or turn. Absent: none. |
 | `alive` | Since 0.23, for `generate`, `count_tokens` and `endpoint`: true when core takes [alive frames](#alive-frames) on the call. Absent: false. |
+| `native_only` | Since 0.27, for `generate`, to an extension whose describe's `native_parser` is core's: true when core left the request's `items`, `tools` and `origin` out, for the extension to parse from `native.body` (see [Native-only calls](#native-only-calls)). Absent: false. |
 
 An extension that gets an `op` it does not know replies with an `error` event whose code is
 `unsupported`.
@@ -283,7 +287,9 @@ accounts, `session` when it holds [sessions](#sessions), `count_tokens` when it
 `check` when it [checks](#check) its accounts, `quota` when it reads their [quota](#quota), and
 `endpoint` when it serves [endpoint calls](#endpoint). An
 extension that lists `login` also
-lists its `login_methods` (see [Login and refresh](#login-and-refresh)).
+lists its `login_methods` (see [Login and refresh](#login-and-refresh)). Since 0.27, a
+`native_parser` above 0 says the extension takes [native-only calls](#native-only-calls), and
+which version of core's parsers it parses them with.
 
 ### `generate`
 
@@ -482,6 +488,7 @@ with `native.format` naming the endpoint:
 | `native.format` | Client route | Body |
 | --- | --- | --- |
 | `openai.responses.compact` | `POST /v1/responses/compact` (and `/backend-api/codex/responses/compact`) | A Responses request; the reply is one JSON object. Core refuses `"stream": true` itself. |
+| `openai.responses.input_tokens` | `POST /v1/responses/input_tokens` | A Responses token-count request; the reply is `{"object":"response.input_tokens","input_tokens":N}`. OpenAI-compatible accounts on the Responses wire and Codex API-key accounts send it to their upstream; when no account can count, core answers with its estimate. |
 | `codex.models` | `GET /v1/models?client_version=<version>` | Core builds `{"client_version":"<version>","models":[{"name":"team/coding","upstream":"gpt-6.1-sol","display_name":"Coding","non_codex":true}]}`. Presence of the query key selects this endpoint, even with an empty value. Core lists accounts of `pluxy/codex` under their normal aliases, exclusions and prefixes, keeps the first mapping of a repeated public name, and sorts by public name. `display_name` is omitted when empty. `non_codex` is true when any other extension's account can also serve that public name, including an account with an unknown model list; the extension then clears the Codex-only options as described below. The GET body is ignored. One direct call goes to the first enabled, usable `pluxy/codex` account in account order, carrying only its `account.id` (no settings or credential), with `request.model` empty. No routing reservation, cooldown, concurrency limit, credential renewal, result, rotation or usage event is involved; there are no retries. Without such an account core returns 200 `{"models":[]}` itself. The extension returns one JSON object in the Codex catalog shape, omitting unknown templates and replacing each slug with `name`. No upstream request or remote refresh is made. |
 | `codex.alpha_search` | `POST /v1/alpha/search` (and `/backend-api/codex/alpha/search`) | Codex's search request, in Codex's own shape; the reply is one JSON object. Its `model` is optional: a request without one is sent to any account, with `request.model` empty. |
 | `openai.images.generations` | `POST /v1/images/generations` | An Images API request; the reply is one JSON object, or server-sent events when it asks for `"stream": true`. Core refuses a request without a `prompt` and names `gpt-image-2` as the model when it names none. |
@@ -756,7 +763,8 @@ stream or request with an error instead.
 
 A request is an ordered list of typed items plus options. It is modelled on the prompt types of
 Vercel's AI SDK Language Model Specification and on the items of Open Responses, kept small for
-version 0.
+version 0. A [native-only call](#native-only-calls) (since 0.27) carries it without its `items`,
+`tools` and `origin`, which the extension parses from `native.body`.
 
 ```json
 {
@@ -780,7 +788,7 @@ version 0.
 | --- | --- |
 | `model` | The model name the client asked for. |
 | `stream` | Whether the client asked for a streamed reply. Core always receives events; this only tells the extension how the client is being served, in case the upstream call should match. |
-| `items` | The conversation, in order. |
+| `items` | The conversation, in order. Absent in a [native-only call](#native-only-calls), as are `tools` and `origin`. |
 | `tools` | Function tools the model may call. `parameters` is a JSON Schema. |
 | `options` | Generation options; any field may be absent: `max_output_tokens`, `temperature`, `top_p`, `stop`, `tool_choice` (`mode`: `auto`, `none`, `required` or `tool` with `name`; since 0.26 `allowed`: the tool names the model may choose from, with `mode` `auto` or `required`), `parallel_tool_calls`, `response_format` (`type`: `text`, `json_object` or `json_schema` with `name`, `description`, `schema`, `strict`), `reasoning_effort` (as the client named it), `thinking_suffix` (version 0.2; see below). An extension below 0.26 cannot read `tool_choice.allowed`: core sends the choice without the list and keeps only the function tools the list names in `tools`, so the model can still call only those, and refuses the request as invalid when the list names none of them. |
 | `native` | The client's original request body and its format, when core received one; `headers` holds the client's request headers that belong to that format, by lower-case name (for `anthropic.messages`: `anthropic-version` and `anthropic-beta`, and the headers the client names itself with: `user-agent`, `x-app`, `anthropic-dangerous-direct-browser-access`, `x-claude-code-session-id`, `x-client-request-id`, the `x-stainless-*` headers of Anthropic's SDKs, `x-client-app` and `x-anthropic-additional-protection`; and Claude Code's subagent, request and remote-session headers (`x-claude-code-agent-id`, `x-claude-code-parent-agent-id`, `x-claude-code-agent-type`, `x-claude-code-request-class`, `x-claude-code-prev-tool-durations`, `x-claude-code-compaction`, `x-claude-code-context-compacted`, `x-claude-remote-container-id`, `x-claude-remote-session-id`), which an extension should send upstream only for a request that names itself as Claude Code (`anthropicmessages.IsClaudeCode`: `x-app: cli`, a `claude-cli/` User-Agent and the `claude-code-20250219` beta); for `openai.responses`: the headers the Codex CLI sends, such as `session-id`, `x-codex-window-id`, `x-codex-turn-metadata`, `version`, `originator` and `user-agent`). |
@@ -843,6 +851,37 @@ reply's `response.start` how it built it: `response.translation` with `from`, `t
 carried in a different form; `dropped`: left out), `path` (in the client's body) and `detail`.
 Everything not listed was preserved. Core logs the losses, together with what the reply had that
 the client's format cannot hold.
+
+### Native-only calls
+
+Since 0.27. The parsed request (`items`, `tools`, `origin`) and `native.body` are the same content
+twice, each about as large as the client's body, while an extension that sends `native.body`
+upstream needs only the body. So an extension may say in describe that it parses the body itself,
+and with which version of core's parsers: `native_parser`, an integer (`format.ParserVersion` in
+`next/format`, which the format packages raise whenever a parser makes something else of a body it
+already read). Core sends a `generate` call's request without its parsed form, with the call's
+`native_only: true`, when all of these hold:
+
+- the extension's `native_parser` equals core's own parser version, so both parse the body into
+  the same `items`, `tools` and `origin`. An extension from another release whose parsers differ,
+  older or newer, gets full calls; 0 or absent means it does not parse;
+- `native.format` is `openai.chat`, `openai.responses`, `anthropic.messages` or
+  `gemini.generate_content`;
+- `native.body` is the body core parsed the request from, or that body with its top-level `model`
+  renamed for the account (except in `gemini.generate_content`, where a `model` member of the body
+  is part of the request's `origin`). A body core changed in any other way, such as taking a
+  [thinking suffix](#the-request) off its model, goes in a full call;
+- `native.body` is valid UTF-8 (a frame's JSON would replace an invalid byte in the parsed form's
+  text, so the extension's parse could differ).
+
+Such a request has no `items`, `tools` or `origin`. Its other fields are as in any call, and they
+are core's, not the body's: `model` (which core may have renamed), `stream`, `options`, `native`,
+`drop_policy` and `caller`. On `native_only`, the extension parses `native.body` with core's
+parser for its format (the `next/format` packages; for `gemini.generate_content` with the
+request's `model` and `stream`), takes `items`, `tools` and `origin` from the result and keeps
+the call's other fields. The Go SDK does this before the handler runs (`nativeonly.Parse` in `next/protocol/nativeonly`),
+so a handler gets the same request as from a full call. `count_tokens` and `endpoint` calls and
+session turns always carry the full request.
 
 ## Events
 
@@ -1438,7 +1477,7 @@ extension below 0.23 gets none: it cannot promise alive frames.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.26. An extension reports the minor version it
+raise the minor version: this document is version 0.27. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1472,8 +1511,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.24 | A model's `capabilities` ([`models`](#models)). |
 | 0.25 | A [tool result](#the-request)'s `content` parts and `is_error`. |
 | 0.26 | A [tool choice](#the-request)'s `allowed` tool list. |
+| 0.27 | [Native-only calls](#native-only-calls): describe's `native_parser` and the call's `native_only`. |
 
-## What version 0.26 leaves out
+## What version 0.27 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

@@ -19,8 +19,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/stdotwork/pluxy/next/format"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/protocol/nativeonly"
 )
 
 // Call is one generate call.
@@ -320,7 +322,7 @@ func (s *server) handle(conn net.Conn) {
 			Event: llm.Event{Type: protocol.TypeDescribeResult},
 			Info: &protocol.Info{
 				ID: s.ext.ID, Version: s.ext.Version, Protocol: protocol.Version, ProtocolMinor: protocol.Minor,
-				Operations: s.ext.operations(), LoginMethods: s.ext.LoginMethods,
+				Operations: s.ext.operations(), LoginMethods: s.ext.LoginMethods, NativeParser: format.ParserVersion,
 			},
 		})
 	case protocol.OpGenerate:
@@ -383,6 +385,15 @@ func (s *server) generate(conn net.Conn, call protocol.Call, h Handler, none str
 	var err error
 	if h == nil {
 		err = &llm.Error{Code: llm.CodeUnsupported, Message: none, Scope: llm.ScopeRequest}
+	} else if call.NativeOnly {
+		// Core left the request's parsed form out: it is what the native body parses to. A
+		// native-only call without a request has no body to parse, and fails as one that does
+		// not parse.
+		if perr := nativeonly.Parse(&c.Request); perr != nil {
+			err = &llm.Error{Code: llm.CodeInternal, Message: "the request's native body does not parse: " + perr.Error()}
+		} else {
+			err = runHandler(ctx, h, c, out)
+		}
 	} else {
 		err = runHandler(ctx, h, c, out)
 	}

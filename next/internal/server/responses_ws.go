@@ -410,6 +410,7 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 		if httpReq, err = openairesponses.ParseRequest(httpTurn.Body); err != nil {
 			return s.refuseTurn(turnTrace, asLLMError(err))
 		}
+		markParsed(&httpReq)
 		httpReq.DropPolicy = g.Config.DropPolicy
 		takeThinkingSuffix(&httpReq)
 		s.nativeHeaders(&httpReq)

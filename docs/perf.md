@@ -137,6 +137,31 @@ level. Another 12% is a second full decode of the body to look for `prompt_cache
 send it to the extension. Core allocates about 1.5 MB per 100 KB request. The added time grows
 with the body: about 13 ms at 100 KB and 84 ms at 800 KB, one request at a time.
 
+### The request goes to the extension once
+
+A generate call used to carry the client's request twice: parsed (`items`, `tools`, `origin`)
+and as the client's own body (`native.body`). Core encoded both into the call's JSON and the
+extension decoded both, though an extension that sends the client's body upstream unchanged never
+reads the parsed form. Later profiles put the largest remaining cost of a request in that
+encoding and decoding, on both sides of the socket.
+
+Since protocol 0.27 an extension can say it parses the body itself, and with which version of
+core's parsers (the SDK does, with its own release's `format.ParserVersion`), and core then
+leaves the parsed form out whenever the body is still the one it parsed and the extension's
+parser version is core's. The extension parses the body with the same parsers core uses, so its
+handler gets the same request as before; an extension from another release whose parsers differ
+gets the full request. A test keeps what the parsers make of each corpus and format-test request
+in a golden file and fails, naming some of them, until the version is raised when a recorded
+request's parse changes; a request added to the corpus or the format tests need not be recorded
+to pass.
+The tradeoff: core no longer encodes the parsed form for such a call, but the extension parses the
+body in place of decoding it, also when it only passes the body through, since a handler's
+request is a plain value that cannot be filled only when it is read. Core still sends the full
+request when the body changed after parsing (a thinking suffix taken off its model), when the
+body is not valid UTF-8, and to an extension that does not say it parses, or parses with another
+version. The protocol's README
+describes the rule (`next/protocol/README.md`, "Native-only calls").
+
 ## The budget check
 
 `go run ./cmd/pluxy-bench -check` runs `stream-pass`, `stream-translate`, `nonstream-pass` and

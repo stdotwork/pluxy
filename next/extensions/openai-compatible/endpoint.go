@@ -19,6 +19,8 @@ func endpointCall(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	switch format {
 	case llm.FormatOpenAIResponsesCompact:
 		return compact(ctx, call, out)
+	case llm.FormatOpenAIResponsesInputTokens:
+		return inputTokens(ctx, call, out)
 	case llm.FormatOpenAIEmbeddings:
 		return embeddings(ctx, call, out)
 	case llm.FormatOpenAIImagesGenerations, llm.FormatOpenAIImagesEdits:
