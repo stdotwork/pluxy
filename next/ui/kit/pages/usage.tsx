@@ -39,7 +39,7 @@ const t = strings("usage", {
   missing: "—",
   exportError: "Could not export requests.",
   fallbackStep: "Fallback step {step}",
-  fallbackStepTitle: "Answered by step {step} of this model's fallback chain",
+  fallbackStepTitle: "Ended on step {step} of this model's fallback chain",
 });
 
 const initial: UsageFilters = { since: "", model: "", provider: "", account: "", key_id: "", failed: "" };
@@ -225,7 +225,7 @@ export function UsagePage() {
                 label: t("status"),
                 value: (e) => (
                   <>
-                    {(e.status ? String(e.status) : t("missing")) + (e.failed ? " · " + t("yes") : "")}
+                    {(e.status ? String(e.status) : t("missing")) + (e.failed ? " · " + t("yes") : "")}{" "}
                     {fallbackStep(e)}
                   </>
                 ),

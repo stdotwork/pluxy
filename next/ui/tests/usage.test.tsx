@@ -21,7 +21,7 @@ const html = (e: UsageEvent) => {
 
 test("a request answered on a later step of its fallback chain is marked with that step", () => {
   expect(html(event({ chain_step: 2 }))).toBe(
-    '<span title="Answered by step 2 of this model\'s fallback chain">' +
+    '<span title="Ended on step 2 of this model\'s fallback chain">' +
       '<span class="badge" data-part="badge" data-tone="muted">Fallback step 2</span></span>',
   );
   expect(html(event({ chain_step: 5 }))).toContain(">Fallback step 5</span>");
