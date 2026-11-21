@@ -15,11 +15,11 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
-// A client's service tier reaches Codex whatever its format, through the model's service tier, and
-// Codex's filter then keeps what its endpoint takes: priority (fast too) and ultrafast. The
-// subscription's routing hint names the tier that was sent. (Which tiers the routed model lists is
-// TestServiceTierPerModel.) A tier it cannot take is reported as
-// dropped for a request translated from another format, at the client's field.
+// A client's service tier reaches Codex whatever its format, through the model's service tier, when
+// the routed model's catalog entry lists it (TestServiceTierPerModel); no entry lists ultrafast, so
+// a translated request loses it. The subscription's routing hint names the tier that was sent. A
+// tier the model does not list is reported as dropped, at the client's field, except auto and
+// default, which are Codex's standard service.
 func TestServiceTierTranslated(t *testing.T) {
 	chat := func(extra string) llm.Request {
 		r, err := openaichat.ParseRequest([]byte(`{"model":"gpt-6.1-sol","messages":[{"role":"user","content":"hi"}]` + extra + `}`))
@@ -120,7 +120,7 @@ func TestVerbosityTranslated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ur, err := buildRequest(req, "acct", settings{}, account{token: "sk-test"}, false)
+	ur, err := buildRequest(overProtocol(t, req), "acct", settings{}, account{token: "sk-test"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
