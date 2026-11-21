@@ -291,11 +291,9 @@ func TestCLISetupAndClientShow(t *testing.T) {
 		t.Errorf("pluxy setup --json picks = %+v", sv.Picks)
 	}
 
-	// In words, one line on standard error names the next step: here, the suggested pick. (The
-	// line follows the question the command asks first: the test's standard input is the null
-	// device, which the command takes for a terminal.)
+	// In words, one line on standard error names the next step: here, the suggested pick.
 	r = runCLI(t, cliEnv, "setup")
-	if r.code != 0 || !strings.HasSuffix(r.stderr, "Next: pluxy setup apply --yes installs what core suggests (pluxy/claude).\n") || strings.Contains(r.stdout, "Next:") {
+	if r.code != 0 || r.stderr != "Next: pluxy setup apply --yes installs what core suggests (pluxy/claude).\n" || strings.Contains(r.stdout, "Next:") {
 		t.Errorf("pluxy setup: %s", r)
 	}
 
