@@ -1,0 +1,622 @@
+package main
+
+// The account commands against a fake management API: the sign-in they start and follow, and the
+// calls that change or read an account.
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stdotwork/pluxy/next/management"
+)
+
+// fakeAccountCore is a management API with one extension that signs in four ways: one key, one
+// browser, one device and one that asks for a code in a prompt of its own.
+type fakeAccountCore struct {
+	mu        sync.Mutex
+	srv       *httptest.Server
+	logins    map[string]*fakeAccountLogin
+	nextLogin int
+	starts    []map[string]any
+	relogins  []map[string]any
+	inputs    []map[string]string
+	cancelled []string
+	patched   []map[string]any
+	removed   []string
+	imports   []management.AuthImportRequest
+	vertices  []string
+}
+
+// fakeAccountLogin is one sign-in the fake runs.
+type fakeAccountLogin struct {
+	account, method, state string
+	prompt                 map[string]any
+	reason                 string
+	polls                  int
+}
+
+func (l *fakeAccountLogin) view(id string) map[string]any {
+	view := map[string]any{"id": id, "account": l.account, "extension": "test/ext", "method": l.method, "state": l.state}
+	if l.prompt != nil {
+		view["prompt"] = l.prompt
+	}
+	if l.reason != "" {
+		view["error"] = map[string]any{"code": "auth", "message": l.reason}
+	}
+	return map[string]any{"login": view}
+}
+
+const fakeRefusal = "the test provider refused this sign-in"
+
+func newFakeAccountCore(t *testing.T) *fakeAccountCore {
+	t.Helper()
+	f := &fakeAccountCore{logins: map[string]*fakeAccountLogin{}}
+	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
+	t.Cleanup(f.srv.Close)
+	return f
+}
+
+// run is one command against the fake server, with no standard input to read.
+func (f *fakeAccountCore) run(args ...string) (string, string, int) {
+	return f.runIn("", false, args...)
+}
+
+// runIn is run with standard input, and whether it is a terminal.
+func (f *fakeAccountCore) runIn(stdin string, tty bool, args ...string) (string, string, int) {
+	var out, errOut bytes.Buffer
+	env := func(k string) string {
+		return map[string]string{"PLUXY_URL": f.srv.URL, "PLUXY_MANAGEMENT_KEY": "k"}[k]
+	}
+	code := runCLIWithInput(args, strings.NewReader(stdin), &out, &errOut, env, tty)
+	return out.String(), errOut.String(), code
+}
+
+func (f *fakeAccountCore) start() ([]map[string]any, []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.starts, f.cancelled
+}
+
+func (f *fakeAccountCore) sent() []map[string]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.inputs
+}
+
+func (f *fakeAccountCore) newLogin(account, method string, state string) string {
+	f.nextLogin++
+	id := fmt.Sprintf("L%d", f.nextLogin)
+	f.logins[id] = &fakeAccountLogin{account: account, method: method, state: state, prompt: fakePrompt(method)}
+	return id
+}
+
+func fakePrompt(method string) map[string]any {
+	switch method {
+	case "browser":
+		return map[string]any{"kind": "browser", "message": "Open the link, sign in and paste the address the browser ends on.",
+			"url":    "https://login.example.test/authorize",
+			"inputs": []any{map[string]any{"name": "redirect_url", "label": "Address the browser ended on"}}}
+	case "device":
+		return map[string]any{"kind": "device", "message": "Open the link and enter the code.",
+			"user_code": "TEST-1234", "verification_uri": "https://login.example.test/device"}
+	case "input":
+		return map[string]any{"kind": "input", "message": "Enter the code.",
+			"inputs": []any{map[string]any{"name": "code", "label": "Code"}}}
+	}
+	return nil
+}
+
+func fakeInput(body map[string]any) map[string]string {
+	out := map[string]string{}
+	in, _ := body["input"].(map[string]any)
+	for name, v := range in {
+		if s, ok := v.(string); ok {
+			out[name] = s
+		}
+	}
+	return out
+}
+
+func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") != "Bearer k" {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":{"code":"unauthorized","message":"invalid management key"}}`))
+		return
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	path := strings.TrimPrefix(r.URL.Path, "/v0/management")
+	write := func(v any) { _ = json.NewEncoder(w).Encode(v) }
+	decode := func() map[string]any {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		return body
+	}
+	switch {
+	case r.Method == http.MethodGet && path == "/login-methods":
+		write(map[string]any{"extensions": []any{map[string]any{"extension": "test/ext", "methods": []any{
+			map[string]any{"method": "api_key", "kind": "api_key", "label": "API key",
+				"inputs": []any{map[string]any{"name": "api_key", "label": "API key", "secret": true}}},
+			map[string]any{"method": "browser", "kind": "browser", "label": "Browser"},
+			map[string]any{"method": "device", "kind": "device", "label": "Device"},
+			map[string]any{"method": "input", "kind": "input", "label": "Code"},
+		}}}})
+	case r.Method == http.MethodPost && path == "/accounts":
+		body := decode()
+		f.starts = append(f.starts, body)
+		id, _ := body["id"].(string)
+		method, _ := body["method"].(string)
+		if id == "taken" {
+			w.WriteHeader(http.StatusConflict)
+			write(map[string]any{"error": map[string]any{"code": "conflict", "message": "an account with this ID already exists"}})
+			return
+		}
+		if method == "api_key" {
+			login := fmt.Sprintf("A%d", len(f.starts))
+			state, reason := "done", ""
+			if fakeInput(body)["api_key"] == "bad-key" {
+				state, reason = "failed", "the test provider refused this key"
+			}
+			f.logins[login] = &fakeAccountLogin{account: id, method: method, state: state, reason: reason}
+			_ = json.NewEncoder(w).Encode(map[string]any{"login": map[string]any{"id": login, "account": id, "extension": "test/ext",
+				"method": method, "state": state}})
+			return
+		}
+		id = f.newLogin(id, method, management.LoginPending)
+		w.WriteHeader(http.StatusAccepted)
+		write(f.logins[id].view(id))
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/accounts/") && strings.HasSuffix(path, "/login"):
+		body := decode()
+		f.relogins = append(f.relogins, body)
+		account := strings.TrimSuffix(strings.TrimPrefix(path, "/accounts/"), "/login")
+		method, _ := body["method"].(string)
+		state := management.LoginPending
+		if method == "api_key" {
+			state = "done"
+		}
+		id := f.newLogin(account, method, state)
+		if state != management.LoginPending {
+			f.logins[id].prompt = nil
+		}
+		w.WriteHeader(http.StatusAccepted)
+		write(f.logins[id].view(id))
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/logins/"):
+		id := strings.TrimPrefix(path, "/logins/")
+		l, ok := f.logins[id]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			write(map[string]any{"error": map[string]any{"code": "not_found", "message": "no such login"}})
+			return
+		}
+		if l.state == management.LoginPending && l.method == "device" {
+			l.polls++
+			if l.polls >= 1 {
+				l.state, l.prompt = "done", nil
+			}
+		}
+		write(l.view(id))
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/logins/") && strings.HasSuffix(path, "/input"):
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/logins/"), "/input")
+		body := decode()
+		in := fakeInput(body)
+		f.inputs = append(f.inputs, in)
+		l, ok := f.logins[id]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		switch l.method {
+		case "browser":
+			switch {
+			case strings.Contains(in["redirect_url"], "code=ok"):
+				l.state, l.prompt = "done", nil
+			case strings.Contains(in["redirect_url"], "code=bad"):
+				l.state, l.prompt, l.reason = "failed", nil, fakeRefusal
+			default:
+				l.prompt["message"] = "That address holds no sign-in code."
+			}
+		case "input":
+			if in["code"] == "1" {
+				l.state, l.prompt = "done", nil
+			}
+		}
+		w.WriteHeader(http.StatusNoContent)
+	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/logins/"):
+		id := strings.TrimPrefix(path, "/logins/")
+		f.cancelled = append(f.cancelled, id)
+		if l, ok := f.logins[id]; ok {
+			l.state, l.prompt = "cancelled", nil
+		}
+		w.WriteHeader(http.StatusNoContent)
+	case r.Method == http.MethodGet && path == "/accounts":
+		write(map[string]any{"accounts": []any{
+			map[string]any{"id": "work", "public_id": "acc_1", "label": "Work account", "extension": "test/ext",
+				"source": "login", "state": "active", "health": map[string]any{"state": "ok"}},
+			map[string]any{"id": "spare", "public_id": "acc_2", "extension": "test/ext", "source": "login",
+				"state": "active", "health": map[string]any{"state": "cooling", "until": "2026-11-21T10:00:00Z", "why": "rate limited"}},
+		}})
+	case r.Method == http.MethodPatch && strings.HasPrefix(path, "/accounts/"):
+		f.patched = append(f.patched, decode())
+		write(map[string]any{"account": map[string]any{"id": strings.TrimPrefix(path, "/accounts/"), "health": map[string]any{"state": "ok"}}})
+	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/accounts/"):
+		id := strings.TrimPrefix(path, "/accounts/")
+		f.removed = append(f.removed, id)
+		w.WriteHeader(http.StatusNoContent)
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/refresh"):
+		id := strings.TrimSuffix(strings.TrimPrefix(path, "/accounts/"), "/refresh")
+		write(map[string]any{"account": map[string]any{"id": id, "expires_at": 2_000_000_000, "health": map[string]any{"state": "ok"}}})
+	case r.Method == http.MethodGet && strings.HasSuffix(path, "/quota"):
+		write(map[string]any{
+			"fetched_at": "2026-11-21T09:00:00Z",
+			"quota": map[string]any{"plan": "Test plan", "plan_ends_at": 1_924_992_000, "limits": []any{
+				map[string]any{"id": "five_hour", "label": "5-hour limit", "used_percent": 42,
+					"resets_at": 2_000_000_000, "window_seconds": 18_000},
+				map[string]any{"id": "weekly", "label": "Weekly limit", "used_percent": 7.125,
+					"used": 1425, "limit": 20000, "unit": "requests", "remaining": 18575,
+					"resets_at": 2_000_086_400, "window_seconds": 604_800},
+				map[string]any{"id": "reset_credits", "label": "Manual resets", "remaining": 5, "unit": "resets"},
+			}},
+		})
+	case r.Method == http.MethodPost && path == "/accounts/import":
+		var req management.AuthImportRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		f.imports = append(f.imports, req)
+		write(map[string]any{"imported": []any{map[string]any{"id": "codex-work-example.com", "extension": "pluxy/codex"}},
+			"skipped": []any{"the file's id_token is not read yet"}})
+	case r.Method == http.MethodPost && path == "/vertex/import":
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		file, _, err := r.FormFile("file")
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		raw, _ := io.ReadAll(file)
+		file.Close()
+		f.vertices = append(f.vertices, string(raw))
+		write(map[string]any{"status": "ok", "account": "vertex-demo", "project_id": "demo", "email": "svc@demo.test", "location": "us-central1"})
+	default:
+		w.WriteHeader(http.StatusNotFound)
+		write(map[string]any{"error": map[string]any{"code": "not_found", "message": "nothing here"}})
+	}
+}
+
+// A secret a sign-in asks for is read from standard input and never printed.
+func TestCLIAccountAddReadsSecretFromStdin(t *testing.T) {
+	f := newFakeAccountCore(t)
+	const key = "fake-key-1a2b3c"
+	out, errOut, code := f.runIn(key+"\n", false, "account", "add", "test/ext", "--method", "api_key", "--id", "work-1")
+	if code != 0 || !strings.Contains(out, "account work-1 added") {
+		t.Fatalf("account add api_key: code=%d out=%q err=%q", code, out, errOut)
+	}
+	starts, _ := f.start()
+	if len(starts) != 1 || fakeInput(starts[0])["api_key"] != key || starts[0]["id"] != "work-1" || starts[0]["extension"] != "test/ext" {
+		t.Fatalf("core was sent %v, want the key from standard input", starts)
+	}
+	if strings.Contains(out+errOut, key) {
+		t.Errorf("the key reached the terminal: %q %q", out, errOut)
+	}
+	// An ID an account already has is refused by core, and nothing is changed: exit 6.
+	if _, errOut, code := f.runIn(key+"\n", false, "account", "add", "test/ext", "--method", "api_key", "--id", "taken"); code != 6 ||
+		!strings.Contains(errOut, "already exists") {
+		t.Errorf("account add with an ID in use: %d %q, want 6 and why", code, errOut)
+	}
+	// A sign-in that ended at once has nothing to wait for: --no-wait still says it is added.
+	if out, errOut, code := f.runIn(key+"\n", false, "account", "add", "test/ext", "--method", "api_key", "--id", "work-10", "--no-wait"); code != 0 ||
+		!strings.Contains(out, "account work-10 added") {
+		t.Errorf("account add --no-wait of a sign-in that ended at once: code=%d out=%q err=%q", code, out, errOut)
+	}
+}
+
+// A secret is never taken from --input, where the shell's history and the process list keep it.
+func TestCLIAccountAddRefusesSecretFlag(t *testing.T) {
+	f := newFakeAccountCore(t)
+	const key = "fake-key-4d5e6f"
+	out, errOut, code := f.run("account", "add", "test/ext", "--method", "api_key", "--input", "api_key="+key)
+	if code != 2 || !strings.Contains(errOut, "secret") {
+		t.Fatalf("account add with a secret in --input: code=%d out=%q err=%q, want 2 and why", code, out, errOut)
+	}
+	if starts, _ := f.start(); len(starts) != 0 {
+		t.Errorf("a sign-in was started anyway: %v", starts)
+	}
+	if strings.Contains(out+errOut, key) {
+		t.Errorf("the key reached the terminal: %q %q", out, errOut)
+	}
+}
+
+// A browser sign-in prints its address, takes the callback URL a flag gives, and says when it is
+// done.
+func TestCLIAccountAddBrowser(t *testing.T) {
+	f := newFakeAccountCore(t)
+	out, errOut, code := f.run("account", "add", "test/ext", "--method", "browser", "--id", "work-2",
+		"--input", "redirect_url=https://localhost:1455/auth/callback?code=ok")
+	if code != 0 || !strings.Contains(out, "account work-2 added") || !strings.Contains(errOut, "https://login.example.test/authorize") {
+		t.Fatalf("account add browser: code=%d out=%q err=%q", code, out, errOut)
+	}
+	if sent := f.sent(); len(sent) != 1 || !strings.Contains(sent[0]["redirect_url"], "code=ok") {
+		t.Fatalf("the callback URL core got: %v", sent)
+	}
+}
+
+// A refused sign-in ends with the provider's reason, and exit 1.
+func TestCLIAccountAddRefused(t *testing.T) {
+	f := newFakeAccountCore(t)
+	out, errOut, code := f.run("account", "add", "test/ext", "--method", "browser", "--id", "work-3",
+		"--input", "redirect_url=https://localhost/callback?code=bad")
+	if code != 1 || !strings.Contains(errOut, fakeRefusal) || strings.Contains(out, "added") {
+		t.Fatalf("a refused sign-in: code=%d out=%q err=%q, want 1 and the reason", code, out, errOut)
+	}
+}
+
+// A sign-in that asks for a code in a prompt of its own reads it from standard input.
+func TestCLIAccountAddPromptFromStdin(t *testing.T) {
+	f := newFakeAccountCore(t)
+	out, errOut, code := f.runIn("1\n", false, "account", "add", "test/ext", "--method", "input", "--id", "work-4")
+	if code != 0 || !strings.Contains(out, "account work-4 added") {
+		t.Fatalf("account add with a prompt: code=%d out=%q err=%q", code, out, errOut)
+	}
+	if sent := f.sent(); len(sent) != 1 || sent[0]["code"] != "1" {
+		t.Fatalf("the code core got: %v", sent)
+	}
+	// The prompt asked for a code and nothing gave one: the sign-in is refused, and cancelled.
+	f = newFakeAccountCore(t)
+	out, errOut, code = f.run("account", "add", "test/ext", "--method", "input", "--id", "work-5")
+	if code != 2 || !strings.Contains(errOut, "Code") || strings.Contains(out, "added") {
+		t.Fatalf("a sign-in with no input: code=%d out=%q err=%q, want 2 and what it needs", code, out, errOut)
+	}
+	if _, cancelled := f.start(); len(cancelled) != 1 {
+		t.Fatalf("the sign-in was not cancelled: %v", cancelled)
+	}
+}
+
+// --no-wait prints where to go and exits 7, leaving the sign-in to core.
+func TestCLIAccountAddNoWait(t *testing.T) {
+	f := newFakeAccountCore(t)
+	out, errOut, code := f.run("account", "add", "test/ext", "--method", "device", "--id", "work-6", "--no-wait")
+	if code != 7 || !strings.Contains(errOut, "TEST-1234") || !strings.Contains(errOut, "https://login.example.test/device") ||
+		!strings.Contains(errOut, "pluxy account list") {
+		t.Fatalf("account add --no-wait: code=%d out=%q err=%q, want 7 and where to go", code, out, errOut)
+	}
+	if _, cancelled := f.start(); len(cancelled) != 0 {
+		t.Errorf("--no-wait cancelled the sign-in: %v", cancelled)
+	}
+}
+
+// A device sign-in is followed to its end: the code is shown, and the login read again.
+func TestCLIAccountAddDevice(t *testing.T) {
+	f := newFakeAccountCore(t)
+	out, errOut, code := f.run("account", "add", "test/ext", "--method", "device", "--id", "work-7")
+	if code != 0 || !strings.Contains(out, "account work-7 added") || !strings.Contains(errOut, "TEST-1234") {
+		t.Fatalf("account add device: code=%d out=%q err=%q", code, out, errOut)
+	}
+}
+
+// account login signs in to an account again, and names an account core does not have.
+func TestCLIAccountLogin(t *testing.T) {
+	f := newFakeAccountCore(t)
+	const key = "fake-key-7g8h9i"
+	out, errOut, code := f.runIn(key+"\n", false, "account", "login", "work", "--method", "api_key")
+	if code != 0 || !strings.Contains(out, "account work signed in again") {
+		t.Fatalf("account login: code=%d out=%q err=%q", code, out, errOut)
+	}
+	f.mu.Lock()
+	relogins := f.relogins
+	f.mu.Unlock()
+	if len(relogins) != 1 || relogins[0]["method"] != "api_key" {
+		t.Fatalf("core was sent %v", relogins)
+	}
+	if strings.Contains(out+errOut, key) {
+		t.Errorf("the key reached the terminal: %q %q", out, errOut)
+	}
+	if _, _, code := f.run("account", "login", "nobody", "--method", "api_key"); code != 5 {
+		t.Errorf("account login of an account core has not: %d, want 5", code)
+	}
+}
+
+// account remove, refresh and set send what they name.
+func TestCLIAccountChangeCommands(t *testing.T) {
+	f := newFakeAccountCore(t)
+	if out, errOut, code := f.run("account", "remove", "work"); code != 0 || !strings.Contains(out, "account work removed") {
+		t.Fatalf("account remove: code=%d out=%q err=%q", code, out, errOut)
+	}
+	f.mu.Lock()
+	removed := f.removed
+	f.removed = nil
+	f.mu.Unlock()
+	if len(removed) != 1 || removed[0] != "work" {
+		t.Errorf("core was asked to remove %v", removed)
+	}
+	expires := time.Unix(2_000_000_000, 0).Local().Format(time.DateTime)
+	if out, errOut, code := f.run("account", "refresh", "work"); code != 0 || !strings.Contains(out, expires) {
+		t.Fatalf("account refresh: code=%d out=%q err=%q, want the new expiry", code, out, errOut)
+	}
+	out, errOut, code := f.run("account", "set", "work", "prefix=fast", "weight=5", `models=[{"id":"m1"}]`, "disabled=true")
+	if code != 0 || !strings.Contains(out, "account work changed") {
+		t.Fatalf("account set: code=%d out=%q err=%q", code, out, errOut)
+	}
+	f.mu.Lock()
+	patched := f.patched
+	f.patched = nil
+	f.mu.Unlock()
+	if len(patched) != 1 {
+		t.Fatalf("PATCH bodies: %v", patched)
+	}
+	body := patched[0]
+	if body["prefix"] != "fast" || body["weight"] != float64(5) || body["disabled"] != true {
+		t.Errorf("PATCH body %v, want prefix, weight and disabled", body)
+	}
+	if models, _ := body["models"].([]any); len(models) != 1 || models[0].(map[string]any)["id"] != "m1" {
+		t.Errorf("PATCH models %v, want the JSON array", body["models"])
+	}
+	// null sets a field back, and a name core does not take is a usage error that names them.
+	if _, _, code := f.run("account", "set", "work", "weight=null"); code != 0 {
+		t.Errorf("account set weight=null: %d", code)
+	}
+	f.mu.Lock()
+	patched, f.patched = f.patched, nil
+	f.mu.Unlock()
+	if len(patched) != 1 {
+		t.Fatalf("PATCH body after weight=null: %v", patched)
+	}
+	if weight, present := patched[0]["weight"]; !present || weight != nil {
+		t.Errorf("PATCH body %v, want weight null", patched[0])
+	}
+	if _, errOut, code := f.run("account", "set", "work", "nonsense=1"); code != 2 || !strings.Contains(errOut, "prefix") {
+		t.Errorf("account set of a field core does not take: %d %q, want 2 and the names", code, errOut)
+	}
+	if _, errOut, code := f.run("account", "set", "work", "weight=five"); code != 2 || !strings.Contains(errOut, "JSON value") {
+		t.Errorf("account set weight=five: %d %q, want 2 and what it takes", code, errOut)
+	}
+}
+
+// account import sends a credential file to POST /accounts/import and a service account key to
+// POST /vertex/import.
+func TestCLIAccountImport(t *testing.T) {
+	f := newFakeAccountCore(t)
+	dir := t.TempDir()
+	authFile := filepath.Join(dir, "codex-work@example.com.json")
+	if err := os.WriteFile(authFile, []byte(`{"type":"codex","access_token":"fake-token"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := f.run("account", "import", authFile)
+	if code != 0 || !strings.Contains(out, "codex-work-example.com") || !strings.Contains(out, "skipped: the file's id_token") {
+		t.Fatalf("account import of a credential file: code=%d out=%q err=%q", code, out, errOut)
+	}
+	f.mu.Lock()
+	imports := f.imports
+	f.mu.Unlock()
+	if len(imports) != 1 || imports[0].Name != "codex-work@example.com.json" || imports[0].Content != `{"type":"codex","access_token":"fake-token"}` {
+		t.Fatalf("POST /accounts/import got %+v", imports)
+	}
+
+	keyFile := filepath.Join(dir, "service-account.json")
+	key := `{"type":"service_account","private_key":"-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n","project_id":"demo"}`
+	if err := os.WriteFile(keyFile, []byte(key), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code = f.run("account", "import", keyFile)
+	if code != 0 || !strings.Contains(out, "account vertex-demo imported") || !strings.Contains(out, "svc@demo.test") {
+		t.Fatalf("account import of a service account key: code=%d out=%q err=%q", code, out, errOut)
+	}
+	f.mu.Lock()
+	vertices := f.vertices
+	f.mu.Unlock()
+	if len(vertices) != 1 || vertices[0] != key {
+		t.Fatalf("POST /vertex/import got %q", vertices)
+	}
+	// Standard input is a service account key too.
+	out, errOut, code = f.runIn(key, false, "account", "import", "-")
+	if code != 0 || !strings.Contains(out, "account vertex-demo imported") {
+		t.Fatalf("account import -: code=%d out=%q err=%q", code, out, errOut)
+	}
+	// A file that is not a .json credential file is a usage error before anything is sent.
+	plain := filepath.Join(dir, "token.txt")
+	if err := os.WriteFile(plain, []byte(`{"type":"codex"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, errOut, code := f.run("account", "import", plain); code != 2 || !strings.Contains(errOut, ".json") {
+		t.Errorf("account import of a .txt file: %d %q, want 2 and why", code, errOut)
+	}
+}
+
+// On a terminal a value is asked for by its label, the secret is not printed back, and --json
+// asks nothing: its standard output stays the API's reply.
+func TestCLIAccountAddPromptsOnTerminal(t *testing.T) {
+	f := newFakeAccountCore(t)
+	const key = "fake-key-9j8k7l"
+	out, errOut, code := f.runIn(key+"\n", true, "account", "add", "test/ext", "--method", "api_key", "--id", "work-8")
+	if code != 0 || !strings.Contains(errOut, "API key: ") || strings.Contains(out+errOut, key) {
+		t.Fatalf("account add on a terminal: code=%d out=%q err=%q, want the label and not the key", code, out, errOut)
+	}
+	out, errOut, code = f.runIn(key+"\n", true, "account", "add", "test/ext", "--method", "api_key", "--id", "work-9", "--json")
+	if code != 0 || errOut != "" || !strings.HasPrefix(out, `{"login":`) || strings.Contains(out, key) {
+		t.Fatalf("account add --json on a terminal: code=%d out=%q err=%q, want the reply and no prompt", code, out, errOut)
+	}
+}
+
+// Ctrl-C cancels the sign-in in core instead of leaving it to add an account later.
+func TestFollowLoginCancelsOnInterrupt(t *testing.T) {
+	f := newFakeAccountCore(t)
+	client := &management.Client{URL: f.srv.URL, Key: "k"}
+	var reply management.LoginReply
+	if _, err := client.Call(context.Background(), http.MethodPost, "/accounts", nil,
+		management.AddAccountRequest{ID: "work", Extension: "test/ext", Method: "browser"}, &reply); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	x := &invocation{ctx: ctx, client: client, stdin: strings.NewReader(""), stdout: io.Discard, stderr: io.Discard}
+	lines := newLineReader(x.stdin, nil)
+	defer lines.close()
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	err := x.followLogin(reply.Login, nil, map[string]string{}, lines, false)
+	if err == nil || !strings.Contains(err.Error(), "cancelled") {
+		t.Fatalf("followLogin after an interrupt: %v, want a cancelled sign-in", err)
+	}
+	f.mu.Lock()
+	cancelled := f.cancelled
+	f.mu.Unlock()
+	if len(cancelled) != 1 || cancelled[0] != reply.Login.ID {
+		t.Errorf("core's sign-ins cancelled: %v, want %s", cancelled, reply.Login.ID)
+	}
+}
+
+// account methods lists each sign-in, marks a secret input, and account list shows the label.
+func TestCLIAccountMethodsAndList(t *testing.T) {
+	f := newFakeAccountCore(t)
+	out, errOut, code := f.run("account", "methods")
+	if code != 0 || !strings.Contains(out, "test/ext") || !strings.Contains(out, "api_key (secret)") ||
+		!strings.Contains(out, "browser") || !strings.Contains(out, "device") {
+		t.Fatalf("account methods: code=%d out=%q err=%q", code, out, errOut)
+	}
+	out, errOut, code = f.run("account", "list")
+	if code != 0 || !strings.Contains(out, "LABEL") || !strings.Contains(out, "Work account") ||
+		!strings.Contains(out, "cooling") || !strings.Contains(out, "rate limited") {
+		t.Fatalf("account list: code=%d out=%q err=%q, want the label column", code, out, errOut)
+	}
+}
+
+// account quota writes a plan and its windows as the panel does, and --json stays the reply.
+func TestCLIAccountQuotaFormat(t *testing.T) {
+	f := newFakeAccountCore(t)
+	out, errOut, code := f.run("account", "quota", "work")
+	reset := time.Unix(2_000_000_000, 0).Local().Format("2006-01-02 15:04")
+	if code != 0 || !strings.Contains(out, "plan: Test plan") || !strings.Contains(out, "42%") ||
+		!strings.Contains(out, "7.13%") || !strings.Contains(out, "5 hours") || !strings.Contains(out, "7 days") ||
+		!strings.Contains(out, "manual resets: 5") || !strings.Contains(out, reset) ||
+		!strings.Contains(out, "1,425 / 20,000 requests") || strings.Contains(out, "limits[") {
+		t.Fatalf("account quota: code=%d out=%q err=%q", code, out, errOut)
+	}
+	raw, errOut, code := f.run("account", "quota", "work", "--json")
+	if code != 0 || !strings.Contains(raw, `"five_hour"`) || !strings.Contains(raw, `"used_percent":42`) || errOut != "" {
+		t.Fatalf("account quota --json: code=%d out=%q err=%q, want the body unchanged", code, raw, errOut)
+	}
+}
+
+// An unknown subcommand names itself and lists the ones the group has.
+func TestCLIAccountUnknownSubcommand(t *testing.T) {
+	f := newFakeAccountCore(t)
+	out, errOut, code := f.run("account", "frobnicate")
+	if code != 2 || out != "" || !strings.Contains(errOut, `unknown account command "frobnicate"`) ||
+		!strings.Contains(errOut, "account add <provider>") || !strings.Contains(errOut, "account import <file>") {
+		t.Fatalf("account frobnicate: code=%d out=%q err=%q, want 2, the name and the valid ones", code, out, errOut)
+	}
+	if _, errOut, code := f.run("account"); code != 2 || !strings.Contains(errOut, "needs a command") {
+		t.Errorf("pluxy account alone: %d %q", code, errOut)
+	}
+}
