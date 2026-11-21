@@ -5,7 +5,7 @@ import { useAccountLabels, usePrivacy } from "../privacy";
 import { useSave } from "../save";
 import type { PageDef } from "../shell";
 import { strings } from "../strings";
-import { Button, Empty, List, Notice, PageHead, useKit, when } from "../ui";
+import { Badge, Button, Empty, List, Notice, PageHead, useKit, when } from "../ui";
 
 const t = strings("usage", {
   title: "Usage",
@@ -38,11 +38,24 @@ const t = strings("usage", {
   milliseconds: "{value} ms",
   missing: "—",
   exportError: "Could not export requests.",
+  fallbackStep: "Fallback step {step}",
+  fallbackStepTitle: "Answered by step {step} of this model's fallback chain",
 });
 
 const initial: UsageFilters = { since: "", model: "", provider: "", account: "", key_id: "", failed: "" };
 const PAGE_SIZE = 50;
 const EXPORT_LIMIT = 10000;
+
+/** The step of the model's fallback chain the request ended on, when it was not the first. */
+export function fallbackStep(e: UsageEvent) {
+  const step = e.chain_step ?? 0;
+  if (step < 2) return null;
+  return (
+    <span title={t("fallbackStepTitle", { step })}>
+      <Badge tone="muted">{t("fallbackStep", { step })}</Badge>
+    </span>
+  );
+}
 
 export function UsagePage() {
   const { api, unauthorized } = useKit();
@@ -210,8 +223,12 @@ export function UsagePage() {
               { label: t("account"), value: (e) => mask(e.account) || t("missing") },
               {
                 label: t("status"),
-                value: (e) =>
-                  (e.status ? String(e.status) : t("missing")) + (e.failed ? " · " + t("yes") : ""),
+                value: (e) => (
+                  <>
+                    {(e.status ? String(e.status) : t("missing")) + (e.failed ? " · " + t("yes") : "")}
+                    {fallbackStep(e)}
+                  </>
+                ),
               },
               { label: t("latency"), value: (e) => t("milliseconds", { value: e.latency_ms }) },
               { label: t("tokens"), value: (e) => e.tokens.total_tokens?.toLocaleString() ?? t("missing") },

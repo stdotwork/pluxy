@@ -10,6 +10,8 @@ export interface UsageEvent {
   key_id?: string;
   failed: boolean;
   status?: number;
+  /** The step of the model's fallback chain the last attempt was for, from 1; absent for a model with no chain. */
+  chain_step?: number;
   latency_ms: number;
   tokens: { total_tokens?: number };
 }
