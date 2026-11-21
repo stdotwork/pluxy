@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/stdotwork/pluxy/next/format/internal/clienttools"
 	mediainput "github.com/stdotwork/pluxy/next/format/internal/media"
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
 	"github.com/stdotwork/pluxy/next/llm"
@@ -159,6 +160,8 @@ type EncodeOptions struct {
 // EncodeRequestWith builds a Messages request body as EncodeRequest does, changed by opts.
 func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss, error) {
 	e := &encoder{keepModelTurn: opts.KeepModelTurn, searchResultOwned: opts.SearchResultOwned}
+	req, lowered := clienttools.Lower(req)
+	e.losses = append(e.losses, lowered...)
 	o := req.Options
 	out := map[string]any{"model": req.Model, "stream": req.Stream}
 	if o.MaxOutputTokens != nil {

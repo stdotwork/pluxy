@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/stdotwork/pluxy/next/format/internal/clienttools"
 	mediainput "github.com/stdotwork/pluxy/next/format/internal/media"
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
 	"github.com/stdotwork/pluxy/next/format/internal/textdoc"
@@ -85,6 +86,8 @@ type outContent struct {
 // first.
 func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 	e := &encoder{}
+	req, lowered := clienttools.Lower(req)
+	e.losses = append(e.losses, lowered...)
 	o := req.Options
 	out := map[string]any{"model": req.Model, "safetySettings": safetyOff}
 

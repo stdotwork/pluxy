@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/format/internal/clienttools"
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
 	"github.com/stdotwork/pluxy/next/format/openaichat"
 	"github.com/stdotwork/pluxy/next/llm"
@@ -90,6 +91,13 @@ type item struct {
 	status     string
 	results    json.RawMessage
 	hasResults bool
+	// ref is the client's tool when the call is to a function that stands for a custom, namespaced
+	// or tool_search tool (clienttools), and decoder reads a custom tool's text as it arrives.
+	ref     *clienttools.Ref
+	decoder clienttools.InputDecoder
+	// finalInput is a finished custom tool call's text, read once from its arguments.
+	finalInput string
+	inputRead  bool
 }
 
 // builder rebuilds Responses output from model events whose upstream format is not Responses.
@@ -110,6 +118,9 @@ type builder struct {
 	lost     map[string]bool
 	lossSize int
 	upFormat string
+	// refs are the request's tools that went upstream as functions standing for something else.
+	refs     map[string]clienttools.Ref
+	refsRead bool
 }
 
 func newBuilder(req llm.Request) *builder {
@@ -143,7 +154,10 @@ func (b *builder) start(r *llm.ResponseInfo) {
 // lose records a loss once per path. Past llm.MaxLosses the list is closed: llm.AddLoss has written
 // its last entry, and nothing more is recorded. lossSize counts what the losses hold, which comes
 // from upstream data, so an aggregator can bound it with the reply.
-func (b *builder) lose(path, detail string) {
+func (b *builder) lose(path, detail string) { b.note(llm.LossDropped, path, detail) }
+
+// note records a loss of the given kind, once per path, as lose says.
+func (b *builder) note(kind, path, detail string) {
 	if b.lost[path] || len(b.losses) > llm.MaxLosses {
 		return
 	}
@@ -152,7 +166,7 @@ func (b *builder) lose(path, detail string) {
 	}
 	b.lost[path] = true
 	b.lossSize += len(path) + len(detail)
-	b.losses = llm.AddLoss(b.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: detail})
+	b.losses = llm.AddLoss(b.losses, llm.Loss{Kind: kind, Path: path, Detail: detail})
 }
 
 func (b *builder) open(idx int, s *llm.ItemStart) *item {
@@ -167,6 +181,14 @@ func (b *builder) open(idx int, s *llm.ItemStart) *item {
 		b.reasons++
 	case llm.ItemToolCall:
 		it.id = "fc_" + s.CallID
+		if it.ref = b.clientTool(s.Name); it.ref != nil {
+			switch it.ref.Kind {
+			case clienttools.KindCustom:
+				it.id = "ctc_" + s.CallID
+			case clienttools.KindSearch:
+				it.id = "tsc_" + s.CallID
+			}
+		}
 	}
 	b.items[idx] = it
 	b.order = append(b.order, it)
@@ -208,7 +230,74 @@ func (b *builder) doneItem(it *item, final bool) obj {
 		}
 		return o
 	}
-	return obj{"id": it.id, "type": "function_call", "status": b.itemStatus(), "arguments": it.text.String(), "call_id": it.callID, "name": it.name}
+	return b.callItem(it, b.itemStatus(), true)
+}
+
+// clientTool returns the tool a call's function stands for, or nil for a plain function. A
+// Responses upstream was sent the client's own tools, so its calls are left as they are.
+func (b *builder) clientTool(name string) *clienttools.Ref {
+	if b.upFormat == format {
+		return nil
+	}
+	if !b.refsRead {
+		b.refs, b.refsRead = clienttools.Refs(b.req), true
+	}
+	if ref, ok := b.refs[name]; ok {
+		return &ref
+	}
+	return nil
+}
+
+// callItem is a tool call as an output item, in the shape the client declared the tool in. done
+// is false for the added event, which has none of the call's input yet.
+func (b *builder) callItem(it *item, status string, done bool) obj {
+	if it.ref == nil {
+		arguments := ""
+		if done {
+			arguments = it.text.String()
+		}
+		return obj{"id": it.id, "type": "function_call", "status": status, "arguments": arguments, "call_id": it.callID, "name": it.name}
+	}
+	switch it.ref.Kind {
+	case clienttools.KindCustom:
+		input := ""
+		if done {
+			input = b.customInput(it)
+		}
+		o := obj{"id": it.id, "type": "custom_tool_call", "status": status, "call_id": it.callID, "name": it.ref.Name, "input": input}
+		if it.ref.Namespace != "" {
+			o["namespace"] = it.ref.Namespace
+		}
+		return o
+	case clienttools.KindSearch:
+		arguments := json.RawMessage("{}")
+		if done {
+			var ok bool
+			if arguments, ok = clienttools.SearchCallArguments(it.text.String()); !ok {
+				status = "incomplete"
+				b.note(llm.LossApproximated, clienttools.OutputPath(it.out, "arguments"), "tool_search arguments that are not a JSON object, sent as {}")
+			}
+		}
+		return obj{"id": it.id, "type": "tool_search_call", "status": status, "call_id": it.callID, "execution": "client", "arguments": arguments}
+	}
+	arguments := ""
+	if done {
+		arguments = it.text.String()
+	}
+	return obj{"id": it.id, "type": "function_call", "status": status, "arguments": arguments, "call_id": it.callID, "name": it.ref.Name, "namespace": it.ref.Namespace}
+}
+
+// customInput is a custom tool call's text, from the arguments of the function it was sent as.
+func (b *builder) customInput(it *item) string {
+	if it.inputRead {
+		return it.finalInput
+	}
+	input, ok := clienttools.CustomInput(it.text.String())
+	if !ok {
+		b.note(llm.LossApproximated, clienttools.OutputPath(it.out, "input"), "custom tool arguments that are not one input string, passed on as the tool's input")
+	}
+	it.finalInput, it.inputRead = input, true
+	return input
 }
 
 // response returns the Response object at the end of the reply.
@@ -498,8 +587,7 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 			return s.emit("response.reasoning_summary_part.added", obj{"output_index": it.out, "item_id": it.id, "summary_index": 0,
 				"part": obj{"type": "summary_text", "text": ""}})
 		}
-		return s.emit("response.output_item.added", obj{"output_index": it.out,
-			"item": obj{"id": it.id, "type": "function_call", "status": "in_progress", "arguments": "", "call_id": it.callID, "name": it.name}})
+		return s.emit("response.output_item.added", obj{"output_index": it.out, "item": b.callItem(it, "in_progress", false)})
 	case llm.EventTextDelta, llm.EventReasoningDelta, llm.EventToolInputDelta:
 		it := b.items[ev.Index]
 		it.text.WriteString(ev.Delta)
@@ -508,6 +596,18 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 			return s.emit("response.output_text.delta", obj{"output_index": it.out, "item_id": it.id, "content_index": 0, "delta": ev.Delta, "logprobs": []any{}})
 		case llm.ItemReasoning:
 			return s.emit("response.reasoning_summary_text.delta", obj{"output_index": it.out, "item_id": it.id, "summary_index": 0, "delta": ev.Delta})
+		}
+		if it.ref != nil {
+			switch it.ref.Kind {
+			case clienttools.KindCustom:
+				text := it.decoder.Push(ev.Delta)
+				if text == "" {
+					return nil
+				}
+				return s.emit("response.custom_tool_call_input.delta", obj{"output_index": it.out, "item_id": it.id, "call_id": it.callID, "delta": text})
+			case clienttools.KindSearch:
+				return nil // the client reads a search's arguments from its done item
+			}
 		}
 		return s.emit("response.function_call_arguments.delta", obj{"output_index": it.out, "item_id": it.id, "delta": ev.Delta})
 	case llm.EventItemEnd:
@@ -579,7 +679,7 @@ func (s *StreamWriter) flushEnds(ev llm.Event) error {
 				return err
 			}
 		case llm.ItemToolCall:
-			if err := s.emit("response.function_call_arguments.done", obj{"output_index": it.out, "item_id": it.id, "arguments": text}); err != nil {
+			if err := s.callInputDone(it, text); err != nil {
 				return err
 			}
 		}
@@ -588,6 +688,19 @@ func (s *StreamWriter) flushEnds(ev llm.Event) error {
 		}
 	}
 	return nil
+}
+
+// callInputDone writes the event that ends a tool call's input, for the kind of tool it is.
+func (s *StreamWriter) callInputDone(it *item, text string) error {
+	if it.ref != nil {
+		switch it.ref.Kind {
+		case clienttools.KindCustom:
+			return s.emit("response.custom_tool_call_input.done", obj{"output_index": it.out, "item_id": it.id, "call_id": it.callID, "input": s.b.customInput(it)})
+		case clienttools.KindSearch:
+			return nil
+		}
+	}
+	return s.emit("response.function_call_arguments.done", obj{"output_index": it.out, "item_id": it.id, "arguments": text})
 }
 
 // searchesDone writes the done events of web searches that ended.

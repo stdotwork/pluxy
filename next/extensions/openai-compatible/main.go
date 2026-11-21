@@ -586,8 +586,8 @@ func (r *reporting) restore(ev *llm.Event) {
 }
 
 // replyNames maps each tool name a translated request was sent under back to the client's
-// (openaichat.ToolNames or geminigenerate.ToolNames). A body in the upstream's own format passed
-// through keeps the client's names.
+// (openaichat.ToolNames, geminigenerate.ToolNames or anthropicmessages.ToolNames). A body in the
+// upstream's own format passed through keeps the client's names.
 func replyNames(req llm.Request, tr *llm.Translation) map[string]string {
 	if tr.Passthrough {
 		return nil
@@ -598,6 +598,8 @@ func replyNames(req llm.Request, tr *llm.Translation) map[string]string {
 		changed = openaichat.ToolNames(req)
 	case llm.FormatGeminiGenerate:
 		changed = geminigenerate.ToolNames(req)
+	case llm.FormatAnthropicMessages:
+		changed = anthropicmessages.ToolNames(req)
 	default:
 		return nil
 	}
