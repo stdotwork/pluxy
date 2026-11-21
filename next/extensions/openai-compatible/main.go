@@ -490,7 +490,7 @@ func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	}
 	resp, err := postBody(ctx, call, s, wire, key, path, body)
 	if err != nil {
-		return err
+		return noEndpoint(err, "token count", path)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
