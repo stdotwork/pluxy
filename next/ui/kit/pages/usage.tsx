@@ -72,7 +72,7 @@ export function fallbackStep(e: UsageEvent) {
   const step = e.chain_step ?? 0;
   if (step < 2) return null;
   return (
-    <span title={t("fallbackStepTitle", { step })}>
+    <span class="usage-mark" title={t("fallbackStepTitle", { step })}>
       <Badge tone="muted">{t("fallbackStep", { step })}</Badge>
     </span>
   );
@@ -83,7 +83,7 @@ export function tries(e: UsageEvent) {
   const count = e.attempts ?? 0;
   if (count < 2) return null;
   return (
-    <span title={t("triesTitle", { count })}>
+    <span class="usage-mark" title={t("triesTitle", { count })}>
       <Badge tone="muted">{t("tries", { count })}</Badge>
     </span>
   );
