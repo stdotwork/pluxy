@@ -27,7 +27,12 @@ import (
 //   - A property whose `oneOf` or `anyOf` is only distinct `const` branches becomes an `enum`.
 //   - An `array` schema without `items` (and without `$ref`) receives `items: {"type":"string"}`.
 //   - When the tool has `strict: true`, every optional property in any object schema is added to
-//     `required` and its schema is made nullable.
+//     `required` and its schema is made nullable (null is added to every keyword that limits the
+//     value, or the schema is wrapped in an `anyOf` with a null branch), and every object schema
+//     with `properties` gets `additionalProperties: false`, as OpenAI's strict mode requires. A
+//     schema that accepts more than its properties (`additionalProperties` true or a schema, or an
+//     object type without `properties`) cannot be made strict without changing what the tool
+//     accepts: the tool is sent with `strict: false` and none of the strict rewrites.
 
 // unionToEnumBranches is how many branches a union needs before it becomes an enum. Smaller
 // unions are left as written.
@@ -48,8 +53,10 @@ var subschemas = [...]string{
 
 // fixToolSchemas applies the rules to the parameters of every function tool in tools, also
 // those inside namespace tools (the Codex app groups MCP tools that way), and reports whether
-// it changed any. A tool it changes is replaced in the slice; the others stay as sent.
-func fixToolSchemas(tools []json.RawMessage) bool {
+// it changed any. A tool it changes is replaced in the slice; the others stay as sent. A strict
+// tool whose schema cannot be made strict is sent with strict false; lose, when not nil, is told
+// the tool's path (path, then its index in tools) and why.
+func fixToolSchemas(tools []json.RawMessage, path string, lose func(path, detail string)) bool {
 	changed := false
 	for i, t := range tools {
 		var o map[string]json.RawMessage
@@ -62,14 +69,20 @@ func fixToolSchemas(tools []json.RawMessage) bool {
 		case "function":
 			var strict bool
 			_ = json.Unmarshal(o["strict"], &strict)
-			if p, ok := fixSchemaForMode(o["parameters"], strict); ok {
+			if p, ok, strictOff := fixSchemaForMode(o["parameters"], strict); ok {
 				o["parameters"] = p
+				if strictOff {
+					o["strict"] = raw(false)
+					if lose != nil {
+						lose(path+"["+strconv.Itoa(i)+"]", "strict mode was turned off: the schema accepts more than its properties, which strict mode cannot express")
+					}
+				}
 				tools[i] = raw(o)
 				changed = true
 			}
 		case "namespace":
 			var nested []json.RawMessage
-			if json.Unmarshal(o["tools"], &nested) == nil && fixToolSchemas(nested) {
+			if json.Unmarshal(o["tools"], &nested) == nil && fixToolSchemas(nested, path+"["+strconv.Itoa(i)+"].tools", lose) {
 				o["tools"] = raw(nested)
 				tools[i] = raw(o)
 				changed = true
@@ -83,21 +96,25 @@ func fixToolSchemas(tools []json.RawMessage) bool {
 // that is not a JSON object is left alone. Numbers are read as text so a large bound or enum
 // value keeps its digits.
 func fixSchema(schema json.RawMessage) (json.RawMessage, bool) {
-	return fixSchemaForMode(schema, false)
+	out, changed, _ := fixSchemaForMode(schema, false)
+	return out, changed
 }
 
-func fixSchemaForMode(schema json.RawMessage, strict bool) (json.RawMessage, bool) {
+// fixSchemaForMode is fixSchema for a tool that is strict or not. strictOff is true when the tool
+// is strict but its schema cannot be made strict: the result then has only the rewrites that
+// apply to any tool, and the caller must send the tool with strict false.
+func fixSchemaForMode(schema json.RawMessage, strict bool) (out json.RawMessage, changed, strictOff bool) {
 	dec := json.NewDecoder(bytes.NewReader(schema))
 	dec.UseNumber()
 	var root any
 	if dec.Decode(&root) != nil {
-		return schema, false
+		return schema, false, false
 	}
 	obj, ok := root.(map[string]any)
 	if !ok {
-		return schema, false
+		return schema, false, false
 	}
-	changed := flattenRootUnion(obj)
+	changed = flattenRootUnion(obj)
 	if dropRejected(obj) {
 		changed = true
 	}
@@ -111,13 +128,22 @@ func fixSchemaForMode(schema json.RawMessage, strict bool) (json.RawMessage, boo
 	if addMissingArrayItems(obj) {
 		changed = true
 	}
-	if strict && makeOptionalPropsNullable(obj) {
-		changed = true
+	if strict {
+		if schemaIsOpen(obj) {
+			strictOff, changed = true, true
+		} else {
+			if closeObjects(obj) {
+				changed = true
+			}
+			if makeOptionalPropsNullable(obj) {
+				changed = true
+			}
+		}
 	}
 	if !changed {
-		return schema, false
+		return schema, false, false
 	}
-	return raw(obj), true
+	return raw(obj), true, strictOff
 }
 
 // dropRejected removes the patterns and bounds the endpoint rejects from v and every schema
@@ -579,41 +605,25 @@ func hasArrayType(t any) bool {
 	return false
 }
 
-// makeOptionalPropsNullable enforces Codex strict mode's requirement that every property of every
-// object schema is listed in required: properties missing from required are appended to it and
-// made nullable.
-func makeOptionalPropsNullable(v any) bool {
+// eachSchema calls fn on every schema under v (v included) and reports whether any call did. Only
+// keywords that hold schemas are entered, so an `enum`, `const` or `default` that happens to look
+// like a schema is not visited. fn runs on a schema before the schemas under it.
+func eachSchema(v any, fn func(map[string]any) bool) bool {
 	changed := false
 	switch s := v.(type) {
 	case []any:
 		for _, item := range s {
-			if makeOptionalPropsNullable(item) {
+			if eachSchema(item, fn) {
 				changed = true
 			}
 		}
 	case map[string]any:
-		if props, ok := s["properties"].(map[string]any); ok && len(props) > 0 {
-			reqList, reqSet := stringSliceAndSet(s["required"])
-			added := false
-			for _, name := range slices.Sorted(maps.Keys(props)) {
-				if reqSet[name] {
-					continue
-				}
-				reqList = append(reqList, name)
-				reqSet[name] = true
-				added = true
-				changed = true
-				if pm, ok := props[name].(map[string]any); ok {
-					props[name] = nullableSchema(pm)
-				}
-			}
-			if added {
-				s["required"] = reqList
-			}
+		if fn(s) {
+			changed = true
 		}
 		if pp, ok := s["patternProperties"].(map[string]any); ok {
 			for _, sub := range pp {
-				if makeOptionalPropsNullable(sub) {
+				if eachSchema(sub, fn) {
 					changed = true
 				}
 			}
@@ -621,7 +631,7 @@ func makeOptionalPropsNullable(v any) bool {
 		for _, k := range subschemaMaps {
 			if m, ok := s[k].(map[string]any); ok {
 				for _, sub := range m {
-					if makeOptionalPropsNullable(sub) {
+					if eachSchema(sub, fn) {
 						changed = true
 					}
 				}
@@ -630,7 +640,7 @@ func makeOptionalPropsNullable(v any) bool {
 		for _, k := range subschemas {
 			switch sub := s[k].(type) {
 			case map[string]any, []any:
-				if makeOptionalPropsNullable(sub) {
+				if eachSchema(sub, fn) {
 					changed = true
 				}
 			}
@@ -639,6 +649,86 @@ func makeOptionalPropsNullable(v any) bool {
 	return changed
 }
 
+// schemaIsOpen reports whether a schema under v accepts keys beyond its properties, which strict
+// mode cannot express: `additionalProperties` true or a schema, or an object type with no
+// `properties` (a free-form map).
+func schemaIsOpen(v any) bool {
+	open := false
+	eachSchema(v, func(s map[string]any) bool {
+		if ap, ok := s["additionalProperties"]; ok && ap != false {
+			open = true
+		}
+		if _, ok := s["properties"]; !ok && hasObjectType(s["type"]) {
+			open = true
+		}
+		return false
+	})
+	return open
+}
+
+func hasObjectType(t any) bool {
+	if s, ok := t.(string); ok {
+		return s == "object"
+	}
+	if l, ok := t.([]any); ok {
+		for _, x := range l {
+			if x == "object" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// closeObjects gives every schema with a `properties` key (an empty one counts) and no
+// `additionalProperties` the value false, and reports whether it changed any.
+func closeObjects(v any) bool {
+	return eachSchema(v, func(s map[string]any) bool {
+		if _, ok := s["properties"].(map[string]any); !ok {
+			return false
+		}
+		if _, ok := s["additionalProperties"]; ok {
+			return false
+		}
+		s["additionalProperties"] = false
+		return true
+	})
+}
+
+// makeOptionalPropsNullable enforces Codex strict mode's requirement that every property of every
+// object schema is listed in required: properties missing from required are appended to it and
+// made nullable.
+func makeOptionalPropsNullable(v any) bool {
+	return eachSchema(v, func(s map[string]any) bool {
+		props, ok := s["properties"].(map[string]any)
+		if !ok || len(props) == 0 {
+			return false
+		}
+		reqList, reqSet := stringSliceAndSet(s["required"])
+		added := false
+		for _, name := range slices.Sorted(maps.Keys(props)) {
+			if reqSet[name] {
+				continue
+			}
+			reqList = append(reqList, name)
+			reqSet[name] = true
+			added = true
+			if pm, ok := props[name].(map[string]any); ok {
+				props[name] = nullableSchema(pm)
+			}
+		}
+		if added {
+			s["required"] = reqList
+		}
+		return added
+	})
+}
+
+// nullableSchema makes a schema accept null. A schema whose only limit is a plain `type`, an
+// `enum`, an `anyOf` or a `oneOf` gets null in it. Any other schema (a `$ref`, `const` or
+// `allOf`, or several of those four keywords together) is wrapped in `anyOf` with a null branch,
+// since null added to one keyword would still fail the other: `description` and `title` move
+// outside.
 func nullableSchema(pm map[string]any) map[string]any {
 	if schemaAllowsNull(pm) {
 		return pm
@@ -646,7 +736,21 @@ func nullableSchema(pm map[string]any) map[string]any {
 	_, hasRef := pm["$ref"]
 	_, hasConst := pm["const"]
 	_, hasAllOf := pm["allOf"]
-	if hasRef || hasConst || hasAllOf {
+	types, typeList := pm["type"].([]any)
+	t, typeString := pm["type"].(string)
+	typeString = typeString && t != ""
+	hasType := typeList || typeString
+	vals, hasEnum := pm["enum"].([]any)
+	anyBranches, hasAnyOf := pm["anyOf"].([]any)
+	oneBranches, hasOneOf := pm["oneOf"].([]any)
+	limits := 0
+	for _, has := range []bool{hasType, hasEnum, hasAnyOf, hasOneOf} {
+		if has {
+			limits++
+		}
+	}
+	switch {
+	case hasRef || hasConst || hasAllOf || limits > 1:
 		outer := map[string]any{}
 		inner := maps.Clone(pm)
 		for _, meta := range []string{"description", "title"} {
@@ -657,61 +761,75 @@ func nullableSchema(pm map[string]any) map[string]any {
 		}
 		outer["anyOf"] = []any{inner, map[string]any{"type": "null"}}
 		return outer
-	}
-	if branches, ok := pm["anyOf"].([]any); ok {
-		pm["anyOf"] = append(branches, map[string]any{"type": "null"})
-		return pm
-	}
-	if branches, ok := pm["oneOf"].([]any); ok {
-		pm["oneOf"] = append(branches, map[string]any{"type": "null"})
-		return pm
-	}
-	if types, ok := pm["type"].([]any); ok {
+	case hasAnyOf:
+		pm["anyOf"] = append(anyBranches, map[string]any{"type": "null"})
+	case hasOneOf:
+		pm["oneOf"] = append(oneBranches, map[string]any{"type": "null"})
+	case typeList:
 		pm["type"] = append(types, "null")
-		return pm
-	}
-	if t, ok := pm["type"].(string); ok && t != "" {
+	case typeString:
 		pm["type"] = []any{t, "null"}
-		return pm
-	}
-	if vals, ok := pm["enum"].([]any); ok {
+	case hasEnum:
 		pm["enum"] = append(vals, nil)
-		return pm
 	}
 	return pm
 }
 
+// schemaAllowsNull reports whether null passes the schema: it has at least one of `type`, `enum`,
+// `const`, `anyOf` and `oneOf`, and null passes every one it has. A `$ref` or `allOf` is not
+// followed, so a schema with one is taken to refuse null.
 func schemaAllowsNull(pm map[string]any) bool {
-	if t, ok := pm["type"].(string); ok && strings.EqualFold(t, "null") {
-		return true
+	if _, ok := pm["$ref"]; ok {
+		return false
 	}
-	if types, ok := pm["type"].([]any); ok {
-		for _, item := range types {
-			if str, ok := item.(string); ok && strings.EqualFold(str, "null") {
-				return true
+	if _, ok := pm["allOf"]; ok {
+		return false
+	}
+	limited := false
+	if t, ok := pm["type"]; ok {
+		limited = true
+		allowed := false
+		switch t := t.(type) {
+		case string:
+			allowed = strings.EqualFold(t, "null")
+		case []any:
+			for _, item := range t {
+				if str, ok := item.(string); ok && strings.EqualFold(str, "null") {
+					allowed = true
+				}
 			}
 		}
+		if !allowed {
+			return false
+		}
 	}
-	if c, hasConst := pm["const"]; hasConst && c == nil {
-		return true
+	if c, ok := pm["const"]; ok {
+		limited = true
+		if c != nil {
+			return false
+		}
 	}
 	if vals, ok := pm["enum"].([]any); ok {
-		for _, item := range vals {
-			if item == nil {
-				return true
-			}
+		limited = true
+		if !slices.Contains(vals, nil) {
+			return false
 		}
 	}
 	for _, uk := range []string{"anyOf", "oneOf"} {
 		if branches, ok := pm[uk].([]any); ok {
+			limited = true
+			allowed := false
 			for _, b := range branches {
 				if bm, ok := b.(map[string]any); ok && schemaAllowsNull(bm) {
-					return true
+					allowed = true
 				}
+			}
+			if !allowed {
+				return false
 			}
 		}
 	}
-	return false
+	return limited
 }
 
 func stringSet(v any) map[string]bool {

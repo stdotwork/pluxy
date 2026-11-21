@@ -517,7 +517,10 @@ func (h *shaper) tools() {
 	}
 	// The endpoint rejects some schema forms whoever wrote the tool, so this covers the client's
 	// own Responses tools too.
-	if fixToolSchemas(tools) {
+	lose := func(path, detail string) {
+		h.tr.Losses = llm.AddLoss(h.tr.Losses, llm.Loss{Kind: llm.LossApproximated, Path: path, Detail: detail})
+	}
+	if fixToolSchemas(tools, "tools", lose) {
 		h.m["tools"] = raw(tools)
 	}
 	for i, t := range tools {
