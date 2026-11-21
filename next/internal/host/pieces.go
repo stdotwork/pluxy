@@ -12,12 +12,12 @@ import (
 // pieces are the secrets of the account a call runs on (protocol.AccountSecretsWith), whose
 // pieces an upstream may echo in its error: a key it refuses, cut to its first characters, or a
 // token in part. The call's Redactor removes only whole secrets and their parts, so core also
-// removes every run of text that holds 4 or more characters of one of these
-// (protocol.RemovePieces) from the upstream's error text: an error event's message and the string
-// values of its raw data, and in the call's capture the body of an upstream reply with an error
-// status, or of every reply when the call ended in an error. A call that succeeded keeps its
-// replies as they are: the rule would cut words of a model's output that share 4 characters with
-// a secret.
+// removes every run of text that holds 4 or more characters of one of these, or 8 of a line of one
+// that spans lines such as a PEM private key (protocol.RemovePieces), from the upstream's error
+// text: an error event's message and the string values of its raw data, and in the call's capture
+// the body of an upstream reply with an error status, or of every reply when the call ended in an
+// error. A call that succeeded keeps its replies as they are: the rule would cut words of a
+// model's output that share 4 characters with a secret.
 type pieces []string
 
 // accountPieces returns the pieces of account a, after outbound has resolved its proxy: its

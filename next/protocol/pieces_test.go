@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -41,6 +42,37 @@ func TestRemovePiecesKeepsPublicPrefix(t *testing.T) {
 	}
 	if got := RemovePieces("the kimi-k2 model is busy", "sk-kimi-Ab3Cd5Ef7Gh9Ij1Kl3"); got != "the kimi-k2 model is busy" {
 		t.Errorf("a word of the prefix went: %q", got)
+	}
+}
+
+// A key file's private key spans lines: its pieces are taken a line at a time, at 8 bytes, so a
+// key that spells part of an error's word leaves the word whole, while the key itself, each of its
+// lines and a line cut in half are still removed.
+func TestRemovePiecesKeyFileLines(t *testing.T) {
+	const (
+		line1 = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQInvaA7Zs3Lp9Qd"
+		line2 = "v2Wp8Ys3Nk6Qd4Rf1Gh5Ij7Kl2Mn0Op3Qr6St9Uv8Wx1Yz4Ab5Cd7Ef0Gh2Ij5K"
+		line3 = "0Zt3Xc6Vb9Nm2Qw5Er8Ty1Ui4Op7As0Df3Gh6Jk9LzXc5VbQSign5Nm1Qw4Er7Ty"
+	)
+	key := "-----BEGIN PRIVATE KEY-----\n" + line1 + "\n" + line2 + "\n" + line3 + "\n-----END PRIVATE KEY-----\n"
+	p := AccountSecretsWith(Account{}, []string{key}) // as core passes a key file's private_key
+	if in := "invalid_grant (Invalid JWT Signature.)"; RemovePieces(in, p...) != in {
+		t.Errorf("RemovePieces(%q) = %q, want the words kept", in, RemovePieces(in, p...))
+	}
+	for _, line := range []string{line1, line2, line3} {
+		if got := RemovePieces(line, p...); got != Redacted {
+			t.Errorf("RemovePieces(%q) = %q, want %q", line, got, Redacted)
+		}
+	}
+	// A PEM's boundary lines are public words, so of them only what a run holds minLinePiece bytes
+	// of goes: "PRIVATE", 7 bytes, is no piece, and the key's body is gone whole.
+	whole := "private_key: " + key
+	want := "private_key: [redacted] PRIVATE [redacted]\n" + strings.Repeat(Redacted+"\n", 3) + "[redacted] PRIVATE [redacted]\n"
+	if got := RemovePieces(whole, p...); got != want {
+		t.Errorf("RemovePieces(%q) = %q, want %q", whole, got, want)
+	}
+	if half := "cut " + line2[:32]; RemovePieces(half, p...) != "cut "+Redacted {
+		t.Errorf("RemovePieces(%q) = %q, want the half line removed", half, RemovePieces(half, p...))
 	}
 }
 
