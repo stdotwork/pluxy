@@ -15,6 +15,9 @@ pub(super) fn access(label: &str) -> Key {
     Key::Access(crate::confirmation::text::access_key(label).expect("a label with an access key"))
 }
 
+/// How long the native input of one key entry may take, the UI Automation check included.
+const INPUT_WAIT: Duration = Duration::from_secs(300);
+
 fn answer(
     app: AppHandle,
     key: String,
@@ -132,11 +135,23 @@ pub(super) fn enter(
     main.eval("window.__keyResult = null; window.__TAURI_INTERNALS__.invoke('key_entry', {change: null}).then(v => window.__keyResult = v, () => window.__keyResult = {status: 'ipc_error'})")
         .map_err(|_| "could not request key entry")?;
     let input = answer(app.clone(), key.to_string(), keep, cancel);
-    let result = wait_for("key entry result", || {
-        eval(main, "window.__keyResult").filter(|v| !v.is_null())
-    });
+    // The input first, with a limit of its own: on Windows it includes the UI Automation check, a
+    // PowerShell that compiles C#, which a loaded runner can take most of `wait_for`'s limit on.
+    // The result's wait then counts only the app's answer.
+    let until = Instant::now() + INPUT_WAIT;
+    while !input.is_finished() {
+        if Instant::now() > until {
+            return Err(format!(
+                "the native key entry input did not finish within {INPUT_WAIT:?}"
+            ));
+        }
+        beat("the native key entry input");
+        std::thread::sleep(Duration::from_millis(200));
+    }
     input.join().map_err(|_| "native input panicked")??;
-    result
+    wait_for("key entry result", || {
+        eval(main, "window.__keyResult").filter(|v| !v.is_null())
+    })
 }
 
 pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
