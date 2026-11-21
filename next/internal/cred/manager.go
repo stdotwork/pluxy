@@ -55,9 +55,9 @@ var (
 	// A credential renewed this recently and refused again by the upstream is not renewed
 	// again: the refusal is not about its age.
 	renewedRecently = time.Minute
-	// loginTimeout bounds a login that waits for a person: the named liveness limit on login
+	// LoginTimeout bounds a login that waits for a person: the named liveness limit on login
 	// calls.
-	loginTimeout = 15 * time.Minute
+	LoginTimeout = 15 * time.Minute
 	// loginKeep is how long a finished login stays visible to the management API.
 	loginKeep = 10 * time.Minute
 )

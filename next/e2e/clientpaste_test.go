@@ -96,7 +96,7 @@ func TestClientPaste(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := runCLI(t, cliEnv, "client", "show", "pi")
-	if r.code != 0 || r.stderr != "Replace <client-key> with a client key: core's config file holds them, and \"pluxy key add\" makes another.\n" || !strings.HasPrefix(r.stdout, "Client: "+reply.Name+"\nAddress: "+reply.BaseURL+"\n") || !strings.HasSuffix(r.stdout, "\n\n"+reply.Note+"\n") {
+	if r.code != 0 || r.stderr != "Replace <client-key> with a client key: core's config file holds them, and \"pluxy key add\" makes another.\nReplace <model-id> with the name of a model your accounts serve: \"pluxy model list\" lists them.\n" || !strings.HasPrefix(r.stdout, "Client: "+reply.Name+"\nAddress: "+reply.BaseURL+"\n") || !strings.HasSuffix(r.stdout, "\n\n"+reply.Note+"\n") {
 		t.Fatalf("pluxy client show pi: %s", r)
 	}
 	for _, f := range reply.Files {
