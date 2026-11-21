@@ -331,11 +331,11 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 	shown := ""
 	var prompt *promptInput
 	// answered says core has an answer to the prompt shown, and reshown that a later read still
-	// shows that prompt, so the person may answer it again. The read made right after an answer
-	// does not count: the extension may not have updated its prompt yet.
+	// shows that prompt, so a person at a terminal may answer it again. The read made right after
+	// an answer does not count: the extension may not have updated its prompt yet.
 	answered, reshown := false, false
 	// ended says standard input has ended. giveUp is the bounded wait on a prompt that was answered
-	// and is still up with nothing left to answer it, and unanswered the field it still wants.
+	// and is still up with nothing that may answer it, and unanswered the field it still wants.
 	ended := false
 	var giveUp <-chan time.Time
 	var unanswered protocol.LoginInput
@@ -419,7 +419,7 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 			}
 			return x.cancelLogin(l.ID, errors.New("sign-in cancelled"))
 		case <-giveUp:
-			return x.cancelLogin(l.ID, usageError{fmt.Sprintf("the sign-in still asks for %s and standard input has no more lines: %s", fieldName(unanswered), inputHint(unanswered))})
+			return x.cancelLogin(l.ID, usageError{fmt.Sprintf("the sign-in still asks for %s after the value it was given: %s", fieldName(unanswered), inputHint(unanswered))})
 		case r := <-input:
 			if !r.ok {
 				ended = true
@@ -455,7 +455,15 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 			case err == nil:
 				failures = 0
 				if answered && promptKey(next.Prompt) == shown {
-					reshown = true
+					// A person can see the prompt is still up and answer it again. A piped line
+					// never does: it may be the next prompt's value, perhaps a secret, so such a
+					// sign-in gets a bounded wait to move on.
+					if x.prompts() {
+						reshown = true
+					} else if giveUp == nil && next.Prompt.Kind == protocol.PromptInput && len(next.Prompt.Inputs) > 0 {
+						unanswered = next.Prompt.Inputs[0]
+						giveUp = time.After(accountAnswerWait)
+					}
 				}
 				l, body = next, nextBody
 				timer.Reset(accountLoginWait)

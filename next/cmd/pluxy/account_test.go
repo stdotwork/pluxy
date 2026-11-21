@@ -1131,12 +1131,34 @@ func TestCLIAccountAddRefusesBrokenDocument(t *testing.T) {
 func TestFollowLoginAnswersARepeatedPrompt(t *testing.T) {
 	shortLoginWait(t)
 	f := newFakeAccountCore(t)
-	out, errOut, code := f.runBounded(t, strings.NewReader("wrong\nright\n"), 5*time.Second, "account", "add", "test/ext", "--method", "repeat", "--id", "again-1")
+	out, errOut, code := f.runIn("wrong\nright\n", true, "account", "add", "test/ext", "--method", "repeat", "--id", "again-1")
 	if code != 0 || !strings.Contains(out, "account again-1 added") {
 		t.Fatalf("a prompt repeated after a wrong answer: code=%d out=%q err=%q", code, out, errOut)
 	}
 	if sent := f.sent(); len(sent) != 2 || sent[0]["code"] != "wrong" || sent[1]["code"] != "right" {
 		t.Fatalf("core was sent %v, want both answers", sent)
+	}
+}
+
+// Piped input answers each prompt once. Core cannot say whether a prompt still up is being worked
+// on or was answered wrongly, and the next piped line may be the value of the next prompt, perhaps
+// a secret, so it is never sent to this one.
+func TestFollowLoginPipedLineNeverAnswersARepeatedPrompt(t *testing.T) {
+	shortLoginWait(t)
+	old := accountAnswerWait
+	accountAnswerWait = 50 * time.Millisecond
+	t.Cleanup(func() { accountAnswerWait = old })
+	f := newFakeAccountCore(t)
+	_, errOut, code := f.runBounded(t, strings.NewReader("first\nsecret-for-the-next-prompt\n"), 5*time.Second,
+		"account", "add", "test/ext", "--method", "repeat", "--id", "piped-1")
+	if code != 2 {
+		t.Fatalf("a piped sign-in whose prompt never moves on: code=%d err=%q, want 2", code, errOut)
+	}
+	if sent := f.sent(); len(sent) != 1 || sent[0]["code"] != "first" {
+		t.Fatalf("core was sent %v, want only the first answer", sent)
+	}
+	if strings.Contains(errOut, "secret-for-the-next-prompt") {
+		t.Fatalf("the unsent line reached the output: %q", errOut)
 	}
 }
 

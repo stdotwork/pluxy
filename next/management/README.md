@@ -88,9 +88,10 @@ management API of a core that is already running. `pluxy -config ...` with no su
   input the values read are sent if every required field has one. A secret's value is never taken
   from `--input`, where the shell's history and the process list keep it, and no value is printed
   back; a terminal keeps a secret or a JSON file off the screen until the whole value is read, and
-  drops lines typed for a prompt the sign-in has moved past. A prompt that is still up after its
-  answer and a further read of the sign-in may be answered again, as may one core refused an
-  answer for; with no more input the command waits a minute for it to move on, then cancels. With
+  drops lines typed for a prompt the sign-in has moved past. At a terminal, a prompt that is still up
+  after its answer and a further read of the sign-in may be answered again, as may one core refused
+  an answer for. Piped input answers each prompt once, since its next line may be the next prompt's
+  value: the command waits a minute for the prompt to move on, then cancels. With
   `--json` nothing is read from a terminal: the values come from `--input` or from a pipe, or the
   command says what it needs with exit code 2. A sign-in that needs a value it did not get is
   cancelled in core, with exit code 2, and so is one `--no-wait` leaves waiting on a prompt. A read
