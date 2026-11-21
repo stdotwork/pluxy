@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/format/internal/audioinput"
@@ -173,7 +174,18 @@ func ParseRequest(body []byte) (llm.Request, error) {
 			nested["response_format"] = raw
 		}
 	}
-	req.Origin = rawjson.Origin(format, "", top, requestFields, nested)
+	// service_tier and verbosity are carried when they are strings; any other value stays in
+	// Origin.Raw.
+	modelled := requestFields
+	if tier, ok := rawjson.Text(top["service_tier"]); ok {
+		req.Options.ServiceTier = tier
+		modelled = rawjson.With(modelled, "service_tier")
+	}
+	if v, ok := rawjson.Text(top["verbosity"]); ok {
+		req.Options.Verbosity = v
+		modelled = rawjson.With(modelled, "verbosity")
+	}
+	req.Origin = rawjson.Origin(format, "", top, modelled, nested)
 	for i, raw := range in.Tools {
 		t, err := parseTool(raw, fmt.Sprintf("tools[%d]", i))
 		if err != nil {
@@ -474,6 +486,8 @@ type outTail struct {
 	ParallelToolCalls *bool             `json:"parallel_tool_calls,omitempty"`
 	ResponseFormat    any               `json:"response_format,omitempty"`
 	ReasoningEffort   string            `json:"reasoning_effort,omitempty"`
+	ServiceTier       string            `json:"service_tier,omitempty"`
+	Verbosity         string            `json:"verbosity,omitempty"`
 }
 
 // encoder builds one Chat Completions request and records what it could not carry over.
@@ -538,6 +552,24 @@ func marshal(v any, raw json.RawMessage) json.RawMessage {
 // parts are dropped is an invalid_request error, never sent empty. It does not look at
 // req.Native; callers that can pass the native body through do so first.
 func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
+	return EncodeRequestWith(req, EncodeOptions{})
+}
+
+// serviceTiers are the service tiers the Chat Completions create reference lists
+// (https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create).
+var serviceTiers = []string{"auto", "default", "flex", "scale", "priority", "fast"}
+
+// EncodeOptions changes how EncodeRequestWith builds a body.
+type EncodeOptions struct {
+	// ServiceTier and Verbosity say the caller knows its upstream takes the field: a request from
+	// another format then carries the client's service tier or verbosity, and without them it
+	// leaves it out and reports it as dropped, since a third-party upstream may refuse a field it
+	// does not list. A Chat client's own tier and verbosity are written either way.
+	ServiceTier, Verbosity bool
+}
+
+// EncodeRequestWith builds a Chat Completions request body as EncodeRequest does, changed by opts.
+func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss, error) {
 	e := &encoder{}
 	req, lowered := clienttools.Lower(req)
 	e.losses = append(e.losses, lowered...)
@@ -552,6 +584,29 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 			Stop:            req.Options.Stop,
 			ReasoningEffort: req.Options.ReasoningEffort,
 		},
+	}
+	// A request from another format carries a tier or verbosity only if the Chat Completions
+	// reference lists it: another value would be refused. A Chat client's own is written as it is.
+	own := req.SourceFormat() == format
+	if t := req.Options.ServiceTier; t != "" {
+		switch {
+		case !opts.ServiceTier && !own:
+			e.lose(llm.LossDropped, llm.ServiceTierPath(req), llm.ServiceTierUnsent)
+		case !own && !slices.Contains(serviceTiers, t):
+			e.lose(llm.LossDropped, llm.ServiceTierPath(req), fmt.Sprintf("Chat Completions lists no %q service tier", t))
+		default:
+			out.ServiceTier = t
+		}
+	}
+	if v := req.Options.Verbosity; v != "" {
+		switch {
+		case !opts.Verbosity && !own:
+			e.lose(llm.LossDropped, llm.VerbosityPath(req), llm.VerbosityUnsent)
+		case !own && !slices.Contains(llm.Verbosities, v):
+			e.lose(llm.LossDropped, llm.VerbosityPath(req), fmt.Sprintf("Chat Completions lists no %q verbosity", v))
+		default:
+			out.Verbosity = v
+		}
 	}
 	if req.Stream {
 		out.StreamOptions = &struct {

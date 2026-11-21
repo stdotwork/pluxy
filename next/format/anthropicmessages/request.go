@@ -104,6 +104,26 @@ type request struct {
 var requestFields = []string{"model", "messages", "system", "max_tokens", "stream", "temperature", "top_p",
 	"stop_sequences", "tools", "tool_choice", "thinking", "output_config"}
 
+// parseServiceTier reads the request's service tier and returns it with the top-level fields the
+// model carries. A fast speed is the priority tier, and the service_tier beside it, which says
+// nothing about speed, stays in Origin.Raw. Without it, service_tier's auto is the auto tier and
+// standard_only the default tier. Any other value, and a speed that is not fast, stays in
+// Origin.Raw.
+func parseServiceTier(top map[string]json.RawMessage) (string, []string) {
+	if speed, ok := rawjson.Text(top["speed"]); ok && speed == "fast" {
+		return llm.ServiceTierPriority, rawjson.With(requestFields, "speed")
+	}
+	if tier, ok := rawjson.Text(top["service_tier"]); ok {
+		switch tier {
+		case "auto":
+			return llm.ServiceTierAuto, rawjson.With(requestFields, "service_tier")
+		case "standard_only":
+			return llm.ServiceTierDefault, rawjson.With(requestFields, "service_tier")
+		}
+	}
+	return "", requestFields
+}
+
 // ParseRequest reads a Messages request body. The result keeps body as its Native form, and every
 // item, part and tool keeps the fields the model has no place for (cache_control, signatures,
 // citations and the like) in its Origin. The result refers to body rather than copying it, so
@@ -139,7 +159,9 @@ func ParseRequest(body []byte) (llm.Request, error) {
 	rf, configRest := parseOutputConfigFormat(configRest)
 	req.Options.ResponseFormat = rf
 	nested["thinking"], nested["output_config"] = thinkingRest, configRest
-	req.Origin = rawjson.Origin(format, "", top, requestFields, nested)
+	var modelled []string
+	req.Options.ServiceTier, modelled = parseServiceTier(top)
+	req.Origin = rawjson.Origin(format, "", top, modelled, nested)
 
 	for i, raw := range in.Tools {
 		req.Tools = append(req.Tools, parseTool(raw, fmt.Sprintf("tools[%d]", i)))

@@ -40,7 +40,7 @@ func TestBuildBodyTranslatesEveryWire(t *testing.T) {
 					}},
 					Native: &llm.Native{Format: source, Body: json.RawMessage(`{}`)},
 				}
-				body, tr, err := buildBody(req, target)
+				body, tr, err := buildBody(req, target, settings{})
 				if err != nil {
 					t.Fatalf("buildBody: %v", err)
 				}

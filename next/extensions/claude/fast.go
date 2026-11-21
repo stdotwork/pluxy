@@ -29,28 +29,6 @@ func isFast(body []byte, betas string) bool {
 	return ok && strings.EqualFold(strings.TrimSpace(s), "fast")
 }
 
-// priorityTier reports whether a Responses client asked for the priority service tier
-// ("service_tier": "priority"), which today's core sends to Claude as fast mode.
-func priorityTier(n *llm.Native) bool {
-	if n == nil || n.Format != llm.FormatOpenAIResponses {
-		return false
-	}
-	var r struct {
-		ServiceTier any `json:"service_tier"`
-	}
-	return json.Unmarshal(n.Body, &r) == nil && r.ServiceTier == "priority"
-}
-
-// withFastSpeed sets "speed": "fast" on a Messages body.
-func withFastSpeed(body []byte) ([]byte, error) {
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(body, &m); err != nil {
-		return nil, err
-	}
-	m["speed"] = json.RawMessage(`"fast"`)
-	return json.Marshal(m)
-}
-
 // fastCredits reports Anthropic's refusal of fast mode to an account without the usage credits
 // it needs. Only the request can change that (no other account fares better for it, and the
 // account is fine for other requests), so the refusal is the request's. A real rate limit

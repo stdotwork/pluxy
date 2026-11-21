@@ -331,6 +331,19 @@ type Options struct {
 	// taken it off Model and off the model in Native.Body. It wins over ReasoningEffort and over
 	// any reasoning or thinking settings in Native.Body, also in a body sent unchanged.
 	ThinkingSuffix string `json:"thinking_suffix,omitempty"`
+	// ServiceTier is the service tier the client asked for (protocol minor version 28): auto,
+	// default, flex, priority, scale or ultrafast (the ServiceTier constants), or another value
+	// the client named, as it wrote it. A format that names a tier otherwise is read into these
+	// (Messages' standard_only is default, its speed fast and Gemini's priority are priority,
+	// Gemini's standard is default); an OpenAI format's fast stays fast, and
+	// CanonicalServiceTier makes it priority. Empty: the client named none, and the upstream's
+	// own default applies. A paid tier is sent only when the client asked for it or its
+	// equivalent; a tier a format cannot say is dropped with a loss, never moved to another.
+	ServiceTier string `json:"service_tier,omitempty"`
+	// Verbosity is how long an answer the client asked for (protocol minor version 28): low,
+	// medium or high, or another value it named, as it wrote it. Empty: the client named none.
+	// Chat Completions and Responses have it; another format drops it with a loss.
+	Verbosity string `json:"verbosity,omitempty"`
 }
 
 // Tool choice modes.

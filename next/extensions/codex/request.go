@@ -4,6 +4,7 @@ import (
 	"crypto/sha1"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
@@ -59,11 +60,23 @@ func buildRequest(req llm.Request, accountID string, s settings, a account, ws b
 	} else {
 		r := req
 		r.Model = model
-		enc, losses, err := openairesponses.EncodeRequest(r)
+		// The Codex endpoint takes a service tier and a verbosity, and so does OpenAI's API; a
+		// custom base_url may be a third-party host that refuses a field it does not list, so it
+		// gets neither from a translated request (takesTier). At the default hosts the routed
+		// model's catalog entry says what it takes, as the Codex CLI reads it (narrowToModel).
+		host := takesTier(s, a)
+		var narrowed []llm.Loss
+		if host {
+			r, narrowed = narrowToModel(r)
+		}
+		enc, losses, err := openairesponses.EncodeRequestWith(r, openairesponses.EncodeOptions{ServiceTier: host, Verbosity: host})
 		if err != nil {
 			return nil, err
 		}
 		tr.Losses = losses
+		for _, l := range narrowed {
+			tr.Losses = llm.AddLoss(tr.Losses, l)
+		}
 		if req.DropPolicy == llm.DropReject && tr.Dropped() {
 			paths := tr.DroppedPaths()
 			return nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Dropped: paths,
@@ -96,6 +109,18 @@ func buildRequest(req llm.Request, accountID string, s settings, a account, ws b
 	}
 	return &upstreamRequest{body: out, tr: tr, model: model, sessionID: sh.sessionID, names: sh.names,
 		keepOutput: nativeLite && (ws || req.Stream), encryptedReasoning: sh.encryptedReasoning}, nil
+}
+
+// takesTier reports whether the account's upstream is known to take a service tier and a verbosity
+// in a Responses request: the hosts of the two default base URLs, OpenAI's API and the ChatGPT
+// backend Codex uses. Any other base_url may be a third-party host.
+func takesTier(s settings, a account) bool {
+	u, err := url.Parse(baseURL(s, a))
+	if err != nil {
+		return false
+	}
+	h := strings.ToLower(u.Hostname())
+	return h == "api.openai.com" || h == "chatgpt.com"
 }
 
 // Fields the Codex endpoint does not take, removed from every request. Codex's own request has no
@@ -435,7 +460,11 @@ func (h *shaper) streamOptions() {
 }
 
 // serviceTier keeps the service tiers the Codex endpoint takes: fast and priority become
-// priority, ultrafast stays, anything else is removed.
+// priority, ultrafast stays, anything else is removed. A translated request's tier has already been
+// narrowed to what its model lists (narrowToModel), which reports the tiers it dropped; this also
+// filters a Responses client's own body, which goes as it came and loses nothing it did not lose
+// before. The routing hint a subscription's request gets is made from the body this leaves
+// (setClientHeaders).
 func (h *shaper) serviceTier() {
 	switch t := h.str("service_tier"); t {
 	case "fast", "priority":

@@ -120,6 +120,22 @@ func Losses(o *llm.Origin, to string) []llm.Loss {
 	return out
 }
 
+// Text returns the string raw holds, and whether raw is a non-empty JSON string. A null, an empty
+// string or any other value is not one: a format that reads a setting only from a string leaves
+// the others where they are, in the request's kept fields.
+func Text(raw json.RawMessage) (string, bool) {
+	var s string
+	if len(raw) == 0 || raw[0] != '"' || json.Unmarshal(raw, &s) != nil || s == "" {
+		return "", false
+	}
+	return s, true
+}
+
+// With returns modelled and the extra names, as a new list.
+func With(modelled []string, extra ...string) []string {
+	return slices.Concat(modelled, extra)
+}
+
 // Join joins a path and a key.
 func Join(path, key string) string {
 	if path == "" {

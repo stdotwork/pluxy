@@ -3,6 +3,7 @@ package openairesponses
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/format/internal/audioinput"
@@ -79,6 +80,7 @@ type outRequest struct {
 	ParallelToolCalls *bool             `json:"parallel_tool_calls,omitempty"`
 	Text              any               `json:"text,omitempty"`
 	Reasoning         any               `json:"reasoning,omitempty"`
+	ServiceTier       string            `json:"service_tier,omitempty"`
 }
 
 type outFunctionTool struct {
@@ -98,6 +100,24 @@ type outFunctionTool struct {
 // dropped is an invalid_request error, never sent empty. It does not look at req.Native; callers
 // that can pass the native body through do so first.
 func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
+	return EncodeRequestWith(req, EncodeOptions{})
+}
+
+// serviceTiers are the service tiers the Responses create reference lists
+// (https://developers.openai.com/api/reference/resources/responses/methods/create).
+var serviceTiers = []string{"auto", "default", "flex", "scale", "priority", "fast", "ultrafast"}
+
+// EncodeOptions changes how EncodeRequestWith builds a body.
+type EncodeOptions struct {
+	// ServiceTier and Verbosity say the caller knows its upstream takes the field: a request from
+	// another format then carries the client's service tier or verbosity, and without them it
+	// leaves it out and reports it as dropped, since a third-party upstream may refuse a field it
+	// does not list. A Responses client's own tier and verbosity are written either way.
+	ServiceTier, Verbosity bool
+}
+
+// EncodeRequestWith builds a Responses request body as EncodeRequest does, changed by opts.
+func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss, error) {
 	e := &encoder{}
 	o := req.Options
 	out := outRequest{
@@ -108,6 +128,20 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 		Temperature:       o.Temperature,
 		TopP:              o.TopP,
 		ParallelToolCalls: o.ParallelToolCalls,
+	}
+	// A request from another format carries a tier or verbosity only if the Responses create
+	// reference lists it: another value would be refused. A Responses client's own is written as
+	// it is.
+	own := req.SourceFormat() == format
+	if o.ServiceTier != "" {
+		switch {
+		case !opts.ServiceTier && !own:
+			e.lose(llm.LossDropped, llm.ServiceTierPath(req), llm.ServiceTierUnsent)
+		case !own && !slices.Contains(serviceTiers, o.ServiceTier):
+			e.lose(llm.LossDropped, llm.ServiceTierPath(req), fmt.Sprintf("Responses lists no %q service tier", o.ServiceTier))
+		default:
+			out.ServiceTier = o.ServiceTier
+		}
 	}
 	if len(o.Stop) > 0 {
 		e.lose(llm.LossDropped, "stop", "Responses has no stop sequences")
@@ -130,6 +164,21 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 			}
 		}
 		out.Text = map[string]any{"format": f}
+	}
+	if v := o.Verbosity; v != "" {
+		switch {
+		case !opts.Verbosity && !own:
+			e.lose(llm.LossDropped, llm.VerbosityPath(req), llm.VerbosityUnsent)
+		case !own && !slices.Contains(llm.Verbosities, v):
+			e.lose(llm.LossDropped, llm.VerbosityPath(req), fmt.Sprintf("Responses lists no %q verbosity", v))
+		default:
+			text, _ := out.Text.(map[string]any)
+			if text == nil {
+				text = map[string]any{}
+			}
+			text["verbosity"] = v
+			out.Text = text
+		}
 	}
 	if tc := o.ToolChoice; tc != nil {
 		switch {

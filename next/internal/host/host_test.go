@@ -47,6 +47,11 @@ func fakeExtension(mode string) {
 		toolResultEcho(minor, true)
 		return
 	}
+	if m, ok := strings.CutPrefix(mode, "service-tier-"); ok {
+		minor, _ := strconv.Atoi(m)
+		toolResultEcho(minor, false)
+		return
+	}
 	if m, ok := strings.CutPrefix(mode, "tool-result-"); ok {
 		minor, _ := strconv.Atoi(m)
 		toolResultEcho(minor, false)

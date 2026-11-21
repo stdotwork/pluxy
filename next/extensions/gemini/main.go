@@ -184,7 +184,7 @@ func generateTo(ctx context.Context, call sdk.Call, out sender) (err error) {
 	if err != nil {
 		return err
 	}
-	body, tr, err := buildBody(call.Request)
+	body, tr, err := buildBodyOn(call.Request, s)
 	if err != nil {
 		return err
 	}
@@ -355,6 +355,24 @@ func postBody(ctx context.Context, t target, body []byte, stream bool, model str
 // place of the request's own. Under the reject drop policy a translation that drops anything is
 // refused.
 func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
+	return buildBodyOn(req, settings{BaseURL: defaultBaseURL})
+}
+
+// takesServiceTier reports whether the account's upstream is known to take a service tier in its
+// GenerateContent request: the Gemini API at its own host does (the GenerateContentRequest
+// reference), Vertex AI's request has none, and any other host may refuse a field it does not list.
+func takesServiceTier(s settings) bool {
+	if s.Vertex != nil {
+		return false
+	}
+	u, err := url.Parse(s.BaseURL)
+	return err == nil && strings.EqualFold(u.Hostname(), "generativelanguage.googleapis.com")
+}
+
+// buildBodyOn builds the body as buildBody does for the Gemini API, for the account with settings
+// s. A translated request's service tier is left out of the body, and reported as dropped, for an
+// account that does not take one (takesServiceTier).
+func buildBodyOn(req llm.Request, s settings) ([]byte, *llm.Translation, error) {
 	tr := &llm.Translation{To: llm.FormatGeminiGenerate}
 	if n := req.Native; n != nil {
 		tr.From = n.Format
@@ -383,7 +401,7 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 		req.Options.MaxOutputTokens = nil
 		extra = append(extra, llm.Loss{Kind: llm.LossDropped, Path: "max_tokens", Detail: "a Messages client's required max_tokens is left to the Gemini model's own limit"})
 	}
-	body, losses, err := geminigenerate.EncodeRequest(req)
+	body, losses, err := geminigenerate.EncodeRequestWith(req, geminigenerate.EncodeOptions{ServiceTier: takesServiceTier(s)})
 	if err != nil {
 		return nil, nil, err
 	}

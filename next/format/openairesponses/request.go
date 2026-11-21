@@ -104,9 +104,17 @@ func ParseRequest(body []byte) (llm.Request, error) {
 	}
 	if raw, ok := top["text"]; ok {
 		m := rawjson.Object(raw)
+		// text.verbosity is carried when it is a string; any other value stays in Origin.Raw.
+		verbosity, hasVerbosity := rawjson.Text(m["verbosity"])
+		if hasVerbosity {
+			req.Options.Verbosity = verbosity
+		}
 		if rf := parseTextFormat(m["format"]); rf != nil {
 			req.Options.ResponseFormat = rf
-			rest := rawjson.Object(rawjson.Rest(m, "format"))
+			rest := rawjson.Object(rawjson.Rest(m, "format", "verbosity"))
+			if !hasVerbosity {
+				rest = rawjson.Object(rawjson.Rest(m, "format"))
+			}
 			if f := rawjson.Rest(rawjson.Object(m["format"]), "type", "name", "description", "schema", "strict"); f != nil {
 				if rest == nil {
 					rest = map[string]json.RawMessage{}
@@ -114,6 +122,8 @@ func ParseRequest(body []byte) (llm.Request, error) {
 				rest["format"] = f
 			}
 			nested["text"] = rawjson.Encode(rest)
+		} else if hasVerbosity {
+			nested["text"] = rawjson.Rest(m, "verbosity")
 		} else {
 			nested["text"] = raw
 		}
@@ -128,7 +138,12 @@ func ParseRequest(body []byte) (llm.Request, error) {
 			nested["reasoning"] = raw
 		}
 	}
-	req.Origin = rawjson.Origin(format, "", top, requestFields, nested)
+	modelled := requestFields
+	if tier, ok := rawjson.Text(top["service_tier"]); ok {
+		req.Options.ServiceTier = tier
+		modelled = rawjson.With(modelled, "service_tier")
+	}
+	req.Origin = rawjson.Origin(format, "", top, modelled, nested)
 
 	for i, raw := range in.Tools {
 		req.Tools = append(req.Tools, parseTool(raw, fmt.Sprintf("tools[%d]", i)))

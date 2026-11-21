@@ -2,11 +2,18 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/stdotwork/pluxy/next/format/anthropicmessages"
+	"github.com/stdotwork/pluxy/next/format/geminigenerate"
+	"github.com/stdotwork/pluxy/next/format/openaichat"
+	"github.com/stdotwork/pluxy/next/format/openairesponses"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 	"github.com/stdotwork/pluxy/next/sdk"
@@ -131,18 +138,208 @@ func TestPostSeesFastModeBeforeBetasAreStripped(t *testing.T) {
 	}
 }
 
-func TestPriorityTier(t *testing.T) {
+// A client's explicit priority tier reaches Claude as fast mode whatever its format: Chat and
+// Responses priority or fast, Gemini priority. The tiers that are not the priority tier, an absent
+// tier and a tier Messages cannot say never do; one it cannot say is reported as dropped, at the
+// client's field, and refuses the request under the reject drop policy.
+func TestServiceTierToFastMode(t *testing.T) {
+	chat := func(extra string) llm.Request {
+		r, err := openaichat.ParseRequest([]byte(`{"model":"claude-opus-4-8","messages":[{"role":"user","content":"hi"}]` + extra + `}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return overProtocol(t, r)
+	}
+	responses := func(extra string) llm.Request {
+		r, err := openairesponses.ParseRequest([]byte(`{"model":"claude-opus-4-8","input":"hi"` + extra + `}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return overProtocol(t, r)
+	}
+	gemini := func(extra string) llm.Request {
+		r, err := geminigenerate.ParseRequest("claude-opus-4-8", false, []byte(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}]`+extra+`}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return overProtocol(t, r)
+	}
 	for _, c := range []struct {
-		n    *llm.Native
-		want bool
+		name     string
+		req      llm.Request
+		speed    string // the body's speed; "" for none
+		tier     string // the body's service_tier; "" for none
+		dropped  []string
+		rejected bool
 	}{
-		{&llm.Native{Format: llm.FormatOpenAIResponses, Body: []byte(`{"service_tier":"priority"}`)}, true},
-		{&llm.Native{Format: llm.FormatOpenAIResponses, Body: []byte(`{"service_tier":"flex"}`)}, false},
-		{&llm.Native{Format: llm.FormatOpenAIChat, Body: []byte(`{"service_tier":"priority"}`)}, false},
-		{nil, false},
+		{"chat priority", chat(`,"service_tier":"priority"`), "fast", "", nil, false},
+		{"chat fast", chat(`,"service_tier":"fast"`), "fast", "", nil, false},
+		{"responses priority", responses(`,"service_tier":"priority"`), "fast", "", nil, false},
+		{"responses fast", responses(`,"service_tier":"fast"`), "fast", "", nil, false},
+		{"gemini priority", gemini(`,"serviceTier":"priority"`), "fast", "", nil, false},
+		{"chat auto", chat(`,"service_tier":"auto"`), "", "auto", nil, false},
+		{"chat default", chat(`,"service_tier":"default"`), "", "standard_only", nil, false},
+		{"gemini standard", gemini(`,"serviceTier":"standard"`), "", "standard_only", nil, false},
+		{"gemini unspecified", gemini(`,"serviceTier":"unspecified"`), "", "", nil, false},
+		{"chat flex", chat(`,"service_tier":"flex"`), "", "", []string{"service_tier"}, true},
+		{"responses scale", responses(`,"service_tier":"scale"`), "", "", []string{"service_tier"}, true},
+		{"responses ultrafast", responses(`,"service_tier":"ultrafast"`), "", "", []string{"service_tier"}, true},
+		{"gemini flex", gemini(`,"serviceTier":"flex"`), "", "", []string{"serviceTier"}, true},
+		{"chat unknown", chat(`,"service_tier":"turbo"`), "", "", []string{"service_tier"}, true},
+		{"chat none", chat(``), "", "", nil, false},
 	} {
-		if got := priorityTier(c.n); got != c.want {
-			t.Errorf("priorityTier(%+v) = %v, want %v", c.n, got, c.want)
+		t.Run(c.name, func(t *testing.T) {
+			body, tr, err := buildBody(c.req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got struct {
+				Speed       string `json:"speed"`
+				ServiceTier string `json:"service_tier"`
+			}
+			if err := json.Unmarshal(body, &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Speed != c.speed || got.ServiceTier != c.tier {
+				t.Errorf("body has speed %q and service_tier %q, want %q and %q: %s", got.Speed, got.ServiceTier, c.speed, c.tier, body)
+			}
+			if d := tr.DroppedPaths(); !slices.Equal(d, c.dropped) {
+				t.Errorf("dropped %q, want %q", d, c.dropped)
+			}
+			rej := c.req
+			rej.DropPolicy = llm.DropReject
+			_, _, err = buildBody(rej)
+			var le *llm.Error
+			if got := errors.As(err, &le) && le.Code == llm.CodeUnsupported; got != c.rejected {
+				t.Errorf("reject policy: error %v, want refused: %v", err, c.rejected)
+			}
+		})
+	}
+}
+
+// A Messages client's own speed still goes as it is sent, and a Messages client's service tier
+// keeps going as sent, with the fast-mode beta added when the body asks for fast mode.
+func TestServiceTierMessagesUnchanged(t *testing.T) {
+	for _, in := range []string{
+		`{"model":"claude-opus-4-8","max_tokens":5,"speed":"fast","messages":[{"role":"user","content":"hi"}]}`,
+		`{"model":"claude-opus-4-8","max_tokens":5,"service_tier":"standard_only","messages":[{"role":"user","content":"hi"}]}`,
+	} {
+		req, err := anthropicmessages.ParseRequest([]byte(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, tr, err := buildBody(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var sent, want map[string]json.RawMessage
+		if json.Unmarshal(body, &sent) != nil || json.Unmarshal([]byte(in), &want) != nil {
+			t.Fatal("not JSON")
+		}
+		for _, k := range []string{"speed", "service_tier"} {
+			if string(sent[k]) != string(want[k]) {
+				t.Errorf("%s = %s, want %s", k, sent[k], want[k])
+			}
+		}
+		if !tr.Passthrough {
+			t.Errorf("a Messages request was not passed through")
 		}
 	}
+}
+
+// An account's base_url decides what Claude sends. Only Anthropic's own API takes a service tier
+// from a request in another format (a third-party host may refuse a field it does not list), and
+// fast mode follows it, except that a Responses client's priority tier still goes as fast mode on
+// any base_url, as it did before other formats' did. Anything left out is reported as dropped at
+// the client's field.
+func TestServiceTierByBaseURL(t *testing.T) {
+	chat := func(extra string) llm.Request {
+		r, err := openaichat.ParseRequest([]byte(`{"model":"claude-opus-4-8","messages":[{"role":"user","content":"hi"}]` + extra + `}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return overProtocol(t, r)
+	}
+	responses := func(extra string) llm.Request {
+		r, err := openairesponses.ParseRequest([]byte(`{"model":"claude-opus-4-8","input":"hi"` + extra + `}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return overProtocol(t, r)
+	}
+	gemini := func(extra string) llm.Request {
+		r, err := geminigenerate.ParseRequest("claude-opus-4-8", false, []byte(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}]`+extra+`}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return overProtocol(t, r)
+	}
+	const custom = "https://llm.example.com"
+	for _, c := range []struct {
+		name    string
+		req     llm.Request
+		base    string
+		speed   string
+		tier    string
+		dropped []string
+	}{
+		{"chat priority at Anthropic", chat(`,"service_tier":"priority"`), defaultBaseURL, "fast", "", nil},
+		{"chat auto at Anthropic", chat(`,"service_tier":"auto"`), defaultBaseURL, "", "auto", nil},
+		{"chat priority at a custom host", chat(`,"service_tier":"priority"`), custom, "", "", []string{"service_tier"}},
+		{"chat fast at a custom host", chat(`,"service_tier":"fast"`), custom, "", "", []string{"service_tier"}},
+		{"chat auto at a custom host", chat(`,"service_tier":"auto"`), custom, "", "", []string{"service_tier"}},
+		{"chat default at a custom host", chat(`,"service_tier":"default"`), custom, "", "", []string{"service_tier"}},
+		{"chat verbosity at a custom host", chat(`,"verbosity":"low"`), custom, "", "", []string{"verbosity"}},
+		{"gemini priority at a custom host", gemini(`,"serviceTier":"priority"`), custom, "", "", []string{"serviceTier"}},
+		{"gemini standard at a custom host", gemini(`,"serviceTier":"standard"`), custom, "", "", []string{"serviceTier"}},
+		{"responses priority at a custom host", responses(`,"service_tier":"priority"`), custom, "fast", "", nil},
+		{"responses fast at a custom host", responses(`,"service_tier":"fast"`), custom, "fast", "", nil},
+		{"responses auto at a custom host", responses(`,"service_tier":"auto"`), custom, "", "", []string{"service_tier"}},
+		{"responses flex at a custom host", responses(`,"service_tier":"flex"`), custom, "", "", []string{"service_tier"}},
+		{"chat none at a custom host", chat(``), custom, "", "", nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			opts := serviceOptions(anthropicmessages.EncodeOptions{}, c.req, c.base)
+			body, tr, err := buildBodyWith(c.req, cacheTTL5m, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got struct {
+				Speed       string `json:"speed"`
+				ServiceTier string `json:"service_tier"`
+			}
+			if err := json.Unmarshal(body, &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Speed != c.speed || got.ServiceTier != c.tier {
+				t.Errorf("body has speed %q and service_tier %q, want %q and %q: %s", got.Speed, got.ServiceTier, c.speed, c.tier, body)
+			}
+			if d := tr.DroppedPaths(); !slices.Equal(d, c.dropped) {
+				t.Errorf("dropped %q, want %q", d, c.dropped)
+			}
+			rej := c.req
+			rej.DropPolicy = llm.DropReject
+			_, _, err = buildBodyWith(rej, cacheTTL5m, serviceOptions(anthropicmessages.EncodeOptions{}, rej, c.base))
+			var le *llm.Error
+			if got := errors.As(err, &le) && le.Code == llm.CodeUnsupported; got != (len(c.dropped) > 0) {
+				t.Errorf("reject policy: error %v, want refused: %v", err, len(c.dropped) > 0)
+			}
+		})
+	}
+}
+
+// overProtocol returns r as the extension gets it: encoded to JSON and decoded again, as the
+// extension protocol carries a request from core, so a test of a body builder starts from a client's
+// real body parsed by its format's own parser and sent the way core sends it.
+func overProtocol(t *testing.T, r llm.Request) llm.Request {
+	t.Helper()
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out llm.Request
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }

@@ -155,6 +155,18 @@ type EncodeOptions struct {
 	// result minted for another credential, so an entry it reports false for is left out and the
 	// result block keeps an empty list. nil keeps every result, as EncodeRequest does.
 	SearchResultOwned func(encryptedContent string) bool
+	// ServiceTier says the caller knows its upstream takes a service tier: a request from another
+	// format then carries the client's auto and default tiers as service_tier (and its priority
+	// tier as speed, with FastMode). Without it every tier is left out and reported as dropped,
+	// since a third-party upstream may refuse a field it does not list. A Messages client's own
+	// tier is written either way.
+	ServiceTier bool
+	// FastMode lets the priority service tier be sent as "speed": "fast", whether or not
+	// ServiceTier is set (a caller may send fast mode where it sends no other tier).
+	// Anthropic takes the field only with the fast-mode beta header (and only on some models), so
+	// the caller sets it only when it adds that header to the request it sends. Left off, the
+	// priority tier is dropped and reported.
+	FastMode bool
 }
 
 // EncodeRequestWith builds a Messages request body as EncodeRequest does, changed by opts.
@@ -180,6 +192,10 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	}
 	if o.ReasoningEffort != "" {
 		e.lose(llm.LossDropped, "reasoning_effort", "Messages takes a thinking budget, which depends on the model")
+	}
+	e.serviceTier(req, opts, out)
+	if o.Verbosity != "" {
+		e.lose(llm.LossDropped, llm.VerbosityPath(req), "Messages has no verbosity setting")
 	}
 	if rf := o.ResponseFormat; rf != nil && rf.Type != "" && rf.Type != llm.ResponseFormatText {
 		switch {
@@ -560,4 +576,40 @@ func claudeSignature(sig string) bool {
 		}
 	}
 	return sig[0] != 'C' || (len(b) > 2 && b[0] == 0x08 && b[1] < 0x80 && b[2] == 0x12)
+}
+
+// serviceTier writes the request's service tier into out as Messages says it: auto as
+// service_tier auto, the default tier as service_tier standard_only (standard capacity only),
+// and the priority tier as speed fast (fast mode) when opts allows it. No other tier has a place
+// in a Messages request: flex, scale, ultrafast and any value the model does not know are
+// dropped and reported, never moved to the nearest tier. A request from another format whose
+// upstream is not known to take a tier (opts.ServiceTier) loses it whole.
+func (e *encoder) serviceTier(req llm.Request, opts EncodeOptions, out map[string]any) {
+	tier := req.Options.ServiceTier
+	if tier == "" {
+		return
+	}
+	own := req.SourceFormat() == format
+	t := llm.CanonicalServiceTier(tier)
+	if t == llm.ServiceTierPriority {
+		// Fast mode has its own switch: a caller may send it where it sends no other tier.
+		if opts.FastMode || own {
+			out["speed"] = "fast"
+		} else {
+			e.lose(llm.LossDropped, llm.ServiceTierPath(req), "Messages takes the priority tier only as fast mode, which this upstream is not sent")
+		}
+		return
+	}
+	if !opts.ServiceTier && !own {
+		e.lose(llm.LossDropped, llm.ServiceTierPath(req), llm.ServiceTierUnsent)
+		return
+	}
+	switch t {
+	case llm.ServiceTierAuto:
+		out["service_tier"] = "auto"
+	case llm.ServiceTierDefault:
+		out["service_tier"] = "standard_only"
+	default:
+		e.lose(llm.LossDropped, llm.ServiceTierPath(req), fmt.Sprintf("Messages has no %q service tier", tier))
+	}
 }
