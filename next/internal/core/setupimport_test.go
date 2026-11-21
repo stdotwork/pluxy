@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stdotwork/pluxy/next/management"
 )
@@ -698,4 +699,200 @@ func mapsEqual(a, b map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// getSetup sends GET /setup to c and returns the reply with its raw body.
+func getSetup(t *testing.T, c *Core, key string) (management.Setup, string) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/v0/management/setup", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.RemoteAddr = "127.0.0.1:12345"
+	rec := httptest.NewRecorder()
+	c.Management().ServeHTTP(rec, req)
+	var s management.Setup
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &s) != nil {
+		t.Fatalf("GET /setup: %d %s", rec.Code, rec.Body.String())
+	}
+	return s, rec.Body.String()
+}
+
+// scanSetup runs a scan through POST /setup/scan and waits until it has ended.
+func scanSetup(t *testing.T, c *Core, key string) management.Setup {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/v0/management/setup/scan", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.RemoteAddr = "127.0.0.1:12345"
+	rec := httptest.NewRecorder()
+	c.Management().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK && rec.Code != http.StatusAccepted {
+		t.Fatalf("POST /setup/scan: %d %s", rec.Code, rec.Body.String())
+	}
+	for i := 0; i < 200; i++ {
+		if s, _ := getSetup(t, c, key); !s.Scanning && s.ScannedAt != nil {
+			return s
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("the scan did not end")
+	return management.Setup{}
+}
+
+// The import is recorded on the row the scan found, whatever way the request spells the file;
+// a dry run and a refused import record nothing; the record survives a scan and a restart.
+func TestSetupImportRecordsLastImport(t *testing.T) {
+	const key = "fake-mgmt-key"
+	home := setTestHome(t)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	writeTestFile(t, cfgPath, `{"listen":"127.0.0.1:0","client_keys":["fake-client-key-1"],"management_key":"`+key+`"}`)
+	cpa := filepath.Join(home, ".cli-proxy-api")
+	writeTestFile(t, filepath.Join(cpa, "config.yaml"), "port: 8317\napi-keys: [fake-cpa-client-key]\nauth-dir: auths\ndebug: on\nclaude-api-key:\n  - {api-key: fake-claude-key}\n")
+	writeTestFile(t, filepath.Join(cpa, "auths", "claude-a.json"), `{"type": "claude", "access_token": "fake-claude"}`)
+	abs := filepath.Join(cpa, "config.yaml")
+
+	start := func() *Core {
+		c, err := Start(Options{ConfigPath: cfgPath, SafeMode: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	row := func(s management.Setup) management.SetupImport {
+		t.Helper()
+		if len(s.Found.Imports) != 1 {
+			t.Fatalf("imports = %+v, want one row", s.Found.Imports)
+		}
+		return s.Found.Imports[0]
+	}
+	c := start()
+	s := scanSetup(t, c, key)
+	if r := row(s); r.Config != "~/.cli-proxy-api/config.yaml" || r.LastImport != nil {
+		t.Fatalf("row before any import = %+v", r)
+	}
+
+	// A dry run and a refused import (a relative auth folder) record nothing.
+	if code, _, body := importCall(t, c, key, management.SetupImportRequest{Config: abs, DryRun: true}); code != http.StatusOK {
+		t.Fatalf("dry run: %d %s", code, body)
+	}
+	if code, _, body := importCall(t, c, key, management.SetupImportRequest{Config: abs, AuthDir: "relative/auths"}); code != http.StatusBadRequest {
+		t.Fatalf("refused import: %d %s", code, body)
+	}
+	if s, body := getSetup(t, c, key); row(s).LastImport != nil || strings.Contains(body, "last_import") {
+		t.Fatalf("a dry run or a refused import left a record: %s", body)
+	}
+
+	// The real import, naming the file by its absolute path, matches the row's ~ spelling.
+	before := time.Now().UTC().Add(-time.Second)
+	code, rep, body := importCall(t, c, key, management.SetupImportRequest{Config: abs})
+	if code != http.StatusOK || rep.DryRun {
+		t.Fatalf("import: %d %s", code, body)
+	}
+	want := func(at time.Time) *management.SetupLastImport {
+		return &management.SetupLastImport{At: at, Brought: len(rep.Brought), Changed: len(rep.Changed), NotBrought: len(rep.NotBrought)}
+	}
+	if len(rep.Brought) == 0 || len(rep.Changed) == 0 || len(rep.NotBrought) == 0 {
+		t.Fatalf("the report should fill all three lists to tell the counts apart: %s", body)
+	}
+	check := func(label string, s management.Setup) {
+		t.Helper()
+		got := row(s).LastImport
+		if got == nil {
+			t.Fatalf("%s: no last_import on %+v", label, row(s))
+		}
+		if w := want(got.At); *got != *w {
+			t.Errorf("%s: last_import = %+v, want %+v", label, *got, *w)
+		}
+		if got.At.Before(before) || got.At.After(time.Now().UTC().Add(time.Second)) || got.At.Location() != time.UTC {
+			t.Errorf("%s: last_import.at = %v is not a UTC time of this import", label, got.At)
+		}
+	}
+	s, body = getSetup(t, c, key)
+	check("after the import", s)
+	for _, leak := range []string{"fake-claude", "fake-cpa-client-key", "claude-api-key"} {
+		if strings.Contains(body, leak) {
+			t.Errorf("GET /setup holds %q", leak)
+		}
+	}
+	// The kept scan on disk has no record in its rows: the record is kept apart.
+	disk, err := os.ReadFile(filepath.Join(StateDir(cfgPath), setupFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept struct {
+		Found    struct{ Imports []map[string]any }
+		Imported map[string]any
+	}
+	if err := json.Unmarshal(disk, &kept); err != nil {
+		t.Fatal(err)
+	}
+	if len(kept.Imported) != 1 || len(kept.Found.Imports) != 1 {
+		t.Fatalf("setup.json: %s", disk)
+	}
+	if _, ok := kept.Found.Imports[0]["last_import"]; ok {
+		t.Errorf("setup.json keeps last_import in the scan's row: %s", disk)
+	}
+
+	// What the reply holds is a copy: changing it changes no record.
+	s.Found.Imports[0].LastImport.Brought = 999
+	c.setup.mu.Lock()
+	for _, r := range c.setup.imported {
+		if r.Brought == 999 {
+			t.Errorf("a returned row shares memory with the kept record")
+		}
+	}
+	c.setup.mu.Unlock()
+
+	// A later scan replaces the rows and the record stays.
+	check("after a scan", scanSetup(t, c, key))
+
+	// A restart keeps it.
+	c.Stop()
+	c = start()
+	defer c.Stop()
+	s, _ = getSetup(t, c, key)
+	check("after a restart", s)
+}
+
+// A dry run and an import name the file by any spelling of it: ~, the absolute path, and a
+// symlink to it match the same row.
+func TestSetupImportRecordMatchesSpellings(t *testing.T) {
+	const key = "fake-mgmt-key"
+	home := setTestHome(t)
+	cpa := filepath.Join(home, ".cli-proxy-api")
+	writeTestFile(t, filepath.Join(cpa, "config.yaml"), "api-keys: [fake-cpa-client-key]\n")
+	spellings := map[string]string{"tilde": "~/.cli-proxy-api/config.yaml", "dotdot": filepath.Join(cpa, "..", ".cli-proxy-api", "config.yaml")}
+	link := filepath.Join(t.TempDir(), "link.yaml")
+	if err := os.Symlink(filepath.Join(cpa, "config.yaml"), link); err == nil {
+		spellings["symlink"] = link
+	}
+	for name, spelled := range spellings {
+		t.Run(name, func(t *testing.T) {
+			cfgPath := filepath.Join(t.TempDir(), "config.json")
+			writeTestFile(t, cfgPath, `{"listen":"127.0.0.1:0","client_keys":["fake-client-key-1"],"management_key":"`+key+`"}`)
+			c, err := Start(Options{ConfigPath: cfgPath, SafeMode: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Stop()
+			scanSetup(t, c, key)
+			if code, _, body := importCall(t, c, key, management.SetupImportRequest{Config: spelled}); code != http.StatusOK {
+				t.Fatalf("import: %d %s", code, body)
+			}
+			s, body := getSetup(t, c, key)
+			if len(s.Found.Imports) != 1 || s.Found.Imports[0].LastImport == nil {
+				t.Errorf("import of %q did not match the row: %s", spelled, body)
+			}
+		})
+	}
+}
+
+// A setup.json from before the record existed loads as it did.
+func TestSetupStateWithoutImportedLoads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", setupFileName)
+	writeTestFile(t, path, `{"format":0,"first_run":false,"found":{"clients":[],"sign_ins":[],"imports":[{"kind":"cliproxyapi","config":"~/.cli-proxy-api/config.yaml","auth_dir":"~","accounts":1}],"core":{"listen":"","reachable_from_network":false}}}`)
+	m := newSetupManager(path, func() (string, bool) { return "", false }, true)
+	defer m.stop()
+	if _, _, _, f := m.snapshot(); len(f.Imports) != 1 || f.Imports[0].LastImport != nil {
+		t.Errorf("imports = %+v", f.Imports)
+	}
 }

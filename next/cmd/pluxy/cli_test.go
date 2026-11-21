@@ -323,6 +323,28 @@ func TestFindCore(t *testing.T) {
 	}
 }
 
+// The Imports table says which setup core has brought across and when, and "no" for one it has not.
+func TestCLISetupImportsTable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"first_run":false,"scanning":false,"scanned_at":"2026-11-19T12:00:00Z","found":{"clients":[],"sign_ins":[],"imports":[{"kind":"cliproxyapi","config":"~/.cli-proxy-api/config.yaml","auth_dir":"~/.cli-proxy-api","accounts":3,"last_import":{"at":"2026-11-20T08:30:05Z","brought":4,"changed":2,"not_brought":2}},{"kind":"cliproxyapi","config":"~/other/config.yaml","auth_dir":"~/other","accounts":1}],"core":{"listen":"127.0.0.1:8317","reachable_from_network":false}},"picks":[]}`))
+	}))
+	defer srv.Close()
+	env := func(k string) string {
+		return map[string]string{"PLUXY_URL": srv.URL, "PLUXY_MANAGEMENT_KEY": "mgmt-secret"}[k]
+	}
+	var out, errOut bytes.Buffer
+	if code := runCLI([]string{"setup"}, &out, &errOut, env); code != 0 {
+		t.Fatalf("setup: code=%d err=%q", code, errOut.String())
+	}
+	want := "Imports:\n" +
+		"KIND         CONFIG                        AUTH DIR          ACCOUNTS  BROUGHT ACROSS\n" +
+		"cliproxyapi  ~/.cli-proxy-api/config.yaml  ~/.cli-proxy-api  3         2026-11-20T08:30:05Z\n" +
+		"cliproxyapi  ~/other/config.yaml           ~/other           1         no\n"
+	if !strings.Contains(out.String(), want) {
+		t.Fatalf("setup printed:\n%s\nwant it to hold:\n%s", out.String(), want)
+	}
+}
+
 // Setup subcommands (TTY vs non-TTY, --yes, --pick, partial failure) and client show.
 func TestCLISetupAndClientShow(t *testing.T) {
 	var applied [][]string

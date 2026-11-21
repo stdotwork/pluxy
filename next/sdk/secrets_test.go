@@ -108,9 +108,8 @@ func TestAccountSecretsPartsHoldingParts(t *testing.T) {
 
 // Wrappers are left out before the parts are measured: a credential written as a header line
 // around a short token adds the token; a header or setting around a token of 1 to 3 bytes has no
-// kept part of 8 bytes, so it counts whole, public words and all; Basic's decoded "user:" with an
-// empty password is a wrapper too, so the user name is not a piece of a Basic value with a long
-// base64 part.
+// kept part of 8 bytes, so it counts whole, public words and all. Basic with an empty password
+// has its secret in the user name, as a key sent as Basic's user name does, so that counts.
 func TestAccountSecretsWrappersOfShortParts(t *testing.T) {
 	settings, _ := json.Marshal(map[string]string{"api_key": "X-Gateway: Bearer s12"})
 	basic := base64.StdEncoding.EncodeToString([]byte("ops@gw.example:"))
@@ -121,7 +120,7 @@ func TestAccountSecretsWrappersOfShortParts(t *testing.T) {
 	}
 	got := AccountSecrets(a)
 	slices.Sort(got)
-	want := []string{basic, "short1", "X-Gateway: Bearer s12", "c=devin-session-token$s12"}
+	want := []string{basic, "ops@gw.example", "short1", "X-Gateway: Bearer s12", "c=devin-session-token$s12"}
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
 		t.Errorf("AccountSecrets = %q\nwant %q", got, want)
@@ -130,7 +129,7 @@ func TestAccountSecretsWrappersOfShortParts(t *testing.T) {
 		"invalid short1":                        "invalid [redacted]",
 		"the gateway refuses Bearer, use a key": "the [redacted] refuses [redacted], use a key",
 		"no devin session token":                "no [redacted] [redacted] [redacted]",
-		"user ops@gw.example is not known":      "user ops@gw.example is not known",
+		"user ops@gw.example is not known":      "user [redacted] is not known",
 	} {
 		if got := UpstreamText(in, AccountSecrets(a)...); got != want {
 			t.Errorf("UpstreamText(%q) = %q, want %q", in, got, want)

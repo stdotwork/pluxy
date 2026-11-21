@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"net/url"
@@ -23,39 +24,44 @@ const minSideSecret = 8
 //   - the credential's api_key, access_token and refresh_token;
 //   - the value of each header whose name is secret (SecretName);
 //   - the user name and password of proxy_url;
-//   - in settings, every string below a key whose name is secret (SecretName), and the
-//     user name, password and secret query values (secretQueryName) of every URL; a URL below a
-//     secret key counts by those parts only, as core's own rule for settings has it.
+//   - in settings, every string or number below a key whose name is secret (SecretName), and the
+//     user name, password and secret query or fragment values (secretQueryName) of every URL; a
+//     URL below a secret key counts by those parts only, as core's own rule for settings has it.
 //
-// A secret made of parts (SecretParts) counts by its parts, not whole: the words of a public
-// prefix, scheme or cookie name ("devin-session-token$", "Bearer", "sid=") are not pieces, and
-// neither is a part that is only such words around another part (a header line's
-// "Bearer <token>"), nor Basic's decoded "user:password" when its password is a part. Two cases
-// count whole:
+// One rule says how a value counts: by its parts (SecretParts), so that only words known to be
+// public stay out of the pieces: a scheme, a public prefix, a real cookie list's names, and the user
+// name of Basic with a password. Every other byte is in a piece:
 //
-//   - a header, proxy or settings secret of 8 bytes or more whose kept parts are all shorter
-//     counts whole instead, with the words around its parts, so it is never left unprotected for
-//     being made of short parts;
-//   - a credential's field that is one "name=value", or holds one behind a scheme or public
-//     prefix ("Bearer name=value", "dca:name=value"), counts that pair whole as well, without the
-//     scheme or prefix, since the bytes before its "=" are no part; the pair's name then counts
-//     as pieces. A cookie list "a=b; c=d" counts by its values only.
+//   - a value that is one "name=value", or holds one behind a scheme or prefix, counts that pair
+//     whole as well as by its value, since the bytes before its "=" are no part. Only the Cookie
+//     header (its name in any case) counts a single pair by its value;
+//   - a list of pairs ("a=b; c=d") counts by its values only when every item is a pair with a
+//     value. One with anything else in it (a bare token, a padded key, an empty value) counts
+//     whole as well;
+//   - a cookie's value and Basic's password count whole, whatever they hold;
+//   - a URL's user name, password and secret query or fragment values count whole as well as by
+//     their parts: they have no public words;
+//   - a value nested deeper than SecretParts splits counts whole;
+//   - a header, proxy or settings secret of 8 bytes or more with no part of 8 bytes or more that
+//     nothing else splits counts whole instead of by its parts, with the words around them.
 //
 // A secret other than the credential's that is shorter than 8 bytes is left out, as core leaves
-// it in text, and so is such a part. A credential's field whose parts are all shorter adds them,
-// without the words around them. The credential's data is left out too: it mixes secrets with
-// plain values (a base URL, a project ID, an OAuth scope) whose words would count as pieces, so
-// an extension passes a secret it keeps there itself (sdk.UpstreamText), and core does not
-// remove pieces of it.
+// it in text, and so is such a part. A credential's field keeps parts of any length. The
+// credential's data is left out too: it mixes secrets with plain values (a base URL, a project
+// ID, an OAuth scope) whose words would count as pieces, so an extension passes a secret it keeps
+// there itself (sdk.UpstreamText), and core does not remove pieces of it.
 func AccountSecrets(a Account) []string {
-	var settings []string
+	var plain, values []string
 	if len(a.Settings) > 0 {
+		// A number keeps its exact digits: a float64 would change a long one.
+		dec := json.NewDecoder(bytes.NewReader(a.Settings))
+		dec.UseNumber()
 		var v any
-		if json.Unmarshal(a.Settings, &v) == nil {
-			settingsSecrets(v, false, func(s string) { settings = append(settings, s) })
+		if json.Valid(a.Settings) && dec.Decode(&v) == nil {
+			settingsSecrets(v, false, func(s string) { plain = append(plain, s) }, func(s string) { values = append(values, s) })
 		}
 	}
-	return accountSecrets(a, settings)
+	return accountSecrets(a, plain, values)
 }
 
 // AccountSecretsWith is AccountSecrets with settings in place of the secrets AccountSecrets
@@ -63,115 +69,166 @@ func AccountSecrets(a Account) []string {
 // (configdoc.SettingsSecrets) find in an account's settings, or in a login's input that is a JSON
 // key file, which it passes as settings; and, with an empty account, a login input that is a URL
 // (a pasted redirect URL), alone. A value that is an absolute URL counts by its user name,
-// password and secret query values only (its other words, such as "https", are no secret), and
-// like every secret but the credential's, one under 8 bytes adds nothing.
+// password and secret query or fragment values only (its other words, such as "https", are no
+// secret), and like every secret but the credential's, one under 8 bytes adds nothing.
 func AccountSecretsWith(a Account, settings []string) []string {
-	var out []string
+	var plain, values []string
 	for _, s := range settings {
 		if absoluteURL(s) {
-			out = append(out, urlSecrets(s, false)...)
+			values = append(values, urlSecrets(s, false)...)
 		} else {
+			plain = append(plain, s)
+		}
+	}
+	return accountSecrets(a, plain, values)
+}
+
+// fieldKind is what kind of field a secret value comes from, which decides how it counts
+// (AccountSecrets).
+type fieldKind int
+
+const (
+	fieldCredential fieldKind = iota // a credential's field: parts of any length count
+	fieldSide                        // a secret header, or a settings value
+	fieldCookie                      // the Cookie header: a single pair counts by its value
+	fieldURLValue                    // a URL's user name, password or secret query value
+)
+
+// accountSecrets is AccountSecrets with the settings' secrets given: plain values, and values
+// read out of a URL.
+func accountSecrets(a Account, settings, urlValues []string) []string {
+	var out []string
+	keep := func(s string) {
+		if s != "" && !slices.Contains(out, s) {
 			out = append(out, s)
 		}
 	}
-	return accountSecrets(a, out)
-}
-
-// accountSecrets is AccountSecrets with the settings' secrets given.
-func accountSecrets(a Account, settings []string) []string {
-	var out []string
-	add := func(s string, short bool) {
-		if s == "" || !short && len(s) < minSideSecret {
+	add := func(s string, kind fieldKind) {
+		credential := kind == fieldCredential
+		if s == "" || !credential && len(s) < minSideSecret {
 			return
 		}
-		parts := SecretParts(s, 1)
-		if len(parts) == 0 {
-			parts = []string{s}
-		}
-		kept := slices.DeleteFunc(slices.Clone(parts), func(p string) bool { return wrapper(p, parts) })
-		min := minSideSecret
-		if !slices.ContainsFunc(kept, func(p string) bool { return len(p) >= minSideSecret }) {
-			if !short {
+		c := countedParts(s, kind == fieldCookie)
+		min := 1
+		if !credential {
+			min = minSideSecret
+			if !slices.ContainsFunc(c.leaves, func(p string) bool { return len(p) >= minSideSecret }) {
 				// No part reaches the minimum: the whole value counts, not its short parts.
-				if !slices.Contains(out, s) {
-					out = append(out, s)
-				}
+				keep(s)
 				return
 			}
-			min = 1
 		}
-		for _, p := range kept {
-			if len(p) >= min && !slices.Contains(out, p) {
-				out = append(out, p)
-			}
+		if c.past || kind == fieldURLValue {
+			keep(s)
 		}
-		if short {
-			// A single name=value counts whole too: the bytes before its "=" are no part. One
-			// behind a public prefix is among the parts, without the prefix.
-			for _, p := range append([]string{strings.TrimSpace(s)}, parts...) {
-				_, pair := cookiePair(p)
-				_, prefixed := publicPrefixEnd(p)
-				if pair && !prefixed && !slices.Contains(out, p) {
-					out = append(out, p)
-				}
+		for _, p := range slices.Concat(c.leaves, c.more) {
+			if len(p) >= min {
+				keep(p)
 			}
 		}
 	}
 	if c := a.Credential; c != nil {
-		add(c.APIKey, true)
-		add(c.AccessToken, true)
-		add(c.RefreshToken, true)
+		add(c.APIKey, fieldCredential)
+		add(c.AccessToken, fieldCredential)
+		add(c.RefreshToken, fieldCredential)
 	}
 	for name, v := range a.Headers {
-		if SecretName(name) {
-			add(v, false)
+		if strings.EqualFold(name, "Cookie") {
+			add(v, fieldCookie)
+		} else if SecretName(name) {
+			add(v, fieldSide)
 		}
 	}
 	for _, s := range urlSecrets(a.ProxyURL, true) {
-		add(s, false)
+		add(s, fieldURLValue)
 	}
 	for _, s := range settings {
-		add(s, false)
+		add(s, fieldSide)
+	}
+	for _, s := range urlValues {
+		add(s, fieldURLValue)
 	}
 	return out
 }
 
-// wrapper reports whether the part p of a secret, among its parts, only wraps another part in
-// public words: it is split again into a part of any length (a header line's "Bearer <token>"), or
-// it is Basic's decoded "user:password" (what a part decodes to from base64) and its password is a
-// part too or empty. A part that merely holds another, such as a cookie's value that holds
-// another cookie's, is not one. Whether the parts it wraps are kept does not matter: a wrapper is
-// never a secret of its own, so a token that has the shape of one ("name:abcd") counts by its
-// inner part only; when no kept part reaches 8 bytes, a header, proxy or settings secret counts
-// whole instead (accountSecrets).
-func wrapper(p string, parts []string) bool {
-	if len(SecretParts(p, 1)) > 0 {
-		return true
-	}
-	_, pass, ok := strings.Cut(p, ":")
-	return ok && (pass == "" || slices.Contains(parts, pass)) && (slices.Contains(parts, base64.StdEncoding.EncodeToString([]byte(p))) ||
-		slices.Contains(parts, base64.RawStdEncoding.EncodeToString([]byte(p))))
+// partCount is what a value counts by for RemovePieces.
+type partCount struct {
+	leaves []string // the parts nothing splits further, or the value itself when it has none
+	more   []string // what holds other parts but is secret itself: a pair, a value, a mixed list
+	past   bool     // the value is nested deeper than SecretParts splits
 }
 
-// settingsSecrets calls add with each secret in the settings value v: each string below a key
-// whose name is secret (secret says v is) but an absolute URL, and the secrets of each URL
-// (urlSecrets).
-func settingsSecrets(v any, secret bool, add func(string)) {
+// countedParts reads s by its structure (directParts) for what it counts by: a scheme, a public
+// prefix, a real cookie list's names and Basic's user name beside a password are the only bytes in
+// none of them. With
+// cookie set, s is the Cookie header's value, whose single pair counts by its value.
+func countedParts(s string, cookie bool) partCount {
+	var c partCount
+	seen := map[string]bool{}
+	var read func(string, int)
+	read = func(s string, depth int) {
+		if seen[s] {
+			return
+		}
+		seen[s] = true
+		shape := directParts(s)
+		if len(shape.parts) == 0 {
+			c.leaves = append(c.leaves, s)
+			return
+		}
+		if depth == maxPartDepth {
+			c.past = true
+			c.leaves = append(append(c.leaves, lastWord(s)), shape.leafParts()...)
+			return
+		}
+		if shape.mixed {
+			c.more = append(c.more, strings.TrimSpace(s))
+		}
+		if shape.pair != "" && !cookie {
+			c.more = append(c.more, shape.pair)
+		}
+		for _, p := range shape.parts {
+			switch p.kind {
+			case partValue:
+				c.more = append(c.more, p.text)
+				read(p.text, depth+1)
+			case partWrapped:
+				read(p.text, depth+1)
+			case partForm:
+				// Only what it wraps counts, not the user name of a plain "user:password".
+				if len(directParts(p.text).parts) > 0 {
+					read(p.text, depth+1)
+				}
+			}
+		}
+	}
+	read(s, 0)
+	return c
+}
+
+// settingsSecrets calls add with each secret in the settings value v, each string or number below
+// a key whose name is secret (secret says v is) but an absolute URL, and value with the secrets of
+// each URL (urlSecrets).
+func settingsSecrets(v any, secret bool, add, value func(string)) {
 	switch v := v.(type) {
 	case string:
 		if secret && !absoluteURL(v) {
 			add(v)
 		}
 		for _, s := range urlSecrets(v, false) {
-			add(s)
+			value(s)
+		}
+	case json.Number:
+		if secret {
+			add(v.String())
 		}
 	case map[string]any:
 		for k, x := range v {
-			settingsSecrets(x, secret || SecretName(k), add)
+			settingsSecrets(x, secret || SecretName(k), add, value)
 		}
 	case []any:
 		for _, x := range v {
-			settingsSecrets(x, secret, add)
+			settingsSecrets(x, secret, add, value)
 		}
 	}
 }
@@ -186,9 +243,10 @@ func absoluteURL(s string) bool {
 	return err == nil && u.Host != ""
 }
 
-// urlSecrets returns the user name and password of the URL s, and the values of its query
-// parameters whose names are secret (secretQueryName) unless proxy is set, as written and
-// decoded; nothing for a string that is not an absolute URL.
+// urlSecrets returns the user name and password of the URL s, and unless proxy is set the values
+// of the parameters whose names are secret (secretQueryName) in its query or its fragment, where
+// an OAuth redirect carries them, split on "&" or ";", as written and decoded; nothing for a
+// string that is not an absolute URL.
 func urlSecrets(s string, proxy bool) []string {
 	s = strings.TrimSpace(s)
 	if !strings.Contains(s, "://") {
@@ -208,9 +266,29 @@ func urlSecrets(s string, proxy bool) []string {
 	if proxy {
 		return out
 	}
-	for _, kv := range strings.Split(u.RawQuery, "&") {
+	return append(out, SecretURLValues(u, secretQueryName)...)
+}
+
+// SecretURLValues returns the non-empty values of the parameters of u whose names secret reports,
+// as written and decoded. Parameters are read in the query and in the fragment, where an OAuth
+// redirect carries them, up to the next "&", and again up to a ";" in them, as some servers split
+// on both. A name may follow a page's route in the fragment ("#/callback?code=..."). It is the one
+// definition of a URL's secret parameters, for AccountSecrets and core's rules for settings.
+func SecretURLValues(u *url.URL, secret func(name string) bool) []string {
+	var params, out []string
+	for _, kv := range slices.Concat(strings.Split(u.RawQuery, "&"), strings.Split(u.EscapedFragment(), "&")) {
+		params = append(params, kv)
+		if strings.Contains(kv, ";") {
+			params = append(params, strings.Split(kv, ";")...)
+		}
+	}
+	named := func(k string) bool {
+		name, err := url.QueryUnescape(k)
+		return err == nil && secret(name)
+	}
+	for _, kv := range params {
 		k, v, _ := strings.Cut(kv, "=")
-		if name, err := url.QueryUnescape(k); err != nil || !secretQueryName(name) {
+		if v == "" || !named(k) && !named(k[strings.LastIndexByte(k, '?')+1:]) {
 			continue
 		}
 		out = append(out, v)
@@ -277,6 +355,10 @@ var escapedRun = regexp.MustCompile(`(?:[A-Za-z0-9_\-.+/=~]|\\u[0-9A-Fa-f]{4}|\\
 // An upstream that refuses a credential often echoes a piece of it, such as its first 24
 // characters and "...", which a NewRedactor's whole forms and parts miss.
 //
+// A run also takes any other character one of secrets holds (secretRunBytes), such as a password's
+// "@" or a letter outside ASCII, so a cut of such a secret is one run too. Whitespace, control
+// characters, quotes, brackets, commas and backslashes always end a run.
+//
 // A secret's public vendor prefix (publicKeyPrefix), such as "sk-proj-", gives no piece of its
 // own: a piece counts only when it holds at least one byte after the prefix, so words such as
 // "project" stay.
@@ -331,7 +413,55 @@ func RemovePieces(s string, secrets ...string) string {
 		return len(pieces) > 0 && holdsPieces(pieces, t, minPiece) ||
 			len(longPieces) > 0 && holdsPieces(longPieces, t, longPiece)
 	}
+	if extra, ok := secretRunBytes(secrets); ok {
+		s = replaceWideRuns(s, &extra, holds)
+	}
 	return ReplaceRuns(s, func(run, d string) bool { return holds(d) || d != run && holds(run) })
+}
+
+// secretRunBytes returns the bytes of secrets that a run of RemovePieces also takes, and whether
+// there are any: those outside the token characters, such as a password's "@" or a letter outside
+// ASCII, but for whitespace, control characters, and the quotes, brackets, commas and backslash
+// that hold an error's JSON together, which would make one run of a whole body.
+func secretRunBytes(secrets []string) (extra [256]bool, ok bool) {
+	for _, secret := range secrets {
+		for i := range len(secret) {
+			c := secret[i]
+			if (c >= 0x80 || c > ' ' && c < 0x7f && !pieceChar(rune(c))) && strings.IndexByte("\"'`\\{}[],", c) < 0 {
+				extra[c], ok = true, true
+			}
+		}
+	}
+	return extra, ok
+}
+
+// replaceWideRuns replaces each run of token characters and extra bytes that holds one of the extra
+// bytes and a piece of a secret (holds), so a cut of a secret with such characters in it goes too.
+// A Redacted already in s stays: its brackets are never in a run.
+func replaceWideRuns(s string, extra *[256]bool, holds func(string) bool) string {
+	var b strings.Builder
+	last := 0
+	for i := 0; i < len(s); {
+		if !extra[s[i]] && !pieceChar(rune(s[i])) {
+			i++
+			continue
+		}
+		start, wide := i, false
+		for i < len(s) && (extra[s[i]] || pieceChar(rune(s[i]))) {
+			wide = wide || extra[s[i]]
+			i++
+		}
+		if wide && holds(s[start:i]) {
+			b.WriteString(s[last:start])
+			b.WriteString(Redacted)
+			last = i
+		}
+	}
+	if last == 0 {
+		return s
+	}
+	b.WriteString(s[last:])
+	return b.String()
 }
 
 // longToken reports whether secret, with the whitespace around it trimmed, is one run of token

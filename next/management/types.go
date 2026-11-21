@@ -621,6 +621,17 @@ type SetupImport struct {
 	Config   string `json:"config"`
 	AuthDir  string `json:"auth_dir"`
 	Accounts int    `json:"accounts"`
+	// LastImport is the last import made from this config on this core, when there was one.
+	LastImport *SetupLastImport `json:"last_import,omitempty"`
+}
+
+// SetupLastImport is what core kept of an import: when it ran and how many rows each list of its
+// report held. It keeps counts only, no row text, name or value.
+type SetupLastImport struct {
+	At         time.Time `json:"at"`
+	Brought    int       `json:"brought"`
+	Changed    int       `json:"changed"`
+	NotBrought int       `json:"not_brought"`
 }
 
 // SetupCore describes core's own listen address and network reachability.

@@ -450,8 +450,8 @@ func TestAccountSecretsLongCredentialPairCountsAtEight(t *testing.T) {
 	}
 }
 
-// What is no single pair counts as before: a cookie list by its values, a token ending in "=" or
-// "==" whole once, and a header, which this rule does not reach, by its value.
+// What is no single pair counts as before: a cookie list by its values, and a token ending in "="
+// or "==" whole once.
 func TestAccountSecretsCredentialPairUnchanged(t *testing.T) {
 	got := AccountSecrets(Account{Credential: &Credential{APIKey: "a=value-one; b=value-two"}})
 	if !slices.Equal(got, []string{"value-one", "value-two"}) {
@@ -466,12 +466,22 @@ func TestAccountSecretsCredentialPairUnchanged(t *testing.T) {
 	if !slices.Equal(got, []string{"value-one", "value-two"}) {
 		t.Errorf("cookie list behind a scheme: AccountSecrets = %q, want its values only", got)
 	}
-	got = AccountSecrets(Account{Headers: map[string]string{"X-Api-Key": "aaaaaaaa=bbbbbbbb"}})
-	if !slices.Equal(got, []string{"bbbbbbbb"}) {
-		t.Errorf("header: AccountSecrets = %q, want its value only", got)
+	// Only the Cookie header, whatever the case of its name, counts a single pair by its value. A
+	// secret header or a settings secret counts it whole as well, as a credential's field does.
+	for _, name := range []string{"Cookie", "cookie", "COOKIE"} {
+		got = AccountSecrets(Account{Headers: map[string]string{name: "aaaaaaaa=bbbbbbbb"}})
+		if !slices.Equal(got, []string{"bbbbbbbb"}) {
+			t.Errorf("%s header: AccountSecrets = %q, want its value only", name, got)
+		}
 	}
-	got = AccountSecrets(Account{Settings: []byte(`{"api_key":"aaaaaaaa=bbbbbbbb"}`)})
-	if !slices.Equal(got, []string{"bbbbbbbb"}) {
-		t.Errorf("settings: AccountSecrets = %q, want its value only", got)
+	for name, a := range map[string]Account{
+		"header":   {Headers: map[string]string{"X-Api-Key": "aaaaaaaa=bbbbbbbb"}},
+		"settings": {Settings: []byte(`{"api_key":"aaaaaaaa=bbbbbbbb"}`)},
+	} {
+		got = AccountSecrets(a)
+		slices.Sort(got)
+		if !slices.Equal(got, []string{"aaaaaaaa=bbbbbbbb", "bbbbbbbb"}) {
+			t.Errorf("%s: AccountSecrets = %q, want the pair and its value", name, got)
+		}
 	}
 }

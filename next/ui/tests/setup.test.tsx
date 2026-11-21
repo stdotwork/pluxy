@@ -651,6 +651,62 @@ test("after the import the report says what was brought, and where to install wh
   expect(page).not.toContain("New management key");
 });
 
+/** The same machine once core has a record of the setup's import. */
+function brought(last: { brought: number; changed: number; not_brought: number }): Setup {
+  const at = "2026-11-20T08:30:05Z";
+  return {
+    ...found,
+    found: {
+      ...found.found,
+      imports: found.found.imports.map((row) => ({ ...row, last_import: { at, ...last } })),
+    },
+  };
+}
+
+test("a setup core has brought across says so, when and with what counts, and offers only the command", () => {
+  const last = { brought: 4, changed: 2, not_brought: 3 };
+  const at = new Date("2026-11-20T08:30:05Z").toLocaleString();
+  for (const bringing of ["offered", undefined] as const) {
+    const page = view(brought(last), { bringing });
+    expect(page).toContain('data-part="setup-import" data-state="brought"');
+    expect(page).toContain("<strong>A CLIProxyAPI setup with 7 accounts</strong>");
+    expect(page).toContain(
+      `<span class="mono">~/.cli-proxy-api/config.yaml</span>, and was brought across on ${at}.`,
+    );
+    // The numbers count rows of the report, settings and auth files alike: never accounts.
+    expect(page).toContain(
+      "Of its settings and auth files: 4 brought across, 2 different in pluxy, 3 not brought across.",
+    );
+    expect(page).toContain(">Brought across</span>");
+    // No button offers it again; the command still can, and says what a second import does.
+    expect(page).not.toContain(">Bring it across</button>");
+    expect(page).not.toContain("writes nothing until you confirm");
+    expect(page).not.toContain("Or use the command");
+    expect(page).toContain("<summary>Bring it across again</summary>");
+    expect(page).toContain("It writes the file's settings over any you changed in pluxy since");
+    expect(page).toContain(
+      "<pre>pluxy import cpa ~/.cli-proxy-api/config.yaml --auth-dir ~/.cli-proxy-api</pre>",
+    );
+  }
+  // A list that held no row is left out.
+  const clean = view(brought({ brought: 5, changed: 0, not_brought: 0 }), { bringing: "offered" });
+  expect(clean).toContain("Of its settings and auth files: 5 brought across.");
+  expect(clean).not.toContain("not brought across");
+  expect(clean).not.toContain("different in pluxy");
+});
+
+test("the report of an import just made stays until it is closed, whatever core has recorded", () => {
+  const report: ImportReport = { ...dryReport, dry_run: false };
+  const page = view(brought({ brought: 2, changed: 1, not_brought: 4 }), {
+    bringing: { config, report, done: true },
+  });
+  expect(page).toContain('data-part="setup-import" data-state="done"');
+  expect(page).toContain("Done. This is what was brought across:");
+  expect(page).toContain(">Close</button>");
+  expect(page).not.toContain("was brought across on");
+  expect(page).not.toContain("Bring it across again");
+});
+
 test("each refusal is said in words a person can act on", () => {
   const refused = (status: number, message: string, dryRun = true) =>
     importProblem({ status, error: { code: "x", message } }, dryRun);

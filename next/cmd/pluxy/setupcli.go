@@ -323,9 +323,14 @@ func printSetup(x *invocation, s management.Setup) {
 	}
 	if len(s.Found.Imports) > 0 {
 		x.printf("\nImports:\n")
-		rows := [][]string{{"KIND", "CONFIG", "AUTH DIR", "ACCOUNTS"}}
+		rows := [][]string{{"KIND", "CONFIG", "AUTH DIR", "ACCOUNTS", "BROUGHT ACROSS"}}
 		for _, im := range s.Found.Imports {
-			rows = append(rows, []string{im.Kind, im.Config, im.AuthDir, fmt.Sprintf("%d", im.Accounts)})
+			// When core last brought this setup across (pluxy import cpa, or the Setup page).
+			brought := "no"
+			if im.LastImport != nil {
+				brought = im.LastImport.At.UTC().Format("2006-01-02T15:04:05Z")
+			}
+			rows = append(rows, []string{im.Kind, im.Config, im.AuthDir, fmt.Sprintf("%d", im.Accounts), brought})
 		}
 		x.table(rows)
 	}

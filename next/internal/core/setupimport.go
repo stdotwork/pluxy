@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"maps"
 	"net/http"
 	"os"
@@ -216,8 +217,16 @@ func (c *Core) ImportCPA(req management.SetupImportRequest) (management.ImportRe
 		}
 		return out
 	}
-	return management.ImportReport{DryRun: req.DryRun, Brought: conv(lists.Brought), Changed: conv(lists.Changed),
-		NotBrought: conv(lists.NotBrought), Needs: c.importNeeds(p, imported)}, nil
+	rep := management.ImportReport{DryRun: req.DryRun, Brought: conv(lists.Brought), Changed: conv(lists.Changed),
+		NotBrought: conv(lists.NotBrought), Needs: c.importNeeds(p, imported)}
+	if !req.DryRun && c.setup != nil {
+		// The import is done: a record that cannot be saved is logged, not an error of the import.
+		rec := management.SetupLastImport{At: time.Now().UTC(), Brought: len(rep.Brought), Changed: len(rep.Changed), NotBrought: len(rep.NotBrought)}
+		if err := c.setup.recordImport(path, rec); err != nil {
+			log.Printf("setup: saving %s: %v", c.setup.statePath, err)
+		}
+	}
+	return rep, nil
 }
 
 // authDirKey is the path in the file of the auth folder's key: the one the translator read.
