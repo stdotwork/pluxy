@@ -34,33 +34,36 @@ func Type(mediaType string) string {
 }
 
 // Base64 reports whether s is base64 of the standard alphabet, padded or not, without decoding
-// it. A data URL carries its bytes in the request body already, so validation reads them in
-// place instead of making a second copy of the image.
+// it. CR and LF between characters are ignored, as MIME wrapping puts them there. A data URL
+// carries its bytes in the request body already, so validation reads them in place instead of
+// making a second copy of the image.
 func Base64(s string) bool {
-	n := len(s)
+	chars := 0
 	pad := 0
-	for n > 0 && s[n-1] == '=' {
-		n--
-		pad++
-	}
-	if n == 0 || pad > 2 || (pad > 0 && len(s)%4 != 0) {
-		return false
-	}
-	for i := 0; i < n; i++ {
+	padded := false
+	for i := 0; i < len(s); i++ {
 		c := s[i]
-		if !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '+' || c == '/') {
+		switch {
+		case c == '\r' || c == '\n':
+			continue // MIME wraps base64 at 76 characters with CRLF; it stays base64.
+		case c == '=':
+			pad++
+			padded = true
+		case padded:
+			return false
+		case c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '+' || c == '/':
+			chars++
+		default:
 			return false
 		}
 	}
-	switch n % 4 {
-	case 0:
-		return true
-	case 2:
-		return pad == 0 || pad == 2
-	case 3:
-		return pad == 0 || pad == 1
+	if chars == 0 || pad > 2 {
+		return false
 	}
-	return false
+	if padded {
+		return (chars+pad)%4 == 0 && ((chars%4 == 2 && pad == 2) || (chars%4 == 3 && pad == 1))
+	}
+	return chars%4 != 1
 }
 
 // InlineImage checks an inline image against the media types a target accepts. url must be a

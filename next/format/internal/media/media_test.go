@@ -6,26 +6,32 @@ import "testing"
 // are RFC 4648's, plus the shapes a data URL in the wild gets wrong.
 func TestBase64(t *testing.T) {
 	for s, want := range map[string]bool{
-		"TWFu":       true,
-		"TWE=":       true,
-		"TQ==":       true,
-		"TWE":        true,
-		"TQ":         true,
-		"TWFuTQ==":   true,
-		"AA==":       true,
-		"AAA=":       true,
-		"AAAA":       true,
-		"":           false,
-		"T":          false,
-		"TQ=":        false,
-		"T===":       false,
-		"TQ===":      false,
-		"====":       false,
-		"TWFu!":      false,
-		"TW Fu":      false,
-		"QQ==QQ==":   false,
-		"-_-_":       false, // URL-safe alphabet
-		"AAAA\nAAAA": false,
+		"TWFu":         true,
+		"TWE=":         true,
+		"TQ==":         true,
+		"TWE":          true,
+		"TQ":           true,
+		"TWFuTQ==":     true,
+		"TWFu\r\n":     true,
+		"TW\r\nFu":     true,
+		"TQ\r\n==":     true,
+		"TW\nFu\rTQ==": true,
+		"AA==":         true,
+		"AAA=":         true,
+		"AAAA":         true,
+		"":             false,
+		"T":            false,
+		"TQ=":          false,
+		"T===":         false,
+		"TQ===":        false,
+		"====":         false,
+		"TWFu!":        false,
+		"TW Fu":        false,
+		"QQ==QQ==":     false,
+		"-_-_":         false, // URL-safe alphabet
+		"AAAA\nAA!A":   false,
+		"\r\n":         false,
+		"TQ=\n=":       true, // the newline is between the padding characters
 	} {
 		if got := Base64(s); got != want {
 			t.Errorf("Base64(%q) = %v, want %v", s, got, want)

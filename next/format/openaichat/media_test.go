@@ -102,3 +102,19 @@ func TestEncodeTextDocument(t *testing.T) {
 		t.Errorf("losses = %+v, want one approximation at messages[0].content[1]", losses)
 	}
 }
+
+// Base64 wrapped with CR or LF is still base64, and the data is forwarded exactly as the client
+// sent it.
+func TestEncodeWrappedBase64Forwarded(t *testing.T) {
+	url := "data:image/png;base64,TW\r\nFu\r\n"
+	body, losses, err := EncodeRequest(imageRequest(url, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), strings.ReplaceAll(strings.ReplaceAll(url, "\r", `\r`), "\n", `\n`)) {
+		t.Errorf("body %s, want the wrapped data forwarded unchanged", body)
+	}
+	if len(losses) != 0 {
+		t.Errorf("losses = %+v, want none", losses)
+	}
+}
