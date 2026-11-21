@@ -97,6 +97,30 @@ func TestStreamDecoderHoldsToolCallUntilName(t *testing.T) {
 	}
 }
 
+// A non-streamed reply whose call never names its function leaves the call out too: the same
+// item.start core refuses.
+func TestDecodeResponseLeavesOutNamelessToolCall(t *testing.T) {
+	body := `{"id":"x","object":"chat.completion","model":"m","choices":[{"index":0,"message":{"role":"assistant","tool_calls":[
+		{"id":"call_a","type":"function","function":{"arguments":"{}"}},
+		{"id":"call_b","type":"function","function":{"name":"f","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`
+	events, err := DecodeResponse([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []string
+	for _, ev := range events {
+		if ev.Item != nil && ev.Item.Kind == llm.ItemToolCall {
+			if ev.Item.Name == "" {
+				t.Errorf("decoder emitted a tool call with no name")
+			}
+			calls = append(calls, ev.Item.CallID)
+		}
+	}
+	if strings.Join(calls, ",") != "call_b" {
+		t.Errorf("calls = %v, want only call_b", calls)
+	}
+}
+
 // A stream whose call never names its function still produces one item.start per call that did.
 func TestStreamDecoderNamelessOnlyCallHasNoItem(t *testing.T) {
 	d, events := decodeAll(t,

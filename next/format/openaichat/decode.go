@@ -565,6 +565,11 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 			item(llm.ItemStart{Kind: llm.ItemMessage}, *m.Content, llm.EventTextDelta, nil)
 		}
 		for i, tc := range m.ToolCalls {
+			if tc.Function.Name == "" {
+				// core refuses an item.start without a name, so a call that never named
+				// its function is left out here too.
+				continue
+			}
 			id := tc.ID
 			if id == "" {
 				id = "call_" + strconv.Itoa(i)
