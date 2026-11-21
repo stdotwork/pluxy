@@ -942,7 +942,7 @@ func inputHint(f protocol.LoginInput) string {
 // browserWaitLine says what happens to a browser sign-in once standard input has ended: its input
 // is only the fallback for a callback the extension may still receive (next/protocol/README.md).
 func browserWaitLine() string {
-	return fmt.Sprintf("standard input has ended, so nothing more can be pasted. Waiting for the browser to finish the sign-in; core gives up on it %s after it started. Ctrl-C cancels it.", humanSpan(cred.LoginTimeout))
+	return fmt.Sprintf("standard input has ended, so nothing more can be pasted. The sign-in can now finish only if the browser's return reaches its provider; core gives up on it %s after it started. Ctrl-C cancels it.", humanSpan(cred.LoginTimeout))
 }
 
 // lineReader reads standard input one line at a time, on a goroutine of its own that takes no

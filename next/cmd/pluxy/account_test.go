@@ -1211,7 +1211,7 @@ func TestFollowLoginRepeatedPromptAtEndOfInput(t *testing.T) {
 }
 
 // browserWaitNotice is what the command says when a browser sign-in can get no more lines.
-const browserWaitNotice = "standard input has ended, so nothing more can be pasted. Waiting for the browser to finish the sign-in; core gives up on it 15 minutes after it started. Ctrl-C cancels it.\n"
+const browserWaitNotice = "standard input has ended, so nothing more can be pasted. The sign-in can now finish only if the browser's return reaches its provider; core gives up on it 15 minutes after it started. Ctrl-C cancels it.\n"
 
 // A browser sign-in does not end with standard input: the browser's return may reach the extension
 // by itself. The command says so once and follows the sign-in to its end.

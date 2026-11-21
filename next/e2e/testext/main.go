@@ -93,8 +93,8 @@ const (
 	methodBrowser = "browser"
 	methodDevice  = "device"
 	methodAPIKey  = "api_key"
-	// methodSettings signs in with a grant that carries the account settings in the input "settings"
-	// (the grant-settings e2e test); the account gets a made-up key.
+	// methodSettings signs in with a grant that carries the account settings when the input
+	// "settings" gives them (the grant-settings e2e test); the account gets a made-up key.
 	methodSettings = "settings"
 )
 
@@ -297,7 +297,7 @@ func login(ctx context.Context, call sdk.LoginCall, s *sdk.LoginSession) (*proto
 		var g protocol.Grant
 		fields := map[string]any{"credential": map[string]string{"kind": "api_key", "api_key": "testext-made-up-key"}}
 		// The method declares no input, so a sign-in started without one has no settings to carry.
-		if settings, ok := call.Input["settings"]; ok {
+		if settings := call.Input["settings"]; settings != "" {
 			fields["settings"] = json.RawMessage(settings)
 		}
 		raw, _ := json.Marshal(fields)

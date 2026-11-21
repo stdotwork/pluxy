@@ -95,12 +95,13 @@ management API of a core that is already running. `pluxy -config ...` with no su
   `--json` nothing is read from a terminal: the values come from `--input` or from a pipe, or the
   command says what it needs with exit code 2. A sign-in that needs a value it did not get is
   cancelled in core, with exit code 2, and so is one `--no-wait` leaves waiting on a prompt. A
-  browser sign-in is the exception, since the browser's return may still reach its extension: when
-  standard input ends, or a piped address is refused, the command says once that nothing more can
-  be pasted and goes on following it until it finishes, core ends it 15 minutes after it started
-  (exit code 1), or Ctrl-C cancels it. A read that fails is tried three times, and then the sign-in
-  is given up on and cancelled. Ctrl-C, SIGTERM and SIGHUP cancel the sign-in and put the terminal
-  back as it was.
+  browser sign-in is the exception, since the browser's return may still reach its extension: a
+  piped address that is refused does not end it, and when standard input ends at a prompt with a
+  value to read, the command says once that nothing more can be pasted. It goes on following the
+  sign-in until it finishes, core ends it 15 minutes after it started (exit code 1), or Ctrl-C
+  cancels it. An extension with no callback can only reach that limit. A read that fails is tried
+  three times, and then the sign-in is given up on and cancelled. Ctrl-C, SIGTERM and SIGHUP cancel
+  the sign-in and put the terminal back as it was.
 - **Exit codes.**
 
   | Code | Meaning |
