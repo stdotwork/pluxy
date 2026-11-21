@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -642,6 +644,69 @@ func TestInputWhileLoginStarts(t *testing.T) {
 		t.Errorf("input once started: %v", err)
 	}
 	m.CancelLogin("login-1")
+}
+
+// endedLoginProvider starts a login that prompts once and then waits for input, as a login
+// does, on a call whose sends fail with sendErr: a connection closed when its extension
+// finished, or another write error.
+type endedLoginProvider struct {
+	fakeProvider
+	sendErr error
+}
+
+func (p *endedLoginProvider) Login(ctx context.Context, _ protocol.Account, _ protocol.Login) LoginCall {
+	return &endedLogin{ctx: ctx, sendErr: p.sendErr}
+}
+
+type endedLogin struct {
+	ctx     context.Context
+	sendErr error
+	n       int
+}
+
+func (l *endedLogin) Next() protocol.Reply {
+	l.n++
+	if l.n == 1 {
+		return protocol.Reply{Event: llm.Event{Type: protocol.TypeLoginPrompt}, Prompt: &protocol.Prompt{Kind: protocol.PromptInput}}
+	}
+	<-l.ctx.Done()
+	return protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeCancelled, Message: "cancelled"}}}
+}
+func (l *endedLogin) Send(map[string]string) error { return l.sendErr }
+func (l *endedLogin) Close()                       {}
+
+// Input for a login whose call has ended, before the login is marked finished, is refused as a
+// conflict: nothing is left to take what the user entered. Another send failure stays as it is.
+func TestInputAfterLoginEnds(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		send error
+		want error
+	}{
+		{"closed connection", fmt.Errorf("write unix @->@test: %w", net.ErrClosed), ErrConflict},
+		{"broken connection", errors.New("write unix @->@test: broken pipe"), nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, err := Open(FileBackend{Dir: filepath.Join(t.TempDir(), "credentials")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			m := NewManager(store, single{&endedLoginProvider{sendErr: tc.send}}, Options{})
+			t.Cleanup(m.Close)
+			if _, err := m.StartLogin(context.Background(), LoginRequest{Account: route.Account{ID: "new"}, Method: "device"}); err != nil {
+				t.Fatal(err)
+			}
+			err = m.LoginInput("login-1", map[string]string{"x": "y"})
+			if tc.want != nil {
+				if !errors.Is(err, tc.want) {
+					t.Errorf("input to an ended login: %v, want %v", err, tc.want)
+				}
+			} else if err == nil || errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "broken pipe") {
+				t.Errorf("input to a login with a broken connection: %v, want the send's own error", err)
+			}
+			m.CancelLogin("login-1")
+		})
+	}
 }
 
 // An account removed while its credential is being renewed, and added again under the same ID

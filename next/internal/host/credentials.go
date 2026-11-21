@@ -212,15 +212,21 @@ func (l *LoginCall) Next() protocol.Reply {
 	return *l.final
 }
 
-// Send passes what the user entered to the login.
+// Send passes what the user entered to the login. Input to a login that has ended — its
+// connection closed when it finished, or never opened — is reported as a closed connection
+// (net.ErrClosed), which the credential manager answers as input to a login that has finished.
 func (l *LoginCall) Send(input map[string]string) error {
 	l.wmu.Lock()
 	defer l.wmu.Unlock()
 	if l.conn == nil {
-		return errors.New("the login is not running")
+		return fmt.Errorf("the login is not running: %w", net.ErrClosed)
 	}
 	l.addSecrets(input)
-	return protocol.WriteFrame(l.conn, protocol.Call{Type: protocol.TypeLoginInput, Input: input})
+	err := protocol.WriteFrame(l.conn, protocol.Call{Type: protocol.TypeLoginInput, Input: input})
+	if errors.Is(err, net.ErrClosed) {
+		return fmt.Errorf("the login has ended: %w", err)
+	}
+	return err
 }
 
 // Close ends the login; if it had not finished, the extension sees it cancelled.

@@ -549,8 +549,10 @@ func importPath(p, name string) (string, error) {
 	return filepath.Clean(p), nil
 }
 
+// readImportConfig reads the config a management call names, opened without waiting for a
+// writer, as a client's config is: a FIFO at its path would hold the import until one came.
 func readImportConfig(path string) ([]byte, error) {
-	f, err := os.Open(path)
+	f, err := openClientFile(path)
 	if err != nil {
 		return nil, err
 	}
