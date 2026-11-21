@@ -109,7 +109,9 @@ func NewRedactor(cs ...*Credential) *Redactor {
 //     (spaces and tabs after the "$" or ":" aside) does not start with "/", so a URL's
 //     "scheme://" is not one: the token;
 //   - a cookie list, "name=value; name=value" (or one pair): each value, its double quotes
-//     aside, where the name is an HTTP token and the value holds only cookie characters.
+//     aside, where the name is an HTTP token and the value holds only cookie characters; a value
+//     of only "=" characters, or none, is base64 padding, not a cookie value, so a key that ends
+//     in "=" or "==" is no pair.
 //
 // A prefix, a scheme or a cookie name is never a part.
 func SecretParts(s string, min int) []string {
@@ -174,7 +176,7 @@ func directParts(s string) []string {
 			if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
 				value = value[1 : len(value)-1]
 			}
-			if ok && name != "" && strings.IndexFunc(name, func(r rune) bool { return !tokenChar(r) }) < 0 &&
+			if ok && name != "" && strings.Trim(value, "=") != "" && strings.IndexFunc(name, func(r rune) bool { return !tokenChar(r) }) < 0 &&
 				strings.IndexFunc(value, func(r rune) bool { return !cookieChar(r) }) < 0 {
 				out = append(out, value)
 			}

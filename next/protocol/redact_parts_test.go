@@ -26,6 +26,10 @@ func TestSecretParts(t *testing.T) {
 		{"cookies", `sid=cookie-sid-0123456789; theme=dark; csrf="csrf-token-abcdef12"`, []string{"cookie-sid-0123456789", "csrf-token-abcdef12"}},
 		{"header line", "Authorization: Bearer gw-token-0123456789", []string{"Bearer gw-token-0123456789", "gw-token-0123456789"}},
 		{"header pair", "Cookie=sid=cookie-sid-0123456789", []string{"sid=cookie-sid-0123456789", "cookie-sid-0123456789"}},
+		// A value of only "=" is base64 padding, not a cookie value; a real pair keeps its parts.
+		{"bearer ending in padding", "Bearer c2stdGVzdC9rZXkrNDJh==", []string{"c2stdGVzdC9rZXkrNDJh=="}},
+		{"cookie value ending in padding", "sid=c2stdGVzdC9rZXkrNDJh==; other=value-0123456789", []string{"c2stdGVzdC9rZXkrNDJh==", "value-0123456789"}},
+		{"quoted padding value", `sid="=="`, nil},
 		{"key and secret", "AKIDEXAMPLE:secret-access-0123", []string{"secret-access-0123"}},
 		// Not split: a URL (core takes a proxy URL apart itself), a plain key, base64 padding,
 		// a short part, a JSON-quoted header line and an OAuth scope.
@@ -34,6 +38,7 @@ func TestSecretParts(t *testing.T) {
 		{"url with a token query", "https://up.example/v1?token=sk-query-0123456789", nil},
 		{"plain key", "sk-ant-api03-plain-key-0123456789", nil},
 		{"base64 with padding", "c2stdGVzdC9rZXkrNDI=", nil},
+		{"base64 with double padding", "c2stdGVzdC9rZXkrNDJh==", nil},
 		{"short part", "dca:short", nil},
 		{"json header line", `"Authorization":"Bearer x"`, nil},
 		{"scope", "openid profile email offline_access", nil},
@@ -43,6 +48,18 @@ func TestSecretParts(t *testing.T) {
 		}
 	}
 	// With a smaller minimum, a secret whose parts are all short has them; a plain one has none.
+	// Base64 padding is no cookie value, even where short parts count.
+	for secret, want := range map[string][]string{
+		"c2stdGVzdC9rZXkrNDI=":                  nil,
+		"c2stdGVzdC9rZXkrNDJh==":                nil,
+		"Bearer c2stdGVzdC9rZXkrNDJh==":         {"c2stdGVzdC9rZXkrNDJh=="},
+		"sid=c2stdGVzdC9rZXkrNDJh==; other=val": {"c2stdGVzdC9rZXkrNDJh==", "val"},
+		`sid="=="`:                              nil,
+	} {
+		if got := SecretParts(secret, 1); !slices.Equal(got, want) {
+			t.Errorf("SecretParts(%q, 1) = %q, want %q", secret, got, want)
+		}
+	}
 	for secret, want := range map[string][]string{"dca:short": {"short"}, "Bearer short1": {"short1"}, "theme=dark": {"dark"}, "short-plain": nil} {
 		if got := SecretParts(secret, 1); !slices.Equal(got, want) {
 			t.Errorf("SecretParts(%q, 1) = %q, want %q", secret, got, want)
