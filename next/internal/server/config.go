@@ -198,7 +198,8 @@ type UsageConfig struct {
 	MaxEvents int `json:"max_events,omitempty"`
 	// MaxAgeMS is how long the record keeps a request. Default 24 hours, at most 30 days.
 	MaxAgeMS int64 `json:"max_age_ms,omitempty"`
-	// KeepDays is how many UTC days of usage files are kept; 0 keeps everything. Absent: 90.
+	// KeepDays is how many UTC days of usage day files are kept; 0 keeps everything. Absent: 90.
+	// It does not delete their summaries (usage/summary).
 	KeepDays *int `json:"keep_days,omitempty"`
 }
 

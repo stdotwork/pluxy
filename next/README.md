@@ -2220,13 +2220,15 @@ refuses (a full disk, a file it cannot open) is counted in `write_errors` and lo
 and stays in the in-memory record. On startup, the in-memory ring is refilled from today's and
 yesterday's files (skipping a torn last line), `seq` continues from the highest `seq` in the refilled
 files or in the newest day file left (numbering older unsequenced lines in order), and day files
-older than `keep_days` (default 90; `0` keeps everything) are deleted at startup and daily. The
+older than `keep_days` (default 90; `0` keeps everything) are deleted at startup and daily.
+`keep_days` covers the day files only: it does not delete the summaries below. The
 highest `seq` numbered is also kept in `usage/seq.json` (mode `0600`), written at startup, before a
 day file is pruned and on shutdown, so `seq` continues above it even after every day file that held
 it is gone.
 When a range in `GET /v0/management/usage` covers closed UTC days (before today), each closed day
 gets a summary file `usage/summary/YYYY-MM-DD.json` (mode `0600`) built on demand from its day file,
-cached in memory after, and kept even after `keep_days` removes old `.jsonl` files; summaries store
+cached in memory after, and kept after `keep_days` removes old `.jsonl` files, so `usage/summary`
+grows by one small file for each closed day a range has covered; summaries store
 per-hour, model, provider, account, client key, failure split, latency sum and all six token counts
 so long ranges never re-read closed `.jsonl` files. Each summary also records the size of the day
 file it was built from and is rebuilt when that file has grown since, so a late event that lands in
