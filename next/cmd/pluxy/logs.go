@@ -20,7 +20,7 @@ import (
 // stdoutIsTerminal reports whether w, a command's standard output, is a terminal. It is not
 // invocation.tty, which describes standard input.
 var stdoutIsTerminal = func(w io.Writer) bool {
-	r, ok := w.(io.Reader) // an *os.File, which isInteractive reads the mode of
+	r, ok := w.(io.Reader) // an *os.File, which isInteractive checks
 	return ok && isInteractive(r)
 }
 
@@ -57,7 +57,6 @@ var logsClearCommand = command{words: "logs clear", routes: []string{"DELETE /lo
 	run: func(x *invocation) error {
 		var r management.LogsCleared
 		return x.call(http.MethodDelete, "/logs", nil, nil, &r, func() {
-			// A count, not "there were none": core's count leaves out a file it could not delete.
 			rotated := fmt.Sprintf("%d rotated log files deleted", r.Removed)
 			if r.Removed == 1 {
 				rotated = "1 rotated log file deleted"

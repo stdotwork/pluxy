@@ -8,6 +8,13 @@ import (
 	"unsafe"
 )
 
+// isTerminalFile reports whether f is a terminal (takes the termios ioctl).
+func isTerminalFile(f *os.File) bool {
+	var tio syscall.Termios
+	_, _, errno := syscall.Syscall6(syscall.SYS_IOCTL, f.Fd(), termiosGet, uintptr(unsafe.Pointer(&tio)), 0, 0, 0)
+	return errno == 0
+}
+
 // terminalNoEcho keeps the terminal's own echo of what is typed on f off, so a secret value is not
 // shown as it is typed, and returns the call that turns it back on. It returns nil when f is not a
 // terminal (an ioctl it does not take).
