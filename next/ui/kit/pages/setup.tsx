@@ -837,7 +837,12 @@ export function SetupPage(props: { options?: SetupOptions }) {
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string>();
   const [bringing, setBringing] = useState<ImportState>();
-  const look = useAction(loaded.reload);
+  // Look again also reads the accounts again: a sign-in left running (a device code, a browser
+  // tab) can finish while this page stays in view, with no focus change to say so.
+  const look = useAction(() => {
+    accounts.reload();
+    loaded.reload();
+  });
   const finish = useAction(() => {
     loaded.reload();
     location.hash = "#/";

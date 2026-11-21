@@ -9,6 +9,16 @@
     flex: 1;
     min-width: min(100%, 12em);
   }
+  /* A mark stays one line, also in a column the open detail has made narrow. */
+  .usage-mark {
+    white-space: nowrap;
+  }
+  .usage-tried {
+    margin: calc(var(--s) * 2) 0 0;
+    padding-left: calc(var(--s) * 5);
+    display: grid;
+    gap: calc(var(--s) * 2);
+  }
   .usage-paging {
     display: flex;
     align-items: center;

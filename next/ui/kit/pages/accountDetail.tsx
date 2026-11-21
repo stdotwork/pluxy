@@ -40,9 +40,12 @@ const t = strings("accountDetail", {
   banned: "banned",
   exhausted: "exhausted",
   needs_login: "needs login",
+  broken: "broken",
   leftOutBecause: "Left out because",
   leftOutUntil: "Left out until",
   bannedHint: "No request is sent to this account until you enable it again.",
+  brokenHint:
+    "pluxy cannot read this account's credential file, so it sends the account no request. Fix or replace the file and restart pluxy, or remove the account, which deletes the file.",
 });
 
 /**
@@ -96,15 +99,21 @@ export function AccountDetail(props: AccountDetailProps) {
         ]}
       />
       {out === "banned" && <Notice tone="warn">{t("bannedHint")}</Notice>}
+      {out === "broken" && <Notice tone="warn">{t("brokenHint")}</Notice>}
       {(act.error ?? remove.error) && <Notice tone="danger">{p.text(act.error ?? remove.error, ids)}</Notice>}
       {a.source === "config" ? (
         <p class="muted">{t("setInConfig")}</p>
       ) : (
         <div class="actions">
-          <AccountEdit account={a} onChanged={props.onChanged} disabled={act.busy || remove.busy} />
-          <Button disabled={act.busy} onClick={() => act.run(() => api.setDisabled(a.id, !off))}>
-            {off ? t("enable") : t("disable")}
-          </Button>
+          {/* Core refuses every change to a broken account but its removal. */}
+          {out !== "broken" && (
+            <>
+              <AccountEdit account={a} onChanged={props.onChanged} disabled={act.busy || remove.busy} />
+              <Button disabled={act.busy} onClick={() => act.run(() => api.setDisabled(a.id, !off))}>
+                {off ? t("enable") : t("disable")}
+              </Button>
+            </>
+          )}
           <ConfirmButton
             disabled={act.busy || remove.busy}
             onConfirm={() => remove.run(() => api.removeAccount(a.id))}
@@ -113,8 +122,12 @@ export function AccountDetail(props: AccountDetailProps) {
           </ConfirmButton>
         </div>
       )}
-      <AccountSettings account={a} />
-      <AccountTools key={a.id} account={a} onChanged={props.onChanged} />
+      {out !== "broken" && (
+        <>
+          <AccountSettings account={a} />
+          <AccountTools key={a.id} account={a} onChanged={props.onChanged} />
+        </>
+      )}
     </Detail>
   );
 }

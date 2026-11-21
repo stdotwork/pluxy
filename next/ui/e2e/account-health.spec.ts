@@ -73,6 +73,40 @@ test("an account its provider closed says so, and Enable brings it back", async 
   await expect(status.locator("dl")).toContainText("Unavailable1");
 });
 
+test("an account whose credential file cannot be read says so and offers only its removal", async ({
+  page,
+}) => {
+  // What core lists for such a file (management README, "Accounts"): the file's name as the ID, no
+  // extension, kind or state, and the file and the error in the health's why.
+  const why = "/home/a/pluxy/state/accounts/lost-1.json: unexpected end of JSON input";
+  await page.route("**/v0/management/accounts", async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const reply = await route.fetch();
+    const body = (await reply.json()) as { accounts: Account[] };
+    const broken = {
+      id: "lost-1",
+      public_id: "acc_00000001",
+      source: "login",
+      health: { state: "broken", why },
+    };
+    await route.fulfill({ response: reply, json: { ...body, accounts: [...body.accounts, broken] } });
+  });
+  await openPanel(page, core);
+  await signIn(page, core);
+  await goTo(page, "Accounts");
+  const row = page.locator('[data-part="item"]').filter({ hasText: "lost-1" });
+  await expect(row.locator('[data-part="badge"]')).toHaveText("broken");
+  await page.getByLabel("Status Filter").selectOption({ label: "Problem" });
+  await expect(row).toBeVisible();
+  await row.getByRole("button", { name: "lost-1", exact: true }).click();
+  const detail = page.getByRole("complementary", { name: "Details: lost-1" });
+  await expect(detail.locator('[data-part="badge"]').first()).toHaveText("broken");
+  await expect(detail).toContainText(why);
+  await expect(detail).toContainText("pluxy cannot read this account's credential file");
+  await expect(detail.getByRole("button", { name: "Remove", exact: true })).toBeVisible();
+  await expect(detail.getByRole("button", { name: /^(Enable|Disable|Edit)$/ })).toHaveCount(0);
+});
+
 test("the accounts table scrolls inside its frame in a narrow window", async ({ page }) => {
   await page.setViewportSize({ width: 700, height: 800 });
   await openPanel(page, core);

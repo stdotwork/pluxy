@@ -271,6 +271,14 @@ form, keeping every field value and file byte, and sends it with a new multipart
 edit stays JSON. The upstream's reply body and content type come back as they came, including
 server-sent events for a streamed reply.
 
+An OpenAI-compatible upstream may lack a side endpoint. A 404 from
+`POST {base_url}/responses/input_tokens`, `/embeddings`, `/messages/count_tokens`,
+`/models/{model}:countTokens`, `/images/generations` or `/images/edits` that does not say the model
+is unknown fails that request only, as a request error that names the endpoint and path, and blocks
+no model on the account, as for `/responses/compact` above. A 404 that says the model does not exist
+still blocks it, and so does a 404 from the generation path. A token count that gets this 404 is an
+error for the client, not an estimate.
+
 Gemini clients call `POST /v1beta/models/{model}:generateContent` or `:streamGenerateContent`
 (a stream is server-sent events, with or without `alt=sse`), and `:countTokens`.
 
@@ -1803,7 +1811,10 @@ echoes its start (`invalid x-api-key: sk-ant-api03-AbCdEf...`), which whole-secr
 misses. The secrets are the credential's key and tokens, secret header values, the proxy's user
 name and password and the secrets core finds in the settings (a URL by its user name, password
 and secret query values only), by their parts, and on a login the inputs it marks secret (the
-extension protocol's [Accounts](protocol/README.md#accounts) says which). A known vendor's
+extension protocol's [Accounts](protocol/README.md#accounts) says which). A header, proxy or
+settings secret of 8 bytes or more whose kept parts are all shorter counts whole, so a word that
+shares 4 characters with its scheme or cookie name goes too. A credential field that is one
+`name=value`, or holds one behind a scheme or prefix, counts that pair whole as well as by its value. A known vendor's
 public key prefix (`sk-proj-`, `sk-kimi-`, `xai-` and the others listed there) gives no piece,
 so `project` or `kimi` stays in an error for such a key; a secret of under 16 bytes after its
 prefix keeps every piece. Any other word of the error that shares 4 characters with a secret

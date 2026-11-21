@@ -439,6 +439,20 @@ func TestCompactUpstreamErrorsAndUnsupported(t *testing.T) {
 		}
 	})
 
+	t.Run("a 404 from the generation path of a chat compaction keeps the model block", func(t *testing.T) {
+		srv, _ := newCompactUpstream(t, func(w http.ResponseWriter, r *http.Request, _ []byte) {
+			w.WriteHeader(http.StatusNotFound)
+			io.WriteString(w, `{"detail":"Not Found"}`)
+		})
+		settings := json.RawMessage(`{"base_url":"` + srv.URL + `/v1","wire_api":"chat"}`)
+		var rec compactRecorder
+		err := compactTo(context.Background(), compactCall(settings, "sk-test", "gpt-4.1", compactSampleBody), &rec)
+		var e *llm.Error
+		if !errors.As(err, &e) || e.Code != llm.CodeNotFound || e.Scope != llm.ScopeModel || strings.Contains(e.Message, "no compaction endpoint") {
+			t.Errorf("err = %+v; want CodeNotFound on ScopeModel, as for any generation", err)
+		}
+	})
+
 	t.Run("messages and gemini wires answer unsupported on credential", func(t *testing.T) {
 		for _, wire := range []string{wireMessages, wireGemini} {
 			t.Run(wire, func(t *testing.T) {
@@ -527,4 +541,41 @@ func TestCompactionHelpers(t *testing.T) {
 	if !errors.As(err, &e) || e.Code != llm.CodeUpstream {
 		t.Errorf("malformed reply err = %+v, want CodeUpstream", err)
 	}
+}
+
+func TestNoEndpoint(t *testing.T) {
+	const want = "this account's upstream has no token count endpoint (POST /models/m:countTokens answered 404)"
+	notFound := func(retryable bool) *llm.Error {
+		return &llm.Error{Code: llm.CodeNotFound, Scope: llm.ScopeModel, Status: http.StatusNotFound, Message: "Not Found", Retryable: retryable}
+	}
+	t.Run("a 404 fails only the request", func(t *testing.T) {
+		err := noEndpoint(notFound(false), "token count", "/models/m:countTokens")
+		var e *llm.Error
+		if !errors.As(err, &e) || e.Code != llm.CodeNotFound || e.Scope != llm.ScopeRequest || e.Retryable || e.Status != http.StatusNotFound || e.Message != want {
+			t.Errorf("err = %+v; want a non-retryable CodeNotFound on ScopeRequest saying %q", err, want)
+		}
+	})
+	t.Run("the compaction message is unchanged", func(t *testing.T) {
+		err := noEndpoint(notFound(false), "compaction", "/responses/compact")
+		var e *llm.Error
+		if !errors.As(err, &e) || e.Message != "this account's upstream has no compaction endpoint (POST /responses/compact answered 404)" {
+			t.Errorf("err = %+v; want the compaction endpoint message", err)
+		}
+	})
+	t.Run("a 404 that says the model does not exist is left alone", func(t *testing.T) {
+		err := noEndpoint(notFound(true), "token count", "/models/m:countTokens")
+		var e *llm.Error
+		if !errors.As(err, &e) || e.Scope != llm.ScopeModel || !e.Retryable || e.Message != "Not Found" {
+			t.Errorf("err = %+v; want the retryable model-scoped 404 unchanged", err)
+		}
+	})
+	t.Run("other errors are left alone", func(t *testing.T) {
+		other := &llm.Error{Code: llm.CodeRateLimit, Scope: llm.ScopeModel, Retryable: true, Message: "slow down"}
+		if got := noEndpoint(other, "token count", "/x"); got != error(other) || other.Scope != llm.ScopeModel || other.Message != "slow down" {
+			t.Errorf("got %v, other = %+v; want the rate limit unchanged", got, other)
+		}
+		if got := noEndpoint(nil, "token count", "/x"); got != nil {
+			t.Errorf("noEndpoint(nil) = %v, want nil", got)
+		}
+	})
 }
