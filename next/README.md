@@ -1805,7 +1805,8 @@ name and password and the secrets core finds in the settings (a URL by its user 
 and secret query values only), by their parts, and on a login the inputs it marks secret (the
 extension protocol's [Accounts](protocol/README.md#accounts) says which). A header, proxy or
 settings secret of 8 bytes or more whose kept parts are all shorter counts whole, so a word that
-shares 4 characters with its scheme or cookie name goes too. A known vendor's
+shares 4 characters with its scheme or cookie name goes too. A credential field that is one
+`name=value`, or holds one behind a scheme or prefix, counts that pair whole as well as by its value. A known vendor's
 public key prefix (`sk-proj-`, `sk-kimi-`, `xai-` and the others listed there) gives no piece,
 so `project` or `kimi` stays in an error for such a key; a secret of under 16 bytes after its
 prefix keeps every piece. Any other word of the error that shares 4 characters with a secret
