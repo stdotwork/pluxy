@@ -154,19 +154,24 @@ func (c *Core) handleThemes(m *server.Management) {
 }
 
 func readStrictJSONComplete(w http.ResponseWriter, r *http.Request, v any) bool {
-	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxManagementBody))
-	if err == nil {
-		dec := json.NewDecoder(bytes.NewReader(b))
-		dec.DisallowUnknownFields()
-		if err = dec.Decode(v); err == nil {
-			if err = dec.Decode(new(any)); err == io.EOF {
-				return true
-			} else if err == nil {
-				err = errors.New("unexpected trailing JSON value")
-			}
-		}
+	b, ok := readManagementBody(w, r)
+	if !ok {
+		return false
 	}
-	writeError(w, http.StatusBadRequest, "invalid_request", "request body: "+err.Error())
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "request body: "+err.Error())
+		return false
+	}
+	switch err := dec.Decode(new(any)); {
+	case err == io.EOF:
+		return true
+	case err == nil:
+		writeError(w, http.StatusBadRequest, "invalid_request", "request body: unexpected trailing JSON value")
+	default:
+		writeError(w, http.StatusBadRequest, "invalid_request", "request body: "+err.Error())
+	}
 	return false
 }
 

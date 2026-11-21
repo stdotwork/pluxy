@@ -932,7 +932,7 @@ func (c *Core) Status() Status {
 	c.mu.Lock() // publish switches the snapshot and the revisions under it
 	firstRun := c.setup == nil || c.setup.isFirstRun()
 	s := Status{SafeMode: c.opts.SafeMode, FirstRun: firstRun, Desired: c.desired, Active: c.active, Extensions: []ExtensionStatus{},
-		Version: version, Commit: commit, Built: built}
+		Version: version, Commit: commit, Built: built, ManagementAPI: management.APIVersion}
 	draining := append([]*host.Managed(nil), c.draining...)
 	cur := c.cur.Load()
 	c.mu.Unlock()

@@ -1014,6 +1014,87 @@ func TestApplySettingsYAML(t *testing.T) {
 	})
 }
 
+// routing.timeouts is part of a settings change: the fields it names change and the rest stay,
+// core's checks for it apply, null removes it, and a config.yaml has no name for it.
+func TestApplySettingsTimeouts(t *testing.T) {
+	// patch decodes a change as the management API reads one, so the field's JSON name is what
+	// the test uses.
+	patch := func(body string) SettingsPatch {
+		t.Helper()
+		dec := json.NewDecoder(strings.NewReader(body))
+		dec.DisallowUnknownFields()
+		var p SettingsPatch
+		if err := dec.Decode(&p); err != nil {
+			t.Fatalf("%s: %v", body, err)
+		}
+		return p
+	}
+	apply := func(src, body string, isYAML bool) (string, error) {
+		d := mustParse(t, src, isYAML)
+		if err := d.ApplySettings(patch(body)); err != nil {
+			return "", err
+		}
+		b, err := d.Bytes()
+		return string(b), err
+	}
+	withTimeouts := `{
+  "listen": "127.0.0.1:8400",
+  "client_keys": ["fake-key-one"],
+  "management_key": "fake-old-management",
+  "routing": {"timeouts": {"header_ms": 15000}}
+}
+`
+
+	got, err := apply(withTimeouts, `{"routing":{"timeouts":{"idle_ms":90000,"total_ms":0}}}`, false)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	r := loads(t, got, false).Routing
+	if r.Timeouts == nil || r.Timeouts.HeaderMS == nil || *r.Timeouts.HeaderMS != 15000 ||
+		r.Timeouts.IdleMS == nil || *r.Timeouts.IdleMS != 90000 || r.Timeouts.TotalMS == nil || *r.Timeouts.TotalMS != 0 {
+		t.Errorf("routing.timeouts = %+v in\n%s", r.Timeouts, got)
+	}
+	var raw struct {
+		Routing map[string]map[string]int64 `json:"routing"`
+	}
+	if err := json.Unmarshal([]byte(got), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]int64{"header_ms": 15000, "idle_ms": 90000, "total_ms": 0}; len(raw.Routing["timeouts"]) != 3 ||
+		raw.Routing["timeouts"]["header_ms"] != want["header_ms"] || raw.Routing["timeouts"]["idle_ms"] != want["idle_ms"] ||
+		raw.Routing["timeouts"]["total_ms"] != want["total_ms"] {
+		t.Errorf("routing.timeouts keys = %v in\n%s", raw.Routing["timeouts"], got)
+	}
+
+	// Each field is checked as the config checks it, and an unknown one is refused.
+	for _, body := range []string{
+		`{"routing":{"timeouts":{"header_ms":-1}}}`,
+		`{"routing":{"timeouts":{"idle_ms":2592000001}}}`,
+		`{"routing":{"timeouts":{"header_ms":1.5}}}`,
+		`{"routing":{"timeouts":{"header_seconds":1}}}`,
+		`{"routing":{"timeouts":5}}`,
+	} {
+		if _, err := apply(withTimeouts, body, false); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: err = %v, want ErrInvalid", body, err)
+		}
+	}
+
+	// null removes the section.
+	got, err = apply(withTimeouts, `{"routing":{"timeouts":null}}`, false)
+	if err != nil || strings.Contains(got, `"timeouts"`) {
+		t.Errorf("null = %v, %v; want the section gone:\n%s", got, err, got)
+	}
+
+	// A config.yaml has no key for it: today's core has none, so writing one would be ignored.
+	// A change that would write it there is refused; one that changes nothing is not.
+	if _, err := apply(editYAMLV8, `{"routing":{"timeouts":{"header_ms":15000}}}`, true); !errors.Is(err, ErrInvalid) {
+		t.Errorf("a config.yaml: err = %v, want ErrInvalid", err)
+	}
+	if got, err := apply(editYAMLV8, `{"routing":{"timeouts":null}}`, true); err != nil || got != editYAMLV8 {
+		t.Errorf("a config.yaml with null = %v, %v; want it unchanged", got, err)
+	}
+}
+
 func TestScrub(t *testing.T) {
 	r := NewRedactor()
 	long, short := "zzzz-long-secret", "zzzz"

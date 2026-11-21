@@ -20,6 +20,11 @@ import (
 // Prefix is where the management API is served. The 0 is its version.
 const Prefix = "/v0/management"
 
+// APIVersion is GET /status's management_api: it goes up when a call changes in a way an older
+// client would misread. Fields are only added between such changes, so a client that reads a
+// version it knows keeps working.
+const APIVersion = 1
+
 // ErrorBody is every failed call's reply: {"error": {"code": "...", "message": "..."}}.
 type ErrorBody struct {
 	Error ErrorDetail `json:"error"`
@@ -63,6 +68,9 @@ type Status struct {
 	Version string `json:"version"`
 	Commit  string `json:"commit"`
 	Built   string `json:"built"`
+	// ManagementAPI is this API's version (APIVersion): it goes up when a call changes in a way
+	// an older client would misread.
+	ManagementAPI int `json:"management_api"`
 }
 
 // InstallRequest is what POST /packages asks for.
@@ -424,6 +432,9 @@ type RoutingSettings struct {
 	ForceModelPrefix   bool             `json:"force-model-prefix"`
 	Retry              RetrySettings    `json:"retry"`
 	Cooldown           CooldownSettings `json:"cooldown"`
+	// Timeouts are the default upstream timeouts of every account, in milliseconds; absent when
+	// the config sets none, which leaves core's own.
+	Timeouts *protocol.Timeouts `json:"timeouts,omitempty"`
 }
 
 // RetrySettings are the retry settings in RoutingSettings.
@@ -600,7 +611,8 @@ type ClientPaste struct {
 	// Tool is the tool's canonical ID (SetupClient.ID), whatever name the call used.
 	Tool string `json:"tool"`
 	Name string `json:"name"`
-	// BaseURL is core's address as a program on core's machine reaches it.
+	// BaseURL is the address a program uses to reach this core: core's own, for a caller on core's
+	// machine, and the address the caller reached core by for a caller on another machine.
 	BaseURL string `json:"base_url"`
 	// Key is a placeholder for a client key, never its value.
 	Key   string            `json:"key"`
