@@ -24,10 +24,11 @@ type outToolCall struct {
 }
 
 type outDelta struct {
-	Role             string        `json:"role,omitempty"`
-	Content          *string       `json:"content,omitempty"`
-	ReasoningContent *string       `json:"reasoning_content,omitempty"`
-	ToolCalls        []outToolCall `json:"tool_calls,omitempty"`
+	Role             string          `json:"role,omitempty"`
+	Content          *string         `json:"content,omitempty"`
+	ReasoningContent *string         `json:"reasoning_content,omitempty"`
+	ToolCalls        []outToolCall   `json:"tool_calls,omitempty"`
+	Logprobs         json.RawMessage `json:"logprobs,omitempty"`
 }
 
 type outChoice struct {
@@ -38,10 +39,11 @@ type outChoice struct {
 }
 
 type outMsg struct {
-	Role             string        `json:"role"`
-	Content          *string       `json:"content"`
-	ReasoningContent *string       `json:"reasoning_content,omitempty"`
-	ToolCalls        []outToolCall `json:"tool_calls,omitempty"`
+	Role             string          `json:"role"`
+	Content          *string         `json:"content"`
+	ReasoningContent *string         `json:"reasoning_content,omitempty"`
+	ToolCalls        []outToolCall   `json:"tool_calls,omitempty"`
+	Logprobs         json.RawMessage `json:"logprobs,omitempty"`
 }
 
 type outUsage struct {
@@ -241,7 +243,12 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		return s.delta(outDelta{ToolCalls: []outToolCall{tc}})
 	case llm.EventTextDelta:
 		d := ev.Delta
-		return s.delta(outDelta{Content: &d})
+		delta := outDelta{Content: &d}
+		if s.up.native {
+			// The event's raw is the choice's logprobs when the upstream sent them.
+			delta.Logprobs = ev.Raw
+		}
+		return s.delta(delta)
 	case llm.EventReasoningDelta:
 		d := ev.Delta
 		return s.delta(outDelta{ReasoningContent: &d})
@@ -294,6 +301,7 @@ type Aggregator struct {
 	toolIdx   map[int]int
 	finish    *llm.Finish
 	usage     *llm.Usage
+	logprobs  []json.RawMessage // each text delta's logprobs, as the upstream sent them
 	size      int
 }
 
@@ -326,6 +334,10 @@ func (a *Aggregator) Add(ev llm.Event) {
 		}
 	case llm.EventTextDelta:
 		a.text.WriteString(ev.Delta)
+		if len(ev.Raw) > 0 {
+			a.logprobs = append(a.logprobs, ev.Raw)
+			a.size += len(ev.Raw)
+		}
 	case llm.EventReasoningDelta:
 		a.reasoning.WriteString(ev.Delta)
 	case llm.EventToolInputDelta:
@@ -538,6 +550,35 @@ func plain(v any) any {
 	return v
 }
 
+// mergeLogprobs puts the logprobs of the text deltas together as a message's: the entries of each
+// delta's content and refusal lists, in the order the tokens came. It returns nil when there are
+// none.
+func mergeLogprobs(parts []json.RawMessage) json.RawMessage {
+	var content, refusal []json.RawMessage
+	for _, raw := range parts {
+		var p struct {
+			Content []json.RawMessage `json:"content"`
+			Refusal []json.RawMessage `json:"refusal"`
+		}
+		if json.Unmarshal(raw, &p) != nil {
+			continue
+		}
+		content = append(content, p.Content...)
+		refusal = append(refusal, p.Refusal...)
+	}
+	if len(content) == 0 && len(refusal) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(struct {
+		Content []json.RawMessage `json:"content"`
+		Refusal []json.RawMessage `json:"refusal,omitempty"`
+	}{content, refusal})
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
 // toolCallOverhead is the JSON a tool call adds around its ID, name and arguments.
 const toolCallOverhead = len(`{"id":"","type":"function","function":{"name":"","arguments":""}},`)
 
@@ -560,6 +601,7 @@ func (a *Aggregator) Response() ([]byte, error) {
 		r := a.reasoning.String()
 		msg.ReasoningContent = &r
 	}
+	msg.Logprobs = mergeLogprobs(a.logprobs)
 	reason := finishReason(a.finish)
 	c := a.head
 	choices := []any{outChoice{Message: msg, FinishReason: &reason}}

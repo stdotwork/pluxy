@@ -136,8 +136,9 @@ type streamChoice struct {
 	Index int `json:"index"`
 	Delta struct {
 		reasoningFields
-		Content   *string `json:"content"`
-		Refusal   string  `json:"refusal"`
+		Content   *string         `json:"content"`
+		Refusal   string          `json:"refusal"`
+		Logprobs  json.RawMessage `json:"logprobs"`
 		ToolCalls []struct {
 			Index    *int   `json:"index"`
 			ID       string `json:"id"`
@@ -252,6 +253,29 @@ func (d *StreamDecoder) piece(p thinkPiece, ev *[]llm.Event) {
 		d.text = d.open(llm.ItemMessage, ev, llm.ItemStart{})
 	}
 	*ev = append(*ev, llm.Event{Type: llm.EventTextDelta, Index: d.text, Delta: p.text})
+}
+
+// logprobs returns the logprobs a Chat reply carried, or nil when it carried none.
+func logprobs(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	return raw
+}
+
+// attachLogprobs puts a delta's logprobs on the text event it produced, if it produced one: a
+// Chat client gets its tokens' log probabilities back from a Chat upstream through the event's
+// raw, which only a client of the reply's own format receives.
+func (d *StreamDecoder) attachLogprobs(raw json.RawMessage, from int, ev *[]llm.Event) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return
+	}
+	for i := len(*ev) - 1; i >= from; i-- {
+		if (*ev)[i].Type == llm.EventTextDelta {
+			(*ev)[i].Raw = raw
+			return
+		}
+	}
 }
 
 // flushThink writes what the think filter still holds when the reply ends: reasoning short of its
@@ -388,7 +412,9 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			out = append(out, llm.Event{Type: llm.EventReasoningDelta, Index: d.reasoning, Delta: r})
 		}
 		if t := ch.Delta.Content; t != nil && *t != "" {
+			before := len(out)
 			d.content(*t, &out)
+			d.attachLogprobs(ch.Delta.Logprobs, before, &out)
 		}
 		if ch.Delta.Refusal != "" {
 			d.refused = true
@@ -558,8 +584,9 @@ type completionChoice struct {
 	Index   int `json:"index"`
 	Message *struct {
 		reasoningFields
-		Content   *string `json:"content"`
-		Refusal   string  `json:"refusal"`
+		Content   *string         `json:"content"`
+		Refusal   string          `json:"refusal"`
+		Logprobs  json.RawMessage `json:"logprobs"`
 		ToolCalls []struct {
 			chatToolCall
 			ExtraContent json.RawMessage `json:"extra_content"`
@@ -621,10 +648,10 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 		ID: c.ID, Model: c.Model, Created: c.Created, Format: llm.FormatOpenAIChat, Raw: replyFields(body),
 	}}}
 	next := 0
-	item := func(start llm.ItemStart, delta string, deltaType string, raw json.RawMessage) {
+	item := func(start llm.ItemStart, delta string, deltaType string, raw, deltaRaw json.RawMessage) {
 		out = append(out, llm.Event{Type: llm.EventItemStart, Index: next, Item: &start, Raw: raw})
 		if delta != "" {
-			out = append(out, llm.Event{Type: deltaType, Index: next, Delta: delta})
+			out = append(out, llm.Event{Type: deltaType, Index: next, Delta: delta, Raw: deltaRaw})
 		}
 		out = append(out, llm.Event{Type: llm.EventItemEnd, Index: next})
 		next++
@@ -647,17 +674,17 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 		reasoning := m.text()
 		tagged, text := parseThink(content)
 		if reasoning != "" {
-			item(llm.ItemStart{Kind: llm.ItemReasoning}, reasoning, llm.EventReasoningDelta, nil)
+			item(llm.ItemStart{Kind: llm.ItemReasoning}, reasoning, llm.EventReasoningDelta, nil, nil)
 		}
 		if tagged != "" && tagged != reasoning {
-			item(llm.ItemStart{Kind: llm.ItemReasoning}, tagged, llm.EventReasoningDelta, nil)
+			item(llm.ItemStart{Kind: llm.ItemReasoning}, tagged, llm.EventReasoningDelta, nil, nil)
 		}
 		if m.Refusal != "" {
 			refused = true
 			text += m.Refusal
 		}
 		if text != "" {
-			item(llm.ItemStart{Kind: llm.ItemMessage}, text, llm.EventTextDelta, nil)
+			item(llm.ItemStart{Kind: llm.ItemMessage}, text, llm.EventTextDelta, nil, logprobs(m.Logprobs))
 		}
 		for i, tc := range m.ToolCalls {
 			if tc.Function.Name == "" {
@@ -678,7 +705,7 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 			}
 			used[id] = true
 			calls++
-			item(llm.ItemStart{Kind: llm.ItemToolCall, CallID: id, Name: tc.Function.Name}, tc.Function.Arguments, llm.EventToolInputDelta, extraContent(tc.ExtraContent))
+			item(llm.ItemStart{Kind: llm.ItemToolCall, CallID: id, Name: tc.Function.Name}, tc.Function.Arguments, llm.EventToolInputDelta, extraContent(tc.ExtraContent), nil)
 		}
 		finish = decodeFinish(ch.FinishReason)
 	}
