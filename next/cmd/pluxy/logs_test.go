@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // runAgainst runs the command against srv with the management key "k"; terminal says whether
@@ -41,10 +42,6 @@ func TestLogsErrorsList(t *testing.T) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if r.Header.Get("X-Empty") != "" || strings.Contains(r.Header.Get("User-Agent"), "never") {
-			w.Write([]byte(`{"files":[]}`))
-			return
-		}
 		w.Write([]byte(files + "\n"))
 	}))
 	defer srv.Close()
@@ -54,6 +51,10 @@ func TestLogsErrorsList(t *testing.T) {
 		len(strings.Fields(lines[0])) != 3 || !strings.HasPrefix(lines[1], "error-v1-chat-2026-11-20T010203-aaaa.log") ||
 		strings.Fields(lines[1])[1] != "1234" || strings.Fields(lines[2])[1] != "7" {
 		t.Errorf("logs errors: %d %q %q, want a table of two files with their sizes", code, out, errOut)
+	}
+	// 1795222923 is this moment, in seconds; the table shows it in local time.
+	if want := time.Date(2026, 11, 21, 1, 2, 3, 0, time.UTC).Local().Format(time.DateTime); len(lines) != 3 || !strings.Contains(lines[1], want) {
+		t.Errorf("logs errors: %q, want the first file's time %s", out, want)
 	}
 	if out, _, code := runLogs(srv, false, "logs", "errors", "--json"); code != 0 || out != files+"\n" {
 		t.Errorf("logs errors --json: %d %q, want the body unchanged", code, out)
@@ -133,14 +134,13 @@ func TestLogsArguments(t *testing.T) {
 			t.Errorf("%v: %d %q %q, want a usage error", args, code, out, errOut)
 		}
 	}
-	for _, c := range []struct{ args, want string }{
-		{"help", "logs errors [name]"},
-		{"help", "logs request <id>"},
-		{"help", "usage export"},
-	} {
-		var out bytes.Buffer
-		if code := runCLI([]string{c.args}, &out, io.Discard, func(string) string { return "" }); code != 0 || !strings.Contains(out.String(), c.want) {
-			t.Errorf("help does not list %q:\n%s", c.want, out.String())
+	var help bytes.Buffer
+	if code := runCLI([]string{"help"}, &help, io.Discard, func(string) string { return "" }); code != 0 {
+		t.Fatalf("help: %d", code)
+	}
+	for _, want := range []string{"logs errors [name]", "logs request <id>", "logs clear", "usage export"} {
+		if !strings.Contains(help.String(), want) {
+			t.Errorf("help does not list %q:\n%s", want, help.String())
 		}
 	}
 }
@@ -235,9 +235,6 @@ func TestLogsClear(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodDelete && r.URL.Path == mgmt+"/logs":
-			if r.Header.Get("X-Off") != "" {
-				return
-			}
 			w.Write([]byte(`{"removed":2}` + "\n"))
 		default:
 			w.WriteHeader(http.StatusBadRequest)
@@ -259,8 +256,8 @@ func TestLogsClear(t *testing.T) {
 	}
 	none := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"removed":0}`)) }))
 	defer none.Close()
-	if out, _, _ := runLogs(none, false, "logs", "clear"); !strings.Contains(out, "no rotated log files") {
-		t.Errorf("logs clear with no rotated files: %q, want it said", out)
+	if out, _, _ := runLogs(none, false, "logs", "clear"); !strings.Contains(out, "0 rotated log files deleted") || strings.Contains(out, "no rotated") {
+		t.Errorf("logs clear that deleted none: %q, want the count: core gives 0 also when a delete failed", out)
 	}
 	off := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
@@ -345,6 +342,24 @@ func TestUsageExportSaysWhenOlderRequestsAreGone(t *testing.T) {
 		if code != 0 || out != usageCSV || errOut != notice {
 			t.Errorf("%s: %d %q %q, want the CSV and the notice once", name, code, out, errOut)
 		}
+	}
+}
+
+// A recorded model or account name comes from a client: on a terminal its control bytes are
+// shown, not sent, and a row ends in a plain newline. Piped, the CSV is exact.
+func TestUsageExportEscapesOnATerminal(t *testing.T) {
+	const page = `{"enabled":true,"events":[{"seq":1,"id":"t1","timestamp":"2026-11-20T01:02:03Z","model":"m\u001b]0;x\u0007","account":"a\r\nb","failed":false,"status":200,"latency_ms":1,"tokens":{}}],"next":1,"more":false,"lost":false}`
+	const header = "Time,Model,Provider,Account,Client key,Failed,Status,Latency,Tokens,Trace ID"
+	var queries []url.Values
+	srv := usageServer(map[string]string{"0": page}, &queries)
+	defer srv.Close()
+	want := header + "\n" + `2026-11-20T01:02:03Z,m\x1b]0;x\x07,,"a\x0d` + "\n" + `b",,false,200,1,,t1` + "\n"
+	if out, errOut, code := runLogs(srv, true, "usage", "export"); code != 0 || errOut != "" || out != want {
+		t.Errorf("usage export on a terminal: %d %q\n got %q\nwant %q", code, errOut, out, want)
+	}
+	piped := header + "\r\n2026-11-20T01:02:03Z,m\x1b]0;x\x07,,\"a\r\nb\",,false,200,1,,t1\r\n"
+	if out, _, code := runLogs(srv, false, "usage", "export"); code != 0 || out != piped {
+		t.Errorf("usage export piped: %d\n got %q\nwant %q", code, out, piped)
 	}
 }
 

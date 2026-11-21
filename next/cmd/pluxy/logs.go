@@ -57,13 +57,10 @@ var logsClearCommand = command{words: "logs clear", routes: []string{"DELETE /lo
 	run: func(x *invocation) error {
 		var r management.LogsCleared
 		return x.call(http.MethodDelete, "/logs", nil, nil, &r, func() {
-			rotated := "no rotated log files to delete"
-			switch r.Removed {
-			case 0:
-			case 1:
+			// A count, not "there were none": core's count leaves out a file it could not delete.
+			rotated := fmt.Sprintf("%d rotated log files deleted", r.Removed)
+			if r.Removed == 1 {
 				rotated = "1 rotated log file deleted"
-			default:
-				rotated = fmt.Sprintf("%d rotated log files deleted", r.Removed)
 			}
 			x.printf("logs cleared: main.log emptied, %s; request logs and error logs are kept\n", rotated)
 		})
@@ -207,8 +204,16 @@ var usageExportCommand = command{words: "usage export", routes: []string{"GET /u
 		if lost {
 			x.eprintf("pluxy: some older requests are no longer available, so this export may not include them\n")
 		}
+		// Names in the record come from clients, so on a terminal they go through escapeWriter,
+		// and a row ends in a plain newline there, since it would show a CR as \x0d. Piped, the
+		// bytes are the panel's CSV.
+		terminal := stdoutIsTerminal(x.stdout)
+		eol := "\r\n"
+		if terminal {
+			eol = "\n"
+		}
 		var out bytes.Buffer
-		writeCSVRow(&out, "Time", "Model", "Provider", "Account", "Client key", "Failed", "Status", "Latency", "Tokens", "Trace ID")
+		writeCSVRow(&out, eol, "Time", "Model", "Provider", "Account", "Client key", "Failed", "Status", "Latency", "Tokens", "Trace ID")
 		for i := len(events) - 1; i >= 0; i-- {
 			e := events[i]
 			status, tokens := "", ""
@@ -218,21 +223,28 @@ var usageExportCommand = command{words: "usage export", routes: []string{"GET /u
 			if e.Tokens.Total != nil {
 				tokens = strconv.FormatInt(*e.Tokens.Total, 10)
 			}
-			writeCSVRow(&out, e.Timestamp.Format(time.RFC3339Nano), e.Model, e.Provider, e.Account, e.KeyID,
+			writeCSVRow(&out, eol, e.Timestamp.Format(time.RFC3339Nano), e.Model, e.Provider, e.Account, e.KeyID,
 				strconv.FormatBool(e.Failed), status, strconv.FormatInt(e.LatencyMS, 10), tokens, e.ID)
 		}
-		_, err := x.stdout.Write(out.Bytes())
-		return err
+		if !terminal {
+			_, err := x.stdout.Write(out.Bytes())
+			return err
+		}
+		w := &escapeWriter{w: x.stdout}
+		if _, err := w.Write(out.Bytes()); err != nil {
+			return err
+		}
+		return w.flush()
 	}}
 
-func writeCSVRow(b *bytes.Buffer, fields ...string) {
+func writeCSVRow(b *bytes.Buffer, eol string, fields ...string) {
 	for i, f := range fields {
 		if i > 0 {
 			b.WriteByte(',')
 		}
 		b.WriteString(csvField(f))
 	}
-	b.WriteString("\r\n")
+	b.WriteString(eol)
 }
 
 // csvField encodes a cell as CSV, neutralizing a spreadsheet formula before quoting. It is
