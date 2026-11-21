@@ -662,11 +662,11 @@ header value stays at 4), reading a run as written and with its
 escapes decoded (JSON's `\/`, `\\` and `\uXXXX` and percent-encoding's `%XX`, nested up to 8
 times); a `[redacted]` already there stays as it is. A PEM private key
 counts by its lines and its unwrapped body, at 8 bytes or more in a row, as does a secret of 32
-bytes or more: a long key is random, so 4 bytes of it would be a coincidence in most errors and
-would redact an ordinary word of them, such as `test` for a key that spells it, or `Signature` for
-a PEM key whose body spells `Sign`, while a fragment that short of a key is of no use. A secret
-under 32 bytes, such as a hand-picked one, stays at 4, so a 4 to 7 byte cut of a key of 32 bytes
-or more is not removed.
+bytes or more: a key that long is almost always random, so 4 bytes of it would be a coincidence in
+most errors and would redact an ordinary word of them, such as `test` for a key that spells it, or
+`Signature` for a PEM key whose body spells `Sign`, while a fragment that short of a key is of no
+use. So a cut of 4 to 7 bytes of a secret of 32 bytes or more is not removed. A shorter secret,
+which may be hand-picked, stays at 4.
 The rule runs on an [error](#errors)'s `message` and on each string value of its `raw` (object keys
 are names, and stay), on every call on an account and on a [login](#login), and on a
 [captured](#upstream-capture) upstream reply's body whose status is 400 or more, or of every reply
