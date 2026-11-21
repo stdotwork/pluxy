@@ -1105,7 +1105,9 @@ func TestCLIAccountAddRefusesOversizedDocumentPromptly(t *testing.T) {
 	doc := "{\"a\": [\n" + strings.Repeat("1,\n", (maxInputValue/3)+10)
 	began := time.Now()
 	_, errOut, code := f.runBounded(t, strings.NewReader(doc), 30*time.Second, "account", "add", "test/ext", "--method", "service_account", "--id", "big-1")
-	if took := time.Since(began); took > 2*time.Second {
+	// Far above a linear read (under a second with -race) and below a quadratic one (over 30
+	// seconds with -race), so a busy runner does not fail it.
+	if took := time.Since(began); took > 15*time.Second {
 		t.Fatalf("a document over 1 MiB took %s to refuse", took)
 	}
 	if code != 2 || !strings.Contains(errOut, "KiB") {
