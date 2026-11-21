@@ -48,9 +48,9 @@ type outMsg struct {
 }
 
 type outUsage struct {
-	PromptTokens        *int64 `json:"prompt_tokens,omitempty"`
-	CompletionTokens    *int64 `json:"completion_tokens,omitempty"`
-	TotalTokens         *int64 `json:"total_tokens,omitempty"`
+	PromptTokens        int64 `json:"prompt_tokens"`
+	CompletionTokens    int64 `json:"completion_tokens"`
+	TotalTokens         int64 `json:"total_tokens"`
 	PromptTokensDetails *struct {
 		CachedTokens     *int64 `json:"cached_tokens,omitempty"`
 		CacheWriteTokens int64  `json:"cache_write_tokens,omitempty"`
@@ -134,11 +134,11 @@ func (u upstream) choices(ev llm.Event) []json.RawMessage {
 	return n.Choices
 }
 
-// encodeUsage writes model usage as Chat Completions usage. A count the upstream did not report is
-// left out rather than written as zero (CompletionUsage has no required field), and one it
-// reported as zero stays zero.
+// encodeUsage writes model usage as Chat Completions usage. When any count is known, all three
+// counts CompletionUsage requires are written, a missing one as 0; a usage with no counts at all
+// is left out, and a count the upstream reported as zero stays zero.
 func encodeUsage(u *llm.Usage) *outUsage {
-	if u == nil {
+	if u == nil || !reportsAnyCount(u) {
 		return nil
 	}
 	val := func(p *int64) int64 {
@@ -147,11 +147,8 @@ func encodeUsage(u *llm.Usage) *outUsage {
 		}
 		return *p
 	}
-	out := &outUsage{PromptTokens: u.InputTokens, CompletionTokens: u.OutputTokens}
-	if u.InputTokens != nil && u.OutputTokens != nil {
-		total := *u.InputTokens + *u.OutputTokens
-		out.TotalTokens = &total
-	}
+	in, outTok := val(u.InputTokens), val(u.OutputTokens)
+	out := &outUsage{PromptTokens: in, CompletionTokens: outTok, TotalTokens: in + outTok}
 	if u.CachedInputTokens != nil || val(u.CacheWriteInputTokens) > 0 {
 		out.PromptTokensDetails = &struct {
 			CachedTokens     *int64 `json:"cached_tokens,omitempty"`
@@ -166,10 +163,13 @@ func encodeUsage(u *llm.Usage) *outUsage {
 			ReasoningTokens int64 `json:"reasoning_tokens"`
 		}{*u.ReasoningTokens}
 	}
-	if out.PromptTokens == nil && out.CompletionTokens == nil && out.PromptTokensDetails == nil && out.CompletionTokensDetails == nil {
-		return nil
-	}
 	return out
+}
+
+// reportsAnyCount reports whether the usage carries any count at all, the upstream's or 0.
+func reportsAnyCount(u *llm.Usage) bool {
+	return u.InputTokens != nil || u.OutputTokens != nil || u.CachedInputTokens != nil ||
+		u.CacheWriteInputTokens != nil || u.ReasoningTokens != nil
 }
 
 func finishReason(f *llm.Finish) string {

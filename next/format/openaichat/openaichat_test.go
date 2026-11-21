@@ -864,8 +864,8 @@ func TestStreamUsageLaterChunks(t *testing.T) {
 	})
 }
 
-// A count the upstream did not report stays absent from a Chat reply's usage instead of becoming
-// zero, and one it reported as zero is written as zero.
+// A Chat usage with any count at all carries the three counts OpenAI's CompletionUsage requires,
+// a missing one as 0; a usage with no counts is left out, and a count reported as zero stays zero.
 func TestRenderUsageUnknownStaysAbsent(t *testing.T) {
 	render := func(u *llm.Usage) string {
 		t.Helper()
@@ -893,8 +893,8 @@ func TestRenderUsageUnknownStaysAbsent(t *testing.T) {
 		u    *llm.Usage
 		want string
 	}{
-		{"only output known", &llm.Usage{OutputTokens: llm.Int64(5)}, `{"completion_tokens":5}`},
-		{"only input known", &llm.Usage{InputTokens: llm.Int64(7)}, `{"prompt_tokens":7}`},
+		{"only output known", &llm.Usage{OutputTokens: llm.Int64(5)}, `{"prompt_tokens":0,"completion_tokens":5,"total_tokens":5}`},
+		{"only input known", &llm.Usage{InputTokens: llm.Int64(7)}, `{"prompt_tokens":7,"completion_tokens":0,"total_tokens":7}`},
 		{"nothing known", &llm.Usage{}, ``},
 		{"real zeros", &llm.Usage{InputTokens: llm.Int64(0), OutputTokens: llm.Int64(0)},
 			`{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}`},

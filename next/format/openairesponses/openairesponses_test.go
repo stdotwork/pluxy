@@ -860,9 +860,9 @@ func TestRenderUsageCacheWrite(t *testing.T) {
 	}
 }
 
-// A count the upstream did not report stays absent from a Response's usage instead of becoming
-// zero. OpenAI's ResponseUsage requires cached_tokens and reasoning_tokens inside the details
-// objects whenever usage is written, so those keep their required zero.
+// A Response's usage with any count at all carries every field OpenAI's ResponseUsage requires,
+// a missing input or output count as 0; a usage with no counts is left out, and a count reported as
+// zero stays zero.
 func TestRenderUsageUnknownStaysAbsent(t *testing.T) {
 	req, err := ParseRequest([]byte(`{"model":"m","input":"hi"}`))
 	if err != nil {
@@ -902,9 +902,9 @@ func TestRenderUsageUnknownStaysAbsent(t *testing.T) {
 	}
 
 	same(t, render(&llm.Usage{OutputTokens: llm.Int64(5)}),
-		`{"output_tokens":5,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}`)
+		`{"input_tokens":0,"output_tokens":5,"total_tokens":5,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}`)
 	same(t, render(&llm.Usage{InputTokens: llm.Int64(7)}),
-		`{"input_tokens":7,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}`)
+		`{"input_tokens":7,"output_tokens":0,"total_tokens":7,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}`)
 	if got := render(&llm.Usage{}); got != "" {
 		t.Errorf("usage = %s, want none", got)
 	}

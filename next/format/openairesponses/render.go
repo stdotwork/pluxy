@@ -241,34 +241,27 @@ func (b *builder) response(stream bool) obj {
 		}
 	}
 	r["output"] = output
-	if u := b.usage; u != nil && (u.InputTokens != nil || u.OutputTokens != nil || u.CachedInputTokens != nil || u.CacheWriteInputTokens != nil || u.ReasoningTokens != nil) {
+	if u := b.usage; u != nil && usageKnown(u) {
 		v := func(p *int64) int64 {
 			if p == nil {
 				return 0
 			}
 			return *p
 		}
-		// A count the upstream did not report is left out. OpenAI's ResponseUsage requires
-		// cached_tokens and reasoning_tokens inside the details objects, so those keep the 0 the
-		// API requires when the upstream reported no cache read or reasoning.
+		// When any count is known, every field OpenAI's ResponseUsage requires is written, a
+		// missing input or output count as 0; a usage with no counts at all is left out.
+		in, outTok := v(u.InputTokens), v(u.OutputTokens)
 		inDetails := obj{"cached_tokens": v(u.CachedInputTokens)}
 		if w := v(u.CacheWriteInputTokens); w > 0 {
 			inDetails["cache_write_tokens"] = w
 		}
-		usage := obj{
+		r["usage"] = obj{
+			"input_tokens":          in,
 			"input_tokens_details":  inDetails,
+			"output_tokens":         outTok,
 			"output_tokens_details": obj{"reasoning_tokens": v(u.ReasoningTokens)},
+			"total_tokens":          in + outTok,
 		}
-		if u.InputTokens != nil {
-			usage["input_tokens"] = *u.InputTokens
-		}
-		if u.OutputTokens != nil {
-			usage["output_tokens"] = *u.OutputTokens
-		}
-		if u.InputTokens != nil && u.OutputTokens != nil {
-			usage["total_tokens"] = *u.InputTokens + *u.OutputTokens
-		}
-		r["usage"] = usage
 		if b.upFormat != format && len(u.Raw) > 0 {
 			for _, k := range unmodelledUsage(u.Raw) {
 				b.lose("usage."+k, "usage field with no place in a Response")
@@ -276,6 +269,13 @@ func (b *builder) response(stream bool) obj {
 		}
 	}
 	return r
+}
+
+// usageKnown reports whether the upstream reported any count at all: a usage with none is left
+// out of a Response rather than written as an object of zeros.
+func usageKnown(u *llm.Usage) bool {
+	return u.InputTokens != nil || u.OutputTokens != nil || u.CachedInputTokens != nil ||
+		u.CacheWriteInputTokens != nil || u.ReasoningTokens != nil
 }
 
 // unmodelledUsage lists Chat usage fields a Response's usage has no place for.
