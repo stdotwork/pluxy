@@ -99,8 +99,9 @@ refusal is shown in the row with what to do about it; a core without the call (4
 command only. Once core has a record of the import (the row's `last_import`), and the report is
 closed, the row says the setup was brought across, when, and how many of its settings and auth
 files each list of the report held. It then has no button: the command is how to bring it across
-again, and the row says what that does. An import never changes core's management key: a management key in the CLIProxyAPI
-setup stays behind, and the report says why in its "does not come across" list.
+again, and the row says what that does. An import never changes core's management key: a
+management key in the CLIProxyAPI setup stays behind, and the report says why in its "does not
+come across" list.
 
 A host can add one button to each client the page lists as found:
 `corePages({ setup: { clientAction, clientActionHint } })` (`SetupOptions` in `kit/pages/setup.tsx`). `clientAction` takes the client's ID from core's
