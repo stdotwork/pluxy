@@ -36,6 +36,10 @@ test("routing saves strategy and priorities and shows live model cooling", async
   await openPanel(page, core);
   await signIn(page, core);
   await goTo(page, "Routing");
+  // An account with no label is named by its extension alone, with no separator before it.
+  await expect(page.locator("tr", { hasText: "alpha-1" }).locator(".routing-identity")).toHaveText(
+    "test/alpha",
+  );
   await page.getByRole("combobox", { name: "Within a tier", exact: true }).selectOption("fill-first");
   await expect
     .poll(async () => (await core.mgmt<CoreSettings>("GET", "/settings")).body.routing.strategy)
