@@ -13,6 +13,10 @@ Chat upstream, a Messages or Gemini request to a Responses upstream, and a Gemin
 Messages upstream are translated, and what the translation could not carry is logged. The
 [Codex provider](#codex) serves OpenAI's Codex models from an API key, a ChatGPT subscription or a Sign in with ChatGPT (SIWC) sign-in.
 
+This file is the reference for core. To build pluxy and send a first request, follow the
+[quick start](../README.md#quick-start); to point a coding tool at it, see
+[docs/clients.md](../docs/clients.md).
+
 ## Layout
 
 | Path | What it is |
@@ -98,9 +102,11 @@ config there and starts on it: it listens on `127.0.0.1` port 8317, or a free po
 taken, with one new client key and a new management key, in a file only its user can read. Core
 logs the file's path and the address, never the keys; read them in the file. `pluxy init
 [-config file] [-port n]` writes the same config without starting core (`-port 0`: a free port),
-and never replaces a file. A config with no management key is refused at start, with a message
-saying how to add one. A first start installs no package: install the providers you use from the
-bundled registry ([Packages](#packages)) or the panel. Flags:
+and never replaces a file. A test that starts a first core sets `PLUXY_INIT_PORT=<port>` to choose
+that port instead, so a test never takes 8317 on the machine it runs on (`0` is a free port); a
+value that is not a port stops core, and no real run sets it. A config with no management key is
+refused at start, with a message saying how to add one. A first start installs no package: install
+the providers you use from the bundled registry ([Packages](#packages)) or the panel. Flags:
 
 - `-config`: the config file (default `config.json`).
 - `-version`: print the build's version, commit and build date on one line, `pluxy <version> (<commit>, <date>)`, and exit. It does not read the config. Core logs the same line when it starts.
@@ -118,7 +124,7 @@ the panel (`extension_pages` in the config); see [extension pages](ui/extension-
 
 An account may list `models` it serves; without a list it serves the models its extension lists
 for it, as today's core serves an account the models of its provider's catalog, and any model
-when the extension has no list for it (the OpenAI-compatible extension has none). Accounts can rename,
+when the extension has no list for it. Accounts can rename,
 exclude and prefix models, and clients list the models on `GET /v1/models`: see
 [Model lists and model names](#model-lists-and-model-names). Core runs the
 extension the config names and every [installed package](#packages) that is enabled, and spreads
@@ -489,11 +495,13 @@ installs only when asked (`pluxy ext install`, or the panel). It runs as user `6
 docker build -t pluxy .
 ```
 
-Core reads no environment variables, so everything is set in `config.json`, and everything core
-keeps is in one folder: `/config`, a volume. It holds `config.json` and, beside it, the
-`credentials`, `packages` and `logs` folders core makes. Make a folder with a config file
-before the first start (with an empty `/config`, core writes a first config that listens on the
-container's own `127.0.0.1`: unreachable from outside, and the health check fails); `listen` must be `0.0.0.0:8400`, since the container's own `127.0.0.1`
+Core takes no settings from its environment: everything is set in `config.json`, and everything
+core keeps is in one folder: `/config`, a volume. It holds `config.json` and, beside it, the
+folders core makes and fills: `credentials`, `packages`, `logs` and `state` (routing state, the
+setup scan, stored themes, the model catalogue, and the keys public account IDs and client-key
+IDs are made with). Make a folder with a config file before the first start (with an
+empty `/config`, core writes a first config that listens on the container's own `127.0.0.1`:
+unreachable from outside, and the health check fails); `listen` must be `0.0.0.0:8400`, since the container's own `127.0.0.1`
 is not reachable from outside it, and the image's health check asks port 8400. Inside a container,
 requests through a published port come from Docker's network address, not from `127.0.0.1`, so
 the management API refuses them unless `management_allow_remote` is `true` (it still needs the
@@ -1457,8 +1465,9 @@ with no live block for an hour is forgotten, and its step with it. Among eligibl
 prefers the session's account (session affinity is on unless the config turns it off), then the
 highest `priority`, then picks by strategy.
 
-A reset the upstream names is used when it is between 1 second and 8 days away (the longest usage
-window of any supported provider is 7 days). A shorter one is held for 1 second. A longer one is
+A reset the upstream names is used when it is between 1 second and 8 days away, or, when the
+upstream also names the usage window's length, up to that length plus an hour (Codex's monthly
+window, 28 to 31 days, resets a month off). A shorter one is held for 1 second. A longer one is
 not believed: the account is held for 30 minutes and checked after 15. The upstream's newest word
 replaces the block's end, sooner or later; a backoff core chose itself only moves a block later.
 A rate limit or quota block on an account or one of its models with more than 15 minutes left is
@@ -1802,8 +1811,9 @@ version 0.3), under the account's naming rules below; an extension that cannot s
 for it. The same list decides which models such an account serves: a request for a model no
 account serves is refused without calling an upstream, as today's core refuses it (404
 `model_not_found`; today's core answers 400). An account whose extension has no list, an empty
-one, or one it could not read within 15 seconds serves any model, and core asks again a minute
-later. Core asks again for each known list every 30 minutes with jitter, when an account's
+one, or one it could not read within 15 seconds serves any model. A list that could not be read is
+asked for again a minute later; an empty list counts as known, so it is refreshed with the others.
+Core asks again for each known list every 30 minutes with jitter, when an account's
 credential is renewed or it signs in again, and on `POST /v0/management/models/refresh`; a
 refresh that fails, times out or comes back empty keeps the last good list, and so does one that
 falls back to the extension's built-in list when the account's list was read from the provider.
@@ -1946,8 +1956,8 @@ at start and on a reload. Send it as a bearer token. The config may set no accou
 | `POST /accounts/{id}/refresh` | Renews the account's credential now. |
 | `POST /vertex/import` | Adds a Vertex AI account from a Google service account key file, as today's `POST /v0/management/vertex/import` does: `multipart/form-data` with the key in `file` and an optional `location` (a form field, else a query parameter; default `us-central1`), at most 1 MiB in all. It runs the Gemini extension's [`service_account` login](#gemini) with the account ID `vertex-<project_id>` (`/`, `\` and `:` in the project ID become `_`, spaces `-`), the settings `vertex.project` and `vertex.location`, and the label `<project_id> (<client_email>)`, waits for it (one token fetch, at the key's `token_uri`) and answers once: 200 `{"status": "ok", "account", "project_id", "email", "location"}`. Errors have the usual `{"error": {"code", "message"}}` shape: 400 `file_required`, `invalid_json`, `project_id_missing` and `invalid_service_account` (also when the token endpoint refuses the key), 400 `invalid_request` for a location or project ID the extension refuses, 409 `conflict` for an account of that ID in the config, 413 for a larger request, 502 with the login's code (`unavailable`) when the token endpoint cannot be reached or fails, and 504 when it does not answer in 45 seconds. When a login added an account of that ID before, the import signs in to it again, so the key replaces the old one only when its `client_email` is the same service account (else 400 `invalid_request`, the account keeps its key) and a `location` the account does not have is a 409; today's core overwrote the file silently. It does not repair a key damaged by pasting (today's core rebuilds a mangled PEM); it takes the file Google gives. |
 | `POST /accounts/import` | Adds the accounts of one credential file of today's auth folder to the running core, read and added as [`pluxy import cpa`](#moving-from-cliproxyapi-pluxy-import-cpa) reads and adds each file of the folder: `{"name": "<file name>.json", "content": "<the file's text>"}`. The content is the file itself, never a path on core's machine; `name` (a `.json` file name, no folder) gives the account ID, as the file's name does. The accounts serve at once, like an account a login adds. 200 `{"imported": [{"id", "extension", "ignored"}], "skipped": [...]}`: each account added, with the file's settings not supported yet that it left out (`ignored`), and why any other account of the file was skipped (a Codex file can hold two). Nothing added: 400 `invalid_request` for a file that is not JSON, of a type the import does not take or holding no token, with routing fields routing refuses once read (such as a `prefix` with a `/` inside, `a/b`; surrounding spaces and slashes are trimmed first), or a bad `name`; 409 `conflict` when the store or the config already has the account's ID, or a sign-in still running will take it (letter case aside); 413 for a file larger than 1 MiB. The message says why. Neither the reply nor core's log holds anything from the file but the account's ID. |
-| `PATCH /accounts/{id}` | `disabled` (`true` or `false`; disabled accounts get no requests) and any of the routing fields `priority`, `weight`, `disable_cooling`, `max_concurrency`, `request_retry`, `prefix`, `models`, `excluded_models`, `model_alias`, `proxy_url` and `headers`, checked as the config's are (a `proxy_url` sent back as `GET /accounts` shows it keeps the password it hides, and a header's placeholder sent back keeps its value; a placeholder that stands for no value the account has is a 400); `null` sets one back to its default. `settings` replaces the account's settings as a whole: an object, or `null` for none. A placeholder from `GET /accounts` keeps the secret it stands for: it is accepted only where that secret is now (an item of a list may move within its list; elsewhere 400), and only while the account's settings still hold that secret and core has not restarted (else 409, read the account again); to change a secret, send the new value. Core passes the settings to the extension as they are. An account whose `settings` change starts with fresh routing state, as on a reload: its blocks, cooldowns, last error and session bindings are dropped. A bad field changes nothing (400). Replies with the account. |
-| `POST /accounts/{id}/cooldown/reset` | Clears the account's cooldowns, on its credential, its models and its endpoint (which accounts naming the same endpoint share), with their backoff steps and its last error, so it serves again at once. Works for config accounts too. Replies with `cleared`, the number of live blocks it cleared, and the account. |
+| `PATCH /accounts/{id}` | `disabled` (`true` or `false`; disabled accounts get no requests) and any of the routing fields `priority`, `weight`, `disable_cooling`, `max_concurrency`, `request_retry`, `prefix`, `models`, `excluded_models`, `model_alias`, `proxy_url` and `headers`, checked as the config's are (a `proxy_url` sent back as `GET /accounts` shows it keeps the password it hides, and a header's placeholder sent back keeps its value; a placeholder that stands for no value the account has is a 400); `null` sets one back to its default. `settings` replaces the account's settings as a whole: an object, or `null` for none. A placeholder from `GET /accounts` keeps the secret it stands for: it is accepted only where that secret is now (an item of a list may move within its list; elsewhere 400), and only while the account's settings still hold that secret and core has not restarted (else 409, read the account again); to change a secret, send the new value. Core passes the settings to the extension as they are. An account whose `settings` change starts with fresh routing state, as on a reload: its blocks, cooldowns, last error and session bindings are dropped, while a ban stands (only signing in again, removing the account or turning it back on lifts it). A bad field changes nothing (400). Replies with the account. |
+| `POST /accounts/{id}/cooldown/reset` | Clears the account's cooldowns, on its credential, its models and its endpoint (which accounts naming the same endpoint share), with their backoff steps and its last error, so it serves again at once unless it is banned: a ban, and the last error of a banned account, stay (see [Accounts and routing](#accounts-and-routing)). Works for config accounts too. Replies with `cleared`, the number of live blocks it cleared, and the account. |
 | `GET /accounts/{id}/models` | The models the account serves: its config's `models` when it lists them, else the ones its extension lists for it (the protocol's [`models`](protocol/README.md#models)). Each has its upstream `id`, what the extension says about it, `names` (the names clients use for it after the account's exclusions, aliases and prefix, and its extension's defaults for logins) and `excluded` when `excluded_models` leaves it out. |
 | `POST /accounts/{id}/test` | Sends the account one small request (`Hi`, at most 16 tokens of reply), straight to its extension: its cooldowns are ignored and its routing state is left as it is. `{"model": ...}` names the model by its upstream name; without it, the first the account serves. Replies 200 with `result`: `ok`, `model`, `served_model`, `latency_ms`, the start of the `reply`, `finish_reason` and `usage`, or `error`. The request spends what a request that size costs. |
 | `GET /accounts/{id}/quota` | The account's plan and usage, read from its provider when asked (the protocol's [`quota`](protocol/README.md#quota)): `quota` with `plan`, optional `plan_ends_at` (the subscription end in Unix seconds), `limits` (each with `id`, `label`, and what the provider gives of `used_percent`, `used`, `limit`, `remaining`, `unit`, `unlimited`, `resets_at`, `window_seconds`, `models`) and `raw`, the provider's replies; and `fetched_at`. 422 with code `unsupported` for an account with no plan to report, such as an API key, or whose extension reads no quota; 502 with the provider's error code when the provider refused or failed. Each provider's section says what it reports. |
@@ -2057,7 +2067,7 @@ in `trusted_proxies`, every client has the proxy's address, so one client's wron
 | Call | What it does |
 | --- | --- |
 | `GET /v0/management/status` | `desired` (the newest config version core has seen, with `error` when it was refused) and `active` (the one serving), each with `revision` and `hash`; `extensions`, one entry per running generation with `state` (`starting`, `active`, `idle`, `crashed`, `quarantined`, `draining`, `stopped`), `current`, `pid`, `restarts`, `last_error` and `active_requests`; `safe_mode`; `first_run`; `version`, `commit` and `built`, the build's version, commit and build date as `-version` prints them. |
-| `GET /v0/management/setup`, `POST /v0/management/setup/scan`, `POST /v0/management/setup/apply`, `POST /v0/management/setup/done` | First-run setup scan, package picks, applying picks and ending first run; see [`management/README.md`](management/README.md#setup). |
+| `GET /v0/management/setup`, `POST /v0/management/setup/scan`, `POST /v0/management/setup/apply`, `POST /v0/management/setup/done`, `GET /v0/management/setup/clients/{id}/paste` | First-run setup scan, package picks, applying picks, ending first run, and the settings to paste into a client tool; see [`management/README.md`](management/README.md#setup). |
 | `POST /v0/management/reload` | Reload now. 200 with the status when the new revision is active; 422 with the status when it was refused. |
 | `GET /v0/management/ui` | The pages of the extensions that run and where they are served; see [extension pages](ui/extension-pages/README.md#how-core-serves-pages). |
 | `GET`, `PATCH /v0/management/extensions/{publisher}/{name}/config` | An extension's settings, checked against the schema its manifest declares; see [extension pages](ui/extension-pages/README.md#how-core-serves-pages). |
@@ -2090,7 +2100,7 @@ its keys and its indent. `PUT /config` writes the document as sent.
 | `POST /v0/management/management-key/rotate` | Replaces the management key with a new random one and returns it as `value`. The old key stops working as the reply is sent. |
 | `GET /v0/management/models` | The models `GET /v1/models` lists, as one list in the same order: `models`, each with `id` (the name clients use), what the account, the catalogue and the extension say about the model (`owned_by`, `display_name`, `context_length`, `max_output_tokens`, `capabilities`, `from`, ...), `upstream` (its name upstream), `extension` (the extension of the account whose entry the list shows) and `accounts` (the IDs of the accounts a request for the name uses, as routing chooses them: one provider's, or with a fallback chain each step's in step order, highest priority first within a step). An account that serves any model because its list is not known adds no name, but is among the accounts of the names its provider serves; a fallback chain that only such accounts serve is listed as the first of them, with its step's model as `upstream`. Under the `weighted` strategy an account of `weight` 0 is in no entry. A name whose accounts all wait for a login or are turned off is left out. Never a credential. |
 | `POST /v0/management/models/refresh` | Ask providers for their model lists again now; optional JSON body `{"account": "<id>"}` for one account. Returns the updated `models` list and per-account `accounts` results (`models`, `kept`, `error`). A read that fails, times out, comes back empty or falls back to the extension's built-in list keeps the last good list (the last live one, when it was read from the provider). |
-| `GET /v0/management/settings` | The basic and routing settings, by today's core's names, and `token_count_estimate`, this core's own, under its own name (below). |
+| `GET /v0/management/settings` | The basic and routing settings, by today's core's names, and `token_count_estimate` and `routing.timeouts`, this core's own, under their own names (below). |
 | `PATCH /v0/management/settings` | Changes the settings the body names (`{"routing": {"strategy": "fill-first"}}`) and replies with them all. 400 for a name or value it does not take. |
 
 In the document, a placeholder stands for the secret it replaced, so a document read with `GET
@@ -2150,6 +2160,7 @@ to `management.secret-key`, or `remote-management.secret-key` when only that is 
 | `routing.cooldown.disable-cooling` | `routing.disable_cooling` | `true`: failures leave no cooldown. An account's own `disable_cooling` wins. |
 | `routing.cooldown.transient-error-cooldown-seconds` | `routing.transient_error_cooldown_ms` (seconds × 1000) | Seconds a failing upstream cools down: 0 for this core's backoff (1 second doubling to a minute), -1 for none. |
 | `routing.cooldown.quota-response-mode` | `routing.quota_response_mode` | `retryable` (the default) or `usage-limit`: what a client gets when every account is out of quota (see [Accounts and routing](#accounts-and-routing)). |
+| `routing.timeouts` | `routing.timeouts` | The default upstream timeouts of every account, in milliseconds: `header_ms`, `idle_ms` and `total_ms`. `0` turns a limit off, a field left out stays as it is, and `null` removes them. This core's own setting: a `config.yaml` has no name for it. |
 | `observability.logs.logging-to-file` | `logs.to_file` | `true` or `false`: whether core also writes its log to [files](#log-files). |
 | `observability.logs.logs-max-total-size-mb` | `logs.max_total_size_mb` | Megabytes the logs folder's `.log` files may take; 0 (the default) is no cap. |
 | `observability.logs.request-log` | `logs.request_log` | `true` or `false`: whether every client request is written to a [request log](#request-logs). |
@@ -2194,8 +2205,26 @@ The recent window lives in an in-memory ring holding the last `max_events` reque
 Core also writes every recorded event asynchronously through a bounded 4,096-event queue to one
 JSONL file per UTC day under `usage/` beside the config file (`usage/YYYY-MM-DD.jsonl`, mode `0600`,
 `"v": 1` on each line), without `fsync` per line. When the queue is full, new events are dropped from
-the disk queue and counted in `dropped` so slow storage never blocks requests. On startup, the in-memory ring is refilled from today's and yesterday's files (skipping a torn last line) while continuing `seq` from the highest `seq` seen in the refilled files (numbering older unsequenced lines in order), and day files older than `keep_days` (default 90; `0` keeps everything) are deleted at startup and daily.
-When a range in `GET /v0/management/usage` covers closed UTC days (before today), each closed day gets a summary file `usage/summary/YYYY-MM-DD.json` (mode `0600`) built on demand from its day file, cached in memory after, and kept even after `keep_days` removes old `.jsonl` files; summaries store per-hour, model, provider, account, client key, failure split, latency sum and all six token counts so long ranges never re-read closed `.jsonl` files. Closed days are counted by whole UTC hours, so a `since` or `until` inside an hour on a closed day counts that whole hour. Today's portion comes from the in-memory ring (or today's `.jsonl` file if earlier events from today rolled out of the ring).
+the disk queue and counted in `dropped` so slow storage never blocks requests; an event the disk
+refuses (a full disk, a file it cannot open) is counted in `write_errors` and logged with its error,
+and stays in the in-memory record. On startup, the in-memory ring is refilled from today's and
+yesterday's files (skipping a torn last line), `seq` continues from the highest `seq` in the refilled
+files or in the newest day file left (numbering older unsequenced lines in order), and day files
+older than `keep_days` (default 90; `0` keeps everything) are deleted at startup and daily. The
+highest `seq` numbered is also kept in `usage/seq.json` (mode `0600`), written at startup, before a
+day file is pruned and on shutdown, so `seq` continues above it even after every day file that held
+it is gone.
+When a range in `GET /v0/management/usage` covers closed UTC days (before today), each closed day
+gets a summary file `usage/summary/YYYY-MM-DD.json` (mode `0600`) built on demand from its day file,
+cached in memory after, and kept even after `keep_days` removes old `.jsonl` files; summaries store
+per-hour, model, provider, account, client key, failure split, latency sum and all six token counts
+so long ranges never re-read closed `.jsonl` files. Each summary also records the size of the day
+file it was built from and is rebuilt when that file has grown since, so a late event that lands in
+a closed day reaches the totals whether or not the summary's invalidation got through. Closed days
+are counted by whole UTC hours, so a `since` or `until` inside an hour on a closed day counts that
+whole hour, and a series counts that hour in the first step it overlaps, so its steps add up to the
+totals. Today's portion comes from the in-memory ring (or today's `.jsonl` file if earlier events
+from today rolled out of the ring).
 Client key IDs (`key_id`) use an HMAC key stored in `state/key-id.key` beside the config file (mode `0600`), so key IDs match across restarts. Reading the record never removes anything: today's core hands its usage queue out once and deletes what it hands out.
 
 ```json
@@ -2207,7 +2236,7 @@ requests are not recorded and what was recorded stays readable.
 
 | Call | What it does |
 | --- | --- |
-| `GET /v0/management/usage` | What the recorded requests add up to over the kept range: `total_requests`, `success_count`, `failure_count`, `success_rate` (0 to 1), `average_latency_ms` and `tokens` (the sums of each token count); the same per model (`models`), extension (`providers`), account (`accounts`, each with its `provider`) and client key (`keys`, by `key_id`), most requests first, plus `by` and `breakdown` when `by` (`model`, `account`, `key`, `provider`) is asked; and `series`, the requests, failures and tokens in each step (`bucket` from `1s` to `24h`, `buckets` up to 1440; defaults to 60 steps of `1m` with no range, `1h` steps for ranges up to 48 hours and `24h` steps beyond), oldest first, ending at `until` (or with the step that holds now). `oldest` is the arrival time of the oldest event considered, `evicted` how many events the limits have pushed out since core started, `dropped` how many events were dropped since core started because the disk writer's queue was full, and `enabled` whether recording is on. |
+| `GET /v0/management/usage` | What the recorded requests add up to over the kept range: `total_requests`, `success_count`, `failure_count`, `success_rate` (0 to 1), `average_latency_ms` and `tokens` (the sums of each token count); the same per model (`models`), extension (`providers`), account (`accounts`, each with its `provider`) and client key (`keys`, by `key_id`), most requests first, plus `by` and `breakdown` when `by` (`model`, `account`, `key`, `provider`) is asked; and `series`, the requests, failures and tokens in each step (`bucket` from `1s` to `24h`, `buckets` up to 1440; defaults to 60 steps of `1m` with no range, `1h` steps for ranges up to 48 hours and `24h` steps beyond), oldest first, ending at `until` (or with the step that holds now). `oldest` is the arrival time of the oldest event considered, `evicted` how many events the limits have pushed out since core started, `dropped` how many events were dropped since core started because the disk writer's queue was full, `write_errors` how many the disk refused to write, each logged, and `enabled` whether recording is on. |
 | `GET /v0/management/usage/events` | The recorded events in the recent ring, oldest first with `after` (`seq` above `after`) or newest first with `before` (`seq` below `before`, or `0` for the latest page), up to `limit` (default 100, at most 1000). The reply's `next` is the `seq` to pass for the next page, `more` says whether more match, and `lost` says whether events after `after` were pushed out before this read, so a program that polls with `after` knows it missed some. |
 
 Both calls take the filters `since` (an RFC 3339 time, or a duration back from now such as `24h`, `7d` or `30d`), `until` (an RFC 3339 time), `model`, `provider`, `account`, `key` (or `key_id`) and `failed` (`true` or `false`). A filter that does not parse is a 400.
@@ -2497,6 +2526,9 @@ a config file that does not load also refuses the package change. One package ch
 time.
 
 ## config.yaml with today's key names
+
+[Moving from CLIProxyAPI](../docs/moving-from-cpa.md) walks through a move step by step; this
+section is the reference for it.
 
 Core also reads a `config.yaml` written for today's core (`core/`), so an existing config moves
 over without renaming keys. A config file whose name ends in `.yaml` or `.yml` is read with

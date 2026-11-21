@@ -184,6 +184,7 @@ experimental_bearer_token = "sk-client"
 			{"a model not an object", map[string]string{jsonc: `{"provider": {"pluxy": {"models": {"m": 1}}}}`}, ref},
 			{"model neither text nor an object", map[string]string{jsonc: `{"model": 1}`}, ref},
 			{"not JSON", map[string]string{jsonc: `{"provider": `}, ref},
+			{"unclosed block comment", map[string]string{jsonc: configured + "\n/* the rest"}, ref},
 		})
 	})
 
@@ -528,6 +529,30 @@ func TestSetupScansOnlyAtFirstStart(t *testing.T) {
 	}
 	if found.Core.Listen != "127.0.0.1:5678" || claudeState(found) != management.ClientStateNeedsUpdate {
 		t.Errorf("second start: listen %q, claude-code %q; want 127.0.0.1:5678 and needs-update", found.Core.Listen, claudeState(found))
+	}
+}
+
+// A kept scan's client states name core's address, scheme included: a start whose scheme is
+// not the one they were read with reads them again, even though the address is the same.
+func TestSetupRefreshesClientStatesForTLS(t *testing.T) {
+	home := setTestHome(t)
+	writeTestFile(t, filepath.Join(home, ".claude", "settings.json"),
+		`{"env": {"ANTHROPIC_BASE_URL": "http://127.0.0.1:1234", "ANTHROPIC_AUTH_TOKEN": "k", "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1", "CLAUDE_CODE_AUTO_MODE_SERVER": "0"}}`)
+	dir := t.TempDir()
+	writeTestFile(t, filepath.Join(dir, setupFileName), `{"format": 0, "first_run": false, "scanned_at": "2026-11-20T00:00:00Z", "found": {"clients": [{"id": "claude-code", "name": "Claude Code", "installed": true, "config": "~/.claude/settings.json", "state": "`+management.ClientStateConfigured+`"}], "sign_ins": [], "imports": [], "core": {"listen": "127.0.0.1:1234", "reachable_from_network": false}}}`)
+	target := func() (string, bool) { return "127.0.0.1:1234", true }
+	m := newSetupManager(filepath.Join(dir, setupFileName), target, false)
+	defer m.stop()
+	m.listening("127.0.0.1:1234", true)
+	_, _, _, found := m.snapshot()
+	state := ""
+	for _, c := range found.Clients {
+		if c.ID == "claude-code" {
+			state = c.State
+		}
+	}
+	if state != management.ClientStateNeedsUpdate {
+		t.Errorf("claude-code state %q after a tls-only change, want needs-update", state)
 	}
 }
 

@@ -213,9 +213,12 @@ If `PLUXY_PROTOCOL_VERSIONS` is not set, the program was not started by pluxy: i
 stderr and exit with a non-zero status.
 
 Core waits for the handshake line for a limited time (10 seconds by default, counted from the
-program running, so the time the system takes to start it does not count); this startup check is
-the only timeout in the protocol. After the line, core sends a `describe` call and checks that
-the reply's `id` matches the manifest.
+program running, so the time the system takes to start it does not count); the `describe` call
+below keeps to the same deadline, so these are the only limits on how long starting an extension
+may take. Limits on the work itself are elsewhere: an account's [`timeouts`](#timeouts) bound an
+upstream request, and core [ends a call](#alive-frames) whose extension has sent it nothing at
+all for too long. After the line, core sends a `describe` call and checks that the reply's `id`
+matches the manifest.
 
 Anything the extension writes to stderr goes to core's log, prefixed with the extension ID. Never
 write credentials there. Anything written to stdout after the handshake line is also logged.
@@ -655,11 +658,14 @@ characters and `...`, which none of the forms above is. So from an upstream's er
 removes every run of token characters (letters, digits and `_-.+/=~`) that holds 4 or more
 consecutive characters of one of the account's secrets, reading a run as written and with its
 escapes decoded (JSON's `\/`, `\\` and `\uXXXX` and percent-encoding's `%XX`, nested up to 8
-times); a `[redacted]` already there stays as it is. It does so in an [error](#errors)'s `message`
-and in each string value of its `raw` (object keys are names, and stay), on every call on an
-account and on a [login](#login), and in a [captured](#upstream-capture) upstream reply's body
-whose status is 400 or more, or of every reply when the call or turn ended in an error, such as a
-200 stream that ends in an error event.
+times); a `[redacted]` already there stays as it is. A PEM private key
+counts by its lines and its unwrapped body, at 8 bytes or more in a row: its body is long and random, so 4 bytes of it
+would be a coincidence in most errors and would redact an ordinary word of them, such as
+`Signature` for a key whose body spells `Sign`, while a fragment that short of a key is of no use.
+The rule runs on an [error](#errors)'s `message` and on each string value of its `raw` (object keys
+are names, and stay), on every call on an account and on a [login](#login), and on a
+[captured](#upstream-capture) upstream reply's body whose status is 400 or more, or of every reply
+when the call or turn ended in an error, such as a 200 stream that ends in an error event.
 
 The account's secrets for this rule are the credential's `api_key`, `access_token` and
 `refresh_token`, the value of each header named like a secret, the proxy's user name and
@@ -673,7 +679,8 @@ known vendor's public key prefix (`sk-proj-`, `sk-svcacct-`, `sk-admin-`, `sk-an
 `xai-` or `gsk_`, the longest that fits) gives no piece: a piece counts only when it holds a byte
 after the prefix, and only when 16 bytes or more of the secret follow the prefix, so a short
 secret keeps every piece. The rule still replaces any other word of the error that shares 4
-characters with a secret, so core never applies it to a reply that succeeded.
+characters with a secret, or 8 with a PEM private key's body, so core never applies it to a
+reply that succeeded.
 
 In Go, `protocol.RemovePieces(s, secrets...)` applies the rule. `protocol.AccountSecretsWith`
 returns an account's secrets with the settings secrets given, as core passes them;
@@ -848,12 +855,14 @@ settings for the model, and a budget as a budget where the upstream takes one, o
 level it falls in (up to 512 tokens `minimal`, 1024 `low`, 8192 `medium`, 24576 `high`, more
 `xhigh`). An extension that ignores it serves the model without the suffix's setting.
 
-**Translation report.** When the extension rebuilds the body in another format, it reports in the
-reply's `response.start` how it built it: `response.translation` with `from`, `to`, `passthrough`
-(true when the client's body was sent unchanged) and `losses`, each with `kind` (`approximated`:
-carried in a different form; `dropped`: left out), `path` (in the client's body) and `detail`.
-Everything not listed was preserved. Core logs the losses, together with what the reply had that
-the client's format cannot hold.
+**Translation report.** The extension reports in the reply's `response.start` how it built its
+upstream request: `response.translation` with `from`, `to`, `passthrough` (true when the client's
+body went upstream rather than a body rebuilt from `items`) and `losses`, each with `kind`
+(`approximated`: carried in a different form; `dropped`: left out), `path` (in the client's body)
+and `detail`. A passthrough body can still lose something: an extension that repairs it for its
+endpoint, as Codex does with a response's history, reports what the repair changed. Everything not
+listed was preserved. Core logs the losses, together with what the reply had that the client's
+format cannot hold.
 
 ### Native-only calls
 

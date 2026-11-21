@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -22,11 +23,16 @@ import (
 const (
 	recordVersion       = 1
 	summaryVersion      = 1
+	seqMarkVersion      = 1
 	defaultCloseTimeout = 5 * time.Second
 	dayLayout           = "2006-01-02"
 	daySuffix           = ".jsonl"
 	summarySubdir       = "summary"
 	summarySuffix       = ".json"
+	// seqFile holds the highest Seq the disk has numbered, so a restart after retention deleted
+	// the day files continues numbering instead of starting again at 1. It is not a day file:
+	// its name never parses as a day.
+	seqFile = "seq.json"
 )
 
 // ErrCloseTimeout is returned by Close when the disk writer has not drained its queue within
@@ -75,15 +81,26 @@ type summaryRow struct {
 }
 
 type daySummaryFile struct {
-	V      int          `json:"v"`
-	Day    string       `json:"day"`
-	Oldest *time.Time   `json:"oldest,omitempty"`
-	Rows   []summaryRow `json:"rows"`
+	V   int    `json:"v"`
+	Day string `json:"day"`
+	// RawBytes is the size of the day file the rows were built from, observed before it was
+	// read: a summary whose file has grown since is rebuilt, which counts a late event appended
+	// to a closed day. A summary without it (an older file) is rebuilt once while its day file
+	// is still there, and trusted once retention has removed it.
+	RawBytes int64        `json:"raw_bytes,omitempty"`
+	Oldest   *time.Time   `json:"oldest,omitempty"`
+	Rows     []summaryRow `json:"rows"`
 }
 
-// Open returns a Store backed by opts.Dir (when non-empty): it prunes day files older than
-// KeepDays, refills the in-memory ring from yesterday's and today's UTC files, and starts one
-// writer goroutine draining a bounded queue.
+// seqMark is seqFile's contents: the highest Seq recorded, which survives a restart.
+type seqMark struct {
+	V   int    `json:"v"`
+	Seq uint64 `json:"seq"`
+}
+
+// Open returns a Store backed by opts.Dir (when non-empty): it refills the in-memory ring from
+// yesterday's and today's UTC files, continues seq from the newest day file left, prunes day
+// files older than KeepDays, and starts one writer goroutine draining a bounded queue.
 func Open(opts Options) (*Store, error) {
 	return openStore(opts, time.Now, nil)
 }
@@ -136,10 +153,13 @@ func openStore(opts Options, now func() time.Time, writeLine func(day string, li
 			return nil, err
 		}
 		initialDay := s.now().UTC().Format(dayLayout)
-		s.prune()
+		// Refill before pruning: a restart whose days retention would delete still continues seq
+		// from what those files hold.
 		if err := s.refill(); err != nil {
 			return nil, err
 		}
+		s.prune()
+		s.writeSeqMark()
 		s.summaries = map[string]*daySummaryFile{}
 		s.writeCh = make(chan Event, queueSize)
 		s.flushCh = make(chan chan struct{}, 16)
@@ -239,8 +259,52 @@ func (s *Store) refill() error {
 			return err
 		}
 	}
+	// The day files retention deleted are gone, but the mark numbered past them is not.
+	seqPath := filepath.Join(s.dir, seqFile)
+	mark, err := readSeqMark(seqPath)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		log.Printf("usage: %s: %v", seqPath, err)
+	}
+	if mark > s.seq {
+		s.seq = mark
+	}
 	s.openSeq = s.seq
 	return nil
+}
+
+// readSeqMark returns the highest Seq seqFile records.
+func readSeqMark(path string) (uint64, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	var m seqMark
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return 0, err
+	}
+	if m.V != seqMarkVersion {
+		return 0, fmt.Errorf("version %d, want %d", m.V, seqMarkVersion)
+	}
+	return m.Seq, nil
+}
+
+// writeSeqMark records the highest Seq this store has numbered, at startup, before retention
+// deletes day files, and at shutdown. A restart then continues above it even when no day file is
+// left. A mark that cannot be read or replaced is logged and the old one kept.
+func (s *Store) writeSeqMark() {
+	s.mu.Lock()
+	seq := s.seq
+	s.mu.Unlock()
+	if seq == 0 {
+		return
+	}
+	b, err := json.Marshal(seqMark{V: seqMarkVersion, Seq: seq})
+	if err == nil {
+		err = writeFileAtomic(s.dir, seqFile, append(b, '\n'))
+	}
+	if err != nil {
+		log.Printf("usage: recording seq %d in %s failed: %v", seq, filepath.Join(s.dir, seqFile), err)
+	}
 }
 
 func (s *Store) refillSeqFromOlderDays(beforeDay string) error {
@@ -327,6 +391,8 @@ func readDayFile(path string, fn func(Event)) error {
 
 func (s *Store) writerLoop(initialDay string) {
 	defer close(s.done)
+	// The last thing the writer does is record the seq it reached, before Close returns.
+	defer s.writeSeqMark()
 	ticker := time.NewTicker(24 * time.Hour)
 	defer ticker.Stop()
 
@@ -339,9 +405,7 @@ func (s *Store) writerLoop(initialDay string) {
 			if !ok {
 				return
 			}
-			if err := s.writeEvent(w, ev); err != nil {
-				s.dropped.Add(1)
-			}
+			s.countWriteError(ev, s.writeEvent(w, ev))
 		case done := <-s.flushCh:
 			for draining := true; draining; {
 				select {
@@ -350,9 +414,7 @@ func (s *Store) writerLoop(initialDay string) {
 						close(done)
 						return
 					}
-					if err := s.writeEvent(w, ev); err != nil {
-						s.dropped.Add(1)
-					}
+					s.countWriteError(ev, s.writeEvent(w, ev))
 				default:
 					draining = false
 				}
@@ -366,6 +428,20 @@ func (s *Store) writerLoop(initialDay string) {
 			s.prune()
 		}
 	}
+}
+
+// countWriteError counts and logs an event the disk could not take. It stays in the in-memory
+// record; the day file misses it until it is written again.
+func (s *Store) countWriteError(ev Event, err error) {
+	if err == nil {
+		return
+	}
+	s.writeErrs.Add(1)
+	day := ev.Timestamp
+	if day.IsZero() {
+		day = ev.recorded
+	}
+	log.Printf("usage: writing event %d to %s failed: %v", ev.Seq, day.UTC().Format(dayLayout), err)
 }
 
 func (s *Store) writeEvent(w *dayWriter, e Event) error {
@@ -383,6 +459,9 @@ func (s *Store) writeEvent(w *dayWriter, e Event) error {
 		return err
 	}
 	if day < s.now().UTC().Format(dayLayout) {
+		// The closed day's summary no longer counts this event. Dropping it makes the rebuild
+		// happen at once; the size it records makes a reader that raced this append rebuild it
+		// too.
 		s.invalidateClosedSummary(day)
 	}
 	if e.Seq > s.writtenSeq.Load() {
@@ -529,6 +608,8 @@ func (s *Store) prune() {
 	if err != nil {
 		return
 	}
+	// A day file about to be deleted was the last record of its seq: keep the seq first.
+	s.writeSeqMark()
 	for _, e := range entries {
 		if e.IsDir() || !e.Type().IsRegular() {
 			continue
@@ -651,21 +732,30 @@ func (s *Store) loadDaySummaries(days []string) []*daySummaryFile {
 }
 
 func (s *Store) loadOrBuildDaySummaryLocked(day string) *daySummaryFile {
+	rawPath := filepath.Join(s.dir, day+daySuffix)
 	if ds := s.summaries[day]; ds != nil {
-		return ds
+		if summaryFitsDayFile(ds, rawPath) {
+			return ds
+		}
+		delete(s.summaries, day)
 	}
 	sumPath := filepath.Join(s.dir, summarySubdir, day+summarySuffix)
 	if raw, err := os.ReadFile(sumPath); err == nil {
 		var ds daySummaryFile
-		if uerr := json.Unmarshal(raw, &ds); uerr == nil && ds.V == summaryVersion && ds.Day == day && ds.Rows != nil {
+		if uerr := json.Unmarshal(raw, &ds); uerr == nil && ds.V == summaryVersion && ds.Day == day && ds.Rows != nil &&
+			summaryFitsDayFile(&ds, rawPath) {
 			s.summaries[day] = &ds
 			return &ds
 		}
 	}
-	rawPath := filepath.Join(s.dir, day+daySuffix)
-	if _, err := os.Lstat(rawPath); err != nil {
+	// The size is observed before the file is read: a write that lands during the read leaves it
+	// below the file's size, so the next read rebuilds instead of trusting a summary that missed
+	// the event.
+	rawFile, err := os.Lstat(rawPath)
+	if err != nil {
 		return nil
 	}
+	rawBytes := rawFile.Size()
 	if s.onReadRaw != nil {
 		s.onReadRaw(day)
 	}
@@ -714,10 +804,25 @@ func (s *Store) loadOrBuildDaySummaryLocked(day string) *daySummaryFile {
 			cmp.Compare(boolInt(a.Failed), boolInt(b.Failed)),
 		)
 	})
-	ds := &daySummaryFile{V: summaryVersion, Day: day, Oldest: oldest, Rows: rows}
-	_ = writeSummaryFileAtomic(filepath.Join(s.dir, summarySubdir), sumPath, ds)
+	ds := &daySummaryFile{V: summaryVersion, Day: day, RawBytes: rawBytes, Oldest: oldest, Rows: rows}
+	// The rows are right whatever happens to the file: keep them in memory and rebuild the file
+	// on the next read.
+	if err := writeSummaryFileAtomic(filepath.Join(s.dir, summarySubdir), sumPath, ds); err != nil {
+		log.Printf("usage: writing the summary of %s failed: %v", day, err)
+	}
 	s.summaries[day] = ds
 	return ds
+}
+
+// summaryFitsDayFile reports whether ds still counts everything in its day file: the file has not
+// grown since the rows were read. A day file retention deleted leaves only the summary, which is
+// then the whole record of the day.
+func summaryFitsDayFile(ds *daySummaryFile, rawPath string) bool {
+	info, err := os.Lstat(rawPath)
+	if err != nil {
+		return true
+	}
+	return !info.Mode().IsRegular() || info.Size() == ds.RawBytes
 }
 
 func boolInt(b bool) int {
@@ -732,8 +837,13 @@ func writeSummaryFileAtomic(sumDir, finalPath string, ds *daySummaryFile) error 
 	if err != nil {
 		return err
 	}
-	b = append(b, '\n')
-	d := private.Dir{Path: sumDir}
+	return writeFileAtomic(sumDir, filepath.Base(finalPath), append(b, '\n'))
+}
+
+// writeFileAtomic replaces name in dir with b, so a reader sees the old contents or the whole new
+// ones, and the folder and file are private.
+func writeFileAtomic(dir, name string, b []byte) error {
+	d := private.Dir{Path: dir}
 	checked, err := d.Open(true)
 	if err != nil {
 		return err
@@ -750,8 +860,7 @@ func writeSummaryFileAtomic(sumDir, finalPath string, ds *daySummaryFile) error 
 		return err
 	}
 	defer root.Close()
-	name := filepath.Base(finalPath)
-	tmp, tmpName, err := private.CreateTemp(root, sumDir, "."+name+".tmp-")
+	tmp, tmpName, err := private.CreateTemp(root, dir, "."+name+".tmp-")
 	if err != nil {
 		return err
 	}

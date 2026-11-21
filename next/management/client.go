@@ -131,7 +131,8 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 // Status is GET /status.
 func (c *Client) Status(ctx context.Context) (Status, error) {
 	var v Status
-	return v, c.get(ctx, "/status", nil, &v)
+	err := c.get(ctx, "/status", nil, &v)
+	return v, err
 }
 
 // Reload is POST /reload. A refused reload is an *APIError with status 422 whose Body is the
@@ -145,7 +146,8 @@ func (c *Client) Reload(ctx context.Context) (Status, error) {
 // Accounts is GET /accounts.
 func (c *Client) Accounts(ctx context.Context) ([]Account, error) {
 	var v AccountsReply
-	return v.Accounts, c.get(ctx, "/accounts", nil, &v)
+	err := c.get(ctx, "/accounts", nil, &v)
+	return v.Accounts, err
 }
 
 // SetAccountDisabled is PATCH /accounts/{id} with disabled.
@@ -202,25 +204,29 @@ func (c *Client) TestAccount(ctx context.Context, id, model string) (TestResult,
 // Quota is GET /accounts/{id}/quota.
 func (c *Client) Quota(ctx context.Context, id string) (QuotaReply, error) {
 	var v QuotaReply
-	return v, c.get(ctx, "/accounts/"+url.PathEscape(id)+"/quota", nil, &v)
+	err := c.get(ctx, "/accounts/"+url.PathEscape(id)+"/quota", nil, &v)
+	return v, err
 }
 
 // AccountModels is GET /accounts/{id}/models.
 func (c *Client) AccountModels(ctx context.Context, id string) (AccountModelsReply, error) {
 	var v AccountModelsReply
-	return v, c.get(ctx, "/accounts/"+url.PathEscape(id)+"/models", nil, &v)
+	err := c.get(ctx, "/accounts/"+url.PathEscape(id)+"/models", nil, &v)
+	return v, err
 }
 
 // Packages is GET /packages.
 func (c *Client) Packages(ctx context.Context) ([]Package, error) {
 	var v PackagesReply
-	return v.Packages, c.get(ctx, "/packages", nil, &v)
+	err := c.get(ctx, "/packages", nil, &v)
+	return v.Packages, err
 }
 
 // Registries is GET /registries.
 func (c *Client) Registries(ctx context.Context) ([]Registry, error) {
 	var v RegistriesReply
-	return v.Registries, c.get(ctx, "/registries", nil, &v)
+	err := c.get(ctx, "/registries", nil, &v)
+	return v.Registries, err
 }
 
 // Install is POST /packages.
@@ -256,7 +262,8 @@ func PackagePath(id string) string {
 // Models is GET /models.
 func (c *Client) Models(ctx context.Context) (ModelsReply, error) {
 	var v ModelsReply
-	return v, c.get(ctx, "/models", nil, &v)
+	err := c.get(ctx, "/models", nil, &v)
+	return v, err
 }
 
 // RefreshModels is POST /models/refresh; an empty account refreshes every account.
@@ -273,7 +280,8 @@ func (c *Client) RefreshModels(ctx context.Context, account string) (RefreshMode
 // ClientKeys is GET /client-keys.
 func (c *Client) ClientKeys(ctx context.Context) ([]ClientKey, error) {
 	var v ClientKeysReply
-	return v.Keys, c.get(ctx, "/client-keys", nil, &v)
+	err := c.get(ctx, "/client-keys", nil, &v)
+	return v.Keys, err
 }
 
 // AddClientKey is POST /client-keys; the reply holds the new key.
@@ -292,32 +300,37 @@ func (c *Client) RemoveClientKey(ctx context.Context, id string) error {
 // Config is GET /config.
 func (c *Client) Config(ctx context.Context) (Config, error) {
 	var v Config
-	return v, c.get(ctx, "/config", nil, &v)
+	err := c.get(ctx, "/config", nil, &v)
+	return v, err
 }
 
 // Settings is GET /settings.
 func (c *Client) Settings(ctx context.Context) (Settings, error) {
 	var v Settings
-	return v, c.get(ctx, "/settings", nil, &v)
+	err := c.get(ctx, "/settings", nil, &v)
+	return v, err
 }
 
 // Logs is GET /logs; q takes after and limit.
 func (c *Client) Logs(ctx context.Context, q url.Values) (LogLines, error) {
 	var v LogLines
-	return v, c.get(ctx, "/logs", q, &v)
+	err := c.get(ctx, "/logs", q, &v)
+	return v, err
 }
 
 // Usage is GET /usage; q takes since, until, by, model, provider, account, key, key_id,
 // failed, bucket and buckets.
 func (c *Client) Usage(ctx context.Context, q url.Values) (UsageReply, error) {
 	var v UsageReply
-	return v, c.get(ctx, "/usage", q, &v)
+	err := c.get(ctx, "/usage", q, &v)
+	return v, err
 }
 
 // Setup is GET /setup.
 func (c *Client) Setup(ctx context.Context) (Setup, error) {
 	var v Setup
-	return v, c.get(ctx, "/setup", nil, &v)
+	err := c.get(ctx, "/setup", nil, &v)
+	return v, err
 }
 
 // SetupScan is POST /setup/scan.
@@ -342,7 +355,8 @@ func (c *Client) ClientPaste(ctx context.Context, id, keyID string) (ClientPaste
 		q = url.Values{"key_id": {keyID}}
 	}
 	var v ClientPaste
-	return v, c.get(ctx, "/setup/clients/"+url.PathEscape(id)+"/paste", q, &v)
+	err := c.get(ctx, "/setup/clients/"+url.PathEscape(id)+"/paste", q, &v)
+	return v, err
 }
 
 // SetupImport is POST /setup/import.
@@ -363,7 +377,8 @@ func (c *Client) SetupDone(ctx context.Context) (SetupDoneReply, error) {
 // provider, account, key, key_id and failed.
 func (c *Client) UsageEvents(ctx context.Context, q url.Values) (UsageEventsReply, error) {
 	var v UsageEventsReply
-	return v, c.get(ctx, "/usage/events", q, &v)
+	err := c.get(ctx, "/usage/events", q, &v)
+	return v, err
 }
 
 // ThemePath is the path of theme id (publisher/name), each part escaped.
@@ -375,7 +390,8 @@ func ThemePath(id string) string {
 // Themes is GET /themes.
 func (c *Client) Themes(ctx context.Context) (ThemesReply, error) {
 	var v ThemesReply
-	return v, c.get(ctx, "/themes", nil, &v)
+	err := c.get(ctx, "/themes", nil, &v)
+	return v, err
 }
 
 // Theme is GET /themes/{publisher}/{name}; it returns the stored JSON bytes unchanged.

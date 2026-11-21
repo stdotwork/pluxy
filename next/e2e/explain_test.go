@@ -281,10 +281,11 @@ func TestBannedAccountIsNamedInTheError(t *testing.T) {
 	ids, _ := publicIDs(t, base)
 	const body = `{"model":"claude-sonnet-4-5-20250929","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`
 	var last explainBody
+	var raw []byte
 	var status int
 	for range 2 {
 		resp := postPath(t, context.Background(), base, "/v1/messages", clientKey, body)
-		raw, _ := io.ReadAll(resp.Body)
+		raw, _ = io.ReadAll(resp.Body)
 		resp.Body.Close()
 		status = resp.StatusCode
 		last = explainBody{}
@@ -292,6 +293,11 @@ func TestBannedAccountIsNamedInTheError(t *testing.T) {
 		if last.Error.Pluxy == nil {
 			t.Fatalf("status %d, no error.pluxy in %s", status, raw)
 		}
+	}
+	// The second request answers with the ban itself, as the first did: its status and the
+	// provider's words, not a 503 that only says no account could serve the model.
+	if status != http.StatusForbidden || !strings.Contains(string(raw), "Your account has been suspended.") {
+		t.Errorf("after the ban: status %d, body %s, want the ban's 403 and the provider's words", status, raw)
 	}
 	p := last.Error.Pluxy
 	if calls.Load() != 1 || len(p.Tried) != 0 || len(p.LeftOut) != 1 || p.LeftOut[0].State != "banned" || p.LeftOut[0].Account != ids["me@example.com"] {

@@ -61,7 +61,7 @@ func TestClientIP(t *testing.T) {
 				r.Header.Add(k, v)
 			}
 		}
-		if got := clientIP(trusted, r); got != netip.MustParseAddr(c.want) {
+		if got := clientOf(trusted, r).addr; got != netip.MustParseAddr(c.want) {
 			t.Errorf("%s: client %s, want %s", c.name, got, c.want)
 		}
 	}
@@ -69,7 +69,7 @@ func TestClientIP(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
 	r.RemoteAddr = "127.0.0.1:1"
 	r.Header.Set("X-Forwarded-For", "198.51.100.1")
-	if got := clientIP(nil, r); got != netip.MustParseAddr("127.0.0.1") {
+	if got := clientOf(nil, r).addr; got != netip.MustParseAddr("127.0.0.1") {
 		t.Errorf("no trusted proxies: client %s", got)
 	}
 }

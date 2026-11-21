@@ -11,6 +11,8 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/stdotwork/pluxy/next/internal/proxyurl"
+	"github.com/stdotwork/pluxy/next/internal/route"
+	"github.com/stdotwork/pluxy/next/protocol"
 	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
 
@@ -173,6 +175,11 @@ type RoutingPatch struct {
 	ForceModelPrefix *bool          `json:"force-model-prefix"`
 	Retry            *RetryPatch    `json:"retry"`
 	Cooldown         *CooldownPatch `json:"cooldown"`
+	// Timeouts sets the default upstream timeouts of every account, in milliseconds
+	// (header_ms, idle_ms, total_ms): a field left out stays as it is, 0 turns a limit off and
+	// null removes them all. This core's own setting, so a config.yaml, which today's core
+	// also reads, has no name for it.
+	Timeouts json.RawMessage `json:"timeouts"`
 }
 
 // CooldownPatch is a change to the cooldown settings.
@@ -436,6 +443,46 @@ func (d *Doc) applyRouting(r *RoutingPatch) error {
 			if err := d.Set(String(mode), d.place("routing.quota_response_mode", "routing.cooldown.quota-response-mode", "quota-cooldown-response-mode")...); err != nil {
 				return err
 			}
+		}
+	}
+	if r.Timeouts != nil {
+		return d.applyTimeouts(r.Timeouts)
+	}
+	return nil
+}
+
+// applyTimeouts writes the default upstream timeouts of every account: null removes the section,
+// and otherwise each field sent is written, the ones left out staying as they are. How core
+// checks them lives with the config it checks, so both refuse the same values. A config.yaml has
+// no name for the section, so a change that would write one there is refused.
+func (d *Doc) applyTimeouts(raw json.RawMessage) error {
+	if string(raw) == "null" {
+		if !d.YAML {
+			d.Delete("routing", "timeouts")
+		}
+		return nil
+	}
+	var t protocol.Timeouts
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&t); err != nil {
+		return fmt.Errorf("%w: routing.timeouts: %v", ErrInvalid, err)
+	}
+	if err := route.ValidateTimeouts("routing.timeouts", &t); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	for _, f := range []struct {
+		name string
+		v    *int64
+	}{{"header_ms", t.HeaderMS}, {"idle_ms", t.IdleMS}, {"total_ms", t.TotalMS}} {
+		if f.v == nil {
+			continue
+		}
+		if d.YAML {
+			return fmt.Errorf("%w: routing.timeouts is this core's own setting and a config.yaml has no name for it", ErrInvalid)
+		}
+		if err := d.Set(Int(*f.v), "routing", "timeouts", f.name); err != nil {
+			return err
 		}
 	}
 	return nil

@@ -44,7 +44,7 @@ const (
 	SourceProvider = "provider"
 	// SourceBackoff: core chose the time, as the upstream named none.
 	SourceBackoff = "backoff"
-	// SourceUnverified: the upstream named a time too far off to believe (see maxReset); the
+	// SourceUnverified: the upstream named a time too far off to believe (see resetFor); the
 	// account is held for two check intervals and checked after one.
 	SourceUnverified = "unverified"
 )
@@ -61,9 +61,20 @@ var (
 	// minReset: a reset the upstream names sooner than this is held this long, so sub-second
 	// hints do not turn into a storm of retries.
 	minReset = time.Second
-	// maxReset: the longest usage window of any supported provider is 7 days; a reset further
-	// off than this is not believed.
+	// maxReset: a reset further off than this is not believed when core does not know the usage
+	// window's length: the longest window any supported provider has is 7 days, with a day to
+	// spare. When the provider names the window's length, that length raises the bound (see
+	// resetFor).
 	maxReset = 8 * 24 * time.Hour
+	// maxWindow: the longest usage window core knows a provider to have: Codex's monthly window,
+	// 28 to 31 days. A provider that names a longer window is not believed about its reset, so a
+	// nonsense length cannot raise the bound without limit.
+	maxWindow = 31 * 24 * time.Hour
+	// resetSlack: how much past its usage window's own length a reset may be named and still be
+	// believed. Providers name resets as Unix seconds, set against their own clock and truncated
+	// to the second, and a window's length is its nominal one; an hour covers those without
+	// believing a reset of another order of magnitude.
+	resetSlack = time.Hour
 	// defaultCheckEvery is how often a block with more than this left is checked.
 	defaultCheckEvery = 15 * time.Minute
 	// exhaustedFrom: a quota block at least this long shows as exhausted, a shorter one as
@@ -71,7 +82,7 @@ var (
 	exhaustedFrom = 5 * time.Minute
 )
 
-const unverifiedWhy = "the provider named a reset more than 8 days away, which is not believed: held until a check"
+const unverifiedWhy = "the provider named a reset too far off to believe: held until a check"
 
 // SetCheckInterval sets how often long blocks are checked, 15 minutes unless set. An unbelieved
 // reset is held for two intervals. For tests.
@@ -81,11 +92,17 @@ func (s *State) SetCheckInterval(d time.Duration) {
 	s.checkEvery = d
 }
 
-// resetFor bounds a reset the upstream named, in milliseconds: shorter than minReset is
-// minReset; longer than maxReset is not believed, and is held for two check intervals instead.
-func (s *State) resetFor(ms int64) (time.Duration, string) {
+// resetFor bounds a reset the upstream named, in milliseconds, for a usage window windowMin
+// minutes long (0 when not known): shorter than minReset is minReset; further off than core
+// believes is not believed, and is held for two check intervals instead. Core believes a reset up
+// to maxReset, or up to the named window's own length plus resetSlack, whichever is longer.
+func (s *State) resetFor(ms, windowMin int64) (time.Duration, string) {
+	limit := maxReset
+	if windowMin > 0 && windowMin <= int64(maxWindow/time.Minute) {
+		limit = max(limit, time.Duration(windowMin)*time.Minute+resetSlack)
+	}
 	switch {
-	case ms > maxReset.Milliseconds():
+	case ms > limit.Milliseconds():
 		return 2 * s.checkEvery, SourceUnverified
 	case ms < minReset.Milliseconds():
 		return minReset, SourceProvider

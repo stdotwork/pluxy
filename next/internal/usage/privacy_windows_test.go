@@ -9,8 +9,8 @@ import (
 	pt "github.com/stdotwork/pluxy/next/internal/private/privatetest"
 )
 
-// The usage folder, a day file and a summary file each have a protected access list that lets
-// in only this user and SYSTEM.
+// The usage folder, a day file, a summary file and the seq mark each have a protected access list
+// that lets in only this user and SYSTEM.
 func TestUsageWindowsAccessList(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "usage")
 	c := &clock{t: time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)}
@@ -25,6 +25,7 @@ func TestUsageWindowsAccessList(t *testing.T) {
 	day := filepath.Join(dir, "2026-11-19"+daySuffix)
 	pt.CheckPrivate(t, "new usage folder", dir, true)
 	pt.CheckPrivate(t, "new day file", day, false)
+	pt.CheckPrivate(t, "new seq mark", filepath.Join(dir, seqFile), false)
 
 	sumDir := filepath.Join(dir, summarySubdir)
 	sumPath := filepath.Join(sumDir, "2026-11-18"+summarySuffix)

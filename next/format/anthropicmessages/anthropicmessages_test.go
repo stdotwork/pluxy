@@ -700,6 +700,35 @@ func TestUsageThinkingTokens(t *testing.T) {
 	}
 }
 
+// A cached input count the model does not hold, because the usage could not be decoded, is not
+// carried: Messages usage writes no cache_read_input_tokens for it, so it is reported as lost.
+func TestUsageCachedTokensWithoutCountIsLost(t *testing.T) {
+	a := NewAggregator()
+	for _, ev := range []llm.Event{
+		{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "r", Model: "up", Format: llm.FormatOpenAIChat}},
+		{Type: llm.EventFinish, Finish: &llm.Finish{Reason: llm.FinishStop}, Usage: &llm.Usage{
+			Raw: json.RawMessage(`{"prompt_tokens":"12000","completion_tokens":50,"prompt_tokens_details":{"cached_tokens":4000}}`),
+		}},
+	} {
+		a.Add(ev)
+	}
+	body, err := a.Response()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m struct {
+		Usage json.RawMessage `json:"usage"`
+	}
+	_ = json.Unmarshal(body, &m)
+	want := `{"input_tokens":0,"output_tokens":0}`
+	if !jsonEqual(m.Usage, json.RawMessage(want)) {
+		t.Errorf("usage %s, want %s", m.Usage, want)
+	}
+	if got := lossList(a.Losses()); !reflect.DeepEqual(got, []string{"dropped usage.prompt_tokens_details.cached_tokens"}) {
+		t.Errorf("losses %q, want the cached count reported lost", got)
+	}
+}
+
 func TestUsageCacheWriteFromOtherFormat(t *testing.T) {
 	for _, c := range []struct {
 		name   string

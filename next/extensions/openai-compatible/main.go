@@ -255,9 +255,10 @@ func upstreamBody(req llm.Request, format string, s settings) ([]byte, *llm.Tran
 	return body, tr, nil
 }
 
-// listModels reads the account's model list from GET {base_url}/models (OpenAI's list shape)
-// with the account's key. An error lets core fall back to the models the account's config
-// names, or to serving any model when the config names none.
+// listModels reads the account's model list from GET {base_url}/models, in OpenAI's list shape
+// or Gemini's, which a wire_api "gemini" account answers with (as check reads both), with the
+// account's key. An error lets core fall back to the models the account's config names, or to
+// serving any model when the config names none.
 func listModels(ctx context.Context, call sdk.ModelsCall) (*protocol.ModelList, error) {
 	s, wire, key, err := account(sdk.Call{ID: call.ID, Account: call.Account})
 	if err != nil {
@@ -294,24 +295,53 @@ func listModels(ctx context.Context, call sdk.ModelsCall) (*protocol.ModelList, 
 			Created     int64  `json:"created"`
 			OwnedBy     string `json:"owned_by"`
 		} `json:"data"`
+		Models []struct {
+			Name                       string   `json:"name"`
+			DisplayName                string   `json:"displayName"`
+			Description                string   `json:"description"`
+			Version                    string   `json:"version"`
+			InputTokenLimit            int      `json:"inputTokenLimit"`
+			OutputTokenLimit           int      `json:"outputTokenLimit"`
+			SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
+		} `json:"models"`
 	}
-	if err := json.Unmarshal(raw, &payload); err != nil || payload.Data == nil {
-		return nil, &llm.Error{Code: llm.CodeUpstream, Message: "upstream model list is not an OpenAI list", Scope: llm.ScopeEndpoint}
+	if err := json.Unmarshal(raw, &payload); err != nil || (payload.Data == nil && payload.Models == nil) {
+		return nil, &llm.Error{Code: llm.CodeUpstream, Message: "upstream model list is not an OpenAI or Gemini list", Scope: llm.ScopeEndpoint}
 	}
-	models := make([]protocol.Model, 0, len(payload.Data))
+	models := make([]protocol.Model, 0, len(payload.Data)+len(payload.Models))
 	seen := map[string]bool{}
-	for _, item := range payload.Data {
-		id := strings.TrimSpace(item.ID)
-		if id == "" || seen[id] {
-			continue
+	add := func(m protocol.Model) {
+		if m.ID == "" || seen[m.ID] {
+			return
 		}
-		seen[id] = true
-		models = append(models, protocol.Model{
-			ID:          id,
+		seen[m.ID] = true
+		models = append(models, m)
+	}
+	for _, item := range payload.Data {
+		add(protocol.Model{
+			ID:          strings.TrimSpace(item.ID),
 			DisplayName: strings.TrimSpace(item.DisplayName),
 			Created:     item.Created,
 			OwnedBy:     strings.TrimSpace(item.OwnedBy),
 		})
+	}
+	for _, item := range payload.Models {
+		// Gemini names a model "models/<id>", and a request names it by the id alone.
+		name := strings.TrimSpace(item.Name)
+		id := strings.TrimPrefix(name, "models/")
+		m := protocol.Model{
+			ID:                id,
+			DisplayName:       strings.TrimSpace(item.DisplayName),
+			Description:       strings.TrimSpace(item.Description),
+			Version:           strings.TrimSpace(item.Version),
+			InputTokenLimit:   max(item.InputTokenLimit, 0),
+			OutputTokenLimit:  max(item.OutputTokenLimit, 0),
+			GenerationMethods: item.SupportedGenerationMethods,
+		}
+		if id != "" && name != id {
+			m.Name = "models/" + id
+		}
+		add(m)
 	}
 	return &protocol.ModelList{Models: models}, nil
 }

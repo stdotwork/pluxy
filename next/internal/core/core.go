@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -115,6 +116,10 @@ type Core struct {
 	bgCtx    context.Context
 	bgCancel context.CancelFunc
 	bgWG     sync.WaitGroup
+	// bgMu and bgClosed hold background work off once Stop waits: work added under bgMu before
+	// bgClosed is set is counted, and none can be added after it, which sync.WaitGroup needs.
+	bgMu     sync.Mutex
+	bgClosed bool
 
 	// accounts serialises setting the accounts a router routes over: a change in the
 	// credential store and a publish never interleave.
@@ -883,6 +888,11 @@ func (c *Core) Stop() {
 	defer c.reloading.Unlock()
 	c.stopped = true
 	c.bgCancel()
+	// No background work starts once Stop waits: an Add during the wait is a WaitGroup misuse
+	// (a credential renewal can land at any moment, see credentialChanged).
+	c.bgMu.Lock()
+	c.bgClosed = true
+	c.bgMu.Unlock()
 	c.checks.stop()
 	if c.setup != nil {
 		c.setup.stop()
@@ -932,7 +942,7 @@ func (c *Core) Status() Status {
 	c.mu.Lock() // publish switches the snapshot and the revisions under it
 	firstRun := c.setup == nil || c.setup.isFirstRun()
 	s := Status{SafeMode: c.opts.SafeMode, FirstRun: firstRun, Desired: c.desired, Active: c.active, Extensions: []ExtensionStatus{},
-		Version: version, Commit: commit, Built: built}
+		Version: version, Commit: commit, Built: built, ManagementAPI: management.APIVersion}
 	draining := append([]*host.Managed(nil), c.draining...)
 	cur := c.cur.Load()
 	c.mu.Unlock()
@@ -1037,6 +1047,10 @@ func (l *leasedLogin) Close() {
 // failedLogin is a login call that is one error.
 type failedLogin struct{ final protocol.Reply }
 
-func (l *failedLogin) Next() protocol.Reply         { return l.final }
-func (l *failedLogin) Send(map[string]string) error { return errors.New("the login is not running") }
-func (l *failedLogin) Close()                       {}
+func (l *failedLogin) Next() protocol.Reply { return l.final }
+func (l *failedLogin) Send(map[string]string) error {
+	// A login that never started has ended: input to it is reported as a closed connection, as
+	// host.LoginCall.Send reports input to a login that ended.
+	return fmt.Errorf("the login is not running: %w", net.ErrClosed)
+}
+func (l *failedLogin) Close() {}

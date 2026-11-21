@@ -137,8 +137,8 @@ func TestRequestEncoding(t *testing.T) {
 		t.Errorf("result for no call: text %q, call %q", str(orphan, 3), str(orphan, 7))
 	}
 	cfg := fieldsOf(t, top[8][0].data)
-	if cfg[2][0].val != maxOutputTokens || cfg[5][0].double() != 0.3 || cfg[8][0].double() != float64(float32(0.95)) {
-		t.Errorf("completion settings max %d temperature %v top_p %v", cfg[2][0].val, cfg[5][0].double(), math.Float64frombits(cfg[8][0].val))
+	if cfg[2][0].val != maxOutputTokens || math.Float64frombits(cfg[5][0].val) != 0.3 || math.Float64frombits(cfg[8][0].val) != float64(float32(0.95)) {
+		t.Errorf("completion settings max %d temperature %v top_p %v", cfg[2][0].val, math.Float64frombits(cfg[5][0].val), math.Float64frombits(cfg[8][0].val))
 	}
 	tool := fieldsOf(t, top[10][0].data)
 	if str(tool, 1) != "weather" || str(tool, 2) != "Get weather" || str(tool, 3) != `{"type":"object"}` {

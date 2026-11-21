@@ -147,6 +147,7 @@ type Store struct {
 	dir             string
 	keepDays        atomic.Int64
 	dropped         atomic.Uint64
+	writeErrs       atomic.Uint64
 	writeCh         chan Event
 	flushCh         chan chan struct{}
 	pruneCh         chan struct{}
@@ -163,11 +164,6 @@ type Store struct {
 
 	sumMu     sync.Mutex
 	summaries map[string]*daySummaryFile
-}
-
-// NewStore returns an empty, in-memory-only store with the default limits.
-func NewStore() *Store {
-	return &Store{maxEvents: DefaultMaxEvents, maxAge: DefaultMaxAge, now: time.Now}
 }
 
 // SetLimits changes the store's limits; zero values take the defaults. Lowering a limit drops the
@@ -461,6 +457,9 @@ type Summary struct {
 	Evicted uint64 `json:"evicted"`
 	// Dropped counts the events dropped since core started because the disk writer's queue was full.
 	Dropped uint64 `json:"dropped"`
+	// WriteErrors counts the events the disk writer could not write since core started, each
+	// logged with its error. They stay in the in-memory record, and their day file misses them.
+	WriteErrors uint64 `json:"write_errors"`
 }
 
 // Summarize adds up the events that match f, and counts them in a time series of buckets steps
@@ -544,6 +543,7 @@ func (s *Store) Summarize(f Filter, bucket time.Duration, buckets int) Summary {
 		Oldest:        oldest,
 		Evicted:       evicted,
 		Dropped:       s.dropped.Load(),
+		WriteErrors:   s.writeErrs.Load(),
 	}
 	for i := range sum.Series {
 		sum.Series[i].Start = first.Add(time.Duration(i) * bucket).UTC()
@@ -580,14 +580,22 @@ func (s *Store) Summarize(f Filter, bucket time.Duration, buckets int) Summary {
 				}
 				groupFor(g, name, r.Provider).addRow(r)
 			}
-			if !hourStart.Before(first) {
-				if b := int(hourStart.Sub(first) / bucket); b >= 0 && b < buckets {
-					sum.Series[b].Requests += r.Requests
-					if r.Failed {
-						sum.Series[b].Failure += r.Requests
-					}
-					sum.Series[b].Tokens += r.Total
+			// A closed day's row is a whole UTC hour. An hour the series' first step starts
+			// inside counts there, as it counts in the totals, rather than nowhere; an hour
+			// before the first step counts in neither.
+			b := -1
+			switch {
+			case !hourStart.Before(first):
+				b = int(hourStart.Sub(first) / bucket)
+			case hourEnd.After(first):
+				b = 0
+			}
+			if b >= 0 && b < buckets {
+				sum.Series[b].Requests += r.Requests
+				if r.Failed {
+					sum.Series[b].Failure += r.Requests
 				}
+				sum.Series[b].Tokens += r.Total
 			}
 		}
 	}

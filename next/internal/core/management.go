@@ -33,6 +33,7 @@ const maxManagementBody = 1 << 20
 //	POST   /v0/management/setup/scan   start a background setup scan now
 //	POST   /v0/management/setup/apply  install and enable setup picks
 //	POST   /v0/management/setup/done   end first run
+//	GET    /v0/management/setup/clients/{id}/paste  what to paste into a client tool's settings
 //	GET    /v0/management/packages  installed packages
 //	GET    /v0/management/registries  what each registry offers
 //	POST   /v0/management/packages  install a package (InstallRequest)
@@ -186,10 +187,26 @@ func writePackage(w http.ResponseWriter, v PackageView, err error) {
 	writeJSON(w, code, body)
 }
 
-func readOptionalJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+// readManagementBody reads a management request body, up to maxManagementBody. It writes the
+// error reply and returns false when it cannot: 413 invalid_request for a body larger than core
+// reads, 400 invalid_request for one it cannot read otherwise.
+func readManagementBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxManagementBody))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "invalid_request", "message": "request body is not valid JSON: " + err.Error()}})
+	if err == nil {
+		return b, true
+	}
+	var tooBig *http.MaxBytesError
+	if errors.As(err, &tooBig) {
+		writeError(w, http.StatusRequestEntityTooLarge, "invalid_request", "request body is too large")
+		return nil, false
+	}
+	writeError(w, http.StatusBadRequest, "invalid_request", "request body: "+err.Error())
+	return nil, false
+}
+
+func readOptionalJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	b, ok := readManagementBody(w, r)
+	if !ok {
 		return false
 	}
 	if len(bytes.TrimSpace(b)) == 0 {
@@ -210,11 +227,11 @@ func readOptionalJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
-	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxManagementBody))
-	if err == nil {
-		err = json.Unmarshal(b, v)
+	b, ok := readManagementBody(w, r)
+	if !ok {
+		return false
 	}
-	if err != nil {
+	if err := json.Unmarshal(b, v); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "invalid_request", "message": "request body is not valid JSON: " + err.Error()}})
 		return false
 	}

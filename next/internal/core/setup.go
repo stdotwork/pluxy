@@ -72,6 +72,10 @@ type setupManager struct {
 	rescan    bool
 	scannedAt *time.Time // nil until the first scan ends: there is no kept scan
 	found     management.SetupFound
+	// statesFor is the address the kept client states were read against (coreAddress of the
+	// listen address and tlsEnable); empty when it is not known, as when the kept scan came
+	// from another run.
+	statesFor string
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -171,8 +175,9 @@ func (m *setupManager) markDone() error {
 }
 
 // listening is told the address core listens on once it does. A first run with no kept scan
-// starts its first scan; otherwise the kept scan's client states are read again against that
-// address, which a restart may have changed (a config listening on port 0).
+// starts its first scan; otherwise the kept scan's client states are read again against the
+// address core answers at, which a restart may have changed (a config listening on port 0, or
+// tls.enable, which changes the scheme every config naming core's address holds).
 func (m *setupManager) listening(listen string, tlsEnable bool) {
 	m.mu.Lock()
 	if m.scannedAt == nil {
@@ -184,10 +189,16 @@ func (m *setupManager) listening(listen string, tlsEnable bool) {
 		return
 	}
 	defer m.mu.Unlock()
-	if m.found.Core.Listen == listen {
+	statesFor := coreAddress(listen, tlsEnable)
+	if m.found.Core.Listen == listen && m.statesFor == statesFor {
 		return
 	}
-	m.found = refreshCoreState(m.found, listen, tlsEnable)
+	m.statesFor = statesFor
+	refreshed := refreshCoreState(m.found, listen, tlsEnable)
+	if slices.Equal(refreshed.Clients, m.found.Clients) && refreshed.Core == m.found.Core {
+		return
+	}
+	m.found = refreshed
 	if err := m.saveLocked(); err != nil {
 		log.Printf("setup: saving %s: %v", m.statePath, err)
 	}
@@ -222,6 +233,7 @@ func (m *setupManager) runLoop() {
 		now := time.Now().UTC()
 		m.found = found
 		m.scannedAt = &now
+		m.statesFor = coreAddress(listen, tlsEnable)
 		if err := m.saveLocked(); err != nil {
 			log.Printf("setup: saving %s: %v", m.statePath, err)
 		}
@@ -395,6 +407,15 @@ func (c *Core) handleSetup(m *server.Management) {
 			writeError(w, http.StatusInternalServerError, "internal", "core's own address is not known: "+err.Error())
 			return
 		}
+		// A caller on another machine uses the address it reached core by, which is the one its
+		// own programs reach core at; core's listen address names this machine instead.
+		if !server.FromThisMachine(r) {
+			baseURL, err = server.ReachedURL(r)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+				return
+			}
+		}
 		snip, _ := ClientSnippetFor(id, baseURL, key)
 		reply := management.ClientPaste{Tool: snip.Tool, Name: snip.Name, BaseURL: baseURL, Key: key, Note: snip.Note}
 		for _, f := range snip.Files {
@@ -542,11 +563,21 @@ func isReachableFromNetwork(listen string) bool {
 	return !server.IsLoopbackHost(strings.TrimSpace(host))
 }
 
+// coreAddress is the address a program on this machine reaches core at, as the client tools'
+// config files name it (server.LocalURL); empty when core's address is not known.
+func coreAddress(listen string, tlsEnable bool) string {
+	u, err := server.LocalURL(listen, tlsEnable)
+	if err != nil {
+		return ""
+	}
+	return u
+}
+
 // refreshCoreState reads each client tool's config again against the core listening on listen.
 func refreshCoreState(found management.SetupFound, listen string, tlsEnable bool) management.SetupFound {
 	found.Core = setupCoreInfo(listen)
 	home := userHomeDir()
-	coreURL, _ := server.LocalURL(listen, tlsEnable)
+	coreURL := coreAddress(listen, tlsEnable)
 	found.Clients = slices.Clone(found.Clients)
 	for i := range found.Clients {
 		c := &found.Clients[i]
@@ -649,7 +680,7 @@ func exeName(name string) string {
 // probes run in a fresh folder below scratch (core's state folder), removed after each.
 func scanMachine(ctx context.Context, scratch, listen string, tlsEnable bool, timeout time.Duration) management.SetupFound {
 	home := userHomeDir()
-	coreURL, _ := server.LocalURL(listen, tlsEnable)
+	coreURL := coreAddress(listen, tlsEnable)
 	clients := make([]management.SetupClient, len(clientSpecs))
 
 	var wg sync.WaitGroup

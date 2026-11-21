@@ -31,18 +31,15 @@ write the same types.
   `POST /vertex/import` reads multipart form data and ignores the parts it does not use, and
   `PUT /themes/{publisher}/{name}` stores any valid JSON object. A call that takes no body ignores
   one. A body is read up to 1 MiB, 4 MiB for `POST /accounts/import` and 256 KiB for a stored theme;
-  a larger one is 413 `invalid_request` from `POST /accounts`, `PATCH /accounts/{id}`,
-  `POST /accounts/{id}/login`, `POST /logins/{id}/input`, `POST /accounts/import`,
-  `POST /vertex/import` and `PUT /themes/{publisher}/{name}`, and 400 `invalid_request` from the
-  other calls that read one. Times are RFC 3339 UTC; durations are whole milliseconds in fields
-  ending `_ms`.
+  a larger one is 413 `invalid_request` from every call that reads a body. Times are RFC 3339 UTC;
+  durations are whole milliseconds in fields ending `_ms`.
 - **Errors.** Every failure is `{"error": {"code": "...", "message": "..."}}` with the HTTP status that
   fits; `code` is stable and `message` is for a person. An error about an upstream account may add
   `status`, `provider_code`, `retryable`, `retry_after_ms`.
 
   | Status | Codes | Meaning |
   | --- | --- | --- |
-  | 400 | `invalid_request` | The request does not parse, lacks a required member, names a field or value the call does not take, or is larger than core reads |
+  | 400 | `invalid_request` | The request does not parse, lacks a required member, or names a field or value the call does not take |
   | 400 | `file_required`, `invalid_json`, `invalid_service_account`, `project_id_missing` | `POST /vertex/import` did not get a usable service account key |
   | 401 | `unauthorized` | No key, or the wrong key |
   | 403 | `remote_disabled` | The call came from another machine while `management_allow_remote` is off |
@@ -89,7 +86,7 @@ management API of a core that is already running. `pluxy -config ...` with no su
   | 3 | No core answered at the address |
   | 4 | Refused: no key, wrong key, another machine, or blocked (401, 403) |
   | 5 | Not found (404) |
-  | 6 | Core refused the change (409, 422); nothing was changed |
+  | 6 | Core refused the change (409 or 422 from a command that changes something); nothing was changed |
   | 7 | Waiting for a person: a sign-in needs a browser or a code, and `--no-wait` was given |
 
 ## Resources
@@ -124,7 +121,7 @@ proposes what to install. Nothing is installed until asked.
 | `POST /setup/done` | `pluxy setup done` | Ends first run (`{"first_run": false}`): the panel and app stop opening on setup |
 | `GET /setup/clients/{id}/paste` | `pluxy client show <tool> [--key-id id]` | What to paste into that client tool's config to point it at this core: its files, the address, and a client key placeholder. `id` is the tool's ID (`claude-code`, `codex`, `opencode`, `pi`, `omp`) or another name for it (`oh-my-pi`, `codex-cli`, a setup package's ID such as `pluxy/pi-setup`, with the `/` escaped as `%2F`). Optional `key_id` names a client key from `GET /client-keys`; the placeholder then names it. 404 for a tool core has no text for, and for a `key_id` core does not hold |
 
-The reply to `GET /setup/clients/{id}/paste`: `tool` (the canonical ID), `name`, `base_url` (core's address as a program on core's machine reaches it), `key` (`<client-key>`, or with `key_id` `<client-key:ID (MASKED)>`: never a key's value, never the management key), `files` (`path` from the home folder, and `content`) and `note` (what the files need besides themselves; left out when empty). The command prints the files as they are, and with `--json` the reply body.
+The reply to `GET /setup/clients/{id}/paste`: `tool` (the canonical ID), `name`, `base_url` (the address a program uses to reach core: core's own, as a program on core's machine reaches it, for a caller on that machine, and the address the caller reached core by, from its `Host` and whether the connection is TLS, for a caller on another), `key` (`<client-key>`, or with `key_id` `<client-key:ID (MASKED)>`: never a key's value, never the management key), `files` (`path` from the home folder, and `content`) and `note` (what the files need besides themselves; left out when empty). The command prints the files as they are, and with `--json` the reply body.
 
 `found`:
 
@@ -208,7 +205,7 @@ is not brought, plain or bcrypt: core keeps its own management key, and its row 
 | `PATCH /accounts/{id}` | `pluxy account enable <id>`, `pluxy account disable <id>`, `pluxy account set <id> name=value...` | Turn on or off; change routing settings |
 | `DELETE /accounts/{id}` | `pluxy account remove <id>` | Remove |
 | `POST /accounts/{id}/refresh` | `pluxy account refresh <id>` | Renew its credential now |
-| `POST /accounts/{id}/cooldown/reset` | `pluxy account clear <id>` | Forget what routing holds against it |
+| `POST /accounts/{id}/cooldown/reset` | `pluxy account clear <id>` | Forget the cooldowns routing holds against the account; a ban stays |
 | `POST /accounts/{id}/test` | `pluxy account test <id> [--model m]` | One small request through it |
 | `GET /accounts/{id}/quota` | `pluxy account quota <id>` | Its usage windows as its provider reports them |
 | `GET /accounts/{id}/models` | `pluxy account models <id>` | The models it serves |
@@ -232,7 +229,8 @@ is not brought, plain or bcrypt: core keeps its own management key, and its row 
 | `broken` | Its credential file cannot be read; `why` names the file | When the file is fixed or replaced and core restarts, or the account is removed |
 
 `source` is `provider` when `until` is the provider's own word, `backoff` when core chose it, and
-`unverified` when the provider named a time core does not believe (more than 8 days away); such a block is
+`unverified` when the provider named a time core does not believe (more than 8 days away, or more
+than an hour past the usage window's own length when the provider named it); such a block is
 held 30 minutes and checked within 15. A block on one of the account's models counts too, and `why` then
 names the model, except a model the account does not have (a 404), which says nothing about the account;
 the blocks themselves, that one too, stay in `cooldowns`. When several blocks hold the account, an

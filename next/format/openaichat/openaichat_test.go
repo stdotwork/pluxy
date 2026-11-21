@@ -810,6 +810,17 @@ func TestRenderUsageCacheWrite(t *testing.T) {
 	if zero != wantZero {
 		t.Errorf("usage with zero cache write:\n got %s\nwant %s", zero, wantZero)
 	}
+
+	// A cached count nobody reported is not a zero: only the write is written.
+	writeOnly := render(&llm.Usage{
+		InputTokens:           llm.Int64(12000),
+		OutputTokens:          llm.Int64(50),
+		CacheWriteInputTokens: llm.Int64(7000),
+	})
+	wantWriteOnly := `{"prompt_tokens":12000,"completion_tokens":50,"total_tokens":12050,"prompt_tokens_details":{"cache_write_tokens":7000}}`
+	if writeOnly != wantWriteOnly {
+		t.Errorf("usage with cache write only:\n got %s\nwant %s", writeOnly, wantWriteOnly)
+	}
 }
 
 // A later Chat chunk whose usage is empty, all zeros or null does not overwrite the usage the

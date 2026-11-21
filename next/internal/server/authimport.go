@@ -2,7 +2,6 @@ package server
 
 import (
 	"encoding/json"
-	"io"
 	"net/http"
 	"slices"
 	"strings"
@@ -31,9 +30,8 @@ type authImported struct {
 // file is logged or sent back: the reply names the accounts added (ID, extension, the file's
 // settings not supported yet) and why the others were skipped.
 func (m *Management) importAuthFile(w http.ResponseWriter, r *http.Request) {
-	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxAuthImportBody))
-	if err != nil {
-		writeManagementError(w, http.StatusRequestEntityTooLarge, "invalid_request", "request body is too large")
+	b, ok := readBody(w, r, maxAuthImportBody)
+	if !ok {
 		return
 	}
 	var req struct {

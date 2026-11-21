@@ -165,8 +165,16 @@ func TestManageThemesAPI(t *testing.T) {
 				t.Fatalf("PUT %s unexpectedly succeeded: %d", p.path, resp.StatusCode)
 			}
 		}
-		if _, err := os.Stat(filepath.Join(dir, "escape.json")); !os.IsNotExist(err) {
-			t.Fatalf("path traversal created file outside themes: %v", err)
+		// A traversal ID such as ../escape would write beside the themes folder, which is
+		// state/themes: state/escape.json. A write that dropped the themes folder would land in
+		// state/themes/escape.json instead.
+		for _, outside := range []string{
+			filepath.Join(dir, "state", "escape.json"),
+			filepath.Join(dir, "state", "themes", "escape.json"),
+		} {
+			if _, err := os.Stat(outside); !os.IsNotExist(err) {
+				t.Fatalf("path traversal created %s", outside)
+			}
 		}
 
 		// Symlink in state/themes must not be followed by GET or listed by GET /themes.

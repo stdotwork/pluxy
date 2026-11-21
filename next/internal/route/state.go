@@ -359,6 +359,14 @@ func (s *State) IsBanned(id string) bool {
 	return ok
 }
 
+// banReason returns the error that banned account id, as the provider gave it, or nil when the
+// account is not banned.
+func (s *State) banReason(id string) *llm.Error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bans[id].reason
+}
+
 // Unban clears any ban on account id so it can serve again, ignoring outcomes from attempts
 // started before the unban. It reports whether the account was banned.
 func (s *State) Unban(id string) bool {
@@ -698,9 +706,9 @@ func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now 
 	switch {
 	case e.RetryAfterMS > 0:
 		// The upstream said when: never try this scope earlier (RFC 9110 §10.2.3), within the
-		// bounds resetFor puts on what is believed.
+		// bounds resetFor puts on what is believed, which the window's length raises.
 		var d time.Duration
-		d, source = s.resetFor(e.RetryAfterMS)
+		d, source = s.resetFor(e.RetryAfterMS, e.QuotaWindowMinutes)
 		if source == SourceUnverified {
 			why = unverifiedWhy
 		}

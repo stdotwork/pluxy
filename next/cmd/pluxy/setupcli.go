@@ -225,7 +225,7 @@ func confirm(in io.Reader, out io.Writer, prompt string) bool {
 }
 
 func printSetup(x *invocation, s management.Setup) {
-	status := "done"
+	status := "not scanned"
 	if s.Scanning {
 		status = "scanning"
 	} else if s.ScannedAt != nil {

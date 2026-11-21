@@ -53,6 +53,13 @@ func (r cliResult) String() string {
 func TestCLIExitCodes(t *testing.T) {
 	base := startCore(t, newUpstream(t), func(cfg map[string]any) { cfg["management_key"] = managementKey })
 	target := []string{"--url", base, "--key", managementKey}
+	// Core checks the account in the background after it starts, and a check is a call into the
+	// extension, which /status shows as active_requests while it runs. Wait for the check to
+	// finish, so the two reads of /status below see the same live state.
+	waitChecks(t, base, func(states map[string]string) bool {
+		state, checked := states["upstream-1"]
+		return checked && state != "checking"
+	})
 
 	// 0: status --json prints GET /status's body as it is.
 	r := runCLI(t, nil, append([]string{"status", "--json"}, target...)...)
@@ -67,8 +74,8 @@ func TestCLIExitCodes(t *testing.T) {
 	}
 	body, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	// The two bodies differ only in nothing: the status holds no time that changes between
-	// the calls, so they are compared as JSON values.
+	// The two bodies differ only in nothing: the status does not change between the calls
+	// while the test makes no request, so they are compared as JSON values.
 	var fromCLI, fromAPI any
 	if err := json.Unmarshal([]byte(r.stdout), &fromCLI); err != nil {
 		t.Fatalf("status --json printed no JSON: %v\n%s", err, r)
@@ -96,8 +103,10 @@ func TestCLIExitCodes(t *testing.T) {
 		}
 	}
 
-	// 3: no core answers at the address.
-	stopped := fmt.Sprintf("http://127.0.0.1:%d", freePort(t))
+	// 3: no core answers at the address. Port 0 is never served: a listener given port 0 takes
+	// another free port, so this address stays closed for the whole run, unlike a freePort that
+	// something else may take between choosing it and the CLI calling it.
+	stopped := "http://127.0.0.1:0"
 	if r := runCLI(t, nil, "status", "--json", "--url", stopped, "--key", managementKey); r.code != 3 || r.stdout != "" {
 		t.Errorf("status with no core: %s; want exit 3 and nothing on standard output", r)
 	}

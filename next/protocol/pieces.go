@@ -215,8 +215,15 @@ func secretQueryName(name string) bool {
 	return false
 }
 
-// minPiece is the shortest piece of a secret RemovePieces replaces, as TrimCut counts one.
+// minPiece is the shortest piece of a secret RemovePieces replaces, as TrimCut counts one, for a
+// secret other than a PEM private key (minLinePiece for one).
 const minPiece = minCutFragment
+
+// minLinePiece is the shortest piece RemovePieces takes from a PEM private key. Its lines are long and random, so 4 bytes of one are a coincidence in most errors,
+// and would redact an ordinary word such as "Signature" for a key whose body spells "Sign", while a
+// fragment that short of a key is of no use. minFragment is the shortest line NewRedactor keeps as
+// a secret of its own, so it is the shortest piece of a line here too.
+const minLinePiece = minFragment
 
 // maxDecode bounds how many layers of escapes ReplaceRuns decodes.
 const maxDecode = 8
@@ -236,29 +243,72 @@ var escapedRun = regexp.MustCompile(`(?:[A-Za-z0-9_\-.+/=~]|\\u[0-9A-Fa-f]{4}|\\
 // own: a piece counts only when it holds at least one byte after the prefix, so words such as
 // "project" stay.
 //
+// A PEM private key counts by its lines and its unwrapped body, at minLinePiece bytes: its
+// body is long and random, so 4 bytes of it would be a coincidence in an error of any length, and
+// a key's fragment that short is of no use, while the error's own words are lost. So a key is
+// redacted whole for a fragment of minLinePiece bytes or more of its body, a shorter run
+// of its body being kept.
+//
 // Text with words in it, such as a model's reply, would lose every word that shares minPiece
 // characters with a secret, so this is for error text: core applies it to an upstream's error
 // with the account's secrets (AccountSecrets).
 func RemovePieces(s string, secrets ...string) string {
 	pieces := map[string]bool{}
+	var linePieces map[string]bool
 	for _, secret := range secrets {
-		// A piece starting at i holds a byte after the prefix when i+minPiece > prefix.
-		for i := max(0, publicKeyPrefix(secret)-minPiece+1); i+minPiece <= len(secret); i++ {
-			pieces[secret[i:i+minPiece]] = true
+		if isPEMPrivateKey(secret) {
+			if linePieces == nil {
+				linePieces = map[string]bool{}
+			}
+			var body strings.Builder
+			for _, line := range strings.Split(secret, "\n") {
+				line = strings.TrimSpace(line)
+				addPieces(linePieces, line, minLinePiece)
+				if !strings.HasPrefix(line, "-----") {
+					body.WriteString(line)
+				}
+			}
+			// An upstream that unwraps the key echoes runs across its line breaks.
+			addPieces(linePieces, body.String(), minLinePiece)
+			continue
 		}
+		addPieces(pieces, secret, minPiece)
 	}
-	if len(pieces) == 0 {
+	if len(pieces) == 0 && len(linePieces) == 0 {
 		return s
 	}
 	holds := func(t string) bool {
-		for i := 0; i+minPiece <= len(t); i++ {
-			if pieces[t[i:i+minPiece]] {
-				return true
-			}
-		}
-		return false
+		return len(pieces) > 0 && holdsPieces(pieces, t, minPiece) ||
+			len(linePieces) > 0 && holdsPieces(linePieces, t, minLinePiece)
 	}
 	return ReplaceRuns(s, func(run, d string) bool { return holds(d) || d != run && holds(run) })
+}
+
+// isPEMPrivateKey reports whether secret is a PEM private key, the one kind of secret that counts
+// by its lines. Any other secret keeps minPiece, a line break in it or not: a token read from a
+// file can end in one, and an upstream may echo its first characters.
+func isPEMPrivateKey(secret string) bool {
+	return strings.Contains(secret, "\n") && strings.Contains(secret, "-----BEGIN ") &&
+		strings.Contains(secret, "PRIVATE KEY-----")
+}
+
+// holdsPieces reports whether t holds one of set's pieces, each n bytes long.
+func holdsPieces(set map[string]bool, t string, n int) bool {
+	for i := 0; i+n <= len(t); i++ {
+		if set[t[i:i+n]] {
+			return true
+		}
+	}
+	return false
+}
+
+// addPieces adds to pieces each run of n bytes of s, from the first that holds a byte after s's
+// public vendor prefix (publicKeyPrefix).
+func addPieces(pieces map[string]bool, s string, n int) {
+	// A piece starting at i holds a byte after the prefix when i+n > prefix.
+	for i := max(0, publicKeyPrefix(s)-n+1); i+n <= len(s); i++ {
+		pieces[s[i:i+n]] = true
+	}
 }
 
 // publicKeyPrefixes are the public prefixes of vendors' API keys, longest first where one

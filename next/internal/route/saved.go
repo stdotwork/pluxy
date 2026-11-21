@@ -59,8 +59,9 @@ func (s *State) Saved(now time.Time) []SavedBlock {
 // Load puts back saved quota blocks, as Saved returned them before a restart, for the accounts
 // known reports. Blocks that have ended by now are left out, and so is what does not read as a
 // block. Each block that would be checked is checked at once (Router.Check), so one that no
-// longer holds ends at the first check. A block saved further off than any believed reset is
-// held as an unbelieved one.
+// longer holds ends at the first check. The file keeps no usage window to bound a block by, so
+// one saved further off than maxReset is held as an unbelieved one; the check at once then ends
+// it or sets its end again.
 func (s *State) Load(saved []SavedBlock, now time.Time, known func(id string) bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

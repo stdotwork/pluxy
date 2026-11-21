@@ -126,7 +126,7 @@ func usageLosses(u *llm.Usage, upFormat string) []string {
 		case "prompt_tokens_details", "input_tokens_details", "completion_tokens_details", "output_tokens_details":
 			if d := rawjson.Object(v); d != nil {
 				for dk, dv := range d {
-					carried := (dk == "cached_tokens" || dk == "cache_write_tokens" && u.CacheWriteInputTokens != nil) && (k == "prompt_tokens_details" || k == "input_tokens_details") ||
+					carried := (dk == "cached_tokens" && u.CachedInputTokens != nil || dk == "cache_write_tokens" && u.CacheWriteInputTokens != nil) && (k == "prompt_tokens_details" || k == "input_tokens_details") ||
 						dk == "reasoning_tokens" && u.ReasoningTokens != nil && (k == "completion_tokens_details" || k == "output_tokens_details")
 					if carried || string(dv) == "0" || string(dv) == "null" {
 						continue

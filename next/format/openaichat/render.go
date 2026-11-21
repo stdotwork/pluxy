@@ -52,6 +52,8 @@ type outUsage struct {
 	CompletionTokens    int64 `json:"completion_tokens"`
 	TotalTokens         int64 `json:"total_tokens"`
 	PromptTokensDetails *struct {
+		// CachedTokens is a pointer, so a cached count nobody reported is left out, as llm.Usage
+		// keeps it: nil is not zero.
 		CachedTokens     *int64 `json:"cached_tokens,omitempty"`
 		CacheWriteTokens int64  `json:"cache_write_tokens,omitempty"`
 	} `json:"prompt_tokens_details,omitempty"`

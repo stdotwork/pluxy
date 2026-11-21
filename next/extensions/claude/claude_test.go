@@ -170,7 +170,7 @@ func TestCacheBreakpoints(t *testing.T) {
 			`{"system":[{"type":"text","text":"S","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","text":"a"}]}]}`,
 			`{"system":[{"type":"text","text":"S","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","text":"a"}]}]}`},
 	} {
-		out, err := addCacheBreakpoints([]byte(c.in))
+		out, err := addCacheBreakpointsTTL([]byte(c.in), cacheTTL5m)
 		if err != nil {
 			t.Fatal(err)
 		}

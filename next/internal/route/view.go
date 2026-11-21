@@ -86,8 +86,9 @@ func (s *State) Runtime(a Account, now time.Time) Runtime {
 
 // Reset clears every block that covers account a, on its credential, its models and its
 // endpoint (which accounts naming the same endpoint share), with their backoff steps, and the
-// account's last error. It reports how many live blocks it cleared. An attempt already running
-// that fails afterwards records its block as usual.
+// account's last error unless it is banned. It reports how many live blocks it cleared, and
+// leaves a ban in place. An attempt already running that fails afterwards records its block as
+// usual.
 func (s *State) Reset(a Account, now time.Time) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -39,12 +39,6 @@ func cacheMarker(ttl string) json.RawMessage {
 	return ephemeral
 }
 
-// addCacheBreakpoints adds default 5-minute cache breakpoints to a translated Messages body that
-// has none.
-func addCacheBreakpoints(body []byte) ([]byte, error) {
-	return addCacheBreakpointsTTL(body, cacheTTL5m)
-}
-
 // addCacheBreakpointsTTL adds cache breakpoints with ttl ("5m" or "1h") to a translated Messages
 // body that has none: where Messages takes cache_control (top-level, system blocks, tools, message
 // content blocks), none is set.

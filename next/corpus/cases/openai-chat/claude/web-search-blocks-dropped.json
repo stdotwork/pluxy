@@ -245,13 +245,13 @@
     {
       "path": "client.body.usage.prompt_tokens_details.cache_write_tokens",
       "kind": "intended",
-      "reason": "The new core reports Chat usage as OpenAI's API has it, with cached_tokens; today's core adds cache_write_tokens and cached_creation_tokens (zero here).",
+      "reason": "The new core reports Chat usage as OpenAI's API has it: cached_tokens, and cache_write_tokens only when the upstream reported a nonzero cache write, which it did not here; today's core adds cache_write_tokens and cached_creation_tokens (zero here).",
       "absent": true
     },
     {
       "path": "client.body.usage.prompt_tokens_details.cached_creation_tokens",
       "kind": "intended",
-      "reason": "The new core reports Chat usage as OpenAI's API has it, with cached_tokens; today's core adds cache_write_tokens and cached_creation_tokens (zero here).",
+      "reason": "The new core reports Chat usage as OpenAI's API has it: cached_tokens, and cache_write_tokens only when the upstream reported a nonzero cache write, which it did not here; today's core adds cache_write_tokens and cached_creation_tokens (zero here).",
       "absent": true
     },
     {

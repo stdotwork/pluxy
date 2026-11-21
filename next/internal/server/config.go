@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"maps"
 	"net"
+	"net/http"
 	"net/netip"
 	"net/url"
 	"os"
@@ -681,4 +682,19 @@ func LocalURL(listen string, tlsEnable bool) (string, error) {
 		scheme = "https"
 	}
 	return scheme + "://" + net.JoinHostPort(host, port), nil
+}
+
+// ReachedURL is the address a request reached core by: its Host, with https when the connection
+// is TLS. A caller on another machine uses that address, since core's own listen address names
+// the wrong machine for it. A Host that is not a host and port is refused.
+func ReachedURL(r *http.Request) (string, error) {
+	u, err := url.Parse("//" + r.Host)
+	if err != nil || r.Host == "" || u.Host != r.Host || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("the request's Host %q is not an address core can name", r.Host)
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host, nil
 }

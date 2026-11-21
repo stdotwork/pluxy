@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -204,13 +203,13 @@ func (c *Core) edit(change func(d *configdoc.Doc) error) func([]byte) ([]byte, e
 
 // readStrictJSON reads a request body into v, refusing fields v does not have.
 func readStrictJSON(w http.ResponseWriter, r *http.Request, v any) bool {
-	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxManagementBody))
-	if err == nil {
-		dec := json.NewDecoder(bytes.NewReader(b))
-		dec.DisallowUnknownFields()
-		err = dec.Decode(v)
+	b, ok := readManagementBody(w, r)
+	if !ok {
+		return false
 	}
-	if err != nil {
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", "request body: "+err.Error())
 		return false
 	}
@@ -255,7 +254,8 @@ func settings(cfg *server.Config) settingsView {
 	v := routingView{Strategy: r.Strategy, ForceModelPrefix: r.ForceModelPrefix,
 		Retry: retryView{RequestRetry: r.RequestRetry, MaxRetryCredentials: r.MaxAccounts, MaxRetryInterval: float64(r.MaxWaitMS) / 1000},
 		Cooldown: cooldownView{DisableCooling: r.DisableCooling, TransientErrorCooldownSeconds: float64(max(r.TransientErrorCooldownMS, -1000)) / 1000,
-			QuotaResponseMode: cmp.Or(r.QuotaResponseMode, route.QuotaRetryable)}}
+			QuotaResponseMode: cmp.Or(r.QuotaResponseMode, route.QuotaRetryable)},
+		Timeouts: r.Timeouts}
 	switch r.Strategy {
 	case "":
 		v.Strategy = route.StrategyRoundRobin
