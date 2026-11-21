@@ -2,7 +2,7 @@
 // several times (instances-session.ts on Linux, platform.ts on Windows and macOS): the app's
 // `native-test:` steps by name, its stdin for the commands it answers, and its exit.
 
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, execFile, spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 
 export type Step = Record<string, unknown>;
@@ -14,6 +14,9 @@ export class Launch {
   private waiting = new Map<string, (s: Step) => void>();
   readonly log: string[] = [];
   readonly pid: number;
+  /** What the app has printed so far on stdout and stderr, in lines and bytes (never trimmed). */
+  lines = 0;
+  bytes = 0;
 
   constructor(
     bin: string,
@@ -32,11 +35,16 @@ export class Launch {
     this.exited = new Promise((resolve) => this.child.once("close", (code) => resolve(code)));
     this.child.stdin?.on("error", () => {});
     for (const stream of [this.child.stdout, this.child.stderr]) {
-      if (stream) createInterface({ input: stream }).on("line", (l) => this.onLine(l));
+      if (!stream) continue;
+      stream.on("data", (chunk: Buffer | string) => {
+        this.bytes += Buffer.byteLength(chunk);
+      });
+      createInterface({ input: stream }).on("line", (l) => this.onLine(l));
     }
   }
 
   private onLine(line: string) {
+    this.lines++;
     this.log.push(line);
     if (this.log.length > 40) this.log.shift();
     const m = /^native-test: (\w+) (.*)$/.exec(line);
@@ -99,4 +107,49 @@ export class Launch {
   dump(): string {
     return this.log.join(" | ");
   }
+
+  /** Where a silent app is stuck: whether it is alive, what it printed, and (not on Windows) its
+   * process, its children and, on macOS, a 3 s sample. Each command gets 10 s; errors become text,
+   * nothing throws. Call it before kill(). */
+  async stuck(): Promise<string> {
+    const alive = this.pid > 0 && this.child.exitCode === null && this.child.signalCode === null;
+    const out = [
+      `app pid ${this.pid}: ${alive ? "still running" : `gone (exit ${this.child.exitCode}, signal ${this.child.signalCode})`}`,
+      `printed ${this.lines} lines, ${this.bytes} bytes on stdout and stderr`,
+    ];
+    if (process.platform !== "win32" && alive) {
+      try {
+        const psCols = ["-o", "pid,ppid,stat,etime,pcpu,rss,command"];
+        out.push(await tool("ps", [...psCols, "-p", String(this.pid)]));
+        const kids = (await tool("pgrep", ["-P", String(this.pid)], false))
+          .split("\n")
+          .filter((x) => /^\d+$/.test(x.trim()))
+          .map((x) => x.trim());
+        out.push(`children: ${kids.length ? kids.join(" ") : "none"}`);
+        if (kids.length) out.push(await tool("ps", [...psCols, "-p", kids.join(",")]));
+        if (process.platform === "darwin") {
+          const sample = (await tool("sample", [String(this.pid), "3"])).split("\n");
+          out.push(sample.slice(0, 80).join("\n"));
+        }
+      } catch (e) {
+        out.push(`diagnostics failed: ${e}`);
+      }
+    }
+    return out.join("\n");
+  }
+}
+
+/** Runs a command with a 10 s timeout and returns its output, or what went wrong, as text. */
+function tool(cmd: string, args: string[], label = true): Promise<string> {
+  return new Promise((resolve) => {
+    try {
+      execFile(cmd, args, { timeout: 10_000, maxBuffer: 4 << 20 }, (err, stdout, stderr) => {
+        const text = `${stdout}${stderr}`.trimEnd();
+        const head = label ? `$ ${cmd} ${args.join(" ")}\n` : "";
+        resolve(err && !text ? `${head}${cmd} failed: ${err.message}` : `${head}${text}`);
+      });
+    } catch (e) {
+      resolve(`${cmd} failed: ${e}`);
+    }
+  });
 }

@@ -65,6 +65,13 @@ const EXIT_MS = 60_000;
 /** The core's program in a version's folder (cores.rs PROGRAM). */
 const PROGRAM = process.platform === "win32" ? "pluxy.exe" : "pluxy";
 
+/** The app did not report in time: where it is stuck (Launch.stuck), also said, taken before the kill. */
+async function stuckText(o: BundledRun, l: Launch, label: string): Promise<string> {
+  const text = await l.stuck();
+  o.say(`${label}: the app is stuck?\n${text}`);
+  return `\n${text}`;
+}
+
 /** Starts program on profile in managed mode, takes its report (and, with rollback, the report
  * after rolling back to that version), and waits for it to quit by itself. */
 async function report(
@@ -81,9 +88,11 @@ async function report(
     PLUXY_APP_TEST_BUNDLED_PACKAGES: String(packages),
   });
   const first = await l.next("bundled", REPORT_MS);
-  o.check(first, `${label}: the app never reported its core: ${l.dump()}`);
+  const firstStuck = first ? "" : await stuckText(o, l, label);
+  o.check(first, `${label}: the app never reported its core: ${l.dump()}${firstStuck}`);
   const after = rollback && first ? await l.next("bundled_rollback", REPORT_MS) : undefined;
-  if (rollback) o.check(after, `${label}: the app never reported the rollback: ${l.dump()}`);
+  const afterStuck = rollback && first && !after ? await stuckText(o, l, label) : "";
+  if (rollback) o.check(after, `${label}: the app never reported the rollback: ${l.dump()}${afterStuck}`);
   const code = await l.exitWithin(EXIT_MS);
   if (code === "timeout") l.kill();
   o.check(code === 0, `${label}: the app exited with ${code}: ${l.dump()}`);
