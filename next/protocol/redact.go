@@ -99,10 +99,13 @@ func NewRedactor(cs ...*Credential) *Redactor {
 // removes each part of 8 bytes or more (shorter ones would match unrelated text), besides s. With
 // a smaller min, a caller tells a secret whose parts are all short, which has some, from one with
 // no structure, which has none. These structures are split, and each part split again, up to 4
-// times:
+// times; of what is still left to split then, the last word is a part too, so a token behind more
+// schemes or prefixes than that is still found:
 //
 //   - an authorization value, "Bearer <token>" or "Basic <base64>" (the scheme in any letter case):
-//     the token, or the base64 text, what it decodes to ("user:password") and the password;
+//     the token, or the base64 text (standard or URL-safe, padded or not), what it decodes to when
+//     that is text ("user:password", also with a password that is not UTF-8) and the password, or
+//     the user name when the password is empty, as a key sent as Basic's user name is;
 //   - a token behind a public prefix, "<prefix>$<token>" or "<prefix>:<token>" (such as Devin's
 //     "devin-session-token$<jwt>", Meta's "dca:<token>" or a header line "Name: value"), where
 //     the prefix is a letter and up to 31 more letters, digits, "-", "_" or ".", and the token
@@ -117,16 +120,26 @@ func NewRedactor(cs ...*Credential) *Redactor {
 func SecretParts(s string, min int) []string {
 	var out []string
 	seen := map[string]bool{s: true}
+	add := func(p string) bool {
+		if len(p) < min || len(p) == 0 || seen[p] {
+			return false
+		}
+		seen[p] = true
+		out = append(out, p)
+		return true
+	}
 	var split func(string, int)
 	split = func(s string, depth int) {
+		shape := directParts(s)
 		if depth == maxPartDepth {
+			if len(shape.parts) > 0 {
+				add(lastWord(s))
+			}
 			return
 		}
-		for _, p := range directParts(s) {
-			if len(p) >= min && len(p) > 0 && !seen[p] {
-				seen[p] = true
-				out = append(out, p)
-				split(p, depth+1)
+		for _, p := range shape.parts {
+			if add(p.text) {
+				split(p.text, depth+1)
 			}
 		}
 	}
@@ -140,44 +153,102 @@ const maxPartDepth = 4
 // maxPrefix is the longest public prefix SecretParts takes off a token.
 const maxPrefix = 32
 
-// directParts returns the parts of s by the structures SecretParts lists, without splitting them
-// again; some may be short.
-func directParts(s string) []string {
+// partKind says what a part of a secret is to the secret around it.
+type partKind int
+
+const (
+	// partWrapped is what a scheme or public prefix wraps: it is the secret, unless it wraps
+	// another part in public words in turn.
+	partWrapped partKind = iota
+	// partValue is a secret of its own whatever it holds: a cookie's value, Basic's password.
+	partValue
+	// partForm is another way of writing other parts, Basic's decoded "user:password": removed
+	// whole, but its user name is no secret.
+	partForm
+)
+
+// secretPart is one part of a secret, as directParts reads it.
+type secretPart struct {
+	text string
+	kind partKind
+}
+
+// secretShape is how directParts reads a value.
+type secretShape struct {
+	parts []secretPart
+	pair  string // the value's one name=value, when that is all it holds: no scheme or prefix
+	mixed bool   // the value is a list of pairs with something in it that is no pair
+}
+
+// directParts reads the structures SecretParts lists in s, without splitting its parts again; some
+// may be short.
+func directParts(s string) secretShape {
 	s = strings.TrimSpace(s)
-	var out []string
+	var shape secretShape
+	wrapped := false
 	if i := strings.IndexAny(s, " \t"); i > 0 {
 		scheme, rest := s[:i], strings.TrimLeft(s[i:], " \t")
 		switch {
 		case rest == "":
 		case strings.EqualFold(scheme, "Bearer"):
-			out = append(out, rest)
+			wrapped = true
+			shape.parts = append(shape.parts, secretPart{rest, partWrapped})
 		case strings.EqualFold(scheme, "Basic"):
-			out = append(out, rest)
-			b, err := base64.StdEncoding.DecodeString(rest)
-			if err != nil {
-				b, err = base64.RawStdEncoding.DecodeString(rest)
-			}
-			if err == nil && utf8.Valid(b) {
-				out = append(out, string(b))
-				if _, pass, ok := strings.Cut(string(b), ":"); ok {
-					out = append(out, pass)
-				}
-			}
+			wrapped = true
+			shape.parts = append(append(shape.parts, secretPart{rest, partWrapped}), basicParts(rest)...)
 		}
 	}
 	if i, ok := publicPrefixEnd(s); ok {
-		if rest := strings.TrimLeft(s[i+1:], " \t"); !strings.HasPrefix(rest, "/") {
-			out = append(out, rest)
+		if rest := strings.TrimLeft(s[i+1:], " \t"); rest != "" && !strings.HasPrefix(rest, "/") {
+			wrapped = true
+			shape.parts = append(shape.parts, secretPart{rest, partWrapped})
 		}
 	}
-	if strings.IndexByte(s, '=') > 0 {
+	if strings.IndexByte(s, '=') >= 0 {
+		pairs, other, pair := 0, false, ""
 		for _, c := range strings.Split(s, ";") {
 			if value, ok := cookiePair(c); ok {
-				out = append(out, value)
+				pairs++
+				pair = strings.TrimSpace(c)
+				shape.parts = append(shape.parts, secretPart{value, partValue})
+			} else if strings.TrimSpace(c) != "" {
+				other = true
 			}
 		}
+		if !wrapped && pairs == 1 && !other {
+			shape.pair = pair
+		}
+		shape.mixed = !wrapped && pairs > 0 && other
 	}
-	return out
+	return shape
+}
+
+// basicParts returns what Basic's base64 text decodes to, when it is text: the decoded value, and
+// the password, or the user name when the password is empty.
+func basicParts(text string) []secretPart {
+	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+		b, err := enc.DecodeString(text)
+		if err != nil || !encodedText(b) {
+			continue
+		}
+		decoded := string(b)
+		user, pass, ok := strings.Cut(decoded, ":")
+		switch {
+		case !ok:
+			return []secretPart{{decoded, partWrapped}}
+		case pass == "":
+			return []secretPart{{decoded, partForm}, {user, partValue}}
+		}
+		return []secretPart{{decoded, partForm}, {pass, partValue}}
+	}
+	return nil
+}
+
+// lastWord returns what follows the last space, tab, ":", "$" or "=" of s, base64 padding at its
+// end aside: the token of a value nested deeper than SecretParts splits.
+func lastWord(s string) string {
+	s = strings.TrimSpace(s)
+	return s[strings.LastIndexAny(strings.TrimRight(s, "="), " \t:$=")+1:]
 }
 
 // cookiePair reports whether c, one "name=value" of a cookie list (spaces around it aside), is a
