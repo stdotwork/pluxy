@@ -96,7 +96,7 @@ func TestXSearchAllowedTools(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		raw, _, err := buildSearchBody(req, true)
+		raw, _, _, err := buildRequest(req, true)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -174,7 +174,7 @@ func TestXSearchToolLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw, _, err := buildSearchBody(req, true)
+	raw, _, _, err := buildRequest(req, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,7 +200,7 @@ func TestXSearchInjectionChoices(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			raw, _, err := buildSearchBody(req, true)
+			raw, _, _, err := buildRequest(req, true)
 			if err != nil {
 				t.Fatal(err)
 			}

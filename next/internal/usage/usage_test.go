@@ -24,9 +24,15 @@ func (c *clock) add(d time.Duration) {
 	c.mu.Unlock()
 }
 
-func newTestStore(maxEvents int, maxAge time.Duration) (*Store, *clock) {
+// newTestStore is a store with no folder (in memory only), which is what the tests below exercise;
+// disk_test.go covers a folder's summaries.
+func newTestStore(t *testing.T, maxEvents int, maxAge time.Duration) (*Store, *clock) {
+	t.Helper()
 	c := &clock{t: time.Date(2026, 11, 9, 12, 0, 30, 0, time.UTC)}
-	s := NewStore()
+	s, err := Open(Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	s.now = c.now
 	s.SetLimits(maxEvents, maxAge)
 	return s, c
@@ -59,7 +65,7 @@ func TestTokensOf(t *testing.T) {
 // Reading never removes events; the limit on events pushes out the oldest; after reads only
 // newer ones and says when some were lost.
 func TestStoreKeepsWhatItIsAskedAndDropsTheOldest(t *testing.T) {
-	s, c := newTestStore(3, time.Hour)
+	s, c := newTestStore(t, 3, time.Hour)
 	for i := range 5 {
 		s.Add(Event{Timestamp: c.now(), Model: fmt.Sprint("m", i)})
 	}
@@ -84,7 +90,7 @@ func TestStoreKeepsWhatItIsAskedAndDropsTheOldest(t *testing.T) {
 }
 
 func TestStoreDropsEventsOlderThanItsAgeLimit(t *testing.T) {
-	s, c := newTestStore(100, time.Minute)
+	s, c := newTestStore(t, 100, time.Minute)
 	s.Add(Event{Timestamp: c.now()})
 	c.add(40 * time.Second)
 	s.Add(Event{Timestamp: c.now()})
@@ -100,7 +106,7 @@ func TestStoreDropsEventsOlderThanItsAgeLimit(t *testing.T) {
 }
 
 func TestStoreLimitsChange(t *testing.T) {
-	s, c := newTestStore(10, time.Hour)
+	s, c := newTestStore(t, 10, time.Hour)
 	for range 10 {
 		s.Add(Event{Timestamp: c.now()})
 	}
@@ -122,7 +128,7 @@ func TestStoreLimitsChange(t *testing.T) {
 }
 
 func TestSummarize(t *testing.T) {
-	s, c := newTestStore(100, time.Hour)
+	s, c := newTestStore(t, 100, time.Hour)
 	add := func(ago time.Duration, model, provider, account, key string, failed bool, latency int64, in, out int64) {
 		e := Event{Timestamp: c.now().Add(-ago), Model: model, Provider: provider, Account: account, KeyID: key,
 			Failed: failed, LatencyMS: latency}
@@ -181,7 +187,7 @@ func TestSummarize(t *testing.T) {
 }
 
 func TestStoreConcurrentUse(t *testing.T) {
-	s, c := newTestStore(50, time.Hour)
+	s, c := newTestStore(t, 50, time.Hour)
 	var wg sync.WaitGroup
 	for g := range 8 {
 		wg.Add(1)
@@ -206,7 +212,7 @@ func TestStoreConcurrentUse(t *testing.T) {
 // The age limit counts from when an event was recorded, which is the order the store keeps: a
 // request that arrived long ago but ended just now stays, and one recorded before it goes first.
 func TestStoreAgesByRecordingOrder(t *testing.T) {
-	s, c := newTestStore(100, time.Minute)
+	s, c := newTestStore(t, 100, time.Minute)
 	s.Add(Event{Timestamp: c.now()})
 	c.add(30 * time.Second)
 	s.Add(Event{Timestamp: c.now().Add(-2 * time.Hour)}) // a request that ran two hours
@@ -221,7 +227,7 @@ func TestStoreAgesByRecordingOrder(t *testing.T) {
 }
 
 func TestEventsAfterTheLargestSeq(t *testing.T) {
-	s, c := newTestStore(10, time.Hour)
+	s, c := newTestStore(t, 10, time.Hour)
 	s.Add(Event{Timestamp: c.now()})
 	if p := s.Events(Filter{}, ^uint64(0), 10); p.Lost || len(p.Events) != 0 {
 		t.Fatalf("after the largest seq: %+v", p)
@@ -229,7 +235,7 @@ func TestEventsAfterTheLargestSeq(t *testing.T) {
 }
 
 func TestEventsBefore(t *testing.T) {
-	s, c := newTestStore(10, time.Hour)
+	s, c := newTestStore(t, 10, time.Hour)
 	for i := range 5 {
 		m := "m1"
 		if i%2 == 1 {

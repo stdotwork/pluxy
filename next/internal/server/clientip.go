@@ -8,8 +8,9 @@ import (
 	"strings"
 )
 
-// anyForwardHeaders are the headers a proxy may name the client in: the two clientIP reads and
-// RFC 7239's Forwarded, which core does not read.
+// anyForwardHeaders are the headers a proxy may name the client in: the two core reads the client
+// from (X-Forwarded-For and X-Real-IP, see forwardedClient) and RFC 7239's Forwarded, which core
+// does not read.
 var anyForwardHeaders = []string{"X-Forwarded-For", "X-Real-IP", "Forwarded"}
 
 // parseTrustedProxies reads trusted_proxies: IP addresses and CIDR ranges.
@@ -42,20 +43,12 @@ func trustedProxy(trusted []netip.Prefix, a netip.Addr) bool {
 	return false
 }
 
-// clientIP returns where r came from: the connection's peer or, when the peer is one of the
-// trusted proxies, the client it names, as today's core reads them. In X-Forwarded-For (every
-// line of it, read as one list) that is the last address that is not a trusted proxy, read from
-// the right, or the first when all are; else the first line of X-Real-IP. A header with an entry
-// that is not an IP address is not used.
-func clientIP(trusted []netip.Prefix, r *http.Request) netip.Addr {
-	if a, ok := forwardedClient(trusted, r); ok {
-		return a
-	}
-	return remoteAddr(r)
-}
-
-// forwardedClient returns the client a trusted proxy names (see clientIP), and false when the
-// peer is not a trusted proxy or names no client core can read.
+// forwardedClient returns where r came from when its peer is one of the trusted proxies: the
+// client it names, as today's core reads it. In X-Forwarded-For (every line of it, read as one
+// list) that is the last address that is not a trusted proxy, read from the right, or the first
+// when all are; else the first line of X-Real-IP. A header with an entry that is not an IP address
+// is not used. It returns false when the peer is not a trusted proxy or names no client core can
+// read; clientOf then takes the peer.
 func forwardedClient(trusted []netip.Prefix, r *http.Request) (netip.Addr, bool) {
 	peer := remoteAddr(r)
 	if !peer.IsValid() || !trustedProxy(trusted, peer) {

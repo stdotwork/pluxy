@@ -109,7 +109,11 @@ func TestWebSocketTurnRecordedBeforeLastMessage(t *testing.T) {
 		{name: "warmup left at response.created", leave: "response.created"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			store := usage.NewStore()
+			store, err := usage.Open(usage.Options{Dir: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { store.Close() })
 			count := func() []usage.Event { return store.Events(usage.Filter{}, 0, 100).Events }
 			attempt := func(context.Context, string, protocol.Account, llm.Request) route.Stream {
 				return &events{evs: tc.reply(t)}

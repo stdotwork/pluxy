@@ -371,7 +371,7 @@ func TestNamespaceFoldCountsInjectedSearch(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		out, _, err := buildSearchBody(req, inject)
+		out, _, _, err := buildRequest(req, inject)
 		if err != nil {
 			t.Fatal(err)
 		}

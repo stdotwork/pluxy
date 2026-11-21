@@ -52,7 +52,12 @@ func catalogGeneration(t *testing.T, accounts []route.Account) (*Generation, *ro
 	router.UseCatalog(func(context.Context, route.Account, *protocol.Credential) (*protocol.ModelList, *llm.Error) {
 		return &protocol.ModelList{Models: []protocol.Model{{ID: "gpt-6.1-sol"}}}, nil
 	})
-	g := &Generation{Config: &Config{ClientKeys: []string{"k"}}, Router: router, Attempt: gen, Usage: usage.NewStore()}
+	store, err := usage.Open(usage.Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { store.Close() })
+	g := &Generation{Config: &Config{ClientKeys: []string{"k"}}, Router: router, Attempt: gen, Usage: store}
 	g.Endpoint = func(_ context.Context, ext string, a protocol.Account, req llm.Request) route.Stream {
 		if ext != "pluxy/codex" {
 			return &events{evs: []llm.Event{{Type: llm.EventError, Error: &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true}}}}
