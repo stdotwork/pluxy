@@ -964,7 +964,7 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 				continue
 			}
 			if strings.HasPrefix(p.URL, "data:") {
-				if _, problem := mediainput.InlineImage(p.URL, mediainput.OpenAIImages); problem != "" {
+				if _, problem := mediainput.AnyImage(p.URL); problem != "" {
 					e.lose(llm.LossDropped, pp, "Chat Completions cannot take this inline image: "+problem)
 					dropped = true
 					continue

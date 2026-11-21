@@ -49,10 +49,11 @@ func TestEncodeInlineImageValidation(t *testing.T) {
 		{"jpeg", "data:image/jpeg;base64,aGVsbG8=", true},
 		{"gif", "data:image/gif;base64,aGVsbG8=", true},
 		{"webp", "data:image/webp;base64,aGVsbG8=", true},
+		{"bmp", "data:image/bmp;base64,aGVsbG8=", true},
 		{"https URL", "https://example.com/cat.png", true},
 		{"invalid base64", "data:image/png;base64,not base64", false},
 		{"empty data", "data:image/png;base64,", false},
-		{"unsupported media type", "data:image/tiff;base64,aGVsbG8=", false},
+		{"not an image type", "data:text/plain;base64,aGVsbG8=", false},
 	} {
 		body, losses, err := EncodeRequest(imageRequest(c.url, ""))
 		if err != nil {

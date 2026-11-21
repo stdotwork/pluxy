@@ -271,7 +271,7 @@ func (e *encoder) content(it llm.Item, msgPath string) (content []json.RawMessag
 				break
 			}
 			if p.URL != "" && strings.HasPrefix(p.URL, "data:") {
-				if _, problem := mediainput.InlineImage(p.URL, mediainput.OpenAIImages); problem != "" {
+				if _, problem := mediainput.AnyImage(p.URL); problem != "" {
 					e.lose(llm.LossDropped, pp, "Responses cannot take this inline image: "+problem)
 					dropped = true
 					break

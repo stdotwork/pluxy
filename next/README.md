@@ -156,9 +156,10 @@ is left as it is.
 
 **Files and images** reach the upstream in a form its API documents: an image by URL, by inline
 data or by file id, and a file by URL, inline data or file id, wherever the target has that form.
-An inline image is sent only when its data is base64 and its media type is one the target
-documents for images (PNG, JPEG, GIF and WebP on OpenAI's APIs and Claude, and Gemini's own list);
-otherwise it is dropped and reported, so `drop_policy` `"reject"` refuses the request. Gemini
+An inline image is sent only when its data is base64 and its media type is an image type the
+target takes (any `image/*` on the Chat Completions and Responses wire, whose vendors take types
+OpenAI's own list does not name, and Claude's and Gemini's documented lists); otherwise it is
+dropped and reported, so `drop_policy` `"reject"` refuses the request. Gemini
 takes a file URL only as a Files API or Cloud Storage (`gs://`) URI; another URL is dropped and
 reported, never fetched. A Messages plain-text document has no block in the other three formats,
 so its text goes as a text part between lines naming its title, reported as an approximated loss.

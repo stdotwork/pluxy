@@ -74,12 +74,26 @@ func InlineImage(url string, allowed []string) (mediaType, problem string) {
 	return mediaType, "its media type is " + mediaType
 }
 
+// AnyImage checks an inline image without a target's media type list: its data must be base64
+// and its media type an image type. The Chat Completions and Responses encoders also serve
+// OpenAI-compatible vendors and Kimi, which take image types OpenAI's own list does not name,
+// so they check only this much.
+func AnyImage(url string) (mediaType, problem string) {
+	mediaType, data, ok := DataURL(url)
+	if !ok {
+		return "", "it is not a base64 data URL"
+	}
+	if !Base64(data) {
+		return mediaType, "its data is not valid base64"
+	}
+	if !strings.HasPrefix(mediaType, "image/") {
+		return mediaType, "its media type is " + mediaType
+	}
+	return mediaType, ""
+}
+
 // The image media types each target documents for its inline image input.
 var (
-	// OpenAIImages is what OpenAI accepts as image input for Chat Completions and Responses:
-	// PNG, JPEG, WEBP and non-animated GIF
-	// (https://platform.openai.com/docs/guides/images-vision#image-input-requirements).
-	OpenAIImages = []string{"image/png", "image/jpeg", "image/webp", "image/gif"}
 	// ClaudeImages is what Claude accepts in an image block: JPEG, PNG, GIF and WebP
 	// (https://docs.anthropic.com/en/docs/build-with-claude/vision#supported-formats).
 	ClaudeImages = []string{"image/jpeg", "image/png", "image/gif", "image/webp"}
