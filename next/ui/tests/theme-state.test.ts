@@ -153,12 +153,15 @@ test("a file the reader refuses never reaches core", async () => {
   const themes = s.state();
   themes.connect();
   await until(() => s.core.count("GET /themes") === 1);
-  expect(await themes.addTheme("{ not json")).toBe("the file is not JSON");
-  expect(await themes.addTheme(JSON.stringify({ name: "No colours", appearance: "dark" }))).toBeString();
+  expect(await themes.addTheme("{ not json")).toEqual({ error: "the file is not JSON" });
+  expect(await themes.addTheme(JSON.stringify({ name: "No colours", appearance: "dark" }))).toEqual({
+    error: expect.any(String),
+  });
   // A built-in theme's exported file: the reason names the field to change.
-  expect(await themes.addTheme(JSON.stringify({ ...defaultTheme }))).toBe(
-    '"id" is pluxy/default, a built-in theme\'s ID. Change "id" in the file to your own, such as my/default, and add it again',
-  );
+  expect(await themes.addTheme(JSON.stringify({ ...defaultTheme }))).toEqual({
+    error:
+      '"id" is pluxy/default, a built-in theme\'s ID. Change "id" in the file to your own, such as my/default, and add it again',
+  });
   expect(s.core.calls.filter((c) => c.startsWith("PUT"))).toEqual([]);
   expect(themes.current.theme.id).toBe("pluxy/default");
 });
@@ -167,7 +170,7 @@ test("adds a theme as it was given, turns it on, exports it and removes it", asy
   const s = setup();
   const themes = s.state();
   themes.connect();
-  expect(await themes.addTheme(nightfallText)).toBeUndefined();
+  expect(await themes.addTheme(nightfallText)).toEqual({ replaced: false });
   expect(s.core.files.get("t3/nightfall")).toEqual(nightfall);
   expect(s.core.current).toBe("t3/nightfall");
   expect(themes.current.theme.id).toBe("t3/nightfall");
@@ -189,6 +192,21 @@ test("adds a theme as it was given, turns it on, exports it and removes it", asy
   expect(themes.listed.map((l) => l.id)).toEqual(["pluxy/default", "pluxy/terminal"]);
 });
 
+test("adding a different file under a stored theme's ID says it replaced that theme", async () => {
+  const s = setup();
+  const themes = s.state();
+  themes.connect();
+  // The first file under this name: there is no stored theme for it to take the place of.
+  expect(await themes.addTheme(nightfallText)).toEqual({ replaced: false });
+  // A second, different file with the same name gets the same ID, and replaces the first.
+  const other = { ...nightfall, description: "a different file" };
+  expect(await themes.addTheme(JSON.stringify(other))).toEqual({ replaced: true });
+  expect(s.core.files.get("t3/nightfall")).toEqual(other);
+  // The very same file again takes no theme's place.
+  expect(await themes.addTheme(JSON.stringify(other))).toEqual({ replaced: false });
+  expect(themes.listed.map((l) => l.id)).toEqual(["pluxy/default", "pluxy/terminal", "t3/nightfall"]);
+});
+
 test("a theme core refuses is not added, and the theme that was on stays", async () => {
   const s = setup();
   const themes = s.state();
@@ -198,7 +216,7 @@ test("a theme core refuses is not added, and the theme that was on stays", async
     method === "PUT" && path.startsWith("/themes/")
       ? { status: 422, error: { code: "refused", message: "at most 64 themes can be stored" } }
       : undefined;
-  expect(await themes.addTheme(nightfallText)).toBe("at most 64 themes can be stored");
+  expect(await themes.addTheme(nightfallText)).toEqual({ error: "at most 64 themes can be stored" });
   expect(themes.current.theme.id).toBe("pluxy/terminal");
   expect(themes.listed.map((l) => l.id)).toEqual(["pluxy/default", "pluxy/terminal"]);
   expect(applied(s.kept).id).toBe("pluxy/terminal");

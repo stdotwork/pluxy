@@ -287,6 +287,19 @@ test("the Themes page says what is still true, and what to do about a file it ca
   await picker.getByRole("radio", { name: "Default" }).check();
   await expect(added).toHaveCount(0);
 
+  // A second file with the same name and a different description: it gets the same ID, so it takes
+  // the first one's place, and the notice says so.
+  const nightfallFile = JSON.parse(readFileSync(join(fixtures, "t3-docs-nightfall.json"), "utf8"));
+  const changed = JSON.stringify({ ...nightfallFile, description: "A second file with this name" });
+  const secondFile = { name: "nightfall.json", mimeType: "application/json", buffer: Buffer.from(changed) };
+  await page.getByLabel("Theme file", { exact: true }).setInputFiles(secondFile);
+  await expect(
+    page.getByText("Nightfall was added and turned on. It replaced a theme with the same name."),
+  ).toBeVisible();
+  // The very same file again takes no theme's place.
+  await page.getByLabel("Theme file", { exact: true }).setInputFiles(secondFile);
+  await expect(page.getByText("Nightfall was added and turned on.", { exact: true })).toBeVisible();
+
   // A theme removed somewhere else since this page read the list: removing it here just works.
   await picker.getByRole("radio", { name: "Nightfall" }).check();
   await core.mgmt("DELETE", "/themes/t3/nightfall");
