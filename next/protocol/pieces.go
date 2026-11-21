@@ -27,19 +27,26 @@ const minSideSecret = 8
 //     user name, password and secret query values (secretQueryName) of every URL; a URL below a
 //     secret key counts by those parts only, as core's own rule for settings has it.
 //
-// A secret made of parts (SecretParts) counts by its parts, not whole, unless none of them is
-// long enough (below): the words of a public prefix, scheme or cookie name ("devin-session-token$", "Bearer", "sid=") are not pieces,
-// and neither is a part that is only such words around another part (a header line's
-// "Bearer <token>"), nor Basic's decoded "user:password" when its password is a part. A secret
-// other than the credential's that is shorter than 8 bytes is left out, as core leaves it in
-// text, and so is such a part; but a header, proxy or settings secret of 8 bytes or more whose
-// kept parts are all shorter counts whole, with the words around its parts, so it is never left
-// unprotected for being made of short parts (it then also removes a word that shares 4
-// characters with its scheme or cookie name). A credential's field whose parts are all shorter
-// adds them, still without the words around them. The credential's data is left out too: it
-// mixes secrets with plain values (a base URL, a project ID, an OAuth scope) whose words would
-// count as pieces, so an extension passes a secret it keeps there itself (sdk.UpstreamText), and
-// core does not remove pieces of it.
+// A secret made of parts (SecretParts) counts by its parts, not whole: the words of a public
+// prefix, scheme or cookie name ("devin-session-token$", "Bearer", "sid=") are not pieces, and
+// neither is a part that is only such words around another part (a header line's
+// "Bearer <token>"), nor Basic's decoded "user:password" when its password is a part. Two cases
+// count whole:
+//
+//   - a header, proxy or settings secret of 8 bytes or more whose kept parts are all shorter
+//     counts whole instead, with the words around its parts, so it is never left unprotected for
+//     being made of short parts;
+//   - a credential's field that is one "name=value", or holds one behind a scheme or public
+//     prefix ("Bearer name=value", "dca:name=value"), counts that pair whole as well, without the
+//     scheme or prefix, since the bytes before its "=" are no part; the pair's name then counts
+//     as pieces. A cookie list "a=b; c=d" counts by its values only.
+//
+// A secret other than the credential's that is shorter than 8 bytes is left out, as core leaves
+// it in text, and so is such a part. A credential's field whose parts are all shorter adds them,
+// without the words around them. The credential's data is left out too: it mixes secrets with
+// plain values (a base URL, a project ID, an OAuth scope) whose words would count as pieces, so
+// an extension passes a secret it keeps there itself (sdk.UpstreamText), and core does not
+// remove pieces of it.
 func AccountSecrets(a Account) []string {
 	var settings []string
 	if len(a.Settings) > 0 {
@@ -96,6 +103,17 @@ func accountSecrets(a Account, settings []string) []string {
 		for _, p := range kept {
 			if len(p) >= min && !slices.Contains(out, p) {
 				out = append(out, p)
+			}
+		}
+		if short {
+			// A single name=value counts whole too: the bytes before its "=" are no part. One
+			// behind a public prefix is among the parts, without the prefix.
+			for _, p := range append([]string{strings.TrimSpace(s)}, parts...) {
+				_, pair := cookiePair(p)
+				_, prefixed := publicPrefixEnd(p)
+				if pair && !prefixed && !slices.Contains(out, p) {
+					out = append(out, p)
+				}
 			}
 		}
 	}
