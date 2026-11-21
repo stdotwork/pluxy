@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 	"unicode/utf16"
@@ -35,6 +36,7 @@ const (
 	exitRefused     = 4
 	exitNotFound    = 5
 	exitChange      = 6
+	exitWaiting     = 7
 )
 
 // command is one client subcommand: the words that name it, its arguments, the management
@@ -67,6 +69,11 @@ type opts struct {
 	id                                             string
 	authDir                                        string
 	dryRun                                         bool
+	// method, input and noWait are account add's and account login's: the sign-in method, what
+	// the person entered, and whether to stop once the sign-in has started.
+	method string
+	input  inputFlag
+	noWait bool
 }
 
 // invocation is one run of a command.
@@ -80,6 +87,10 @@ type invocation struct {
 	stdout io.Writer
 	stderr io.Writer
 	tty    bool
+	// restoreEcho puts the terminal's echo back on. A command that gives up while a secret is
+	// being typed calls it before cancelling the sign-in in core, since that call may take
+	// seconds when core does not answer.
+	restoreEcho func()
 }
 
 // call makes one management call. With --json the reply's body goes to standard output as it
@@ -119,6 +130,34 @@ func (x *invocation) table(rows [][]string) {
 }
 
 func (x *invocation) printf(format string, a ...any) { fmt.Fprintf(x.stdout, format, a...) }
+
+// eprintf writes what a command asks a person, and its notes, on standard error: standard
+// output stays the answers.
+func (x *invocation) eprintf(format string, a ...any) { fmt.Fprintf(x.stderr, format, a...) }
+
+// prompts reports whether a command may ask the person for a value: only on a terminal, and never
+// with --json, whose standard output is the API's reply and nothing else.
+func (x *invocation) prompts() bool { return x.tty && !x.json }
+
+// asks refuses a value that would be read from a terminal with --json: nothing is shown there, so
+// a read for a line would look like a hang, and standard output belongs to the reply.
+func (x *invocation) asks(f protocol.LoginInput) error {
+	if x.json && x.tty {
+		return usageError{"with --json nothing is asked on a terminal: " + inputHint(f)}
+	}
+	return nil
+}
+
+// terminal is standard input when it is a terminal, whose echo a secret value is kept from.
+func (x *invocation) terminal() *os.File {
+	if !x.tty {
+		return nil
+	}
+	if f, ok := x.stdin.(*os.File); ok {
+		return f
+	}
+	return nil
+}
 
 func dash(s string) string {
 	if s == "" {
@@ -271,11 +310,34 @@ var commands = []command{
 				x.printf("%s removed\n", x.args[0])
 			})
 		}},
+	{words: "account methods", routes: []string{"GET /login-methods"}, summary: "how each running extension can add an account: its sign-in methods and what each asks for",
+		run: runAccountMethods},
+	{words: "account add", args: []string{"provider"}, routes: []string{"POST /accounts", "GET /logins/{id}", "POST /logins/{id}/input", "DELETE /logins/{id}"},
+		summary: "add an account by signing in, following the sign-in to its end and asking for what it needs",
+		flags: func(fs *flag.FlagSet, o *opts) {
+			fs.StringVar(&o.id, "id", "", "the account's ID (default: a new one, account- and 12 hex digits)")
+			signInFlags(fs, o)
+		},
+		run: runAccountAdd},
+	{words: "account login", args: []string{"id"}, routes: []string{"POST /accounts/{id}/login"},
+		summary: "sign in to an account again, following the sign-in as account add does",
+		flags:   signInFlags,
+		run:     runAccountLogin},
+	{words: "account remove", args: []string{"id"}, routes: []string{"DELETE /accounts/{id}"}, summary: "remove an account and its credential",
+		run: runAccountRemove},
+	{words: "account refresh", args: []string{"id"}, routes: []string{"POST /accounts/{id}/refresh"}, summary: "renew an account's credential now",
+		run: runAccountRefresh},
+	{words: "account set", args: []string{"id", "name=value"}, more: true, routes: []string{"PATCH /accounts/{id}"},
+		summary: "change an account: disabled, priority, weight, disable_cooling, max_concurrency, request_retry, prefix, models, excluded_models, model_alias, proxy_url, headers, timeouts or settings (null sets one back)",
+		run:     runAccountSet},
+	{words: "account import", args: []string{"file"}, routes: []string{"POST /accounts/import", "POST /vertex/import"},
+		summary: "add an account from a credential file: a Google service account key (a JSON object with a private_key and a project_id) is imported as a Vertex account, any other file as today's core's credential file (- reads a service account key from standard input)",
+		run:     runAccountImport},
 	{words: "account list", routes: []string{"GET /accounts"}, summary: "every account and its state",
 		run: func(x *invocation) error {
 			var r management.AccountsReply
 			return x.call(http.MethodGet, "/accounts", nil, nil, &r, func() {
-				rows := [][]string{{"ID", "PUBLIC ID", "EXTENSION", "SOURCE", "HEALTH", "UNTIL", "WHY"}}
+				rows := [][]string{{"ID", "PUBLIC ID", "LABEL", "EXTENSION", "SOURCE", "HEALTH", "UNTIL", "WHY"}}
 				for _, a := range r.Accounts {
 					health := dash(a.Health.State)
 					if a.Health.Source == management.SourceUnverified {
@@ -285,7 +347,7 @@ var commands = []command{
 					if a.Health.Until != nil {
 						until = a.Health.Until.Local().Format(time.DateTime)
 					}
-					rows = append(rows, []string{a.ID, a.PublicID, dash(a.Extension), a.Source, health, until, dash(a.Health.Why)})
+					rows = append(rows, []string{a.ID, a.PublicID, dash(a.Label), dash(a.Extension), a.Source, health, until, dash(a.Health.Why)})
 				}
 				x.table(rows)
 			})
@@ -421,10 +483,7 @@ var commands = []command{
 			return err
 		}},
 	{words: "account quota", args: []string{"id"}, routes: []string{"GET /accounts/{id}/quota"}, summary: "an account's usage windows, as its provider reports them",
-		run: func(x *invocation) error {
-			var r management.QuotaReply
-			return x.call(http.MethodGet, accountPath(x.args[0])+"/quota", nil, nil, &r, func() { printFlat(x, r.Quota) })
-		}},
+		run: runAccountQuota},
 	{words: "account models", args: []string{"id"}, routes: []string{"GET /accounts/{id}/models"}, summary: "the models an account serves",
 		run: func(x *invocation) error {
 			var r management.AccountModelsReply
@@ -1072,6 +1131,30 @@ func find(args []string) (*command, []string) {
 	return best, args[n:]
 }
 
+// groupPrefix is args0 and a space when commands name a group by it (account, ext, ...), else "".
+func groupPrefix(word string) string {
+	prefix := word + " "
+	if slices.ContainsFunc(commands, func(c command) bool { return strings.HasPrefix(c.words, prefix) }) {
+		return prefix
+	}
+	return ""
+}
+
+// groupHelp writes a group's commands and their one-line summaries, for a command line that
+// names the group without a command it has.
+func groupHelp(w io.Writer, prefix string) {
+	fmt.Fprintf(w, "usage: pluxy %s<command> [flags]\n", prefix)
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	for i := range commands {
+		c := &commands[i]
+		if !strings.HasPrefix(c.words+" ", prefix) {
+			continue
+		}
+		fmt.Fprintf(tw, "  %s\t%s\n", c.words+argsUsage(c), c.summary)
+	}
+	tw.Flush()
+}
+
 // help writes the list of commands whose words start with prefix.
 func help(w io.Writer, prefix string) {
 	fmt.Fprintln(w, "usage: pluxy serve [-config file] [flags]   run core (pluxy with no subcommand does too)")
@@ -1102,10 +1185,20 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 	}
 	cmd, rest := find(args)
 	if cmd == nil {
-		// A group's word alone (pluxy account) lists the group's commands.
-		if prefix := args[0] + " "; slices.ContainsFunc(commands, func(c command) bool { return strings.HasPrefix(c.words, prefix) }) {
-			fmt.Fprintf(stderr, "pluxy: %q needs a command\n", args[0])
-			help(stderr, prefix)
+		// A group's word names the commands it holds: alone (pluxy account), with one it does
+		// not have (pluxy account frobnicate), or with words it does not take (pluxy settings
+		// set). A command's word alone with more after it (pluxy status now) is that command's
+		// extra argument, which its own check below refuses.
+		if prefix := groupPrefix(args[0]); prefix != "" {
+			if len(args) > 1 {
+				fmt.Fprintf(stderr, "pluxy: unknown %s command %q\n", args[0], args[1])
+			} else {
+				fmt.Fprintf(stderr, "pluxy: %s needs a command\n", args[0])
+			}
+			groupHelp(stderr, prefix)
+		} else if slices.ContainsFunc(commands, func(c command) bool { return c.words == args[0] }) {
+			fmt.Fprintf(stderr, "pluxy: %s takes no subcommand %q\n", args[0], args[1])
+			help(stderr, "")
 		} else {
 			fmt.Fprintf(stderr, "pluxy: unknown command %q\n", args[0])
 			help(stderr, "")
@@ -1144,12 +1237,18 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 		fmt.Fprintf(stderr, "pluxy: usage: pluxy %s%s [flags]\n", cmd.words, argsUsage(cmd))
 		return exitUsage
 	}
+	// A --input pair the flag could not take is refused here, where nothing quotes the value it
+	// was given.
+	if o.input.bad != nil {
+		printError(stderr, *jsonOut, usageError{"--input: " + o.input.bad.Error()})
+		return exitUsage
+	}
 	t, err := findCore(*configPath, cmpOr(*addr, getenv("PLUXY_URL")), cmpOr(*key, getenv("PLUXY_MANAGEMENT_KEY")))
 	if err != nil {
 		printError(stderr, *jsonOut, err)
 		return exitFailed
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 	x := &invocation{ctx: ctx, client: &management.Client{URL: t.url, Key: t.key, HTTP: t.http}, args: pos, opts: o, json: *jsonOut, stdin: stdin, stdout: stdout, stderr: stderr, tty: tty}
 	err = cmd.run(x)
@@ -1177,11 +1276,14 @@ func printError(stderr io.Writer, asJSON bool, err error) {
 	}
 	code, msg := "failed", err.Error()
 	var ue usageError
+	var we waitingError
 	switch {
 	case errors.As(err, &ae):
 		code, msg = ae.Code, ae.Message
 	case errors.As(err, &ue):
 		code = "invalid_request"
+	case errors.As(err, &we):
+		code = "waiting"
 	case management.IsUnreachable(err):
 		code = "unreachable"
 	}
@@ -1207,10 +1309,13 @@ func (c command) changesNothing() bool {
 // so its 409 or 422 failed a call rather than refusing a change.
 func exitCode(err error, readOnly bool) int {
 	var ue usageError
+	var we waitingError
 	var ae *management.APIError
 	switch {
 	case errors.As(err, &ue):
 		return exitUsage
+	case errors.As(err, &we):
+		return exitWaiting
 	case management.IsUnreachable(err):
 		return exitUnreachable
 	case errors.As(err, &ae):

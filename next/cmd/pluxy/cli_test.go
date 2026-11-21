@@ -30,18 +30,6 @@ var laterCommands = []string{
 	"DELETE /logs", "GET /request-error-logs", "GET /request-error-logs/{name}", "GET /request-log-by-id/{id}",
 	// pluxy ext config <id> [name=value]...
 	"GET /extensions/{publisher}/{name}/config", "PATCH /extensions/{publisher}/{name}/config",
-	// pluxy account methods
-	"GET /login-methods",
-	// pluxy account add <provider>: one sign-in from start to end
-	"POST /accounts", "GET /logins/{id}", "POST /logins/{id}/input", "DELETE /logins/{id}",
-	// pluxy account login <id>
-	"POST /accounts/{id}/login",
-	// pluxy account remove <id>
-	"DELETE /accounts/{id}",
-	// pluxy account refresh <id>
-	"POST /accounts/{id}/refresh",
-	// pluxy account import <file>
-	"POST /accounts/import", "POST /vertex/import",
 }
 
 // noCommand are the management calls that get no command: they serve the panel's own pages.

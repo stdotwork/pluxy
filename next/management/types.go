@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/internal/cred"
 	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/internal/logfile"
 	"github.com/stdotwork/pluxy/next/internal/packages"
@@ -255,6 +256,81 @@ type AccountReply struct {
 // takes the account's routing fields too, by their JSON names.
 type AccountPatch struct {
 	Disabled *bool `json:"disabled,omitempty"`
+}
+
+// LoginMethods is one running extension's ways to sign in, as GET /login-methods lists them.
+type LoginMethods struct {
+	Extension string                 `json:"extension"`
+	Methods   []protocol.LoginMethod `json:"methods"`
+}
+
+// LoginMethodsReply is GET /login-methods's reply.
+type LoginMethodsReply struct {
+	Extensions []LoginMethods `json:"extensions"`
+}
+
+// Login is a sign-in as the management API shows it (cred.LoginView).
+type Login = cred.LoginView
+
+// Login states (Login.State).
+const (
+	LoginPending   = cred.LoginPending
+	LoginDone      = cred.LoginDone
+	LoginFailed    = cred.LoginFailed
+	LoginCancelled = cred.LoginCancelled
+)
+
+// LoginReply is POST /accounts's, POST /accounts/{id}/login's and GET /logins/{id}'s reply.
+type LoginReply struct {
+	Login Login `json:"login"`
+}
+
+// AddAccountRequest is POST /accounts's body, as far as the pluxy command fills it in: the
+// account's ID, the extension and method that sign in, and what the user entered to start.
+type AddAccountRequest struct {
+	ID        string            `json:"id"`
+	Extension string            `json:"extension,omitempty"`
+	Method    string            `json:"method"`
+	Input     map[string]string `json:"input,omitempty"`
+}
+
+// LoginAgainRequest is POST /accounts/{id}/login's body.
+type LoginAgainRequest struct {
+	Method string            `json:"method"`
+	Input  map[string]string `json:"input,omitempty"`
+}
+
+// LoginInputRequest is POST /logins/{id}/input's body: what the user entered for the prompt.
+type LoginInputRequest struct {
+	Input map[string]string `json:"input"`
+}
+
+// AuthImportRequest is POST /accounts/import's body: one credential file's name and text.
+type AuthImportRequest struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
+}
+
+// AuthImported is one account POST /accounts/import added.
+type AuthImported struct {
+	ID        string   `json:"id"`
+	Extension string   `json:"extension"`
+	Ignored   []string `json:"ignored,omitempty"`
+}
+
+// AuthImportReply is POST /accounts/import's reply.
+type AuthImportReply struct {
+	Imported []AuthImported `json:"imported"`
+	Skipped  []string       `json:"skipped,omitempty"`
+}
+
+// VertexImportReply is POST /vertex/import's reply.
+type VertexImportReply struct {
+	Status    string `json:"status"`
+	Account   string `json:"account"`
+	ProjectID string `json:"project_id"`
+	Email     string `json:"email,omitempty"`
+	Location  string `json:"location"`
 }
 
 // RouteReply is GET /route's reply: what a request for the model would do now (route.Plan). Each

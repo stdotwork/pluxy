@@ -7,8 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"mime/multipart"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -326,6 +329,35 @@ func (c *Client) Usage(ctx context.Context, q url.Values) (UsageReply, error) {
 	return v, err
 }
 
+// MultipartBody is a ready multipart/form-data body, made by NewMultipartBody.
+type MultipartBody struct {
+	bytes       []byte
+	contentType string
+}
+
+// NewMultipartBody makes a multipart/form-data body: one file part named field holding data as
+// filename, and the fields name=value.
+func NewMultipartBody(field, filename string, data []byte, fields map[string]string) (*MultipartBody, error) {
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+	part, err := w.CreateFormFile(field, filename)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := part.Write(data); err != nil {
+		return nil, err
+	}
+	for _, name := range slices.Sorted(maps.Keys(fields)) {
+		if err := w.WriteField(name, fields[name]); err != nil {
+			return nil, err
+		}
+	}
+	if err := w.Close(); err != nil {
+		return nil, err
+	}
+	return &MultipartBody{bytes: b.Bytes(), contentType: w.FormDataContentType()}, nil
+}
+
 // Setup is GET /setup.
 func (c *Client) Setup(ctx context.Context) (Setup, error) {
 	var v Setup
@@ -421,6 +453,16 @@ func (c *Client) SetTheme(ctx context.Context, id string) (ThemeSelection, error
 
 // CallBytes sends one call with raw JSON bytes body (if non-nil) and behaves like Call.
 func (c *Client) CallBytes(ctx context.Context, method, path string, query url.Values, raw []byte, out any) ([]byte, error) {
+	return c.callRaw(ctx, method, path, query, "application/json", raw, out)
+}
+
+// CallForm sends one call with a multipart/form-data body (form) and behaves like Call.
+func (c *Client) CallForm(ctx context.Context, method, path string, query url.Values, form *MultipartBody, out any) ([]byte, error) {
+	return c.callRaw(ctx, method, path, query, form.contentType, form.bytes, out)
+}
+
+// callRaw sends one call with body and its content type.
+func (c *Client) callRaw(ctx context.Context, method, path string, query url.Values, contentType string, raw []byte, out any) ([]byte, error) {
 	u := strings.TrimSuffix(c.URL, "/") + Prefix + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()
@@ -433,8 +475,8 @@ func (c *Client) CallBytes(ctx context.Context, method, path string, query url.V
 	if err != nil {
 		return nil, err
 	}
-	if raw != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if raw != nil && contentType != "" {
+		req.Header.Set("Content-Type", contentType)
 	}
 	if c.Key != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Key)

@@ -150,7 +150,7 @@ with its reason, in the **Changed** or **Not brought** list.
 | `secret-key` under `remote-management` or `management` | pluxy's own management key (`management_key`); the import does not bring CPA's. Change it with `POST /v0/management/management-key/rotate` |
 | The panel at `/management.html`, downloaded on first use | The panel at `/panel/`, built in |
 | A provider or channel (`codex`, `claude`, ...) built into the program | A provider extension, installed as a package (`pluxy/codex`, `pluxy/claude`, ...); `pluxy ext list` |
-| Login flags (`--codex-login`, `--claude-login`, ...) | The panel's **Add Account** page |
+| Login flags (`--codex-login`, `--claude-login`, ...) | `pluxy account add <provider>`, or the panel's **Add Account** page |
 | Several models pooled under one alias in an `openai-compatibility` entry | A fallback chain; `pluxy chain list` |
 | `weighted-round-robin` | `weighted` (CPA's name still works in a `config.yaml`) |
 | Cooling, `disable-cooling` | Cooldown; `pluxy account list` shows what is blocked, until when and why, and `pluxy account clear <id>` ends it |
