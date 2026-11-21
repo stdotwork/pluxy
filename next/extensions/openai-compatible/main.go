@@ -602,6 +602,9 @@ var decoders = map[string]struct {
 func relayStream(ctx context.Context, body io.Reader, out eventSender, upstreamFormat string) error {
 	r := sse.NewReader(body)
 	dec := decoders[upstreamFormat].stream()
+	// The report in response.start has gone by the time a decoder finds something it had to
+	// leave out of a reply, so its losses are logged, with core's prefix for this extension.
+	defer reportLosses(dec)
 	for {
 		e, err := r.Next()
 		eof := err == io.EOF
@@ -634,6 +637,18 @@ func relayStream(ctx context.Context, body io.Reader, out eventSender, upstreamF
 		if eof {
 			return nil
 		}
+	}
+}
+
+// reportLosses logs what a stream decoder had to leave out of the reply. A decoder without losses
+// has none to log.
+func reportLosses(dec streamDecoder) {
+	lr, ok := dec.(interface{ Losses() []llm.Loss })
+	if !ok {
+		return
+	}
+	for _, l := range lr.Losses() {
+		fmt.Fprintf(os.Stderr, "reply loss: %s %s (%s)\n", l.Kind, l.Path, l.Detail)
 	}
 }
 
