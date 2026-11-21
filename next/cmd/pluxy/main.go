@@ -148,7 +148,11 @@ func firstStart(configPath string, inherited bool) error {
 func setupStartLine(panelBuilt bool, local, configPath, listen string) string {
 	command := "pluxy setup"
 	if configPath != "config.json" {
-		command += " --config " + configPath
+		arg := configPath
+		if strings.ContainsAny(arg, " \t") {
+			arg = `"` + arg + `"` // one argument when the line is pasted into a shell
+		}
+		command += " --config " + arg
 	}
 	if _, port, err := net.SplitHostPort(listen); err != nil || port == "0" {
 		command += " --url " + local

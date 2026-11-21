@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -420,38 +419,16 @@ func runImportCPA(x *invocation) error {
 	// not an absolute path): its sentence is the whole answer, so no error code follows it.
 	var ae *management.APIError
 	if errors.As(err, &ae) && ae.Status == http.StatusBadRequest && ae.Code != "" {
-		return unreadableError{api: ae, remote: remoteCore(x.client.URL)}
+		return unreadableError{api: ae}
 	}
 	return err
 }
 
 // unreadableError is an API error printed as core's message alone. It is still the API error
-// for the exit code and for --json, which prints the reply's body. remote is the address of a
-// core on another machine: the paths are read there, which the message then says, since the
-// file may well be on this one.
+// for the exit code and for --json, which prints the reply's body.
 type unreadableError struct {
-	api    *management.APIError
-	remote string
+	api *management.APIError
 }
 
-func (e unreadableError) Error() string {
-	if e.remote == "" {
-		return e.api.Message
-	}
-	return fmt.Sprintf("%s (core at %s reads the path on its own machine)", e.api.Message, e.remote)
-}
+func (e unreadableError) Error() string { return e.api.Message }
 func (e unreadableError) Unwrap() error { return e.api }
-
-// remoteCore returns address when it does not name this machine by a loopback address or
-// localhost, and "" when it does.
-func remoteCore(address string) string {
-	u, err := url.Parse(address)
-	if err != nil {
-		return address
-	}
-	host := u.Hostname()
-	if ip := net.ParseIP(host); host == "localhost" || ip != nil && ip.IsLoopback() {
-		return ""
-	}
-	return address
-}

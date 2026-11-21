@@ -647,22 +647,6 @@ func TestCLIImportCPAUnreadable(t *testing.T) {
 	if out, errOut, code := run("import", "cpa", "/srv/cpa/config.yaml", "--json"); code != 1 || out != "" || errOut != body+"\n" {
 		t.Errorf("import cpa --json: code=%d out=%q stderr=%q, want the reply's body", code, out, errOut)
 	}
-	// A core on another machine reads the path there, and the line says so.
-	for address, want := range map[string]string{
-		"http://127.0.0.1:8317":   "",
-		"http://localhost:8317":   "",
-		"https://[::1]:8317":      "",
-		"http://10.0.0.5:8317":    "http://10.0.0.5:8317",
-		"https://pluxy.test:8317": "https://pluxy.test:8317",
-	} {
-		if got := remoteCore(address); got != want {
-			t.Errorf("remoteCore(%q) = %q, want %q", address, got, want)
-		}
-	}
-	remote := unreadableError{api: &management.APIError{Status: 400, Code: "invalid_request", Message: "there is no file at /srv/cpa/config.yaml"}, remote: "http://10.0.0.5:8317"}
-	if want := "there is no file at /srv/cpa/config.yaml (core at http://10.0.0.5:8317 reads the path on its own machine)"; remote.Error() != want {
-		t.Errorf("a remote core's refusal reads %q, want %q", remote.Error(), want)
-	}
 	// Every other refusal keeps its code.
 	status = http.StatusUnprocessableEntity
 	if _, errOut, code := run("import", "cpa", "/srv/cpa/config.yaml"); code != 6 || errOut != "pluxy: there is no file at /srv/cpa/config.yaml (invalid_request)\n" {
@@ -703,6 +687,9 @@ func TestSetupStartLine(t *testing.T) {
 		// A config listening on port 0 does not say where core is, so the command is given the address.
 		{false, "http://127.0.0.1:40123", "/tmp/x/config.json", "127.0.0.1:0",
 			"first-run setup is not finished. Next: run pluxy setup --config /tmp/x/config.json --url http://127.0.0.1:40123"},
+		// A path with a space stays one argument when the command is pasted.
+		{false, "http://127.0.0.1:8317", "/tmp/my files/config.json", "127.0.0.1:8317",
+			`first-run setup is not finished. Next: run pluxy setup --config "/tmp/my files/config.json"`},
 	} {
 		if got := setupStartLine(c.panel, c.url, c.configPath, c.listen); got != c.want {
 			t.Errorf("setupStartLine(%v, %q, %q, %q) =\n%q, want\n%q", c.panel, c.url, c.configPath, c.listen, got, c.want)
