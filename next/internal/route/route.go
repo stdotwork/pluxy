@@ -575,6 +575,9 @@ func (c *call) attempts() llm.Event {
 		if c.req.Pin != "" {
 			msg = fmt.Sprintf("account %q does not exist or does not serve model %q", c.req.Pin, model)
 		}
+		if len(c.held) != 0 {
+			msg = heldMessage(c.held, model, c.req.Pin)
+		}
 		return errorEvent(&llm.Error{Code: llm.CodeNotFound, Message: msg, ProviderCode: "model_not_found"})
 	}
 
@@ -1022,6 +1025,29 @@ func coolingError(model string, wait time.Duration, reason *llm.Error) *llm.Erro
 		e.Code = llm.CodeQuota
 	}
 	return e
+}
+
+// heldMessage is the message of a request that no account in service can serve, when the held
+// accounts that serve its model are all turned off, all waiting for a new sign-in, or both. It
+// names no account but the one the client pinned (pin): the text reaches API clients.
+func heldMessage(held []target, model, pin string) string {
+	state := held[0].a.Held
+	for _, t := range held[1:] {
+		if t.a.Held != state {
+			state = ""
+		}
+	}
+	verb := "is turned off or needs a new sign-in"
+	switch state {
+	case HealthDisabled:
+		verb = "is turned off"
+	case HealthNeedsLogin:
+		verb = "needs a new sign-in"
+	}
+	if pin != "" {
+		return fmt.Sprintf("account %q cannot serve model %q: it %s", pin, model, verb)
+	}
+	return fmt.Sprintf("no account can serve model %q: every account that serves it %s", model, verb)
 }
 
 // banned is the error that ends a request because every account that serves its model is

@@ -223,3 +223,46 @@ func TestPlanNamesHeldAccounts(t *testing.T) {
 		t.Errorf("left out = %+v", p.LeftOut)
 	}
 }
+
+// A model that every account serving it holds says why: turned off, waiting for a new sign-in, or
+// a mix of both. A pinned request names only the pinned account. The code, status and provider
+// code of the reply do not change, and a model no held account serves keeps today's message.
+func TestHeldModelErrorSaysWhy(t *testing.T) {
+	served := func(id string, held string) Account {
+		return Account{ID: id, Models: []ModelEntry{{Name: "m"}}, Held: held}
+	}
+	for _, c := range []struct {
+		name     string
+		accounts []Account
+		pin      string
+		want     string
+	}{
+		{"all turned off", []Account{served("a", HealthDisabled), served("b", HealthDisabled)}, "",
+			`no account can serve model "m": every account that serves it is turned off`},
+		{"all need a sign-in", []Account{served("a", HealthNeedsLogin)}, "",
+			`no account can serve model "m": every account that serves it needs a new sign-in`},
+		{"a mix", []Account{served("a", HealthDisabled), served("b", HealthNeedsLogin)}, "",
+			`no account can serve model "m": every account that serves it is turned off or needs a new sign-in`},
+		{"pinned turned off", []Account{served("a", HealthDisabled), served("b", HealthNeedsLogin)}, "a",
+			`account "a" cannot serve model "m": it is turned off`},
+		{"pinned needs a sign-in", []Account{served("a", HealthDisabled), served("b", HealthNeedsLogin)}, "b",
+			`account "b" cannot serve model "m": it needs a new sign-in`},
+		{"no held account serves it", []Account{{ID: "a", Models: []ModelEntry{{Name: "other"}}}}, "",
+			`no account serves model "m"`},
+		{"pinned account that does not exist", []Account{served("a", HealthDisabled)}, "nobody",
+			`account "nobody" does not exist or does not serve model "m"`},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t, Config{}, c.accounts...)
+			req := h.req("m")
+			req.Pin = c.pin
+			e := lastError(t, h.run(req))
+			if e.Message != c.want {
+				t.Errorf("message = %q, want %q", e.Message, c.want)
+			}
+			if e.Code != llm.CodeNotFound || e.ProviderCode != "model_not_found" {
+				t.Errorf("code %q, provider code %q; want %q and model_not_found", e.Code, e.ProviderCode, llm.CodeNotFound)
+			}
+		})
+	}
+}
