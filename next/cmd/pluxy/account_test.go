@@ -174,6 +174,14 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"error":{"code":"unauthorized","message":"invalid management key"}}`))
 		return
 	}
+	// A cancel the test makes core slow to take holds the caller, not the fake's state: the sleep
+	// is outside the lock, so what the fake did can still be read while it waits.
+	if r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/logins/") {
+		f.mu.Lock()
+		delay := f.deleteDelay
+		f.mu.Unlock()
+		time.Sleep(delay)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	path := strings.TrimPrefix(r.URL.Path, "/v0/management")
@@ -325,9 +333,6 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/logins/"):
 		id := strings.TrimPrefix(path, "/logins/")
-		if f.deleteDelay > 0 {
-			time.Sleep(f.deleteDelay)
-		}
 		if f.failDelete {
 			w.WriteHeader(http.StatusInternalServerError)
 			write(map[string]any{"error": map[string]any{"code": "failed", "message": "the test core cannot cancel it"}})

@@ -37,7 +37,7 @@ const (
 	ptyHangup     = "hangup"     // SIGHUP at the same point
 	ptySwitch     = "switch"     // the prompt changes to a secret field while a plain one is read
 	ptyJSON       = "json"       // --json on a terminal, which asks nothing and reads nothing
-	ptySlowCancel = "slowcancel" // SIGTERM while core takes its time to take the cancel
+	ptySlowCancel = "slowcancel" // SIGTERM while core does not answer the cancel at all
 )
 
 // TestCLIAccountTerminal is the test in the parent, and the command's run in the child it starts.
@@ -88,20 +88,23 @@ func TestCLIAccountTerminal(t *testing.T) {
 		p.waitEcho(true)
 		p.wantChild(t, "code=1", "cancelled=1")
 	})
-	// The echo comes back before core is asked to cancel the sign-in: a core that takes its time
-	// must not keep the terminal hidden.
+	// The echo comes back before core is asked to cancel the sign-in: a core that does not answer
+	// must not keep the terminal hidden until the cancel call gives up.
 	t.Run("slowcancel", func(t *testing.T) {
 		p := startPTY(t, ptySlowCancel)
 		p.waitEcho(false)
+		signalAt := time.Now()
 		p.signal(t, syscall.SIGTERM)
 		p.waitEcho(true)
-		select {
-		case err := <-p.done:
-			t.Fatalf("the command ended (%v) before the echo came back, so the cancel call came first", err)
-		default:
+		if took := time.Since(signalAt); took > time.Second {
+			t.Fatalf("the echo came back after %s: core was asked to cancel before the terminal was put back", took)
 		}
+		// Core never answers the cancel: the command gives up on it and says so.
 		p.waitExit(t, 1)
-		p.wantChild(t, "code=1", "cancelled=1")
+		p.wantChild(t, "code=1", "cancelled=0")
+		if !strings.Contains(p.childOutput(), "not cancelled") {
+			t.Errorf("the cancel core never answered was not said: %q", p.childOutput())
+		}
 	})
 	// A prompt that changes to a secret field while the plain one is still being read: the echo
 	// goes off for the secret at once, and the line read for the old field is dropped.
@@ -132,7 +135,7 @@ func TestCLIAccountTerminal(t *testing.T) {
 func ptyChild(t *testing.T, scenario string) {
 	f := newFakeAccountCore(t)
 	if scenario == ptySlowCancel {
-		f.deleteDelay = 3 * time.Second
+		f.deleteDelay = 30 * time.Second
 	}
 	method := "secret_prompt"
 	if scenario == ptySwitch {
