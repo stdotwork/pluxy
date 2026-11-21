@@ -127,7 +127,6 @@ func TestVerifyWebSearchReplayForeignCitationsDoNotFailCredentialFailover(t *tes
 // continue. The same history on credential A must still carry its result, so the test does not
 // pass by discarding every replayed search.
 func TestVerifyWebSearchReplayForeignSearchResultsDoNotFailCredentialFailover(t *testing.T) {
-	t.Skip("bug tro-web-search-replay-credential-failover: replayed search results minted for another credential are sent back unchanged")
 	const encryptedA = "encrypted-content-minted-for-a"
 	srv := claudetest.New(t)
 	keyA, keyB := srv.IssueKey(), srv.IssueKey()
