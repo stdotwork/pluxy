@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "preact/hooks";
+import { useEffect, useId, useRef, useState } from "preact/hooks";
 import { useSave } from "../save";
 import type { PageDef } from "../shell";
 import { rich, strings } from "../strings";
@@ -279,6 +279,12 @@ function AddTheme(props: {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const { result } = props;
+  // What an add came to shows under the Add button, which often sits at the window's lower edge:
+  // it is scrolled into view, so an add never looks as if nothing happened.
+  const said = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (result) said.current?.scrollIntoView?.({ block: "nearest" });
+  }, [result]);
 
   /** A chosen file and pasted JSON go the same way. Returns whether the theme was added. */
   const add = async (source: string) => {
@@ -291,6 +297,16 @@ function AddTheme(props: {
     return !("error" in outcome);
   };
 
+  const outcome =
+    result &&
+    ("error" in result ? (
+      <Notice tone="danger">{t("notAdded", { error: result.error })}</Notice>
+    ) : (
+      // True only while the theme it added is the one that is on.
+      result.id === themes.current.theme.id && (
+        <Notice tone="ok">{t(result.replaced ? "replaced" : "added", { name: result.added })}</Notice>
+      )
+    ));
   return (
     <Card title={t("add")}>
       <p class="muted">{rich(t("addHelp"), { path: <span class="mono">next/ui/themes/README.md</span> })}</p>
@@ -310,7 +326,8 @@ function AddTheme(props: {
               props.onResult({ error: t("tooLarge", { limit: MAX_THEME_BYTES / 1024 }) });
               return;
             }
-            await add(await file.text());
+            // The pasted text was not what got added: a theme from a file leaves none behind.
+            if (await add(await file.text())) setText("");
           }}
         />
       </label>
@@ -346,11 +363,7 @@ function AddTheme(props: {
           </Button>
         </div>
       </form>
-      {result && "error" in result && <Notice tone="danger">{t("notAdded", { error: result.error })}</Notice>}
-      {/* True only while the theme it added is the one that is on. */}
-      {result && "added" in result && result.id === themes.current.theme.id && (
-        <Notice tone="ok">{t(result.replaced ? "replaced" : "added", { name: result.added })}</Notice>
-      )}
+      {outcome && <div ref={said}>{outcome}</div>}
     </Card>
   );
 }
