@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 
 	mediainput "github.com/stdotwork/pluxy/next/format/internal/media"
@@ -449,23 +450,47 @@ func media(p llm.Part) (map[string]any, string) {
 	return map[string]any{"fileData": map[string]any{"fileUri": url}}, ""
 }
 
-// geminiFileURI reports whether url is a file URI Google documents for fileData.fileUri: a Files
-// API file URI, which files.upload and files.get return (https://ai.google.dev/gemini-api/docs/files).
-// Nothing else is accepted for a translated request: a Cloud Storage (gs://) URI is refused
+// geminiFileURI reports whether url is a Files API file URI, which files.upload and files.get
+// return (https://ai.google.dev/gemini-api/docs/files): https, Google's host, and the path
+// /v1/files/<id> or /v1beta/files/<id>, where <id> is one segment of ASCII letters, digits, - or
+// _. Nothing else is accepted for a translated request. A Cloud Storage (gs://) URI is refused
 // because Vertex AI would read that object with the account's own permissions on behalf of
-// whoever holds the client key. pluxy never fetches the URL itself.
-func geminiFileURI(url string) bool {
-	const api = "https://generativelanguage.googleapis.com/"
-	rest, ok := strings.CutPrefix(url, api)
-	if !ok {
+// whoever holds the client key. The URL is parsed and checked, never fetched.
+func geminiFileURI(raw string) bool {
+	if strings.ContainsAny(raw, "?#") {
+		return false // a query or fragment, even an empty one
+	}
+	u, err := url.Parse(raw)
+	if err != nil || !strings.EqualFold(u.Scheme, "https") || u.Opaque != "" {
 		return false
 	}
-	for _, v := range []string{"v1/", "v1beta/", "v1alpha/"} {
-		if path, ok := strings.CutPrefix(rest, v); ok {
-			return strings.HasPrefix(path, "files/") && len(path) > len("files/")
+	if u.User != nil || u.Port() != "" || !strings.EqualFold(u.Hostname(), "generativelanguage.googleapis.com") {
+		return false
+	}
+	if u.RawQuery != "" || u.Fragment != "" || u.ForceQuery {
+		return false
+	}
+	for _, prefix := range []string{"/v1/files/", "/v1beta/files/"} {
+		if id, ok := strings.CutPrefix(u.Path, prefix); ok && fileID(id) {
+			// The escaped path must be the same bytes: %2e%2e, %2F and %61bc are refused.
+			return u.EscapedPath() == prefix+id
 		}
 	}
 	return false
+}
+
+// fileID reports whether id is one path segment of ASCII letters, digits, - or _.
+func fileID(id string) bool {
+	if id == "" {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 // withSignature puts sig on part as its thoughtSignature, replacing SkipSignature.

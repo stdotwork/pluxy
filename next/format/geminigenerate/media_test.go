@@ -298,3 +298,39 @@ func TestEncodeForeignNativeTextDocumentDropped(t *testing.T) {
 		t.Errorf("body %s, losses %+v; want the foreign part dropped", body, losses)
 	}
 }
+
+// geminiFileURI accepts exactly the Files API file URI forms and nothing that only looks like
+// one: traversal, escapes, credentials, ports, queries, fragments, other versions and other hosts
+// are refused.
+func TestGeminiFileURI(t *testing.T) {
+	for _, c := range []struct {
+		url  string
+		want bool
+	}{
+		{"https://generativelanguage.googleapis.com/v1beta/files/abc-123_X", true},
+		{"https://generativelanguage.googleapis.com/v1/files/abc", true},
+		{"https://GENERATIVELANGUAGE.GOOGLEAPIS.COM/v1beta/files/abc", true},
+		{"https://generativelanguage.googleapis.com/v1beta/files/../models/x:generateContent", false},
+		{"https://generativelanguage.googleapis.com/v1beta/files/abc/def", false},
+		{"https://generativelanguage.googleapis.com/v1beta/files/", false},
+		{"https://generativelanguage.googleapis.com/v1beta/files/abc?x=1", false},
+		{"https://generativelanguage.googleapis.com/v1beta/files/abc?", false},
+		{"https://generativelanguage.googleapis.com/v1beta/files/abc#x", false},
+		{"https://generativelanguage.googleapis.com/v1beta/files/abc#", false},
+		{"https://user@generativelanguage.googleapis.com/v1beta/files/abc", false},
+		{"https://generativelanguage.googleapis.com:443/v1beta/files/abc", false},
+		{"http://generativelanguage.googleapis.com/v1beta/files/abc", false},
+		{"https://generativelanguage.googleapis.com/v1alpha/files/abc", false},
+		{"https://generativelanguage.googleapis.com/v1beta/files/%2e%2e", false},
+		{"https://generativelanguage.googleapis.com/v1beta/files/a%2Fb", false},
+		{"https://generativelanguage.googleapis.com/v1beta/files/%61bc", false},
+		{"https://generativelanguage.googleapis.com/v1beta/files/a b", false},
+		{"https://evil.example/v1beta/files/abc", false},
+		{"gs://bucket/cat.png", false},
+		{"", false},
+	} {
+		if got := geminiFileURI(c.url); got != c.want {
+			t.Errorf("geminiFileURI(%q) = %v, want %v", c.url, got, c.want)
+		}
+	}
+}
