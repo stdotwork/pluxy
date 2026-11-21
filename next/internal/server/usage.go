@@ -16,7 +16,12 @@ type meter struct {
 	ev    usage.Event
 	start time.Time
 	sent  int // the status already sent, once a streamed reply began; else 0
-	done  bool
+
+	attempts int         // the attempts made so far
+	open     bool        // an attempt has begun and not failed
+	cur      llm.Tried   // the open attempt, its result not yet known
+	tried    []llm.Tried // the attempts that ended, up to maxTried
+	done     bool
 }
 
 // newMeter returns the meter of a request r that arrived at start, or nil when the generation
@@ -54,6 +59,29 @@ func (m *meter) attempt(a route.Attempt, trace string) {
 	if a.Model != m.ev.Model {
 		m.ev.UpstreamModel = a.Model
 	}
+	m.attempts++
+	m.open, m.cur = true, llm.Tried{Account: a.Public, Provider: a.Extension, Model: a.Model}
+}
+
+// maxTried is how many attempts an event keeps: the first maxTried-1 and the last.
+const maxTried = 16
+
+// attemptFailed notes that the open attempt ended without a reply that began, as t says.
+func (m *meter) attemptFailed(t llm.Tried) {
+	if m == nil {
+		return
+	}
+	m.open = false
+	m.addTried(t)
+}
+
+// addTried keeps t as the newest attempt, in the last slot once the list is full.
+func (m *meter) addTried(t llm.Tried) {
+	if len(m.tried) < maxTried {
+		m.tried = append(m.tried, t)
+		return
+	}
+	m.tried[maxTried-1] = t
 }
 
 // finish records the request as ended by ev, its finish event: a complete reply.
@@ -61,7 +89,7 @@ func (m *meter) finish(ev llm.Event) {
 	if m == nil || m.done {
 		return
 	}
-	e := m.event(http.StatusOK)
+	e := m.event(http.StatusOK, "ok")
 	e.Tokens = usage.TokensOf(ev.Usage)
 	m.store.Add(e)
 }
@@ -76,7 +104,7 @@ func (m *meter) fail(e *llm.Error, status int) {
 		// The client went away: nothing reached it but what was sent already.
 		status = m.sent
 	}
-	ev := m.event(status)
+	ev := m.event(status, route.ResultCode(e))
 	ev.Failed, ev.ErrorCode, ev.Tokens = true, e.Code, usage.TokensOf(e.Usage)
 	m.store.Add(ev)
 }
@@ -89,9 +117,19 @@ func (m *meter) drop() {
 }
 
 // event returns the request's event as it ends now with status, and marks the meter done.
-func (m *meter) event(status int) usage.Event {
+func (m *meter) event(status int, result string) usage.Event {
 	m.done = true
 	e := m.ev
+	e.Attempts = m.attempts
+	if m.open {
+		// The attempt that was running ends the request: with ok when it answered, else with
+		// the error's result code. One attempt that succeeded is told by the event's account already.
+		m.cur.Result = result
+		if result != "ok" || m.attempts > 1 {
+			m.addTried(m.cur)
+		}
+	}
+	e.Tried = m.tried
 	e.LatencyMS = time.Since(m.start).Milliseconds()
 	e.Status = status
 	return e

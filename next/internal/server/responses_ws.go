@@ -516,6 +516,7 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 			turnTrace.account = a.Account
 		}
 	}
+	rr.AttemptFailed = m.attemptFailed
 	// Payload rules reach a turn sent as an HTTP call through sdk.Upstream; a turn on an upstream
 	// session gets them on its session.turn frame (protocol 0.15), and an extension that reports
 	// less than 0.15 is refused a turn that rules apply to.

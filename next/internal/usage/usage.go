@@ -91,6 +91,15 @@ type Event struct {
 	// ChainStep is the step of the model's fallback chain the last attempt was for, from 1;
 	// absent for a model with no chain.
 	ChainStep int `json:"chain_step,omitempty"`
+	// Attempts is how many accounts the request went to, the number X-Pluxy-Attempts carries;
+	// absent for a request that never reached one.
+	Attempts int `json:"attempts,omitempty"`
+	// Tried is what each attempt hit, in order, as the error body's tried names them: the
+	// account's public ID, its provider, the model sent upstream and how the attempt ended (ok
+	// for the one that answered). Absent for a request with one attempt that succeeded, whose
+	// Account and Provider say it all. At most 16 entries are kept, the first 15 and the last;
+	// Attempts stays the true count.
+	Tried []llm.Tried `json:"tried,omitempty"`
 	// KeyID identifies the client key the request came with, as the management API lists client
 	// keys; empty with no client keys set.
 	KeyID string `json:"key_id,omitempty"`

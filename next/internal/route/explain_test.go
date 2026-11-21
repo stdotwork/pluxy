@@ -207,8 +207,8 @@ func TestPlanFollowsTheRouter(t *testing.T) {
 // client.
 func TestResultCode(t *testing.T) {
 	for code, want := range map[string]string{llm.CodeQuota: "quota", llm.CodeAuth: "auth", "made-up": "error", "": "error"} {
-		if got := resultCode(&llm.Error{Code: code}); got != want {
-			t.Errorf("resultCode(%q) = %q, want %q", code, got, want)
+		if got := ResultCode(&llm.Error{Code: code}); got != want {
+			t.Errorf("ResultCode(%q) = %q, want %q", code, got, want)
 		}
 	}
 }

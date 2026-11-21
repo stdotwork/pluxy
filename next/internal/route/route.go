@@ -220,6 +220,9 @@ type Request struct {
 	// Attempting, when set, is called each time an account is chosen for an attempt, before the
 	// attempt starts, on the goroutine that called Next.
 	Attempting func(Attempt)
+	// AttemptFailed, when set, is called each time an attempt ends without a reply that began,
+	// with the entry the error's tried list holds for it, on the goroutine that called Next.
+	AttemptFailed func(llm.Tried)
 }
 
 // Attempt names the account an attempt goes to.
@@ -675,8 +678,11 @@ func (c *call) attempts() llm.Event {
 				return ev
 			}
 			last = ev.Error
-			c.tried = append(c.tried, triedAttempt{t.key(), llm.Tried{Account: r.state.PublicID(a.ID), Provider: a.Extension,
-				Model: t.model, Result: resultCode(last)}})
+			failed := llm.Tried{Account: r.state.PublicID(a.ID), Provider: a.Extension, Model: t.model, Result: ResultCode(last)}
+			c.tried = append(c.tried, triedAttempt{t.key(), failed})
+			if c.req.AttemptFailed != nil {
+				c.req.AttemptFailed(failed)
+			}
 			if rounded && (last.Code == llm.CodeRateLimit || last.Code == llm.CodeQuota) {
 				limited[a.ID] = r.now()
 			}

@@ -58,7 +58,9 @@ var resultCodes = []string{llm.CodeInvalidRequest, llm.CodeAuth, llm.CodePermiss
 	llm.CodeNotFound, llm.CodeRateLimit, llm.CodeQuota, llm.CodeUnsupported, llm.CodeUpstream, llm.CodeUnavailable,
 	llm.CodeCancelled, llm.CodeInternal, llm.CodeExtensionCrashed, llm.CodeExtensionProtocol, llm.CodeExtensionUnavailable}
 
-func resultCode(e *llm.Error) string {
+// ResultCode is e's code as an attempt's result: the code when it is one of core's own, else
+// "error".
+func ResultCode(e *llm.Error) string {
 	if e != nil && slices.Contains(resultCodes, e.Code) {
 		return e.Code
 	}

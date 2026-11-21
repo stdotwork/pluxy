@@ -27,24 +27,33 @@ type usageTokens struct {
 	Total      *int64 `json:"total_tokens"`
 }
 
+type usageTried struct {
+	Account  string `json:"account"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	Result   string `json:"result"`
+}
+
 type usageEvent struct {
-	Seq           uint64      `json:"seq"`
-	ID            string      `json:"id"`
-	Timestamp     time.Time   `json:"timestamp"`
-	Endpoint      string      `json:"endpoint"`
-	Stream        bool        `json:"stream"`
-	Model         string      `json:"model"`
-	UpstreamModel string      `json:"upstream_model"`
-	ServedModel   string      `json:"served_model"`
-	Provider      string      `json:"provider"`
-	Account       string      `json:"account"`
-	KeyID         string      `json:"key_id"`
-	ClientIP      string      `json:"client_ip"`
-	Failed        bool        `json:"failed"`
-	Status        int         `json:"status"`
-	ErrorCode     string      `json:"error_code"`
-	LatencyMS     int64       `json:"latency_ms"`
-	Tokens        usageTokens `json:"tokens"`
+	Seq           uint64       `json:"seq"`
+	ID            string       `json:"id"`
+	Timestamp     time.Time    `json:"timestamp"`
+	Endpoint      string       `json:"endpoint"`
+	Stream        bool         `json:"stream"`
+	Model         string       `json:"model"`
+	UpstreamModel string       `json:"upstream_model"`
+	ServedModel   string       `json:"served_model"`
+	Provider      string       `json:"provider"`
+	Account       string       `json:"account"`
+	Attempts      int          `json:"attempts"`
+	Tried         []usageTried `json:"tried"`
+	KeyID         string       `json:"key_id"`
+	ClientIP      string       `json:"client_ip"`
+	Failed        bool         `json:"failed"`
+	Status        int          `json:"status"`
+	ErrorCode     string       `json:"error_code"`
+	LatencyMS     int64        `json:"latency_ms"`
+	Tokens        usageTokens  `json:"tokens"`
 }
 
 type usagePage struct {
@@ -406,7 +415,7 @@ func TestUsageRecordsWebSocketTurns(t *testing.T) {
 	}
 	e := p.Events[0]
 	if e.Endpoint != "/v1/responses" || !e.Stream || e.Model != "gpt-test" || e.Account != "acct-ws" || e.Provider != "pluxy/codex" ||
-		e.Failed || e.Status != 200 || e.Tokens.Total != nil {
+		e.Failed || e.Status != 200 || e.Tokens.Total != nil || e.Attempts != 1 || e.Tried != nil {
 		t.Fatalf("turn's event: %+v", e)
 	}
 }
