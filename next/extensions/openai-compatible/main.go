@@ -69,7 +69,7 @@ const (
 )
 
 func main() {
-	if err := sdk.Serve(sdk.Extension{ID: id, Version: version, Login: login, LoginMethods: loginMethods, Generate: generate, CountTokens: countTokens, Models: listModels, Check: check, Quota: quota, Endpoint: endpointCall}); err != nil {
+	if err := sdk.Serve(sdk.Extension{ID: id, Version: version, Login: login, LoginMethods: loginMethods, Generate: maskGoogle(generate), CountTokens: maskGoogle(countTokens), Models: listModels, Check: check, Quota: quota, Endpoint: maskGoogle(endpointCall)}); err != nil {
 		fmt.Fprintln(os.Stderr, "openai-compatible:", err)
 		os.Exit(1)
 	}
@@ -280,7 +280,7 @@ func listModels(ctx context.Context, call sdk.ModelsCall) (*protocol.ModelList, 
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, ownerUpstreamError(resp, "")
+		return nil, upstreamError(resp, "")
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
 	if err != nil {
@@ -383,7 +383,7 @@ func check(ctx context.Context, call sdk.CheckCall) (*protocol.CheckResult, erro
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "the upstream has no model list to check the key with", Scope: llm.ScopeCredential}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, ownerUpstreamError(resp, "")
+		return nil, upstreamError(resp, "")
 	}
 	var list struct {
 		Data   []json.RawMessage `json:"data"`   // OpenAI and Anthropic
@@ -732,22 +732,9 @@ func decodeResponse(format string, raw []byte) ([]llm.Event, []llm.Loss, error) 
 	return events, nil, err
 }
 
-// upstreamError turns a non-2xx upstream response into an error for a client. An account can point
-// at Google's own host; a reply in Google's error shape then loses what names the owner's Google
-// project or account (geminigenerate.MaskProject), after the error is classified. The owner's own
-// calls (the model list, the check, login and the quota reading) use ownerUpstreamError instead,
-// since they are how the owner finds which project needs an API enabled.
-func upstreamError(resp *http.Response, model string) *llm.Error {
-	e := ownerUpstreamError(resp, model)
-	if geminigenerate.IsGoogleErrorShape(e.Raw) {
-		return geminigenerate.MaskProject(e)
-	}
-	return e
-}
-
-// ownerUpstreamError turns a non-2xx upstream response into a structured error. model is the model
+// upstreamError turns a non-2xx upstream response into a structured error. model is the model
 // the request asked for.
-func ownerUpstreamError(resp *http.Response, model string) *llm.Error {
+func upstreamError(resp *http.Response, model string) *llm.Error {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	var parsed struct {
 		Error struct {

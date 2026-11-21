@@ -15,20 +15,41 @@ import (
 // redaction uses.
 const Redacted = protocol.Redacted
 
-// Google's errors name the Google Cloud project or account an upstream account belongs to: in the
-// message ("The consumer 'projects/123' is suspended."), and in the details, where ErrorInfo's
-// metadata (consumer, containerInfo, activationUrl), QuotaFailure's subject, ResourceInfo's owner
-// and resource_name, and Help's links carry it. A client holding a pluxy key must not learn it.
+// Google's errors name the Google Cloud project, organization, folder, billing account or account
+// an upstream account belongs to: in the message ("The consumer 'projects/123' is suspended."),
+// and in the details, where ErrorInfo's metadata (consumer, containerInfo, activationUrl),
+// QuotaFailure's subject, ResourceInfo's owner and resource_name, and Help's links carry it. A client holding a pluxy key must not learn it.
 // The details themselves stay: clients read RetryInfo and QuotaFailure.
 
-// namePatterns are the ways text names a project or an account. Group 1 is the name.
-var namePatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\bprojects/([\w-]+(?:\.[\w-]+)*)`),
-	regexp.MustCompile(`(?i)\bproject:([\w-]+(?:\.[\w-]+)*)`),
-	regexp.MustCompile(`(?i)\bproject(?:_?id|_?number)?=([\w.-]+)`),
-	regexp.MustCompile(`(?i)\bproject (?:number |id )?(\d+)\b`),
-	regexp.MustCompile("(?i)\\bproject ['\"`]([^'\"`\\s]+)['\"`]"),
-	regexp.MustCompile(`(?i)\b(?:user|serviceAccount):([A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)`),
+// namePattern is a way text names a project, an organization, a folder, a billing account or a
+// person. Group 1 is the name; ok, when set, tells a name from a word that happens to follow.
+type namePattern struct {
+	re *regexp.Regexp
+	ok func(name string) bool
+}
+
+const nameToken = `([\w-]+(?:\.[\w-]+)*)`
+
+var namePatterns = []namePattern{
+	{re: regexp.MustCompile(`(?i)\b(?:projects|organizations|folders|billingAccounts)/` + nameToken)},
+	{re: regexp.MustCompile(`(?i)\b(?:project(?:_?id|_?number)?|organization|folder|billingAccount):` + nameToken)},
+	{re: regexp.MustCompile(`(?i)\bproject(?:_?id|_?number)?=([\w.-]+)`)},
+	{re: regexp.MustCompile(`(?i)\bproject (?:number |id )?(\d+)\b`)},
+	{re: regexp.MustCompile("(?i)\\bproject ['\"`]([^'\"`\\s]+)['\"`]")},
+	{re: regexp.MustCompile(`(?i)\b(?:user|serviceAccount|group):([A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)`)},
+	// Any service account's address, whatever the account's own key says.
+	{re: regexp.MustCompile(`([A-Za-z0-9._%+-]+@(?:[a-z][a-z0-9-]*\.iam|developer)\.gserviceaccount\.com)`)},
+	// "Permission denied on resource project my-proj-1.": a project ID after the words, which a
+	// word of prose ("resource project has been denied") must not be taken for: an ID is all
+	// digits, or at least six characters with a hyphen or a digit.
+	{re: regexp.MustCompile(`(?i:\bresource project) ([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)`), ok: looksLikeProjectID},
+}
+
+func looksLikeProjectID(id string) bool {
+	if strings.Trim(id, "0123456789") == "" {
+		return true
+	}
+	return len(id) >= 6 && strings.ContainsAny(id, "-0123456789")
 }
 
 // serviceAccountProject finds the project in a service account's address.
@@ -37,7 +58,9 @@ var serviceAccountProject = regexp.MustCompile(`@([a-z][a-z0-9-]*)\.iam\.gservic
 // MaskProject returns e without the Google project or account its message and its raw body name.
 // known are identifiers the caller knows belong to the upstream account (its project, a service
 // account's project and address); the structured fields of Google's error details and the text
-// patterns above add the rest. Each is replaced, as a whole token, in the message and in every
+// patterns above add the rest. A QuotaFailure violation's subject and a ResourceInfo's owner,
+// found by the detail's @type, go whole, whatever they say; a PreconditionFailure's subject, and
+// the quota metric, ID, value and dimensions, stay. Each is replaced, as a whole token, in the message and in every
 // string value of the raw body (an object, or the array a Google API wraps one in); the keys,
 // numbers, types, reasons, quota facts and everything else stay, and a body with nothing to mask
 // keeps its bytes. e itself is returned when nothing changed; otherwise a copy, and e is not
@@ -81,9 +104,10 @@ func MaskBody(body []byte, known ...string) []byte {
 	return body
 }
 
-// IsGoogleErrorShape reports whether raw is a Google error body: an object with an "error" whose
-// code is a number and whose status is a name such as RESOURCE_EXHAUSTED, alone or as the one
-// element of an array (as Google's OpenAI-compatible API sends it).
+// IsGoogleErrorShape reports whether raw is a Google error: an object with an "error" whose code
+// is a number and whose status is a name such as RESOURCE_EXHAUSTED, alone or as the one element
+// of an array (as Google's OpenAI-compatible API sends it), or such an error object by itself (as
+// a Chat Completions decoder keeps the one a stream carried).
 func IsGoogleErrorShape(raw []byte) bool {
 	raw = bytes.TrimSpace(raw)
 	if len(raw) > 0 && raw[0] == '[' {
@@ -94,26 +118,38 @@ func IsGoogleErrorShape(raw []byte) bool {
 		raw = list[0]
 	}
 	var b struct {
-		Error struct {
-			Code   json.RawMessage `json:"code"`
-			Status string          `json:"status"`
-		} `json:"error"`
+		Error json.RawMessage `json:"error"`
+		errorShape
 	}
-	if json.Unmarshal(raw, &b) != nil || b.Error.Status == "" {
+	if json.Unmarshal(raw, &b) != nil {
 		return false
 	}
-	var n json.Number
-	return json.Unmarshal(b.Error.Code, &n) == nil && len(b.Error.Code) > 0 && b.Error.Code[0] != '"'
+	if len(b.Error) > 0 {
+		var e errorShape
+		return json.Unmarshal(b.Error, &e) == nil && e.ok()
+	}
+	return b.errorShape.ok()
+}
+
+// errorShape is the members of a Google error object that tell it from another vendor's.
+type errorShape struct {
+	Code   json.RawMessage `json:"code"`
+	Status string          `json:"status"`
+}
+
+func (e errorShape) ok() bool {
+	return e.Status != "" && len(e.Code) > 0 && e.Code[0] != '"' && json.Unmarshal(e.Code, new(json.Number)) == nil
 }
 
 // names holds what to mask.
 type names struct {
-	list []string
-	seen map[string]bool
+	list  []string
+	seen  map[string]bool
+	whole map[string]bool // values that go whole: a QuotaFailure's subjects and a ResourceInfo's owners
 }
 
 func newNames(known []string) *names {
-	d := &names{seen: map[string]bool{}}
+	d := &names{seen: map[string]bool{}, whole: map[string]bool{}}
 	for _, k := range known {
 		d.add(k)
 	}
@@ -144,9 +180,11 @@ func (d *names) addProject(v string) {
 
 // learnString adds the names text holds in the forms of namePatterns.
 func (d *names) learnString(s string) {
-	for _, re := range namePatterns {
-		for _, m := range re.FindAllStringSubmatch(s, -1) {
-			d.addProject(m[1])
+	for _, p := range namePatterns {
+		for _, m := range p.re.FindAllStringSubmatch(s, -1) {
+			if p.ok == nil || p.ok(m[1]) {
+				d.addProject(m[1])
+			}
 		}
 	}
 }
@@ -179,12 +217,33 @@ func (d *names) learnFields(v any) {
 			}
 			d.learnFields(e)
 		}
+		typ, _ := v["@type"].(string)
+		switch {
+		case isType(typ, "QuotaFailure"):
+			vs, _ := v["violations"].([]any)
+			for _, e := range vs {
+				if m, ok := e.(map[string]any); ok {
+					if s, ok := m["subject"].(string); ok {
+						d.whole[s] = true
+					}
+				}
+			}
+		case isType(typ, "ResourceInfo"):
+			if s, ok := v["owner"].(string); ok {
+				d.whole[s] = true
+			}
+		}
 		// ResourceInfo names a project resource by its ID alone.
-		typ, _ := firstString(v, "resource_type", "resourceType")
-		if name, ok := firstString(v, "resource_name", "resourceName"); ok && strings.HasSuffix(strings.ToLower(typ), "project") {
+		rtype, _ := firstString(v, "resource_type", "resourceType")
+		if name, ok := firstString(v, "resource_name", "resourceName"); ok && strings.HasSuffix(strings.ToLower(rtype), "project") {
 			d.addProject(name)
 		}
 	}
+}
+
+// isType reports whether a detail's @type URL names the google.rpc message called name.
+func isType(typ, name string) bool {
+	return typ == name || strings.HasSuffix(typ, "."+name)
 }
 
 func normalKey(k string) string {
@@ -202,8 +261,11 @@ func firstString(m map[string]any, keys ...string) (string, bool) {
 
 // maskString replaces the names in s: the pattern forms, then each known name as a whole token.
 func (d *names) maskString(s string) string {
-	for _, re := range namePatterns {
-		s = replaceGroup(s, re)
+	if d.whole[s] {
+		return Redacted
+	}
+	for _, p := range namePatterns {
+		s = replaceGroup(s, p)
 	}
 	sort.SliceStable(d.list, func(i, j int) bool { return len(d.list[i]) > len(d.list[j]) })
 	for _, id := range d.list {
@@ -214,15 +276,18 @@ func (d *names) maskString(s string) string {
 
 func (d *names) maskJSON(raw []byte) []byte { return mapStrings(raw, d.maskString) }
 
-// replaceGroup replaces group 1 of each match of re in s.
-func replaceGroup(s string, re *regexp.Regexp) string {
-	idx := re.FindAllStringSubmatchIndex(s, -1)
+// replaceGroup replaces group 1 of each match of p in s.
+func replaceGroup(s string, p namePattern) string {
+	idx := p.re.FindAllStringSubmatchIndex(s, -1)
 	if len(idx) == 0 {
 		return s
 	}
 	var b strings.Builder
 	last := 0
 	for _, m := range idx {
+		if p.ok != nil && !p.ok(s[m[2]:m[3]]) {
+			continue
+		}
 		b.WriteString(s[last:m[2]])
 		b.WriteString(Redacted)
 		last = m[3]

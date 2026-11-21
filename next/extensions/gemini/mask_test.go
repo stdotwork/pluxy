@@ -129,3 +129,27 @@ func TestMaskReply(t *testing.T) {
 		t.Errorf("an event named error was not masked: %s", got)
 	}
 }
+
+// An Interactions reply or event with an error object at any depth is masked, as a failed
+// interaction's is; one with no error object is the same bytes, whatever its text says.
+func TestMaskReplyNestedError(t *testing.T) {
+	nested := []byte(`{"event_type":"interaction.complete","interaction":{"id":"v1_x","status":"failed","error":{"code":403,"message":"The consumer 'projects/123' is suspended."}}}`)
+	got := maskReply(nested, "", nil)
+	if strings.Contains(string(got), "123") || !strings.Contains(string(got), `"status":"failed"`) || !json.Valid(got) {
+		t.Errorf("got %s", got)
+	}
+	inList := []byte(`{"outputs":[{"type":"x","detail":{"error":{"message":"project 987654 is off"}}}]}`)
+	if got := maskReply(inList, "", nil); strings.Contains(string(got), "987654") {
+		t.Errorf("got %s", got)
+	}
+	for _, same := range []string{
+		`{"outputs":[{"type":"text","text":"an error in projects/123: project 'abc' failed"}]}`,
+		`{"outputs":[{"type":"text","text":"the \"error\" word"}],"error":null}`,
+		`{"error":"projects/123","interaction":{"error":"projects/456"}}`,
+	} {
+		b := []byte(same)
+		if got := maskReply(b, "", nil); &got[0] != &b[0] {
+			t.Errorf("%s changed to %s", same, got)
+		}
+	}
+}

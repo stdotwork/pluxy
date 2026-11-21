@@ -491,9 +491,10 @@ keeps `param` from an OpenAI-format upstream, and a Gemini client keeps `details
 upstream; no field is copied into a format that does not define it. `param` is the upstream's own
 path, so on a translated request it can name a field in the upstream's shape. A 429, 503 or 529
 carries `Retry-After` when the upstream said how long to wait. A Google upstream's error names the
-Google project or account of the pluxy account (in its message, and in its details); the Gemini and
-OpenAI-compatible extensions replace those names with `[redacted]` in what a client gets, and keep
-the rest, so `RetryInfo` and `QuotaFailure` still read. The owner's own account check and quota
+Google project, organization, folder, billing account or person behind the pluxy account (in its
+message, and in its details); the Gemini and OpenAI-compatible extensions replace those names with
+`[redacted]` in what a client gets (a `QuotaFailure` subject and a `ResourceInfo` owner whole), and
+keep the rest, so `RetryInfo` and the quota's metric, ID and value still read. The owner's own account check and quota
 reading keep the names.
 
 When an upstream says the prompt does not fit the model's context window, the client gets it in

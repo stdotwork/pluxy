@@ -72,7 +72,7 @@ func TestMaskQuotaFailureKeepsTheQuota(t *testing.T) {
 		`{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},` +
 		`{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"34s"}]}}`
 	got := MaskProject(&llm.Error{Code: llm.CodeRateLimit, Message: "You exceeded your current quota.", Raw: json.RawMessage(raw)})
-	want := strings.Replace(raw, `"subject":"project:my-proj-7"`, `"subject":"project:[redacted]"`, 1)
+	want := strings.Replace(raw, `"subject":"project:my-proj-7"`, `"subject":"[redacted]"`, 1)
 	if string(got.Raw) != want {
 		t.Errorf("raw = %s\nwant  %s", got.Raw, want)
 	}
@@ -193,6 +193,7 @@ func TestIsGoogleErrorShape(t *testing.T) {
 		`{"error":{"code":"403","message":"m","status":"X"}}`:                  false,
 		`{"error":{"code":403,"message":"m"}}`:                                 false,
 		`{"error":{"message":"m","type":"invalid_request_error","code":"x"}}`:  false,
+		`{"code":403,"message":"m","status":"PERMISSION_DENIED"}`:              true,
 		`not json`: false,
 	} {
 		if got := IsGoogleErrorShape([]byte(raw)); got != want {
@@ -208,5 +209,63 @@ func TestMaskErrorInfoResource(t *testing.T) {
 	want := strings.Replace(raw, "projects/123", "projects/[redacted]", 1)
 	if string(got.Raw) != want {
 		t.Errorf("raw = %s\nwant  %s", got.Raw, want)
+	}
+}
+
+// More ways Google's text names a project, an organization, a folder, a billing account or a
+// person; the words around them stay.
+func TestMaskMorePatterns(t *testing.T) {
+	for in, want := range map[string]string{
+		"Permission denied on resource project my-proj-1.":              "Permission denied on resource project [redacted].",
+		"Permission denied on resource project 4242 now":                "Permission denied on resource project [redacted] now",
+		"resource project denied the request":                           "resource project denied the request",
+		"the resource project has been denied access":                   "the resource project has been denied access",
+		"Your project has been denied access.":                          "Your project has been denied access.",
+		"ids project_number:4242 and project_id:my-proj-3 ok":           "ids project_number:[redacted] and project_id:[redacted] ok",
+		"in organizations/555000/x and folders/666000":                  "in organizations/[redacted]/x and folders/[redacted]",
+		"billingAccounts/0123-ABCD-4567 is closed":                      "billingAccounts/[redacted] is closed",
+		"organization:555000 folder:666000 billingAccount:0123-ABCD":    "organization:[redacted] folder:[redacted] billingAccount:[redacted]",
+		"owner group:team@example.com is gone":                          "owner group:[redacted] is gone",
+		"Caller foo@my-proj-2.iam.gserviceaccount.com lacks permission": "Caller [redacted] lacks permission",
+		"default 123-compute@developer.gserviceaccount.com":             "default [redacted]",
+	} {
+		if got := MaskProject(&llm.Error{Message: in}).Message; got != want {
+			t.Errorf("%q\n got  %q\n want %q", in, got, want)
+		}
+	}
+}
+
+// The project of any service account address is learned and masked wherever else it stands.
+func TestMaskLearnsProjectOfAnyServiceAccount(t *testing.T) {
+	got := MaskProject(&llm.Error{Message: "Caller foo@my-proj-2.iam.gserviceaccount.com in my-proj-2 lacks permission"})
+	if got.Message != "Caller [redacted] in [redacted] lacks permission" {
+		t.Errorf("message = %q", got.Message)
+	}
+}
+
+// A QuotaFailure's subject and a ResourceInfo's owner go whole, whatever they say; the other
+// details' subjects, and the quota facts, stay.
+func TestMaskWholeSubjectAndOwner(t *testing.T) {
+	raw := `{"error":{"code":429,"message":"m","status":"RESOURCE_EXHAUSTED","details":[` +
+		`{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[` +
+		`{"subject":"clientip:203.0.113.7","quotaMetric":"m/x","quotaId":"Id","quotaValue":"9","quotaDimensions":{"region":"us"}},` +
+		`{"subject":"organization:555000"},{"subject":"folder:666000"},{"subject":"something else entirely"}]},` +
+		`{"@type":"type.googleapis.com/google.rpc.ResourceInfo","resource_type":"x","resource_name":"organizations/555000/x","owner":"group:team@example.com"},` +
+		`{"@type":"type.googleapis.com/google.rpc.ResourceInfo","owner":"billingAccounts/0123-ABCD"},` +
+		`{"@type":"type.googleapis.com/google.rpc.ResourceInfo","owner":"plain words"},` +
+		`{"@type":"type.googleapis.com/google.rpc.PreconditionFailure","violations":[{"type":"TOS","subject":"google.com/cloud","description":"Terms of service not accepted"}]}]}}`
+	got := string(MaskProject(&llm.Error{Message: "m", Raw: json.RawMessage(raw)}).Raw)
+	for _, gone := range []string{"203.0.113.7", "555000", "666000", "something else entirely", "team@example.com", "0123-ABCD", "plain words"} {
+		if strings.Contains(got, gone) {
+			t.Errorf("%q survives: %s", gone, got)
+		}
+	}
+	for _, keep := range []string{`"subject":"google.com/cloud"`, `"quotaMetric":"m/x"`, `"quotaId":"Id"`, `"quotaValue":"9"`, `"quotaDimensions":{"region":"us"}`, `"resource_name":"organizations/[redacted]/x"`, `"type":"TOS"`} {
+		if !strings.Contains(got, keep) {
+			t.Errorf("lost %s: %s", keep, got)
+		}
+	}
+	if n := strings.Count(got, `"subject":"[redacted]"`); n != 4 {
+		t.Errorf("%d subjects masked, want 4: %s", n, got)
 	}
 }

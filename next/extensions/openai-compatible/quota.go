@@ -115,7 +115,7 @@ func quota(ctx context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		e := ownerUpstreamError(resp, "")
+		e := upstreamError(resp, "")
 		if e.Code == llm.CodeNotFound {
 			e.Code, e.Scope = llm.CodeUpstream, llm.ScopeEndpoint
 		}

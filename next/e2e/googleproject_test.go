@@ -43,6 +43,17 @@ const quotaReply = `{"error":{"code":429,"message":"You exceeded your current qu
 	`{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Learn more about Gemini API quotas","url":"https://ai.google.dev/gemini-api/docs/rate-limits"}]},` +
 	`{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"34s"}]}}`
 
+// otherNamesReply names the owner in the forms the other replies do not: a project in plain prose,
+// the client's address, an organization, a folder, a group, a billing account and a service account.
+const otherNamesReply = `{"error":{"code":403,"message":"Permission denied on resource project my-proj-1. Caller foo@my-proj-2.iam.gserviceaccount.com lacks permission.","status":"PERMISSION_DENIED","details":[` +
+	`{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"IAM_PERMISSION_DENIED","domain":"googleapis.com"},` +
+	`{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"subject":"clientip:203.0.113.7","quotaId":"Q"},{"subject":"organization:555000"},{"subject":"folder:666000"}]},` +
+	`{"@type":"type.googleapis.com/google.rpc.ResourceInfo","resource_name":"organizations/555000/x","owner":"group:team@example.com"},` +
+	`{"@type":"type.googleapis.com/google.rpc.ResourceInfo","owner":"billingAccounts/0123-ABCD"}]}}`
+
+// ownerNames are the names the replies above carry for the owner.
+var ownerNames = []string{ownerProjectNumber, ownerProjectID, "my-proj-1", "my-proj-2", "203.0.113.7", "555000", "666000", "team@example.com", "0123-ABCD", "foo@"}
+
 const goodChunk = `{"candidates":[{"content":{"role":"model","parts":[{"text":"Hi"}]},"index":0}]}`
 
 // googleProjectCore runs core with one Gemini account on the fake.
@@ -92,7 +103,7 @@ func (c clientCall) exchange(t *testing.T, base string) (int, string) {
 
 func noProject(t *testing.T, what, reply string) {
 	t.Helper()
-	for _, id := range []string{ownerProjectNumber, ownerProjectID} {
+	for _, id := range ownerNames {
 		if strings.Contains(reply, id) {
 			t.Errorf("%s names the owner's project %s:\n%s", what, id, reply)
 		}
@@ -102,7 +113,7 @@ func noProject(t *testing.T, what, reply string) {
 // Every client of every API gets a Google upstream's error without the project, whether the
 // upstream answered with an error status or put the error in a reply that was already streaming.
 func TestGoogleProjectNotInClientErrors(t *testing.T) {
-	for _, r := range []struct{ name, body string }{{"consumer suspended", suspendedReply}, {"service disabled", disabledReply}} {
+	for _, r := range []struct{ name, body string }{{"consumer suspended", suspendedReply}, {"service disabled", disabledReply}, {"other names", otherNamesReply}} {
 		for _, c := range googleProjectClients {
 			for _, mode := range []string{"error status", "error in stream", "error in a 200 reply"} {
 				if mode != "error status" && (mode == "error in stream") != c.stream {
@@ -134,7 +145,7 @@ func TestGoogleProjectNotInClientErrors(t *testing.T) {
 					if mode == "error status" && status < 400 {
 						t.Errorf("status %d, want an error status", status)
 					}
-					if !strings.Contains(strings.ToLower(reply), "suspended") && !strings.Contains(strings.ToLower(reply), "disabled") {
+					if !strings.Contains(strings.ToLower(reply), "suspended") && !strings.Contains(strings.ToLower(reply), "disabled") && !strings.Contains(strings.ToLower(reply), "permission denied") {
 						t.Errorf("the reply lost what the upstream said:\n%s", reply)
 					}
 					// The account is now blocked; what the next request says must not name the project either.
@@ -194,7 +205,7 @@ func TestGoogleProjectQuotaFailureKeepsRetryInfo(t *testing.T) {
 	if err := json.Unmarshal(raw, &got); err != nil {
 		t.Fatalf("%v: %s", err, raw)
 	}
-	want := strings.Replace(quotaReply, "project:"+ownerProjectID, "project:[redacted]", 1)
+	want := strings.Replace(quotaReply, "project:"+ownerProjectID, "[redacted]", 1)
 	var wantBody struct {
 		Error struct {
 			Details []json.RawMessage `json:"details"`
@@ -230,6 +241,15 @@ func TestGoogleProjectNotInInteractionsErrors(t *testing.T) {
 			fmt.Fprint(w, "event: interaction.start\ndata: {\"event_type\":\"interaction.start\",\"interaction\":{\"id\":\"v1_x\",\"status\":\"in_progress\"}}\n\n")
 			fmt.Fprintf(w, "event: error\ndata: {\"event_type\":\"error\",\"error\":%s}\n\n", strings.TrimSuffix(strings.TrimPrefix(suspendedReply, `{"error":`), `}`))
 		}},
+		{"failed interaction in a 200 reply", body, func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"id":"v1_x","status":"failed","error":%s}`, strings.TrimSuffix(strings.TrimPrefix(otherNamesReply, `{"error":`), `}`))
+		}},
+		{"failed interaction in a stream event", streamBody, func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "event: interaction.start\ndata: {\"event_type\":\"interaction.start\",\"interaction\":{\"id\":\"v1_x\",\"status\":\"in_progress\"}}\n\n")
+			fmt.Fprintf(w, "event: interaction.complete\ndata: {\"event_type\":\"interaction.complete\",\"interaction\":{\"id\":\"v1_x\",\"status\":\"failed\",\"error\":%s}}\n\n", strings.TrimSuffix(strings.TrimPrefix(disabledReply, `{"error":`), `}`))
+		}},
 		{"error in a 200 reply", body, func(w http.ResponseWriter) {
 			w.Header().Set("Content-Type", "application/json")
 			io.WriteString(w, suspendedReply)
@@ -246,7 +266,7 @@ func TestGoogleProjectNotInInteractionsErrors(t *testing.T) {
 			resp.Header.Write(&all)
 			all.Write(raw)
 			noProject(t, "reply", all.String())
-			if !strings.Contains(string(raw), "error") {
+			if !strings.Contains(string(raw), "error") && !strings.Contains(string(raw), "failed") {
 				t.Errorf("the client got no error:\n%s", raw)
 			}
 			if c.name != "error in a 200 reply" && strings.Contains(c.req, `"stream":true`) && !strings.Contains(string(raw), "interaction.start") {
@@ -344,5 +364,29 @@ func TestGoogleProjectNotInOpenAICompatibleErrors(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// An OpenAI-compatible account that points at Google's host can fail inside a reply that was
+// already streaming; a client gets that error without the project too.
+func TestGoogleProjectNotInOpenAICompatibleStreamErrors(t *testing.T) {
+	for _, c := range []clientCall{
+		{"chat stream", "/v1/chat/completions", `{"model":"gpt-test","stream":true,"messages":[{"role":"user","content":"Hi"}]}`, true},
+		{"gemini stream", "/v1beta/models/gpt-test:streamGenerateContent?alt=sse", `{"contents":[{"role":"user","parts":[{"text":"Hi"}]}]}`, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			u := newUpstream(t)
+			u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				fmt.Fprint(w, "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Hi\"}}]}\n\n")
+				fmt.Fprintf(w, "data: %s\n\n", disabledReply)
+			}
+			_, reply := c.exchange(t, startCore(t, u))
+			if !strings.Contains(reply, "has not been used") {
+				t.Fatalf("the upstream's error did not reach the client:\n%s", reply)
+			}
+			noProject(t, c.name+" reply", reply)
+		})
 	}
 }
