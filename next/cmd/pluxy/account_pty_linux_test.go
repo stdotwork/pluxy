@@ -527,10 +527,18 @@ func (p *ptySession) wantSecretKept(t *testing.T) {
 // answer core was sent (by name, and whether it was the value the test typed).
 func (p *ptySession) wantChild(t *testing.T, parts ...string) {
 	t.Helper()
-	out := p.childOutput()
-	line := ""
-	if i := strings.LastIndex(out, ptyMarker); i >= 0 {
-		line = strings.SplitN(out[i:], "\n", 2)[0]
+	// The command's last line comes through a pipe another goroutine reads, so it can still be on
+	// its way when the process has already exited.
+	var out, line string
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(2 * time.Millisecond) {
+		out = p.childOutput()
+		if i := strings.LastIndex(out, ptyMarker); i >= 0 && strings.Contains(out[i:], "\n") {
+			line = strings.SplitN(out[i:], "\n", 2)[0]
+			break
+		}
+		if time.Now().After(deadline) {
+			break
+		}
 	}
 	if line == "" {
 		t.Fatalf("the command reported nothing; it wrote %q", out)

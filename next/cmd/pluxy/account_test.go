@@ -1303,7 +1303,8 @@ func TestFollowLoginBrowserAtEndOfInput(t *testing.T) {
 }
 
 // An optional input prompt that arrives after standard input has already ended is still sent
-// complete, without cancelling the sign-in.
+// complete, without cancelling the sign-in. It guards what stopping the ask must not break; the
+// change itself is shown by the terminal test "Ctrl-D then secret".
 func TestFollowLoginOptionalInputAfterEndOfInput(t *testing.T) {
 	shortLoginWait(t)
 	f := newFakeAccountCore(t)
