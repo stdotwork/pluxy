@@ -1183,6 +1183,16 @@ func TestCLIAccountAddLeavesUnusedInputUnread(t *testing.T) {
 	}
 }
 
+// --no-wait's refusal names only what works: --input cannot answer a prompt that a sign-in shows
+// after it starts, since --no-wait cancels that sign-in either way.
+func TestCLIAccountAddNoWaitGivesNoFalseHint(t *testing.T) {
+	f := newFakeAccountCore(t)
+	_, errOut, code := f.run("account", "add", "test/ext", "--method", "input", "--id", "hint-1", "--no-wait", "--input", "code=1")
+	if code != 2 || strings.Contains(errOut, "--input") || !strings.Contains(errOut, "without --no-wait") {
+		t.Fatalf("--no-wait on a prompt: code=%d err=%q, want 2, no --input hint", code, errOut)
+	}
+}
+
 // account methods lists each sign-in, marks a secret input, and account list shows the label.
 func TestCLIAccountMethodsAndList(t *testing.T) {
 	f := newFakeAccountCore(t)

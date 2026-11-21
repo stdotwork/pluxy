@@ -303,7 +303,7 @@ func (x *invocation) afterLoginStart(l management.Login, body []byte, in signInI
 			if len(names) > 0 {
 				need = strings.Join(names, ", ")
 			}
-			return x.cancelLogin(l.ID, usageError{fmt.Sprintf("the sign-in waits for %s, and --no-wait leaves nothing to answer it: run it again without --no-wait, or give the value with --input name=value (a secret on standard input)", need)})
+			return x.cancelLogin(l.ID, usageError{fmt.Sprintf("the sign-in waits for %s, and --no-wait leaves nothing to answer it: run it again without --no-wait", need)})
 		}
 		x.loginPrompt(l.Prompt)
 		if x.json {
