@@ -227,9 +227,10 @@ const minPiece = minCutFragment
 // secret, which may be hand-picked, keeps the shorter piece.
 const longSecret = 32
 
-// longPiece is the shortest piece RemovePieces takes from a long token and from a PEM private key. A PEM key's lines are long and random too, so 4 bytes of one would
-// redact an ordinary word such as "Signature" for a key whose body spells "Sign", while a
-// fragment that short of a key is of no use. minFragment is the shortest line NewRedactor keeps as
+// longPiece is the shortest piece RemovePieces takes from a long token and from a PEM private
+// key. Both are almost always random, so 4 bytes of one would redact an ordinary word such as
+// "Signature" for a key whose body spells "Sign", while a fragment that short of a key is of no
+// use. minFragment is the shortest line NewRedactor keeps as
 // a secret of its own, so it is the shortest piece of a line here too.
 const longPiece = minFragment
 
@@ -305,20 +306,33 @@ func RemovePieces(s string, secrets ...string) string {
 }
 
 // longToken reports whether secret, with the whitespace around it trimmed, is one run of token
-// characters of longSecret bytes or more that is not the base64 of text. A value with anything
-// else in it (a scheme SecretParts does not split, a JSON object, a line break) can hold a shorter
-// secret, and base64 of text is a form of what it encodes, such as Basic's user:password, so 4
-// bytes of either can be a large share of a short secret.
+// characters of longSecret bytes or more that is not base64 (standard or URL-safe, padded or not)
+// of text (encodedText). A value with anything else in it (a scheme SecretParts does not split, a
+// JSON object, a line break) can hold a shorter secret, and base64 of text is a form of what it
+// encodes, such as Basic's user:password, so 4 bytes of either can be a large share of a short
+// secret.
 func longToken(secret string) bool {
 	s := strings.TrimSpace(secret)
 	if len(s) < longSecret || strings.IndexFunc(s, func(r rune) bool { return !pieceChar(r) }) >= 0 {
 		return false
 	}
-	b, err := base64.StdEncoding.DecodeString(s)
-	if err != nil {
-		b, err = base64.RawStdEncoding.DecodeString(s)
+	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
+		if b, err := enc.DecodeString(s); err == nil && encodedText(b) {
+			return false
+		}
 	}
-	return err != nil || !utf8.Valid(b)
+	return true
+}
+
+// encodedText reports whether b, decoded from base64, is text rather than random bytes: valid
+// UTF-8, or Basic's user:password with a password in another encoding, which shows as a printable
+// ASCII user name before the first colon.
+func encodedText(b []byte) bool {
+	if utf8.Valid(b) {
+		return true
+	}
+	user, _, ok := strings.Cut(string(b), ":")
+	return ok && user != "" && strings.IndexFunc(user, func(r rune) bool { return r < ' ' || r > '~' }) < 0
 }
 
 // pieceChar reports whether r is a token character of the runs RemovePieces reads.

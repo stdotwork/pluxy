@@ -224,6 +224,8 @@ func TestRemovePiecesLongRuleIsForOneToken(t *testing.T) {
 		{"JSON in a header", account("Authorization", `{"api_key":"Ab3Cd5Ef","user":"svc"}`), "refused Ab3C given"},
 		{"a pasted header line", []string{"Authorization: Token Ab3Cd5Ef7Gh9Ij1Kl3Mn5Op7Qr"}, "refused Ab3C given"},
 		{"Basic's base64", account("Authorization", "Basic c2VydmljZS1hY2NvdW50LTE6cDdRdzJFcjU="), "invalid credential cDdR given"},
+		{"URL-safe base64", []string{"c2VydmljZS1hY2NvdW50LTE6cDdRdzJFcjU-"}, "refused c2Vy given"},
+		{"Basic with a Latin-1 password", []string{"c2VydmljZS1hY2NvdW50LTE66enp6enp6ek="}, "refused c2Vy given"},
 		{"base64 of longer text", []string{longText}, "invalid credential " + longText[len(longText)-8:len(longText)-4] + " given"},
 	} {
 		if got, want := RemovePieces(c.in, c.secrets...), strings.Replace(c.in, strings.Fields(c.in)[len(strings.Fields(c.in))-2], Redacted, 1); got != want {

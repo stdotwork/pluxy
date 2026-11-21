@@ -1418,7 +1418,7 @@ rule from every extension's errors (see [Account checks](#account-checks)), but 
 the other rules or the bound, so the extension keeps its own cleaning. Otherwise the message
 names only the status (`Devin answered 500 Internal Server Error`), or, for a quota read whose
 reply broke off, says that it broke off. The rule can also replace a word that shares 4 characters
-with one of the secrets, such as `proxy` for a proxy user name `proxy-user-1`.
+(8 for a long token) with one of the secrets, such as `proxy` for a proxy user name `proxy-user-1`.
 
 Not built, from today's core: removing Claude Code's and Codex's attribution lines from the system
 prompt and `devin.sensitive-words`; rewriting tool descriptions; encoding tool call IDs (they pass
@@ -1765,8 +1765,8 @@ short a string would mangle unrelated text. An error's message and the string va
 body, from every extension and for every call (requests, checks, quota and model reads,
 refreshes, sessions and logins), also lose every run of token characters (letters, digits and
 `_-.+/=~`, read as written and with JSON and percent escapes decoded) that holds 4 or more
-consecutive characters of one of the account's secrets, or 8 or more of a long token (one run of
-32 or more token characters that is not the base64 of text): an upstream that refuses a key often
+consecutive characters of one of the account's secrets, or 8 or more of a long token (trimmed, one
+run of 32 or more token characters that is not base64 of text): an upstream that refuses a key often
 echoes its start (`invalid x-api-key: sk-ant-api03-AbCdEf...`), which whole-secret redaction
 misses. The secrets are the credential's key and tokens, secret header values, the proxy's user
 name and password and the secrets core finds in the settings (a URL by its user name, password

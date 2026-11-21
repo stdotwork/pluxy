@@ -662,7 +662,7 @@ escapes decoded (JSON's `\/`, `\\` and `\uXXXX` and percent-encoding's `%XX`, ne
 times); a `[redacted]` already there stays as it is. A PEM private key
 counts by its lines and its unwrapped body, at 8 bytes or more in a row. A long token is a secret
 that, trimmed of the whitespace around it, is one run of 32 or more token characters and is not
-the base64 of text. Both are almost always random, so 4 bytes of one would be a coincidence in
+base64 (standard or URL-safe, padded or not) of text. Both are almost always random, so 4 bytes of one would be a coincidence in
 most errors and would redact an ordinary word of them, such as `test` for a key that spells it, or
 `Signature` for a PEM key whose body spells `Sign`, while a fragment that short of a key is of no
 use. So a cut of 4 to 7 bytes of either is not removed. Every other secret stays at 4, each by its
