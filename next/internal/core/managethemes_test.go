@@ -148,6 +148,46 @@ func TestThemeStoreLimitsAndSymlinks(t *testing.T) {
 	_ = fs.ErrExist
 }
 
+// A file that is not one JSON object is not a stored theme: list leaves it out, get says it is
+// not there, and it does not count towards the 64-theme cap.
+func TestFilesThatAreNotThemes(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "state", "themes")
+	st := newThemeStore(dir)
+	if err := os.MkdirAll(filepath.Join(dir, "junk"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for i := range maxStoredThemes {
+		p := filepath.Join(dir, "junk", fmt.Sprintf("junk-%02d.json", i))
+		if err := os.WriteFile(p, []byte("not a theme"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reply, err := st.list()
+	if err != nil || len(reply.Themes) != 0 {
+		t.Fatalf("list with only files that are not themes = %+v, %v; want no themes", reply, err)
+	}
+	if _, err := st.get("junk", "junk-00"); !errors.Is(err, errNotTheme) {
+		t.Errorf("get of a file that is not a theme = %v, want errNotTheme", err)
+	}
+	if _, err := st.put("junk", "real", "", []byte(`{"name":"Real"}`)); err != nil {
+		t.Fatalf("put with 64 files that are not themes: %v, want it stored", err)
+	}
+
+	// At the cap a file that is not a theme does not stand in for the one being stored, and a
+	// stored theme is still replaced.
+	for i := range maxStoredThemes - 1 {
+		if _, err := st.put("cap", fmt.Sprintf("t-%02d", i), "", []byte(`{}`)); err != nil {
+			t.Fatalf("put #%d: %v", i, err)
+		}
+	}
+	if _, err := st.put("junk", "junk-00", "", []byte(`{}`)); !errors.Is(err, errThemeLimit) {
+		t.Errorf("put over a file that is not a theme at the cap = %v, want errThemeLimit", err)
+	}
+	if _, err := st.put("junk", "real", "Updated", []byte(`{"name":"Updated"}`)); err != nil {
+		t.Errorf("replacing a stored theme at the cap: %v, want it replaced", err)
+	}
+}
+
 func TestHandleThemesHTTP(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.json")
@@ -243,5 +283,35 @@ func TestHandleThemesHTTP(t *testing.T) {
 	}
 	if r := do(http.MethodPut, "/theme", `{"id":""}`); r.Code != http.StatusOK {
 		t.Fatalf("PUT /theme clear = %d, want 200", r.Code)
+	}
+
+	// A file in a publisher's folder that is not one JSON object is not a stored theme: GET
+	// answers 404 as it does for an absent one, and list leaves it out.
+	themesDir := filepath.Join(StateDir(cfgPath), "themes")
+	if err := os.MkdirAll(filepath.Join(themesDir, "junk"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(themesDir, "junk", "not-a-theme.json"), []byte("not a theme"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r := do(http.MethodGet, "/themes/junk/not-a-theme", ""); r.Code != http.StatusNotFound {
+		t.Errorf("GET a file that is not a theme = %d (%s), want 404", r.Code, r.Body.String())
+	}
+	if r := do(http.MethodGet, "/themes", ""); r.Code != http.StatusOK || strings.Contains(r.Body.String(), "junk/not-a-theme") {
+		t.Errorf("GET /themes = %d (%s), want the file left out", r.Code, r.Body.String())
+	}
+
+	// A file at the publisher's path refuses PUT with the change refusal wrong input gets, not
+	// with an internal error, and GET and DELETE say there is no such theme.
+	if err := os.WriteFile(filepath.Join(themesDir, "blocked"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r := do(http.MethodPut, "/themes/blocked/one", `{}`); r.Code != http.StatusUnprocessableEntity {
+		t.Errorf("PUT with a file at the publisher's path = %d (%s), want 422", r.Code, r.Body.String())
+	}
+	for _, method := range []string{http.MethodGet, http.MethodDelete} {
+		if r := do(method, "/themes/blocked/one", ""); r.Code != http.StatusNotFound {
+			t.Errorf("%s with a file at the publisher's path = %d (%s), want 404", method, r.Code, r.Body.String())
+		}
 	}
 }

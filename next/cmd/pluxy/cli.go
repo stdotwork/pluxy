@@ -46,6 +46,9 @@ type command struct {
 	more    bool
 	routes  []string
 	summary string
+	// readOnly: the command changes nothing, so a 409 or 422 from core did not refuse a change
+	// (a config that does not parse cannot be shown, but nothing was refused).
+	readOnly bool
 	// flags adds the command's own flags.
 	flags func(fs *flag.FlagSet, o *opts)
 	run   func(x *invocation) error
@@ -81,12 +84,22 @@ type invocation struct {
 // call makes one management call. With --json the reply's body goes to standard output as it
 // came; otherwise out is decoded and show prints it.
 func (x *invocation) call(method, path string, q url.Values, in, out any, show func()) error {
-	body, err := x.client.Call(x.ctx, method, path, q, in, out)
-	if err != nil {
+	if x.json {
+		// The body is printed unchanged, so it is not read through the typed reply first: a
+		// field a newer core changed the type of would abort the output. What does decode is
+		// still decoded, for the commands whose exit code depends on it (setup apply's failed
+		// picks).
+		body, err := x.client.Call(x.ctx, method, path, q, in, nil)
+		if err != nil {
+			return err
+		}
+		if out != nil {
+			_ = json.Unmarshal(body, out)
+		}
+		_, err = x.stdout.Write(body)
 		return err
 	}
-	if x.json {
-		_, err := x.stdout.Write(body)
+	if _, err := x.client.Call(x.ctx, method, path, q, in, out); err != nil {
 		return err
 	}
 	if show != nil {
@@ -143,7 +156,7 @@ var commands = []command{
 			}
 			return err
 		}},
-	{words: "config show", routes: []string{"GET /config"}, summary: "the config file, with its secrets replaced by placeholders",
+	{words: "config show", routes: []string{"GET /config"}, summary: "the config file, with its secrets replaced by placeholders", readOnly: true,
 		run: func(x *invocation) error {
 			var c management.Config
 			return x.call(http.MethodGet, "/config", nil, nil, &c, func() {
@@ -385,7 +398,7 @@ var commands = []command{
 				x.printf("account %s: %d cooldowns cleared\n", x.args[0], r.Cleared)
 			})
 		}},
-	{words: "account test", args: []string{"id"}, routes: []string{"POST /accounts/{id}/test"}, summary: "send one small request through an account",
+	{words: "account test", args: []string{"id"}, routes: []string{"POST /accounts/{id}/test"}, summary: "send one small request through an account", readOnly: true,
 		flags: func(fs *flag.FlagSet, o *opts) {
 			fs.StringVar(&o.model, "model", "", "the model to ask (default: one the account serves)")
 		},
@@ -651,7 +664,11 @@ var commands = []command{
 		}},
 	{words: "theme show", args: []string{"id"}, routes: []string{"GET /themes/{publisher}/{name}"}, summary: "a stored theme's JSON",
 		run: func(x *invocation) error {
-			body, err := x.client.Call(x.ctx, http.MethodGet, management.ThemePath(x.args[0]), nil, nil, nil)
+			path, err := themeAPIPath(x.args[0])
+			if err != nil {
+				return err
+			}
+			body, err := x.client.Call(x.ctx, http.MethodGet, path, nil, nil, nil)
 			if err != nil {
 				return err
 			}
@@ -673,8 +690,14 @@ var commands = []command{
 				return err
 			}
 			id := resolveThemeID(x.opts.id, x.args[0], raw)
+			// With --json the reply is printed unchanged, so it is not decoded into the
+			// summary first: a field a newer core changed the type of would abort it.
 			var summary management.ThemeSummary
-			body, err := x.client.CallBytes(x.ctx, http.MethodPut, management.ThemePath(id), nil, raw, &summary)
+			var out any = &summary
+			if x.json {
+				out = nil
+			}
+			body, err := x.client.CallBytes(x.ctx, http.MethodPut, management.ThemePath(id), nil, raw, out)
 			if err != nil {
 				return err
 			}
@@ -687,7 +710,11 @@ var commands = []command{
 		}},
 	{words: "theme remove", args: []string{"id"}, routes: []string{"DELETE /themes/{publisher}/{name}"}, summary: "remove a stored theme",
 		run: func(x *invocation) error {
-			return x.call(http.MethodDelete, management.ThemePath(x.args[0]), nil, nil, nil, func() {
+			path, err := themeAPIPath(x.args[0])
+			if err != nil {
+				return err
+			}
+			return x.call(http.MethodDelete, path, nil, nil, nil, func() {
 				x.printf("theme %s removed\n", x.args[0])
 			})
 		}},
@@ -806,6 +833,16 @@ func validThemeID(id string) bool {
 		return false
 	}
 	return validThemePart(pub) && validThemePart(name)
+}
+
+// themeAPIPath is the API path of a theme ID from the command line. The commands that take one
+// ID refuse a one-part ID here: it would make a path with an empty part, which core answers as a
+// theme that is not there.
+func themeAPIPath(id string) (string, error) {
+	if !validThemeID(id) {
+		return "", usageError{fmt.Sprintf("theme ID %q is not valid: write it as publisher/name", id)}
+	}
+	return management.ThemePath(id), nil
 }
 
 func validThemePart(s string) bool {
@@ -1119,7 +1156,7 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 		return exitOK
 	}
 	printError(stderr, *jsonOut, err)
-	return exitCode(err)
+	return exitCode(err, cmd.readOnly)
 }
 
 // printError writes a command's error to stderr: with --json, as the API's error object (the
@@ -1151,8 +1188,9 @@ func printError(stderr io.Writer, asJSON bool, err error) {
 	fmt.Fprintf(stderr, "%s\n", b)
 }
 
-// exitCode is the exit code for a command's error.
-func exitCode(err error) int {
+// exitCode is the exit code for a command's error. readOnly says the command changes nothing,
+// so its 409 or 422 failed a call rather than refusing a change.
+func exitCode(err error, readOnly bool) int {
 	var ue usageError
 	var ae *management.APIError
 	switch {
@@ -1167,6 +1205,9 @@ func exitCode(err error) int {
 		case http.StatusNotFound:
 			return exitNotFound
 		case http.StatusConflict, http.StatusUnprocessableEntity:
+			if readOnly {
+				return exitFailed
+			}
 			return exitChange
 		}
 	}
