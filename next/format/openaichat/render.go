@@ -49,8 +49,10 @@ type outUsage struct {
 	CompletionTokens    int64 `json:"completion_tokens"`
 	TotalTokens         int64 `json:"total_tokens"`
 	PromptTokensDetails *struct {
-		CachedTokens     int64 `json:"cached_tokens"`
-		CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
+		// CachedTokens is a pointer, so a cached count nobody reported is left out, as llm.Usage
+		// keeps it: nil is not zero.
+		CachedTokens     *int64 `json:"cached_tokens,omitempty"`
+		CacheWriteTokens int64  `json:"cache_write_tokens,omitempty"`
 	} `json:"prompt_tokens_details,omitempty"`
 	CompletionTokensDetails *struct {
 		ReasoningTokens int64 `json:"reasoning_tokens"`
@@ -142,10 +144,10 @@ func encodeUsage(u *llm.Usage) *outUsage {
 	out.TotalTokens = out.PromptTokens + out.CompletionTokens
 	if u.CachedInputTokens != nil || v(u.CacheWriteInputTokens) > 0 {
 		out.PromptTokensDetails = &struct {
-			CachedTokens     int64 `json:"cached_tokens"`
-			CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
+			CachedTokens     *int64 `json:"cached_tokens,omitempty"`
+			CacheWriteTokens int64  `json:"cache_write_tokens,omitempty"`
 		}{
-			CachedTokens:     v(u.CachedInputTokens),
+			CachedTokens:     u.CachedInputTokens,
 			CacheWriteTokens: max(0, v(u.CacheWriteInputTokens)),
 		}
 	}

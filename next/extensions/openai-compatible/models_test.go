@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -79,10 +80,26 @@ func TestListModels(t *testing.T) {
 		t.Errorf("empty list: %+v, %v", list, err)
 	}
 
+	// Gemini's list shape, which a wire_api "gemini" account answers with: the model's resource
+	// name is its id without "models/", and its other fields have the model's own places.
+	body = `{"models":[{"name":"models/gemini-a","displayName":"Gemini A","description":"A test model","version":"001","inputTokenLimit":1000,"outputTokenLimit":100,"supportedGenerationMethods":["generateContent"]},{"name":"models/gemini-a"},{"name":"gemini-b"}]}`
+	gemini, err := listModels(context.Background(), callFor("gemini"))
+	if err != nil {
+		t.Fatalf("listModels gemini list: %v", err)
+	}
+	wantGemini := []protocol.Model{
+		{ID: "gemini-a", Name: "models/gemini-a", DisplayName: "Gemini A", Description: "A test model", Version: "001",
+			InputTokenLimit: 1000, OutputTokenLimit: 100, GenerationMethods: []string{"generateContent"}},
+		{ID: "gemini-b"}, // a name without the "models/" prefix leaves Name at its default, the id
+	}
+	if !reflect.DeepEqual(gemini.Models, wantGemini) {
+		t.Errorf("gemini models = %+v, want %+v", gemini.Models, wantGemini)
+	}
+
 	// Non-list JSON or HTTP errors fail with *llm.Error.
-	body = `{"models":[]}`
+	body = `{"object":"list"}`
 	if _, err := listModels(context.Background(), callFor("chat")); err == nil {
-		t.Error("expected error when data array is missing")
+		t.Error("expected error when neither list shape is there")
 	}
 	status = http.StatusInternalServerError
 	body = `{"error":{"message":"server down"}}`

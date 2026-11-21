@@ -73,7 +73,8 @@ func refuseDowngrade(id string, minor int, req llm.Request, lost []llm.Loss) *ll
 }
 
 // withLosses adds lost to the translation report of a response.start event, as losses of the
-// extension's own translation. A reply sent as the client's body unchanged lost nothing.
+// extension's own translation. A report that says passthrough describes the body the extension
+// sent, not what core left out of the request before it, so core's losses are kept either way.
 func withLosses(ev llm.Event, lost []llm.Loss) llm.Event {
 	if len(lost) == 0 || ev.Type != llm.EventResponseStart {
 		return ev
@@ -84,9 +85,6 @@ func withLosses(ev llm.Event, lost []llm.Loss) llm.Event {
 	}
 	var t llm.Translation
 	if r.Translation != nil {
-		if r.Translation.Passthrough {
-			return ev
-		}
 		t = *r.Translation
 		t.Losses = slices.Clone(t.Losses)
 	}

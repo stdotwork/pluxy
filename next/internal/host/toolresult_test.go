@@ -19,7 +19,7 @@ import (
 // toolResultEcho is an extension that reports protocol minor version minor and answers a
 // generate call or a session turn with the request's items in response.start's raw, and a
 // translation report with one loss of its own.
-func toolResultEcho(minor int) {
+func toolResultEcho(minor int, passthrough bool) {
 	socket := os.Getenv(protocol.EnvSocket)
 	ln, err := net.Listen("unix", socket)
 	if err != nil {
@@ -28,7 +28,7 @@ func toolResultEcho(minor int) {
 	fmt.Print(protocol.HandshakeLine(protocol.Version, socket))
 	reply := func(conn net.Conn, req *llm.Request) {
 		raw, _ := json.Marshal(map[string]any{"items": req.Items})
-		tr := &llm.Translation{From: llm.FormatAnthropicMessages, To: llm.FormatOpenAIChat,
+		tr := &llm.Translation{From: llm.FormatAnthropicMessages, To: llm.FormatOpenAIChat, Passthrough: passthrough,
 			Losses: []llm.Loss{{Kind: llm.LossDropped, Path: "metadata"}}}
 		_ = protocol.WriteFrame(conn, protocol.Reply{Event: llm.Event{Type: llm.EventResponseStart,
 			Response: &llm.ResponseInfo{ID: "r", Model: "m", Raw: raw, Translation: tr}}})
@@ -177,5 +177,35 @@ func TestToolResultPartsDowngrade(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// A translation that says the client's body went upstream unchanged says nothing about what core
+// left out of it first: a tool result's parts and error flag that core dropped before sending are
+// reported as lost, beside the extension's own losses.
+func TestPassthroughKeepsCoreLosses(t *testing.T) {
+	ctx := context.Background()
+	acct := protocol.Account{ID: "a", Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-1"}}
+	ext, err := Start(filepath.Join(fakePackage(t, "tool-result-passthrough-24"), ManifestFile), Options{Log: io.Discard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ext.Stop()
+	s := ext.Generate(ctx, acct, richResult(llm.DropReport))
+	defer s.Close()
+	ev := nextWithin(t, "passthrough", s.Next)
+	if ev.Type != llm.EventResponseStart || ev.Response == nil || ev.Response.Translation == nil {
+		t.Fatalf("first event %+v, want response.start with the translation report", ev)
+	}
+	if !ev.Response.Translation.Passthrough {
+		t.Errorf("translation %+v, want the extension's passthrough report", ev.Response.Translation)
+	}
+	var paths []string
+	for _, l := range ev.Response.Translation.Losses {
+		paths = append(paths, l.Path)
+	}
+	want := []string{"metadata", "messages[1].content[0].content[1]", "messages[1].content[0].is_error"}
+	if !reflect.DeepEqual(paths, want) {
+		t.Errorf("losses %q, want %q", paths, want)
 	}
 }
