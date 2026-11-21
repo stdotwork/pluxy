@@ -550,6 +550,8 @@ func TestRootUnionKeepsEveryBranchsValues(t *testing.T) {
 		name string
 		in   string
 		want string // the property "p" after cleaning, as JSON
+		// wantOpenAPI is want for OpenAPI mode, when it differs.
+		wantOpenAPI string
 	}{
 		{
 			name: "consts of different branches are unioned",
@@ -585,6 +587,12 @@ func TestRootUnionKeepsEveryBranchsValues(t *testing.T) {
 			want: `{"anyOf":[{"enum":["read"],"type":"string"},{"type":"string"}]}`,
 		},
 		{
+			name:        "a null branch and a string branch become one nullable schema",
+			in:          root("", branch(`"p":{"type":"null"}`), branch(`"p":{"type":"string"}`)),
+			want:        `{"type":["string","null"]}`,
+			wantOpenAPI: `{"nullable":true,"type":"string"}`,
+		},
+		{
 			name: "the parent's own schema wins",
 			in:   root(`"p":{"type":"string","description":"parent"}`, branch(`"p":{"const":"read"}`), branch(`"p":{"const":"list"}`)),
 			want: `{"description":"parent","type":"string"}`,
@@ -607,8 +615,12 @@ func TestRootUnionKeepsEveryBranchsValues(t *testing.T) {
 						t.Fatalf("root not flattened: %s", first)
 					}
 					got, _ := json.Marshal(m["properties"].(map[string]any)["p"])
-					if string(got) != tc.want {
-						t.Errorf("p = %s, want %s", got, tc.want)
+					want := tc.want
+					if openAPI && tc.wantOpenAPI != "" {
+						want = tc.wantOpenAPI
+					}
+					if string(got) != want {
+						t.Errorf("p = %s, want %s", got, want)
 					}
 					if again, c := cleanToolSchema(first, openAPI, newRefBudget()); c {
 						t.Errorf("second pass changed the schema:\n%s\n%s", first, again)
