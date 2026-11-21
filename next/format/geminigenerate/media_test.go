@@ -42,11 +42,6 @@ func TestEncodeMediaURL(t *testing.T) {
 			body: `{"model":"gemini-x","messages":[{"role":"user","content":[{"type":"text","text":"look"},{"type":"image_url","image_url":{"url":"https://generativelanguage.googleapis.com/v1beta/files/abc-123"}}]}]}`,
 			want: `{"fileData":{"fileUri":"https://generativelanguage.googleapis.com/v1beta/files/abc-123"}}`,
 		},
-		{
-			name: "Chat image, Cloud Storage URI",
-			body: `{"model":"gemini-x","messages":[{"role":"user","content":[{"type":"text","text":"look"},{"type":"image_url","image_url":{"url":"gs://bucket/cat.png"}}]}]}`,
-			want: `{"fileData":{"fileUri":"gs://bucket/cat.png"}}`,
-		},
 	} {
 		req, err := openaichat.ParseRequest([]byte(c.body))
 		if err != nil {
@@ -80,6 +75,36 @@ func TestEncodeMediaURL(t *testing.T) {
 		t.Errorf("Responses file URL: body %s, losses %+v", body, losses)
 	}
 	msgs, err := anthropicmessages.ParseRequest([]byte(`{"model":"gemini-x","max_tokens":9,"messages":[{"role":"user","content":[
+		{"type":"text","text":"look"},{"type":"document","source":{"type":"url","url":"https://generativelanguage.googleapis.com/v1beta/files/report-1"}}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, losses, err = EncodeRequest(msgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"fileData":{"fileUri":"https://generativelanguage.googleapis.com/v1beta/files/report-1"}`) || len(losses) != 0 {
+		t.Errorf("Messages document URL: body %s, losses %+v", body, losses)
+	}
+}
+
+// A Cloud Storage URI from a translated request is dropped with a loss: Vertex would read the
+// object with the account's own permissions, which a client key must not reach through pluxy.
+func TestEncodeCloudStorageURIDropped(t *testing.T) {
+	chat, err := openaichat.ParseRequest([]byte(`{"model":"gemini-x","messages":[{"role":"user","content":[
+		{"type":"text","text":"look"},{"type":"image_url","image_url":{"url":"gs://bucket/cat.png"}}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, losses, err := EncodeRequest(chat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "gs://") || len(losses) != 1 || losses[0].Kind != llm.LossDropped {
+		t.Errorf("Chat image: body %s, losses %+v; want the URI dropped", body, losses)
+	}
+
+	msgs, err := anthropicmessages.ParseRequest([]byte(`{"model":"gemini-x","max_tokens":9,"messages":[{"role":"user","content":[
 		{"type":"text","text":"look"},{"type":"document","source":{"type":"url","url":"gs://bucket/report.pdf"}}]}]}`))
 	if err != nil {
 		t.Fatal(err)
@@ -88,8 +113,8 @@ func TestEncodeMediaURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(body), `"fileData":{"fileUri":"gs://bucket/report.pdf"}`) || len(losses) != 0 {
-		t.Errorf("Messages document URL: body %s, losses %+v", body, losses)
+	if strings.Contains(string(body), "gs://") || len(losses) != 1 || losses[0].Kind != llm.LossDropped {
+		t.Errorf("Messages document: body %s, losses %+v; want the URI dropped", body, losses)
 	}
 }
 

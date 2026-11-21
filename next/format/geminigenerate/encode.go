@@ -442,27 +442,28 @@ func media(p llm.Part) (map[string]any, string) {
 		return map[string]any{"fileData": map[string]any{"fileUri": url}}, ""
 	}
 	if !geminiFileURI(url) {
-		return nil, "GenerateContent takes a URL only as a Files API URI (/v1/files/ or /v1beta/files/) or a Cloud Storage (gs://) URI"
+		return nil, "GenerateContent takes a URL only as a Files API URI (/v1/files/ or /v1beta/files/)"
 	}
 	return map[string]any{"fileData": map[string]any{"fileUri": url}}, ""
 }
 
-// geminiFileURI reports whether url is one of the file URI forms Google documents for
-// fileData.fileUri: a Files API file URI, which files.upload and files.get return
-// (https://ai.google.dev/gemini-api/docs/files), or a Cloud Storage URI, which Vertex AI takes
-// (https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/send-multimodal-prompts).
-// Nothing else is documented for GenerateContent, and pluxy never fetches the URL itself.
+// geminiFileURI reports whether url is a file URI Google documents for fileData.fileUri: a Files
+// API file URI, which files.upload and files.get return (https://ai.google.dev/gemini-api/docs/files).
+// Nothing else is accepted for a translated request: a Cloud Storage (gs://) URI is refused
+// because Vertex AI would read that object with the account's own permissions on behalf of
+// whoever holds the client key. pluxy never fetches the URL itself.
 func geminiFileURI(url string) bool {
 	const api = "https://generativelanguage.googleapis.com/"
-	if rest, ok := strings.CutPrefix(url, api); ok {
-		for _, v := range []string{"v1/", "v1beta/", "v1alpha/"} {
-			if path, ok := strings.CutPrefix(rest, v); ok {
-				return strings.HasPrefix(path, "files/") && len(path) > len("files/")
-			}
-		}
+	rest, ok := strings.CutPrefix(url, api)
+	if !ok {
 		return false
 	}
-	return strings.HasPrefix(url, "gs://") && len(url) > len("gs://")
+	for _, v := range []string{"v1/", "v1beta/", "v1alpha/"} {
+		if path, ok := strings.CutPrefix(rest, v); ok {
+			return strings.HasPrefix(path, "files/") && len(path) > len("files/")
+		}
+	}
+	return false
 }
 
 // withSignature puts sig on part as its thoughtSignature, replacing SkipSignature.
