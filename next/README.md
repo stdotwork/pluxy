@@ -2153,8 +2153,26 @@ The recent window lives in an in-memory ring holding the last `max_events` reque
 Core also writes every recorded event asynchronously through a bounded 4,096-event queue to one
 JSONL file per UTC day under `usage/` beside the config file (`usage/YYYY-MM-DD.jsonl`, mode `0600`,
 `"v": 1` on each line), without `fsync` per line. When the queue is full, new events are dropped from
-the disk queue and counted in `dropped` so slow storage never blocks requests. On startup, the in-memory ring is refilled from today's and yesterday's files (skipping a torn last line) while continuing `seq` from the highest `seq` seen in the refilled files (numbering older unsequenced lines in order), and day files older than `keep_days` (default 90; `0` keeps everything) are deleted at startup and daily.
-When a range in `GET /v0/management/usage` covers closed UTC days (before today), each closed day gets a summary file `usage/summary/YYYY-MM-DD.json` (mode `0600`) built on demand from its day file, cached in memory after, and kept even after `keep_days` removes old `.jsonl` files; summaries store per-hour, model, provider, account, client key, failure split, latency sum and all six token counts so long ranges never re-read closed `.jsonl` files. Closed days are counted by whole UTC hours, so a `since` or `until` inside an hour on a closed day counts that whole hour. Today's portion comes from the in-memory ring (or today's `.jsonl` file if earlier events from today rolled out of the ring).
+the disk queue and counted in `dropped` so slow storage never blocks requests; an event the disk
+refuses (a full disk, a file it cannot open) is counted in `write_errors` and logged with its error,
+and stays in the in-memory record. On startup, the in-memory ring is refilled from today's and
+yesterday's files (skipping a torn last line), `seq` continues from the highest `seq` in the refilled
+files or in the newest day file left (numbering older unsequenced lines in order), and day files
+older than `keep_days` (default 90; `0` keeps everything) are deleted at startup and daily. The
+highest `seq` numbered is also kept in `usage/seq.json` (mode `0600`), written at startup, before a
+day file is pruned and on shutdown, so `seq` continues above it even after every day file that held
+it is gone.
+When a range in `GET /v0/management/usage` covers closed UTC days (before today), each closed day
+gets a summary file `usage/summary/YYYY-MM-DD.json` (mode `0600`) built on demand from its day file,
+cached in memory after, and kept even after `keep_days` removes old `.jsonl` files; summaries store
+per-hour, model, provider, account, client key, failure split, latency sum and all six token counts
+so long ranges never re-read closed `.jsonl` files. Each summary also records the size of the day
+file it was built from and is rebuilt when that file has grown since, so a late event that lands in
+a closed day reaches the totals whether or not the summary's invalidation got through. Closed days
+are counted by whole UTC hours, so a `since` or `until` inside an hour on a closed day counts that
+whole hour, and a series counts that hour in the first step it overlaps, so its steps add up to the
+totals. Today's portion comes from the in-memory ring (or today's `.jsonl` file if earlier events
+from today rolled out of the ring).
 Client key IDs (`key_id`) use an HMAC key stored in `state/key-id.key` beside the config file (mode `0600`), so key IDs match across restarts. Reading the record never removes anything: today's core hands its usage queue out once and deletes what it hands out.
 
 ```json
@@ -2166,7 +2184,7 @@ requests are not recorded and what was recorded stays readable.
 
 | Call | What it does |
 | --- | --- |
-| `GET /v0/management/usage` | What the recorded requests add up to over the kept range: `total_requests`, `success_count`, `failure_count`, `success_rate` (0 to 1), `average_latency_ms` and `tokens` (the sums of each token count); the same per model (`models`), extension (`providers`), account (`accounts`, each with its `provider`) and client key (`keys`, by `key_id`), most requests first, plus `by` and `breakdown` when `by` (`model`, `account`, `key`, `provider`) is asked; and `series`, the requests, failures and tokens in each step (`bucket` from `1s` to `24h`, `buckets` up to 1440; defaults to 60 steps of `1m` with no range, `1h` steps for ranges up to 48 hours and `24h` steps beyond), oldest first, ending at `until` (or with the step that holds now). `oldest` is the arrival time of the oldest event considered, `evicted` how many events the limits have pushed out since core started, `dropped` how many events were dropped since core started because the disk writer's queue was full, and `enabled` whether recording is on. |
+| `GET /v0/management/usage` | What the recorded requests add up to over the kept range: `total_requests`, `success_count`, `failure_count`, `success_rate` (0 to 1), `average_latency_ms` and `tokens` (the sums of each token count); the same per model (`models`), extension (`providers`), account (`accounts`, each with its `provider`) and client key (`keys`, by `key_id`), most requests first, plus `by` and `breakdown` when `by` (`model`, `account`, `key`, `provider`) is asked; and `series`, the requests, failures and tokens in each step (`bucket` from `1s` to `24h`, `buckets` up to 1440; defaults to 60 steps of `1m` with no range, `1h` steps for ranges up to 48 hours and `24h` steps beyond), oldest first, ending at `until` (or with the step that holds now). `oldest` is the arrival time of the oldest event considered, `evicted` how many events the limits have pushed out since core started, `dropped` how many events were dropped since core started because the disk writer's queue was full, `write_errors` how many the disk refused to write, each logged, and `enabled` whether recording is on. |
 | `GET /v0/management/usage/events` | The recorded events in the recent ring, oldest first with `after` (`seq` above `after`) or newest first with `before` (`seq` below `before`, or `0` for the latest page), up to `limit` (default 100, at most 1000). The reply's `next` is the `seq` to pass for the next page, `more` says whether more match, and `lost` says whether events after `after` were pushed out before this read, so a program that polls with `after` knows it missed some. |
 
 Both calls take the filters `since` (an RFC 3339 time, or a duration back from now such as `24h`, `7d` or `30d`), `until` (an RFC 3339 time), `model`, `provider`, `account`, `key` (or `key_id`) and `failed` (`true` or `false`). A filter that does not parse is a 400.

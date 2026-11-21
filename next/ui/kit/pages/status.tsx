@@ -108,8 +108,9 @@ const REFRESH_MS = 60_000;
  * The usage call's query. `since` is a duration back from core's own now, so the clocks of
  * the browser and core never have to agree; the series is the same window cut at 10-minute marks.
  * shortcut: totals cover the whole 200 minutes while the series' first step starts at its
- * 10-minute mark, so the oldest step can hold up to 10 minutes less than the totals count;
- * upgrade by asking for `since` at that mark when a call can say it.
+ * 10-minute mark, so the oldest step can hold up to 10 minutes less than the totals count, and a
+ * closed day (which core counts in whole hours) counts the hour that mark falls inside whole in
+ * the first step; upgrade by asking for `since` at that mark when a call can say it.
  */
 export const usageQuery = () =>
   `since=${BUCKET_MINUTES * BUCKETS}m&bucket=${BUCKET_MINUTES}m&buckets=${BUCKETS}`;
