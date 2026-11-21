@@ -213,7 +213,7 @@ func TestCleanUnknownKeywordsAndLiteralProtection(t *testing.T) {
 		"required": ["properties", "readOnly", "writeOnly", "$ref", "x-custom", "meta"]
 	}`
 
-	cleaned, changed := cleanToolSchema(json.RawMessage(in), false)
+	cleaned, changed := cleanToolSchema(json.RawMessage(in), false, newRefBudget())
 	if !changed {
 		t.Fatal("expected schema to be modified")
 	}
@@ -256,7 +256,7 @@ func TestCleanUnknownKeywordsAndLiteralProtection(t *testing.T) {
 		t.Errorf("literal examples value was mutated: %#v", ex)
 	}
 
-	if _, again := cleanToolSchema(cleaned, false); again {
+	if _, again := cleanToolSchema(cleaned, false, newRefBudget()); again {
 		t.Errorf("expected second pass to be a no-op")
 	}
 }
@@ -285,7 +285,7 @@ func TestCleanRefsCyclesAndNoAliasing(t *testing.T) {
 	in = strings.ReplaceAll(in, "leaf~1slash", "leaf/slash")
 	in = strings.ReplaceAll(in, "leaf~01slash", "leaf~1slash")
 
-	cleaned, _ := cleanToolSchema(json.RawMessage(in), false)
+	cleaned, _ := cleanToolSchema(json.RawMessage(in), false, newRefBudget())
 	var m map[string]any
 	if err := json.Unmarshal(cleaned, &m); err != nil {
 		t.Fatal(err)
@@ -327,7 +327,7 @@ func TestCleanConditionalsAndAllOf(t *testing.T) {
 		]
 	}`
 
-	cleaned, _ := cleanToolSchema(json.RawMessage(in), false)
+	cleaned, _ := cleanToolSchema(json.RawMessage(in), false, newRefBudget())
 	var m map[string]any
 	if err := json.Unmarshal(cleaned, &m); err != nil {
 		t.Fatal(err)
@@ -373,7 +373,7 @@ func TestCleanTypeRequiredAndArrayItemsConsistency(t *testing.T) {
 		"required": ["nestedBare", "nestedBare", "nonexistent"]
 	}`
 
-	cleaned, _ := cleanToolSchema(json.RawMessage(in), false)
+	cleaned, _ := cleanToolSchema(json.RawMessage(in), false, newRefBudget())
 	var m map[string]any
 	if err := json.Unmarshal(cleaned, &m); err != nil {
 		t.Fatal(err)
@@ -448,7 +448,7 @@ func TestCleanEnumsAndBooleanSubschemas(t *testing.T) {
 		}
 	}`
 
-	cleaned, _ := cleanToolSchema(json.RawMessage(in), false)
+	cleaned, _ := cleanToolSchema(json.RawMessage(in), false, newRefBudget())
 	var m map[string]any
 	if err := json.Unmarshal(cleaned, &m); err != nil {
 		t.Fatal(err)
@@ -501,7 +501,7 @@ func TestCleanEnumsAndBooleanSubschemas(t *testing.T) {
 func TestCleanUnionsAndOpenAPIPassthrough(t *testing.T) {
 	// Nested oneOf normalizes to anyOf, and openAPI parameters preserve uppercase OBJECT/STRING.
 	in := `{"type":"object","properties":{"a":{"oneOf":[{"type":"string"},{"type":"integer"}]}}}`
-	cleaned, _ := cleanToolSchema(json.RawMessage(in), false)
+	cleaned, _ := cleanToolSchema(json.RawMessage(in), false, newRefBudget())
 	var m map[string]any
 	if err := json.Unmarshal(cleaned, &m); err != nil {
 		t.Fatal(err)
@@ -512,13 +512,13 @@ func TestCleanUnionsAndOpenAPIPassthrough(t *testing.T) {
 	}
 
 	cleanOpenAPI := json.RawMessage(`{"type":"OBJECT","properties":{"city":{"type":"STRING"}},"required":["city"]}`)
-	out, changed := cleanToolSchema(cleanOpenAPI, true)
+	out, changed := cleanToolSchema(cleanOpenAPI, true, newRefBudget())
 	if changed || string(out) != string(cleanOpenAPI) {
 		t.Errorf("clean OpenAPI schema changed = %v, out = %s", changed, out)
 	}
 
 	dirtyOpenAPI := json.RawMessage(`{"type":"object","additionalProperties":false,"properties":{"nick":{"type":["string","null"]}}}`)
-	oaOut, oaChanged := cleanToolSchema(dirtyOpenAPI, true)
+	oaOut, oaChanged := cleanToolSchema(dirtyOpenAPI, true, newRefBudget())
 	if !oaChanged {
 		t.Fatal("expected dirty OpenAPI schema to change")
 	}
@@ -603,7 +603,7 @@ func TestRootUnionKeepsEveryBranchsValues(t *testing.T) {
 			for _, tc := range cases {
 				t.Run(key+"/"+map[bool]string{false: "json", true: "openapi"}[openAPI]+"/"+tc.name, func(t *testing.T) {
 					in := strings.ReplaceAll(tc.in, "%KEY%", key)
-					first, changed := cleanToolSchema(json.RawMessage(in), openAPI)
+					first, changed := cleanToolSchema(json.RawMessage(in), openAPI, newRefBudget())
 					if !changed {
 						t.Fatal("schema unchanged")
 					}
@@ -622,11 +622,11 @@ func TestRootUnionKeepsEveryBranchsValues(t *testing.T) {
 					if string(got) != want {
 						t.Errorf("p = %s, want %s", got, want)
 					}
-					if again, c := cleanToolSchema(first, openAPI); c {
+					if again, c := cleanToolSchema(first, openAPI, newRefBudget()); c {
 						t.Errorf("second pass changed the schema:\n%s\n%s", first, again)
 					}
 					for range 20 {
-						if next, _ := cleanToolSchema(json.RawMessage(in), openAPI); string(next) != string(first) {
+						if next, _ := cleanToolSchema(json.RawMessage(in), openAPI, newRefBudget()); string(next) != string(first) {
 							t.Fatalf("output varies between runs:\n%s\n%s", first, next)
 						}
 					}
@@ -740,7 +740,7 @@ func TestNumericEnums(t *testing.T) {
 			}
 			t.Run(tc.name+"/"+mode, func(t *testing.T) {
 				in := `{"type":"object","properties":{"p":` + tc.in + `}}`
-				first, _ := cleanToolSchema(json.RawMessage(in), openAPI)
+				first, _ := cleanToolSchema(json.RawMessage(in), openAPI, newRefBudget())
 				// Numbers are decoded as json.Number so that 2e3 is compared as written.
 				var m struct {
 					Properties map[string]any `json:"properties"`
@@ -753,7 +753,7 @@ func TestNumericEnums(t *testing.T) {
 				if got, _ := json.Marshal(m.Properties["p"]); string(got) != want {
 					t.Errorf("p = %s, want %s", got, want)
 				}
-				if again, changed := cleanToolSchema(first, openAPI); changed {
+				if again, changed := cleanToolSchema(first, openAPI, newRefBudget()); changed {
 					t.Errorf("second pass changed the schema:\n%s\n%s", first, again)
 				}
 			})
