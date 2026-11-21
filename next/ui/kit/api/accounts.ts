@@ -12,6 +12,8 @@ export interface AccountError {
 
 export interface Account {
   id: string;
+  /** `acc_` and 8 hex digits: what core calls the account outside itself, as in a request's `tried`. */
+  public_id?: string;
   source: "config" | "login";
   extension?: string;
   kind?: string;
