@@ -4,12 +4,21 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stdotwork/pluxy/next/format/anthropicmessages"
 	"github.com/stdotwork/pluxy/next/format/openaichat"
 	"github.com/stdotwork/pluxy/next/format/openairesponses"
 	"github.com/stdotwork/pluxy/next/llm"
+)
+
+var (
+	// apiSettings is an account at the Gemini API, vertexSettingsTest one on Vertex AI and customHost
+	// one whose base_url is a third-party host.
+	apiSettings        = settings{BaseURL: defaultBaseURL}
+	vertexSettingsTest = settings{Vertex: &vertexSettings{}}
+	customHost         = settings{BaseURL: "https://llm.example.com"}
 )
 
 // A client's service tier reaches the Gemini API as its serviceTier: default is standard, flex and
@@ -63,7 +72,7 @@ func TestServiceTierTranslated(t *testing.T) {
 		{"responses verbosity", responses(`,"text":{"verbosity":"low"}`), "", []string{"text.verbosity"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			body, tr, err := buildBodyOn(c.req, false)
+			body, tr, err := buildBodyOn(c.req, apiSettings)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -82,14 +91,14 @@ func TestServiceTierTranslated(t *testing.T) {
 			if len(c.dropped) > 0 {
 				rej := c.req
 				rej.DropPolicy = llm.DropReject
-				_, _, err := buildBodyOn(rej, false)
+				_, _, err := buildBodyOn(rej, apiSettings)
 				var le *llm.Error
 				if !errors.As(err, &le) || le.Code != llm.CodeUnsupported || !slices.Equal(le.Dropped, c.dropped) {
 					t.Errorf("reject policy: %v, want unsupported naming %q", err, c.dropped)
 				}
 			}
 			// Vertex AI sends no tier, and reports the one it would have sent.
-			vbody, vtr, err := buildBodyOn(c.req, true)
+			vbody, vtr, err := buildBodyOn(c.req, vertexSettingsTest)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -114,13 +123,47 @@ func TestServiceTierTranslated(t *testing.T) {
 func TestServiceTierGeminiPassthrough(t *testing.T) {
 	body := `{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"serviceTier":"flex"}`
 	req := llm.Request{Model: "gemini-2.5-pro", Native: &llm.Native{Format: llm.FormatGeminiGenerate, Body: json.RawMessage(body)}}
-	for _, vertex := range []bool{false, true} {
-		got, tr, err := buildBodyOn(req, vertex)
+	for _, st := range []settings{apiSettings, vertexSettingsTest, customHost} {
+		got, tr, err := buildBodyOn(req, st)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if string(got) != body || !tr.Passthrough || len(tr.Losses) != 0 {
-			t.Errorf("vertex=%v: body %s, report %+v, want the body as sent and no losses", vertex, got, tr)
+			t.Errorf("%+v: body %s, report %+v, want the body as sent and no losses", st, got, tr)
+		}
+	}
+}
+
+// An account whose base_url is not the Gemini API's gets no service tier from a translated request,
+// as Vertex AI does not: the same loss at the client's field, and the request still goes (and is
+// refused under the reject drop policy, as a Vertex one is).
+func TestServiceTierCustomHost(t *testing.T) {
+	req, err := openaichat.ParseRequest([]byte(`{"model":"m","service_tier":"priority","verbosity":"low","messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, st := range map[string]settings{"custom": customHost, "vertex": vertexSettingsTest} {
+		body, tr, err := buildBodyOn(req, st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(body), "serviceTier") {
+			t.Errorf("%s: body has a service tier: %s", name, body)
+		}
+		if d := tr.DroppedPaths(); !slices.Equal(d, []string{"service_tier", "verbosity"}) {
+			t.Errorf("%s: dropped %q, want service_tier and verbosity", name, d)
+		}
+		rej := req
+		rej.DropPolicy = llm.DropReject
+		if _, _, err := buildBodyOn(rej, st); err == nil {
+			t.Errorf("%s: a tier was not refused under reject", name)
+		}
+	}
+	// The Gemini API's host, in any letter case and with a path or port, takes one.
+	for _, base := range []string{"https://generativelanguage.googleapis.com", "https://GenerativeLanguage.googleapis.com/v1beta"} {
+		body, _, err := buildBodyOn(req, settings{BaseURL: base})
+		if err != nil || !strings.Contains(string(body), `"serviceTier":"priority"`) {
+			t.Errorf("%s: %v, body %s, want serviceTier priority", base, err, body)
 		}
 	}
 }

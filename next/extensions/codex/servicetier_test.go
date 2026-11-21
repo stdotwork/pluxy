@@ -133,3 +133,58 @@ func TestVerbosityTranslated(t *testing.T) {
 		t.Errorf("dropped %q, want none", d)
 	}
 }
+
+// What Codex takes depends on the account's base_url: only OpenAI's API and the ChatGPT backend, the
+// two default hosts, are known to take a service tier and a verbosity. At any other host a request
+// translated from another format carries neither, and each is reported as dropped at the client's
+// field; a Responses client's own body goes as it came, through Codex's filter.
+func TestServiceTierByBaseURL(t *testing.T) {
+	chat, err := openaichat.ParseRequest([]byte(`{"model":"gpt-test","service_tier":"priority","verbosity":"low","messages":[{"role":"user","content":"hi"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	own, err := openairesponses.ParseRequest([]byte(`{"model":"gpt-test","service_tier":"priority","text":{"verbosity":"low"},"input":"hi"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name    string
+		req     llm.Request
+		set     settings
+		sub     bool
+		tier    string
+		verbose string
+		dropped []string
+	}{
+		{"api default", chat, settings{}, false, "priority", "low", nil},
+		{"subscription default", chat, settings{}, true, "priority", "low", nil},
+		{"api explicit", chat, settings{BaseURL: "https://API.openai.com/v1/"}, false, "priority", "low", nil},
+		{"chatgpt explicit", chat, settings{BaseURL: "https://chatgpt.com/backend-api/codex"}, true, "priority", "low", nil},
+		{"custom host", chat, settings{BaseURL: "https://llm.example.com/v1"}, false, "", "", []string{"service_tier", "verbosity"}},
+		{"custom host, subscription", chat, settings{BaseURL: "https://llm.example.com/v1"}, true, "", "", []string{"service_tier", "verbosity"}},
+		{"lookalike host", chat, settings{BaseURL: "https://api.openai.com.evil.test/v1"}, false, "", "", []string{"service_tier", "verbosity"}},
+		{"own body, custom host", own, settings{BaseURL: "https://llm.example.com/v1"}, false, "priority", "low", nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ur, err := buildRequest(c.req, "acct", c.set, account{token: "sk-test", subscription: c.sub}, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var body struct {
+				ServiceTier string `json:"service_tier"`
+				Text        struct {
+					Verbosity string `json:"verbosity"`
+				} `json:"text"`
+			}
+			if err := json.Unmarshal(ur.body, &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.ServiceTier != c.tier || body.Text.Verbosity != c.verbose {
+				t.Errorf("body has service_tier %q and verbosity %q, want %q and %q: %s", body.ServiceTier, body.Text.Verbosity, c.tier, c.verbose, ur.body)
+			}
+			if d := ur.tr.DroppedPaths(); !slices.Equal(d, c.dropped) {
+				t.Errorf("dropped %q, want %q", d, c.dropped)
+			}
+		})
+	}
+}

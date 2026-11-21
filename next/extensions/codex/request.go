@@ -4,6 +4,7 @@ import (
 	"crypto/sha1"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
@@ -59,9 +60,12 @@ func buildRequest(req llm.Request, accountID string, s settings, a account, ws b
 	} else {
 		r := req
 		r.Model = model
-		// The Codex endpoint takes a service tier and a verbosity (the shaper then keeps the tiers it
-		// serves).
-		enc, losses, err := openairesponses.EncodeRequestWith(r, openairesponses.EncodeOptions{ServiceTier: true, Verbosity: true})
+		// The Codex endpoint takes a service tier and a verbosity, and so does OpenAI's API; a
+		// custom base_url may be a third-party host that refuses a field it does not list, so it
+		// gets neither from a translated request (takesTier). The shaper then keeps the tiers
+		// Codex serves.
+		tier := takesTier(s, a)
+		enc, losses, err := openairesponses.EncodeRequestWith(r, openairesponses.EncodeOptions{ServiceTier: tier, Verbosity: tier})
 		if err != nil {
 			return nil, err
 		}
@@ -98,6 +102,18 @@ func buildRequest(req llm.Request, accountID string, s settings, a account, ws b
 	}
 	return &upstreamRequest{body: out, tr: tr, model: model, sessionID: sh.sessionID, names: sh.names,
 		keepOutput: nativeLite && (ws || req.Stream), encryptedReasoning: sh.encryptedReasoning}, nil
+}
+
+// takesTier reports whether the account's upstream is known to take a service tier and a verbosity
+// in a Responses request: the hosts of the two default base URLs, OpenAI's API and the ChatGPT
+// backend Codex uses. Any other base_url may be a third-party host.
+func takesTier(s settings, a account) bool {
+	u, err := url.Parse(baseURL(s, a))
+	if err != nil {
+		return false
+	}
+	h := strings.ToLower(u.Hostname())
+	return h == "api.openai.com" || h == "chatgpt.com"
 }
 
 // Fields the Codex endpoint does not take, removed from every request. Codex's own request has no

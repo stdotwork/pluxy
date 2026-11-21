@@ -58,7 +58,7 @@ func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	// A conversation that ends on the model's turn is summarized with that turn: Anthropic takes
 	// one on a compaction request (its docs' compaction loop sends one to Claude Opus 5.5), though
 	// the Messages encoder drops it as a prefill on a generation for the models that refuse one.
-	body, _, err := buildBodyWith(req, s.CacheTTL, anthropicmessages.EncodeOptions{KeepModelTurn: true})
+	body, _, err := buildBodyWith(req, s.CacheTTL, serviceOptions(anthropicmessages.EncodeOptions{KeepModelTurn: true}, req, s.BaseURL))
 	if err != nil {
 		return err
 	}

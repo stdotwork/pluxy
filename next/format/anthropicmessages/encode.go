@@ -161,7 +161,8 @@ type EncodeOptions struct {
 	// since a third-party upstream may refuse a field it does not list. A Messages client's own
 	// tier is written either way.
 	ServiceTier bool
-	// FastMode, with ServiceTier, lets the priority service tier be sent as "speed": "fast".
+	// FastMode lets the priority service tier be sent as "speed": "fast", whether or not
+	// ServiceTier is set (a caller may send fast mode where it sends no other tier).
 	// Anthropic takes the field only with the fast-mode beta header (and only on some models), so
 	// the caller sets it only when it adds that header to the request it sends. Left off, the
 	// priority tier is dropped and reported.
@@ -589,21 +590,25 @@ func (e *encoder) serviceTier(req llm.Request, opts EncodeOptions, out map[strin
 		return
 	}
 	own := req.SourceFormat() == format
-	if !opts.ServiceTier && !own {
-		e.lose(llm.LossDropped, llm.ServiceTierPath(req), llm.ServiceTierUnsent)
-		return
-	}
-	switch llm.CanonicalServiceTier(tier) {
-	case llm.ServiceTierAuto:
-		out["service_tier"] = "auto"
-	case llm.ServiceTierDefault:
-		out["service_tier"] = "standard_only"
-	case llm.ServiceTierPriority:
+	t := llm.CanonicalServiceTier(tier)
+	if t == llm.ServiceTierPriority {
+		// Fast mode has its own switch: a caller may send it where it sends no other tier.
 		if opts.FastMode || own {
 			out["speed"] = "fast"
 		} else {
 			e.lose(llm.LossDropped, llm.ServiceTierPath(req), "Messages takes the priority tier only as fast mode, which this upstream is not sent")
 		}
+		return
+	}
+	if !opts.ServiceTier && !own {
+		e.lose(llm.LossDropped, llm.ServiceTierPath(req), llm.ServiceTierUnsent)
+		return
+	}
+	switch t {
+	case llm.ServiceTierAuto:
+		out["service_tier"] = "auto"
+	case llm.ServiceTierDefault:
+		out["service_tier"] = "standard_only"
 	default:
 		e.lose(llm.LossDropped, llm.ServiceTierPath(req), fmt.Sprintf("Messages has no %q service tier", tier))
 	}

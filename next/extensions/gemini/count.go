@@ -21,7 +21,7 @@ func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error
 	if err != nil {
 		return err
 	}
-	body, tr, err := buildBody(call.Request)
+	body, tr, err := buildBodyOn(call.Request, s)
 	if err != nil {
 		return err
 	}

@@ -45,7 +45,7 @@ func compactTo(ctx context.Context, call sdk.Call, out sender) (err error) {
 	if err != nil {
 		return err
 	}
-	body, tr, err := buildBodyOn(req, s.Vertex != nil)
+	body, tr, err := buildBodyOn(req, s)
 	if err != nil {
 		return err
 	}

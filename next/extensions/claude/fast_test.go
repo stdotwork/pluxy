@@ -246,3 +246,84 @@ func TestServiceTierMessagesUnchanged(t *testing.T) {
 		}
 	}
 }
+
+// An account's base_url decides what Claude sends. Only Anthropic's own API takes a service tier
+// from a request in another format (a third-party host may refuse a field it does not list), and
+// fast mode follows it, except that a Responses client's priority tier still goes as fast mode on
+// any base_url, as it did before other formats' did. Anything left out is reported as dropped at
+// the client's field.
+func TestServiceTierByBaseURL(t *testing.T) {
+	chat := func(extra string) llm.Request {
+		r, err := openaichat.ParseRequest([]byte(`{"model":"claude-opus-4-8","messages":[{"role":"user","content":"hi"}]` + extra + `}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	responses := func(extra string) llm.Request {
+		r, err := openairesponses.ParseRequest([]byte(`{"model":"claude-opus-4-8","input":"hi"` + extra + `}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	gemini := func(extra string) llm.Request {
+		r, err := geminigenerate.ParseRequest("claude-opus-4-8", false, []byte(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}]`+extra+`}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	const custom = "https://llm.example.com"
+	for _, c := range []struct {
+		name    string
+		req     llm.Request
+		base    string
+		speed   string
+		tier    string
+		dropped []string
+	}{
+		{"chat priority at Anthropic", chat(`,"service_tier":"priority"`), defaultBaseURL, "fast", "", nil},
+		{"chat auto at Anthropic", chat(`,"service_tier":"auto"`), defaultBaseURL, "", "auto", nil},
+		{"chat priority at a custom host", chat(`,"service_tier":"priority"`), custom, "", "", []string{"service_tier"}},
+		{"chat fast at a custom host", chat(`,"service_tier":"fast"`), custom, "", "", []string{"service_tier"}},
+		{"chat auto at a custom host", chat(`,"service_tier":"auto"`), custom, "", "", []string{"service_tier"}},
+		{"chat default at a custom host", chat(`,"service_tier":"default"`), custom, "", "", []string{"service_tier"}},
+		{"chat verbosity at a custom host", chat(`,"verbosity":"low"`), custom, "", "", []string{"verbosity"}},
+		{"gemini priority at a custom host", gemini(`,"serviceTier":"priority"`), custom, "", "", []string{"serviceTier"}},
+		{"gemini standard at a custom host", gemini(`,"serviceTier":"standard"`), custom, "", "", []string{"serviceTier"}},
+		{"responses priority at a custom host", responses(`,"service_tier":"priority"`), custom, "fast", "", nil},
+		{"responses fast at a custom host", responses(`,"service_tier":"fast"`), custom, "fast", "", nil},
+		{"responses auto at a custom host", responses(`,"service_tier":"auto"`), custom, "", "", []string{"service_tier"}},
+		{"responses flex at a custom host", responses(`,"service_tier":"flex"`), custom, "", "", []string{"service_tier"}},
+		{"chat none at a custom host", chat(``), custom, "", "", nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			opts := serviceOptions(anthropicmessages.EncodeOptions{}, c.req, c.base)
+			body, tr, err := buildBodyWith(c.req, cacheTTL5m, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got struct {
+				Speed       string `json:"speed"`
+				ServiceTier string `json:"service_tier"`
+			}
+			if err := json.Unmarshal(body, &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Speed != c.speed || got.ServiceTier != c.tier {
+				t.Errorf("body has speed %q and service_tier %q, want %q and %q: %s", got.Speed, got.ServiceTier, c.speed, c.tier, body)
+			}
+			if d := tr.DroppedPaths(); !slices.Equal(d, c.dropped) {
+				t.Errorf("dropped %q, want %q", d, c.dropped)
+			}
+			rej := c.req
+			rej.DropPolicy = llm.DropReject
+			_, _, err = buildBodyWith(rej, cacheTTL5m, serviceOptions(anthropicmessages.EncodeOptions{}, rej, c.base))
+			var le *llm.Error
+			if got := errors.As(err, &le) && le.Code == llm.CodeUnsupported; got != (len(c.dropped) > 0) {
+				t.Errorf("reject policy: error %v, want refused: %v", err, len(c.dropped) > 0)
+			}
+		})
+	}
+}

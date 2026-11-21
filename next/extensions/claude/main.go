@@ -247,9 +247,9 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
-	body, tr, err := buildBodyWith(call.Request, s.CacheTTL, anthropicmessages.EncodeOptions{
+	body, tr, err := buildBodyWith(call.Request, s.CacheTTL, serviceOptions(anthropicmessages.EncodeOptions{
 		SearchResultOwned: func(enc string) bool { return searchOwners.mintedBy(enc, call.Account.ID) },
-	})
+	}, call.Request, s.BaseURL))
 	if err != nil {
 		return err
 	}
@@ -413,9 +413,9 @@ func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
 			Message: "this account's base_url is not Anthropic's own (" + defaultBaseURL + "), which is the only one this extension sends a token count to"}
 	}
-	body, tr, err := buildBodyWith(call.Request, s.CacheTTL, anthropicmessages.EncodeOptions{
+	body, tr, err := buildBodyWith(call.Request, s.CacheTTL, serviceOptions(anthropicmessages.EncodeOptions{
 		SearchResultOwned: func(enc string) bool { return searchOwners.mintedBy(enc, call.Account.ID) },
-	})
+	}, call.Request, s.BaseURL))
 	if err != nil {
 		return err
 	}
@@ -480,7 +480,19 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 }
 
 func buildBodyWithTTL(req llm.Request, cacheTTL string) ([]byte, *llm.Translation, error) {
-	return buildBodyWith(req, cacheTTL, anthropicmessages.EncodeOptions{})
+	return buildBodyWith(req, cacheTTL, serviceOptions(anthropicmessages.EncodeOptions{}, req, defaultBaseURL))
+}
+
+// serviceOptions returns opts with the service tier and fast mode set for an account whose base URL
+// is baseURL. Only Anthropic's own API is known to take a service tier (a third-party host may
+// refuse a field it does not list), and its fast mode is sent where post adds the beta header it
+// needs. On another host a Responses client's priority tier still goes as fast mode, as it did
+// before other formats' did; no other client format's does.
+func serviceOptions(opts anthropicmessages.EncodeOptions, req llm.Request, baseURL string) anthropicmessages.EncodeOptions {
+	anthropic := isAnthropicBase(baseURL)
+	opts.ServiceTier = anthropic
+	opts.FastMode = anthropic || req.SourceFormat() == llm.FormatOpenAIResponses
+	return opts
 }
 
 // buildBodyWith builds the body as buildBodyWithTTL does, encoding a request in another format
@@ -519,9 +531,6 @@ func buildBodyWith(req llm.Request, cacheTTL string, opts anthropicmessages.Enco
 			return body, tr, nil
 		}
 	}
-	// Anthropic takes a service tier, and a priority one goes as fast mode: post adds the beta
-	// header it needs.
-	opts.ServiceTier, opts.FastMode = true, true
 	body, losses, err := anthropicmessages.EncodeRequestWith(req, opts)
 	if err != nil {
 		return nil, nil, err
