@@ -20,8 +20,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/format"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/protocol/nativeonly"
 	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
 
@@ -581,6 +583,17 @@ func (e *Extension) CountTokens(ctx context.Context, account protocol.Account, r
 	return e.call(ctx, protocol.OpCountTokens, account, req)
 }
 
+// nativeOnlyMinor is the minor version that adds native-only generate calls
+// (protocol.Call.NativeOnly; package nativeonly holds their rule).
+const nativeOnlyMinor = 27
+
+// ParsesNative reports whether an extension that described itself with info takes native-only
+// generate calls (protocol.Call.NativeOnly): it implements minor version 27 or later and says
+// it parses a request's native body itself, with the parsers core has (format.ParserVersion).
+func ParsesNative(info protocol.Info) bool {
+	return info.ProtocolMinor >= nativeOnlyMinor && info.NativeParser == format.ParserVersion
+}
+
 // ServesEndpoints reports whether an extension that described itself with info serves endpoint
 // calls: it implements minor version 7 or later and lists the endpoint operation.
 func ServesEndpoints(info protocol.Info) bool {
@@ -673,6 +686,11 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 	}
 	s.stop = context.AfterFunc(ctx, func() { conn.Close() })
 	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: op, Account: &account, Request: &req, Capture: s.capture != nil, Payload: rules, Alive: alive}
+	if op == protocol.OpGenerate && ParsesNative(e.info) && nativeonly.Can(req) {
+		// The extension parses the native body itself: send the request's content once.
+		sent := nativeonly.Strip(req)
+		call.Request, call.NativeOnly = &sent, true
+	}
 	if err := protocol.WriteFrame(conn, call); err != nil {
 		if errors.Is(err, protocol.ErrFrameTooLarge) {
 			// The request is valid but too big to pass on in one frame; only a smaller request
