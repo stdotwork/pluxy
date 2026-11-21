@@ -24,26 +24,25 @@ type outToolCall struct {
 }
 
 type outDelta struct {
-	Role             string          `json:"role,omitempty"`
-	Content          *string         `json:"content,omitempty"`
-	ReasoningContent *string         `json:"reasoning_content,omitempty"`
-	ToolCalls        []outToolCall   `json:"tool_calls,omitempty"`
-	Logprobs         json.RawMessage `json:"logprobs,omitempty"`
+	Role             string        `json:"role,omitempty"`
+	Content          *string       `json:"content,omitempty"`
+	ReasoningContent *string       `json:"reasoning_content,omitempty"`
+	ToolCalls        []outToolCall `json:"tool_calls,omitempty"`
 }
 
 type outChoice struct {
-	Index        int       `json:"index"`
-	Delta        *outDelta `json:"delta,omitempty"`
-	Message      *outMsg   `json:"message,omitempty"`
-	FinishReason *string   `json:"finish_reason"`
+	Index        int             `json:"index"`
+	Delta        *outDelta       `json:"delta,omitempty"`
+	Message      *outMsg         `json:"message,omitempty"`
+	FinishReason *string         `json:"finish_reason"`
+	Logprobs     json.RawMessage `json:"logprobs,omitempty"`
 }
 
 type outMsg struct {
-	Role             string          `json:"role"`
-	Content          *string         `json:"content"`
-	ReasoningContent *string         `json:"reasoning_content,omitempty"`
-	ToolCalls        []outToolCall   `json:"tool_calls,omitempty"`
-	Logprobs         json.RawMessage `json:"logprobs,omitempty"`
+	Role             string        `json:"role"`
+	Content          *string       `json:"content"`
+	ReasoningContent *string       `json:"reasoning_content,omitempty"`
+	ToolCalls        []outToolCall `json:"tool_calls,omitempty"`
 }
 
 type outUsage struct {
@@ -243,12 +242,12 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		return s.delta(outDelta{ToolCalls: []outToolCall{tc}})
 	case llm.EventTextDelta:
 		d := ev.Delta
-		delta := outDelta{Content: &d}
+		c := outChoice{Delta: &outDelta{Content: &d}}
 		if s.up.native {
-			// The event's raw is the choice's logprobs when the upstream sent them.
-			delta.Logprobs = ev.Raw
+			// The event's raw holds the choice's logprobs when the upstream sent them.
+			c.Logprobs = textMetaOf(ev.Raw).Logprobs
 		}
-		return s.delta(delta)
+		return s.chunk([]outChoice{c}, nil)
 	case llm.EventReasoningDelta:
 		d := ev.Delta
 		return s.delta(outDelta{ReasoningContent: &d})
@@ -334,9 +333,11 @@ func (a *Aggregator) Add(ev llm.Event) {
 		}
 	case llm.EventTextDelta:
 		a.text.WriteString(ev.Delta)
-		if len(ev.Raw) > 0 {
-			a.logprobs = append(a.logprobs, ev.Raw)
-			a.size += len(ev.Raw)
+		if a.up.native {
+			if lp := textMetaOf(ev.Raw).Logprobs; len(lp) > 0 {
+				a.logprobs = append(a.logprobs, lp)
+				a.size += len(lp)
+			}
 		}
 	case llm.EventReasoningDelta:
 		a.reasoning.WriteString(ev.Delta)
@@ -601,10 +602,9 @@ func (a *Aggregator) Response() ([]byte, error) {
 		r := a.reasoning.String()
 		msg.ReasoningContent = &r
 	}
-	msg.Logprobs = mergeLogprobs(a.logprobs)
 	reason := finishReason(a.finish)
 	c := a.head
-	choices := []any{outChoice{Message: msg, FinishReason: &reason}}
+	choices := []any{outChoice{Message: msg, FinishReason: &reason, Logprobs: mergeLogprobs(a.logprobs)}}
 	for _, o := range a.others {
 		choices = append(choices, o.value())
 	}

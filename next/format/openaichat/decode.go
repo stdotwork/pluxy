@@ -138,7 +138,6 @@ type streamChoice struct {
 		reasoningFields
 		Content   *string         `json:"content"`
 		Refusal   json.RawMessage `json:"refusal"`
-		Logprobs  json.RawMessage `json:"logprobs"`
 		ToolCalls []struct {
 			Index    *int   `json:"index"`
 			ID       string `json:"id"`
@@ -149,7 +148,8 @@ type streamChoice struct {
 			ExtraContent json.RawMessage `json:"extra_content"`
 		} `json:"tool_calls"`
 	} `json:"delta"`
-	FinishReason *string `json:"finish_reason"`
+	FinishReason *string         `json:"finish_reason"`
+	Logprobs     json.RawMessage `json:"logprobs"`
 }
 
 // StreamDecoder turns the data of an upstream Chat Completions stream into events. The first
@@ -276,11 +276,12 @@ func logprobs(raw json.RawMessage) json.RawMessage {
 	return raw
 }
 
-// attachLogprobs puts a delta's logprobs on the text event it produced, if it produced one: a
-// Chat client gets its tokens' log probabilities back from a Chat upstream through the event's
-// raw, which only a client of the reply's own format receives.
-func (d *StreamDecoder) attachLogprobs(raw json.RawMessage, from int, ev *[]llm.Event) {
-	if len(raw) == 0 || string(raw) == "null" {
+// attachTextMeta puts meta on the text event the delta produced, if it produced one: a Chat
+// client gets the choice's logprobs back, and the text a refusal, through the event's raw, which
+// only a client of the reply's own format receives.
+func (d *StreamDecoder) attachTextMeta(meta textMeta, from int, ev *[]llm.Event) {
+	raw := meta.raw()
+	if raw == nil {
 		return
 	}
 	for i := len(*ev) - 1; i >= from; i-- {
@@ -427,7 +428,7 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		if t := ch.Delta.Content; t != nil && *t != "" {
 			before := len(out)
 			d.content(*t, &out)
-			d.attachLogprobs(ch.Delta.Logprobs, before, &out)
+			d.attachTextMeta(textMeta{Logprobs: logprobs(ch.Logprobs)}, before, &out)
 		}
 		if r := refusalText(ch.Delta.Refusal); r != "" {
 			d.refused = true
@@ -599,13 +600,13 @@ type completionChoice struct {
 		reasoningFields
 		Content   *string         `json:"content"`
 		Refusal   json.RawMessage `json:"refusal"`
-		Logprobs  json.RawMessage `json:"logprobs"`
 		ToolCalls []struct {
 			chatToolCall
 			ExtraContent json.RawMessage `json:"extra_content"`
 		} `json:"tool_calls"`
 	} `json:"message"`
-	FinishReason string `json:"finish_reason"`
+	FinishReason string          `json:"finish_reason"`
+	Logprobs     json.RawMessage `json:"logprobs"`
 }
 
 // extraContent returns a tool call's extra_content as the raw of its item.start event:
@@ -697,7 +698,7 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 			text += refusal
 		}
 		if text != "" {
-			item(llm.ItemStart{Kind: llm.ItemMessage}, text, llm.EventTextDelta, nil, logprobs(m.Logprobs))
+			item(llm.ItemStart{Kind: llm.ItemMessage}, text, llm.EventTextDelta, nil, textMeta{Logprobs: logprobs(ch.Logprobs)}.raw())
 		}
 		for i, tc := range m.ToolCalls {
 			if tc.Function.Name == "" {
