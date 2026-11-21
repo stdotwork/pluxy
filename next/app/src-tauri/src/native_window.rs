@@ -3,7 +3,8 @@
 //!
 //! - `first`: the default size; resizing and moving; a pending login polls while the window
 //!   shows, not while it is minimized (unmapped, as a window manager iconifies it), and again
-//!   once it is restored; closing with Ask every time asks, Cancel keeps the window, Minimize to
+//!   once it is restored, and its "Open Link" opens the sign-in page in the browser, no window
+//!   of the app's own; closing with Ask every time asks, Cancel keeps the window, Minimize to
 //!   Tray closes it and leaves no webview or web process; the real tray item reopens it at the
 //!   size and place it had; Remember this choice keeps Minimize to Tray, which then closes
 //!   without asking; Exit App, chosen in the settings, quits.
@@ -325,7 +326,20 @@ fn ensure_open(c: &mut Checks, app: &AppHandle) {
     }
 }
 
-/// A pending login polls while the window shows, not while it is minimized.
+/// The stand-in browser's log (`native/feed.ts`, `PLUXY_APP_TEST_BROWSER_LOG`): one address a
+/// line, each what the app handed the session's https handler. Empty without one.
+fn browser_log() -> Vec<String> {
+    std::env::var("PLUXY_APP_TEST_BROWSER_LOG")
+        .ok()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .unwrap_or_default()
+        .lines()
+        .map(String::from)
+        .collect()
+}
+
+/// A pending login polls while the window shows, not while it is minimized, and its "Open Link"
+/// goes to the person's browser, never to a window of the app's own.
 fn polling(c: &mut Checks, app: &AppHandle) {
     // The page draws every method from one reply, so once one shows, test/alpha's shows too, if
     // core runs test/alpha. A failure names the step that did not happen.
@@ -358,6 +372,37 @@ fn polling(c: &mut Checks, app: &AppHandle) {
     ) {
         return;
     }
+    // Open Link: the sign-in page's own address reaches the browser, and the window opens
+    // nothing of its own.
+    let link = main_eval(
+        app,
+        "document.querySelector('[data-part=flow] a[target=_blank]')?.href ?? null",
+    )
+    .and_then(|v| v.as_str().map(String::from));
+    let opened_before = browser_log().len();
+    let webviews = app.webviews().len();
+    let clicked = main_eval(
+        app,
+        "(() => { const b = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Open Link'); if (!b) return false; b.click(); return true; })()",
+    );
+    let opened = within(10, || {
+        let l = browser_log();
+        (l.len() > opened_before).then_some(l)
+    });
+    c.check(
+        clicked == Some(json!(true))
+            && link.is_some()
+            && opened
+                .as_ref()
+                .is_some_and(|l| l.last().is_some_and(|last| Some(last) == link.as_ref())),
+        format!("Open Link opens the sign-in page in the browser: {link:?} as {opened:?}"),
+    );
+    sleep(1000);
+    let own = app.webviews().len() - webviews;
+    c.check(
+        own == 0,
+        format!("Open Link opens no window of the app's own ({own} webviews more)"),
+    );
     let before = LOGIN_READS.load(SeqCst);
     sleep(5000);
     let shown = LOGIN_READS.load(SeqCst) - before;
