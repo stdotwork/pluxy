@@ -68,12 +68,18 @@ export function scanState(setup: Setup): "first" | "again" | "never" | "done" {
   return setup.scanned_at ? "done" : "never";
 }
 
-/** Whether core runs a provider: an installed provider pick, or any package that is not a client pick. */
+/** Package states where the package is installed but its program did not run. */
+const failedStates = new Set(["failed", "crashed", "quarantined"]);
+
+/**
+ * Whether core runs a provider: a provider pick it installed whose last Start did not fail, or a
+ * package that is not a client pick, is enabled and has not failed.
+ */
 export function hasProvider(setup: Setup, results: Results, packages: Package[] = []): boolean {
   const clients = new Set(setup.picks.filter((pick) => pick.kind === "client").map((pick) => pick.id));
   return (
-    providerPicks(setup).some((pick) => isInstalled(pick, results)) ||
-    packages.some((p) => !clients.has(p.id))
+    providerPicks(setup).some((pick) => isInstalled(pick, results) && results[pick.id]?.status !== "error") ||
+    packages.some((p) => !clients.has(p.id) && p.enabled && !failedStates.has(p.state))
   );
 }
 

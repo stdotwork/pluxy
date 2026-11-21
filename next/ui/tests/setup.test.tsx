@@ -2,7 +2,7 @@
 import { expect, test } from "bun:test";
 import type { VNode } from "preact";
 import render from "preact-render-to-string";
-import { api, type ImportReport, type Setup, type SetupApplyResult } from "../kit/api";
+import { api, type ImportReport, type Package, type Setup, type SetupApplyResult } from "../kit/api";
 import type { Feature, Host, Method, Reply } from "../kit/host";
 import {
   type ImportState,
@@ -357,6 +357,91 @@ test("Start sends only ticked providers; a failed one says why and is sent again
   const failed = await start(down.api, found, choices, first.results);
   expect(failed.reply.status).toBe(0);
   expect(failed.results).toBe(first.results);
+});
+
+/** An installed package as GET /packages shows it: enabled and active unless said otherwise. */
+const pkg = (more: Partial<Package> = {}): Package => ({
+  id: "pluxy/gemini",
+  version: "1.0.0",
+  registry: "bundled",
+  url: "https://packages.example.test/gemini",
+  sha256: "0".repeat(64),
+  enabled: true,
+  installed_at: "2026-11-20T10:00:00Z",
+  state: "active",
+  ...more,
+});
+
+test("a pick core kept after a failed start says it is installed and not running", () => {
+  // Core keeps a package whose program does not start: the next /setup says it is installed.
+  const kept: Setup = {
+    ...found,
+    picks: found.picks.map((p) => (p.id === "pluxy/claude" ? { ...p, installed: true } : p)),
+  };
+  const results: Results = { "pluxy/claude": { status: "error", error: "the program exited at once" } };
+  const page = view(kept, { results });
+
+  // The row says it is not running, and names the error and where to look, instead of "Installed".
+  expect(page).toContain('data-tone="warn">Installed, not running<');
+  expect(page).not.toContain('data-tone="ok">Installed<');
+  expect(page).toContain(
+    "Claude was installed but did not start: the program exited at once<br/>Look at it on the Extensions page.",
+  );
+  // It is not the notice for a pick that was never installed, and Start does not send it again.
+  expect(page).not.toContain("Could not install");
+  expect(toInstall(kept, {}, results)).not.toContain("pluxy/claude");
+  // Its checkbox stays as an installed pick's: ticked, and disabled.
+  expect(page).toContain('<input type="checkbox" checked disabled');
+
+  // It is no running provider: Finish does not take the page's primary button.
+  expect(hasProvider(kept, results)).toBe(false);
+
+  // With nothing left to install but that failed pick, Finish no longer takes the primary button:
+  // the Start part offers to start without a provider instead.
+  const onlyFailed: Setup = {
+    ...nothingFound,
+    picks: [pick("pluxy/claude", "Claude", { installed: true })],
+  };
+  const noProvider = view(onlyFailed, { results });
+  expect(noProvider).toContain("pluxy will run with no provider");
+  expect(primary(noProvider)).toEqual(["Start without a provider"]);
+  expect(noProvider).toContain('data-variant="quiet">Finish</button>');
+});
+
+test("only a provider that is enabled and has not failed counts as running", () => {
+  // A pick installed by a Start that worked is a running provider.
+  expect(hasProvider(allSet, {})).toBe(true);
+  expect(hasProvider(found, { "pluxy/claude": { status: "done" } })).toBe(true);
+  // One whose Start failed is not, whatever core says about the install.
+  const failedPick: Setup = {
+    ...nothingFound,
+    picks: [pick("pluxy/claude", "Claude", { installed: true })],
+  };
+  expect(hasProvider(failedPick, { "pluxy/claude": { status: "error", error: "no start" } })).toBe(false);
+  // A package counts only when it is enabled and has not failed.
+  const noPicks: Setup = { ...nothingFound, picks: [] };
+  expect(hasProvider(noPicks, {}, [pkg()])).toBe(true);
+  expect(hasProvider(noPicks, {}, [pkg({ enabled: false, state: "disabled" })])).toBe(false);
+  expect(hasProvider(noPicks, {}, [pkg({ state: "failed" })])).toBe(false);
+  expect(hasProvider(noPicks, {}, [pkg({ state: "crashed" })])).toBe(false);
+  expect(hasProvider(noPicks, {}, [pkg({ state: "quarantined" })])).toBe(false);
+  // A client pick's package is a client, not a provider.
+  const clientPick: Setup = {
+    ...nothingFound,
+    picks: [{ ...pick("pluxy/claude-code", "Claude Code settings"), kind: "client" }],
+  };
+  expect(hasProvider(clientPick, {}, [pkg({ id: "pluxy/claude-code" })])).toBe(false);
+});
+
+test("a pick that was installed and started keeps its Installed badge and offers Finish", () => {
+  const done = { ...found, picks: found.picks.map((p) => ({ ...p, installed: true })) };
+  const results: Results = { "pluxy/claude": { status: "done" } };
+  const page = view(done, { results, accounts: 2 });
+  expect(page).toContain('data-tone="ok">Installed<');
+  expect(page).not.toContain("Installed, not running");
+  expect(page).not.toContain("did not start");
+  expect(hasProvider(done, results)).toBe(true);
+  expect(primary(page)).toEqual(["Finish"]);
 });
 
 test("opened again after setup, the page is a status and offers no Finish", () => {

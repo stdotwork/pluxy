@@ -122,6 +122,9 @@ const t = strings("setup", {
   tickHint: "Tick the ones you have an account for.",
   noPicks: "pluxy has no provider to offer here. The Extensions page lists what can be installed.",
   installed: "Installed",
+  installedNotRunning: "Installed, not running",
+  installedFailed: "{title} was installed but did not start: {error}",
+  installedFailedWhere: "Look at it on the Extensions page.",
   failed: "Could not install {title}: {error}",
   failedRetry: "Press {button} to try again.",
 
@@ -503,6 +506,8 @@ function PickRow(props: {
   const { pick } = props;
   const installed = isInstalled(pick, props.results);
   const result = props.results[pick.id];
+  // Core keeps a package whose program did not start: an installed pick can be the one that failed.
+  const notRunning = installed && result?.status === "error";
   return (
     <li
       data-part="setup-pick"
@@ -522,14 +527,24 @@ function PickRow(props: {
             {pick.because && !installed && <small class="hint">{pick.because}</small>}
           </span>
         </label>
-        {installed && <Badge tone="ok">{t("installed")}</Badge>}
+        {installed && !notRunning && <Badge tone="ok">{t("installed")}</Badge>}
+        {notRunning && <Badge tone="warn">{t("installedNotRunning")}</Badge>}
       </div>
-      {!installed && result?.status === "error" && (
+      {notRunning ? (
         <Notice tone="danger">
-          {t("failed", { title: pick.title || pick.id, error: result.error ?? "" })}
+          {t("installedFailed", { title: pick.title || pick.id, error: result.error ?? "" })}
           <br />
-          {t("failedRetry", { button: props.button })}
+          {t("installedFailedWhere")}
         </Notice>
+      ) : (
+        !installed &&
+        result?.status === "error" && (
+          <Notice tone="danger">
+            {t("failed", { title: pick.title || pick.id, error: result.error ?? "" })}
+            <br />
+            {t("failedRetry", { button: props.button })}
+          </Notice>
+        )
       )}
     </li>
   );
