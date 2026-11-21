@@ -37,8 +37,8 @@ func TestEncodeImageByFileIDDropped(t *testing.T) {
 	}
 }
 
-// An inline image is sent only when its data is base64 and its media type is one OpenAI
-// documents for image input.
+// These encoders also serve OpenAI-compatible vendors, so any image media type is kept: an
+// inline image is sent only when its data is base64 and its media type starts with image/.
 func TestEncodeInlineImageValidation(t *testing.T) {
 	for _, c := range []struct {
 		name string
