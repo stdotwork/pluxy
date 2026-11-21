@@ -271,6 +271,14 @@ form, keeping every field value and file byte, and sends it with a new multipart
 edit stays JSON. The upstream's reply body and content type come back as they came, including
 server-sent events for a streamed reply.
 
+The same holds for these other side endpoints: `POST {base_url}/responses/input_tokens`,
+`/embeddings`, `/messages/count_tokens`, `/models/{model}:countTokens`, `/images/generations` and
+`/images/edits`, as for `/responses/compact` above. A 404 from one of them that does not say the model is unknown (an
+upstream without that path) fails that request only, as a request error saying the account's
+upstream has no such endpoint and the path that answered 404, and blocks no model on the account.
+A 404 that says the model does not exist still blocks it, and so does a 404 from the generation
+path. A token count that gets this 404 is an error for the client, not an estimate.
+
 Gemini clients call `POST /v1beta/models/{model}:generateContent` or `:streamGenerateContent`
 (a stream is server-sent events, with or without `alt=sse`), and `:countTokens`.
 
