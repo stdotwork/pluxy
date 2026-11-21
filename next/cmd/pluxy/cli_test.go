@@ -26,8 +26,6 @@ var laterCommands = []string{
 	"PATCH /settings",
 	// pluxy key rotate-management
 	"POST /management-key/rotate",
-	// pluxy logs clear, pluxy logs errors [name], pluxy logs request <id>
-	"DELETE /logs", "GET /request-error-logs", "GET /request-error-logs/{name}", "GET /request-log-by-id/{id}",
 	// pluxy ext config <id> [name=value]...
 	"GET /extensions/{publisher}/{name}/config", "PATCH /extensions/{publisher}/{name}/config",
 }

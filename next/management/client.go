@@ -103,14 +103,7 @@ func (c *Client) Call(ctx context.Context, method, path string, query url.Values
 		return nil, &UnreachableError{URL: c.URL, Err: err}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		e := &APIError{Status: resp.StatusCode, Body: b}
-		var eb ErrorBody
-		if json.Unmarshal(b, &eb) == nil && eb.Error.Code != "" {
-			e.Code, e.Message = eb.Error.Code, eb.Error.Message
-		} else {
-			e.Message = fmt.Sprintf("core answered %s", resp.Status)
-		}
-		return b, e
+		return b, apiError(resp, b)
 	}
 	if out != nil && len(b) > 0 {
 		if err := json.Unmarshal(b, out); err != nil {
@@ -118,6 +111,90 @@ func (c *Client) Call(ctx context.Context, method, path string, query url.Values
 		}
 	}
 	return b, nil
+}
+
+// apiError is the error for a non-2xx reply whose body is b.
+func apiError(resp *http.Response, b []byte) *APIError {
+	e := &APIError{Status: resp.StatusCode, Body: b}
+	var eb ErrorBody
+	if json.Unmarshal(b, &eb) == nil && eb.Error.Code != "" {
+		e.Code, e.Message = eb.Error.Code, eb.Error.Message
+	} else {
+		e.Message = fmt.Sprintf("core answered %s", resp.Status)
+	}
+	return e
+}
+
+// Stream sends one call like Call, without a body, and copies a 2xx reply's body to w as it
+// arrives, however large it is: Call stops reading at 64 MiB, which would cut a log file short
+// with no error. A non-2xx reply is the same *APIError Call gives, and nothing is written. A
+// reply that breaks off is an *UnreachableError, after the bytes that arrived were written;
+// an error of w is returned as it is.
+//
+// The client's overall timeout does not bound the copy, since a large file takes as long as it
+// takes: it bounds the wait for the reply to begin, and ctx ends the copy.
+func (c *Client) Stream(ctx context.Context, method, path string, query url.Values, w io.Writer) error {
+	u := strings.TrimSuffix(c.URL, "/") + Prefix + path
+	if len(query) > 0 {
+		u += "?" + query.Encode()
+	}
+	hc := defaultHTTP
+	if c.HTTP != nil {
+		hc = c.HTTP
+	}
+	wait := hc.Timeout
+	whole := *hc
+	whole.Timeout = 0
+	callerCtx := ctx
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, method, u, nil)
+	if err != nil {
+		return err
+	}
+	if c.Key != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Key)
+	}
+	var timer *time.Timer
+	if wait > 0 {
+		timer = time.AfterFunc(wait, cancel)
+	}
+	resp, err := whole.Do(req)
+	if timer != nil {
+		timer.Stop()
+	}
+	if err != nil {
+		if callerCtx.Err() != nil {
+			return callerCtx.Err()
+		}
+		return &UnreachableError{URL: c.URL, Err: err}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		b, err := io.ReadAll(io.LimitReader(resp.Body, maxReply))
+		if err != nil {
+			return &UnreachableError{URL: c.URL, Err: err}
+		}
+		return apiError(resp, b)
+	}
+	buf := make([]byte, 32<<10)
+	for {
+		n, rerr := resp.Body.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return werr
+			}
+		}
+		if rerr == io.EOF {
+			return nil
+		}
+		if rerr != nil {
+			if callerCtx.Err() != nil {
+				return callerCtx.Err()
+			}
+			return &UnreachableError{URL: c.URL, Err: rerr}
+		}
+	}
 }
 
 // IsUnreachable reports whether err says no core answered.

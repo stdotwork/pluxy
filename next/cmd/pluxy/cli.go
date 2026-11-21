@@ -44,6 +44,8 @@ const (
 type command struct {
 	words string
 	args  []string
+	// optional: the last argument may be left out.
+	optional bool
 	// more: the last argument may be given more than once (at least once).
 	more    bool
 	routes  []string
@@ -255,6 +257,7 @@ var commands = []command{
 				}
 			})
 		}},
+	logsErrorsCommand, logsRequestCommand, logsClearCommand,
 	{words: "ext list", routes: []string{"GET /packages"}, summary: "installed extension packages and their state",
 		run: func(x *invocation) error {
 			var r management.PackagesReply
@@ -707,6 +710,7 @@ var commands = []command{
 				x.table(rows)
 			})
 		}},
+	usageExportCommand,
 	{words: "theme list", routes: []string{"GET /themes"}, summary: "the selected theme and stored themes",
 		run: func(x *invocation) error {
 			var r management.ThemesReply
@@ -1108,7 +1112,11 @@ func formatCapabilities(c *protocol.ModelCapabilities) string {
 // argsUsage is how help and usage errors write cmd's arguments.
 func argsUsage(cmd *command) string {
 	out := ""
-	for _, a := range cmd.args {
+	for i, a := range cmd.args {
+		if cmd.optional && i == len(cmd.args)-1 {
+			out += " [" + a + "]"
+			continue
+		}
 		out += " <" + a + ">"
 	}
 	if cmd.more {
@@ -1233,7 +1241,7 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 		pos = append(pos, fs.Arg(0))
 		rest = fs.Args()[1:]
 	}
-	if len(pos) != len(cmd.args) && !(cmd.more && len(pos) > len(cmd.args)) {
+	if len(pos) != len(cmd.args) && !(cmd.more && len(pos) > len(cmd.args)) && !(cmd.optional && len(pos) == len(cmd.args)-1) {
 		fmt.Fprintf(stderr, "pluxy: usage: pluxy %s%s [flags]\n", cmd.words, argsUsage(cmd))
 		return exitUsage
 	}
