@@ -22,6 +22,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 var (
@@ -63,14 +65,43 @@ type importKey struct {
 	email string
 }
 
+// loginWords are the words a login error may show that the tests below assert on.
+var loginWords = []string{
+	"Invalid JWT Signature", "token_uri", "private_key", "client_email", "not PEM", "RSA", "unreachable",
+}
+
+// newImportKey makes a service account key pair for a test, from one whose private key does not
+// spell part of a message a login test asserts on. Core removes each run of a login error's text
+// that shares four characters with a secret, and the key file is secret: a key drawn at random
+// sometimes spells four characters of the endpoint's words, and a test then reads
+// "invalid_grant (Invalid JWT [redacted])" where it wants "Invalid JWT Signature." (4 keys of 2000
+// do). Such a key is drawn again, so the tests below fail only for a reason of their own.
 func newImportKey(t *testing.T, email string) importKey {
 	t.Helper()
-	k, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
+	for {
+		k, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			t.Fatal(err)
+		}
+		der, _ := x509.MarshalPKCS8PrivateKey(k)
+		pemText := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+		// The private key is the key file's only secret long enough to count, and removing its
+		// pieces is what core does to a login error (pieces.event).
+		pieces := protocol.AccountSecretsWith(protocol.Account{}, []string{pemText})
+		if !spellsAny(loginWords, pieces) {
+			return importKey{priv: k, email: email, pem: pemText}
+		}
 	}
-	der, _ := x509.MarshalPKCS8PrivateKey(k)
-	return importKey{priv: k, email: email, pem: string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))}
+}
+
+// spellsAny reports whether removing pieces would change one of words.
+func spellsAny(words, pieces []string) bool {
+	for _, w := range words {
+		if protocol.RemovePieces(w, pieces...) != w {
+			return true
+		}
+	}
+	return false
 }
 
 // json returns the key file Google would give for project, its token_uri the fake's.

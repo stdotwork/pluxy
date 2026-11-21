@@ -645,6 +645,10 @@ func TestBannedAccountScenario6AndPersistence(t *testing.T) {
 	if got := h.healthOf("a"); got.State != HealthBanned {
 		t.Fatalf("after Reset: %+v, want still banned", got)
 	}
+	// A banned account keeps its last error through Reset, unlike an unbanned one.
+	if rt := h.r.state.Runtime(Account{ID: "a"}, h.now); rt.LastError == nil || rt.LastError.Code != llm.CodeAccountClosed {
+		t.Fatalf("runtime after Reset: %+v, want the ban's LastError kept", rt)
+	}
 
 	// SavedBans and LoadBans preserve the ban across a restart, and skip unknown accounts.
 	bans := h.r.state.SavedBans()
