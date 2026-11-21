@@ -461,9 +461,14 @@ func TestCLISetupAndClientShow(t *testing.T) {
 
 	// client show for all 5 tools, never printing the management key.
 	const placeholderHint = "Replace <client-key> with a client key: core's config file holds them, and \"pluxy key add\" makes another.\n"
+	const modelHint = "Replace <model-id> with the name of a model your accounts serve: \"pluxy model list\" lists them.\n"
 	for _, tool := range []string{"claude-code", "codex", "opencode", "pi", "omp"} {
+		want := placeholderHint
+		if tool == "opencode" || tool == "pi" || tool == "omp" {
+			want += modelHint
+		}
 		out, errOut, code := runWith("", false, "client", "show", tool)
-		if code != 0 || errOut != placeholderHint || !strings.Contains(out, srv.URL) || strings.Contains(out, "mgmt-secret") || strings.Contains(out, "Replace") {
+		if code != 0 || errOut != want || !strings.Contains(out, srv.URL) || strings.Contains(out, "mgmt-secret") || strings.Contains(out, "Replace") {
 			t.Errorf("client show %s: code=%d err=%q out=%q", tool, code, errOut, out)
 		}
 	}

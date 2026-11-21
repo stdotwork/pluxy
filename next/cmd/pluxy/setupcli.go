@@ -295,6 +295,12 @@ func runClientShow(x *invocation) error {
 		case strings.HasPrefix(p.Key, "<client-key:"):
 			x.eprintf("Replace %s with that key's full value from core's config file: pluxy never prints a stored key.\n", p.Key)
 		}
+		for _, f := range p.Files {
+			if strings.Contains(f.Content, "<model-id>") {
+				x.eprintf("Replace <model-id> with the name of a model your accounts serve: \"pluxy model list\" lists them.\n")
+				break
+			}
+		}
 	})
 }
 
