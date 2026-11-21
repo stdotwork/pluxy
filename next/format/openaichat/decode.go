@@ -137,6 +137,7 @@ type streamChoice struct {
 	Delta struct {
 		reasoningFields
 		Content   *string `json:"content"`
+		Refusal   string  `json:"refusal"`
 		ToolCalls []struct {
 			Index    *int   `json:"index"`
 			ID       string `json:"id"`
@@ -169,6 +170,7 @@ type StreamDecoder struct {
 	opened    int             // tool calls whose item started
 	used      map[string]bool // tool call ids the stream has used or sent
 	think     thinkFilter     // a leading think tag in the content, split across chunks
+	refused   bool            // the reply carried a refusal
 	losses    []llm.Loss
 }
 
@@ -388,6 +390,10 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		if t := ch.Delta.Content; t != nil && *t != "" {
 			d.content(*t, &out)
 		}
+		if ch.Delta.Refusal != "" {
+			d.refused = true
+			d.piece(thinkPiece{text: ch.Delta.Refusal}, &out)
+		}
 		for _, tc := range ch.Delta.ToolCalls {
 			index := -1
 			if tc.Index != nil {
@@ -480,6 +486,9 @@ func (d *StreamDecoder) end() []llm.Event {
 		// waits for a call would wait for one that is not in the reply.
 		f.Reason = llm.FinishStop
 	}
+	if d.refused {
+		f.Reason = llm.FinishContentFilter
+	}
 	return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: d.usage})
 }
 
@@ -550,6 +559,7 @@ type completionChoice struct {
 	Message *struct {
 		reasoningFields
 		Content   *string `json:"content"`
+		Refusal   string  `json:"refusal"`
 		ToolCalls []struct {
 			chatToolCall
 			ExtraContent json.RawMessage `json:"extra_content"`
@@ -620,6 +630,7 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 		next++
 	}
 	var losses []llm.Loss
+	refused := false
 	finish := llm.Finish{Reason: llm.FinishOther}
 	used := map[string]bool{} // ids the reply has used, whether sent or made
 	made := 0
@@ -640,6 +651,10 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 		}
 		if tagged != "" && tagged != reasoning {
 			item(llm.ItemStart{Kind: llm.ItemReasoning}, tagged, llm.EventReasoningDelta, nil)
+		}
+		if m.Refusal != "" {
+			refused = true
+			text += m.Refusal
 		}
 		if text != "" {
 			item(llm.ItemStart{Kind: llm.ItemMessage}, text, llm.EventTextDelta, nil)
@@ -671,6 +686,9 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 		// Every call was left out for naming no function: a client that waits for a call
 		// would wait for one that is not in the reply.
 		finish.Reason = llm.FinishStop
+	}
+	if refused {
+		finish.Reason = llm.FinishContentFilter
 	}
 	if ev := otherChoices(others); ev != nil {
 		out = append(out, *ev)
