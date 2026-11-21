@@ -1,6 +1,12 @@
 package openaichat
 
-import "testing"
+import (
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/stdotwork/pluxy/next/llm"
+)
 
 // The tags are built from pieces so that no tool or editor treats them as markup.
 const (
@@ -70,6 +76,66 @@ func TestThinkTagsBecomeReasoning(t *testing.T) {
 		got := reasoningEvents(t, deltaChunk(`{"content":"`+openTag[:4]+`"}`), finishChunk)
 		if got != "T:"+openTag[:4] {
 			t.Errorf("got %q, want T:%s", got, openTag[:4])
+		}
+	})
+}
+
+// significantEvents returns a reply's text, reasoning and item starts in order.
+func significantEvents(t *testing.T, chunks ...string) []string {
+	t.Helper()
+	d := NewStreamDecoder()
+	var got []string
+	for _, c := range chunks {
+		evs, err := d.Decode([]byte(c))
+		if err != nil {
+			t.Fatalf("decode %s: %v", c, err)
+		}
+		for _, ev := range evs {
+			switch ev.Type {
+			case llm.EventTextDelta:
+				got = append(got, "T:"+ev.Delta)
+			case llm.EventReasoningDelta:
+				got = append(got, "R:"+ev.Delta)
+			case llm.EventItemStart:
+				got = append(got, "I:"+ev.Item.Kind)
+			}
+		}
+	}
+	return got
+}
+
+// Content the think filter still holds goes out before the tool call or refusal that interrupts
+// it, not after it.
+func TestHeldThinkContentGoesBeforeInterruptions(t *testing.T) {
+	call := `{"id":"x","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"f","arguments":"{}"}}]},"finish_reason":null}]}`
+	callFinish := `{"id":"x","object":"chat.completion.chunk","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`
+	t.Run("whitespace before a tool call", func(t *testing.T) {
+		got := significantEvents(t, deltaChunk(`{"content":"  "}`), call, callFinish)
+		text, start := slices.Index(got, "T:  "), slices.Index(got, "I:tool_call")
+		if text < 0 || start < 0 || text > start {
+			t.Errorf("events %q: want the held whitespace before the tool call", got)
+		}
+	})
+	t.Run("partial tag before a tool call", func(t *testing.T) {
+		got := significantEvents(t, deltaChunk(`{"content":"`+openTag[:4]+`"}`), call, callFinish)
+		text, start := slices.Index(got, "T:"+openTag[:4]), slices.Index(got, "I:tool_call")
+		if text < 0 || start < 0 || text > start {
+			t.Errorf("events %q: want the held text before the tool call", got)
+		}
+	})
+	t.Run("held reasoning before a refusal", func(t *testing.T) {
+		got := significantEvents(t,
+			deltaChunk(`{"content":"`+openTag+`thinking`+closeTag[:5]+`"}`),
+			deltaChunk(`{"refusal":"No."}`),
+			finishChunk)
+		text := slices.Index(got, "T:No.")
+		if text < 0 {
+			t.Fatalf("events %q: no refusal text", got)
+		}
+		for i, s := range got {
+			if strings.HasPrefix(s, "R:") && i > text {
+				t.Errorf("events %q: reasoning %q came after the refusal", got, s)
+			}
 		}
 	})
 }

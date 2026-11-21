@@ -432,7 +432,13 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		}
 		if r := refusalText(ch.Delta.Refusal); r != "" {
 			d.refused = true
+			// Held content belongs before the refusal that interrupts it.
+			d.flushThink(&out)
 			d.piece(thinkPiece{text: r}, &out)
+		}
+		if len(ch.Delta.ToolCalls) > 0 {
+			// Held content belongs before the tool call that interrupts it.
+			d.flushThink(&out)
 		}
 		for _, tc := range ch.Delta.ToolCalls {
 			index := -1
