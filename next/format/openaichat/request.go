@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/format/internal/audioinput"
+	"github.com/stdotwork/pluxy/next/format/internal/clienttools"
 	mediainput "github.com/stdotwork/pluxy/next/format/internal/media"
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
 	"github.com/stdotwork/pluxy/next/format/internal/textdoc"
@@ -538,6 +539,8 @@ func marshal(v any, raw json.RawMessage) json.RawMessage {
 // req.Native; callers that can pass the native body through do so first.
 func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 	e := &encoder{}
+	req, lowered := clienttools.Lower(req)
+	e.losses = append(e.losses, lowered...)
 	out := outRequest{
 		Model:    req.Model,
 		Messages: []json.RawMessage{},

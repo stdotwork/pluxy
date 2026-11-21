@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/stdotwork/pluxy/next/format/internal/clienttools"
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
@@ -60,6 +61,7 @@ func sanitizeToolName(name string) string {
 // name after the first 53 bytes. The result depends only on req, so the request and its reply
 // agree.
 func ToolNames(req llm.Request) map[string]string {
+	req, _ = clienttools.Lower(req) // the names the encoder sends
 	n := toolNames{to: map[string]string{}, taken: map[string]bool{}}
 	var declared, called []string
 	for _, t := range req.Tools {

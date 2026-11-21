@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/format/internal/clienttools"
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
 	"github.com/stdotwork/pluxy/next/format/openaichat"
 	"github.com/stdotwork/pluxy/next/llm"
@@ -90,6 +91,15 @@ type item struct {
 	status     string
 	results    json.RawMessage
 	hasResults bool
+	// ref is the client's tool when the call is to a function that stands for a custom, namespaced
+	// or tool_search tool (clienttools), and decoder reads a custom tool's text as it arrives.
+	ref     *clienttools.Ref
+	decoder clienttools.InputDecoder
+	// finalInput is a finished custom tool call's text, read once from its arguments, and
+	// inputWhole whether they were one whole input string.
+	finalInput string
+	inputWhole bool
+	inputRead  bool
 }
 
 // builder rebuilds Responses output from model events whose upstream format is not Responses.
@@ -110,6 +120,9 @@ type builder struct {
 	lost     map[string]bool
 	lossSize int
 	upFormat string
+	// refs are the request's tools that went upstream as functions standing for something else.
+	refs     map[string]clienttools.Ref
+	refsRead bool
 }
 
 func newBuilder(req llm.Request) *builder {
@@ -143,7 +156,10 @@ func (b *builder) start(r *llm.ResponseInfo) {
 // lose records a loss once per path. Past llm.MaxLosses the list is closed: llm.AddLoss has written
 // its last entry, and nothing more is recorded. lossSize counts what the losses hold, which comes
 // from upstream data, so an aggregator can bound it with the reply.
-func (b *builder) lose(path, detail string) {
+func (b *builder) lose(path, detail string) { b.note(llm.LossDropped, path, detail) }
+
+// note records a loss of the given kind, once per path, as lose says.
+func (b *builder) note(kind, path, detail string) {
 	if b.lost[path] || len(b.losses) > llm.MaxLosses {
 		return
 	}
@@ -152,7 +168,7 @@ func (b *builder) lose(path, detail string) {
 	}
 	b.lost[path] = true
 	b.lossSize += len(path) + len(detail)
-	b.losses = llm.AddLoss(b.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: detail})
+	b.losses = llm.AddLoss(b.losses, llm.Loss{Kind: kind, Path: path, Detail: detail})
 }
 
 func (b *builder) open(idx int, s *llm.ItemStart) *item {
@@ -167,6 +183,14 @@ func (b *builder) open(idx int, s *llm.ItemStart) *item {
 		b.reasons++
 	case llm.ItemToolCall:
 		it.id = "fc_" + s.CallID
+		if it.ref = b.clientTool(s.Name); it.ref != nil {
+			switch it.ref.Kind {
+			case clienttools.KindCustom:
+				it.id = "ctc_" + s.CallID
+			case clienttools.KindSearch:
+				it.id = "tsc_" + s.CallID
+			}
+		}
 	}
 	b.items[idx] = it
 	b.order = append(b.order, it)
@@ -208,7 +232,99 @@ func (b *builder) doneItem(it *item, final bool) obj {
 		}
 		return o
 	}
-	return obj{"id": it.id, "type": "function_call", "status": b.itemStatus(), "arguments": it.text.String(), "call_id": it.callID, "name": it.name}
+	return b.callItem(it, b.itemStatus(), true)
+}
+
+// clientTool returns the tool a call's function stands for, or nil for a plain function. A
+// Responses upstream was sent the client's own tools, so its calls are left as they are.
+func (b *builder) clientTool(name string) *clienttools.Ref {
+	if b.upFormat == format {
+		return nil
+	}
+	if !b.refsRead {
+		b.refs, b.refsRead = clienttools.Refs(b.req), true
+	}
+	if ref, ok := b.refs[name]; ok {
+		return &ref
+	}
+	return nil
+}
+
+// callItem is a tool call as an output item, in the shape the client declared the tool in. done
+// is false for the added event, which has none of the call's input yet.
+func (b *builder) callItem(it *item, status string, done bool) obj {
+	if it.ref != nil {
+		switch it.ref.Kind {
+		case clienttools.KindCustom:
+			input := ""
+			if done {
+				input, _ = b.customInput(it)
+			}
+			o := obj{"id": it.id, "type": "custom_tool_call", "status": status, "call_id": it.callID, "name": it.ref.Name, "input": input}
+			if it.ref.Namespace != "" {
+				o["namespace"] = it.ref.Namespace
+			}
+			return o
+		case clienttools.KindSearch:
+			arguments := json.RawMessage("{}")
+			if done {
+				var ok bool
+				if arguments, ok = clienttools.SearchCallArguments(it.text.String()); !ok {
+					status = "incomplete"
+					b.note(llm.LossApproximated, clienttools.OutputPath(it.out, "arguments"), "tool_search arguments that are not a JSON object, sent as {}")
+				}
+			}
+			return obj{"id": it.id, "type": "tool_search_call", "status": status, "call_id": it.callID, "execution": "client", "arguments": arguments}
+		}
+	}
+	arguments := ""
+	if done {
+		arguments = it.text.String()
+	}
+	o := obj{"id": it.id, "type": "function_call", "status": status, "arguments": arguments, "call_id": it.callID, "name": it.name}
+	if it.ref != nil {
+		o["name"], o["namespace"] = it.ref.Name, it.ref.Namespace
+	}
+	return o
+}
+
+// customInput is a custom tool call's text, from the arguments of the function it was sent as, and
+// whether they were one whole input string.
+func (b *builder) customInput(it *item) (string, bool) {
+	if !it.inputRead {
+		it.finalInput, it.inputWhole = clienttools.CustomInput(it.text.String())
+		it.inputRead = true
+	}
+	return it.finalInput, it.inputWhole
+}
+
+// deliverable reports whether an ended item may reach the client. A custom tool call whose
+// arguments are not whole may not: Codex runs a done item whatever its status says, so a command
+// the token limit cut off would run.
+func (b *builder) deliverable(it *item) bool {
+	if it.kind != llm.ItemToolCall || it.ref == nil || it.ref.Kind != clienttools.KindCustom {
+		return true
+	}
+	_, whole := b.customInput(it)
+	return whole
+}
+
+// undelivered settles the custom tool calls that were held back, once the reply has finished. A
+// reply cut off by the token limit or a filter explains them: it stays incomplete, and each is
+// reported as dropped. On any other finish the upstream sent a call it should not have, which is
+// an error. The extensions report that error first (CustomCallCheck), so that core counts the
+// reply as failed; this keeps an extension built without the check from showing a success.
+func (b *builder) undelivered() *llm.Error {
+	for _, it := range b.order {
+		if it.kind != llm.ItemToolCall || it.done || it.ref == nil || it.ref.Kind != clienttools.KindCustom {
+			continue
+		}
+		if !b.incomplete() {
+			return clienttools.NotWholeError(it.ref.Name, b.usage)
+		}
+		b.lose(clienttools.OutputPath(it.out, ""), "a custom tool call whose arguments are not one whole input string")
+	}
+	return nil
 }
 
 // response returns the Response object at the end of the reply.
@@ -498,8 +614,7 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 			return s.emit("response.reasoning_summary_part.added", obj{"output_index": it.out, "item_id": it.id, "summary_index": 0,
 				"part": obj{"type": "summary_text", "text": ""}})
 		}
-		return s.emit("response.output_item.added", obj{"output_index": it.out,
-			"item": obj{"id": it.id, "type": "function_call", "status": "in_progress", "arguments": "", "call_id": it.callID, "name": it.name}})
+		return s.emit("response.output_item.added", obj{"output_index": it.out, "item": b.callItem(it, "in_progress", false)})
 	case llm.EventTextDelta, llm.EventReasoningDelta, llm.EventToolInputDelta:
 		it := b.items[ev.Index]
 		it.text.WriteString(ev.Delta)
@@ -508,6 +623,18 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 			return s.emit("response.output_text.delta", obj{"output_index": it.out, "item_id": it.id, "content_index": 0, "delta": ev.Delta, "logprobs": []any{}})
 		case llm.ItemReasoning:
 			return s.emit("response.reasoning_summary_text.delta", obj{"output_index": it.out, "item_id": it.id, "summary_index": 0, "delta": ev.Delta})
+		}
+		if it.ref != nil {
+			switch it.ref.Kind {
+			case clienttools.KindCustom:
+				text := it.decoder.Push(ev.Delta)
+				if text == "" {
+					return nil
+				}
+				return s.emit("response.custom_tool_call_input.delta", obj{"output_index": it.out, "item_id": it.id, "call_id": it.callID, "delta": text})
+			case clienttools.KindSearch:
+				return nil // the client reads a search's arguments from its done item
+			}
 		}
 		return s.emit("response.function_call_arguments.delta", obj{"output_index": it.out, "item_id": it.id, "delta": ev.Delta})
 	case llm.EventItemEnd:
@@ -536,6 +663,9 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		if err := s.searchesDone(b.endSearches()); err != nil {
 			return err
 		}
+		if e := b.undelivered(); e != nil {
+			return s.emit("error", errorFields(e))
+		}
 		typ := "response.completed"
 		if b.incomplete() {
 			typ = "response.incomplete"
@@ -560,6 +690,9 @@ func (s *StreamWriter) flushEnds(ev llm.Event) error {
 	s.pending = nil
 	for _, idx := range ends {
 		it := s.b.items[idx]
+		if !s.b.deliverable(it) {
+			continue
+		}
 		it.done = true
 		text := it.text.String()
 		switch it.kind {
@@ -579,7 +712,7 @@ func (s *StreamWriter) flushEnds(ev llm.Event) error {
 				return err
 			}
 		case llm.ItemToolCall:
-			if err := s.emit("response.function_call_arguments.done", obj{"output_index": it.out, "item_id": it.id, "arguments": text}); err != nil {
+			if err := s.callInputDone(it, text); err != nil {
 				return err
 			}
 		}
@@ -590,11 +723,95 @@ func (s *StreamWriter) flushEnds(ev llm.Event) error {
 	return nil
 }
 
+// callInputDone writes the event that ends a tool call's input, for the kind of tool it is.
+func (s *StreamWriter) callInputDone(it *item, text string) error {
+	if it.ref != nil {
+		switch it.ref.Kind {
+		case clienttools.KindCustom:
+			input, _ := s.b.customInput(it)
+			return s.emit("response.custom_tool_call_input.done", obj{"output_index": it.out, "item_id": it.id, "call_id": it.callID, "input": input})
+		case clienttools.KindSearch:
+			return nil
+		}
+	}
+	return s.emit("response.function_call_arguments.done", obj{"output_index": it.out, "item_id": it.id, "arguments": text})
+}
+
 // searchesDone writes the done events of web searches that ended.
 func (s *StreamWriter) searchesDone(ended []*item) error {
 	for _, it := range ended {
 		if err := s.emit("response.output_item.done", obj{"output_index": it.out, "item": searchItem(it, false)}); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// CustomCallCheck is what a provider extension runs on a translated reply: it ends the reply with
+// an upstream error when a call to one of the client's custom tools is not one whole input string
+// and the finish does not explain it (a token limit or a filter), so core handles the reply as it
+// does any failed one. Use one per reply. A nil check passes everything.
+type CustomCallCheck struct {
+	refs map[string]clienttools.Ref
+	open map[int]*customCall
+	list []*customCall
+}
+
+type customCall struct {
+	name    string
+	decoder clienttools.InputDecoder
+}
+
+// NewCustomCallCheck returns the check for a reply to req translated as tr, or nil when no call in
+// it can be to a custom tool: a body passed through, a Responses upstream, no custom tool declared.
+func NewCustomCallCheck(req llm.Request, tr *llm.Translation) *CustomCallCheck {
+	if tr == nil || tr.Passthrough || tr.To == format {
+		return nil
+	}
+	refs := map[string]clienttools.Ref{}
+	for sent, ref := range clienttools.Refs(req) {
+		if ref.Kind == clienttools.KindCustom {
+			refs[sent] = ref
+		}
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	return &CustomCallCheck{refs: refs, open: map[int]*customCall{}}
+}
+
+// Check reads one event of the reply, with its tool names already the client's, and returns the
+// error to end the reply with in place of a finish event.
+func (c *CustomCallCheck) Check(ev llm.Event) error {
+	if c == nil {
+		return nil
+	}
+	switch ev.Type {
+	case llm.EventItemStart:
+		if ev.Item == nil || ev.Item.Kind != llm.ItemToolCall {
+			delete(c.open, ev.Index)
+			return nil
+		}
+		ref, ok := c.refs[ev.Item.Name]
+		if !ok {
+			delete(c.open, ev.Index)
+			return nil
+		}
+		call := &customCall{name: ref.Name}
+		c.open[ev.Index] = call
+		c.list = append(c.list, call)
+	case llm.EventToolInputDelta:
+		if call := c.open[ev.Index]; call != nil {
+			call.decoder.Check(ev.Delta)
+		}
+	case llm.EventFinish:
+		if ev.Finish != nil && (ev.Finish.Reason == llm.FinishLength || ev.Finish.Reason == llm.FinishContentFilter) {
+			return nil // the writer leaves the calls out of the incomplete reply
+		}
+		for _, call := range c.list {
+			if !call.decoder.Whole() {
+				return clienttools.NotWholeError(call.name, ev.Usage)
+			}
 		}
 	}
 	return nil
@@ -634,7 +851,7 @@ func (a *Aggregator) Add(ev llm.Event) {
 	case llm.EventTextDelta, llm.EventReasoningDelta, llm.EventToolInputDelta:
 		b.items[ev.Index].text.WriteString(ev.Delta)
 	case llm.EventItemEnd:
-		b.items[ev.Index].done = true
+		b.items[ev.Index].done = b.deliverable(b.items[ev.Index])
 		if ev.Opaque != nil {
 			b.items[ev.Index].opaque = ev.Opaque.Data
 			a.size += len(ev.Opaque.Data)
@@ -697,6 +914,9 @@ func finalResponse(raw json.RawMessage) json.RawMessage {
 func (a *Aggregator) Response() ([]byte, error) {
 	if len(a.final) > 0 {
 		return a.final, nil
+	}
+	if e := a.b.undelivered(); e != nil {
+		return nil, e
 	}
 	return json.Marshal(a.b.response(false))
 }

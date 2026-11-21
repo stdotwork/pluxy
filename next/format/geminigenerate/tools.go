@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/stdotwork/pluxy/next/format/internal/clienttools"
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
@@ -71,6 +72,7 @@ func sanitizeToolName(name string) string {
 // of the client's name after the first 117 bytes. The result depends only on req, so the request
 // and its reply agree.
 func ToolNames(req llm.Request) map[string]string {
+	req, _ = clienttools.Lower(req) // the names the encoder sends
 	n := toolNames{to: map[string]string{}, taken: map[string]bool{}}
 	var declared, called []string
 	for _, t := range req.Tools {
@@ -148,6 +150,14 @@ func (n *toolNames) allocate(names []string) {
 			}
 		}
 	}
+}
+
+// FunctionTools returns the function tools EncodeRequest declares for req, each under the name the
+// reply's calls go back to the client with (a Responses client's custom and namespace tools are
+// sent as functions).
+func FunctionTools(req llm.Request) []llm.Tool {
+	req, _ = clienttools.Lower(req)
+	return req.Tools
 }
 
 // ToolName returns the GenerateContent name for a client's function name.

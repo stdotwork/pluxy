@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"strings"
 
+	"github.com/stdotwork/pluxy/next/format/geminigenerate"
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
@@ -255,7 +256,7 @@ func integralNumber(lit []byte) (string, bool) {
 // client's name.
 func toolSchemas(req llm.Request) map[string]json.RawMessage {
 	out := map[string]json.RawMessage{}
-	for _, t := range req.Tools {
+	for _, t := range geminigenerate.FunctionTools(req) {
 		if t.Type != llm.ToolNative && len(t.Parameters) > 0 {
 			out[t.Name] = t.Parameters
 		}
