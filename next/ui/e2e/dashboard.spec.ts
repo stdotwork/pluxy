@@ -139,6 +139,26 @@ test("the Dashboard shows core's global proxy URL as core shows it, or a dash fo
   await expect(line()).toHaveText("—");
 });
 
+test("the Dashboard says when core could not save requests to its usage files", async ({ page }) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await goTo(page, "Dashboard");
+  const notice = page.getByText("Requests core could not save to its usage files since it started");
+  // The test core writes every request, so its count is 0 and the page says nothing.
+  await expect(stat(page, "Success rate")).toContainText("75%");
+  await expect(notice).toHaveCount(0);
+
+  // The same reply with three failed writes, as a core with a full disk gives it.
+  await page.route("**/v0/management/usage?*", async (route) => {
+    const reply = await route.fetch();
+    await route.fulfill({ response: reply, json: { ...(await reply.json()), write_errors: 3 } });
+  });
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(notice).toContainText(
+    "since it started: 3. They are counted here until core restarts; core's log says why.",
+  );
+});
+
 test("the Dashboard refreshes every minute, and only while the document is visible", async ({ page }) => {
   const reads: string[] = [];
   page.on("request", (r) => {
