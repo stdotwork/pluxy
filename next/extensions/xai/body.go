@@ -54,13 +54,8 @@ func buildBody(req llm.Request) ([]byte, *llm.Translation, error) {
 	return body, tr, err
 }
 
-// buildSearchBody is buildBody with the x_search tool injected when injectXSearch is set.
-func buildSearchBody(req llm.Request, injectXSearch bool) ([]byte, *llm.Translation, error) {
-	body, tr, _, err := buildRequest(req, injectXSearch)
-	return body, tr, err
-}
-
-// buildRequest is buildSearchBody that also returns what turns xAI's reply back for the client:
+// buildRequest returns the body for xAI's Responses API and also what turns xAI's reply back for
+// the client:
 // calls to the custom tools of the request become custom tool calls (patch.go) and calls to the
 // functions that stand for namespace tools become calls in their namespaces (namespace.go). It is
 // nil when the request has neither.

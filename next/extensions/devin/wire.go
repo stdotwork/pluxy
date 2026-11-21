@@ -55,8 +55,6 @@ type field struct {
 	data []byte
 }
 
-func (f field) double() float64 { return math.Float64frombits(f.val) }
-
 var errBadMessage = errors.New("malformed protobuf message")
 
 // parseFields reads a message's fields in order.

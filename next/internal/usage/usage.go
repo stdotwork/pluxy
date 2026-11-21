@@ -166,11 +166,6 @@ type Store struct {
 	summaries map[string]*daySummaryFile
 }
 
-// NewStore returns an empty, in-memory-only store with the default limits.
-func NewStore() *Store {
-	return &Store{maxEvents: DefaultMaxEvents, maxAge: DefaultMaxAge, now: time.Now}
-}
-
 // SetLimits changes the store's limits; zero values take the defaults. Lowering a limit drops the
 // oldest events at once.
 func (s *Store) SetLimits(maxEvents int, maxAge time.Duration) {
