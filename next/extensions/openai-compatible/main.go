@@ -209,9 +209,12 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		}
 		return &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
 	}
-	events, err := decoders[wire.format].response(raw)
+	events, losses, err := decodeResponse(wire.format, raw)
 	if err != nil {
 		return err
+	}
+	for _, l := range losses {
+		logReplyLoss(l)
 	}
 	for _, ev := range events {
 		if err := send.Send(ev); err != nil {
@@ -648,8 +651,25 @@ func reportLosses(dec streamDecoder) {
 		return
 	}
 	for _, l := range lr.Losses() {
-		fmt.Fprintf(os.Stderr, "reply loss: %s %s (%s)\n", l.Kind, l.Path, l.Detail)
+		logReplyLoss(l)
 	}
+}
+
+// logReplyLoss writes one thing a reply had to leave out to the extension's log, which core
+// prefixes with the extension's ID. A reply's translation report goes out with its first event, so
+// a loss found while reading the reply has no other way to core.
+func logReplyLoss(l llm.Loss) {
+	fmt.Fprintf(os.Stderr, "reply loss: %s %s (%s)\n", l.Kind, l.Path, l.Detail)
+}
+
+// decodeResponse reads a non-streamed reply, with what a Chat one had to leave out (a call that
+// never named its function); the other formats' decoders report no losses.
+func decodeResponse(format string, raw []byte) ([]llm.Event, []llm.Loss, error) {
+	if format == llm.FormatOpenAIChat {
+		return openaichat.DecodeResponseLosses(raw)
+	}
+	events, err := decoders[format].response(raw)
+	return events, nil, err
 }
 
 // upstreamError turns a non-2xx upstream response into a structured error. model is the model

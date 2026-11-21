@@ -166,6 +166,7 @@ type StreamDecoder struct {
 	finish    *llm.Finish
 	usage     *llm.Usage
 	calls     int             // tool calls made an id so far
+	opened    int             // tool calls whose item started
 	used      map[string]bool // tool call ids the stream has used or sent
 	losses    []llm.Loss
 }
@@ -229,6 +230,7 @@ func (d *StreamDecoder) closeAll(ev *[]llm.Event) {
 // that arrived before it.
 func (d *StreamDecoder) openCall(c *toolCall, ev *[]llm.Event) {
 	c.item = d.open(llm.ItemToolCall, ev, llm.ItemStart{CallID: c.id, Name: c.name})
+	d.opened++
 	if c.extra != nil {
 		(*ev)[len(*ev)-1].Raw = c.extra
 		c.extra = nil
@@ -441,6 +443,11 @@ func (d *StreamDecoder) end() []llm.Event {
 	if d.finish != nil {
 		f = *d.finish
 	}
+	if f.Reason == llm.FinishToolCalls && d.opened == 0 {
+		// Every call the upstream sent was dropped for naming no function: a client that
+		// waits for a call would wait for one that is not in the reply.
+		f.Reason = llm.FinishStop
+	}
 	return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: d.usage})
 }
 
@@ -536,19 +543,28 @@ func extraContent(raw json.RawMessage) json.RawMessage {
 // in a native event. A body holding an error object, or without choice 0 and its message, is an
 // error: it is not an answer, even with status 200.
 func DecodeResponse(body []byte) ([]llm.Event, error) {
+	events, _, err := DecodeResponseLosses(body)
+	return events, err
+}
+
+// DecodeResponseLosses turns an upstream non-streamed Chat Completions response into the events a
+// stream of it would have produced, and returns what it had to leave out: a tool call that never
+// named its function, which core refuses as an item.start. It is the non-streamed counterpart of
+// StreamDecoder.Losses.
+func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 	var c completion
 	if err := json.Unmarshal(body, &c); err != nil {
-		return nil, malformed("upstream sent a malformed response", body)
+		return nil, nil, malformed("upstream sent a malformed response", body)
 	}
 	if hasError(c.Error) {
-		return nil, upstreamErrorObject(c.Error, "upstream reported an error")
+		return nil, nil, upstreamErrorObject(c.Error, "upstream reported an error")
 	}
 	choices := make([]completionChoice, len(c.Choices))
 	var others []json.RawMessage
 	first := false
 	for i, raw := range c.Choices {
 		if err := json.Unmarshal(raw, &choices[i]); err != nil {
-			return nil, malformed("upstream sent a malformed response", body)
+			return nil, nil, malformed("upstream sent a malformed response", body)
 		}
 		if choices[i].Index != 0 {
 			others = append(others, raw)
@@ -557,7 +573,7 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 		}
 	}
 	if !first {
-		return nil, malformed("upstream sent a response without a completion", body)
+		return nil, nil, malformed("upstream sent a response without a completion", body)
 	}
 	out := []llm.Event{{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{
 		ID: c.ID, Model: c.Model, Created: c.Created, Format: llm.FormatOpenAIChat, Raw: replyFields(body),
@@ -571,9 +587,11 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 		out = append(out, llm.Event{Type: llm.EventItemEnd, Index: next})
 		next++
 	}
+	var losses []llm.Loss
 	finish := llm.Finish{Reason: llm.FinishOther}
 	used := map[string]bool{} // ids the reply has used, whether sent or made
 	made := 0
+	calls := 0
 	for _, ch := range choices {
 		if ch.Index != 0 || ch.Message == nil {
 			continue
@@ -589,6 +607,9 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 			if tc.Function.Name == "" {
 				// core refuses an item.start without a name, so a call that never named
 				// its function is left out here too.
+				losses = llm.AddLoss(losses, llm.Loss{Kind: llm.LossDropped,
+					Path:   fmt.Sprintf("choices[0].message.tool_calls[%d]", i),
+					Detail: "a tool call that never named its function"})
 				continue
 			}
 			id := tc.ID
@@ -600,12 +621,18 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 				}
 			}
 			used[id] = true
+			calls++
 			item(llm.ItemStart{Kind: llm.ItemToolCall, CallID: id, Name: tc.Function.Name}, tc.Function.Arguments, llm.EventToolInputDelta, extraContent(tc.ExtraContent))
 		}
 		finish = decodeFinish(ch.FinishReason)
 	}
+	if finish.Reason == llm.FinishToolCalls && calls == 0 {
+		// Every call was left out for naming no function: a client that waits for a call
+		// would wait for one that is not in the reply.
+		finish.Reason = llm.FinishStop
+	}
 	if ev := otherChoices(others); ev != nil {
 		out = append(out, *ev)
 	}
-	return append(out, llm.Event{Type: llm.EventFinish, Finish: &finish, Usage: decodeUsage(c.Usage)}), nil
+	return append(out, llm.Event{Type: llm.EventFinish, Finish: &finish, Usage: decodeUsage(c.Usage)}), losses, nil
 }
