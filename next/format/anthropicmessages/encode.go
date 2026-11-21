@@ -474,6 +474,9 @@ func source(p llm.Part) map[string]any {
 	if p.Type == llm.PartFile && p.FileData != "" {
 		url = p.FileData
 	}
+	if p.Type == llm.PartFile && p.FileData != "" && (p.Origin == nil || p.Origin.Format != format) && !mediainput.FileDataOK(p.FileData) {
+		return nil
+	}
 	switch {
 	case mediainput.IsDataURL(url):
 		mediaType, data, ok := mediainput.DataURL(url)

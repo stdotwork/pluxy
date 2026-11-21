@@ -36,6 +36,21 @@ func DataURL(s string) (mediaType, data string, ok bool) {
 	return mediaType, data, true
 }
 
+// FileDataOK reports whether a file part's FileData can be sent as file data. Part.FileData holds
+// a base64 data URL, raw base64, or an http or https URL; anything else would reach the upstream
+// as garbage.
+func FileDataOK(s string) bool {
+	if IsDataURL(s) {
+		_, data, ok := DataURL(s)
+		return ok && Base64(data)
+	}
+	lower := strings.ToLower(s)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		return true
+	}
+	return Base64(s)
+}
+
 // Type returns a data URL's media type normalised for comparison and for sending upstream: lower
 // case, with any parameters after the first semicolon removed.
 func Type(mediaType string) string {

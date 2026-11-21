@@ -309,12 +309,10 @@ func (e *encoder) content(it llm.Item, msgPath string) (content []json.RawMessag
 					dropped = true
 					break
 				}
-				if mediainput.IsDataURL(p.FileData) {
-					if _, data, ok := mediainput.DataURL(p.FileData); !ok || !mediainput.Base64(data) {
-						e.lose(llm.LossDropped, pp, "Responses cannot take this file data: it is not a valid base64 data URL")
-						dropped = true
-						break
-					}
+				if p.FileData != "" && !mediainput.FileDataOK(p.FileData) {
+					e.lose(llm.LossDropped, pp, "Responses cannot take this file data: it is not base64 or a URL")
+					dropped = true
+					break
 				}
 			}
 			m := map[string]string{"type": "input_file"}

@@ -98,3 +98,23 @@ func TestIsDataURL(t *testing.T) {
 		}
 	}
 }
+
+// FileData holds a data URL, raw base64 or a URL, and nothing else is sendable.
+func TestFileDataOK(t *testing.T) {
+	for s, want := range map[string]bool{
+		"data:application/pdf;base64,JVBERi0=": true,
+		"DATA:application/pdf;BASE64,JVBERi0=": true,
+		"JVBERi0=":                             true,
+		"data:application/pdf,raw":             false,
+		"https://example.com/r.pdf":            true,
+		"HTTPS://example.com/r.pdf":            true,
+		"http://example.com/r.pdf":             true,
+		"%%%":                                  false,
+		"":                                     false,
+		"ftp://example.com/r.pdf":              false,
+	} {
+		if got := FileDataOK(s); got != want {
+			t.Errorf("FileDataOK(%q) = %v, want %v", s, got, want)
+		}
+	}
+}

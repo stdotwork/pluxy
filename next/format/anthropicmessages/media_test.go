@@ -136,3 +136,39 @@ func TestEncodeSameFormatImageNotValidated(t *testing.T) {
 		t.Errorf("translated body %s, losses %+v; want the image dropped", body, losses)
 	}
 }
+
+// FileData can be a data URL, raw base64 or a URL. A translated part keeps each of those, and
+// anything else is dropped with a loss.
+func TestEncodeTranslatedFileDataForms(t *testing.T) {
+	file := func(data string) llm.Request {
+		return llm.Request{Model: "m", Items: []llm.Item{{
+			Type: llm.ItemTypeMessage, Role: llm.RoleUser,
+			Content: []llm.Part{{Type: llm.PartText, Text: "look"}, {Type: llm.PartFile, FileData: data}},
+		}}}
+	}
+	for _, c := range []struct {
+		name string
+		data string
+		keep bool
+	}{
+		{"data URL", "data:application/pdf;base64,JVBERi0=", true},
+		{"raw base64", "JVBERi0=", true},
+		{"URL", "https://example.com/r.pdf", true},
+		{"garbage", "%%%", false},
+		{"not base64 data URL", "data:application/pdf,raw", false},
+	} {
+		body, losses, err := EncodeRequest(file(c.data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.keep {
+			if !strings.Contains(string(body), `"type":"document"`) || len(losses) != 0 {
+				t.Errorf("%s: body %s, losses %+v; want the file kept", c.name, body, losses)
+			}
+			continue
+		}
+		if strings.Contains(string(body), "%%%") || len(losses) != 1 || losses[0].Kind != llm.LossDropped {
+			t.Errorf("%s: body %s, losses %+v; want the file dropped", c.name, body, losses)
+		}
+	}
+}
