@@ -36,7 +36,10 @@ const minSideSecret = 8
 // kept parts are all shorter counts whole, with the words around its parts, so it is never left
 // unprotected for being made of short parts (it then also removes a word that shares 4
 // characters with its scheme or cookie name). A credential's field whose parts are all shorter
-// adds them, still without the words around them. The credential's data is left out too: it
+// adds them, still without the words around them. A credential's field that is one "name=value",
+// or holds one ("Bearer name=value", "dca:name=value"), counts that pair whole too, as the bytes
+// before its "=" are no part; a cookie list "a=b; c=d" counts by its values only, and a cookie's
+// name then counts as pieces in that field. The credential's data is left out too: it
 // mixes secrets with plain values (a base URL, a project ID, an OAuth scope) whose words would
 // count as pieces, so an extension passes a secret it keeps there itself (sdk.UpstreamText), and
 // core does not remove pieces of it.
@@ -96,6 +99,14 @@ func accountSecrets(a Account, settings []string) []string {
 		for _, p := range kept {
 			if len(p) >= min && !slices.Contains(out, p) {
 				out = append(out, p)
+			}
+		}
+		if short {
+			// A single name=value counts whole too: the bytes before its "=" are no part.
+			for _, p := range append([]string{strings.TrimSpace(s)}, parts...) {
+				if _, ok := cookiePair(p); ok && !strings.Contains(p, ";") && !slices.Contains(out, p) {
+					out = append(out, p)
+				}
 			}
 		}
 	}

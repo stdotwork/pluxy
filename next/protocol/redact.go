@@ -172,17 +172,27 @@ func directParts(s string) []string {
 	}
 	if strings.IndexByte(s, '=') > 0 {
 		for _, c := range strings.Split(s, ";") {
-			name, value, ok := strings.Cut(strings.TrimSpace(c), "=")
-			if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
-				value = value[1 : len(value)-1]
-			}
-			if ok && name != "" && strings.Trim(value, "=") != "" && strings.IndexFunc(name, func(r rune) bool { return !tokenChar(r) }) < 0 &&
-				strings.IndexFunc(value, func(r rune) bool { return !cookieChar(r) }) < 0 {
+			if value, ok := cookiePair(c); ok {
 				out = append(out, value)
 			}
 		}
 	}
 	return out
+}
+
+// cookiePair reports whether c, one "name=value" of a cookie list (spaces around it aside), is a
+// pair that SecretParts reads, and returns its value, its double quotes aside: the name is an HTTP
+// token, the value holds only cookie characters, and it is not empty or only "=" characters.
+func cookiePair(c string) (value string, ok bool) {
+	name, value, ok := strings.Cut(strings.TrimSpace(c), "=")
+	if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+		value = value[1 : len(value)-1]
+	}
+	if ok && name != "" && strings.Trim(value, "=") != "" && strings.IndexFunc(name, func(r rune) bool { return !tokenChar(r) }) < 0 &&
+		strings.IndexFunc(value, func(r rune) bool { return !cookieChar(r) }) < 0 {
+		return value, true
+	}
+	return "", false
 }
 
 // publicPrefix reports whether p has the shape of a public prefix before a token: a letter, then

@@ -383,3 +383,62 @@ func TestAccountSecretsLongPartAndShortValueUnchanged(t *testing.T) {
 		t.Errorf("AccountSecrets of a 7-byte value = %q, want nothing", got)
 	}
 }
+
+// A credential field holding one name=value counts whole, as well as by its value: the bytes before
+// the "=" are no part, so a cut of the start of the field would stay in an error otherwise.
+func TestAccountSecretsCredentialPairCountsWhole(t *testing.T) {
+	for _, tc := range []struct {
+		name, key, value, cut string
+	}{
+		// 40 bytes, a long token: a cut of 23 bytes of its start.
+		{"long", "QUJDREVGR0hJSktMTU5PUFI=U1RVVldYWVphYmNk", "U1RVVldYWVphYmNk", "QUJDREVGR0hJSktMTU5PUFI"},
+		// 20 bytes, under 32: a cut of 4 bytes of its start.
+		{"short", "aGVsbG8=d29ybGQxMjM0", "d29ybGQxMjM0", "aGVs"},
+	} {
+		for field, c := range map[string]Credential{
+			"api_key":       {APIKey: tc.key},
+			"access_token":  {AccessToken: tc.key},
+			"refresh_token": {RefreshToken: tc.key},
+		} {
+			got := AccountSecrets(Account{Credential: &c})
+			if len(got) != 2 || !slices.Contains(got, tc.key) || !slices.Contains(got, tc.value) {
+				t.Errorf("%s %s: AccountSecrets = %q, want the whole key and its value", tc.name, field, got)
+			}
+			if out := RemovePieces("key "+tc.cut+" refused", got...); out != "key "+Redacted+" refused" {
+				t.Errorf("%s %s: RemovePieces = %q, want the cut removed", tc.name, field, out)
+			}
+		}
+	}
+}
+
+// A scheme or a public prefix in front of one name=value does not hide it: the pair counts whole.
+func TestAccountSecretsCredentialPairBehindPrefix(t *testing.T) {
+	const pair = "aGVsbG8=d29ybGQxMjM0"
+	for _, key := range []string{"Bearer " + pair, "dca:" + pair} {
+		got := AccountSecrets(Account{Credential: &Credential{APIKey: key}})
+		if len(got) != 2 || !slices.Contains(got, pair) || !slices.Contains(got, "d29ybGQxMjM0") {
+			t.Errorf("AccountSecrets(%q) = %q, want the pair and its value", key, got)
+		}
+		if out := RemovePieces("key aGVs refused", got...); out != "key "+Redacted+" refused" {
+			t.Errorf("RemovePieces for %q = %q, want the cut removed", key, out)
+		}
+	}
+}
+
+// What is no single pair counts as before: a cookie list by its values, a token ending in "=" or
+// "==" whole once, and a header, which this rule does not reach, by its value.
+func TestAccountSecretsCredentialPairUnchanged(t *testing.T) {
+	got := AccountSecrets(Account{Credential: &Credential{APIKey: "a=value-one; b=value-two"}})
+	if !slices.Equal(got, []string{"value-one", "value-two"}) {
+		t.Errorf("cookie list: AccountSecrets = %q, want its values only", got)
+	}
+	for _, tok := range []string{"abcdefghijklmnop=", "abcdefghijklmnop=="} {
+		if got := AccountSecrets(Account{Credential: &Credential{APIKey: tok}}); !slices.Equal(got, []string{tok}) {
+			t.Errorf("AccountSecrets(%q) = %q, want it whole once", tok, got)
+		}
+	}
+	got = AccountSecrets(Account{Headers: map[string]string{"X-Api-Key": "aaaaaaaa=bbbbbbbb"}})
+	if !slices.Equal(got, []string{"bbbbbbbb"}) {
+		t.Errorf("header: AccountSecrets = %q, want its value only", got)
+	}
+}
