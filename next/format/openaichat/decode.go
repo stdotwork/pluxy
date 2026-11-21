@@ -135,9 +135,9 @@ type streamChunk struct {
 type streamChoice struct {
 	Index int `json:"index"`
 	Delta struct {
-		Content          *string `json:"content"`
-		ReasoningContent *string `json:"reasoning_content"`
-		ToolCalls        []struct {
+		reasoningFields
+		Content   *string `json:"content"`
+		ToolCalls []struct {
 			Index    *int   `json:"index"`
 			ID       string `json:"id"`
 			Function struct {
@@ -344,12 +344,12 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		if ch.Index != 0 {
 			continue
 		}
-		if r := ch.Delta.ReasoningContent; r != nil && *r != "" {
+		if r := ch.Delta.text(); r != "" {
 			d.closeItem(&d.text, &out)
 			if d.reasoning < 0 {
 				d.reasoning = d.open(llm.ItemReasoning, &out, llm.ItemStart{})
 			}
-			out = append(out, llm.Event{Type: llm.EventReasoningDelta, Index: d.reasoning, Delta: *r})
+			out = append(out, llm.Event{Type: llm.EventReasoningDelta, Index: d.reasoning, Delta: r})
 		}
 		if t := ch.Delta.Content; t != nil && *t != "" {
 			d.closeItem(&d.reasoning, &out)
@@ -516,9 +516,9 @@ type completion struct {
 type completionChoice struct {
 	Index   int `json:"index"`
 	Message *struct {
-		Content          *string `json:"content"`
-		ReasoningContent *string `json:"reasoning_content"`
-		ToolCalls        []struct {
+		reasoningFields
+		Content   *string `json:"content"`
+		ToolCalls []struct {
 			chatToolCall
 			ExtraContent json.RawMessage `json:"extra_content"`
 		} `json:"tool_calls"`
@@ -597,8 +597,8 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 			continue
 		}
 		m := ch.Message
-		if m.ReasoningContent != nil && *m.ReasoningContent != "" {
-			item(llm.ItemStart{Kind: llm.ItemReasoning}, *m.ReasoningContent, llm.EventReasoningDelta, nil)
+		if r := m.text(); r != "" {
+			item(llm.ItemStart{Kind: llm.ItemReasoning}, r, llm.EventReasoningDelta, nil)
 		}
 		if m.Content != nil && *m.Content != "" {
 			item(llm.ItemStart{Kind: llm.ItemMessage}, *m.Content, llm.EventTextDelta, nil)
