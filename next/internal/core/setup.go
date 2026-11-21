@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -255,7 +256,7 @@ func (m *setupManager) runLoop() {
 
 func (m *setupManager) snapshot() (firstRun, scanning bool, scannedAt *time.Time, found management.SetupFound) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	firstRun, scanning = m.firstRun, m.scanning
 	var at *time.Time
 	if m.scannedAt != nil {
 		t := *m.scannedAt
@@ -265,12 +266,15 @@ func (m *setupManager) snapshot() (firstRun, scanning bool, scannedAt *time.Time
 	f.Clients = slices.Clone(f.Clients)
 	f.SignIns = slices.Clone(f.SignIns)
 	f.Imports = slices.Clone(f.Imports)
+	imported := maps.Clone(m.imported)
+	m.mu.Unlock()
+	// importKey reads the file system, so it runs outside the lock, as the scan does.
 	for i, r := range f.Imports {
-		if rec, ok := m.imported[importKey(r.Config)]; ok {
+		if rec, ok := imported[importKey(r.Config)]; ok {
 			f.Imports[i].LastImport = &rec
 		}
 	}
-	return m.firstRun, m.scanning, at, f
+	return firstRun, scanning, at, f
 }
 
 // importKey names a config file for the record of its import: the home folder expanded and
@@ -289,12 +293,13 @@ func importKey(config string) string {
 
 // recordImport keeps that an import ran from config, and saves it with the rest of the state.
 func (m *setupManager) recordImport(config string, rec management.SetupLastImport) error {
+	key := importKey(config)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.imported == nil {
 		m.imported = map[string]management.SetupLastImport{}
 	}
-	m.imported[importKey(config)] = rec
+	m.imported[key] = rec
 	return m.saveLocked()
 }
 
