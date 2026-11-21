@@ -257,7 +257,8 @@ func (r *Redactor) placeholderOf(n *yaml.Node, texts map[*yaml.Node]string) stri
 //   - the value of a header whose name is about authentication (Authorization, X-Api-Key,
 //     Cookie, ...) or is named like a secret, in any mapping whose name holds header
 //     (headers, extra_headers, headers_override); a mapping there is read by these rules;
-//   - a URL with a user name, password or query, anywhere;
+//   - a URL with a user name, password or query, or a parameter named like a secret in its
+//     fragment, anywhere;
 //   - a copy: a string of MinTextSecret bytes or more, written as a whole value, that is also
 //     the value of a secret by one of the rules above by itself (not only for being in a
 //     mapping below a secret key), as note: <the key> (see found).
@@ -417,12 +418,16 @@ func (r *Redactor) RestoreHeaders(sent, cur map[string]string) (map[string]strin
 	return out, nil
 }
 
+// secretURL reports whether s is a URL that holds a secret: one with a user name, a password or a
+// query, or a parameter named like a secret in its fragment. A fragment without one (a page's
+// "#section") holds none, so such a URL still shows.
 func secretURL(s string) bool {
 	if !strings.Contains(s, "://") {
 		return false
 	}
 	u, err := url.Parse(strings.TrimSpace(s))
-	return err == nil && u.Host != "" && (u.User != nil || u.RawQuery != "")
+	return err == nil && u.Host != "" &&
+		(u.User != nil || u.RawQuery != "" || len(protocol.SecretURLValues(u, secretParam)) > 0)
 }
 
 // sectionLists are the top-level keys of a config.yaml whose value is a list of provider entries,
@@ -727,7 +732,7 @@ func (d *Doc) TextSecrets() []string {
 // covers short ones too.
 const MinTextSecret = 8
 
-// secretParam reports whether a URL's query parameter is named like a secret: by the rule for
+// secretParam reports whether a URL's parameter is named like a secret: by the rule for
 // header and query parameter names (protocol.SecretName: key, token, auth, signature, ...), by
 // the rules for key names, or as a signature (sig, sas), a password (pwd, pass, passwd,
 // passcode), a signed token or assertion (jwt, client_assertion, credential), or an OAuth code
@@ -745,9 +750,9 @@ func secretParam(name string) bool {
 // rules of RedactSettings, to be removed from text where they occur: those of MinTextSecret
 // bytes or more. Of a URL, its parts are returned on their own too, as an extension may write
 // one without the rest: the forms of its user name and password a proxy URL's are removed in
-// (proxyurl.Password; the redaction adds the Basic form), and the value of each query parameter
-// named like a secret (secretParam), as written and decoded. Settings that do not parse hold
-// none it can find.
+// (proxyurl.Password; the redaction adds the Basic form), and the value of each parameter named
+// like a secret (secretParam) in its query or fragment (protocol.SecretURLValues), as written and
+// decoded. Settings that do not parse hold none it can find.
 func SettingsSecrets(b []byte) []string {
 	d, err := Parse(b, false)
 	if err != nil {
@@ -770,18 +775,8 @@ func SettingsSecrets(b []byte) []string {
 			add(f)
 		}
 		if u, err := url.Parse(strings.TrimSpace(n.Value)); err == nil {
-			for _, kv := range strings.Split(u.RawQuery, "&") {
-				k, v, _ := strings.Cut(kv, "=")
-				if name, err := url.QueryUnescape(k); err != nil || !secretParam(name) {
-					continue
-				}
+			for _, v := range protocol.SecretURLValues(u, secretParam) {
 				add(v)
-				if s, err := url.QueryUnescape(v); err == nil {
-					add(s)
-				}
-				if s, err := url.PathUnescape(v); err == nil {
-					add(s)
-				}
 			}
 		}
 	}

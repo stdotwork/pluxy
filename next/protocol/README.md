@@ -625,10 +625,11 @@ especially short ones, out of the credential. Core removes the secrets in the ac
 whatever joins their words, or none, and may end in a number or a word such as `value` or
 `pem`), header values about authentication or named like a secret in an object whose name holds
 `header` (`extra_headers`, `headers_override`), and any URL
-with a user name, password or query (a `base_url` with a token in it), as its management API
+with a user name, password or query (a `base_url` with a token in it), or with a parameter named
+like a secret in its fragment, as its management API
 hides them; of such a URL also its user name, its password, the two together (in Basic form
-too) and the value of each query parameter named like a secret (`key`, `token`, `sig`, ...), as
-written and decoded, on their own. Below a key named like a secret, `true`, `false`, `null` and the empty string are
+too) and the value of each parameter named like a secret (`key`, `token`, `sig`, ...) in its query
+or fragment, split on `&` or `;`, as written and decoded, on their own. Below a key named like a secret, `true`, `false`, `null` and the empty string are
 not secrets: they carry none. Unlike a credential's strings, a settings secret shorter than 8
 bytes is left in text, since removing every occurrence of so short a string would mangle
 unrelated text; the management API still shows it as a placeholder. When the settings change,
@@ -638,10 +639,13 @@ until the program exits, for calls that still run with them.
 A secret made of parts (in the credential, the settings, the proxy or the headers) counts part by
 part too, since an upstream may echo only one part: core also removes each part of 8 bytes or
 more, in the same forms, but never the public prefix, scheme or name around it. It splits these
-structures, and each part again, up to 4 times:
+structures, and each part again, up to 4 times; of what is still left to split then, the last
+word is a part too, so a token behind more schemes or prefixes than that is still found:
 
 - an authorization value, `Bearer <token>` or `Basic <base64>` (the scheme in any letter case):
-  the token, or the base64 text, what it decodes to (`user:password`) and the password;
+  the token, or the base64 text (standard or URL-safe, padded or not), what it decodes to when
+  that is text or holds a `:` (`user:password`, in any encoding) and the password, or the
+  user name when the password is empty, as a key sent as Basic's user name is;
 - a token behind a public prefix, `<prefix>$<token>` or `<prefix>:<token>`, such as Devin's
   `devin-session-token$<jwt>`, Meta's `dca:<token>` or `Name: value`, where the prefix is a letter
   and up to 31 more letters, digits, `-`, `_` or `.`, and the token (spaces and tabs after the `$`
@@ -661,7 +665,10 @@ removes every run of token characters (letters, digits and `_-.+/=~`) that holds
 consecutive characters of one of the account's secrets, or 8 or more of a long token, reading a
 run as written and with its
 escapes decoded (JSON's `\/`, `\\` and `\uXXXX` and percent-encoding's `%XX`, nested up to 8
-times); a `[redacted]` already there stays as it is. A PEM private key
+times); a `[redacted]` already there stays as it is. A run also takes any other character one of
+the account's secrets holds, such as a password's `@` or a letter outside ASCII, so a cut of such a
+secret is one run; whitespace, control characters, quotes, brackets, commas and backslashes always
+end a run. A PEM private key
 counts by its lines and its unwrapped body, at 8 bytes or more in a row. A long token is a secret
 that, trimmed of the whitespace around it, is one run of 32 or more token characters and is not
 base64 (standard or URL-safe, padded or not) of text. Both are almost always random, so 4 bytes of one would be a coincidence in
@@ -679,19 +686,32 @@ when the call or turn ended in an error, such as a 200 stream that ends in an er
 The account's secrets for this rule are the credential's `api_key`, `access_token` and
 `refresh_token`, the value of each header named like a secret, the proxy's user name and
 password, and the secrets core's own rules find in `settings` (those `GET /accounts` hides), a
-URL counting by its user name, password and the values of its query parameters named like a
-secret only; on a login, also each input the login method or prompt marks `secret`, and the user
-name, password and secret query values of an input that is a URL. A secret made of parts counts
-by its parts, and one other than the credential's or an input's under 8 bytes adds nothing. One
-of 8 bytes or more whose kept parts are all shorter (a part that only wraps another, such as a
-scheme or header line around a token, is not kept) counts whole, so short parts never leave it
-unprotected; the words around its parts, such as its scheme, then count too. A credential's
-`api_key`, `access_token` or `refresh_token` that is one `name=value`, or holds one behind a scheme
-or prefix (`Bearer name=value`, `dca:name=value`), counts that pair, without the scheme or prefix,
-whole as well as by its value, so the bytes before its `=` are protected (from 8 bytes when the
-pair is a long token), and a word that shares 4 characters with the pair's name goes too. A cookie
-list (`a=b; c=d`) counts by its values only. A
-known vendor's public key prefix (`sk-proj-`, `sk-svcacct-`, `sk-admin-`, `sk-ant-api03-`,
+URL counting by its user name, password and the values of its parameters named like a secret
+only, in its query or in the fragment an OAuth redirect carries, split on `&` or `;`; on a login,
+also each input the login method or prompt marks `secret`, and the same parts of an input that is
+a URL.
+
+One rule says how a value counts: by its parts, so that only words known to be public stay out of
+the pieces. Those are a scheme, a public prefix, the names of a real cookie list, and Basic's user
+name when it has a password. Every other byte is in a piece:
+
+- a value that is one `name=value`, or holds one behind a scheme or prefix (`Bearer name=value`,
+  `dca:name=value`), counts that pair, without the scheme or prefix, whole as well as by its value,
+  so the bytes before its `=` are protected (from 8 bytes when the pair is a long token), and a
+  word that shares 4 characters with the pair's name goes too. Only the `Cookie` header (its name
+  in any letter case) counts a single pair by its value;
+- a list of pairs (`a=b; c=d`) counts by its values only when every item is a pair with a value.
+  One with anything else in it (a bare token, a padded key, an empty value) counts whole as well;
+- a cookie's value and Basic's password count whole, whatever they hold;
+- a URL's user name, password and secret parameter values count whole as well as by their parts;
+- a value nested deeper than the 4 splits counts whole;
+- one other than the credential's or an input's under 8 bytes adds nothing, and neither does such
+  a part. One of 8 bytes or more with no part of 8 bytes or more that nothing else splits (a part
+  that only wraps another, such as a scheme or header line around a token, is not one) counts
+  whole instead, so short parts never leave it unprotected; the words around its parts, such as
+  its scheme, then count too. A credential's field or a login's input keeps parts of any length.
+
+A known vendor's public key prefix (`sk-proj-`, `sk-svcacct-`, `sk-admin-`, `sk-ant-api03-`,
 `sk-ant-admin01-`, `sk-ant-oat01-`, `sk-ant-ort01-`, `sk-ant-`, `sk-kimi-`, `sk-or-v1-`, `sk-`,
 `xai-` or `gsk_`, the longest that fits) gives no piece: a piece counts only when it holds a byte
 after the prefix, and only when 16 bytes or more of the secret follow the prefix, so a short
@@ -703,8 +723,10 @@ In Go, `protocol.RemovePieces(s, secrets...)` applies the rule. `protocol.Accoun
 returns an account's secrets with the settings secrets given, as core passes them;
 `protocol.AccountSecrets(account)` finds those in `settings` itself, by rules close to core's (a
 key named like a secret by `protocol.SecretName`, which also takes names core's rules do not,
-such as `monkey`, and query parameter names without core's letter folding), for an extension:
+such as `monkey`, and parameter names without core's letter folding), for an extension:
 `sdk.UpstreamText` applies the rule with the other cleaning an extension's error text needs.
+`protocol.SecretURLValues(u, secret)` is the one reading of a URL's secret parameters, which both
+sets of rules use.
 
 ### Proxy
 
