@@ -89,7 +89,7 @@ test("a setup core refuses or can no longer read says why, and changes nothing",
   rmSync(file);
   await row.getByRole("button", { name: "Bring it across", exact: true }).click();
   await expect(row.getByRole("alert")).toContainText("pluxy could not read the CLIProxyAPI setup:");
-  await expect(row.getByRole("alert")).toContainText("config.yaml: no such file or directory");
+  await expect(row.getByRole("alert")).toContainText(`there is no file at ${file}`);
   await expect(row.getByRole("alert")).toContainText("then press Look again");
   expect((await core.mgmt<Accounts>("GET", "/accounts")).body.accounts).toEqual(before);
 });

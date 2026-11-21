@@ -655,8 +655,8 @@ test("each refusal is said in words a person can act on", () => {
   const refused = (status: number, message: string, dryRun = true) =>
     importProblem({ status, error: { code: "x", message } }, dryRun);
   expect(importProblem({ status: 200, body: dryReport }, true)).toEqual({});
-  expect(refused(400, "open /home/a/.cli-proxy-api/config.yaml: no such file or directory").problem).toBe(
-    "pluxy could not read the CLIProxyAPI setup: open /home/a/.cli-proxy-api/config.yaml: no such file or directory. Check that the file is still there and that pluxy may read it, then press Look again. Nothing was changed.",
+  expect(refused(400, "there is no file at /home/a/.cli-proxy-api/config.yaml").problem).toBe(
+    "pluxy could not read the CLIProxyAPI setup: there is no file at /home/a/.cli-proxy-api/config.yaml. Check that the file is still there and that pluxy may read it, then press Look again. Nothing was changed.",
   );
   expect(refused(422, "config.yaml: port must be a number").problem).toBe(
     "pluxy will not bring this setup across: config.yaml: port must be a number. Change that in the CLIProxyAPI setup, then try again. Nothing was changed.",
