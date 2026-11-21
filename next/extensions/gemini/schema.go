@@ -319,23 +319,32 @@ func subtractRefCost(v any, left *int) {
 	}
 }
 
-// refusedTargetFields returns the fields a refused ref keeps from its target: a short type, a
-// boolean nullable, and a description that the budget can still pay for.
+// refusedTargetFields returns the fields a refused ref keeps from its target, each only while the
+// budget can still pay for it: a short type, a boolean nullable and a description.
 func (x *refExpansion) refusedTargetFields(tm map[string]any) map[string]any {
 	out := map[string]any{}
-	if t, ok := tm["type"]; ok && shortType(t) {
+	if t, ok := tm["type"]; ok && shortType(t) && x.pay(t) {
 		out["type"] = deepClone(t)
 	}
-	if n, ok := tm["nullable"].(bool); ok {
+	if n, ok := tm["nullable"].(bool); ok && x.pay(n) {
 		out["nullable"] = n
 	}
-	if d, ok := tm["description"].(string); ok {
-		if cost := refValueCost + len(d); cost <= x.budget.left {
-			x.budget.left -= cost
-			out["description"] = d
-		}
+	if d, ok := tm["description"].(string); ok && x.pay(d) {
+		out["description"] = d
 	}
 	return out
+}
+
+// pay takes the cost of v from the budget and says whether it fit. A value that would use the
+// budget up exactly does not fit, because subtractRefCost stops walking at zero.
+func (x *refExpansion) pay(v any) bool {
+	left := x.budget.left
+	subtractRefCost(v, &left)
+	if left <= 0 {
+		return false
+	}
+	x.budget.left = left
+	return true
 }
 
 // shortType says whether t is a string of at most maxKeptTypeLen bytes or a list of at most

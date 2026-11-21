@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -188,5 +189,22 @@ func TestRefRefusedTargetsLongTypeIsNotCloned(t *testing.T) {
 	}
 	if strings.Contains(got, "$ref") {
 		t.Errorf("a $ref survived")
+	}
+}
+
+// Once the budget is spent, a refused ref keeps nothing of its target, so many refs to a target
+// with a long type list cost a small fixed stub each.
+func TestRefusedRefKeepsNothingOnceBudgetIsSpent(t *testing.T) {
+	in := `{"type":"object","$defs":{"d":{"type":["string","number","integer","boolean","object","array","null"],"nullable":true,"description":"kept only if paid for"}},"properties":{"p":{"$ref":"#/$defs/d"}}}`
+	out, _ := cleanToolSchema(json.RawMessage(in), false, &refBudget{})
+	var got struct {
+		Properties map[string]map[string]any `json:"properties"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{"type": "object", "description": "See: d"}
+	if !reflect.DeepEqual(got.Properties["p"], want) {
+		t.Errorf("p = %#v, want %#v", got.Properties["p"], want)
 	}
 }
