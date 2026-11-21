@@ -43,7 +43,9 @@ The navigation's **Privacy mode** toggle hides account e-mail addresses and iden
 person shares their screen (`kit/privacy.ts`). It changes only what pages show: a page passes a
 value through `usePrivacy()`'s masks where it shows it (text, `title`, `aria-label`) and keeps the
 real value for calls, search, filters, copying and downloads. Keys never go through the masks;
-they keep their own handling in both states. The panel keeps the choice in the host's prefs
+they keep their own handling in both states. Where the desktop app says it saved a file, privacy
+mode names the file and its folder only (`shownPath` in `kit/save.tsx`): the folders above hold
+the person's user name. The panel keeps the choice in the host's prefs
 (`prefsPrivacy`); the desktop app keeps it natively. Extension pages get it as `privacy` in the
 theme snapshot (`extension-pages/README.md`); the kit cannot hide what a page shows itself.
 

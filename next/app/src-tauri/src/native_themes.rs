@@ -7,8 +7,9 @@
 //!   canvas colour (`--px-color-bg` and `--app-theme-canvas` on the root element), the root has
 //!   class `dark`, and the picker lists Nightfall, chosen; `GET /themes` through the app's host
 //!   (the `core_call` command) has `t3/nightfall` as `current`. Then Export is pressed: the page
-//!   says where the file was saved, that path is `nightfall.json` in the session's Downloads
-//!   folder, and the file there, read from disk, holds the theme file's JSON. The app saves it
+//!   says where the file was saved (in privacy mode only its folder and name), that is
+//!   `nightfall.json` in the session's Downloads folder, and the file there, read from disk,
+//!   holds the theme file's JSON. The app saves it
 //!   itself (the `file_save` command), with no dialog to drive.
 //! - `restart`: the next launch paints in that theme before anything is clicked, and its Themes
 //!   page has Nightfall chosen; the stage stays on that page long enough for the session's last
@@ -278,16 +279,36 @@ fn export(c: &mut Checks, app: &AppHandle) {
     ) {
         return;
     }
-    let path = std::path::PathBuf::from(&said.unwrap_or_default()[SAVED.len()..]);
+    let shown = said.unwrap_or_default()[SAVED.len()..].to_string();
     // A session with no Downloads folder set up gets the one at home.
     let downloads = app
         .path()
         .download_dir()
         .or_else(|_| app.path().home_dir().map(|home| home.join("Downloads")))
         .ok();
+    let expected = downloads.as_ref().map(|d| d.join("nightfall.json"));
+    // In privacy mode the page names the file and its folder only ("…/Downloads/nightfall.json"):
+    // the folders above hold the user name. Otherwise it shows the whole path.
+    let path = match shown.strip_prefix('…') {
+        Some(short) => {
+            let folder = downloads
+                .as_ref()
+                .and_then(|d| d.file_name())
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
+            c.check(
+                short.trim_start_matches(['/', '\\']).replace('\\', "/")
+                    == format!("{folder}/nightfall.json"),
+                format!(
+                    "in privacy mode the page names only the folder and the file ({shown}, Downloads {downloads:?})"
+                ),
+            );
+            expected.clone().unwrap_or_default()
+        }
+        None => std::path::PathBuf::from(&shown),
+    };
     c.check(
-        path.file_name().and_then(|n| n.to_str()) == Some("nightfall.json")
-            && path.parent().map(|p| p.to_path_buf()) == downloads,
+        Some(&path) == expected.as_ref(),
         format!(
             "the saved file is nightfall.json in the Downloads folder ({}, Downloads {downloads:?})",
             path.display()
