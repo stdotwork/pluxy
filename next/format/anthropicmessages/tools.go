@@ -65,7 +65,7 @@ func ToolNames(req llm.Request) map[string]string {
 	n := toolNames{to: map[string]string{}, taken: map[string]bool{}}
 	var declared, called []string
 	for _, t := range req.Tools {
-		if t.Type != llm.ToolNative {
+		if t.IsFunction() {
 			declared = append(declared, t.Name)
 		}
 	}

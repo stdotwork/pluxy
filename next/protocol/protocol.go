@@ -39,8 +39,9 @@ const Version = 0
 // flag (llm.Item.Content and llm.Item.IsError on a tool_result); minor 26 adds a tool choice's
 // allowed tool list (llm.ToolChoice.Allowed); minor 27 adds native-only generate calls
 // (Info.NativeParser and Call.NativeOnly); minor 28 adds the request's service tier and
-// verbosity (llm.Options.ServiceTier and llm.Options.Verbosity).
-const Minor = 28
+// verbosity (llm.Options.ServiceTier and llm.Options.Verbosity); minor 29 adds the canonical
+// web search tool (llm.ToolWebSearch and llm.Tool.WebSearch).
+const Minor = 29
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20

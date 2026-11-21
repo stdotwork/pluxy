@@ -298,6 +298,9 @@ type Part struct {
 // Tool types.
 const (
 	ToolFunction = "function"
+	// ToolWebSearch is a provider-hosted web search tool (protocol minor version 29). WebSearch
+	// holds the settings more than one format can say; Origin holds the client's original tool.
+	ToolWebSearch = "web_search"
 	// ToolNative is a tool core could not interpret, such as a provider-hosted tool;
 	// Origin.Raw holds it whole.
 	ToolNative = "native"
@@ -310,8 +313,15 @@ type Tool struct {
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 	// Strict asks the provider to make arguments follow Parameters exactly.
-	Strict *bool   `json:"strict,omitempty"`
-	Origin *Origin `json:"origin,omitempty"`
+	Strict *bool `json:"strict,omitempty"`
+	// WebSearch holds the settings of a ToolWebSearch tool (protocol minor version 29).
+	WebSearch *WebSearchTool `json:"web_search,omitempty"`
+	Origin    *Origin        `json:"origin,omitempty"`
+}
+
+// IsFunction reports whether t is a function tool (Type is empty or ToolFunction).
+func (t Tool) IsFunction() bool {
+	return t.Type == "" || t.Type == ToolFunction
 }
 
 // Options are generation options. Nil or empty means not set.

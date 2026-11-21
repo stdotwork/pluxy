@@ -183,11 +183,28 @@ func ParseRequest(body []byte) (llm.Request, error) {
 
 func parseTool(raw json.RawMessage, path string) llm.Tool {
 	var t struct {
-		Type        string          `json:"type"`
-		Name        string          `json:"name"`
-		Description string          `json:"description"`
-		InputSchema json.RawMessage `json:"input_schema"`
-		Strict      *bool           `json:"strict"`
+		Type           string            `json:"type"`
+		Name           string            `json:"name"`
+		Description    string            `json:"description"`
+		InputSchema    json.RawMessage   `json:"input_schema"`
+		Strict         *bool             `json:"strict"`
+		MaxUses        *int              `json:"max_uses"`
+		AllowedDomains []string          `json:"allowed_domains"`
+		BlockedDomains []string          `json:"blocked_domains"`
+		UserLocation   *llm.UserLocation `json:"user_location"`
+	}
+	if rawjson.Unmarshal(raw, &t) == nil && strings.HasPrefix(t.Type, "web_search_") {
+		return llm.Tool{
+			Type: llm.ToolWebSearch,
+			Name: t.Name,
+			WebSearch: &llm.WebSearchTool{
+				MaxUses:        t.MaxUses,
+				AllowedDomains: t.AllowedDomains,
+				BlockedDomains: t.BlockedDomains,
+				UserLocation:   t.UserLocation,
+			},
+			Origin: &llm.Origin{Format: format, Path: path, Raw: append(json.RawMessage(nil), raw...)},
+		}
 	}
 	if rawjson.Unmarshal(raw, &t) != nil || (t.Type != "" && t.Type != "custom") || t.Name == "" || len(t.InputSchema) == 0 {
 		// Server tools (web search, code execution, ...) and versioned client tools (bash,

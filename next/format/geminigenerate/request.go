@@ -352,6 +352,10 @@ func parseTools(raw json.RawMessage, path string) []llm.Tool {
 			continue
 		}
 		one, _ := json.Marshal(map[string]json.RawMessage{k: m[k]})
+		if k == "googleSearch" {
+			out = append(out, llm.Tool{Type: llm.ToolWebSearch, WebSearch: &llm.WebSearchTool{}, Origin: &llm.Origin{Format: format, Path: path + "." + k, Raw: one}})
+			continue
+		}
 		out = append(out, llm.Tool{Type: llm.ToolNative, Origin: &llm.Origin{Format: format, Path: path + "." + k, Raw: one}})
 	}
 	return out

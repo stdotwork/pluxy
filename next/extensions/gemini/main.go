@@ -401,7 +401,8 @@ func buildBodyOn(req llm.Request, s settings) ([]byte, *llm.Translation, error) 
 		req.Options.MaxOutputTokens = nil
 		extra = append(extra, llm.Loss{Kind: llm.LossDropped, Path: "max_tokens", Detail: "a Messages client's required max_tokens is left to the Gemini model's own limit"})
 	}
-	body, losses, err := geminigenerate.EncodeRequestWith(req, geminigenerate.EncodeOptions{ServiceTier: takesServiceTier(s)})
+	takes := takesServiceTier(s)
+	body, losses, err := geminigenerate.EncodeRequestWith(req, geminigenerate.EncodeOptions{ServiceTier: takes, WebSearch: takes})
 	if err != nil {
 		return nil, nil, err
 	}

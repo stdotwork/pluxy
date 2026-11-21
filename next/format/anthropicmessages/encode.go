@@ -167,6 +167,11 @@ type EncodeOptions struct {
 	// the caller sets it only when it adds that header to the request it sends. Left off, the
 	// priority tier is dropped and reported.
 	FastMode bool
+	// WebSearch says the caller knows its upstream takes a Messages web_search_20250305 tool:
+	// a request from another format then carries a canonical web search tool, and without it the
+	// tool is left out and reported as dropped. A Messages client's own tool is written either
+	// way.
+	WebSearch bool
 }
 
 // EncodeRequestWith builds a Messages request body as EncodeRequest does, changed by opts.
@@ -227,14 +232,30 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	}
 	var tools []json.RawMessage
 	for i, t := range req.Tools {
-		if len(allowed) > 0 && (t.Type == llm.ToolNative || !allowed[t.Name]) {
+		if len(allowed) > 0 && (!t.IsFunction() || !allowed[t.Name]) {
+			continue
+		}
+		if t.Type == llm.ToolWebSearch {
+			if t.Origin != nil && t.Origin.Format == format {
+				tools = append(tools, t.Origin.Raw)
+			} else if !opts.WebSearch {
+				e.lose(llm.LossDropped, pathOf(t.Origin, fmt.Sprintf("tools[%d]", i)), llm.WebSearchUnsent)
+			} else if ws, skip, ok := canonicalWebSearchTool(t); ok {
+				if !skip {
+					tools = append(tools, ws)
+				}
+			} else {
+				e.lose(llm.LossDropped, pathOf(t.Origin, fmt.Sprintf("tools[%d]", i)), "Messages has no such tool")
+			}
 			continue
 		}
 		if t.Type == llm.ToolNative {
 			if t.Origin != nil && t.Origin.Format == format {
 				tools = append(tools, t.Origin.Raw)
 			} else if ws, skip, ok := webSearchTool(t); ok {
-				if !skip {
+				if !opts.WebSearch {
+					e.lose(llm.LossDropped, pathOf(t.Origin, fmt.Sprintf("tools[%d]", i)), llm.WebSearchUnsent)
+				} else if !skip {
 					tools = append(tools, ws)
 				}
 			} else {
@@ -254,7 +275,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	if len(allowed) > 0 {
 		defined := map[string]bool{}
 		for _, t := range req.Tools {
-			if t.Type != llm.ToolNative {
+			if t.IsFunction() {
 				defined[t.Name] = true
 			}
 		}

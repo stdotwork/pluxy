@@ -65,6 +65,51 @@ func webSearchTool(t llm.Tool) (tool json.RawMessage, skip, ok bool) {
 	return b, false, true
 }
 
+// canonicalWebSearchTool returns the Claude tool for a canonical ToolWebSearch from another
+// format (Chat, Gemini, or synthetic). A Responses tool uses webSearchTool above so its exact
+// output is unchanged.
+func canonicalWebSearchTool(t llm.Tool) (tool json.RawMessage, skip, ok bool) {
+	if ws, sk, matched := webSearchTool(t); matched {
+		return ws, sk, true
+	}
+	if t.WebSearch != nil && t.WebSearch.Disabled {
+		return nil, true, true
+	}
+	out := map[string]any{"type": webSearchToolType, "name": cmp.Or(strings.TrimSpace(t.Name), "web_search")}
+	if ws := t.WebSearch; ws != nil {
+		if ws.MaxUses != nil {
+			out["max_uses"] = *ws.MaxUses
+		}
+		if len(ws.AllowedDomains) > 0 {
+			out["allowed_domains"] = ws.AllowedDomains
+		}
+		if len(ws.BlockedDomains) > 0 {
+			out["blocked_domains"] = ws.BlockedDomains
+		}
+		if u := ws.UserLocation; u != nil {
+			loc := map[string]any{"type": cmp.Or(u.Type, "approximate")}
+			if u.Country != "" {
+				loc["country"] = u.Country
+			}
+			if u.City != "" {
+				loc["city"] = u.City
+			}
+			if u.Region != "" {
+				loc["region"] = u.Region
+			}
+			if u.Timezone != "" {
+				loc["timezone"] = u.Timezone
+			}
+			out["user_location"] = loc
+		}
+	}
+	b, err := json.Marshal(out)
+	if err != nil {
+		return nil, false, false
+	}
+	return b, false, true
+}
+
 // webSearchCall is a replayed Responses web_search_call item.
 type webSearchCall struct {
 	ID     string `json:"id"`

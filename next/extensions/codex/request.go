@@ -69,7 +69,7 @@ func buildRequest(req llm.Request, accountID string, s settings, a account, ws b
 		if host {
 			r, narrowed = narrowToModel(r)
 		}
-		enc, losses, err := openairesponses.EncodeRequestWith(r, openairesponses.EncodeOptions{ServiceTier: host, Verbosity: host})
+		enc, losses, err := openairesponses.EncodeRequestWith(r, openairesponses.EncodeOptions{ServiceTier: host, Verbosity: host, WebSearch: host})
 		if err != nil {
 			return nil, err
 		}

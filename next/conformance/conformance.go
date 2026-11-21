@@ -192,6 +192,7 @@ func Run(t *testing.T, target Target) {
 	t.Run("tool_result", k.toolResult)
 	t.Run("allowed_tools", k.allowedTools)
 	t.Run("service_tier", k.serviceTier)
+	t.Run("web_search", k.webSearch)
 	t.Run("cancel", k.cancel)
 	t.Run("errors/rate_limited", func(t *testing.T) {
 		k.wantError(t, ScenarioRateLimited, llm.Error{Code: llm.CodeRateLimit, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: 20000}, llm.ScopeModel)
@@ -450,6 +451,46 @@ func (k *kit) serviceTier(t *testing.T) {
 				t.Errorf("text = %q, want %q", text.String(), ReplyText)
 			}
 		})
+	}
+}
+
+// webSearch checks that an extension accepts a request carrying a canonical web search tool
+// (protocol 0.29): it carries the tool where its upstream takes one and reports it or its
+// unsupported settings as dropped otherwise, and the call still finishes with the normal reply.
+func (k *kit) webSearch(t *testing.T) {
+	ext := k.start(t)
+	setup := k.target.Prepare(t, ScenarioText)
+	req := request(true)
+	maxUses := 2
+	req.Tools = []llm.Tool{{
+		Type: llm.ToolWebSearch,
+		Name: "web_search",
+		WebSearch: &llm.WebSearchTool{
+			MaxUses:        &maxUses,
+			AllowedDomains: []string{"example.com"},
+			UserLocation:   &llm.UserLocation{Type: "approximate", Country: "US"},
+		},
+		Origin: &llm.Origin{
+			Format: llm.FormatAnthropicMessages,
+			Path:   "tools[0]",
+			Raw:    json.RawMessage(`{"type":"web_search_20250305","name":"web_search","max_uses":2,"allowed_domains":["example.com"],"user_location":{"type":"approximate","country":"US"}}`),
+		},
+	}}
+	s := ext.Generate(context.Background(), setup.Account, req)
+	defer s.Close()
+	evs := collect(t, s)
+	last := evs[len(evs)-1]
+	if last.Type != llm.EventFinish {
+		t.Fatalf("ended with %s: %v", last.Type, last.Error)
+	}
+	var text strings.Builder
+	for _, ev := range evs {
+		if ev.Type == llm.EventTextDelta {
+			text.WriteString(ev.Delta)
+		}
+	}
+	if text.String() != ReplyText {
+		t.Errorf("text = %q, want %q", text.String(), ReplyText)
 	}
 }
 

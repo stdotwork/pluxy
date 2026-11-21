@@ -95,6 +95,11 @@ type EncodeOptions struct {
 	// without it the tier is left out and reported as dropped. A Gemini client's own tier is
 	// written either way.
 	ServiceTier bool
+	// WebSearch says the caller knows its upstream takes a GenerateContent googleSearch tool:
+	// a request from another format then carries a canonical web search tool (when no function
+	// tools are present), and without it the tool is left out and reported as dropped. A Gemini
+	// client's own googleSearch tool is written either way.
+	WebSearch bool
 }
 
 // EncodeRequestWith builds a GenerateContent request body as EncodeRequest does, changed by opts.
@@ -138,10 +143,53 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	}
 
 	toolNameMap := ToolNames(req)
+	hasFunctionTools := false
+	for _, t := range req.Tools {
+		if t.IsFunction() {
+			hasFunctionTools = true
+			break
+		}
+	}
 	var decls []json.RawMessage
 	var tools []json.RawMessage
 	for i, t := range req.Tools {
 		p := pathOf(t.Origin, fmt.Sprintf("tools[%d]", i))
+		if t.Type == llm.ToolWebSearch {
+			if t.Origin != nil && t.Origin.Format == format {
+				tools = append(tools, t.Origin.Raw)
+				continue
+			}
+			if !opts.WebSearch {
+				e.lose(llm.LossDropped, p, llm.WebSearchUnsent)
+				continue
+			}
+			if t.WebSearch != nil && t.WebSearch.Disabled {
+				continue
+			}
+			if hasFunctionTools {
+				// Gemini 2.x rejects googleSearch alongside functionDeclarations; Gemini 3/4
+				// requires includeServerSideToolInvocations (which disallows AUTO mode and
+				// changes the reply format). Keep the function tools and drop search with a loss.
+				e.lose(llm.LossDropped, p, "GenerateContent cannot combine googleSearch with functionDeclarations without server-side tool invocation handling")
+				continue
+			}
+			tools = append(tools, json.RawMessage(`{"googleSearch":{}}`))
+			if ws := t.WebSearch; ws != nil {
+				if ws.MaxUses != nil {
+					e.lose(llm.LossDropped, rawjson.Join(p, "max_uses"), "GenerateContent googleSearch has no max_uses")
+				}
+				if len(ws.AllowedDomains) > 0 {
+					e.lose(llm.LossDropped, rawjson.Join(p, "allowed_domains"), "GenerateContent googleSearch has no allowed_domains")
+				}
+				if len(ws.BlockedDomains) > 0 {
+					e.lose(llm.LossDropped, rawjson.Join(p, "blocked_domains"), "GenerateContent googleSearch has no blocked_domains")
+				}
+				if ws.UserLocation != nil {
+					e.lose(llm.LossDropped, rawjson.Join(p, "user_location"), "GenerateContent googleSearch has no user_location")
+				}
+			}
+			continue
+		}
 		if t.Type == llm.ToolNative {
 			if t.Origin != nil && t.Origin.Format == format {
 				tools = append(tools, t.Origin.Raw)

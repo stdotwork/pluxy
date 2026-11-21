@@ -1549,7 +1549,7 @@ extension below 0.23 gets none: it cannot promise alive frames.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.28. An extension reports the minor version it
+raise the minor version: this document is version 0.29. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1585,8 +1585,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.26 | A [tool choice](#the-request)'s `allowed` tool list. |
 | 0.27 | [Native-only calls](#native-only-calls): describe's `native_parser` and the call's `native_only`. |
 | 0.28 | The request's `options.service_tier` and `options.verbosity` ([the request](#the-request)). |
+| 0.29 | The canonical `web_search` tool (`tool.type = "web_search"` and `tool.web_search`; [the request](#the-request)). |
 
-## What version 0.28 leaves out
+## What version 0.29 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

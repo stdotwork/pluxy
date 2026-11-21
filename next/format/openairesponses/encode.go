@@ -114,6 +114,11 @@ type EncodeOptions struct {
 	// leaves it out and reports it as dropped, since a third-party upstream may refuse a field it
 	// does not list. A Responses client's own tier and verbosity are written either way.
 	ServiceTier, Verbosity bool
+	// WebSearch says the caller knows its upstream takes a Responses web_search tool: a request
+	// from another format then carries a canonical web search tool, and without it the tool is
+	// left out and reported as dropped. A Responses client's own web_search tool is written
+	// either way.
+	WebSearch bool
 }
 
 // EncodeRequestWith builds a Responses request body as EncodeRequest does, changed by opts.
@@ -195,11 +200,60 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 		}
 	}
 	for i, t := range req.Tools {
+		p := pathOf(t.Origin, fmt.Sprintf("tools[%d]", i))
+		if t.Type == llm.ToolWebSearch {
+			if t.Origin != nil && t.Origin.Format == format {
+				out.Tools = append(out.Tools, t.Origin.Raw)
+				continue
+			}
+			if !opts.WebSearch {
+				e.lose(llm.LossDropped, p, llm.WebSearchUnsent)
+				continue
+			}
+			if t.WebSearch != nil && t.WebSearch.Disabled {
+				continue
+			}
+			wt := map[string]any{"type": "web_search"}
+			if ws := t.WebSearch; ws != nil {
+				if len(ws.AllowedDomains) > 0 {
+					wt["filters"] = map[string]any{"allowed_domains": ws.AllowedDomains}
+				}
+				if u := ws.UserLocation; u != nil {
+					loc := map[string]any{"type": "approximate"}
+					if u.Type != "" {
+						loc["type"] = u.Type
+					}
+					if u.Country != "" {
+						loc["country"] = u.Country
+					}
+					if u.City != "" {
+						loc["city"] = u.City
+					}
+					if u.Region != "" {
+						loc["region"] = u.Region
+					}
+					if u.Timezone != "" {
+						loc["timezone"] = u.Timezone
+					}
+					wt["user_location"] = loc
+				}
+				if ws.MaxUses != nil {
+					e.lose(llm.LossDropped, rawjson.Join(p, "max_uses"), "Responses web_search has no max_uses")
+				}
+				if len(ws.BlockedDomains) > 0 {
+					e.lose(llm.LossDropped, rawjson.Join(p, "blocked_domains"), "Responses web_search has no blocked_domains")
+				}
+			}
+			if b, err := json.Marshal(wt); err == nil {
+				out.Tools = append(out.Tools, b)
+			}
+			continue
+		}
 		if t.Type == llm.ToolNative {
 			if t.Origin != nil && t.Origin.Format == format {
 				out.Tools = append(out.Tools, t.Origin.Raw)
 			} else {
-				e.lose(llm.LossDropped, pathOf(t.Origin, fmt.Sprintf("tools[%d]", i)), "Responses has no such tool")
+				e.lose(llm.LossDropped, p, "Responses has no such tool")
 			}
 			continue
 		}

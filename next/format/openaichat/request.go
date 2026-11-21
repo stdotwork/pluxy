@@ -185,6 +185,11 @@ func ParseRequest(body []byte) (llm.Request, error) {
 		req.Options.Verbosity = v
 		modelled = rawjson.With(modelled, "verbosity")
 	}
+	var webSearchTool *llm.Tool
+	if raw, ok := top["web_search_options"]; ok && rawjson.Object(raw) != nil {
+		webSearchTool = parseWebSearchOptions(raw)
+		modelled = rawjson.With(modelled, "web_search_options")
+	}
 	req.Origin = rawjson.Origin(format, "", top, modelled, nested)
 	for i, raw := range in.Tools {
 		t, err := parseTool(raw, fmt.Sprintf("tools[%d]", i))
@@ -192,6 +197,9 @@ func ParseRequest(body []byte) (llm.Request, error) {
 			return llm.Request{}, invalid("tools[%d]: %v", i, err)
 		}
 		req.Tools = append(req.Tools, t)
+	}
+	if webSearchTool != nil {
+		req.Tools = append(req.Tools, *webSearchTool)
 	}
 	for i, raw := range in.Messages {
 		items, err := parseMessage(raw, fmt.Sprintf("messages[%d]", i))
@@ -488,6 +496,7 @@ type outTail struct {
 	ReasoningEffort   string            `json:"reasoning_effort,omitempty"`
 	ServiceTier       string            `json:"service_tier,omitempty"`
 	Verbosity         string            `json:"verbosity,omitempty"`
+	WebSearchOptions  json.RawMessage   `json:"web_search_options,omitempty"`
 }
 
 // encoder builds one Chat Completions request and records what it could not carry over.
@@ -566,6 +575,11 @@ type EncodeOptions struct {
 	// leaves it out and reports it as dropped, since a third-party upstream may refuse a field it
 	// does not list. A Chat client's own tier and verbosity are written either way.
 	ServiceTier, Verbosity bool
+	// WebSearch says the caller knows its upstream takes web_search_options (only specialized
+	// search models such as gpt-5-search-api accept it): a request from another format then
+	// carries a canonical web search tool on those models, and without it the tool is left out
+	// and reported as dropped. A Chat client's own web_search_options is written either way.
+	WebSearch bool
 }
 
 // EncodeRequestWith builds a Chat Completions request body as EncodeRequest does, changed by opts.
@@ -618,11 +632,65 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	}
 	toolNameMap := ToolNames(req)
 	for i, t := range req.Tools {
+		p := path(t.Origin, fmt.Sprintf("tools[%d]", i))
+		if t.Type == llm.ToolWebSearch {
+			if t.Origin != nil && t.Origin.Format == format {
+				out.WebSearchOptions = t.Origin.Raw
+				continue
+			}
+			if !opts.WebSearch {
+				e.lose(llm.LossDropped, p, llm.WebSearchUnsent)
+				continue
+			}
+			if t.WebSearch != nil && t.WebSearch.Disabled {
+				continue
+			}
+			if !isSearchModel(req.Model) {
+				e.lose(llm.LossDropped, p, fmt.Sprintf("Chat Completions model %q does not support web_search_options (only specialized search models such as gpt-5-search-api do)", req.Model))
+				continue
+			}
+			wsOut := map[string]any{}
+			if ws := t.WebSearch; ws != nil {
+				if u := ws.UserLocation; u != nil {
+					approx := map[string]any{}
+					if u.Country != "" {
+						approx["country"] = u.Country
+					}
+					if u.City != "" {
+						approx["city"] = u.City
+					}
+					if u.Region != "" {
+						approx["region"] = u.Region
+					}
+					if u.Timezone != "" {
+						approx["timezone"] = u.Timezone
+					}
+					locType := u.Type
+					if locType == "" {
+						locType = "approximate"
+					}
+					wsOut["user_location"] = map[string]any{"type": locType, "approximate": approx}
+				}
+				if ws.MaxUses != nil {
+					e.lose(llm.LossDropped, rawjson.Join(p, "max_uses"), "Chat Completions web_search_options has no max_uses")
+				}
+				if len(ws.AllowedDomains) > 0 {
+					e.lose(llm.LossDropped, rawjson.Join(p, "allowed_domains"), "Chat Completions web_search_options has no allowed_domains")
+				}
+				if len(ws.BlockedDomains) > 0 {
+					e.lose(llm.LossDropped, rawjson.Join(p, "blocked_domains"), "Chat Completions web_search_options has no blocked_domains")
+				}
+			}
+			if b, err := json.Marshal(wsOut); err == nil {
+				out.WebSearchOptions = b
+			}
+			continue
+		}
 		if t.Type == llm.ToolNative {
 			if t.Origin != nil && t.Origin.Format == format {
 				out.Tools = append(out.Tools, t.Origin.Raw)
 			} else {
-				e.lose(llm.LossDropped, path(t.Origin, fmt.Sprintf("tools[%d]", i)), "Chat Completions has no such tool")
+				e.lose(llm.LossDropped, p, "Chat Completions has no such tool")
 			}
 			continue
 		}

@@ -177,11 +177,33 @@ func ParseRequest(body []byte) (llm.Request, error) {
 
 func parseTool(raw json.RawMessage, path string) llm.Tool {
 	var t struct {
-		Type        string          `json:"type"`
-		Name        string          `json:"name"`
-		Description string          `json:"description"`
-		Parameters  json.RawMessage `json:"parameters"`
-		Strict      *bool           `json:"strict"`
+		Type              string            `json:"type"`
+		Name              string            `json:"name"`
+		Description       string            `json:"description"`
+		Parameters        json.RawMessage   `json:"parameters"`
+		Strict            *bool             `json:"strict"`
+		ExternalWebAccess *bool             `json:"external_web_access"`
+		MaxUses           *int              `json:"max_uses"`
+		UserLocation      *llm.UserLocation `json:"user_location"`
+		Filters           *struct {
+			AllowedDomains []string `json:"allowed_domains"`
+		} `json:"filters"`
+	}
+	if json.Unmarshal(raw, &t) == nil && (t.Type == "web_search" || strings.HasPrefix(t.Type, "web_search_preview")) {
+		ws := &llm.WebSearchTool{
+			MaxUses:      t.MaxUses,
+			UserLocation: t.UserLocation,
+			Disabled:     t.ExternalWebAccess != nil && !*t.ExternalWebAccess,
+		}
+		if t.Filters != nil {
+			ws.AllowedDomains = t.Filters.AllowedDomains
+		}
+		return llm.Tool{
+			Type:      llm.ToolWebSearch,
+			Name:      t.Name,
+			WebSearch: ws,
+			Origin:    &llm.Origin{Format: format, Path: path, Raw: append(json.RawMessage(nil), raw...)},
+		}
 	}
 	if json.Unmarshal(raw, &t) != nil || t.Type != "function" || t.Name == "" {
 		// Hosted and custom tools are not function tools; they survive whole.

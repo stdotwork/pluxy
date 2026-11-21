@@ -54,8 +54,9 @@ var presets = map[string]preset{
 	"api.mistral.ai":   {developerRole: roleSystem, passback: ptr(false)},
 }
 
-// tierFields say which of a request's service tier and verbosity an upstream's API takes.
-type tierFields struct{ serviceTier, verbosity bool }
+// tierFields say which of a request's service tier, verbosity and web search tool an upstream's
+// API takes.
+type tierFields struct{ serviceTier, verbosity, webSearch bool }
 
 // tierHosts are the vendors whose API documentation names a service tier or a verbosity in the
 // request, by base URL host and then by the format of the wire. A request from another format
@@ -77,11 +78,11 @@ type tierFields struct{ serviceTier, verbosity bool }
 //     (https://ai.google.dev/api/generate-content/generate-content). GenerateContent has no verbosity.
 var tierHosts = map[string]map[string]tierFields{
 	"api.openai.com": {
-		llm.FormatOpenAIChat:      {serviceTier: true, verbosity: true},
-		llm.FormatOpenAIResponses: {serviceTier: true, verbosity: true},
+		llm.FormatOpenAIChat:      {serviceTier: true, verbosity: true, webSearch: true},
+		llm.FormatOpenAIResponses: {serviceTier: true, verbosity: true, webSearch: true},
 	},
-	"api.anthropic.com":                 {llm.FormatAnthropicMessages: {serviceTier: true}},
-	"generativelanguage.googleapis.com": {llm.FormatGeminiGenerate: {serviceTier: true}},
+	"api.anthropic.com":                 {llm.FormatAnthropicMessages: {serviceTier: true, webSearch: true}},
+	"generativelanguage.googleapis.com": {llm.FormatGeminiGenerate: {serviceTier: true, webSearch: true}},
 }
 
 // tierFieldsOf returns which of a tier and a verbosity the account's upstream takes on the wire of
