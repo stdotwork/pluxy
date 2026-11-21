@@ -53,7 +53,7 @@ func TestAccountSecrets(t *testing.T) {
 	}
 }
 
-// A header or cookie whose parts are all under 8 bytes counts whole (the ruled cost: words that
+// A header or cookie whose parts are all under 8 bytes counts whole (at a cost: words that
 // share 4 characters with it, "Bearer" and "theme" among them, are replaced too), where the
 // credential's own value adds its short inner value, without the public prefix.
 func TestAccountSecretsShortParts(t *testing.T) {
