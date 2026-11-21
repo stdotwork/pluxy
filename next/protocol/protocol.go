@@ -189,13 +189,13 @@ type Account struct {
 	// are about authentication are secret.
 	Headers map[string]string `json:"headers,omitempty"`
 	// Timeouts bounds how long an upstream request waits for response headers, gaps between
-	// raw body bytes or completion (minor version 18). Nil fields use core's defaults; 0 turns a
+	// raw body bytes or completion (minor version 22). Nil fields use core's defaults; 0 turns a
 	// limit off.
 	Timeouts *Timeouts `json:"timeouts,omitempty"`
 }
 
 // Timeouts bounds how long an upstream request waits for response headers, gaps between raw
-// body bytes or completion (minor version 18). Zero turns a limit off.
+// body bytes or completion (minor version 22). Zero turns a limit off.
 type Timeouts struct {
 	HeaderMS *int64 `json:"header_ms,omitempty"`
 	IdleMS   *int64 `json:"idle_ms,omitempty"`

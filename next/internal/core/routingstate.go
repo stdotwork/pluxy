@@ -19,11 +19,11 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// routingFile is the file in the state folder that holds routing's quota blocks.
+// routingFile is the file in the state folder that holds routing's quota blocks and bans.
 const routingFile = "routing.json"
 
-// routingDoc is routing.json: the quota blocks of route.State.Saved, under the version of the
-// document's form (routingVersion).
+// routingDoc is routing.json: the quota blocks of route.State.Saved and the bans of
+// route.State.SavedBans, under the version of the document's form (routingVersion).
 type routingDoc struct {
 	V      int                `json:"v"`
 	Blocks []route.SavedBlock `json:"blocks"`
@@ -103,9 +103,9 @@ func (c *Core) runQuotaRefresh(ctx context.Context, r *routing) {
 	}
 }
 
-// loadRouting puts back the blocks routing.json holds, for the accounts core has. A file that
-// cannot be read, or that another version of core wrote, is logged and left in place: core starts
-// without its blocks, and saveRouting moves it aside only when a block must be saved.
+// loadRouting puts back the blocks and bans routing.json holds, for the accounts core has. A
+// file that cannot be read, or that another version of core wrote, is logged and left in place:
+// core starts without them, and saveRouting moves it aside only when state must be saved.
 func (c *Core) loadRouting(r *routing) {
 	b, err := os.ReadFile(r.path)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -168,10 +168,11 @@ func (c *Core) checkRouting(ctx context.Context) {
 	}
 }
 
-// saveRouting writes routing's quota blocks to routing.json when they changed: whole, to a
-// temporary file renamed into place, readable by its owner only. With no block to save it writes
-// nothing unless the file holds blocks core saved or read before. A file loadRouting could not
-// read is left in place until a block must be saved, and then moved aside to routing.json.bad.
+// saveRouting writes routing's state, its quota blocks and bans, to routing.json when they
+// changed: whole, to a temporary file renamed into place, readable by its owner only. With
+// neither to save it writes nothing unless the file holds state core saved or read before. A
+// file loadRouting could not read is left in place until state must be saved, and then moved
+// aside to routing.json.bad.
 func (c *Core) saveRouting(r *routing) {
 	blocks := c.state.Saved(time.Now())
 	bans := c.state.SavedBans()

@@ -102,9 +102,11 @@ config there and starts on it: it listens on `127.0.0.1` port 8317, or a free po
 taken, with one new client key and a new management key, in a file only its user can read. Core
 logs the file's path and the address, never the keys; read them in the file. `pluxy init
 [-config file] [-port n]` writes the same config without starting core (`-port 0`: a free port),
-and never replaces a file. A config with no management key is refused at start, with a message
-saying how to add one. A first start installs no package: install the providers you use from the
-bundled registry ([Packages](#packages)) or the panel. Flags:
+and never replaces a file. A test that starts a first core sets `PLUXY_INIT_PORT=<port>` to choose
+that port instead, so a test never takes 8317 on the machine it runs on (`0` is a free port); a
+value that is not a port stops core, and no real run sets it. A config with no management key is
+refused at start, with a message saying how to add one. A first start installs no package: install
+the providers you use from the bundled registry ([Packages](#packages)) or the panel. Flags:
 
 - `-config`: the config file (default `config.json`).
 - `-version`: print the build's version, commit and build date on one line, `pluxy <version> (<commit>, <date>)`, and exit. It does not read the config. Core logs the same line when it starts.
@@ -122,7 +124,7 @@ the panel (`extension_pages` in the config); see [extension pages](ui/extension-
 
 An account may list `models` it serves; without a list it serves the models its extension lists
 for it, as today's core serves an account the models of its provider's catalog, and any model
-when the extension has no list for it (the OpenAI-compatible extension has none). Accounts can rename,
+when the extension has no list for it. Accounts can rename,
 exclude and prefix models, and clients list the models on `GET /v1/models`: see
 [Model lists and model names](#model-lists-and-model-names). Core runs the
 extension the config names and every [installed package](#packages) that is enabled, and spreads
@@ -464,11 +466,13 @@ installs only when asked (`pluxy ext install`, or the panel). It runs as user `6
 docker build -t pluxy .
 ```
 
-Core reads no environment variables, so everything is set in `config.json`, and everything core
-keeps is in one folder: `/config`, a volume. It holds `config.json` and, beside it, the
-`credentials`, `packages` and `logs` folders core makes. Make a folder with a config file
-before the first start (with an empty `/config`, core writes a first config that listens on the
-container's own `127.0.0.1`: unreachable from outside, and the health check fails); `listen` must be `0.0.0.0:8400`, since the container's own `127.0.0.1`
+Core takes no settings from its environment: everything is set in `config.json`, and everything
+core keeps is in one folder: `/config`, a volume. It holds `config.json` and, beside it, the
+folders core makes and fills: `credentials`, `packages`, `logs` and `state` (routing state, the
+setup scan, stored themes, the model catalogue, and the keys public account IDs and client-key
+IDs are made with). Make a folder with a config file before the first start (with an
+empty `/config`, core writes a first config that listens on the container's own `127.0.0.1`:
+unreachable from outside, and the health check fails); `listen` must be `0.0.0.0:8400`, since the container's own `127.0.0.1`
 is not reachable from outside it, and the image's health check asks port 8400. Inside a container,
 requests through a published port come from Docker's network address, not from `127.0.0.1`, so
 the management API refuses them unless `management_allow_remote` is `true` (it still needs the
@@ -1766,8 +1770,9 @@ version 0.3), under the account's naming rules below; an extension that cannot s
 for it. The same list decides which models such an account serves: a request for a model no
 account serves is refused without calling an upstream, as today's core refuses it (404
 `model_not_found`; today's core answers 400). An account whose extension has no list, an empty
-one, or one it could not read within 15 seconds serves any model, and core asks again a minute
-later. Core asks again for each known list every 30 minutes with jitter, when an account's
+one, or one it could not read within 15 seconds serves any model. A list that could not be read is
+asked for again a minute later; an empty list counts as known, so it is refreshed with the others.
+Core asks again for each known list every 30 minutes with jitter, when an account's
 credential is renewed or it signs in again, and on `POST /v0/management/models/refresh`; a
 refresh that fails, times out or comes back empty keeps the last good list, and so does one that
 falls back to the extension's built-in list when the account's list was read from the provider.
@@ -1910,8 +1915,8 @@ at start and on a reload. Send it as a bearer token. The config may set no accou
 | `POST /accounts/{id}/refresh` | Renews the account's credential now. |
 | `POST /vertex/import` | Adds a Vertex AI account from a Google service account key file, as today's `POST /v0/management/vertex/import` does: `multipart/form-data` with the key in `file` and an optional `location` (a form field, else a query parameter; default `us-central1`), at most 1 MiB in all. It runs the Gemini extension's [`service_account` login](#gemini) with the account ID `vertex-<project_id>` (`/`, `\` and `:` in the project ID become `_`, spaces `-`), the settings `vertex.project` and `vertex.location`, and the label `<project_id> (<client_email>)`, waits for it (one token fetch, at the key's `token_uri`) and answers once: 200 `{"status": "ok", "account", "project_id", "email", "location"}`. Errors have the usual `{"error": {"code", "message"}}` shape: 400 `file_required`, `invalid_json`, `project_id_missing` and `invalid_service_account` (also when the token endpoint refuses the key), 400 `invalid_request` for a location or project ID the extension refuses, 409 `conflict` for an account of that ID in the config, 413 for a larger request, 502 with the login's code (`unavailable`) when the token endpoint cannot be reached or fails, and 504 when it does not answer in 45 seconds. When a login added an account of that ID before, the import signs in to it again, so the key replaces the old one only when its `client_email` is the same service account (else 400 `invalid_request`, the account keeps its key) and a `location` the account does not have is a 409; today's core overwrote the file silently. It does not repair a key damaged by pasting (today's core rebuilds a mangled PEM); it takes the file Google gives. |
 | `POST /accounts/import` | Adds the accounts of one credential file of today's auth folder to the running core, read and added as [`pluxy import cpa`](#moving-from-cliproxyapi-pluxy-import-cpa) reads and adds each file of the folder: `{"name": "<file name>.json", "content": "<the file's text>"}`. The content is the file itself, never a path on core's machine; `name` (a `.json` file name, no folder) gives the account ID, as the file's name does. The accounts serve at once, like an account a login adds. 200 `{"imported": [{"id", "extension", "ignored"}], "skipped": [...]}`: each account added, with the file's settings not supported yet that it left out (`ignored`), and why any other account of the file was skipped (a Codex file can hold two). Nothing added: 400 `invalid_request` for a file that is not JSON, of a type the import does not take or holding no token, with routing fields routing refuses once read (such as a `prefix` with a `/` inside, `a/b`; surrounding spaces and slashes are trimmed first), or a bad `name`; 409 `conflict` when the store or the config already has the account's ID, or a sign-in still running will take it (letter case aside); 413 for a file larger than 1 MiB. The message says why. Neither the reply nor core's log holds anything from the file but the account's ID. |
-| `PATCH /accounts/{id}` | `disabled` (`true` or `false`; disabled accounts get no requests) and any of the routing fields `priority`, `weight`, `disable_cooling`, `max_concurrency`, `request_retry`, `prefix`, `models`, `excluded_models`, `model_alias`, `proxy_url` and `headers`, checked as the config's are (a `proxy_url` sent back as `GET /accounts` shows it keeps the password it hides, and a header's placeholder sent back keeps its value; a placeholder that stands for no value the account has is a 400); `null` sets one back to its default. `settings` replaces the account's settings as a whole: an object, or `null` for none. A placeholder from `GET /accounts` keeps the secret it stands for: it is accepted only where that secret is now (an item of a list may move within its list; elsewhere 400), and only while the account's settings still hold that secret and core has not restarted (else 409, read the account again); to change a secret, send the new value. Core passes the settings to the extension as they are. An account whose `settings` change starts with fresh routing state, as on a reload: its blocks, cooldowns, last error and session bindings are dropped. A bad field changes nothing (400). Replies with the account. |
-| `POST /accounts/{id}/cooldown/reset` | Clears the account's cooldowns, on its credential, its models and its endpoint (which accounts naming the same endpoint share), with their backoff steps and its last error, so it serves again at once. Works for config accounts too. Replies with `cleared`, the number of live blocks it cleared, and the account. |
+| `PATCH /accounts/{id}` | `disabled` (`true` or `false`; disabled accounts get no requests) and any of the routing fields `priority`, `weight`, `disable_cooling`, `max_concurrency`, `request_retry`, `prefix`, `models`, `excluded_models`, `model_alias`, `proxy_url` and `headers`, checked as the config's are (a `proxy_url` sent back as `GET /accounts` shows it keeps the password it hides, and a header's placeholder sent back keeps its value; a placeholder that stands for no value the account has is a 400); `null` sets one back to its default. `settings` replaces the account's settings as a whole: an object, or `null` for none. A placeholder from `GET /accounts` keeps the secret it stands for: it is accepted only where that secret is now (an item of a list may move within its list; elsewhere 400), and only while the account's settings still hold that secret and core has not restarted (else 409, read the account again); to change a secret, send the new value. Core passes the settings to the extension as they are. An account whose `settings` change starts with fresh routing state, as on a reload: its blocks, cooldowns, last error and session bindings are dropped, while a ban stands (only signing in again, removing the account or turning it back on lifts it). A bad field changes nothing (400). Replies with the account. |
+| `POST /accounts/{id}/cooldown/reset` | Clears the account's cooldowns, on its credential, its models and its endpoint (which accounts naming the same endpoint share), with their backoff steps and its last error, so it serves again at once unless it is banned: a ban, and the last error of a banned account, stay (see [Accounts and routing](#accounts-and-routing)). Works for config accounts too. Replies with `cleared`, the number of live blocks it cleared, and the account. |
 | `GET /accounts/{id}/models` | The models the account serves: its config's `models` when it lists them, else the ones its extension lists for it (the protocol's [`models`](protocol/README.md#models)). Each has its upstream `id`, what the extension says about it, `names` (the names clients use for it after the account's exclusions, aliases and prefix, and its extension's defaults for logins) and `excluded` when `excluded_models` leaves it out. |
 | `POST /accounts/{id}/test` | Sends the account one small request (`Hi`, at most 16 tokens of reply), straight to its extension: its cooldowns are ignored and its routing state is left as it is. `{"model": ...}` names the model by its upstream name; without it, the first the account serves. Replies 200 with `result`: `ok`, `model`, `served_model`, `latency_ms`, the start of the `reply`, `finish_reason` and `usage`, or `error`. The request spends what a request that size costs. |
 | `GET /accounts/{id}/quota` | The account's plan and usage, read from its provider when asked (the protocol's [`quota`](protocol/README.md#quota)): `quota` with `plan`, optional `plan_ends_at` (the subscription end in Unix seconds), `limits` (each with `id`, `label`, and what the provider gives of `used_percent`, `used`, `limit`, `remaining`, `unit`, `unlimited`, `resets_at`, `window_seconds`, `models`) and `raw`, the provider's replies; and `fetched_at`. 422 with code `unsupported` for an account with no plan to report, such as an API key, or whose extension reads no quota; 502 with the provider's error code when the provider refused or failed. Each provider's section says what it reports. |
@@ -2021,7 +2026,7 @@ in `trusted_proxies`, every client has the proxy's address, so one client's wron
 | Call | What it does |
 | --- | --- |
 | `GET /v0/management/status` | `desired` (the newest config version core has seen, with `error` when it was refused) and `active` (the one serving), each with `revision` and `hash`; `extensions`, one entry per running generation with `state` (`starting`, `active`, `idle`, `crashed`, `quarantined`, `draining`, `stopped`), `current`, `pid`, `restarts`, `last_error` and `active_requests`; `safe_mode`; `first_run`; `version`, `commit` and `built`, the build's version, commit and build date as `-version` prints them. |
-| `GET /v0/management/setup`, `POST /v0/management/setup/scan`, `POST /v0/management/setup/apply`, `POST /v0/management/setup/done` | First-run setup scan, package picks, applying picks and ending first run; see [`management/README.md`](management/README.md#setup). |
+| `GET /v0/management/setup`, `POST /v0/management/setup/scan`, `POST /v0/management/setup/apply`, `POST /v0/management/setup/done`, `GET /v0/management/setup/clients/{id}/paste` | First-run setup scan, package picks, applying picks, ending first run, and the settings to paste into a client tool; see [`management/README.md`](management/README.md#setup). |
 | `POST /v0/management/reload` | Reload now. 200 with the status when the new revision is active; 422 with the status when it was refused. |
 | `GET /v0/management/ui` | The pages of the extensions that run and where they are served; see [extension pages](ui/extension-pages/README.md#how-core-serves-pages). |
 | `GET`, `PATCH /v0/management/extensions/{publisher}/{name}/config` | An extension's settings, checked against the schema its manifest declares; see [extension pages](ui/extension-pages/README.md#how-core-serves-pages). |

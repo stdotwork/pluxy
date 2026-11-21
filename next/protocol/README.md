@@ -213,9 +213,12 @@ If `PLUXY_PROTOCOL_VERSIONS` is not set, the program was not started by pluxy: i
 stderr and exit with a non-zero status.
 
 Core waits for the handshake line for a limited time (10 seconds by default, counted from the
-program running, so the time the system takes to start it does not count); this startup check is
-the only timeout in the protocol. After the line, core sends a `describe` call and checks that
-the reply's `id` matches the manifest.
+program running, so the time the system takes to start it does not count); the `describe` call
+below keeps to the same deadline, so these are the only limits on how long starting an extension
+may take. Limits on the work itself are elsewhere: an account's [`timeouts`](#timeouts) bound an
+upstream request, and core [ends a call](#alive-frames) whose extension has sent it nothing at
+all for too long. After the line, core sends a `describe` call and checks that the reply's `id`
+matches the manifest.
 
 Anything the extension writes to stderr goes to core's log, prefixed with the extension ID. Never
 write credentials there. Anything written to stdout after the handshake line is also logged.
