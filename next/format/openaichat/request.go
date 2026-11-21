@@ -10,7 +10,9 @@ import (
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/format/internal/audioinput"
+	mediainput "github.com/stdotwork/pluxy/next/format/internal/media"
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
+	"github.com/stdotwork/pluxy/next/format/internal/textdoc"
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
@@ -956,6 +958,20 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 				dropped = true
 				continue
 			}
+			if p.URL == "" {
+				e.lose(llm.LossDropped, pp, "Chat Completions cannot take an image with no URL")
+				dropped = true
+				continue
+			}
+			if (p.Origin == nil || p.Origin.Format != format) && mediainput.IsDataURL(p.URL) {
+				// Only a part translated from another format is checked: a Chat client's own
+				// image is what its upstream takes.
+				if _, problem := mediainput.AnyImage(p.URL); problem != "" {
+					e.lose(llm.LossDropped, pp, "Chat Completions cannot take this inline image: "+problem)
+					dropped = true
+					continue
+				}
+			}
 			op := outPart{Type: "image_url"}
 			op.ImageURL = &struct {
 				URL    string `json:"url"`
@@ -978,6 +994,11 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 				dropped = true
 				continue
 			}
+			if (p.Origin == nil || p.Origin.Format != format) && p.FileData != "" && !mediainput.FileDataOK(p.FileData) {
+				e.lose(llm.LossDropped, pp, "Chat Completions cannot take this file data: it is not base64 or a URL")
+				dropped = true
+				continue
+			}
 			op := outPart{Type: "file"}
 			op.File = &struct {
 				FileID   string `json:"file_id,omitempty"`
@@ -987,13 +1008,22 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 			out = append(out, marshal(op, e.kept(p.Origin)))
 			sendable = true
 		case llm.PartNative:
-			if p.Format != format {
-				e.lose(llm.LossDropped, pp, "a "+p.Format+" content part Chat Completions cannot carry")
-				dropped = true
+			if p.Format == format {
+				out = append(out, p.Data)
+				sendable = true
 				continue
 			}
-			out = append(out, p.Data)
-			sendable = true
+			if p.Format == llm.FormatAnthropicMessages {
+				if text, title, ok := textdoc.FromAnthropic(p.Data); ok {
+					wrapped := textdoc.Wrap(title, text)
+					out = append(out, marshal(outPart{Type: "text", Text: &wrapped}, nil))
+					e.lose(llm.LossApproximated, pp, "a Messages plain-text document, carried as text")
+					sendable = true
+					continue
+				}
+			}
+			e.lose(llm.LossDropped, pp, "a "+p.Format+" content part Chat Completions cannot carry")
+			dropped = true
 		default:
 			return nil, false, false, &llm.Error{Code: llm.CodeUnsupported, Message: fmt.Sprintf("%s: unsupported content part %q", pp, p.Type), Scope: llm.ScopeRequest}
 		}

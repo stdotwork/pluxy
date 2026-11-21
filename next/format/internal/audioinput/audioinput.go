@@ -5,6 +5,7 @@ package audioinput
 import (
 	"strings"
 
+	"github.com/stdotwork/pluxy/next/format/internal/media"
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
@@ -61,12 +62,8 @@ func Inline(p llm.Part) (mediaType, data string, ok bool) {
 	if p.Type != llm.PartFile {
 		return "", "", false
 	}
-	meta, data, found := strings.Cut(strings.TrimPrefix(p.FileData, "data:"), ",")
-	if !found || !strings.HasPrefix(p.FileData, "data:") || data == "" {
-		return "", "", false
-	}
-	mediaType, isBase64 := strings.CutSuffix(meta, ";base64")
-	if !isBase64 || !strings.HasPrefix(strings.ToLower(mediaType), "audio/") {
+	mediaType, data, ok = media.DataURL(p.FileData)
+	if !ok || data == "" || !strings.HasPrefix(strings.ToLower(mediaType), "audio/") {
 		return "", "", false
 	}
 	return mediaType, data, true

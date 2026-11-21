@@ -4,9 +4,12 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strings"
 
+	mediainput "github.com/stdotwork/pluxy/next/format/internal/media"
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
+	"github.com/stdotwork/pluxy/next/format/internal/textdoc"
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
@@ -182,7 +185,7 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 		switch it.Type {
 		case llm.ItemTypeMessage:
 			e.kept(it.Origin)
-			parts, sendable, dropped := e.parts(it, p)
+			parts, sendable, dropped := e.parts(it, p, true)
 			if it.Role == llm.RoleUser && dropped && !sendable {
 				return nil, nil, invalid("%s: nothing in this user turn can be sent to GenerateContent", p)
 			}
@@ -334,7 +337,7 @@ func (e *encoder) allowedNames(allowed []string, names map[string]string) []stri
 
 // parts encodes a message's content as GenerateContent parts. sendable reports whether any part
 // with something in it was kept, dropped whether any part was dropped and reported.
-func (e *encoder) parts(it llm.Item, msgPath string) (parts []json.RawMessage, sendable, dropped bool) {
+func (e *encoder) parts(it llm.Item, msgPath string, textDocs bool) (parts []json.RawMessage, sendable, dropped bool) {
 	for i, p := range it.Content {
 		pp := pathOf(p.Origin, fmt.Sprintf("%s.content[%d]", msgPath, i))
 		var part map[string]any
@@ -346,9 +349,10 @@ func (e *encoder) parts(it llm.Item, msgPath string) (parts []json.RawMessage, s
 			}
 			part = map[string]any{"text": p.Text}
 		case llm.PartImage, llm.PartFile:
-			part = media(p)
-			if part == nil {
-				e.lose(llm.LossDropped, pp, "GenerateContent cannot take this "+p.Type+": only inline data (a base64 data URL) is sent")
+			var problem string
+			part, problem = media(p)
+			if problem != "" {
+				e.lose(llm.LossDropped, pp, "GenerateContent cannot take this "+p.Type+": "+problem)
 				dropped = true
 				continue
 			}
@@ -357,6 +361,13 @@ func (e *encoder) parts(it llm.Item, msgPath string) (parts []json.RawMessage, s
 				parts = append(parts, p.Data)
 				sendable = true
 				continue
+			}
+			if p.Format == llm.FormatAnthropicMessages && textDocs {
+				if text, title, ok := textdoc.FromAnthropic(p.Data); ok {
+					part = map[string]any{"text": textdoc.Wrap(title, text)}
+					e.lose(llm.LossApproximated, pp, "a Messages plain-text document, carried as text")
+					break
+				}
 			}
 			e.lose(llm.LossDropped, pp, "a "+p.Format+" content part GenerateContent cannot carry")
 			dropped = true
@@ -397,30 +408,89 @@ func (e *encoder) responseParts(it llm.Item, itemPath string) []json.RawMessage 
 		}
 		media = append(media, p)
 	}
-	parts, _, _ := e.parts(llm.Item{Content: media}, itemPath)
+	parts, _, _ := e.parts(llm.Item{Content: media}, itemPath, false)
 	return parts
 }
 
-// media returns the inlineData part for an image or file given as a base64 data URL, or the
-// fileData part for one read from GenerateContent with its file URI, or nil.
-func media(p llm.Part) map[string]any {
+// media returns the GenerateContent part for an image or file, and the reason when it cannot be
+// sent: an inline image whose data is not base64 or whose media type Gemini does not document,
+// or a URL that is not one of the file URI forms Gemini documents. It never fetches the URL.
+func media(p llm.Part) (map[string]any, string) {
 	url := p.URL
 	if p.Type == llm.PartFile && p.FileData != "" {
 		url = p.FileData
 	}
-	if strings.HasPrefix(url, "data:") {
-		meta, data, ok := strings.Cut(strings.TrimPrefix(url, "data:"), ",")
-		mediaType, isBase64 := strings.CutSuffix(meta, ";base64")
-		if !ok || !isBase64 || mediaType == "" {
-			return nil
+	if mediainput.IsDataURL(url) {
+		mediaType, data, ok := mediainput.DataURL(url)
+		if !ok {
+			return nil, "it is not a base64 data URL"
 		}
-		return map[string]any{"inlineData": map[string]any{"mimeType": mediaType, "data": data}}
+		if p.Origin == nil || p.Origin.Format != format {
+			// Only a part translated from another format is checked; one the client sent to
+			// GenerateContent is what Gemini accepts, and its media type goes back as written.
+			mediaType = mediainput.Type(mediaType)
+			if !mediainput.Base64(data) {
+				return nil, "its data is not valid base64"
+			}
+			if p.Type == llm.PartImage || strings.HasPrefix(mediaType, "image/") {
+				if _, problem := mediainput.InlineImage(url, mediainput.GeminiImages); problem != "" {
+					return nil, problem
+				}
+			}
+		}
+		return map[string]any{"inlineData": map[string]any{"mimeType": mediaType, "data": data}}, ""
 	}
 	if url != "" && p.Origin != nil && p.Origin.Format == format {
 		// The MIME type is in the kept fields.
-		return map[string]any{"fileData": map[string]any{"fileUri": url}}
+		return map[string]any{"fileData": map[string]any{"fileUri": url}}, ""
 	}
-	return nil
+	if !geminiFileURI(url) {
+		return nil, "GenerateContent takes a URL only as a Files API URI (/v1/files/ or /v1beta/files/)"
+	}
+	return map[string]any{"fileData": map[string]any{"fileUri": url}}, ""
+}
+
+// geminiFileURI reports whether url is a Files API file URI, which files.upload and files.get
+// return (https://ai.google.dev/gemini-api/docs/files): https, Google's host, and the path
+// /v1/files/<id> or /v1beta/files/<id>, where <id> is one segment of ASCII letters, digits, - or
+// _. Nothing else is accepted for a translated request. A Cloud Storage (gs://) URI is refused
+// because Vertex AI would read that object with the account's own permissions on behalf of
+// whoever holds the client key. The URL is parsed and checked, never fetched.
+func geminiFileURI(raw string) bool {
+	if strings.ContainsAny(raw, "?#") {
+		return false // a query or fragment, even an empty one
+	}
+	u, err := url.Parse(raw)
+	if err != nil || !strings.EqualFold(u.Scheme, "https") || u.Opaque != "" {
+		return false
+	}
+	if u.User != nil || u.Port() != "" || !strings.EqualFold(u.Hostname(), "generativelanguage.googleapis.com") {
+		return false
+	}
+	if u.RawQuery != "" || u.Fragment != "" || u.ForceQuery {
+		return false
+	}
+	for _, prefix := range []string{"/v1/files/", "/v1beta/files/"} {
+		if id, ok := strings.CutPrefix(u.Path, prefix); ok && fileID(id) {
+			// The escaped path must be the same bytes: %2e%2e, %2F and %61bc are refused.
+			return u.EscapedPath() == prefix+id
+		}
+	}
+	return false
+}
+
+// fileID reports whether id is one path segment of ASCII letters, digits, - or _.
+func fileID(id string) bool {
+	if id == "" {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 // withSignature puts sig on part as its thoughtSignature, replacing SkipSignature.

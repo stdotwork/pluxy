@@ -6,7 +6,9 @@ import (
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/format/internal/audioinput"
+	mediainput "github.com/stdotwork/pluxy/next/format/internal/media"
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
+	"github.com/stdotwork/pluxy/next/format/internal/textdoc"
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
@@ -263,6 +265,20 @@ func (e *encoder) content(it llm.Item, msgPath string) (content []json.RawMessag
 				sendable = true
 			}
 		case p.Type == llm.PartImage && it.Role != llm.RoleAssistant:
+			if p.URL == "" && p.FileID == "" {
+				e.lose(llm.LossDropped, pp, "Responses cannot take an image with no URL or file id")
+				dropped = true
+				break
+			}
+			if (p.Origin == nil || p.Origin.Format != format) && mediainput.IsDataURL(p.URL) {
+				// Only a part translated from another format is checked: a Responses client's
+				// own image is what its upstream takes.
+				if _, problem := mediainput.AnyImage(p.URL); problem != "" {
+					e.lose(llm.LossDropped, pp, "Responses cannot take this inline image: "+problem)
+					dropped = true
+					break
+				}
+			}
 			m := map[string]string{"type": "input_image"}
 			if p.URL != "" {
 				m["image_url"] = p.URL
@@ -287,6 +303,18 @@ func (e *encoder) content(it llm.Item, msgPath string) (content []json.RawMessag
 				sendable = true
 				break
 			}
+			if p.Origin == nil || p.Origin.Format != format {
+				if p.FileID == "" && p.FileData == "" && p.URL == "" {
+					e.lose(llm.LossDropped, pp, "Responses cannot take a file with no file id, data or URL")
+					dropped = true
+					break
+				}
+				if p.FileData != "" && !mediainput.FileDataOK(p.FileData) {
+					e.lose(llm.LossDropped, pp, "Responses cannot take this file data: it is not base64 or a URL")
+					dropped = true
+					break
+				}
+			}
 			m := map[string]string{"type": "input_file"}
 			for k, v := range map[string]string{"file_id": p.FileID, "file_data": p.FileData, "file_url": p.URL, "filename": p.Filename} {
 				if v != "" {
@@ -298,6 +326,17 @@ func (e *encoder) content(it llm.Item, msgPath string) (content []json.RawMessag
 		case p.Type == llm.PartNative && p.Format == format:
 			content = append(content, p.Data)
 			sendable = true
+		case p.Type == llm.PartNative:
+			if p.Format == llm.FormatAnthropicMessages {
+				if text, title, ok := textdoc.FromAnthropic(p.Data); ok {
+					content = append(content, marshal(map[string]string{"type": textType, "text": textdoc.Wrap(title, text)}, nil))
+					e.lose(llm.LossApproximated, pp, "a Messages plain-text document, carried as text")
+					sendable = true
+					break
+				}
+			}
+			e.lose(llm.LossDropped, pp, "a "+partFormat(p)+" content part Responses cannot carry here")
+			dropped = true
 		default:
 			e.lose(llm.LossDropped, pp, "a "+partFormat(p)+" content part Responses cannot carry here")
 			dropped = true

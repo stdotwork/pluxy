@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	mediainput "github.com/stdotwork/pluxy/next/format/internal/media"
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
 	"github.com/stdotwork/pluxy/next/llm"
 )
@@ -484,15 +485,30 @@ func source(p llm.Part) map[string]any {
 	if p.Type == llm.PartFile && p.FileData != "" {
 		url = p.FileData
 	}
+	if p.Type == llm.PartFile && p.FileData != "" && (p.Origin == nil || p.Origin.Format != format) && !mediainput.FileDataOK(p.FileData) {
+		return nil
+	}
 	switch {
-	case strings.HasPrefix(url, "data:"):
-		meta, data, ok := strings.Cut(strings.TrimPrefix(url, "data:"), ",")
-		mediaType, isBase64 := strings.CutSuffix(meta, ";base64")
-		if !ok || !isBase64 {
+	case mediainput.IsDataURL(url):
+		mediaType, data, ok := mediainput.DataURL(url)
+		if !ok {
 			return nil
 		}
-		if p.Type == llm.PartFile && !strings.HasPrefix(mediaType, "image/") && mediaType != "application/pdf" {
-			return nil
+		if p.Origin == nil || p.Origin.Format != format {
+			// Only a part translated from another format is checked; one the client sent to
+			// Messages is what Messages accepts, and its media type goes back as written.
+			mediaType = mediainput.Type(mediaType)
+			if !mediainput.Base64(data) {
+				return nil
+			}
+			if p.Type == llm.PartImage || strings.HasPrefix(mediaType, "image/") {
+				if _, problem := mediainput.InlineImage(url, mediainput.ClaudeImages); problem != "" {
+					return nil
+				}
+			}
+			if p.Type == llm.PartFile && !strings.HasPrefix(mediaType, "image/") && mediaType != "application/pdf" {
+				return nil
+			}
 		}
 		return map[string]any{"type": "base64", "media_type": mediaType, "data": data}
 	case url != "":
