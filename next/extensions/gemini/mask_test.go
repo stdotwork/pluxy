@@ -111,18 +111,19 @@ func TestCheckKeepsTheProject(t *testing.T) {
 }
 
 // Only an error is masked in what an Interactions client gets as the upstream sent it: a model's
-// text that mentions a project path, and an "error" member that is not an object, stay.
+// text that mentions a project path stays, while a top-level object or string "error" member and
+// an event named "error" are masked.
 func TestMaskReply(t *testing.T) {
 	text := []byte(`{"event_type":"content.delta","delta":{"text":"see projects/123/locations/x"}}`)
 	if got := maskReply(text, "", nil); &got[0] != &text[0] {
 		t.Errorf("an event with no error changed: %s", got)
 	}
-	notObject := []byte(`{"error":"projects/123"}`)
-	if got := maskReply(notObject, "", nil); string(got) != string(notObject) {
-		t.Errorf("got %s", got)
-	}
 	e := []byte(`{"error":{"message":"The consumer 'projects/123' is suspended."}}`)
 	if got := maskReply(e, "", nil); strings.Contains(string(got), "123") {
+		t.Errorf("got %s", got)
+	}
+	strErr := []byte(`{"error":"projects/123"}`)
+	if got := maskReply(strErr, "", nil); string(got) != `{"error":"projects/[redacted]"}` {
 		t.Errorf("got %s", got)
 	}
 	if got := maskReply([]byte(`{"message":"projects/123"}`), "error", nil); strings.Contains(string(got), "123") {
@@ -130,26 +131,76 @@ func TestMaskReply(t *testing.T) {
 	}
 }
 
-// An Interactions reply or event with an error object at any depth is masked, as a failed
-// interaction's is; one with no error object is the same bytes, whatever its text says.
+// An Interactions reply or event with an "error" member one object level down (as a failed
+// interaction has) masks only that member; one with no matching error member is the same bytes,
+// whatever its text says.
 func TestMaskReplyNestedError(t *testing.T) {
 	nested := []byte(`{"event_type":"interaction.complete","interaction":{"id":"v1_x","status":"failed","error":{"code":403,"message":"The consumer 'projects/123' is suspended."}}}`)
 	got := maskReply(nested, "", nil)
 	if strings.Contains(string(got), "123") || !strings.Contains(string(got), `"status":"failed"`) || !json.Valid(got) {
 		t.Errorf("got %s", got)
 	}
-	inList := []byte(`{"outputs":[{"type":"x","detail":{"error":{"message":"project 987654 is off"}}}]}`)
-	if got := maskReply(inList, "", nil); strings.Contains(string(got), "987654") {
-		t.Errorf("got %s", got)
-	}
 	for _, same := range []string{
 		`{"outputs":[{"type":"text","text":"an error in projects/123: project 'abc' failed"}]}`,
 		`{"outputs":[{"type":"text","text":"the \"error\" word"}],"error":null}`,
-		`{"error":"projects/123","interaction":{"error":"projects/456"}}`,
 	} {
 		b := []byte(same)
 		if got := maskReply(b, "", nil); &got[0] != &b[0] {
 			t.Errorf("%s changed to %s", same, got)
 		}
 	}
+}
+
+// In an Interactions reply, only the value of an "error" member (object or string) at the top
+// level or one object level down — never inside an array — is masked; model text and tool output
+// outside that value keep their exact bytes. An event named "error" is still masked whole.
+func TestMaskReplyOnlyErrors(t *testing.T) {
+	t.Run("completed reply with tool error object stays byte-identical", func(t *testing.T) {
+		in := []byte(`{"id":"v1_x","status":"completed","steps":[{"type":"text","text":"The project lives at projects/acme-prod-4821/models/x"},{"type":"function_result","result":{"error":{"code":"tool_failed","message":"projects/999"}}}]}`)
+		if got := maskReply(in, "", []string{"acme-prod-4821"}); string(got) != string(in) || &got[0] != &in[0] {
+			t.Errorf("completed reply changed:\n got  %s\n want %s", got, in)
+		}
+	})
+	t.Run("top-level error object leaves sibling text untouched", func(t *testing.T) {
+		in := []byte(`{"id":"v1_x","outputs":[{"type":"text","text":"see projects/999"}],"error":{"code":403,"message":"The consumer 'projects/123' is suspended."}}`)
+		want := `{"id":"v1_x","outputs":[{"type":"text","text":"see projects/999"}],"error":{"code":403,"message":"The consumer 'projects/[redacted]' is suspended."}}`
+		if got := maskReply(in, "", nil); string(got) != want {
+			t.Errorf("got  %s\nwant %s", got, want)
+		}
+	})
+	t.Run("one level down error object leaves outer fields untouched", func(t *testing.T) {
+		in := []byte(`{"event_type":"interaction.complete","note":"projects/999","interaction":{"id":"v1_x","status":"failed","text":"projects/888","error":{"code":403,"message":"The consumer 'projects/123' is suspended."}}}`)
+		want := `{"event_type":"interaction.complete","note":"projects/999","interaction":{"id":"v1_x","status":"failed","text":"projects/888","error":{"code":403,"message":"The consumer 'projects/[redacted]' is suspended."}}}`
+		if got := maskReply(in, "", nil); string(got) != want {
+			t.Errorf("got  %s\nwant %s", got, want)
+		}
+	})
+	t.Run("string error at top level and one level down", func(t *testing.T) {
+		in := []byte(`{"error":"The consumer 'projects/123' is suspended.","interaction":{"status":"failed","error":"project 456 failed","text":"projects/999"}}`)
+		want := `{"error":"The consumer 'projects/[redacted]' is suspended.","interaction":{"status":"failed","error":"project [redacted] failed","text":"projects/999"}}`
+		if got := maskReply(in, "", nil); string(got) != want {
+			t.Errorf("got  %s\nwant %s", got, want)
+		}
+	})
+	t.Run("two object levels down or inside array stays byte-identical", func(t *testing.T) {
+		for _, raw := range []string{
+			`{"a":{"b":{"error":{"message":"projects/123"}}}}`,
+			`[{"error":{"message":"projects/123"}}]`,
+			`{"outputs":[{"type":"x","detail":{"error":{"message":"project 987654 is off"}}}]}`,
+			`{"error":null}`,
+			`{"error":["projects/123"]}`,
+		} {
+			b := []byte(raw)
+			if got := maskReply(b, "", nil); string(got) != raw || &got[0] != &b[0] {
+				t.Errorf("%s changed to %s", raw, got)
+			}
+		}
+	})
+	t.Run("event named error is still masked whole", func(t *testing.T) {
+		in := []byte(`{"message":"projects/123","extra":"projects/456"}`)
+		want := `{"message":"projects/[redacted]","extra":"projects/[redacted]"}`
+		if got := maskReply(in, "error", nil); string(got) != want {
+			t.Errorf("got  %s\nwant %s", got, want)
+		}
+	})
 }

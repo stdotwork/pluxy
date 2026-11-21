@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/protocol"
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
@@ -76,4 +77,82 @@ func TestUpstreamErrorKeepsTheProject(t *testing.T) {
 	if !strings.Contains(e.Message, "738291456021") || !strings.Contains(string(e.Raw), "acme-prod-4821") {
 		t.Errorf("the project is gone: %q %s", e.Message, e.Raw)
 	}
+}
+
+// An account pointed at googleapis.com (such as Vertex AI's OpenAI-compatible endpoint) masks
+// errors even with no Google-shaped body — such as an unreachable upstream whose URL names the
+// project — and passes the project in the base_url's /projects/<id>/ path as a known name.
+// Another vendor's host with a non-Google body stays byte-identical.
+func TestMaskGoogleHostErrors(t *testing.T) {
+	vertexCall := sdk.Call{Account: protocol.Account{
+		Settings: json.RawMessage(`{"base_url":"https://us-central1-aiplatform.googleapis.com/v1/projects/acme-prod-4821/locations/us-central1/endpoints/openapi"}`),
+	}}
+	t.Run("unreachable vertex url", func(t *testing.T) {
+		e := &llm.Error{
+			Code:    llm.CodeUnavailable,
+			Scope:   llm.ScopeEndpoint,
+			Message: `upstream unreachable: Post "https://us-central1-aiplatform.googleapis.com/v1/projects/acme-prod-4821/locations/us-central1/endpoints/openapi/chat/completions": dial tcp 1.2.3.4:443: connect: connection refused`,
+		}
+		got := maskGoogle(failWith(e))(context.Background(), vertexCall, nil)
+		var le *llm.Error
+		if !errors.As(got, &le) {
+			t.Fatalf("got %v, want *llm.Error", got)
+		}
+		if strings.Contains(le.Message, "acme-prod-4821") {
+			t.Errorf("project leaked in message: %q", le.Message)
+		}
+		if !strings.Contains(le.Message, "/projects/[redacted]/locations/us-central1/endpoints/openapi/chat/completions") {
+			t.Errorf("unexpected message: %q", le.Message)
+		}
+		if le.Code != llm.CodeUnavailable || le.Scope != llm.ScopeEndpoint {
+			t.Errorf("classification changed: %+v", le)
+		}
+	})
+	t.Run("known project from base_url on non-google body", func(t *testing.T) {
+		e := &llm.Error{
+			Code:    llm.CodePermission,
+			Message: "denied for acme-prod-4821",
+			Raw:     json.RawMessage(`{"detail":"denied for acme-prod-4821"}`),
+		}
+		got := maskGoogle(failWith(e))(context.Background(), vertexCall, nil)
+		var le *llm.Error
+		if !errors.As(got, &le) {
+			t.Fatalf("got %v, want *llm.Error", got)
+		}
+		if strings.Contains(le.Message, "acme-prod-4821") || strings.Contains(string(le.Raw), "acme-prod-4821") {
+			t.Errorf("project leaked: %q %s", le.Message, le.Raw)
+		}
+	})
+	t.Run("bare googleapis.com host", func(t *testing.T) {
+		call := sdk.Call{Account: protocol.Account{
+			Settings: json.RawMessage(`{"base_url":"https://googleapis.com/v1/projects/acme-prod-4821/endpoints/openapi"}`),
+		}}
+		e := &llm.Error{Code: llm.CodeUnavailable, Message: `Post "https://googleapis.com/v1/projects/acme-prod-4821/endpoints/openapi/chat/completions": EOF`}
+		got := maskGoogle(failWith(e))(context.Background(), call, nil)
+		var le *llm.Error
+		if !errors.As(got, &le) || strings.Contains(le.Message, "acme-prod-4821") {
+			t.Errorf("got %+v, want masked error", got)
+		}
+	})
+	t.Run("non-llm error on googleapis host", func(t *testing.T) {
+		err := errors.New(`Post "https://us-central1-aiplatform.googleapis.com/v1/projects/acme-prod-4821/locations/us-central1/endpoints/openapi": EOF`)
+		got := maskGoogle(failWith(err))(context.Background(), vertexCall, nil)
+		var le *llm.Error
+		if !errors.As(got, &le) || strings.Contains(le.Message, "acme-prod-4821") || le.Code != llm.CodeInternal {
+			t.Errorf("got %#v, want masked internal error", got)
+		}
+	})
+	t.Run("other vendor host stays byte-identical", func(t *testing.T) {
+		for _, base := range []string{
+			"https://notgoogleapis.com/v1/projects/acme-prod-4821/v1",
+			"https://api.example.com/v1/projects/acme-prod-4821/v1",
+		} {
+			call := sdk.Call{Account: protocol.Account{Settings: json.RawMessage(`{"base_url":"` + base + `"}`)}}
+			raw := `{"error":{"message":"Project acme-prod-4821 at projects/acme-prod-4821 is over budget","type":"insufficient_quota","code":"insufficient_quota"}}`
+			e := &llm.Error{Code: llm.CodeQuota, Message: "Project acme-prod-4821 at projects/acme-prod-4821 is over budget", Raw: json.RawMessage(raw)}
+			if got := maskGoogle(failWith(e))(context.Background(), call, nil); got != e || string(e.Raw) != raw {
+				t.Errorf("%s: got %+v, want byte-identical error", base, got)
+			}
+		}
+	})
 }

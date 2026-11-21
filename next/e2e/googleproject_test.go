@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -338,8 +340,11 @@ func TestGoogleProjectOwnerStillSeesIt(t *testing.T) {
 }
 
 // An OpenAI-compatible account that points at Google's own host answers with Google's errors: a
-// client of any API gets them without the project, the object form and the array form Google's
-// OpenAI-compatible API uses.
+// client of any API gets them without the project. For the array form Google's OpenAI-compatible
+// API wraps an error in, upstreamError does not unwrap the array, so the client gets a generic
+// status message rather than the upstream body; masking of the array shape itself is covered by
+// the unit tests (geminigenerate.TestMaskArrayForm and openai-compatible's
+// TestMaskGoogleMasksGoogleShapedErrors/array).
 func TestGoogleProjectNotInOpenAICompatibleErrors(t *testing.T) {
 	for name, body := range map[string]string{"object": disabledReply, "array": "[" + disabledReply + "]"} {
 		for _, c := range []clientCall{
@@ -361,6 +366,13 @@ func TestGoogleProjectNotInOpenAICompatibleErrors(t *testing.T) {
 				noProject(t, c.name+" reply", reply)
 				if status < 400 {
 					t.Errorf("status %d, want an error", status)
+				}
+				if name == "object" {
+					if !strings.Contains(reply, "has not been used") || !strings.Contains(reply, "[redacted]") {
+						t.Errorf("object reply did not carry the masked upstream message:\n%s", reply)
+					}
+				} else if !strings.Contains(reply, "upstream returned 403 Forbidden") {
+					t.Errorf("array reply = %s, want the generic status message", reply)
 				}
 			})
 		}
@@ -389,4 +401,104 @@ func TestGoogleProjectNotInOpenAICompatibleStreamErrors(t *testing.T) {
 			noProject(t, c.name+" reply", reply)
 		})
 	}
+}
+
+// Errors returned through CountTokens on both extensions and through the OpenAI-compatible
+// Endpoint handler are masked too.
+func TestGoogleProjectNotInCountTokensAndEndpointErrors(t *testing.T) {
+	t.Run("gemini/countTokens", func(t *testing.T) {
+		t.Parallel()
+		up := newFakeGemini(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			io.WriteString(w, disabledReply)
+		})
+		base := googleProjectCore(t, up)
+		call := clientCall{
+			name: "gemini countTokens",
+			path: "/v1beta/models/gemini-2.5-flash:countTokens",
+			body: `{"contents":[{"role":"user","parts":[{"text":"Hi"}]}]}`,
+		}
+		status, reply := call.exchange(t, base)
+		if up.all() == "" {
+			t.Fatalf("the upstream got no request")
+		}
+		if status != http.StatusForbidden {
+			t.Errorf("status %d, want 403:\n%s", status, reply)
+		}
+		if !strings.Contains(reply, "has not been used") || !strings.Contains(reply, "[redacted]") {
+			t.Errorf("the reply did not carry the masked upstream message:\n%s", reply)
+		}
+		noProject(t, call.name+" reply", reply)
+	})
+
+	t.Run("openai-compatible/countTokens", func(t *testing.T) {
+		t.Parallel()
+		var hits atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1beta/models/gpt-test:countTokens" {
+				http.NotFound(w, r)
+				return
+			}
+			hits.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			io.WriteString(w, disabledReply)
+		}))
+		defer srv.Close()
+		base := startCore(t, &upstream{Server: srv}, func(cfg map[string]any) {
+			ext := cfg["extension"].(map[string]any)
+			acct := ext["accounts"].([]any)[0].(map[string]any)
+			acct["settings"] = map[string]any{"base_url": srv.URL + "/v1beta", "wire_api": "gemini"}
+		})
+		call := clientCall{
+			name: "openai-compatible countTokens",
+			path: "/v1beta/models/gpt-test:countTokens",
+			body: `{"contents":[{"role":"user","parts":[{"text":"Hi"}]}]}`,
+		}
+		status, reply := call.exchange(t, base)
+		if hits.Load() == 0 {
+			t.Fatalf("the upstream got no request")
+		}
+		if status != http.StatusForbidden {
+			t.Errorf("status %d, want 403:\n%s", status, reply)
+		}
+		if !strings.Contains(reply, "has not been used") || !strings.Contains(reply, "[redacted]") {
+			t.Errorf("the reply did not carry the masked upstream message:\n%s", reply)
+		}
+		noProject(t, call.name+" reply", reply)
+	})
+
+	t.Run("openai-compatible/endpoint", func(t *testing.T) {
+		t.Parallel()
+		var hits atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/v1/images/generations" {
+				http.NotFound(w, r)
+				return
+			}
+			hits.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			io.WriteString(w, disabledReply)
+		}))
+		defer srv.Close()
+		base := startCore(t, &upstream{Server: srv})
+		call := clientCall{
+			name: "openai-compatible images endpoint",
+			path: "/v1/images/generations",
+			body: `{"model":"gpt-test","prompt":"a cat"}`,
+		}
+		status, reply := call.exchange(t, base)
+		if hits.Load() == 0 {
+			t.Fatalf("the upstream got no request")
+		}
+		if status != http.StatusForbidden {
+			t.Errorf("status %d, want 403:\n%s", status, reply)
+		}
+		if !strings.Contains(reply, "has not been used") || !strings.Contains(reply, "[redacted]") {
+			t.Errorf("the reply did not carry the masked upstream message:\n%s", reply)
+		}
+		noProject(t, call.name+" reply", reply)
+	})
 }

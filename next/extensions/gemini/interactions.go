@@ -18,7 +18,8 @@ import (
 // Gemini's Interactions API (POST /v1beta/interactions) is served to Interactions clients as an
 // endpoint call, by accounts whose settings say "interactions": true, as today's core serves it
 // only on its interactions key group and on Vertex accounts that opt in. The client's body goes
-// upstream nearly as it came and the upstream's reply comes back as it is:
+// upstream nearly as it came; the upstream's reply comes back as it is except that any error's
+// Google project or account names are masked (maskReply):
 //
 //   - a Gemini API key: POST {base_url}/v1beta/interactions, the key in x-goog-api-key;
 //   - a Vertex service account: POST {host}/v1beta1/projects/{project}/locations/global/interactions

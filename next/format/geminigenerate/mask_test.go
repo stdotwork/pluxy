@@ -269,3 +269,99 @@ func TestMaskWholeSubjectAndOwner(t *testing.T) {
 		t.Errorf("%d subjects masked, want 4: %s", n, got)
 	}
 }
+
+// Empty subject or owner values mask nothing else (nor turn themselves into [redacted]).
+func TestMaskEmptySubjectAndOwner(t *testing.T) {
+	for name, raw := range map[string]string{
+		"empty subject": `{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"m","details":[{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"subject":"","quotaId":"Q"}]},{"@type":"type.googleapis.com/google.rpc.LocalizedMessage","locale":"","message":""}]}}`,
+		"empty owner":   `{"error":{"code":403,"status":"PERMISSION_DENIED","message":"m","details":[{"@type":"type.googleapis.com/google.rpc.ResourceInfo","owner":"","description":""}]}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := &llm.Error{Code: llm.CodeRateLimit, Message: "", Raw: json.RawMessage(raw)}
+			if got := MaskProject(e); got != e || string(got.Raw) != raw {
+				t.Errorf("empty value masked something:\n got  %q %s\n want %q %s", got.Message, got.Raw, e.Message, raw)
+			}
+		})
+	}
+}
+
+// A whole value (QuotaFailure.violations[].subject or ResourceInfo.owner) is masked only in its
+// own field, not where another field or detail uses the same plain word.
+func TestMaskWholeOnlyInOwnField(t *testing.T) {
+	raw := `{"error":{"code":429,"message":"global quota exceeded","status":"RESOURCE_EXHAUSTED","details":[` +
+		`{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"subject":"global","quotaDimensions":{"location":"global"}}]},` +
+		`{"@type":"type.googleapis.com/google.rpc.ResourceInfo","resource_type":"global","owner":"global"},` +
+		`{"@type":"type.googleapis.com/google.rpc.PreconditionFailure","violations":[{"type":"TOS","subject":"global"}]}]}}`
+	e := &llm.Error{Code: llm.CodeRateLimit, Message: "global quota exceeded", Raw: json.RawMessage(raw)}
+	got := MaskProject(e)
+	if got.Message != "global quota exceeded" {
+		t.Errorf("message changed: %q", got.Message)
+	}
+	want := `{"error":{"code":429,"message":"global quota exceeded","status":"RESOURCE_EXHAUSTED","details":[` +
+		`{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"subject":"[redacted]","quotaDimensions":{"location":"global"}}]},` +
+		`{"@type":"type.googleapis.com/google.rpc.ResourceInfo","resource_type":"global","owner":"[redacted]"},` +
+		`{"@type":"type.googleapis.com/google.rpc.PreconditionFailure","violations":[{"type":"TOS","subject":"global"}]}]}}`
+	if string(got.Raw) != want {
+		t.Errorf("raw =\n%s\nwant\n%s", got.Raw, want)
+	}
+}
+
+// A subject or owner that looks like an identifier (contains :, / or @) is also masked where the
+// message or another string repeats it, as a whole token; a plain word is not.
+func TestMaskSubjectAndOwnerIdentifierInMessage(t *testing.T) {
+	raw := `{"error":{"code":429,"message":"Quota exceeded for clientip:203.0.113.7 (not clientip:203.0.113.70), owner acme/team-7 and bob@corp.example in global.","status":"RESOURCE_EXHAUSTED","details":[` +
+		`{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"subject":"clientip:203.0.113.7"},{"subject":"global"}]},` +
+		`{"@type":"type.googleapis.com/google.rpc.ResourceInfo","owner":"acme/team-7"},` +
+		`{"@type":"type.googleapis.com/google.rpc.ResourceInfo","owner":"bob@corp.example"},` +
+		`{"@type":"type.googleapis.com/google.rpc.LocalizedMessage","locale":"en-US","message":"Blocked clientip:203.0.113.7 and acme/team-70 and xbob@corp.example."}]}}`
+	msg := "Quota exceeded for clientip:203.0.113.7 (not clientip:203.0.113.70), owner acme/team-7 and bob@corp.example in global."
+	got := MaskProject(&llm.Error{Code: llm.CodeRateLimit, Message: msg, Raw: json.RawMessage(raw)})
+	wantMsg := "Quota exceeded for [redacted] (not clientip:203.0.113.70), owner [redacted] and [redacted] in global."
+	if got.Message != wantMsg {
+		t.Errorf("message =\n%q\nwant\n%q", got.Message, wantMsg)
+	}
+	for _, gone := range []string{"203.0.113.7)", "clientip:203.0.113.7 ", "owner acme/team-7 ", "bob@corp.example in"} {
+		if strings.Contains(string(got.Raw), gone) {
+			t.Errorf("identifier survived in raw (%q): %s", gone, got.Raw)
+		}
+	}
+	for _, keep := range []string{"clientip:203.0.113.70", "acme/team-70", "xbob@corp.example", "in global."} {
+		if !strings.Contains(string(got.Raw), keep) {
+			t.Errorf("non-matching token %q was altered in raw: %s", keep, got.Raw)
+		}
+	}
+	if !strings.Contains(string(got.Raw), `"Blocked [redacted] and acme/team-70 and xbob@corp.example."`) {
+		t.Errorf("LocalizedMessage not masked as expected: %s", got.Raw)
+	}
+}
+
+// "resource project <id>" with an all-letter ID (6..30 chars) followed by end of text or
+// punctuation is masked, while ordinary prose stays and digit/hyphen forms still work.
+func TestMaskResourceProjectAllLetterID(t *testing.T) {
+	max30 := strings.Repeat("a", 30)
+	over31 := strings.Repeat("a", 31)
+	for in, want := range map[string]string{
+		"Permission denied on resource project myproject.":                           "Permission denied on resource project [redacted].",
+		"Permission denied on resource project myproject":                            "Permission denied on resource project [redacted]",
+		"Permission denied on resource project myproject, check billing":             "Permission denied on resource project [redacted], check billing",
+		"Permission denied on resource project myproject; retry":                     "Permission denied on resource project [redacted]; retry",
+		"Permission denied on resource project myproject: check":                     "Permission denied on resource project [redacted]: check",
+		"Permission denied on (resource project myproject)":                          "Permission denied on (resource project [redacted])",
+		"Permission denied on 'resource project myproject'":                          "Permission denied on 'resource project [redacted]'",
+		`Permission denied on "resource project myproject"`:                          `Permission denied on "resource project [redacted]"`,
+		"Permission denied on `resource project myproject`":                          "Permission denied on `resource project [redacted]`",
+		"Permission denied on resource project myproject. Project myproject is off.": "Permission denied on resource project [redacted]. Project [redacted] is off.",
+		"Permission denied on resource project abcdef.":                              "Permission denied on resource project [redacted].",
+		"Permission denied on resource project abcde.":                               "Permission denied on resource project abcde.",
+		"Permission denied on resource project " + max30 + ".":                       "Permission denied on resource project [redacted].",
+		"Permission denied on resource project " + over31 + ".":                      "Permission denied on resource project " + over31 + ".",
+		"resource project has been denied":                                           "resource project has been denied",
+		"resource project denied the request":                                        "resource project denied the request",
+		"Permission denied on resource project my-proj-1 now":                        "Permission denied on resource project [redacted] now",
+		"Permission denied on resource project 4242 now":                             "Permission denied on resource project [redacted] now",
+	} {
+		if got := MaskProject(&llm.Error{Message: in}).Message; got != want {
+			t.Errorf("%q\n got  %q\n want %q", in, got, want)
+		}
+	}
+}

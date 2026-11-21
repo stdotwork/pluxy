@@ -18,8 +18,9 @@ const Redacted = protocol.Redacted
 // Google's errors name the Google Cloud project, organization, folder, billing account or account
 // an upstream account belongs to: in the message ("The consumer 'projects/123' is suspended."),
 // and in the details, where ErrorInfo's metadata (consumer, containerInfo, activationUrl),
-// QuotaFailure's subject, ResourceInfo's owner and resource_name, and Help's links carry it. A client holding a pluxy key must not learn it.
-// The details themselves stay: clients read RetryInfo and QuotaFailure.
+// QuotaFailure's subject, ResourceInfo's owner and resource_name, and Help's links carry it.
+// A client holding a pluxy key must not learn it. The details themselves stay: clients read
+// RetryInfo and QuotaFailure.
 
 // namePattern is a way text names a project, an organization, a folder, a billing account or a
 // person. Group 1 is the name; ok, when set, tells a name from a word that happens to follow.
@@ -39,10 +40,14 @@ var namePatterns = []namePattern{
 	{re: regexp.MustCompile(`(?i)\b(?:user|serviceAccount|group):([A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)`)},
 	// Any service account's address, whatever the account's own key says.
 	{re: regexp.MustCompile(`([A-Za-z0-9._%+-]+@(?:[a-z][a-z0-9-]*\.iam|developer)\.gserviceaccount\.com)`)},
-	// "Permission denied on resource project my-proj-1.": a project ID after the words, which a
-	// word of prose ("resource project has been denied") must not be taken for: an ID is all
-	// digits, or at least six characters with a hyphen or a digit.
+	// "Permission denied on resource project my-proj-1." or "... resource project myproject.": a
+	// project ID after the words, which prose ("resource project has been denied") must not be
+	// taken for. An ID is all digits, or at least six characters with a hyphen or a digit, or 6 to
+	// 30 lowercase letters, digits and hyphens followed by end of text or ., ; : quote or ).
 	{re: regexp.MustCompile(`(?i:\bresource project) ([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)`), ok: looksLikeProjectID},
+	{re: regexp.MustCompile("(?i:\\bresource project) ([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)(?:$|[.,;:'\"`)])"), ok: func(id string) bool {
+		return len(id) >= 6 && len(id) <= 30
+	}},
 }
 
 func looksLikeProjectID(id string) bool {
@@ -58,13 +63,16 @@ var serviceAccountProject = regexp.MustCompile(`@([a-z][a-z0-9-]*)\.iam\.gservic
 // MaskProject returns e without the Google project or account its message and its raw body name.
 // known are identifiers the caller knows belong to the upstream account (its project, a service
 // account's project and address); the structured fields of Google's error details and the text
-// patterns above add the rest. A QuotaFailure violation's subject and a ResourceInfo's owner,
-// found by the detail's @type, go whole, whatever they say; a PreconditionFailure's subject, and
-// the quota metric, ID, value and dimensions, stay. Each is replaced, as a whole token, in the message and in every
-// string value of the raw body (an object, or the array a Google API wraps one in); the keys,
-// numbers, types, reasons, quota facts and everything else stay, and a body with nothing to mask
-// keeps its bytes. e itself is returned when nothing changed; otherwise a copy, and e is not
-// touched. Call it after the error has been classified: it changes no code, scope or delay.
+// patterns above add the rest. A non-empty QuotaFailure violation's subject and ResourceInfo's
+// owner, found by the detail's @type, go whole in their own field, whatever they say; one that
+// looks like an identifier (contains :, / or @) is also masked where another string repeats it,
+// while a plain word (such as "global") stays elsewhere. A PreconditionFailure's subject, and the
+// quota metric, ID, value and dimensions, stay. Each collected name is replaced as a whole token
+// in the message and in every string value of the raw body (an object, or the array a Google API
+// wraps one in); the keys, numbers, types, reasons, quota facts and everything else stay, and a
+// body with nothing to mask keeps its bytes. e itself is returned when nothing changed; otherwise
+// a copy, and e is not touched. Call it after the error has been classified: it changes no code,
+// scope or delay.
 func MaskProject(e *llm.Error, known ...string) *llm.Error {
 	if e == nil {
 		return nil
@@ -72,13 +80,14 @@ func MaskProject(e *llm.Error, known ...string) *llm.Error {
 	d := newNames(known)
 	rawOK := len(e.Raw) > 0 && json.Valid(e.Raw)
 	d.learnString(e.Message)
+	var whole map[int]bool
 	if rawOK {
-		d.learnJSON(e.Raw)
+		whole = d.learnJSON(e.Raw)
 	}
 	msg := d.maskString(e.Message)
 	raw := e.Raw
 	if rawOK {
-		raw = d.maskJSON(e.Raw)
+		raw = d.maskJSON(e.Raw, whole)
 	}
 	if msg == e.Message && bytes.Equal(raw, e.Raw) {
 		return e
@@ -93,8 +102,8 @@ func MaskProject(e *llm.Error, known ...string) *llm.Error {
 func MaskBody(body []byte, known ...string) []byte {
 	d := newNames(known)
 	if json.Valid(body) {
-		d.learnJSON(body)
-		return d.maskJSON(body)
+		whole := d.learnJSON(body)
+		return d.maskJSON(body, whole)
 	}
 	s := string(body)
 	d.learnString(s)
@@ -143,13 +152,12 @@ func (e errorShape) ok() bool {
 
 // names holds what to mask.
 type names struct {
-	list  []string
-	seen  map[string]bool
-	whole map[string]bool // values that go whole: a QuotaFailure's subjects and a ResourceInfo's owners
+	list []string
+	seen map[string]bool
 }
 
 func newNames(known []string) *names {
-	d := &names{seen: map[string]bool{}, whole: map[string]bool{}}
+	d := &names{seen: map[string]bool{}}
 	for _, k := range known {
 		d.add(k)
 	}
@@ -189,13 +197,14 @@ func (d *names) learnString(s string) {
 	}
 }
 
-// learnJSON adds the names the string values of raw hold and the ones its structured fields give.
-func (d *names) learnJSON(raw []byte) {
-	mapStrings(raw, func(s string) string { d.learnString(s); return s })
-	var v any
-	if json.Unmarshal(raw, &v) == nil {
-		d.learnFields(v)
-	}
+// learnJSON adds the names the string values of raw hold and the ones its structured fields give,
+// and returns the byte offsets of non-empty QuotaFailure violation subjects and ResourceInfo
+// owners in raw so those fields can be masked whole without affecting other fields.
+func (d *names) learnJSON(raw []byte) map[int]bool {
+	mapStrings(raw, func(_ int, s string) string { d.learnString(s); return s })
+	var whole map[int]bool
+	d.learnFields(raw, 0, len(raw), &whole)
+	return whole
 }
 
 // projectKeys are the members of Google's error details that hold a project, by their names
@@ -204,41 +213,192 @@ var projectKeys = map[string]bool{
 	"consumer": true, "containerinfo": true, "project": true, "projectid": true, "projectnumber": true,
 }
 
-func (d *names) learnFields(v any) {
-	switch v := v.(type) {
-	case []any:
-		for _, e := range v {
-			d.learnFields(e)
-		}
-	case map[string]any:
-		for k, e := range v {
-			if s, ok := e.(string); ok && projectKeys[normalKey(k)] {
-				d.addProject(s)
+func (d *names) learnFields(raw []byte, start, end int, whole *map[int]bool) {
+	i := skipWS(raw, start)
+	if i >= end {
+		return
+	}
+	switch raw[i] {
+	case '[':
+		i++
+		for {
+			i = skipWS(raw, i)
+			if i >= end || raw[i] == ']' {
+				return
 			}
-			d.learnFields(e)
+			ve := skipValue(raw, i)
+			d.learnFields(raw, i, ve, whole)
+			i = skipWS(raw, ve)
+			if i < end && raw[i] == ',' {
+				i++
+			} else {
+				return
+			}
 		}
-		typ, _ := v["@type"].(string)
-		switch {
-		case isType(typ, "QuotaFailure"):
-			vs, _ := v["violations"].([]any)
-			for _, e := range vs {
-				if m, ok := e.(map[string]any); ok {
-					if s, ok := m["subject"].(string); ok {
-						d.whole[s] = true
+	case '{':
+		i++
+		var (
+			typ          string
+			rtype, rname string
+			hasRtype     bool
+			hasRname     bool
+			ownerOffsets []int
+			ownerVals    []string
+			violRanges   [][2]int
+		)
+		for {
+			i = skipWS(raw, i)
+			if i >= end || raw[i] == '}' {
+				break
+			}
+			ke := skipString(raw, i)
+			var k string
+			_ = json.Unmarshal(raw[i:ke], &k)
+			i = skipWS(raw, ke)
+			if i >= end || raw[i] != ':' {
+				break
+			}
+			vs := skipWS(raw, i+1)
+			ve := skipValue(raw, vs)
+			if vs < ve {
+				switch raw[vs] {
+				case '"':
+					var s string
+					if json.Unmarshal(raw[vs:ve], &s) == nil {
+						if projectKeys[normalKey(k)] {
+							d.addProject(s)
+						}
+						switch k {
+						case "@type":
+							typ = s
+						case "resource_type":
+							rtype, hasRtype = s, true
+						case "resourceType":
+							if !hasRtype {
+								rtype = s
+							}
+						case "resource_name":
+							rname, hasRname = s, true
+						case "resourceName":
+							if !hasRname {
+								rname, hasRname = s, true
+							}
+						case "owner":
+							ownerOffsets = append(ownerOffsets, vs)
+							ownerVals = append(ownerVals, s)
+						}
 					}
+				case '{', '[':
+					if k == "violations" && raw[vs] == '[' {
+						violRanges = append(violRanges, [2]int{vs, ve})
+					}
+					d.learnFields(raw, vs, ve, whole)
 				}
 			}
-		case isType(typ, "ResourceInfo"):
-			if s, ok := v["owner"].(string); ok {
-				d.whole[s] = true
+			i = skipWS(raw, ve)
+			if i < end && raw[i] == ',' {
+				i++
+			} else {
+				break
+			}
+		}
+		if isType(typ, "ResourceInfo") {
+			for idx, s := range ownerVals {
+				d.recordWhole(ownerOffsets[idx], s, whole)
+			}
+		}
+		if isType(typ, "QuotaFailure") {
+			for _, r := range violRanges {
+				d.learnQuotaSubjects(raw, r[0], r[1], whole)
 			}
 		}
 		// ResourceInfo names a project resource by its ID alone.
-		rtype, _ := firstString(v, "resource_type", "resourceType")
-		if name, ok := firstString(v, "resource_name", "resourceName"); ok && strings.HasSuffix(strings.ToLower(rtype), "project") {
-			d.addProject(name)
+		if hasRname && strings.HasSuffix(strings.ToLower(rtype), "project") {
+			d.addProject(rname)
 		}
 	}
+}
+
+// learnQuotaSubjects records the byte offset of each non-empty "subject" string inside the
+// violation objects of a QuotaFailure's violations array.
+func (d *names) learnQuotaSubjects(raw []byte, start, end int, whole *map[int]bool) {
+	i := skipWS(raw, start)
+	if i >= end || raw[i] != '[' {
+		return
+	}
+	i++
+	for {
+		i = skipWS(raw, i)
+		if i >= end || raw[i] == ']' {
+			return
+		}
+		ve := skipValue(raw, i)
+		if i < ve && raw[i] == '{' {
+			j := i + 1
+			for {
+				j = skipWS(raw, j)
+				if j >= ve || raw[j] == '}' {
+					break
+				}
+				ke := skipString(raw, j)
+				var k string
+				_ = json.Unmarshal(raw[j:ke], &k)
+				j = skipWS(raw, ke)
+				if j >= ve || raw[j] != ':' {
+					break
+				}
+				vs := skipWS(raw, j+1)
+				vEnd := skipValue(raw, vs)
+				if k == "subject" && vs < vEnd && raw[vs] == '"' {
+					var s string
+					if json.Unmarshal(raw[vs:vEnd], &s) == nil {
+						d.recordWhole(vs, s, whole)
+					}
+				}
+				j = skipWS(raw, vEnd)
+				if j < ve && raw[j] == ',' {
+					j++
+				} else {
+					break
+				}
+			}
+		}
+		i = skipWS(raw, ve)
+		if i < end && raw[i] == ',' {
+			i++
+		} else {
+			return
+		}
+	}
+}
+
+// recordWhole marks the string at off to be replaced whole in its own field, and adds s to the
+// token list when it looks like an identifier (contains :, / or @ alongside an alphanumeric
+// character) so repetitions in the message or other strings are masked as whole tokens. Empty
+// values are skipped.
+func (d *names) recordWhole(off int, s string, whole *map[int]bool) {
+	if strings.TrimSpace(s) == "" {
+		return
+	}
+	if *whole == nil {
+		*whole = map[int]bool{}
+	}
+	(*whole)[off] = true
+	if looksLikeIdentifier(s) {
+		d.add(s)
+	}
+}
+
+func looksLikeIdentifier(s string) bool {
+	if !strings.ContainsAny(s, ":/@") {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if isAlnum(s[i]) {
+			return true
+		}
+	}
+	return false
 }
 
 // isType reports whether a detail's @type URL names the google.rpc message called name.
@@ -250,20 +410,8 @@ func normalKey(k string) string {
 	return strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(k))
 }
 
-func firstString(m map[string]any, keys ...string) (string, bool) {
-	for _, k := range keys {
-		if s, ok := m[k].(string); ok {
-			return s, true
-		}
-	}
-	return "", false
-}
-
 // maskString replaces the names in s: the pattern forms, then each known name as a whole token.
 func (d *names) maskString(s string) string {
-	if d.whole[s] {
-		return Redacted
-	}
 	for _, p := range namePatterns {
 		s = replaceGroup(s, p)
 	}
@@ -274,7 +422,14 @@ func (d *names) maskString(s string) string {
 	return s
 }
 
-func (d *names) maskJSON(raw []byte) []byte { return mapStrings(raw, d.maskString) }
+func (d *names) maskJSON(raw []byte, whole map[int]bool) []byte {
+	return mapStrings(raw, func(off int, s string) string {
+		if whole[off] {
+			return Redacted
+		}
+		return d.maskString(s)
+	})
+}
 
 // replaceGroup replaces group 1 of each match of p in s.
 func replaceGroup(s string, p namePattern) string {
@@ -333,10 +488,11 @@ func replaceToken(s, id string) string {
 	return b.String()
 }
 
-// mapStrings calls f on each string value (not key) of the JSON text raw and returns raw with the
-// values f changed written again; everything else, key order, numbers and spacing, is the
-// original bytes. raw itself comes back when nothing changed.
-func mapStrings(raw []byte, f func(string) string) []byte {
+// mapStrings calls f with the starting byte offset and decoded text of each string value (not key)
+// of the JSON text raw and returns raw with the values f changed written again; everything else,
+// key order, numbers and spacing, is the original bytes. raw itself comes back when nothing
+// changed.
+func mapStrings(raw []byte, f func(int, string) string) []byte {
 	var out []byte
 	last := 0
 	for i := 0; i < len(raw); {
@@ -344,25 +500,15 @@ func mapStrings(raw []byte, f func(string) string) []byte {
 			i++
 			continue
 		}
-		j := i + 1
-		for j < len(raw) && raw[j] != '"' {
-			if raw[j] == '\\' {
-				j++
-			}
-			j++
-		}
-		if j >= len(raw) {
+		end := skipString(raw, i)
+		if end == i || end > len(raw) || raw[end-1] != '"' {
 			break
 		}
-		end := j + 1
-		k := end
-		for k < len(raw) && (raw[k] == ' ' || raw[k] == '\t' || raw[k] == '\n' || raw[k] == '\r') {
-			k++
-		}
+		k := skipWS(raw, end)
 		if !(k < len(raw) && raw[k] == ':') {
 			var s string
 			if json.Unmarshal(raw[i:end], &s) == nil {
-				if m := f(s); m != s {
+				if m := f(i, s); m != s {
 					if out == nil {
 						out = make([]byte, 0, len(raw)+16)
 					}
@@ -378,6 +524,66 @@ func mapStrings(raw []byte, f func(string) string) []byte {
 		return raw
 	}
 	return append(out, raw[last:]...)
+}
+
+func skipWS(b []byte, i int) int {
+	for i < len(b) && (b[i] == ' ' || b[i] == '\t' || b[i] == '\n' || b[i] == '\r') {
+		i++
+	}
+	return i
+}
+
+func skipString(b []byte, i int) int {
+	if i >= len(b) || b[i] != '"' {
+		return i
+	}
+	i++
+	for i < len(b) {
+		if b[i] == '\\' {
+			i += 2
+			continue
+		}
+		if b[i] == '"' {
+			return i + 1
+		}
+		i++
+	}
+	return len(b)
+}
+
+func skipValue(b []byte, i int) int {
+	if i >= len(b) {
+		return i
+	}
+	switch b[i] {
+	case '"':
+		return skipString(b, i)
+	case '{', '[':
+		depth := 1
+		i++
+		for i < len(b) && depth > 0 {
+			switch b[i] {
+			case '"':
+				i = skipString(b, i)
+				continue
+			case '{', '[':
+				depth++
+			case '}', ']':
+				depth--
+			}
+			i++
+		}
+		return i
+	default:
+		for i < len(b) {
+			switch b[i] {
+			case ' ', '\t', '\n', '\r', ',', '}', ']':
+				return i
+			}
+			i++
+		}
+		return i
+	}
 }
 
 func encodeString(s string) []byte {

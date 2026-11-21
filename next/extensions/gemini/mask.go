@@ -71,43 +71,141 @@ func knownNames(a protocol.Account) []string {
 	return known
 }
 
-// maskReply masks a reply or an event an Interactions client gets as the upstream sent it, when
-// it holds a Google error: the data of an event named error, or JSON with an "error" object at any
-// depth (a failed interaction's, for one). A reply with no such object is returned as it is, even
-// when its text mentions an error or a project. A reply with one is masked whole, model text
-// included, since the names to mask can stand anywhere in it.
+// maskReply masks a reply or an event an Interactions client gets as the upstream sent it: the
+// data of an event named "error" is masked whole, and otherwise only the value of an "error"
+// member (an object or a string) at the top level of the JSON or one object level down (such as
+// {"interaction":{"status":"failed","error":{...}}}), never inside an array. Everything outside
+// those values keeps its bytes, and a reply with nothing to mask is returned as it is.
 func maskReply(data []byte, event string, known []string) []byte {
 	if event == "error" {
 		return geminigenerate.MaskBody(data, known...)
 	}
-	if !bytes.Contains(data, []byte(`"error"`)) {
+	if !bytes.Contains(data, []byte(`"error"`)) || !json.Valid(data) {
 		return data
 	}
-	var v any
-	if json.Unmarshal(data, &v) != nil || !hasErrorObject(v) {
+	var spans [][2]int
+	collectErrorSpans(data, 0, len(data), 0, &spans)
+	if len(spans) == 0 {
 		return data
 	}
-	return geminigenerate.MaskBody(data, known...)
+	var out []byte
+	last := 0
+	for _, sp := range spans {
+		orig := data[sp[0]:sp[1]]
+		masked := geminigenerate.MaskBody(orig, known...)
+		if !bytes.Equal(masked, orig) {
+			if out == nil {
+				out = make([]byte, 0, len(data)+16)
+			}
+			out = append(out, data[last:sp[0]]...)
+			out = append(out, masked...)
+			last = sp[1]
+		}
+	}
+	if out == nil {
+		return data
+	}
+	return append(out, data[last:]...)
 }
 
-// hasErrorObject reports whether v holds an "error" member that is an object, at any depth.
-func hasErrorObject(v any) bool {
-	switch v := v.(type) {
-	case map[string]any:
-		for k, e := range v {
-			if _, ok := e.(map[string]any); ok && k == "error" {
-				return true
-			}
-			if hasErrorObject(e) {
-				return true
+// collectErrorSpans appends the [start, end) byte ranges of "error" member values that are JSON
+// objects or strings at depth 0 (top-level object) or depth 1 (one object level down), never
+// descending into arrays or beyond depth 1.
+func collectErrorSpans(raw []byte, start, end, depth int, spans *[][2]int) {
+	i := skipWS(raw, start)
+	if i >= end || raw[i] != '{' {
+		return
+	}
+	i++
+	for {
+		i = skipWS(raw, i)
+		if i >= end || raw[i] == '}' {
+			return
+		}
+		ke := skipString(raw, i)
+		var k string
+		_ = json.Unmarshal(raw[i:ke], &k)
+		i = skipWS(raw, ke)
+		if i >= end || raw[i] != ':' {
+			return
+		}
+		vs := skipWS(raw, i+1)
+		ve := skipValue(raw, vs)
+		if vs < ve {
+			switch {
+			case k == "error":
+				if raw[vs] == '{' || raw[vs] == '"' {
+					*spans = append(*spans, [2]int{vs, ve})
+				}
+			case depth == 0 && raw[vs] == '{':
+				collectErrorSpans(raw, vs, ve, 1, spans)
 			}
 		}
-	case []any:
-		for _, e := range v {
-			if hasErrorObject(e) {
-				return true
-			}
+		i = skipWS(raw, ve)
+		if i < end && raw[i] == ',' {
+			i++
+		} else {
+			return
 		}
 	}
-	return false
+}
+
+func skipWS(b []byte, i int) int {
+	for i < len(b) && (b[i] == ' ' || b[i] == '\t' || b[i] == '\n' || b[i] == '\r') {
+		i++
+	}
+	return i
+}
+
+func skipString(b []byte, i int) int {
+	if i >= len(b) || b[i] != '"' {
+		return i
+	}
+	i++
+	for i < len(b) {
+		if b[i] == '\\' {
+			i += 2
+			continue
+		}
+		if b[i] == '"' {
+			return i + 1
+		}
+		i++
+	}
+	return len(b)
+}
+
+func skipValue(b []byte, i int) int {
+	if i >= len(b) {
+		return i
+	}
+	switch b[i] {
+	case '"':
+		return skipString(b, i)
+	case '{', '[':
+		depth := 1
+		i++
+		for i < len(b) && depth > 0 {
+			switch b[i] {
+			case '"':
+				i = skipString(b, i)
+				continue
+			case '{', '[':
+				depth++
+			case '}', ']':
+				depth--
+			}
+			i++
+		}
+		return i
+	default:
+		for i < len(b) {
+			switch b[i] {
+			case ' ', '\t', '\n', '\r', ',', '}', ']':
+				return i
+			}
+			i++
+		}
+		return i
+	}
 }
