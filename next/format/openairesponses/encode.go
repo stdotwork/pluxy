@@ -3,6 +3,7 @@ package openairesponses
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/format/internal/audioinput"
@@ -102,6 +103,10 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 	return EncodeRequestWith(req, EncodeOptions{})
 }
 
+// serviceTiers are the service tiers the Responses create reference lists
+// (https://developers.openai.com/api/reference/resources/responses/methods/create).
+var serviceTiers = []string{"auto", "default", "flex", "scale", "priority", "fast", "ultrafast"}
+
 // EncodeOptions changes how EncodeRequestWith builds a body.
 type EncodeOptions struct {
 	// ServiceTier and Verbosity say the caller knows its upstream takes the field: a request from
@@ -124,13 +129,18 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 		TopP:              o.TopP,
 		ParallelToolCalls: o.ParallelToolCalls,
 	}
-	// Responses names the same tiers and verbosities as the model does.
+	// A request from another format carries a tier or verbosity only if the Responses create
+	// reference lists it: another value would be refused. A Responses client's own is written as
+	// it is.
 	own := req.SourceFormat() == format
 	if o.ServiceTier != "" {
-		if opts.ServiceTier || own {
-			out.ServiceTier = o.ServiceTier
-		} else {
+		switch {
+		case !opts.ServiceTier && !own:
 			e.lose(llm.LossDropped, llm.ServiceTierPath(req), llm.ServiceTierUnsent)
+		case !own && !slices.Contains(serviceTiers, o.ServiceTier):
+			e.lose(llm.LossDropped, llm.ServiceTierPath(req), fmt.Sprintf("Responses lists no %q service tier", o.ServiceTier))
+		default:
+			out.ServiceTier = o.ServiceTier
 		}
 	}
 	if len(o.Stop) > 0 {
@@ -155,15 +165,20 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 		}
 		out.Text = map[string]any{"format": f}
 	}
-	if o.Verbosity != "" && !opts.Verbosity && !own {
-		e.lose(llm.LossDropped, llm.VerbosityPath(req), llm.VerbosityUnsent)
-	} else if o.Verbosity != "" {
-		text, _ := out.Text.(map[string]any)
-		if text == nil {
-			text = map[string]any{}
+	if v := o.Verbosity; v != "" {
+		switch {
+		case !opts.Verbosity && !own:
+			e.lose(llm.LossDropped, llm.VerbosityPath(req), llm.VerbosityUnsent)
+		case !own && !slices.Contains(llm.Verbosities, v):
+			e.lose(llm.LossDropped, llm.VerbosityPath(req), fmt.Sprintf("Responses lists no %q verbosity", v))
+		default:
+			text, _ := out.Text.(map[string]any)
+			if text == nil {
+				text = map[string]any{}
+			}
+			text["verbosity"] = v
+			out.Text = text
 		}
-		text["verbosity"] = o.Verbosity
-		out.Text = text
 	}
 	if tc := o.ToolChoice; tc != nil {
 		switch {

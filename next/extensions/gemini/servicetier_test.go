@@ -33,21 +33,21 @@ func TestServiceTierTranslated(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return r
+		return overProtocol(t, r)
 	}
 	responses := func(extra string) llm.Request {
 		r, err := openairesponses.ParseRequest([]byte(`{"model":"gemini-2.5-pro","input":"hi"` + extra + `}`))
 		if err != nil {
 			t.Fatal(err)
 		}
-		return r
+		return overProtocol(t, r)
 	}
 	messages := func(extra string) llm.Request {
 		r, err := anthropicmessages.ParseRequest([]byte(`{"model":"gemini-2.5-pro","messages":[{"role":"user","content":"hi"}]` + extra + `}`))
 		if err != nil {
 			t.Fatal(err)
 		}
-		return r
+		return overProtocol(t, r)
 	}
 	for _, c := range []struct {
 		name    string
@@ -138,10 +138,11 @@ func TestServiceTierGeminiPassthrough(t *testing.T) {
 // as Vertex AI does not: the same loss at the client's field, and the request still goes (and is
 // refused under the reject drop policy, as a Vertex one is).
 func TestServiceTierCustomHost(t *testing.T) {
-	req, err := openaichat.ParseRequest([]byte(`{"model":"m","service_tier":"priority","verbosity":"low","messages":[{"role":"user","content":"hi"}]}`))
+	parsed, err := openaichat.ParseRequest([]byte(`{"model":"m","service_tier":"priority","verbosity":"low","messages":[{"role":"user","content":"hi"}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
+	req := overProtocol(t, parsed)
 	for name, st := range map[string]settings{"custom": customHost, "vertex": vertexSettingsTest} {
 		body, tr, err := buildBodyOn(req, st)
 		if err != nil {
@@ -166,4 +167,20 @@ func TestServiceTierCustomHost(t *testing.T) {
 			t.Errorf("%s: %v, body %s, want serviceTier priority", base, err, body)
 		}
 	}
+}
+
+// overProtocol returns r as the extension gets it: encoded to JSON and decoded again, as the
+// extension protocol carries a request from core, so a test of a body builder starts from a client's
+// real body parsed by its format's own parser and sent the way core sends it.
+func overProtocol(t *testing.T, r llm.Request) llm.Request {
+	t.Helper()
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out llm.Request
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }

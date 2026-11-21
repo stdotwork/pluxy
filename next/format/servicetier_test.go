@@ -144,7 +144,11 @@ func TestServiceTierMatrix(t *testing.T) {
 		{"chat priority", "chat", `,"service_tier":"priority"`, "service_tier=priority", "service_tier=priority", "drop:service_tier", "speed=fast", "serviceTier=priority"},
 		{"chat fast", "chat", `,"service_tier":"fast"`, "service_tier=fast", "service_tier=fast", "drop:service_tier", "speed=fast", "serviceTier=priority"},
 		{"chat ultrafast", "chat", `,"service_tier":"ultrafast"`, "service_tier=ultrafast", "service_tier=ultrafast", "drop:service_tier", "drop:service_tier", "drop:service_tier"},
-		{"chat unknown", "chat", `,"service_tier":"turbo"`, "service_tier=turbo", "service_tier=turbo", "drop:service_tier", "drop:service_tier", "drop:service_tier"},
+		// A tier OpenAI's references do not list is the client's own on its own wire only: Responses
+		// lists ultrafast and Chat Completions does not.
+		{"chat unknown", "chat", `,"service_tier":"turbo"`, "service_tier=turbo", "drop:service_tier", "drop:service_tier", "drop:service_tier", "drop:service_tier"},
+		{"responses unknown", "responses", `,"service_tier":"turbo"`, "drop:service_tier", "service_tier=turbo", "drop:service_tier", "drop:service_tier", "drop:service_tier"},
+		{"responses ultrafast", "responses", `,"service_tier":"ultrafast"`, "drop:service_tier", "service_tier=ultrafast", "drop:service_tier", "drop:service_tier", "drop:service_tier"},
 		{"chat none", "chat", ``, "", "", "", "", ""},
 		{"responses auto", "responses", `,"service_tier":"auto"`, "service_tier=auto", "service_tier=auto", "service_tier=auto", "service_tier=auto", "drop:service_tier"},
 		{"responses fast", "responses", `,"service_tier":"fast"`, "service_tier=fast", "service_tier=fast", "drop:service_tier", "speed=fast", "serviceTier=priority"},
@@ -219,19 +223,37 @@ func TestServiceTierUnreadableStays(t *testing.T) {
 func TestVerbosityMatrix(t *testing.T) {
 	for _, c := range []struct {
 		name, client, extra string
-		chat, responses     string // the verbosity written; "" for none
-		dropped             string // the path reported dropped by Messages and Gemini
+		read                string // the verbosity read into the model
+		chat, responses     string // the verbosity written; "" for none (reported dropped if one was read)
+		dropped             string // the path reported dropped by Messages and Gemini (and by a wire that lists no such verbosity)
 	}{
-		{"chat", "chat", `,"verbosity":"low"`, "low", "low", "verbosity"},
-		{"responses", "responses", `,"text":{"verbosity":"high"}`, "high", "high", "text.verbosity"},
-		{"responses with format", "responses", `,"text":{"verbosity":"medium","format":{"type":"json_object"}}`, "medium", "medium", "text.verbosity"},
-		{"chat unknown", "chat", `,"verbosity":"loud"`, "loud", "loud", "verbosity"},
-		{"none", "chat", ``, "", "", ""},
+		{"chat", "chat", `,"verbosity":"low"`, "low", "low", "low", "verbosity"},
+		{"responses", "responses", `,"text":{"verbosity":"high"}`, "high", "high", "high", "text.verbosity"},
+		{"responses with format", "responses", `,"text":{"verbosity":"medium","format":{"type":"json_object"}}`, "medium", "medium", "medium", "text.verbosity"},
+		// A value OpenAI's references do not list is the client's own on its own wire only.
+		{"chat unknown", "chat", `,"verbosity":"loud"`, "loud", "loud", "", "verbosity"},
+		{"responses unknown", "responses", `,"text":{"verbosity":"loud"}`, "loud", "", "loud", "text.verbosity"},
+		{"none", "chat", ``, "", "", "", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			req := tierClients[c.client](t, c.extra)
-			if req.Options.Verbosity != c.chat {
-				t.Errorf("read as %q, want %q", req.Options.Verbosity, c.chat)
+			if req.Options.Verbosity != c.read {
+				t.Errorf("read as %q, want %q", req.Options.Verbosity, c.read)
+			}
+			lossPaths := func(losses []llm.Loss) []string {
+				var paths []string
+				for _, l := range losses {
+					if strings.Contains(l.Path, "verbosity") {
+						paths = append(paths, l.Path)
+					}
+				}
+				return paths
+			}
+			wantLoss := func(written string) []string {
+				if c.read != "" && written == "" {
+					return []string{c.dropped}
+				}
+				return nil
 			}
 			body, losses, err := tierTargets["chat"](req)
 			if err != nil {
@@ -241,8 +263,8 @@ func TestVerbosityMatrix(t *testing.T) {
 				Verbosity string `json:"verbosity"`
 			}
 			_ = json.Unmarshal(body, &chat)
-			if chat.Verbosity != c.chat || len(losses) != 0 {
-				t.Errorf("Chat: verbosity %q, losses %+v, want %q and none: %s", chat.Verbosity, losses, c.chat, body)
+			if chat.Verbosity != c.chat || !slices.Equal(lossPaths(losses), wantLoss(c.chat)) {
+				t.Errorf("Chat: verbosity %q, losses %+v, want %q and %q dropped: %s", chat.Verbosity, losses, c.chat, wantLoss(c.chat), body)
 			}
 			body, losses, err = tierTargets["responses"](req)
 			if err != nil {
@@ -255,25 +277,19 @@ func TestVerbosityMatrix(t *testing.T) {
 				} `json:"text"`
 			}
 			_ = json.Unmarshal(body, &resp)
-			if resp.Text.Verbosity != c.responses || len(losses) != 0 {
-				t.Errorf("Responses: verbosity %q, losses %+v, want %q and none: %s", resp.Text.Verbosity, losses, c.responses, body)
+			if resp.Text.Verbosity != c.responses || !slices.Equal(lossPaths(losses), wantLoss(c.responses)) {
+				t.Errorf("Responses: verbosity %q, losses %+v, want %q and %q dropped: %s", resp.Text.Verbosity, losses, c.responses, wantLoss(c.responses), body)
 			}
 			for _, target := range []string{"messages", "gemini"} {
 				_, losses, err := tierTargets[target](req)
 				if err != nil {
 					t.Fatal(err)
 				}
-				var paths []string
-				for _, l := range losses {
-					if strings.Contains(l.Path, "verbosity") {
-						paths = append(paths, l.Path)
-					}
-				}
 				want := []string(nil)
 				if c.dropped != "" {
 					want = []string{c.dropped}
 				}
-				if !slices.Equal(paths, want) {
+				if paths := lossPaths(losses); !slices.Equal(paths, want) {
 					t.Errorf("%s: dropped %q, want %q", target, paths, want)
 				}
 			}

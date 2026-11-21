@@ -72,3 +72,6 @@ const ServiceTierUnsent = "nothing says this upstream takes a service tier, so i
 
 // VerbosityUnsent is ServiceTierUnsent for verbosity.
 const VerbosityUnsent = "nothing says this upstream takes a verbosity, so it is not sent"
+
+// Verbosities are the verbosities OpenAI's Chat Completions and Responses create references list.
+var Verbosities = []string{"low", "medium", "high"}

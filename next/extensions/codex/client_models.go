@@ -180,3 +180,55 @@ func extendedClientReasoning(version string) bool {
 	}
 	return true
 }
+
+// catalogEntry is what the client catalog says a model takes: the ids of the service tiers it lists
+// and whether it takes a verbosity (support_verbosity), as the Codex CLI filters a request on the
+// same data (service_tier_for_request in codex-rs/protocol/src/openai_models.rs and
+// support_verbosity in codex-rs/core/src/client.rs). A model the catalog does not list takes
+// neither.
+type catalogEntry struct {
+	tiers     []string
+	verbosity bool
+}
+
+// catalogEntryOf returns the catalog entry of a model, and a zero entry for one not listed.
+func catalogEntryOf(model string) catalogEntry {
+	m, ok := clientTemplates()[strings.ToLower(strings.TrimSpace(model))]
+	if !ok {
+		return catalogEntry{}
+	}
+	var e catalogEntry
+	var tiers []struct {
+		ID string `json:"id"`
+	}
+	if json.Unmarshal(m["service_tiers"], &tiers) == nil {
+		for _, t := range tiers {
+			e.tiers = append(e.tiers, t.ID)
+		}
+	}
+	_ = json.Unmarshal(m["support_verbosity"], &e.verbosity)
+	return e
+}
+
+// narrowToModel returns r without the service tier and verbosity its routed model does not take,
+// and the losses that are, at the client's field. A tier the model lists is kept ("fast" is
+// "priority"); auto and default ask for the standard service every Codex request gets, so they are
+// left off with no loss; any other tier is dropped and reported. A verbosity is kept only for a
+// model that takes one. The request's own copy is changed, not the caller's.
+func narrowToModel(r llm.Request) (llm.Request, []llm.Loss) {
+	e := catalogEntryOf(r.Model)
+	var losses []llm.Loss
+	if t := r.Options.ServiceTier; t != "" && !slices.Contains(e.tiers, llm.CanonicalServiceTier(t)) {
+		r.Options.ServiceTier = ""
+		if t != llm.ServiceTierAuto && t != llm.ServiceTierDefault {
+			losses = append(losses, llm.Loss{Kind: llm.LossDropped, Path: llm.ServiceTierPath(r),
+				Detail: "the Codex catalog lists no " + strconv.Quote(t) + " service tier for " + r.Model})
+		}
+	}
+	if r.Options.Verbosity != "" && !e.verbosity {
+		losses = append(losses, llm.Loss{Kind: llm.LossDropped, Path: llm.VerbosityPath(r),
+			Detail: "the Codex catalog lists no verbosity for " + r.Model})
+		r.Options.Verbosity = ""
+	}
+	return r, losses
+}

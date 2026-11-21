@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/format/internal/audioinput"
@@ -554,6 +555,10 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 	return EncodeRequestWith(req, EncodeOptions{})
 }
 
+// serviceTiers are the service tiers the Chat Completions create reference lists
+// (https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create).
+var serviceTiers = []string{"auto", "default", "flex", "scale", "priority", "fast"}
+
 // EncodeOptions changes how EncodeRequestWith builds a body.
 type EncodeOptions struct {
 	// ServiceTier and Verbosity say the caller knows its upstream takes the field: a request from
@@ -580,20 +585,27 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			ReasoningEffort: req.Options.ReasoningEffort,
 		},
 	}
-	// Chat Completions names the same tiers and verbosities as the model does.
+	// A request from another format carries a tier or verbosity only if the Chat Completions
+	// reference lists it: another value would be refused. A Chat client's own is written as it is.
 	own := req.SourceFormat() == format
 	if t := req.Options.ServiceTier; t != "" {
-		if opts.ServiceTier || own {
-			out.ServiceTier = t
-		} else {
+		switch {
+		case !opts.ServiceTier && !own:
 			e.lose(llm.LossDropped, llm.ServiceTierPath(req), llm.ServiceTierUnsent)
+		case !own && !slices.Contains(serviceTiers, t):
+			e.lose(llm.LossDropped, llm.ServiceTierPath(req), fmt.Sprintf("Chat Completions lists no %q service tier", t))
+		default:
+			out.ServiceTier = t
 		}
 	}
 	if v := req.Options.Verbosity; v != "" {
-		if opts.Verbosity || own {
-			out.Verbosity = v
-		} else {
+		switch {
+		case !opts.Verbosity && !own:
 			e.lose(llm.LossDropped, llm.VerbosityPath(req), llm.VerbosityUnsent)
+		case !own && !slices.Contains(llm.Verbosities, v):
+			e.lose(llm.LossDropped, llm.VerbosityPath(req), fmt.Sprintf("Chat Completions lists no %q verbosity", v))
+		default:
+			out.Verbosity = v
 		}
 	}
 	if req.Stream {

@@ -237,7 +237,9 @@ no developer role and an assistant message takes no `reasoning_content`). Other 
 Groq included, have no preset: their documentation names nothing they need shaped.
 
 A request from another client format carries the client's service tier and verbosity only to a host
-whose documentation names the field on that wire: `api.openai.com` on the Chat Completions and
+whose documentation names the field on that wire, and only a value that documentation lists (a tier in the
+Chat Completions or Responses create reference's list, a verbosity of `low`, `medium` or `high`; any other is
+dropped and reported): `api.openai.com` on the Chat Completions and
 Responses wires (both), `api.anthropic.com` on the Messages wire (the service tier: `auto` and
 `default`; the priority tier needs fast mode's beta header, which this extension does not add, so it
 is dropped) and `generativelanguage.googleapis.com` on the Gemini wire (the service tier). Any other
@@ -763,9 +765,15 @@ A request in another client format carries the client's service tier and verbosi
 (Responses' `service_tier` and `text.verbosity`) only where the account's base URL host is
 `api.openai.com` or `chatgpt.com`, the two defaults (a custom `base_url` may be a third-party host
 that refuses a field it does not list, so it gets neither, reported as dropped at the client's
-field); the endpoint's own filter then keeps `priority` (`fast` too) and `ultrafast`, and a
-translated request that asked for another tier has it reported as dropped. The subscription's
-routing hint names the tier sent.
+field), and then as the routed model's entry in the client catalog (`client_models.json`) allows, as
+the Codex CLI filters on the same data: a service tier only if the entry lists it (`fast` counts as
+`priority`; no model lists `ultrafast`), a verbosity only if the entry says `support_verbosity`, and
+a verbosity only if it is `low`, `medium` or `high`. A model the catalog does not list gets neither.
+`auto` and `default` are Codex's standard service: they are omitted and report no loss. Any other
+tier Codex cannot take, and a verbosity it cannot take, is reported as dropped at the client's field
+(and the `reject` drop policy refuses the request). A Responses client's own body goes as it came,
+through the endpoint's own filter, which keeps `priority` (`fast` too) and `ultrafast`. The
+subscription's routing hint names the tier sent.
 
 ## Claude
 

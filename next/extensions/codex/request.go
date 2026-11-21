@@ -62,14 +62,21 @@ func buildRequest(req llm.Request, accountID string, s settings, a account, ws b
 		r.Model = model
 		// The Codex endpoint takes a service tier and a verbosity, and so does OpenAI's API; a
 		// custom base_url may be a third-party host that refuses a field it does not list, so it
-		// gets neither from a translated request (takesTier). The shaper then keeps the tiers
-		// Codex serves.
-		tier := takesTier(s, a)
-		enc, losses, err := openairesponses.EncodeRequestWith(r, openairesponses.EncodeOptions{ServiceTier: tier, Verbosity: tier})
+		// gets neither from a translated request (takesTier). At the default hosts the routed
+		// model's catalog entry says what it takes, as the Codex CLI reads it (narrowToModel).
+		host := takesTier(s, a)
+		var narrowed []llm.Loss
+		if host {
+			r, narrowed = narrowToModel(r)
+		}
+		enc, losses, err := openairesponses.EncodeRequestWith(r, openairesponses.EncodeOptions{ServiceTier: host, Verbosity: host})
 		if err != nil {
 			return nil, err
 		}
 		tr.Losses = losses
+		for _, l := range narrowed {
+			tr.Losses = llm.AddLoss(tr.Losses, l)
+		}
 		if req.DropPolicy == llm.DropReject && tr.Dropped() {
 			paths := tr.DroppedPaths()
 			return nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Dropped: paths,
@@ -453,23 +460,17 @@ func (h *shaper) streamOptions() {
 }
 
 // serviceTier keeps the service tiers the Codex endpoint takes: fast and priority become
-// priority, ultrafast stays, anything else is removed. The tier is in the body whatever the
-// client's format: a translated request's comes from the model's service tier (the Responses
-// encoder writes it), and the routing hint a subscription's request gets is made from this body
-// (setClientHeaders). A request translated from another format that asked for a tier Codex cannot
-// take is reported as dropped, at the client's field: flex, scale and any tier the model does
-// not know. Auto and default ask for the standard service Codex gives every request. A body sent
-// as the client wrote it loses nothing it did not lose before.
+// priority, ultrafast stays, anything else is removed. A translated request's tier has already been
+// narrowed to what its model lists (narrowToModel), which reports the tiers it dropped; this also
+// filters a Responses client's own body, which goes as it came and loses nothing it did not lose
+// before. The routing hint a subscription's request gets is made from the body this leaves
+// (setClientHeaders).
 func (h *shaper) serviceTier() {
 	switch t := h.str("service_tier"); t {
 	case "fast", "priority":
 		h.m["service_tier"] = raw("priority")
 	case "ultrafast":
 	default:
-		if t != "" && t != llm.ServiceTierAuto && t != llm.ServiceTierDefault && !h.passthrough() {
-			h.tr.Losses = llm.AddLoss(h.tr.Losses, llm.Loss{Kind: llm.LossDropped, Path: llm.ServiceTierPath(h.req),
-				Detail: fmt.Sprintf("the Codex endpoint has no %q service tier", t)})
-		}
 		delete(h.m, "service_tier")
 	}
 }

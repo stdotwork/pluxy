@@ -148,21 +148,21 @@ func TestServiceTierToFastMode(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return r
+		return overProtocol(t, r)
 	}
 	responses := func(extra string) llm.Request {
 		r, err := openairesponses.ParseRequest([]byte(`{"model":"claude-opus-4-8","input":"hi"` + extra + `}`))
 		if err != nil {
 			t.Fatal(err)
 		}
-		return r
+		return overProtocol(t, r)
 	}
 	gemini := func(extra string) llm.Request {
 		r, err := geminigenerate.ParseRequest("claude-opus-4-8", false, []byte(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}]`+extra+`}`))
 		if err != nil {
 			t.Fatal(err)
 		}
-		return r
+		return overProtocol(t, r)
 	}
 	for _, c := range []struct {
 		name     string
@@ -258,21 +258,21 @@ func TestServiceTierByBaseURL(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return r
+		return overProtocol(t, r)
 	}
 	responses := func(extra string) llm.Request {
 		r, err := openairesponses.ParseRequest([]byte(`{"model":"claude-opus-4-8","input":"hi"` + extra + `}`))
 		if err != nil {
 			t.Fatal(err)
 		}
-		return r
+		return overProtocol(t, r)
 	}
 	gemini := func(extra string) llm.Request {
 		r, err := geminigenerate.ParseRequest("claude-opus-4-8", false, []byte(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}]`+extra+`}`))
 		if err != nil {
 			t.Fatal(err)
 		}
-		return r
+		return overProtocol(t, r)
 	}
 	const custom = "https://llm.example.com"
 	for _, c := range []struct {
@@ -326,4 +326,20 @@ func TestServiceTierByBaseURL(t *testing.T) {
 			}
 		})
 	}
+}
+
+// overProtocol returns r as the extension gets it: encoded to JSON and decoded again, as the
+// extension protocol carries a request from core, so a test of a body builder starts from a client's
+// real body parsed by its format's own parser and sent the way core sends it.
+func overProtocol(t *testing.T, r llm.Request) llm.Request {
+	t.Helper()
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out llm.Request
+	if err := json.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	return out
 }
