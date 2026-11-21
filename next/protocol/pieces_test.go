@@ -346,3 +346,45 @@ func TestRemovePiecesLongKeyWithPrefix(t *testing.T) {
 		}
 	}
 }
+
+// A header, proxy or settings secret whose kept parts are all under 8 bytes counts whole, so it is
+// never left unprotected for being made of short parts. The fake value splits at "=" into two
+// parts of 7 bytes each.
+func TestAccountSecretsShortPartsCountWhole(t *testing.T) {
+	const value = "aGVsbG8=d29ybGQ"
+	for name, got := range map[string][]string{
+		"header":   AccountSecrets(Account{Headers: map[string]string{"X-Api-Key": value}}),
+		"proxy":    AccountSecrets(Account{ProxyURL: "http://user:" + value + "@proxy.example:8080"}),
+		"settings": AccountSecrets(Account{Settings: []byte(`{"api_key":"` + value + `"}`)}),
+		"with":     AccountSecretsWith(Account{}, []string{value}),
+	} {
+		if name == "proxy" {
+			// The user name "user" is under 8 bytes and adds nothing; the password is the value.
+			if !slices.Equal(got, []string{value}) {
+				t.Errorf("%s: AccountSecrets = %q, want [%q]", name, got, value)
+			}
+			continue
+		}
+		if !slices.Equal(got, []string{value}) {
+			t.Errorf("%s: AccountSecrets = %q, want [%q]", name, got, value)
+		}
+		if out := RemovePieces("key "+value+" refused", got...); out != "key "+Redacted+" refused" {
+			t.Errorf("%s: RemovePieces = %q, want the whole value removed", name, out)
+		}
+	}
+}
+
+// A value with a part of 8 bytes or more counts by its parts only, and one under 8 bytes adds
+// nothing, as before.
+func TestAccountSecretsLongPartAndShortValueUnchanged(t *testing.T) {
+	got := AccountSecrets(Account{Headers: map[string]string{"Authorization": "Bearer gw-token-12345"}})
+	if !slices.Equal(got, []string{"gw-token-12345"}) {
+		t.Errorf("AccountSecrets = %q, want only the token", got)
+	}
+	if out := RemovePieces("refuses Bearer here", got...); out != "refuses Bearer here" {
+		t.Errorf("RemovePieces = %q, want Bearer kept", out)
+	}
+	if got := AccountSecrets(Account{Headers: map[string]string{"X-Api-Key": "abc=def"}}); len(got) != 0 {
+		t.Errorf("AccountSecrets of a 7-byte value = %q, want nothing", got)
+	}
+}

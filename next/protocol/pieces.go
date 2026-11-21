@@ -32,11 +32,14 @@ const minSideSecret = 8
 // and neither is a part that is only such words around another part (a header line's
 // "Bearer <token>"), nor Basic's decoded "user:password" when its password is a part. A secret
 // other than the credential's that is shorter than 8 bytes is left out, as core leaves it in
-// text, and so is such a part: a header, proxy or settings secret whose parts are all shorter adds
-// nothing. A credential's field whose parts are all shorter adds them, still without the words
-// around them. The credential's data is left out too: it mixes secrets with plain values (a base
-// URL, a project ID, an OAuth scope) whose words would count as pieces, so an extension passes a
-// secret it keeps there itself (sdk.UpstreamText), and core does not remove pieces of it.
+// text, and so is such a part; but a header, proxy or settings secret of 8 bytes or more whose
+// kept parts are all shorter counts whole, with the words around its parts, so it is never left
+// unprotected for being made of short parts (it then also removes a word that shares 4
+// characters with its scheme or cookie name). A credential's field whose parts are all shorter
+// adds them, still without the words around them. The credential's data is left out too: it
+// mixes secrets with plain values (a base URL, a project ID, an OAuth scope) whose words would
+// count as pieces, so an extension passes a secret it keeps there itself (sdk.UpstreamText), and
+// core does not remove pieces of it.
 func AccountSecrets(a Account) []string {
 	var settings []string
 	if len(a.Settings) > 0 {
@@ -80,7 +83,14 @@ func accountSecrets(a Account, settings []string) []string {
 		}
 		kept := slices.DeleteFunc(slices.Clone(parts), func(p string) bool { return wrapper(p, parts) })
 		min := minSideSecret
-		if short && !slices.ContainsFunc(kept, func(p string) bool { return len(p) >= minSideSecret }) {
+		if !slices.ContainsFunc(kept, func(p string) bool { return len(p) >= minSideSecret }) {
+			if !short {
+				// No part reaches the minimum: the whole value counts, not its short parts.
+				if !slices.Contains(out, s) {
+					out = append(out, s)
+				}
+				return
+			}
 			min = 1
 		}
 		for _, p := range kept {
@@ -114,7 +124,8 @@ func accountSecrets(a Account, settings []string) []string {
 // part too or empty. A part that merely holds another, such as a cookie's value that holds
 // another cookie's, is not one. Whether the parts it wraps are kept does not matter: a wrapper is
 // never a secret of its own, so a token that has the shape of one ("name:abcd") counts by its
-// inner part only, and is left out when that part is too short.
+// inner part only; when that part is too short, a header, proxy or settings secret counts whole
+// instead (accountSecrets).
 func wrapper(p string, parts []string) bool {
 	if len(SecretParts(p, 1)) > 0 {
 		return true

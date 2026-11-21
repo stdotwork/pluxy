@@ -53,19 +53,21 @@ func TestAccountSecrets(t *testing.T) {
 	}
 }
 
-// A header or cookie whose parts are all under 8 bytes adds nothing, as any side secret under 8
-// bytes does: the public words around them ("Bearer", "theme") are not pieces. The credential's own
-// value adds its short inner value, without the public prefix.
+// A header or cookie whose parts are all under 8 bytes counts whole (the ruled cost: words that
+// share 4 characters with it, "Bearer" and "theme" among them, are replaced too), where the
+// credential's own value adds its short inner value, without the public prefix.
 func TestAccountSecretsShortParts(t *testing.T) {
 	a := protocol.Account{
 		Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "devin-session-token$short"},
 		Headers:    map[string]string{"Authorization": "Bearer short1", "Cookie": "theme=dark"},
 	}
-	if got, want := AccountSecrets(a), []string{"short"}; !slices.Equal(got, want) {
+	got, want := AccountSecrets(a), []string{"Bearer short1", "short", "theme=dark"}
+	slices.Sort(got)
+	if !slices.Equal(got, want) {
 		t.Errorf("AccountSecrets = %q, want %q", got, want)
 	}
 	for in, want := range map[string]string{
-		"this session refuses Bearer, and the theme is dark": "this session refuses Bearer, and the theme is dark",
+		"this session refuses Bearer, and the theme is dark": "this session refuses [redacted], and the [redacted] is [redacted]",
 		"invalid devin-session-token: shor (truncated)":      "invalid devin-session-token: [redacted] (truncated)",
 	} {
 		if got := UpstreamText(in, AccountSecrets(a)...); got != want {
@@ -105,9 +107,10 @@ func TestAccountSecretsPartsHoldingParts(t *testing.T) {
 }
 
 // Wrappers are left out before the parts are measured: a credential written as a header line
-// around a short token adds the token; a header or setting around a token of 1 to 3 bytes adds
-// nothing, not the public words around it; Basic's decoded "user:" with an empty password is a
-// wrapper too, so the user name is not a piece.
+// around a short token adds the token; a header or setting around a token of 1 to 3 bytes has no
+// kept part of 8 bytes, so it counts whole, public words and all; Basic's decoded "user:" with an
+// empty password is a wrapper too, so the user name is not a piece of a Basic value with a long
+// base64 part.
 func TestAccountSecretsWrappersOfShortParts(t *testing.T) {
 	settings, _ := json.Marshal(map[string]string{"api_key": "X-Gateway: Bearer s12"})
 	basic := base64.StdEncoding.EncodeToString([]byte("ops@gw.example:"))
@@ -118,15 +121,15 @@ func TestAccountSecretsWrappersOfShortParts(t *testing.T) {
 	}
 	got := AccountSecrets(a)
 	slices.Sort(got)
-	want := []string{basic, "short1"}
+	want := []string{basic, "short1", "X-Gateway: Bearer s12", "c=devin-session-token$s12"}
 	slices.Sort(want)
 	if !slices.Equal(got, want) {
 		t.Errorf("AccountSecrets = %q\nwant %q", got, want)
 	}
 	for in, want := range map[string]string{
 		"invalid short1":                        "invalid [redacted]",
-		"the gateway refuses Bearer, use a key": "the gateway refuses Bearer, use a key",
-		"no devin session token":                "no devin session token",
+		"the gateway refuses Bearer, use a key": "the [redacted] refuses [redacted], use a key",
+		"no devin session token":                "no [redacted] [redacted] [redacted]",
 		"user ops@gw.example is not known":      "user ops@gw.example is not known",
 	} {
 		if got := UpstreamText(in, AccountSecrets(a)...); got != want {
