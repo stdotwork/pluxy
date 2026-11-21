@@ -15,12 +15,16 @@ import (
 
 	"github.com/stdotwork/pluxy/next/extensions/claude/claudetest"
 	"github.com/stdotwork/pluxy/next/extensions/codex/codextest"
+	"github.com/stdotwork/pluxy/next/extensions/gemini/geminitest"
 )
 
-// A client's service tier, whatever its format, reaches Claude as the tier Messages has for it, and
-// only a priority tier (priority or fast) becomes fast mode, with the beta Anthropic requires. The
-// old core records no such translations, so this is checked here, at the HTTP seam: core serves the
-// client, the Claude extension sends the request, and the fake Anthropic API records it.
+// An account's base_url decides what Claude takes. At a host that is not Anthropic's own (the fake
+// here, as a third-party host would be) a request in another format carries no service tier: a
+// host may refuse a field it does not list. Only a Responses client's priority tier still goes as
+// fast mode, with the beta Anthropic requires, as it did before other formats' did. At Anthropic's
+// own API every format's tier is carried (TestServiceTierToFastMode in the extension's tests, with
+// no network). The old core records no such translations, so this is checked at the HTTP seam: core
+// serves the client, the Claude extension sends the request, and the fake Anthropic API records it.
 func TestServiceTierToClaude(t *testing.T) {
 	srv := claudetest.New(t)
 	base := startClaudeCore(t)
@@ -31,12 +35,12 @@ func TestServiceTierToClaude(t *testing.T) {
 		speed, tier      string // the upstream body's speed and service_tier; "" for none
 		fastBeta         bool
 	}{
-		{"chat priority", "/v1/chat/completions", `{"model":"claude-opus-4-6","service_tier":"priority","messages":[{"role":"user","content":"Hi"}]}`, "fast", "", true},
-		{"chat fast", "/v1/chat/completions", `{"model":"claude-opus-4-6","service_tier":"fast","messages":[{"role":"user","content":"Hi"}]}`, "fast", "", true},
+		{"chat priority", "/v1/chat/completions", `{"model":"claude-opus-4-6","service_tier":"priority","messages":[{"role":"user","content":"Hi"}]}`, "", "", false},
+		{"chat fast", "/v1/chat/completions", `{"model":"claude-opus-4-6","service_tier":"fast","messages":[{"role":"user","content":"Hi"}]}`, "", "", false},
 		{"responses priority", "/v1/responses", `{"model":"claude-opus-4-6","service_tier":"priority","input":"Hi"}`, "fast", "", true},
-		{"gemini priority", "/v1beta/models/claude-opus-4-6:generateContent", `{"serviceTier":"priority","contents":[{"role":"user","parts":[{"text":"Hi"}]}]}`, "fast", "", true},
-		{"chat auto", "/v1/chat/completions", `{"model":"claude-opus-4-6","service_tier":"auto","messages":[{"role":"user","content":"Hi"}]}`, "", "auto", false},
-		{"chat default", "/v1/chat/completions", `{"model":"claude-opus-4-6","service_tier":"default","messages":[{"role":"user","content":"Hi"}]}`, "", "standard_only", false},
+		{"gemini priority", "/v1beta/models/claude-opus-4-6:generateContent", `{"serviceTier":"priority","contents":[{"role":"user","parts":[{"text":"Hi"}]}]}`, "", "", false},
+		{"chat auto", "/v1/chat/completions", `{"model":"claude-opus-4-6","service_tier":"auto","messages":[{"role":"user","content":"Hi"}]}`, "", "", false},
+		{"chat default", "/v1/chat/completions", `{"model":"claude-opus-4-6","service_tier":"default","messages":[{"role":"user","content":"Hi"}]}`, "", "", false},
 		{"chat flex", "/v1/chat/completions", `{"model":"claude-opus-4-6","service_tier":"flex","messages":[{"role":"user","content":"Hi"}]}`, "", "", false},
 		{"chat scale", "/v1/chat/completions", `{"model":"claude-opus-4-6","service_tier":"scale","messages":[{"role":"user","content":"Hi"}]}`, "", "", false},
 		{"chat ultrafast", "/v1/chat/completions", `{"model":"claude-opus-4-6","service_tier":"ultrafast","messages":[{"role":"user","content":"Hi"}]}`, "", "", false},
@@ -72,10 +76,13 @@ func TestServiceTierToClaude(t *testing.T) {
 	}
 }
 
-// A client's service tier reaches Codex as the Responses tier it means, whatever the client's
-// format: priority and fast (a Messages client's fast speed too) as priority, with the
-// subscription's routing hint naming it; ultrafast as it is; and the tiers Codex does not take
-// (auto, default, flex, scale) are left off.
+// What Codex takes depends on the account's base_url. At a host that is not one of the two defaults
+// (OpenAI's API and the ChatGPT backend; the fake here, as a third-party host would be) a request in
+// another format carries neither a service tier nor a verbosity, since a host may refuse a field it
+// does not list, and the subscription's routing hint names no tier. A Responses client's own body
+// goes as it came, through Codex's filter (priority and ultrafast stay). The same translations at
+// the default hosts are checked without the network in the extension's tests
+// (TestServiceTierTranslated, TestVerbosityTranslated).
 func TestServiceTierToCodex(t *testing.T) {
 	srv := codextest.New(t)
 	base := runCore(t, map[string]any{
@@ -111,15 +118,19 @@ func TestServiceTierToCodex(t *testing.T) {
 		name, path, body string
 		tier             string // service_tier of the upstream body; "" for none
 	}{
-		{"chat priority", "/v1/chat/completions", `{"model":"gpt-6.1-sol","service_tier":"priority","messages":[{"role":"user","content":"Hi"}]}`, "priority"},
-		{"chat fast", "/v1/chat/completions", `{"model":"gpt-6.1-sol","service_tier":"fast","messages":[{"role":"user","content":"Hi"}]}`, "priority"},
-		{"chat ultrafast", "/v1/chat/completions", `{"model":"gpt-6.1-sol","service_tier":"ultrafast","messages":[{"role":"user","content":"Hi"}]}`, "ultrafast"},
+		{"chat priority", "/v1/chat/completions", `{"model":"gpt-6.1-sol","service_tier":"priority","messages":[{"role":"user","content":"Hi"}]}`, ""},
+		{"chat fast", "/v1/chat/completions", `{"model":"gpt-6.1-sol","service_tier":"fast","messages":[{"role":"user","content":"Hi"}]}`, ""},
+		{"chat ultrafast", "/v1/chat/completions", `{"model":"gpt-6.1-sol","service_tier":"ultrafast","messages":[{"role":"user","content":"Hi"}]}`, ""},
 		{"chat flex", "/v1/chat/completions", `{"model":"gpt-6.1-sol","service_tier":"flex","messages":[{"role":"user","content":"Hi"}]}`, ""},
 		{"chat default", "/v1/chat/completions", `{"model":"gpt-6.1-sol","service_tier":"default","messages":[{"role":"user","content":"Hi"}]}`, ""},
-		{"messages speed fast", "/v1/messages", `{"model":"gpt-6.1-sol","max_tokens":50,"speed":"fast","messages":[{"role":"user","content":"Hi"}]}`, "priority"},
+		{"messages speed fast", "/v1/messages", `{"model":"gpt-6.1-sol","max_tokens":50,"speed":"fast","messages":[{"role":"user","content":"Hi"}]}`, ""},
 		{"messages standard_only", "/v1/messages", `{"model":"gpt-6.1-sol","max_tokens":50,"service_tier":"standard_only","messages":[{"role":"user","content":"Hi"}]}`, ""},
-		{"gemini priority", "/v1beta/models/gpt-6.1-sol:generateContent", `{"serviceTier":"priority","contents":[{"role":"user","parts":[{"text":"Hi"}]}]}`, "priority"},
+		{"gemini priority", "/v1beta/models/gpt-6.1-sol:generateContent", `{"serviceTier":"priority","contents":[{"role":"user","parts":[{"text":"Hi"}]}]}`, ""},
 		{"chat none", "/v1/chat/completions", `{"model":"gpt-6.1-sol","messages":[{"role":"user","content":"Hi"}]}`, ""},
+		// A Responses client's own body goes as it came.
+		{"responses priority", "/v1/responses", `{"model":"gpt-6.1-sol","service_tier":"priority","input":"Hi"}`, "priority"},
+		{"responses ultrafast", "/v1/responses", `{"model":"gpt-6.1-sol","service_tier":"ultrafast","input":"Hi"}`, "ultrafast"},
+		{"responses flex", "/v1/responses", `{"model":"gpt-6.1-sol","service_tier":"flex","input":"Hi"}`, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			before := len(srv.Requests())
@@ -458,5 +469,70 @@ func TestServiceTierThirdPartyHostReject(t *testing.T) {
 	t.Logf("status %d: %s", resp.StatusCode, raw)
 	if n, _ := got(); resp.StatusCode != http.StatusBadRequest || n != 0 || !strings.Contains(string(raw), "service_tier") {
 		t.Errorf("status %d with %d upstream calls: %s; want 400, no call, service_tier named", resp.StatusCode, n, raw)
+	}
+}
+
+// A Gemini account whose base_url is not the Gemini API's (the fake here, as a third-party host
+// would be, and as Vertex AI is) gets no service tier from a request in another format, and the
+// request still succeeds. A Gemini client's own body goes as it came. At the Gemini API's own host
+// the tier is carried (the extension's tests, with no network).
+func TestServiceTierToGemini(t *testing.T) {
+	srv := geminitest.New(t)
+	base := runCore(t, map[string]any{
+		"listen": "127.0.0.1:0", "client_keys": []string{clientKey}, "management_key": managementKey,
+		"extension": map[string]any{
+			"manifest": geminiManifest(t),
+			"accounts": []any{map[string]any{
+				"id":         "key",
+				"settings":   map[string]any{"base_url": srv.URL},
+				"credential": map[string]any{"kind": "api_key", "api_key": srv.IssueKey()},
+				"models":     []string{"gemini-2.5-pro"},
+			}},
+		},
+	})
+	for _, c := range []struct {
+		name, path, body string
+		tier             string // serviceTier of the upstream body; "" for none
+	}{
+		{"chat priority", "/v1/chat/completions", `{"model":"gemini-2.5-pro","service_tier":"priority","verbosity":"low","messages":[{"role":"user","content":"Hi"}]}`, ""},
+		{"responses flex", "/v1/responses", `{"model":"gemini-2.5-pro","service_tier":"flex","input":"Hi"}`, ""},
+		{"messages fast", "/v1/messages", `{"model":"gemini-2.5-pro","max_tokens":9,"speed":"fast","messages":[{"role":"user","content":"Hi"}]}`, ""},
+		{"gemini priority", "/v1beta/models/gemini-2.5-pro:generateContent", `{"serviceTier":"priority","contents":[{"role":"user","parts":[{"text":"Hi"}]}]}`, "priority"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			before := len(srv.Requests())
+			req, _ := http.NewRequest(http.MethodPost, base+c.path, strings.NewReader(c.body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer "+clientKey)
+			req.Header.Set("X-Api-Key", clientKey)
+			req.Header.Set("Anthropic-Version", "2023-06-01")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			b, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status %d: %s", resp.StatusCode, b)
+			}
+			reqs := srv.Requests()
+			if len(reqs) != before+1 {
+				t.Fatalf("upstream got %d requests, want 1", len(reqs)-before)
+			}
+			var sent map[string]json.RawMessage
+			if err := json.Unmarshal(reqs[before].Body, &sent); err != nil {
+				t.Fatal(err)
+			}
+			var tier string
+			_ = json.Unmarshal(sent["serviceTier"], &tier)
+			if tier != c.tier {
+				t.Errorf("upstream serviceTier = %q, want %q: %s", tier, c.tier, reqs[before].Body)
+			}
+			for _, f := range []string{"service_tier", "verbosity", "speed"} {
+				if _, ok := sent[f]; ok {
+					t.Errorf("upstream body has %s: %s", f, reqs[before].Body)
+				}
+			}
+		})
 	}
 }

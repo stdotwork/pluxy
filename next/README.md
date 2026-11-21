@@ -604,11 +604,6 @@ from a release's packages, add its `registry.json` under `packages.registries`, 
 The Codex provider extension (`extensions/codex`) serves OpenAI's Codex models from an OpenAI API
 key, a ChatGPT subscription or a Sign in with ChatGPT (SIWC) sign-in (below). Build it as `extensions/codex/codex` and name its manifest:
 
-A request in another client format carries the client's service tier and verbosity to Codex
-(Responses' `service_tier` and `text.verbosity`); the endpoint's own filter then keeps `priority`
-(`fast` too) and `ultrafast`, and a translated request that asked for another tier has it reported
-as dropped. The subscription's routing hint names the tier sent.
-
 ```json
 {
   "management_key": "choose-a-management-key",
@@ -764,6 +759,14 @@ and its `-siwc-bind` flag, is not built: the login method replaces it.
 
 **Quota.** For a ChatGPT sign-in account, `GET /v0/management/accounts/{id}/quota` reads `GET {backend}/wham/usage`, where `{backend}` is the account's `base_url` without a trailing `/codex` (default `https://chatgpt.com/backend-api`), with the access token, the `Chatgpt-Account-Id` header and the same `User-Agent` and `Originator` the account's requests carry (so `codex_identity` applies). It also reads `GET {backend}/subscriptions?account_id=...` for `active_until` (reported as optional `plan_ends_at` in Unix seconds), and `GET {backend}/wham/rate-limit-reset-credits` for `available_count` (the `reset_credits` limit, labelled "Manual resets", with `remaining` in `resets`). Both extra reads use the same identity; a failed extra read leaves its field out without failing the usage read. Nothing spends a reset. It reports the plan (`plan_type`), the 5-hour and weekly or monthly windows (`five_hour`, `weekly`, `monthly`), code review's windows (`code_review_*`), each extra limit such as one model's (`<name>_five_hour` and so on) and the credit balance (`credits`), with the share used, reset time and window length. An API key or a SIWC account answers unsupported. A sign-in's grant carries `identity` `{"email", "account_id"}`: members of one ChatGPT workspace share its account ID, so the e-mail address tells them apart.
 
+A request in another client format carries the client's service tier and verbosity to Codex
+(Responses' `service_tier` and `text.verbosity`) only where the account's base URL host is
+`api.openai.com` or `chatgpt.com`, the two defaults (a custom `base_url` may be a third-party host
+that refuses a field it does not list, so it gets neither, reported as dropped at the client's
+field); the endpoint's own filter then keeps `priority` (`fast` too) and `ultrafast`, and a
+translated request that asked for another tier has it reported as dropped. The subscription's
+routing hint names the tier sent.
+
 ## Claude
 
 The Claude extension (`extensions/claude`) talks to Anthropic's Messages API with an API key or a
@@ -898,9 +901,10 @@ characters becomes `cpa_tid_v1_` and the ID in URL-safe base64, the same ID the 
 whose base64 form would pass 64 bytes becomes the prefix and a SHA-256 digest of the ID instead,
 so every ID stays within the 64 bytes Anthropic's upstreams take.
 
-**Fast mode.** A request whose body has `"speed": "fast"` (a Messages client's own, or any other
-client format's priority service tier, which becomes it: Chat Completions' and Responses'
-`"service_tier"` of `priority` or `fast`, Gemini's `"serviceTier": "priority"`; `auto`, `default`,
+**Fast mode.** A request whose body has `"speed": "fast"` (a Messages client's own, or a Responses
+client's `"service_tier"` of `priority` or `fast`, which becomes it on any `base_url`; at Anthropic's
+own API (`https://api.anthropic.com`) so does any other client format's priority tier, Chat
+Completions' `priority` or `fast` and Gemini's `"serviceTier": "priority"`; `auto`, `default`,
 `flex` and an absent tier never do) gets the `fast-mode-2026-02-01` beta in `anthropic-beta`, which
 Anthropic requires with that field, also on a token count. A request that names that beta itself,
 in its `anthropic-beta` header or in the `betas` list of its body, is a fast-mode request too, as in
@@ -954,11 +958,6 @@ check (`check`) reads the model list for an API key; a subscription or a setup t
 The Gemini extension (`extensions/gemini`) talks to Google's Gemini models through the Gemini API
 or Vertex AI. Point `extension.manifest` at `extensions/gemini/pluxy-extension.json`. A Gemini API
 key:
-
-A request in another client format carries the client's service tier to the Gemini API as
-`serviceTier` (`standard`, `flex` or `priority`; any other tier is reported as dropped) and none to
-Vertex AI, whose `generateContent` request has no such field; the client's verbosity has no place in
-either.
 
 ```json
 {"id": "gemini", "credential": {"kind": "api_key", "api_key": "AIza..."}}
@@ -1087,6 +1086,12 @@ program no listener that outlives its calls, and core stops idle programs.
 
 **Quota and identity.** Google offers no quota reading or rate-limit headers for Gemini API keys or Vertex AI accounts, so `quota` reports the last-seen values from the account's most recent HTTP 429 reply (`google.rpc.QuotaFailure`, `google.rpc.RetryInfo` or HTTP `Retry-After`, and `google.rpc.ErrorInfo`), kept in extension memory only (nothing is written to disk) and labelled with when the 429 was seen and that it is not a live reading; an account that has not received a 429 answers with an empty limit list stating that no rate-limit reply has been seen yet. A `service_account` login's grant carries `identity` `{"client_email"}`, the key's service account; an API key login has none.
 
+A request in another client format carries the client's service tier to the Gemini API as
+`serviceTier` (`standard`, `flex` or `priority`; any other tier is reported as dropped) only where
+the account's `base_url` host is `generativelanguage.googleapis.com`, and none to a custom host or
+Vertex AI, whose `generateContent` request has no such field; the client's verbosity has no place in
+either.
+
 ## Kimi
 
 The Kimi extension (`extensions/kimi`) serves Kimi Code, Moonshot AI's coding subscription. Point
@@ -1099,10 +1104,6 @@ expires. A Kimi Code API key can be added with method `api_key` and secret input
 the extension checks it with `GET {base_url}/v1/models` before storing it in core's credential
 store. Refused keys report Kimi's reason with secrets removed. A key also works as an account
 in the config:
-
-A request in another client format goes to Kimi without the client's service tier and verbosity,
-which are reported as dropped at the client's field: nothing says Kimi's API takes them. A client's
-own body goes as it came.
 
 ```json
 {"id": "kimi", "credential": {"kind": "api_key", "api_key": "sk-kimi-..."}}
@@ -1155,6 +1156,10 @@ place.
 
 **Quota.** For a device login, quota reads `GET {base_url}/v1/usages` and the plan from `GET {base_url}/v1/me` (`user_level_name`) on the account's Kimi Code host, with the access token and the same device headers (`X-Msh-*`, `User-Agent`) the account's requests carry. It reports each entry of `limits` (labelled by its name, else by its window length, else "Limit #n"), the usage summary ("Weekly limit") and the monthly ratios ("Monthly limit", "Monthly coding limit"). An API key answers unsupported. Kimi's device login returns no user ID, so its grant has no identity and a re-login is not checked, as in today's core.
 
+A request in another client format goes to Kimi without the client's service tier and verbosity,
+which are reported as dropped at the client's field: nothing says Kimi's API takes them. A client's
+own body goes as it came.
+
 ## xAI
 
 The xAI extension (`extensions/xai`) serves xAI's Grok models with an xAI API key or a Grok
@@ -1162,10 +1167,6 @@ account. Point `extension.manifest` at `extensions/xai/pluxy-extension.json`. An
 added with method `api_key` and secret input `api_key`, or from the config with the key as the
 credential. The login checks `GET {base_url}/models` and keeps an accepted key only in core's
 credential store; a refusal reports xAI's reason with secrets removed:
-
-A request in another client format goes to xAI without the client's service tier and verbosity,
-which are reported as dropped at the client's field: nothing says xAI's API takes them. A Responses
-client's own body goes as it came.
 
 ```json
 {"id": "xai", "credential": {"kind": "api_key", "api_key": "xai-..."}}
@@ -1351,6 +1352,10 @@ Not built, and why:
 
 **Quota.** A Grok login's quota is what the Grok CLI shows: `GET {cli}/billing?format=credits` and `GET {cli}/billing` on the CLI's chat endpoint (the host the account's requests go to), and `GET {cli}/user?include=subscription` and `GET {cli}/settings` for the plan's name, with the login's token and the Grok CLI identity headers the requests carry. It reports the weekly credit window (`weekly`), the monthly credits (`monthly_credits`), the pay-as-you-go cap and use (`pay_as_you_go`) and the prepaid balance (`prepaid`), in `usd`. Nothing that spends from the account is sent (the old panel sent a one-token chat for paid accounts; that is not rebuilt). An API key answers unsupported. A Grok login's grant carries `identity` `{"sub", "email"}` from its ID token.
 
+A request in another client format goes to xAI without the client's service tier and verbosity,
+which are reported as dropped at the client's field: nothing says xAI's API takes them. A Responses
+client's own body goes as it came.
+
 ## Meta
 
 The Meta extension (`extensions/meta`) serves Meta's Muse models on `api.meta.ai`. Point
@@ -1366,10 +1371,6 @@ good; a 5xx, or a failure after the poll was sent, ends the login. The key does 
 timer: when Meta refuses it, core renews the credential once, which makes a new key from the
 device token. A Meta API key works too, by login with method `api_key` or in the config; a `dca:` token is refused
 as a key:
-
-A request in another client format goes to Meta without the client's service tier and verbosity,
-which are reported as dropped at the client's field: nothing says Meta's API takes them. A Responses
-client's own body goes as it came.
 
 ```json
 {"id": "meta", "credential": {"kind": "api_key", "api_key": "..."}}
@@ -1399,6 +1400,10 @@ false), apply_patch rewriting for Codex Desktop, dropping encrypted reasoning Me
 Responses compaction through Meta, and token counting.
 
 **Quota.** Meta reports a Muse Code login's usage only from its key endpoint, so quota sends `POST https://api.meta.ai/muse-code/key` with an empty object, the device token, `x-api-version: 1.0.0` and Muse Code's client identity headers. The device token renews the account, so this goes only where a renewal goes, never to `base_url`. The call makes a new API key, which is dropped and never returned or stored; the account's own key is left alone, and if Meta retires it, core renews the credential on the next refused request (whether Meta does is not known). It reports `window` ("Usage limit", with its length) and `weekly` ("Weekly limit") from `subs_usage`, and the plan from `subs_tier_name`. An API key answers unsupported. A device login's grant carries `identity` `{"email"}`.
+
+A request in another client format goes to Meta without the client's service tier and verbosity,
+which are reported as dropped at the client's field: nothing says Meta's API takes them. A Responses
+client's own body goes as it came.
 
 ## Devin
 
