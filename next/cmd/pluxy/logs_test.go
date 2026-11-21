@@ -178,6 +178,91 @@ func TestLogsTerminalEscaping(t *testing.T) {
 	}
 }
 
+func TestLogsCommandTerminalEscaping(t *testing.T) {
+	// Include real escape sequences, C1 control (\xc2\x9b), DEL, CR, tab, valid non-ASCII, and raw invalid UTF-8.
+	body := `{"lines":["ok\tcol osc \u001b]0;title\u0007 csi \u001b[2J c1 ` + "\xc2\x9b" + ` cr\r del\u007f é","bad ` + "\xff" + ` end"],"line-count":2,"latest-timestamp":1795222923}` + "\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != mgmt+"/logs" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	wantTerminal := "ok\tcol osc \\x1b]0;title\\x07 csi \\x1b[2J c1 \\u009b cr\\x0d del\\x7f é\n" +
+		"bad \ufffd end\n"
+	if out, errOut, code := runLogs(srv, true, "logs"); code != 0 || errOut != "" || out != wantTerminal {
+		t.Errorf("logs on a terminal: code=%d err=%q\n got %q\nwant %q", code, errOut, out, wantTerminal)
+	}
+
+	wantPiped := "ok\tcol osc \x1b]0;title\x07 csi \x1b[2J c1 \xc2\x9b cr\r del\x7f é\n" +
+		"bad \ufffd end\n"
+	if out, errOut, code := runLogs(srv, false, "logs"); code != 0 || errOut != "" || out != wantPiped {
+		t.Errorf("logs piped: code=%d err=%q\n got %q\nwant %q", code, errOut, out, wantPiped)
+	}
+
+	for _, terminal := range []bool{false, true} {
+		if out, errOut, code := runLogs(srv, terminal, "logs", "--json"); code != 0 || errOut != "" || out != body {
+			t.Errorf("logs --json (terminal=%v): code=%d err=%q\n got %q\nwant %q", terminal, code, errOut, out, body)
+		}
+	}
+}
+
+func TestUsageEventsTerminalEscaping(t *testing.T) {
+	ts := time.Date(2026, 11, 20, 1, 2, 3, 0, time.UTC)
+	tsStr := ts.Local().Format(time.DateTime)
+	body := `{"enabled":true,"events":[` +
+		`{"seq":1,"timestamp":"2026-11-20T01:02:03Z","model":"m\u001b]0;title\u0007\u001b[2J` + "\xc2\x9b" + `\n\t\r\u007fé","account":"acc\u001b[31m\t\n","key_id":"k\u001b[1m\t1","failed":true,"status":502,"error_code":"err\u001b[2J\ncode","latency_ms":42,"tokens":{"total_tokens":10}},` +
+		`{"seq":2,"timestamp":"2026-11-20T01:02:03Z","model":"gpt-4o","account":"acc-2","key_id":"k2","failed":false,"status":200,"latency_ms":7,"tokens":{"total_tokens":3}}` +
+		`],"next":2,"more":false,"lost":false}` + "\n"
+	var queries []url.Values
+	srv := usageServer(map[string]string{"": body}, &queries)
+	defer srv.Close()
+
+	// On a terminal: every client/upstream string cell is escaped before tabwriter aligns columns,
+	// including tab (\x09) and newline (\x0a), so column widths stay aligned and no raw control bytes reach stdout.
+	escModel := `m\x1b]0;title\x07\x1b[2J\u009b\x0a\x09\x0d\x7fé`
+	escAccount := `acc\x1b[31m\x09\x0a`
+	escKey := `k\x1b[1m\x091`
+	escStatus := `502 (err\x1b[2J\x0acode)`
+	wantTerminal := "" +
+		"SEQ  TIME                 MODEL                                            ACCOUNT              KEY            STATUS                    LATENCY  TOKENS\n" +
+		"1    " + tsStr + "  " + escModel + "  " + escAccount + "  " + escKey + "  " + escStatus + "  42ms     10\n" +
+		"2    " + tsStr + "  gpt-4o                                           acc-2                k2             200                       7ms      3\n"
+	if out, errOut, code := runLogs(srv, true, "usage", "events"); code != 0 || errOut != "" || out != wantTerminal {
+		t.Errorf("usage events on a terminal: code=%d err=%q\n got:\n%q\nwant:\n%q", code, errOut, out, wantTerminal)
+	}
+
+	// Piped: exact unescaped bytes as tabwriter produces them.
+	wantPiped := "" +
+		"SEQ    TIME                 MODEL  ACCOUNT  KEY  STATUS  LATENCY  TOKENS\n" +
+		"1      " + tsStr + "  m\x1b]0;title\x07\x1b[2J\xc2\x9b\n" +
+		"       \r\x7fé                  acc\x1b[31m  \n" +
+		"       k\x1b[1m                1         502 (err\x1b[2J\n" +
+		"code)  42ms                 10\n" +
+		"2      " + tsStr + "  gpt-4o  acc-2  k2  200  7ms  3\n"
+	if out, errOut, code := runLogs(srv, false, "usage", "events"); code != 0 || errOut != "" || out != wantPiped {
+		t.Errorf("usage events piped: code=%d err=%q\n got:\n%q\nwant:\n%q", code, errOut, out, wantPiped)
+	}
+
+	// --json: exact body bytes whether stdout is a terminal or a pipe.
+	for _, terminal := range []bool{false, true} {
+		if out, errOut, code := runLogs(srv, terminal, "usage", "events", "--json"); code != 0 || errOut != "" || out != body {
+			t.Errorf("usage events --json (terminal=%v): code=%d err=%q\n got %q\nwant %q", terminal, code, errOut, out, body)
+		}
+	}
+}
+
+// escapeTableCell reuses escapeWriter and also escapes tabs, newlines, and invalid UTF-8.
+func TestEscapeTableCell(t *testing.T) {
+	in := "a\x1b]0;title\x07\x1b[2J\xc2\x9b\n\t\r\x7f\xff\xc3"
+	want := `a\x1b]0;title\x07\x1b[2J\u009b\x0a\x09\x0d\x7f\xff\xc3`
+	if got := escapeTableCell(in); got != want {
+		t.Errorf("escapeTableCell(%q) = %q, want %q", in, got, want)
+	}
+}
+
 // A file above the 64 MiB limit of the client's ordinary calls arrives whole.
 func TestLogsDownloadAbove64MiB(t *testing.T) {
 	const size = 64<<20 + 3<<20 + 1

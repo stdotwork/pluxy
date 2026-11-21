@@ -254,9 +254,17 @@ var commands = []command{
 			}
 			var l management.LogLines
 			return x.call(http.MethodGet, "/logs", q, nil, &l, func() {
-				for _, line := range l.Lines {
-					x.printf("%s\n", line)
+				if !stdoutIsTerminal(x.stdout) {
+					for _, line := range l.Lines {
+						x.printf("%s\n", line)
+					}
+					return
 				}
+				w := &escapeWriter{w: x.stdout}
+				for _, line := range l.Lines {
+					fmt.Fprintf(w, "%s\n", line)
+				}
+				_ = w.flush()
 			})
 		}},
 	logsErrorsCommand, logsRequestCommand, logsClearCommand,
@@ -681,6 +689,13 @@ var commands = []command{
 					x.printf("no matching events\n")
 					return
 				}
+				terminal := stdoutIsTerminal(x.stdout)
+				cell := func(s string) string {
+					if terminal {
+						return escapeTableCell(s)
+					}
+					return s
+				}
 				rows := [][]string{{"SEQ", "TIME", "MODEL", "ACCOUNT", "KEY", "STATUS", "LATENCY", "TOKENS"}}
 				for _, ev := range r.Events {
 					status := strconv.Itoa(ev.Status)
@@ -689,7 +704,7 @@ var commands = []command{
 					}
 					if ev.Failed {
 						if ev.ErrorCode != "" {
-							status = status + " (" + ev.ErrorCode + ")"
+							status = status + " (" + cell(ev.ErrorCode) + ")"
 						} else {
 							status = status + " (failed)"
 						}
@@ -701,9 +716,9 @@ var commands = []command{
 					rows = append(rows, []string{
 						strconv.FormatUint(ev.Seq, 10),
 						ev.Timestamp.Local().Format(time.DateTime),
-						dash(ev.Model),
-						dash(ev.Account),
-						dash(ev.KeyID),
+						dash(cell(ev.Model)),
+						dash(cell(ev.Account)),
+						dash(cell(ev.KeyID)),
 						status,
 						fmt.Sprintf("%dms", ev.LatencyMS),
 						tokens,
