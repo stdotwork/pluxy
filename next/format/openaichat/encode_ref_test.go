@@ -38,6 +38,7 @@ type outRequestRef struct {
 // encodeRequestRef is EncodeRequest as it was.
 func encodeRequestRef(req llm.Request) ([]byte, []llm.Loss, error) {
 	e := &encoder{}
+	names := ToolNames(req)
 	out := outRequestRef{
 		Model:           req.Model,
 		Messages:        []json.RawMessage{},
@@ -65,13 +66,13 @@ func encodeRequestRef(req llm.Request) ([]byte, []llm.Loss, error) {
 			}
 			continue
 		}
-		ct := chatTool{Type: "function", Function: chatFunction{Name: t.Name, Description: t.Description, Parameters: t.Parameters, Strict: t.Strict}}
+		ct := chatTool{Type: "function", Function: chatFunction{Name: ToolName(names, t.Name), Description: t.Description, Parameters: t.Parameters, Strict: t.Strict}}
 		out.Tools = append(out.Tools, marshal(ct, e.kept(t.Origin)))
 	}
 	if len(out.Tools) > 0 {
 		out.ParallelToolCalls = req.Options.ParallelToolCalls
 		if tc := req.Options.ToolChoice; tc != nil {
-			out.ToolChoice = encodeToolChoice(tc)
+			out.ToolChoice = encodeToolChoice(tc, names)
 		}
 	}
 
@@ -144,7 +145,7 @@ func encodeRequestRef(req llm.Request) ([]byte, []llm.Loss, error) {
 			}
 			var tc chatToolCall
 			tc.ID, tc.Type = it.CallID, "function"
-			tc.Function.Name, tc.Function.Arguments = it.Name, it.Arguments
+			tc.Function.Name, tc.Function.Arguments = ToolName(names, it.Name), toolArguments(it.Arguments, it.Origin, p, e)
 			origin, extra := geminiSignature(it.Origin)
 			raw := e.kept(origin)
 			if extra != nil {

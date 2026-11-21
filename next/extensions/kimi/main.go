@@ -208,7 +208,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
-	send := &reporting{Stream: out, tr: tr}
+	send := &reporting{Stream: out, tr: tr, names: replyNames(call.Request, tr)}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.BaseURL+up.path, bytes.NewReader(body))
 	if err != nil {
 		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
@@ -285,10 +285,12 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	return nil
 }
 
-// reporting adds the translation report to the reply's response.start event.
+// reporting adds the translation report to the reply's response.start event, and gives each tool
+// call the client's own name for the tool when the request was sent under another (names).
 type reporting struct {
 	*sdk.Stream
-	tr *llm.Translation
+	tr    *llm.Translation
+	names map[string]string // the upstream's name -> the client's
 }
 
 func (r *reporting) Send(ev llm.Event) error {
@@ -297,7 +299,34 @@ func (r *reporting) Send(ev llm.Event) error {
 		info.Translation = r.tr
 		ev.Response = &info
 	}
+	r.restore(&ev)
 	return r.Stream.Send(ev)
+}
+
+// restore gives a tool call the client's own name for the tool.
+func (r *reporting) restore(ev *llm.Event) {
+	if ev.Type != llm.EventItemStart || ev.Item == nil || ev.Item.Kind != llm.ItemToolCall {
+		return
+	}
+	if name, ok := r.names[ev.Item.Name]; ok {
+		item := *ev.Item
+		item.Name = name
+		ev.Item = &item
+	}
+}
+
+// replyNames maps each tool name a translated request was sent under back to the client's
+// (openaichat.ToolNames). A body in the upstream's own format passed through keeps the client's
+// names.
+func replyNames(req llm.Request, tr *llm.Translation) map[string]string {
+	if tr.Passthrough {
+		return nil
+	}
+	back := map[string]string{}
+	for from, to := range openaichat.ToolNames(req) {
+		back[to] = from
+	}
+	return back
 }
 
 type streamDecoder interface {
@@ -315,10 +344,25 @@ var decoders = map[string]struct {
 	llm.FormatAnthropicMessages: {func() streamDecoder { return anthropicmessages.NewStreamDecoder() }, anthropicmessages.DecodeResponse},
 }
 
+// reportLosses logs what a stream decoder had to leave out of the reply. A decoder without losses
+// has none to log.
+func reportLosses(dec streamDecoder) {
+	lr, ok := dec.(interface{ Losses() []llm.Loss })
+	if !ok {
+		return
+	}
+	for _, l := range lr.Losses() {
+		fmt.Fprintf(os.Stderr, "reply loss: %s %s (%s)\n", l.Kind, l.Path, l.Detail)
+	}
+}
+
 // relayStream decodes the upstream stream and sends each event as soon as it is decoded. A
 // blocked send blocks the next upstream read.
 func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Event) error }, dec streamDecoder) error {
 	r := sse.NewReader(body)
+	// The report in response.start has gone by the time a decoder finds something it had to
+	// leave out of a reply, so its losses are logged, with core's prefix for this extension.
+	defer reportLosses(dec)
 	for {
 		e, err := r.Next()
 		eof := err == io.EOF

@@ -495,6 +495,25 @@ func (e *encoder) kept(o *llm.Origin) json.RawMessage {
 	return nil
 }
 
+// toolArguments returns a tool call's arguments as Chat takes them. Another format can hold
+// arguments that are not a JSON object (Messages takes an input object, a Responses client's
+// custom call holds free text), and Chat would refuse them; such a string is sent as {}, as the
+// Messages and Gemini encoders already do with what they cannot carry. A Chat client's own call
+// keeps the bytes it sent.
+func toolArguments(args string, o *llm.Origin, path string, e *encoder) string {
+	if o != nil && o.Format == format {
+		return args
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal([]byte(args), &m) == nil && m != nil {
+		return args
+	}
+	if strings.TrimSpace(args) != "" {
+		e.lose(llm.LossApproximated, path, "tool arguments that are not a JSON object, sent as {}")
+	}
+	return "{}"
+}
+
 func path(o *llm.Origin, fallback string) string {
 	if o != nil && o.Path != "" {
 		return o.Path
@@ -537,6 +556,7 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 	if rf := req.Options.ResponseFormat; rf != nil {
 		out.ResponseFormat = encodeResponseFormat(rf)
 	}
+	toolNameMap := ToolNames(req)
 	for i, t := range req.Tools {
 		if t.Type == llm.ToolNative {
 			if t.Origin != nil && t.Origin.Format == format {
@@ -546,14 +566,14 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 			}
 			continue
 		}
-		ct := chatTool{Type: "function", Function: chatFunction{Name: t.Name, Description: t.Description, Parameters: t.Parameters, Strict: t.Strict}}
+		ct := chatTool{Type: "function", Function: chatFunction{Name: ToolName(toolNameMap, t.Name), Description: t.Description, Parameters: t.Parameters, Strict: t.Strict}}
 		out.Tools = append(out.Tools, marshal(ct, e.kept(t.Origin)))
 	}
 	if len(out.Tools) > 0 {
 		// Chat Completions accepts these only with tools.
 		out.ParallelToolCalls = req.Options.ParallelToolCalls
 		if tc := req.Options.ToolChoice; tc != nil {
-			out.ToolChoice = encodeToolChoice(tc)
+			out.ToolChoice = encodeToolChoice(tc, toolNameMap)
 		}
 	}
 
@@ -649,7 +669,7 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 			}
 			var tc chatToolCall
 			tc.ID, tc.Type = it.CallID, "function"
-			tc.Function.Name, tc.Function.Arguments = it.Name, it.Arguments
+			tc.Function.Name, tc.Function.Arguments = ToolName(toolNameMap, it.Name), toolArguments(it.Arguments, it.Origin, p, e)
 			origin, extra := geminiSignature(it.Origin)
 			raw := e.kept(origin)
 			if extra != nil {
@@ -876,16 +896,16 @@ func joinReasoning(have, next string) string {
 	return have + "\n\n" + next
 }
 
-func encodeToolChoice(tc *llm.ToolChoice) any {
+func encodeToolChoice(tc *llm.ToolChoice, names map[string]string) any {
 	if len(tc.Allowed) > 0 {
 		tools := make([]any, 0, len(tc.Allowed))
 		for _, name := range tc.Allowed {
-			tools = append(tools, map[string]any{"type": "function", "function": map[string]string{"name": name}})
+			tools = append(tools, map[string]any{"type": "function", "function": map[string]string{"name": ToolName(names, name)}})
 		}
 		return map[string]any{"type": "allowed_tools", "allowed_tools": map[string]any{"mode": tc.Mode, "tools": tools}}
 	}
 	if tc.Mode == llm.ToolChoiceTool {
-		return map[string]any{"type": "function", "function": map[string]string{"name": tc.Name}}
+		return map[string]any{"type": "function", "function": map[string]string{"name": ToolName(names, tc.Name)}}
 	}
 	return tc.Mode
 }

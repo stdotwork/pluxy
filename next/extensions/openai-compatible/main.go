@@ -193,7 +193,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return err
 	}
 	// The report travels on the reply's first event.
-	send := &reporting{Stream: out, tr: tr}
+	send := &reporting{Stream: out, tr: tr, names: replyNames(call.Request, tr)}
 	resp, err := postBody(ctx, call, s, wire, key, endpoint(s.WireAPI, call.Request), body)
 	if err != nil {
 		return err
@@ -209,9 +209,12 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		}
 		return &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
 	}
-	events, err := decoders[wire.format].response(raw)
+	events, losses, err := decodeResponse(wire.format, raw)
 	if err != nil {
 		return err
+	}
+	for _, l := range losses {
+		logReplyLoss(l)
 	}
 	for _, ev := range events {
 		if err := send.Send(ev); err != nil {
@@ -552,10 +555,12 @@ func buildBody(req llm.Request, target string) ([]byte, *llm.Translation, error)
 	return body, tr, nil
 }
 
-// reporting adds the translation report to the reply's response.start event.
+// reporting adds the translation report to the reply's response.start event, and gives each tool
+// call the client's own name for the tool when the request was sent under another (names).
 type reporting struct {
 	*sdk.Stream
-	tr *llm.Translation
+	tr    *llm.Translation
+	names map[string]string // the upstream's name -> the client's
 }
 
 func (r *reporting) Send(ev llm.Event) error {
@@ -564,7 +569,43 @@ func (r *reporting) Send(ev llm.Event) error {
 		info.Translation = r.tr
 		ev.Response = &info
 	}
+	r.restore(&ev)
 	return r.Stream.Send(ev)
+}
+
+// restore gives a tool call the client's own name for the tool.
+func (r *reporting) restore(ev *llm.Event) {
+	if ev.Type != llm.EventItemStart || ev.Item == nil || ev.Item.Kind != llm.ItemToolCall {
+		return
+	}
+	if name, ok := r.names[ev.Item.Name]; ok {
+		item := *ev.Item
+		item.Name = name
+		ev.Item = &item
+	}
+}
+
+// replyNames maps each tool name a translated request was sent under back to the client's
+// (openaichat.ToolNames or geminigenerate.ToolNames). A body in the upstream's own format passed
+// through keeps the client's names.
+func replyNames(req llm.Request, tr *llm.Translation) map[string]string {
+	if tr.Passthrough {
+		return nil
+	}
+	var changed map[string]string
+	switch tr.To {
+	case llm.FormatOpenAIChat:
+		changed = openaichat.ToolNames(req)
+	case llm.FormatGeminiGenerate:
+		changed = geminigenerate.ToolNames(req)
+	default:
+		return nil
+	}
+	back := map[string]string{}
+	for from, to := range changed {
+		back[to] = from
+	}
+	return back
 }
 
 // eventSender is what the reply is sent to.
@@ -594,6 +635,9 @@ var decoders = map[string]struct {
 func relayStream(ctx context.Context, body io.Reader, out eventSender, upstreamFormat string) error {
 	r := sse.NewReader(body)
 	dec := decoders[upstreamFormat].stream()
+	// The report in response.start has gone by the time a decoder finds something it had to
+	// leave out of a reply, so its losses are logged, with core's prefix for this extension.
+	defer reportLosses(dec)
 	for {
 		e, err := r.Next()
 		eof := err == io.EOF
@@ -627,6 +671,35 @@ func relayStream(ctx context.Context, body io.Reader, out eventSender, upstreamF
 			return nil
 		}
 	}
+}
+
+// reportLosses logs what a stream decoder had to leave out of the reply. A decoder without losses
+// has none to log.
+func reportLosses(dec streamDecoder) {
+	lr, ok := dec.(interface{ Losses() []llm.Loss })
+	if !ok {
+		return
+	}
+	for _, l := range lr.Losses() {
+		logReplyLoss(l)
+	}
+}
+
+// logReplyLoss writes one thing a reply had to leave out to the extension's log, which core
+// prefixes with the extension's ID. A reply's translation report goes out with its first event, so
+// a loss found while reading the reply has no other way to core.
+func logReplyLoss(l llm.Loss) {
+	fmt.Fprintf(os.Stderr, "reply loss: %s %s (%s)\n", l.Kind, l.Path, l.Detail)
+}
+
+// decodeResponse reads a non-streamed reply, with what a Chat one had to leave out (a call that
+// never named its function); the other formats' decoders report no losses.
+func decodeResponse(format string, raw []byte) ([]llm.Event, []llm.Loss, error) {
+	if format == llm.FormatOpenAIChat {
+		return openaichat.DecodeResponseLosses(raw)
+	}
+	events, err := decoders[format].response(raw)
+	return events, nil, err
 }
 
 // upstreamError turns a non-2xx upstream response into a structured error. model is the model
