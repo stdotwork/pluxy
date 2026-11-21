@@ -160,10 +160,12 @@ taken and whose encrypted entries are not shown), in that order from the first f
 so the same text in two fields is shown once; `reasoning_content` may be a list of parts. A
 reasoning run that opens the reply's content in a `think` tag, and its closing tag, becomes
 reasoning as well, including when a tag is split across stream chunks, while a tag later in the
-text stays text. A `refusal` on the message or a delta becomes the reply's text and finishes the
-reply as a content filter, which a Messages client gets as `stop_reason` `"refusal"`. A Chat client
-whose reply came from a Chat upstream gets the upstream's `logprobs` back, on each chunk or joined
-into the message's when the reply is not streamed.
+text stays text. A `refusal` on the message or a delta reaches a client in another format as the
+reply's text and finishes the reply as a content filter, which a Messages client gets as
+`stop_reason` `"refusal"`; a Chat client whose reply came from a Chat upstream gets it in
+`message.refusal` or `delta.refusal`, with `content` left out and the upstream's finish reason
+kept. A Chat client whose reply came from a Chat upstream gets the choice's `logprobs` back, on
+each chunk or joined into the choice's when the reply is not streamed.
 
 A Chat or Responses account sends a reasoning effort the upstream may not take as the nearest one
 it does, as today's core does: `"reasoning_levels"` in its `settings` lists the efforts the

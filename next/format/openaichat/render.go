@@ -26,6 +26,7 @@ type outToolCall struct {
 type outDelta struct {
 	Role             string        `json:"role,omitempty"`
 	Content          *string       `json:"content,omitempty"`
+	Refusal          *string       `json:"refusal,omitempty"`
 	ReasoningContent *string       `json:"reasoning_content,omitempty"`
 	ToolCalls        []outToolCall `json:"tool_calls,omitempty"`
 }
@@ -41,6 +42,7 @@ type outChoice struct {
 type outMsg struct {
 	Role             string        `json:"role"`
 	Content          *string       `json:"content"`
+	Refusal          *string       `json:"refusal,omitempty"`
 	ReasoningContent *string       `json:"reasoning_content,omitempty"`
 	ToolCalls        []outToolCall `json:"tool_calls,omitempty"`
 }
@@ -198,6 +200,7 @@ type StreamWriter struct {
 	head         outCompletion
 	up           upstream
 	tools        map[int]int // item index -> tool_calls index
+	refused      bool        // a same-format reply carried a refusal
 }
 
 // NewStreamWriter returns a writer for one client stream. includeUsage adds the final usage
@@ -242,10 +245,21 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		return s.delta(outDelta{ToolCalls: []outToolCall{tc}})
 	case llm.EventTextDelta:
 		d := ev.Delta
-		c := outChoice{Delta: &outDelta{Content: &d}}
+		meta := textMeta{}
+		if s.up.native {
+			meta = textMetaOf(ev.Raw)
+		}
+		delta := outDelta{}
+		if meta.Refusal {
+			s.refused = true
+			delta.Refusal = &d
+		} else {
+			delta.Content = &d
+		}
+		c := outChoice{Delta: &delta}
 		if s.up.native {
 			// The event's raw holds the choice's logprobs when the upstream sent them.
-			c.Logprobs = textMetaOf(ev.Raw).Logprobs
+			c.Logprobs = meta.Logprobs
 		}
 		return s.chunk([]outChoice{c}, nil)
 	case llm.EventReasoningDelta:
@@ -265,6 +279,10 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		return nil
 	case llm.EventFinish:
 		reason := finishReason(ev.Finish)
+		if s.up.native && s.refused && ev.Finish != nil && ev.Finish.RawReason != "" {
+			// A same-format reply keeps the finish reason its upstream sent.
+			reason = ev.Finish.RawReason
+		}
 		if err := s.chunk([]outChoice{{Delta: &outDelta{}, FinishReason: &reason}}, nil); err != nil {
 			return err
 		}
@@ -294,6 +312,7 @@ type Aggregator struct {
 	others    []*otherChoice          // choices after the first, in the order they came
 	streamed  map[string]*otherChoice // the ones put together from stream fragments, by index
 	text      strings.Builder
+	refusal   strings.Builder
 	reasoning strings.Builder
 	tools     []outToolCall
 	toolArgs  []*strings.Builder // the arguments of each tool call, as they streamed, by position in tools
@@ -301,6 +320,7 @@ type Aggregator struct {
 	finish    *llm.Finish
 	usage     *llm.Usage
 	logprobs  []json.RawMessage // each text delta's logprobs, as the upstream sent them
+	refused   bool              // a same-format reply carried a refusal
 	size      int
 }
 
@@ -332,12 +352,19 @@ func (a *Aggregator) Add(ev llm.Event) {
 			a.toolArgs = append(a.toolArgs, new(strings.Builder))
 		}
 	case llm.EventTextDelta:
-		a.text.WriteString(ev.Delta)
+		meta := textMeta{}
 		if a.up.native {
-			if lp := textMetaOf(ev.Raw).Logprobs; len(lp) > 0 {
-				a.logprobs = append(a.logprobs, lp)
-				a.size += len(lp)
-			}
+			meta = textMetaOf(ev.Raw)
+		}
+		if meta.Refusal {
+			a.refusal.WriteString(ev.Delta)
+			a.refused = true
+		} else {
+			a.text.WriteString(ev.Delta)
+		}
+		if len(meta.Logprobs) > 0 {
+			a.logprobs = append(a.logprobs, meta.Logprobs)
+			a.size += len(meta.Logprobs)
 		}
 	case llm.EventReasoningDelta:
 		a.reasoning.WriteString(ev.Delta)
@@ -594,7 +621,12 @@ func (a *Aggregator) Response() ([]byte, error) {
 		a.tools[i].Function.Arguments = a.toolArgs[i].String()
 	}
 	msg := &outMsg{Role: llm.RoleAssistant, ToolCalls: a.tools}
-	if a.text.Len() > 0 || len(a.tools) == 0 {
+	if a.refused {
+		r := a.refusal.String()
+		msg.Refusal = &r
+	}
+	// A refusal leaves content out when the reply has no other text.
+	if a.text.Len() > 0 || (len(a.tools) == 0 && !a.refused) {
 		t := a.text.String()
 		msg.Content = &t
 	}
@@ -603,6 +635,10 @@ func (a *Aggregator) Response() ([]byte, error) {
 		msg.ReasoningContent = &r
 	}
 	reason := finishReason(a.finish)
+	if a.up.native && a.refused && a.finish != nil && a.finish.RawReason != "" {
+		// A same-format reply keeps the finish reason its upstream sent.
+		reason = a.finish.RawReason
+	}
 	c := a.head
 	choices := []any{outChoice{Message: msg, FinishReason: &reason, Logprobs: mergeLogprobs(a.logprobs)}}
 	for _, o := range a.others {

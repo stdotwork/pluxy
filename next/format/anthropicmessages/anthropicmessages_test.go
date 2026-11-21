@@ -1474,3 +1474,71 @@ func TestEncodeAudioInputIsReported(t *testing.T) {
 		t.Errorf("losses:\n got %q\nwant %q", got, want)
 	}
 }
+
+// A Chat upstream's refusal reaches a Messages client as the reply's text and stop_reason
+// "refusal", streamed or not.
+func TestChatRefusalBecomesMessagesRefusal(t *testing.T) {
+	t.Run("nonstream", func(t *testing.T) {
+		evs, err := openaichat.DecodeResponse([]byte(`{"id":"c1","model":"m","choices":[{"index":0,` +
+			`"message":{"role":"assistant","content":null,"refusal":"I cannot help with that."},"finish_reason":"stop"}]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		a := NewAggregator()
+		for _, ev := range evs {
+			a.Add(ev)
+		}
+		body, err := a.Response()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+			StopReason string `json:"stop_reason"`
+		}
+		if err := json.Unmarshal(body, &out); err != nil {
+			t.Fatalf("body %s: %v", body, err)
+		}
+		if len(out.Content) != 1 || out.Content[0].Type != "text" || out.Content[0].Text != "I cannot help with that." {
+			t.Errorf("body %s: want the refusal as the reply's text", body)
+		}
+		if out.StopReason != "refusal" {
+			t.Errorf("body %s: stop_reason = %q, want refusal", body, out.StopReason)
+		}
+	})
+	t.Run("stream", func(t *testing.T) {
+		chunks := []string{
+			`{"id":"c1","model":"m","choices":[{"index":0,"delta":{"refusal":"I cannot help with that."},"finish_reason":null}]}`,
+			`{"id":"c1","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+		}
+		d := openaichat.NewStreamDecoder()
+		var evs []llm.Event
+		for _, c := range chunks {
+			got, err := d.Decode([]byte(c))
+			if err != nil {
+				t.Fatal(err)
+			}
+			evs = append(evs, got...)
+		}
+		tail, err := d.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := writeAll(t, append(evs, tail...))
+		var text, reason string
+		for _, l := range lines {
+			if strings.HasPrefix(l, "content_block_delta ") && strings.Contains(l, `"text":"I cannot help with that."`) {
+				text = l
+			}
+			if strings.HasPrefix(l, "message_delta ") && strings.Contains(l, `"stop_reason":"refusal"`) {
+				reason = l
+			}
+		}
+		if text == "" || reason == "" {
+			t.Errorf("stream %q: want the refusal text and stop_reason refusal", lines)
+		}
+	})
+}

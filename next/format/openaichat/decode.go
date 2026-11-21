@@ -434,7 +434,9 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			d.refused = true
 			// Held content belongs before the refusal that interrupts it.
 			d.flushThink(&out)
+			before := len(out)
 			d.piece(thinkPiece{text: r}, &out)
+			d.attachTextMeta(textMeta{Logprobs: logprobs(ch.Logprobs), Refusal: true}, before, &out)
 		}
 		if len(ch.Delta.ToolCalls) > 0 {
 			// Held content belongs before the tool call that interrupts it.
@@ -699,12 +701,27 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 		if tagged != "" && tagged != reasoning {
 			item(llm.ItemStart{Kind: llm.ItemReasoning}, tagged, llm.EventReasoningDelta, nil, nil)
 		}
-		if refusal := refusalText(m.Refusal); refusal != "" {
+		refusal := refusalText(m.Refusal)
+		if refusal != "" {
 			refused = true
-			text += refusal
 		}
-		if text != "" {
-			item(llm.ItemStart{Kind: llm.ItemMessage}, text, llm.EventTextDelta, nil, textMeta{Logprobs: logprobs(ch.Logprobs)}.raw())
+		if text != "" || refusal != "" {
+			start := llm.ItemStart{Kind: llm.ItemMessage}
+			out = append(out, llm.Event{Type: llm.EventItemStart, Index: next, Item: &start})
+			if text != "" {
+				meta := textMeta{}
+				if refusal == "" {
+					// The choice's logprobs belong on its last text delta.
+					meta.Logprobs = logprobs(ch.Logprobs)
+				}
+				out = append(out, llm.Event{Type: llm.EventTextDelta, Index: next, Delta: text, Raw: meta.raw()})
+			}
+			if refusal != "" {
+				meta := textMeta{Logprobs: logprobs(ch.Logprobs), Refusal: true}
+				out = append(out, llm.Event{Type: llm.EventTextDelta, Index: next, Delta: refusal, Raw: meta.raw()})
+			}
+			out = append(out, llm.Event{Type: llm.EventItemEnd, Index: next})
+			next++
 		}
 		for i, tc := range m.ToolCalls {
 			if tc.Function.Name == "" {
