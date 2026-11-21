@@ -237,3 +237,24 @@ func TestEncodeTranslatedFileDataForms(t *testing.T) {
 		}
 	}
 }
+
+// An audio file part with the scheme and marker in another case is still audio, as OpenAI's own
+// data URLs are case-insensitive.
+func TestEncodeAudioDataURLCase(t *testing.T) {
+	req, err := ParseRequest([]byte(`{"model":"m","messages":[{"role":"user","content":[
+		{"type":"text","text":"transcribe"},
+		{"type":"file","file":{"file_data":"DATA:audio/wav;BASE64,SUQzBA=="}}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, losses, err := EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"input_audio":{"data":"SUQzBA==","format":"wav"}`) {
+		t.Errorf("body %s, want input_audio", body)
+	}
+	if len(losses) != 0 {
+		t.Errorf("losses = %+v, want none", losses)
+	}
+}
