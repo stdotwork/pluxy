@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -390,7 +391,7 @@ func TestCLISetupAndClientShow(t *testing.T) {
 	}
 
 	// Non-terminal stdin does not prompt or apply.
-	if out, errOut, code := runWith("", false, "setup"); code != 0 || errOut != "" || !strings.Contains(out, "pluxy/claude") || len(applied) != 0 {
+	if out, errOut, code := runWith("", false, "setup"); code != 0 || errOut != "Next: pluxy setup apply --yes installs what core suggests (pluxy/claude).\n" || !strings.Contains(out, "pluxy/claude") || len(applied) != 0 {
 		t.Fatalf("setup non-tty: code=%d out=%q err=%q applied=%v", code, out, errOut, applied)
 	}
 	// Terminal answering n does not apply.
@@ -474,6 +475,238 @@ func TestCLISetupAndClientShow(t *testing.T) {
 	}
 	if _, _, code := runWith("", false, "client", "show", "unknown-tool"); code != 2 {
 		t.Errorf("client show unknown: code=%d, want 2", code)
+	}
+}
+
+// After pluxy setup and pluxy setup apply, one line on standard error names the next step for the
+// state core is in; once first-run setup has ended, and with --json, there is none.
+func TestCLISetupNextStep(t *testing.T) {
+	const (
+		claude  = `{"id":"pluxy/claude","kind":"provider","title":"Claude","summary":"Claude","installed":%v,"suggested":%v}`
+		client  = `{"id":"claude-code","name":"Claude Code","installed":true,"version":"2.4.1","config":"~/.claude/settings.json","state":"%s"}`
+		absent  = `{"id":"codex","name":"Codex CLI","installed":false,"config":"~/.codex/config.toml","state":"not-configured"}`
+		account = `{"id":"a1","public_id":"p1","source":"login","extension":"pluxy/claude","state":"ok"}`
+		method  = `{"extension":"%s","methods":[{"method":"api_key","label":"API key"}]}`
+	)
+	type state struct {
+		firstRun, scanning bool
+		clients, picks     string
+		accounts, methods  string
+	}
+	var cur, afterApply state
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+strings.TrimPrefix(r.URL.Path, "/v0/management"))
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v0/management/setup":
+			fmt.Fprintf(w, `{"first_run":%v,"scanning":%v,"scanned_at":"2026-11-19T12:00:00Z","found":{"clients":[%s],"sign_ins":[],"imports":[],"core":{"listen":"127.0.0.1:8317","reachable_from_network":false}},"picks":[%s]}`,
+				cur.firstRun, cur.scanning, cur.clients, cur.picks)
+		case "GET /v0/management/accounts":
+			fmt.Fprintf(w, `{"accounts":[%s]}`, cur.accounts)
+		case "GET /v0/management/login-methods":
+			fmt.Fprintf(w, `{"extensions":[%s]}`, cur.methods)
+		case "POST /v0/management/setup/apply":
+			cur = afterApply
+			w.Write([]byte(`{"results":[{"id":"pluxy/claude","status":"done","package":{"id":"pluxy/claude","version":"0.1.0","enabled":true,"state":"active"}}]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"error":{"code":"not_found","message":"nope"}}`))
+		}
+	}))
+	defer srv.Close()
+	env := func(k string) string {
+		return map[string]string{"PLUXY_URL": srv.URL, "PLUXY_MANAGEMENT_KEY": "k"}[k]
+	}
+	run := func(stdin string, tty bool, args ...string) (string, string, int) {
+		var out, errOut bytes.Buffer
+		calls = nil
+		code := runCLIWithInput(args, strings.NewReader(stdin), &out, &errOut, env, tty)
+		return out.String(), errOut.String(), code
+	}
+
+	suggested := state{firstRun: true, clients: fmt.Sprintf(client, "not-configured"), picks: fmt.Sprintf(claude, false, true)}
+	noAccount := state{firstRun: true, clients: fmt.Sprintf(client, "not-configured"), picks: fmt.Sprintf(claude, true, true), methods: fmt.Sprintf(method, "pluxy/claude")}
+	withAccount := noAccount
+	withAccount.accounts = account
+	const (
+		applyLine   = "Next: pluxy setup apply --yes installs what core suggests (pluxy/claude).\n"
+		accountLine = "Next: add an account with pluxy account add pluxy/claude (pluxy account methods lists the ways to sign in).\n"
+		clientLine  = "Next: pluxy client show claude-code prints what to paste into Claude Code's config; then pluxy setup done ends first-run setup.\n"
+	)
+	for _, c := range []struct {
+		name string
+		s    state
+		want string
+	}{
+		{"suggested picks not installed", suggested, applyLine},
+		{"still scanning", state{firstRun: true, scanning: true, picks: fmt.Sprintf(claude, false, false)},
+			"Next: core is still looking at this machine: run pluxy setup again in a moment.\n"},
+		{"providers offered, none suggested", state{firstRun: true, picks: fmt.Sprintf(claude, false, false)},
+			"Next: install a provider with pluxy setup apply --pick <id>, an ID from the picks pluxy setup lists.\n"},
+		{"no provider offered or running", state{firstRun: true},
+			"Next: no provider is running, so no account can be added yet: pluxy ext list shows what is installed, and pluxy ext available what can be installed.\n"},
+		{"a provider installed and not running", state{firstRun: true, picks: fmt.Sprintf(claude, true, true)},
+			"Next: no provider is running, so no account can be added yet: pluxy ext list shows what is installed, and pluxy ext available what can be installed.\n"},
+		{"a provider running, no account", noAccount, accountLine},
+		{"two providers running, no account", state{firstRun: true, picks: fmt.Sprintf(claude, true, true), methods: fmt.Sprintf(method, "pluxy/claude") + "," + fmt.Sprintf(method, "pluxy/codex")},
+			"Next: add an account with pluxy account add <provider> (pluxy account methods lists the providers and their ways to sign in).\n"},
+		{"an account, a client to point at core", withAccount, clientLine},
+		{"an account, the found client configured", state{firstRun: true, clients: fmt.Sprintf(client, "configured") + "," + absent, picks: fmt.Sprintf(claude, true, true), accounts: account},
+			"Next: pluxy setup done ends first-run setup.\n"},
+		{"setup ended", state{firstRun: false, clients: fmt.Sprintf(client, "not-configured"), picks: fmt.Sprintf(claude, false, true)}, ""},
+	} {
+		cur = c.s
+		out, errOut, code := run("", false, "setup")
+		if code != 0 || errOut != c.want || strings.Contains(out, "Next:") {
+			t.Errorf("setup, %s: code=%d stderr=%q, want %q; stdout=%q", c.name, code, errOut, c.want, out)
+		}
+		// --json prints the reply alone and asks core for nothing more.
+		cur = c.s
+		out, errOut, code = run("", false, "setup", "--json")
+		if code != 0 || errOut != "" || !json.Valid([]byte(out)) || !slices.Equal(calls, []string{"GET /setup"}) {
+			t.Errorf("setup --json, %s: code=%d stderr=%q calls=%v out=%q", c.name, code, errOut, calls, out)
+		}
+	}
+
+	// The step named after picks are applied is the one for the state they leave.
+	for _, c := range []struct {
+		name  string
+		stdin string
+		tty   bool
+		args  []string
+	}{
+		{"setup --yes", "", false, []string{"setup", "--yes"}},
+		{"setup on a terminal, answering y", "y\n", true, []string{"setup"}},
+		{"setup apply --yes", "", false, []string{"setup", "apply", "--yes"}},
+		{"setup apply --pick", "", false, []string{"setup", "apply", "--pick", "pluxy/claude"}},
+		{"setup apply on a terminal, answering y", "y\n", true, []string{"setup", "apply"}},
+	} {
+		cur, afterApply = suggested, noAccount
+		out, errOut, code := run(c.stdin, c.tty, c.args...)
+		if code != 0 || !strings.HasSuffix(errOut, accountLine) || strings.Count(errOut, "Next:") != 1 || !strings.Contains(out, "pluxy/claude  done") {
+			t.Errorf("%s: code=%d stderr=%q, want it to end %q; stdout=%q", c.name, code, errOut, accountLine, out)
+		}
+	}
+	// Declining leaves the picks to apply, and the line says how.
+	for _, args := range [][]string{{"setup"}, {"setup", "apply"}} {
+		cur = suggested
+		if _, errOut, code := run("n\n", true, args...); code != 0 || !strings.HasSuffix(errOut, applyLine) || slices.Contains(calls, "POST /setup/apply") {
+			t.Errorf("%v on a terminal, answering n: code=%d stderr=%q calls=%v", args, code, errOut, calls)
+		}
+	}
+	// Nothing suggested is left to apply: the line is the one for the state core is in.
+	cur = withAccount
+	if out, errOut, code := run("", false, "setup", "apply", "--yes"); code != 0 || out != "no suggested picks to apply\n" || errOut != clientLine {
+		t.Errorf("setup apply --yes with nothing to apply: code=%d out=%q stderr=%q", code, out, errOut)
+	}
+	// With --json an apply prints its reply alone.
+	cur, afterApply = suggested, noAccount
+	if out, errOut, code := run("", false, "setup", "apply", "--yes", "--json"); code != 0 || errOut != "" || !strings.HasPrefix(out, `{"results":`) {
+		t.Errorf("setup apply --yes --json: code=%d out=%q stderr=%q", code, out, errOut)
+	}
+	// A core that does not answer the calls the line needs gets no line, and no error.
+	cur = state{firstRun: true}
+	old := srv.Config.Handler
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/accounts") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		old.ServeHTTP(w, r)
+	})
+	if _, errOut, code := run("", false, "setup"); code != 0 || errOut != "" {
+		t.Errorf("setup against a core without GET /accounts: code=%d stderr=%q, want no line", code, errOut)
+	}
+}
+
+// pluxy import cpa says what core could not read in core's own words, with no error code after
+// them; the reply, its code and the exit code stay as they are.
+func TestCLIImportCPAUnreadable(t *testing.T) {
+	const body = `{"error":{"code":"invalid_request","message":"there is no file at /srv/cpa/config.yaml"}}`
+	status := http.StatusBadRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method+" "+r.URL.Path != "POST /v0/management/setup/import" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(status)
+		w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	run := func(args ...string) (string, string, int) {
+		var out, errOut bytes.Buffer
+		env := func(k string) string {
+			return map[string]string{"PLUXY_URL": srv.URL, "PLUXY_MANAGEMENT_KEY": "k"}[k]
+		}
+		code := runCLI(args, &out, &errOut, env)
+		return out.String(), errOut.String(), code
+	}
+	if out, errOut, code := run("import", "cpa", "/srv/cpa/config.yaml"); code != 1 || out != "" || errOut != "pluxy: there is no file at /srv/cpa/config.yaml\n" {
+		t.Errorf("import cpa: code=%d out=%q stderr=%q", code, out, errOut)
+	}
+	if out, errOut, code := run("import", "cpa", "/srv/cpa/config.yaml", "--json"); code != 1 || out != "" || errOut != body+"\n" {
+		t.Errorf("import cpa --json: code=%d out=%q stderr=%q, want the reply's body", code, out, errOut)
+	}
+	// A core on another machine reads the path there, and the line says so.
+	for address, want := range map[string]string{
+		"http://127.0.0.1:8317":   "",
+		"http://localhost:8317":   "",
+		"https://[::1]:8317":      "",
+		"http://10.0.0.5:8317":    "http://10.0.0.5:8317",
+		"https://pluxy.test:8317": "https://pluxy.test:8317",
+	} {
+		if got := remoteCore(address); got != want {
+			t.Errorf("remoteCore(%q) = %q, want %q", address, got, want)
+		}
+	}
+	remote := unreadableError{api: &management.APIError{Status: 400, Code: "invalid_request", Message: "there is no file at /srv/cpa/config.yaml"}, remote: "http://10.0.0.5:8317"}
+	if want := "there is no file at /srv/cpa/config.yaml (core at http://10.0.0.5:8317 reads the path on its own machine)"; remote.Error() != want {
+		t.Errorf("a remote core's refusal reads %q, want %q", remote.Error(), want)
+	}
+	// Every other refusal keeps its code.
+	status = http.StatusUnprocessableEntity
+	if _, errOut, code := run("import", "cpa", "/srv/cpa/config.yaml"); code != 6 || errOut != "pluxy: there is no file at /srv/cpa/config.yaml (invalid_request)\n" {
+		t.Errorf("import cpa refused with 422: code=%d stderr=%q", code, errOut)
+	}
+}
+
+// pluxy status names the build as core's own first line does.
+func TestStatusBuildLine(t *testing.T) {
+	for _, c := range []struct{ version, commit, built, want string }{
+		{"1.2.3", "0123abc", "2026-11-10T08:00:00Z", "pluxy 1.2.3 (0123abc, 2026-11-10T08:00:00Z)\n"},
+		{"dev", "unknown", "unknown", "pluxy dev (no commit or build date recorded)\n"},
+	} {
+		var out bytes.Buffer
+		printStatus(&invocation{stdout: &out}, management.Status{Version: c.version, Commit: c.commit, Built: c.built})
+		if line, _, _ := strings.Cut(out.String(), "\n"); line+"\n" != c.want {
+			t.Errorf("status of %s (%s, %s) starts %q, want %q", c.version, c.commit, c.built, line, c.want)
+		}
+	}
+}
+
+// While first-run setup has not ended, core's start names where to go on: the panel when this
+// build serves one, and the command with the flags it needs to reach this core.
+func TestSetupStartLine(t *testing.T) {
+	for _, c := range []struct {
+		panel      bool
+		url        string
+		configPath string
+		listen     string
+		want       string
+	}{
+		{true, "http://127.0.0.1:8317", "config.json", "127.0.0.1:8317",
+			"first-run setup is not finished. Next: open http://127.0.0.1:8317/panel/ in a browser and sign in with the management key, or run pluxy setup"},
+		{false, "http://127.0.0.1:8317", "config.json", "127.0.0.1:8317",
+			"first-run setup is not finished. Next: run pluxy setup"},
+		{true, "https://127.0.0.1:9000", "/etc/pluxy/config.json", "0.0.0.0:9000",
+			"first-run setup is not finished. Next: open https://127.0.0.1:9000/panel/ in a browser and sign in with the management key, or run pluxy setup --config /etc/pluxy/config.json"},
+		// A config listening on port 0 does not say where core is, so the command is given the address.
+		{false, "http://127.0.0.1:40123", "/tmp/x/config.json", "127.0.0.1:0",
+			"first-run setup is not finished. Next: run pluxy setup --config /tmp/x/config.json --url http://127.0.0.1:40123"},
+	} {
+		if got := setupStartLine(c.panel, c.url, c.configPath, c.listen); got != c.want {
+			t.Errorf("setupStartLine(%v, %q, %q, %q) =\n%q, want\n%q", c.panel, c.url, c.configPath, c.listen, got, c.want)
+		}
 	}
 }
 

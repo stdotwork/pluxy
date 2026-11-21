@@ -22,6 +22,7 @@ import (
 	"time"
 	"unicode/utf16"
 
+	"github.com/stdotwork/pluxy/next/internal/buildinfo"
 	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/management"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -1019,7 +1020,7 @@ func accountSwitch(verb string, disabled bool, summary string) command {
 }
 
 func printStatus(x *invocation, s management.Status) {
-	x.printf("pluxy %s (%s, %s)\n", s.Version, s.Commit, s.Built)
+	x.printf("%s\n", buildinfo.Format(s.Version, s.Commit, s.Built))
 	x.printf("config revision %d active", s.Active.Revision)
 	if s.Desired.Revision != s.Active.Revision {
 		x.printf("; revision %d refused: %s", s.Desired.Revision, s.Desired.Error)

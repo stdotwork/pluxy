@@ -291,6 +291,14 @@ func TestCLISetupAndClientShow(t *testing.T) {
 		t.Errorf("pluxy setup --json picks = %+v", sv.Picks)
 	}
 
+	// In words, one line on standard error names the next step: here, the suggested pick. (The
+	// line follows the question the command asks first: the test's standard input is the null
+	// device, which the command takes for a terminal.)
+	r = runCLI(t, cliEnv, "setup")
+	if r.code != 0 || !strings.HasSuffix(r.stderr, "Next: pluxy setup apply --yes installs what core suggests (pluxy/claude).\n") || strings.Contains(r.stdout, "Next:") {
+		t.Errorf("pluxy setup: %s", r)
+	}
+
 	r = runCLI(t, cliEnv, "client", "show", "claude-code")
 	if r.code != 0 || r.stderr != "Replace <client-key> with a client key: core's config file holds them, and \"pluxy key add\" makes another.\n" {
 		t.Fatalf("pluxy client show claude-code: %s", r)
@@ -327,6 +335,20 @@ func TestCLISetupAndClientShow(t *testing.T) {
 	if r.code != 0 || json.Unmarshal([]byte(r.stdout), &reply) != nil || len(reply.Results) == 0 || reply.Results[0].ID != "pluxy/claude" || reply.Results[0].Status != "done" {
 		t.Errorf("pluxy setup --yes --json: %s", r)
 	}
+	// The provider runs and core has no account: the next step is to add one, after pluxy setup
+	// and after an apply that had nothing left to install.
+	const addAccount = "Next: add an account with pluxy account add pluxy/claude (pluxy account methods lists the ways to sign in).\n"
+	if r = runCLI(t, cliEnv, "setup"); r.code != 0 || r.stderr != addAccount {
+		t.Errorf("pluxy setup after the pick was applied: %s", r)
+	}
+	if r = runCLI(t, cliEnv, "setup", "apply", "--yes"); r.code != 0 || r.stdout != "no suggested picks to apply\n" || r.stderr != addAccount {
+		t.Errorf("pluxy setup apply --yes with nothing suggested: %s", r)
+	}
+	// A pick applied in words is followed by the step for the state it leaves.
+	if r = runCLI(t, cliEnv, "setup", "apply", "--pick", "pluxy/openai-compatible"); r.code != 0 || !strings.Contains(r.stdout, "pluxy/openai-compatible  done") ||
+		r.stderr != "Next: add an account with pluxy account add <provider> (pluxy account methods lists the providers and their ways to sign in).\n" {
+		t.Errorf("pluxy setup apply --pick: %s", r)
+	}
 	// Nothing left to apply: with --json, a usage error as an error object.
 	r = runCLI(t, cliEnv, "setup", "apply", "--yes", "--json")
 	if r.code != 2 || r.stdout != "" || !strings.HasPrefix(r.stderr, `{"error":{"code":"invalid_request"`) {
@@ -335,5 +357,9 @@ func TestCLISetupAndClientShow(t *testing.T) {
 	r = runCLI(t, cliEnv, "setup", "done", "--json")
 	if r.code != 0 || !strings.Contains(r.stdout, `"first_run":false`) {
 		t.Errorf("pluxy setup done --json: %s", r)
+	}
+	// Setup has ended: no next step is named.
+	if r = runCLI(t, cliEnv, "setup"); r.code != 0 || r.stderr != "" || !strings.HasPrefix(r.stdout, "first_run: false") {
+		t.Errorf("pluxy setup after setup done: %s", r)
 	}
 }

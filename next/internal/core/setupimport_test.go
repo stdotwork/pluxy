@@ -677,6 +677,15 @@ func TestSetupImportRefusals(t *testing.T) {
 			t.Errorf("%+v: %d %s, want %d without the secret", cs.req, code, body, cs.code)
 		}
 	}
+	// A file that is not there is named in plain words, which the panel shows inside its own
+	// sentence and the command prints as they are.
+	missing := filepath.Join(dir, "missing.yaml")
+	code, _, body := importCall(t, c, "fake-mgmt-key", management.SetupImportRequest{Config: missing})
+	var reply management.ErrorBody
+	if err := json.Unmarshal([]byte(body), &reply); err != nil || code != http.StatusBadRequest ||
+		reply.Error.Code != "invalid_request" || reply.Error.Message != "there is no file at "+missing {
+		t.Errorf("a missing config: %d %s, want 400 invalid_request: there is no file at %s", code, body, missing)
+	}
 }
 
 func mapsEqual(a, b map[string]string) bool {
