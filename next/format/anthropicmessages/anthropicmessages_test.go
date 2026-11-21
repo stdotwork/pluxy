@@ -1542,3 +1542,85 @@ func TestChatRefusalBecomesMessagesRefusal(t *testing.T) {
 		}
 	})
 }
+
+// A Messages upstream's output_tokens_details.thinking_tokens is read into the reasoning count,
+// streamed and not, and capped at output_tokens, which already includes it.
+func TestDecodeThinkingTokens(t *testing.T) {
+	check := func(t *testing.T, u *llm.Usage) {
+		t.Helper()
+		if u == nil {
+			t.Fatal("usage is nil")
+		}
+		if u.OutputTokens == nil || *u.OutputTokens != 40 {
+			t.Errorf("OutputTokens = %v, want 40", u.OutputTokens)
+		}
+		if u.ReasoningTokens == nil || *u.ReasoningTokens != 25 {
+			t.Errorf("ReasoningTokens = %v, want 25", u.ReasoningTokens)
+		}
+	}
+
+	t.Run("non-streamed", func(t *testing.T) {
+		body := `{"id":"msg_1","type":"message","role":"assistant","model":"up","content":[{"type":"text","text":"Hi"}],
+			"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":40,"output_tokens_details":{"thinking_tokens":25}}}`
+		evs, err := DecodeResponse([]byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var finish *llm.Event
+		for i := range evs {
+			if evs[i].Type == llm.EventFinish {
+				finish = &evs[i]
+			}
+		}
+		if finish == nil {
+			t.Fatal("missing finish event")
+		}
+		check(t, finish.Usage)
+	})
+
+	t.Run("streamed", func(t *testing.T) {
+		stream := []string{
+			`{"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"up","content":[],"usage":{"input_tokens":10,"output_tokens":1}}}`,
+			`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}`,
+			`{"type":"content_block_stop","index":0}`,
+			`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":40,"output_tokens_details":{"thinking_tokens":25}}}`,
+			`{"type":"message_stop"}`,
+		}
+		d := NewStreamDecoder()
+		var finish *llm.Event
+		for _, s := range stream {
+			evs, err := d.Decode([]byte(s))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i := range evs {
+				if evs[i].Type == llm.EventFinish {
+					finish = &evs[i]
+				}
+			}
+		}
+		if finish == nil {
+			t.Fatal("missing finish event")
+		}
+		check(t, finish.Usage)
+	})
+
+	t.Run("more thinking than output is capped", func(t *testing.T) {
+		body := `{"id":"msg_1","type":"message","role":"assistant","model":"up","content":[{"type":"text","text":"Hi"}],
+			"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":40,"output_tokens_details":{"thinking_tokens":60}}}`
+		evs, err := DecodeResponse([]byte(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range evs {
+			if evs[i].Type == llm.EventFinish {
+				if u := evs[i].Usage; u == nil || u.ReasoningTokens == nil || *u.ReasoningTokens != 40 {
+					t.Fatalf("ReasoningTokens = %v, want the 40 output tokens", u)
+				}
+				return
+			}
+		}
+		t.Fatal("missing finish event")
+	})
+}

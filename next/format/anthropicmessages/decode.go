@@ -27,6 +27,9 @@ type usage struct {
 	OutputTokens             *int64 `json:"output_tokens"`
 	CacheReadInputTokens     *int64 `json:"cache_read_input_tokens"`
 	CacheCreationInputTokens *int64 `json:"cache_creation_input_tokens"`
+	OutputTokensDetails      *struct {
+		ThinkingTokens *int64 `json:"thinking_tokens"`
+	} `json:"output_tokens_details"`
 }
 
 // decodeUsage reads Messages usage. Anthropic's input_tokens counts only the input after the last
@@ -50,6 +53,15 @@ func decodeUsage(raw json.RawMessage) *llm.Usage {
 			}
 		}
 		out.InputTokens = &total
+	}
+	// Claude's output_tokens already includes the thinking tokens, so they are the reasoning part
+	// of it, never more than it (as LiteLLM reads this field).
+	if d := u.OutputTokensDetails; d != nil && d.ThinkingTokens != nil {
+		thinking := max(0, *d.ThinkingTokens)
+		if u.OutputTokens != nil && thinking > *u.OutputTokens {
+			thinking = *u.OutputTokens
+		}
+		out.ReasoningTokens = &thinking
 	}
 	return out
 }

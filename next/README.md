@@ -289,9 +289,15 @@ When an upstream ends a Responses stream with a `response.completed`, `response.
 `response.failed` whose `output` is empty, core fills it with the items the stream's
 `response.output_item.done` events finished, as today's core does.
 
-A Messages client's usage carries `output_tokens_details.thinking_tokens` (at most `output_tokens`)
-whenever the upstream reports its reasoning tokens; today's core writes it only for a Responses
-upstream.
+A reply's reasoning tokens are written where each format's API has a place for them:
+`completion_tokens_details.reasoning_tokens` on Chat, `output_tokens_details.reasoning_tokens` on
+Responses, `output_tokens_details.thinking_tokens` on Messages (at most `output_tokens`) and
+`thoughtsTokenCount` on Gemini. A Messages upstream's own
+`output_tokens_details.thinking_tokens` is read into the same count, though Anthropic's
+`output_tokens` already includes them; today's core writes that field only for a Responses
+upstream. A count the upstream did not report is left out of the reply rather than written as 0,
+except where the API requires it: Messages requires `input_tokens` and `output_tokens`, and
+OpenAI's `ResponseUsage` requires `cached_tokens` and `reasoning_tokens` inside its details objects.
 
 OpenAI's legacy text completions (`POST /v1/completions`) are served as Chat Completions, as
 today's core serves them: the prompt (a string, or a list of one string) becomes one user message,
