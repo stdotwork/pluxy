@@ -332,7 +332,7 @@ var commands = []command{
 	{words: "account refresh", args: []string{"id"}, routes: []string{"POST /accounts/{id}/refresh"}, summary: "renew an account's credential now",
 		run: runAccountRefresh},
 	{words: "account set", args: []string{"id", "name=value"}, more: true, routes: []string{"PATCH /accounts/{id}"},
-		summary: "change an account: disabled, priority, weight, disable_cooling, max_concurrency, request_retry, prefix, models, excluded_models, model_alias, proxy_url, headers, timeouts or settings (null sets one back)",
+		summary: "change an account: disabled (true or false), priority, weight, disable_cooling, max_concurrency, request_retry, prefix, models, excluded_models, model_alias, proxy_url, headers, timeouts or settings (null sets any but disabled back)",
 		run:     runAccountSet},
 	{words: "account import", args: []string{"file"}, routes: []string{"POST /accounts/import", "POST /vertex/import"},
 		summary: "add an account from a credential file: a Google service account key (a JSON object with a private_key and a project_id) is imported as a Vertex account, any other file as today's core's credential file (- reads a service account key from standard input)",

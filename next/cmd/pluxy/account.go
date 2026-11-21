@@ -107,8 +107,10 @@ func methodsFor(r management.LoginMethodsReply, id string) (*management.LoginMet
 	return nil, usageError{fmt.Sprintf("no extension %q offers a sign-in; these do: %s", id, strings.Join(have, ", "))}
 }
 
-// pickMethod is the method named by want, or the only one the extension offers.
-func pickMethod(m *management.LoginMethods, want string) (protocol.LoginMethod, error) {
+// pickMethod is the method named by want, or the only one the extension offers. account names the
+// account signing in again, if any: core keeps no record of the way it signed in before, so the
+// command cannot choose for it.
+func pickMethod(m *management.LoginMethods, want, account string) (protocol.LoginMethod, error) {
 	if want != "" {
 		for _, method := range m.Methods {
 			if method.Method == want {
@@ -138,7 +140,11 @@ func pickMethod(m *management.LoginMethods, want string) (protocol.LoginMethod, 
 		}
 		labels = append(labels, label)
 	}
-	return protocol.LoginMethod{}, usageError{fmt.Sprintf("%s signs in %d ways; name one with --method: %s", m.Extension, len(m.Methods), strings.Join(labels, ", "))}
+	unrecorded := ""
+	if account != "" {
+		unrecorded = fmt.Sprintf(", and core does not record which one account %s used", account)
+	}
+	return protocol.LoginMethod{}, usageError{fmt.Sprintf("%s signs in %d ways%s; name one with --method: %s", m.Extension, len(m.Methods), unrecorded, strings.Join(labels, ", "))}
 }
 
 // signInFlags adds the flags account add and account login share: the sign-in method, what the
@@ -208,7 +214,7 @@ func runAccountAdd(x *invocation) error {
 	if err != nil {
 		return err
 	}
-	method, err := pickMethod(ext, x.opts.method)
+	method, err := pickMethod(ext, x.opts.method, "")
 	if err != nil {
 		return err
 	}
@@ -262,7 +268,7 @@ func runAccountLogin(x *invocation) error {
 	if err != nil {
 		return err
 	}
-	method, err := pickMethod(offered, x.opts.method)
+	method, err := pickMethod(offered, x.opts.method, id)
 	if err != nil {
 		return err
 	}
@@ -335,10 +341,10 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 	// an answer does not count: the extension may not have updated its prompt yet.
 	answered, reshown := false, false
 	// ended says standard input has ended. giveUp is the bounded wait on a prompt that was answered
-	// and is still up with nothing that may answer it, and unanswered the field it still wants.
+	// and is still up with nothing that may answer it, and stillAsking the error it ends with.
 	ended := false
 	var giveUp <-chan time.Time
-	var unanswered protocol.LoginInput
+	var stillAsking error
 	// failures counts reads of the sign-in in a row that failed, as the panel does: three and the
 	// command gives up on the sign-in, waiting longer between each try.
 	failures := 0
@@ -419,19 +425,28 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 			}
 			return x.cancelLogin(l.ID, errors.New("sign-in cancelled"))
 		case <-giveUp:
-			return x.cancelLogin(l.ID, usageError{fmt.Sprintf("the sign-in still asks for %s after the value it was given: %s", fieldName(unanswered), inputHint(unanswered))})
+			return x.cancelLogin(l.ID, stillAsking)
 		case r := <-input:
 			if !r.ok {
 				ended = true
 				if lines.hidden() {
 					x.eprintf("\n")
 				}
+				if prompt.kind == protocol.PromptBrowser {
+					// Nothing more can be pasted, and the command cannot tell whether the browser's
+					// return reaches the extension by itself: --no-wait is the way to leave a sign-in
+					// waiting for that. On a terminal the cursor is still after the field's label.
+					if x.prompts() && !lines.hidden() {
+						x.eprintf("\n")
+					}
+					return x.cancelLogin(l.ID, usageError{fmt.Sprintf("standard input ended before the sign-in got %s, so it was cancelled: %s", fieldName(*field), browserPasteHint)})
+				}
 				if prompt.repeated && len(prompt.done) == 0 {
 					// Nothing new to answer a prompt that already has an answer: the extension may
-					// still be working on it, so it gets a while to move on. A browser prompt can
-					// also end by its callback, and stays until the sign-in's own limit.
+					// still be working on it, so it gets a while to move on. A device prompt ends by
+					// itself, and stays until the sign-in's own limit.
 					if prompt.kind == protocol.PromptInput {
-						unanswered = *field
+						stillAsking = stillAsks(prompt.kind, *field)
 						giveUp = time.After(accountAnswerWait)
 					}
 					prompt = nil
@@ -460,8 +475,8 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 					// sign-in gets a bounded wait to move on.
 					if x.prompts() {
 						reshown = true
-					} else if giveUp == nil && next.Prompt.Kind == protocol.PromptInput && len(next.Prompt.Inputs) > 0 {
-						unanswered = next.Prompt.Inputs[0]
+					} else if giveUp == nil && next.Prompt.Kind != protocol.PromptDevice && len(next.Prompt.Inputs) > 0 {
+						stillAsking = stillAsks(next.Prompt.Kind, next.Prompt.Inputs[0])
 						giveUp = time.After(accountAnswerWait)
 					}
 				}
@@ -677,7 +692,7 @@ func (g *promptInput) take(r lineRead) (bool, error) {
 	return true, nil
 }
 
-// endOfInput is standard input's end. A prompt that can finish by itself goes on. One whose
+// endOfInput is standard input's end. A device prompt, which finishes by itself, goes on. One whose
 // required fields all have a value is left complete, so what it has is sent; one that must have a
 // value it did not get cannot go on, and the sign-in is cancelled with a usage error.
 func (g *promptInput) endOfInput(x *invocation, login string) error {
@@ -907,6 +922,19 @@ func inputHint(f protocol.LoginInput) string {
 	return fmt.Sprintf("give it with --input %s=<value>, or on standard input, one line for each value the sign-in asks for", f.Name)
 }
 
+// browserPasteHint says what to do about a browser prompt that standard input cannot answer. A
+// value from an earlier sign-in does not fit, so --input is no way to give it.
+const browserPasteHint = "run the command again in a terminal to paste it, or add --no-wait to leave the sign-in waiting for the browser"
+
+// stillAsks is the error of a prompt still up, after its answer, with nothing that may answer it.
+func stillAsks(kind string, f protocol.LoginInput) error {
+	hint := inputHint(f)
+	if kind == protocol.PromptBrowser {
+		hint = browserPasteHint
+	}
+	return usageError{fmt.Sprintf("the sign-in still asks for %s after the value it was given: %s", fieldName(f), hint)}
+}
+
 // lineReader reads standard input one line at a time, on a goroutine of its own that takes no
 // requests and never touches the terminal, so a sign-in can be read again while a person types.
 // The goroutine starts with the first value asked for: a command that needs none leaves standard
@@ -1106,7 +1134,8 @@ func runAccountSet(x *invocation) error {
 }
 
 // setValue is the JSON one name=value on the command line sends: null sets the field back to
-// its default, a plain-string field takes the value as it is, and the rest must be JSON.
+// its default (core refuses it for disabled, which is only true or false), a plain-string field
+// takes the value as it is, and the rest must be JSON.
 func setValue(name, value string, jsonValue bool) (json.RawMessage, error) {
 	if value == "null" {
 		return json.RawMessage("null"), nil

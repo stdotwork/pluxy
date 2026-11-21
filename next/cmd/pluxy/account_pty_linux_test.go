@@ -41,6 +41,7 @@ const (
 	ptyPaste      = "paste"      // a multi-line JSON key pasted into its field
 	ptyBack       = "back"       // a secret field, then a plain one
 	ptyStartTerm  = "startterm"  // SIGTERM while a value is read before the sign-in starts
+	ptyAddress    = "address"    // a browser sign-in: a pasted non-address, then what comes next
 )
 
 // TestCLIAccountTerminal is the test in the parent, and the command's run in the child it starts.
@@ -171,6 +172,40 @@ func TestCLIAccountTerminal(t *testing.T) {
 		p.waitEcho(true)
 		p.wantChild(t, "code=1", "cancelled=0")
 	})
+	// A browser sign-in that was pasted a non-address asks again. The person can paste the right
+	// address, press Ctrl-D (the end of input), or press Ctrl-C.
+	t.Run("address", func(t *testing.T) {
+		pasteWrong := func(t *testing.T) *ptySession {
+			p := startPTY(t, ptyAddress)
+			p.waitOutput("Address the browser ended on: ")
+			p.write(t, "not an address\n")
+			p.waitOutput("That address holds no sign-in code.")
+			return p
+		}
+		t.Run("tries again", func(t *testing.T) {
+			p := pasteWrong(t)
+			p.write(t, "https://localhost/callback?code=ok\n")
+			p.waitExit(t, 0)
+			p.wantChild(t, "code=0", "cancelled=0", "inputs=2")
+		})
+		t.Run("Ctrl-D", func(t *testing.T) {
+			p := pasteWrong(t)
+			p.write(t, "\x04")
+			p.waitExit(t, 2)
+			p.waitEcho(true)
+			p.wantChild(t, "code=2", "cancelled=1", "inputs=1")
+			if !strings.Contains(p.childOutput(), "standard input ended") {
+				t.Errorf("Ctrl-D said nothing about the sign-in: %q", p.childOutput())
+			}
+		})
+		t.Run("Ctrl-C", func(t *testing.T) {
+			p := pasteWrong(t)
+			p.signal(t, syscall.SIGINT)
+			p.waitExit(t, 1)
+			p.waitEcho(true)
+			p.wantChild(t, "code=1", "cancelled=1", "inputs=1")
+		})
+	})
 	// --json on a terminal is a usage error and nothing is read: a silent wait for a line is not a
 	// prompt.
 	t.Run("json", func(t *testing.T) {
@@ -198,6 +233,8 @@ func ptyChild(t *testing.T, scenario string) {
 		method = "back"
 	case ptyStartTerm:
 		method = "api_key"
+	case ptyAddress:
+		method = "browser"
 	}
 	args := []string{"account", "add", "test/ext", "--id", "pty-1", "--method", method,
 		"--url", f.srv.URL, "--key", "k"}

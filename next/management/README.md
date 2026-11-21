@@ -94,9 +94,11 @@ management API of a core that is already running. `pluxy -config ...` with no su
   value: the command waits a minute for the prompt to move on, then cancels. With
   `--json` nothing is read from a terminal: the values come from `--input` or from a pipe, or the
   command says what it needs with exit code 2. A sign-in that needs a value it did not get is
-  cancelled in core, with exit code 2, and so is one `--no-wait` leaves waiting on a prompt. A read
-  that fails is tried three times, and then the sign-in is given up on and cancelled. Ctrl-C,
-  SIGTERM and SIGHUP cancel the sign-in and put the terminal back as it was.
+  cancelled in core, with exit code 2, and so is one `--no-wait` leaves waiting on a prompt. A
+  browser sign-in is cancelled the same way when standard input ends before the address is pasted;
+  `--no-wait` leaves one waiting for the browser instead. A read that fails is tried three times,
+  and then the sign-in is given up on and cancelled. Ctrl-C, SIGTERM and SIGHUP cancel the sign-in
+  and put the terminal back as it was.
 - **Exit codes.**
 
   | Code | Meaning |
@@ -232,7 +234,7 @@ is not brought, plain or bcrypt: core keeps its own management key, and its row 
 | `GET /login-methods` | `pluxy account methods` | How each running extension can add an account |
 | `POST /accounts`, `GET /logins/{id}`, `POST /logins/{id}/input`, `DELETE /logins/{id}` | `pluxy account add <provider> [--id id] [--method m] [--input name=value]... [--no-wait]` | Start a sign-in and follow it to the end; prints the address to open or the code to type. `--id` names the account (default: `account-` and 12 hex digits); `--no-wait` stops once it has started, with exit code 7, unless the sign-in waits on a prompt's value, which is exit code 2 and cancels it |
 | `POST /accounts/{id}/login` | `pluxy account login <id> [--method m] [--input name=value]... [--no-wait]` | Sign in again, followed as `account add` follows a sign-in |
-| `PATCH /accounts/{id}` | `pluxy account enable <id>`, `pluxy account disable <id>`, `pluxy account set <id> name=value...` | Turn on or off; change routing settings. `name` is `disabled` or one of the fields below; its value is JSON, except `prefix` and `proxy_url`, which take their text as it is; `null` sets a field back to its default |
+| `PATCH /accounts/{id}` | `pluxy account enable <id>`, `pluxy account disable <id>`, `pluxy account set <id> name=value...` | Turn on or off; change routing settings. `name` is `disabled` or one of the fields below; its value is JSON, except `prefix` and `proxy_url`, which take their text as it is; `null` sets a field other than `disabled` back to its default |
 | `DELETE /accounts/{id}` | `pluxy account remove <id>` | Remove |
 | `POST /accounts/{id}/refresh` | `pluxy account refresh <id>` | Renew its credential now |
 | `POST /accounts/{id}/cooldown/reset` | `pluxy account clear <id>` | Forget the cooldowns routing holds against the account; a ban stays |
