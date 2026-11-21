@@ -102,3 +102,25 @@ test("the text for a client says what goes where a model's name stands", async (
   await expect(opencode.locator("pre")).toContainText("<model-id>");
   await expect(opencode).toContainText("Where the text says <model-id>, a model's name goes");
 });
+
+test("Look again counts an account added while the page stayed in view", async ({ page }) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await page.goto(`${core.base}/panel/#/setup`);
+  const account = page.getByRole("region", { name: "Connect an account" });
+  await expect(account).toContainText("1 account connected");
+  // A sign-in that finishes elsewhere, as a device code does: the page gets no focus change.
+  const started = await core.mgmt<{ login: { id: string } }>("POST", "/accounts", {
+    id: "setup-later",
+    extension: "pluxy/claude",
+    method: "api_key",
+    input: { api_key: "test-later-key" },
+  });
+  expect(started.status).toBe(202);
+  await expect
+    .poll(async () => (await core.mgmt<{ accounts: unknown[] }>("GET", "/accounts")).body.accounts.length)
+    .toBe(2);
+  await expect(account).toContainText("1 account connected");
+  await page.getByRole("button", { name: "Look again", exact: true }).click();
+  await expect(account).toContainText("2 accounts connected");
+});
