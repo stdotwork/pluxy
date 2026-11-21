@@ -84,7 +84,8 @@ var (
 	// (https://docs.anthropic.com/en/docs/build-with-claude/vision#supported-formats).
 	ClaudeImages = []string{"image/jpeg", "image/png", "image/gif", "image/webp"}
 	// GeminiImages is what GenerateContent's inlineData documents
-	// (https://ai.google.dev/api/generate-content#Blob); the vision guide names the same
-	// formats (https://ai.google.dev/gemini-api/docs/image-understanding#supported-formats).
+	// (https://ai.google.dev/api/generate-content#Blob); the vision guide lists the same set
+	// without the GIF and AVIF the API reference adds
+	// (https://ai.google.dev/gemini-api/docs/image-understanding#supported-formats).
 	GeminiImages = []string{"image/png", "image/jpeg", "image/jpg", "image/webp", "image/heic", "image/heif", "image/gif", "image/avif"}
 )
