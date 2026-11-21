@@ -68,7 +68,7 @@ func embeddings(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	}
 	resp, err := postBody(ctx, call, s, chat, key, "/embeddings", reqBody)
 	if err != nil {
-		return err
+		return noEndpoint(err, "embeddings", "/embeddings")
 	}
 	defer resp.Body.Close()
 

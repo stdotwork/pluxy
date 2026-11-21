@@ -61,7 +61,7 @@ func images(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return upstreamError(resp, call.Request.Model)
+		return noEndpoint(upstreamError(resp, call.Request.Model), "images", path)
 	}
 	ct := resp.Header.Get("Content-Type")
 	if ct == "" {
