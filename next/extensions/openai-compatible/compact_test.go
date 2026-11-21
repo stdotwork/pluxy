@@ -395,6 +395,50 @@ func TestCompactUpstreamErrorsAndUnsupported(t *testing.T) {
 		}
 	})
 
+	t.Run("a 404 from the compact path fails only the request", func(t *testing.T) {
+		for name, body := range map[string]string{
+			"no body":                     ``,
+			"a path not found":            `{"detail":"Not Found"}`,
+			"a message without the model": `{"error":{"message":"no route for POST /v1/responses/compact","type":"invalid_request_error"}}`,
+		} {
+			t.Run(name, func(t *testing.T) {
+				srv, _ := newCompactUpstream(t, func(w http.ResponseWriter, r *http.Request, _ []byte) {
+					w.WriteHeader(http.StatusNotFound)
+					io.WriteString(w, body)
+				})
+				settings := json.RawMessage(`{"base_url":"` + srv.URL + `/v1","wire_api":"responses"}`)
+				var rec compactRecorder
+				err := compactTo(context.Background(), compactCall(settings, "sk-test", "gpt-4.1", compactSampleBody), &rec)
+				var e *llm.Error
+				if !errors.As(err, &e) || e.Code != llm.CodeNotFound || e.Scope != llm.ScopeRequest || e.Retryable || e.Status != http.StatusNotFound ||
+					!strings.Contains(e.Message, "no compaction endpoint") {
+					t.Errorf("err = %+v; want a non-retryable CodeNotFound on ScopeRequest saying the upstream has no compaction endpoint", err)
+				}
+			})
+		}
+	})
+
+	t.Run("a 404 that says the model does not exist keeps the model block", func(t *testing.T) {
+		for name, body := range map[string]string{
+			"code":    `{"error":{"message":"The model does not exist","type":"invalid_request_error","code":"model_not_found"}}`,
+			"message": `{"error":{"message":"model gpt-4.1 not found","type":"invalid_request_error"}}`,
+		} {
+			t.Run(name, func(t *testing.T) {
+				srv, _ := newCompactUpstream(t, func(w http.ResponseWriter, r *http.Request, _ []byte) {
+					w.WriteHeader(http.StatusNotFound)
+					io.WriteString(w, body)
+				})
+				settings := json.RawMessage(`{"base_url":"` + srv.URL + `/v1","wire_api":"responses"}`)
+				var rec compactRecorder
+				err := compactTo(context.Background(), compactCall(settings, "sk-test", "gpt-4.1", compactSampleBody), &rec)
+				var e *llm.Error
+				if !errors.As(err, &e) || e.Code != llm.CodeNotFound || e.Scope != llm.ScopeModel || !e.Retryable {
+					t.Errorf("err = %+v; want a retryable CodeNotFound on ScopeModel", err)
+				}
+			})
+		}
+	})
+
 	t.Run("messages and gemini wires answer unsupported on credential", func(t *testing.T) {
 		for _, wire := range []string{wireMessages, wireGemini} {
 			t.Run(wire, func(t *testing.T) {

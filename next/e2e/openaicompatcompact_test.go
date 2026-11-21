@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -262,6 +263,120 @@ func TestOpenAICompatibleResponsesCompact(t *testing.T) {
 		}
 		if got := len(recorded()); got != 0 {
 			t.Errorf("upstream got %d requests, want 0", got)
+		}
+	})
+}
+
+// An upstream with no compaction path answers 404 to POST {base_url}/responses/compact. That
+// fails only the compaction request, with a message that says so: generation for the same model
+// on the same account still reaches the upstream. A 404 from the generation path, or one that
+// says the model does not exist, still blocks the model.
+func TestOpenAICompatibleCompactPathMissing(t *testing.T) {
+	codexHeaders := map[string]string{
+		"User-Agent": "codex_cli_rs/0.150.0 (Linux; x86_64)",
+		"Originator": "codex_cli_rs",
+		"Version":    "0.150.0",
+		"Session_id": "s-1",
+	}
+	compactBody := `{"model":"gpt-4.1","instructions":"You are a coding agent.",` +
+		`"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"List the files."}]}]}`
+	generateBody := `{"model":"gpt-4.1","input":"hello","stream":false}`
+	const generated = `{"id":"resp_1","object":"response","created_at":1700000000,"status":"completed","model":"gpt-4.1",` +
+		`"output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"hi","annotations":[]}]}],` +
+		`"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`
+
+	// run starts a core with one responses account whose upstream answers each path as paths
+	// say (status and body), and counts the requests each path got.
+	run := func(t *testing.T, paths map[string][2]string) (string, func(string) int) {
+		t.Helper()
+		var mu sync.Mutex
+		hits := map[string]int{}
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet && r.URL.Path == "/v1/models" {
+				w.Header().Set("Content-Type", "application/json")
+				io.WriteString(w, `{"object":"list","data":[{"id":"gpt-4.1","object":"model"}]}`)
+				return
+			}
+			io.Copy(io.Discard, r.Body)
+			mu.Lock()
+			hits[r.URL.Path]++
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			if p, ok := paths[r.URL.Path]; ok {
+				code, _ := strconv.Atoi(p[0])
+				w.WriteHeader(code)
+				io.WriteString(w, p[1])
+				return
+			}
+			w.WriteHeader(http.StatusNotFound)
+			io.WriteString(w, `{"detail":"Not Found"}`)
+		}))
+		t.Cleanup(srv.Close)
+		base := runCore(t, map[string]any{
+			"listen":         "127.0.0.1:0",
+			"client_keys":    []string{clientKey},
+			"management_key": managementKey,
+			"extension": map[string]any{
+				"manifest": filepath.Join(binDir, "pluxy-extension.json"),
+				"accounts": []any{map[string]any{
+					"id":         "responses-acct",
+					"settings":   map[string]any{"base_url": srv.URL + "/v1", "wire_api": "responses"},
+					"credential": map[string]any{"kind": "api_key", "api_key": "made-up-sample-9137"},
+				}},
+			},
+		})
+		return base, func(path string) int {
+			mu.Lock()
+			defer mu.Unlock()
+			return hits[path]
+		}
+	}
+
+	t.Run("no compact path", func(t *testing.T) {
+		base, hits := run(t, map[string][2]string{"/v1/responses": {"200", generated}})
+		code, reply := clientPost(t, base, "/v1/responses/compact", compactBody, codexHeaders)
+		if code != http.StatusNotFound || !strings.Contains(reply, "compaction") {
+			t.Errorf("compact: status %d, reply %s; want a 404 that says the upstream has no compaction endpoint", code, reply)
+		}
+		code, reply = clientPost(t, base, "/v1/responses", generateBody, nil)
+		if code != http.StatusOK {
+			t.Fatalf("generation after the compact 404: status %d, reply %s; want 200", code, reply)
+		}
+		if got := hits("/v1/responses"); got != 1 {
+			t.Errorf("upstream got %d generation requests, want 1", got)
+		}
+	})
+
+	t.Run("compact says the model does not exist", func(t *testing.T) {
+		base, hits := run(t, map[string][2]string{
+			"/v1/responses/compact": {"404", `{"error":{"message":"The model does not exist","type":"invalid_request_error","code":"model_not_found"}}`},
+			"/v1/responses":         {"200", generated},
+		})
+		code, _ := clientPost(t, base, "/v1/responses/compact", compactBody, codexHeaders)
+		if code != http.StatusNotFound {
+			t.Errorf("compact: status %d, want 404", code)
+		}
+		code, reply := clientPost(t, base, "/v1/responses", generateBody, nil)
+		if code == http.StatusOK {
+			t.Errorf("generation after a model_not_found: status 200, want the model blocked: %s", reply)
+		}
+		if got := hits("/v1/responses"); got != 0 {
+			t.Errorf("upstream got %d generation requests, want 0 while the model is blocked", got)
+		}
+	})
+
+	t.Run("generation 404 blocks the model", func(t *testing.T) {
+		base, hits := run(t, nil)
+		code, _ := clientPost(t, base, "/v1/responses", generateBody, nil)
+		if code != http.StatusNotFound {
+			t.Errorf("first generation: status %d, want 404", code)
+		}
+		code, _ = clientPost(t, base, "/v1/responses", generateBody, nil)
+		if code == http.StatusOK {
+			t.Errorf("second generation: status 200, want the model blocked")
+		}
+		if got := hits("/v1/responses"); got != 1 {
+			t.Errorf("upstream got %d generation requests, want 1 (the second is refused by the block)", got)
 		}
 	})
 }

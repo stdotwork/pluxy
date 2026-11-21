@@ -250,7 +250,9 @@ other host.
 Responses compaction (`POST /v1/responses/compact` and `POST /backend-api/codex/responses/compact`)
 is served on OpenAI-compatible accounts by `wire_api`: a `"responses"` account passes the client's
 body through to `POST {base_url}/responses/compact` unchanged with the account's key header and
-returns the upstream's reply as it came; a `"chat"` account translates the Responses conversation to
+returns the upstream's reply as it came (a 404 from that path that does not say the model is unknown
+means the upstream has no compaction endpoint: it fails that request only, as a request error with a
+message that says so, and blocks no model on the account); a `"chat"` account translates the Responses conversation to
 one non-streamed `POST {base_url}/chat/completions` request with `tool_choice` set to `"none"`,
 structured output and stop sequences cleared, and the Codex CLI's compaction prompt (`prompt.md`)
 appended as a last user message, and returns OpenAI's `response.compaction` object carrying one user

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -80,7 +81,7 @@ func compactResponses(ctx context.Context, call sdk.Call, s settings, wire wireI
 	call.Request.Stream = false
 	resp, err := postBody(ctx, call, s, wire, key, "/responses/compact", call.Request.Native.Body)
 	if err != nil {
-		return err
+		return noCompactPath(err)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
@@ -101,6 +102,21 @@ func compactResponses(ctx context.Context, call sdk.Call, s settings, wire wireI
 		return err
 	}
 	return out.Finish(llm.Finish{Reason: llm.FinishStop}, responseUsage(r.Usage))
+}
+
+// noCompactPath scopes to the request a 404 from {base_url}/responses/compact that does not say
+// the model is unknown, as the Codex and xAI extensions do for their endpoints. Many vendors have no
+// such path, and that says nothing about the model's generation on the account, which a
+// model-scoped error would block for hours. The message tells the client the upstream has no
+// compaction endpoint. A 404 that says the model does not exist is left as it is.
+func noCompactPath(err error) error {
+	var e *llm.Error
+	if !errors.As(err, &e) || e.Code != llm.CodeNotFound || e.Retryable {
+		return err
+	}
+	e.Scope = llm.ScopeRequest
+	e.Message = "this account's upstream has no compaction endpoint (POST /responses/compact answered 404)"
+	return e
 }
 
 func compactChat(ctx context.Context, call sdk.Call, s settings, wire wireInfo, key string, out bodySender) error {
