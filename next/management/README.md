@@ -208,7 +208,7 @@ is not brought, plain or bcrypt: core keeps its own management key, and its row 
 | `PATCH /accounts/{id}` | `pluxy account enable <id>`, `pluxy account disable <id>`, `pluxy account set <id> name=value...` | Turn on or off; change routing settings |
 | `DELETE /accounts/{id}` | `pluxy account remove <id>` | Remove |
 | `POST /accounts/{id}/refresh` | `pluxy account refresh <id>` | Renew its credential now |
-| `POST /accounts/{id}/cooldown/reset` | `pluxy account clear <id>` | Forget what routing holds against it |
+| `POST /accounts/{id}/cooldown/reset` | `pluxy account clear <id>` | Forget the cooldowns routing holds against the account; a ban stays |
 | `POST /accounts/{id}/test` | `pluxy account test <id> [--model m]` | One small request through it |
 | `GET /accounts/{id}/quota` | `pluxy account quota <id>` | Its usage windows as its provider reports them |
 | `GET /accounts/{id}/models` | `pluxy account models <id>` | The models it serves |

@@ -33,6 +33,7 @@ const maxManagementBody = 1 << 20
 //	POST   /v0/management/setup/scan   start a background setup scan now
 //	POST   /v0/management/setup/apply  install and enable setup picks
 //	POST   /v0/management/setup/done   end first run
+//	GET    /v0/management/setup/clients/{id}/paste  what to paste into a client tool's settings
 //	GET    /v0/management/packages  installed packages
 //	GET    /v0/management/registries  what each registry offers
 //	POST   /v0/management/packages  install a package (InstallRequest)
