@@ -2394,7 +2394,8 @@ and with it off nothing is recorded or sent.
 
 With `logs.request_log` off (the default), core writes only the requests that fail, as
 `error-<name>.log`, as today's core does: a reply status of 400 or more, or a streamed reply that
-fails after it began; a client that goes away is not a failure. `logs.error_logs_max_files`
+fails after it began; a client that goes away is not a failure. Core also writes one for a handler
+that panics, whether or not it had sent a reply. `logs.error_logs_max_files`
 (today's `error-logs-max-files`, default 10) keeps the newest of them; 0 keeps them all. Request
 logs count toward `logs.max_total_size_mb`, which is applied after each file is written.
 

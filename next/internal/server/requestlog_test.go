@@ -456,50 +456,73 @@ func TestRequestLogKeptWhenHandlerPanics(t *testing.T) {
 			io.WriteString(w, `{"error":"panic-reply"}`)
 		}, []string{"Status: 503", "panic-reply"}, []string{"Status: 200"}},
 		{"before the reply", func(http.ResponseWriter) {}, nil, []string{"Status:"}},
+		{"after a 200 reply", func(w http.ResponseWriter) {
+			w.WriteHeader(http.StatusOK)
+			io.WriteString(w, `{"ok":"panic-reply"}`)
+		}, []string{"Status: 200", "panic-reply"}, []string{"Status: 503"}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
-			g := &Generation{RequestLog: &RequestLog{Dir: dir, All: true, Redact: protocol.NewRedactor()}}
-			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
-			req.Header.Set("X-Test-Header", "kept")
-			panicValue := fmt.Errorf("handler panic, %s", tc.name)
-			var recovered any
-			func() {
-				defer func() { recovered = recover() }()
-				logged(httptest.NewRecorder(), req, g, func(w http.ResponseWriter, r *http.Request) {
-					keepBody(r, body)
-					tc.handle(w)
-					panic(panicValue)
-				})
-			}()
-			if recovered != panicValue {
-				t.Fatalf("the panic reached the caller as %v, want the same value %v", recovered, panicValue)
-			}
+		for _, all := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s, request log %t", tc.name, all), func(t *testing.T) {
+				dir := t.TempDir()
+				g := &Generation{RequestLog: &RequestLog{Dir: dir, All: all, Redact: protocol.NewRedactor()}}
+				req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+				req.Header.Set("X-Test-Header", "kept")
+				panicValue := fmt.Errorf("handler panic, %s", tc.name)
+				var recovered any
+				func() {
+					defer func() { recovered = recover() }()
+					logged(httptest.NewRecorder(), req, g, func(w http.ResponseWriter, r *http.Request) {
+						keepBody(r, body)
+						tc.handle(w)
+						panic(panicValue)
+					})
+				}()
+				if recovered != panicValue {
+					t.Fatalf("the panic reached the caller as %v, want the same value %v", recovered, panicValue)
+				}
 
-			entries, err := os.ReadDir(dir)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(entries) != 1 {
-				t.Fatalf("request log files after the panic: %d, want 1", len(entries))
-			}
-			raw, err := os.ReadFile(filepath.Join(dir, entries[0].Name()))
-			if err != nil {
-				t.Fatal(err)
-			}
-			text := string(raw)
-			for _, want := range append([]string{"URL: /v1/chat/completions", "Method: POST", "X-Test-Header: kept",
-				"panic-body", "=== RESPONSE ==="}, tc.want...) {
-				if !strings.Contains(text, want) {
-					t.Errorf("the panic's request log lacks %q:\n%s", want, text)
+				entries, err := os.ReadDir(dir)
+				if err != nil {
+					t.Fatal(err)
 				}
-			}
-			for _, absent := range tc.absent {
-				if strings.Contains(text, absent) {
-					t.Errorf("the panic's request log holds %q, which the request never sent:\n%s", absent, text)
+				if len(entries) != 1 {
+					t.Fatalf("request log files after the panic: %d, want 1", len(entries))
 				}
-			}
-		})
+				if got := strings.HasPrefix(entries[0].Name(), "error-"); got != !all {
+					t.Errorf("the panic's log is %s, want an error log: %t", entries[0].Name(), !all)
+				}
+				raw, err := os.ReadFile(filepath.Join(dir, entries[0].Name()))
+				if err != nil {
+					t.Fatal(err)
+				}
+				text := string(raw)
+				for _, want := range append([]string{"URL: /v1/chat/completions", "Method: POST", "X-Test-Header: kept",
+					"panic-body", "=== RESPONSE ==="}, tc.want...) {
+					if !strings.Contains(text, want) {
+						t.Errorf("the panic's request log lacks %q:\n%s", want, text)
+					}
+				}
+				for _, absent := range tc.absent {
+					if strings.Contains(text, absent) {
+						t.Errorf("the panic's request log holds %q, which the request never sent:\n%s", absent, text)
+					}
+				}
+			})
+		}
+	}
+}
+
+// With the request log off, a handler that returns normally with a 200 reply writes no file.
+func TestRequestLogErrorsOnlySkipsOKReply(t *testing.T) {
+	dir := t.TempDir()
+	g := &Generation{RequestLog: &RequestLog{Dir: dir, Redact: protocol.NewRedactor()}}
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
+	logged(httptest.NewRecorder(), req, g, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		io.WriteString(w, `{"ok":true}`)
+	})
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("request log files for a 200 reply with error logs only: %d, want 0", len(entries))
 	}
 }
 

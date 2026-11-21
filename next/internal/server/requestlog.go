@@ -148,13 +148,15 @@ type requestEntry struct {
 	reply    *capture // made into text only when the log is written
 	// replyTitle names the reply's section: RESPONSE, or WEBSOCKET MESSAGES for a turn.
 	replyTitle string
+	// panicked is set when the handler panicked, whether or not it sent a reply.
+	panicked bool
 }
 
-// failed reports whether the request counts as failed for an error log, as in today's core: a
-// reply status of 400 or more, or a failure after the reply began. A client that went away is
-// not a failure.
+// failed reports whether the request counts as failed for an error log: as in today's core, a
+// reply status of 400 or more or a failure after the reply began, and also a handler that
+// panicked. A client that went away is not a failure.
 func (e *requestEntry) failed() bool {
-	return e.status >= 400 || e.trace != nil && e.trace.failed
+	return e.status >= 400 || e.panicked || e.trace != nil && e.trace.failed
 }
 
 // write writes e to its request log file, if e is to be logged.
@@ -418,11 +420,14 @@ func logged(w http.ResponseWriter, r *http.Request, g *Generation, h func(w http
 	// (http.ErrAbortHandler included): a handler that crashed is the one whose log is most
 	// needed. A status of 0 is shown as no status, the way the log already shows a reply that
 	// never began.
+	// A panic is seen as h not returning: finished stays false, and nothing recovers it.
+	finished := false
 	defer func() {
 		g.RequestLog.write(&requestEntry{at: at, method: r.Method, url: r.URL, client: ClientIP(r), headers: r.Header, body: t.body, trace: t,
-			status: rec.status, rHeaders: rec.header, reply: rec.body, replyTitle: "RESPONSE"})
+			status: rec.status, rHeaders: rec.header, reply: rec.body, replyTitle: "RESPONSE", panicked: !finished})
 	}()
 	h(rec, r)
+	finished = true
 }
 
 // requestTrace returns r's trace, adding a new one when it has none. The request's access line
