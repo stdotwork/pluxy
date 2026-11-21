@@ -235,6 +235,7 @@ func serveEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep end
 		t.attempt(a)
 		m.attempt(a, t.id)
 	}
+	rr.AttemptFailed = m.attemptFailed
 	stream := meterStream(g.Router.Generate(host.WithPayloadClient(r.Context(), req.Model, r.Header), rr), m)
 	writeEndpointReplyFor(w, r, stream, ep, f, m, body, &cannot, g.Config.TokenCountEstimateOn(), g.Config.Routing.ExplainOn())
 }

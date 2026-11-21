@@ -980,3 +980,36 @@ func (l *lockedBuffer) String() string {
 	defer l.mu.Unlock()
 	return l.b.String()
 }
+
+func TestAttemptsAndTriedPersistAndOlderRecordsLoad(t *testing.T) {
+	dir := t.TempDir()
+	c := &clock{t: time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)}
+	// A day-file line written before attempts and tried existed.
+	old := `{"v":1,"seq":1,"timestamp":"2026-11-19T11:58:00Z","endpoint":"/v1/chat/completions","stream":false,"model":"gpt-4o","failed":false,"latency_ms":3,"tokens":{}}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, "2026-11-19.jsonl"), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := openStore(Options{Dir: dir}, c.now, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tried := []llm.Tried{
+		{Account: "acc_11111111", Provider: "openai", Model: "gpt-4o", Result: "rate_limit"},
+		{Account: "acc_22222222", Provider: "openai", Model: "gpt-4o", Result: "ok"},
+	}
+	s.Add(Event{Timestamp: c.now(), Model: "gpt-4o", Attempts: 2, Tried: tried})
+	s.Add(Event{Timestamp: c.now(), Model: "gpt-4o", Attempts: 1})
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := openStore(Options{Dir: dir}, c.now, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	ev := s2.Events(Filter{}, 0, 10).Events
+	if len(ev) != 3 || ev[0].Attempts != 0 || ev[0].Tried != nil || ev[1].Attempts != 2 || !slices.Equal(ev[1].Tried, tried) ||
+		ev[2].Attempts != 1 || ev[2].Tried != nil {
+		t.Fatalf("events after reload = %+v", ev)
+	}
+}

@@ -346,6 +346,7 @@ func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat
 		t.attempt(a)
 		m.attempt(a, t.id)
 	}
+	rr.AttemptFailed = m.attemptFailed
 	stream := meterStream(g.Router.Generate(host.WithPayloadClient(r.Context(), req.Model, r.Header), rr), m)
 	defer stream.Close()
 	fail := func(e *llm.Error) {
