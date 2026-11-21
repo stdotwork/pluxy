@@ -407,6 +407,15 @@ func (c *Core) handleSetup(m *server.Management) {
 			writeError(w, http.StatusInternalServerError, "internal", "core's own address is not known: "+err.Error())
 			return
 		}
+		// A caller on another machine uses the address it reached core by, which is the one its
+		// own programs reach core at; core's listen address names this machine instead.
+		if !server.FromThisMachine(r) {
+			baseURL, err = server.ReachedURL(r)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+				return
+			}
+		}
 		snip, _ := ClientSnippetFor(id, baseURL, key)
 		reply := management.ClientPaste{Tool: snip.Tool, Name: snip.Name, BaseURL: baseURL, Key: key, Note: snip.Note}
 		for _, f := range snip.Files {

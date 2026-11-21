@@ -734,10 +734,26 @@ func (m *Management) refresh(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, management.AccountReply{Account: m.view(rec)})
 }
 
-func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
-	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxManagementBody))
-	if err != nil {
+// readBody reads a management request body, up to limit bytes. It writes the error reply and
+// returns false when it cannot: 413 invalid_request for a body larger than core reads, 400
+// invalid_request for one it cannot read otherwise.
+func readBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, bool) {
+	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
+	if err == nil {
+		return b, true
+	}
+	var tooBig *http.MaxBytesError
+	if errors.As(err, &tooBig) {
 		writeManagementError(w, http.StatusRequestEntityTooLarge, "invalid_request", "request body is too large")
+		return nil, false
+	}
+	writeManagementError(w, http.StatusBadRequest, "invalid_request", "reading the request body: "+err.Error())
+	return nil, false
+}
+
+func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	b, ok := readBody(w, r, maxManagementBody)
+	if !ok {
 		return false
 	}
 	if err := json.Unmarshal(b, v); err != nil {
