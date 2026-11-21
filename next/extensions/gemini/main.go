@@ -62,14 +62,14 @@ func main() {
 	err := sdk.Serve(sdk.Extension{
 		ID:           id,
 		Version:      version,
-		Generate:     generate,
+		Generate:     masked(generate),
 		LoginMethods: loginMethods,
 		Login:        login,
-		CountTokens:  countTokens,
+		CountTokens:  masked(countTokens),
 		Models:       listModels,
 		Check:        check,
 		Quota:        quota,
-		Endpoint:     endpoint,
+		Endpoint:     masked(endpoint),
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "gemini:", err)
@@ -463,6 +463,7 @@ type reporting struct {
 	out    sender
 	tr     *llm.Translation
 	redact *protocol.Redactor // nil, or what else to remove from upstream data
+	known  []string           // the account's own Google project and identity, which an error must not name
 	names  map[string]string  // GenerateContent name -> the client's
 	// schemas are the request's function schemas by the client's tool name, and callNames the
 	// client's name of each open call, for integralArguments; both nil on a passthrough body.

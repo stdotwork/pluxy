@@ -200,3 +200,13 @@ func TestIsGoogleErrorShape(t *testing.T) {
 		}
 	}
 }
+
+// ErrorInfo's own example puts the project in metadata.resource.
+func TestMaskErrorInfoResource(t *testing.T) {
+	raw := `{"error":{"code":403,"message":"m","status":"PERMISSION_DENIED","details":[{"reason":"API_DISABLED","domain":"googleapis.com","metadata":{"resource":"projects/123","service":"pubsub.googleapis.com"}}]}}`
+	got := MaskProject(&llm.Error{Message: "m", Raw: json.RawMessage(raw)})
+	want := strings.Replace(raw, "projects/123", "projects/[redacted]", 1)
+	if string(got.Raw) != want {
+		t.Errorf("raw = %s\nwant  %s", got.Raw, want)
+	}
+}

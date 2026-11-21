@@ -108,7 +108,7 @@ func login(ctx context.Context, call sdk.LoginCall, _ *sdk.LoginSession) (*proto
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		e := upstreamError(resp, "")
+		e := ownerUpstreamError(resp, "")
 		if e.Status >= 500 || e.Code == llm.CodeAuth || e.Code == llm.CodePermission {
 			e.Retryable = false
 		}
