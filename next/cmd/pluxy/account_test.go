@@ -38,6 +38,8 @@ type fakeAccountCore struct {
 	imports    []management.AuthImportRequest
 	vertices   []string
 	failDelete bool
+	// deleteDelay makes a cancel take that long to answer, as a core that is busy does.
+	deleteDelay time.Duration
 	// onCreate runs on each sign-in the fake starts, so a test can make one fail or end late.
 	onCreate func(*fakeAccountLogin)
 }
@@ -323,6 +325,9 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/logins/"):
 		id := strings.TrimPrefix(path, "/logins/")
+		if f.deleteDelay > 0 {
+			time.Sleep(f.deleteDelay)
+		}
 		if f.failDelete {
 			w.WriteHeader(http.StatusInternalServerError)
 			write(map[string]any{"error": map[string]any{"code": "failed", "message": "the test core cannot cancel it"}})

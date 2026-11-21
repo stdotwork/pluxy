@@ -87,6 +87,10 @@ type invocation struct {
 	stdout io.Writer
 	stderr io.Writer
 	tty    bool
+	// restoreEcho puts the terminal's echo back on. A command that gives up while a secret is
+	// being typed calls it before cancelling the sign-in in core, since that call may take
+	// seconds when core does not answer.
+	restoreEcho func()
 }
 
 // call makes one management call. With --json the reply's body goes to standard output as it

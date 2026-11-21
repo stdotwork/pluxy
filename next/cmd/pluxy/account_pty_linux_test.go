@@ -31,12 +31,13 @@ const (
 
 // The runs.
 const (
-	ptySecret  = "secret"  // a secret field, typed and answered
-	ptySigint  = "sigint"  // Ctrl-C while the secret is being typed
-	ptySigterm = "sigterm" // SIGTERM at the same point
-	ptyHangup  = "hangup"  // SIGHUP at the same point
-	ptySwitch  = "switch"  // the prompt changes to a secret field while a plain one is read
-	ptyJSON    = "json"    // --json on a terminal, which asks nothing and reads nothing
+	ptySecret     = "secret"     // a secret field, typed and answered
+	ptySigint     = "sigint"     // Ctrl-C while the secret is being typed
+	ptySigterm    = "sigterm"    // SIGTERM at the same point
+	ptyHangup     = "hangup"     // SIGHUP at the same point
+	ptySwitch     = "switch"     // the prompt changes to a secret field while a plain one is read
+	ptyJSON       = "json"       // --json on a terminal, which asks nothing and reads nothing
+	ptySlowCancel = "slowcancel" // SIGTERM while core takes its time to take the cancel
 )
 
 // TestCLIAccountTerminal is the test in the parent, and the command's run in the child it starts.
@@ -87,6 +88,21 @@ func TestCLIAccountTerminal(t *testing.T) {
 		p.waitEcho(true)
 		p.wantChild(t, "code=1", "cancelled=1")
 	})
+	// The echo comes back before core is asked to cancel the sign-in: a core that takes its time
+	// must not keep the terminal hidden.
+	t.Run("slowcancel", func(t *testing.T) {
+		p := startPTY(t, ptySlowCancel)
+		p.waitEcho(false)
+		p.signal(t, syscall.SIGTERM)
+		p.waitEcho(true)
+		select {
+		case err := <-p.done:
+			t.Fatalf("the command ended (%v) before the echo came back, so the cancel call came first", err)
+		default:
+		}
+		p.waitExit(t, 1)
+		p.wantChild(t, "code=1", "cancelled=1")
+	})
 	// A prompt that changes to a secret field while the plain one is still being read: the echo
 	// goes off for the secret at once, and the line read for the old field is dropped.
 	t.Run("switch", func(t *testing.T) {
@@ -115,6 +131,9 @@ func TestCLIAccountTerminal(t *testing.T) {
 // and core did is written to the parent as one line, since the parent cannot see core.
 func ptyChild(t *testing.T, scenario string) {
 	f := newFakeAccountCore(t)
+	if scenario == ptySlowCancel {
+		f.deleteDelay = 3 * time.Second
+	}
 	method := "secret_prompt"
 	if scenario == ptySwitch {
 		method = "switch"

@@ -315,6 +315,10 @@ func (x *invocation) afterLoginStart(l management.Login, body []byte, in signInI
 func (x *invocation) followLogin(l management.Login, body []byte, in signInInputs, lines *lineReader, again bool) error {
 	ctx, stop := context.WithTimeout(x.ctx, accountLoginTimeout)
 	defer stop()
+	// The terminal's echo goes back on before the sign-in is cancelled in core, which may take
+	// seconds to answer.
+	x.restoreEcho = lines.show
+	defer func() { x.restoreEcho = nil }()
 
 	shown := ""
 	var prompt *promptInput
@@ -681,6 +685,11 @@ func (x *invocation) loginEnded(l management.Login, body []byte, again bool) err
 // cancelLogin stops a sign-in the command gives up on and returns err, the reason it did. It says
 // when core did not take the cancel, since such a sign-in is still in core.
 func (x *invocation) cancelLogin(id string, err error) error {
+	// A terminal with a secret's echo still off is put back first: the cancel call below waits up
+	// to five seconds for core.
+	if x.restoreEcho != nil {
+		x.restoreEcho()
+	}
 	// The command's own context may be the one that ended (Ctrl-C), so the cancel call gets a
 	// context of its own; core keeps a sign-in no one cancelled, so it is worth the try.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(x.ctx), 5*time.Second)
