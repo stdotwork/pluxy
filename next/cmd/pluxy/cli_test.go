@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -543,6 +544,126 @@ func TestUsageCLI(t *testing.T) {
 	}
 	if !strings.Contains(seenQueries[2], "before=0") || !strings.Contains(seenQueries[2], "limit=5") || !strings.Contains(seenQueries[2], "key=k1") {
 		t.Errorf("usage events query = %q, want before=0, limit=5, key=k1", seenQueries[2])
+	}
+}
+
+// theme add keeps the ID alone on standard output, so it can be piped, and says on standard error
+// that the theme is not on, unless it is or core does not say.
+func TestThemeAddSaysItIsNotOn(t *testing.T) {
+	var mu sync.Mutex
+	var requests []string
+	list := func(w http.ResponseWriter) { w.Write([]byte(`{"current":"","themes":[]}`)) }
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		if r.Method == http.MethodGet {
+			list(w)
+			return
+		}
+		w.Write([]byte(`{"id":"t3/f","name":"F","bytes":12}` + "\n"))
+	}))
+	defer srv.Close()
+	file := filepath.Join(t.TempDir(), "f.json")
+	if err := os.WriteFile(file, []byte(`{"name":"F"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run := func(args ...string) (string, string, int, []string) {
+		mu.Lock()
+		requests = nil
+		mu.Unlock()
+		var out, errOut bytes.Buffer
+		code := runCLI(append(args, "--url", srv.URL, "--key", "k"), &out, &errOut, func(string) string { return "" })
+		mu.Lock()
+		defer mu.Unlock()
+		return out.String(), errOut.String(), code, slices.Clone(requests)
+	}
+	const notOn = "Stored but not turned on. To turn it on, run: pluxy theme set t3/f\n"
+	for _, c := range []struct {
+		name    string
+		list    func(http.ResponseWriter)
+		wantErr string
+	}{
+		{"nothing selected", func(w http.ResponseWriter) { w.Write([]byte(`{"current":"","themes":[]}`)) }, notOn},
+		{"another selected", func(w http.ResponseWriter) { w.Write([]byte(`{"current":"pluxy/paper","themes":[]}`)) }, notOn},
+		{"already selected", func(w http.ResponseWriter) { w.Write([]byte(`{"current":"t3/f","themes":[]}`)) }, ""},
+		{"a field of a newer core", func(w http.ResponseWriter) { w.Write([]byte(`{"current":"t3/f","themes":7}`)) }, ""},
+		{"list fails", func(w http.ResponseWriter) { w.WriteHeader(http.StatusInternalServerError) }, ""},
+		{"list is not JSON", func(w http.ResponseWriter) { w.Write([]byte("not json")) }, ""},
+	} {
+		mu.Lock()
+		list = c.list
+		mu.Unlock()
+		out, errOut, code, _ := run("theme", "add", file)
+		if code != 0 || out != "t3/f\n" || errOut != c.wantErr {
+			t.Errorf("%s: exit %d, stdout %q, stderr %q; want 0, the ID alone, %q", c.name, code, out, errOut, c.wantErr)
+		}
+	}
+	// --json prints core's reply and nothing else, and asks core nothing more.
+	out, errOut, code, sent := run("theme", "add", file, "--json")
+	if code != 0 || out != `{"id":"t3/f","name":"F","bytes":12}`+"\n" || errOut != "" || len(sent) != 1 {
+		t.Errorf("--json: exit %d, stdout %q, stderr %q, requests %q", code, out, errOut, sent)
+	}
+
+	// A bad ID is refused here, in plain words, with no request.
+	const shape = `write it as publisher/name, such as my/paper, with each part 1 to 64 characters from a-z, 0-9 and -`
+	for id, want := range map[string]string{
+		"Bad Id":                        `theme ID "Bad Id" is not valid: ` + shape,
+		"nopublisher":                   `theme ID "nopublisher" is not valid: ` + shape,
+		"a/b/c":                         `theme ID "a/b/c" is not valid: ` + shape,
+		"my/" + strings.Repeat("a", 65): `theme ID "my/` + strings.Repeat("a", 65) + `" is not valid: ` + shape,
+		"current/paper":                 `theme ID "current/paper" is not valid: "current" cannot be the publisher, so use another, such as my/paper`,
+	} {
+		out, errOut, code, sent := run("theme", "add", file, "--id", id)
+		if code != exitUsage || out != "" || errOut != "pluxy: "+want+"\n" || len(sent) != 0 {
+			t.Errorf("--id %q: exit %d, stdout %q, stderr %q, requests %q; want exit 2 and %q", id, code, out, errOut, sent, want)
+		}
+	}
+	// So is an ID worked out from a file whose name leaves nothing to use.
+	noName := filepath.Join(t.TempDir(), ".json")
+	if err := os.WriteFile(noName, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, errOut, code, sent := run("theme", "add", noName); code != exitUsage || !strings.Contains(errOut, shape) || len(sent) != 0 {
+		t.Errorf("a file named .json: exit %d, stderr %q, requests %q", code, errOut, sent)
+	}
+}
+
+// A command group's --help and -h list its commands on standard output, for every group; a bare
+// group and an unknown subcommand stay usage errors.
+func TestGroupHelp(t *testing.T) {
+	run := func(args ...string) (string, string, int) {
+		var out, errOut bytes.Buffer
+		code := runCLI(args, &out, &errOut, func(string) string { return "" })
+		return out.String(), errOut.String(), code
+	}
+	groups := map[string]bool{}
+	for _, c := range commands {
+		if word, _, ok := strings.Cut(c.words, " "); ok && !slices.ContainsFunc(commands, func(o command) bool { return o.words == word }) {
+			groups[word] = true
+		}
+	}
+	if !groups["theme"] || len(groups) < 3 {
+		t.Fatalf("groups = %v", groups)
+	}
+	for group := range groups {
+		for _, flag := range []string{"--help", "-h", "-help", "--h"} {
+			out, errOut, code := run(group, flag)
+			if code != exitOK || errOut != "" || !strings.HasPrefix(out, "usage: pluxy "+group+" <command> [flags]\n") {
+				t.Errorf("%s %s: exit %d, stdout %q, stderr %q", group, flag, code, out, errOut)
+			}
+			for _, c := range commands {
+				if strings.HasPrefix(c.words, group+" ") && !strings.Contains(out, c.words) {
+					t.Errorf("%s %s does not list %q", group, flag, c.words)
+				}
+			}
+		}
+		if out, errOut, code := run(group); code != exitUsage || out != "" || !strings.Contains(errOut, group+" needs a command") {
+			t.Errorf("bare %s: exit %d, stdout %q, stderr %q", group, code, out, errOut)
+		}
+		if out, errOut, code := run(group, "frobnicate", "--help"); code != exitUsage || out != "" || !strings.Contains(errOut, "unknown "+group+" command") {
+			t.Errorf("%s frobnicate --help: exit %d, stdout %q, stderr %q", group, code, out, errOut)
+		}
 	}
 }
 

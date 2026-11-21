@@ -39,13 +39,23 @@ var (
 	errNotTheme      = errors.New("not one JSON object")
 	errThemeTooLarge = errors.New("theme exceeds size limit")
 	errThemeLimit    = fmt.Errorf("at most %d themes can be stored", maxStoredThemes)
+	errNoSuchTheme   = errors.New("no theme has this ID")
 )
+
+// builtInThemePublisher is the publisher of the themes the UI ships.
+const builtInThemePublisher = "pluxy"
+
+// builtInThemeIDs are the themes the UI ships (next/ui/themes/*.json). Core holds no file for
+// them; TestBuiltInThemeIDsMatchTheUI keeps this list equal to the UI's.
+var builtInThemeIDs = []string{"pluxy/default", "pluxy/paper", "pluxy/terminal"}
 
 // themeStore keeps user-added theme JSON files under <state>/themes/<publisher>/<name>.json
 // and the selected theme ID in <state>/themes/current.
 type themeStore struct {
 	dir string
 	mu  sync.Mutex
+	// onSelectChecked is a test hook; it runs between a selection's check and its write.
+	onSelectChecked func()
 }
 
 func newThemeStore(dir string) *themeStore { return &themeStore{dir: dir} }
@@ -83,8 +93,15 @@ func (c *Core) handleThemes(m *server.Management) {
 
 	m.Handle("PUT /themes/{publisher}/{name}", func(w http.ResponseWriter, r *http.Request) {
 		pub, name := r.PathValue("publisher"), r.PathValue("name")
-		if _, err := parseThemeParts(pub, name); err != nil {
+		id, err := parseThemeParts(pub, name)
+		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		// The UI lists its own theme under this ID, so a stored file would never show.
+		if slices.Contains(builtInThemeIDs, id) {
+			writeError(w, http.StatusUnprocessableEntity, "refused",
+				fmt.Sprintf("%s is a built-in theme's ID. Use an ID of your own, such as my/%s, and add it again", id, name))
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, maxThemeBytes)
@@ -148,12 +165,30 @@ func (c *Core) handleThemes(m *server.Management) {
 			writeError(w, http.StatusBadRequest, "invalid_request", fmt.Sprintf("theme ID %q is not valid", *req.ID))
 			return
 		}
-		if err := c.themes.setCurrent(*req.ID); err != nil {
+		err := c.themes.setCurrent(*req.ID)
+		switch {
+		case errors.Is(err, errNoSuchTheme):
+			writeError(w, http.StatusNotFound, "not_found", noSuchThemeMessage(*req.ID))
+		case err != nil:
 			writeError(w, http.StatusInternalServerError, "internal", err.Error())
-			return
+		default:
+			writeJSON(w, http.StatusOK, management.ThemeSelection{ID: *req.ID})
 		}
-		writeJSON(w, http.StatusOK, management.ThemeSelection{ID: *req.ID})
 	})
+}
+
+// noSuchThemeMessage names the built-in themes, which `pluxy theme list` does not show.
+func noSuchThemeMessage(id string) string {
+	last := len(builtInThemeIDs) - 1
+	builtIns := strings.Join(builtInThemeIDs[:last], ", ") + " and " + builtInThemeIDs[last]
+	return fmt.Sprintf("no theme has the ID %s. The built-in themes are %s; run \"pluxy theme list\" to see the stored ones", id, builtIns)
+}
+
+// uiMayHoldTheme reports whether id can be a theme the UI holds rather than core: a listed
+// built-in, or another ID of their publisher, since a newer panel or app may ship a built-in this
+// core does not list.
+func uiMayHoldTheme(id string) bool {
+	return slices.Contains(builtInThemeIDs, id) || strings.HasPrefix(id, builtInThemePublisher+"/")
 }
 
 func readStrictJSONComplete(w http.ResponseWriter, r *http.Request, v any) bool {
@@ -506,6 +541,26 @@ func (s *themeStore) remove(pub, name string) error {
 	return nil
 }
 
+// storedLocked reports whether list counts id as a stored theme.
+func (s *themeStore) storedLocked(id string) (bool, error) {
+	top, err := s.openTop(false)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	defer top.Close()
+	themes, err := s.listEntriesLocked(top)
+	if err != nil {
+		return false, err
+	}
+	return slices.ContainsFunc(themes, func(t management.ThemeSummary) bool { return t.ID == id }), nil
+}
+
+// setCurrent selects id, or clears the selection when id is empty. An ID that is neither a stored
+// theme nor one the UI may hold is errNoSuchTheme, and the selection stays. The check and the
+// write share one hold of the lock, so a theme removed meanwhile cannot end up selected.
 func (s *themeStore) setCurrent(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -522,6 +577,18 @@ func (s *themeStore) setCurrent(id string) error {
 			return err
 		}
 		return private.SyncDir(top)
+	}
+	if !uiMayHoldTheme(id) {
+		stored, err := s.storedLocked(id)
+		if err != nil {
+			return err
+		}
+		if !stored {
+			return errNoSuchTheme
+		}
+	}
+	if s.onSelectChecked != nil {
+		s.onSelectChecked()
 	}
 	top, err := s.openTop(true)
 	if err != nil {

@@ -212,6 +212,34 @@ func TestManageThemesAPI(t *testing.T) {
 			t.Fatalf("replace at cap = %d (%s), want 200", code, body)
 		}
 	})
+
+	t.Run("built-in IDs cannot be stored and unknown IDs cannot be selected", func(t *testing.T) {
+		base, _, _ := startOnFreePort(t, filepath.Join(binDir, "pluxy"), cfgPath, cfgContent, "-watch-interval=0")
+
+		code, body := mcall(t, base, managementKey, http.MethodPut, "/themes/pluxy/paper", `{"name":"Mine"}`)
+		var errBody mgmt.ErrorBody
+		if err := json.Unmarshal(body, &errBody); err != nil || code != http.StatusUnprocessableEntity || errBody.Error.Code != "refused" ||
+			!strings.Contains(errBody.Error.Message, "built-in") { // the store is at its cap here, which is also a 422
+			t.Fatalf("PUT /themes/pluxy/paper = %d %s, want 422 refused for the built-in's ID", code, body)
+		}
+		if code, body := mcall(t, base, managementKey, http.MethodPut, "/theme", `{"id":"t3/cap-00"}`); code != http.StatusOK {
+			t.Fatalf("PUT /theme stored = %d: %s", code, body)
+		}
+		code, body = mcall(t, base, managementKey, http.MethodPut, "/theme", `{"id":"nope/nothing"}`)
+		errBody = mgmt.ErrorBody{}
+		if err := json.Unmarshal(body, &errBody); err != nil || code != http.StatusNotFound || errBody.Error.Code != "not_found" {
+			t.Fatalf("PUT /theme unknown = %d %s, want 404 not_found", code, body)
+		}
+		_, body = mcall(t, base, managementKey, http.MethodGet, "/themes", nil)
+		var list mgmt.ThemesReply
+		if err := json.Unmarshal(body, &list); err != nil || list.Current != "t3/cap-00" {
+			t.Fatalf("GET /themes after the refusal = %s, want current t3/cap-00", body)
+		}
+		// A built-in this core does not list, from a newer panel or app.
+		if code, body := mcall(t, base, managementKey, http.MethodPut, "/theme", `{"id":"pluxy/from-a-newer-ui"}`); code != http.StatusOK {
+			t.Fatalf("PUT /theme of the built-ins' publisher = %d: %s", code, body)
+		}
+	})
 }
 
 func TestCLIThemes(t *testing.T) {
@@ -324,5 +352,46 @@ func TestCLIThemes(t *testing.T) {
 	}
 	if r = runCLI(t, env, "theme", "remove", "acme/missing"); r.code != 5 {
 		t.Fatalf("theme remove missing: %s, want exit 5", r)
+	}
+
+	// 7. A built-in's ID and a bad ID are refused, and say what to do.
+	r = runCLI(t, env, "theme", "add", fileWithID, "--id", "pluxy/paper")
+	if r.code != 6 || r.stdout != "" || !strings.Contains(r.stderr, "pluxy/paper is a built-in theme's ID") {
+		t.Fatalf("theme add --id pluxy/paper: %s, want exit 6 and the reason", r)
+	}
+	r = runCLI(t, env, "theme", "add", fileWithID, "--id", "Bad Id")
+	if r.code != 2 || r.stdout != "" || !strings.Contains(r.stderr, "publisher/name") || strings.Contains(r.stderr, "404") {
+		t.Fatalf("theme add --id Bad Id: %s, want exit 2 and what an ID looks like", r)
+	}
+
+	// 8. An ID no theme has is not selected.
+	if r = runCLI(t, env, "theme", "set", "t3/night-fall"); r.code != 0 {
+		t.Fatalf("theme set stored: %s", r)
+	}
+	r = runCLI(t, env, "theme", "set", "nope/nothing")
+	if r.code != 5 || r.stdout != "" || !strings.Contains(r.stderr, "nope/nothing") || !strings.Contains(r.stderr, "pluxy theme list") {
+		t.Fatalf("theme set nope/nothing: %s, want exit 5 and where the IDs are", r)
+	}
+	if r = runCLI(t, env, "theme", "list"); !strings.Contains(r.stdout, "current: t3/night-fall") {
+		t.Fatalf("theme list after the refusal: %s, want the selection unchanged", r)
+	}
+
+	// 9. add keeps the ID alone on standard output and says on standard error that it is not on,
+	// unless it already is.
+	r = runCLI(t, env, "theme", "add", fileWithID, "--id", "acme/second")
+	if r.code != 0 || r.stdout != "acme/second\n" || !strings.Contains(r.stderr, "pluxy theme set acme/second") {
+		t.Fatalf("theme add of a theme that is not on: %s", r)
+	}
+	r = runCLI(t, env, "theme", "add", fileT3Name)
+	if r.code != 0 || r.stdout != "t3/night-fall\n" || r.stderr != "" {
+		t.Fatalf("theme add of the theme that is on: %s, want no line on standard error", r)
+	}
+
+	// 10. The group's help.
+	for _, flag := range []string{"--help", "-h"} {
+		r = runCLI(t, nil, "theme", flag)
+		if r.code != 0 || !strings.Contains(r.stdout, "theme add <file>") || r.stderr != "" {
+			t.Fatalf("theme %s: %s, want exit 0 and the commands on standard output", flag, r)
+		}
 	}
 }
