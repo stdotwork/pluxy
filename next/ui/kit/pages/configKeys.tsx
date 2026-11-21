@@ -178,6 +178,7 @@ function ClientKeys(props: { state: KeysState; tab: string; onChanged: () => voi
             type="button"
             class="btn"
             data-part="button"
+            data-slot="button"
             data-variant="quiet"
             aria-disabled={state.adding || keys.loading || deleting}
             onClick={add}

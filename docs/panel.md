@@ -44,6 +44,7 @@ label says that it spends one request.
 | System | Replaced Management Center Info. "Management Center" was the upstream panel's product name. |
 | Routing, Quota Management, Config Panel, Logs Viewer | The old panel's names: these pages do the same job as the old ones did. |
 | Usage | A new page; see [The Usage page](#the-usage-page). |
+| Set up pluxy | A new page, named for what a person does there. The panel opens it by itself on a first start; afterwards it stays in the navigation and shows the same things as they are now. |
 
 The navigation keeps the old panel's groups: Operate, Gateway, Observe, Control, and the
 extensions' pages last. Since every text goes through the string layer, renaming a page later is a
