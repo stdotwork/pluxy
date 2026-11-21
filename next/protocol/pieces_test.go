@@ -190,3 +190,30 @@ func TestReplaceRuns(t *testing.T) {
 		}
 	}
 }
+
+// Only a PEM private key counts by its lines. Any other secret keeps the 4-byte rule, even with a
+// line break in it, such as a token read from a file with its final newline: an upstream that
+// echoes a refused key cut to its first characters must not get them through.
+func TestRemovePiecesOnlyPEMCountsByLines(t *testing.T) {
+	for _, secret := range []string{"tok-abcdefghijklmnopqrstuvwxyz\n", "first-line-secret\nsecond-line-secret"} {
+		if got := RemovePieces("key tok-a... refused", secret); strings.HasPrefix(secret, "tok-") && got != "key [redacted] refused" {
+			t.Errorf("RemovePieces with %q = %q, want the 5-byte cut removed", secret, got)
+		}
+		if got := RemovePieces("key seco... refused", secret); !strings.HasPrefix(secret, "tok-") && got != "key [redacted] refused" {
+			t.Errorf("RemovePieces with %q = %q, want the 4-byte cut removed", secret, got)
+		}
+	}
+}
+
+// A fragment that runs across a PEM body's line break, as an upstream that unwraps the key would
+// echo it, is removed though neither side holds 8 bytes of one line.
+func TestRemovePiecesPEMAcrossLines(t *testing.T) {
+	const (
+		line1 = "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQInvaA7Zs3Lp9Qd"
+		line2 = "v2Wp8Ys3Nk6Qd4Rf1Gh5Ij7Kl2Mn0Op3Qr6St9Uv8Wx1Yz4Ab5Cd7Ef0Gh2Ij5K"
+	)
+	key := "-----BEGIN PRIVATE KEY-----\n" + line1 + "\n" + line2 + "\n-----END PRIVATE KEY-----\n"
+	if in := "cut " + line1[len(line1)-5:] + line2[:5]; RemovePieces(in, key) != "cut "+Redacted {
+		t.Errorf("RemovePieces(%q) = %q, want the fragment across the line break removed", in, RemovePieces(in, key))
+	}
+}

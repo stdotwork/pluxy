@@ -216,11 +216,10 @@ func secretQueryName(name string) bool {
 }
 
 // minPiece is the shortest piece of a secret RemovePieces replaces, as TrimCut counts one, for a
-// secret that does not span lines (minLinePiece for one that does).
+// secret other than a PEM private key (minLinePiece for one).
 const minPiece = minCutFragment
 
-// minLinePiece is the shortest piece RemovePieces takes from a secret that spans lines (a PEM
-// private key). Its lines are long and random, so 4 bytes of one are a coincidence in most errors,
+// minLinePiece is the shortest piece RemovePieces takes from a PEM private key. Its lines are long and random, so 4 bytes of one are a coincidence in most errors,
 // and would redact an ordinary word such as "Signature" for a key whose body spells "Sign", while a
 // fragment that short of a key is of no use. minFragment is the shortest line NewRedactor keeps as
 // a secret of its own, so it is the shortest piece of a line here too.
@@ -244,10 +243,10 @@ var escapedRun = regexp.MustCompile(`(?:[A-Za-z0-9_\-.+/=~]|\\u[0-9A-Fa-f]{4}|\\
 // own: a piece counts only when it holds at least one byte after the prefix, so words such as
 // "project" stay.
 //
-// A secret that spans lines (a PEM private key) counts by its lines, at minLinePiece bytes: its
+// A PEM private key counts by its lines and its unwrapped body, at minLinePiece bytes: its
 // body is long and random, so 4 bytes of it would be a coincidence in an error of any length, and
 // a key's fragment that short is of no use, while the error's own words are lost. So a key is
-// redacted whole for a fragment of minLinePiece bytes or more of one of its lines, a shorter run
+// redacted whole for a fragment of minLinePiece bytes or more of its body, a shorter run
 // of its body being kept.
 //
 // Text with words in it, such as a model's reply, would lose every word that shares minPiece
@@ -257,13 +256,20 @@ func RemovePieces(s string, secrets ...string) string {
 	pieces := map[string]bool{}
 	var linePieces map[string]bool
 	for _, secret := range secrets {
-		if strings.Contains(secret, "\n") {
+		if isPEMPrivateKey(secret) {
 			if linePieces == nil {
 				linePieces = map[string]bool{}
 			}
+			var body strings.Builder
 			for _, line := range strings.Split(secret, "\n") {
-				addPieces(linePieces, strings.TrimSpace(line), minLinePiece)
+				line = strings.TrimSpace(line)
+				addPieces(linePieces, line, minLinePiece)
+				if !strings.HasPrefix(line, "-----") {
+					body.WriteString(line)
+				}
 			}
+			// An upstream that unwraps the key echoes runs across its line breaks.
+			addPieces(linePieces, body.String(), minLinePiece)
 			continue
 		}
 		addPieces(pieces, secret, minPiece)
@@ -276,6 +282,14 @@ func RemovePieces(s string, secrets ...string) string {
 			len(linePieces) > 0 && holdsPieces(linePieces, t, minLinePiece)
 	}
 	return ReplaceRuns(s, func(run, d string) bool { return holds(d) || d != run && holds(run) })
+}
+
+// isPEMPrivateKey reports whether secret is a PEM private key, the one kind of secret that counts
+// by its lines. Any other secret keeps minPiece, a line break in it or not: a token read from a
+// file can end in one, and an upstream may echo its first characters.
+func isPEMPrivateKey(secret string) bool {
+	return strings.Contains(secret, "\n") && strings.Contains(secret, "-----BEGIN ") &&
+		strings.Contains(secret, "PRIVATE KEY-----")
 }
 
 // holdsPieces reports whether t holds one of set's pieces, each n bytes long.

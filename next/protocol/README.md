@@ -655,8 +655,8 @@ characters and `...`, which none of the forms above is. So from an upstream's er
 removes every run of token characters (letters, digits and `_-.+/=~`) that holds 4 or more
 consecutive characters of one of the account's secrets, reading a run as written and with its
 escapes decoded (JSON's `\/`, `\\` and `\uXXXX` and percent-encoding's `%XX`, nested up to 8
-times); a `[redacted]` already there stays as it is. A secret that spans lines (a PEM private key)
-counts by its lines, at 8 bytes or more in a row: its body is long and random, so 4 bytes of it
+times); a `[redacted]` already there stays as it is. A PEM private key
+counts by its lines and its unwrapped body, at 8 bytes or more in a row: its body is long and random, so 4 bytes of it
 would be a coincidence in most errors and would redact an ordinary word of them, such as
 `Signature` for a key whose body spells `Sign`, while a fragment that short of a key is of no use.
 The rule runs on an [error](#errors)'s `message` and on each string value of its `raw` (object keys
@@ -676,7 +676,7 @@ known vendor's public key prefix (`sk-proj-`, `sk-svcacct-`, `sk-admin-`, `sk-an
 `xai-` or `gsk_`, the longest that fits) gives no piece: a piece counts only when it holds a byte
 after the prefix, and only when 16 bytes or more of the secret follow the prefix, so a short
 secret keeps every piece. The rule still replaces any other word of the error that shares 4
-characters with a secret, or 8 with a line of one that spans lines, so core never applies it to a
+characters with a secret, or 8 with a PEM private key's body, so core never applies it to a
 reply that succeeded.
 
 In Go, `protocol.RemovePieces(s, secrets...)` applies the rule. `protocol.AccountSecretsWith`
