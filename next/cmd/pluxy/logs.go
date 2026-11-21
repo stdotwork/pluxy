@@ -85,13 +85,26 @@ func (x *invocation) logFile(path string) error {
 }
 
 // escapeWriter writes what it is given with the characters a terminal would act on shown as
-// text: the C0 controls and DEL other than newline and tab as \xNN (so a logged escape sequence
+// text: the C0 controls and DEL other than newline and tab (or including them when
+// escapeWhitespace is set, for a single table cell) as \xNN (so a logged escape sequence
 // cannot move the cursor, retitle the window or rewrite what is shown), the C1 controls, which
 // some terminals act on, as \uNNNN, and bytes that are not UTF-8 as \xNN. Everything else is
 // written as it is. A character cut in two by a Write is held until its rest comes.
 type escapeWriter struct {
-	w    io.Writer
-	hold []byte
+	w                io.Writer
+	hold             []byte
+	escapeWhitespace bool
+}
+
+// escapeTableCell runs s through escapeWriter with tabs and newlines also escaped, as \x09 and
+// \x0a. With the vertical tab and form feed escapeWriter always escapes, that covers every byte
+// text/tabwriter acts on, so a table cell cannot add a column or a row on a terminal.
+func escapeTableCell(s string) string {
+	var b bytes.Buffer
+	w := &escapeWriter{w: &b, escapeWhitespace: true}
+	_, _ = io.WriteString(w, s)
+	_ = w.flush()
+	return b.String()
 }
 
 func (e *escapeWriter) Write(p []byte) (int, error) {
@@ -101,7 +114,7 @@ func (e *escapeWriter) Write(p []byte) (int, error) {
 	for i := 0; i < len(data); {
 		b := data[i]
 		switch {
-		case b == '\n' || b == '\t' || (b >= 0x20 && b < 0x7f):
+		case (!e.escapeWhitespace && (b == '\n' || b == '\t')) || (b >= 0x20 && b < 0x7f):
 			out.WriteByte(b)
 			i++
 		case b < utf8.RuneSelf:
