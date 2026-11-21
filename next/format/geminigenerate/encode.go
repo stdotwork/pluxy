@@ -118,6 +118,10 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 	if o.ReasoningEffort != "" {
 		e.lose(llm.LossDropped, "reasoning_effort", "GenerateContent takes thinking settings, which depend on the model")
 	}
+	e.serviceTier(req, out)
+	if o.Verbosity != "" {
+		e.lose(llm.LossDropped, llm.VerbosityPath(req), "GenerateContent has no verbosity setting")
+	}
 
 	toolNameMap := ToolNames(req)
 	var decls []json.RawMessage
@@ -552,4 +556,21 @@ func IsThoughtSignature(s string) bool {
 		b, err = base64.RawStdEncoding.DecodeString(strings.TrimRight(s, "="))
 	}
 	return err == nil && len(b) > 0 && b[0] == 0x0a
+}
+
+// serviceTier writes the request's service tier into out as GenerateContent's serviceTier: the
+// default tier is standard, flex and priority are themselves. GenerateContent has no auto, scale
+// or ultrafast tier, and none for a value the model does not know: those are dropped and
+// reported, never moved to the nearest tier.
+func (e *encoder) serviceTier(req llm.Request, out map[string]any) {
+	tier := req.Options.ServiceTier
+	switch t := llm.CanonicalServiceTier(tier); t {
+	case "":
+	case llm.ServiceTierDefault:
+		out["serviceTier"] = "standard"
+	case llm.ServiceTierFlex, llm.ServiceTierPriority:
+		out["serviceTier"] = t
+	default:
+		e.lose(llm.LossDropped, llm.ServiceTierPath(req), fmt.Sprintf("GenerateContent has no %q service tier", tier))
+	}
 }

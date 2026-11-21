@@ -173,7 +173,18 @@ func ParseRequest(body []byte) (llm.Request, error) {
 			nested["response_format"] = raw
 		}
 	}
-	req.Origin = rawjson.Origin(format, "", top, requestFields, nested)
+	// service_tier and verbosity are carried when they are strings; any other value stays in
+	// Origin.Raw.
+	modelled := requestFields
+	if tier, ok := rawjson.Text(top["service_tier"]); ok {
+		req.Options.ServiceTier = tier
+		modelled = rawjson.With(modelled, "service_tier")
+	}
+	if v, ok := rawjson.Text(top["verbosity"]); ok {
+		req.Options.Verbosity = v
+		modelled = rawjson.With(modelled, "verbosity")
+	}
+	req.Origin = rawjson.Origin(format, "", top, modelled, nested)
 	for i, raw := range in.Tools {
 		t, err := parseTool(raw, fmt.Sprintf("tools[%d]", i))
 		if err != nil {
@@ -474,6 +485,8 @@ type outTail struct {
 	ParallelToolCalls *bool             `json:"parallel_tool_calls,omitempty"`
 	ResponseFormat    any               `json:"response_format,omitempty"`
 	ReasoningEffort   string            `json:"reasoning_effort,omitempty"`
+	ServiceTier       string            `json:"service_tier,omitempty"`
+	Verbosity         string            `json:"verbosity,omitempty"`
 }
 
 // encoder builds one Chat Completions request and records what it could not carry over.
@@ -551,6 +564,9 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 			TopP:            req.Options.TopP,
 			Stop:            req.Options.Stop,
 			ReasoningEffort: req.Options.ReasoningEffort,
+			// Chat Completions names the same tiers and verbosities as the model does.
+			ServiceTier: req.Options.ServiceTier,
+			Verbosity:   req.Options.Verbosity,
 		},
 	}
 	if req.Stream {

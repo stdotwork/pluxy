@@ -119,7 +119,21 @@ func ParseRequest(model string, stream bool, body []byte) (llm.Request, error) {
 		req.Options.ToolChoice = tc
 		nested["toolConfig"] = rest
 	}
-	req.Origin = rawjson.Origin(format, "", top, requestFields, nested)
+	modelled := requestFields
+	if tier, ok := rawjson.Text(top["serviceTier"]); ok {
+		// unspecified is standard, as an absent tier is: it names no tier of its own.
+		switch tier {
+		case "standard":
+			req.Options.ServiceTier = llm.ServiceTierDefault
+			modelled = rawjson.With(modelled, "serviceTier")
+		case "flex", "priority":
+			req.Options.ServiceTier = tier
+			modelled = rawjson.With(modelled, "serviceTier")
+		case "unspecified":
+			modelled = rawjson.With(modelled, "serviceTier")
+		}
+	}
+	req.Origin = rawjson.Origin(format, "", top, modelled, nested)
 
 	if raw, ok := top["tools"]; ok && !isNull(raw) {
 		var tools []json.RawMessage

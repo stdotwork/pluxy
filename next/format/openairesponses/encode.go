@@ -79,6 +79,7 @@ type outRequest struct {
 	ParallelToolCalls *bool             `json:"parallel_tool_calls,omitempty"`
 	Text              any               `json:"text,omitempty"`
 	Reasoning         any               `json:"reasoning,omitempty"`
+	ServiceTier       string            `json:"service_tier,omitempty"`
 }
 
 type outFunctionTool struct {
@@ -108,6 +109,8 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 		Temperature:       o.Temperature,
 		TopP:              o.TopP,
 		ParallelToolCalls: o.ParallelToolCalls,
+		// Responses names the same tiers as the model does.
+		ServiceTier: o.ServiceTier,
 	}
 	if len(o.Stop) > 0 {
 		e.lose(llm.LossDropped, "stop", "Responses has no stop sequences")
@@ -130,6 +133,14 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 			}
 		}
 		out.Text = map[string]any{"format": f}
+	}
+	if o.Verbosity != "" {
+		text, _ := out.Text.(map[string]any)
+		if text == nil {
+			text = map[string]any{}
+		}
+		text["verbosity"] = o.Verbosity
+		out.Text = text
 	}
 	if tc := o.ToolChoice; tc != nil {
 		switch {
