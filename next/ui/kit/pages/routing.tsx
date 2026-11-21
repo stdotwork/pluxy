@@ -358,7 +358,8 @@ export function RoutingPage() {
                             {p.text(a.id, accountIdentities(a))}
                             <small class="routing-identity muted">
                               {p.id(a.label)}
-                              {a.extension && <> · {a.extension}</>}
+                              {a.label && a.extension && " · "}
+                              {a.extension}
                             </small>
                             {a.source === "config" && <Badge tone="muted">{t("config")}</Badge>}
                           </>
