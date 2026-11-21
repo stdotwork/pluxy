@@ -48,12 +48,12 @@ type outMsg struct {
 }
 
 type outUsage struct {
-	PromptTokens        int64 `json:"prompt_tokens"`
-	CompletionTokens    int64 `json:"completion_tokens"`
-	TotalTokens         int64 `json:"total_tokens"`
+	PromptTokens        *int64 `json:"prompt_tokens,omitempty"`
+	CompletionTokens    *int64 `json:"completion_tokens,omitempty"`
+	TotalTokens         *int64 `json:"total_tokens,omitempty"`
 	PromptTokensDetails *struct {
-		CachedTokens     int64 `json:"cached_tokens"`
-		CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
+		CachedTokens     *int64 `json:"cached_tokens,omitempty"`
+		CacheWriteTokens int64  `json:"cache_write_tokens,omitempty"`
 	} `json:"prompt_tokens_details,omitempty"`
 	CompletionTokensDetails *struct {
 		ReasoningTokens int64 `json:"reasoning_tokens"`
@@ -116,7 +116,10 @@ func (u upstream) usage(us *llm.Usage) any {
 	if u.native && len(us.Raw) > 0 {
 		return us.Raw
 	}
-	return encodeUsage(us)
+	if out := encodeUsage(us); out != nil {
+		return out
+	}
+	return nil
 }
 
 // choices returns the choices kept in a native event.
@@ -131,31 +134,40 @@ func (u upstream) choices(ev llm.Event) []json.RawMessage {
 	return n.Choices
 }
 
+// encodeUsage writes model usage as Chat Completions usage. A count the upstream did not report is
+// left out rather than written as zero (CompletionUsage has no required field), and one it
+// reported as zero stays zero.
 func encodeUsage(u *llm.Usage) *outUsage {
 	if u == nil {
 		return nil
 	}
-	v := func(p *int64) int64 {
+	val := func(p *int64) int64 {
 		if p == nil {
 			return 0
 		}
 		return *p
 	}
-	out := &outUsage{PromptTokens: v(u.InputTokens), CompletionTokens: v(u.OutputTokens)}
-	out.TotalTokens = out.PromptTokens + out.CompletionTokens
-	if u.CachedInputTokens != nil || v(u.CacheWriteInputTokens) > 0 {
+	out := &outUsage{PromptTokens: u.InputTokens, CompletionTokens: u.OutputTokens}
+	if u.InputTokens != nil && u.OutputTokens != nil {
+		total := *u.InputTokens + *u.OutputTokens
+		out.TotalTokens = &total
+	}
+	if u.CachedInputTokens != nil || val(u.CacheWriteInputTokens) > 0 {
 		out.PromptTokensDetails = &struct {
-			CachedTokens     int64 `json:"cached_tokens"`
-			CacheWriteTokens int64 `json:"cache_write_tokens,omitempty"`
+			CachedTokens     *int64 `json:"cached_tokens,omitempty"`
+			CacheWriteTokens int64  `json:"cache_write_tokens,omitempty"`
 		}{
-			CachedTokens:     v(u.CachedInputTokens),
-			CacheWriteTokens: max(0, v(u.CacheWriteInputTokens)),
+			CachedTokens:     u.CachedInputTokens,
+			CacheWriteTokens: max(0, val(u.CacheWriteInputTokens)),
 		}
 	}
 	if u.ReasoningTokens != nil {
 		out.CompletionTokensDetails = &struct {
 			ReasoningTokens int64 `json:"reasoning_tokens"`
 		}{*u.ReasoningTokens}
+	}
+	if out.PromptTokens == nil && out.CompletionTokens == nil && out.PromptTokensDetails == nil && out.CompletionTokensDetails == nil {
+		return nil
 	}
 	return out
 }

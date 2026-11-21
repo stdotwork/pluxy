@@ -863,3 +863,54 @@ func TestStreamUsageLaterChunks(t *testing.T) {
 		}
 	})
 }
+
+// A count the upstream did not report stays absent from a Chat reply's usage instead of becoming
+// zero, and one it reported as zero is written as zero.
+func TestRenderUsageUnknownStaysAbsent(t *testing.T) {
+	render := func(u *llm.Usage) string {
+		t.Helper()
+		a := NewAggregator()
+		a.Add(llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "r1", Model: "m", Format: llm.FormatAnthropicMessages}})
+		a.Add(llm.Event{Type: llm.EventItemStart, Index: 0, Item: &llm.ItemStart{Kind: llm.ItemMessage}})
+		a.Add(llm.Event{Type: llm.EventTextDelta, Index: 0, Delta: "ok"})
+		a.Add(llm.Event{Type: llm.EventItemEnd, Index: 0})
+		a.Add(llm.Event{Type: llm.EventFinish, Finish: &llm.Finish{Reason: llm.FinishStop}, Usage: u})
+		b, err := a.Response()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out struct {
+			Usage json.RawMessage `json:"usage"`
+		}
+		if err := json.Unmarshal(b, &out); err != nil {
+			t.Fatal(err)
+		}
+		return string(out.Usage)
+	}
+
+	cases := []struct {
+		name string
+		u    *llm.Usage
+		want string
+	}{
+		{"only output known", &llm.Usage{OutputTokens: llm.Int64(5)}, `{"completion_tokens":5}`},
+		{"only input known", &llm.Usage{InputTokens: llm.Int64(7)}, `{"prompt_tokens":7}`},
+		{"nothing known", &llm.Usage{}, ``},
+		{"real zeros", &llm.Usage{InputTokens: llm.Int64(0), OutputTokens: llm.Int64(0)},
+			`{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}`},
+		{"cache write without a cache read", &llm.Usage{InputTokens: llm.Int64(10), OutputTokens: llm.Int64(2), CacheWriteInputTokens: llm.Int64(500)},
+			`{"prompt_tokens":10,"completion_tokens":2,"total_tokens":12,"prompt_tokens_details":{"cache_write_tokens":500}}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := render(c.u)
+			if c.want == "" {
+				if got != "" {
+					t.Fatalf("usage = %s, want none", got)
+				}
+				return
+			}
+			jsonEqual(t, []byte(got), c.want)
+		})
+	}
+}

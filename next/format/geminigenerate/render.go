@@ -52,22 +52,36 @@ func finishReason(f *llm.Finish, upFormat string) string {
 // encodeUsage writes model usage as usageMetadata, following Gemini's inclusion rules:
 // promptTokenCount counts every input token, cached ones included, with the cached part in
 // cachedContentTokenCount; candidatesTokenCount leaves out thoughtsTokenCount; totalTokenCount
-// is all of them.
+// is all of them. A count the upstream did not report is left out (UsageMetadata's fields are all
+// optional), and the total of a partly unknown usage with it.
 func encodeUsage(u *llm.Usage) obj {
 	if u == nil {
 		return nil
 	}
 	in, outTok, reasoning := val(u.InputTokens), val(u.OutputTokens), val(u.ReasoningTokens)
-	m := obj{
-		"promptTokenCount":     in,
-		"candidatesTokenCount": max(0, outTok-reasoning),
-		"totalTokenCount":      in + outTok,
+	m := obj{}
+	known := false
+	if u.InputTokens != nil {
+		m["promptTokenCount"] = in
+		known = true
+	}
+	if u.OutputTokens != nil {
+		m["candidatesTokenCount"] = max(0, outTok-reasoning)
+		known = true
+	}
+	if u.InputTokens != nil && u.OutputTokens != nil {
+		m["totalTokenCount"] = in + outTok
 	}
 	if c := val(u.CachedInputTokens); c > 0 {
 		m["cachedContentTokenCount"] = c
+		known = true
 	}
 	if reasoning > 0 {
 		m["thoughtsTokenCount"] = reasoning
+		known = true
+	}
+	if !known {
+		return nil
 	}
 	return m
 }
