@@ -149,6 +149,8 @@ func TestCLIOutput(t *testing.T) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /v0/management/client-keys":
 			w.Write([]byte(`{"keys":[{"id":"k1","masked":"sk******ab"}]}` + "\n"))
+		case "POST /v0/management/client-keys":
+			w.Write([]byte(`{"key":{"id":"k2","masked":"sk******cd"},"value":"sk-new-key"}` + "\n"))
 		case "GET /v0/management/status":
 			// A newer core whose version field changed type.
 			w.Write([]byte(`{"version":5,"active":{"revision":1}}` + "\n"))
@@ -212,6 +214,14 @@ func TestCLIOutput(t *testing.T) {
 		}
 		code := runCLI(args, &out, &errOut, env)
 		return out.String(), errOut.String(), code
+	}
+	// key add prints the new key on stdout and says on stderr that it is not shown again; --json
+	// prints the reply alone.
+	if out, errOut, code := run("key", "add"); code != 0 || out != "sk-new-key\n" || errOut != "Save this key now: pluxy will not print it again.\n" {
+		t.Fatalf("key add: code=%d out=%q err=%q", code, out, errOut)
+	}
+	if out, errOut, code := run("key", "add", "--json"); code != 0 || errOut != "" || !strings.HasPrefix(out, `{"key":`) {
+		t.Fatalf("key add --json: code=%d out=%q err=%q", code, out, errOut)
 	}
 	if out, _, code := run("key", "list", "--json"); code != 0 || out != `{"keys":[{"id":"k1","masked":"sk******ab"}]}`+"\n" {
 		t.Errorf("key list --json: %d %q, want the body unchanged", code, out)
@@ -430,14 +440,18 @@ func TestCLISetupAndClientShow(t *testing.T) {
 	}
 
 	// client show for all 5 tools, never printing the management key.
+	const placeholderHint = "Replace <client-key> with a client key: core's config file holds them, and \"pluxy key add\" makes another.\n"
 	for _, tool := range []string{"claude-code", "codex", "opencode", "pi", "omp"} {
 		out, errOut, code := runWith("", false, "client", "show", tool)
-		if code != 0 || errOut != "" || !strings.Contains(out, srv.URL) || strings.Contains(out, "mgmt-secret") {
+		if code != 0 || errOut != placeholderHint || !strings.Contains(out, srv.URL) || strings.Contains(out, "mgmt-secret") || strings.Contains(out, "Replace") {
 			t.Errorf("client show %s: code=%d err=%q out=%q", tool, code, errOut, out)
 		}
 	}
 	// Pi's files are JSON with no comment line in them.
-	out, _, _ := runWith("", false, "client", "show", "pi", "--json")
+	out, errOut, _ := runWith("", false, "client", "show", "pi", "--json")
+	if errOut != "" {
+		t.Errorf("client show pi --json: stderr=%q, want none", errOut)
+	}
 	var pi struct {
 		Files []struct{ Path, Content string }
 	}
@@ -450,8 +464,12 @@ func TestCLISetupAndClientShow(t *testing.T) {
 		}
 	}
 	// --key-id valid vs unknown.
-	if out, _, code := runWith("", false, "client", "show", "claude-code", "--key-id", "k1"); code != 0 || !strings.Contains(out, "k1") || !strings.Contains(out, "sk******ab") || strings.Contains(out, "mgmt-secret") {
-		t.Errorf("client show --key-id k1: code=%d out=%q", code, out)
+	const storedHint = "Replace <client-key:k1 (sk******ab)> with that key's full value from core's config file: pluxy never prints a stored key.\n"
+	if out, errOut, code := runWith("", false, "client", "show", "claude-code", "--key-id", "k1"); code != 0 || errOut != storedHint || !strings.Contains(out, "k1") || !strings.Contains(out, "sk******ab") || strings.Contains(out, "mgmt-secret") {
+		t.Errorf("client show --key-id k1: code=%d err=%q out=%q", code, errOut, out)
+	}
+	if out, errOut, code := runWith("", false, "client", "show", "claude-code", "--key-id", "k1", "--json"); code != 0 || errOut != "" || !json.Valid([]byte(out)) {
+		t.Errorf("client show --key-id k1 --json: code=%d err=%q out=%q", code, errOut, out)
 	}
 	if _, _, code := runWith("", false, "client", "show", "claude-code", "--key-id", "missing"); code != 5 {
 		t.Errorf("client show --key-id missing: code=%d, want 5", code)
