@@ -295,7 +295,12 @@ func login(ctx context.Context, call sdk.LoginCall, s *sdk.LoginSession) (*proto
 		return grant(call.Account.ID, oauthCredential("fake-refresh-token")), nil
 	case methodSettings:
 		var g protocol.Grant
-		raw, _ := json.Marshal(map[string]any{"credential": map[string]string{"kind": "api_key", "api_key": "testext-made-up-key"}, "settings": json.RawMessage(call.Input["settings"])})
+		fields := map[string]any{"credential": map[string]string{"kind": "api_key", "api_key": "testext-made-up-key"}}
+		// The method declares no input, so a sign-in started without one has no settings to carry.
+		if settings, ok := call.Input["settings"]; ok {
+			fields["settings"] = json.RawMessage(settings)
+		}
+		raw, _ := json.Marshal(fields)
 		err := json.Unmarshal(raw, &g)
 		return &g, err
 	case methodAPIKey:

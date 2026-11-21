@@ -68,6 +68,41 @@ func TestLoginGrantSettings(t *testing.T) {
 	check()
 }
 
+// The "settings" way of the test extension asks for nothing, so it is started with no input (the
+// panel and the command both do this), and adds an account with no settings of its own.
+func TestLoginGrantWithoutSettingsInput(t *testing.T) {
+	pkg := testPackage(t, "0.1.0")
+	base := runCore(t, map[string]any{
+		"listen": "127.0.0.1:0", "client_keys": []string{clientKey}, "management_key": managementKey,
+		"credentials_dir": filepath.Join(t.TempDir(), "credentials"),
+		"extension":       map[string]any{"manifest": filepath.Join(pkg, "pluxy-extension.json"), "accounts": []any{}},
+	})
+	var l loginReply
+	if code := manage(t, base, "POST", "/accounts", map[string]any{"id": "no-input", "method": "settings"}, &l); code != http.StatusAccepted {
+		t.Fatalf("POST /accounts: status %d", code)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for l.Login.State == "pending" && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+		manage(t, base, "GET", "/logins/"+l.Login.ID, nil, &l)
+	}
+	if l.Login.State != "done" {
+		t.Fatalf("login: state %s, error %+v", l.Login.State, l.Login.Error)
+	}
+	var list struct {
+		Accounts []struct {
+			ID       string          `json:"id"`
+			Settings json.RawMessage `json:"settings"`
+		} `json:"accounts"`
+	}
+	if code := manage(t, base, "GET", "/accounts", nil, &list); code != http.StatusOK {
+		t.Fatalf("GET /accounts: status %d", code)
+	}
+	if len(list.Accounts) != 1 || list.Accounts[0].ID != "no-input" || len(list.Accounts[0].Settings) != 0 {
+		t.Fatalf("accounts = %+v, want no-input with no settings", list.Accounts)
+	}
+}
+
 func TestLoginGrantInvalidCallerSettings(t *testing.T) {
 	pkg := testPackage(t, "0.1.0")
 	base := runCore(t, map[string]any{
