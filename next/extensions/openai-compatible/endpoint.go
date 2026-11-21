@@ -25,6 +25,8 @@ func endpointCall(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return embeddings(ctx, call, out)
 	case llm.FormatOpenAIImagesGenerations, llm.FormatOpenAIImagesEdits:
 		return images(ctx, call, out)
+	case llm.FormatOpenAIAudioSpeech, llm.FormatOpenAIAudioTranscriptions, llm.FormatOpenAIAudioTranslations:
+		return audio(ctx, call, out)
 	default:
 		return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
 			Message: fmt.Sprintf("the OpenAI-compatible extension does not serve %q", format)}

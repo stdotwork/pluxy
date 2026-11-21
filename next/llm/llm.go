@@ -187,6 +187,18 @@ const (
 	// mask[image_url] as mask.file_id and mask.image_url) and each file a data URL, the images
 	// (image[] or image) appended to images[].image_url and the mask as mask.image_url.
 	FormatOpenAIImagesEdits = "openai.images.edits"
+	// FormatOpenAIAudioSpeech is OpenAI's speech endpoint, POST /v1/audio/speech: a JSON
+	// request answered with binary audio under the upstream's Content-Type, or server-sent events
+	// when it asks for "stream_format": "sse". The binary reply travels as base64 body pieces.
+	FormatOpenAIAudioSpeech = "openai.audio.speech"
+	// FormatOpenAIAudioTranscriptions is OpenAI's transcription endpoint, POST
+	// /v1/audio/transcriptions. A multipart form arrives in its JSON form: each field a member,
+	// the uploaded file as {filename, content_type, data} with data base64, and a repeated field
+	// as a list. The reply is the upstream's, one JSON or text body or server-sent events.
+	FormatOpenAIAudioTranscriptions = "openai.audio.transcriptions"
+	// FormatOpenAIAudioTranslations is OpenAI's translation endpoint, POST
+	// /v1/audio/translations, with the same request and reply form as transcriptions.
+	FormatOpenAIAudioTranslations = "openai.audio.translations"
 	// FormatOpenAIEmbeddings is OpenAI's Embeddings API, POST /v1/embeddings: a JSON body,
 	// answered with one JSON object.
 	FormatOpenAIEmbeddings = "openai.embeddings"

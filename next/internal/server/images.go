@@ -69,11 +69,12 @@ func mediaType(contentType string) string {
 	return strings.ToLower(strings.TrimSpace(mt))
 }
 
-// formJSON reads a multipart/form-data Images API body into its JSON form, as today's core sends
-// such an edit to Codex: each field a member (n, output_compression and partial_images as
-// numbers, stream as a boolean, a repeated field as a list, mask[file_id] and mask[image_url]
-// inside mask), the image files (image[], else image) appended to images as data URLs, and the
-// first mask file as mask.image_url.
+// formJSON reads a multipart/form-data endpoint body into its JSON form. For an Images API edit,
+// as today's core sends it to Codex, each field is a member (n, output_compression and
+// partial_images as numbers, stream as a boolean, a repeated field as a list, mask[file_id] and
+// mask[image_url] inside mask), the image files (image[], else image) are appended to images as
+// data URLs, and the first mask file becomes mask.image_url. An audio file named file becomes
+// {filename, content_type, data}, where data is the file's bytes in base64.
 func formJSON(contentType string, body []byte) (json.RawMessage, *llm.Error) {
 	_, params, err := mime.ParseMediaType(contentType)
 	if err != nil || params["boundary"] == "" {
@@ -119,6 +120,21 @@ func formJSON(contentType string, body []byte) (json.RawMessage, *llm.Error) {
 	if len(mask) > 0 {
 		out["mask"] = mask
 	}
+	if files := form.File["file"]; len(files) > 0 {
+		vals := make([]any, len(files))
+		for i, fh := range files {
+			v, err := formFileValue(fh)
+			if err != nil {
+				return nil, badImagesRequest(err.Error())
+			}
+			vals[i] = v
+		}
+		if len(vals) == 1 {
+			out["file"] = vals[0]
+		} else {
+			out["file"] = vals
+		}
+	}
 	files := form.File["image[]"]
 	if len(files) == 0 {
 		files = form.File["image"]
@@ -163,21 +179,45 @@ func formValue(key, v string) any {
 	return v
 }
 
-// dataURL returns an uploaded file as a data URL, its media type from the part's Content-Type or
-// else sniffed from its bytes.
+// dataURL returns an uploaded file as a data URL.
 func dataURL(fh *multipart.FileHeader) (string, error) {
+	data, mt, err := upload(fh)
+	if err != nil {
+		return "", err
+	}
+	return "data:" + mt + ";base64," + base64.StdEncoding.EncodeToString(data), nil
+}
+
+// formFile is an uploaded file in a form's JSON form.
+type formFile struct {
+	Filename    string `json:"filename,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+	Data        string `json:"data"`
+}
+
+// formFileValue returns an uploaded file in the JSON form of an audio request.
+func formFileValue(fh *multipart.FileHeader) (formFile, error) {
+	data, mt, err := upload(fh)
+	if err != nil {
+		return formFile{}, err
+	}
+	return formFile{Filename: fh.Filename, ContentType: mt, Data: base64.StdEncoding.EncodeToString(data)}, nil
+}
+
+// upload reads an uploaded file and returns its bytes and media type.
+func upload(fh *multipart.FileHeader) ([]byte, string, error) {
 	f, err := fh.Open()
 	if err != nil {
-		return "", fmt.Errorf("reading the upload %q: %w", fh.Filename, err)
+		return nil, "", fmt.Errorf("reading the upload %q: %w", fh.Filename, err)
 	}
 	defer f.Close()
 	data, err := io.ReadAll(f)
 	if err != nil {
-		return "", fmt.Errorf("reading the upload %q: %w", fh.Filename, err)
+		return nil, "", fmt.Errorf("reading the upload %q: %w", fh.Filename, err)
 	}
 	mt := strings.TrimSpace(fh.Header.Get("Content-Type"))
 	if mt == "" {
 		mt = http.DetectContentType(data)
 	}
-	return "data:" + mt + ";base64," + base64.StdEncoding.EncodeToString(data), nil
+	return data, mt, nil
 }
