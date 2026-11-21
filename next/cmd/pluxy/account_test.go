@@ -132,12 +132,6 @@ func fakePrompt(method string) map[string]any {
 	case "input":
 		return map[string]any{"kind": "input", "message": "Enter the code.",
 			"inputs": []any{map[string]any{"name": "code", "label": "Code"}}}
-	case "fields":
-		return map[string]any{"kind": "input", "message": "Enter both.",
-			"inputs": []any{
-				map[string]any{"name": "one", "label": "First"},
-				map[string]any{"name": "two", "label": "Second"},
-			}}
 	case "ask_later":
 		return map[string]any{"kind": "input", "message": "Anything to add?",
 			"inputs": []any{map[string]any{"name": "note", "label": "Note", "optional": true}}}
@@ -195,8 +189,7 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 			map[string]any{"method": "browser", "kind": "browser", "label": "Browser"},
 			map[string]any{"method": "device", "kind": "device", "label": "Device"},
 			map[string]any{"method": "input", "kind": "input", "label": "Code"},
-			map[string]any{"method": "fields", "kind": "input", "label": "Two fields"},
-			map[string]any{"method": "ask_later", "kind": "browser", "label": "Asks later"},
+			map[string]any{"method": "ask_later", "kind": "input", "label": "Asks later"},
 			map[string]any{"method": "triple", "kind": "api_key", "label": "Three values",
 				"inputs": []any{
 					map[string]any{"name": "one", "label": "First"},
@@ -206,11 +199,6 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 			map[string]any{"method": "optional", "kind": "input", "label": "Optional note"},
 			map[string]any{"method": "secret_prompt", "kind": "input", "label": "Secret prompt"},
 			map[string]any{"method": "switch", "kind": "input", "label": "Two prompts"},
-			map[string]any{"method": "pair", "kind": "api_key", "label": "Two values",
-				"inputs": []any{
-					map[string]any{"name": "one", "label": "First"},
-					map[string]any{"name": "two", "label": "Second"},
-				}},
 			map[string]any{"method": "service_account", "kind": "api_key", "label": "Service account",
 				"inputs": []any{map[string]any{"name": "service_account", "label": "Service account key", "secret": true}}},
 			map[string]any{"method": "kept", "kind": "api_key", "label": "Base URL",
@@ -327,10 +315,6 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 			}
 		case "input", "optional", "secret_prompt":
 			l.late = func() { l.state, l.prompt = "done", nil }
-		case "fields":
-			if in["one"] != "" && in["two"] != "" {
-				l.late = func() { l.state, l.prompt = "done", nil }
-			}
 		case "switch":
 			if in["api_key"] != "" {
 				l.late = func() { l.state, l.prompt = "done", nil }
@@ -905,6 +889,24 @@ func TestFollowLoginRetriesRejectedInput(t *testing.T) {
 	}
 	if sent := f.sent(); len(sent) != 1 || sent[0]["code"] != "1" {
 		t.Errorf("core was sent %v, want the answer it took", sent)
+	}
+}
+
+// A prompt that changes after an answer is shown again and answered: the command waits for core to
+// move the prompt on, then reads the next value.
+func TestCLIAccountAddAnswersAChangedPrompt(t *testing.T) {
+	f := newFakeAccountCore(t)
+	out, errOut, code := f.runIn("https://localhost/callback?code=ok\n", false,
+		"account", "add", "test/ext", "--method", "browser", "--id", "changed-1",
+		"--input", "redirect_url=https://localhost/callback?code=nope")
+	if code != 0 || !strings.Contains(out, "account changed-1 added") {
+		t.Fatalf("account add with an answer core sent back: code=%d out=%q err=%q", code, out, errOut)
+	}
+	if !strings.Contains(errOut, "That address holds no sign-in code.") {
+		t.Errorf("the changed prompt was not shown: %q", errOut)
+	}
+	if sent := f.sent(); len(sent) != 2 {
+		t.Errorf("core was sent %v, want the refused address and the one that works", sent)
 	}
 }
 

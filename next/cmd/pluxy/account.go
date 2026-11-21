@@ -452,8 +452,8 @@ type signInInputs struct {
 }
 
 // optionalInput is the panel's rule for a field that may be left empty (next/ui/kit/loginFlow.tsx
-// optionalInput): the method says so, or signing in again keeps its value in the account's
-// settings, which only a non-secret value is.
+// optionalInput): the method says so, or a sign-in again finds the value already in the account's
+// settings, where only a non-secret value is kept.
 func optionalInput(f protocol.LoginInput, kept map[string]bool) bool {
 	return f.Optional || (!f.Secret && kept[f.Name])
 }
@@ -559,7 +559,8 @@ func jsonValue(sofar, line string) (string, bool, error) {
 }
 
 // take is one line of standard input: the value of the field that waits for it, or one more line
-// of a value that is a JSON document. An empty line answers an optional field with nothing.
+// of a value that is a JSON document. An empty line answers a field that may be left empty with
+// nothing, which is not sent.
 func (g *promptInput) take(line string) error {
 	f := g.next()
 	if f == nil {
@@ -575,7 +576,7 @@ func (g *promptInput) take(line string) error {
 	}
 	g.partial = ""
 	g.done[f.Name] = true
-	if v != "" || !f.Optional {
+	if v != "" || !optionalInput(*f, g.kept) {
 		g.got[f.Name] = v
 	}
 	return nil
@@ -593,7 +594,7 @@ func (g *promptInput) endOfInput(x *invocation, login string) error {
 		return x.cancelLogin(login, usageError{fmt.Sprintf("%s is not a complete JSON document, and standard input ended before its end", fieldName(*f))})
 	}
 	for _, f := range g.fields {
-		if g.done[f.Name] || f.Optional {
+		if g.done[f.Name] || optionalInput(f, g.kept) {
 			continue
 		}
 		return x.cancelLogin(login, usageError{fmt.Sprintf("the sign-in needs %s and standard input has no more lines: %s", fieldName(f), inputHint(f))})
@@ -813,6 +814,7 @@ type lineReader struct {
 	once     sync.Once
 	mu       sync.Mutex
 	closed   bool
+	ended    bool
 	asked    uint64
 	// restore turns the terminal's echo back on while a secret line is read; nil otherwise.
 	restore func()
@@ -849,6 +851,11 @@ func newLineReader(r io.Reader, term *os.File) *lineReader {
 			hidden := l.hidden()
 			line, err := l.src.ReadString('\n')
 			if err != nil && line == "" {
+				// The end is told before the end of input is delivered, so an ask made after
+				// that delivery is answered as end-of-input, never as a line that never comes.
+				l.mu.Lock()
+				l.ended = true
+				l.mu.Unlock()
 				select {
 				case l.lines <- lineRead{}:
 				case <-l.done:
@@ -917,7 +924,7 @@ func (l *lineReader) close() {
 func (l *lineReader) askLine(ctx context.Context, secret bool) (uint64, error) {
 	l.echo(secret)
 	l.mu.Lock()
-	if l.closed {
+	if l.closed || l.ended {
 		l.mu.Unlock()
 		return 0, errEndOfInput
 	}
