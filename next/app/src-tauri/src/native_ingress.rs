@@ -137,12 +137,29 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
             && flight.iter().filter(|r| r["status"] == 429).count() == 4,
         "in-flight flood did not admit exactly eight",
     )?;
+    // The limit is per second, so a flood shows it only when all 40 requests fit in one. One that
+    // did not (a loaded runner) says nothing about the limit: it is sent again from the same
+    // counts, at most three times in all.
     std::thread::sleep(Duration::from_millis(1800));
-    let r = command(&w, "rate", "rate")?;
+    // Read after that wait, once what the flood before this one started has finished.
+    let counters = [&ARRIVED, &ADMITTED, &FORWARDED, &OPERATIONS];
+    let before = counters.map(|c| c.load(SeqCst));
+    let mut tries = 0;
+    let r = loop {
+        let r = command(&w, "rate", "rate")?;
+        tries += 1;
+        if r["elapsed"].as_f64().unwrap_or(f64::MAX) < 1000.0 || tries == 3 {
+            break r;
+        }
+        std::thread::sleep(Duration::from_millis(1800));
+        for (c, n) in counters.iter().zip(before) {
+            c.store(n, SeqCst);
+        }
+    };
     let rate = r["rate"].as_array().ok_or("no rate report")?;
     require(
         r["elapsed"].as_f64().unwrap_or(f64::MAX) < 1000.0,
-        "rate flood did not fit in one second",
+        "rate flood did not fit in one second, in three tries",
     )?;
     require(
         rate.iter().filter(|r| r["status"] == 204).count() == 30

@@ -474,6 +474,7 @@ $out | ConvertTo-Json -Compress -Depth 3"#
         .flat_map(|u| u.to_le_bytes())
         .collect();
     let encoded = base64::engine::general_purpose::STANDARD.encode(encoded);
+    let started = std::time::Instant::now();
     let mut child = Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded])
         .stdin(Stdio::piped())
@@ -503,5 +504,6 @@ $out | ConvertTo-Json -Compress -Depth 3"#
     })?;
     // What the control itself says, beside what UI Automation reports of it.
     v["style_password"] = style_password.into();
+    v["ms"] = (started.elapsed().as_millis() as u64).into();
     Ok(v)
 }
