@@ -549,6 +549,37 @@ test("bringing a setup across is a dry run first, then the import, which re-read
   expect(tickedBoxes(fake.root)).toBe(1);
 });
 
+test("once the report of an import is closed, the row says it was brought across and offers no button", async () => {
+  let imported = false;
+  const fake = await mount((call) => {
+    if (call.method === "GET" && call.path === "/setup") {
+      const body = withImport();
+      const last_import = { at: "2026-11-20T08:30:05Z", brought: 1, changed: 0, not_brought: 1 };
+      if (imported) body.found.imports = body.found.imports.map((row) => ({ ...row, last_import }));
+      return { status: 200, body };
+    }
+    if (call.path === "/setup/import") {
+      const dry = (call.body as { dry_run: boolean }).dry_run;
+      if (!dry) imported = true;
+      return { status: 200, body: report(dry) };
+    }
+    return quiet(call);
+  });
+  await press(fake.root, "Bring it across");
+  await press(fake.root, "Bring it across now");
+  // The report stays, with its Close, though core's record has arrived.
+  expect(reads(fake.calls, "/setup")).toBe(2);
+  expect(fake.text()).toContain("Done. This is what was brought across:");
+  expect(fake.text()).not.toContain("was brought across on");
+
+  await press(fake.root, "Close");
+  expect(fake.text()).not.toContain("Done. This is what was brought across:");
+  expect(fake.text()).toContain("was brought across on");
+  expect(fake.text()).toContain("Of its settings and auth files: 1 brought across, 1 not brought across.");
+  expect(all(fake.root, "button").map((node) => node.textContent)).not.toContain("Bring it across");
+  expect(imports(fake.calls)).toHaveLength(2);
+});
+
 test("after a real import the page reads setup once more, without probing for a changed key", async () => {
   const fake = await mount((call) => {
     if (call.method === "GET" && call.path === "/setup") return { status: 200, body: withImport() };

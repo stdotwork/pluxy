@@ -32,6 +32,19 @@ export interface SetupImport {
   config: string;
   auth_dir: string;
   accounts: number;
+  /** The last import made from this config on this core, when there was one. */
+  last_import?: SetupLastImport;
+}
+
+/**
+ * What core kept of an import: when it ran, and how many rows each list of its report held. A row
+ * is a key of the config or a file of the auth folder, so these do not count accounts.
+ */
+export interface SetupLastImport {
+  at: string;
+  brought: number;
+  changed: number;
+  not_brought: number;
 }
 
 export interface SetupFound {

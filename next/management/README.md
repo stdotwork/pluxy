@@ -156,7 +156,8 @@ The reply to `GET /setup/clients/{id}/paste`: `tool` (the canonical ID), `name`,
     {"provider": "pluxy/codex", "from": "codex", "label": "Codex is signed in on this machine"}
   ],
   "imports": [
-    {"kind": "cliproxyapi", "config": "~/.cli-proxy-api/config.yaml", "auth_dir": "~/.cli-proxy-api", "accounts": 7}
+    {"kind": "cliproxyapi", "config": "~/.cli-proxy-api/config.yaml", "auth_dir": "~/.cli-proxy-api", "accounts": 7,
+     "last_import": {"at": "2026-11-20T08:30:05Z", "brought": 31, "changed": 3, "not_brought": 6}}
   ],
   "core": {"listen": "127.0.0.1:8317", "reachable_from_network": false}
 }
@@ -164,6 +165,14 @@ The reply to `GET /setup/clients/{id}/paste`: `tool` (the canonical ID), `name`,
 
 A client's `state` is `not-configured`, `configured` (it points at this core), `needs-update`, or **new** `refused` (a file the desktop app's writer for that tool would refuse to change; no pick is suggested to apply to it). `sign_ins`
 only says a sign-in exists; core reads no token from it.
+
+**new** An import's `last_import` is there once core has brought that setup across (`POST /setup/import`
+without `dry_run`, from the command or the panel): `at`, the time in UTC the last such import ended, and
+`brought`, `changed` and `not_brought`, the number of rows in each list of its report (below). A row is a
+key of the config or a file of the auth folder, so the numbers do not count accounts. Core keeps the
+record in `state/setup.json`, by the config file's path, and a later scan does not drop it. The panel's
+Setup page then says the setup was brought across and offers the import by the command only; `pluxy setup`
+shows the time in its Imports table.
 
 `picks`, in the order to show them:
 
