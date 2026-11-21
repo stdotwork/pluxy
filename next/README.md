@@ -147,6 +147,13 @@ or `:streamGenerateContent?alt=sse`, with the key in `x-goog-api-key`); the defa
 Responses account serves Responses, Messages and Gemini clients; a Messages account serves Messages
 and Gemini clients; a Gemini account serves only Gemini clients for now.
 
+A request translated to Chat Completions gets the tool names that API takes: ASCII letters,
+digits, `_` and `-`, at most 64 bytes. Any other name is sent with each other character as `_`
+and cut, two names that would come out the same each get a hash of the client's name, and the
+reply's calls go back to the client under its own name. A replayed call whose arguments are not a
+JSON object is sent as `{}` and reported as an approximated loss; a custom tool's free-form input
+is left as it is.
+
 A Chat or Responses account sends a reasoning effort the upstream may not take as the nearest one
 it does, as today's core does: `"reasoning_levels"` in its `settings` lists the efforts the
 upstream accepts (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`), by default `low`,
@@ -793,7 +800,9 @@ properties move to the root, and `allOf`'s required names too. Patterns stay as 
 included, which Messages takes. Every request, a Messages client's own body included, has two parts
 Anthropic refuses repaired: an empty `allowed_domains` or `blocked_domains` list on a built-in
 `web_search_*` tool is removed, and a `tool_use` id or `tool_result` `tool_use_id` with other
-characters becomes `cpa_tid_v1_` and the ID in URL-safe base64, the same ID the same way.
+characters becomes `cpa_tid_v1_` and the ID in URL-safe base64, the same ID the same way; one
+whose base64 form would pass 64 bytes becomes the prefix and a SHA-256 digest of the ID instead,
+so every ID stays within the 64 bytes Anthropic's upstreams take.
 
 **Fast mode.** A request whose body has `"speed": "fast"` (a Messages client's own, or a
 Responses client's `"service_tier": "priority"`, which becomes it as in today's core; Chat
@@ -897,7 +906,11 @@ included. A Messages client's `max_tokens` is left to the model's own limit, sin
 it mandatory. Each thought signature Gemini sends reaches a Messages client as a thinking block's
 signature and a Responses client as a reasoning item's `encrypted_content`; when the client replays
 it, the signature goes back on the part that follows it, so Gemini 3's function calls keep their
-reasoning between turns. A function call with no signature gets the value Google documents for
+reasoning between turns. A translated request's function names are the ones GenerateContent
+takes: ASCII letters, digits, `_`, `.`, `:` and `-`, at most 128 bytes, and starting with a
+letter or `_` for Vertex AI. Any other name is sent with each other character as `_` and cut, two
+names that would come out the same each get a hash of the client's name, and the reply's calls go
+back to the client under its own name. A function call with no signature gets the value Google documents for
 calls it did not issue.
 
 **Interactions API.** Core serves Gemini's Interactions API at `POST /v1beta/interactions` (Google's
