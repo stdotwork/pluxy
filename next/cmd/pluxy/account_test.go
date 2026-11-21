@@ -63,6 +63,10 @@ type fakeAccountLogin struct {
 	// late is a change made after a read has answered, as an extension's own work does: it is
 	// applied on the read after the one that reports it.
 	late func()
+	// onPoll runs on each read of the sign-in, so a test can change the prompt mid-flight.
+	onPoll func(*fakeAccountLogin)
+	// onInput handles an answer when set, returning true when it handled it.
+	onInput func(*fakeAccountLogin, map[string]string) bool
 }
 
 func (l *fakeAccountLogin) view(id string) map[string]any {
@@ -323,6 +327,9 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 		if l.expireAfter > 0 && l.polls >= l.expireAfter {
 			l.state, l.prompt = "cancelled", nil
 		}
+		if l.onPoll != nil {
+			l.onPoll(l)
+		}
 		view := l.view(id)
 		if l.late != nil {
 			late := l.late
@@ -346,6 +353,10 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.inputs = append(f.inputs, in)
+		if l.onInput != nil && l.onInput(l, in) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		switch l.method {
 		case "browser":
 			switch {
@@ -1289,6 +1300,41 @@ func TestFollowLoginBrowserAtEndOfInput(t *testing.T) {
 			t.Errorf("--no-wait cancelled the sign-in: %v", cancelled)
 		}
 	})
+}
+
+// An optional input prompt that arrives after standard input has already ended is still sent
+// complete, without cancelling the sign-in.
+func TestFollowLoginOptionalInputAfterEndOfInput(t *testing.T) {
+	shortLoginWait(t)
+	f := newFakeAccountCore(t)
+	f.onCreate = func(l *fakeAccountLogin) {
+		l.onPoll = func(l *fakeAccountLogin) {
+			if l.state == management.LoginPending && l.polls == 2 {
+				l.prompt = fakePrompt("optional")
+			}
+		}
+		l.onInput = func(l *fakeAccountLogin, _ map[string]string) bool {
+			if l.prompt != nil && l.prompt["kind"] == "input" {
+				l.late = func() { l.state, l.prompt = "done", nil }
+				return true
+			}
+			return false
+		}
+	}
+	out, errOut, code := f.runBounded(t, strings.NewReader(""), 5*time.Second, "account", "add", "test/ext", "--method", "browser", "--id", "opt-1")
+	if code != 0 || !strings.Contains(out, "account opt-1 added") {
+		t.Fatalf("code=%d out=%q err=%q, want the optional prompt sent complete", code, out, errOut)
+	}
+	if !strings.Contains(errOut, browserWaitNotice) || !strings.Contains(errOut, "Anything to add?") {
+		t.Errorf("missing expected prompt output: %q", errOut)
+	}
+	if _, cancelled := f.start(); len(cancelled) != 0 {
+		t.Errorf("the sign-in was cancelled: %v", cancelled)
+	}
+	sent := f.sent()
+	if len(sent) != 1 || len(sent[0]) != 0 {
+		t.Errorf("core was sent %v, want one empty answer for the optional prompt", sent)
+	}
 }
 
 // A command that needs no value leaves standard input alone, for whatever reads it next.
