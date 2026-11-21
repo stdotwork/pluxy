@@ -85,6 +85,13 @@
     margin-top: 0;
   }
 
+  /* A list laid out as a stack is a column of rows, not a bulleted list. */
+  ul.stack {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
   .actions {
     display: flex;
     gap: calc(var(--s) * 2);
