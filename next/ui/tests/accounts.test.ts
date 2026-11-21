@@ -71,6 +71,7 @@ test("an account core leaves out of routing is a problem, unless a person turned
     health("banned"),
     health("exhausted"),
     health("needs_login"),
+    health("broken", { state: "", extension: "" }),
     health("disabled", { disabled: true }),
     account("banned-then-off", { disabled: true, health: { state: "banned" } }),
     account("old-core"),
@@ -81,14 +82,26 @@ test("an account core leaves out of routing is a problem, unless a person turned
     "banned",
     "exhausted",
     "needs_login",
+    "broken",
     undefined,
     undefined,
     undefined,
   ]);
-  expect(rows.map((a) => hasProblem(a, now))).toEqual([false, false, true, true, true, false, false, false]);
+  expect(rows.map((a) => hasProblem(a, now))).toEqual([
+    false,
+    false,
+    true,
+    true,
+    true,
+    true,
+    false,
+    false,
+    false,
+  ]);
   expect(filterAccounts(rows, { status: "problem" }, now).map((a) => a.id)).toEqual([
     "banned",
     "exhausted",
     "needs_login",
+    "broken",
   ]);
 });
