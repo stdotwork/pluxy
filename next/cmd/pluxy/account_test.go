@@ -58,6 +58,8 @@ type fakeAccountLogin struct {
 	gone bool
 	// doneAfter ends the sign-in on its own, so a test that never answers has an end.
 	doneAfter int
+	// expireAfter ends it as core's limit on a sign-in does: cancelled, by no call of the command.
+	expireAfter int
 	// late is a change made after a read has answered, as an extension's own work does: it is
 	// applied on the read after the one that reports it.
 	late func()
@@ -317,6 +319,9 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		if l.doneAfter > 0 && l.polls >= l.doneAfter {
 			l.state, l.prompt = "done", nil
+		}
+		if l.expireAfter > 0 && l.polls >= l.expireAfter {
+			l.state, l.prompt = "cancelled", nil
 		}
 		view := l.view(id)
 		if l.late != nil {
@@ -814,9 +819,7 @@ func TestFollowLoginSaysWhenTheSignInWasNotCancelled(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	stdin, held := io.Pipe()
-	defer held.Close()
-	x := &invocation{ctx: ctx, client: client, stdin: stdin, stdout: io.Discard, stderr: io.Discard}
+	x := &invocation{ctx: ctx, client: client, stdin: strings.NewReader(""), stdout: io.Discard, stderr: io.Discard}
 	lines := newLineReader(x.stdin, nil)
 	defer lines.close()
 	go func() {
@@ -976,12 +979,9 @@ func TestCLIAccountAddAnswersAChangedPrompt(t *testing.T) {
 
 // A sign-in core no longer has is given up on, and cancelled in case core still runs it.
 func TestFollowLoginCancelsWhenTheSignInIsGone(t *testing.T) {
-	shortLoginWait(t)
 	f := newFakeAccountCore(t)
 	f.onCreate = func(l *fakeAccountLogin) { l.gone = true }
-	stdin, held := io.Pipe()
-	defer held.Close()
-	out, errOut, code := f.runBounded(t, stdin, 5*time.Second, "account", "add", "test/ext", "--method", "browser", "--id", "gone-1")
+	out, errOut, code := f.run("account", "add", "test/ext", "--method", "browser", "--id", "gone-1")
 	if code != 5 || !strings.Contains(errOut, "no such login") {
 		t.Fatalf("account add of a sign-in core lost: code=%d out=%q err=%q, want 5", code, out, errOut)
 	}
@@ -1000,9 +1000,7 @@ func TestFollowLoginCancelsOnInterrupt(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	stdin, held := io.Pipe()
-	defer held.Close()
-	x := &invocation{ctx: ctx, client: client, stdin: stdin, stdout: io.Discard, stderr: io.Discard}
+	x := &invocation{ctx: ctx, client: client, stdin: strings.NewReader(""), stdout: io.Discard, stderr: io.Discard}
 	lines := newLineReader(x.stdin, nil)
 	defer lines.close()
 	go func() {
@@ -1212,65 +1210,78 @@ func TestFollowLoginRepeatedPromptAtEndOfInput(t *testing.T) {
 	})
 }
 
-// A browser sign-in that can get no more lines ends: nothing is left waiting on a paste that
-// cannot come, and the command says what to do instead. One that still has an open standard input
-// goes on, since the browser's return may reach the extension by itself.
+// browserWaitNotice is what the command says when a browser sign-in can get no more lines.
+const browserWaitNotice = "standard input has ended, so nothing more can be pasted. Waiting for the browser to finish the sign-in; core gives up on it 15 minutes after it started. Ctrl-C cancels it.\n"
+
+// A browser sign-in does not end with standard input: the browser's return may reach the extension
+// by itself. The command says so once and follows the sign-in to its end.
 func TestFollowLoginBrowserAtEndOfInput(t *testing.T) {
 	shortLoginWait(t)
-	wantCancelled := func(t *testing.T, f *fakeAccountCore, errOut string, code int, words ...string) {
+	wantWaited := func(t *testing.T, f *fakeAccountCore, out, errOut string, code, sent int, id string) {
 		t.Helper()
-		if code != 2 {
-			t.Fatalf("code=%d err=%q, want 2", code, errOut)
+		if code != 0 || !strings.Contains(out, "account "+id+" added") {
+			t.Fatalf("code=%d out=%q err=%q, want the sign-in followed to its end", code, out, errOut)
 		}
-		for _, w := range words {
-			if !strings.Contains(errOut, w) {
-				t.Errorf("the error does not say %q: %q", w, errOut)
-			}
+		if n := strings.Count(errOut, browserWaitNotice); n != 1 {
+			t.Errorf("the notice was written %d times, want once: %q", n, errOut)
 		}
-		if _, cancelled := f.start(); len(cancelled) != 1 {
-			t.Errorf("the sign-in was left in core: cancelled %v", cancelled)
+		if _, cancelled := f.start(); len(cancelled) != 0 {
+			t.Errorf("the sign-in was cancelled: %v", cancelled)
+		}
+		if got := f.sent(); len(got) != sent {
+			t.Errorf("core was sent %v, want %d answers", got, sent)
 		}
 	}
 	t.Run("nothing on standard input", func(t *testing.T) {
 		f := newFakeAccountCore(t)
-		_, errOut, code := f.runBounded(t, strings.NewReader(""), 5*time.Second, "account", "add", "test/ext", "--method", "browser", "--id", "br-1")
-		wantCancelled(t, f, errOut, code, "standard input ended", "Address the browser ended on", "--no-wait")
-		if sent := f.sent(); len(sent) != 0 {
-			t.Errorf("core was sent %v, want nothing", sent)
-		}
+		f.onCreate = func(l *fakeAccountLogin) { l.doneAfter = 3 }
+		out, errOut, code := f.runBounded(t, strings.NewReader(""), 5*time.Second, "account", "add", "test/ext", "--method", "browser", "--id", "br-1")
+		wantWaited(t, f, out, errOut, code, 0, "br-1")
 	})
 	t.Run("a non-address, then the end", func(t *testing.T) {
 		f := newFakeAccountCore(t)
-		_, errOut, code := f.runBounded(t, strings.NewReader("not an address\n"), 5*time.Second, "account", "add", "test/ext", "--method", "browser", "--id", "br-2")
-		wantCancelled(t, f, errOut, code, "That address holds no sign-in code.", "standard input ended")
-		if sent := f.sent(); len(sent) != 1 {
-			t.Errorf("core was sent %v, want the one line", sent)
+		f.onCreate = func(l *fakeAccountLogin) { l.doneAfter = 3 }
+		out, errOut, code := f.runBounded(t, strings.NewReader("not an address\n"), 5*time.Second, "account", "add", "test/ext", "--method", "browser", "--id", "br-2")
+		wantWaited(t, f, out, errOut, code, 1, "br-2")
+		if !strings.Contains(errOut, "That address holds no sign-in code.") {
+			t.Errorf("the prompt's answer was not shown: %q", errOut)
 		}
 	})
-	t.Run("piped answers the prompt keeps refusing", func(t *testing.T) {
+	// The second value leaves the prompt as it was, so nothing reads standard input again: its end
+	// is still noticed, and the wait that gives up on an input prompt does not apply.
+	t.Run("piped values the prompt keeps refusing", func(t *testing.T) {
 		old := accountAnswerWait
-		accountAnswerWait = 50 * time.Millisecond
+		accountAnswerWait = 20 * time.Millisecond
 		t.Cleanup(func() { accountAnswerWait = old })
 		f := newFakeAccountCore(t)
-		stdin, held := io.Pipe()
-		defer held.Close()
-		go func() { _, _ = io.WriteString(held, "not an address\nstill not one\n") }()
-		_, errOut, code := f.runBounded(t, stdin, 5*time.Second, "account", "add", "test/ext", "--method", "browser", "--id", "br-3")
-		wantCancelled(t, f, errOut, code, "still asks for Address the browser ended on", "--no-wait")
+		f.onCreate = func(l *fakeAccountLogin) { l.doneAfter = 30 }
+		out, errOut, code := f.runBounded(t, strings.NewReader("not an address\nstill not one\n"), 5*time.Second, "account", "add", "test/ext", "--method", "browser", "--id", "br-3")
+		wantWaited(t, f, out, errOut, code, 2, "br-3")
+	})
+	t.Run("core's limit ends the wait", func(t *testing.T) {
+		f := newFakeAccountCore(t)
+		f.onCreate = func(l *fakeAccountLogin) { l.expireAfter = 3 }
+		_, errOut, code := f.runBounded(t, strings.NewReader(""), 5*time.Second, "account", "add", "test/ext", "--method", "browser", "--id", "br-4")
+		if code != 1 || !strings.Contains(errOut, browserWaitNotice) || !strings.Contains(errOut, "the sign-in was cancelled") {
+			t.Fatalf("code=%d err=%q, want 1, the notice and the end", code, errOut)
+		}
+		if _, cancelled := f.start(); len(cancelled) != 0 {
+			t.Errorf("the command cancelled it itself: %v", cancelled)
+		}
 	})
 	t.Run("the browser returns while standard input stays open", func(t *testing.T) {
 		f := newFakeAccountCore(t)
 		f.onCreate = func(l *fakeAccountLogin) { l.doneAfter = 3 }
 		stdin, held := io.Pipe()
 		defer held.Close()
-		out, errOut, code := f.runBounded(t, stdin, 5*time.Second, "account", "add", "test/ext", "--method", "browser", "--id", "br-4")
-		if code != 0 || !strings.Contains(out, "account br-4 added") {
-			t.Fatalf("code=%d out=%q err=%q", code, out, errOut)
+		out, errOut, code := f.runBounded(t, stdin, 5*time.Second, "account", "add", "test/ext", "--method", "browser", "--id", "br-5")
+		if code != 0 || !strings.Contains(out, "account br-5 added") || strings.Contains(errOut, "standard input has ended") {
+			t.Fatalf("code=%d out=%q err=%q, want it added and no notice", code, out, errOut)
 		}
 	})
 	t.Run("--no-wait leaves it for the browser", func(t *testing.T) {
 		f := newFakeAccountCore(t)
-		_, errOut, code := f.runBounded(t, strings.NewReader(""), 5*time.Second, "account", "add", "test/ext", "--method", "browser", "--id", "br-5", "--no-wait")
+		_, errOut, code := f.runBounded(t, strings.NewReader(""), 5*time.Second, "account", "add", "test/ext", "--method", "browser", "--id", "br-6", "--no-wait")
 		if code != 7 {
 			t.Fatalf("code=%d err=%q, want 7", code, errOut)
 		}

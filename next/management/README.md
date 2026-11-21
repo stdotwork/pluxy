@@ -91,14 +91,16 @@ management API of a core that is already running. `pluxy -config ...` with no su
   drops lines typed for a prompt the sign-in has moved past. At a terminal, a prompt that is still up
   after its answer and a further read of the sign-in may be answered again, as may one core refused
   an answer for. Piped input answers each prompt once, since its next line may be the next prompt's
-  value: the command waits a minute for the prompt to move on, then cancels. With
+  value: the command waits a minute for an input prompt to move on, then cancels. With
   `--json` nothing is read from a terminal: the values come from `--input` or from a pipe, or the
   command says what it needs with exit code 2. A sign-in that needs a value it did not get is
   cancelled in core, with exit code 2, and so is one `--no-wait` leaves waiting on a prompt. A
-  browser sign-in is cancelled the same way when standard input ends before the address is pasted;
-  `--no-wait` leaves one waiting for the browser instead. A read that fails is tried three times,
-  and then the sign-in is given up on and cancelled. Ctrl-C, SIGTERM and SIGHUP cancel the sign-in
-  and put the terminal back as it was.
+  browser sign-in is the exception, since the browser's return may still reach its extension: when
+  standard input ends, or a piped address is refused, the command says once that nothing more can
+  be pasted and goes on following it until it finishes, core ends it 15 minutes after it started
+  (exit code 1), or Ctrl-C cancels it. A read that fails is tried three times, and then the sign-in
+  is given up on and cancelled. Ctrl-C, SIGTERM and SIGHUP cancel the sign-in and put the terminal
+  back as it was.
 - **Exit codes.**
 
   | Code | Meaning |

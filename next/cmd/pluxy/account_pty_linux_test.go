@@ -188,14 +188,19 @@ func TestCLIAccountTerminal(t *testing.T) {
 			p.waitExit(t, 0)
 			p.wantChild(t, "code=0", "cancelled=0", "inputs=2")
 		})
+		// Ctrl-D ends what can be pasted, not the sign-in: the notice starts on its own line, and
+		// Ctrl-C still cancels what goes on waiting.
 		t.Run("Ctrl-D", func(t *testing.T) {
 			p := pasteWrong(t)
+			p.waitOutput("open: https://login.example.test/authorize\nAddress the browser ended on: ")
 			p.write(t, "\x04")
-			p.waitExit(t, 2)
+			p.waitOutput("Address the browser ended on: \n" + browserWaitNotice)
+			p.signal(t, syscall.SIGINT)
+			p.waitExit(t, 1)
 			p.waitEcho(true)
-			p.wantChild(t, "code=2", "cancelled=1", "inputs=1")
-			if !strings.Contains(p.childOutput(), "standard input ended") {
-				t.Errorf("Ctrl-D said nothing about the sign-in: %q", p.childOutput())
+			p.wantChild(t, "code=1", "cancelled=1", "inputs=1")
+			if n := strings.Count(p.childOutput(), browserWaitNotice); n != 1 {
+				t.Errorf("the notice was written %d times, want once: %q", n, p.childOutput())
 			}
 		})
 		t.Run("Ctrl-C", func(t *testing.T) {

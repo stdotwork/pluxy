@@ -341,10 +341,13 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 	// an answer does not count: the extension may not have updated its prompt yet.
 	answered, reshown := false, false
 	// ended says standard input has ended. giveUp is the bounded wait on a prompt that was answered
-	// and is still up with nothing that may answer it, and stillAsking the error it ends with.
+	// and is still up with nothing that may answer it, and unanswered the field it still wants.
 	ended := false
 	var giveUp <-chan time.Time
-	var stillAsking error
+	var unanswered protocol.LoginInput
+	// browserLeft says a browser prompt was answered by a pipe and is still up, so nothing reads
+	// standard input until it changes; waitSaid that the notice about the end of input is written.
+	browserLeft, waitSaid := false, false
 	// failures counts reads of the sign-in in a row that failed, as the panel does: three and the
 	// command gives up on the sign-in, waiting longer between each try.
 	failures := 0
@@ -356,7 +359,7 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 		}
 		if key := promptKey(l.Prompt); l.Prompt != nil && (key != shown || reshown) {
 			repeated := key == shown
-			shown, answered, reshown, giveUp = key, false, false, nil
+			shown, answered, reshown, giveUp, browserLeft = key, false, false, nil, false
 			var err error
 			if prompt, err = x.newPromptInput(l.Prompt, in); err != nil {
 				return x.cancelLogin(l.ID, err)
@@ -412,11 +415,17 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 			if err := x.asks(*field); err != nil {
 				return x.cancelLogin(l.ID, err)
 			}
-			if x.prompts() {
+			// Once standard input has ended, a browser prompt asks for nothing: only the browser can
+			// answer it.
+			if x.prompts() && !(ended && prompt.kind == protocol.PromptBrowser) {
 				prompt.ask(x)
 			}
 			lines.start()
 			input = lines.lines
+		}
+		var inputEnd <-chan struct{}
+		if browserLeft && !waitSaid {
+			inputEnd = lines.finished
 		}
 		select {
 		case <-ctx.Done():
@@ -425,28 +434,33 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 			}
 			return x.cancelLogin(l.ID, errors.New("sign-in cancelled"))
 		case <-giveUp:
-			return x.cancelLogin(l.ID, stillAsking)
+			return x.cancelLogin(l.ID, usageError{fmt.Sprintf("the sign-in still asks for %s after the value it was given: %s", fieldName(unanswered), inputHint(unanswered))})
+		case <-inputEnd:
+			// Lines read before the end may still answer a later prompt, so input has not ended for
+			// that prompt yet.
+			waitSaid = true
+			x.eprintf("%s\n", browserWaitLine())
 		case r := <-input:
 			if !r.ok {
-				ended = true
-				if lines.hidden() {
+				if prompt.kind == protocol.PromptBrowser {
+					if !waitSaid {
+						waitSaid = true
+						// On a terminal the cursor is still after the field's label.
+						if x.prompts() && !ended {
+							x.eprintf("\n")
+						}
+						x.eprintf("%s\n", browserWaitLine())
+					}
+				} else if lines.hidden() {
 					x.eprintf("\n")
 				}
-				if prompt.kind == protocol.PromptBrowser {
-					// Nothing more can be pasted, and the command cannot tell whether the browser's
-					// return reaches the extension by itself: --no-wait is the way to leave a sign-in
-					// waiting for that. On a terminal the cursor is still after the field's label.
-					if x.prompts() && !lines.hidden() {
-						x.eprintf("\n")
-					}
-					return x.cancelLogin(l.ID, usageError{fmt.Sprintf("standard input ended before the sign-in got %s, so it was cancelled: %s", fieldName(*field), browserPasteHint)})
-				}
+				ended = true
 				if prompt.repeated && len(prompt.done) == 0 {
 					// Nothing new to answer a prompt that already has an answer: the extension may
-					// still be working on it, so it gets a while to move on. A device prompt ends by
-					// itself, and stays until the sign-in's own limit.
+					// still be working on it, so it gets a while to move on. A browser prompt can
+					// also end by its callback, and stays until the sign-in's own limit.
 					if prompt.kind == protocol.PromptInput {
-						stillAsking = stillAsks(prompt.kind, *field)
+						unanswered = *field
 						giveUp = time.After(accountAnswerWait)
 					}
 					prompt = nil
@@ -475,8 +489,11 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 					// sign-in gets a bounded wait to move on.
 					if x.prompts() {
 						reshown = true
-					} else if giveUp == nil && next.Prompt.Kind != protocol.PromptDevice && len(next.Prompt.Inputs) > 0 {
-						stillAsking = stillAsks(next.Prompt.Kind, next.Prompt.Inputs[0])
+					} else if next.Prompt.Kind == protocol.PromptBrowser {
+						// The browser's return may still end it, so it is not given up on.
+						browserLeft = true
+					} else if giveUp == nil && next.Prompt.Kind == protocol.PromptInput && len(next.Prompt.Inputs) > 0 {
+						unanswered = next.Prompt.Inputs[0]
 						giveUp = time.After(accountAnswerWait)
 					}
 				}
@@ -692,7 +709,7 @@ func (g *promptInput) take(r lineRead) (bool, error) {
 	return true, nil
 }
 
-// endOfInput is standard input's end. A device prompt, which finishes by itself, goes on. One whose
+// endOfInput is standard input's end. A prompt that can finish by itself goes on. One whose
 // required fields all have a value is left complete, so what it has is sent; one that must have a
 // value it did not get cannot go on, and the sign-in is cancelled with a usage error.
 func (g *promptInput) endOfInput(x *invocation, login string) error {
@@ -922,17 +939,10 @@ func inputHint(f protocol.LoginInput) string {
 	return fmt.Sprintf("give it with --input %s=<value>, or on standard input, one line for each value the sign-in asks for", f.Name)
 }
 
-// browserPasteHint says what to do about a browser prompt that standard input cannot answer. A
-// value from an earlier sign-in does not fit, so --input is no way to give it.
-const browserPasteHint = "run the command again in a terminal to paste it, or add --no-wait to leave the sign-in waiting for the browser"
-
-// stillAsks is the error of a prompt still up, after its answer, with nothing that may answer it.
-func stillAsks(kind string, f protocol.LoginInput) error {
-	hint := inputHint(f)
-	if kind == protocol.PromptBrowser {
-		hint = browserPasteHint
-	}
-	return usageError{fmt.Sprintf("the sign-in still asks for %s after the value it was given: %s", fieldName(f), hint)}
+// browserWaitLine says what happens to a browser sign-in once standard input has ended: its input
+// is only the fallback for a callback the extension may still receive (next/protocol/README.md).
+func browserWaitLine() string {
+	return fmt.Sprintf("standard input has ended, so nothing more can be pasted. Waiting for the browser to finish the sign-in; core gives up on it %s after it started. Ctrl-C cancels it.", humanSpan(cred.LoginTimeout))
 }
 
 // lineReader reads standard input one line at a time, on a goroutine of its own that takes no
@@ -949,6 +959,8 @@ type lineReader struct {
 	closed  sync.Once
 	// restore turns the terminal's echo back on while it is off; nil otherwise.
 	restore func()
+	// finished is closed once the goroutine has stopped reading: lines may still hold what it read.
+	finished chan struct{}
 }
 
 // lineRead is one line of standard input, or its end (ok false, as a closed channel gives).
@@ -966,7 +978,7 @@ const typedAhead = 16
 // secret value is kept from; nil when there is none.
 func newLineReader(r io.Reader, term *os.File) *lineReader {
 	return &lineReader{src: bufio.NewReaderSize(r, 64<<10), term: term,
-		lines: make(chan lineRead, typedAhead), done: make(chan struct{})}
+		lines: make(chan lineRead, typedAhead), done: make(chan struct{}), finished: make(chan struct{})}
 }
 
 // start begins reading, once.
@@ -974,6 +986,7 @@ func (l *lineReader) start() { l.started.Do(func() { go l.read() }) }
 
 // read sends each line, and closes the channel at the end of input or after a line too long.
 func (l *lineReader) read() {
+	defer close(l.finished)
 	defer close(l.lines)
 	for {
 		text, tooLong, err := readBoundedLine(l.src)

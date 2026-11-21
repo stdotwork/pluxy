@@ -155,7 +155,7 @@ func (m *Manager) StartLogin(ctx context.Context, req LoginRequest) (LoginView, 
 	}
 	m.loginSeq++
 	l.id = "login-" + strconv.FormatUint(m.loginSeq, 10)
-	lctx, cancel := context.WithTimeout(m.ctx, loginTimeout)
+	lctx, cancel := context.WithTimeout(m.ctx, LoginTimeout)
 	l.cancel = cancel
 	m.logins[l.id] = l
 	m.wg.Add(1)
