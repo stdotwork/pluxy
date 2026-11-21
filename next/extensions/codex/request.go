@@ -59,7 +59,9 @@ func buildRequest(req llm.Request, accountID string, s settings, a account, ws b
 	} else {
 		r := req
 		r.Model = model
-		enc, losses, err := openairesponses.EncodeRequest(r)
+		// The Codex endpoint takes a service tier and a verbosity (the shaper then keeps the tiers it
+		// serves).
+		enc, losses, err := openairesponses.EncodeRequestWith(r, openairesponses.EncodeOptions{ServiceTier: true, Verbosity: true})
 		if err != nil {
 			return nil, err
 		}

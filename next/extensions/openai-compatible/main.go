@@ -229,7 +229,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 // built: the client's body or its translation (buildBody), with the account's reasoning levels
 // (applyReasoning) and, for a Chat upstream, its shaping settings (shapeChat) applied.
 func upstreamBody(req llm.Request, format string, s settings) ([]byte, *llm.Translation, error) {
-	body, tr, err := buildBody(req, format)
+	body, tr, err := buildBody(req, format, s)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -472,7 +472,7 @@ func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
 			Message: "this account's upstream speaks " + formatNames[wire.format] + ", which has no token count endpoint"}
 	}
-	body, tr, err := buildBody(req, wire.format)
+	body, tr, err := buildBody(req, wire.format, s)
 	if err != nil {
 		return err
 	}
@@ -531,7 +531,7 @@ var formatNames = map[string]string{
 // buildBody returns the upstream request body for req in format target and how it was built. A
 // request in the upstream's own format is sent unchanged; every other client format is translated
 // to the target. Under the reject drop policy a translation that drops anything is refused.
-func buildBody(req llm.Request, target string) ([]byte, *llm.Translation, error) {
+func buildBody(req llm.Request, target string, s settings) ([]byte, *llm.Translation, error) {
 	tr := &llm.Translation{To: target}
 	if n := req.Native; n != nil {
 		tr.From = n.Format
@@ -540,16 +540,27 @@ func buildBody(req llm.Request, target string) ([]byte, *llm.Translation, error)
 			return n.Body, tr, nil
 		}
 	}
+	// A service tier or a verbosity from another format goes only to a host whose documentation
+	// says its API takes it (tierHosts); any other upstream may refuse a field it does not list.
+	f := tierFieldsOf(s, target)
 	var encode func(llm.Request) ([]byte, []llm.Loss, error)
 	switch target {
 	case llm.FormatOpenAIChat:
-		encode = openaichat.EncodeRequest
+		encode = func(r llm.Request) ([]byte, []llm.Loss, error) {
+			return openaichat.EncodeRequestWith(r, openaichat.EncodeOptions{ServiceTier: f.serviceTier, Verbosity: f.verbosity})
+		}
 	case llm.FormatOpenAIResponses:
-		encode = openairesponses.EncodeRequest
+		encode = func(r llm.Request) ([]byte, []llm.Loss, error) {
+			return openairesponses.EncodeRequestWith(r, openairesponses.EncodeOptions{ServiceTier: f.serviceTier, Verbosity: f.verbosity})
+		}
 	case llm.FormatAnthropicMessages:
-		encode = anthropicmessages.EncodeRequest
+		encode = func(r llm.Request) ([]byte, []llm.Loss, error) {
+			return anthropicmessages.EncodeRequestWith(r, anthropicmessages.EncodeOptions{ServiceTier: f.serviceTier})
+		}
 	case llm.FormatGeminiGenerate:
-		encode = geminigenerate.EncodeRequest
+		encode = func(r llm.Request) ([]byte, []llm.Loss, error) {
+			return geminigenerate.EncodeRequestWith(r, geminigenerate.EncodeOptions{ServiceTier: f.serviceTier})
+		}
 	default:
 		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
 			Message: "the upstream speaks an unknown format " + strconv.Quote(target)}

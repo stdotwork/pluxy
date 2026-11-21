@@ -519,8 +519,9 @@ func buildBodyWith(req llm.Request, cacheTTL string, opts anthropicmessages.Enco
 			return body, tr, nil
 		}
 	}
-	// A priority service tier goes as fast mode: post adds the beta header it needs.
-	opts.FastMode = true
+	// Anthropic takes a service tier, and a priority one goes as fast mode: post adds the beta
+	// header it needs.
+	opts.ServiceTier, opts.FastMode = true, true
 	body, losses, err := anthropicmessages.EncodeRequestWith(req, opts)
 	if err != nil {
 		return nil, nil, err

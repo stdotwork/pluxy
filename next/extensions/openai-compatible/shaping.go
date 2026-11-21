@@ -54,6 +54,46 @@ var presets = map[string]preset{
 	"api.mistral.ai":   {developerRole: roleSystem, passback: ptr(false)},
 }
 
+// tierFields say which of a request's service tier and verbosity an upstream's API takes.
+type tierFields struct{ serviceTier, verbosity bool }
+
+// tierHosts are the vendors whose API documentation names a service tier or a verbosity in the
+// request, by base URL host and then by the format of the wire. A request from another format
+// carries the client's tier or verbosity only to these; any other host gets neither, since an
+// upstream may refuse a field it does not list (Mistral's Chat request does, with
+// "additionalProperties: false", and the Codex CLI sends a verbosity of its own). A client's own
+// body goes upstream as it came whatever the host. Mistral documents a service_tier of its own,
+// whose values are not checked here, so it is not listed.
+//
+//   - api.openai.com: service_tier and verbosity in the Chat Completions create reference
+//     (https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
+//     and service_tier and text.verbosity in the Responses create reference
+//     (https://developers.openai.com/api/reference/resources/responses/methods/create).
+//   - api.anthropic.com: service_tier in the Messages create reference
+//     (https://platform.claude.com/docs/en/api/messages/create), described at
+//     https://platform.claude.com/docs/en/api/service-tiers. Its fast mode needs a beta header this
+//     extension does not add, so the priority tier is not sent. Messages has no verbosity.
+//   - generativelanguage.googleapis.com: serviceTier in GenerateContentRequest
+//     (https://ai.google.dev/api/generate-content/generate-content). GenerateContent has no verbosity.
+var tierHosts = map[string]map[string]tierFields{
+	"api.openai.com": {
+		llm.FormatOpenAIChat:      {serviceTier: true, verbosity: true},
+		llm.FormatOpenAIResponses: {serviceTier: true, verbosity: true},
+	},
+	"api.anthropic.com":                 {llm.FormatAnthropicMessages: {serviceTier: true}},
+	"generativelanguage.googleapis.com": {llm.FormatGeminiGenerate: {serviceTier: true}},
+}
+
+// tierFieldsOf returns which of a tier and a verbosity the account's upstream takes on the wire of
+// format.
+func tierFieldsOf(s settings, format string) tierFields {
+	u, err := url.Parse(s.BaseURL)
+	if err != nil {
+		return tierFields{}
+	}
+	return tierHosts[strings.ToLower(u.Hostname())][format]
+}
+
 // shapingOf returns the shaping for an account: its own settings where set, else its host's preset.
 func shapingOf(s settings) shaping {
 	var p preset
