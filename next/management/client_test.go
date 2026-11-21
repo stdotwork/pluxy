@@ -1,9 +1,14 @@
 package management
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
 	"testing"
 )
 
@@ -38,3 +43,106 @@ func TestGettersReturnTheDecodedReply(t *testing.T) {
 		t.Errorf("ClientKeys = %+v, %v; want the reply's key", keys, err)
 	}
 }
+
+// repeatReader is n bytes of b, read without holding them.
+type repeatReader struct {
+	n int64
+	b byte
+}
+
+func (r *repeatReader) Read(p []byte) (int, error) {
+	if r.n == 0 {
+		return 0, io.EOF
+	}
+	n := int64(len(p))
+	if n > r.n {
+		n = r.n
+	}
+	for i := range p[:n] {
+		p[i] = r.b
+	}
+	r.n -= n
+	return int(n), nil
+}
+
+// Stream writes a reply larger than Call's limit whole.
+func TestStreamCopiesAReplyAboveTheCallLimit(t *testing.T) {
+	const size = maxReply + 5<<20
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != Prefix+"/big" || r.URL.Query().Get("x") != "1" || r.Header.Get("Authorization") != "Bearer k" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Length", strconv.Itoa(size))
+		io.Copy(w, &repeatReader{n: size, b: 'a'})
+	}))
+	defer srv.Close()
+	c := &Client{URL: srv.URL, Key: "k"}
+	var n countWriter
+	if err := c.Stream(context.Background(), http.MethodGet, "/big", url.Values{"x": {"1"}}, &n); err != nil || n.n != size {
+		t.Fatalf("Stream wrote %d bytes, %v; want all %d", n.n, err, size)
+	}
+}
+
+type countWriter struct{ n int64 }
+
+func (w *countWriter) Write(p []byte) (int, error) { w.n += int64(len(p)); return len(p), nil }
+
+// A non-2xx reply is the error Call gives, and nothing is written.
+func TestStreamErrorsAreCallErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == Prefix+"/plain" {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"error":{"code":"not_found","message":"no log file of that name"}}`))
+	}))
+	defer srv.Close()
+	c := &Client{URL: srv.URL}
+	var out bytes.Buffer
+	err := c.Stream(context.Background(), http.MethodGet, "/x", nil, &out)
+	var ae *APIError
+	if !errors.As(err, &ae) || ae.Status != 404 || ae.Code != "not_found" || ae.Message != "no log file of that name" || out.Len() != 0 {
+		t.Errorf("Stream of a 404 = %v, %d bytes written; want the API error and nothing written", err, out.Len())
+	}
+	err = c.Stream(context.Background(), http.MethodGet, "/plain", nil, &out)
+	if !errors.As(err, &ae) || ae.Status != 502 || ae.Code != "" || out.Len() != 0 {
+		t.Errorf("Stream of a bare 502 = %v; want an API error with the status in its message", err)
+	}
+	if err := (&Client{URL: "http://127.0.0.1:1"}).Stream(context.Background(), http.MethodGet, "/x", nil, &out); !IsUnreachable(err) {
+		t.Errorf("Stream with no core = %v, want an unreachable error", err)
+	}
+}
+
+// A stream that ends before its declared length is an error, not a short success; the bytes
+// before the break are written.
+func TestStreamBrokenMidway(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		w.Write([]byte("partial"))
+		w.(http.Flusher).Flush()
+		panic(http.ErrAbortHandler)
+	}))
+	defer srv.Close()
+	var out bytes.Buffer
+	err := (&Client{URL: srv.URL}).Stream(context.Background(), http.MethodGet, "/x", nil, &out)
+	if err == nil || out.String() != "partial" {
+		t.Errorf("Stream of a broken reply = %v, wrote %q; want an error after the bytes that arrived", err, out.String())
+	}
+}
+
+// A failing writer stops the stream with its own error, which is not "no core answered".
+func TestStreamWriterError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("x")) }))
+	defer srv.Close()
+	want := errors.New("pipe closed")
+	err := (&Client{URL: srv.URL}).Stream(context.Background(), http.MethodGet, "/x", nil, failWriter{want})
+	if !errors.Is(err, want) || IsUnreachable(err) {
+		t.Errorf("Stream into a failing writer = %v, want that writer's error", err)
+	}
+}
+
+type failWriter struct{ err error }
+
+func (w failWriter) Write([]byte) (int, error) { return 0, w.err }

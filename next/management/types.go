@@ -534,6 +534,26 @@ type CooldownSettings struct {
 // LogLines is GET /logs's reply.
 type LogLines = logfile.Lines
 
+// ErrorLogFile is one error log in GET /request-error-logs's reply.
+type ErrorLogFile struct {
+	Name string `json:"name"`
+	// Size is in bytes.
+	Size int64 `json:"size"`
+	// Modified is when it was last written, in Unix seconds.
+	Modified int64 `json:"modified"`
+}
+
+// ErrorLogsReply is GET /request-error-logs's reply: the error logs, newest first.
+type ErrorLogsReply struct {
+	Files []ErrorLogFile `json:"files"`
+}
+
+// LogsCleared is DELETE /logs's reply: Removed is how many rotated log files it deleted
+// (main.log itself is emptied, not counted).
+type LogsCleared struct {
+	Removed int `json:"removed"`
+}
+
 // UsageReply is GET /usage's reply: whether usage is recorded, and the summary.
 type UsageReply struct {
 	Enabled bool `json:"enabled"`
