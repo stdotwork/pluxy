@@ -11,8 +11,10 @@ import (
 )
 
 // countTokens counts the request's input tokens with the model's countTokens method. A Gemini
-// client's countTokens body is sent as it came, except that Vertex AI, which takes no
-// generateContentRequest, gets a wrapped request's contents, system instruction and tools; a
+// client's countTokens body is sent as it came, apart from two repairs: its tool schemas are
+// cleaned (schema.go, also inside a wrapped generateContentRequest) and a top-level contents array
+// that starts with a model turn gets an empty user turn in front (fixLeadingTurn). Vertex AI, which takes no
+// generateContentRequest, also gets a wrapped request's contents, system instruction and tools; a
 // request in another format is rebuilt as GenerateContent and counted whole: for the Gemini API
 // under generateContentRequest, for Vertex AI as its contents, system instruction and tools.
 func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
