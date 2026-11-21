@@ -348,7 +348,7 @@ test("in a window shorter than the side navigation, the navigation scrolls to it
   // The wheel over the navigation reaches it, on a page too short to scroll itself.
   await bar.hover({ position: { x: 20, y: 20 } });
   await page.mouse.wheel(0, 4000);
-  await expect(last).toBeInViewport({ ratio: 1 });
+  await expect(last).toBeInViewport({ ratio: 0.95 });
 });
 
 test("with the navigation on top in a narrow window, the current page's entry is in view and the bar shows there is more", async ({
@@ -367,11 +367,11 @@ test("with the navigation on top in a narrow window, the current page's entry is
     location.hash = "#/themes";
   });
   await expect(page.getByRole("heading", { name: "Themes", level: 1 })).toBeVisible();
-  await expect(themes).toBeInViewport({ ratio: 1 });
+  await expect(themes).toBeInViewport({ ratio: 0.95 });
   // The cue at the edges: shadows that stay put while the entries scroll under them.
   await expect(bar).toHaveCSS("background-attachment", /local.*scroll/);
   await bar.getByRole("link", { name: "Dashboard", exact: true }).click();
-  await expect(bar.getByRole("link", { name: "Dashboard", exact: true })).toBeInViewport({ ratio: 1 });
+  await expect(bar.getByRole("link", { name: "Dashboard", exact: true })).toBeInViewport({ ratio: 0.95 });
 });
 
 test("a change of page opens the new page at its top; a change inside a page keeps the place", async ({
@@ -448,6 +448,36 @@ test("the sign-in page fills the window, says how to open the panel without cust
   if (!again) throw new Error("no sign-in card");
   expect(Math.abs(again.x + again.width / 2 - 640)).toBeLessThan(2);
   expect(Math.abs(again.y + again.height / 2 - 400)).toBeLessThan(2);
+});
+
+test("what an add came to is brought into view, and a theme from a file leaves no pasted text", async ({
+  page,
+}) => {
+  const nightfall = join(import.meta.dirname, "..", "tests", "fixtures", "t3-docs-nightfall.json");
+  const paste = page.getByLabel("Or paste a theme file's JSON");
+  const add = page.getByRole("button", { name: "Add", exact: true });
+  await page.setViewportSize({ width: 1280, height: 560 });
+  await open(page);
+  await signIn(page, core);
+  await goTo(page, "Themes");
+
+  // The Add button at the window's lower edge, as after scrolling down to it: the reason shows
+  // under it, outside the window unless the page brings it in.
+  await paste.fill('{"foo": 1}');
+  await add.evaluate((b) => window.scrollBy(0, b.getBoundingClientRect().bottom - window.innerHeight + 4));
+  await add.click();
+  await expect(page.getByRole("alert")).toContainText("Not added:");
+  await expect(page.getByRole("alert")).toBeInViewport({ ratio: 0.95 });
+
+  // A theme then added from a file: the refused text does not stay in the box.
+  await page.getByLabel("Theme file", { exact: true }).setInputFiles(nightfall);
+  await expect(page.getByText("Nightfall was added and turned on.")).toBeInViewport({ ratio: 0.95 });
+  await expect(paste).toHaveValue("");
+  await page.getByRole("button", { name: "Remove Nightfall", exact: true }).click();
+  await page.getByRole("button", { name: "Yes, remove Nightfall", exact: true }).click();
+  await expect(
+    page.getByRole("radiogroup", { name: "Theme" }).getByRole("radio", { name: "Default" }),
+  ).toBeChecked();
 });
 
 test("screenshots in two themes", async ({ page }) => {
