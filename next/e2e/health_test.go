@@ -221,9 +221,9 @@ func TestSavedBlockKeepsAccountOutAfterRestart(t *testing.T) {
 		t.Fatalf("account list: %s", r)
 	}
 	for _, line := range strings.Split(r.stdout, "\n") {
-		// The columns are ID, PUBLIC ID, EXTENSION, SOURCE, HEALTH.
+		// The columns are ID, PUBLIC ID, LABEL, EXTENSION, SOURCE, HEALTH.
 		f := strings.Fields(line)
-		if len(f) > 4 && f[0] == "a" && f[4] != "exhausted" || len(f) > 4 && f[0] == "b" && f[4] != "ok" {
+		if len(f) > 5 && f[0] == "a" && f[5] != "exhausted" || len(f) > 5 && f[0] == "b" && f[5] != "ok" {
 			t.Errorf("account list line %q: want a exhausted and b ok\n%s", line, r.stdout)
 		}
 	}
