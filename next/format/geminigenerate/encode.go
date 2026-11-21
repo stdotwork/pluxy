@@ -361,10 +361,12 @@ func (e *encoder) parts(it llm.Item, msgPath string, textDocs bool) (parts []jso
 				sendable = true
 				continue
 			}
-			if text, title, ok := textdoc.FromAnthropic(p.Data); ok && textDocs {
-				part = map[string]any{"text": textdoc.Wrap(title, text)}
-				e.lose(llm.LossApproximated, pp, "a Messages plain-text document, carried as text")
-				break
+			if p.Format == llm.FormatAnthropicMessages && textDocs {
+				if text, title, ok := textdoc.FromAnthropic(p.Data); ok {
+					part = map[string]any{"text": textdoc.Wrap(title, text)}
+					e.lose(llm.LossApproximated, pp, "a Messages plain-text document, carried as text")
+					break
+				}
 			}
 			e.lose(llm.LossDropped, pp, "a "+p.Format+" content part GenerateContent cannot carry")
 			dropped = true

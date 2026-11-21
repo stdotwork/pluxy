@@ -1008,12 +1008,14 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 				sendable = true
 				continue
 			}
-			if text, title, ok := textdoc.FromAnthropic(p.Data); ok {
-				wrapped := textdoc.Wrap(title, text)
-				out = append(out, marshal(outPart{Type: "text", Text: &wrapped}, nil))
-				e.lose(llm.LossApproximated, pp, "a Messages plain-text document, carried as text")
-				sendable = true
-				continue
+			if p.Format == llm.FormatAnthropicMessages {
+				if text, title, ok := textdoc.FromAnthropic(p.Data); ok {
+					wrapped := textdoc.Wrap(title, text)
+					out = append(out, marshal(outPart{Type: "text", Text: &wrapped}, nil))
+					e.lose(llm.LossApproximated, pp, "a Messages plain-text document, carried as text")
+					sendable = true
+					continue
+				}
 			}
 			e.lose(llm.LossDropped, pp, "a "+p.Format+" content part Chat Completions cannot carry")
 			dropped = true

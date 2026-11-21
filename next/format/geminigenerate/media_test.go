@@ -277,3 +277,24 @@ func TestEncodeSameFormatImageNotValidated(t *testing.T) {
 		t.Errorf("translated body %s, losses %+v; want the image dropped", body, losses)
 	}
 }
+
+// Only a Messages document block is a Messages text document: a native part of another format
+// that happens to hold the same JSON is not carried as its text.
+func TestEncodeForeignNativeTextDocumentDropped(t *testing.T) {
+	doc := []byte(`{"type":"document","source":{"type":"text","media_type":"text/plain","data":"Line one\nLine two"},"title":"notes.txt"}`)
+	req := llm.Request{Model: "m", Items: []llm.Item{{
+		Type: llm.ItemTypeMessage, Role: llm.RoleUser,
+		Content: []llm.Part{
+			{Type: llm.PartText, Text: "summarize"},
+			{Type: llm.PartNative, Format: llm.FormatOpenAIChat, Data: doc,
+				Origin: &llm.Origin{Format: llm.FormatOpenAIChat, Path: "messages[0].content[1]"}},
+		},
+	}}}
+	body, losses, err := EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "Line one") || len(losses) != 1 || losses[0].Kind != llm.LossDropped {
+		t.Errorf("body %s, losses %+v; want the foreign part dropped", body, losses)
+	}
+}

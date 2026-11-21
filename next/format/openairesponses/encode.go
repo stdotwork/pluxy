@@ -315,11 +315,13 @@ func (e *encoder) content(it llm.Item, msgPath string) (content []json.RawMessag
 			content = append(content, p.Data)
 			sendable = true
 		case p.Type == llm.PartNative:
-			if text, title, ok := textdoc.FromAnthropic(p.Data); ok {
-				content = append(content, marshal(map[string]string{"type": textType, "text": textdoc.Wrap(title, text)}, nil))
-				e.lose(llm.LossApproximated, pp, "a Messages plain-text document, carried as text")
-				sendable = true
-				break
+			if p.Format == llm.FormatAnthropicMessages {
+				if text, title, ok := textdoc.FromAnthropic(p.Data); ok {
+					content = append(content, marshal(map[string]string{"type": textType, "text": textdoc.Wrap(title, text)}, nil))
+					e.lose(llm.LossApproximated, pp, "a Messages plain-text document, carried as text")
+					sendable = true
+					break
+				}
 			}
 			e.lose(llm.LossDropped, pp, "a "+partFormat(p)+" content part Responses cannot carry here")
 			dropped = true
