@@ -551,6 +551,20 @@ func marshal(v any, raw json.RawMessage) json.RawMessage {
 // parts are dropped is an invalid_request error, never sent empty. It does not look at
 // req.Native; callers that can pass the native body through do so first.
 func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
+	return EncodeRequestWith(req, EncodeOptions{})
+}
+
+// EncodeOptions changes how EncodeRequestWith builds a body.
+type EncodeOptions struct {
+	// ServiceTier and Verbosity say the caller knows its upstream takes the field: a request from
+	// another format then carries the client's service tier or verbosity, and without them it
+	// leaves it out and reports it as dropped, since a third-party upstream may refuse a field it
+	// does not list. A Chat client's own tier and verbosity are written either way.
+	ServiceTier, Verbosity bool
+}
+
+// EncodeRequestWith builds a Chat Completions request body as EncodeRequest does, changed by opts.
+func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss, error) {
 	e := &encoder{}
 	req, lowered := clienttools.Lower(req)
 	e.losses = append(e.losses, lowered...)
@@ -564,10 +578,23 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 			TopP:            req.Options.TopP,
 			Stop:            req.Options.Stop,
 			ReasoningEffort: req.Options.ReasoningEffort,
-			// Chat Completions names the same tiers and verbosities as the model does.
-			ServiceTier: req.Options.ServiceTier,
-			Verbosity:   req.Options.Verbosity,
 		},
+	}
+	// Chat Completions names the same tiers and verbosities as the model does.
+	own := req.SourceFormat() == format
+	if t := req.Options.ServiceTier; t != "" {
+		if opts.ServiceTier || own {
+			out.ServiceTier = t
+		} else {
+			e.lose(llm.LossDropped, llm.ServiceTierPath(req), llm.ServiceTierUnsent)
+		}
+	}
+	if v := req.Options.Verbosity; v != "" {
+		if opts.Verbosity || own {
+			out.Verbosity = v
+		} else {
+			e.lose(llm.LossDropped, llm.VerbosityPath(req), llm.VerbosityUnsent)
+		}
 	}
 	if req.Stream {
 		out.StreamOptions = &struct {

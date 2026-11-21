@@ -85,6 +85,20 @@ type outContent struct {
 // them). It does not look at req.Native; callers that can pass the native body through do so
 // first.
 func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
+	return EncodeRequestWith(req, EncodeOptions{})
+}
+
+// EncodeOptions changes how EncodeRequestWith builds a body.
+type EncodeOptions struct {
+	// ServiceTier says the caller knows its upstream takes a service tier (the Gemini API does,
+	// Vertex AI does not): a request from another format then carries the client's tier, and
+	// without it the tier is left out and reported as dropped. A Gemini client's own tier is
+	// written either way.
+	ServiceTier bool
+}
+
+// EncodeRequestWith builds a GenerateContent request body as EncodeRequest does, changed by opts.
+func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss, error) {
 	e := &encoder{}
 	req, lowered := clienttools.Lower(req)
 	e.losses = append(e.losses, lowered...)
@@ -118,7 +132,7 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 	if o.ReasoningEffort != "" {
 		e.lose(llm.LossDropped, "reasoning_effort", "GenerateContent takes thinking settings, which depend on the model")
 	}
-	e.serviceTier(req, out)
+	e.serviceTier(req, opts, out)
 	if o.Verbosity != "" {
 		e.lose(llm.LossDropped, llm.VerbosityPath(req), "GenerateContent has no verbosity setting")
 	}
@@ -561,11 +575,18 @@ func IsThoughtSignature(s string) bool {
 // serviceTier writes the request's service tier into out as GenerateContent's serviceTier: the
 // default tier is standard, flex and priority are themselves. GenerateContent has no auto, scale
 // or ultrafast tier, and none for a value the model does not know: those are dropped and
-// reported, never moved to the nearest tier.
-func (e *encoder) serviceTier(req llm.Request, out map[string]any) {
+// reported, never moved to the nearest tier. So is every tier of a request from another format
+// whose upstream is not known to take one (opts.ServiceTier).
+func (e *encoder) serviceTier(req llm.Request, opts EncodeOptions, out map[string]any) {
 	tier := req.Options.ServiceTier
+	if tier == "" {
+		return
+	}
+	if !opts.ServiceTier && req.SourceFormat() != format {
+		e.lose(llm.LossDropped, llm.ServiceTierPath(req), llm.ServiceTierUnsent)
+		return
+	}
 	switch t := llm.CanonicalServiceTier(tier); t {
-	case "":
 	case llm.ServiceTierDefault:
 		out["serviceTier"] = "standard"
 	case llm.ServiceTierFlex, llm.ServiceTierPriority:

@@ -46,15 +46,33 @@ var tierClients = map[string]func(t *testing.T, extra string) llm.Request{
 	},
 }
 
-// The upstream formats the tests write a request to.
+// The upstream formats the tests write a request to, each for a caller that says its upstream takes
+// the service tier and the verbosity (messages-fast also takes fast mode).
 var tierTargets = map[string]func(llm.Request) ([]byte, []llm.Loss, error){
+	"chat": func(r llm.Request) ([]byte, []llm.Loss, error) {
+		return openaichat.EncodeRequestWith(r, openaichat.EncodeOptions{ServiceTier: true, Verbosity: true})
+	},
+	"responses": func(r llm.Request) ([]byte, []llm.Loss, error) {
+		return openairesponses.EncodeRequestWith(r, openairesponses.EncodeOptions{ServiceTier: true, Verbosity: true})
+	},
+	"messages": func(r llm.Request) ([]byte, []llm.Loss, error) {
+		return anthropicmessages.EncodeRequestWith(r, anthropicmessages.EncodeOptions{ServiceTier: true})
+	},
+	"messages-fast": func(r llm.Request) ([]byte, []llm.Loss, error) {
+		return anthropicmessages.EncodeRequestWith(r, anthropicmessages.EncodeOptions{ServiceTier: true, FastMode: true})
+	},
+	"gemini": func(r llm.Request) ([]byte, []llm.Loss, error) {
+		return geminigenerate.EncodeRequestWith(r, geminigenerate.EncodeOptions{ServiceTier: true})
+	},
+}
+
+// tierTargetsOff are the same formats for a caller that does not say so: the encoders' plain entry
+// points.
+var tierTargetsOff = map[string]func(llm.Request) ([]byte, []llm.Loss, error){
 	"chat":      openaichat.EncodeRequest,
 	"responses": openairesponses.EncodeRequest,
 	"messages": func(r llm.Request) ([]byte, []llm.Loss, error) {
 		return anthropicmessages.EncodeRequest(r)
-	},
-	"messages-fast": func(r llm.Request) ([]byte, []llm.Loss, error) {
-		return anthropicmessages.EncodeRequestWith(r, anthropicmessages.EncodeOptions{FastMode: true})
 	},
 	"gemini": geminigenerate.EncodeRequest,
 }
@@ -134,7 +152,7 @@ func TestServiceTierMatrix(t *testing.T) {
 		// Messages: standard_only is the default tier, fast speed the priority tier.
 		{"messages auto", "messages", `,"service_tier":"auto"`, "service_tier=auto", "service_tier=auto", "service_tier=auto", "service_tier=auto", "drop:service_tier"},
 		{"messages standard_only", "messages", `,"service_tier":"standard_only"`, "service_tier=default", "service_tier=default", "service_tier=standard_only", "service_tier=standard_only", "serviceTier=standard"},
-		{"messages speed fast", "messages", `,"speed":"fast"`, "service_tier=priority", "service_tier=priority", "drop:speed", "speed=fast", "serviceTier=priority"},
+		{"messages speed fast", "messages", `,"speed":"fast"`, "service_tier=priority", "service_tier=priority", "speed=fast", "speed=fast", "serviceTier=priority"},
 		// Speed that is not fast says no tier: it stays a field of the client's, written back to its
 		// own format and reported where another has no place for it.
 		{"messages speed standard", "messages", `,"speed":"standard"`, "drop:speed", "drop:speed", "speed=standard", "speed=standard", "drop:speed"},
@@ -215,7 +233,7 @@ func TestVerbosityMatrix(t *testing.T) {
 			if req.Options.Verbosity != c.chat {
 				t.Errorf("read as %q, want %q", req.Options.Verbosity, c.chat)
 			}
-			body, losses, err := openaichat.EncodeRequest(req)
+			body, losses, err := tierTargets["chat"](req)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -226,7 +244,7 @@ func TestVerbosityMatrix(t *testing.T) {
 			if chat.Verbosity != c.chat || len(losses) != 0 {
 				t.Errorf("Chat: verbosity %q, losses %+v, want %q and none: %s", chat.Verbosity, losses, c.chat, body)
 			}
-			body, losses, err = openairesponses.EncodeRequest(req)
+			body, losses, err = tierTargets["responses"](req)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -267,7 +285,7 @@ func TestVerbosityMatrix(t *testing.T) {
 // text that is not an object keeps all of itself.
 func TestVerbosityKeepsTextFields(t *testing.T) {
 	req := tierClients["responses"](t, `,"text":{"verbosity":"low","other":1,"format":{"type":"json_schema","name":"n","schema":{"type":"object"},"extra":true}}`)
-	body, _, err := openairesponses.EncodeRequest(req)
+	body, _, err := tierTargets["responses"](req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -289,7 +307,7 @@ func TestVerbosityKeepsTextFields(t *testing.T) {
 	if req.Options.Verbosity != "" {
 		t.Errorf("verbosity 7 read as %q, want none", req.Options.Verbosity)
 	}
-	body, _, _ = openairesponses.EncodeRequest(req)
+	body, _, _ = tierTargets["responses"](req)
 	if got := json.RawMessage(body); !json.Valid(got) || string(rawField(t, body, "text")) != `{"verbosity":7}` {
 		t.Errorf("text = %s, want {\"verbosity\":7} kept", rawField(t, body, "text"))
 	}
@@ -352,5 +370,63 @@ func TestServiceTierRead(t *testing.T) {
 		if got := tierClients[c.client](t, c.extra).Options.ServiceTier; got != c.want {
 			t.Errorf("%s %s: read as %q, want %q", c.client, c.extra, got, c.want)
 		}
+	}
+}
+
+// Without the caller saying its upstream takes the field, a request from another format goes
+// without a service tier and without a verbosity, and each is reported as dropped at the client's
+// field. A client's own tier and verbosity are written back to its own format either way.
+func TestServiceTierUnsentWithoutOption(t *testing.T) {
+	for _, c := range []struct {
+		name, client, extra string
+		own                 string // the target that is the client's own format
+		ownSays             string // what the client's own target writes: "field=value"
+		dropped             []string
+	}{
+		{"chat", "chat", `,"service_tier":"priority","verbosity":"low"`, "chat", "service_tier=priority", []string{"service_tier", "verbosity"}},
+		{"responses", "responses", `,"service_tier":"fast","text":{"verbosity":"low"}`, "responses", "service_tier=fast", []string{"service_tier", "text.verbosity"}},
+		{"messages", "messages", `,"service_tier":"auto"`, "messages", "service_tier=auto", []string{"service_tier"}},
+		{"messages fast", "messages", `,"speed":"fast"`, "messages", "speed=fast", []string{"speed"}},
+		{"gemini", "gemini", `,"serviceTier":"flex"`, "gemini", "serviceTier=flex", []string{"serviceTier"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			req := tierClients[c.client](t, c.extra)
+			for target, encode := range tierTargetsOff {
+				body, losses, err := encode(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var m map[string]json.RawMessage
+				if err := json.Unmarshal(body, &m); err != nil {
+					t.Fatal(err)
+				}
+				var paths []string
+				for _, l := range losses {
+					if l.Kind == llm.LossDropped && (strings.Contains(l.Path, "erbosity") || slices.Contains(tierFields, l.Path)) {
+						paths = append(paths, l.Path)
+					}
+				}
+				said := ""
+				for _, f := range tierFields {
+					if v, ok := m[f]; ok {
+						var s string
+						_ = json.Unmarshal(v, &s)
+						said = f + "=" + s
+					}
+				}
+				if target == c.own {
+					if said != c.ownSays || len(paths) != 0 {
+						t.Errorf("%s (the client's own): said %q, dropped %q, want %q and nothing dropped: %s", target, said, paths, c.ownSays, body)
+					}
+					continue
+				}
+				if said != "" || rawField(t, body, "verbosity") != nil || strings.Contains(string(rawField(t, body, "text")), "verbosity") {
+					t.Errorf("%s: body says a tier or verbosity: %s", target, body)
+				}
+				if !slices.Equal(paths, c.dropped) {
+					t.Errorf("%s: dropped %q, want %q", target, paths, c.dropped)
+				}
+			}
+		})
 	}
 }

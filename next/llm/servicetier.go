@@ -30,8 +30,9 @@ func CanonicalServiceTier(tier string) string {
 	return tier
 }
 
-// source returns the format r's body came from, or "" when it has none.
-func (r Request) source() string {
+// SourceFormat returns the format r's body came from (the format of Native, else of Origin), or ""
+// when it has none.
+func (r Request) SourceFormat() string {
 	switch {
 	case r.Native != nil && r.Native.Format != "":
 		return r.Native.Format
@@ -45,7 +46,7 @@ func (r Request) source() string {
 // loss: service_tier, except in a Messages request, where a priority tier is speed, and a
 // Gemini one, where it is serviceTier.
 func ServiceTierPath(r Request) string {
-	switch r.source() {
+	switch r.SourceFormat() {
 	case FormatAnthropicMessages:
 		if CanonicalServiceTier(r.Options.ServiceTier) == ServiceTierPriority {
 			return "speed"
@@ -59,8 +60,15 @@ func ServiceTierPath(r Request) string {
 // VerbosityPath returns the field of r's source body that Options.Verbosity came from, for a
 // loss: verbosity, except in a Responses request, where it is text.verbosity.
 func VerbosityPath(r Request) string {
-	if r.source() == FormatOpenAIResponses {
+	if r.SourceFormat() == FormatOpenAIResponses {
 		return "text.verbosity"
 	}
 	return "verbosity"
 }
+
+// ServiceTierUnsent is the detail of the loss for a service tier an encoder leaves out because
+// nothing says its upstream takes the field.
+const ServiceTierUnsent = "nothing says this upstream takes a service tier, so it is not sent"
+
+// VerbosityUnsent is ServiceTierUnsent for verbosity.
+const VerbosityUnsent = "nothing says this upstream takes a verbosity, so it is not sent"

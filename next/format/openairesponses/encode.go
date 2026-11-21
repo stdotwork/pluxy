@@ -99,6 +99,20 @@ type outFunctionTool struct {
 // dropped is an invalid_request error, never sent empty. It does not look at req.Native; callers
 // that can pass the native body through do so first.
 func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
+	return EncodeRequestWith(req, EncodeOptions{})
+}
+
+// EncodeOptions changes how EncodeRequestWith builds a body.
+type EncodeOptions struct {
+	// ServiceTier and Verbosity say the caller knows its upstream takes the field: a request from
+	// another format then carries the client's service tier or verbosity, and without them it
+	// leaves it out and reports it as dropped, since a third-party upstream may refuse a field it
+	// does not list. A Responses client's own tier and verbosity are written either way.
+	ServiceTier, Verbosity bool
+}
+
+// EncodeRequestWith builds a Responses request body as EncodeRequest does, changed by opts.
+func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss, error) {
 	e := &encoder{}
 	o := req.Options
 	out := outRequest{
@@ -109,8 +123,15 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 		Temperature:       o.Temperature,
 		TopP:              o.TopP,
 		ParallelToolCalls: o.ParallelToolCalls,
-		// Responses names the same tiers as the model does.
-		ServiceTier: o.ServiceTier,
+	}
+	// Responses names the same tiers and verbosities as the model does.
+	own := req.SourceFormat() == format
+	if o.ServiceTier != "" {
+		if opts.ServiceTier || own {
+			out.ServiceTier = o.ServiceTier
+		} else {
+			e.lose(llm.LossDropped, llm.ServiceTierPath(req), llm.ServiceTierUnsent)
+		}
 	}
 	if len(o.Stop) > 0 {
 		e.lose(llm.LossDropped, "stop", "Responses has no stop sequences")
@@ -134,7 +155,9 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 		}
 		out.Text = map[string]any{"format": f}
 	}
-	if o.Verbosity != "" {
+	if o.Verbosity != "" && !opts.Verbosity && !own {
+		e.lose(llm.LossDropped, llm.VerbosityPath(req), llm.VerbosityUnsent)
+	} else if o.Verbosity != "" {
 		text, _ := out.Text.(map[string]any)
 		if text == nil {
 			text = map[string]any{}
