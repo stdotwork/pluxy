@@ -96,6 +96,30 @@ func TestListModels(t *testing.T) {
 		t.Errorf("gemini models = %+v, want %+v", gemini.Models, wantGemini)
 	}
 
+	// A Gemini list keeps only the models a request can call: one that lists generateContent or
+	// streamGenerateContent, or that lists no methods at all (a server may not send the field).
+	body = `{"models":[
+		{"name":"models/gen-only","supportedGenerationMethods":["generateContent"]},
+		{"name":"models/stream-only","supportedGenerationMethods":["streamGenerateContent"]},
+		{"name":"models/both","supportedGenerationMethods":["generateContent","streamGenerateContent","countTokens"]},
+		{"name":"models/embed-only","supportedGenerationMethods":["embedContent"]},
+		{"name":"models/bidi-only","supportedGenerationMethods":["bidiGenerateContent"]},
+		{"name":"models/no-field"},
+		{"name":"models/empty-methods","supportedGenerationMethods":[]}
+	]}`
+	filtered, err := listModels(context.Background(), callFor("gemini"))
+	if err != nil {
+		t.Fatalf("listModels gemini filter: %v", err)
+	}
+	var gotIDs []string
+	for _, m := range filtered.Models {
+		gotIDs = append(gotIDs, m.ID)
+	}
+	wantIDs := []string{"gen-only", "stream-only", "both", "no-field", "empty-methods"}
+	if !slices.Equal(gotIDs, wantIDs) {
+		t.Errorf("gemini callable ids = %v, want %v", gotIDs, wantIDs)
+	}
+
 	// Non-list JSON or HTTP errors fail with *llm.Error.
 	body = `{"object":"list"}`
 	if _, err := listModels(context.Background(), callFor("chat")); err == nil {

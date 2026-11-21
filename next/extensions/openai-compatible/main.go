@@ -48,6 +48,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -326,6 +327,12 @@ func listModels(ctx context.Context, call sdk.ModelsCall) (*protocol.ModelList, 
 		})
 	}
 	for _, item := range payload.Models {
+		// A model that names its methods and lists neither generateContent nor
+		// streamGenerateContent cannot be called by a request (embedding-only, for one). A model
+		// that lists none is kept: a compatible server may not send the field.
+		if len(item.SupportedGenerationMethods) > 0 && !slices.ContainsFunc(item.SupportedGenerationMethods, generationMethod) {
+			continue
+		}
 		// Gemini names a model "models/<id>", and a request names it by the id alone.
 		name := strings.TrimSpace(item.Name)
 		id := strings.TrimPrefix(name, "models/")
@@ -344,6 +351,12 @@ func listModels(ctx context.Context, call sdk.ModelsCall) (*protocol.ModelList, 
 		add(m)
 	}
 	return &protocol.ModelList{Models: models}, nil
+}
+
+// generationMethod reports whether a Gemini model's supportedGenerationMethods entry is one the
+// wire calls: :generateContent or :streamGenerateContent (see the wire URLs above).
+func generationMethod(method string) bool {
+	return method == "generateContent" || method == "streamGenerateContent"
 }
 
 // check reads the upstream's model list, GET {base_url}/models: free for the account, and refused
