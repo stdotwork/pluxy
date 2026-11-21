@@ -215,14 +215,6 @@ func (c *Client) Status(ctx context.Context) (Status, error) {
 	return v, err
 }
 
-// Reload is POST /reload. A refused reload is an *APIError with status 422 whose Body is the
-// status.
-func (c *Client) Reload(ctx context.Context) (Status, error) {
-	var v Status
-	_, err := c.Call(ctx, http.MethodPost, "/reload", nil, nil, &v)
-	return v, err
-}
-
 // Accounts is GET /accounts.
 func (c *Client) Accounts(ctx context.Context) ([]Account, error) {
 	var v AccountsReply
@@ -230,70 +222,8 @@ func (c *Client) Accounts(ctx context.Context) ([]Account, error) {
 	return v.Accounts, err
 }
 
-// SetAccountDisabled is PATCH /accounts/{id} with disabled.
-func (c *Client) SetAccountDisabled(ctx context.Context, id string, disabled bool) (Account, error) {
-	var v AccountReply
-	_, err := c.Call(ctx, http.MethodPatch, "/accounts/"+url.PathEscape(id), nil, AccountPatch{Disabled: &disabled}, &v)
-	return v.Account, err
-}
-
-// ResetCooldowns is POST /accounts/{id}/cooldown/reset.
-func (c *Client) ResetCooldowns(ctx context.Context, id string) (CooldownResetReply, error) {
-	var v CooldownResetReply
-	_, err := c.Call(ctx, http.MethodPost, "/accounts/"+url.PathEscape(id)+"/cooldown/reset", nil, nil, &v)
-	return v, err
-}
-
-// Chains is GET /chains: the fallback chains.
-func (c *Client) Chains(ctx context.Context) (ChainsReply, error) {
-	var out ChainsReply
-	err := c.get(ctx, "/chains", nil, &out)
-	return out, err
-}
-
-// SetChain is PUT /chains/{name}: name's fallback chain becomes steps.
-func (c *Client) SetChain(ctx context.Context, name string, steps []ChainStep) (Chain, error) {
-	var out Chain
-	_, err := c.Call(ctx, http.MethodPut, ChainPath(name), nil, ChainRequest{Steps: steps}, &out)
-	return out, err
-}
-
-// RemoveChain is DELETE /chains/{name}: name goes back to the default, one provider's accounts.
-func (c *Client) RemoveChain(ctx context.Context, name string) error {
-	_, err := c.Call(ctx, http.MethodDelete, ChainPath(name), nil, nil, nil)
-	return err
-}
-
 // ChainPath is the path of name's chain, its name escaped as one path segment.
 func ChainPath(name string) string { return "/chains/" + url.PathEscape(name) }
-
-// Route is GET /route: what a request for model would do now, sent to no one.
-func (c *Client) Route(ctx context.Context, model string) (RouteReply, error) {
-	var out RouteReply
-	err := c.get(ctx, "/route", url.Values{"model": {model}}, &out)
-	return out, err
-}
-
-// TestAccount is POST /accounts/{id}/test; an empty model lets core pick one.
-func (c *Client) TestAccount(ctx context.Context, id, model string) (TestResult, error) {
-	var v TestReply
-	_, err := c.Call(ctx, http.MethodPost, "/accounts/"+url.PathEscape(id)+"/test", nil, TestRequest{Model: model}, &v)
-	return v.Result, err
-}
-
-// Quota is GET /accounts/{id}/quota.
-func (c *Client) Quota(ctx context.Context, id string) (QuotaReply, error) {
-	var v QuotaReply
-	err := c.get(ctx, "/accounts/"+url.PathEscape(id)+"/quota", nil, &v)
-	return v, err
-}
-
-// AccountModels is GET /accounts/{id}/models.
-func (c *Client) AccountModels(ctx context.Context, id string) (AccountModelsReply, error) {
-	var v AccountModelsReply
-	err := c.get(ctx, "/accounts/"+url.PathEscape(id)+"/models", nil, &v)
-	return v, err
-}
 
 // Packages is GET /packages.
 func (c *Client) Packages(ctx context.Context) ([]Package, error) {
@@ -302,59 +232,10 @@ func (c *Client) Packages(ctx context.Context) ([]Package, error) {
 	return v.Packages, err
 }
 
-// Registries is GET /registries.
-func (c *Client) Registries(ctx context.Context) ([]Registry, error) {
-	var v RegistriesReply
-	err := c.get(ctx, "/registries", nil, &v)
-	return v.Registries, err
-}
-
-// Install is POST /packages.
-func (c *Client) Install(ctx context.Context, req InstallRequest) (Package, error) {
-	var v PackageReply
-	_, err := c.Call(ctx, http.MethodPost, "/packages", nil, req, &v)
-	return v.Package, err
-}
-
-// SetPackageEnabled is POST /packages/{id}/enable or .../disable; id is publisher/name.
-func (c *Client) SetPackageEnabled(ctx context.Context, id string, enabled bool) (Package, error) {
-	verb := "disable"
-	if enabled {
-		verb = "enable"
-	}
-	var v PackageReply
-	_, err := c.Call(ctx, http.MethodPost, PackagePath(id)+"/"+verb, nil, nil, &v)
-	return v.Package, err
-}
-
-// RemovePackage is DELETE /packages/{id}.
-func (c *Client) RemovePackage(ctx context.Context, id string) error {
-	_, err := c.Call(ctx, http.MethodDelete, PackagePath(id), nil, nil, nil)
-	return err
-}
-
 // PackagePath is the path of package id (publisher/name), each part escaped.
 func PackagePath(id string) string {
 	publisher, name, _ := strings.Cut(id, "/")
 	return "/packages/" + url.PathEscape(publisher) + "/" + url.PathEscape(name)
-}
-
-// Models is GET /models.
-func (c *Client) Models(ctx context.Context) (ModelsReply, error) {
-	var v ModelsReply
-	err := c.get(ctx, "/models", nil, &v)
-	return v, err
-}
-
-// RefreshModels is POST /models/refresh; an empty account refreshes every account.
-func (c *Client) RefreshModels(ctx context.Context, account string) (RefreshModelsReply, error) {
-	var in any
-	if account != "" {
-		in = RefreshModelsRequest{Account: account}
-	}
-	var v RefreshModelsReply
-	_, err := c.Call(ctx, http.MethodPost, "/models/refresh", nil, in, &v)
-	return v, err
 }
 
 // ClientKeys is GET /client-keys.
@@ -362,48 +243,6 @@ func (c *Client) ClientKeys(ctx context.Context) ([]ClientKey, error) {
 	var v ClientKeysReply
 	err := c.get(ctx, "/client-keys", nil, &v)
 	return v.Keys, err
-}
-
-// AddClientKey is POST /client-keys; the reply holds the new key.
-func (c *Client) AddClientKey(ctx context.Context) (NewClientKeyReply, error) {
-	var v NewClientKeyReply
-	_, err := c.Call(ctx, http.MethodPost, "/client-keys", nil, nil, &v)
-	return v, err
-}
-
-// RemoveClientKey is DELETE /client-keys/{id}.
-func (c *Client) RemoveClientKey(ctx context.Context, id string) error {
-	_, err := c.Call(ctx, http.MethodDelete, "/client-keys/"+url.PathEscape(id), nil, nil, nil)
-	return err
-}
-
-// Config is GET /config.
-func (c *Client) Config(ctx context.Context) (Config, error) {
-	var v Config
-	err := c.get(ctx, "/config", nil, &v)
-	return v, err
-}
-
-// Settings is GET /settings.
-func (c *Client) Settings(ctx context.Context) (Settings, error) {
-	var v Settings
-	err := c.get(ctx, "/settings", nil, &v)
-	return v, err
-}
-
-// Logs is GET /logs; q takes after and limit.
-func (c *Client) Logs(ctx context.Context, q url.Values) (LogLines, error) {
-	var v LogLines
-	err := c.get(ctx, "/logs", q, &v)
-	return v, err
-}
-
-// Usage is GET /usage; q takes since, until, by, model, provider, account, key, key_id,
-// failed, bucket and buckets.
-func (c *Client) Usage(ctx context.Context, q url.Values) (UsageReply, error) {
-	var v UsageReply
-	err := c.get(ctx, "/usage", q, &v)
-	return v, err
 }
 
 // MultipartBody is a ready multipart/form-data body, made by NewMultipartBody.
@@ -468,13 +307,6 @@ func (c *Client) ClientPaste(ctx context.Context, id, keyID string) (ClientPaste
 	return v, err
 }
 
-// SetupImport is POST /setup/import.
-func (c *Client) SetupImport(ctx context.Context, req SetupImportRequest) (ImportReport, error) {
-	var v ImportReport
-	_, err := c.Call(ctx, http.MethodPost, "/setup/import", nil, req, &v)
-	return v, err
-}
-
 // SetupDone is POST /setup/done.
 func (c *Client) SetupDone(ctx context.Context) (SetupDoneReply, error) {
 	var v SetupDoneReply
@@ -482,50 +314,10 @@ func (c *Client) SetupDone(ctx context.Context) (SetupDoneReply, error) {
 	return v, err
 }
 
-// UsageEvents is GET /usage/events; q takes after, before, limit, since, until, model,
-// provider, account, key, key_id and failed.
-func (c *Client) UsageEvents(ctx context.Context, q url.Values) (UsageEventsReply, error) {
-	var v UsageEventsReply
-	err := c.get(ctx, "/usage/events", q, &v)
-	return v, err
-}
-
 // ThemePath is the path of theme id (publisher/name), each part escaped.
 func ThemePath(id string) string {
 	publisher, name, _ := strings.Cut(id, "/")
 	return "/themes/" + url.PathEscape(publisher) + "/" + url.PathEscape(name)
-}
-
-// Themes is GET /themes.
-func (c *Client) Themes(ctx context.Context) (ThemesReply, error) {
-	var v ThemesReply
-	err := c.get(ctx, "/themes", nil, &v)
-	return v, err
-}
-
-// Theme is GET /themes/{publisher}/{name}; it returns the stored JSON bytes unchanged.
-func (c *Client) Theme(ctx context.Context, id string) ([]byte, error) {
-	return c.Call(ctx, http.MethodGet, ThemePath(id), nil, nil, nil)
-}
-
-// PutTheme is PUT /themes/{publisher}/{name}; it sends body unchanged as JSON.
-func (c *Client) PutTheme(ctx context.Context, id string, body []byte) (ThemeSummary, error) {
-	var v ThemeSummary
-	_, err := c.CallBytes(ctx, http.MethodPut, ThemePath(id), nil, body, &v)
-	return v, err
-}
-
-// RemoveTheme is DELETE /themes/{publisher}/{name}.
-func (c *Client) RemoveTheme(ctx context.Context, id string) error {
-	_, err := c.Call(ctx, http.MethodDelete, ThemePath(id), nil, nil, nil)
-	return err
-}
-
-// SetTheme is PUT /theme; an empty id clears the selection.
-func (c *Client) SetTheme(ctx context.Context, id string) (ThemeSelection, error) {
-	var v ThemeSelection
-	_, err := c.Call(ctx, http.MethodPut, "/theme", nil, ThemeSelection{ID: id}, &v)
-	return v, err
 }
 
 // CallBytes sends one call with raw JSON bytes body (if non-nil) and behaves like Call.
