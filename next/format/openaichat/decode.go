@@ -135,9 +135,10 @@ type streamChunk struct {
 type streamChoice struct {
 	Index int `json:"index"`
 	Delta struct {
-		Content          *string `json:"content"`
-		ReasoningContent *string `json:"reasoning_content"`
-		ToolCalls        []struct {
+		reasoningFields
+		Content   *string         `json:"content"`
+		Refusal   json.RawMessage `json:"refusal"`
+		ToolCalls []struct {
 			Index    *int   `json:"index"`
 			ID       string `json:"id"`
 			Function struct {
@@ -147,7 +148,8 @@ type streamChoice struct {
 			ExtraContent json.RawMessage `json:"extra_content"`
 		} `json:"tool_calls"`
 	} `json:"delta"`
-	FinishReason *string `json:"finish_reason"`
+	FinishReason *string         `json:"finish_reason"`
+	Logprobs     json.RawMessage `json:"logprobs"`
 }
 
 // StreamDecoder turns the data of an upstream Chat Completions stream into events. The first
@@ -168,6 +170,8 @@ type StreamDecoder struct {
 	calls     int             // tool calls made an id so far
 	opened    int             // tool calls whose item started
 	used      map[string]bool // tool call ids the stream has used or sent
+	think     thinkFilter     // a leading think tag in the content, split across chunks
+	refused   bool            // the reply carried a refusal
 	losses    []llm.Loss
 }
 
@@ -224,6 +228,76 @@ func (d *StreamDecoder) closeAll(ev *[]llm.Event) {
 	clear(d.tools)
 	clear(d.extra)
 	d.last = nil
+}
+
+// content feeds a content delta through the leading think tag's filter and writes what it
+// settles as reasoning or text, closing and opening the items as it goes.
+func (d *StreamDecoder) content(s string, ev *[]llm.Event) {
+	for _, p := range d.think.feed(s) {
+		d.piece(p, ev)
+	}
+}
+
+// piece writes one run of content as the reasoning or the text it turned out to be.
+func (d *StreamDecoder) piece(p thinkPiece, ev *[]llm.Event) {
+	if p.reasoning {
+		d.closeItem(&d.text, ev)
+		if d.reasoning < 0 {
+			d.reasoning = d.open(llm.ItemReasoning, ev, llm.ItemStart{})
+		}
+		*ev = append(*ev, llm.Event{Type: llm.EventReasoningDelta, Index: d.reasoning, Delta: p.text})
+		return
+	}
+	d.closeItem(&d.reasoning, ev)
+	if d.text < 0 {
+		d.text = d.open(llm.ItemMessage, ev, llm.ItemStart{})
+	}
+	*ev = append(*ev, llm.Event{Type: llm.EventTextDelta, Index: d.text, Delta: p.text})
+}
+
+// refusalText returns the text of a Chat refusal field, or "" when the upstream sent something
+// other than a string: an odd value is no refusal, and must not fail the reply.
+func refusalText(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		return ""
+	}
+	return s
+}
+
+// logprobs returns the logprobs a Chat reply carried, or nil when it carried none.
+func logprobs(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	return raw
+}
+
+// attachTextMeta puts meta on the text event the delta produced, if it produced one: a Chat
+// client gets the choice's logprobs back, and the text a refusal, through the event's raw, which
+// only a client of the reply's own format receives.
+func (d *StreamDecoder) attachTextMeta(meta textMeta, from int, ev *[]llm.Event) {
+	raw := meta.raw()
+	if raw == nil {
+		return
+	}
+	for i := len(*ev) - 1; i >= from; i-- {
+		if (*ev)[i].Type == llm.EventTextDelta {
+			(*ev)[i].Raw = raw
+			return
+		}
+	}
+}
+
+// flushThink writes what the think filter still holds when the reply ends: reasoning short of its
+// closing tag, or content that never became the opening tag.
+func (d *StreamDecoder) flushThink(ev *[]llm.Event) {
+	for _, p := range d.think.flush() {
+		d.piece(p, ev)
+	}
 }
 
 // openCall opens the item of a tool call whose name is now known, writing first the arguments
@@ -344,19 +418,29 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		if ch.Index != 0 {
 			continue
 		}
-		if r := ch.Delta.ReasoningContent; r != nil && *r != "" {
+		if r := ch.Delta.text(); r != "" {
 			d.closeItem(&d.text, &out)
 			if d.reasoning < 0 {
 				d.reasoning = d.open(llm.ItemReasoning, &out, llm.ItemStart{})
 			}
-			out = append(out, llm.Event{Type: llm.EventReasoningDelta, Index: d.reasoning, Delta: *r})
+			out = append(out, llm.Event{Type: llm.EventReasoningDelta, Index: d.reasoning, Delta: r})
 		}
 		if t := ch.Delta.Content; t != nil && *t != "" {
-			d.closeItem(&d.reasoning, &out)
-			if d.text < 0 {
-				d.text = d.open(llm.ItemMessage, &out, llm.ItemStart{})
-			}
-			out = append(out, llm.Event{Type: llm.EventTextDelta, Index: d.text, Delta: *t})
+			before := len(out)
+			d.content(*t, &out)
+			d.attachTextMeta(textMeta{Logprobs: logprobs(ch.Logprobs)}, before, &out)
+		}
+		if r := refusalText(ch.Delta.Refusal); r != "" {
+			d.refused = true
+			// Held content belongs before the refusal that interrupts it.
+			d.flushThink(&out)
+			before := len(out)
+			d.piece(thinkPiece{text: r}, &out)
+			d.attachTextMeta(textMeta{Logprobs: logprobs(ch.Logprobs), Refusal: true}, before, &out)
+		}
+		if len(ch.Delta.ToolCalls) > 0 {
+			// Held content belongs before the tool call that interrupts it.
+			d.flushThink(&out)
 		}
 		for _, tc := range ch.Delta.ToolCalls {
 			index := -1
@@ -413,6 +497,7 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		if ch.FinishReason != nil && *ch.FinishReason != "" {
 			f := decodeFinish(*ch.FinishReason)
 			d.finish = &f
+			d.flushThink(&out)
 			d.closeAll(&out)
 		}
 	}
@@ -438,6 +523,7 @@ func (d *StreamDecoder) end() []llm.Event {
 	if !d.started {
 		out = append(out, llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{}})
 	}
+	d.flushThink(&out)
 	d.closeAll(&out)
 	f := llm.Finish{Reason: llm.FinishOther}
 	if d.finish != nil {
@@ -447,6 +533,9 @@ func (d *StreamDecoder) end() []llm.Event {
 		// Every call the upstream sent was dropped for naming no function: a client that
 		// waits for a call would wait for one that is not in the reply.
 		f.Reason = llm.FinishStop
+	}
+	if d.refused {
+		f.Reason = llm.FinishContentFilter
 	}
 	return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: d.usage})
 }
@@ -516,14 +605,16 @@ type completion struct {
 type completionChoice struct {
 	Index   int `json:"index"`
 	Message *struct {
-		Content          *string `json:"content"`
-		ReasoningContent *string `json:"reasoning_content"`
-		ToolCalls        []struct {
+		reasoningFields
+		Content   *string         `json:"content"`
+		Refusal   json.RawMessage `json:"refusal"`
+		ToolCalls []struct {
 			chatToolCall
 			ExtraContent json.RawMessage `json:"extra_content"`
 		} `json:"tool_calls"`
 	} `json:"message"`
-	FinishReason string `json:"finish_reason"`
+	FinishReason string          `json:"finish_reason"`
+	Logprobs     json.RawMessage `json:"logprobs"`
 }
 
 // extraContent returns a tool call's extra_content as the raw of its item.start event:
@@ -579,15 +670,16 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 		ID: c.ID, Model: c.Model, Created: c.Created, Format: llm.FormatOpenAIChat, Raw: replyFields(body),
 	}}}
 	next := 0
-	item := func(start llm.ItemStart, delta string, deltaType string, raw json.RawMessage) {
+	item := func(start llm.ItemStart, delta string, deltaType string, raw, deltaRaw json.RawMessage) {
 		out = append(out, llm.Event{Type: llm.EventItemStart, Index: next, Item: &start, Raw: raw})
 		if delta != "" {
-			out = append(out, llm.Event{Type: deltaType, Index: next, Delta: delta})
+			out = append(out, llm.Event{Type: deltaType, Index: next, Delta: delta, Raw: deltaRaw})
 		}
 		out = append(out, llm.Event{Type: llm.EventItemEnd, Index: next})
 		next++
 	}
 	var losses []llm.Loss
+	refused := false
 	finish := llm.Finish{Reason: llm.FinishOther}
 	used := map[string]bool{} // ids the reply has used, whether sent or made
 	made := 0
@@ -597,11 +689,39 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 			continue
 		}
 		m := ch.Message
-		if m.ReasoningContent != nil && *m.ReasoningContent != "" {
-			item(llm.ItemStart{Kind: llm.ItemReasoning}, *m.ReasoningContent, llm.EventReasoningDelta, nil)
+		content := ""
+		if m.Content != nil {
+			content = *m.Content
 		}
-		if m.Content != nil && *m.Content != "" {
-			item(llm.ItemStart{Kind: llm.ItemMessage}, *m.Content, llm.EventTextDelta, nil)
+		reasoning := m.text()
+		tagged, text := parseThink(content)
+		if reasoning != "" {
+			item(llm.ItemStart{Kind: llm.ItemReasoning}, reasoning, llm.EventReasoningDelta, nil, nil)
+		}
+		if tagged != "" && tagged != reasoning {
+			item(llm.ItemStart{Kind: llm.ItemReasoning}, tagged, llm.EventReasoningDelta, nil, nil)
+		}
+		refusal := refusalText(m.Refusal)
+		if refusal != "" {
+			refused = true
+		}
+		if text != "" || refusal != "" {
+			start := llm.ItemStart{Kind: llm.ItemMessage}
+			out = append(out, llm.Event{Type: llm.EventItemStart, Index: next, Item: &start})
+			if text != "" {
+				meta := textMeta{}
+				if refusal == "" {
+					// The choice's logprobs belong on its last text delta.
+					meta.Logprobs = logprobs(ch.Logprobs)
+				}
+				out = append(out, llm.Event{Type: llm.EventTextDelta, Index: next, Delta: text, Raw: meta.raw()})
+			}
+			if refusal != "" {
+				meta := textMeta{Logprobs: logprobs(ch.Logprobs), Refusal: true}
+				out = append(out, llm.Event{Type: llm.EventTextDelta, Index: next, Delta: refusal, Raw: meta.raw()})
+			}
+			out = append(out, llm.Event{Type: llm.EventItemEnd, Index: next})
+			next++
 		}
 		for i, tc := range m.ToolCalls {
 			if tc.Function.Name == "" {
@@ -622,7 +742,7 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 			}
 			used[id] = true
 			calls++
-			item(llm.ItemStart{Kind: llm.ItemToolCall, CallID: id, Name: tc.Function.Name}, tc.Function.Arguments, llm.EventToolInputDelta, extraContent(tc.ExtraContent))
+			item(llm.ItemStart{Kind: llm.ItemToolCall, CallID: id, Name: tc.Function.Name}, tc.Function.Arguments, llm.EventToolInputDelta, extraContent(tc.ExtraContent), nil)
 		}
 		finish = decodeFinish(ch.FinishReason)
 	}
@@ -630,6 +750,9 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 		// Every call was left out for naming no function: a client that waits for a call
 		// would wait for one that is not in the reply.
 		finish.Reason = llm.FinishStop
+	}
+	if refused {
+		finish.Reason = llm.FinishContentFilter
 	}
 	if ev := otherChoices(others); ev != nil {
 		out = append(out, *ev)

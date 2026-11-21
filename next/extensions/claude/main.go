@@ -246,7 +246,9 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
-	body, tr, err := buildBodyWithTTL(call.Request, s.CacheTTL)
+	body, tr, err := buildBodyWith(call.Request, s.CacheTTL, anthropicmessages.EncodeOptions{
+		SearchResultOwned: func(enc string) bool { return searchOwners.mintedBy(enc, call.Account.ID) },
+	})
 	if err != nil {
 		return err
 	}
@@ -255,7 +257,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 			return err
 		}
 	}
-	send := &reporting{Stream: out, tr: tr, names: replyNames(call.Request, tr)}
+	send := &reporting{Stream: out, tr: tr, names: replyNames(call.Request, tr), account: call.Account.ID}
 	resp, err := post(ctx, call, s, "/v1/messages", body, tr.Passthrough, call.Request.Stream)
 	if err != nil {
 		return err
@@ -409,7 +411,9 @@ func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
 			Message: "this account's base_url is not Anthropic's own (" + defaultBaseURL + "), which is the only one this extension sends a token count to"}
 	}
-	body, tr, err := buildBodyWithTTL(call.Request, s.CacheTTL)
+	body, tr, err := buildBodyWith(call.Request, s.CacheTTL, anthropicmessages.EncodeOptions{
+		SearchResultOwned: func(enc string) bool { return searchOwners.mintedBy(enc, call.Account.ID) },
+	})
 	if err != nil {
 		return err
 	}
@@ -605,8 +609,9 @@ func setField(body []byte, key string, v any) ([]byte, error) {
 // call the client's own name for the tool when the request was sent under another (names).
 type reporting struct {
 	*sdk.Stream
-	tr    *llm.Translation
-	names map[string]string
+	tr      *llm.Translation
+	names   map[string]string
+	account string // the account the reply comes from, for its web search results
 }
 
 func (r *reporting) Send(ev llm.Event) error {
@@ -622,6 +627,7 @@ func (r *reporting) Send(ev llm.Event) error {
 			ev.Item = &item
 		}
 	}
+	rememberSearchResults(ev.Raw, r.account)
 	return r.Stream.Send(ev)
 }
 
