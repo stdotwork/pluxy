@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.28
+# pluxy extension protocol, version 0.29
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -44,7 +44,8 @@ tools the model may choose from, where the client named a set rather than one to
 adds [native-only calls](#native-only-calls): an extension that parses the client's body itself gets
 a `generate` call's request without its parsed form, so the request's content crosses the socket
 once. Version 0.28 adds the request's [service tier and verbosity](#the-request): `options.service_tier`
-and `options.verbosity`.
+and `options.verbosity`. Version 0.29 adds the canonical [web search tool](#the-request):
+`tool.type = "web_search"` and `tool.web_search`.
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
@@ -839,7 +840,7 @@ version 0. A [native-only call](#native-only-calls) (since 0.27) carries it with
 | `model` | The model name the client asked for. |
 | `stream` | Whether the client asked for a streamed reply. Core always receives events; this only tells the extension how the client is being served, in case the upstream call should match. |
 | `items` | The conversation, in order. Absent in a [native-only call](#native-only-calls), as are `tools` and `origin`. |
-| `tools` | Function tools the model may call. `parameters` is a JSON Schema. |
+| `tools` | Tools the model may call: function tools (`parameters` is a JSON Schema), canonical `web_search` tools (version 0.29), or `native` tools (see below). |
 | `options` | Generation options; any field may be absent: `max_output_tokens`, `temperature`, `top_p`, `stop`, `tool_choice` (`mode`: `auto`, `none`, `required` or `tool` with `name`; since 0.26 `allowed`: the tool names the model may choose from, with `mode` `auto` or `required`), `parallel_tool_calls`, `response_format` (`type`: `text`, `json_object` or `json_schema` with `name`, `description`, `schema`, `strict`), `reasoning_effort` (as the client named it), `service_tier` and `verbosity` (version 0.28; see below), `thinking_suffix` (version 0.2; see below). An extension below 0.26 cannot read `tool_choice.allowed`: core sends the choice without the list and keeps only the function tools the list names in `tools`, so the model can still call only those, and refuses the request as invalid when the list names none of them. |
 | `native` | The client's original request body and its format, when core received one; `headers` holds the client's request headers that belong to that format, by lower-case name (for `anthropic.messages`: `anthropic-version` and `anthropic-beta`, and the headers the client names itself with: `user-agent`, `x-app`, `anthropic-dangerous-direct-browser-access`, `x-claude-code-session-id`, `x-client-request-id`, the `x-stainless-*` headers of Anthropic's SDKs, `x-client-app` and `x-anthropic-additional-protection`; and Claude Code's subagent, request and remote-session headers (`x-claude-code-agent-id`, `x-claude-code-parent-agent-id`, `x-claude-code-agent-type`, `x-claude-code-request-class`, `x-claude-code-prev-tool-durations`, `x-claude-code-compaction`, `x-claude-code-context-compacted`, `x-claude-remote-container-id`, `x-claude-remote-session-id`), which an extension should send upstream only for a request that names itself as Claude Code (`anthropicmessages.IsClaudeCode`: `x-app: cli`, a `claude-cli/` User-Agent and the `claude-code-20250219` beta); for `openai.responses`: the headers the Codex CLI sends, such as `session-id`, `x-codex-window-id`, `x-codex-turn-metadata`, `version`, `originator` and `user-agent`). |
 | `origin` | The request's top-level fields that have no place in the model (see Origin below). |
@@ -867,9 +868,9 @@ Content part types:
 | `file` | One of `file_id`, `file_data` (inline) or `url`; optional `filename`. |
 | `native` | `format` and `data`: a part core could not interpret, kept as the client sent it. |
 
-Tools: `type` (`function`, the default, or `native` for a tool core could not interpret, such as a
-provider-hosted tool, held whole in `origin.raw`), `name`, `description`, `parameters` (JSON
-Schema), `strict`, `origin`.
+Tools: `type` (`function`, the default; `web_search`, since 0.29, for a provider-hosted web search
+tool; or `native` for any other tool core could not interpret, held whole in `origin.raw`), `name`,
+`description`, `parameters` (JSON Schema), `strict`, `web_search` (since 0.29, see below), `origin`.
 
 **Origin.** The request, every item, part and tool may carry `origin`: `format` (the format it
 came from), `path` (where it was in the client's body, for example `messages[2]` or `input[0]`)
@@ -914,6 +915,29 @@ sent as `priority` or as a faster mode. A body sent as the client wrote it (`nat
 holds them. An extension below 0.28 does not get them: core leaves them out of `options`, lists
 each as a dropped loss in the reply's translation report, and refuses the request when its
 `drop_policy` is `reject`.
+
+**Web search tool.** Since 0.29, a tool with `type: "web_search"` is a canonical provider-hosted
+web search tool, read from Responses (`web_search`, `web_search_preview*`), Messages
+(`web_search_*`), Chat Completions (`web_search_options`, at `origin.path: "web_search_options"`)
+and Gemini GenerateContent (`googleSearch`). The client's original tool stays whole in `origin`
+(`origin.format`, `origin.path`, `origin.raw`), and `tool.web_search` holds the canonical settings
+more than one format can say:
+
+| `tool.web_search` field | Meaning |
+| --- | --- |
+| `max_uses` | Optional integer: maximum number of searches the model may make. |
+| `allowed_domains` | Optional list of strings: domains search results are limited to. |
+| `blocked_domains` | Optional list of strings: domains excluded from search results. |
+| `user_location` | Optional object of approximate location fields: `type`, `country`, `city`, `region`, `timezone`. |
+| `search_context_size` | Optional string: search context size (such as `low`, `medium`, `high`), carried between OpenAI Chat Completions and OpenAI Responses. |
+| `disabled` | Optional boolean: true when the client explicitly asked for no live web search (such as Responses `external_web_access: false`). |
+
+An extension below 0.29 does not receive `type: "web_search"` or `tool.web_search`: core converts
+every `web_search` tool in `tools` to `type: "native"` with its `origin` unchanged, except an
+`openai.chat` `web_search_options` tool (`origin.format: "openai.chat"` and
+`origin.path: "web_search_options"`), which core removes from `tools` and restores into the
+request's top-level `origin.raw` under `"web_search_options"` so older extensions receive the same
+request they did before 0.29.
 
 **Translation report.** The extension reports in the reply's `response.start` how it built its
 upstream request: `response.translation` with `from`, `to`, `passthrough` (true when the client's

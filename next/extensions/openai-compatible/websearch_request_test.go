@@ -111,13 +111,14 @@ func TestWebSearchOpenAICompatibleSameFormatByteIdentical(t *testing.T) {
 		t.Errorf("same-format body changed:\ngot:  %s\nwant: %s", body, raw)
 	}
 
-	// Also verify Responses target on third-party host drops search tool.
-	respReq, err := openairesponses.ParseRequest([]byte(`{"model":"gpt-5","input":"hi","tools":[{"type":"web_search"}]}`))
+	// Verify web_search_preview -> Messages target on third-party host drops search tool,
+	// while Responses web_search -> Messages keeps the existing base mapping.
+	prevReq, err := openairesponses.ParseRequest([]byte(`{"model":"claude-sonnet-4-6","input":"hi","tools":[{"type":"web_search_preview"}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	respReq = roundTripReq(t, respReq)
-	body4, tr4, err := buildBody(respReq, llm.FormatAnthropicMessages, settings{BaseURL: "https://proxy.example.com/v1"})
+	prevReq = roundTripReq(t, prevReq)
+	body4, tr4, err := buildBody(prevReq, llm.FormatAnthropicMessages, settings{BaseURL: "https://proxy.example.com/v1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,6 +129,25 @@ func TestWebSearchOpenAICompatibleSameFormatByteIdentical(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(got4.Tools) != 0 || !tr4.Dropped() {
-		t.Errorf("third-party anthropic: tools=%v dropped=%v", got4.Tools, tr4.Dropped())
+		t.Errorf("third-party anthropic web_search_preview: tools=%v dropped=%v", got4.Tools, tr4.Dropped())
+	}
+
+	respReq, err := openairesponses.ParseRequest([]byte(`{"model":"claude-sonnet-4-6","input":"hi","tools":[{"type":"web_search"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	respReq = roundTripReq(t, respReq)
+	body5, tr5, err := buildBody(respReq, llm.FormatAnthropicMessages, settings{BaseURL: "https://proxy.example.com/v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got5 struct {
+		Tools []map[string]any `json:"tools"`
+	}
+	if err := json.Unmarshal(body5, &got5); err != nil {
+		t.Fatal(err)
+	}
+	if len(got5.Tools) != 1 || got5.Tools[0]["type"] != "web_search_20250305" || tr5.Dropped() {
+		t.Errorf("third-party anthropic web_search: tools=%v dropped=%v", got5.Tools, tr5.Dropped())
 	}
 }

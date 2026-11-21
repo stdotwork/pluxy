@@ -1,6 +1,10 @@
 package host
 
-import "github.com/stdotwork/pluxy/next/llm"
+import (
+	"encoding/json"
+
+	"github.com/stdotwork/pluxy/next/llm"
+)
 
 // webSearchMinor is the protocol minor version that adds the canonical web search tool
 // (llm.ToolWebSearch and llm.Tool.WebSearch).
@@ -8,25 +12,57 @@ const webSearchMinor = 29
 
 // downgradeWebSearch returns req as an extension that implements protocol minor version minor
 // can take it. Before webSearchMinor, every ToolWebSearch becomes a ToolNative with its Origin
-// unchanged, matching what extensions below 0.29 received before canonical web search tools
-// existed. req's own tool slice is not mutated.
+// unchanged, except an OpenAI Chat web_search_options tool, which is removed from Tools and
+// restored into req.Origin.Raw under "web_search_options" as extensions below 0.29 received it.
+// req's own Tools slice and Origin are never mutated.
 func downgradeWebSearch(minor int, req llm.Request) llm.Request {
 	if minor >= webSearchMinor {
 		return req
 	}
-	var tools []llm.Tool
-	for i, t := range req.Tools {
+	hasWebSearch := false
+	for _, t := range req.Tools {
+		if t.Type == llm.ToolWebSearch {
+			hasWebSearch = true
+			break
+		}
+	}
+	if !hasWebSearch {
+		return req
+	}
+	tools := make([]llm.Tool, 0, len(req.Tools))
+	var chatWebSearch json.RawMessage
+	for _, t := range req.Tools {
 		if t.Type != llm.ToolWebSearch {
+			tools = append(tools, t)
 			continue
 		}
-		if tools == nil {
-			tools = make([]llm.Tool, len(req.Tools))
-			copy(tools, req.Tools)
+		if t.Origin != nil && t.Origin.Format == llm.FormatOpenAIChat && t.Origin.Path == "web_search_options" {
+			chatWebSearch = t.Origin.Raw
+			continue
 		}
-		tools[i] = llm.Tool{Type: llm.ToolNative, Origin: t.Origin}
+		tools = append(tools, llm.Tool{Type: llm.ToolNative, Origin: t.Origin})
 	}
-	if tools != nil {
+	if len(tools) == 0 {
+		req.Tools = nil
+	} else {
 		req.Tools = tools
+	}
+	if len(chatWebSearch) > 0 {
+		m := map[string]json.RawMessage{}
+		if req.Origin != nil && len(req.Origin.Raw) > 0 {
+			_ = json.Unmarshal(req.Origin.Raw, &m)
+		}
+		m["web_search_options"] = append(json.RawMessage(nil), chatWebSearch...)
+		if raw, err := json.Marshal(m); err == nil {
+			var o llm.Origin
+			if req.Origin != nil {
+				o = *req.Origin
+			} else {
+				o.Format = llm.FormatOpenAIChat
+			}
+			o.Raw = raw
+			req.Origin = &o
+		}
 	}
 	return req
 }

@@ -214,9 +214,15 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 				continue
 			}
 			wt := map[string]any{"type": "web_search"}
+			var carried rawjson.WebSearchCarried
 			if ws := t.WebSearch; ws != nil {
+				if ws.SearchContextSize != "" {
+					wt["search_context_size"] = ws.SearchContextSize
+					carried.SearchContextSize = true
+				}
 				if len(ws.AllowedDomains) > 0 {
 					wt["filters"] = map[string]any{"allowed_domains": ws.AllowedDomains}
+					carried.AllowedDomains = true
 				}
 				if u := ws.UserLocation; u != nil {
 					loc := map[string]any{"type": "approximate"}
@@ -236,14 +242,10 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 						loc["timezone"] = u.Timezone
 					}
 					wt["user_location"] = loc
-				}
-				if ws.MaxUses != nil {
-					e.lose(llm.LossDropped, rawjson.Join(p, "max_uses"), "Responses web_search has no max_uses")
-				}
-				if len(ws.BlockedDomains) > 0 {
-					e.lose(llm.LossDropped, rawjson.Join(p, "blocked_domains"), "Responses web_search has no blocked_domains")
+					carried.UserLocation = true
 				}
 			}
+			e.losses = append(e.losses, rawjson.WebSearchLosses(t, p, format, carried)...)
 			if b, err := json.Marshal(wt); err == nil {
 				out.Tools = append(out.Tools, b)
 			}

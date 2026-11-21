@@ -236,30 +236,40 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			continue
 		}
 		if t.Type == llm.ToolWebSearch {
+			p := pathOf(t.Origin, fmt.Sprintf("tools[%d]", i))
 			if t.Origin != nil && t.Origin.Format == format {
 				tools = append(tools, t.Origin.Raw)
-			} else if !opts.WebSearch {
-				e.lose(llm.LossDropped, pathOf(t.Origin, fmt.Sprintf("tools[%d]", i)), llm.WebSearchUnsent)
-			} else if ws, skip, ok := canonicalWebSearchTool(t); ok {
+			} else if ws, skip, carried, ok := webSearchTool(t); ok {
 				if !skip {
 					tools = append(tools, ws)
+					e.losses = append(e.losses, rawjson.WebSearchLosses(t, p, format, carried)...)
+				}
+			} else if !opts.WebSearch {
+				e.lose(llm.LossDropped, p, llm.WebSearchUnsent)
+			} else if t.WebSearch != nil && t.WebSearch.Disabled {
+			} else if !supportsWebSearch(req.Model) {
+				e.lose(llm.LossDropped, p, fmt.Sprintf("Messages model %q does not support %s", req.Model, webSearchToolType))
+			} else if ws, skip, carried, ok := canonicalWebSearchTool(t); ok {
+				if !skip {
+					tools = append(tools, ws)
+					e.losses = append(e.losses, rawjson.WebSearchLosses(t, p, format, carried)...)
 				}
 			} else {
-				e.lose(llm.LossDropped, pathOf(t.Origin, fmt.Sprintf("tools[%d]", i)), "Messages has no such tool")
+				e.lose(llm.LossDropped, p, "Messages has no such tool")
 			}
 			continue
 		}
 		if t.Type == llm.ToolNative {
+			p := pathOf(t.Origin, fmt.Sprintf("tools[%d]", i))
 			if t.Origin != nil && t.Origin.Format == format {
 				tools = append(tools, t.Origin.Raw)
-			} else if ws, skip, ok := webSearchTool(t); ok {
-				if !opts.WebSearch {
-					e.lose(llm.LossDropped, pathOf(t.Origin, fmt.Sprintf("tools[%d]", i)), llm.WebSearchUnsent)
-				} else if !skip {
+			} else if ws, skip, carried, ok := webSearchTool(t); ok {
+				if !skip {
 					tools = append(tools, ws)
+					e.losses = append(e.losses, rawjson.WebSearchLosses(t, p, format, carried)...)
 				}
 			} else {
-				e.lose(llm.LossDropped, pathOf(t.Origin, fmt.Sprintf("tools[%d]", i)), "Messages has no such tool")
+				e.lose(llm.LossDropped, p, "Messages has no such tool")
 			}
 			continue
 		}

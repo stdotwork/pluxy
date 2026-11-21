@@ -28,9 +28,9 @@ const serverToolIDPrefix = "srvtoolu_"
 // one. A tool the client marked external_web_access false asks for no search on the web, so it
 // becomes no tool (skip true). The tool's name (default web_search), max_uses,
 // filters.allowed_domains and user_location carry over; Claude's tool has nothing for the rest.
-func webSearchTool(t llm.Tool) (tool json.RawMessage, skip, ok bool) {
+func webSearchTool(t llm.Tool) (tool json.RawMessage, skip bool, carried rawjson.WebSearchCarried, ok bool) {
 	if t.Origin == nil || t.Origin.Format != llm.FormatOpenAIResponses {
-		return nil, false, false
+		return nil, false, carried, false
 	}
 	var w struct {
 		Type              string          `json:"type"`
@@ -43,48 +43,64 @@ func webSearchTool(t llm.Tool) (tool json.RawMessage, skip, ok bool) {
 		} `json:"filters"`
 	}
 	if json.Unmarshal(t.Origin.Raw, &w) != nil || w.Type != "web_search" {
-		return nil, false, false
+		return nil, false, carried, false
 	}
 	if w.ExternalWebAccess != nil && !*w.ExternalWebAccess {
-		return nil, true, true
+		return nil, true, carried, true
 	}
 	out := map[string]any{"type": webSearchToolType, "name": cmp.Or(strings.TrimSpace(w.Name), "web_search")}
 	if w.MaxUses != nil {
 		out["max_uses"] = *w.MaxUses
+		carried.MaxUses = true
 	}
 	if a := w.Filters.AllowedDomains; len(a) > 0 && a[0] == '[' {
 		out["allowed_domains"] = a
+		carried.AllowedDomains = true
 	}
 	if u := w.UserLocation; len(u) > 0 && u[0] == '{' {
 		out["user_location"] = u
+		carried.UserLocation = true
+		carried.RawUserLocation = true
 	}
 	b, err := json.Marshal(out)
 	if err != nil {
-		return nil, false, false
+		return nil, false, carried, false
 	}
-	return b, false, true
+	return b, false, carried, true
+}
+
+// supportsWebSearch reports whether model is in a Claude model family listed on Anthropic's
+// web search tool page (https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool):
+// Claude 4.5 and later (Opus, Sonnet, Haiku, Fable, Mythos) and claude-mythos-preview.
+func supportsWebSearch(model string) bool {
+	m := claudeName(model)
+	if m == "claude-mythos-preview" || strings.HasPrefix(m, "claude-mythos-preview-") {
+		return true
+	}
+	major, minor, ok := parseClaudeVersion(model)
+	return ok && (major > 4 || (major == 4 && minor >= 5))
 }
 
 // canonicalWebSearchTool returns the Claude tool for a canonical ToolWebSearch from another
-// format (Chat, Gemini, or synthetic). A Responses tool uses webSearchTool above so its exact
-// output is unchanged.
-func canonicalWebSearchTool(t llm.Tool) (tool json.RawMessage, skip, ok bool) {
-	if ws, sk, matched := webSearchTool(t); matched {
-		return ws, sk, true
-	}
+// format (Chat, Gemini, Responses web_search_preview, or synthetic). A Responses web_search tool
+// uses webSearchTool above so its exact output is unchanged.
+func canonicalWebSearchTool(t llm.Tool) (tool json.RawMessage, skip bool, carried rawjson.WebSearchCarried, ok bool) {
 	if t.WebSearch != nil && t.WebSearch.Disabled {
-		return nil, true, true
+		return nil, true, carried, true
 	}
 	out := map[string]any{"type": webSearchToolType, "name": cmp.Or(strings.TrimSpace(t.Name), "web_search")}
 	if ws := t.WebSearch; ws != nil {
 		if ws.MaxUses != nil {
 			out["max_uses"] = *ws.MaxUses
+			carried.MaxUses = true
 		}
 		if len(ws.AllowedDomains) > 0 {
 			out["allowed_domains"] = ws.AllowedDomains
+			carried.AllowedDomains = true
 		}
 		if len(ws.BlockedDomains) > 0 {
 			out["blocked_domains"] = ws.BlockedDomains
+			carried.BlockedDomains = true
 		}
 		if u := ws.UserLocation; u != nil {
 			loc := map[string]any{"type": cmp.Or(u.Type, "approximate")}
@@ -101,13 +117,14 @@ func canonicalWebSearchTool(t llm.Tool) (tool json.RawMessage, skip, ok bool) {
 				loc["timezone"] = u.Timezone
 			}
 			out["user_location"] = loc
+			carried.UserLocation = true
 		}
 	}
 	b, err := json.Marshal(out)
 	if err != nil {
-		return nil, false, false
+		return nil, false, carried, false
 	}
-	return b, false, true
+	return b, false, carried, true
 }
 
 // webSearchCall is a replayed Responses web_search_call item.

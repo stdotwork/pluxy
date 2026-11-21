@@ -1,10 +1,12 @@
 package host
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 	"testing"
 
+	"github.com/stdotwork/pluxy/next/format/openaichat"
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
@@ -59,5 +61,55 @@ func TestWebSearchDowngrade(t *testing.T) {
 	got29 := downgradeWebSearch(29, req)
 	if !reflect.DeepEqual(got29, req) {
 		t.Errorf("minor 29: req changed: got %+v, want %+v", got29, req)
+	}
+}
+
+func TestWebSearchDowngradeChatOptions(t *testing.T) {
+	raw := []byte(`{"model":"gpt-5-search-api","messages":[{"role":"user","content":"hi"}],"web_search_options":{"search_context_size":"low"},"seed":42}`)
+	req, err := openaichat.ParseRequest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	origRawBefore := append([]byte(nil), req.Origin.Raw...)
+	origPtr := req.Origin
+
+	got := downgradeWebSearch(28, req)
+	if len(got.Tools) != 0 {
+		t.Fatalf("minor 28: len(Tools) = %d, want 0 (tools: %+v)", len(got.Tools), got.Tools)
+	}
+	// Must not mutate the caller's Origin.
+	if got.Origin == origPtr {
+		t.Errorf("minor 28: mutated caller Origin pointer")
+	}
+	if !bytes.Equal(origPtr.Raw, origRawBefore) {
+		t.Errorf("minor 28: mutated caller Origin.Raw: got %s, want %s", origPtr.Raw, origRawBefore)
+	}
+	body, losses, err := openaichat.EncodeRequest(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(losses) != 0 {
+		t.Errorf("unexpected losses: %+v", losses)
+	}
+	// Must match what base 45439babf produces: web_search_options at top level, no tools array.
+	want := `{"messages":[{"role":"user","content":"hi"}],"model":"gpt-5-search-api","seed":42,"stream":false,"web_search_options":{"search_context_size":"low"}}`
+	if string(body) != want {
+		t.Errorf("encoded body:\ngot:  %s\nwant: %s", body, want)
+	}
+}
+
+func TestAllowedToolsDowngradeExcludesWebSearch(t *testing.T) {
+	req := llm.Request{
+		Model: "gpt-5.4",
+		Tools: []llm.Tool{
+			{Type: llm.ToolWebSearch, Name: "web_search", WebSearch: &llm.WebSearchTool{}},
+			{Type: llm.ToolFunction, Name: "get_weather"},
+		},
+		Options: llm.Options{
+			ToolChoice: &llm.ToolChoice{Mode: llm.ToolChoiceAuto, Allowed: []string{"web_search"}},
+		},
+	}
+	if _, err := downgradeAllowedTools(25, req); err == nil {
+		t.Fatalf("expected invalid_request when allowed_tools names only a ToolWebSearch, got nil")
 	}
 }

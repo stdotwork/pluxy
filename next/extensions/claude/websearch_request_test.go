@@ -27,12 +27,14 @@ func roundTripRequest(t *testing.T, req llm.Request) llm.Request {
 
 func TestWebSearchToClaude(t *testing.T) {
 	cases := []struct {
-		name  string
-		parse func(t *testing.T) llm.Request
-		check func(t *testing.T, tool map[string]any)
+		name             string
+		parse            func(t *testing.T) llm.Request
+		check            func(t *testing.T, tool map[string]any)
+		keepOnCustomHost bool
 	}{
 		{
-			name: "responses",
+			name:             "responses",
+			keepOnCustomHost: true,
 			parse: func(t *testing.T) llm.Request {
 				req, err := openairesponses.ParseRequest([]byte(`{
 					"model":"claude-sonnet-4-6",
@@ -53,6 +55,28 @@ func TestWebSearchToClaude(t *testing.T) {
 				}
 				if _, ok := tool["allowed_domains"]; !ok {
 					t.Errorf("missing allowed_domains in %v", tool)
+				}
+				if _, ok := tool["user_location"]; !ok {
+					t.Errorf("missing user_location in %v", tool)
+				}
+			},
+		},
+		{
+			name: "responses_preview",
+			parse: func(t *testing.T) llm.Request {
+				req, err := openairesponses.ParseRequest([]byte(`{
+					"model":"claude-sonnet-4-6",
+					"input":"latest news",
+					"tools":[{"type":"web_search_preview","user_location":{"type":"approximate","country":"US","city":"SF"}}]
+				}`))
+				if err != nil {
+					t.Fatal(err)
+				}
+				return req
+			},
+			check: func(t *testing.T, tool map[string]any) {
+				if tool["type"] != "web_search_20250305" || tool["name"] != "web_search" {
+					t.Errorf("tool = %v, want web_search_20250305", tool)
 				}
 				if _, ok := tool["user_location"]; !ok {
 					t.Errorf("missing user_location in %v", tool)
@@ -124,7 +148,8 @@ func TestWebSearchToClaude(t *testing.T) {
 				t.Errorf("official host: unexpected dropped losses: %+v", tr.Losses)
 			}
 
-			// Third-party base_url gets no tool and a loss.
+			// Third-party base_url: Responses web_search keeps existing mapping; other formats
+			// and web_search_preview get no tool and a loss.
 			customBody, customTr, err := buildBodyWith(req, cacheTTL5m, serviceOptions(anthropicmessages.EncodeOptions{}, req, "https://proxy.example.com"))
 			if err != nil {
 				t.Fatalf("custom host: %v", err)
@@ -135,11 +160,20 @@ func TestWebSearchToClaude(t *testing.T) {
 			if err := json.Unmarshal(customBody, &customGot); err != nil {
 				t.Fatalf("unmarshal custom body: %v", err)
 			}
-			if len(customGot.Tools) != 0 {
-				t.Errorf("custom host: len(tools) = %d, want 0 (body: %s)", len(customGot.Tools), customBody)
-			}
-			if !customTr.Dropped() {
-				t.Errorf("custom host: expected dropped loss, got %+v", customTr.Losses)
+			if tc.keepOnCustomHost {
+				if len(customGot.Tools) != 1 {
+					t.Errorf("custom host: len(tools) = %d, want 1 (body: %s)", len(customGot.Tools), customBody)
+				}
+				if customTr.Dropped() {
+					t.Errorf("custom host: unexpected dropped loss: %+v", customTr.Losses)
+				}
+			} else {
+				if len(customGot.Tools) != 0 {
+					t.Errorf("custom host: len(tools) = %d, want 0 (body: %s)", len(customGot.Tools), customBody)
+				}
+				if !customTr.Dropped() {
+					t.Errorf("custom host: expected dropped loss, got %+v", customTr.Losses)
+				}
 			}
 		})
 	}
@@ -161,5 +195,148 @@ func TestWebSearchClaudeSameFormatByteIdentical(t *testing.T) {
 	}
 	if !bytes.Equal(body, raw) {
 		t.Errorf("same-format body changed:\ngot:  %s\nwant: %s", body, raw)
+	}
+}
+
+func TestWebSearchResponsesCustomBaseURL(t *testing.T) {
+	req, err := openairesponses.ParseRequest([]byte(`{
+		"model":"claude-test",
+		"input":"latest news",
+		"tools":[{"type":"web_search","max_uses":3,"filters":{"allowed_domains":["example.com"]},"user_location":{"type":"approximate","country":"US","city":"SF"}}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req = roundTripRequest(t, req)
+
+	// ToolWebSearch path on custom base_url: still mapped by webSearchTool.
+	body, tr, err := buildBodyWith(req, cacheTTL5m, serviceOptions(anthropicmessages.EncodeOptions{}, req, "https://proxy.example.com"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Tools []map[string]any `json:"tools"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Tools) != 1 || got.Tools[0]["type"] != "web_search_20250305" {
+		t.Fatalf("ToolWebSearch custom host: tools = %v, want web_search_20250305 (body: %s)", got.Tools, body)
+	}
+	if tr.Dropped() {
+		t.Errorf("ToolWebSearch custom host: unexpected dropped losses: %+v", tr.Losses)
+	}
+
+	// ToolNative path (as from an older core) on custom base_url: still mapped by webSearchTool.
+	nativeReq := req
+	nativeReq.Tools = []llm.Tool{{Type: llm.ToolNative, Origin: req.Tools[0].Origin}}
+	bodyN, trN, err := buildBodyWith(nativeReq, cacheTTL5m, serviceOptions(anthropicmessages.EncodeOptions{}, nativeReq, "https://proxy.example.com"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotN struct {
+		Tools []map[string]any `json:"tools"`
+	}
+	if err := json.Unmarshal(bodyN, &gotN); err != nil {
+		t.Fatal(err)
+	}
+	if len(gotN.Tools) != 1 || gotN.Tools[0]["type"] != "web_search_20250305" {
+		t.Fatalf("ToolNative custom host: tools = %v, want web_search_20250305 (body: %s)", gotN.Tools, bodyN)
+	}
+	if trN.Dropped() {
+		t.Errorf("ToolNative custom host: unexpected dropped losses: %+v", trN.Losses)
+	}
+
+	// web_search_preview was NOT mapped at base: gated by opts.WebSearch (dropped on custom base_url).
+	prevReq, err := openairesponses.ParseRequest([]byte(`{
+		"model":"claude-sonnet-4-6",
+		"input":"latest news",
+		"tools":[{"type":"web_search_preview"}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prevReq = roundTripRequest(t, prevReq)
+	bodyP, trP, err := buildBodyWith(prevReq, cacheTTL5m, serviceOptions(anthropicmessages.EncodeOptions{}, prevReq, "https://proxy.example.com"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotP struct {
+		Tools []map[string]any `json:"tools"`
+	}
+	if err := json.Unmarshal(bodyP, &gotP); err != nil {
+		t.Fatal(err)
+	}
+	if len(gotP.Tools) != 0 || !trP.Dropped() {
+		t.Errorf("web_search_preview custom host: tools=%v dropped=%v, want empty tools and dropped loss", gotP.Tools, trP.Dropped())
+	}
+}
+
+func TestWebSearchClaudeModelGate(t *testing.T) {
+	supported := []string{
+		"claude-sonnet-4-5-20250929",
+		"claude-opus-4-5-20251101",
+		"claude-haiku-4-5-20251001",
+		"claude-sonnet-4-6",
+		"claude-opus-4-6",
+		"claude-opus-4-7",
+		"claude-opus-4-8",
+		"claude-opus-5",
+		"claude-sonnet-5",
+		"claude-opus-5-5",
+		"claude-sonnet-5-5",
+		"claude-haiku-5-5",
+		"claude-fable-5-2",
+		"claude-mythos-5-2",
+		"claude-mythos-preview",
+	}
+	unsupported := []string{
+		"claude-3-haiku-20240307",
+		"claude-3-5-sonnet-20241022",
+		"claude-3-5-haiku-20241022",
+		"claude-3-7-sonnet-20250219",
+		"claude-sonnet-4-20250514",
+		"claude-opus-4-20250514",
+		"claude-opus-4-1-20250805",
+		"custom-model",
+	}
+	for _, model := range supported {
+		req, err := openaichat.ParseRequest([]byte(`{"model":"` + model + `","messages":[{"role":"user","content":"hi"}],"web_search_options":{}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req = roundTripRequest(t, req)
+		body, tr, err := buildBodyWith(req, cacheTTL5m, serviceOptions(anthropicmessages.EncodeOptions{}, req, defaultBaseURL))
+		if err != nil {
+			t.Fatalf("%s: %v", model, err)
+		}
+		var got struct {
+			Tools []map[string]any `json:"tools"`
+		}
+		_ = json.Unmarshal(body, &got)
+		if len(got.Tools) != 1 || got.Tools[0]["type"] != "web_search_20250305" {
+			t.Errorf("supported model %s: tools=%v, want web_search_20250305", model, got.Tools)
+		}
+		if tr.Dropped() {
+			t.Errorf("supported model %s: unexpected dropped losses %+v", model, tr.Losses)
+		}
+	}
+	for _, model := range unsupported {
+		req, err := openaichat.ParseRequest([]byte(`{"model":"` + model + `","messages":[{"role":"user","content":"hi"}],"web_search_options":{}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req = roundTripRequest(t, req)
+		body, tr, err := buildBodyWith(req, cacheTTL5m, serviceOptions(anthropicmessages.EncodeOptions{}, req, defaultBaseURL))
+		if err != nil {
+			t.Fatalf("%s: %v", model, err)
+		}
+		var got struct {
+			Tools []map[string]any `json:"tools"`
+		}
+		_ = json.Unmarshal(body, &got)
+		if len(got.Tools) != 0 || !tr.Dropped() {
+			t.Errorf("unsupported model %s: tools=%v dropped=%v, want no tool and dropped loss", model, got.Tools, tr.Dropped())
+		}
 	}
 }

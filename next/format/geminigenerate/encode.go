@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/format/internal/clienttools"
@@ -152,11 +153,13 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	}
 	var decls []json.RawMessage
 	var tools []json.RawMessage
+	hasOwnTools := false
 	for i, t := range req.Tools {
 		p := pathOf(t.Origin, fmt.Sprintf("tools[%d]", i))
 		if t.Type == llm.ToolWebSearch {
 			if t.Origin != nil && t.Origin.Format == format {
 				tools = append(tools, t.Origin.Raw)
+				hasOwnTools = true
 				continue
 			}
 			if !opts.WebSearch {
@@ -164,6 +167,10 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 				continue
 			}
 			if t.WebSearch != nil && t.WebSearch.Disabled {
+				continue
+			}
+			if !supportsGoogleSearch(req.Model) {
+				e.lose(llm.LossDropped, p, fmt.Sprintf("GenerateContent model %q does not support googleSearch", req.Model))
 				continue
 			}
 			if hasFunctionTools {
@@ -174,25 +181,15 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 				continue
 			}
 			tools = append(tools, json.RawMessage(`{"googleSearch":{}}`))
-			if ws := t.WebSearch; ws != nil {
-				if ws.MaxUses != nil {
-					e.lose(llm.LossDropped, rawjson.Join(p, "max_uses"), "GenerateContent googleSearch has no max_uses")
-				}
-				if len(ws.AllowedDomains) > 0 {
-					e.lose(llm.LossDropped, rawjson.Join(p, "allowed_domains"), "GenerateContent googleSearch has no allowed_domains")
-				}
-				if len(ws.BlockedDomains) > 0 {
-					e.lose(llm.LossDropped, rawjson.Join(p, "blocked_domains"), "GenerateContent googleSearch has no blocked_domains")
-				}
-				if ws.UserLocation != nil {
-					e.lose(llm.LossDropped, rawjson.Join(p, "user_location"), "GenerateContent googleSearch has no user_location")
-				}
+			for _, l := range rawjson.WebSearchLosses(t, p, format, rawjson.WebSearchCarried{}) {
+				e.losses = llm.AddLoss(e.losses, l)
 			}
 			continue
 		}
 		if t.Type == llm.ToolNative {
 			if t.Origin != nil && t.Origin.Format == format {
 				tools = append(tools, t.Origin.Raw)
+				hasOwnTools = true
 			} else {
 				e.lose(llm.LossDropped, p, "GenerateContent has no such tool")
 			}
@@ -215,8 +212,12 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	}
 	if len(tools) > 0 {
 		out["tools"] = tools
-		if fc := e.functionCalling(o.ToolChoice, o.ParallelToolCalls, toolNameMap); fc != nil {
-			out["toolConfig"] = map[string]any{"functionCallingConfig": fc}
+		if len(decls) > 0 || hasOwnTools {
+			if fc := e.functionCalling(o.ToolChoice, o.ParallelToolCalls, toolNameMap); fc != nil {
+				out["toolConfig"] = map[string]any{"functionCallingConfig": fc}
+			}
+		} else if o.ToolChoice != nil && (o.ToolChoice.Mode == llm.ToolChoiceRequired || o.ToolChoice.Mode == llm.ToolChoiceTool) {
+			e.lose(llm.LossDropped, "tool_choice", "GenerateContent functionCallingConfig cannot force googleSearch without functionDeclarations")
 		}
 	}
 
@@ -641,5 +642,51 @@ func (e *encoder) serviceTier(req llm.Request, opts EncodeOptions, out map[strin
 		out["serviceTier"] = t
 	default:
 		e.lose(llm.LossDropped, llm.ServiceTierPath(req), fmt.Sprintf("GenerateContent has no %q service tier", tier))
+	}
+}
+
+// supportsGoogleSearch reports whether model is in a Gemini model family listed on Google's
+// Grounding with Google Search pages
+// (https://ai.google.dev/gemini-api/docs/google-search and
+// https://cloud.google.com/vertex-ai/generative-ai/docs/grounding/grounding-with-google-search):
+// Gemini 2.0 Flash (not Flash-Lite or image), Gemini 2.5 Pro/Flash/Flash-Lite (not image or TTS),
+// Gemini 3.x and 4.x families, Gemini Robotics ER 2+, Gemini Nano Banana 2+, and the -latest
+// Gemini aliases. Older Gemini 1.x models (which used google_search_retrieval), Gemma models,
+// embeddings and unknown models return false.
+func supportsGoogleSearch(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	m = strings.TrimPrefix(m, "models/")
+	if strings.Contains(m, "embedding") || strings.Contains(m, "-tts") {
+		return false
+	}
+	switch m {
+	case "gemini-pro-latest", "gemini-flash-latest", "gemini-flash-lite-latest":
+		return true
+	}
+	if strings.HasPrefix(m, "gemini-nano-banana-") {
+		return true
+	}
+	if match := roboticsModel.FindStringSubmatch(m); match != nil {
+		major, _ := strconv.Atoi(match[1])
+		return major >= 2
+	}
+	match := geminiModel.FindStringSubmatch(m)
+	if match == nil {
+		return false
+	}
+	major, _ := strconv.Atoi(match[1])
+	minor, _ := strconv.Atoi(match[2])
+	switch {
+	case major >= 3:
+		return true
+	case major == 2 && minor == 5:
+		if strings.Contains(m, "-image") {
+			return false
+		}
+		return strings.Contains(m, "-pro") || strings.Contains(m, "-flash")
+	case major == 2 && minor == 0:
+		return strings.Contains(m, "-flash") && !strings.Contains(m, "-flash-lite") && !strings.Contains(m, "-image")
+	default:
+		return false
 	}
 }

@@ -183,30 +183,34 @@ func ParseRequest(body []byte) (llm.Request, error) {
 
 func parseTool(raw json.RawMessage, path string) llm.Tool {
 	var t struct {
-		Type           string            `json:"type"`
-		Name           string            `json:"name"`
-		Description    string            `json:"description"`
-		InputSchema    json.RawMessage   `json:"input_schema"`
-		Strict         *bool             `json:"strict"`
-		MaxUses        *int              `json:"max_uses"`
-		AllowedDomains []string          `json:"allowed_domains"`
-		BlockedDomains []string          `json:"blocked_domains"`
-		UserLocation   *llm.UserLocation `json:"user_location"`
+		Type        string          `json:"type"`
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		InputSchema json.RawMessage `json:"input_schema"`
+		Strict      *bool           `json:"strict"`
 	}
-	if rawjson.Unmarshal(raw, &t) == nil && strings.HasPrefix(t.Type, "web_search_") {
+	err := rawjson.Unmarshal(raw, &t)
+	if err == nil && strings.HasPrefix(t.Type, "web_search_") {
+		var w struct {
+			MaxUses        *int              `json:"max_uses"`
+			AllowedDomains []string          `json:"allowed_domains"`
+			BlockedDomains []string          `json:"blocked_domains"`
+			UserLocation   *llm.UserLocation `json:"user_location"`
+		}
+		_ = rawjson.Unmarshal(raw, &w)
 		return llm.Tool{
 			Type: llm.ToolWebSearch,
 			Name: t.Name,
 			WebSearch: &llm.WebSearchTool{
-				MaxUses:        t.MaxUses,
-				AllowedDomains: t.AllowedDomains,
-				BlockedDomains: t.BlockedDomains,
-				UserLocation:   t.UserLocation,
+				MaxUses:        w.MaxUses,
+				AllowedDomains: w.AllowedDomains,
+				BlockedDomains: w.BlockedDomains,
+				UserLocation:   w.UserLocation,
 			},
 			Origin: &llm.Origin{Format: format, Path: path, Raw: append(json.RawMessage(nil), raw...)},
 		}
 	}
-	if rawjson.Unmarshal(raw, &t) != nil || (t.Type != "" && t.Type != "custom") || t.Name == "" || len(t.InputSchema) == 0 {
+	if err != nil || (t.Type != "" && t.Type != "custom") || t.Name == "" || len(t.InputSchema) == 0 {
 		// Server tools (web search, code execution, ...) and versioned client tools (bash,
 		// text editor, ...) are not function tools; they survive whole.
 		return llm.Tool{Type: llm.ToolNative, Origin: &llm.Origin{Format: format, Path: path, Raw: append(json.RawMessage(nil), raw...)}}

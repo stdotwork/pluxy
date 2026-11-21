@@ -177,26 +177,33 @@ func ParseRequest(body []byte) (llm.Request, error) {
 
 func parseTool(raw json.RawMessage, path string) llm.Tool {
 	var t struct {
-		Type              string            `json:"type"`
-		Name              string            `json:"name"`
-		Description       string            `json:"description"`
-		Parameters        json.RawMessage   `json:"parameters"`
-		Strict            *bool             `json:"strict"`
-		ExternalWebAccess *bool             `json:"external_web_access"`
-		MaxUses           *int              `json:"max_uses"`
-		UserLocation      *llm.UserLocation `json:"user_location"`
-		Filters           *struct {
-			AllowedDomains []string `json:"allowed_domains"`
-		} `json:"filters"`
+		Type        string          `json:"type"`
+		Name        string          `json:"name"`
+		Description string          `json:"description"`
+		Parameters  json.RawMessage `json:"parameters"`
+		Strict      *bool           `json:"strict"`
 	}
-	if json.Unmarshal(raw, &t) == nil && (t.Type == "web_search" || strings.HasPrefix(t.Type, "web_search_preview")) {
-		ws := &llm.WebSearchTool{
-			MaxUses:      t.MaxUses,
-			UserLocation: t.UserLocation,
-			Disabled:     t.ExternalWebAccess != nil && !*t.ExternalWebAccess,
+	err := json.Unmarshal(raw, &t)
+	if err == nil && (t.Type == "web_search" || strings.HasPrefix(t.Type, "web_search_preview")) {
+		var w struct {
+			ExternalWebAccess *bool             `json:"external_web_access"`
+			MaxUses           *int              `json:"max_uses"`
+			UserLocation      *llm.UserLocation `json:"user_location"`
+			Filters           *struct {
+				AllowedDomains []string `json:"allowed_domains"`
+			} `json:"filters"`
 		}
-		if t.Filters != nil {
-			ws.AllowedDomains = t.Filters.AllowedDomains
+		_ = json.Unmarshal(raw, &w)
+		ws := &llm.WebSearchTool{
+			MaxUses:      w.MaxUses,
+			UserLocation: w.UserLocation,
+			Disabled:     w.ExternalWebAccess != nil && !*w.ExternalWebAccess,
+		}
+		if s, ok := rawjson.Text(rawjson.Object(raw)["search_context_size"]); ok {
+			ws.SearchContextSize = s
+		}
+		if w.Filters != nil {
+			ws.AllowedDomains = w.Filters.AllowedDomains
 		}
 		return llm.Tool{
 			Type:      llm.ToolWebSearch,
@@ -205,7 +212,7 @@ func parseTool(raw json.RawMessage, path string) llm.Tool {
 			Origin:    &llm.Origin{Format: format, Path: path, Raw: append(json.RawMessage(nil), raw...)},
 		}
 	}
-	if json.Unmarshal(raw, &t) != nil || t.Type != "function" || t.Name == "" {
+	if err != nil || t.Type != "function" || t.Name == "" {
 		// Hosted and custom tools are not function tools; they survive whole.
 		return llm.Tool{Type: llm.ToolNative, Origin: &llm.Origin{Format: format, Path: path, Raw: append(json.RawMessage(nil), raw...)}}
 	}

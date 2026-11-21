@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
@@ -26,6 +27,9 @@ func parseWebSearchOptions(raw json.RawMessage) *llm.Tool {
 		} `json:"user_location"`
 	}
 	ws := &llm.WebSearchTool{}
+	if s, ok := rawjson.Text(rawjson.Object(raw)["search_context_size"]); ok {
+		ws.SearchContextSize = s
+	}
 	if json.Unmarshal(raw, &o) == nil && o.UserLocation != nil {
 		u := &llm.UserLocation{Type: o.UserLocation.Type}
 		if a := o.UserLocation.Approximate; a != nil {

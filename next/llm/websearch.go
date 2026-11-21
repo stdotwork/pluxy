@@ -3,10 +3,11 @@ package llm
 // WebSearchTool holds the settings of a canonical web search tool (protocol minor version 29)
 // that more than one format can say. The client's original tool stays on Tool.Origin.
 type WebSearchTool struct {
-	MaxUses        *int          `json:"max_uses,omitempty"`
-	AllowedDomains []string      `json:"allowed_domains,omitempty"`
-	BlockedDomains []string      `json:"blocked_domains,omitempty"`
-	UserLocation   *UserLocation `json:"user_location,omitempty"`
+	MaxUses           *int          `json:"max_uses,omitempty"`
+	AllowedDomains    []string      `json:"allowed_domains,omitempty"`
+	BlockedDomains    []string      `json:"blocked_domains,omitempty"`
+	UserLocation      *UserLocation `json:"user_location,omitempty"`
+	SearchContextSize string        `json:"search_context_size,omitempty"`
 	// Disabled is true when the client explicitly asked for no live web search (Responses
 	// external_web_access: false).
 	Disabled bool `json:"disabled,omitempty"`
