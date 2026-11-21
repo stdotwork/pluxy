@@ -179,7 +179,8 @@ func TestLogsTerminalEscaping(t *testing.T) {
 }
 
 func TestLogsCommandTerminalEscaping(t *testing.T) {
-	// Include real escape sequences, C1 control (\xc2\x9b), DEL, CR, tab, valid non-ASCII, and raw invalid UTF-8.
+	// Real escape sequences, a C1 control (\xc2\x9b), DEL, CR, tab and valid non-ASCII. The invalid
+	// byte reaches the command as U+FFFD, since the reply is JSON.
 	body := `{"lines":["ok\tcol osc \u001b]0;title\u0007 csi \u001b[2J c1 ` + "\xc2\x9b" + ` cr\r del\u007f é","bad ` + "\xff" + ` end"],"line-count":2,"latest-timestamp":1795222923}` + "\n"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != mgmt+"/logs" {
@@ -256,8 +257,8 @@ func TestUsageEventsTerminalEscaping(t *testing.T) {
 
 // escapeTableCell reuses escapeWriter and also escapes tabs, newlines, and invalid UTF-8.
 func TestEscapeTableCell(t *testing.T) {
-	in := "a\x1b]0;title\x07\x1b[2J\xc2\x9b\n\t\r\x7f\xff\xc3"
-	want := `a\x1b]0;title\x07\x1b[2J\u009b\x0a\x09\x0d\x7f\xff\xc3`
+	in := "a\x1b]0;title\x07\x1b[2J\xc2\x9b\n\t\v\f\r\x7f\xff\xc3"
+	want := `a\x1b]0;title\x07\x1b[2J\u009b\x0a\x09\x0b\x0c\x0d\x7f\xff\xc3`
 	if got := escapeTableCell(in); got != want {
 		t.Errorf("escapeTableCell(%q) = %q, want %q", in, got, want)
 	}

@@ -97,8 +97,9 @@ type escapeWriter struct {
 	escapeWhitespace bool
 }
 
-// escapeTableCell runs s through escapeWriter with tabs and newlines also escaped as \x09 and
-// \x0a, so a table cell cannot break tabwriter alignment or inject a new row on a terminal.
+// escapeTableCell runs s through escapeWriter with tabs and newlines also escaped, as \x09 and
+// \x0a. With the vertical tab and form feed escapeWriter always escapes, that covers every byte
+// text/tabwriter acts on, so a table cell cannot add a column or a row on a terminal.
 func escapeTableCell(s string) string {
 	var b bytes.Buffer
 	w := &escapeWriter{w: &b, escapeWhitespace: true}
