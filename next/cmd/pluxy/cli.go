@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 	"unicode/utf16"
@@ -1243,7 +1244,7 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 		printError(stderr, *jsonOut, err)
 		return exitFailed
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 	x := &invocation{ctx: ctx, client: &management.Client{URL: t.url, Key: t.key, HTTP: t.http}, args: pos, opts: o, json: *jsonOut, stdin: stdin, stdout: stdout, stderr: stderr, tty: tty}
 	err = cmd.run(x)

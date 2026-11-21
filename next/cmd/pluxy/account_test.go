@@ -144,6 +144,9 @@ func fakePrompt(method string) map[string]any {
 	case "optional":
 		return map[string]any{"kind": "input", "message": "Anything to add?",
 			"inputs": []any{map[string]any{"name": "note", "label": "Note", "optional": true}}}
+	case "secret_prompt":
+		return map[string]any{"kind": "input", "message": "Enter the key.",
+			"inputs": []any{map[string]any{"name": "api_key", "label": "API key", "secret": true}}}
 	case "switch":
 		return map[string]any{"kind": "input", "message": "Paste the address the browser ended on.",
 			"inputs": []any{map[string]any{"name": "url", "label": "Address"}}}
@@ -201,6 +204,8 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 					map[string]any{"name": "three", "label": "Third"},
 				}},
 			map[string]any{"method": "optional", "kind": "input", "label": "Optional note"},
+			map[string]any{"method": "secret_prompt", "kind": "input", "label": "Secret prompt"},
+			map[string]any{"method": "switch", "kind": "input", "label": "Two prompts"},
 			map[string]any{"method": "pair", "kind": "api_key", "label": "Two values",
 				"inputs": []any{
 					map[string]any{"name": "one", "label": "First"},
@@ -320,7 +325,7 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 			default:
 				l.prompt["message"] = "That address holds no sign-in code."
 			}
-		case "input", "optional":
+		case "input", "optional", "secret_prompt":
 			l.late = func() { l.state, l.prompt = "done", nil }
 		case "fields":
 			if in["one"] != "" && in["two"] != "" {

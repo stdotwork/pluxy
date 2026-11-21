@@ -319,7 +319,8 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 	shown := ""
 	var prompt *promptInput
 	input := lines.lines
-	awaiting := false
+	// asked is the read in flight, as the reader numbered it; 0 when the prompt waits for none.
+	asked := uint64(0)
 	// failures counts reads of the sign-in in a row that failed, as the panel does: three and the
 	// command gives up on the sign-in, waiting longer between each try.
 	failures := 0
@@ -331,6 +332,9 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 		}
 		if key := promptKey(l.Prompt); l.Prompt != nil && key != shown {
 			shown = key
+			// A line read for the prompt before this one answers nothing here: its number is
+			// forgotten, and the line is dropped when it comes.
+			asked = 0
 			x.loginPrompt(l.Prompt)
 			var err error
 			if prompt, err = x.newPromptInput(l.Prompt, in); err != nil {
@@ -367,22 +371,27 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 			if x.prompts() {
 				prompt.ask(x)
 			}
-			if !awaiting {
-				err := lines.askLine(ctx, prompt.next().Secret)
-				if errors.Is(err, errEndOfInput) {
+			if asked == 0 {
+				if err := x.asks(*prompt.next()); err != nil {
+					return x.cancelLogin(l.ID, err)
+				}
+				// The terminal's echo is set for the field now asked: a prompt that changed while
+				// the field before it was being read leaves nothing of that read behind.
+				gen, err := lines.askLine(ctx, prompt.next().Secret)
+				switch {
+				case err == nil:
+					asked = gen
+				case errors.Is(err, errEndOfInput):
 					// Standard input has ended: the prompt answers with what it has, or the
 					// sign-in is cancelled.
 					input = nil
-					awaiting = false
 					if err := prompt.endOfInput(x, l.ID); err != nil {
 						return err
 					}
 					continue
-				}
-				if err != nil {
+				default:
 					return x.cancelLogin(l.ID, err)
 				}
-				awaiting = true
 			}
 		}
 		select {
@@ -392,22 +401,29 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 			}
 			return x.cancelLogin(l.ID, errors.New("sign-in cancelled"))
 		case r := <-input:
-			awaiting = false
-			if !r.ok {
+			switch {
+			case !r.ok:
+				// Standard input has ended, and the reader is gone.
 				input = nil
+				asked = 0
 				if prompt != nil {
 					if err := prompt.endOfInput(x, l.ID); err != nil {
 						return err
 					}
 				}
-				continue
-			}
-			if r.hidden {
-				x.eprintf("\n")
-			}
-			if prompt != nil {
-				if err := prompt.take(r.text); err != nil {
-					return x.cancelLogin(l.ID, err)
+			case r.gen != asked:
+				// A line read for a prompt the sign-in has moved past answers nothing; the echo
+				// the field now asked for stays as it is.
+			default:
+				asked = 0
+				if r.hidden {
+					x.eprintf("\n")
+				}
+				lines.show()
+				if prompt != nil {
+					if err := prompt.take(r.text); err != nil {
+						return x.cancelLogin(l.ID, err)
+					}
 				}
 			}
 		case <-timer.C:
@@ -783,50 +799,55 @@ func inputHint(f protocol.LoginInput) string {
 
 // lineReader reads standard input one line at a time, on a goroutine of its own, so a sign-in can
 // be read again while a person types. The command asks for each line, so it can name a secret one
-// before it is typed: a terminal then keeps it off the screen. close ends the reader and turns the
-// terminal's echo back on.
+// before it is typed: a terminal then keeps it off the screen. Each ask is numbered, and the line
+// it reads answers that number, so a line typed for a prompt the sign-in has moved past is told
+// apart from the line the prompt now waits for. close ends the reader and turns the terminal's
+// echo back on.
 type lineReader struct {
 	src      *bufio.Reader
 	term     *os.File
-	ask      chan bool
+	ask      chan uint64
 	lines    chan lineRead
 	done     chan struct{}
 	finished chan struct{}
 	once     sync.Once
 	mu       sync.Mutex
+	closed   bool
+	asked    uint64
 	// restore turns the terminal's echo back on while a secret line is read; nil otherwise.
 	restore func()
+}
+
+// lineRead is one line of standard input, or its end (ok false); gen is the ask it answers, and
+// hidden says the terminal's echo was off while it was typed, so a line ending has to be written.
+type lineRead struct {
+	gen    uint64
+	text   string
+	ok     bool
+	hidden bool
 }
 
 // errEndOfInput is standard input's end where a line was asked for: the reader is gone, and no
 // line will come.
 var errEndOfInput = errors.New("standard input has ended")
 
-// lineRead is one line of standard input, or its end (ok false); hidden says the terminal's echo
-// was off while it was typed, so a line ending has to be written.
-type lineRead struct {
-	text   string
-	ok     bool
-	hidden bool
-}
-
 // newLineReader reads r's lines. term is standard input when it is a terminal, whose echo a
 // secret line is kept from; nil when there is none.
 func newLineReader(r io.Reader, term *os.File) *lineReader {
-	l := &lineReader{src: bufio.NewReaderSize(r, 64<<10), term: term, ask: make(chan bool), lines: make(chan lineRead), done: make(chan struct{}), finished: make(chan struct{})}
+	l := &lineReader{src: bufio.NewReaderSize(r, 64<<10), term: term, ask: make(chan uint64, 1),
+		lines: make(chan lineRead), done: make(chan struct{}), finished: make(chan struct{})}
 	go func() {
 		defer close(l.finished)
 		defer close(l.lines)
 		for {
-			var secret bool
+			var gen uint64
 			select {
-			case secret = <-l.ask:
+			case gen = <-l.ask:
 			case <-l.done:
 				return
 			}
-			hidden := l.hide(secret)
+			hidden := l.hidden()
 			line, err := l.src.ReadString('\n')
-			l.show()
 			if err != nil && line == "" {
 				select {
 				case l.lines <- lineRead{}:
@@ -835,7 +856,7 @@ func newLineReader(r io.Reader, term *os.File) *lineReader {
 				return
 			}
 			select {
-			case l.lines <- lineRead{text: strings.TrimRight(line, "\r\n"), ok: true, hidden: hidden}:
+			case l.lines <- lineRead{gen: gen, text: strings.TrimRight(line, "\r\n"), ok: true, hidden: hidden}:
 			case <-l.done:
 				return
 			}
@@ -844,27 +865,30 @@ func newLineReader(r io.Reader, term *os.File) *lineReader {
 	return l
 }
 
-// hide takes a secret line off the terminal, if secret and there is one, and says whether it did.
-func (l *lineReader) hide(secret bool) bool {
-	if !secret || l.term == nil {
-		return false
-	}
+// echo turns the terminal's echo off while a secret value is typed, and back on otherwise. Only
+// the command that asks changes it, never the reader: a reader that turned it off after close
+// would hand the shell that follows a terminal that shows nothing.
+func (l *lineReader) echo(secret bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.restore = terminalNoEcho(l.term)
-	return l.restore != nil
-}
-
-// show turns the terminal's echo back on after a line.
-func (l *lineReader) show() {
-	l.mu.Lock()
-	restore := l.restore
-	l.restore = nil
-	l.mu.Unlock()
-	if restore != nil {
+	if l.closed {
+		return
+	}
+	if secret {
+		if l.restore == nil && l.term != nil {
+			l.restore = terminalNoEcho(l.term)
+		}
+		return
+	}
+	if l.restore != nil {
+		restore := l.restore
+		l.restore = nil
 		restore()
 	}
 }
+
+// show turns the terminal's echo back on after a line.
+func (l *lineReader) show() { l.echo(false) }
 
 // hidden says whether the terminal's echo is off now: a secret line is being typed.
 func (l *lineReader) hidden() bool {
@@ -875,38 +899,59 @@ func (l *lineReader) hidden() bool {
 
 func (l *lineReader) close() {
 	l.once.Do(func() {
+		l.mu.Lock()
+		l.closed = true
+		restore := l.restore
+		l.restore = nil
+		l.mu.Unlock()
 		close(l.done)
-		l.show()
+		if restore != nil {
+			restore()
+		}
 	})
 }
 
-// askLine asks for the next line, naming it a secret one to keep off the terminal. It says
-// standard input has ended once the reader is gone, so a caller never waits on a line no one will
-// read.
-func (l *lineReader) askLine(ctx context.Context, secret bool) error {
+// askLine asks for the next line, naming it a secret one to keep off the terminal, and returns the
+// number the line will answer. It says standard input has ended once the reader is gone, so no
+// caller waits on a line no one will read.
+func (l *lineReader) askLine(ctx context.Context, secret bool) (uint64, error) {
+	l.echo(secret)
+	l.mu.Lock()
+	if l.closed {
+		l.mu.Unlock()
+		return 0, errEndOfInput
+	}
+	l.asked++
+	gen := l.asked
+	l.mu.Unlock()
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return 0, ctx.Err()
 	case <-l.finished:
-		return errEndOfInput
-	case l.ask <- secret:
-		return nil
+		return 0, errEndOfInput
+	case l.ask <- gen:
+		return gen, nil
 	}
 }
 
 // readline is the next line; ok is false when standard input has ended.
 func (l *lineReader) readline(ctx context.Context, secret bool) (lineRead, error) {
-	if err := l.askLine(ctx, secret); err != nil {
+	gen, err := l.askLine(ctx, secret)
+	if err != nil {
 		if errors.Is(err, errEndOfInput) {
 			return lineRead{}, nil
 		}
 		return lineRead{}, err
 	}
-	select {
-	case <-ctx.Done():
-		return lineRead{}, ctx.Err()
-	case r := <-l.lines:
-		return r, nil
+	for {
+		select {
+		case <-ctx.Done():
+			return lineRead{}, ctx.Err()
+		case r := <-l.lines:
+			if !r.ok || r.gen == gen {
+				return r, nil
+			}
+		}
 	}
 }
 
