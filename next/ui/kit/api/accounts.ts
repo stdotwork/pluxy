@@ -57,7 +57,12 @@ export interface Account {
   health?: AccountHealth;
 }
 
-/** An account's health in GET /accounts: `state` is ok, cooling, exhausted, needs_login, banned or disabled. */
+/**
+ * An account's health in GET /accounts: `state` is ok, cooling, exhausted, needs_login, banned,
+ * disabled or broken. A broken account is one whose credential file core cannot read: core knows
+ * it only by the file's name, so its `extension`, `kind` and `state` are empty and `why` names the
+ * file and the error.
+ */
 export interface AccountHealth {
   state: string;
   /** When the block ends, if core knows. */
@@ -66,12 +71,13 @@ export interface AccountHealth {
   source?: string;
 }
 
-const LEFT_OUT = ["banned", "exhausted", "needs_login"] as const;
+const LEFT_OUT = ["banned", "exhausted", "needs_login", "broken"] as const;
 export type LeftOut = (typeof LEFT_OUT)[number];
 
 /**
  * The health state that keeps every request away from an account a person has left on: its
- * provider closed it, its usage window ran out, or it needs a new sign-in. Nothing for an account
+ * provider closed it, its usage window ran out, it needs a new sign-in, or core cannot read its
+ * credential file. Nothing for an account
  * that serves, one a person turned off, and one cooling (a short block, often of one model).
  */
 export function leftOut(a: Account): LeftOut | undefined {
