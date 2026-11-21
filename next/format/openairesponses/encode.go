@@ -303,6 +303,20 @@ func (e *encoder) content(it llm.Item, msgPath string) (content []json.RawMessag
 				sendable = true
 				break
 			}
+			if p.Origin == nil || p.Origin.Format != format {
+				if p.FileID == "" && p.FileData == "" && p.URL == "" {
+					e.lose(llm.LossDropped, pp, "Responses cannot take a file with no file id, data or URL")
+					dropped = true
+					break
+				}
+				if strings.HasPrefix(p.FileData, "data:") {
+					if _, data, ok := mediainput.DataURL(p.FileData); !ok || !mediainput.Base64(data) {
+						e.lose(llm.LossDropped, pp, "Responses cannot take this file data: it is not a valid base64 data URL")
+						dropped = true
+						break
+					}
+				}
+			}
 			m := map[string]string{"type": "input_file"}
 			for k, v := range map[string]string{"file_id": p.FileID, "file_data": p.FileData, "file_url": p.URL, "filename": p.Filename} {
 				if v != "" {

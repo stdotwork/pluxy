@@ -139,3 +139,42 @@ func TestEncodeForeignNativeTextDocumentDropped(t *testing.T) {
 		t.Errorf("body %s, losses %+v; want the foreign part dropped", body, losses)
 	}
 }
+
+// A translated file part is checked too: a data URL that is not base64 is not sent, and a part
+// with nothing in it never becomes an empty file block.
+func TestEncodeTranslatedFileValidation(t *testing.T) {
+	file := func(p llm.Part) llm.Request {
+		return llm.Request{Model: "m", Items: []llm.Item{{
+			Type: llm.ItemTypeMessage, Role: llm.RoleUser,
+			Content: []llm.Part{{Type: llm.PartText, Text: "look"}, p},
+		}}}
+	}
+	for _, c := range []struct {
+		name string
+		part llm.Part
+		keep bool
+	}{
+		{"invalid base64", llm.Part{Type: llm.PartFile, FileData: "data:application/pdf;base64,%%%"}, false},
+		{"not a base64 data URL", llm.Part{Type: llm.PartFile, FileData: "data:application/pdf,raw"}, false},
+		{"valid data URL", llm.Part{Type: llm.PartFile, FileData: "data:application/pdf;base64,JVBERi0="}, true},
+		{"file id", llm.Part{Type: llm.PartFile, FileID: "file_1"}, true},
+		{"empty", llm.Part{Type: llm.PartFile}, false},
+	} {
+		body, losses, err := EncodeRequest(file(c.part))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.keep {
+			if !strings.Contains(string(body), `"type":"file"`) {
+				t.Errorf("%s: body %s, want the file kept", c.name, body)
+			}
+			if len(losses) != 0 {
+				t.Errorf("%s: losses = %+v, want none", c.name, losses)
+			}
+			continue
+		}
+		if strings.Contains(string(body), `"type":"file"`) || len(losses) != 1 || losses[0].Kind != llm.LossDropped {
+			t.Errorf("%s: body %s, losses %+v; want the file dropped", c.name, body, losses)
+		}
+	}
+}

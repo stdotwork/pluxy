@@ -994,6 +994,13 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 				dropped = true
 				continue
 			}
+			if (p.Origin == nil || p.Origin.Format != format) && strings.HasPrefix(p.FileData, "data:") {
+				if _, data, ok := mediainput.DataURL(p.FileData); !ok || !mediainput.Base64(data) {
+					e.lose(llm.LossDropped, pp, "Chat Completions cannot take this file data: it is not a valid base64 data URL")
+					dropped = true
+					continue
+				}
+			}
 			op := outPart{Type: "file"}
 			op.File = &struct {
 				FileID   string `json:"file_id,omitempty"`
