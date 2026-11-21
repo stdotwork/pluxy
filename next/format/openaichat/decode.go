@@ -165,13 +165,14 @@ type StreamDecoder struct {
 	choices   map[int]bool            // every choice index seen, true once it carried a finish reason
 	finish    *llm.Finish
 	usage     *llm.Usage
-	calls     int // tool calls made an id so far
+	calls     int             // tool calls made an id so far
+	used      map[string]bool // tool call ids the stream has used or sent
 	losses    []llm.Loss
 }
 
 // NewStreamDecoder returns a decoder for one stream.
 func NewStreamDecoder() *StreamDecoder {
-	return &StreamDecoder{text: -1, reasoning: -1, tools: map[int]*toolCall{}, extra: map[int]json.RawMessage{}, choices: map[int]bool{}}
+	return &StreamDecoder{text: -1, reasoning: -1, tools: map[int]*toolCall{}, extra: map[int]json.RawMessage{}, choices: map[int]bool{}, used: map[string]bool{}}
 }
 
 func (d *StreamDecoder) open(kind string, ev *[]llm.Event, item llm.ItemStart) int {
@@ -267,6 +268,24 @@ func (d *StreamDecoder) dropNameless(c *toolCall) {
 		Detail: "a streamed tool call that never named its function"})
 }
 
+// callID returns the id of a tool call the upstream gave none: call_<index> when the chunk named
+// an index and that id is free, as today's core gives it, else the next call_<n> that no id in
+// this stream has used (an upstream may send a literal call_0 of its own).
+func (d *StreamDecoder) callID(index int) string {
+	if index >= 0 {
+		if id := "call_" + strconv.Itoa(index); !d.used[id] {
+			return id
+		}
+	}
+	for {
+		id := "call_" + strconv.Itoa(d.calls)
+		d.calls++
+		if !d.used[id] {
+			return id
+		}
+	}
+}
+
 // Losses returns what the reply had that the model could not carry, the calls that never named
 // their function, one loss each.
 func (d *StreamDecoder) Losses() []llm.Loss { return d.losses }
@@ -359,9 +378,9 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 				d.closeItem(&d.text, &out)
 				call = &toolCall{index: index, id: tc.ID, item: -1}
 				if call.id == "" {
-					call.id = "call_" + strconv.Itoa(d.calls)
-					d.calls++
+					call.id = d.callID(index)
 				}
+				d.used[call.id] = true
 				if index >= 0 {
 					d.tools[index] = call
 				}
@@ -553,6 +572,8 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 		next++
 	}
 	finish := llm.Finish{Reason: llm.FinishOther}
+	used := map[string]bool{} // ids the reply has used, whether sent or made
+	made := 0
 	for _, ch := range choices {
 		if ch.Index != 0 || ch.Message == nil {
 			continue
@@ -573,7 +594,12 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 			id := tc.ID
 			if id == "" {
 				id = "call_" + strconv.Itoa(i)
+				for used[id] {
+					id = "call_" + strconv.Itoa(made)
+					made++
+				}
 			}
+			used[id] = true
 			item(llm.ItemStart{Kind: llm.ItemToolCall, CallID: id, Name: tc.Function.Name}, tc.Function.Arguments, llm.EventToolInputDelta, extraContent(tc.ExtraContent))
 		}
 		finish = decodeFinish(ch.FinishReason)
