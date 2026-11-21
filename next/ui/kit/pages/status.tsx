@@ -36,6 +36,8 @@ const t = strings("dashboard", {
   safeMode: "Core runs in safe mode: no extension runs, so client requests fail.",
   usageOff:
     "Core is not recording requests, so the figures below stay empty. Turn on usage statistics in the Config Panel.",
+  usageNotSaved:
+    "Requests core could not save to its usage files since it started: {count}. They are counted here until core restarts; core's log says why.",
   verdictGood: "All systems steady",
   verdictWarning: "Minor turbulence",
   verdictCritical: "Needs attention",
@@ -270,6 +272,9 @@ export function StatusPage() {
       )}
       {s?.safe_mode && <Notice tone="warn">{t("safeMode")}</Notice>}
       {u && !u.enabled && <Notice tone="warn">{t("usageOff")}</Notice>}
+      {u && (u.write_errors ?? 0) > 0 && (
+        <Notice tone="warn">{t("usageNotSaved", { count: (u.write_errors ?? 0).toLocaleString() })}</Notice>
+      )}
       <div class="stack">
         <section class="card hero" data-part="card" data-tone={tone} aria-label={verdictText(verdict)}>
           <h2 class="hero-verdict">{verdictText(verdict)}</h2>

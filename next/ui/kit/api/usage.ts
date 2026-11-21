@@ -32,6 +32,11 @@ export interface UsageSummary extends Omit<UsageGroup, "name" | "provider"> {
   bucket_seconds: number;
   /** Oldest first, ending with the step that holds now; steps with no requests are included. */
   series: UsageBucket[];
+  /**
+   * The requests core could not write to its usage files since it started (a full disk, a file it
+   * cannot open). They stay in the record core keeps in memory. Absent from a core that predates it.
+   */
+  write_errors?: number;
 }
 
 export const usageApi = (host: Host) => ({
