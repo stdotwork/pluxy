@@ -433,27 +433,17 @@ func (l *Files) Clear() (int, error) {
 			notDeleted = append(notDeleted, n)
 		}
 	}
+	// A failed rotation can leave no file open. open holds main.log to the folder's checks (no
+	// link, this user's file), which a truncate by path would not.
 	mainFailed := false
+	if l.f == nil && l.open() != nil {
+		mainFailed = true
+	}
 	if l.f != nil {
 		if err := l.f.Truncate(0); err != nil {
 			mainFailed = true
 		} else {
 			l.size = 0
-		}
-	} else {
-		path := filepath.Join(l.dir, Main)
-		if info, err := os.Lstat(path); err == nil {
-			if !info.Mode().IsRegular() {
-				mainFailed = true
-			} else if err := os.Truncate(path, 0); err != nil && !os.IsNotExist(err) {
-				mainFailed = true
-			} else {
-				l.size = 0
-			}
-		} else if os.IsNotExist(err) {
-			l.size = 0
-		} else {
-			mainFailed = true
 		}
 	}
 	var parts []string

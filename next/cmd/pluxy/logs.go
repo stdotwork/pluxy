@@ -57,7 +57,6 @@ var logsClearCommand = command{words: "logs clear", routes: []string{"DELETE /lo
 	run: func(x *invocation) error {
 		var r management.LogsCleared
 		return x.call(http.MethodDelete, "/logs", nil, nil, &r, func() {
-			// A count, not "there were none": core's count leaves out a file it could not delete.
 			rotated := fmt.Sprintf("%d rotated log files deleted", r.Removed)
 			if r.Removed == 1 {
 				rotated = "1 rotated log file deleted"

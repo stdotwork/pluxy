@@ -386,13 +386,15 @@ func TestClearEmptiesMainWhenHandleNilAndRotationStillWorks(t *testing.T) {
 		t.Fatalf("tracked size = %d, want 0", size)
 	}
 
-	// Missing main.log while l.f is nil is not a failure.
+	// Missing main.log while l.f is nil is not a failure: Clear opens a new, empty one.
+	l.mu.Lock()
+	_ = l.f.Close()
+	l.f = nil
+	l.size = 1234
+	l.mu.Unlock()
 	if err := os.Remove(filepath.Join(l.Dir(), Main)); err != nil {
 		t.Fatal(err)
 	}
-	l.mu.Lock()
-	l.size = 1234
-	l.mu.Unlock()
 	if removed, err := l.Clear(); err != nil || removed != 0 {
 		t.Fatalf("Clear with missing main.log: removed=%d err=%v", removed, err)
 	}
