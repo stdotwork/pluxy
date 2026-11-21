@@ -104,7 +104,7 @@ func (m *meter) fail(e *llm.Error, status int) {
 		// The client went away: nothing reached it but what was sent already.
 		status = m.sent
 	}
-	ev := m.event(status, e.Code)
+	ev := m.event(status, route.ResultCode(e))
 	ev.Failed, ev.ErrorCode, ev.Tokens = true, e.Code, usage.TokensOf(e.Usage)
 	m.store.Add(ev)
 }
@@ -123,7 +123,7 @@ func (m *meter) event(status int, result string) usage.Event {
 	e.Attempts = m.attempts
 	if m.open {
 		// The attempt that was running ends the request: with ok when it answered, else with
-		// the error's code. One attempt that succeeded is told by the event's account already.
+		// the error's result code. One attempt that succeeded is told by the event's account already.
 		m.cur.Result = result
 		if result != "ok" || m.attempts > 1 {
 			m.addTried(m.cur)

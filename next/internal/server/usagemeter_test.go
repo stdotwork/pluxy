@@ -84,6 +84,18 @@ func TestMeterStreamBrokenAfterItBeganEndsWithTheErrorCode(t *testing.T) {
 	}
 }
 
+// An error's code can be one an extension chose, so an attempt's result takes it only when it is
+// one of core's own, as the error body's tried does.
+func TestMeterResultIsNeverAnExtensionsText(t *testing.T) {
+	m, s := meterFor(t)
+	attemptOn(m, 1)
+	m.fail(&llm.Error{Code: "text-an-extension-chose"}, 200)
+	e := onlyEvent(t, s)
+	if len(e.Tried) != 1 || e.Tried[0].Result != "error" {
+		t.Fatalf("tried %+v, want one entry with the result error", e.Tried)
+	}
+}
+
 func TestMeterBoundsTriedToFirst15AndLast(t *testing.T) {
 	m, s := meterFor(t)
 	for i := 1; i <= 20; i++ {

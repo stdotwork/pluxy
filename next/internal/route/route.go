@@ -678,7 +678,7 @@ func (c *call) attempts() llm.Event {
 				return ev
 			}
 			last = ev.Error
-			failed := llm.Tried{Account: r.state.PublicID(a.ID), Provider: a.Extension, Model: t.model, Result: resultCode(last)}
+			failed := llm.Tried{Account: r.state.PublicID(a.ID), Provider: a.Extension, Model: t.model, Result: ResultCode(last)}
 			c.tried = append(c.tried, triedAttempt{t.key(), failed})
 			if c.req.AttemptFailed != nil {
 				c.req.AttemptFailed(failed)
