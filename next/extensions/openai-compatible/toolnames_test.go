@@ -17,6 +17,7 @@ func TestReplyNamesRestoresClientToolNames(t *testing.T) {
 	}{
 		{llm.FormatOpenAIChat, "mcp_server_tool", "mcp/server.tool"},
 		{llm.FormatGeminiGenerate, "mcp_server.tool", "mcp/server.tool"},
+		{llm.FormatAnthropicMessages, "mcp_server_tool", "mcp/server.tool"},
 	} {
 		tr := &llm.Translation{To: c.to, From: llm.FormatAnthropicMessages}
 		names := replyNames(req, tr)
@@ -40,8 +41,8 @@ func TestReplyNamesRestoresClientToolNames(t *testing.T) {
 	if names := replyNames(req, &llm.Translation{To: llm.FormatOpenAIChat, Passthrough: true}); names != nil {
 		t.Errorf("passthrough names = %v, want none", names)
 	}
-	// A Messages target is left to the Messages provider's own restore.
-	if names := replyNames(req, &llm.Translation{To: llm.FormatAnthropicMessages}); names != nil {
-		t.Errorf("Messages target names = %v, want none", names)
+	// A Responses target is sent the client's names.
+	if names := replyNames(req, &llm.Translation{To: llm.FormatOpenAIResponses}); names != nil {
+		t.Errorf("Responses target names = %v, want none", names)
 	}
 }

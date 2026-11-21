@@ -225,7 +225,7 @@ func replacesTranscript(typ string, msg map[string]json.RawMessage, input json.R
 	for _, raw := range list {
 		it := itemOf(raw)
 		switch it.Type {
-		case "function_call", "custom_tool_call":
+		case "function_call", "custom_tool_call", "tool_search_call":
 			return true
 		case "message":
 			if it.Role == "assistant" {
@@ -364,9 +364,12 @@ func stripTokenCounts(v any) bool {
 	return changed
 }
 
-func isToolCall(typ string) bool { return typ == "function_call" || typ == "custom_tool_call" }
+func isToolCall(typ string) bool {
+	return typ == "function_call" || typ == "custom_tool_call" || typ == "tool_search_call"
+}
+
 func isToolCallOutput(typ string) bool {
-	return typ == "function_call_output" || typ == "custom_tool_call_output"
+	return typ == "function_call_output" || typ == "custom_tool_call_output" || typ == "tool_search_output"
 }
 
 // dedupeCalls keeps the first tool call of each call_id.

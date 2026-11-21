@@ -473,7 +473,7 @@ func (p *plan) settle() {
 			}
 			continue
 		}
-		if d.deferred && !clientSearch {
+		if d.deferred && !clientSearch && d.priority < 2 {
 			p.lose(llm.LossApproximated, rawjson.Join(d.path, "defer_loading"), "no search can load it on this upstream, so it is declared from the start")
 		}
 		tool := d.tool

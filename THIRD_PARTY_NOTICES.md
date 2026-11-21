@@ -60,8 +60,9 @@ removed when the new core in `next/` replaced it. `next/` keeps from it:
   `TestExtractUpstreamErrorSummary_AuthPackageDirectSanitization` in
   `sdk/cliproxy/auth/conductor_selection_cooldown_test.go`;
 - adapted: the Codex `apply_patch` parameter schema and instruction text in
-  `next/extensions/xai/patch.go` are the constants of `internal/client/codex/apply-patch/tool.go`
-  byte for byte, and the description it builds follows that file's `Description`;
+  `next/extensions/xai/patch.go` and `next/format/internal/clienttools/clienttools.go` are the
+  constants of `internal/client/codex/apply-patch/tool.go` byte for byte, and the description each
+  builds follows that file's `Description`;
 - adapted: the table of old and v8 config key paths (`moves`) in `next/internal/legacy/config.go`,
   written out from `internal/config/config_v8.go`;
 - follows: in `next/extensions/codex/request.go`, the raising of a small output budget to 16 follows
@@ -464,6 +465,42 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
+~~~
+
+## BerriAI/litellm
+
+LiteLLM, from <https://github.com/BerriAI/litellm> (commit
+`6245f94734938b0cfc25d208064a01806518040d`). `next/` keeps from it:
+
+- adapted: in `next/format/internal/clienttools/clienttools.go`, the handling of a tool_search the
+  client runs follows `litellm/responses/litellm_completion_transformation/client_tool_search.py`:
+  deferred tools stay off the request until a search output loads them, and the two sentences of
+  `searchOutput` are that file's `_search_output_text`.
+
+Licence text, for content outside `litellm/enterprise/`, as it is in `LICENSE`:
+
+~~~text
+MIT License
+
+Copyright (c) 2023 Berri AI
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ~~~
 
 ## cheaper-inference/OmniRoute

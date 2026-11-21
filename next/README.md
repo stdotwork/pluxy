@@ -157,8 +157,35 @@ A request translated to Chat Completions gets the tool names that API takes: ASC
 digits, `_` and `-`, at most 64 bytes. Any other name is sent with each other character as `_`
 and cut, two names that would come out the same each get a hash of the client's name, and the
 reply's calls go back to the client under its own name. A replayed call whose arguments are not a
-JSON object is sent as `{}` and reported as an approximated loss; a custom tool's free-form input
-is left as it is.
+JSON object is sent as `{}` and reported as an approximated loss; a Chat client's custom tool call
+keeps its free-form input.
+
+**Codex tools on other upstreams.** A Responses client's tools that a Messages, GenerateContent or
+Chat Completions upstream has no form for are sent as functions, on every account that translates
+to one of those formats, and the upstream's calls go back in the form the client declared:
+
+- A custom tool (`apply_patch`, say) is a function with one required string argument, `input`, and
+  its grammar moves into the description. Its call comes back as a `custom_tool_call` with the same
+  events the Responses API sends. Arguments that are not one `input` string are given to the client
+  as the tool's input and reported as an approximated loss, so the tool refuses them and the model
+  can try again.
+- A namespace's tools are functions named `namespace__tool`. A name that already has that prefix or
+  starts with `mcp__` keeps its name, and so does a tool in the Codex client's default namespace,
+  `functions`. Calls come back with their name and namespace. The namespace's description goes on
+  its first tool, since a function has no group to describe.
+- An `additional_tools` input item's tools count as the request's.
+- A `tool_search` the client runs (`execution: "client"`) is a function, and its call comes back as
+  a `tool_search_call`. Tools marked `defer_loading` stay off the request until a
+  `tool_search_output` in the conversation loads them. A `tool_search` the provider runs has no
+  counterpart on these upstreams: it is reported as dropped, and the tools it would have loaded
+  are declared from the start.
+- Replayed calls and outputs of these tools go up as function calls and results.
+- When names are the same once flattened, one tool stays and the others are reported as dropped:
+  the `tools` list comes before an `additional_tools` item, a top-level tool before a namespace's,
+  and then the first declared.
+- A `tool_choice` or `allowed_tools` entry that names one of these tools names its function.
+
+Each target's name limits apply to the flattened name, and the client still gets its own name back.
 
 **Files and images** are sent in the form each upstream takes: an image by URL, by inline data or
 by file id, and a file by URL, inline data or file id, wherever the target has that form. An

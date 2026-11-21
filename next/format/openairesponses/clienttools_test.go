@@ -836,3 +836,82 @@ func TestPlainFunctionsUnchanged(t *testing.T) {
 		})
 	}
 }
+
+// A tool_search call is a real call on these upstreams, and Messages refuses a repeated call ID, so
+// a WebSocket client's transcript keeps one of each, as it does for function and custom calls.
+func TestTranscriptKeepsOneToolSearchCall(t *testing.T) {
+	const call = `{"type":"tool_search_call","call_id":"s1","execution":"client","status":"completed","arguments":{"query":"x"}}`
+	const output = `{"type":"tool_search_output","call_id":"s1","execution":"client","status":"completed","tools":[]}`
+	msg := func(fields map[string]string) map[string]json.RawMessage {
+		m := map[string]json.RawMessage{}
+		for k, v := range fields {
+			m[k] = json.RawMessage(v)
+		}
+		return m
+	}
+	count := func(t *testing.T, body []byte) int {
+		t.Helper()
+		var b struct {
+			Input []struct {
+				Type string `json:"type"`
+			} `json:"input"`
+		}
+		mustJSON(t, body, &b)
+		n := 0
+		for _, it := range b.Input {
+			if it.Type == "tool_search_call" {
+				n++
+			}
+		}
+		return n
+	}
+	start := func(t *testing.T) *openairesponses.Transcript {
+		t.Helper()
+		tr := &openairesponses.Transcript{}
+		turn, e := tr.Next(msg(map[string]string{"type": `"response.create"`, "model": `"m"`, "input": `[{"type":"message","role":"user","content":"go"}]`}))
+		if e != nil {
+			t.Fatal(e)
+		}
+		tr.Commit(turn.Body, json.RawMessage(`[`+call+`]`))
+		return tr
+	}
+	t.Run("whole conversation", func(t *testing.T) {
+		turn, e := start(t).Next(msg(map[string]string{"type": `"response.create"`, "model": `"m"`,
+			"input": `[{"type":"message","role":"user","content":"go"},` + call + `,` + output + `]`}))
+		if e != nil {
+			t.Fatal(e)
+		}
+		if n := count(t, turn.Body); n != 1 {
+			t.Errorf("%d tool_search calls in %s", n, turn.Body)
+		}
+	})
+	t.Run("appended", func(t *testing.T) {
+		turn, e := start(t).Next(msg(map[string]string{"type": `"response.append"`, "input": `[` + call + `,` + output + `]`}))
+		if e != nil {
+			t.Fatal(e)
+		}
+		if n := count(t, turn.Body); n != 1 {
+			t.Errorf("%d tool_search calls in %s", n, turn.Body)
+		}
+	})
+}
+
+// A deferred tool a search has loaded is not reported as declared early.
+func TestLoadedDeferredToolIsNotALoss(t *testing.T) {
+	body := `{"model":"m","input":[{"type":"message","role":"user","content":"go"},
+		{"type":"tool_search_call","call_id":"s1","execution":"client","status":"completed","arguments":{"query":"x"}},
+		{"type":"tool_search_output","call_id":"s1","execution":"client","status":"completed","tools":[{"type":"function","name":"loaded","defer_loading":true,"parameters":{"type":"object"}}]}]}`
+	for _, tg := range targets() {
+		t.Run(tg.name, func(t *testing.T) {
+			w, losses := encode(t, tg, parse(t, body))
+			if !slices.Contains(w.tools, "loaded") {
+				t.Fatalf("tools = %v", w.tools)
+			}
+			for _, l := range losses {
+				if strings.Contains(l.Path, "defer_loading") {
+					t.Errorf("reported: %+v", l)
+				}
+			}
+		})
+	}
+}
