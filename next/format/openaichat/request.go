@@ -963,7 +963,9 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 				dropped = true
 				continue
 			}
-			if strings.HasPrefix(p.URL, "data:") {
+			if (p.Origin == nil || p.Origin.Format != format) && strings.HasPrefix(p.URL, "data:") {
+				// Only a part translated from another format is checked: a Chat client's own
+				// image is what its upstream takes.
 				if _, problem := mediainput.AnyImage(p.URL); problem != "" {
 					e.lose(llm.LossDropped, pp, "Chat Completions cannot take this inline image: "+problem)
 					dropped = true

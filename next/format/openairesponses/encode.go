@@ -270,7 +270,9 @@ func (e *encoder) content(it llm.Item, msgPath string) (content []json.RawMessag
 				dropped = true
 				break
 			}
-			if p.URL != "" && strings.HasPrefix(p.URL, "data:") {
+			if (p.Origin == nil || p.Origin.Format != format) && p.URL != "" && strings.HasPrefix(p.URL, "data:") {
+				// Only a part translated from another format is checked: a Responses client's
+				// own image is what its upstream takes.
 				if _, problem := mediainput.AnyImage(p.URL); problem != "" {
 					e.lose(llm.LossDropped, pp, "Responses cannot take this inline image: "+problem)
 					dropped = true

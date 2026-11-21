@@ -422,10 +422,17 @@ func media(p llm.Part) (map[string]any, string) {
 		if !ok {
 			return nil, "it is not a base64 data URL"
 		}
-		mediaType = mediainput.Type(mediaType)
-		if p.Type == llm.PartImage || strings.HasPrefix(mediaType, "image/") {
-			if _, problem := mediainput.InlineImage(url, mediainput.GeminiImages); problem != "" {
-				return nil, problem
+		if p.Origin == nil || p.Origin.Format != format {
+			// Only a part translated from another format is checked; one the client sent to
+			// GenerateContent is what Gemini accepts, and its media type goes back as written.
+			mediaType = mediainput.Type(mediaType)
+			if !mediainput.Base64(data) {
+				return nil, "its data is not valid base64"
+			}
+			if p.Type == llm.PartImage || strings.HasPrefix(mediaType, "image/") {
+				if _, problem := mediainput.InlineImage(url, mediainput.GeminiImages); problem != "" {
+					return nil, problem
+				}
 			}
 		}
 		return map[string]any{"inlineData": map[string]any{"mimeType": mediaType, "data": data}}, ""

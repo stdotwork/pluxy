@@ -216,3 +216,39 @@ func TestEncodeTextDocument(t *testing.T) {
 		t.Errorf("losses = %+v, want one approximation at messages[0].content[1]", losses)
 	}
 }
+
+// transImageRequest is a user turn with text and one image translated from another format (no
+// origin, so not the target's own).
+func transImageRequest(url string) llm.Request {
+	return llm.Request{Model: "m", Items: []llm.Item{{
+		Type:    llm.ItemTypeMessage,
+		Role:    llm.RoleUser,
+		Content: []llm.Part{{Type: llm.PartText, Text: "look"}, {Type: llm.PartImage, URL: url}},
+	}}}
+}
+
+// A part the client sent to GenerateContent itself is what Gemini accepts: the encoder does not
+// apply the image list or the base64 check to it, only to parts translated from another format.
+func TestEncodeSameFormatImageNotValidated(t *testing.T) {
+	same := transImageRequest("data:image/tiff;base64,aGVsbG8=")
+	same.Items[0].Content[1].Origin = &llm.Origin{Format: llm.FormatGeminiGenerate, Path: "messages[0].content[1]"}
+	body, losses, err := EncodeRequest(same)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"mimeType":"image/tiff"`) {
+		t.Errorf("same-format body %s, want the client's own image written back", body)
+	}
+	if len(losses) != 0 {
+		t.Errorf("same-format losses = %+v, want none", losses)
+	}
+
+	translated := transImageRequest("data:image/tiff;base64,aGVsbG8=")
+	body, losses, err = EncodeRequest(translated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "image/tiff") || len(losses) != 1 || losses[0].Kind != llm.LossDropped {
+		t.Errorf("translated body %s, losses %+v; want the image dropped", body, losses)
+	}
+}

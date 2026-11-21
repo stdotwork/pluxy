@@ -108,3 +108,29 @@ func TestEncodeTextDocumentKept(t *testing.T) {
 		t.Errorf("losses = %+v, want none", losses)
 	}
 }
+
+// A part the client sent to Messages itself is what Messages accepts: the encoder does not
+// apply the image list or the base64 check to it, only to parts translated from another format.
+func TestEncodeSameFormatImageNotValidated(t *testing.T) {
+	same := imageRequest("data:image/tiff;base64,aGVsbG8=", "")
+	same.Items[0].Content[1].Origin = &llm.Origin{Format: llm.FormatAnthropicMessages, Path: "messages[0].content[1]"}
+	body, losses, err := EncodeRequest(same)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `"media_type":"image/tiff"`) {
+		t.Errorf("same-format body %s, want the client's own image written back", body)
+	}
+	if len(losses) != 0 {
+		t.Errorf("same-format losses = %+v, want none", losses)
+	}
+
+	translated := imageRequest("data:image/tiff;base64,aGVsbG8=", "")
+	body, losses, err = EncodeRequest(translated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "image/tiff") || len(losses) != 1 || losses[0].Kind != llm.LossDropped {
+		t.Errorf("translated body %s, losses %+v; want the image dropped", body, losses)
+	}
+}

@@ -477,17 +477,24 @@ func source(p llm.Part) map[string]any {
 	switch {
 	case strings.HasPrefix(url, "data:"):
 		mediaType, data, ok := mediainput.DataURL(url)
-		if !ok || !mediainput.Base64(data) {
+		if !ok {
 			return nil
 		}
-		mediaType = mediainput.Type(mediaType)
-		if p.Type == llm.PartImage || strings.HasPrefix(mediaType, "image/") {
-			if _, problem := mediainput.InlineImage(url, mediainput.ClaudeImages); problem != "" {
+		if p.Origin == nil || p.Origin.Format != format {
+			// Only a part translated from another format is checked; one the client sent to
+			// Messages is what Messages accepts, and its media type goes back as written.
+			mediaType = mediainput.Type(mediaType)
+			if !mediainput.Base64(data) {
 				return nil
 			}
-		}
-		if p.Type == llm.PartFile && !strings.HasPrefix(mediaType, "image/") && mediaType != "application/pdf" {
-			return nil
+			if p.Type == llm.PartImage || strings.HasPrefix(mediaType, "image/") {
+				if _, problem := mediainput.InlineImage(url, mediainput.ClaudeImages); problem != "" {
+					return nil
+				}
+			}
+			if p.Type == llm.PartFile && !strings.HasPrefix(mediaType, "image/") && mediaType != "application/pdf" {
+				return nil
+			}
 		}
 		return map[string]any{"type": "base64", "media_type": mediaType, "data": data}
 	case url != "":
