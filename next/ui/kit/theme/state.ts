@@ -373,7 +373,7 @@ export class ThemeState {
     for (const fn of this.listeners) fn();
   }
 
-  /** Themes an earlier version kept in prefs go to core once; one core refuses stays out. */
+  /** Themes an earlier version kept in prefs go to core; one core could not store stays in prefs. */
   private async moveOld() {
     const prefs = this.host.prefs;
     const oldTheme = prefs.get(PREF_OLD_THEME);
@@ -382,17 +382,25 @@ export class ThemeState {
     // Core did not answer: the prefs stay, for the next time.
     if (!ok(list) || !list.body) return;
     const held = new Set((list.body.themes ?? []).map((s) => s.id));
+    let moved = true;
     for (const text of this.oldImported()) {
       const r = parseThemeText(text);
       if (!r.ok || this.builtInFiles.has(r.theme.id) || held.has(r.theme.id)) continue;
       const put = await this.api.storeTheme(r.theme.id, JSON.parse(text));
       if (put.status === 0 || put.status === 401) return;
-      if (ok(put)) held.add(r.theme.id);
+      if (!ok(put)) {
+        // The prefs hold the only copy: kept, so the next start tries again.
+        moved = false;
+        continue;
+      }
+      held.add(r.theme.id);
     }
     if (!list.body.current && oldTheme && (this.builtInFiles.has(oldTheme) || held.has(oldTheme))) {
       const set = await this.api.selectTheme(oldTheme);
       if (set.status === 0 || set.status === 401) return;
+      if (!ok(set)) moved = false;
     }
+    if (!moved) return;
     prefs.set(PREF_OLD_IMPORTED, null);
     prefs.set(PREF_OLD_THEME, null);
   }
