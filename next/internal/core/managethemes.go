@@ -36,6 +36,7 @@ const (
 
 var (
 	errNotRegular    = errors.New("not a regular file")
+	errNotTheme      = errors.New("not one JSON object")
 	errThemeTooLarge = errors.New("theme exceeds size limit")
 	errThemeLimit    = fmt.Errorf("at most %d themes can be stored", maxStoredThemes)
 )
@@ -67,7 +68,7 @@ func (c *Core) handleThemes(m *server.Management) {
 		}
 		raw, err := c.themes.get(pub, name)
 		switch {
-		case errors.Is(err, fs.ErrNotExist), errors.Is(err, errNotRegular):
+		case errors.Is(err, fs.ErrNotExist), errors.Is(err, errNotRegular), errors.Is(err, errNotTheme):
 			writeError(w, http.StatusNotFound, "not_found", "no stored theme has this ID")
 		case errors.Is(err, errThemeTooLarge):
 			writeError(w, http.StatusRequestEntityTooLarge, "invalid_request", "stored theme exceeds 256 KiB")
@@ -106,6 +107,8 @@ func (c *Core) handleThemes(m *server.Management) {
 		switch {
 		case errors.Is(err, errThemeLimit):
 			writeError(w, http.StatusUnprocessableEntity, "refused", err.Error())
+		case errors.Is(err, errNotRegular):
+			writeError(w, http.StatusUnprocessableEntity, "refused", fmt.Sprintf("publisher %q is a file, not a folder", pub))
 		case err != nil:
 			writeError(w, http.StatusInternalServerError, "internal", err.Error())
 		default:
@@ -324,12 +327,8 @@ func (s *themeStore) listEntriesLocked(top *os.Root) ([]management.ThemeSummary,
 			if !validThemePart(name) {
 				continue
 			}
-			raw, err := readRegularInRoot(pubRoot, fname, maxThemeBytes)
+			raw, themeName, err := readThemeInRoot(pubRoot, fname)
 			if err != nil {
-				continue
-			}
-			themeName, ok := parseThemeObject(raw)
-			if !ok {
 				continue
 			}
 			themes = append(themes, management.ThemeSummary{
@@ -385,57 +384,23 @@ func (s *themeStore) get(pub, name string) ([]byte, error) {
 		return nil, err
 	}
 	defer pubRoot.Close()
-	return readRegularInRoot(pubRoot, name+".json", maxThemeBytes)
+	raw, _, err := readThemeInRoot(pubRoot, name+".json")
+	return raw, err
 }
 
-func (s *themeStore) countStoredLocked(top *os.Root) (int, error) {
-	d, err := top.Open(".")
+// readThemeInRoot reads one stored theme: a regular file in root of at most 256 KiB whose bytes
+// are one JSON object, which is all put stores. A file that is not one is not a theme, as list
+// and the 64-theme cap agree.
+func readThemeInRoot(root *os.Root, fname string) (raw []byte, themeName string, err error) {
+	raw, err = readRegularInRoot(root, fname, maxThemeBytes)
 	if err != nil {
-		return 0, err
+		return nil, "", err
 	}
-	defer d.Close()
-	pubDirs, err := d.ReadDir(-1)
-	if err != nil {
-		return 0, err
+	themeName, ok := parseThemeObject(raw)
+	if !ok {
+		return nil, "", errNotTheme
 	}
-	n := 0
-	for _, pe := range pubDirs {
-		pub := pe.Name()
-		if pub == themeCurrentFile || pe.Type()&fs.ModeSymlink != 0 || !pe.IsDir() || !validThemePart(pub) {
-			continue
-		}
-		pubRoot, err := top.OpenRoot(pub)
-		if err != nil {
-			continue
-		}
-		pd, err := pubRoot.Open(".")
-		if err != nil {
-			pubRoot.Close()
-			continue
-		}
-		files, err := pd.ReadDir(-1)
-		pd.Close()
-		if err != nil {
-			pubRoot.Close()
-			continue
-		}
-		for _, fe := range files {
-			fname := fe.Name()
-			if fe.Type()&fs.ModeSymlink != 0 || !strings.HasSuffix(fname, ".json") {
-				continue
-			}
-			if !validThemePart(strings.TrimSuffix(fname, ".json")) {
-				continue
-			}
-			linfo, err := pubRoot.Lstat(fname)
-			if err != nil || !linfo.Mode().IsRegular() {
-				continue
-			}
-			n++
-		}
-		pubRoot.Close()
-	}
-	return n, nil
+	return raw, themeName, nil
 }
 
 func (s *themeStore) put(pub, name, themeName string, raw []byte) (management.ThemeSummary, error) {
@@ -447,31 +412,32 @@ func (s *themeStore) put(pub, name, themeName string, raw []byte) (management.Th
 	}
 	defer top.Close()
 
-	// Replacing an existing stored theme stays allowed even at the 64-theme cap.
-	exists := false
-	fname := name + ".json"
+	// A file at a publisher's path leaves nowhere to store a theme: GET and DELETE say there is
+	// no such theme, and putting one is refused the same way as any change core will not apply.
 	if pubInfo, err := top.Lstat(pub); err == nil {
 		if pubInfo.Mode()&fs.ModeSymlink != 0 || !pubInfo.IsDir() {
-			return management.ThemeSummary{}, fmt.Errorf("%s is not a folder", pub)
-		}
-		if pubRoot, err := top.OpenRoot(pub); err == nil {
-			if linfo, err := pubRoot.Lstat(fname); err == nil && linfo.Mode().IsRegular() {
-				exists = true
-			}
-			pubRoot.Close()
+			return management.ThemeSummary{}, errNotRegular
 		}
 	}
-	if !exists {
-		count, err := s.countStoredLocked(top)
-		if err != nil {
-			return management.ThemeSummary{}, err
-		}
-		if count >= maxStoredThemes {
-			return management.ThemeSummary{}, errThemeLimit
-		}
+	// Replacing a stored theme stays allowed even at the 64-theme cap. A file that is not one is
+	// not a theme, here as in list and get, so putting one where it sits counts.
+	themes, err := s.listEntriesLocked(top)
+	if err != nil {
+		return management.ThemeSummary{}, err
+	}
+	id := pub + "/" + name
+	stored := slices.ContainsFunc(themes, func(t management.ThemeSummary) bool { return t.ID == id })
+	if !stored && len(themes) >= maxStoredThemes {
+		return management.ThemeSummary{}, errThemeLimit
 	}
 
-	if err := top.Mkdir(pub, private.DirMode); err != nil && !errors.Is(err, fs.ErrExist) {
+	if err := top.Mkdir(pub, private.DirMode); err == nil {
+		// The new folder's entry in themes/ must be on disk before the theme's file is: a crash
+		// between the two would otherwise lose the folder and the file in it.
+		if err := private.SyncDir(top); err != nil {
+			return management.ThemeSummary{}, err
+		}
+	} else if !errors.Is(err, fs.ErrExist) {
 		return management.ThemeSummary{}, err
 	}
 	pubRoot, err := top.OpenRoot(pub)
@@ -479,7 +445,7 @@ func (s *themeStore) put(pub, name, themeName string, raw []byte) (management.Th
 		return management.ThemeSummary{}, err
 	}
 	defer pubRoot.Close()
-	if err := private.WriteFile(pubRoot, filepath.Join(s.dir, pub), ".theme-", fname, raw); err != nil {
+	if err := private.WriteFile(pubRoot, filepath.Join(s.dir, pub), ".theme-", name+".json", raw); err != nil {
 		return management.ThemeSummary{}, err
 	}
 	return management.ThemeSummary{

@@ -161,6 +161,18 @@ func TestCLIOutput(t *testing.T) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /v0/management/client-keys":
 			w.Write([]byte(`{"keys":[{"id":"k1","masked":"sk******ab"}]}` + "\n"))
+		case "GET /v0/management/status":
+			// A newer core whose version field changed type.
+			w.Write([]byte(`{"version":5,"active":{"revision":1}}` + "\n"))
+		case "GET /v0/management/config":
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			w.Write([]byte(`{"error":{"code":"invalid_config","message":"the config file does not parse, so it cannot be shown with its secrets hidden: bad"}}`))
+		case "GET /v0/management/settings":
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			w.Write([]byte(`{"error":{"code":"invalid_config","message":"the settings do not parse"}}`))
+		case "PUT /v0/management/themes/t3/f":
+			// A newer core that counts a theme's bytes differently.
+			w.Write([]byte(`{"id":"t3/f","bytes":"12"}` + "\n"))
 		case "PATCH /v0/management/accounts/a%2Fb", "PATCH /v0/management/accounts/a/b":
 			var body map[string]any
 			json.NewDecoder(r.Body).Decode(&body)
@@ -215,6 +227,32 @@ func TestCLIOutput(t *testing.T) {
 	}
 	if out, _, code := run("key", "list", "--json"); code != 0 || out != `{"keys":[{"id":"k1","masked":"sk******ab"}]}`+"\n" {
 		t.Errorf("key list --json: %d %q, want the body unchanged", code, out)
+	}
+	// --json prints the reply body unchanged even when a field's type changed in a newer core.
+	if out, errOut, code := run("status", "--json"); code != 0 || out != `{"version":5,"active":{"revision":1}}`+"\n" || errOut != "" {
+		t.Errorf("status --json with a changed field type: %d %q %q, want the body unchanged", code, out, errOut)
+	}
+	// A 422 on a command that changes nothing did not refuse a change.
+	if _, errOut, code := run("config", "show"); code != 1 || !strings.Contains(errOut, "does not parse") {
+		t.Errorf("config show on a config that does not parse: %d %q, want 1 and the reason", code, errOut)
+	}
+	// So does any other command that only reads, with no mark of its own.
+	if _, errOut, code := run("settings"); code != 1 || !strings.Contains(errOut, "do not parse") {
+		t.Errorf("settings on settings that do not parse: %d %q, want 1 and the reason", code, errOut)
+	}
+	// A one-part theme ID is a usage error, not a path with an empty part.
+	for _, args := range [][]string{{"theme", "show", "default"}, {"theme", "remove", "default"}} {
+		if _, errOut, code := run(args...); code != 2 || !strings.Contains(errOut, "publisher/name") {
+			t.Errorf("%q: exit %d %q, want 2 and how to write the ID", args, code, errOut)
+		}
+	}
+	// theme add --json prints the reply body unchanged too.
+	themeFile := filepath.Join(t.TempDir(), "f.json")
+	if err := os.WriteFile(themeFile, []byte(`{"name":"F"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, errOut, code := run("theme", "add", themeFile, "--json"); code != 0 || out != `{"id":"t3/f","bytes":"12"}`+"\n" || errOut != "" {
+		t.Errorf("theme add --json with a changed field type: %d %q %q, want the body unchanged", code, out, errOut)
 	}
 	if out, _, code := run("key", "list"); code != 0 || !strings.Contains(out, "k1") || !strings.Contains(out, "sk******ab") {
 		t.Errorf("key list: %d %q", code, out)

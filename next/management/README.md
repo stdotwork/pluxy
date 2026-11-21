@@ -86,7 +86,7 @@ management API of a core that is already running. `pluxy -config ...` with no su
   | 3 | No core answered at the address |
   | 4 | Refused: no key, wrong key, another machine, or blocked (401, 403) |
   | 5 | Not found (404) |
-  | 6 | Core refused the change (409, 422); nothing was changed |
+  | 6 | Core refused the change (409 or 422 from a command that changes something); nothing was changed |
   | 7 | Waiting for a person: a sign-in needs a browser or a code, and `--no-wait` was given |
 
 ## Resources
