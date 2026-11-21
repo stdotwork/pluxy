@@ -418,7 +418,7 @@ func errorFields(e *llm.Error) obj {
 		Error obj `json:"error"`
 	}
 	_ = json.Unmarshal(body, &b)
-	return obj{"code": b.Error["code"], "message": b.Error["message"], "param": nil, "error": b.Error}
+	return obj{"code": b.Error["code"], "message": b.Error["message"], "param": b.Error["param"], "error": b.Error}
 }
 
 // StreamWriter writes events to a client as a Responses stream. When the reply came from a

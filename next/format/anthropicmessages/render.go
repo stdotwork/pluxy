@@ -827,8 +827,38 @@ func errorFields(e *llm.Error) obj {
 		typ = e.ProviderCode
 	}
 	o := obj{"type": typ, "message": msg}
+	out := obj{"type": "error", "error": o}
+	requestID, details := messagesErrorFields(e.Raw)
+	if requestID != nil {
+		out["request_id"] = requestID
+	}
+	if details != nil {
+		o["details"] = details
+	}
 	e.Pluxy(o)
-	return obj{"type": "error", "error": o}
+	return out
+}
+
+// messagesErrorFields returns the request_id and error.details of raw when raw is a Messages error
+// body or event: type "error" with an error object. A Codex WebSocket error message looks the same
+// but has a status, and its fields are not these.
+func messagesErrorFields(raw json.RawMessage) (requestID, details json.RawMessage) {
+	m := rawjson.Object(raw)
+	if m == nil || string(m["type"]) != `"error"` || m["status"] != nil {
+		return nil, nil
+	}
+	inner := rawjson.Object(m["error"])
+	if inner == nil {
+		return nil, nil
+	}
+	var id string
+	if json.Unmarshal(m["request_id"], &id) == nil && id != "" {
+		requestID = m["request_id"]
+	}
+	if rawjson.Object(inner["details"]) != nil {
+		details = inner["details"]
+	}
+	return requestID, details
 }
 
 // ErrorResponse returns the HTTP status and Anthropic error body for e.

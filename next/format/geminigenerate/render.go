@@ -586,12 +586,18 @@ func ErrorResponse(e *llm.Error) (int, []byte) {
 	}
 	body := obj{"code": st, "message": msg, "status": name}
 	if isGoogleError(e.Raw) {
+		// Google's code is a number and its details a list; another format's error can have a
+		// details member that means something else.
 		var g struct {
 			Error struct {
+				Code    json.RawMessage `json:"code"`
 				Details json.RawMessage `json:"details"`
 			} `json:"error"`
 		}
-		if json.Unmarshal(e.Raw, &g) == nil && !isNull(g.Error.Details) {
+		var code int
+		var details []json.RawMessage
+		if json.Unmarshal(e.Raw, &g) == nil && json.Unmarshal(g.Error.Code, &code) == nil &&
+			!isNull(g.Error.Details) && json.Unmarshal(g.Error.Details, &details) == nil {
 			body["details"] = g.Error.Details
 		}
 	}
