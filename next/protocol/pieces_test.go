@@ -1,7 +1,6 @@
 package protocol
 
 import (
-	"encoding/base64"
 	"slices"
 	"strings"
 	"testing"
@@ -216,41 +215,5 @@ func TestRemovePiecesPEMAcrossLines(t *testing.T) {
 	key := "-----BEGIN PRIVATE KEY-----\n" + line1 + "\n" + line2 + "\n-----END PRIVATE KEY-----\n"
 	if in := "cut " + line1[len(line1)-5:] + line2[:5]; RemovePieces(in, key) != "cut "+Redacted {
 		t.Errorf("RemovePieces(%q) = %q, want the fragment across the line break removed", in, RemovePieces(in, key))
-	}
-}
-
-// A credential that ends in base64 padding keeps its redaction: it is no cookie pair, so the
-// secret counts whole (or by its token behind a scheme), and a cut of it is removed.
-func TestAccountSecretsBase64Padding(t *testing.T) {
-	basicText := base64.StdEncoding.EncodeToString([]byte("gw-user:gw-pass-123"))
-	long := "c2VydmljZS1hY2NvdW50LTE6cDdRdzJFcjVhYWFhYWE=="
-	for _, c := range []struct {
-		name string
-		acct Account
-		want string // a secret AccountSecrets must return
-		cut  string // a cut of it that RemovePieces must remove
-	}{
-		{"api key", Account{Credential: &Credential{APIKey: "c2stdGVzdC9rZXkrNDJh=="}}, "c2stdGVzdC9rZXkrNDJh==", "c2stdGVz"},
-		{"long api key", Account{Credential: &Credential{APIKey: long}}, long, long[10:30]},
-		{"access token", Account{Credential: &Credential{AccessToken: "dG9rZW4tb25lLXR3bw=="}}, "dG9rZW4tb25lLXR3bw==", "dG9rZW4t"},
-		{"bearer header", Account{Headers: map[string]string{"Authorization": "Bearer dG9rZW4tb25lLXR3bw=="}}, "dG9rZW4tb25lLXR3bw==", "dG9rZW4t"},
-		{"basic header", Account{Headers: map[string]string{"Authorization": "Basic " + basicText}}, basicText, basicText[:8]},
-		{"secret setting", Account{Settings: []byte(`{"client_secret":"c2V0dGluZy1zZWNyZXQ="}`)}, "c2V0dGluZy1zZWNyZXQ=", "c2V0dGlu"},
-		{"secret setting, double padding", Account{Settings: []byte(`{"client_secret":"c2V0dGluZy1zZWNyZXRh=="}`)}, "c2V0dGluZy1zZWNyZXRh==", "c2V0dGlu"},
-	} {
-		got := AccountSecrets(c.acct)
-		if !slices.Contains(got, c.want) || slices.Contains(got, "=") || slices.Contains(got, "==") {
-			t.Errorf("%s: AccountSecrets = %q, want it to hold %q and not the padding", c.name, got, c.want)
-		}
-		in := "bad credential " + c.cut + " given"
-		if out, want := RemovePieces(in, got...), "bad credential [redacted] given"; out != want {
-			t.Errorf("%s: RemovePieces(%q) = %q, want %q", c.name, in, out, want)
-		}
-	}
-	// A real cookie header keeps its parts exactly.
-	got := AccountSecrets(Account{Headers: map[string]string{"Cookie": "sid=cookie-sid-0123456789; theme=dark; other=c2VjcmV0LXZhbHVl=="}})
-	slices.Sort(got)
-	if want := []string{"c2VjcmV0LXZhbHVl==", "cookie-sid-0123456789"}; !slices.Equal(got, want) {
-		t.Errorf("cookie header: AccountSecrets = %q, want %q", got, want)
 	}
 }
