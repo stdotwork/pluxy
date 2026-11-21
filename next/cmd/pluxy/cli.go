@@ -746,7 +746,7 @@ var commands = []command{
 			}
 			return nil
 		}},
-	{words: "theme add", args: []string{"file"}, routes: []string{"PUT /themes/{publisher}/{name}"}, summary: "store a theme JSON file",
+	{words: "theme add", args: []string{"file"}, routes: []string{"PUT /themes/{publisher}/{name}", "GET /themes"}, summary: "store a theme JSON file",
 		flags: func(fs *flag.FlagSet, o *opts) {
 			fs.StringVar(&o.id, "id", "", "theme ID (publisher/name)")
 		},
@@ -756,6 +756,9 @@ var commands = []command{
 				return err
 			}
 			id := resolveThemeID(x.opts.id, x.args[0], raw)
+			if err := checkNewThemeID(id); err != nil {
+				return err
+			}
 			// With --json the reply is printed unchanged, so it is not decoded into the
 			// summary first: a field a newer core changed the type of would abort it.
 			var summary management.ThemeSummary
@@ -772,6 +775,13 @@ var commands = []command{
 				return err
 			}
 			x.printf("%s\n", summary.ID)
+			// Standard output stays the ID alone. When core does not say what is selected, say nothing.
+			var themes struct {
+				Current string `json:"current"`
+			}
+			if _, err := x.client.Call(x.ctx, http.MethodGet, "/themes", nil, nil, &themes); err == nil && themes.Current != summary.ID {
+				x.eprintf("Stored but not turned on. To turn it on, run: pluxy theme set %s\n", summary.ID)
+			}
 			return nil
 		}},
 	{words: "theme remove", args: []string{"id"}, routes: []string{"DELETE /themes/{publisher}/{name}"}, summary: "remove a stored theme",
@@ -899,6 +909,18 @@ func validThemeID(id string) bool {
 		return false
 	}
 	return validThemePart(pub) && validThemePart(name)
+}
+
+// checkNewThemeID refuses an ID theme add cannot store, before any request, and says what a valid
+// one looks like.
+func checkNewThemeID(id string) error {
+	if validThemeID(id) {
+		return nil
+	}
+	if pub, name, ok := strings.Cut(id, "/"); ok && pub == "current" && validThemePart(name) {
+		return usageError{fmt.Sprintf(`theme ID %q is not valid: "current" cannot be the publisher, so use another, such as my/%s`, id, name)}
+	}
+	return usageError{fmt.Sprintf("theme ID %q is not valid: write it as publisher/name, such as my/paper, with each part 1 to 64 characters from a-z, 0-9 and -", id)}
 }
 
 // themeAPIPath is the API path of a theme ID from the command line. The commands that take one
@@ -1165,6 +1187,11 @@ func groupHelp(w io.Writer, prefix string) {
 	tw.Flush()
 }
 
+// isHelpFlag reports whether arg is one of the spellings of help a command's own flags take.
+func isHelpFlag(arg string) bool {
+	return slices.Contains([]string{"-h", "--h", "-help", "--help"}, arg)
+}
+
 // help writes the list of commands whose words start with prefix.
 func help(w io.Writer, prefix string) {
 	fmt.Fprintln(w, "usage: pluxy serve [-config file] [flags]   run core (pluxy with no subcommand does too)")
@@ -1198,8 +1225,13 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 		// A group's word names the commands it holds: alone (pluxy account), with one it does
 		// not have (pluxy account frobnicate), or with words it does not take (pluxy settings
 		// set). A command's word alone with more after it (pluxy status now) is that command's
-		// extra argument, which its own check below refuses.
+		// extra argument, which its own check below refuses. Asked for help, it lists them as
+		// the answer rather than as a usage error.
 		if prefix := groupPrefix(args[0]); prefix != "" {
+			if len(args) > 1 && isHelpFlag(args[1]) {
+				groupHelp(stdout, prefix)
+				return exitOK
+			}
 			if len(args) > 1 {
 				fmt.Fprintf(stderr, "pluxy: unknown %s command %q\n", args[0], args[1])
 			} else {

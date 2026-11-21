@@ -308,7 +308,8 @@ Every other class name, element and attribute can change in any release.
 Core keeps the themes a person adds and which theme is on, so the panel, the desktop app and the
 `pluxy` command show the same ones. Core stores a theme file's JSON as it is given, and reads it
 only to check that it is one UTF-8 JSON object of at most 256 KiB and to take its `name` for the
-list; the UI is what checks the rest of a file. Core keeps at most 64 themes.
+list; the UI is what checks the rest of a file. Core keeps at most 64 themes, and refuses to store
+one under a built-in theme's ID.
 
 On the Themes page:
 
@@ -346,6 +347,15 @@ derives the part after `t3/` from `name` as the Themes page does. When neither `
 usable, it uses `t3/<file name>`. The command does not check the file as the UI does: a stored file
 the UI cannot read is listed on the Themes page with the reason and cannot be turned on. The
 built-in themes' IDs are `pluxy/default`, `pluxy/terminal` and `pluxy/paper`.
+
+`pluxy theme add` does not turn the theme on. It prints the ID alone on standard output, so it can
+be piped, and unless that theme is already on, one line on standard error gives the
+`pluxy theme set` command to run.
+
+`pluxy theme set` takes a stored theme or a built-in theme. Any other ID is refused and the theme
+that is on stays on, except an ID whose publisher is `pluxy`: a newer panel or desktop app may hold
+a built-in theme this core does not list, so core accepts it, and a window that does not hold that
+theme shows the default.
 
 ## Safe mode
 

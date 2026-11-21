@@ -308,9 +308,9 @@ Closed days are counted by whole UTC hours, so a `since` or `until` inside an ho
 | --- | --- | --- |
 | `GET /themes` | `pluxy theme list` | The selected theme ID (`current`) and the stored themes (`id`, `name`, `bytes`) |
 | `GET /themes/{publisher}/{name}` | `pluxy theme show <id>` | One stored theme's JSON unchanged |
-| `PUT /themes/{publisher}/{name}` | `pluxy theme add <file> [--id publisher/name]` | Store a theme JSON object (up to 256 KiB; at most 64 stored) |
+| `PUT /themes/{publisher}/{name}` | `pluxy theme add <file> [--id publisher/name]` | Store a theme JSON object (up to 256 KiB; at most 64 stored). 422 `refused` for a built-in theme's ID (`pluxy/default`, `pluxy/paper`, `pluxy/terminal`), which the UI lists as its own; a file stored under one before this rule stays readable and removable. The command refuses an ID that is not `publisher/name` before it calls core. It prints the ID alone on standard output and, unless that theme is already selected, one line on standard error saying it is not turned on |
 | `DELETE /themes/{publisher}/{name}` | `pluxy theme remove <id>` | Remove a stored theme; clears `current` if it was selected |
-| `PUT /theme` | `pluxy theme set <id>`, `pluxy theme clear` | Select a theme ID (even one the UI holds) or clear the selection |
+| `PUT /theme` | `pluxy theme set <id>`, `pluxy theme clear` | Select a theme, or clear the selection with an empty `id`. Core takes a stored theme, a built-in theme, and any other ID whose publisher is `pluxy`, since a newer panel or app may hold a built-in this core does not list. Any other ID is 404 `not_found`, and the selection stays |
 
 ## What a client request gets back (**new**)
 
