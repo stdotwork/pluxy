@@ -108,7 +108,7 @@ func Lower(req llm.Request) (llm.Request, []llm.Loss) {
 	p := analyze(req)
 	out := req
 	out.Tools = p.tools
-	out.Items = p.lowerItems(req.Items)
+	out.Items = lowerItems(req.Items)
 	p.lowerChoice(&out)
 	return out, p.losses
 }
@@ -502,7 +502,7 @@ func inputArguments(input string) string {
 	return strings.TrimSuffix(b.String(), "\n")
 }
 
-func (p *plan) lowerItems(items []llm.Item) []llm.Item {
+func lowerItems(items []llm.Item) []llm.Item {
 	out := make([]llm.Item, 0, len(items))
 	for _, it := range items {
 		if !fromResponses(it.Origin) {
@@ -517,7 +517,7 @@ func (p *plan) lowerItems(items []llm.Item) []llm.Item {
 				out = append(out, it)
 				continue
 			}
-			if lowered, ok := p.lowerNative(it); ok {
+			if lowered, ok := lowerNative(it); ok {
 				out = append(out, lowered)
 			}
 		default:
@@ -551,7 +551,7 @@ func unnamespaced(it llm.Item) llm.Item {
 // lowerNative makes a replayed custom tool or tool_search item a function call or result. It
 // reports false for an item that goes up as nothing: an additional_tools item, whose tools are
 // declared.
-func (p *plan) lowerNative(it llm.Item) (llm.Item, bool) {
+func lowerNative(it llm.Item) (llm.Item, bool) {
 	m := rawjson.Object(it.Origin.Raw)
 	path := it.Origin.Path
 	field := func(k string) string {

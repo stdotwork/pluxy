@@ -251,40 +251,39 @@ func (b *builder) clientTool(name string) *clienttools.Ref {
 // callItem is a tool call as an output item, in the shape the client declared the tool in. done
 // is false for the added event, which has none of the call's input yet.
 func (b *builder) callItem(it *item, status string, done bool) obj {
-	if it.ref == nil {
-		arguments := ""
-		if done {
-			arguments = it.text.String()
-		}
-		return obj{"id": it.id, "type": "function_call", "status": status, "arguments": arguments, "call_id": it.callID, "name": it.name}
-	}
-	switch it.ref.Kind {
-	case clienttools.KindCustom:
-		input := ""
-		if done {
-			input = b.customInput(it)
-		}
-		o := obj{"id": it.id, "type": "custom_tool_call", "status": status, "call_id": it.callID, "name": it.ref.Name, "input": input}
-		if it.ref.Namespace != "" {
-			o["namespace"] = it.ref.Namespace
-		}
-		return o
-	case clienttools.KindSearch:
-		arguments := json.RawMessage("{}")
-		if done {
-			var ok bool
-			if arguments, ok = clienttools.SearchCallArguments(it.text.String()); !ok {
-				status = "incomplete"
-				b.note(llm.LossApproximated, clienttools.OutputPath(it.out, "arguments"), "tool_search arguments that are not a JSON object, sent as {}")
+	if it.ref != nil {
+		switch it.ref.Kind {
+		case clienttools.KindCustom:
+			input := ""
+			if done {
+				input = b.customInput(it)
 			}
+			o := obj{"id": it.id, "type": "custom_tool_call", "status": status, "call_id": it.callID, "name": it.ref.Name, "input": input}
+			if it.ref.Namespace != "" {
+				o["namespace"] = it.ref.Namespace
+			}
+			return o
+		case clienttools.KindSearch:
+			arguments := json.RawMessage("{}")
+			if done {
+				var ok bool
+				if arguments, ok = clienttools.SearchCallArguments(it.text.String()); !ok {
+					status = "incomplete"
+					b.note(llm.LossApproximated, clienttools.OutputPath(it.out, "arguments"), "tool_search arguments that are not a JSON object, sent as {}")
+				}
+			}
+			return obj{"id": it.id, "type": "tool_search_call", "status": status, "call_id": it.callID, "execution": "client", "arguments": arguments}
 		}
-		return obj{"id": it.id, "type": "tool_search_call", "status": status, "call_id": it.callID, "execution": "client", "arguments": arguments}
 	}
 	arguments := ""
 	if done {
 		arguments = it.text.String()
 	}
-	return obj{"id": it.id, "type": "function_call", "status": status, "arguments": arguments, "call_id": it.callID, "name": it.ref.Name, "namespace": it.ref.Namespace}
+	o := obj{"id": it.id, "type": "function_call", "status": status, "arguments": arguments, "call_id": it.callID, "name": it.name}
+	if it.ref != nil {
+		o["name"], o["namespace"] = it.ref.Name, it.ref.Namespace
+	}
+	return o
 }
 
 // customInput is a custom tool call's text, from the arguments of the function it was sent as.
