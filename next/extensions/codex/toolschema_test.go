@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -446,7 +447,10 @@ func TestFixSchemaStrictOptionalProperties(t *testing.T) {
 	}
 
 	// Strict makes every optional property required and nullable recursively.
-	out, changed := fixSchemaForMode(json.RawMessage(in), true)
+	out, changed, strictOff := fixSchemaForMode(json.RawMessage(in), true)
+	if strictOff {
+		t.Fatal("a closable schema turned strict off")
+	}
 	if !changed {
 		t.Fatal("strict schema was not changed")
 	}
@@ -455,7 +459,7 @@ func TestFixSchemaStrictOptionalProperties(t *testing.T) {
 		"properties": {
 			"req": {"type": "string"},
 			"optStr": {"type": ["string", "null"]},
-			"optEnum": {"type": ["string", "null"], "enum": ["a", "b"]},
+			"optEnum": {"anyOf": [{"type": "string", "enum": ["a", "b"]}, {"type": "null"}]},
 			"optUntypedEnum": {"enum": ["x", "y", null]},
 			"optAlreadyNull": {"type": ["integer", "null"]},
 			"optAnyOf": {"anyOf": [{"type": "string"}, {"type": "number"}, {"type": "null"}]},
@@ -467,15 +471,18 @@ func TestFixSchemaStrictOptionalProperties(t *testing.T) {
 					"must": {"type": "boolean"},
 					"may": {"type": ["number", "null"]}
 				},
-				"required": ["must", "may"]
+				"required": ["must", "may"],
+				"additionalProperties": false
 			}
 		},
+		"additionalProperties": false,
 		"required": ["req", "nested", "optAlreadyNull", "optAnyOf", "optArr", "optEnum", "optRef", "optStr", "optUntypedEnum"],
 		"$defs": {
 			"Child": {
 				"type": "object",
 				"properties": {"a": {"type": "string"}, "b": {"type": ["string", "null"]}},
-				"required": ["a", "b"]
+				"required": ["a", "b"],
+				"additionalProperties": false
 			}
 		}
 	}`)
@@ -682,7 +689,8 @@ func TestStrictToolSchemasThroughTheExtension(t *testing.T) {
 			"tags": {"type": ["array", "null"], "items": {"type": "string"}},
 			"note": {"type": ["string", "null"]}
 		},
-		"required": ["mode", "note", "query", "tags"]
+		"required": ["mode", "note", "query", "tags"],
+		"additionalProperties": false
 	}`)
 
 	msgReq := llm.Request{
@@ -709,4 +717,294 @@ func TestStrictToolSchemasThroughTheExtension(t *testing.T) {
 		},
 		"required": ["mode"]
 	}`)
+}
+
+// strictTools sends a Responses client's tools through buildRequest and returns the tools that
+// would go upstream, with the translation's losses.
+func strictTools(t *testing.T, tools string) ([]map[string]json.RawMessage, *llm.Translation) {
+	t.Helper()
+	body := `{"model":"gpt-test","input":[],"tools":` + tools + `}`
+	ur, err := buildRequest(llm.Request{Model: "gpt-test", Native: &llm.Native{Format: llm.FormatOpenAIResponses, Body: json.RawMessage(body)}},
+		"a", settings{ImageGenerationTool: new(bool)}, account{token: "k"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Tools []map[string]json.RawMessage `json:"tools"`
+	}
+	if err := json.Unmarshal(ur.body, &out); err != nil {
+		t.Fatal(err)
+	}
+	return out.Tools, ur.tr
+}
+
+func strictFlag(t *testing.T, tool map[string]json.RawMessage) bool {
+	t.Helper()
+	var b bool
+	if err := json.Unmarshal(tool["strict"], &b); err != nil {
+		t.Fatalf("strict = %s: %v", tool["strict"], err)
+	}
+	return b
+}
+
+// everyObjectIsClosed reports each schema that has a properties key and no additionalProperties
+// false, by walking the whole value (properties, $defs, items, anyOf and the rest alike).
+func unclosedObjects(v any, path string, out *[]string) {
+	switch s := v.(type) {
+	case []any:
+		for i, x := range s {
+			unclosedObjects(x, path+"["+strconv.Itoa(i)+"]", out)
+		}
+	case map[string]any:
+		if _, ok := s["properties"].(map[string]any); ok && s["additionalProperties"] != false {
+			*out = append(*out, path)
+		}
+		for k, x := range s {
+			switch k {
+			case "enum", "const", "default", "examples", "required":
+				continue
+			}
+			unclosedObjects(x, path+"."+k, out)
+		}
+	}
+}
+
+// Under strict: true every object schema that has properties is closed, wherever it sits.
+func TestStrictClosesEveryObject(t *testing.T) {
+	in := `{"type":"object","properties":{
+		"nested":{"type":"object","properties":{"deep":{"type":"object","properties":{"x":{"type":"string"}}}}},
+		"list":{"type":"array","items":{"type":"object","properties":{"y":{"type":"string"}}}},
+		"either":{"anyOf":[{"type":"object","properties":{"z":{"type":"string"}}},{"type":"string"}]},
+		"ref":{"$ref":"#/$defs/Child"},
+		"empty":{"type":"object","properties":{}},
+		"already":{"type":"object","properties":{"w":{"type":"string"}},"additionalProperties":false}
+	},"$defs":{"Child":{"type":"object","properties":{"a":{"type":"string"}}}}}`
+	tools, tr := strictTools(t, `[{"type":"function","name":"f","strict":true,"parameters":`+in+`}]`)
+	if !strictFlag(t, tools[0]) {
+		t.Fatalf("a schema that can be closed was sent non-strict: %s", tools[0]["parameters"])
+	}
+	var bad []string
+	unclosedObjects(mustJSON(t, tools[0]["parameters"]), "$", &bad)
+	if len(bad) > 0 {
+		t.Errorf("objects left open: %v\n%s", bad, tools[0]["parameters"])
+	}
+	if len(tr.Losses) != 0 {
+		t.Errorf("losses = %+v, want none", tr.Losses)
+	}
+}
+
+// A schema that accepts more than its properties cannot be made strict without changing what the
+// tool accepts: the tool goes out non-strict, with the non-strict rules' result, and one loss.
+func TestStrictOpenSchemaGoesNonStrict(t *testing.T) {
+	for name, params := range map[string]string{
+		"a free-form map":                `{"type":"object","properties":{"meta":{"type":"object"},"tags":{"type":"array"}}}`,
+		"a free-form root":               `{"type":"object"}`,
+		"a nullable free map":            `{"type":"object","properties":{"m":{"type":["object","null"]}}}`,
+		"a free map in $defs":            `{"type":"object","properties":{"c":{"$ref":"#/$defs/M"}},"$defs":{"M":{"type":"object"}}}`,
+		"additionalProperties":           `{"type":"object","properties":{"a":{"type":"string"}},"additionalProperties":true}`,
+		"an additionalProperties schema": `{"type":"object","properties":{"a":{"type":"string"}},"additionalProperties":{"type":"string"}}`,
+		"a nested open object":           `{"type":"object","properties":{"o":{"type":"object","properties":{"k":{"type":"string"}},"additionalProperties":{}}}}`,
+		"a two-branch allOf in $defs":    `{"type":"object","properties":{"x":{"$ref":"#/$defs/W"}},"$defs":{"B":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]},"W":{"allOf":[{"$ref":"#/$defs/B"},{"type":"object","properties":{"n":{"type":"string"}},"required":["n"]}]}}}`,
+		"a root two-branch allOf":        `{"allOf":[{"$ref":"#/$defs/B"},{"type":"object","properties":{"n":{"type":"string"}},"required":["n"]}],"$defs":{"B":{"type":"object","properties":{"id":{"type":"string"}},"required":["id"]}}}`,
+		"if and then":                    `{"type":"object","properties":{"kind":{"type":"string"},"v":{"type":"string"}},"if":{"properties":{"kind":{"const":"a"}}},"then":{"required":["v"]}}`,
+		"if and else":                    `{"type":"object","properties":{"kind":{"type":"string"},"v":{"type":"string"}},"if":{"properties":{"kind":{"const":"a"}}},"else":{"required":["v"]}}`,
+		"not":                            `{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"}},"not":{"required":["a","b"]}}`,
+		"dependentSchemas":               `{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"}},"dependentSchemas":{"a":{"required":["b"]}}}`,
+		"dependencies":                   `{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"}},"dependencies":{"a":["b"]}}`,
+		"properties beside $ref":         `{"type":"object","properties":{"a":{"$ref":"#/$defs/X","properties":{"k":{"type":"string"}}}},"$defs":{"X":{"type":"object","properties":{"j":{"type":"string"}}}}}`,
+		"properties beside anyOf":        `{"type":"object","properties":{"a":{"anyOf":[{"type":"object","properties":{"x":{"type":"string"}}},{"type":"string"}],"properties":{"k":{"type":"string"}}}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			tools, tr := strictTools(t, `[{"type":"function","name":"f","strict":true,"parameters":`+params+`}]`)
+			if strictFlag(t, tools[0]) {
+				t.Fatalf("sent strict: %s", tools[0]["parameters"])
+			}
+			// What the non-strict rules leave: nothing added to required, no nullability, and
+			// the missing array items still filled in. Equal to that result means no strict
+			// rewrite was applied, whether or not the input already has required lists.
+			want, _ := fixed(t, params)
+			sameJSON(t, mustJSON(t, tools[0]["parameters"]), mustMarshal(t, want))
+			if len(tr.Losses) != 1 {
+				t.Fatalf("losses = %+v, want one", tr.Losses)
+			}
+			l := tr.Losses[0]
+			if l.Kind != llm.LossApproximated || l.Path != "tools[0]" || !strings.Contains(l.Detail, "strict") {
+				t.Errorf("loss = %+v", l)
+			}
+		})
+	}
+}
+
+// A single-branch allOf of a $ref combines nothing, so the tool stays strict and the referenced
+// object is closed like any other.
+func TestStrictSingleBranchAllOfStaysStrict(t *testing.T) {
+	in := `{"type":"object","properties":{"c":{"allOf":[{"$ref":"#/$defs/Foo"}],"description":"x"}},"$defs":{"Foo":{"type":"object","properties":{"f":{"type":"string"}}}}}`
+	tools, tr := strictTools(t, `[{"type":"function","name":"f","strict":true,"parameters":`+in+`}]`)
+	if !strictFlag(t, tools[0]) {
+		t.Fatalf("a single-branch allOf was sent non-strict: %s", tools[0]["parameters"])
+	}
+	var bad []string
+	unclosedObjects(mustJSON(t, tools[0]["parameters"]), "$", &bad)
+	if len(bad) > 0 {
+		t.Errorf("objects left open: %v\n%s", bad, tools[0]["parameters"])
+	}
+	var got struct {
+		Defs struct {
+			Foo map[string]json.RawMessage `json:"Foo"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(tools[0]["parameters"], &got); err != nil {
+		t.Fatal(err)
+	}
+	if string(got.Defs.Foo["additionalProperties"]) != "false" {
+		t.Errorf("Foo is not closed: %s", tools[0]["parameters"])
+	}
+	if len(tr.Losses) != 0 {
+		t.Errorf("losses = %+v, want none", tr.Losses)
+	}
+}
+
+func mustMarshal(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// Inside a namespace tool, each function tool is judged on its own, and its loss names its path.
+func TestStrictNamespaceTools(t *testing.T) {
+	closed := `{"type":"object","properties":{"a":{"type":"string"}}}`
+	open := `{"type":"object","properties":{"a":{"type":"string"},"m":{"type":"object"}}}`
+	tools, tr := strictTools(t, `[{"type":"namespace","name":"mcp__s","description":"d","tools":[
+		{"type":"function","name":"ok","strict":true,"parameters":`+closed+`},
+		{"type":"function","name":"open","strict":true,"parameters":`+open+`}]}]`)
+	var nested []map[string]json.RawMessage
+	if err := json.Unmarshal(tools[0]["tools"], &nested); err != nil {
+		t.Fatal(err)
+	}
+	if !strictFlag(t, nested[0]) || strictFlag(t, nested[1]) {
+		t.Fatalf("strict flags = %v, %v, want true, false", strictFlag(t, nested[0]), strictFlag(t, nested[1]))
+	}
+	sameJSON(t, mustJSON(t, nested[0]["parameters"]), `{"type":"object","properties":{"a":{"type":["string","null"]}},"required":["a"],"additionalProperties":false}`)
+	sameJSON(t, mustJSON(t, nested[1]["parameters"]), open)
+	if len(tr.Losses) != 1 || tr.Losses[0].Path != "tools[0].tools[1]" || tr.Losses[0].Kind != llm.LossApproximated {
+		t.Errorf("losses = %+v, want one at tools[0].tools[1]", tr.Losses)
+	}
+}
+
+// A tool that is not strict goes out as the rules for any tool leave it: no closing, no
+// required, no nullability, no strict flag turned on or off, and no loss.
+func TestNonStrictToolsAreNotClosed(t *testing.T) {
+	params := `{"type":"object","properties":{"a":{"type":"string"},"m":{"type":"object"},"o":{"type":"object","properties":{"k":{"type":"string"}}}}}`
+	for name, tool := range map[string]string{
+		"strict false": `{"type":"function","name":"f","strict":false,"parameters":` + params + `}`,
+		"no strict":    `{"type":"function","name":"f","parameters":` + params + `}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			tools, tr := strictTools(t, `[`+tool+`]`)
+			if got := string(tools[0]["parameters"]); got != params {
+				t.Errorf("parameters changed:\n got %s\nwant %s", got, params)
+			}
+			if s, ok := tools[0]["strict"]; ok && string(s) != "false" {
+				t.Errorf("strict = %s", s)
+			}
+			if len(tr.Losses) != 0 {
+				t.Errorf("losses = %+v", tr.Losses)
+			}
+		})
+	}
+}
+
+// acceptsNull reads a schema's shape, not its words: null passes when every one of type, enum,
+// const, anyOf and oneOf that the schema has lets it through.
+func acceptsNull(s map[string]any) bool {
+	seen := false
+	if v, ok := s["type"]; ok {
+		seen = true
+		found := v == "null"
+		if l, ok := v.([]any); ok {
+			for _, x := range l {
+				found = found || x == "null"
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	if v, ok := s["enum"].([]any); ok {
+		seen = true
+		found := false
+		for _, x := range v {
+			found = found || x == nil
+		}
+		if !found {
+			return false
+		}
+	}
+	if v, ok := s["const"]; ok {
+		seen = true
+		if v != nil {
+			return false
+		}
+	}
+	for _, k := range []string{"anyOf", "oneOf"} {
+		if l, ok := s[k].([]any); ok {
+			seen = true
+			found := false
+			for _, b := range l {
+				if bm, ok := b.(map[string]any); ok && acceptsNull(bm) {
+					found = true
+				}
+			}
+			if !found {
+				return false
+			}
+		}
+	}
+	return seen
+}
+
+// An optional property is made required, so null must pass every keyword that constrains it.
+func TestStrictOptionalPropertyAcceptsNull(t *testing.T) {
+	props := map[string]string{
+		"plainType":       `{"type":"string"}`,
+		"typeList":        `{"type":["string","integer"]}`,
+		"plainAnyOf":      `{"anyOf":[{"type":"string"},{"type":"number"}]}`,
+		"plainOneOf":      `{"oneOf":[{"type":"string"},{"type":"number"}]}`,
+		"plainEnum":       `{"enum":["x","y"]}`,
+		"typeEnum":        `{"type":"string","enum":["a","b"],"description":"d","title":"T"}`,
+		"typeAnyOf":       `{"type":"string","anyOf":[{"minLength":1},{"maxLength":0}],"description":"d"}`,
+		"typeOneOf":       `{"type":"string","oneOf":[{"minLength":1},{"maxLength":0}]}`,
+		"anyOfAndOneOf":   `{"anyOf":[{"type":"string"},{"type":"number"}],"oneOf":[{"minimum":1},{"maximum":0}]}`,
+		"enumAndAnyOf":    `{"enum":["a","b"],"anyOf":[{"const":"a"},{"const":"b"}]}`,
+		"typeNullInList":  `{"type":["string","null"],"enum":["a","b"]}`,
+		"nullBranchOnly":  `{"type":"string","anyOf":[{"type":"string"},{"type":"null"}]}`,
+		"alreadyNullable": `{"type":["integer","null"]}`,
+	}
+	var parts []string
+	for k, v := range props {
+		parts = append(parts, `"`+k+`":`+v)
+	}
+	params := `{"type":"object","properties":{` + strings.Join(parts, ",") + `}}`
+	tools, _ := strictTools(t, `[{"type":"function","name":"f","strict":true,"parameters":`+params+`}]`)
+	out := mustJSON(t, tools[0]["parameters"]).(map[string]any)
+	got := out["properties"].(map[string]any)
+	for name := range props {
+		pm, ok := got[name].(map[string]any)
+		if !ok || !acceptsNull(pm) {
+			t.Errorf("%s refuses null: %s", name, mustMarshal(t, got[name]))
+		}
+	}
+	// The forms that already took a null keep their shape; the rest are wrapped, with the
+	// description and title outside.
+	sameJSON(t, got["plainType"], `{"type":["string","null"]}`)
+	sameJSON(t, got["typeList"], `{"type":["string","integer","null"]}`)
+	sameJSON(t, got["plainAnyOf"], `{"anyOf":[{"type":"string"},{"type":"number"},{"type":"null"}]}`)
+	sameJSON(t, got["plainOneOf"], `{"oneOf":[{"type":"string"},{"type":"number"},{"type":"null"}]}`)
+	sameJSON(t, got["plainEnum"], `{"enum":["x","y",null]}`)
+	sameJSON(t, got["typeEnum"], `{"description":"d","title":"T","anyOf":[{"type":"string","enum":["a","b"]},{"type":"null"}]}`)
+	sameJSON(t, got["typeAnyOf"], `{"description":"d","anyOf":[{"type":"string","anyOf":[{"minLength":1},{"maxLength":0}]},{"type":"null"}]}`)
+	sameJSON(t, got["alreadyNullable"], `{"type":["integer","null"]}`)
 }
