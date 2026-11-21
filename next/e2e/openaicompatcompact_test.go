@@ -321,7 +321,7 @@ func TestOpenAICompatibleCompactPathMissing(t *testing.T) {
 				"accounts": []any{map[string]any{
 					"id":         "responses-acct",
 					"settings":   map[string]any{"base_url": srv.URL + "/v1", "wire_api": "responses"},
-					"credential": map[string]any{"kind": "api_key", "api_key": "made-up-compat-key"},
+					"credential": map[string]any{"kind": "api_key", "api_key": "made-up-sample-9137"},
 				}},
 			},
 		})
