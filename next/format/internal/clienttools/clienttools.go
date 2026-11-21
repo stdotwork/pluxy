@@ -4,7 +4,8 @@
 //
 //   - A custom tool (Codex's apply_patch, say) becomes a function with one required string
 //     argument, input, and its grammar moves into the description. Its replayed calls and outputs
-//     become function calls and results.
+//     become function calls and results. A reply's call to it reaches the client only when its
+//     arguments are one whole input string (CustomInput).
 //   - A namespace's tools become functions named N__child. A name that already has the prefix or
 //     starts with mcp__ keeps its name, and so does a tool in Codex's default namespace, functions,
 //     which Codex treats as the same tool as the plain name.
@@ -699,20 +700,24 @@ func (p *plan) lowerChoice(req *llm.Request) {
 // Call helpers for the reply.
 
 // CustomInput reads a custom tool's text out of the arguments of the function call it came back
-// as. Arguments that are not one input string are the model's mistake: they are returned as they
-// came, with ok false, so the tool refuses them and the model can try again. Arguments cut off
-// before their end give the text so far.
+// as. ok is true only for exactly one whole {"input":"<string>"} object. Anything else (arguments
+// cut off, empty, {}, another shape, extra fields or anything after the object) must not reach the
+// client as a call: Codex runs a done item whatever its status says, so a cut-off command would
+// run.
 func CustomInput(arguments string) (input string, ok bool) {
-	trimmed := strings.TrimSpace(arguments)
-	if trimmed == "" || trimmed == "{}" {
-		return "", true
-	}
 	var d InputDecoder
 	d.Push(arguments)
-	if d.failed {
-		return arguments, false
+	if !d.Whole() {
+		return "", false
 	}
 	return d.input.String(), true
+}
+
+// NotWholeError is the error that ends a reply whose custom tool call is not whole, on a finish
+// that does not explain it. It names the tool and never repeats the arguments.
+func NotWholeError(name string, usage *llm.Usage) *llm.Error {
+	return &llm.Error{Code: llm.CodeUpstream, Scope: llm.ScopeEndpoint, Usage: usage,
+		Message: "invalid arguments for custom tool " + name + " received from upstream"}
 }
 
 // SearchCallArguments reads a tool_search call's arguments, which the client takes as a JSON
@@ -725,7 +730,11 @@ func SearchCallArguments(arguments string) (json.RawMessage, bool) {
 	return json.RawMessage(raw), true
 }
 
-// OutputPath names a reply's output item in a loss.
+// OutputPath names a reply's output item, or a field of it, in a loss.
 func OutputPath(index int, field string) string {
-	return "output[" + strconv.Itoa(index) + "]." + field
+	path := "output[" + strconv.Itoa(index) + "]"
+	if field == "" {
+		return path
+	}
+	return rawjson.Join(path, field)
 }

@@ -205,19 +205,21 @@ func parseToolChoice(raw json.RawMessage) *llm.ToolChoice {
 
 // responsesAllowedTool is one entry of a tool choice's allowed_tools list: a function tool, named
 // in name, as Responses writes it. Responses writes the name flat, but function.name is read too,
-// as clients that share code with Chat write it.
+// as clients that share code with Chat write it. An entry with a namespace is a tool only its
+// namespace and name identify.
 type responsesAllowedTool struct {
-	Type     string `json:"type"`
-	Name     string `json:"name"`
-	Function struct {
+	Type      string `json:"type"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Function  struct {
 		Name string `json:"name"`
 	} `json:"function"`
 }
 
 // allowedToolChoice reads a tool choice's allowed_tools list: its mode (auto or required) and the
-// function tools it names, as the model's allowed list. One that names anything else, or no tool,
-// is nil, so the choice stays whole in the request's fields rather than losing the entries the
-// model has no place for.
+// function tools it names, as the model's allowed list. One that names anything else (a custom or
+// namespaced tool among them), or no tool, is nil, so the choice stays whole in the request's
+// fields rather than losing what the model has no place for.
 func allowedToolChoice(mode string, tools []responsesAllowedTool) *llm.ToolChoice {
 	if len(tools) == 0 || (mode != llm.ToolChoiceAuto && mode != llm.ToolChoiceRequired) {
 		return nil
@@ -228,7 +230,7 @@ func allowedToolChoice(mode string, tools []responsesAllowedTool) *llm.ToolChoic
 		if name == "" {
 			name = t.Function.Name
 		}
-		if t.Type != "function" || name == "" {
+		if t.Type != "function" || name == "" || t.Namespace != "" {
 			return nil
 		}
 		names = append(names, name)

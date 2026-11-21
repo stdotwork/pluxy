@@ -208,7 +208,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
-	send := &reporting{Stream: out, tr: tr, names: replyNames(call.Request, tr)}
+	send := &reporting{Stream: out, tr: tr, names: replyNames(call.Request, tr), calls: openairesponses.NewCustomCallCheck(call.Request, tr)}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.BaseURL+up.path, bytes.NewReader(body))
 	if err != nil {
 		return &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
@@ -291,6 +291,7 @@ type reporting struct {
 	*sdk.Stream
 	tr    *llm.Translation
 	names map[string]string // the upstream's name -> the client's
+	calls *openairesponses.CustomCallCheck
 }
 
 func (r *reporting) Send(ev llm.Event) error {
@@ -300,6 +301,9 @@ func (r *reporting) Send(ev llm.Event) error {
 		ev.Response = &info
 	}
 	r.restore(&ev)
+	if err := r.calls.Check(ev); err != nil {
+		return err
+	}
 	return r.Stream.Send(ev)
 }
 

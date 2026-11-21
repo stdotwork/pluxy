@@ -74,6 +74,7 @@ import (
 	"time"
 
 	"github.com/stdotwork/pluxy/next/format/anthropicmessages"
+	"github.com/stdotwork/pluxy/next/format/openairesponses"
 	"github.com/stdotwork/pluxy/next/format/sse"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -257,7 +258,8 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 			return err
 		}
 	}
-	send := &reporting{Stream: out, tr: tr, names: replyNames(call.Request, tr), account: call.Account.ID}
+	send := &reporting{Stream: out, tr: tr, names: replyNames(call.Request, tr), account: call.Account.ID,
+		calls: openairesponses.NewCustomCallCheck(call.Request, tr)}
 	resp, err := post(ctx, call, s, "/v1/messages", body, tr.Passthrough, call.Request.Stream)
 	if err != nil {
 		return err
@@ -612,6 +614,7 @@ type reporting struct {
 	tr      *llm.Translation
 	names   map[string]string
 	account string // the account the reply comes from, for its web search results
+	calls   *openairesponses.CustomCallCheck
 }
 
 func (r *reporting) Send(ev llm.Event) error {
@@ -626,6 +629,9 @@ func (r *reporting) Send(ev llm.Event) error {
 			item.Name = name
 			ev.Item = &item
 		}
+	}
+	if err := r.calls.Check(ev); err != nil {
+		return err
 	}
 	rememberSearchResults(ev.Raw, r.account)
 	return r.Stream.Send(ev)

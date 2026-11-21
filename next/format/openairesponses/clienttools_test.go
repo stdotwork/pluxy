@@ -3,6 +3,7 @@ package openairesponses_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -462,27 +463,186 @@ func TestCustomToolCallComesBack(t *testing.T) {
 	}
 }
 
-// Arguments that are not one input string are the model's mistake: the client gets them as the
-// tool's input, so the tool can refuse them and the model can try again.
-func TestCustomToolArgumentsNotInput(t *testing.T) {
-	for _, tc := range []struct{ name, args, want string }{
-		{"other field", `{"patch":"x"}`, `{"patch":"x"}`},
-		{"second field", `{"input":"x","more":1}`, `{"input":"x","more":1}`},
-		{"not a string", `{"input":5}`, `{"input":5}`},
-		{"empty object", `{}`, ""},
-		{"nothing", ``, ""},
+// notWhole are arguments that are not exactly one {"input":"<string>"} object.
+var notWhole = []struct{ name, args string }{
+	{"cut off in the text", `{"input":"rm -rf /home/me/project/build`},
+	{"cut off after the text", `{"input":"rm -rf build"`},
+	{"cut off in an escape", `{"input":"a\`},
+	{"nothing", ``},
+	{"empty object", `{}`},
+	{"other field", `{"patch":"x"}`},
+	{"field after", `{"input":"x","more":1}`},
+	{"not a string", `{"input":5}`},
+	{"text after the object", `{"input":"x"} y`},
+	{"second object", `{"input":"x"}{"input":"y"}`},
+}
+
+func replyFinishing(tg target, req llm.Request, args, reason string) []llm.Event {
+	var fragments []string
+	if args != "" {
+		fragments = []string{args[:1], args[1:]}
+	}
+	events := replyEvents(tg, req, "apply_patch", fragments...)
+	events[len(events)-1].Finish = &llm.Finish{Reason: reason}
+	return events
+}
+
+func noCustomCall(t *testing.T, got []sseEvent) {
+	t.Helper()
+	if eventOf(got, "response.custom_tool_call_input.done") != nil {
+		t.Error("the client got the end of the input")
+	}
+	if eventOf(got, "response.output_item.done") != nil {
+		t.Error("the client got the call as done, which Codex runs")
+	}
+}
+
+// A custom call whose arguments are cut off by the token limit never reaches the client as a
+// call: Codex runs a done item whatever its status says.
+func TestCustomToolCallCutOff(t *testing.T) {
+	for _, tg := range targets() {
+		for _, reason := range []string{llm.FinishLength, llm.FinishContentFilter} {
+			for _, tc := range notWhole {
+				t.Run(tg.name+"/"+reason+"/"+tc.name, func(t *testing.T) {
+					req := parse(t, `{"model":"m","stream":true,"tools":[`+patchTool+`],"input":"go"}`)
+					events := replyFinishing(tg, req, tc.args, reason)
+
+					var buf bytes.Buffer
+					w := openairesponses.NewStreamWriter(&buf, req)
+					for _, ev := range events {
+						if err := w.Write(ev); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if l := lossAt(w.Losses(), "output[0]"); l == nil || l.Kind != llm.LossDropped {
+						t.Errorf("stream loss = %+v, want dropped at output[0]; all: %+v", l, w.Losses())
+					}
+					got := stream(t, req, events)
+					noCustomCall(t, got)
+					done := eventOf(got, "response.incomplete")
+					if done == nil {
+						t.Fatalf("no response.incomplete in %v", got)
+					}
+					if out := done["response"].(map[string]any)["output"].([]any); len(out) != 0 {
+						t.Errorf("final output = %v, want none", out)
+					}
+
+					a := openairesponses.NewAggregator(req)
+					for _, ev := range events {
+						a.Add(ev)
+					}
+					b, err := a.Response()
+					if err != nil {
+						t.Fatal(err)
+					}
+					var r map[string]any
+					mustJSON(t, b, &r)
+					if out := r["output"].([]any); len(out) != 0 || r["status"] != "incomplete" {
+						t.Errorf("aggregate status %v, output %v", r["status"], out)
+					}
+					if l := lossAt(a.Losses(), "output[0]"); l == nil || l.Kind != llm.LossDropped {
+						t.Errorf("aggregate loss = %+v; all: %+v", l, a.Losses())
+					}
+				})
+			}
+		}
+	}
+}
+
+// On any other finish such a call fails the reply, with an error that names the tool and does not
+// repeat the arguments.
+func TestCustomToolCallNotWholeFails(t *testing.T) {
+	for _, tg := range targets() {
+		for _, tc := range notWhole {
+			t.Run(tg.name+"/"+tc.name, func(t *testing.T) {
+				req := parse(t, `{"model":"m","stream":true,"tools":[`+patchTool+`],"input":"go"}`)
+				tr := &llm.Translation{From: llm.FormatOpenAIResponses, To: tg.format}
+				events := replyFinishing(tg, req, tc.args, llm.FinishToolCalls)
+
+				// The extension ends the reply through the upstream error path.
+				check := openairesponses.NewCustomCallCheck(req, tr)
+				var failure error
+				for _, ev := range events {
+					if failure = check.Check(ev); failure != nil {
+						if ev.Type != llm.EventFinish {
+							t.Errorf("failed on %s", ev.Type)
+						}
+						break
+					}
+				}
+				var e *llm.Error
+				if !errors.As(failure, &e) || e.Code != llm.CodeUpstream || !strings.Contains(e.Message, "apply_patch") {
+					t.Fatalf("check = %v, want an upstream error naming the tool", failure)
+				}
+				if tc.args != "" && strings.Contains(e.Message, tc.args) {
+					t.Errorf("the error repeats the arguments: %s", e.Message)
+				}
+
+				// A core whose extension has no check still never shows the call or a success.
+				got := stream(t, req, events)
+				noCustomCall(t, got)
+				if eventOf(got, "response.completed") != nil {
+					t.Error("the reply completed")
+				}
+				if m := eventOf(got, "error"); m == nil || !strings.Contains(m["message"].(string), "apply_patch") {
+					t.Errorf("error event = %v", m)
+				}
+				a := openairesponses.NewAggregator(req)
+				for _, ev := range events {
+					a.Add(ev)
+				}
+				if b, err := a.Response(); err == nil {
+					t.Errorf("aggregate = %s, want an error", b)
+				}
+			})
+		}
+	}
+}
+
+// Exactly one whole object is delivered, an empty input and white space around it included.
+func TestCustomToolCallWhole(t *testing.T) {
+	for _, tc := range []struct{ args, want string }{
+		{`{"input":""}`, ""},
+		{`{"input":"x"}`, "x"},
+		{" {\n \"input\" : \"x\" }\n", "x"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		for _, reason := range []string{llm.FinishToolCalls, llm.FinishLength} {
 			tg := targets()[2]
 			req := parse(t, `{"model":"m","stream":true,"tools":[`+patchTool+`],"input":"go"}`)
-			var fragments []string
-			if tc.args != "" {
-				fragments = []string{tc.args[:1], tc.args[1:]}
-			}
-			got := stream(t, req, replyEvents(tg, req, "apply_patch", fragments...))
+			events := replyFinishing(tg, req, tc.args, reason)
+			got := stream(t, req, events)
 			wantFields(t, "input done", eventOf(got, "response.custom_tool_call_input.done"), map[string]any{"input": tc.want})
 			wantFields(t, "done", eventOf(got, "response.output_item.done")["item"].(map[string]any), map[string]any{"type": "custom_tool_call", "input": tc.want})
-		})
+			check := openairesponses.NewCustomCallCheck(req, &llm.Translation{To: tg.format})
+			for _, ev := range events {
+				if err := check.Check(ev); err != nil {
+					t.Errorf("check on %q: %v", tc.args, err)
+				}
+			}
+		}
+	}
+}
+
+// A body passed through, or a request with no custom tool, needs no check.
+func TestCustomCallCheckOnlyForTranslatedCustomTools(t *testing.T) {
+	custom := parse(t, `{"model":"m","tools":[`+patchTool+`],"input":"go"}`)
+	plain := parse(t, `{"model":"m","tools":[{"type":"function","name":"read","parameters":{"type":"object"}}],"input":"go"}`)
+	for _, tc := range []struct {
+		name string
+		req  llm.Request
+		tr   *llm.Translation
+	}{
+		{"passthrough", custom, &llm.Translation{To: llm.FormatOpenAIResponses, Passthrough: true}},
+		{"Responses target", custom, &llm.Translation{To: llm.FormatOpenAIResponses}},
+		{"no custom tool", plain, &llm.Translation{To: llm.FormatOpenAIChat}},
+	} {
+		if c := openairesponses.NewCustomCallCheck(tc.req, tc.tr); c != nil {
+			t.Errorf("%s: got a check", tc.name)
+		}
+	}
+	var none *openairesponses.CustomCallCheck
+	if err := none.Check(llm.Event{Type: llm.EventFinish, Finish: &llm.Finish{Reason: llm.FinishStop}}); err != nil {
+		t.Errorf("a nil check: %v", err)
 	}
 }
 
@@ -726,6 +886,49 @@ func TestToolChoiceNamesFlattenedFunction(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// A list of one namespaced function names its flattened function. The parser used to read it as
+// the bare name, which no tool has once flattened.
+func TestAllowedToolsOneNamespacedEntry(t *testing.T) {
+	const choice = `{"type":"allowed_tools","mode":"required","tools":[{"type":"function","name":"search","namespace":"docs"}]}`
+	body := `{"model":"m","tools":[{"type":"namespace","name":"docs","tools":[{"type":"function","name":"search","parameters":{"type":"object"}},{"type":"function","name":"fetch","parameters":{"type":"object"}}]}],"tool_choice":` + choice + `,"input":"go"}`
+	for _, tg := range targets() {
+		t.Run(tg.name, func(t *testing.T) {
+			w, losses := encode(t, tg, parse(t, body))
+			if l := lossAt(losses, "tool_choice"); l != nil {
+				t.Errorf("reported as lost: %+v", *l)
+			}
+			if tg.name == "messages" {
+				if !slices.Equal(w.tools, []string{"docs__search"}) {
+					t.Errorf("tools = %v, want only the allowed one", w.tools)
+				}
+				return
+			}
+			if !slices.Equal(w.choice, []string{"docs__search"}) {
+				t.Errorf("choice = %v", w.choice)
+			}
+		})
+	}
+	// A Responses upstream gets the client's own body, with the list as it wrote it.
+	req := parse(t, body)
+	if !bytes.Contains(req.Native.Body, []byte(`"namespace":"docs"}]}`)) {
+		t.Errorf("native body changed: %s", req.Native.Body)
+	}
+	b, _, err := openairesponses.EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		ToolChoice json.RawMessage `json:"tool_choice"`
+	}
+	mustJSON(t, b, &out)
+	var got, want any
+	mustJSON(t, out.ToolChoice, &got)
+	mustJSON(t, []byte(choice), &want)
+	if g, _ := json.Marshal(got); string(g) != func() string { w, _ := json.Marshal(want); return string(w) }() {
+		t.Errorf("Responses tool_choice = %s, want %s", out.ToolChoice, choice)
 	}
 }
 

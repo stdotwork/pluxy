@@ -10,9 +10,10 @@ import (
 // as, {"input":"<text>"}, while the arguments arrive in fragments, so the client sees the text as
 // it is written. It accepts only that shape: an object with one field, input, holding a string,
 // and nothing after it. A fragment may end inside an escape or a character; the text is handed out
-// once the whole of it has arrived. It is adapted from extensions/xai/patchinput.go, without that
-// decoder's size limits and final check: here the writer holds the arguments and CustomInput reads
-// them whole at the end.
+// once the whole of it has arrived, so text from arguments that later turn out not to have the
+// shape may already be out; such a call is never finished for the client (CustomInput). It is
+// adapted from extensions/xai/patchinput.go, without that decoder's size limits and final
+// comparison: here the writer holds the arguments, and CustomInput reads them whole at the end.
 type InputDecoder struct {
 	pending []byte
 	state   int
@@ -58,6 +59,17 @@ func (d *InputDecoder) Push(fragment string) string {
 		return ""
 	}
 	return d.input.String()[before:]
+}
+
+// Check reads the next fragment for a caller that needs only Whole, without keeping its text.
+func (d *InputDecoder) Check(fragment string) {
+	d.Push(fragment)
+	d.input.Reset()
+}
+
+// Whole reports whether the arguments read so far are exactly one {"input":"<string>"} object.
+func (d *InputDecoder) Whole() bool {
+	return !d.failed && d.state == decTail && d.closed
 }
 
 func (d *InputDecoder) fail() int {

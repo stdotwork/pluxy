@@ -95,8 +95,10 @@ type item struct {
 	// or tool_search tool (clienttools), and decoder reads a custom tool's text as it arrives.
 	ref     *clienttools.Ref
 	decoder clienttools.InputDecoder
-	// finalInput is a finished custom tool call's text, read once from its arguments.
+	// finalInput is a finished custom tool call's text, read once from its arguments, and
+	// inputWhole whether they were one whole input string.
 	finalInput string
+	inputWhole bool
 	inputRead  bool
 }
 
@@ -256,7 +258,7 @@ func (b *builder) callItem(it *item, status string, done bool) obj {
 		case clienttools.KindCustom:
 			input := ""
 			if done {
-				input = b.customInput(it)
+				input, _ = b.customInput(it)
 			}
 			o := obj{"id": it.id, "type": "custom_tool_call", "status": status, "call_id": it.callID, "name": it.ref.Name, "input": input}
 			if it.ref.Namespace != "" {
@@ -286,17 +288,43 @@ func (b *builder) callItem(it *item, status string, done bool) obj {
 	return o
 }
 
-// customInput is a custom tool call's text, from the arguments of the function it was sent as.
-func (b *builder) customInput(it *item) string {
-	if it.inputRead {
-		return it.finalInput
+// customInput is a custom tool call's text, from the arguments of the function it was sent as, and
+// whether they were one whole input string.
+func (b *builder) customInput(it *item) (string, bool) {
+	if !it.inputRead {
+		it.finalInput, it.inputWhole = clienttools.CustomInput(it.text.String())
+		it.inputRead = true
 	}
-	input, ok := clienttools.CustomInput(it.text.String())
-	if !ok {
-		b.note(llm.LossApproximated, clienttools.OutputPath(it.out, "input"), "custom tool arguments that are not one input string, passed on as the tool's input")
+	return it.finalInput, it.inputWhole
+}
+
+// deliverable reports whether an ended item may reach the client. A custom tool call whose
+// arguments are not whole may not: Codex runs a done item whatever its status says, so a command
+// the token limit cut off would run.
+func (b *builder) deliverable(it *item) bool {
+	if it.kind != llm.ItemToolCall || it.ref == nil || it.ref.Kind != clienttools.KindCustom {
+		return true
 	}
-	it.finalInput, it.inputRead = input, true
-	return input
+	_, whole := b.customInput(it)
+	return whole
+}
+
+// undelivered settles the custom tool calls that were held back, once the reply has finished. A
+// reply cut off by the token limit or a filter explains them: it stays incomplete, and each is
+// reported as dropped. On any other finish the upstream sent a call it should not have, which is
+// an error. The extensions report that error first (CustomCallCheck), so that core counts the
+// reply as failed; this keeps an extension built without the check from showing a success.
+func (b *builder) undelivered() *llm.Error {
+	for _, it := range b.order {
+		if it.kind != llm.ItemToolCall || it.done || it.ref == nil || it.ref.Kind != clienttools.KindCustom {
+			continue
+		}
+		if !b.incomplete() {
+			return clienttools.NotWholeError(it.ref.Name, b.usage)
+		}
+		b.lose(clienttools.OutputPath(it.out, ""), "a custom tool call whose arguments are not one whole input string")
+	}
+	return nil
 }
 
 // response returns the Response object at the end of the reply.
@@ -635,6 +663,9 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		if err := s.searchesDone(b.endSearches()); err != nil {
 			return err
 		}
+		if e := b.undelivered(); e != nil {
+			return s.emit("error", errorFields(e))
+		}
 		typ := "response.completed"
 		if b.incomplete() {
 			typ = "response.incomplete"
@@ -659,6 +690,9 @@ func (s *StreamWriter) flushEnds(ev llm.Event) error {
 	s.pending = nil
 	for _, idx := range ends {
 		it := s.b.items[idx]
+		if !s.b.deliverable(it) {
+			continue
+		}
 		it.done = true
 		text := it.text.String()
 		switch it.kind {
@@ -694,7 +728,8 @@ func (s *StreamWriter) callInputDone(it *item, text string) error {
 	if it.ref != nil {
 		switch it.ref.Kind {
 		case clienttools.KindCustom:
-			return s.emit("response.custom_tool_call_input.done", obj{"output_index": it.out, "item_id": it.id, "call_id": it.callID, "input": s.b.customInput(it)})
+			input, _ := s.b.customInput(it)
+			return s.emit("response.custom_tool_call_input.done", obj{"output_index": it.out, "item_id": it.id, "call_id": it.callID, "input": input})
 		case clienttools.KindSearch:
 			return nil
 		}
@@ -707,6 +742,76 @@ func (s *StreamWriter) searchesDone(ended []*item) error {
 	for _, it := range ended {
 		if err := s.emit("response.output_item.done", obj{"output_index": it.out, "item": searchItem(it, false)}); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// CustomCallCheck is what a provider extension runs on a translated reply: it ends the reply with
+// an upstream error when a call to one of the client's custom tools is not one whole input string
+// and the finish does not explain it (a token limit or a filter), so core handles the reply as it
+// does any failed one. Use one per reply. A nil check passes everything.
+type CustomCallCheck struct {
+	refs map[string]clienttools.Ref
+	open map[int]*customCall
+	list []*customCall
+}
+
+type customCall struct {
+	name    string
+	decoder clienttools.InputDecoder
+}
+
+// NewCustomCallCheck returns the check for a reply to req translated as tr, or nil when no call in
+// it can be to a custom tool: a body passed through, a Responses upstream, no custom tool declared.
+func NewCustomCallCheck(req llm.Request, tr *llm.Translation) *CustomCallCheck {
+	if tr == nil || tr.Passthrough || tr.To == format {
+		return nil
+	}
+	refs := map[string]clienttools.Ref{}
+	for sent, ref := range clienttools.Refs(req) {
+		if ref.Kind == clienttools.KindCustom {
+			refs[sent] = ref
+		}
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	return &CustomCallCheck{refs: refs, open: map[int]*customCall{}}
+}
+
+// Check reads one event of the reply, with its tool names already the client's, and returns the
+// error to end the reply with in place of a finish event.
+func (c *CustomCallCheck) Check(ev llm.Event) error {
+	if c == nil {
+		return nil
+	}
+	switch ev.Type {
+	case llm.EventItemStart:
+		if ev.Item == nil || ev.Item.Kind != llm.ItemToolCall {
+			delete(c.open, ev.Index)
+			return nil
+		}
+		ref, ok := c.refs[ev.Item.Name]
+		if !ok {
+			delete(c.open, ev.Index)
+			return nil
+		}
+		call := &customCall{name: ref.Name}
+		c.open[ev.Index] = call
+		c.list = append(c.list, call)
+	case llm.EventToolInputDelta:
+		if call := c.open[ev.Index]; call != nil {
+			call.decoder.Check(ev.Delta)
+		}
+	case llm.EventFinish:
+		if ev.Finish != nil && (ev.Finish.Reason == llm.FinishLength || ev.Finish.Reason == llm.FinishContentFilter) {
+			return nil // the writer leaves the calls out of the incomplete reply
+		}
+		for _, call := range c.list {
+			if !call.decoder.Whole() {
+				return clienttools.NotWholeError(call.name, ev.Usage)
+			}
 		}
 	}
 	return nil
@@ -746,7 +851,7 @@ func (a *Aggregator) Add(ev llm.Event) {
 	case llm.EventTextDelta, llm.EventReasoningDelta, llm.EventToolInputDelta:
 		b.items[ev.Index].text.WriteString(ev.Delta)
 	case llm.EventItemEnd:
-		b.items[ev.Index].done = true
+		b.items[ev.Index].done = b.deliverable(b.items[ev.Index])
 		if ev.Opaque != nil {
 			b.items[ev.Index].opaque = ev.Opaque.Data
 			a.size += len(ev.Opaque.Data)
@@ -809,6 +914,9 @@ func finalResponse(raw json.RawMessage) json.RawMessage {
 func (a *Aggregator) Response() ([]byte, error) {
 	if len(a.final) > 0 {
 		return a.final, nil
+	}
+	if e := a.b.undelivered(); e != nil {
+		return nil, e
 	}
 	return json.Marshal(a.b.response(false))
 }

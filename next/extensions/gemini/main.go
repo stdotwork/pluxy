@@ -43,6 +43,7 @@ import (
 	"time"
 
 	"github.com/stdotwork/pluxy/next/format/geminigenerate"
+	"github.com/stdotwork/pluxy/next/format/openairesponses"
 	"github.com/stdotwork/pluxy/next/format/sse"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -189,7 +190,7 @@ func generateTo(ctx context.Context, call sdk.Call, out sender) (err error) {
 	}
 	body = cleanToolSchemas(body)
 	body = fixTurns(body, s.Vertex != nil, call.Request.Stream, !tr.Passthrough)
-	send := &reporting{out: out, tr: tr, names: replyNames(call.Request, tr)}
+	send := &reporting{out: out, tr: tr, names: replyNames(call.Request, tr), calls: openairesponses.NewCustomCallCheck(call.Request, tr)}
 	if !tr.Passthrough {
 		// Gemini's function arguments are a protobuf Struct, so an integer parameter comes
 		// back as a double; the request's schemas say which ones are integers.
@@ -449,6 +450,7 @@ type reporting struct {
 	// client's name of each open call, for integralArguments; both nil on a passthrough body.
 	schemas   map[string]json.RawMessage
 	callNames map[int]string
+	calls     *openairesponses.CustomCallCheck
 }
 
 func (r *reporting) Send(ev llm.Event) error {
@@ -475,6 +477,9 @@ func (r *reporting) Send(ev llm.Event) error {
 				ev.Delta = string(integralArguments([]byte(ev.Delta), schema))
 			}
 		}
+	}
+	if err := r.calls.Check(ev); err != nil {
+		return err
 	}
 	return r.out.Send(r.redact.Event(ev))
 }

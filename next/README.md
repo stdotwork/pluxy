@@ -166,9 +166,12 @@ to one of those formats, and the upstream's calls go back in the form the client
 
 - A custom tool (`apply_patch`, say) is a function with one required string argument, `input`, and
   its grammar moves into the description. Its call comes back as a `custom_tool_call` with the same
-  events the Responses API sends. Arguments that are not one `input` string are given to the client
-  as the tool's input and reported as an approximated loss, so the tool refuses them and the model
-  can try again.
+  events the Responses API sends, but only when its arguments are exactly one whole `{"input":"..."}`
+  object (an empty string counts). Any other call never reaches the client as a call, because Codex
+  runs a finished call whatever its status says, so a command cut off by the token limit would run:
+  it has no done event and is not in the final output. A reply that stopped on the token limit or a
+  content filter stays `response.incomplete` and reports the call as dropped. On any other finish
+  the reply fails with an upstream error that names the tool and does not repeat its arguments.
 - A namespace's tools are functions named `namespace__tool`. A name that already has that prefix or
   starts with `mcp__` keeps its name, and so does a tool in the Codex client's default namespace,
   `functions`. Calls come back with their name and namespace. The namespace's description goes on

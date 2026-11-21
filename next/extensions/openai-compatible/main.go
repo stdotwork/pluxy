@@ -193,7 +193,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return err
 	}
 	// The report travels on the reply's first event.
-	send := &reporting{Stream: out, tr: tr, names: replyNames(call.Request, tr)}
+	send := &reporting{Stream: out, tr: tr, names: replyNames(call.Request, tr), calls: openairesponses.NewCustomCallCheck(call.Request, tr)}
 	resp, err := postBody(ctx, call, s, wire, key, endpoint(s.WireAPI, call.Request), body)
 	if err != nil {
 		return err
@@ -561,6 +561,7 @@ type reporting struct {
 	*sdk.Stream
 	tr    *llm.Translation
 	names map[string]string // the upstream's name -> the client's
+	calls *openairesponses.CustomCallCheck
 }
 
 func (r *reporting) Send(ev llm.Event) error {
@@ -570,6 +571,9 @@ func (r *reporting) Send(ev llm.Event) error {
 		ev.Response = &info
 	}
 	r.restore(&ev)
+	if err := r.calls.Check(ev); err != nil {
+		return err
+	}
 	return r.Stream.Send(ev)
 }
 
