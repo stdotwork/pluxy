@@ -19,16 +19,22 @@ import (
 const (
 	// maxRefDepth bounds a chain of $refs, so a schema that refers to itself ends.
 	maxRefDepth = 16
-	// maxRefNodes bounds the JSON values that $ref expansion produces for one request, all its
-	// tools together. Depth alone does not bound the tree: a def with four refs to the next def
-	// multiplies the output by four at every level.
-	maxRefNodes = 50000
+	// maxRefCost bounds what $ref expansion produces for one request, all its tools together, in
+	// the units of refCost. Depth alone does not bound the tree: a def with four refs to the next
+	// def multiplies the output by four at every level. Counting values alone does not bound the
+	// bytes: a def with a long description and many refs to it copies the description each time.
+	maxRefCost = 4 << 20
+	// refValueCost is what any JSON value costs, before the length of its text.
+	refValueCost = 64
+	// maxKeptTypeLen and maxKeptTypes bound the type a refused ref keeps from its target.
+	maxKeptTypeLen = 16
+	maxKeptTypes   = 8
 )
 
-// refBudget is what is left of a request's maxRefNodes.
+// refBudget is what is left of a request's maxRefCost.
 type refBudget struct{ left int }
 
-func newRefBudget() *refBudget { return &refBudget{left: maxRefNodes} }
+func newRefBudget() *refBudget { return &refBudget{left: maxRefCost} }
 
 var (
 	removedKeywords = map[string]bool{
@@ -268,43 +274,88 @@ type refExpansion struct {
 	root   any
 	active map[string]bool // the refs being expanded, so a cycle ends
 	budget *refBudget
-	sizes  map[string]int // each ref's target size, counted once (up to maxRefNodes+1)
+	sizes  map[string]int // each ref's target cost, counted once (up to maxRefCost+1)
 }
 
-// charge takes the size of ref's target from the budget and says whether it fit. A ref that does
-// not fit costs nothing, so later, smaller refs can still fit.
+// charge takes the cost of ref's target from the budget and says whether it fit. A ref that does
+// not fit costs nothing, so later, cheaper refs can still fit.
 func (x *refExpansion) charge(ref string, target any) bool {
-	size, ok := x.sizes[ref]
+	cost, ok := x.sizes[ref]
 	if !ok {
-		left := maxRefNodes + 1
-		countNodes(target, &left)
-		size = maxRefNodes + 1 - left
-		x.sizes[ref] = size
+		left := maxRefCost + 1
+		subtractRefCost(target, &left)
+		cost = min(maxRefCost+1-left, maxRefCost+1)
+		x.sizes[ref] = cost
 	}
-	if size > x.budget.left {
+	if cost > x.budget.left {
 		return false
 	}
-	x.budget.left -= size
+	x.budget.left -= cost
 	return true
 }
 
-// countNodes subtracts the number of JSON values in v from *left, and stops walking once it is
-// used up.
-func countNodes(v any, left *int) {
+// subtractRefCost subtracts the cost of v from *left, and stops walking once it is used up. A
+// value costs refValueCost, plus the length of a string's or number's text, plus the length of
+// each of an object's keys.
+func subtractRefCost(v any, left *int) {
 	if *left <= 0 {
 		return
 	}
-	*left--
+	*left -= refValueCost
 	switch x := v.(type) {
+	case string:
+		*left -= len(x)
+	case json.Number:
+		*left -= len(x)
 	case []any:
 		for _, item := range x {
-			countNodes(item, left)
+			subtractRefCost(item, left)
 		}
 	case map[string]any:
-		for _, item := range x {
-			countNodes(item, left)
+		for k, item := range x {
+			*left -= len(k)
+			subtractRefCost(item, left)
 		}
 	}
+}
+
+// refusedTargetFields returns the fields a refused ref keeps from its target: a short type, a
+// boolean nullable, and a description that the budget can still pay for.
+func (x *refExpansion) refusedTargetFields(tm map[string]any) map[string]any {
+	out := map[string]any{}
+	if t, ok := tm["type"]; ok && shortType(t) {
+		out["type"] = deepClone(t)
+	}
+	if n, ok := tm["nullable"].(bool); ok {
+		out["nullable"] = n
+	}
+	if d, ok := tm["description"].(string); ok {
+		if cost := refValueCost + len(d); cost <= x.budget.left {
+			x.budget.left -= cost
+			out["description"] = d
+		}
+	}
+	return out
+}
+
+// shortType says whether t is a string of at most maxKeptTypeLen bytes or a list of at most
+// maxKeptTypes such strings.
+func shortType(t any) bool {
+	switch x := t.(type) {
+	case string:
+		return len(x) <= maxKeptTypeLen
+	case []any:
+		if len(x) > maxKeptTypes {
+			return false
+		}
+		for _, item := range x {
+			if s, ok := item.(string); !ok || len(s) > maxKeptTypeLen {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func resolveRefs(x *refExpansion, v any, depth int) any {
@@ -352,8 +403,9 @@ func resolveRefNode(x *refExpansion, node map[string]any, ref string, depth int)
 	var ok bool
 	if strings.HasPrefix(ref, "#/") && !x.active[ref] && depth < maxRefDepth {
 		target, ok = resolveJSONPointer(x.root, ref)
-		// The target's size is paid before it is cloned. A target that does not fit takes the
-		// fallback below, which keeps its type, nullable and description.
+		// The target's cost is paid before it is cloned. A target that does not fit takes the
+		// fallback below, which keeps what refusedTargetFields allows of its type, nullable and
+		// description.
 		if ok && !x.charge(ref, target) {
 			ok = false
 		}
@@ -361,11 +413,7 @@ func resolveRefNode(x *refExpansion, node map[string]any, ref string, depth int)
 	if !ok {
 		out := make(map[string]any, len(node)+1)
 		if tm, isMap := target.(map[string]any); isMap {
-			for _, k := range []string{"type", "nullable", "description"} {
-				if val, exists := tm[k]; exists {
-					out[k] = deepClone(val)
-				}
-			}
+			maps.Copy(out, x.refusedTargetFields(tm))
 		}
 		for _, k := range slices.Sorted(maps.Keys(node)) {
 			if k != "$ref" && k != "$defs" && k != "definitions" {

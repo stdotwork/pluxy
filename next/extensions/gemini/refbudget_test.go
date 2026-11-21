@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -88,7 +89,7 @@ func TestRefFanoutIsBounded(t *testing.T) {
 }
 
 // TestRefBudgetIsSharedByAllTools: the budget is per request, not per tool, or many tools would
-// multiply it. Every tool here inlines one def of about a thousand values twice.
+// multiply it. Every tool here inlines one def of 500 properties twice.
 func TestRefBudgetIsSharedByAllTools(t *testing.T) {
 	var props []string
 	for i := 0; i < 500; i++ {
@@ -144,5 +145,48 @@ func TestRefReusedDefIsInlined(t *testing.T) {
 	}
 	if n := strings.Count(got, `"required":["x","y"]`); n != 30 {
 		t.Errorf("%d of 30 uses were inlined", n)
+	}
+}
+
+// TestRefLongDescriptionIsBounded: the budget counts bytes, not only values. One def with a long
+// description and a thousand refs to it is a small request whose full expansion is a thousand
+// copies of the description.
+func TestRefLongDescriptionIsBounded(t *testing.T) {
+	var props []string
+	for i := 0; i < 1000; i++ {
+		props = append(props, fmt.Sprintf(`"p%d":{"$ref":"#/$defs/long"}`, i))
+	}
+	schema := `{"type":"object","$defs":{"long":{"type":"object","description":"` + strings.Repeat("d", 50000) +
+		`"}},"properties":{` + strings.Join(props, ",") + `}}`
+	got := cleanedSchemas(t, toolsBody(t, schema))[0]
+	if len(got) > 6<<20 {
+		t.Errorf("a %d byte schema became %d bytes", len(schema), len(got))
+	}
+	if strings.Contains(got, "$ref") || !strings.Contains(got, "See: long") {
+		t.Errorf("the refs were not all resolved, or none was refused")
+	}
+}
+
+// TestRefRefusedTargetsLongTypeIsNotCloned: a refused ref keeps its target's type only when it
+// is short. A target with a type list of 60,000 strings and 200 refs to it must not clone the
+// list 200 times.
+func TestRefRefusedTargetsLongTypeIsNotCloned(t *testing.T) {
+	var props []string
+	for i := 0; i < 200; i++ {
+		props = append(props, fmt.Sprintf(`"p%d":{"$ref":"#/$defs/wide"}`, i))
+	}
+	schema := `{"type":"object","$defs":{"wide":{"type":[` + strings.TrimSuffix(strings.Repeat(`"string",`, 60000), ",") +
+		`]}},"properties":{` + strings.Join(props, ",") + `}}`
+	body := toolsBody(t, schema)
+
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	got := cleanedSchemas(t, body)[0]
+	runtime.ReadMemStats(&after)
+	if alloc := after.TotalAlloc - before.TotalAlloc; alloc > 64<<20 {
+		t.Errorf("cleaning a %d byte schema allocated %d MiB", len(schema), alloc>>20)
+	}
+	if strings.Contains(got, "$ref") {
+		t.Errorf("a $ref survived")
 	}
 }
