@@ -138,6 +138,9 @@ func fakePrompt(method string) map[string]any {
 				map[string]any{"name": "one", "label": "First"},
 				map[string]any{"name": "two", "label": "Second"},
 			}}
+	case "ask_later":
+		return map[string]any{"kind": "input", "message": "Anything to add?",
+			"inputs": []any{map[string]any{"name": "note", "label": "Note", "optional": true}}}
 	case "optional":
 		return map[string]any{"kind": "input", "message": "Anything to add?",
 			"inputs": []any{map[string]any{"name": "note", "label": "Note", "optional": true}}}
@@ -190,6 +193,13 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 			map[string]any{"method": "device", "kind": "device", "label": "Device"},
 			map[string]any{"method": "input", "kind": "input", "label": "Code"},
 			map[string]any{"method": "fields", "kind": "input", "label": "Two fields"},
+			map[string]any{"method": "ask_later", "kind": "browser", "label": "Asks later"},
+			map[string]any{"method": "triple", "kind": "api_key", "label": "Three values",
+				"inputs": []any{
+					map[string]any{"name": "one", "label": "First"},
+					map[string]any{"name": "two", "label": "Second", "optional": true},
+					map[string]any{"name": "three", "label": "Third"},
+				}},
 			map[string]any{"method": "optional", "kind": "input", "label": "Optional note"},
 			map[string]any{"method": "pair", "kind": "api_key", "label": "Two values",
 				"inputs": []any{
@@ -269,6 +279,10 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		if l.state == management.LoginPending && l.method == "switch" && l.polls == 1 {
 			l.prompt = fakeSwitchPrompt()
+		}
+		if l.state == management.LoginPending && l.method == "ask_later" && l.polls == 1 {
+			l.prompt = map[string]any{"kind": "input", "message": "Enter the code.",
+				"inputs": []any{map[string]any{"name": "code", "label": "Code"}}}
 		}
 		if l.doneAfter > 0 && l.polls >= l.doneAfter {
 			l.state, l.prompt = "done", nil
@@ -786,6 +800,106 @@ func TestCLIAccountAddSendsOneAnswerPerPrompt(t *testing.T) {
 	}
 	if sent := f.sent(); len(sent) != 1 {
 		t.Fatalf("the prompt was answered %d times: %v", len(sent), sent)
+	}
+}
+
+// shortLoginWait shortens the wait between reads of a sign-in, so a test that makes several of
+// them does not take the panel's two seconds each.
+func shortLoginWait(t *testing.T) {
+	t.Helper()
+	old := accountLoginWait
+	accountLoginWait = 10 * time.Millisecond
+	t.Cleanup(func() { accountLoginWait = old })
+}
+
+// A sign-in that asks for three values and is given one line is refused at once, rather than
+// waiting for a line standard input will never send: the second value may be left empty, so the
+// command goes on to ask for the third after standard input has ended.
+func TestCLIAccountAddThreeValuesAtEndOfInput(t *testing.T) {
+	f := newFakeAccountCore(t)
+	done := make(chan struct{})
+	var out, errOut string
+	var code int
+	go func() {
+		defer close(done)
+		out, errOut, code = f.runIn("first\n", false, "account", "add", "test/ext", "--method", "triple", "--id", "triple-1")
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("account add waited for a line after standard input ended")
+	}
+	if code != 2 || !strings.Contains(errOut, "Third") || strings.Contains(out, "added") {
+		t.Fatalf("account add with one of three values: code=%d out=%q err=%q, want 2 and what it needs", code, out, errOut)
+	}
+}
+
+// The same where the value is asked for by a prompt that comes after standard input ended: the
+// sign-in is cancelled, not waited on.
+func TestFollowLoginTwoValuesAtEndOfInput(t *testing.T) {
+	shortLoginWait(t)
+	f := newFakeAccountCore(t)
+	done := make(chan struct{})
+	var out, errOut string
+	var code int
+	go func() {
+		defer close(done)
+		out, errOut, code = f.runIn("", false, "account", "add", "test/ext", "--method", "ask_later", "--id", "later-1")
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the sign-in waited for a line after standard input ended")
+	}
+	if code != 2 || !strings.Contains(errOut, "Code") || strings.Contains(out, "added") {
+		t.Fatalf("a prompt that comes after standard input ended: code=%d out=%q err=%q, want 2 and what it needs", code, out, errOut)
+	}
+	if _, cancelled := f.start(); len(cancelled) != 1 {
+		t.Errorf("the sign-in was not cancelled: %v", cancelled)
+	}
+}
+
+// A sign-in core cannot read for a moment is read again, as the panel tries three times.
+func TestFollowLoginRetriesFailedReads(t *testing.T) {
+	shortLoginWait(t)
+	f := newFakeAccountCore(t)
+	f.onCreate = func(l *fakeAccountLogin) { l.failPolls = 2 }
+	out, errOut, code := f.run("account", "add", "test/ext", "--method", "device", "--id", "retry-1")
+	if code != 0 || !strings.Contains(out, "account retry-1 added") {
+		t.Fatalf("account add while core cannot read the sign-in: code=%d out=%q err=%q", code, out, errOut)
+	}
+	if _, cancelled := f.start(); len(cancelled) != 0 {
+		t.Errorf("a read that could be tried again ended the sign-in: %v", cancelled)
+	}
+}
+
+// After three reads in a row that core could not answer, the sign-in is given up on and cancelled.
+func TestFollowLoginGivesUpAfterThreeFailedReads(t *testing.T) {
+	shortLoginWait(t)
+	f := newFakeAccountCore(t)
+	f.onCreate = func(l *fakeAccountLogin) { l.failPolls = 3 }
+	_, errOut, code := f.run("account", "add", "test/ext", "--method", "device", "--id", "retry-2")
+	if code == 0 || !strings.Contains(errOut, "could not be read") {
+		t.Fatalf("account add with three failed reads: code=%d err=%q, want a refusal and why", code, errOut)
+	}
+	if _, cancelled := f.start(); len(cancelled) != 1 {
+		t.Errorf("the sign-in was not cancelled: %v", cancelled)
+	}
+}
+
+// An answer core refuses is shown and asked for again, rather than ending the sign-in.
+func TestFollowLoginRetriesRejectedInput(t *testing.T) {
+	f := newFakeAccountCore(t)
+	f.onCreate = func(l *fakeAccountLogin) { l.failInputs = 1 }
+	out, errOut, code := f.runIn("1\n1\n", false, "account", "add", "test/ext", "--method", "input", "--id", "retry-3")
+	if code != 0 || !strings.Contains(out, "account retry-3 added") {
+		t.Fatalf("account add with an answer core refused: code=%d out=%q err=%q", code, out, errOut)
+	}
+	if !strings.Contains(errOut, "did not take") {
+		t.Errorf("the refusal was not shown: %q", errOut)
+	}
+	if sent := f.sent(); len(sent) != 1 || sent[0]["code"] != "1" {
+		t.Errorf("core was sent %v, want the answer it took", sent)
 	}
 }
 

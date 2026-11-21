@@ -34,8 +34,12 @@ import (
 )
 
 // accountLoginWait is how often a sign-in in flight is read again: the panel asks every 2
-// seconds too.
-const accountLoginWait = 2 * time.Second
+// seconds too. A test sets it shorter for a sign-in it makes core fail.
+var accountLoginWait = 2 * time.Second
+
+// accountLoginAttempts is how many reads of a sign-in may fail in a row before the command gives
+// up on it: the panel tries three times (next/ui/kit/loginFlow.tsx).
+const accountLoginAttempts = 3
 
 // accountLoginTimeout bounds a sign-in the command follows, so a provider that never ends one
 // does not hold the terminal for ever. A sign-in's own prompt expires long before.
@@ -316,8 +320,11 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 	var prompt *promptInput
 	input := lines.lines
 	awaiting := false
-	ticker := time.NewTicker(accountLoginWait)
-	defer ticker.Stop()
+	// failures counts reads of the sign-in in a row that failed, as the panel does: three and the
+	// command gives up on the sign-in, waiting longer between each try.
+	failures := 0
+	timer := time.NewTimer(accountLoginWait)
+	defer timer.Stop()
 	for {
 		if l.State != management.LoginPending {
 			return x.loginEnded(l, body, again)
@@ -338,11 +345,21 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 			answered := prompt
 			prompt = nil
 			if answered.answerable() {
-				next, nextBody, err := x.answerPrompt(ctx, l.ID, answered.got)
-				if err != nil {
-					return x.cancelLogin(l.ID, err)
+				if err := x.sendInput(ctx, l.ID, answered.got); err != nil {
+					if !loginRetryable(ctx, err) {
+						return x.cancelLogin(l.ID, err)
+					}
+					// A person may give the value again: the prompt is shown once more, with what
+					// core said below it.
+					x.eprintf("the sign-in did not take that (%v); give it again\n", err)
+					shown = ""
+					continue
 				}
-				l, body = next, nextBody
+				// The answer is in. Reading the sign-in now says at once whether it ended; a read
+				// that fails is left to the next one, since the answer is already sent.
+				if next, nextBody, err := x.readLogin(ctx, l.ID); err == nil {
+					l, body = next, nextBody
+				}
 				continue
 			}
 		}
@@ -351,7 +368,18 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 				prompt.ask(x)
 			}
 			if !awaiting {
-				if err := lines.askLine(ctx, prompt.next().Secret); err != nil {
+				err := lines.askLine(ctx, prompt.next().Secret)
+				if errors.Is(err, errEndOfInput) {
+					// Standard input has ended: the prompt answers with what it has, or the
+					// sign-in is cancelled.
+					input = nil
+					awaiting = false
+					if err := prompt.endOfInput(x, l.ID); err != nil {
+						return err
+					}
+					continue
+				}
+				if err != nil {
 					return x.cancelLogin(l.ID, err)
 				}
 				awaiting = true
@@ -382,12 +410,20 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 					return x.cancelLogin(l.ID, err)
 				}
 			}
-		case <-ticker.C:
+		case <-timer.C:
 			next, nextBody, err := x.readLogin(ctx, l.ID)
-			if err != nil {
-				return x.cancelLogin(l.ID, err)
+			switch {
+			case err == nil:
+				failures = 0
+				l, body = next, nextBody
+				timer.Reset(accountLoginWait)
+			case !loginRetryable(ctx, err) || failures+1 >= accountLoginAttempts:
+				return x.cancelLogin(l.ID, fmt.Errorf("the sign-in could not be read: %w", err))
+			default:
+				failures++
+				x.eprintf("could not read the sign-in (%v); trying again\n", err)
+				timer.Reset(accountLoginWait << failures)
 			}
-			l, body = next, nextBody
 		}
 	}
 }
@@ -549,14 +585,29 @@ func (g *promptInput) endOfInput(x *invocation, login string) error {
 	return nil
 }
 
-// answerPrompt sends what the prompt asked for and reads the sign-in again. What comes back may
-// still be the prompt it just answered: an extension updates its prompt on its own goroutine, so
-// followLogin keeps the prompt it showed until the sign-in changes it or ends.
-func (x *invocation) answerPrompt(ctx context.Context, id string, input map[string]string) (management.Login, []byte, error) {
-	if _, err := x.client.Call(ctx, http.MethodPost, "/logins/"+url.PathEscape(id)+"/input", nil, management.LoginInputRequest{Input: input}, nil); err != nil {
-		return management.Login{}, nil, err
+// sendInput sends what a prompt asked for. It does not read the sign-in again: an extension
+// updates its prompt on its own goroutine, so what comes back at once may still be the prompt it
+// just answered, and followLogin reads it again until it changes or ends.
+func (x *invocation) sendInput(ctx context.Context, id string, input map[string]string) error {
+	_, err := x.client.Call(ctx, http.MethodPost, "/logins/"+url.PathEscape(id)+"/input", nil, management.LoginInputRequest{Input: input}, nil)
+	return err
+}
+
+// loginRetryable says whether reading or answering a sign-in can succeed on another try: an
+// answer core will not give again (404, or a refused key) cannot, and neither can a call whose
+// context has ended.
+func loginRetryable(ctx context.Context, err error) bool {
+	if ctx.Err() != nil {
+		return false
 	}
-	return x.readLogin(ctx, id)
+	var ae *management.APIError
+	if errors.As(err, &ae) {
+		switch ae.Status {
+		case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+			return false
+		}
+	}
+	return true
 }
 
 // readLogin is GET /logins/{id}, whose body is what --json prints at the end.
@@ -735,16 +786,21 @@ func inputHint(f protocol.LoginInput) string {
 // before it is typed: a terminal then keeps it off the screen. close ends the reader and turns the
 // terminal's echo back on.
 type lineReader struct {
-	src   *bufio.Reader
-	term  *os.File
-	ask   chan bool
-	lines chan lineRead
-	done  chan struct{}
-	once  sync.Once
-	mu    sync.Mutex
+	src      *bufio.Reader
+	term     *os.File
+	ask      chan bool
+	lines    chan lineRead
+	done     chan struct{}
+	finished chan struct{}
+	once     sync.Once
+	mu       sync.Mutex
 	// restore turns the terminal's echo back on while a secret line is read; nil otherwise.
 	restore func()
 }
+
+// errEndOfInput is standard input's end where a line was asked for: the reader is gone, and no
+// line will come.
+var errEndOfInput = errors.New("standard input has ended")
 
 // lineRead is one line of standard input, or its end (ok false); hidden says the terminal's echo
 // was off while it was typed, so a line ending has to be written.
@@ -757,8 +813,9 @@ type lineRead struct {
 // newLineReader reads r's lines. term is standard input when it is a terminal, whose echo a
 // secret line is kept from; nil when there is none.
 func newLineReader(r io.Reader, term *os.File) *lineReader {
-	l := &lineReader{src: bufio.NewReaderSize(r, 64<<10), term: term, ask: make(chan bool), lines: make(chan lineRead), done: make(chan struct{})}
+	l := &lineReader{src: bufio.NewReaderSize(r, 64<<10), term: term, ask: make(chan bool), lines: make(chan lineRead), done: make(chan struct{}), finished: make(chan struct{})}
 	go func() {
+		defer close(l.finished)
 		defer close(l.lines)
 		for {
 			var secret bool
@@ -823,11 +880,15 @@ func (l *lineReader) close() {
 	})
 }
 
-// askLine asks for the next line, naming it a secret one to keep off the terminal.
+// askLine asks for the next line, naming it a secret one to keep off the terminal. It says
+// standard input has ended once the reader is gone, so a caller never waits on a line no one will
+// read.
 func (l *lineReader) askLine(ctx context.Context, secret bool) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-l.finished:
+		return errEndOfInput
 	case l.ask <- secret:
 		return nil
 	}
@@ -836,6 +897,9 @@ func (l *lineReader) askLine(ctx context.Context, secret bool) error {
 // readline is the next line; ok is false when standard input has ended.
 func (l *lineReader) readline(ctx context.Context, secret bool) (lineRead, error) {
 	if err := l.askLine(ctx, secret); err != nil {
+		if errors.Is(err, errEndOfInput) {
+			return lineRead{}, nil
+		}
 		return lineRead{}, err
 	}
 	select {
