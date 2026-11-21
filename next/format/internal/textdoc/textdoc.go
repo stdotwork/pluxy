@@ -7,11 +7,14 @@ package textdoc
 import (
 	"encoding/json"
 	"strings"
+
+	"github.com/stdotwork/pluxy/next/format/internal/media"
 )
 
 // FromAnthropic returns the text and title of a Messages plain-text document block
 // ({"type":"document","source":{"type":"text","media_type":"text/plain","data":"..."},
-// "title":"..."}), or ok false for any other block.
+// "title":"..."}), or ok false for any other block. A source of another media type is not a
+// plain-text document, whatever its type says.
 func FromAnthropic(raw []byte) (text, title string, ok bool) {
 	var b struct {
 		Type   string `json:"type"`
@@ -23,6 +26,9 @@ func FromAnthropic(raw []byte) (text, title string, ok bool) {
 		} `json:"source"`
 	}
 	if json.Unmarshal(raw, &b) != nil || b.Type != "document" || b.Source == nil || b.Source.Type != "text" {
+		return "", "", false
+	}
+	if media.Type(b.Source.MediaType) != "text/plain" {
 		return "", "", false
 	}
 	return b.Source.Data, b.Title, true

@@ -180,3 +180,24 @@ func TestEncodeTranslatedFileValidation(t *testing.T) {
 		}
 	}
 }
+
+// A Messages document source of a text type other than text/plain is not a plain-text document:
+// it falls through to the ordinary dropped loss.
+func TestEncodeNonPlainTextDocumentDropped(t *testing.T) {
+	doc := []byte(`{"type":"document","source":{"type":"text","media_type":"text/html","data":"<p>Hello</p>"}}`)
+	req := llm.Request{Model: "m", Items: []llm.Item{{
+		Type: llm.ItemTypeMessage, Role: llm.RoleUser,
+		Content: []llm.Part{
+			{Type: llm.PartText, Text: "summarize"},
+			{Type: llm.PartNative, Format: llm.FormatAnthropicMessages, Data: doc,
+				Origin: &llm.Origin{Format: llm.FormatAnthropicMessages, Path: "messages[0].content[1]"}},
+		},
+	}}}
+	body, losses, err := EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "Hello") || len(losses) != 1 || losses[0].Kind != llm.LossDropped {
+		t.Errorf("body %s, losses %+v; want the document dropped", body, losses)
+	}
+}
