@@ -844,10 +844,12 @@ func errorFields(e *llm.Error) obj {
 	return out
 }
 
-// messagesErrorFields returns the request_id and error.details of raw when raw is a Messages error
-// body or event: type "error" with an error object. A Codex WebSocket error message looks the same
-// but has a status, and its fields are not these.
-func messagesErrorFields(raw json.RawMessage) (requestID, details json.RawMessage) {
+// messagesErrorFields returns the request_id and the details to forward when raw is a Messages
+// error body or event: type "error" with an error object. A Codex WebSocket error message looks the
+// same but has a status, and its fields are not these. Of details only a text error_code is kept,
+// the one member Anthropic's SDK reads for every error type: another can identify the upstream's
+// organization to whoever holds a client key.
+func messagesErrorFields(raw json.RawMessage) (requestID json.RawMessage, details obj) {
 	m := rawjson.Object(raw)
 	if m == nil || string(m["type"]) != `"error"` || m["status"] != nil {
 		return nil, nil
@@ -860,8 +862,9 @@ func messagesErrorFields(raw json.RawMessage) (requestID, details json.RawMessag
 	if json.Unmarshal(m["request_id"], &id) == nil && id != "" {
 		requestID = m["request_id"]
 	}
-	if rawjson.Object(inner["details"]) != nil {
-		details = inner["details"]
+	var code *string
+	if d := rawjson.Object(inner["details"]); d != nil && json.Unmarshal(d["error_code"], &code) == nil && code != nil {
+		details = obj{"error_code": *code}
 	}
 	return requestID, details
 }

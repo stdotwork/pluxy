@@ -37,6 +37,16 @@ func TestMarkContextOverflow(t *testing.T) {
 			t.Errorf("%s changed: %+v", name, e)
 		}
 	}
+	for _, code := range []string{"", "invalid_request_error", "INVALID_ARGUMENT", "invalid_request"} {
+		e := &Error{Code: CodeUpstream, ProviderCode: code, Message: "prompt is too long"}
+		if _ = MarkContextOverflow(e); e.ProviderCode != ProviderContextLengthExceeded {
+			t.Errorf("no status, code %q: %+v, want an overflow", code, e)
+		}
+	}
+	other := &Error{Code: CodeUpstream, ProviderCode: "rate_limit_exceeded", Message: "quotes: prompt is too long"}
+	if _ = MarkContextOverflow(other); other.ProviderCode != "rate_limit_exceeded" || other.Status != 0 {
+		t.Errorf("no status, another code: %+v, want it unchanged", other)
+	}
 	plain := errors.New("prompt is too long")
 	if got := MarkContextOverflow(plain); got != plain {
 		t.Errorf("a plain error = %v", got)

@@ -649,6 +649,14 @@ func upstreamErrorFor(ctx context.Context, resp *http.Response, model string, re
 	case s >= 500:
 		// The upstream may have run the request before failing, so retrying is not known safe.
 		e.Code, e.Scope = llm.CodeUpstream, llm.ScopeEndpoint
+		if s == 529 {
+			e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"), time.Now())
+		}
+		// Google's error table gives this as a cause of 500 INTERNAL: the request's, not the account's.
+		if s == http.StatusInternalServerError && strings.Contains(strings.ToLower(e.Message), "input context is too long") {
+			e.Status = http.StatusBadRequest
+			_ = llm.MarkContextOverflow(e)
+		}
 	default:
 		e.Code, e.Scope = llm.CodeInvalidRequest, llm.ScopeRequest
 		_ = llm.MarkContextOverflow(e)

@@ -16,6 +16,9 @@ func TestErrorKeepsMessagesFields(t *testing.T) {
 		name, raw, requestID, details string
 	}{
 		{"messages error", raw, "req_1", details},
+		{"details beyond error_code", `{"type":"error","error":{"type":"api_error","message":"m","details":{"error_code":"organization_on_hold","appeal_url":"https://example.test/appeal/org-1"}},"request_id":"req_5"}`, "req_5", `{"error_code":"organization_on_hold"}`},
+		{"details without error_code", `{"type":"error","error":{"type":"api_error","message":"m","details":{"appeal_url":"https://example.test/a"}}}`, "", ""},
+		{"error_code that is not text", `{"type":"error","error":{"type":"api_error","message":"m","details":{"error_code":7}}}`, "", ""},
 		{"no optional fields", `{"type":"error","error":{"type":"api_error","message":"m"}}`, "", ""},
 		{"null fields", `{"type":"error","error":{"type":"api_error","message":"m","details":null},"request_id":null}`, "", ""},
 		{"OpenAI error", `{"error":{"message":"m","type":"t","param":"p","code":"c"},"request_id":"req_2"}`, "", ""},

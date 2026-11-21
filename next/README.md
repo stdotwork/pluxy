@@ -466,7 +466,8 @@ never the words of an upstream's reply. `routing.explain` `false` leaves out the
 and the member, and keeps the trace ID.
 
 An upstream's error keeps the fields the client's format shares with the upstream's. A Messages
-client keeps `request_id` and `error.details` from a Messages upstream, a Chat or Responses client
+client keeps `request_id` and the text `error_code` of `error.details` from a Messages upstream
+(the rest of `details` is not forwarded, since it can identify the upstream's organization), a Chat or Responses client
 keeps `param` from an OpenAI-format upstream, and a Gemini client keeps `details` from a Google
 upstream; no field is copied into a format that does not define it. `param` is the upstream's own
 path, so on a translated request it can name a field in the upstream's shape. A 429, 503 or 529
@@ -477,7 +478,8 @@ the shape it acts on: status 400 with code `context_length_exceeded` on Chat, Re
 Responses WebSocket; a 400 `invalid_request_error` whose message says `prompt is too long` on
 Messages; a 400 `INVALID_ARGUMENT` on Gemini. The Claude, Codex, Gemini and OpenAI-compatible
 extensions recognise it by that code or by the upstream messages LiteLLM's exception mapping
-lists. It fails that request only: it blocks no account or model and is not tried on another
+lists, and a Gemini 500 by the words `input context is too long`, the cause Google's error table
+gives for 500 `INTERNAL`. It fails that request only: it blocks no account or model and is not tried on another
 account.
 
 `pluxy route <model>` (`GET /v0/management/route?model=<name>`) says what a request for the model

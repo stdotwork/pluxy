@@ -12,7 +12,8 @@ const ProviderContextLengthExceeded = "context_length_exceeded"
 
 // contextOverflowMessages are the upstream messages, in lower case, that say the prompt does not
 // fit. They are those LiteLLM's is_error_str_context_window_exceeded recognises, without its
-// entry for OpenAI's limit on the length of one string, which compacting does not cure.
+// entry for OpenAI's limit on the length of one string, which compacting does not cure, and with
+// the cause Google's API error table gives for a 500.
 var contextOverflowMessages = []string{
 	"exceed context limit",
 	"this model's maximum context length is",
@@ -24,6 +25,7 @@ var contextOverflowMessages = []string{
 	"exceeds the available context size",           // llama.cpp
 	"exceeds the maximum number of tokens allowed", // Gemini
 	"prompt is too long",                           // Anthropic
+	"input context is too long",                    // Google's error table, for a 500 INTERNAL
 }
 
 // isContextOverflow reports whether an upstream's message says the prompt does not fit.
@@ -52,10 +54,26 @@ func MarkContextOverflow(err error) error {
 		(e.Code != CodeInvalidRequest && e.Code != CodeUpstream) {
 		return err
 	}
-	if e.ProviderCode != ProviderContextLengthExceeded && !isContextOverflow(e.Message) {
-		return err
+	if e.ProviderCode != ProviderContextLengthExceeded {
+		// An error without a status says what it is only by its code: one with another code stays
+		// that error, even if its message quotes an overflow.
+		if e.Status == 0 && !invalidRequestCode(e.ProviderCode) {
+			return err
+		}
+		if !isContextOverflow(e.Message) {
+			return err
+		}
 	}
 	e.Code, e.Scope, e.Status, e.Retryable = CodeInvalidRequest, ScopeRequest, 400, false
 	e.ProviderCode = ProviderContextLengthExceeded
 	return err
+}
+
+// invalidRequestCode reports whether a provider code is empty or names an invalid request.
+func invalidRequestCode(code string) bool {
+	switch strings.ToLower(code) {
+	case "", "invalid_request_error", "invalid_request", "invalid_argument":
+		return true
+	}
+	return false
 }

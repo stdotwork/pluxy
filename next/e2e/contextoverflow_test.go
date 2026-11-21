@@ -197,3 +197,89 @@ func TestContextOverflowInStreamBlocksNothing(t *testing.T) {
 		}
 	}
 }
+
+// overflowCore runs a core with one account on the extension in dir, whose upstream is handler.
+func overflowCore(t *testing.T, dir, model string, handler http.HandlerFunc) string {
+	t.Helper()
+	up := httptest.NewServer(handler)
+	t.Cleanup(up.Close)
+	base, _, _ := runCoreArgs(t, map[string]any{
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, dir, "pluxy-extension.json"),
+			"accounts": []any{map[string]any{
+				"id": "overflow-1", "models": []string{model},
+				"settings":   map[string]any{"base_url": up.URL},
+				"credential": map[string]any{"kind": "api_key", "api_key": "sk-overflow-test"},
+			}},
+		},
+	})
+	return base
+}
+
+func overflowPost(t *testing.T, base, path, body string) (int, []byte) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, base+path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+clientKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, b
+}
+
+// A stream error with another code stays that error, even when its message quotes an overflow.
+func TestStatuslessErrorWithOtherCodeIsNotOverflow(t *testing.T) {
+	base := overflowCore(t, "", "gpt-a40", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, `data: {"error":{"type":"rate_limit_error","code":"rate_limit_exceeded","message":"rate limit exceeded; diagnostic quotes: This model's maximum context length is 8192 tokens."}}`+"\n\n")
+	})
+	status, b := overflowPost(t, base, "/v1/chat/completions", `{"model":"gpt-a40","stream":true,"messages":[{"role":"user","content":"`+overflowPrompt+`"}]}`)
+	if status == http.StatusBadRequest || strings.Contains(string(b), "context_length_exceeded") || !strings.Contains(string(b), "rate_limit_exceeded") {
+		t.Errorf("client got %d %s, want the upstream's rate_limit_exceeded and no overflow", status, b)
+	}
+}
+
+// Google's error table gives "Your input context is too long." as a cause of 500 INTERNAL. That
+// 500 is an overflow on this request; any other 500 stays a 500.
+func TestGeminiInternalContextTooLong(t *testing.T) {
+	const model = "gemini-a40"
+	chat := `{"model":"` + model + `","messages":[{"role":"user","content":"` + overflowPrompt + `"}]}`
+	gemini := `{"contents":[{"role":"user","parts":[{"text":"` + overflowPrompt + `"}]}]}`
+	geminiPath := "/v1beta/models/" + model + ":generateContent"
+	reply := func(msg string, calls *atomic.Int64) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if b, _ := io.ReadAll(r.Body); strings.Contains(string(b), overflowPrompt) {
+				calls.Add(1)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = io.WriteString(w, `{"error":{"code":500,"message":"`+msg+`","status":"INTERNAL"}}`)
+		}
+	}
+	var calls atomic.Int64
+	base := overflowCore(t, "gemini", model, reply("Your input context is too long.", &calls))
+	if status, b := overflowPost(t, base, "/v1/chat/completions", chat); wantOverflowCode(status, b) != "" {
+		t.Errorf("Chat client: %d %s", status, b)
+	}
+	if status, b := overflowPost(t, base, geminiPath, gemini); wantOverflowGemini(status, b) != "" {
+		t.Errorf("Gemini client: %d %s", status, b)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Errorf("the upstream saw %d requests, want 2: the overflow must block nothing", got)
+	}
+	var otherCalls atomic.Int64
+	other := overflowCore(t, "gemini", model, reply("An internal error has occurred.", &otherCalls))
+	status, b := overflowPost(t, other, geminiPath, gemini)
+	if e := overflowError(b); status != http.StatusInternalServerError || e["status"] != "INTERNAL" || e["code"] != float64(500) {
+		t.Errorf("another 500: %d %s, want 500 INTERNAL", status, b)
+	}
+}

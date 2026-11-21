@@ -476,6 +476,9 @@ LiteLLM, from <https://github.com/BerriAI/litellm> (commit
   client runs follows `litellm/responses/litellm_completion_transformation/client_tool_search.py`:
   deferred tools stay off the request until a search output loads them, and the two sentences of
   `searchOutput` are that file's `_search_output_text`.
+- adapted: in `next/llm/overflow.go`, the list of upstream messages that say a prompt does not fit
+  the model's context window, and the checks beside it, follow
+  `is_error_str_context_window_exceeded` in `litellm/litellm_core_utils/exception_mapping_utils.py`.
 
 Licence text, for content outside `litellm/enterprise/`, as it is in `LICENSE`:
 

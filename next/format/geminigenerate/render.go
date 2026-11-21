@@ -601,8 +601,9 @@ func ErrorResponse(e *llm.Error) (int, []byte) {
 			if !isNull(g.Error.Details) && json.Unmarshal(g.Error.Details, &details) == nil {
 				body["details"] = g.Error.Details
 			}
-			// An overflow's provider code is not Google's: it keeps the status Google gave it.
-			if _, ok := googleStatus[g.Error.Status]; ok && e.ProviderCode == llm.ProviderContextLengthExceeded {
+			// An overflow's provider code is not Google's: it keeps the status Google gave it, unless
+			// core changed the HTTP status, as for a 500 that is an overflow.
+			if _, ok := googleStatus[g.Error.Status]; ok && code == st && e.ProviderCode == llm.ProviderContextLengthExceeded {
 				body["status"] = g.Error.Status
 			}
 		}

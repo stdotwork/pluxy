@@ -539,6 +539,9 @@ func statusError(resp *http.Response, model string) *llm.Error {
 	case s >= 500:
 		// The upstream may have run the request before failing.
 		e.Code, e.Scope = llm.CodeUpstream, llm.ScopeEndpoint
+		if s == 529 {
+			e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"))
+		}
 	default:
 		e.Code, e.Scope = llm.CodeInvalidRequest, llm.ScopeRequest
 	}
