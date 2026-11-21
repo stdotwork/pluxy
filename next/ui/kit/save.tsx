@@ -3,6 +3,7 @@
 
 import { useState } from "preact/hooks";
 import type { Host } from "./host";
+import { usePrivacy } from "./privacy";
 import { strings } from "./strings";
 import { Notice, useKit } from "./ui";
 
@@ -36,11 +37,24 @@ export async function saveFile(
 }
 
 /**
+ * A saved file's path as the page shows it. In privacy mode only the file and its folder are named:
+ * the folders above them usually hold the person's user name.
+ */
+export function shownPath(path: string, privacy: boolean): string {
+  if (!privacy) return path;
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  if (parts.length <= 2) return path;
+  const separator = path.includes("\\") && !path.includes("/") ? "\\" : "/";
+  return ["…", ...parts.slice(-2)].join(separator);
+}
+
+/**
  * A page's saves: save() saves a file, and notice says where the host put the last one or why it
  * could not, until the next save or clear().
  */
 export function useSave() {
   const { host } = useKit();
+  const privacy = usePrivacy();
   const [result, setResult] = useState<{ path: string } | { error: string }>();
   return {
     async save(name: string, text: string, type: string) {
@@ -56,7 +70,7 @@ export function useSave() {
     notice:
       result &&
       ("path" in result ? (
-        <Notice tone="ok">{t("saved", { path: result.path })}</Notice>
+        <Notice tone="ok">{t("saved", { path: shownPath(result.path, privacy.on) })}</Notice>
       ) : (
         <Notice tone="danger">{t("notSaved", { error: result.error })}</Notice>
       )),
