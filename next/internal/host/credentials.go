@@ -114,7 +114,8 @@ func (l *LoginCall) markSecret(inputs []protocol.LoginInput) {
 // rules for a credential's, or for one that is a JSON object (a service account's key file), its
 // secrets by the rules for an account's settings, as its field names and plain values (a
 // project ID, a token endpoint) are no secret; and of any other value that is a URL (a pasted
-// redirect URL), its user name, password and secret query values (protocol.AccountSecretsWith).
+// redirect URL), its user name, password and secret query or fragment values
+// (protocol.AccountSecretsWith).
 func (l *LoginCall) addSecrets(input map[string]string) {
 	for k, v := range input {
 		var obj map[string]json.RawMessage
