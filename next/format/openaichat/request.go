@@ -495,6 +495,25 @@ func (e *encoder) kept(o *llm.Origin) json.RawMessage {
 	return nil
 }
 
+// toolArguments returns a tool call's arguments as Chat takes them. Another format can hold
+// arguments that are not a JSON object (Messages takes an input object, a Responses client's
+// custom call holds free text), and Chat would refuse them; such a string is sent as {}, as the
+// Messages and Gemini encoders already do with what they cannot carry. A Chat client's own call
+// keeps the bytes it sent.
+func toolArguments(args string, o *llm.Origin, path string, e *encoder) string {
+	if o != nil && o.Format == format {
+		return args
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal([]byte(args), &m) == nil && m != nil {
+		return args
+	}
+	if strings.TrimSpace(args) != "" {
+		e.lose(llm.LossApproximated, path, "tool arguments that are not a JSON object, sent as {}")
+	}
+	return "{}"
+}
+
 func path(o *llm.Origin, fallback string) string {
 	if o != nil && o.Path != "" {
 		return o.Path
@@ -649,7 +668,7 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 			}
 			var tc chatToolCall
 			tc.ID, tc.Type = it.CallID, "function"
-			tc.Function.Name, tc.Function.Arguments = it.Name, it.Arguments
+			tc.Function.Name, tc.Function.Arguments = it.Name, toolArguments(it.Arguments, it.Origin, p, e)
 			origin, extra := geminiSignature(it.Origin)
 			raw := e.kept(origin)
 			if extra != nil {

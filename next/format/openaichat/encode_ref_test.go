@@ -144,7 +144,7 @@ func encodeRequestRef(req llm.Request) ([]byte, []llm.Loss, error) {
 			}
 			var tc chatToolCall
 			tc.ID, tc.Type = it.CallID, "function"
-			tc.Function.Name, tc.Function.Arguments = it.Name, it.Arguments
+			tc.Function.Name, tc.Function.Arguments = it.Name, toolArguments(it.Arguments, it.Origin, p, e)
 			origin, extra := geminiSignature(it.Origin)
 			raw := e.kept(origin)
 			if extra != nil {

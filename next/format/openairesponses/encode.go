@@ -32,6 +32,24 @@ func (e *encoder) kept(o *llm.Origin) json.RawMessage {
 	return nil
 }
 
+// toolArguments returns a tool call's arguments as Responses takes them. Another format can hold
+// arguments that are not a JSON object, and Responses would refuse them; such a string is sent as
+// {}, as the Messages and Gemini encoders already do with what they cannot carry. A Responses
+// client's own call keeps the bytes it sent, and a custom tool's free-form input is never JSON.
+func toolArguments(args string, o *llm.Origin, path string, e *encoder) string {
+	if o != nil && o.Format == format {
+		return args
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal([]byte(args), &m) == nil && m != nil {
+		return args
+	}
+	if strings.TrimSpace(args) != "" {
+		e.lose(llm.LossApproximated, path, "tool arguments that are not a JSON object, sent as {}")
+	}
+	return "{}"
+}
+
 func pathOf(o *llm.Origin, fallback string) string {
 	if o != nil && o.Path != "" {
 		return o.Path
@@ -165,7 +183,7 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 				out.Input = append(out.Input, marshal(m, e.kept(it.Origin)))
 				break
 			}
-			m := map[string]any{"type": "function_call", "call_id": it.CallID, "name": it.Name, "arguments": it.Arguments}
+			m := map[string]any{"type": "function_call", "call_id": it.CallID, "name": it.Name, "arguments": toolArguments(it.Arguments, it.Origin, p, e)}
 			if it.ID != "" {
 				m["id"] = it.ID
 			}
