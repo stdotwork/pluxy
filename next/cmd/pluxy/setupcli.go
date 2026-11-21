@@ -284,6 +284,12 @@ func runClientShow(x *invocation) error {
 		if p.Note != "" {
 			x.printf("\n%s\n", p.Note)
 		}
+		switch {
+		case p.Key == "<client-key>":
+			x.eprintf("Replace <client-key> with a client key: the first is in client_keys in core's config.json, and \"pluxy key add\" makes another.\n")
+		case strings.HasPrefix(p.Key, "<client-key:"):
+			x.eprintf("Replace %s with that key's full value from client_keys in core's config.json: pluxy never prints a stored key.\n", p.Key)
+		}
 	})
 }
 

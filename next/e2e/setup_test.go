@@ -292,7 +292,7 @@ func TestCLISetupAndClientShow(t *testing.T) {
 	}
 
 	r = runCLI(t, cliEnv, "client", "show", "claude-code")
-	if r.code != 0 || r.stderr != "" {
+	if r.code != 0 || r.stderr != "Replace <client-key> with a client key: the first is in client_keys in core's config.json, and \"pluxy key add\" makes another.\n" {
 		t.Fatalf("pluxy client show claude-code: %s", r)
 	}
 	if !strings.Contains(r.stdout, base) || !strings.Contains(r.stdout, "ANTHROPIC_BASE_URL") || !strings.Contains(r.stdout, "ANTHROPIC_AUTH_TOKEN") {
@@ -316,6 +316,9 @@ func TestCLISetupAndClientShow(t *testing.T) {
 	r = runCLI(t, cliEnv, "client", "show", "claude-code", "--key-id", keys.Keys[0].ID)
 	if r.code != 0 || !strings.Contains(r.stdout, keys.Keys[0].ID) || strings.Contains(r.stdout, managementKey) || strings.Contains(r.stdout, clientKey) {
 		t.Errorf("client show --key-id: %s", r)
+	}
+	if want := "Replace <client-key:" + keys.Keys[0].ID + " (" + keys.Keys[0].Masked + ")> with that key's full value"; !strings.HasPrefix(r.stderr, want) {
+		t.Errorf("client show --key-id stderr: %q, want it to start %q", r.stderr, want)
 	}
 
 	// pluxy setup --yes --json applies the suggested picks and prints the apply reply.

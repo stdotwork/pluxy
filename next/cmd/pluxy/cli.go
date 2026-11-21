@@ -227,6 +227,7 @@ var commands = []command{
 			var r management.NewClientKeyReply
 			return x.call(http.MethodPost, "/client-keys", nil, nil, &r, func() {
 				x.printf("%s\n", r.Value)
+				x.eprintf("Save this key now: pluxy will not print it again.\n")
 			})
 		}},
 	{words: "key remove", args: []string{"id"}, routes: []string{"DELETE /client-keys/{id}"}, summary: "remove a client key",
