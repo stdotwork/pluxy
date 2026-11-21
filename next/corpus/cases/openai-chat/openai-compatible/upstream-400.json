@@ -21,13 +21,8 @@
     {
       "path": "client.body.error",
       "kind": "intended",
-      "reason": "The new core answers upstream errors with an error body it builds itself (message, type and code), not the upstream's JSON passed through; recorded as a deliberate difference when the core skeleton was built.",
-      "want": {
-        "code": "context_length_exceeded",
-        "message": "This model's maximum context length is 8192 tokens.",
-        "type": "invalid_request_error",
-        "pluxy": "(volatile)"
-      }
+      "reason": "The new core answers upstream errors with an error body it builds itself (message, type and code), not the upstream's JSON passed through, and keeps the param of an OpenAI-format upstream's error.",
+      "want": {"code":"context_length_exceeded","message":"This model's maximum context length is 8192 tokens.","type":"invalid_request_error","pluxy":"(volatile)","param":"messages"}
     }
   ],
   "recorded_old_core": {

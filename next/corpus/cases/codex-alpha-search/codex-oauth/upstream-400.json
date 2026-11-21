@@ -65,13 +65,5 @@
         "path": "/backend-api/codex/alpha/search"
       }
     ]
-  },
-  "exceptions": [
-    {
-      "path": "client.body.error.param",
-      "kind": "intended",
-      "absent": true,
-      "reason": "The new core answers upstream errors with an error body it builds itself (message, type and code), not the upstream's JSON passed through; recorded as a deliberate difference when the core skeleton was built."
-    }
-  ]
+  }
 }

@@ -277,7 +277,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	}
 	events, err := anthropicmessages.DecodeResponse(raw)
 	if err != nil {
-		return err
+		return llm.MarkContextOverflow(err)
 	}
 	for _, ev := range events {
 		if err := send.Send(ev); err != nil {
@@ -680,7 +680,7 @@ func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Ev
 		default:
 			events, err = dec.Decode([]byte(e.Data))
 			if err != nil {
-				return err
+				return llm.MarkContextOverflow(err)
 			}
 		}
 		for _, ev := range events {
@@ -754,6 +754,7 @@ func upstreamError(resp *http.Response, model string, modelLevelCooling bool) *l
 		e.Code, e.Scope = llm.CodeUpstream, llm.ScopeEndpoint
 	default:
 		e.Code, e.Scope = llm.CodeInvalidRequest, llm.ScopeRequest
+		_ = llm.MarkContextOverflow(e)
 	}
 	return e
 }

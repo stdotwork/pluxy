@@ -269,7 +269,7 @@ func relayReply(ctx context.Context, resp *http.Response, send sender, mayRetry 
 	}
 	events, err := geminigenerate.DecodeResponse(raw)
 	if err != nil {
-		return mayRetry && geminigenerate.IsMalformedCall(err), err
+		return mayRetry && geminigenerate.IsMalformedCall(err), llm.MarkContextOverflow(err)
 	}
 	for _, ev := range events {
 		if err := send.Send(ev); err != nil {
@@ -538,7 +538,7 @@ func relayStream(ctx context.Context, body io.Reader, out sender) error {
 		default:
 			events, err = dec.Decode([]byte(e.Data))
 			if err != nil {
-				return err
+				return llm.MarkContextOverflow(err)
 			}
 		}
 		for _, ev := range events {
@@ -667,8 +667,17 @@ func upstreamErrorFor(ctx context.Context, resp *http.Response, model string, re
 	case s >= 500:
 		// The upstream may have run the request before failing, so retrying is not known safe.
 		e.Code, e.Scope = llm.CodeUpstream, llm.ScopeEndpoint
+		if s == 529 {
+			e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"), time.Now())
+		}
+		// Google's error table gives this as a cause of 500 INTERNAL: the request's, not the account's.
+		if s == http.StatusInternalServerError && strings.Contains(strings.ToLower(e.Message), "input context is too long") {
+			e.Status = http.StatusBadRequest
+			_ = llm.MarkContextOverflow(e)
+		}
 	default:
 		e.Code, e.Scope = llm.CodeInvalidRequest, llm.ScopeRequest
+		_ = llm.MarkContextOverflow(e)
 	}
 	return e
 }

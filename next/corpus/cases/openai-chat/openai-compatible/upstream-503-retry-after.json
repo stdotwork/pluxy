@@ -22,12 +22,13 @@
       "path": "client.body.error",
       "kind": "intended",
       "reason": "The new core answers upstream errors with an error body it builds itself (message, type and code), not the upstream's JSON passed through; recorded as a deliberate difference when the core skeleton was built.",
-      "want": {
-        "code": "server_error",
-        "message": "The engine is currently overloaded, please try again later",
-        "type": "server_error",
-        "pluxy": "(volatile)"
-      }
+      "want": {"code":"server_error","message":"The engine is currently overloaded, please try again later","type":"server_error","pluxy":"(volatile)"}
+    },
+    {
+      "path": "client.headers.Retry-After",
+      "kind": "intended",
+      "reason": "The new core tells a client of an unavailable or overloaded upstream when to retry, passing on the upstream's Retry-After on a 503 or 529; the old core's recorded reply has no such header.",
+      "want": "5"
     }
   ],
   "recorded_old_core": {

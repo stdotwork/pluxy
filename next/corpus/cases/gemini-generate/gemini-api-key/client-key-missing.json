@@ -21,6 +21,12 @@
       "kind": "intended",
       "reason": "The old core answers a missing client key with {\"error\": \"<text>\"} on every route; the new core answers a Gemini client with Google's error shape (error.code, message, status UNAUTHENTICATED).",
       "want": "application/json"
+    },
+    {
+      "path": "client.headers.X-Should-Retry",
+      "kind": "intended",
+      "reason": "The new core tells a client refused for a missing or wrong client key not to retry (X-Should-Retry: false), since the same key cannot succeed; the old core sent no such header.",
+      "want": "false"
     }
   ],
   "recorded_old_core": {

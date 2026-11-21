@@ -221,9 +221,11 @@ func (s *wsSocket) sendError(e *llm.Error) error {
 		Error map[string]json.RawMessage `json:"error"`
 	}
 	obj := map[string]json.RawMessage(nil)
-	if json.Unmarshal(e.Raw, &b) == nil && b.Error != nil {
+	if json.Unmarshal(e.Raw, &b) == nil && b.Error != nil && (e.ProviderCode != llm.ProviderContextLengthExceeded ||
+		string(b.Error["code"]) == `"`+llm.ProviderContextLengthExceeded+`"`) {
+		// An overflow from an upstream of another format has the code only in the rendered body.
 		obj = b.Error
-	} else if json.Unmarshal(body, &b) == nil {
+	} else if b.Error = nil; json.Unmarshal(body, &b) == nil {
 		obj = b.Error
 		if e.ProviderCode == "" {
 			delete(obj, "code")
@@ -240,6 +242,9 @@ func (s *wsSocket) sendError(e *llm.Error) error {
 			h[kv[0]] = kv[1]
 		}
 		m["headers"] = h
+	}
+	if e == errClientKey {
+		m["headers"] = map[string]string{"X-Should-Retry": "false"}
 	}
 	msg, _ := json.Marshal(m)
 	return s.send(msg)

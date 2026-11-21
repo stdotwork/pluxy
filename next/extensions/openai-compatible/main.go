@@ -212,7 +212,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	}
 	events, losses, err := decodeResponse(wire.format, raw)
 	if err != nil {
-		return err
+		return llm.MarkContextOverflow(err)
 	}
 	for _, l := range losses {
 		logReplyLoss(l)
@@ -686,7 +686,7 @@ func relayStream(ctx context.Context, body io.Reader, out eventSender, upstreamF
 		default:
 			events, err = dec.Decode([]byte(e.Data))
 			if err != nil {
-				return err
+				return llm.MarkContextOverflow(err)
 			}
 		}
 		for _, ev := range events {
@@ -793,8 +793,12 @@ func upstreamError(resp *http.Response, model string) *llm.Error {
 	case s >= 500:
 		// The upstream may have run the request before failing, so retrying is not known safe.
 		e.Code, e.Scope = llm.CodeUpstream, llm.ScopeEndpoint
+		if s == 529 {
+			e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"))
+		}
 	default:
 		e.Code, e.Scope = llm.CodeInvalidRequest, llm.ScopeRequest
+		_ = llm.MarkContextOverflow(e)
 	}
 	return e
 }

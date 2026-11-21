@@ -247,7 +247,7 @@ func serveHealthz(w http.ResponseWriter, _ *http.Request) {
 // at every load. Only a request with a configured key learns of the state.
 func refused(cfg *Config, r *http.Request, googleKeys bool) *llm.Error {
 	if !authorized(cfg, r, googleKeys) {
-		return &llm.Error{Code: llm.CodeAuth, Message: "missing or invalid API key", Status: http.StatusUnauthorized, ProviderCode: "invalid_api_key"}
+		return errClientKey
 	}
 	if ex := cfg.ExampleClientKeys(); len(ex) > 0 {
 		return &llm.Error{Code: llm.CodePermission, Status: http.StatusForbidden, ProviderCode: ExampleKeyCode,
@@ -256,6 +256,11 @@ func refused(cfg *Config, r *http.Request, googleKeys bool) *llm.Error {
 	}
 	return nil
 }
+
+// errClientKey is the refusal of a missing or wrong client key. writeError and the WebSocket's
+// sendError tell it by identity, since an upstream's 401 can have the same code and status. It is
+// shared between requests, so nothing may change it.
+var errClientKey = &llm.Error{Code: llm.CodeAuth, Message: "missing or invalid API key", Status: http.StatusUnauthorized, ProviderCode: "invalid_api_key"}
 
 // ExampleKeyCode is the provider code of the error that refuses requests while a client key is
 // one of the example config's.
@@ -309,9 +314,12 @@ func (f clientFormat) writeError(w http.ResponseWriter, e *llm.Error) int {
 		for _, h := range e.UsageLimit.Headers() {
 			w.Header().Set(h[0], h[1])
 		}
-	case status == http.StatusTooManyRequests && e.RetryAfterMS > 0:
-		// Tell a rate-limited client when to try again, in whole seconds rounded up (RFC 9110
-		// section 10.2.3, RFC 6585 section 4).
+	case e == errClientKey:
+		// Trying again with the same key cannot succeed.
+		w.Header().Set("X-Should-Retry", "false")
+	case (status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable || status == 529) && e.RetryAfterMS > 0:
+		// Tell a rate-limited or overloaded client when to try again, in whole seconds rounded up
+		// (RFC 9110 section 10.2.3, RFC 6585 section 4).
 		w.Header().Set("Retry-After", strconv.FormatInt(int64(llm.WholeSeconds(time.Duration(e.RetryAfterMS)*time.Millisecond)/time.Second), 10))
 	}
 	w.WriteHeader(status)

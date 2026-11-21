@@ -717,7 +717,38 @@ func ErrorResponse(e *llm.Error) (int, []byte) {
 		msg = fmt.Sprintf("%s (%d)", http.StatusText(status), status)
 	}
 	o := map[string]any{"message": msg, "type": typ, "code": code}
+	if p := upstreamParam(e.Raw); p != "" {
+		o["param"] = p
+	}
 	e.Pluxy(o)
 	body, _ := json.Marshal(map[string]any{"error": o})
 	return status, body
+}
+
+// upstreamParam returns the param of an OpenAI-format error, when it names one: in an HTTP error
+// body (error.param), a failed Responses reply (response.error.param), or a stream's error event
+// or error object (param). Messages and Google errors have no such field.
+func upstreamParam(raw json.RawMessage) string {
+	var b struct {
+		Param any `json:"param"`
+		Error *struct {
+			Param any `json:"param"`
+		} `json:"error"`
+		Response *struct {
+			Error *struct {
+				Param any `json:"param"`
+			} `json:"error"`
+		} `json:"response"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &b) != nil {
+		return ""
+	}
+	param := b.Param
+	if b.Error != nil {
+		param = b.Error.Param
+	} else if b.Response != nil && b.Response.Error != nil {
+		param = b.Response.Error.Param
+	}
+	s, _ := param.(string)
+	return s
 }

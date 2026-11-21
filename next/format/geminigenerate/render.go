@@ -586,13 +586,26 @@ func ErrorResponse(e *llm.Error) (int, []byte) {
 	}
 	body := obj{"code": st, "message": msg, "status": name}
 	if isGoogleError(e.Raw) {
+		// Google's code is a number and its details a list; another format's error can have a
+		// details member that means something else.
 		var g struct {
 			Error struct {
+				Code    json.RawMessage `json:"code"`
+				Status  string          `json:"status"`
 				Details json.RawMessage `json:"details"`
 			} `json:"error"`
 		}
-		if json.Unmarshal(e.Raw, &g) == nil && !isNull(g.Error.Details) {
-			body["details"] = g.Error.Details
+		var code int
+		if json.Unmarshal(e.Raw, &g) == nil && json.Unmarshal(g.Error.Code, &code) == nil {
+			var details []json.RawMessage
+			if !isNull(g.Error.Details) && json.Unmarshal(g.Error.Details, &details) == nil {
+				body["details"] = g.Error.Details
+			}
+			// An overflow's provider code is not Google's: it keeps the status Google gave it, unless
+			// core changed the HTTP status, as for a 500 that is an overflow.
+			if _, ok := googleStatus[g.Error.Status]; ok && code == st && e.ProviderCode == llm.ProviderContextLengthExceeded {
+				body["status"] = g.Error.Status
+			}
 		}
 	}
 	e.Pluxy(body)
