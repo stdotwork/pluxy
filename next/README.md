@@ -910,7 +910,11 @@ reasoning between turns. A translated request's function names are the ones Gene
 takes: ASCII letters, digits, `_`, `.`, `:` and `-`, at most 128 bytes, and starting with a
 letter or `_` for Vertex AI. Any other name is sent with each other character as `_` and cut, two
 names that would come out the same each get a hash of the client's name, and the reply's calls go
-back to the client under its own name. A function call with no signature gets the value Google documents for
+back to the client under its own name. Gemini's function arguments are a protobuf Struct, so an
+integer parameter can come back as a double (2500.0); on a translated reply the extension writes
+it as an integer (2500) where the request's tool schema declares that property integer, nested
+objects and array items included, and leaves a number, an unknown schema, a fraction and a value
+beyond 2^53 as they came. A function call with no signature gets the value Google documents for
 calls it did not issue.
 
 **Interactions API.** Core serves Gemini's Interactions API at `POST /v1beta/interactions` (Google's
@@ -1014,7 +1018,9 @@ them: Kimi's names for its coding models (`kimi-k2.8` is `kimi-for-coding`, and 
 their `kimi-` prefix), a temperature only where Kimi takes it (1.0, or 0.6 with thinking off),
 tool schemas with their `$ref`s inlined, usage asked for on Chat streams, the reasoning effort as
 Kimi's `thinking` setting (low, high or max; none turns it off), the latest reasoning repeated on
-each Chat tool call, and a Responses batch of function call outputs moved next to its calls. Each
+each Chat tool call, and a Responses batch of function call outputs moved next to its calls. A
+translated request's tool names are the ones Chat Completions takes, and the reply's calls go back
+to the client under its own name. Each
 request names pluxy in Kimi's device headers, with the device ID made at login (none for a key); the device's host
 name, which Kimi's CLI also sends, is left out. A 429 that says the quota is used up is reported
 as a used-up quota, not a rate limit.
