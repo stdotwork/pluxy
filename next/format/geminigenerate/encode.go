@@ -8,6 +8,7 @@ import (
 
 	mediainput "github.com/stdotwork/pluxy/next/format/internal/media"
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
+	"github.com/stdotwork/pluxy/next/format/internal/textdoc"
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
@@ -183,7 +184,7 @@ func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
 		switch it.Type {
 		case llm.ItemTypeMessage:
 			e.kept(it.Origin)
-			parts, sendable, dropped := e.parts(it, p)
+			parts, sendable, dropped := e.parts(it, p, true)
 			if it.Role == llm.RoleUser && dropped && !sendable {
 				return nil, nil, invalid("%s: nothing in this user turn can be sent to GenerateContent", p)
 			}
@@ -335,7 +336,7 @@ func (e *encoder) allowedNames(allowed []string, names map[string]string) []stri
 
 // parts encodes a message's content as GenerateContent parts. sendable reports whether any part
 // with something in it was kept, dropped whether any part was dropped and reported.
-func (e *encoder) parts(it llm.Item, msgPath string) (parts []json.RawMessage, sendable, dropped bool) {
+func (e *encoder) parts(it llm.Item, msgPath string, textDocs bool) (parts []json.RawMessage, sendable, dropped bool) {
 	for i, p := range it.Content {
 		pp := pathOf(p.Origin, fmt.Sprintf("%s.content[%d]", msgPath, i))
 		var part map[string]any
@@ -359,6 +360,11 @@ func (e *encoder) parts(it llm.Item, msgPath string) (parts []json.RawMessage, s
 				parts = append(parts, p.Data)
 				sendable = true
 				continue
+			}
+			if text, title, ok := textdoc.FromAnthropic(p.Data); ok && textDocs {
+				part = map[string]any{"text": textdoc.Wrap(title, text)}
+				e.lose(llm.LossApproximated, pp, "a Messages plain-text document, carried as text")
+				break
 			}
 			e.lose(llm.LossDropped, pp, "a "+p.Format+" content part GenerateContent cannot carry")
 			dropped = true
@@ -399,13 +405,9 @@ func (e *encoder) responseParts(it llm.Item, itemPath string) []json.RawMessage 
 		}
 		media = append(media, p)
 	}
-	parts, _, _ := e.parts(llm.Item{Content: media}, itemPath)
+	parts, _, _ := e.parts(llm.Item{Content: media}, itemPath, false)
 	return parts
 }
-
-// geminiImages are the image media types GenerateContent's inlineData documents
-// (https://ai.google.dev/api/generate-content#Blob; the vision guide lists the same formats).
-var geminiImages = []string{"image/png", "image/jpeg", "image/jpg", "image/webp", "image/heic", "image/heif", "image/gif", "image/avif"}
 
 // media returns the GenerateContent part for an image or file, and the reason when it cannot be
 // sent: an inline image whose data is not base64 or whose media type Gemini does not document,
@@ -421,7 +423,7 @@ func media(p llm.Part) (map[string]any, string) {
 			return nil, "it is not a base64 data URL"
 		}
 		if p.Type == llm.PartImage || strings.HasPrefix(mediaType, "image/") {
-			if _, problem := mediainput.InlineImage(url, geminiImages); problem != "" {
+			if _, problem := mediainput.InlineImage(url, mediainput.GeminiImages); problem != "" {
 				return nil, problem
 			}
 		}

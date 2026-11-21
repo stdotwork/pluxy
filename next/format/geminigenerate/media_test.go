@@ -192,3 +192,25 @@ func TestEncodeInlineImageValidation(t *testing.T) {
 		}
 	}
 }
+
+// A Messages plain-text document has no GenerateContent form: its text is carried in a text
+// part, delimited and named after the document, and reported as an approximated loss.
+func TestEncodeTextDocument(t *testing.T) {
+	req, err := anthropicmessages.ParseRequest([]byte(`{"model":"gemini-x","max_tokens":9,"messages":[{"role":"user","content":[
+		{"type":"text","text":"summarize"},
+		{"type":"document","source":{"type":"text","media_type":"text/plain","data":"Line one\nLine two"},"title":"notes.txt"}]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, losses, err := EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "[Document: notes.txt]\nLine one\nLine two\n[End of document: notes.txt]"
+	if !strings.Contains(string(body), `"text":"`+strings.ReplaceAll(want, "\n", `\n`)+`"`) {
+		t.Errorf("body %s, want the document's text carried", body)
+	}
+	if len(losses) != 1 || losses[0].Kind != llm.LossApproximated || losses[0].Path != "messages[0].content[1]" {
+		t.Errorf("losses = %+v, want one approximation at messages[0].content[1]", losses)
+	}
+}

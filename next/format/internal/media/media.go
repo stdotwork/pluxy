@@ -73,3 +73,18 @@ func InlineImage(url string, allowed []string) (mediaType, problem string) {
 	}
 	return mediaType, "its media type is " + mediaType
 }
+
+// The image media types each target documents for its inline image input.
+var (
+	// OpenAIImages is what OpenAI accepts as image input for Chat Completions and Responses:
+	// PNG, JPEG, WEBP and non-animated GIF
+	// (https://platform.openai.com/docs/guides/images-vision#image-input-requirements).
+	OpenAIImages = []string{"image/png", "image/jpeg", "image/webp", "image/gif"}
+	// ClaudeImages is what Claude accepts in an image block: JPEG, PNG, GIF and WebP
+	// (https://docs.anthropic.com/en/docs/build-with-claude/vision#supported-formats).
+	ClaudeImages = []string{"image/jpeg", "image/png", "image/gif", "image/webp"}
+	// GeminiImages is what GenerateContent's inlineData documents
+	// (https://ai.google.dev/api/generate-content#Blob); the vision guide names the same
+	// formats (https://ai.google.dev/gemini-api/docs/image-understanding#supported-formats).
+	GeminiImages = []string{"image/png", "image/jpeg", "image/jpg", "image/webp", "image/heic", "image/heif", "image/gif", "image/avif"}
+)

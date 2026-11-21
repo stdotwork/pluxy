@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	mediainput "github.com/stdotwork/pluxy/next/format/internal/media"
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
 	"github.com/stdotwork/pluxy/next/llm"
 )
@@ -475,10 +476,14 @@ func source(p llm.Part) map[string]any {
 	}
 	switch {
 	case strings.HasPrefix(url, "data:"):
-		meta, data, ok := strings.Cut(strings.TrimPrefix(url, "data:"), ",")
-		mediaType, isBase64 := strings.CutSuffix(meta, ";base64")
-		if !ok || !isBase64 {
+		mediaType, data, ok := mediainput.DataURL(url)
+		if !ok || !mediainput.Base64(data) {
 			return nil
+		}
+		if p.Type == llm.PartImage || strings.HasPrefix(mediaType, "image/") {
+			if _, problem := mediainput.InlineImage(url, mediainput.ClaudeImages); problem != "" {
+				return nil
+			}
 		}
 		if p.Type == llm.PartFile && !strings.HasPrefix(mediaType, "image/") && mediaType != "application/pdf" {
 			return nil

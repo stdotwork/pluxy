@@ -1,0 +1,103 @@
+package openaichat
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/stdotwork/pluxy/next/llm"
+)
+
+func imageRequest(url, fileID string) llm.Request {
+	p := llm.Part{Type: llm.PartImage, URL: url}
+	if url == "" {
+		p.FileID = fileID
+	}
+	return llm.Request{Model: "m", Items: []llm.Item{{
+		Type:    llm.ItemTypeMessage,
+		Role:    llm.RoleUser,
+		Content: []llm.Part{{Type: llm.PartText, Text: "look"}, p},
+	}}}
+}
+
+// Chat Completions has no image-by-file-id form: the file part takes a file id but only a PDF,
+// so an image by file id is dropped with a loss, never silently.
+func TestEncodeImageByFileIDDropped(t *testing.T) {
+	body, losses, err := EncodeRequest(imageRequest("", "file_1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "image_url") || strings.Contains(string(body), "file_1") {
+		t.Errorf("body %s carries the image", body)
+	}
+	if len(losses) != 1 || losses[0].Kind != llm.LossDropped || !strings.Contains(losses[0].Detail, "file id") {
+		t.Fatalf("losses = %+v, want the image dropped with a loss naming the file id", losses)
+	}
+	if !(&llm.Translation{Losses: losses}).Dropped() {
+		t.Error("Translation.Dropped() = false, want true so the reject policy refuses the request")
+	}
+}
+
+// An inline image is sent only when its data is base64 and its media type is one OpenAI
+// documents for image input.
+func TestEncodeInlineImageValidation(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		url  string
+		keep bool
+	}{
+		{"png", "data:image/png;base64,aGVsbG8=", true},
+		{"jpeg", "data:image/jpeg;base64,aGVsbG8=", true},
+		{"gif", "data:image/gif;base64,aGVsbG8=", true},
+		{"webp", "data:image/webp;base64,aGVsbG8=", true},
+		{"https URL", "https://example.com/cat.png", true},
+		{"invalid base64", "data:image/png;base64,not base64", false},
+		{"empty data", "data:image/png;base64,", false},
+		{"unsupported media type", "data:image/tiff;base64,aGVsbG8=", false},
+	} {
+		body, losses, err := EncodeRequest(imageRequest(c.url, ""))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.keep {
+			if !strings.Contains(string(body), `"image_url":{"url":"`+c.url+`"`) {
+				t.Errorf("%s: body %s, want the image kept", c.name, body)
+			}
+			if len(losses) != 0 {
+				t.Errorf("%s: losses = %+v, want none", c.name, losses)
+			}
+			continue
+		}
+		if strings.Contains(string(body), "image_url") {
+			t.Errorf("%s: body %s carries the image", c.name, body)
+		}
+		if len(losses) != 1 || losses[0].Kind != llm.LossDropped {
+			t.Errorf("%s: losses = %+v, want one drop", c.name, losses)
+		}
+	}
+}
+
+// A Messages plain-text document (as anthropicmessages.ParseRequest builds it) has no Chat
+// Completions form: its text is carried in a text part, delimited and named after the document,
+// and reported as an approximated loss.
+func TestEncodeTextDocument(t *testing.T) {
+	doc := []byte(`{"type":"document","source":{"type":"text","media_type":"text/plain","data":"Line one\nLine two"},"title":"notes.txt"}`)
+	req := llm.Request{Model: "m", Items: []llm.Item{{
+		Type: llm.ItemTypeMessage, Role: llm.RoleUser,
+		Content: []llm.Part{
+			{Type: llm.PartText, Text: "summarize"},
+			{Type: llm.PartNative, Format: llm.FormatAnthropicMessages, Data: doc,
+				Origin: &llm.Origin{Format: llm.FormatAnthropicMessages, Path: "messages[0].content[1]"}},
+		},
+	}}}
+	body, losses, err := EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "[Document: notes.txt]\nLine one\nLine two\n[End of document: notes.txt]"
+	if !strings.Contains(string(body), `"type":"text","text":"`+strings.ReplaceAll(want, "\n", `\n`)+`"`) {
+		t.Errorf("body %s, want the document's text carried", body)
+	}
+	if len(losses) != 1 || losses[0].Kind != llm.LossApproximated || losses[0].Path != "messages[0].content[1]" {
+		t.Errorf("losses = %+v, want one approximation at messages[0].content[1]", losses)
+	}
+}

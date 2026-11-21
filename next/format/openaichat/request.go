@@ -10,7 +10,9 @@ import (
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/format/internal/audioinput"
+	mediainput "github.com/stdotwork/pluxy/next/format/internal/media"
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
+	"github.com/stdotwork/pluxy/next/format/internal/textdoc"
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
@@ -956,6 +958,18 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 				dropped = true
 				continue
 			}
+			if p.URL == "" {
+				e.lose(llm.LossDropped, pp, "Chat Completions cannot take an image with no URL")
+				dropped = true
+				continue
+			}
+			if strings.HasPrefix(p.URL, "data:") {
+				if _, problem := mediainput.InlineImage(p.URL, mediainput.OpenAIImages); problem != "" {
+					e.lose(llm.LossDropped, pp, "Chat Completions cannot take this inline image: "+problem)
+					dropped = true
+					continue
+				}
+			}
 			op := outPart{Type: "image_url"}
 			op.ImageURL = &struct {
 				URL    string `json:"url"`
@@ -987,13 +1001,20 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 			out = append(out, marshal(op, e.kept(p.Origin)))
 			sendable = true
 		case llm.PartNative:
-			if p.Format != format {
-				e.lose(llm.LossDropped, pp, "a "+p.Format+" content part Chat Completions cannot carry")
-				dropped = true
+			if p.Format == format {
+				out = append(out, p.Data)
+				sendable = true
 				continue
 			}
-			out = append(out, p.Data)
-			sendable = true
+			if text, title, ok := textdoc.FromAnthropic(p.Data); ok {
+				wrapped := textdoc.Wrap(title, text)
+				out = append(out, marshal(outPart{Type: "text", Text: &wrapped}, nil))
+				e.lose(llm.LossApproximated, pp, "a Messages plain-text document, carried as text")
+				sendable = true
+				continue
+			}
+			e.lose(llm.LossDropped, pp, "a "+p.Format+" content part Chat Completions cannot carry")
+			dropped = true
 		default:
 			return nil, false, false, &llm.Error{Code: llm.CodeUnsupported, Message: fmt.Sprintf("%s: unsupported content part %q", pp, p.Type), Scope: llm.ScopeRequest}
 		}

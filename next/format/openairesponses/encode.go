@@ -6,7 +6,9 @@ import (
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/format/internal/audioinput"
+	mediainput "github.com/stdotwork/pluxy/next/format/internal/media"
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
+	"github.com/stdotwork/pluxy/next/format/internal/textdoc"
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
@@ -263,6 +265,18 @@ func (e *encoder) content(it llm.Item, msgPath string) (content []json.RawMessag
 				sendable = true
 			}
 		case p.Type == llm.PartImage && it.Role != llm.RoleAssistant:
+			if p.URL == "" && p.FileID == "" {
+				e.lose(llm.LossDropped, pp, "Responses cannot take an image with no URL or file id")
+				dropped = true
+				break
+			}
+			if p.URL != "" && strings.HasPrefix(p.URL, "data:") {
+				if _, problem := mediainput.InlineImage(p.URL, mediainput.OpenAIImages); problem != "" {
+					e.lose(llm.LossDropped, pp, "Responses cannot take this inline image: "+problem)
+					dropped = true
+					break
+				}
+			}
 			m := map[string]string{"type": "input_image"}
 			if p.URL != "" {
 				m["image_url"] = p.URL
@@ -298,6 +312,15 @@ func (e *encoder) content(it llm.Item, msgPath string) (content []json.RawMessag
 		case p.Type == llm.PartNative && p.Format == format:
 			content = append(content, p.Data)
 			sendable = true
+		case p.Type == llm.PartNative:
+			if text, title, ok := textdoc.FromAnthropic(p.Data); ok {
+				content = append(content, marshal(map[string]string{"type": textType, "text": textdoc.Wrap(title, text)}, nil))
+				e.lose(llm.LossApproximated, pp, "a Messages plain-text document, carried as text")
+				sendable = true
+				break
+			}
+			e.lose(llm.LossDropped, pp, "a "+partFormat(p)+" content part Responses cannot carry here")
+			dropped = true
 		default:
 			e.lose(llm.LossDropped, pp, "a "+partFormat(p)+" content part Responses cannot carry here")
 			dropped = true
