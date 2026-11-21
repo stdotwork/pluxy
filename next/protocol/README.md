@@ -878,8 +878,9 @@ same tier as `priority`; Messages' `standard_only` is `default`, its `auto` is `
 `high`, from Chat Completions' `verbosity` and Responses' `text.verbosity`. These fields leave
 `origin.raw`: the request's kept fields no longer hold `service_tier`, `verbosity`,
 `text.verbosity`, Messages' `speed` or Gemini's `serviceTier` when core could read them into the
-options. An extension builds its upstream request from them where its upstream has the same
-setting, and reports the rest as dropped losses at the client's field. It never raises what the
+options. An extension builds its upstream request from them only where it knows its upstream takes
+the same setting (a third-party upstream may refuse a field it does not list), and reports the rest as
+dropped losses at the client's field. It never raises what the
 client pays: a paid tier is sent only when the client asked for that tier or its equivalent, and
 `auto`, `default`, an absent tier and any value the upstream's format does not name are never
 sent as `priority` or as a faster mode. A body sent as the client wrote it (`native.body`) already

@@ -171,10 +171,14 @@ var wireReplies = map[string]string{
 	"gemini":    `{"candidates":[{"content":{"role":"model","parts":[{"text":"Done."}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}`,
 }
 
-// A client's service tier and verbosity reach an OpenAI-compatible upstream in the form its wire
-// has for them, and what the wire cannot say is dropped, not moved to another setting: the request
-// still goes (the default drop policy), without it. The old core records no such translations, so
-// this is checked at the HTTP seam, with a fake upstream per wire.
+// A client's own service tier and verbosity reach an OpenAI-compatible upstream as it sent them,
+// and a request in another format goes to a third-party host (any base URL not listed in the
+// extension's tierHosts) with neither: nothing says that host's API takes them, and it may refuse a
+// field it does not list. The request still succeeds. The same requests to the vendors whose
+// documentation names the fields (api.openai.com, api.anthropic.com and
+// generativelanguage.googleapis.com) are checked without the network in the extension's own tests
+// (TestServiceTierToDocumentedHosts), since a core test cannot reach those hosts. The old core
+// records no such translations, so this is checked at the HTTP seam, with a fake upstream per wire.
 func TestServiceTierAcrossWires(t *testing.T) {
 	const prompt = `[{"role":"user","content":"Hi"}]`
 	clients := map[string]struct{ path, body string }{
@@ -208,6 +212,12 @@ func TestServiceTierAcrossWires(t *testing.T) {
 				t.Fatalf("no expectation for %s on %s", name, wire)
 			}
 			t.Run(name+" to "+wire, func(t *testing.T) {
+				// The wants above are the fields at a vendor that documents them; a third-party host
+				// gets them only from a client of its own wire, whose body goes as it came.
+				wantHere := want[name][wire]
+				if client, _, _ := strings.Cut(name, "-"); client != wire {
+					wantHere = map[string]string{}
+				}
 				// A request to a Messages wire needs an Anthropic-Version header only from its own
 				// clients, so none is sent for the others.
 				var mu sync.Mutex
@@ -277,8 +287,8 @@ func TestServiceTierAcrossWires(t *testing.T) {
 				if text.Verbosity != "" {
 					got["text.verbosity"] = text.Verbosity
 				}
-				if !maps.Equal(got, want[name][wire]) {
-					t.Errorf("upstream body says %v, want %v: %s", got, want[name][wire], bodies[0])
+				if !maps.Equal(got, wantHere) {
+					t.Errorf("upstream body says %v, want %v: %s", got, wantHere, bodies[0])
 				}
 			})
 		}
@@ -296,9 +306,13 @@ func TestServiceTierRejectPolicy(t *testing.T) {
 		{"chat flex to messages", "/v1/chat/completions", `{"model":"m","service_tier":"flex","messages":[{"role":"user","content":"Hi"}]}`, "messages", "service_tier"},
 		{"chat verbosity to gemini", "/v1/chat/completions", `{"model":"m","verbosity":"low","messages":[{"role":"user","content":"Hi"}]}`, "gemini", "verbosity"},
 		{"chat auto to gemini", "/v1/chat/completions", `{"model":"m","service_tier":"auto","messages":[{"role":"user","content":"Hi"}]}`, "gemini", "service_tier"},
-		{"messages fast to chat", "/v1/messages", `{"model":"m","max_tokens":9,"speed":"fast","messages":[{"role":"user","content":"Hi"}]}`, "chat", ""},
-		{"gemini flex to responses", "/v1beta/models/m:generateContent", `{"serviceTier":"flex","contents":[{"role":"user","parts":[{"text":"Hi"}]}]}`, "responses", ""},
-		{"chat auto to messages", "/v1/chat/completions", `{"model":"m","service_tier":"auto","messages":[{"role":"user","content":"Hi"}]}`, "messages", ""},
+		// A third-party host's API is not known to take a tier, so these are refused too; at the
+		// vendors that document them they go (extensions/openai-compatible TestServiceTierRejectPolicy).
+		{"messages fast to chat", "/v1/messages", `{"model":"m","max_tokens":9,"speed":"fast","messages":[{"role":"user","content":"Hi"}]}`, "chat", "speed"},
+		{"gemini flex to responses", "/v1beta/models/m:generateContent", `{"serviceTier":"flex","contents":[{"role":"user","parts":[{"text":"Hi"}]}]}`, "responses", "serviceTier"},
+		{"chat auto to messages", "/v1/chat/completions", `{"model":"m","service_tier":"auto","messages":[{"role":"user","content":"Hi"}]}`, "messages", "service_tier"},
+		// A client's own request goes whatever the host.
+		{"chat flex to chat", "/v1/chat/completions", `{"model":"m","service_tier":"flex","messages":[{"role":"user","content":"Hi"}]}`, "chat", ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			var mu sync.Mutex
@@ -354,5 +368,95 @@ func TestServiceTierRejectPolicy(t *testing.T) {
 				t.Errorf("status %d with %d upstream calls: %s; want it refused naming %s", resp.StatusCode, calls, raw, c.dropped)
 			}
 		})
+	}
+}
+
+// serviceTierCore runs core with one OpenAI-compatible account on a wire, at a local fake upstream:
+// a third-party host, as far as the extension can tell. It returns core's address and the number
+// of generation requests and the last generation body the upstream got.
+func serviceTierCore(t *testing.T, wire, policy string) (base string, got func() (int, []byte)) {
+	t.Helper()
+	var mu sync.Mutex
+	calls := 0
+	var last []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			io.WriteString(w, `{"data":[]}`)
+			return
+		}
+		mu.Lock()
+		calls++
+		last = b
+		mu.Unlock()
+		io.WriteString(w, wireReplies[wire])
+	}))
+	t.Cleanup(srv.Close)
+	cfg := map[string]any{
+		"listen": "127.0.0.1:0", "client_keys": []string{clientKey}, "management_key": managementKey,
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "pluxy-extension.json"),
+			"accounts": []any{map[string]any{
+				"id":         "upstream-1",
+				"settings":   map[string]any{"base_url": srv.URL + "/v1", "wire_api": wire},
+				"credential": map[string]any{"kind": "api_key", "api_key": upstreamKey},
+			}},
+		},
+	}
+	if policy != "" {
+		cfg["drop_policy"] = policy
+	}
+	return runCore(t, cfg), func() (int, []byte) {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls, last
+	}
+}
+
+// A Responses client's service tier and verbosity do not go to a third-party host: nothing says its
+// API takes them (Mistral's Chat request, for one, refuses a field it does not list), so a request
+// translated to its wire goes without them and still succeeds, as it did before they were carried
+// across formats. The Codex CLI sends a verbosity on its own.
+func TestServiceTierThirdPartyHost(t *testing.T) {
+	const body = `{"model":"m","service_tier":"priority","text":{"verbosity":"low"},"input":"Hi"}`
+	for _, wire := range []string{"chat", "messages", "gemini"} {
+		t.Run(wire, func(t *testing.T) {
+			base, got := serviceTierCore(t, wire, "")
+			resp := postPath(t, context.Background(), base, "/v1/responses", clientKey, body)
+			raw, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK || !strings.Contains(string(raw), "Done.") {
+				t.Fatalf("status %d: %s", resp.StatusCode, raw)
+			}
+			n, sent := got()
+			if n != 1 {
+				t.Fatalf("upstream got %d requests, want 1", n)
+			}
+			var m map[string]json.RawMessage
+			if err := json.Unmarshal(sent, &m); err != nil {
+				t.Fatal(err)
+			}
+			for _, f := range []string{"service_tier", "verbosity", "speed", "serviceTier", "text"} {
+				if _, ok := m[f]; ok {
+					t.Errorf("upstream body has %s: %s", f, sent)
+				}
+			}
+		})
+	}
+}
+
+// Under the reject drop policy the same request is refused before it reaches the upstream, as it was
+// before a tier and a verbosity were carried across formats: the service tier and the verbosity are
+// among what the Chat wire cannot carry.
+func TestServiceTierThirdPartyHostReject(t *testing.T) {
+	base, got := serviceTierCore(t, "chat", "reject")
+	resp := postPath(t, context.Background(), base, "/v1/responses", clientKey,
+		`{"model":"m","service_tier":"priority","text":{"verbosity":"low"},"input":"Hi"}`)
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	t.Logf("status %d: %s", resp.StatusCode, raw)
+	if n, _ := got(); resp.StatusCode != http.StatusBadRequest || n != 0 || !strings.Contains(string(raw), "service_tier") {
+		t.Errorf("status %d with %d upstream calls: %s; want 400, no call, service_tier named", resp.StatusCode, n, raw)
 	}
 }

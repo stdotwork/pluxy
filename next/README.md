@@ -236,6 +236,15 @@ assistant message's content is a string, and thinking mode wants the reasoning b
 no developer role and an assistant message takes no `reasoning_content`). Other hosts, OpenRouter and
 Groq included, have no preset: their documentation names nothing they need shaped.
 
+A request from another client format carries the client's service tier and verbosity only to a host
+whose documentation names the field on that wire: `api.openai.com` on the Chat Completions and
+Responses wires (both), `api.anthropic.com` on the Messages wire (the service tier: `auto` and
+`default`; the priority tier needs fast mode's beta header, which this extension does not add, so it
+is dropped) and `generativelanguage.googleapis.com` on the Gemini wire (the service tier). Any other
+host, Mistral and OpenRouter included, gets neither on a translated request, which reports each as
+dropped at the client's field (and the `reject` drop policy refuses it), since an upstream may refuse a
+field it does not list. A client's own body goes upstream as it came, whatever the host.
+
 For an OpenAI-compatible account whose vendor offers a usage or balance endpoint for a normal API
 key, `GET /v0/management/accounts/{id}/quota` reads it: OpenRouter's `GET /api/v1/key` (reporting
 the plan `free` or `paid` from `is_free_tier`, the key's USD spending limit and remaining allowance
@@ -595,6 +604,11 @@ from a release's packages, add its `registry.json` under `packages.registries`, 
 The Codex provider extension (`extensions/codex`) serves OpenAI's Codex models from an OpenAI API
 key, a ChatGPT subscription or a Sign in with ChatGPT (SIWC) sign-in (below). Build it as `extensions/codex/codex` and name its manifest:
 
+A request in another client format carries the client's service tier and verbosity to Codex
+(Responses' `service_tier` and `text.verbosity`); the endpoint's own filter then keeps `priority`
+(`fast` too) and `ultrafast`, and a translated request that asked for another tier has it reported
+as dropped. The subscription's routing hint names the tier sent.
+
 ```json
 {
   "management_key": "choose-a-management-key",
@@ -941,6 +955,11 @@ The Gemini extension (`extensions/gemini`) talks to Google's Gemini models throu
 or Vertex AI. Point `extension.manifest` at `extensions/gemini/pluxy-extension.json`. A Gemini API
 key:
 
+A request in another client format carries the client's service tier to the Gemini API as
+`serviceTier` (`standard`, `flex` or `priority`; any other tier is reported as dropped) and none to
+Vertex AI, whose `generateContent` request has no such field; the client's verbosity has no place in
+either.
+
 ```json
 {"id": "gemini", "credential": {"kind": "api_key", "api_key": "AIza..."}}
 ```
@@ -1081,6 +1100,10 @@ the extension checks it with `GET {base_url}/v1/models` before storing it in cor
 store. Refused keys report Kimi's reason with secrets removed. A key also works as an account
 in the config:
 
+A request in another client format goes to Kimi without the client's service tier and verbosity,
+which are reported as dropped at the client's field: nothing says Kimi's API takes them. A client's
+own body goes as it came.
+
 ```json
 {"id": "kimi", "credential": {"kind": "api_key", "api_key": "sk-kimi-..."}}
 ```
@@ -1139,6 +1162,10 @@ account. Point `extension.manifest` at `extensions/xai/pluxy-extension.json`. An
 added with method `api_key` and secret input `api_key`, or from the config with the key as the
 credential. The login checks `GET {base_url}/models` and keeps an accepted key only in core's
 credential store; a refusal reports xAI's reason with secrets removed:
+
+A request in another client format goes to xAI without the client's service tier and verbosity,
+which are reported as dropped at the client's field: nothing says xAI's API takes them. A Responses
+client's own body goes as it came.
 
 ```json
 {"id": "xai", "credential": {"kind": "api_key", "api_key": "xai-..."}}
@@ -1339,6 +1366,10 @@ good; a 5xx, or a failure after the poll was sent, ends the login. The key does 
 timer: when Meta refuses it, core renews the credential once, which makes a new key from the
 device token. A Meta API key works too, by login with method `api_key` or in the config; a `dca:` token is refused
 as a key:
+
+A request in another client format goes to Meta without the client's service tier and verbosity,
+which are reported as dropped at the client's field: nothing says Meta's API takes them. A Responses
+client's own body goes as it came.
 
 ```json
 {"id": "meta", "credential": {"kind": "api_key", "api_key": "..."}}
