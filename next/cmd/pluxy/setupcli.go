@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/internal/core"
@@ -49,7 +50,7 @@ func setupCommands() []command {
 	return []command{
 		{
 			words:   "setup",
-			routes:  []string{"GET /setup"},
+			routes:  []string{"GET /setup", "GET /accounts", "GET /login-methods"},
 			summary: "show what core found on this machine and suggested packages",
 			flags: func(fs *flag.FlagSet, o *opts) {
 				fs.BoolVar(&o.yes, "yes", false, "apply suggested picks without asking")
@@ -69,7 +70,7 @@ func setupCommands() []command {
 		},
 		{
 			words:   "setup apply",
-			routes:  []string{"POST /setup/apply"},
+			routes:  []string{"POST /setup/apply", "GET /setup", "GET /accounts", "GET /login-methods"},
 			summary: "install and enable setup picks",
 			flags: func(fs *flag.FlagSet, o *opts) {
 				fs.Var(&o.picks, "pick", "package ID to install and enable (may be repeated)")
@@ -121,7 +122,7 @@ func runSetup(x *invocation) error {
 		if !x.json {
 			printSetup(x, s)
 		}
-		return applySuggested(x, suggestedUninstalled(s.Picks))
+		return applySuggested(x, s)
 	}
 	var s management.Setup
 	if err := x.call(http.MethodGet, "/setup", nil, nil, &s, func() {
@@ -129,11 +130,13 @@ func runSetup(x *invocation) error {
 	}); err != nil {
 		return err
 	}
-	todo := suggestedUninstalled(s.Picks)
-	if x.json || !x.tty || len(todo) == 0 {
+	if x.json {
 		return nil
 	}
-	if !confirm(x.stdin, x.stderr, fmt.Sprintf("Apply suggested picks (%s)? [y/N]: ", strings.Join(todo, ", "))) {
+	todo := suggestedUninstalled(s.Picks)
+	if !x.tty || len(todo) == 0 ||
+		!confirm(x.stdin, x.stderr, fmt.Sprintf("Apply suggested picks (%s)? [y/N]: ", strings.Join(todo, ", "))) {
+		x.nextStep(s)
 		return nil
 	}
 	return applySetupPicks(x, todo)
@@ -153,19 +156,24 @@ func runSetupApply(x *invocation) error {
 	todo := suggestedUninstalled(s.Picks)
 	if len(todo) > 0 && !x.opts.yes &&
 		!confirm(x.stdin, x.stderr, fmt.Sprintf("Apply suggested picks (%s)? [y/N]: ", strings.Join(todo, ", "))) {
+		if !x.json {
+			x.nextStep(s)
+		}
 		return nil
 	}
-	return applySuggested(x, todo)
+	return applySuggested(x, s)
 }
 
-// applySuggested applies the suggested picks not installed yet. With none, there is no reply to
+// applySuggested applies s's suggested picks not installed yet. With none, there is no reply to
 // print: with --json that is a usage error, otherwise a line says so.
-func applySuggested(x *invocation, todo []string) error {
+func applySuggested(x *invocation, s management.Setup) error {
+	todo := suggestedUninstalled(s.Picks)
 	if len(todo) == 0 {
 		if x.json {
 			return usageError{"no suggested picks to apply: name one with pluxy setup apply --pick <id>"}
 		}
 		x.printf("no suggested picks to apply\n")
+		x.nextStep(s)
 		return nil
 	}
 	return applySetupPicks(x, todo)
@@ -198,7 +206,71 @@ func applySetupPicks(x *invocation, picks []string) error {
 	if failed > 0 {
 		return fmt.Errorf("%d of %d picks failed", failed, len(r.Results))
 	}
+	if !x.json {
+		// The step that follows is the one for the state the picks left core in.
+		if s, err := x.client.Setup(x.ctx); err == nil {
+			x.nextStep(s)
+		}
+	}
 	return nil
+}
+
+// nextStep writes one line naming what to do next while first-run setup has not ended, for the
+// state core is in: s, and for the later steps its accounts and the providers that can add one.
+// It is a note for a person, so it goes to standard error, as a command's other notes do, and
+// standard output stays the tables. It writes nothing once setup has ended, or when core does
+// not answer what the line needs.
+func (x *invocation) nextStep(s management.Setup) {
+	if !s.FirstRun {
+		return
+	}
+	line := func() string {
+		if todo := suggestedUninstalled(s.Picks); len(todo) > 0 {
+			return fmt.Sprintf("pluxy setup apply --yes installs what core suggests (%s).", strings.Join(todo, ", "))
+		}
+		if s.Scanning {
+			// The suggestions follow from what the scan finds.
+			return "core is still looking at this machine: run pluxy setup again in a moment."
+		}
+		accounts, err := x.client.Accounts(x.ctx)
+		if err != nil {
+			return ""
+		}
+		if len(accounts) > 0 {
+			for _, c := range s.Found.Clients {
+				if c.Installed && c.State != "configured" && slices.Contains(core.ClientSnippetTools, c.ID) {
+					return fmt.Sprintf("pluxy client show %s prints what to paste into %s's config; then pluxy setup done ends first-run setup.", c.ID, cmpOr(c.Name, c.ID))
+				}
+			}
+			return "pluxy setup done ends first-run setup."
+		}
+		methods, err := x.loginMethods()
+		if err != nil {
+			return ""
+		}
+		// An account is added through a running provider, which is what offers a way to sign in.
+		var providers []string
+		for _, e := range methods.Extensions {
+			if len(e.Methods) > 0 {
+				providers = append(providers, e.Extension)
+			}
+		}
+		switch len(providers) {
+		case 0:
+			for _, p := range s.Picks {
+				if p.Kind == "provider" && !p.Installed {
+					return "install a provider with pluxy setup apply --pick <id>, an ID from the picks pluxy setup lists."
+				}
+			}
+			return "no provider is running, so no account can be added yet: pluxy ext list shows what is installed, and pluxy ext available what can be installed."
+		case 1:
+			return fmt.Sprintf("add an account with pluxy account add %s (pluxy account methods lists the ways to sign in).", providers[0])
+		}
+		return "add an account with pluxy account add <provider> (pluxy account methods lists the providers and their ways to sign in)."
+	}()
+	if line != "" {
+		x.eprintf("Next: %s\n", line)
+	}
 }
 
 func suggestedUninstalled(picks []management.SetupPick) []string {
@@ -317,7 +389,7 @@ func runImportCPA(x *invocation) error {
 	}
 	var r management.ImportReport
 	req := management.SetupImportRequest{Config: cfg, AuthDir: dir, DryRun: x.opts.dryRun}
-	return x.call(http.MethodPost, "/setup/import", nil, req, &r, func() {
+	err = x.call(http.MethodPost, "/setup/import", nil, req, &r, func() {
 		if r.DryRun {
 			x.printf("Dry run: nothing was written.\n")
 		}
@@ -348,4 +420,20 @@ func runImportCPA(x *invocation) error {
 			x.table(rows)
 		}
 	})
+	// A 400 is core saying it could not read what the command named (no such file, not a file,
+	// not an absolute path): its sentence is the whole answer, so no error code follows it.
+	var ae *management.APIError
+	if errors.As(err, &ae) && ae.Status == http.StatusBadRequest && ae.Code != "" {
+		return unreadableError{api: ae}
+	}
+	return err
 }
+
+// unreadableError is an API error printed as core's message alone. It is still the API error
+// for the exit code and for --json, which prints the reply's body.
+type unreadableError struct {
+	api *management.APIError
+}
+
+func (e unreadableError) Error() string { return e.api.Message }
+func (e unreadableError) Unwrap() error { return e.api }

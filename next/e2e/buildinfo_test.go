@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -65,13 +64,13 @@ func TestBuildInfoFromLinker(t *testing.T) {
 	}
 }
 
-// TestBuildInfoDefaults checks the build made without -ldflags, as TestMain makes it: -version
-// still prints exactly one line with a version, a commit and a build date.
+// TestBuildInfoDefaults checks the build made without -ldflags and without the checkout's
+// commit, as TestMain makes it (-buildvcs=false): -version still prints exactly one line, which
+// says in words that the build recorded no commit or date.
 func TestBuildInfoDefaults(t *testing.T) {
 	out, err := exec.Command(filepath.Join(binDir, "pluxy"), "-version").CombinedOutput()
-	line, ok := strings.CutSuffix(string(out), "\n")
-	if err != nil || !ok || !regexp.MustCompile(`^pluxy \S+ \(\S+, \S+\)$`).MatchString(line) {
-		t.Errorf("-version: %v; output %q, want one line matching ^pluxy \\S+ \\(\\S+, \\S+\\)$", err, out)
+	if want := "pluxy dev (no commit or build date recorded)\n"; err != nil || string(out) != want {
+		t.Errorf("-version: %v; output %q, want %q", err, out, want)
 	}
 }
 

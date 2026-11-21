@@ -109,7 +109,7 @@ refused at start, with a message saying how to add one. A first start installs n
 the providers you use from the bundled registry ([Packages](#packages)) or the panel. Flags:
 
 - `-config`: the config file (default `config.json`).
-- `-version`: print the build's version, commit and build date on one line, `pluxy <version> (<commit>, <date>)`, and exit. It does not read the config. Core logs the same line when it starts.
+- `-version`: print the build's version, commit and build date on one line, `pluxy <version> (<commit>, <date>)`, and exit. A build that recorded no commit or date (one made with `go run`, with `-buildvcs=false` or outside a git checkout) says so instead: `pluxy dev (no commit or build date recorded)`. It does not read the config. Core logs the same line when it starts.
 - `-safe-mode`: start with no extensions: client requests fail, the management API works.
 - `-watch-interval`: how often core looks for changes to the config file; `0` turns the watch off (default `1s`).
 - `-bundled`: the index of the bundled packages (default `bundled/index.json` beside the program, when it exists); see [Packages](#packages).

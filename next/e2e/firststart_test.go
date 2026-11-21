@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -63,6 +64,15 @@ func TestFirstStartWritesConfigAndInstallsNothing(t *testing.T) {
 		t.Fatal(err)
 	}
 	all := logs.waitFor(t, "first start: wrote a new config, "+path)
+	// Once it listens it says where to go on: the panel when this build has one, and the command
+	// with what it needs to reach this core.
+	next := "pluxy: first-run setup is not finished. Next: open " + base + "/panel/ in a browser and sign in with the management key, or run pluxy setup --config " + path
+	if _, err := os.Stat(filepath.Join("..", "internal", "panel", "dist", "index.html")); err != nil {
+		next = "pluxy: first-run setup is not finished. Next: run pluxy setup --config " + path
+	}
+	if !slices.Contains(strings.Split(logs.waitFor(t, "first-run setup"), "\n"), next) {
+		t.Errorf("the start's log has no line %q", next)
+	}
 
 	info, err := os.Stat(path)
 	if err != nil {

@@ -47,8 +47,24 @@ func Get() (version, commit, date string) {
 	return version, commit, date
 }
 
-// Line is the one line that says which build runs: pluxy <version> (<commit>, <date>).
+// Line is the one line that says which build runs: Format of what Get returns.
 func Line() string {
-	version, commit, date := Get()
-	return fmt.Sprintf("pluxy %s (%s, %s)", version, commit, date)
+	return Format(Get())
+}
+
+// Format is the line for a build with these values, as Get and GET /status give them: pluxy
+// <version> (<commit>, <date>). A commit or a date that is empty or "unknown" is left out: the
+// one that is known stands alone, and with neither the line says that none was recorded. A
+// build made with go run, with -buildvcs=false or outside a git checkout records neither.
+func Format(version, commit, date string) string {
+	known := func(v string) bool { return v != "" && v != "unknown" }
+	switch {
+	case known(commit) && known(date):
+		return fmt.Sprintf("pluxy %s (%s, %s)", version, commit, date)
+	case known(commit):
+		return fmt.Sprintf("pluxy %s (%s)", version, commit)
+	case known(date):
+		return fmt.Sprintf("pluxy %s (built %s)", version, date)
+	}
+	return fmt.Sprintf("pluxy %s (no commit or build date recorded)", version)
 }

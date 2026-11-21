@@ -140,6 +140,29 @@ func firstStart(configPath string, inherited bool) error {
 	return nil
 }
 
+// setupStartLine is what core's start says while first-run setup has not ended: where to go
+// on. It names the panel only when this build serves one (panelBuilt), at local, the address
+// core is reached at on this machine, and the setup command with what it needs to find this
+// core: the config file when it is not the default one, and the address when the config's
+// listen address does not give it (port 0, a port core picked at start).
+func setupStartLine(panelBuilt bool, local, configPath, listen string) string {
+	command := "pluxy setup"
+	if configPath != "config.json" {
+		arg := configPath
+		if strings.ContainsAny(arg, " \t") {
+			arg = `"` + arg + `"` // one argument when the line is pasted into a shell
+		}
+		command += " --config " + arg
+	}
+	if _, port, err := net.SplitHostPort(listen); err != nil || port == "0" {
+		command += " --url " + local
+	}
+	if !panelBuilt {
+		return "first-run setup is not finished. Next: run " + command
+	}
+	return fmt.Sprintf("first-run setup is not finished. Next: open %s%s in a browser and sign in with the management key, or run %s", local, panel.Prefix, command)
+}
+
 // initConfig is pluxy init: it writes a first config, as a first start does, without starting
 // core, and returns the exit code.
 func initConfig(args []string, stdout, stderr io.Writer) int {
@@ -297,6 +320,12 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string, 
 
 	fmt.Fprintf(os.Stderr, "pluxy: listening on %s://%s\n", scheme, ln.Addr())
 	fmt.Fprintf(os.Stderr, "pluxy: extension pages on http://%s\n", pagesLn.Addr())
+	// A core handed its socket was started by a program, which shows setup itself.
+	if listenFD < 0 && c.Status().FirstRun {
+		if local, err := server.LocalURL(ln.Addr().String(), tlsConfig != nil); err == nil {
+			fmt.Fprintf(os.Stderr, "pluxy: %s\n", setupStartLine(panel.Built(assets), local, configPath, cfg.Listen))
+		}
+	}
 
 	errc := make(chan error, 2)
 	go func() {

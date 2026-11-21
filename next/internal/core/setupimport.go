@@ -57,6 +57,10 @@ func (c *Core) ImportCPA(req management.SetupImportRequest) (management.ImportRe
 		return management.ImportReport{}, err
 	}
 	b, err := readImportConfig(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		// In words that also read well inside the panel's own sentence about a setup it could not read.
+		return management.ImportReport{}, &editError{http.StatusBadRequest, "invalid_request", "there is no file at " + path}
+	}
 	if err != nil {
 		return management.ImportReport{}, &editError{http.StatusBadRequest, "invalid_request", err.Error()}
 	}
@@ -100,6 +104,8 @@ func (c *Core) ImportCPA(req management.SetupImportRequest) (management.ImportRe
 			res.Ledger.Update(legacy.ConfigItem(authDirKey(res)), func(list *int, row *legacy.Row) {
 				*list, row.Why = legacy.NotBrought, "the folder "+dir+" is not there"
 			})
+		case errors.Is(err, fs.ErrNotExist) && missing(dir):
+			return management.ImportReport{}, &editError{http.StatusBadRequest, "invalid_request", "there is no auth folder at " + dir}
 		case err != nil:
 			return management.ImportReport{}, &editError{http.StatusBadRequest, "invalid_request", "auth folder: " + err.Error()}
 		}
@@ -556,6 +562,13 @@ func importPath(p, name string) (string, error) {
 		return "", &editError{http.StatusBadRequest, "invalid_request", name + " must be an absolute path on core's machine"}
 	}
 	return filepath.Clean(p), nil
+}
+
+// missing reports whether nothing is at path. A folder that is there can still fail to be read
+// for a file in it that went away meanwhile.
+func missing(path string) bool {
+	_, err := os.Stat(path)
+	return errors.Is(err, fs.ErrNotExist)
 }
 
 // readImportConfig reads the config a management call names, opened without waiting for a
