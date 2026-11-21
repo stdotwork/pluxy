@@ -16,11 +16,11 @@ func TestMarkContextOverflow(t *testing.T) {
 	} {
 		e := &Error{Code: CodeUpstream, Scope: ScopeEndpoint, Message: msg, Retryable: true}
 		_ = MarkContextOverflow(e)
-		if e.Code != CodeInvalidRequest || e.Scope != ScopeRequest || e.Status != 400 || e.ProviderCode != CodeContextLengthExceeded || e.Retryable {
+		if e.Code != CodeInvalidRequest || e.Scope != ScopeRequest || e.Status != 400 || e.ProviderCode != ProviderContextLengthExceeded || e.Retryable {
 			t.Errorf("%q: %+v, want an overflow on this request only", msg, e)
 		}
 	}
-	coded := &Error{Code: CodeUpstream, ProviderCode: CodeContextLengthExceeded, Message: "too big"}
+	coded := &Error{Code: CodeUpstream, ProviderCode: ProviderContextLengthExceeded, Message: "too big"}
 	if _ = MarkContextOverflow(coded); coded.Scope != ScopeRequest || coded.Status != 400 {
 		t.Errorf("an error with the code = %+v", coded)
 	}

@@ -5,10 +5,10 @@ import (
 	"strings"
 )
 
-// CodeContextLengthExceeded is the provider code of an error that says the prompt does not fit the
+// ProviderContextLengthExceeded is the provider code of an error that says the prompt does not fit the
 // model's context window. It is OpenAI's code, and the one the Codex CLI compacts on, with status
 // 400 or in a stream.
-const CodeContextLengthExceeded = "context_length_exceeded"
+const ProviderContextLengthExceeded = "context_length_exceeded"
 
 // contextOverflowMessages are the upstream messages, in lower case, that say the prompt does not
 // fit. They are those LiteLLM's is_error_str_context_window_exceeded recognises, without its
@@ -43,7 +43,7 @@ func isContextOverflow(message string) bool {
 }
 
 // MarkContextOverflow gives err, when it is an upstream's refusal of a prompt too long for the
-// model, the code CodeContextLengthExceeded, status 400 and ScopeRequest: it fails this request
+// model, the code ProviderContextLengthExceeded, status 400 and ScopeRequest: it fails this request
 // only, and is not tried on another account. Any other error comes back unchanged. An extension
 // calls it on the errors of its upstream's replies.
 func MarkContextOverflow(err error) error {
@@ -52,10 +52,10 @@ func MarkContextOverflow(err error) error {
 		(e.Code != CodeInvalidRequest && e.Code != CodeUpstream) {
 		return err
 	}
-	if e.ProviderCode != CodeContextLengthExceeded && !isContextOverflow(e.Message) {
+	if e.ProviderCode != ProviderContextLengthExceeded && !isContextOverflow(e.Message) {
 		return err
 	}
 	e.Code, e.Scope, e.Status, e.Retryable = CodeInvalidRequest, ScopeRequest, 400, false
-	e.ProviderCode = CodeContextLengthExceeded
+	e.ProviderCode = ProviderContextLengthExceeded
 	return err
 }

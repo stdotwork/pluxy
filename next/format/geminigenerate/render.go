@@ -602,7 +602,7 @@ func ErrorResponse(e *llm.Error) (int, []byte) {
 				body["details"] = g.Error.Details
 			}
 			// An overflow's provider code is not Google's: it keeps the status Google gave it.
-			if _, ok := googleStatus[g.Error.Status]; ok && e.ProviderCode == llm.CodeContextLengthExceeded {
+			if _, ok := googleStatus[g.Error.Status]; ok && e.ProviderCode == llm.ProviderContextLengthExceeded {
 				body["status"] = g.Error.Status
 			}
 		}
