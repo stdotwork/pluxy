@@ -538,9 +538,8 @@ test("bringing a setup across is a dry run first, then the import, which re-read
   // The provider the accounts need is ticked, and Start now installs it.
   expect(tickedBoxes(fake.root)).toBe(1);
   expect(fake.text()).toContain("Start installs: Claude.");
-  // Setup, the accounts and the packages are read again: once to see that core still takes the
-  // key, once by the page.
-  expect(reads(fake.calls, "/setup")).toBe(3);
+  // Setup, the accounts and the packages are read again by the page.
+  expect(reads(fake.calls, "/setup")).toBe(2);
   expect(reads(fake.calls, "/accounts")).toBe(2);
   expect(reads(fake.calls, "/packages")).toBe(2);
   expect(fake.signedOut.times).toBe(0);
@@ -548,6 +547,23 @@ test("bringing a setup across is a dry run first, then the import, which re-read
   await press(fake.root, "Close");
   expect(fake.text()).not.toContain("Brought across (1)");
   expect(tickedBoxes(fake.root)).toBe(1);
+});
+
+test("after a real import the page reads setup once more, without probing for a changed key", async () => {
+  const fake = await mount((call) => {
+    if (call.method === "GET" && call.path === "/setup") return { status: 200, body: withImport() };
+    if (call.path === "/setup/import") {
+      return { status: 200, body: report((call.body as { dry_run: boolean }).dry_run) };
+    }
+    return quiet(call);
+  });
+  await press(fake.root, "Bring it across");
+  await press(fake.root, "Bring it across now");
+  expect(fake.text()).toContain("Done. This is what was brought across:");
+  // One read to open the page and one by the page after the import. An import keeps pluxy's
+  // management key, so there is no key to probe for and no sign-in to send the person to.
+  expect(reads(fake.calls, "/setup")).toBe(2);
+  expect(fake.signedOut.times).toBe(0);
 });
 
 test("a refused import says why, drops the report, and can be tried again", async () => {
@@ -582,44 +598,6 @@ test("a refused import says why, drops the report, and can be tried again", asyn
   status = 401;
   await press(fake.root, "Bring it across now");
   expect(fake.signedOut.times).toBe(1);
-});
-
-test("an import that changed the management key keeps its report on screen until the person signs in again", async () => {
-  let imported = false;
-  const fake = await mount((call) => {
-    if (call.method === "GET" && call.path === "/setup") {
-      return imported ? { status: 401 } : { status: 200, body: withImport() };
-    }
-    if (call.path === "/setup/import") {
-      const dry = (call.body as { dry_run: boolean }).dry_run;
-      imported = !dry;
-      return { status: 200, body: { ...report(dry), brought: [{ what: "management.secret-key" }] } };
-    }
-    return quiet(call);
-  });
-  await press(fake.root, "Bring it across");
-  expect(fake.text()).toContain("it becomes pluxy's management key");
-  await press(fake.root, "Bring it across now");
-  expect(fake.text()).toContain("Done. This is what was brought across:");
-  expect(fake.text()).toContain("it is now the management key of the CLIProxyAPI setup");
-  expect(fake.signedOut.times).toBe(0);
-  expect(reads(fake.calls, "/accounts")).toBe(1);
-  await press(fake.root, "Sign in again");
-  expect(fake.signedOut.times).toBe(1);
-});
-
-test("a host with no sign-in of its own sends no import that would replace the management key", async () => {
-  const fake = await mount((call) => {
-    if (call.method === "GET" && call.path === "/setup") return { status: 200, body: withImport() };
-    if (call.path === "/setup/import") {
-      return { status: 200, body: { ...report(true), brought: [{ what: "management.secret-key" }] } };
-    }
-    return quiet(call);
-  }, []);
-  await press(fake.root, "Bring it across");
-  expect(fake.text()).toContain("sets a management key (management.secret-key)");
-  expect(all(fake.root, "button").map((node) => node.textContent)).not.toContain("Bring it across now");
-  expect(imports(fake.calls).map((call) => (call.body as { dry_run: boolean }).dry_run)).toEqual([true]);
 });
 
 test("the accounts are read again when the window gets focus, and not after the page is left", async () => {

@@ -9,7 +9,6 @@ import {
   importCommand,
   importProblem,
   neededPicks,
-  newManagementKey,
   type SetupOptions,
   SetupView,
 } from "../kit/pages/setup";
@@ -161,8 +160,6 @@ function view(
     remote?: boolean;
     options?: SetupOptions;
     bringing?: ImportState | "offered";
-    /** The host has no sign-in of its own to give a new management key to. */
-    keyFixed?: boolean;
   } = {},
 ) {
   const results = more.results ?? {};
@@ -180,8 +177,6 @@ function view(
           state: more.bringing === "offered" ? undefined : more.bringing,
           onBring: nothing,
           onClose: nothing,
-          onSignIn: nothing,
-          keyFixed: more.keyFixed,
         }
       }
       onLook={nothing}
@@ -498,15 +493,10 @@ const dryReport: ImportReport = {
       why: "core keeps listening on 127.0.0.1:8317: listen cannot change while core runs",
       keep_with: '"listen": "0.0.0.0:8317" in pluxy\'s config file, then restart core',
     },
-    {
-      what: "management.secret-key",
-      from: "(a bcrypt hash of the key)",
-      to: "(a new key, shown once when the import runs)",
-      why: "today's core keeps only a bcrypt hash of its management key, which pluxy cannot use",
-    },
   ],
   not_brought: [
     { what: "debug", why: "this core writes no debug-level log lines" },
+    { what: "management.secret-key", why: "pluxy keeps its own management key" },
     { what: "auth file", name: "claude-a.json", why: "core already has an account claude-a, which it keeps" },
     { what: "auth file", name: "kiro-a.json", why: "pluxy has no provider for it" },
   ],
@@ -538,62 +528,42 @@ test("the dry run's report shows core's three lists with counts, what is needed,
   const page = view(found, { bringing: { config, report: dryReport } });
   expect(page).toContain("Nothing is written yet.");
   expect(page).toContain("<summary>Comes across (2)</summary>");
-  expect(page).toContain("<summary>Different in pluxy (2)</summary>");
-  expect(page).toContain("<summary>Does not come across (3)</summary>");
+  expect(page).toContain("<summary>Different in pluxy (1)</summary>");
+  expect(page).toContain("<summary>Does not come across (4)</summary>");
   expect(page).toContain('<strong class="mono">auth file gemini-work.json</strong>');
   expect(page).toContain("pluxy/gemini account gemini-work");
   expect(page).toContain("core already has an account claude-a, which it keeps");
   expect(page).toContain("pluxy has no provider for it");
+  // A row that stays behind says why, the management key included.
+  expect(page).toContain("pluxy keeps its own management key");
   expect(page).toContain("&quot;listen&quot;: &quot;0.0.0.0:8317&quot; in pluxy's config file");
   expect(page).toContain("Gemini is not installed, and 1 account needs it. You can install it once");
   expect(page).toContain("example/other is not installed, and 2 accounts need it.");
-  expect(page).toContain("This replaces pluxy's management key");
   expect(page).toContain(">Bring it across now</button>");
   expect(page).toContain(">Cancel</button>");
   // The row's own button and the command make way for the report.
   expect(page).not.toContain(">Bring it across</button>");
   expect(page).not.toContain("Or use the command");
-  // A plain management key is brought as it is: the page says what that does to the sign-in.
-  const plain = { ...dryReport, changed: [], brought: [{ what: "remote-management.secret-key" }] };
-  expect(view(found, { bringing: { config, report: plain } })).toContain("it becomes pluxy's management key");
 });
 
 test("after the import the report says what was brought, and where to install what the accounts need", () => {
-  const made = "made-up-management-key";
-  const report: ImportReport = {
-    ...dryReport,
-    dry_run: false,
-    changed: dryReport.changed.map((row) =>
-      row.what === "management.secret-key" ? { ...row, to: made } : row,
-    ),
-  };
-  expect(newManagementKey(dryReport)).toBeUndefined();
-  expect(newManagementKey(report)).toBe(made);
+  const report: ImportReport = { ...dryReport, dry_run: false };
   // Gemini is on the page's list, so it is ticked; a package the page does not offer is not.
   expect(neededPicks(found, report)).toEqual({ "pluxy/gemini": true });
 
   const page = view(found, { bringing: { config, report, done: true } });
   expect(page).toContain("Done. This is what was brought across:");
   expect(page).toContain("<summary>Brought across (2)</summary>");
-  expect(page).toContain("<summary>Not brought across (3)</summary>");
+  expect(page).toContain("<summary>Not brought across (4)</summary>");
   expect(page).toContain("It is ticked under Providers: press Start to install it.");
   expect(page).toContain(
     "example/other is not installed, and 2 accounts need it. Install it on the Extensions page.",
   );
   expect(page).toContain(">Close</button>");
   expect(page).not.toContain("Bring it across now");
-  // The new key is never in the list. It is shown once, apart, when core stopped taking the old one.
-  expect(page).not.toContain(made);
-  expect(page).toContain("(the new management key, shown below)");
-  const changed = view(found, { bringing: { config, report, done: true, keyChanged: true } });
-  expect(changed.match(new RegExp(made, "g"))).toHaveLength(1);
-  expect(changed).toContain(`<code data-part="key-value">${made}</code>`);
-  expect(changed).toContain(">Sign in again</button>");
-  expect(changed).not.toContain(">Close</button>");
-  const plain = { ...report, changed: [] };
-  expect(view(found, { bringing: { config, report: plain, done: true, keyChanged: true } })).toContain(
-    "it is now the management key of the CLIProxyAPI setup",
-  );
+  // The import keeps pluxy's management key, so there is no new key and no sign-in to send to.
+  expect(page).not.toContain("Sign in again");
+  expect(page).not.toContain("New management key");
 });
 
 test("each refusal is said in words a person can act on", () => {
@@ -629,26 +599,4 @@ test("each refusal is said in words a person can act on", () => {
   );
   expect(onOld).not.toContain(">Bring it across</button>");
   expect(onOld).not.toContain("Or use the command");
-});
-
-test("a host that cannot sign in again does not offer an import that would replace the management key", () => {
-  // The desktop app running its own pluxy keeps the key itself: no sign-in could take a new one.
-  for (const report of [
-    dryReport,
-    { ...dryReport, changed: [], brought: [{ what: "remote-management.secret-key" }] },
-  ]) {
-    const page = view(found, { bringing: { config, report }, keyFixed: true });
-    expect(page).toContain("<summary>Comes across (");
-    expect(page).toContain("sets a management key (");
-    expect(page).toContain("the app could not reach pluxy afterwards");
-    expect(page).toContain("remove that line from the CLIProxyAPI config");
-    expect(page).not.toContain(">Bring it across now</button>");
-    expect(page).not.toContain("you sign in again");
-    expect(page).toContain(">Cancel</button>");
-  }
-  // A setup with no management key comes across there as anywhere.
-  const plain = { ...dryReport, changed: [] };
-  const page = view(found, { bringing: { config, report: plain }, keyFixed: true });
-  expect(page).toContain(">Bring it across now</button>");
-  expect(page).not.toContain("sets a management key");
 });
