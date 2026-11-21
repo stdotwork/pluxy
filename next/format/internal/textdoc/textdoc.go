@@ -38,7 +38,7 @@ func FromAnthropic(raw []byte) (text, title string, ok bool) {
 // one line, its line breaks (and the other separators a line break can be written with) becoming
 // spaces, so it cannot end the delimiter early.
 func Wrap(title, text string) string {
-	name := strings.NewReplacer("\r", " ", "\n", " ", "\u2028", " ", "\u2029", " ", "\u0085", " ").Replace(title)
+	name := strings.NewReplacer("\r", " ", "\n", " ", "\v", " ", "\f", " ", "\u2028", " ", "\u2029", " ", "\u0085", " ").Replace(title)
 	if name != "" {
 		return "[Document: " + name + "]\n" + text + "\n[End of document: " + name + "]"
 	}

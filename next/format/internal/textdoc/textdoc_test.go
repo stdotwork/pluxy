@@ -62,4 +62,7 @@ func TestWrap(t *testing.T) {
 	if got, want := Wrap("a\u2028b\u2029c\u0085d", "x"), "[Document: a b c d]\nx\n[End of document: a b c d]"; got != want {
 		t.Errorf("Wrap with other line separators in the title = %q, want %q", got, want)
 	}
+	if got, want := Wrap("a\vb\fc", "x"), "[Document: a b c]\nx\n[End of document: a b c]"; got != want {
+		t.Errorf("Wrap with a vertical tab or form feed in the title = %q, want %q", got, want)
+	}
 }
