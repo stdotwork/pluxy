@@ -143,6 +143,8 @@
     position: sticky;
     top: 0;
     height: 100vh;
+    /* More entries than the window is tall: the navigation scrolls by itself. */
+    overflow-y: auto;
     border-inline-end-width: var(--px-shape-border);
     padding: calc(var(--s) * 2);
   }

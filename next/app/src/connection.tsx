@@ -231,83 +231,85 @@ export function ConnectionPage(props: { connection: Connection; onChange: (c: Co
   return (
     <>
       <PageHead title="Connection" />
-      {c.mode && (
-        <Card title="Now">
-          <Facts rows={describe(c)} />
-          {c.error && <Notice tone="danger">{c.error}</Notice>}
-          {c.target && !c.signed_in && (
-            <Notice tone="warn">
-              Not signed in to this core: enter its management key in the native dialog.
-            </Notice>
-          )}
-          {c.mode === "managed" && c.core?.state !== "missing" && (
-            <div class="actions">
-              <Button disabled={busy} onClick={() => apply(coreAction(c))}>
-                {c.core?.state === "running" ? "Restart core" : "Start core"}
-              </Button>
-            </div>
-          )}
+      <div class="stack">
+        {c.mode && (
+          <Card title="Now">
+            <Facts rows={describe(c)} />
+            {c.error && <Notice tone="danger">{c.error}</Notice>}
+            {c.target && !c.signed_in && (
+              <Notice tone="warn">
+                Not signed in to this core: enter its management key in the native dialog.
+              </Notice>
+            )}
+            {c.mode === "managed" && c.core?.state !== "missing" && (
+              <div class="actions">
+                <Button disabled={busy} onClick={() => apply(coreAction(c))}>
+                  {c.core?.state === "running" ? "Restart core" : "Start core"}
+                </Button>
+              </div>
+            )}
+          </Card>
+        )}
+        {c.mode === "managed" && <CoreVersions connection={c} />}
+        <Card title={c.mode ? "Change" : "How should the app reach core?"}>
+          <form
+            aria-label="Connection"
+            onSubmit={(e) => {
+              e.preventDefault();
+              apply(async () => {
+                const next = change();
+                if (next.mode === "managed") return connectionSet(next);
+                const result = await keyEntry(next);
+                return result.connection;
+              });
+            }}
+          >
+            <Choices label="Mode" value={mode} choices={MODES} onChange={setMode} />
+            {mode === "managed" && (
+              <>
+                <Field
+                  label="Core source"
+                  hint="The full path of an index of signed core releases. The app has no built-in source."
+                  value={coreSource}
+                  onInput={setCoreSource}
+                />
+                <Field
+                  label="Core program (optional)"
+                  hint="A core program of your own, by full path, to adopt: the app copies it into its own cores and runs the copy. Empty: the pluxy program beside the app."
+                  value={corePath}
+                  onInput={setCorePath}
+                />
+              </>
+            )}
+            {(mode === "local" || mode === "remote") && (
+              <Field
+                label="Address"
+                hint={
+                  mode === "local"
+                    ? "This computer only, such as http://127.0.0.1:8400."
+                    : "https only, such as https://pluxy.example."
+                }
+                value={url}
+                onInput={setUrl}
+              />
+            )}
+            {mode === "remote" && (
+              <Field
+                label="Certificate authority (optional)"
+                hint="A PEM file to trust for this core, for a certificate you made yourself."
+                value={caFile}
+                onInput={setCaFile}
+              />
+            )}
+            {error && <Notice tone="danger">{error}</Notice>}
+            <Button type="submit" variant="primary" disabled={busy || !mode}>
+              {busy ? "Connecting…" : mode === "managed" ? "Connect" : "Enter management key"}
+            </Button>
+          </form>
         </Card>
-      )}
-      {c.mode === "managed" && <CoreVersions connection={c} />}
-      <Card title={c.mode ? "Change" : "How should the app reach core?"}>
-        <form
-          aria-label="Connection"
-          onSubmit={(e) => {
-            e.preventDefault();
-            apply(async () => {
-              const next = change();
-              if (next.mode === "managed") return connectionSet(next);
-              const result = await keyEntry(next);
-              return result.connection;
-            });
-          }}
-        >
-          <Choices label="Mode" value={mode} choices={MODES} onChange={setMode} />
-          {mode === "managed" && (
-            <>
-              <Field
-                label="Core source"
-                hint="The full path of an index of signed core releases. The app has no built-in source."
-                value={coreSource}
-                onInput={setCoreSource}
-              />
-              <Field
-                label="Core program (optional)"
-                hint="A core program of your own, by full path, to adopt: the app copies it into its own cores and runs the copy. Empty: the pluxy program beside the app."
-                value={corePath}
-                onInput={setCorePath}
-              />
-            </>
-          )}
-          {(mode === "local" || mode === "remote") && (
-            <Field
-              label="Address"
-              hint={
-                mode === "local"
-                  ? "This computer only, such as http://127.0.0.1:8400."
-                  : "https only, such as https://pluxy.example."
-              }
-              value={url}
-              onInput={setUrl}
-            />
-          )}
-          {mode === "remote" && (
-            <Field
-              label="Certificate authority (optional)"
-              hint="A PEM file to trust for this core, for a certificate you made yourself."
-              value={caFile}
-              onInput={setCaFile}
-            />
-          )}
-          {error && <Notice tone="danger">{error}</Notice>}
-          <Button type="submit" variant="primary" disabled={busy || !mode}>
-            {busy ? "Connecting…" : mode === "managed" ? "Connect" : "Enter management key"}
-          </Button>
-        </form>
-      </Card>
-      <StartupSettings />
-      <WindowSettings />
+        <StartupSettings />
+        <WindowSettings />
+      </div>
     </>
   );
 }

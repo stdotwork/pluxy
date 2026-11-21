@@ -321,6 +321,23 @@ test("the Themes page says what is still true, and what to do about a file it ca
   ]);
 });
 
+test("in a window shorter than the side navigation, the navigation scrolls to its last entry", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1100, height: 320 });
+  await open(page);
+  await signIn(page, core);
+  const bar = nav(page);
+  const last = bar.getByRole("link").last();
+  // The navigation is taller than the window: its last entry starts out of view.
+  expect(await bar.evaluate((n) => n.scrollHeight > n.clientHeight)).toBe(true);
+  await expect(last).not.toBeInViewport();
+  // The wheel over the navigation reaches it, on a page too short to scroll itself.
+  await bar.hover({ position: { x: 20, y: 20 } });
+  await page.mouse.wheel(0, 4000);
+  await expect(last).toBeInViewport({ ratio: 1 });
+});
+
 test("with the navigation on top in a narrow window, the current page's entry is in view and the bar shows there is more", async ({
   page,
 }) => {
@@ -347,7 +364,7 @@ test("with the navigation on top in a narrow window, the current page's entry is
 test("a change of page opens the new page at its top; a change inside a page keeps the place", async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 1280, height: 500 });
+  await page.setViewportSize({ width: 1280, height: 250 });
   await open(page);
   await signIn(page, core);
   const scrolled = () => page.evaluate(() => window.scrollY);

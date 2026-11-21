@@ -183,9 +183,13 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
       <KitContext.Provider value={kit}>
         <div class="shell" data-part="shell">
           <main class="main" data-part="main">
-            <div class="content">
-              <ConnectionPage connection={shown} onChange={changed} />
-              <DevicePage onChanged={loadDevice} />
+            <div class="content stack">
+              <div>
+                <ConnectionPage connection={shown} onChange={changed} />
+              </div>
+              <div>
+                <DevicePage onChanged={loadDevice} />
+              </div>
             </div>
           </main>
         </div>
