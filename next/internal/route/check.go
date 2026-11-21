@@ -138,7 +138,7 @@ func (s *State) checked(claims []claim, q *protocol.Quota, e *llm.Error, now tim
 				*b = block{mark: b.mark, reason: b.reason}
 				break
 			}
-			d, source := s.resetFor(reset.Sub(now).Milliseconds())
+			d, source := s.resetFor(reset.Sub(now).Milliseconds(), window)
 			why := ""
 			if source == SourceUnverified {
 				why = unverifiedWhy

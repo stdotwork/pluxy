@@ -279,29 +279,77 @@ func TestNewestWordReplaces(t *testing.T) {
 }
 
 // A reset a provider names beyond 8 days is not believed, and does not overflow: the account is
-// held 30 minutes and checked at 15. One under a second is held a second.
+// held 30 minutes and checked at 15. One under a second is held a second. When the provider names
+// the usage window's length too, the rule is that window's length plus an hour: a month's reset
+// on a monthly window is believed, the same reset on a five-hour window is not.
 func TestResetBounds(t *testing.T) {
+	const day = 24 * time.Hour
 	for _, c := range []struct {
 		ms           int64
+		window       int64 // the usage window's length in minutes; 0: not known
 		left, check  time.Duration
 		source, kind string
 	}{
-		{1, time.Second, 0, SourceProvider, HealthCooling},
-		{(8 * 24 * time.Hour).Milliseconds(), 8 * 24 * time.Hour, 15 * time.Minute, SourceProvider, HealthExhausted},
-		{(8 * 24 * time.Hour).Milliseconds() + 1, 30 * time.Minute, 15 * time.Minute, SourceUnverified, HealthExhausted},
-		{1 << 62, 30 * time.Minute, 15 * time.Minute, SourceUnverified, HealthExhausted},
+		{1, 0, time.Second, 0, SourceProvider, HealthCooling},
+		{(8 * day).Milliseconds(), 0, 8 * day, 15 * time.Minute, SourceProvider, HealthExhausted},
+		{(8 * day).Milliseconds() + 1, 0, 30 * time.Minute, 15 * time.Minute, SourceUnverified, HealthExhausted},
+		{1 << 62, 0, 30 * time.Minute, 15 * time.Minute, SourceUnverified, HealthExhausted},
+		{(29 * day).Milliseconds(), 30 * 24 * 60, 29 * day, 15 * time.Minute, SourceProvider, HealthExhausted},
+		{(29 * day).Milliseconds(), 5 * 60, 30 * time.Minute, 15 * time.Minute, SourceUnverified, HealthExhausted},
+		{(30*day + time.Hour).Milliseconds(), 30 * 24 * 60, 30*day + time.Hour, 15 * time.Minute, SourceProvider, HealthExhausted},
+		{(31 * day).Milliseconds(), 30 * 24 * 60, 30 * time.Minute, 15 * time.Minute, SourceUnverified, HealthExhausted},
 	} {
 		st := NewState()
 		now := time.Unix(1_700_000_000, 0)
-		st.failure(&Account{ID: "a"}, "m", 1, &llm.Error{Code: llm.CodeQuota, Scope: llm.ScopeCredential, RetryAfterMS: c.ms}, now, 0)
+		st.failure(&Account{ID: "a"}, "m", 1, &llm.Error{Code: llm.CodeQuota, Scope: llm.ScopeCredential, RetryAfterMS: c.ms, QuotaWindowMinutes: c.window}, now, 0)
 		got := st.Health(Account{ID: "a"}, now, Hold{})
 		var check time.Duration
 		if got.NextCheck != nil {
 			check = got.NextCheck.Sub(now)
 		}
 		if got.Until == nil || got.Until.Sub(now) != c.left || check != c.check || got.Source != c.source || got.State != c.kind {
-			t.Errorf("reset of %d ms: %+v, want %s for %v from %s, checked in %v", c.ms, got, c.kind, c.left, c.source, c.check)
+			t.Errorf("reset of %d ms on a %d-minute window: %+v, want %s for %v from %s, checked in %v", c.ms, c.window, got, c.kind, c.left, c.source, c.check)
 		}
+	}
+}
+
+// A check believes a reset the window its reading names allows: a monthly window's month-long
+// reset is believed, the same reset on a five-hour window is not.
+func TestCheckBelievesAResetItsWindowAllows(t *testing.T) {
+	const day = 24 * time.Hour
+	for _, c := range []struct {
+		name   string
+		window int64 // the window's length in seconds
+		left   time.Duration
+		source string
+	}{
+		{"a monthly window", 30 * 24 * 60 * 60, 29 * day, SourceProvider},
+		{"a five-hour window", 5 * 60 * 60, 30 * time.Minute, SourceUnverified},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t, Config{}, accts("a")...)
+			rd := &fakeReadings{}
+			h.r.UseReadings(rd)
+			h.on("a", quotaOut(5*time.Hour))
+			h.run(h.req("m")) // a refuses, held for 5 hours
+			h.now = h.now.Add(15 * time.Minute)
+			check(func(now time.Time) (*protocol.Quota, *llm.Error) {
+				return &protocol.Quota{Limits: []protocol.QuotaLimit{
+					{ID: "monthly", UsedPercent: pct(100), ResetsAt: now.Add(29 * day).Unix(), WindowSeconds: c.window},
+				}}, nil
+			})(h, rd)
+			got := h.healthOf("a")
+			var left, next time.Duration
+			if got.Until != nil {
+				left = got.Until.Sub(h.now)
+			}
+			if got.NextCheck != nil {
+				next = got.NextCheck.Sub(h.now)
+			}
+			if got.State != HealthExhausted || left != c.left || next != 15*time.Minute || got.Source != c.source {
+				t.Errorf("after the check: %+v, want exhausted for %v from %s, checked in 15m", got, c.left, c.source)
+			}
+		})
 	}
 }
 
