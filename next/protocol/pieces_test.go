@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"encoding/base64"
 	"slices"
 	"strings"
 	"testing"
@@ -191,17 +192,51 @@ func TestReplaceRuns(t *testing.T) {
 	}
 }
 
-// Only a PEM private key counts by its lines. Any other secret under 32 bytes keeps the 4-byte
-// rule, even with a line break in it, such as a token read from a file with its final newline: an
-// upstream that echoes a refused key cut to its first characters must not get them through.
+// Only a PEM private key counts by its lines. Any other secret with a line break inside it keeps
+// the 4-byte rule whatever its length, and so does a short token read from a file with its final
+// newline: an upstream that echoes a refused key cut to its first characters must not get them
+// through.
 func TestRemovePiecesOnlyPEMCountsByLines(t *testing.T) {
-	for _, secret := range []string{"tok-abcdefghijklmnopqrstuvwxyz\n", "first-line\nsecond-line"} {
+	for _, secret := range []string{"tok-abcdefghijklmnopqrstuvwxyz\n", "first-line-secret\nsecond-line-secret"} {
 		if got := RemovePieces("key tok-a... refused", secret); strings.HasPrefix(secret, "tok-") && got != "key [redacted] refused" {
 			t.Errorf("RemovePieces with %q = %q, want the 5-byte cut removed", secret, got)
 		}
 		if got := RemovePieces("key seco... refused", secret); !strings.HasPrefix(secret, "tok-") && got != "key [redacted] refused" {
 			t.Errorf("RemovePieces with %q = %q, want the 4-byte cut removed", secret, got)
 		}
+	}
+}
+
+// Only one long token counts at 8 bytes. A value of 32 bytes or more that holds a shorter token
+// in a shape SecretParts does not split, or that is the base64 of text such as Basic's
+// user:password, keeps the 4-byte rule: a few bytes of it can be a large share of the real secret.
+func TestRemovePiecesLongRuleIsForOneToken(t *testing.T) {
+	account := func(name, value string) []string {
+		return AccountSecrets(Account{Headers: map[string]string{name: value}})
+	}
+	longText := base64.StdEncoding.EncodeToString([]byte("a-long-service-account-name:p7Qw2Er5"))
+	for _, c := range []struct {
+		name    string
+		secrets []string
+		in      string
+	}{
+		{"another scheme", account("Authorization", "Token Ab3Cd5Ef7Gh9Ij1Kl3Mn5Op7Qr"), "invalid key: Ab3C given"},
+		{"JSON in a header", account("Authorization", `{"api_key":"Ab3Cd5Ef","user":"svc"}`), "refused Ab3C given"},
+		{"a pasted header line", []string{"Authorization: Token Ab3Cd5Ef7Gh9Ij1Kl3Mn5Op7Qr"}, "refused Ab3C given"},
+		{"Basic's base64", account("Authorization", "Basic c2VydmljZS1hY2NvdW50LTE6cDdRdzJFcjU="), "invalid credential cDdR given"},
+		{"base64 of longer text", []string{longText}, "invalid credential " + longText[len(longText)-8:len(longText)-4] + " given"},
+	} {
+		if got, want := RemovePieces(c.in, c.secrets...), strings.Replace(c.in, strings.Fields(c.in)[len(strings.Fields(c.in))-2], Redacted, 1); got != want {
+			t.Errorf("%s (secrets %q): RemovePieces(%q) = %q, want %q", c.name, c.secrets, c.in, got, want)
+		}
+	}
+	// A long token keeps the 8-byte rule with its final newline.
+	const key = "Qx7Rv2Lm9Tz4Kp8Wn3Hc6Yd1Bf5Gs0Ja\n"
+	if got := RemovePieces("key Qx7Rv2L given", key); got != "key Qx7Rv2L given" {
+		t.Errorf("a 7-byte cut of a long token with a newline = %q, want it kept", got)
+	}
+	if got := RemovePieces("key Qx7Rv2Lm given", key); got != "key [redacted] given" {
+		t.Errorf("an 8-byte cut of a long token with a newline = %q, want it removed", got)
 	}
 }
 

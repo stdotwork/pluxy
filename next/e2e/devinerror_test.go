@@ -87,7 +87,8 @@ func checkNoTokenPart(t *testing.T, got string, logs *coreLog, part string) {
 // An upstream refusal whose body is longer than the extension reads is cut. If the upstream
 // echoes the session token and the cut falls inside it, the cut text must not become the error:
 // the token's start would reach the client and core's log, cleaned only by core's piece rule
-// (protocol.RemovePieces, at 4 bytes, or 8 for a secret of 32 bytes or more), which the extension does not rely on.
+// (protocol.RemovePieces, at 4 bytes, or 8 for a long token), which the extension does not rely
+// on.
 func TestDevinCutErrorBodyKeepsNoCredential(t *testing.T) {
 	// Text, not JSON, so the extension can't take a message out of it; the token straddles the
 	// read limit.

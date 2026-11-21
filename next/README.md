@@ -1406,7 +1406,7 @@ on as it is, the extension passes such a body on only as the message, only when 
 whole (under 1 MiB, and not broken off), and cleaned. The cleaned text is one line, cut after
 1000 characters with an ellipsis. Replaced by `[redacted]` are: every run of token characters
 (letters, digits and `_-.+/=~`) holding 4 or more consecutive characters of one of the account's
-secrets: its session token after the public `devin-session-token$` prefix, the values of its
+secrets, or 8 or more of a long token (see [Account checks](#account-checks)): its session token after the public `devin-session-token$` prefix, the values of its
 secret headers, its proxy's user name and password and the secrets in its settings (4
 characters all within a secret's public vendor prefix, such as `sk-proj-`, do not count; see
 [Account checks](#account-checks)); `Bearer` and
@@ -1414,11 +1414,11 @@ characters all within a secret's public vendor prefix, such as `sk-proj-`, do no
 other run of 24 or more token characters. A run is also read with its escapes decoded (JSON's
 `\/` and `\uXXXX`, `%XX`), so a piece written with escapes between its characters is replaced
 too. Core removes whole copies of an account's secrets everywhere, and pieces of them by the same
-4-character rule from every extension's errors (see [Account checks](#account-checks)), but not
+rule from every extension's errors (see [Account checks](#account-checks)), but not
 the other rules or the bound, so the extension keeps its own cleaning. Otherwise the message
 names only the status (`Devin answered 500 Internal Server Error`), or, for a quota read whose
-reply broke off, says that it broke off. The 4-character rule (8 for a secret of 32 bytes or more)
-can also replace a word that shares 4 characters with one of the secrets, such as `proxy` for a proxy user name `proxy-user-1`.
+reply broke off, says that it broke off. The rule can also replace a word that shares 4 characters
+with one of the secrets, such as `proxy` for a proxy user name `proxy-user-1`.
 
 Not built, from today's core: removing Claude Code's and Codex's attribution lines from the system
 prompt and `devin.sensitive-words`; rewriting tool descriptions; encoding tool call IDs (they pass
@@ -1765,7 +1765,8 @@ short a string would mangle unrelated text. An error's message and the string va
 body, from every extension and for every call (requests, checks, quota and model reads,
 refreshes, sessions and logins), also lose every run of token characters (letters, digits and
 `_-.+/=~`, read as written and with JSON and percent escapes decoded) that holds 4 or more
-consecutive characters of one of the account's secrets: an upstream that refuses a key often
+consecutive characters of one of the account's secrets, or 8 or more of a long token (one run of
+32 or more token characters that is not the base64 of text): an upstream that refuses a key often
 echoes its start (`invalid x-api-key: sk-ant-api03-AbCdEf...`), which whole-secret redaction
 misses. The secrets are the credential's key and tokens, secret header values, the proxy's user
 name and password and the secrets core finds in the settings (a URL by its user name, password
@@ -1774,8 +1775,8 @@ extension protocol's [Accounts](protocol/README.md#accounts) says which). A know
 public key prefix (`sk-proj-`, `sk-kimi-`, `xai-` and the others listed there) gives no piece,
 so `project` or `kimi` stays in an error for such a key; a secret of under 16 bytes after its
 prefix keeps every piece. Any other word of the error that shares 4 characters with a secret
-(8 with one of 32 bytes or more) goes too, such as `token` for a header `Bearer gw-token-12345`; a reply that succeeded is never
-changed by the rule.
+(8 with a long token) goes too, such as `token` for a header `Bearer gw-token-12345`; a reply that
+succeeded is never changed by the rule.
 Each
 extension checks with its upstream's model list, and only accounts with an API key:
 
@@ -2412,7 +2413,8 @@ sections come from the extension with the account's own credential, the secrets 
 its proxy's password and its secret header values already removed, and an error's text and the
 body of an upstream reply with an error status (400 or more), or of every reply of a request
 that failed, without the pieces of the account's secrets (see [Account checks](#account-checks)):
-a failed request's log can lose words of the model's text that share 4 characters (8 for a secret of 32 bytes or more) with a secret;
+a failed request's log can lose words of the model's text that share 4 characters (8 for a long
+token) with a secret;
 in the upstream sections the
 values of headers and query parameters whose names hold `auth`, `key`, `token`, `secret`,
 `cookie`, `session`, `password`, `passphrase` or `signature` are masked too, the URL's user name and password
