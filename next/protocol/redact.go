@@ -109,9 +109,9 @@ func NewRedactor(cs ...*Credential) *Redactor {
 //     (spaces and tabs after the "$" or ":" aside) does not start with "/", so a URL's
 //     "scheme://" is not one: the token;
 //   - a cookie list, "name=value; name=value" (or one pair): each value, its double quotes
-//     aside, where the name is an HTTP token and the value holds only cookie characters; a value
-//     of only "=" characters, or none, is base64 padding, not a cookie value, so a key that ends
-//     in "=" or "==" is no pair.
+//     aside, where the name is an HTTP token and the value holds only cookie characters. A value
+//     that is empty or only "=" characters, its quotes aside, adds no part: after a key's first
+//     "=" that is base64 padding, so "abc==" is no pair, while "abc=def==" still is.
 //
 // A prefix, a scheme or a cookie name is never a part.
 func SecretParts(s string, min int) []string {
