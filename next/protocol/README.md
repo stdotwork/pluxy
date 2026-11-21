@@ -687,9 +687,10 @@ of 8 bytes or more whose kept parts are all shorter (a part that only wraps anot
 scheme or header line around a token, is not kept) counts whole, so short parts never leave it
 unprotected; the words around its parts, such as its scheme, then count too. A credential's
 `api_key`, `access_token` or `refresh_token` that is one `name=value`, or holds one behind a scheme
-or prefix (`Bearer name=value`, `dca:name=value`), counts that pair whole as well as by its value,
-so the bytes before its `=` are protected; a cookie list (`a=b; c=d`) counts by its values only,
-and a cookie's name in such a field then removes a word that shares 4 characters with it. A
+or prefix (`Bearer name=value`, `dca:name=value`), counts that pair, without the scheme or prefix,
+whole as well as by its value, so the bytes before its `=` are protected (from 8 bytes when the
+pair is a long token), and a word that shares 4 characters with the pair's name goes too. A cookie
+list (`a=b; c=d`) counts by its values only. A
 known vendor's public key prefix (`sk-proj-`, `sk-svcacct-`, `sk-admin-`, `sk-ant-api03-`,
 `sk-ant-admin01-`, `sk-ant-oat01-`, `sk-ant-ort01-`, `sk-ant-`, `sk-kimi-`, `sk-or-v1-`, `sk-`,
 `xai-` or `gsk_`, the longest that fits) gives no piece: a piece counts only when it holds a byte

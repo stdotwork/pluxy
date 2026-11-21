@@ -414,7 +414,7 @@ func TestAccountSecretsCredentialPairCountsWhole(t *testing.T) {
 // A scheme or a public prefix in front of one name=value does not hide it: the pair counts whole.
 func TestAccountSecretsCredentialPairBehindPrefix(t *testing.T) {
 	const pair = "aGVsbG8=d29ybGQxMjM0"
-	for _, key := range []string{"Bearer " + pair, "dca:" + pair} {
+	for _, key := range []string{"Bearer " + pair, "dca:" + pair, "devin-session-token$" + pair} {
 		got := AccountSecrets(Account{Credential: &Credential{APIKey: key}})
 		if len(got) != 2 || !slices.Contains(got, pair) || !slices.Contains(got, "d29ybGQxMjM0") {
 			t.Errorf("AccountSecrets(%q) = %q, want the pair and its value", key, got)
@@ -422,6 +422,31 @@ func TestAccountSecretsCredentialPairBehindPrefix(t *testing.T) {
 		if out := RemovePieces("key aGVs refused", got...); out != "key "+Redacted+" refused" {
 			t.Errorf("RemovePieces for %q = %q, want the cut removed", key, out)
 		}
+		// The scheme or prefix is no piece.
+		const words = "upstream session expired, Bearer refused"
+		if out := RemovePieces(words, got...); out != words {
+			t.Errorf("RemovePieces for %q = %q, want the public words kept", key, out)
+		}
+	}
+	// A password that is one pair, inside Basic.
+	basic := base64.StdEncoding.EncodeToString([]byte("gw-user:name=0123456789abcdef"))
+	got := AccountSecrets(Account{Credential: &Credential{APIKey: "Basic " + basic}})
+	if !slices.Contains(got, "name=0123456789abcdef") || !slices.Contains(got, "0123456789abcdef") {
+		t.Errorf("Basic: AccountSecrets = %q, want the pair and its value", got)
+	}
+	if out := RemovePieces("bad name=012 refused", got...); out != "bad "+Redacted+" refused" {
+		t.Errorf("Basic: RemovePieces = %q, want the cut removed", out)
+	}
+}
+
+// A pair of 32 or more token characters is one long token: a cut of its name counts from 8 bytes.
+func TestAccountSecretsLongCredentialPairCountsAtEight(t *testing.T) {
+	got := AccountSecrets(Account{Credential: &Credential{APIKey: "QUJDREVGR0hJSktMTU5PUFI=U1RVVldYWVphYmNk"}})
+	if out := RemovePieces("bad QUJDREV refused", got...); out != "bad QUJDREV refused" {
+		t.Errorf("a 7-byte cut of the name = %q, want it kept", out)
+	}
+	if out := RemovePieces("bad QUJDREVG refused", got...); out != "bad "+Redacted+" refused" {
+		t.Errorf("an 8-byte cut of the name = %q, want it removed", out)
 	}
 }
 
@@ -437,8 +462,16 @@ func TestAccountSecretsCredentialPairUnchanged(t *testing.T) {
 			t.Errorf("AccountSecrets(%q) = %q, want it whole once", tok, got)
 		}
 	}
+	got = AccountSecrets(Account{Credential: &Credential{APIKey: "Bearer a=value-one; b=value-two"}})
+	if !slices.Equal(got, []string{"value-one", "value-two"}) {
+		t.Errorf("cookie list behind a scheme: AccountSecrets = %q, want its values only", got)
+	}
 	got = AccountSecrets(Account{Headers: map[string]string{"X-Api-Key": "aaaaaaaa=bbbbbbbb"}})
 	if !slices.Equal(got, []string{"bbbbbbbb"}) {
 		t.Errorf("header: AccountSecrets = %q, want its value only", got)
+	}
+	got = AccountSecrets(Account{Settings: []byte(`{"api_key":"aaaaaaaa=bbbbbbbb"}`)})
+	if !slices.Equal(got, []string{"bbbbbbbb"}) {
+		t.Errorf("settings: AccountSecrets = %q, want its value only", got)
 	}
 }

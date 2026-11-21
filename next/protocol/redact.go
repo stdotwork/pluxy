@@ -165,7 +165,7 @@ func directParts(s string) []string {
 			}
 		}
 	}
-	if i := strings.IndexAny(s, "$:"); i > 0 && i <= maxPrefix && publicPrefix(s[:i]) {
+	if i, ok := publicPrefixEnd(s); ok {
 		if rest := strings.TrimLeft(s[i+1:], " \t"); !strings.HasPrefix(rest, "/") {
 			out = append(out, rest)
 		}
@@ -193,6 +193,13 @@ func cookiePair(c string) (value string, ok bool) {
 		return value, true
 	}
 	return "", false
+}
+
+// publicPrefixEnd returns the index of the "$" or ":" that ends a public prefix at the start of
+// s, if s has one.
+func publicPrefixEnd(s string) (int, bool) {
+	i := strings.IndexAny(s, "$:")
+	return i, i > 0 && i <= maxPrefix && publicPrefix(s[:i])
 }
 
 // publicPrefix reports whether p has the shape of a public prefix before a token: a letter, then
