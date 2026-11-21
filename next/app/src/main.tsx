@@ -15,7 +15,7 @@ import { KitContext } from "../../ui/kit/ui";
 import defaultTheme from "../../ui/themes/default.json";
 import paper from "../../ui/themes/paper.json";
 import terminal from "../../ui/themes/terminal.json";
-import { agentPages, setupClientAction } from "./agentPages";
+import { agentPages, setupClientAction, setupOffersNeeded } from "./agentPages";
 import { clientListPage } from "./clientList";
 import { detected, encode, listed, openClient, PREF, parse } from "./clientListItems";
 import { ConnectionPage } from "./connection";
@@ -94,15 +94,18 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
       );
     };
   }, [loadDevice]);
-  // What the registries offer this device, read once: the Setup page offers to set up a client
-  // whose tool one of them offers, as Beginner Mode does.
+  // What the registries offer this device: the Setup page offers to set up a client whose tool
+  // one of them offers, as Beginner Mode does. Read once the window shows that page for a core on
+  // this computer (setupOffersNeeded), not on a start that only shows the Connection page.
   const [offers, setOffers] = useState<DeviceRegistry[]>();
+  const offersNeeded = setupOffersNeeded(conn);
   useEffect(() => {
+    if (!offersNeeded) return;
     device.registries().then(
       (r) => setOffers(r.body),
       () => {},
     );
-  }, []);
+  }, [offersNeeded]);
   // The app's own core exited: show it.
   useEffect(() => {
     const off = listen("pluxy-connection", () => connectionGet().then(changed, () => {}));
