@@ -546,13 +546,15 @@ func cleanUnions(m map[string]any, isToolRoot, openAPI bool) {
 		if props == nil {
 			props = map[string]any{}
 		}
+		own := maps.Clone(props)
+		branchSchemas := map[string][]any{}
 		var commonReq []string
 		first := true
 		for _, b := range nonNull {
 			if bp, ok := b["properties"].(map[string]any); ok {
-				for k, v := range bp {
-					if _, exists := props[k]; !exists {
-						props[k] = v
+				for _, k := range slices.Sorted(maps.Keys(bp)) {
+					if _, exists := own[k]; !exists {
+						branchSchemas[k] = append(branchSchemas[k], bp[k])
 					}
 				}
 			}
@@ -565,6 +567,9 @@ func cleanUnions(m map[string]any, isToolRoot, openAPI bool) {
 			} else {
 				commonReq = slices.DeleteFunc(slices.Clone(commonReq), func(r string) bool { return !slices.Contains(bReq, r) })
 			}
+		}
+		for k, schemas := range branchSchemas {
+			props[k] = mergeBranchSchemas(schemas)
 		}
 		if len(props) > 0 || m["type"] == nil {
 			m["type"], m["properties"] = "object", props
@@ -617,6 +622,67 @@ func cleanUnions(m map[string]any, isToolRoot, openAPI bool) {
 		}
 		m["anyOf"] = branches
 	}
+}
+
+// mergeBranchSchemas merges the schemas one property has in the branches of a root union, given in
+// branch order. Identical schemas keep one. Schemas that differ only in enum and description, all
+// with an enum, become one schema whose enum holds every branch's values (first-seen order, no
+// duplicates) and whose description is the first non-empty one. Anything else becomes an anyOf of
+// the distinct schemas, which loses nothing.
+func mergeBranchSchemas(schemas []any) any {
+	var distinct []any
+	for _, s := range schemas {
+		if !slices.ContainsFunc(distinct, func(d any) bool { return reflect.DeepEqual(d, s) }) {
+			distinct = append(distinct, s)
+		}
+	}
+	if len(distinct) == 1 {
+		return distinct[0]
+	}
+	if merged, ok := mergeEnumSchemas(distinct); ok {
+		return merged
+	}
+	return map[string]any{"anyOf": distinct}
+}
+
+func mergeEnumSchemas(schemas []any) (map[string]any, bool) {
+	var base map[string]any
+	var values []any
+	seen := map[string]bool{}
+	description := ""
+	for _, s := range schemas {
+		sm, ok := s.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		enum, ok := sm["enum"].([]any)
+		if !ok {
+			return nil, false
+		}
+		rest := maps.Clone(sm)
+		delete(rest, "enum")
+		delete(rest, "description")
+		if base == nil {
+			base = rest
+		} else if !reflect.DeepEqual(base, rest) {
+			return nil, false
+		}
+		for _, v := range enum {
+			key, _ := json.Marshal(v)
+			if !seen[string(key)] {
+				seen[string(key)] = true
+				values = append(values, v)
+			}
+		}
+		if d, _ := sm["description"].(string); description == "" {
+			description = d
+		}
+	}
+	base["enum"] = values
+	if description != "" {
+		base["description"] = description
+	}
+	return base, true
 }
 
 func normalizeTypeAndNullable(m map[string]any, openAPI bool) {

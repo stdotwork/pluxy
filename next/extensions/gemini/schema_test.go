@@ -120,6 +120,9 @@ func TestRequestPathCleansToolSchema(t *testing.T) {
 			if reqList, _ := schema["required"].([]any); len(reqList) != 1 || reqList[0] != "action" {
 				t.Errorf("root required = %#v, want [\"action\"]", schema["required"])
 			}
+			if action, _ := props["action"].(map[string]any); !reflect.DeepEqual(action["enum"], []any{"read", "list"}) {
+				t.Errorf("action = %#v, want enum [read list] from both branches", props["action"])
+			}
 			target, _ := props["target"].(map[string]any)
 			if target == nil || target["type"] != "object" {
 				t.Fatalf("inlined target property missing or not an object: %#v", props["target"])
@@ -526,5 +529,96 @@ func TestCleanUnionsAndOpenAPIPassthrough(t *testing.T) {
 	nick := oaMap["properties"].(map[string]any)["nick"].(map[string]any)
 	if nick["type"] != "string" || nick["nullable"] != true {
 		t.Errorf("OpenAPI nullable nick = %#v", nick)
+	}
+}
+
+// TestRootUnionKeepsEveryBranchsValues checks how a tool's root anyOf/oneOf is flattened into one
+// object when a property appears in more than one branch.
+func TestRootUnionKeepsEveryBranchsValues(t *testing.T) {
+	root := func(parentProps string, branches ...string) string {
+		props := ""
+		if parentProps != "" {
+			props = `"properties": {` + parentProps + `},`
+		}
+		return `{"type":"object",` + props + `"%KEY%":[` + strings.Join(branches, ",") + `]}`
+	}
+	branch := func(props string) string {
+		return `{"type":"object","properties":{` + props + `}}`
+	}
+	cases := []struct {
+		name string
+		in   string
+		want string // the property "p" after cleaning, as JSON
+	}{
+		{
+			name: "consts of different branches are unioned",
+			in:   root("", branch(`"p":{"const":"read"}`), branch(`"p":{"const":"list"}`)),
+			want: `{"enum":["read","list"],"type":"string"}`,
+		},
+		{
+			name: "identical schemas keep one",
+			in:   root("", branch(`"p":{"type":"integer","minimum":1}`), branch(`"p":{"type":"integer","minimum":1}`)),
+			want: `{"minimum":1,"type":"integer"}`,
+		},
+		{
+			name: "values keep first-seen order without duplicates, first non-empty description wins",
+			in: root("",
+				branch(`"p":{"type":"string","enum":["b","a"]}`),
+				branch(`"p":{"type":"string","enum":["a","c"],"description":"second"}`),
+				branch(`"p":{"type":"string","enum":["c","d","b"],"description":"third"}`)),
+			want: `{"description":"second","enum":["b","a","c","d"],"type":"string"}`,
+		},
+		{
+			name: "a branch that lacks the property does not matter",
+			in:   root("", branch(`"p":{"const":"read"}`), branch(`"q":{"type":"string"}`), branch(`"p":{"const":"list"}`)),
+			want: `{"enum":["read","list"],"type":"string"}`,
+		},
+		{
+			name: "different types become an anyOf in branch order",
+			in:   root("", branch(`"p":{"type":"string"}`), branch(`"p":{"type":"integer"}`), branch(`"p":{"type":"string"}`)),
+			want: `{"anyOf":[{"type":"string"},{"type":"integer"}]}`,
+		},
+		{
+			name: "a branch without an enum becomes an anyOf",
+			in:   root("", branch(`"p":{"const":"read"}`), branch(`"p":{"type":"string"}`)),
+			want: `{"anyOf":[{"enum":["read"],"type":"string"},{"type":"string"}]}`,
+		},
+		{
+			name: "the parent's own schema wins",
+			in:   root(`"p":{"type":"string","description":"parent"}`, branch(`"p":{"const":"read"}`), branch(`"p":{"const":"list"}`)),
+			want: `{"description":"parent","type":"string"}`,
+		},
+	}
+	for _, key := range []string{"anyOf", "oneOf"} {
+		for _, openAPI := range []bool{false, true} {
+			for _, tc := range cases {
+				t.Run(key+"/"+map[bool]string{false: "json", true: "openapi"}[openAPI]+"/"+tc.name, func(t *testing.T) {
+					in := strings.ReplaceAll(tc.in, "%KEY%", key)
+					first, changed := cleanToolSchema(json.RawMessage(in), openAPI)
+					if !changed {
+						t.Fatal("schema unchanged")
+					}
+					var m map[string]any
+					if err := json.Unmarshal(first, &m); err != nil {
+						t.Fatal(err)
+					}
+					if _, has := m[key]; has || m["type"] != "object" {
+						t.Fatalf("root not flattened: %s", first)
+					}
+					got, _ := json.Marshal(m["properties"].(map[string]any)["p"])
+					if string(got) != tc.want {
+						t.Errorf("p = %s, want %s", got, tc.want)
+					}
+					if again, c := cleanToolSchema(first, openAPI); c {
+						t.Errorf("second pass changed the schema:\n%s\n%s", first, again)
+					}
+					for range 20 {
+						if next, _ := cleanToolSchema(json.RawMessage(in), openAPI); string(next) != string(first) {
+							t.Fatalf("output varies between runs:\n%s\n%s", first, next)
+						}
+					}
+				})
+			}
+		}
 	}
 }
