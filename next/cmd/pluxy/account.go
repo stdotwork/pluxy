@@ -366,8 +366,13 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 			}
 			prompt.repeated = repeated
 			// The echo is set first and what was typed for the old prompt dropped next, both before
-			// the new prompt is on the screen: what is typed after reading it is its answer.
-			lines.field(prompt.next())
+			// the new prompt is on the screen: what is typed after reading it is its answer. Once
+			// standard input has ended nothing will read a value, so echo is not turned off.
+			if ended {
+				lines.show()
+			} else {
+				lines.field(prompt.next())
+			}
 			lines.dropTyped()
 			if repeated {
 				x.eprintf("the sign-in is still asking; give the value again if the last one was wrong\n")
@@ -378,7 +383,11 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 		if prompt != nil {
 			field = prompt.next()
 		}
-		lines.field(field)
+		if ended {
+			lines.show()
+		} else {
+			lines.field(field)
+		}
 		if prompt != nil && field == nil {
 			// The prompt wants nothing more: send what a flag, its settings or standard input
 			// gave, or, with nothing to send, wait below for the sign-in to finish by itself. The
@@ -415,9 +424,8 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 			if err := x.asks(*field); err != nil {
 				return x.cancelLogin(l.ID, err)
 			}
-			// Once standard input has ended, a browser prompt asks for nothing: only the browser can
-			// answer it.
-			if x.prompts() && !(ended && prompt.kind == protocol.PromptBrowser) {
+			// Once standard input has ended, no prompt asks for a value: nothing can read one.
+			if x.prompts() && !ended {
 				prompt.ask(x)
 			}
 			lines.start()

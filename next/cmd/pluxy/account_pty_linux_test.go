@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -31,17 +32,18 @@ const (
 
 // The runs.
 const (
-	ptySecret     = "secret"     // a secret field, typed and answered
-	ptySigint     = "sigint"     // Ctrl-C while the secret is being typed
-	ptySigterm    = "sigterm"    // SIGTERM at the same point
-	ptyHangup     = "hangup"     // SIGHUP at the same point
-	ptySwitch     = "switch"     // the prompt changes to a secret field while a plain one is read
-	ptyJSON       = "json"       // --json on a terminal, which asks nothing and reads nothing
-	ptySlowCancel = "slowcancel" // SIGTERM while core does not answer the cancel at all
-	ptyPaste      = "paste"      // a multi-line JSON key pasted into its field
-	ptyBack       = "back"       // a secret field, then a plain one
-	ptyStartTerm  = "startterm"  // SIGTERM while a value is read before the sign-in starts
-	ptyAddress    = "address"    // a browser sign-in: a pasted non-address, then what comes next
+	ptySecret        = "secret"         // a secret field, typed and answered
+	ptySigint        = "sigint"         // Ctrl-C while the secret is being typed
+	ptySigterm       = "sigterm"        // SIGTERM at the same point
+	ptyHangup        = "hangup"         // SIGHUP at the same point
+	ptySwitch        = "switch"         // the prompt changes to a secret field while a plain one is read
+	ptyJSON          = "json"           // --json on a terminal, which asks nothing and reads nothing
+	ptySlowCancel    = "slowcancel"     // SIGTERM while core does not answer the cancel at all
+	ptyPaste         = "paste"          // a multi-line JSON key pasted into its field
+	ptyBack          = "back"           // a secret field, then a plain one
+	ptyStartTerm     = "startterm"      // SIGTERM while a value is read before the sign-in starts
+	ptyAddress       = "address"        // a browser sign-in: a pasted non-address, then what comes next
+	ptyAddressSecret = "address_secret" // a browser sign-in: Ctrl-D, then a secret input prompt
 )
 
 // TestCLIAccountTerminal is the test in the parent, and the command's run in the child it starts.
@@ -175,12 +177,15 @@ func TestCLIAccountTerminal(t *testing.T) {
 	// A browser sign-in that was pasted a non-address asks again. The person can paste the right
 	// address, press Ctrl-D (the end of input), or press Ctrl-C.
 	t.Run("address", func(t *testing.T) {
-		pasteWrong := func(t *testing.T) *ptySession {
-			p := startPTY(t, ptyAddress)
+		pasteWrongScenario := func(t *testing.T, scenario string) *ptySession {
+			p := startPTY(t, scenario)
 			p.waitOutput("Address the browser ended on: ")
 			p.write(t, "not an address\n")
 			p.waitOutput("That address holds no sign-in code.")
 			return p
+		}
+		pasteWrong := func(t *testing.T) *ptySession {
+			return pasteWrongScenario(t, ptyAddress)
 		}
 		t.Run("tries again", func(t *testing.T) {
 			p := pasteWrong(t)
@@ -201,6 +206,56 @@ func TestCLIAccountTerminal(t *testing.T) {
 			p.wantChild(t, "code=1", "cancelled=1", "inputs=1")
 			if n := strings.Count(p.childOutput(), browserWaitNotice); n != 1 {
 				t.Errorf("the notice was written %d times, want once: %q", n, p.childOutput())
+			}
+		})
+		// After Ctrl-D, a later secret input prompt must not ask for a value or turn echo off:
+		// standard input has ended, so the sign-in cancels with exit 2.
+		t.Run("Ctrl-D then secret", func(t *testing.T) {
+			p := pasteWrongScenario(t, ptyAddressSecret)
+			p.waitOutput("open: https://login.example.test/authorize\nAddress the browser ended on: ")
+			p.waitEcho(true)
+			p.write(t, "\x04")
+			echoOff := false
+			deadline := time.Now().Add(20 * time.Second)
+			for done := false; !done; {
+				if !ptyEcho(t, p.master) {
+					echoOff = true
+				}
+				select {
+				case err := <-p.done:
+					var exited *exec.ExitError
+					got := 0
+					switch {
+					case errors.As(err, &exited):
+						got = exited.ExitCode()
+					case err != nil:
+						t.Fatalf("the command: %v", err)
+					}
+					if got != 2 {
+						t.Fatalf("the command exited %d, want 2; it wrote %q", got, p.childOutput())
+					}
+					done = true
+				default:
+					if time.Now().After(deadline) {
+						t.Fatalf("the command did not exit; it wrote %q", p.childOutput())
+					}
+					time.Sleep(100 * time.Microsecond)
+				}
+			}
+			p.waitEcho(true)
+			if echoOff {
+				t.Errorf("the terminal's echo was turned off for a prompt after standard input ended")
+			}
+			p.wantChild(t, "code=2", "cancelled=1", "inputs=1", "echo=on")
+			out := p.childOutput()
+			if strings.Contains(out, "API key: ") {
+				t.Errorf("the secret field's label was printed after standard input ended: %q", out)
+			}
+			if !strings.Contains(out, "Enter the key.") {
+				t.Errorf("the prompt's message was not printed: %q", out)
+			}
+			if !strings.Contains(out, "the sign-in needs API key and standard input has no more lines:") {
+				t.Errorf("the end-of-input error was not printed: %q", out)
 			}
 		})
 		t.Run("Ctrl-C", func(t *testing.T) {
@@ -240,16 +295,48 @@ func ptyChild(t *testing.T, scenario string) {
 		method = "api_key"
 	case ptyAddress:
 		method = "browser"
+	case ptyAddressSecret:
+		method = "browser"
+		shortLoginWait(t)
 	}
 	args := []string{"account", "add", "test/ext", "--id", "pty-1", "--method", method,
 		"--url", f.srv.URL, "--key", "k"}
 	if scenario == ptyJSON {
 		args = append(args, "--json")
 	}
+	var stderr io.Writer = os.Stderr
+	echoStayedOn := true
+	if scenario == ptyAddressSecret {
+		var login *fakeAccountLogin
+		f.onCreate = func(l *fakeAccountLogin) { login = l }
+		stderr = &watchWriter{
+			w:      os.Stderr,
+			needle: browserWaitNotice,
+			onMatch: func() {
+				f.mu.Lock()
+				if login != nil {
+					login.prompt = fakeSwitchPrompt()
+				}
+				f.mu.Unlock()
+			},
+			afterMatch: func() {
+				if !ptyEcho(t, os.Stdin) {
+					echoStayedOn = false
+				}
+			},
+		}
+	}
 	var out bytes.Buffer
-	code := runCLIWithInput(args, os.Stdin, &out, os.Stderr, func(string) string { return "" }, true)
+	code := runCLIWithInput(args, os.Stdin, &out, stderr, func(string) string { return "" }, true)
 	f.mu.Lock()
 	summary := fmt.Sprintf("%s code=%d cancelled=%d inputs=%d", ptyMarker, code, len(f.cancelled), len(f.inputs))
+	if scenario == ptyAddressSecret {
+		if echoStayedOn {
+			summary += " echo=on"
+		} else {
+			summary += " echo=off"
+		}
+	}
 	for _, in := range f.inputs {
 		for name, value := range in {
 			answer := "answer"
@@ -440,10 +527,18 @@ func (p *ptySession) wantSecretKept(t *testing.T) {
 // answer core was sent (by name, and whether it was the value the test typed).
 func (p *ptySession) wantChild(t *testing.T, parts ...string) {
 	t.Helper()
-	out := p.childOutput()
-	line := ""
-	if i := strings.LastIndex(out, ptyMarker); i >= 0 {
-		line = strings.SplitN(out[i:], "\n", 2)[0]
+	// The command's last line comes through a pipe another goroutine reads, so it can still be on
+	// its way when the process has already exited.
+	var out, line string
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(2 * time.Millisecond) {
+		out = p.childOutput()
+		if i := strings.LastIndex(out, ptyMarker); i >= 0 && strings.Contains(out[i:], "\n") {
+			line = strings.SplitN(out[i:], "\n", 2)[0]
+			break
+		}
+		if time.Now().After(deadline) {
+			break
+		}
 	}
 	if line == "" {
 		t.Fatalf("the command reported nothing; it wrote %q", out)
@@ -471,6 +566,33 @@ func (b *syncBuffer) text() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+// watchWriter forwards writes to w, calls onMatch once when the written output contains needle,
+// and calls afterMatch on every subsequent write.
+type watchWriter struct {
+	w          io.Writer
+	needle     string
+	onMatch    func()
+	afterMatch func()
+	buf        bytes.Buffer
+	matched    bool
+}
+
+func (w *watchWriter) Write(p []byte) (int, error) {
+	n, err := w.w.Write(p)
+	if w.matched {
+		if w.afterMatch != nil {
+			w.afterMatch()
+		}
+		return n, err
+	}
+	w.buf.Write(p[:n])
+	if strings.Contains(w.buf.String(), w.needle) {
+		w.matched = true
+		w.onMatch()
+	}
+	return n, err
 }
 
 // openPTY opens a terminal pair: the master, which is what the terminal shows and what is typed
