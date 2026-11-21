@@ -137,7 +137,7 @@ type streamChoice struct {
 	Delta struct {
 		reasoningFields
 		Content   *string         `json:"content"`
-		Refusal   string          `json:"refusal"`
+		Refusal   json.RawMessage `json:"refusal"`
 		Logprobs  json.RawMessage `json:"logprobs"`
 		ToolCalls []struct {
 			Index    *int   `json:"index"`
@@ -253,6 +253,19 @@ func (d *StreamDecoder) piece(p thinkPiece, ev *[]llm.Event) {
 		d.text = d.open(llm.ItemMessage, ev, llm.ItemStart{})
 	}
 	*ev = append(*ev, llm.Event{Type: llm.EventTextDelta, Index: d.text, Delta: p.text})
+}
+
+// refusalText returns the text of a Chat refusal field, or "" when the upstream sent something
+// other than a string: an odd value is no refusal, and must not fail the reply.
+func refusalText(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if json.Unmarshal(raw, &s) != nil {
+		return ""
+	}
+	return s
 }
 
 // logprobs returns the logprobs a Chat reply carried, or nil when it carried none.
@@ -416,9 +429,9 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			d.content(*t, &out)
 			d.attachLogprobs(ch.Delta.Logprobs, before, &out)
 		}
-		if ch.Delta.Refusal != "" {
+		if r := refusalText(ch.Delta.Refusal); r != "" {
 			d.refused = true
-			d.piece(thinkPiece{text: ch.Delta.Refusal}, &out)
+			d.piece(thinkPiece{text: r}, &out)
 		}
 		for _, tc := range ch.Delta.ToolCalls {
 			index := -1
@@ -585,7 +598,7 @@ type completionChoice struct {
 	Message *struct {
 		reasoningFields
 		Content   *string         `json:"content"`
-		Refusal   string          `json:"refusal"`
+		Refusal   json.RawMessage `json:"refusal"`
 		Logprobs  json.RawMessage `json:"logprobs"`
 		ToolCalls []struct {
 			chatToolCall
@@ -679,9 +692,9 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 		if tagged != "" && tagged != reasoning {
 			item(llm.ItemStart{Kind: llm.ItemReasoning}, tagged, llm.EventReasoningDelta, nil, nil)
 		}
-		if m.Refusal != "" {
+		if refusal := refusalText(m.Refusal); refusal != "" {
 			refused = true
-			text += m.Refusal
+			text += refusal
 		}
 		if text != "" {
 			item(llm.ItemStart{Kind: llm.ItemMessage}, text, llm.EventTextDelta, nil, logprobs(m.Logprobs))

@@ -82,3 +82,31 @@ func TestRefusalReachesClient(t *testing.T) {
 		}
 	})
 }
+
+// A refusal the upstream sent in a shape other than a string is no refusal; it must not fail the
+// rest of the reply, which decoded before this field was read.
+func TestNonStringRefusalDoesNotFailTheReply(t *testing.T) {
+	t.Run("delta", func(t *testing.T) {
+		evs := streamReply(t, deltaChunk(`{"content":"Hi","refusal":{"x":1}}`), finishChunk)
+		text, finish := textAndFinish(t, evs)
+		if text != "Hi" {
+			t.Errorf("text = %q, want Hi", text)
+		}
+		if finish == nil || finish.Reason != llm.FinishStop {
+			t.Errorf("finish = %+v, want stop", finish)
+		}
+	})
+	t.Run("message", func(t *testing.T) {
+		evs, err := DecodeResponse([]byte(completionBody(`{"role":"assistant","content":"Hi","refusal":{"x":1}}`)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		text, finish := textAndFinish(t, evs)
+		if text != "Hi" {
+			t.Errorf("text = %q, want Hi", text)
+		}
+		if finish == nil || finish.Reason != llm.FinishStop {
+			t.Errorf("finish = %+v, want stop", finish)
+		}
+	})
+}
