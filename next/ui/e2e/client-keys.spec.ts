@@ -42,6 +42,10 @@ for (const theme of ["default", "terminal"]) {
       const clients = page.getByRole("region", { name: "Client API Keys (access.api-keys)", exact: true });
       await expect(clients.locator('[data-part="item"]')).toHaveCount(1);
       await expect(clients.getByRole("button", { name: "Copy", exact: true })).toHaveCount(0);
+      await expect(clients.getByRole("button", { name: "Add", exact: true })).toHaveAttribute(
+        "data-slot",
+        "button",
+      );
       await clients.getByRole("button", { name: "Add", exact: true }).click();
       const value = clients.locator('[data-part="key-value"]');
       await expect(value).toBeVisible();

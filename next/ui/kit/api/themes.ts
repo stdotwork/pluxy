@@ -1,5 +1,6 @@
-// The themes core keeps (next/management/README.md, "Themes"). Core stores a theme file as it is
-// given and does not read it: the kit's reader (theme/validate.ts) is the one validator.
+// The themes core keeps (next/management/README.md, "Themes"). Core checks a stored theme file is
+// one UTF-8 JSON object of at most 256 KiB and takes its `name` for the list; the kit's reader
+// (theme/validate.ts) is the one validator of everything else.
 
 import type { Host } from "../host";
 import { seg } from "./path";

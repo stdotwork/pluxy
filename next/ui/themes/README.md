@@ -306,8 +306,9 @@ Every other class name, element and attribute can change in any release.
 ## Where themes are kept
 
 Core keeps the themes a person adds and which theme is on, so the panel, the desktop app and the
-`pluxy` command show the same ones. Core stores a theme file's JSON as it is given and does not
-read it; the UI is what checks a file. Core keeps at most 64 themes.
+`pluxy` command show the same ones. Core stores a theme file's JSON as it is given, and reads it
+only to check that it is one UTF-8 JSON object of at most 256 KiB and to take its `name` for the
+list; the UI is what checks the rest of a file. Core keeps at most 64 themes.
 
 On the Themes page:
 
