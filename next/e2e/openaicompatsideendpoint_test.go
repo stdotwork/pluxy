@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -92,8 +91,8 @@ func TestOpenAICompatibleSideEndpointMissing(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// run starts a core with one account of the case's wire whose upstream answers the
-			// side path with sideStatus and sideReply, and the generation path with genReply
-			// unless genStatus says otherwise; it counts the requests each path got.
+			// side path with a 404 and sideReply, and the generation path with genStatus (and
+			// the case's genReply when that is 200); it counts the requests each path got.
 			run := func(t *testing.T, sideReply string, genStatus int) (string, func(string) int) {
 				t.Helper()
 				var mu sync.Mutex
@@ -195,7 +194,7 @@ func TestOpenAICompatibleSideEndpointMissing(t *testing.T) {
 					t.Errorf("second generation: status 200, want the model blocked")
 				}
 				if got := hits(tc.upstreamGen); got != 1 {
-					t.Errorf("upstream got %s generation requests, want 1 (the second is refused by the block)", strconv.Itoa(got))
+					t.Errorf("upstream got %d generation requests, want 1 (the second is refused by the block)", got)
 				}
 			})
 		})
