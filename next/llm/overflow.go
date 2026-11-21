@@ -1,11 +1,8 @@
-package openaichat
+package llm
 
 import (
 	"errors"
-	"net/http"
 	"strings"
-
-	"github.com/stdotwork/pluxy/next/llm"
 )
 
 // CodeContextLengthExceeded is the provider code of an error that says the prompt does not fit the
@@ -50,15 +47,15 @@ func isContextOverflow(message string) bool {
 // only, and is not tried on another account. Any other error comes back unchanged. An extension
 // calls it on the errors of its upstream's replies.
 func MarkContextOverflow(err error) error {
-	var e *llm.Error
-	if !errors.As(err, &e) || (e.Status != 0 && e.Status != http.StatusBadRequest) ||
-		(e.Code != llm.CodeInvalidRequest && e.Code != llm.CodeUpstream) {
+	var e *Error
+	if !errors.As(err, &e) || (e.Status != 0 && e.Status != 400) ||
+		(e.Code != CodeInvalidRequest && e.Code != CodeUpstream) {
 		return err
 	}
 	if e.ProviderCode != CodeContextLengthExceeded && !isContextOverflow(e.Message) {
 		return err
 	}
-	e.Code, e.Scope, e.Status, e.Retryable = llm.CodeInvalidRequest, llm.ScopeRequest, http.StatusBadRequest, false
+	e.Code, e.Scope, e.Status, e.Retryable = CodeInvalidRequest, ScopeRequest, 400, false
 	e.ProviderCode = CodeContextLengthExceeded
 	return err
 }

@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
-	"github.com/stdotwork/pluxy/next/format/openaichat"
 	"github.com/stdotwork/pluxy/next/format/openairesponses"
 	"github.com/stdotwork/pluxy/next/llm"
 )
@@ -603,7 +602,7 @@ func ErrorResponse(e *llm.Error) (int, []byte) {
 				body["details"] = g.Error.Details
 			}
 			// An overflow's provider code is not Google's: it keeps the status Google gave it.
-			if _, ok := googleStatus[g.Error.Status]; ok && e.ProviderCode == openaichat.CodeContextLengthExceeded {
+			if _, ok := googleStatus[g.Error.Status]; ok && e.ProviderCode == llm.CodeContextLengthExceeded {
 				body["status"] = g.Error.Status
 			}
 		}

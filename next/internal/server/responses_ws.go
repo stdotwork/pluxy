@@ -221,8 +221,8 @@ func (s *wsSocket) sendError(e *llm.Error) error {
 		Error map[string]json.RawMessage `json:"error"`
 	}
 	obj := map[string]json.RawMessage(nil)
-	if json.Unmarshal(e.Raw, &b) == nil && b.Error != nil && (e.ProviderCode != openaichat.CodeContextLengthExceeded ||
-		string(b.Error["code"]) == `"`+openaichat.CodeContextLengthExceeded+`"`) {
+	if json.Unmarshal(e.Raw, &b) == nil && b.Error != nil && (e.ProviderCode != llm.CodeContextLengthExceeded ||
+		string(b.Error["code"]) == `"`+llm.CodeContextLengthExceeded+`"`) {
 		// An overflow from an upstream of another format has the code only in the rendered body.
 		obj = b.Error
 	} else if b.Error = nil; json.Unmarshal(body, &b) == nil {

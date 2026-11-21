@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
-	"github.com/stdotwork/pluxy/next/format/openaichat"
 	"github.com/stdotwork/pluxy/next/format/openairesponses"
 	"github.com/stdotwork/pluxy/next/llm"
 )
@@ -829,7 +828,7 @@ func errorFields(e *llm.Error) obj {
 	}
 	// Anthropic's own words for a prompt over the context window, which a Messages client looks for,
 	// ahead of another upstream's.
-	if e.ProviderCode == openaichat.CodeContextLengthExceeded && !strings.Contains(strings.ToLower(msg), "prompt is too long") {
+	if e.ProviderCode == llm.CodeContextLengthExceeded && !strings.Contains(strings.ToLower(msg), "prompt is too long") {
 		msg = "prompt is too long: " + msg
 	}
 	o := obj{"type": typ, "message": msg}
