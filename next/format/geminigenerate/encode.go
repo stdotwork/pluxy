@@ -422,6 +422,7 @@ func media(p llm.Part) (map[string]any, string) {
 		if !ok {
 			return nil, "it is not a base64 data URL"
 		}
+		mediaType = mediainput.Type(mediaType)
 		if p.Type == llm.PartImage || strings.HasPrefix(mediaType, "image/") {
 			if _, problem := mediainput.InlineImage(url, mediainput.GeminiImages); problem != "" {
 				return nil, problem

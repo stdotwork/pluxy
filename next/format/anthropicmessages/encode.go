@@ -480,6 +480,7 @@ func source(p llm.Part) map[string]any {
 		if !ok || !mediainput.Base64(data) {
 			return nil
 		}
+		mediaType = mediainput.Type(mediaType)
 		if p.Type == llm.PartImage || strings.HasPrefix(mediaType, "image/") {
 			if _, problem := mediainput.InlineImage(url, mediainput.ClaudeImages); problem != "" {
 				return nil

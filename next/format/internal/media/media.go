@@ -24,6 +24,15 @@ func DataURL(s string) (mediaType, data string, ok bool) {
 	return mediaType, data, true
 }
 
+// Type returns a data URL's media type normalised for comparison and for sending upstream: lower
+// case, with any parameters after the first semicolon removed.
+func Type(mediaType string) string {
+	if i := strings.IndexByte(mediaType, ';'); i >= 0 {
+		mediaType = mediaType[:i]
+	}
+	return strings.ToLower(mediaType)
+}
+
 // Base64 reports whether s is base64 of the standard alphabet, padded or not, without decoding
 // it. A data URL carries its bytes in the request body already, so validation reads them in
 // place instead of making a second copy of the image.
@@ -63,6 +72,7 @@ func InlineImage(url string, allowed []string) (mediaType, problem string) {
 	if !ok {
 		return "", "it is not a base64 data URL"
 	}
+	mediaType = Type(mediaType)
 	if !Base64(data) {
 		return mediaType, "its data is not valid base64"
 	}
@@ -83,6 +93,7 @@ func AnyImage(url string) (mediaType, problem string) {
 	if !ok {
 		return "", "it is not a base64 data URL"
 	}
+	mediaType = Type(mediaType)
 	if !Base64(data) {
 		return mediaType, "its data is not valid base64"
 	}
