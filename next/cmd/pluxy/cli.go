@@ -134,6 +134,15 @@ func (x *invocation) eprintf(format string, a ...any) { fmt.Fprintf(x.stderr, fo
 // with --json, whose standard output is the API's reply and nothing else.
 func (x *invocation) prompts() bool { return x.tty && !x.json }
 
+// asks refuses a value that would be read from a terminal with --json: nothing is shown there, so
+// a read for a line would look like a hang, and standard output belongs to the reply.
+func (x *invocation) asks(f protocol.LoginInput) error {
+	if x.json && x.tty {
+		return usageError{"with --json nothing is asked on a terminal: " + inputHint(f)}
+	}
+	return nil
+}
+
 // terminal is standard input when it is a terminal, whose echo a secret value is kept from.
 func (x *invocation) terminal() *os.File {
 	if !x.tty {
@@ -1221,6 +1230,12 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 	}
 	if len(pos) != len(cmd.args) && !(cmd.more && len(pos) > len(cmd.args)) {
 		fmt.Fprintf(stderr, "pluxy: usage: pluxy %s%s [flags]\n", cmd.words, argsUsage(cmd))
+		return exitUsage
+	}
+	// A --input pair the flag could not take is refused here, where nothing quotes the value it
+	// was given.
+	if o.input.bad != nil {
+		printError(stderr, *jsonOut, usageError{"--input: " + o.input.bad.Error()})
 		return exitUsage
 	}
 	t, err := findCore(*configPath, cmpOr(*addr, getenv("PLUXY_URL")), cmpOr(*key, getenv("PLUXY_MANAGEMENT_KEY")))

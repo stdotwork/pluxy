@@ -49,22 +49,25 @@ func (e waitingError) Error() string { return e.msg }
 
 // inputFlag collects the --input name=value pairs: what the person entered for the inputs a
 // sign-in asks for. A secret is refused here (a flag stands in the shell's history and in the
-// process list) and read from a prompt or standard input instead.
-type inputFlag struct{ values map[string]string }
-
-func (f *inputFlag) String() string {
-	var pairs []string
-	for name, value := range f.values {
-		pairs = append(pairs, name+"="+value)
-	}
-	slices.Sort(pairs)
-	return strings.Join(pairs, ",")
+// process list) and read from a prompt or standard input instead. A pair that is not name=value
+// is kept as bad and refused once the flags are read: the flag package puts the value it was
+// given into its own error, and a value given here may turn out to be secret.
+type inputFlag struct {
+	values map[string]string
+	bad    error
 }
+
+// String writes no values. The flag package prints them in help and quotes them in its errors,
+// and its error is the one thing a bad pair would otherwise put them into.
+func (f *inputFlag) String() string { return "" }
 
 func (f *inputFlag) Set(v string) error {
 	name, value, ok := strings.Cut(v, "=")
 	if !ok || name == "" {
-		return errors.New("write it as name=value")
+		if f.bad == nil {
+			f.bad = errors.New("write it as name=value")
+		}
+		return nil
 	}
 	if f.values == nil {
 		f.values = map[string]string{}
@@ -209,8 +212,8 @@ func runAccountAdd(x *invocation) error {
 	}
 	lines := newLineReader(x.stdin, x.terminal())
 	defer lines.close()
-	vals := maps.Clone(x.opts.input.values)
-	input, err := x.startInputs(method.Inputs, vals, lines)
+	in := signInInputs{vals: maps.Clone(x.opts.input.values)}
+	input, err := x.startInputs(method.Inputs, in, lines)
 	if err != nil {
 		return err
 	}
@@ -224,7 +227,7 @@ func runAccountAdd(x *invocation) error {
 	if reply.Login.ID == "" {
 		return errors.New("core started no sign-in")
 	}
-	return x.afterLoginStart(reply.Login, body, vals, lines, false)
+	return x.afterLoginStart(reply.Login, body, in, lines, false)
 }
 
 // runAccountLogin is pluxy account login <id>: it signs in to an account again.
@@ -256,8 +259,10 @@ func runAccountLogin(x *invocation) error {
 	}
 	lines := newLineReader(x.stdin, x.terminal())
 	defer lines.close()
-	vals := maps.Clone(x.opts.input.values)
-	input, err := x.startInputs(method.Inputs, vals, lines)
+	// A sign-in again may leave empty what the account's settings already hold, as the panel
+	// does: a non-secret input the account keeps is optional (next/ui/kit/loginFlow.tsx).
+	in := signInInputs{vals: maps.Clone(x.opts.input.values), kept: settingsKeys(accounts.Accounts[i].Settings)}
+	input, err := x.startInputs(method.Inputs, in, lines)
 	if err != nil {
 		return err
 	}
@@ -271,13 +276,26 @@ func runAccountLogin(x *invocation) error {
 	if reply.Login.ID == "" {
 		return errors.New("core started no sign-in")
 	}
-	return x.afterLoginStart(reply.Login, body, vals, lines, true)
+	return x.afterLoginStart(reply.Login, body, in, lines, true)
 }
 
 // afterLoginStart ends the sign-in a command started: it says where to go and stops (--no-wait,
 // exit 7) or follows it to its end. A sign-in that ended at once has nothing to wait for.
-func (x *invocation) afterLoginStart(l management.Login, body []byte, vals map[string]string, lines *lineReader, again bool) error {
+func (x *invocation) afterLoginStart(l management.Login, body []byte, in signInInputs, lines *lineReader, again bool) error {
 	if x.opts.noWait && l.State == management.LoginPending {
+		if l.Prompt != nil && l.Prompt.Kind == protocol.PromptInput {
+			// A prompt's values are read by this command alone, so a sign-in core keeps waiting on
+			// one never ends where it is: cancel it and say what to give.
+			var names []string
+			for _, f := range l.Prompt.Inputs {
+				names = append(names, fieldName(f))
+			}
+			need := "a value"
+			if len(names) > 0 {
+				need = strings.Join(names, ", ")
+			}
+			return x.cancelLogin(l.ID, usageError{fmt.Sprintf("the sign-in waits for %s, and --no-wait leaves nothing to answer it: run it again without --no-wait, or give the value with --input name=value (a secret on standard input)", need)})
+		}
 		x.loginPrompt(l.Prompt)
 		if x.json {
 			if err := x.writeBody(body); err != nil {
@@ -286,11 +304,11 @@ func (x *invocation) afterLoginStart(l management.Login, body []byte, vals map[s
 		}
 		return waitingError{fmt.Sprintf("waiting for the sign-in for %s to finish: it goes on in core, and the account appears in pluxy account list when it does", l.Account)}
 	}
-	return x.followLogin(l, body, vals, lines, again)
+	return x.followLogin(l, body, in, lines, again)
 }
 
 // followLogin reads a sign-in again until it ends, asking for what its prompts want.
-func (x *invocation) followLogin(l management.Login, body []byte, vals map[string]string, lines *lineReader, again bool) error {
+func (x *invocation) followLogin(l management.Login, body []byte, in signInInputs, lines *lineReader, again bool) error {
 	ctx, stop := context.WithTimeout(x.ctx, accountLoginTimeout)
 	defer stop()
 
@@ -308,21 +326,21 @@ func (x *invocation) followLogin(l management.Login, body []byte, vals map[strin
 			shown = key
 			x.loginPrompt(l.Prompt)
 			var err error
-			if prompt, err = x.newPromptInput(l.Prompt, vals); err != nil {
+			if prompt, err = x.newPromptInput(l.Prompt, in); err != nil {
 				return x.cancelLogin(l.ID, err)
 			}
 		}
 		if prompt != nil && prompt.next() == nil {
-			// The prompt wants nothing more: send what a flag or standard input gave, or, with
-			// nothing to send, wait below for the sign-in to finish by itself. A prompt that is
-			// shown again unchanged is not handled again: nothing more is owed it.
+			// The prompt wants nothing more: send what a flag, its settings or standard input
+			// gave, or, with nothing to send, wait below for the sign-in to finish by itself. The
+			// prompt stays the one shown: core's extension may not have moved on yet, and another
+			// line read now would answer the prompt that comes next with this one's value.
 			answered := prompt
 			prompt = nil
-			if len(answered.got) > 0 {
-				shown = ""
+			if answered.answerable() {
 				next, nextBody, err := x.answerPrompt(ctx, l.ID, answered.got)
 				if err != nil {
-					return err
+					return x.cancelLogin(l.ID, err)
 				}
 				l, body = next, nextBody
 				continue
@@ -342,7 +360,7 @@ func (x *invocation) followLogin(l management.Login, body []byte, vals map[strin
 		select {
 		case <-ctx.Done():
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return x.cancelLogin(l.ID, fmt.Errorf("the sign-in did not finish in %s; core's login was cancelled", accountLoginTimeout))
+				return x.cancelLogin(l.ID, fmt.Errorf("the sign-in did not finish in %s", accountLoginTimeout))
 			}
 			return x.cancelLogin(l.ID, errors.New("sign-in cancelled"))
 		case r := <-input:
@@ -360,33 +378,71 @@ func (x *invocation) followLogin(l management.Login, body []byte, vals map[strin
 				x.eprintf("\n")
 			}
 			if prompt != nil {
-				prompt.take(r.text)
+				if err := prompt.take(r.text); err != nil {
+					return x.cancelLogin(l.ID, err)
+				}
 			}
 		case <-ticker.C:
 			next, nextBody, err := x.readLogin(ctx, l.ID)
 			if err != nil {
-				return err
+				return x.cancelLogin(l.ID, err)
 			}
 			l, body = next, nextBody
 		}
 	}
 }
 
+// signInInputs is what a command already has for a sign-in: the values --input gave, by name, and
+// the settings the account keeps, by name (empty for an account being added).
+type signInInputs struct {
+	vals map[string]string
+	kept map[string]bool
+}
+
+// optionalInput is the panel's rule for a field that may be left empty (next/ui/kit/loginFlow.tsx
+// optionalInput): the method says so, or signing in again keeps its value in the account's
+// settings, which only a non-secret value is.
+func optionalInput(f protocol.LoginInput, kept map[string]bool) bool {
+	return f.Optional || (!f.Secret && kept[f.Name])
+}
+
+// settingsKeys names the settings an account keeps as they are stored, each of which a sign-in
+// again may leave empty.
+func settingsKeys(raw json.RawMessage) map[string]bool {
+	keys := map[string]bool{}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil {
+		return keys
+	}
+	for k := range m {
+		keys[k] = true
+	}
+	return keys
+}
+
 // promptInput gathers what one prompt of a sign-in asks for.
 type promptInput struct {
 	kind   string
 	fields []protocol.LoginInput
-	got    map[string]string
-	asked  map[string]bool
-	eof    bool
+	kept   map[string]bool
+	// got is what is sent back: the values that have one. done is every field answered, which an
+	// optional field answered with nothing is too.
+	got   map[string]string
+	done  map[string]bool
+	asked map[string]bool
+	eof   bool
+	// partial is a value that is not complete yet: a JSON document, such as a pretty-printed
+	// service account key, spans several lines.
+	partial string
 }
 
 // newPromptInput is the gathering for p: each value a flag gave is taken, except a secret's,
 // which no flag may give.
-func (x *invocation) newPromptInput(p *protocol.Prompt, vals map[string]string) (*promptInput, error) {
-	g := &promptInput{kind: p.Kind, fields: p.Inputs, got: map[string]string{}, asked: map[string]bool{}}
+func (x *invocation) newPromptInput(p *protocol.Prompt, in signInInputs) (*promptInput, error) {
+	g := &promptInput{kind: p.Kind, fields: p.Inputs, kept: in.kept,
+		got: map[string]string{}, done: map[string]bool{}, asked: map[string]bool{}}
 	for _, f := range p.Inputs {
-		v, ok := vals[f.Name]
+		v, ok := in.vals[f.Name]
 		if !ok {
 			continue
 		}
@@ -394,7 +450,8 @@ func (x *invocation) newPromptInput(p *protocol.Prompt, vals map[string]string) 
 			return nil, usageError{fmt.Sprintf("%s is secret: the sign-in reads it from a prompt or standard input, never from --input", fieldName(f))}
 		}
 		g.got[f.Name] = v
-		delete(vals, f.Name)
+		g.done[f.Name] = true
+		delete(in.vals, f.Name)
 	}
 	return g, nil
 }
@@ -405,12 +462,16 @@ func (g *promptInput) next() *protocol.LoginInput {
 		return nil
 	}
 	for i := range g.fields {
-		if _, ok := g.got[g.fields[i].Name]; !ok {
+		if !g.done[g.fields[i].Name] {
 			return &g.fields[i]
 		}
 	}
 	return nil
 }
+
+// answerable says whether the prompt waits for an answer this command can send: it asked for
+// values, and standard input did not end before it had them.
+func (g *promptInput) answerable() bool { return len(g.fields) > 0 && !g.eof }
 
 // ask writes the label of the field standard input is about to read, once for each field.
 func (g *promptInput) ask(x *invocation) {
@@ -422,27 +483,65 @@ func (g *promptInput) ask(x *invocation) {
 	x.eprintf("%s: ", fieldName(*f))
 }
 
-// take is one line of standard input: the value of the field that waits for it. An empty line
-// leaves an optional field out.
-func (g *promptInput) take(line string) {
+// maxInputValue bounds one value a sign-in asks for, as maxImportFile bounds the file the import
+// command reads: a service account key is a document of a few kilobytes, and standard input may
+// never end.
+const maxInputValue = 1 << 20
+
+// jsonValue extends the value a field has so far with one more line and says whether it is
+// complete. A value that starts with a brace is a JSON document, such as the service account key
+// a Vertex sign-in reads, and a pretty-printed one spans several lines: it is complete when it
+// parses, so a document is never sent cut short at its first line.
+func jsonValue(sofar, line string) (string, bool, error) {
+	v := line
+	if sofar != "" {
+		v = sofar + "\n" + line
+	}
+	if len(v) > maxInputValue {
+		return "", false, usageError{fmt.Sprintf("a value is over the %d KiB a sign-in takes", maxInputValue>>10)}
+	}
+	if !strings.HasPrefix(strings.TrimSpace(v), "{") || json.Valid([]byte(v)) {
+		return v, true, nil
+	}
+	return v, false, nil
+}
+
+// take is one line of standard input: the value of the field that waits for it, or one more line
+// of a value that is a JSON document. An empty line answers an optional field with nothing.
+func (g *promptInput) take(line string) error {
 	f := g.next()
 	if f == nil {
-		return
+		return nil
 	}
-	if line != "" || !f.Optional {
-		g.got[f.Name] = line
+	v, complete, err := jsonValue(g.partial, line)
+	if err != nil {
+		return err
 	}
+	if !complete {
+		g.partial = v
+		return nil
+	}
+	g.partial = ""
+	g.done[f.Name] = true
+	if v != "" || !f.Optional {
+		g.got[f.Name] = v
+	}
+	return nil
 }
 
 // endOfInput is standard input's end: a sign-in that must have an input it did not get cannot go
 // on, so it is cancelled with a usage error; one that can finish by itself goes on.
 func (g *promptInput) endOfInput(x *invocation, login string) error {
+	f := g.next()
 	g.eof = true
 	if g.kind != protocol.PromptInput {
 		return nil
 	}
+	if g.partial != "" && f != nil {
+		return x.cancelLogin(login, usageError{fmt.Sprintf("%s is not a complete JSON document, and standard input ended before its end", fieldName(*f))})
+	}
 	for _, f := range g.fields {
-		if _, ok := g.got[f.Name]; ok || f.Optional {
+		if g.done[f.Name] || f.Optional {
 			continue
 		}
 		return x.cancelLogin(login, usageError{fmt.Sprintf("the sign-in needs %s and standard input has no more lines: %s", fieldName(f), inputHint(f))})
@@ -450,8 +549,9 @@ func (g *promptInput) endOfInput(x *invocation, login string) error {
 	return nil
 }
 
-// answerPrompt sends what the prompt asked for and reads the sign-in again, so a prompt that
-// comes back unchanged is not answered twice with one input.
+// answerPrompt sends what the prompt asked for and reads the sign-in again. What comes back may
+// still be the prompt it just answered: an extension updates its prompt on its own goroutine, so
+// followLogin keeps the prompt it showed until the sign-in changes it or ends.
 func (x *invocation) answerPrompt(ctx context.Context, id string, input map[string]string) (management.Login, []byte, error) {
 	if _, err := x.client.Call(ctx, http.MethodPost, "/logins/"+url.PathEscape(id)+"/input", nil, management.LoginInputRequest{Input: input}, nil); err != nil {
 		return management.Login{}, nil, err
@@ -510,13 +610,16 @@ func (x *invocation) loginEnded(l management.Login, body []byte, again bool) err
 	return fmt.Errorf("the sign-in failed: %s", reason)
 }
 
-// cancelLogin stops a sign-in the command gives up on and returns err, the reason it did.
+// cancelLogin stops a sign-in the command gives up on and returns err, the reason it did. It says
+// when core did not take the cancel, since such a sign-in is still in core.
 func (x *invocation) cancelLogin(id string, err error) error {
 	// The command's own context may be the one that ended (Ctrl-C), so the cancel call gets a
 	// context of its own; core keeps a sign-in no one cancelled, so it is worth the try.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(x.ctx), 5*time.Second)
 	defer cancel()
-	_, _ = x.client.Call(ctx, http.MethodDelete, "/logins/"+url.PathEscape(id), nil, nil, nil)
+	if _, cerr := x.client.Call(ctx, http.MethodDelete, "/logins/"+url.PathEscape(id), nil, nil, nil); cerr != nil {
+		return fmt.Errorf("%w (the sign-in was not cancelled in core: %v)", err, cerr)
+	}
 	return err
 }
 
@@ -558,32 +661,54 @@ func promptURL(p *protocol.Prompt) string {
 
 // startInputs is what the sign-in asks for before it starts, from --input or standard input. A
 // required one it did not get is a usage error, and nothing is started.
-func (x *invocation) startInputs(fields []protocol.LoginInput, vals map[string]string, lines *lineReader) (map[string]string, error) {
+func (x *invocation) startInputs(fields []protocol.LoginInput, in signInInputs, lines *lineReader) (map[string]string, error) {
 	out := map[string]string{}
 	for _, f := range fields {
-		if v, ok := vals[f.Name]; ok {
+		if v, ok := in.vals[f.Name]; ok {
 			if f.Secret {
 				return nil, usageError{fmt.Sprintf("%s is secret: the sign-in reads it from a prompt or standard input, never from --input", fieldName(f))}
 			}
 			out[f.Name] = v
-			delete(vals, f.Name)
+			delete(in.vals, f.Name)
 			continue
+		}
+		if err := x.asks(f); err != nil {
+			return nil, err
 		}
 		if x.prompts() {
 			x.eprintf("%s: ", fieldName(f))
 		}
-		r, err := lines.readline(x.ctx, f.Secret)
-		if err != nil {
-			return nil, err
+		var value string
+		for {
+			r, err := lines.readline(x.ctx, f.Secret)
+			if err != nil {
+				return nil, err
+			}
+			hidden := lines.hidden()
+			lines.show()
+			if hidden {
+				x.eprintf("\n")
+			}
+			if !r.ok {
+				if value != "" {
+					return nil, usageError{fmt.Sprintf("%s is not a complete JSON document, and standard input ended before its end", fieldName(f))}
+				}
+				if optionalInput(f, in.kept) {
+					break
+				}
+				return nil, usageError{fmt.Sprintf("the sign-in needs %s: %s", fieldName(f), inputHint(f))}
+			}
+			// A value that is a JSON document takes more lines than its first one.
+			var complete bool
+			if value, complete, err = jsonValue(value, r.text); err != nil {
+				return nil, err
+			}
+			if complete {
+				break
+			}
 		}
-		if r.hidden {
-			x.eprintf("\n")
-		}
-		if !r.ok && !f.Optional {
-			return nil, usageError{fmt.Sprintf("the sign-in needs %s: %s", fieldName(f), inputHint(f))}
-		}
-		if r.ok && (r.text != "" || !f.Optional) {
-			out[f.Name] = r.text
+		if value != "" || !optionalInput(f, in.kept) {
+			out[f.Name] = value
 		}
 	}
 	return out, nil
@@ -682,6 +807,13 @@ func (l *lineReader) show() {
 	if restore != nil {
 		restore()
 	}
+}
+
+// hidden says whether the terminal's echo is off now: a secret line is being typed.
+func (l *lineReader) hidden() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.restore != nil
 }
 
 func (l *lineReader) close() {
@@ -810,7 +942,24 @@ func runAccountImport(x *invocation) error {
 	if path == "-" {
 		raw, err = io.ReadAll(io.LimitReader(x.stdin, maxImportFile+1))
 	} else {
-		raw, err = os.ReadFile(path)
+		// What is read is a credential file, not a stream: a device or a pipe never ends, and the
+		// 1 MiB core takes is refused before a byte of it is read.
+		var st os.FileInfo
+		if st, err = os.Stat(path); err != nil {
+			return err
+		}
+		if !st.Mode().IsRegular() {
+			return usageError{fmt.Sprintf("%s is not a regular file: give it a credential file", path)}
+		}
+		if st.Size() > maxImportFile {
+			return fmt.Errorf("%s is larger than the 1 MiB core reads", path)
+		}
+		var f *os.File
+		if f, err = os.Open(path); err != nil {
+			return err
+		}
+		defer f.Close()
+		raw, err = io.ReadAll(io.LimitReader(f, maxImportFile+1))
 		name = filepath.Base(path)
 	}
 	if err != nil {

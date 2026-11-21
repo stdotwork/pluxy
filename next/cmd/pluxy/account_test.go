@@ -21,21 +21,25 @@ import (
 	"github.com/stdotwork/pluxy/next/management"
 )
 
-// fakeAccountCore is a management API with one extension that signs in four ways: one key, one
-// browser, one device and one that asks for a code in a prompt of its own.
+// fakeAccountCore is a management API with one extension that signs in a few ways: a key, a
+// browser, a device, prompts of its own, a service account key, and methods whose inputs a flag
+// or an account's settings give.
 type fakeAccountCore struct {
-	mu        sync.Mutex
-	srv       *httptest.Server
-	logins    map[string]*fakeAccountLogin
-	nextLogin int
-	starts    []map[string]any
-	relogins  []map[string]any
-	inputs    []map[string]string
-	cancelled []string
-	patched   []map[string]any
-	removed   []string
-	imports   []management.AuthImportRequest
-	vertices  []string
+	mu         sync.Mutex
+	srv        *httptest.Server
+	logins     map[string]*fakeAccountLogin
+	nextLogin  int
+	starts     []map[string]any
+	relogins   []map[string]any
+	inputs     []map[string]string
+	cancelled  []string
+	patched    []map[string]any
+	removed    []string
+	imports    []management.AuthImportRequest
+	vertices   []string
+	failDelete bool
+	// onCreate runs on each sign-in the fake starts, so a test can make one fail or end late.
+	onCreate func(*fakeAccountLogin)
 }
 
 // fakeAccountLogin is one sign-in the fake runs.
@@ -44,6 +48,17 @@ type fakeAccountLogin struct {
 	prompt                 map[string]any
 	reason                 string
 	polls                  int
+	// failPolls: how many reads of the sign-in answer 500 before the state is read.
+	failPolls int
+	// failInputs: how many answers the sign-in refuses with 422 before taking one.
+	failInputs int
+	// gone makes every read of the sign-in answer 404, as core does for one it does not have.
+	gone bool
+	// doneAfter ends the sign-in on its own, so a test that never answers has an end.
+	doneAfter int
+	// late is a change made after a read has answered, as an extension's own work does: it is
+	// applied on the read after the one that reports it.
+	late func()
 }
 
 func (l *fakeAccountLogin) view(id string) map[string]any {
@@ -97,7 +112,11 @@ func (f *fakeAccountCore) sent() []map[string]string {
 func (f *fakeAccountCore) newLogin(account, method string, state string) string {
 	f.nextLogin++
 	id := fmt.Sprintf("L%d", f.nextLogin)
-	f.logins[id] = &fakeAccountLogin{account: account, method: method, state: state, prompt: fakePrompt(method)}
+	l := &fakeAccountLogin{account: account, method: method, state: state, prompt: fakePrompt(method)}
+	if f.onCreate != nil {
+		f.onCreate(l)
+	}
+	f.logins[id] = l
 	return id
 }
 
@@ -113,8 +132,27 @@ func fakePrompt(method string) map[string]any {
 	case "input":
 		return map[string]any{"kind": "input", "message": "Enter the code.",
 			"inputs": []any{map[string]any{"name": "code", "label": "Code"}}}
+	case "fields":
+		return map[string]any{"kind": "input", "message": "Enter both.",
+			"inputs": []any{
+				map[string]any{"name": "one", "label": "First"},
+				map[string]any{"name": "two", "label": "Second"},
+			}}
+	case "optional":
+		return map[string]any{"kind": "input", "message": "Anything to add?",
+			"inputs": []any{map[string]any{"name": "note", "label": "Note", "optional": true}}}
+	case "switch":
+		return map[string]any{"kind": "input", "message": "Paste the address the browser ended on.",
+			"inputs": []any{map[string]any{"name": "url", "label": "Address"}}}
 	}
 	return nil
+}
+
+// fakeSwitchPrompt is the prompt a switch sign-in asks for once the person has been asked for the
+// address: another field, and a secret one.
+func fakeSwitchPrompt() map[string]any {
+	return map[string]any{"kind": "input", "message": "Enter the key.",
+		"inputs": []any{map[string]any{"name": "api_key", "label": "API key", "secret": true}}}
 }
 
 func fakeInput(body map[string]any) map[string]string {
@@ -151,6 +189,17 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 			map[string]any{"method": "browser", "kind": "browser", "label": "Browser"},
 			map[string]any{"method": "device", "kind": "device", "label": "Device"},
 			map[string]any{"method": "input", "kind": "input", "label": "Code"},
+			map[string]any{"method": "fields", "kind": "input", "label": "Two fields"},
+			map[string]any{"method": "optional", "kind": "input", "label": "Optional note"},
+			map[string]any{"method": "pair", "kind": "api_key", "label": "Two values",
+				"inputs": []any{
+					map[string]any{"name": "one", "label": "First"},
+					map[string]any{"name": "two", "label": "Second"},
+				}},
+			map[string]any{"method": "service_account", "kind": "api_key", "label": "Service account",
+				"inputs": []any{map[string]any{"name": "service_account", "label": "Service account key", "secret": true}}},
+			map[string]any{"method": "kept", "kind": "api_key", "label": "Base URL",
+				"inputs": []any{map[string]any{"name": "base_url", "label": "Base URL"}}},
 		}}}})
 	case r.Method == http.MethodPost && path == "/accounts":
 		body := decode()
@@ -162,11 +211,15 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 			write(map[string]any{"error": map[string]any{"code": "conflict", "message": "an account with this ID already exists"}})
 			return
 		}
-		if method == "api_key" {
+		switch method {
+		case "api_key", "kept", "service_account":
 			login := fmt.Sprintf("A%d", len(f.starts))
 			state, reason := "done", ""
-			if fakeInput(body)["api_key"] == "bad-key" {
+			switch {
+			case method == "api_key" && fakeInput(body)["api_key"] == "bad-key":
 				state, reason = "failed", "the test provider refused this key"
+			case method == "service_account" && !json.Valid([]byte(fakeInput(body)["service_account"])):
+				state, reason = "failed", "the service account key is not JSON"
 			}
 			f.logins[login] = &fakeAccountLogin{account: id, method: method, state: state, reason: reason}
 			_ = json.NewEncoder(w).Encode(map[string]any{"login": map[string]any{"id": login, "account": id, "extension": "test/ext",
@@ -182,7 +235,7 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 		account := strings.TrimSuffix(strings.TrimPrefix(path, "/accounts/"), "/login")
 		method, _ := body["method"].(string)
 		state := management.LoginPending
-		if method == "api_key" {
+		if method == "api_key" || method == "kept" {
 			state = "done"
 		}
 		id := f.newLogin(account, method, state)
@@ -199,23 +252,50 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 			write(map[string]any{"error": map[string]any{"code": "not_found", "message": "no such login"}})
 			return
 		}
-		if l.state == management.LoginPending && l.method == "device" {
-			l.polls++
-			if l.polls >= 1 {
-				l.state, l.prompt = "done", nil
-			}
+		if l.failPolls > 0 {
+			l.failPolls--
+			w.WriteHeader(http.StatusInternalServerError)
+			write(map[string]any{"error": map[string]any{"code": "failed", "message": "the sign-in cannot be read now"}})
+			return
 		}
-		write(l.view(id))
+		if l.gone {
+			w.WriteHeader(http.StatusNotFound)
+			write(map[string]any{"error": map[string]any{"code": "not_found", "message": "no such login"}})
+			return
+		}
+		l.polls++
+		if l.state == management.LoginPending && l.method == "device" && l.polls >= 1 {
+			l.state, l.prompt = "done", nil
+		}
+		if l.state == management.LoginPending && l.method == "switch" && l.polls == 1 {
+			l.prompt = fakeSwitchPrompt()
+		}
+		if l.doneAfter > 0 && l.polls >= l.doneAfter {
+			l.state, l.prompt = "done", nil
+		}
+		view := l.view(id)
+		if l.late != nil {
+			late := l.late
+			l.late = nil
+			late()
+		}
+		write(view)
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/logins/") && strings.HasSuffix(path, "/input"):
 		id := strings.TrimSuffix(strings.TrimPrefix(path, "/logins/"), "/input")
 		body := decode()
 		in := fakeInput(body)
-		f.inputs = append(f.inputs, in)
 		l, ok := f.logins[id]
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
+		if l.failInputs > 0 {
+			l.failInputs--
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			write(map[string]any{"error": map[string]any{"code": "invalid_request", "message": "the test core did not take that value"}})
+			return
+		}
+		f.inputs = append(f.inputs, in)
 		switch l.method {
 		case "browser":
 			switch {
@@ -226,14 +306,25 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 			default:
 				l.prompt["message"] = "That address holds no sign-in code."
 			}
-		case "input":
-			if in["code"] == "1" {
-				l.state, l.prompt = "done", nil
+		case "input", "optional":
+			l.late = func() { l.state, l.prompt = "done", nil }
+		case "fields":
+			if in["one"] != "" && in["two"] != "" {
+				l.late = func() { l.state, l.prompt = "done", nil }
+			}
+		case "switch":
+			if in["api_key"] != "" {
+				l.late = func() { l.state, l.prompt = "done", nil }
 			}
 		}
 		w.WriteHeader(http.StatusNoContent)
 	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/logins/"):
 		id := strings.TrimPrefix(path, "/logins/")
+		if f.failDelete {
+			w.WriteHeader(http.StatusInternalServerError)
+			write(map[string]any{"error": map[string]any{"code": "failed", "message": "the test core cannot cancel it"}})
+			return
+		}
 		f.cancelled = append(f.cancelled, id)
 		if l, ok := f.logins[id]; ok {
 			l.state, l.prompt = "cancelled", nil
@@ -242,7 +333,8 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && path == "/accounts":
 		write(map[string]any{"accounts": []any{
 			map[string]any{"id": "work", "public_id": "acc_1", "label": "Work account", "extension": "test/ext",
-				"source": "login", "state": "active", "health": map[string]any{"state": "ok"}},
+				"source": "login", "state": "active", "settings": map[string]any{"base_url": "https://example.test/v1"},
+				"health": map[string]any{"state": "ok"}},
 			map[string]any{"id": "spare", "public_id": "acc_2", "extension": "test/ext", "source": "login",
 				"state": "active", "health": map[string]any{"state": "cooling", "until": "2026-11-21T10:00:00Z", "why": "rate limited"}},
 		}})
@@ -541,9 +633,172 @@ func TestCLIAccountAddPromptsOnTerminal(t *testing.T) {
 	if code != 0 || !strings.Contains(errOut, "API key: ") || strings.Contains(out+errOut, key) {
 		t.Fatalf("account add on a terminal: code=%d out=%q err=%q, want the label and not the key", code, out, errOut)
 	}
-	out, errOut, code = f.runIn(key+"\n", true, "account", "add", "test/ext", "--method", "api_key", "--id", "work-9", "--json")
+	// Standard input that is not a terminal is read, and nothing is asked on it: the reply is
+	// standard output's alone.
+	out, errOut, code = f.runIn(key+"\n", false, "account", "add", "test/ext", "--method", "api_key", "--id", "work-9", "--json")
 	if code != 0 || errOut != "" || !strings.HasPrefix(out, `{"login":`) || strings.Contains(out, key) {
-		t.Fatalf("account add --json on a terminal: code=%d out=%q err=%q, want the reply and no prompt", code, out, errOut)
+		t.Fatalf("account add --json: code=%d out=%q err=%q, want the reply and no prompt", code, out, errOut)
+	}
+}
+
+// A value given without = to --input is refused, and the value never reaches the terminal: the
+// flag package itself would quote it, and it may be a secret.
+func TestCLIAccountInputKeepsValueOutOfErrors(t *testing.T) {
+	f := newFakeAccountCore(t)
+	const value = "sk-LEAKME"
+	out, errOut, code := f.run("account", "add", "test/ext", "--method", "api_key", "--input", value)
+	if code != 2 || !strings.Contains(errOut, "name=value") {
+		t.Fatalf("account add --input with no =: code=%d out=%q err=%q, want 2 and how to write it", code, out, errOut)
+	}
+	if strings.Contains(out+errOut, value) {
+		t.Errorf("the value reached the terminal: %q %q", out, errOut)
+	}
+}
+
+// --no-wait cannot leave a sign-in that only the command can answer: it cancels that sign-in and
+// says what a value it needs.
+func TestCLIAccountAddNoWaitRefusesInputPrompt(t *testing.T) {
+	f := newFakeAccountCore(t)
+	out, errOut, code := f.run("account", "add", "test/ext", "--method", "input", "--id", "wait-1", "--no-wait")
+	if code != 2 || strings.Contains(out, "added") {
+		t.Fatalf("account add --no-wait on a prompt that needs a value: code=%d out=%q err=%q, want 2", code, out, errOut)
+	}
+	if !strings.Contains(errOut, "Code") {
+		t.Errorf("the error does not say what the sign-in needs: %q", errOut)
+	}
+	if _, cancelled := f.start(); len(cancelled) != 1 {
+		t.Errorf("the sign-in was left to hang in core: %v", cancelled)
+	}
+}
+
+// A service account key is a JSON document, and a pretty-printed one spans several lines: the
+// value is read to the end of the document, not to the end of its first line.
+func TestCLIAccountAddReadsJSONAcrossLines(t *testing.T) {
+	f := newFakeAccountCore(t)
+	key := "{\n  \"type\": \"service_account\",\n  \"project_id\": \"demo\"\n}"
+	out, errOut, code := f.runIn(key+"\n", false, "account", "add", "test/ext", "--method", "service_account", "--id", "sa-1")
+	if code != 0 || !strings.Contains(out, "account sa-1 added") {
+		t.Fatalf("account add of a pretty-printed key: code=%d out=%q err=%q", code, out, errOut)
+	}
+	starts, _ := f.start()
+	if len(starts) != 1 || fakeInput(starts[0])["service_account"] != key {
+		t.Fatalf("core was sent %v, want the whole document", starts)
+	}
+	// A document that is not whole is refused rather than sent cut short.
+	f = newFakeAccountCore(t)
+	out, errOut, code = f.runIn("{\n  \"type\": \"service_account\"\n", false, "account", "add", "test/ext", "--method", "service_account", "--id", "sa-2")
+	if code != 2 || !strings.Contains(errOut, "JSON") || strings.Contains(out, "added") {
+		t.Fatalf("account add of an unfinished document: code=%d out=%q err=%q, want 2 and why", code, out, errOut)
+	}
+	if starts, _ := f.start(); len(starts) != 0 {
+		t.Errorf("a sign-in was started with an unfinished document: %v", starts)
+	}
+}
+
+// account login leaves a non-secret input the account's settings already hold optional, as the
+// panel does; account add, which has no settings, still asks for it.
+func TestCLIAccountLoginKeepsSettingsOptional(t *testing.T) {
+	f := newFakeAccountCore(t)
+	out, errOut, code := f.run("account", "login", "work", "--method", "kept")
+	if code != 0 || !strings.Contains(out, "account work signed in again") {
+		t.Fatalf("account login with a value the account keeps: code=%d out=%q err=%q", code, out, errOut)
+	}
+	if _, errOut, code := f.run("account", "add", "test/ext", "--method", "kept", "--id", "work-k1"); code != 2 || !strings.Contains(errOut, "Base URL") {
+		t.Errorf("account add of the same value: %d %q, want 2 and what it needs", code, errOut)
+	}
+}
+
+// With --json not even a terminal is read for a value: standard output is the reply alone.
+func TestCLIAccountAddJSONDoesNotAskOnTerminal(t *testing.T) {
+	f := newFakeAccountCore(t)
+	out, errOut, code := f.runIn("", true, "account", "add", "test/ext", "--method", "api_key", "--json")
+	if code != 2 || !strings.Contains(errOut, "--json") || strings.Contains(errOut, "API key: ") {
+		t.Fatalf("account add --json on a terminal: code=%d out=%q err=%q, want 2 and why", code, out, errOut)
+	}
+	if starts, _ := f.start(); len(starts) != 0 {
+		t.Errorf("a sign-in was started without its value: %v", starts)
+	}
+}
+
+// account import refuses what is not a regular file before reading it, and a file over the 1 MiB
+// core takes.
+func TestCLIAccountImportRefusesNonRegularFile(t *testing.T) {
+	f := newFakeAccountCore(t)
+	_, errOut, code := f.run("account", "import", t.TempDir())
+	if code != 2 || !strings.Contains(errOut, "not a regular file") {
+		t.Fatalf("account import of a directory: code=%d err=%q, want 2 and why", code, errOut)
+	}
+	big := filepath.Join(t.TempDir(), "big.json")
+	if err := os.WriteFile(big, bytes.Repeat([]byte(" "), maxImportFile+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, errOut, code := f.run("account", "import", big); code == 0 || !strings.Contains(errOut, "1 MiB") {
+		t.Errorf("account import of a file over 1 MiB: code=%d err=%q, want a refusal", code, errOut)
+	}
+}
+
+// When core cannot be asked to cancel a sign-in, the command says so rather than claiming it was
+// cancelled.
+func TestFollowLoginSaysWhenTheSignInWasNotCancelled(t *testing.T) {
+	f := newFakeAccountCore(t)
+	f.failDelete = true
+	client := &management.Client{URL: f.srv.URL, Key: "k"}
+	var reply management.LoginReply
+	if _, err := client.Call(context.Background(), http.MethodPost, "/accounts", nil,
+		management.AddAccountRequest{ID: "work", Extension: "test/ext", Method: "browser"}, &reply); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	x := &invocation{ctx: ctx, client: client, stdin: strings.NewReader(""), stdout: io.Discard, stderr: io.Discard}
+	lines := newLineReader(x.stdin, nil)
+	defer lines.close()
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	err := x.followLogin(reply.Login, nil, signInInputs{}, lines, false)
+	if err == nil || !strings.Contains(err.Error(), "not cancelled") {
+		t.Fatalf("followLogin after an interrupt core would not cancel: %v, want it to say the sign-in is still running", err)
+	}
+}
+
+// A prompt whose values are all optional is answered by blank lines: an empty answer is sent,
+// rather than the prompt being asked again.
+func TestCLIAccountAddAnswersAnAllOptionalPrompt(t *testing.T) {
+	f := newFakeAccountCore(t)
+	f.onCreate = func(l *fakeAccountLogin) { l.doneAfter = 2 }
+	out, errOut, code := f.runIn("\n", false, "account", "add", "test/ext", "--method", "optional", "--id", "opt-1")
+	if code != 0 || !strings.Contains(out, "account opt-1 added") {
+		t.Fatalf("account add of an all-optional prompt: code=%d out=%q err=%q", code, out, errOut)
+	}
+	if sent := f.sent(); len(sent) != 1 || len(sent[0]) != 0 {
+		t.Fatalf("core was sent %v, want one empty answer", sent)
+	}
+}
+
+// A prompt answered once is not answered again while the extension has not updated it yet: the
+// fake applies an answer's change on the read after the one that reports it.
+func TestCLIAccountAddSendsOneAnswerPerPrompt(t *testing.T) {
+	f := newFakeAccountCore(t)
+	out, errOut, code := f.runIn("1\n1\n", false, "account", "add", "test/ext", "--method", "input", "--id", "once-1")
+	if code != 0 || !strings.Contains(out, "account once-1 added") {
+		t.Fatalf("account add of a prompt: code=%d out=%q err=%q", code, out, errOut)
+	}
+	if sent := f.sent(); len(sent) != 1 {
+		t.Fatalf("the prompt was answered %d times: %v", len(sent), sent)
+	}
+}
+
+// A sign-in core no longer has is given up on, and cancelled in case core still runs it.
+func TestFollowLoginCancelsWhenTheSignInIsGone(t *testing.T) {
+	f := newFakeAccountCore(t)
+	f.onCreate = func(l *fakeAccountLogin) { l.gone = true }
+	out, errOut, code := f.run("account", "add", "test/ext", "--method", "browser", "--id", "gone-1")
+	if code != 5 || !strings.Contains(errOut, "no such login") {
+		t.Fatalf("account add of a sign-in core lost: code=%d out=%q err=%q, want 5", code, out, errOut)
+	}
+	if _, cancelled := f.start(); len(cancelled) != 1 {
+		t.Errorf("the sign-in was not cancelled: %v", cancelled)
 	}
 }
 
@@ -564,7 +819,7 @@ func TestFollowLoginCancelsOnInterrupt(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		cancel()
 	}()
-	err := x.followLogin(reply.Login, nil, map[string]string{}, lines, false)
+	err := x.followLogin(reply.Login, nil, signInInputs{}, lines, false)
 	if err == nil || !strings.Contains(err.Error(), "cancelled") {
 		t.Fatalf("followLogin after an interrupt: %v, want a cancelled sign-in", err)
 	}
