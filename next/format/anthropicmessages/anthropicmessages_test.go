@@ -1464,6 +1464,156 @@ func TestEncodeCarriesToolCallOnlyMessageCacheControl(t *testing.T) {
 			t.Errorf("losses:\n got %q\nwant %q", got, want)
 		}
 	})
+
+	t.Run("at_four_breakpoints_drops_carried_marker", func(t *testing.T) {
+		in := `{
+			"model": "claude-sonnet-4-6",
+			"tools": [
+				{"type": "function", "cache_control": {"type": "ephemeral"}, "function": {"name": "a", "parameters": {"type": "object"}}}
+			],
+			"messages": [
+				{"role": "system", "content": [{"type": "text", "text": "Rules", "cache_control": {"type": "ephemeral"}}]},
+				{"role": "user", "cache_control": {"type": "ephemeral"}, "content": "Check"},
+				{
+					"role": "assistant",
+					"content": null,
+					"cache_control": {"type": "ephemeral"},
+					"tool_calls": [
+						{"id": "call_1", "type": "function", "function": {"name": "a", "arguments": "{}"}}
+					]
+				},
+				{"role": "tool", "tool_call_id": "call_1", "cache_control": {"type": "ephemeral"}, "content": "r1"},
+				{"role": "user", "content": "Done"}
+			]
+		}`
+		req, err := openaichat.ParseRequest([]byte(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, losses, err := EncodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameJSON(t, "body", out, `{
+			"model": "claude-sonnet-4-6",
+			"max_tokens": 32000,
+			"stream": false,
+			"tools": [
+				{"name": "a", "input_schema": {"type": "object", "properties": {}}, "cache_control": {"type": "ephemeral"}}
+			],
+			"system": [{"type": "text", "text": "Rules", "cache_control": {"type": "ephemeral"}}],
+			"messages": [
+				{"role": "user", "content": [{"type": "text", "text": "Check", "cache_control": {"type": "ephemeral"}}]},
+				{"role": "assistant", "content": [{"type": "tool_use", "id": "call_1", "name": "a", "input": {}}]},
+				{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "r1", "cache_control": {"type": "ephemeral"}}]},
+				{"role": "user", "content": [{"type": "text", "text": "Done"}]}
+			]
+		}`)
+		want := []string{"dropped messages[2].cache_control"}
+		if got := lossList(losses); !reflect.DeepEqual(got, want) {
+			t.Errorf("losses:\n got %q\nwant %q", got, want)
+		}
+	})
+
+	t.Run("top_level_cache_control_counts_toward_four_breakpoint_limit", func(t *testing.T) {
+		in := `{
+			"model": "claude-sonnet-4-6",
+			"cache_control": {"type": "ephemeral"},
+			"tools": [
+				{"type": "function", "cache_control": {"type": "ephemeral"}, "function": {"name": "a", "parameters": {"type": "object"}}}
+			],
+			"messages": [
+				{"role": "system", "content": [{"type": "text", "text": "Rules", "cache_control": {"type": "ephemeral"}}]},
+				{"role": "user", "content": "First"},
+				{
+					"role": "assistant",
+					"content": null,
+					"cache_control": {"type": "ephemeral"},
+					"tool_calls": [
+						{"id": "call_1", "type": "function", "function": {"name": "a", "arguments": "{}"}}
+					]
+				},
+				{"role": "tool", "tool_call_id": "call_1", "content": "r1"},
+				{
+					"role": "assistant",
+					"content": null,
+					"cache_control": {"type": "ephemeral"},
+					"tool_calls": [
+						{"id": "call_2", "type": "function", "function": {"name": "a", "arguments": "{}"}}
+					]
+				},
+				{"role": "tool", "tool_call_id": "call_2", "content": "r2"},
+				{"role": "user", "content": "Done"}
+			]
+		}`
+		req, err := openaichat.ParseRequest([]byte(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, losses, err := EncodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameJSON(t, "body", out, `{
+			"model": "claude-sonnet-4-6",
+			"max_tokens": 32000,
+			"stream": false,
+			"cache_control": {"type": "ephemeral"},
+			"tools": [
+				{"name": "a", "input_schema": {"type": "object", "properties": {}}, "cache_control": {"type": "ephemeral"}}
+			],
+			"system": [{"type": "text", "text": "Rules", "cache_control": {"type": "ephemeral"}}],
+			"messages": [
+				{"role": "user", "content": [{"type": "text", "text": "First"}]},
+				{"role": "assistant", "content": [{"type": "tool_use", "id": "call_1", "name": "a", "input": {}, "cache_control": {"type": "ephemeral"}}]},
+				{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "r1"}]},
+				{"role": "assistant", "content": [{"type": "tool_use", "id": "call_2", "name": "a", "input": {}}]},
+				{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_2", "content": "r2"}]},
+				{"role": "user", "content": [{"type": "text", "text": "Done"}]}
+			]
+		}`)
+		want := []string{"dropped messages[4].cache_control"}
+		if got := lossList(losses); !reflect.DeepEqual(got, want) {
+			t.Errorf("losses:\n got %q\nwant %q", got, want)
+		}
+	})
+
+	t.Run("never_lands_on_thinking_block", func(t *testing.T) {
+		// Responses reasoning with a valid Claude signature emits a thinking block, but each
+		// Responses input item has its own turn, so an empty assistant message's cache_control
+		// cannot attach to it.
+		in := `{
+			"model": "claude-sonnet-4-6",
+			"input": [
+				{"type": "message", "role": "user", "content": "Check"},
+				{"type": "reasoning", "summary": [{"type": "summary_text", "text": "thought"}], "encrypted_content": "Esig"},
+				{"type": "message", "role": "assistant", "content": [], "cache_control": {"type": "ephemeral"}},
+				{"type": "message", "role": "user", "content": "Done"}
+			]
+		}`
+		req, err := openairesponses.ParseRequest([]byte(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, losses, err := EncodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameJSON(t, "body", out, `{
+			"model": "claude-sonnet-4-6",
+			"max_tokens": 32000,
+			"stream": false,
+			"messages": [
+				{"role": "user", "content": [{"type": "text", "text": "Check"}]},
+				{"role": "assistant", "content": [{"type": "thinking", "thinking": "thought", "signature": "Esig"}]},
+				{"role": "user", "content": [{"type": "text", "text": "Done"}]}
+			]
+		}`)
+		want := []string{"dropped input[2].cache_control"}
+		if got := lossList(losses); !reflect.DeepEqual(got, want) {
+			t.Errorf("losses:\n got %q\nwant %q", got, want)
+		}
+	})
 }
 
 func TestEncodeResponseFormat(t *testing.T) {

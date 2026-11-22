@@ -19,6 +19,10 @@ import (
 // It is today's core's value for clients in other formats.
 const defaultMaxTokens = 32000
 
+// maxCacheBreakpoints is the maximum number of cache_control breakpoints Anthropic's Messages API
+// accepts per request (explicit block breakpoints plus top-level automatic caching).
+const maxCacheBreakpoints = 4
+
 type encoder struct {
 	losses []llm.Loss
 	// keepModelTurn: the conversation's trailing assistant turns are kept (EncodeOptions).
@@ -512,23 +516,31 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Message: fmt.Sprintf("%s: unsupported item type %q", p, it.Type), Scope: llm.ScopeRequest}
 		}
 	}
-	for _, cc := range pendingCC {
-		var target *outMessage
-		for j := len(msgs) - 1; j >= 0; j-- {
-			if msgs[j].turn == cc.turn && msgs[j].role == cc.role && len(msgs[j].content) > 0 {
-				target = msgs[j]
-				break
+	if len(pendingCC) > 0 {
+		cacheBreakpoints := countCacheBreakpoints(req.Origin, tools, system, msgs)
+		for _, cc := range pendingCC {
+			var target *outMessage
+			for j := len(msgs) - 1; j >= 0; j-- {
+				if msgs[j].turn == cc.turn && msgs[j].role == cc.role && len(msgs[j].content) > 0 {
+					target = msgs[j]
+					break
+				}
 			}
-		}
-		if target == nil {
-			e.lose(llm.LossDropped, rawjson.Join(cc.path, "cache_control"), "message has no content block to carry cache_control")
-			continue
-		}
-		last := len(target.content) - 1
-		if rawjson.Object(target.content[last])["cache_control"] == nil {
+			if target == nil {
+				e.lose(llm.LossDropped, rawjson.Join(cc.path, "cache_control"), "message has no content block to carry cache_control")
+				continue
+			}
+			last := len(target.content) - 1
+			if rawjson.Object(target.content[last])["cache_control"] != nil {
+				e.lose(llm.LossDropped, rawjson.Join(cc.path, "cache_control"), "last content block already carries cache_control")
+				continue
+			}
+			if cacheBreakpoints >= maxCacheBreakpoints {
+				e.lose(llm.LossDropped, rawjson.Join(cc.path, "cache_control"), "Messages allows at most 4 cache breakpoints per request")
+				continue
+			}
 			target.content[last] = rawjson.Merge(target.content[last], cc.raw)
-		} else {
-			e.lose(llm.LossDropped, rawjson.Join(cc.path, "cache_control"), "last content block already carries cache_control")
+			cacheBreakpoints++
 		}
 	}
 	if len(system) > 0 {
@@ -549,6 +561,39 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 		return nil, nil, err
 	}
 	return rawjson.Merge(b, e.kept(req.Origin)), e.losses, nil
+}
+
+func countCacheBreakpoints(origin *llm.Origin, tools, system []json.RawMessage, msgs []*outMessage) int {
+	n := 0
+	if origin != nil {
+		if origin.Format == format {
+			if rawjson.Object(origin.Raw)["cache_control"] != nil {
+				n++
+			}
+		} else if m := rawjson.Object(origin.Raw); m != nil {
+			if _, ok := validCacheControl(m["cache_control"]); ok {
+				n++
+			}
+		}
+	}
+	for _, t := range tools {
+		if rawjson.Object(t)["cache_control"] != nil {
+			n++
+		}
+	}
+	for _, b := range system {
+		if rawjson.Object(b)["cache_control"] != nil {
+			n++
+		}
+	}
+	for _, m := range msgs {
+		for _, b := range m.content {
+			if rawjson.Object(b)["cache_control"] != nil {
+				n++
+			}
+		}
+	}
+	return n
 }
 
 func encodeToolChoice(tc *llm.ToolChoice, parallel *bool, names map[string]string) map[string]any {
