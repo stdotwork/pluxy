@@ -402,7 +402,7 @@ func TestCompactWithoutSummaryKeepsUsage(t *testing.T) {
 }
 
 func TestCompactUpstreamErrorsAndRedaction(t *testing.T) {
-	t.Run("rate limit maps and records quota state", func(t *testing.T) {
+	t.Run("rate limit maps to a retryable model-scope error", func(t *testing.T) {
 		srv := geminitest.New(t)
 		srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
 			geminitest.RateLimited(w, 7)

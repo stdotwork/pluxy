@@ -179,7 +179,6 @@ func TestCompactChatSummary(t *testing.T) {
 			Tools             json.RawMessage `json:"tools"`
 			ToolChoice        string          `json:"tool_choice"`
 			ParallelToolCalls *bool           `json:"parallel_tool_calls"`
-			Stop              json.RawMessage `json:"stop"`
 			ResponseFormat    json.RawMessage `json:"response_format"`
 			ReasoningEffort   string          `json:"reasoning_effort"`
 			Messages          []struct {
@@ -204,8 +203,8 @@ func TestCompactChatSummary(t *testing.T) {
 		if sent.ToolChoice != "none" {
 			t.Errorf("tool_choice = %q, want none", sent.ToolChoice)
 		}
-		if sent.ParallelToolCalls != nil || len(sent.Stop) != 0 || len(sent.ResponseFormat) != 0 {
-			t.Errorf("parallel_tool_calls=%v stop=%s response_format=%s; want all cleared", sent.ParallelToolCalls, sent.Stop, sent.ResponseFormat)
+		if sent.ParallelToolCalls != nil || len(sent.ResponseFormat) != 0 {
+			t.Errorf("parallel_tool_calls=%v response_format=%s; want all cleared", sent.ParallelToolCalls, sent.ResponseFormat)
 		}
 		if sent.ReasoningEffort != "high" {
 			t.Errorf("reasoning_effort = %q, want high", sent.ReasoningEffort)
@@ -518,7 +517,7 @@ func TestCompactionHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compactionRequest: %v", err)
 	}
-	if req.Stream || req.Model != "gpt-4.1" || req.Options.Stop != nil || req.Options.ResponseFormat != nil ||
+	if req.Stream || req.Model != "gpt-4.1" || req.Options.ResponseFormat != nil ||
 		req.Options.ParallelToolCalls != nil || req.Options.ToolChoice == nil || req.Options.ToolChoice.Mode != llm.ToolChoiceNone ||
 		req.Options.ThinkingSuffix != "medium" || req.DropPolicy != llm.DropReject || req.Caller != "c-1" {
 		t.Errorf("unexpected normalized request: %+v", req.Options)
