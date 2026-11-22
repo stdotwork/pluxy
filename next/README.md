@@ -1186,7 +1186,9 @@ one input at a time to `:embedContent`, `gemini-embedding-001` one input at a ti
 (per Google's single-input limit for that model), and other Vertex text embedding models to
 `:predict` in batches of up to 250 instances. `dimensions` maps to `outputDimensionality`;
 `encoding_format` accepts `"float"` (the default) and `"base64"` (IEEE 754 little-endian float32
-bytes). Token-ID array inputs, streaming and thinking suffixes are refused with 400 on the request.
+bytes). Token-ID array inputs are refused as unsupported on the account so routing can move on to
+another provider (returning 400 naming `input` if only Gemini accounts serve the model); streaming
+and thinking suffixes are refused with 400 on the request.
 
 **Compaction.** `POST /v1/responses/compact` (also `POST /backend-api/codex/responses/compact`) is
 served on every Gemini account (Gemini API keys, Vertex AI service accounts and express mode keys,

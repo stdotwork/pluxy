@@ -614,7 +614,7 @@ func readEmbeddingInputs(raw json.RawMessage) ([]string, error) {
 		return nil, badEmbeddingRequest("input must not be empty")
 	}
 	if isTokenArray(items) {
-		return nil, badEmbeddingRequest("input: Gemini embeddings do not accept token-ID arrays; pass text strings instead")
+		return nil, unsupportedEmbeddingInput("input: Gemini embeddings do not accept token-ID arrays; pass text strings instead")
 	}
 	out := make([]string, len(items))
 	for i, item := range items {
@@ -627,15 +627,27 @@ func readEmbeddingInputs(raw json.RawMessage) ([]string, error) {
 	return out, nil
 }
 
-// isTokenArray reports whether items looks like OpenAI's integer token-ID array or array of
-// integer token-ID arrays.
+// isTokenArray reports whether items is OpenAI's integer token-ID array or array of non-empty
+// integer token-ID arrays. Mixed or malformed arrays return false so they stay invalid requests.
 func isTokenArray(items []json.RawMessage) bool {
-	var n int64
-	if json.Unmarshal(items[0], &n) == nil {
+	allInt := true
+	for _, item := range items {
+		var n int64
+		if json.Unmarshal(item, &n) != nil {
+			allInt = false
+			break
+		}
+	}
+	if allInt {
 		return true
 	}
-	var nested []int64
-	return json.Unmarshal(items[0], &nested) == nil
+	for _, item := range items {
+		var nested []int64
+		if json.Unmarshal(item, &nested) != nil || len(nested) == 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // encodeFloat32Base64 encodes an embedding vector as IEEE 754 little-endian float32 bytes in
@@ -650,4 +662,8 @@ func encodeFloat32Base64(values []float64) string {
 
 func badEmbeddingRequest(message string) *llm.Error {
 	return &llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusBadRequest, Scope: llm.ScopeRequest, Message: message}
+}
+
+func unsupportedEmbeddingInput(message string) *llm.Error {
+	return &llm.Error{Code: llm.CodeUnsupported, Status: http.StatusBadRequest, Scope: llm.ScopeCredential, Retryable: true, Message: message}
 }
