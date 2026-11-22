@@ -15,8 +15,8 @@ import (
 // json_schema, per https://platform.claude.com/docs/en/build-with-claude/structured-outputs.
 // Anthropic lists Claude 4.5 and later (Opus, Sonnet, Haiku, Fable, Mythos) and
 // claude-mythos-preview; recognized older Claude versions (3.x, 4.0, 4.1) are not supported.
-// Unrecognized model names (such as claude-mythos-preview or custom names on a custom base_url)
-// return true so working requests are not rejected.
+// A name it cannot place (such as claude-mythos-preview) returns true, so a working request is not
+// changed.
 func supportsStructuredOutput(model string) bool {
 	major, minor, ok := parseClaudeVersion(model)
 	if !ok {
@@ -96,6 +96,7 @@ type schemaAdapter struct {
 	root    map[string]any
 	losses  []llm.Loss
 	changed bool
+	checked map[string]bool // $refs already followed and found free of cycles
 }
 
 // adaptStructuredSchema checks and adapts a cross-format JSON Schema for Messages
@@ -115,7 +116,7 @@ func adaptStructuredSchema(raw json.RawMessage) (json.RawMessage, []llm.Loss, bo
 	if !ok || root == nil {
 		return nil, []llm.Loss{{Kind: llm.LossDropped, Path: "response_format", Detail: "Messages output_config.format json_schema requires a schema object"}}, false
 	}
-	a := &schemaAdapter{root: root}
+	a := &schemaAdapter{root: root, checked: map[string]bool{}}
 	if reason := a.checkCycles(root, map[string]bool{}); reason != "" {
 		return nil, []llm.Loss{{Kind: llm.LossDropped, Path: "response_format", Detail: reason}}, false
 	}
@@ -156,14 +157,16 @@ func (a *schemaAdapter) checkCycles(node any, visiting map[string]bool) string {
 		if visiting[ref] {
 			return "Messages output_config.format does not support recursive schemas"
 		}
-		target := a.resolvePointer(ref)
-		if target != nil {
+		// Each $ref is followed once, so a chain of definitions that each name the next several
+		// times, from the client's request, costs time in its length and not exponentially.
+		if target := a.resolvePointer(ref); target != nil && !a.checked[ref] {
 			visiting[ref] = true
 			reason := a.checkCycles(target, visiting)
 			delete(visiting, ref)
 			if reason != "" {
 				return reason
 			}
+			a.checked[ref] = true
 		}
 	}
 	for _, key := range []string{"properties", "$defs", "definitions"} {
@@ -316,9 +319,9 @@ func (a *schemaAdapter) walk(m map[string]any, path string) string {
 			}
 		case k == "format":
 			if s, ok := m[k].(string); !ok || !supportedStringFormats[s] {
+				a.lose(llm.LossDropped, path+".format", fmt.Sprintf("Messages output_config.format does not support string format %q", fmt.Sprint(m[k])))
 				delete(m, k)
 				a.changed = true
-				a.lose(llm.LossDropped, path+".format", fmt.Sprintf("Messages output_config.format does not support string format %q", fmt.Sprint(m[k])))
 			}
 		case k == "pattern":
 			if s, ok := m[k].(string); ok && unsupportedRegex(s) {

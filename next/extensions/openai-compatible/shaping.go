@@ -56,7 +56,7 @@ var presets = map[string]preset{
 
 // tierFields say which of a request's service tier, verbosity, web search and code execution tools
 // an upstream's API takes.
-type tierFields struct{ serviceTier, verbosity, webSearch, codeExecution bool }
+type tierFields struct{ serviceTier, verbosity, webSearch, codeExecution, structuredOutput bool }
 
 // tierHosts are the vendors whose API documentation names a service tier, a verbosity, a hosted
 // web search tool, or a hosted code execution tool in the request, by base URL host and then by
@@ -98,7 +98,7 @@ var tierHosts = map[string]map[string]tierFields{
 		llm.FormatOpenAIChat:      {serviceTier: true, verbosity: true, webSearch: true},
 		llm.FormatOpenAIResponses: {serviceTier: true, verbosity: true, webSearch: true, codeExecution: true},
 	},
-	"api.anthropic.com":                 {llm.FormatAnthropicMessages: {serviceTier: true, webSearch: true, codeExecution: true}},
+	"api.anthropic.com":                 {llm.FormatAnthropicMessages: {serviceTier: true, webSearch: true, codeExecution: true, structuredOutput: true}},
 	"generativelanguage.googleapis.com": {llm.FormatGeminiGenerate: {serviceTier: true, webSearch: true, codeExecution: true}},
 }
 

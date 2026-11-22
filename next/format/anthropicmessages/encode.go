@@ -178,6 +178,10 @@ type EncodeOptions struct {
 	// documented Claude model families, and without it the tool is left out and reported as
 	// dropped. A Messages client's own tool is written either way.
 	CodeExecution bool
+	// StructuredOutputRules says the upstream is Anthropic's own API, whose structured output
+	// refuses some schemas and older models: a request from another format then has its schema
+	// fitted to those rules or left out with a loss. Any other upstream gets the schema as it came.
+	StructuredOutputRules bool
 }
 
 // EncodeRequestWith builds a Messages request body as EncodeRequest does, changed by opts.
@@ -211,7 +215,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	if rf := o.ResponseFormat; rf != nil && rf.Type != "" && rf.Type != llm.ResponseFormatText {
 		switch {
 		case rf.Type == llm.ResponseFormatJSONSchema && rawjson.Object(rf.Schema) != nil:
-			if req.SourceFormat() == format {
+			if req.SourceFormat() == format || !opts.StructuredOutputRules {
 				out["output_config"] = map[string]any{
 					"format": map[string]any{
 						"type":   "json_schema",

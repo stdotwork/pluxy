@@ -3,9 +3,11 @@ package anthropicmessages
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stdotwork/pluxy/next/format/geminigenerate"
 	"github.com/stdotwork/pluxy/next/format/openaichat"
@@ -31,7 +33,7 @@ func TestEncodeStructuredOutputModelGate(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			out, losses, err := EncodeRequest(req)
+			out, losses, err := EncodeRequestWith(req, EncodeOptions{StructuredOutputRules: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -64,7 +66,7 @@ func TestEncodeStructuredOutputModelGate(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			out, losses, err := EncodeRequest(req)
+			out, losses, err := EncodeRequestWith(req, EncodeOptions{StructuredOutputRules: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -100,7 +102,7 @@ func TestEncodeStructuredOutputSchemaAdaptation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		out, losses, err := EncodeRequest(req)
+		out, losses, err := EncodeRequestWith(req, EncodeOptions{StructuredOutputRules: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -166,7 +168,7 @@ func TestEncodeStructuredOutputSchemaAdaptation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		out, losses, err := EncodeRequest(req)
+		out, losses, err := EncodeRequestWith(req, EncodeOptions{StructuredOutputRules: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -231,7 +233,7 @@ func TestEncodeStructuredOutputSchemaAdaptation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			out, losses, err := EncodeRequest(req)
+			out, losses, err := EncodeRequestWith(req, EncodeOptions{StructuredOutputRules: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -254,7 +256,7 @@ func TestEncodeStructuredOutputSchemaAdaptation(t *testing.T) {
 		if req.SourceFormat() != llm.FormatAnthropicMessages {
 			t.Fatalf("SourceFormat = %q", req.SourceFormat())
 		}
-		out, losses, err := EncodeRequest(req)
+		out, losses, err := EncodeRequestWith(req, EncodeOptions{StructuredOutputRules: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -265,4 +267,55 @@ func TestEncodeStructuredOutputSchemaAdaptation(t *testing.T) {
 			t.Errorf("losses = %q, want none", lossList(losses))
 		}
 	})
+}
+
+// A custom base_url may be a Claude-compatible upstream with its own schema rules, so only
+// Anthropic's own API gets the schema changed or left out.
+func TestEncodeStructuredOutputLeavesOtherUpstreamsAlone(t *testing.T) {
+	const schema = `{"type":"object","properties":{"n":{"type":"integer","minimum":1}},"additionalProperties":true}`
+	for _, model := range []string{"claude-opus-4-1", "claude-opus-5-5", "glm-5"} {
+		req, err := openaichat.ParseRequest([]byte(`{"model":"` + model + `","messages":[{"role":"user","content":"hi"}],` +
+			`"response_format":{"type":"json_schema","json_schema":{"name":"r","schema":` + schema + `}}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, losses, err := EncodeRequestWith(req, EncodeOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(out), schema) {
+			t.Errorf("%s: schema changed: %s", model, out)
+		}
+		if len(losses) != 0 {
+			t.Errorf("%s: losses = %+v", model, losses)
+		}
+	}
+}
+
+// A client's chain of $defs that each name the next twice must not take time doubling per link.
+func TestStructuredSchemaRefChainIsLinear(t *testing.T) {
+	const links = 60
+	var defs strings.Builder
+	for i := range links {
+		fmt.Fprintf(&defs, `"d%d":{"anyOf":[{"$ref":"#/$defs/d%d"},{"$ref":"#/$defs/d%d"}]},`, i, i+1, i+1)
+	}
+	fmt.Fprintf(&defs, `"d%d":{"type":"string"}`, links)
+	raw := json.RawMessage(`{"$defs":{` + defs.String() + `},"type":"object","properties":{"a":{"$ref":"#/$defs/d0"}},"additionalProperties":false}`)
+	done := make(chan struct{})
+	go func() {
+		adaptStructuredSchema(raw)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("schema check did not finish")
+	}
+}
+
+func TestStructuredSchemaNamesTheFormatItDrops(t *testing.T) {
+	_, losses, ok := adaptStructuredSchema(json.RawMessage(`{"type":"object","properties":{"a":{"type":"string","format":"phone"}},"additionalProperties":false}`))
+	if !ok || len(losses) != 1 || !strings.Contains(losses[0].Detail, `"phone"`) {
+		t.Fatalf("ok = %v, losses = %+v", ok, losses)
+	}
 }

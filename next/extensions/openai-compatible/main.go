@@ -555,7 +555,7 @@ func buildBody(req llm.Request, target string, s settings) ([]byte, *llm.Transla
 		}
 	case llm.FormatAnthropicMessages:
 		encode = func(r llm.Request) ([]byte, []llm.Loss, error) {
-			return anthropicmessages.EncodeRequestWith(r, anthropicmessages.EncodeOptions{ServiceTier: f.serviceTier, WebSearch: f.webSearch, CodeExecution: f.codeExecution})
+			return anthropicmessages.EncodeRequestWith(r, anthropicmessages.EncodeOptions{ServiceTier: f.serviceTier, WebSearch: f.webSearch, CodeExecution: f.codeExecution, StructuredOutputRules: f.structuredOutput})
 		}
 	case llm.FormatGeminiGenerate:
 		encode = func(r llm.Request) ([]byte, []llm.Loss, error) {
