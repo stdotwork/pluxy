@@ -33,8 +33,16 @@ func (e *Extension) accountPieces(a protocol.Account) pieces {
 
 // add returns p with the secrets of q it does not hold yet.
 func (p pieces) add(q pieces) pieces {
+	if len(q) == 0 {
+		return p
+	}
+	seen := make(map[string]struct{}, len(p))
+	for _, s := range p {
+		seen[s] = struct{}{}
+	}
 	for _, s := range q {
-		if !slices.Contains(p, s) {
+		if _, ok := seen[s]; !ok {
+			seen[s] = struct{}{}
 			p = append(p, s)
 		}
 	}

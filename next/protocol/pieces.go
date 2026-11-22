@@ -98,10 +98,19 @@ const (
 // read out of a URL.
 func accountSecrets(a Account, settings, urlValues []string) []string {
 	var out []string
+	var seen map[string]struct{}
 	keep := func(s string) {
-		if s != "" && !slices.Contains(out, s) {
-			out = append(out, s)
+		if s == "" {
+			return
 		}
+		if _, ok := seen[s]; ok {
+			return
+		}
+		if seen == nil {
+			seen = make(map[string]struct{})
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
 	}
 	add := func(s string, kind fieldKind) {
 		credential := kind == fieldCredential
