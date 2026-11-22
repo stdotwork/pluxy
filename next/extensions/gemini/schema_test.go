@@ -593,6 +593,12 @@ func TestRootUnionKeepsEveryBranchsValues(t *testing.T) {
 			wantOpenAPI: `{"nullable":true,"type":"string"}`,
 		},
 		{
+			name:        "a null branch and a string enum branch keep nullability",
+			in:          root("", branch(`"p":{"type":"null"}`), branch(`"p":{"type":"string","enum":["a"]}`)),
+			want:        `{"enum":["a"],"type":["string","null"]}`,
+			wantOpenAPI: `{"enum":["a"],"nullable":true,"type":"string"}`,
+		},
+		{
 			name: "the parent's own schema wins",
 			in:   root(`"p":{"type":"string","description":"parent"}`, branch(`"p":{"const":"read"}`), branch(`"p":{"const":"list"}`)),
 			want: `{"description":"parent","type":"string"}`,
@@ -723,6 +729,24 @@ func TestNumericEnums(t *testing.T) {
 			in:      `{"type":"string","enum":["a","b","a"]}`,
 			json:    `{"enum":["a","b"],"type":"string"}`,
 			openAPI: `{"enum":["a","b"],"type":"string"}`,
+		},
+		{
+			name:    "nullable string enum keeps null across passes",
+			in:      `{"type":"string","enum":["a",null]}`,
+			json:    `{"enum":["a"],"type":["string","null"]}`,
+			openAPI: `{"enum":["a"],"nullable":true,"type":"string"}`,
+		},
+		{
+			name:    "string type list with null is kept",
+			in:      `{"type":["string","null"],"enum":["a"]}`,
+			json:    `{"enum":["a"],"type":["string","null"]}`,
+			openAPI: `{"enum":["a"],"nullable":true,"type":"string"}`,
+		},
+		{
+			name:    "uppercase string type list with null is kept",
+			in:      `{"type":["STRING","null"],"enum":["a"]}`,
+			json:    `{"enum":["a"],"type":["STRING","null"]}`,
+			openAPI: `{"enum":["a"],"nullable":true,"type":"STRING"}`,
 		},
 		{
 			name:    "no type, booleans become strings",
