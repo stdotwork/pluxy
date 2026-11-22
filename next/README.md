@@ -1202,6 +1202,33 @@ unsupported for non-text parts, `taskType` and `title` so another account on the
 them), pass through on a Gemini wire (rewriting only a mismatched aliased model name), and answer
 unsupported on a Messages wire.
 
+**Audio (speech and transcription).** OpenAI's `POST /v1/audio/speech` and
+`POST /v1/audio/transcriptions` are served on every Gemini account (Gemini API keys, Vertex AI
+service accounts and express mode keys, without needing `interactions`) through non-streamed
+`:generateContent`.
+
+- **Speech (`POST /v1/audio/speech`):** sends `input` with `responseModalities: ["AUDIO"]` and
+  `speechConfig.voiceConfig.prebuiltVoiceConfig.voiceName`. OpenAI's built-in voice names map to
+  Gemini's prebuilt voices (`alloy` -> `Kore`, `ash` -> `Iapetus`, `ballad` -> `Algieba`,
+  `cedar` -> `Achird`, `coral` -> `Sulafat`, `echo` -> `Charon`, `fable` -> `Umbriel`,
+  `marin` -> `Despina`, `onyx` -> `Orus`, `sage` -> `Vindemiatrix`, `shimmer` -> `Achernar`,
+  `verse` -> `Puck`), while `nova` and Gemini prebuilt or library voice names pass through
+  unchanged. Serves `"pcm"` (`audio/pcm`) and `"wav"` (`audio/wav`, wrapping raw PCM in a 44-byte
+  RIFF/WAVE header using the sample rate stated by the upstream's `mimeType`, default 24000 Hz).
+  Because Gemini returns raw PCM and pluxy carries no audio encoder, other formats (including
+  OpenAI's default `"mp3"` when `response_format` is omitted), `stream_format: "sse"`,
+  `speed != 1.0`, `instructions`, and custom voice objects answer retryable credential-scoped
+  `unsupported` naming the field so routing can move on to another account on the same model.
+- **Transcription (`POST /v1/audio/transcriptions`):** sends the uploaded audio as `inlineData`
+  (within Google's 20 MB total inline request limit) with a verbatim transcription instruction,
+  optional `language`, `prompt` and `temperature`, and excludes thought parts from the output.
+  Serves `"json"` (`{"text":"..."}`) and `"text"` (`text/plain; charset=utf-8`). Formats needing
+  timestamps or diarization (`"verbose_json"`, `"srt"`, `"vtt"`, `"diarized_json"`),
+  `timestamp_granularities`, `stream: true`, `include`, speaker references, `chunking_strategy` and
+  files past the 20 MB inline limit answer retryable credential-scoped `unsupported` naming the
+  field. `POST /v1/audio/translations` is not served on Gemini accounts (answers retryable
+  credential-scoped `unsupported` so routing can try another account).
+
 **Compaction.** `POST /v1/responses/compact` (also `POST /backend-api/codex/responses/compact`) is
 served on every Gemini account (Gemini API keys, Vertex AI service accounts and express mode keys,
 without needing `interactions`). The Responses request is translated to `GenerateContent` with the
