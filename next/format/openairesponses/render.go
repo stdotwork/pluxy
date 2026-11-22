@@ -221,8 +221,8 @@ func textPart(text string, annotations []any) obj {
 }
 
 // urlAnnotations builds Responses url_citation annotation objects from canonical citations.
-// Valid rune ranges are preserved; citations with nil or out-of-range offsets omit start_index
-// and end_index rather than emitting a wrong range.
+// Valid rune ranges are preserved. Responses requires both indices, so a citation with nil or
+// out-of-range offsets covers the whole text, which is what a citation with no narrower range means.
 func urlAnnotations(citations []llm.Citation, text string) []any {
 	if len(citations) == 0 {
 		return []any{}
@@ -233,7 +233,7 @@ func urlAnnotations(citations []llm.Citation, text string) []any {
 		if !llm.ValidCitationURL(c.URL) {
 			continue
 		}
-		ann := obj{"type": "url_citation", "url": c.URL, "title": c.Title}
+		ann := obj{"type": "url_citation", "url": c.URL, "title": c.Title, "start_index": 0, "end_index": maxRunes}
 		if c.StartIndex != nil && c.EndIndex != nil && *c.StartIndex >= 0 && *c.EndIndex >= *c.StartIndex && *c.EndIndex <= maxRunes {
 			ann["start_index"] = *c.StartIndex
 			ann["end_index"] = *c.EndIndex

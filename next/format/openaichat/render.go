@@ -48,8 +48,8 @@ type outAnnotation struct {
 type outURLCitation struct {
 	URL        string `json:"url"`
 	Title      string `json:"title"`
-	StartIndex *int   `json:"start_index,omitempty"`
-	EndIndex   *int   `json:"end_index,omitempty"`
+	StartIndex int    `json:"start_index"`
+	EndIndex   int    `json:"end_index"`
 }
 
 type outMsg struct {
@@ -411,17 +411,18 @@ func (a *Aggregator) Add(ev llm.Event) {
 			a.size += len(meta.Logprobs)
 		}
 	case llm.EventItemEnd:
-		if len(ev.Citations) > 0 {
+		// A same-format reply keeps what it has today.
+		if len(ev.Citations) > 0 && !a.up.native {
 			base := a.msgStart[ev.Index]
 			itemRunes := a.msgRunes[ev.Index]
 			for _, c := range ev.Citations {
 				if !llm.ValidCitationURL(c.URL) {
 					continue
 				}
-				uc := outURLCitation{URL: c.URL, Title: c.Title}
+				// Chat requires both indices: a citation with no narrower range covers its item.
+				uc := outURLCitation{URL: c.URL, Title: c.Title, StartIndex: base, EndIndex: base + itemRunes}
 				if c.StartIndex != nil && c.EndIndex != nil && *c.StartIndex >= 0 && *c.EndIndex >= *c.StartIndex && *c.EndIndex <= itemRunes {
-					s, e := base+*c.StartIndex, base+*c.EndIndex
-					uc.StartIndex, uc.EndIndex = &s, &e
+					uc.StartIndex, uc.EndIndex = base+*c.StartIndex, base+*c.EndIndex
 				}
 				a.annotations = append(a.annotations, outAnnotation{Type: "url_citation", URLCitation: uc})
 				a.size += len(c.URL) + len(c.Title) + 48

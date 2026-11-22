@@ -224,6 +224,7 @@ type StreamDecoder struct {
 	think     thinkFilter     // a leading think tag in the content, split across chunks
 	refused   bool            // the reply carried a refusal
 	textRunes int             // runes emitted in the current open message item
+	rawRunes  int             // runes of upstream content for it, with any leading think tag
 	annRaws   []json.RawMessage
 	losses    []llm.Loss
 }
@@ -248,12 +249,12 @@ func (d *StreamDecoder) closeItem(idx *int, ev *[]llm.Event) {
 			if len(d.annRaws) > 0 {
 				var cits []llm.Citation
 				for _, raw := range d.annRaws {
-					cits = append(cits, extractChatAnnotations(raw, 0, d.textRunes)...)
+					cits = append(cits, extractChatAnnotations(raw, max(d.rawRunes-d.textRunes, 0), d.textRunes)...)
 				}
 				end.Citations = cits
 				d.annRaws = nil
 			}
-			d.textRunes = 0
+			d.textRunes, d.rawRunes = 0, 0
 		}
 		*ev = append(*ev, end)
 		*idx = -1
@@ -496,10 +497,11 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		}
 		if t := ch.Delta.Content; t != nil && *t != "" {
 			before := len(out)
+			d.rawRunes += utf8.RuneCountInString(*t)
 			d.content(*t, &out)
 			d.attachTextMeta(textMeta{Logprobs: logprobs(ch.Logprobs)}, before, &out)
 		}
-		if len(ch.Delta.Annotations) > 0 && ch.Delta.Annotations[0] == '[' {
+		if d.text >= 0 && len(ch.Delta.Annotations) > 0 && ch.Delta.Annotations[0] == '[' {
 			d.annRaws = append(d.annRaws, append(json.RawMessage(nil), ch.Delta.Annotations...))
 		}
 		if r := refusalText(ch.Delta.Refusal); r != "" {

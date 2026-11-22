@@ -931,7 +931,9 @@ sources from Responses, `url_citation` annotations from Chat Completions, and `g
 (`groundingChunks` and `groundingSupports`, with UTF-8 byte offsets converted to Unicode code
 points) from Gemini render as Responses `url_citation` annotations (streaming and non-streaming),
 non-streaming Chat Completions `url_citation` annotations, and Gemini `groundingMetadata`
-(streaming and non-streaming). Cross-format citations and sources are not written into Messages
+(streaming and non-streaming). OpenAI requires both indices on a URL citation, so a citation with
+no usable range covers its whole message there. A Chat upstream's reply to a Chat client stays as
+it was, without annotations. Cross-format citations and sources are not written into Messages
 replies (Anthropic's `web_search_result_location` requires a vendor-signed `encrypted_index` that
 is verified on replay) and are reported as dropped, and a replayed message's `annotations` are not
 sent back to Claude. Claude does not need citations in the history: the replayed search blocks

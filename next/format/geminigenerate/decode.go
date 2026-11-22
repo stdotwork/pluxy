@@ -167,14 +167,20 @@ type StreamDecoder struct {
 	// Grounding state for the current open message item and the reply as a whole.
 	textBuf   strings.Builder
 	partSpans map[int][2]int // candidate partIndex -> [byteStart, byteEnd] in textBuf
-	citations []llm.Citation
-	sources   []llm.Source
-	seenSrc   map[string]bool
+	// A part index counts within one chunk, so partSpans holds only while the item's text came in
+	// one chunk. Once it spans chunks (multiChunk), offsets are read against the whole text.
+	chunkNo    int
+	spanChunk  int
+	multiChunk bool
+	citations  []llm.Citation
+	seenCit    map[string]bool
+	sources    []llm.Source
+	seenSrc    map[string]bool
 }
 
 // NewStreamDecoder returns a decoder for one stream.
 func NewStreamDecoder() *StreamDecoder {
-	return &StreamDecoder{text: -1, think: -1, partSpans: map[int][2]int{}, seenSrc: map[string]bool{}}
+	return &StreamDecoder{text: -1, think: -1, partSpans: map[int][2]int{}, seenSrc: map[string]bool{}, seenCit: map[string]bool{}}
 }
 
 func (d *StreamDecoder) open(kind string, out []llm.Event, start llm.ItemStart) (int, []llm.Event) {
@@ -196,6 +202,8 @@ func (d *StreamDecoder) closeItem(idx *int, out []llm.Event) []llm.Event {
 		}
 		d.textBuf.Reset()
 		clear(d.partSpans)
+		clear(d.seenCit)
+		d.multiChunk = false
 	}
 	out = append(out, end)
 	*idx = -1
@@ -234,7 +242,8 @@ func (d *StreamDecoder) decodeGrounding(raw json.RawMessage) {
 		d.seenSrc[ch.Web.URI] = true
 		d.sources = append(d.sources, llm.Source{URL: ch.Web.URI, Title: ch.Web.Title})
 	}
-	if isNull(gm.Supports) || gm.Supports[0] != '[' || len(chunks) == 0 {
+	// With no open text item there is nothing to attach a citation to; its source is kept above.
+	if d.text < 0 || isNull(gm.Supports) || gm.Supports[0] != '[' || len(chunks) == 0 {
 		return
 	}
 	var supports []struct {
@@ -265,13 +274,15 @@ func (d *StreamDecoder) decodeGrounding(raw json.RawMessage) {
 				partIdx = *sup.Segment.PartIndex
 			}
 			// Determine the text slice and base rune offset for this partIndex.
-			// In streaming, parts arrive across chunks and offsets are into fullText (partIdx 0).
-			// In a multi-part single response (e.g. a thought part at 0, text part at 1),
-			// partSpans maps partIndex to its byte span in fullText.
+			// Text that came in several chunks is read as one text. In a single chunk with
+			// several parts (e.g. a thought part at 0, text part at 1), partSpans maps partIndex
+			// to its byte span in fullText.
 			partText := fullText
 			baseRune := 0
 			mapped := true
-			if partIdx > 0 {
+			if d.multiChunk {
+				mapped = partIdx == 0
+			} else if partIdx > 0 {
 				if span, ok := d.partSpans[partIdx]; ok {
 					partText = fullText[span[0]:span[1]]
 					baseRune = utf8.RuneCountInString(fullText[:span[0]])
@@ -304,6 +315,15 @@ func (d *StreamDecoder) decodeGrounding(raw json.RawMessage) {
 				s, e := *startRune, *endRune
 				c.StartIndex, c.EndIndex = &s, &e
 			}
+			// Metadata can repeat on later chunks of a stream.
+			key := c.URL
+			if c.StartIndex != nil {
+				key = fmt.Sprintf("%s\x00%d\x00%d", c.URL, *c.StartIndex, *c.EndIndex)
+			}
+			if d.seenCit[key] {
+				continue
+			}
+			d.seenCit[key] = true
 			d.citations = append(d.citations, c)
 		}
 	}
@@ -338,6 +358,7 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 
 // decode adds the events chunk c produces to out.
 func (d *StreamDecoder) decode(c chunk, out []llm.Event) []llm.Event {
+	d.chunkNo++
 	if d.responseID == "" {
 		d.responseID = c.ResponseID
 	}
@@ -455,6 +476,10 @@ func (d *StreamDecoder) part(partIdx int, raw json.RawMessage, out []llm.Event) 
 	if d.text < 0 {
 		d.text, out = d.open(llm.ItemMessage, out, llm.ItemStart{})
 	}
+	if len(d.partSpans) > 0 && d.spanChunk != d.chunkNo {
+		d.multiChunk = true
+	}
+	d.spanChunk = d.chunkNo
 	start := d.textBuf.Len()
 	d.textBuf.WriteString(text)
 	d.partSpans[partIdx] = [2]int{start, d.textBuf.Len()}
