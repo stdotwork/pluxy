@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/stdotwork/pluxy/next/conformance"
 	"github.com/stdotwork/pluxy/next/format/anthropicmessages"
+	"github.com/stdotwork/pluxy/next/format/openairesponses"
 	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -202,18 +204,37 @@ func TestAgentMessages(t *testing.T) {
 }
 
 // An assistant message's phase (commentary or final_answer), which Codex takes on every account and
-// asks clients to send back, reaches the upstream.
+// asks clients to send back, reaches the upstream even when history repairs rewrite the input, and
+// a Codex reply carrying those phases is reported as opaque output for non-Responses clients.
 func TestPhaseReachesCodex(t *testing.T) {
 	body := `{"model":"gpt-6.1-sol","input":[{"role":"user","content":"go"},
+		{"type":"item_reference","id":"rs_stored"},
 		{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Looking."}]},
 		{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Done."}]},
 		{"role":"user","content":"again"}]}`
 	for _, a := range []account{{subscription: true}, {siwc: true}, {}} {
-		_, m := shapeWith(t, responsesReq("gpt-6.1-sol", body, nil), settings{}, a)
+		ur, m := shapeWith(t, responsesReq("gpt-6.1-sol", body, nil), settings{}, a)
 		items := inputOf(t, m)
+		if got := typesOf(items); strings.Join(got, ",") != "message,message,message,message" {
+			t.Fatalf("account %+v: input types %v, want item_reference dropped", a, got)
+		}
+		if l, ok := lossAt(ur.tr, "input[1]"); !ok || l.Kind != llm.LossDropped {
+			t.Errorf("account %+v: item_reference drop not reported: %+v", a, ur.tr.Losses)
+		}
 		if items[1]["phase"] != "commentary" || items[2]["phase"] != "final_answer" {
 			t.Errorf("account %+v: phases %v and %v", a, items[1]["phase"], items[2]["phase"])
 		}
+	}
+
+	reply := `{"type":"response.completed","response":{"id":"r1","object":"response","model":"gpt-6.1-sol","status":"completed","output":[` +
+		`{"id":"msg_1","type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Looking."}]},` +
+		`{"id":"msg_2","type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"Done."}]}]}}`
+	out, err := newRepairs().apply([]byte(reply))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := openairesponses.OpaqueOutput(json.RawMessage(out)); !reflect.DeepEqual(got, []string{"output[0].phase", "output[1].phase"}) {
+		t.Errorf("OpaqueOutput(relayed reply) = %q, want both phases reported", got)
 	}
 }
 

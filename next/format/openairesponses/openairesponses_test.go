@@ -409,9 +409,24 @@ func TestOpaqueOutputPhase(t *testing.T) {
 	}
 }
 
-// A replayed assistant message keeps its phase when the request is built again for a Responses
-// upstream.
+// A phased assistant message from a Responses reply is reported as opaque output for other formats,
+// and keeps its phase when replayed and encoded again for a Responses upstream.
 func TestPhaseSurvivesEncoding(t *testing.T) {
+	reply := `{"id":"r1","object":"response","model":"m","status":"completed","output":[{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Looking."}]}]}`
+	evs, err := DecodeResponse([]byte(reply))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var finishRaw json.RawMessage
+	for _, ev := range evs {
+		if ev.Type == llm.EventFinish {
+			finishRaw = ev.Raw
+		}
+	}
+	if got := OpaqueOutput(finishRaw); !reflect.DeepEqual(got, []string{"output[0].phase"}) {
+		t.Errorf("OpaqueOutput(decoded reply) = %q, want [output[0].phase]", got)
+	}
+
 	req, err := ParseRequest([]byte(`{"model":"m","input":[{"role":"user","content":"go"},{"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"Looking."}]}]}`))
 	if err != nil {
 		t.Fatal(err)
