@@ -163,6 +163,10 @@ func fakePrompt(method string) map[string]any {
 	case "repeat":
 		return map[string]any{"kind": "input", "message": "Enter the code.",
 			"inputs": []any{map[string]any{"name": "code", "label": "Code"}}}
+	case "opt_then_secret":
+		return fakeSwitchPrompt()
+	case "opt_then_browser":
+		return fakePrompt("browser")
 	}
 	return nil
 }
@@ -240,6 +244,19 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 				"inputs": []any{map[string]any{"name": "service_account", "label": "Service account key", "secret": true}}},
 			map[string]any{"method": "kept", "kind": "api_key", "label": "Base URL",
 				"inputs": []any{map[string]any{"name": "base_url", "label": "Base URL"}}},
+			map[string]any{"method": "opt_secret", "kind": "api_key", "label": "Optional then secret",
+				"inputs": []any{
+					map[string]any{"name": "note", "label": "Note", "optional": true},
+					map[string]any{"name": "api_key", "label": "API key", "secret": true},
+				}},
+			map[string]any{"method": "opt_then_secret", "kind": "input", "label": "Optional start then secret prompt",
+				"inputs": []any{
+					map[string]any{"name": "note", "label": "Note", "optional": true},
+				}},
+			map[string]any{"method": "opt_then_browser", "kind": "browser", "label": "Optional start then browser prompt",
+				"inputs": []any{
+					map[string]any{"name": "note", "label": "Note", "optional": true},
+				}},
 		}}}})
 	case r.Method == http.MethodPost && path == "/accounts":
 		body := decode()
@@ -252,7 +269,7 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		switch method {
-		case "api_key", "kept", "service_account":
+		case "api_key", "kept", "service_account", "triple", "opt_secret":
 			login := fmt.Sprintf("A%d", len(f.starts))
 			state, reason := "done", ""
 			switch {
@@ -837,7 +854,7 @@ func TestFollowLoginSaysWhenTheSignInWasNotCancelled(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		cancel()
 	}()
-	err := x.followLogin(reply.Login, nil, signInInputs{}, lines, false)
+	err := x.followLogin(reply.Login, nil, signInInputs{}, lines, false, false)
 	if err == nil || !strings.Contains(err.Error(), "not cancelled") {
 		t.Fatalf("followLogin after an interrupt core would not cancel: %v, want it to say the sign-in is still running", err)
 	}
@@ -898,6 +915,18 @@ func TestCLIAccountAddThreeValuesAtEndOfInput(t *testing.T) {
 	}
 	if code != 2 || !strings.Contains(errOut, "Third") || strings.Contains(out, "added") {
 		t.Fatalf("account add with one of three values: code=%d out=%q err=%q, want 2 and what it needs", code, out, errOut)
+	}
+	// A later field supplied by --input is still taken after an earlier optional field hit end of
+	// input, and no label is printed for it.
+	out, errOut, code = f.runIn("first\n", true, "account", "add", "test/ext", "--method", "triple", "--id", "triple-flag", "--input", "three=third")
+	if code != 0 || !strings.Contains(out, "account triple-flag added") {
+		t.Fatalf("account add with --input after optional EOF: code=%d out=%q err=%q", code, out, errOut)
+	}
+	if strings.Contains(errOut, "Third: ") {
+		t.Errorf("the flag-supplied field's label was printed: %q", errOut)
+	}
+	if starts, _ := f.start(); len(starts) != 1 || fakeInput(starts[0])["one"] != "first" || fakeInput(starts[0])["three"] != "third" {
+		t.Fatalf("core was sent %v, want one=first and three=third", starts)
 	}
 }
 
@@ -1018,7 +1047,7 @@ func TestFollowLoginCancelsOnInterrupt(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		cancel()
 	}()
-	err := x.followLogin(reply.Login, nil, signInInputs{}, lines, false)
+	err := x.followLogin(reply.Login, nil, signInInputs{}, lines, false, false)
 	if err == nil || !strings.Contains(err.Error(), "cancelled") {
 		t.Fatalf("followLogin after an interrupt: %v, want a cancelled sign-in", err)
 	}
