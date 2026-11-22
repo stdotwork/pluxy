@@ -34,7 +34,7 @@ defaults:
 jobs:
   next:
     # GitHub's runners, never PLUXY_LINUX_CLOUD_RUNNER: this job is shorter than the native test, so
-    # Namespace's vCPUs are kept for that (AGENTS.md, "Where jobs run").
+    # Namespace's vCPUs are kept for that (docs/ci.md, "Where jobs run").
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
