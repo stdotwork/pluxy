@@ -160,6 +160,7 @@ function view(
     remote?: boolean;
     options?: SetupOptions;
     bringing?: ImportState | "offered";
+    packages?: Package[];
   } = {},
 ) {
   const results = more.results ?? {};
@@ -170,7 +171,7 @@ function view(
       remote={more.remote ?? false}
       choices={more.choices ?? {}}
       results={results}
-      provider={hasProvider(setup, results)}
+      provider={hasProvider(setup, results, more.packages)}
       accounts={more.accounts ?? 0}
       bring={
         more.bringing && {
@@ -425,12 +426,44 @@ test("only a provider that is enabled and has not failed counts as running", () 
   expect(hasProvider(noPicks, {}, [pkg({ state: "failed" })])).toBe(false);
   expect(hasProvider(noPicks, {}, [pkg({ state: "crashed" })])).toBe(false);
   expect(hasProvider(noPicks, {}, [pkg({ state: "quarantined" })])).toBe(false);
+  // An installed pick whose package is disabled or has failed is not running, whatever the pick says.
+  const installed: Setup = {
+    ...nothingFound,
+    picks: [pick("pluxy/claude", "Claude", { installed: true })],
+  };
+  const claude = (more: Partial<Package> = {}) => pkg({ id: "pluxy/claude", ...more });
+  expect(hasProvider(installed, {}, [claude()])).toBe(true);
+  expect(hasProvider(installed, {}, [claude({ enabled: false, state: "disabled" })])).toBe(false);
+  expect(hasProvider(installed, {}, [claude({ state: "failed" })])).toBe(false);
+  expect(hasProvider(installed, {}, [claude({ state: "crashed" })])).toBe(false);
+  expect(hasProvider(installed, {}, [claude({ state: "quarantined" })])).toBe(false);
+  // Another provider that runs still counts.
+  expect(hasProvider(installed, {}, [claude({ state: "crashed" }), pkg()])).toBe(true);
   // A client pick's package is a client, not a provider.
   const clientPick: Setup = {
     ...nothingFound,
     picks: [{ ...pick("pluxy/claude-code", "Claude Code settings"), kind: "client" }],
   };
   expect(hasProvider(clientPick, {}, [pkg({ id: "pluxy/claude-code" })])).toBe(false);
+});
+
+test("with the only installed provider disabled, the page offers no sign-in and Finish is not primary", () => {
+  const installed: Setup = {
+    ...nothingFound,
+    picks: [pick("pluxy/claude", "Claude", { installed: true })],
+  };
+  const running = view(installed, { packages: [pkg({ id: "pluxy/claude" })] });
+  expect(running).toContain('class="add-account stack"');
+  expect(primary(running)).toEqual(["Finish"]);
+
+  const disabled = view(installed, {
+    packages: [pkg({ id: "pluxy/claude", enabled: false, state: "disabled" })],
+  });
+  expect(disabled).not.toContain('class="add-account stack"');
+  expect(disabled).toContain("This comes after a provider");
+  expect(disabled).toContain("pluxy will run with no provider");
+  expect(primary(disabled)).toEqual(["Start without a provider"]);
+  expect(disabled).toContain('data-variant="quiet">Finish</button>');
 });
 
 test("a pick that was installed and started keeps its Installed badge and offers Finish", () => {
