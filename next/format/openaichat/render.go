@@ -253,6 +253,20 @@ func (s *StreamWriter) lose(path, detail string) {
 	s.losses = llm.AddLoss(s.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: detail})
 }
 
+func (s *StreamWriter) loseMedia(m *llm.OutputMedia) {
+	if m == nil {
+		return
+	}
+	switch m.Kind {
+	case llm.MediaImage:
+		s.lose("media.image", "Chat Completions has no official output image field")
+	case llm.MediaAudio:
+		s.lose("media.audio", "Chat Completions message.audio requires a server-issued id and expires_at")
+	default:
+		s.lose("media", "Chat Completions has no place for this output media")
+	}
+}
+
 func (s *StreamWriter) chunk(choices any, usage any) error {
 	c := s.head
 	c.Choices = choices
@@ -315,6 +329,9 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		tc.Function.Arguments = ev.Delta
 		return s.delta(outDelta{ToolCalls: []outToolCall{tc}})
 	case llm.EventItemEnd:
+		return nil
+	case llm.EventMedia:
+		s.loseMedia(ev.Media)
 		return nil
 	case llm.EventNative:
 		if c := s.up.choices(ev); len(c) > 0 {
@@ -410,6 +427,20 @@ func (a *Aggregator) lose(path, detail string) {
 	a.losses = llm.AddLoss(a.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: detail})
 }
 
+func (a *Aggregator) loseMedia(m *llm.OutputMedia) {
+	if m == nil {
+		return
+	}
+	switch m.Kind {
+	case llm.MediaImage:
+		a.lose("media.image", "Chat Completions has no official output image field")
+	case llm.MediaAudio:
+		a.lose("media.audio", "Chat Completions message.audio requires a server-issued id and expires_at")
+	default:
+		a.lose("media", "Chat Completions has no place for this output media")
+	}
+}
+
 // Add records one event.
 func (a *Aggregator) Add(ev llm.Event) {
 	a.size += len(ev.Delta)
@@ -418,6 +449,8 @@ func (a *Aggregator) Add(ev llm.Event) {
 		a.head.ID, a.head.Model, a.head.Created = ev.Response.ID, ev.Response.Model, created(ev.Response)
 		a.up = newUpstream(ev.Response)
 		a.size += len(a.head.ID) + len(a.head.Model) + len(a.up.fields)
+	case llm.EventMedia:
+		a.loseMedia(ev.Media)
 	case llm.EventNative:
 		for _, c := range a.up.choices(ev) {
 			a.size += len(c)

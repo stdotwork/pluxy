@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -266,7 +267,10 @@ func relay(ctx context.Context, resp *http.Response, out eventSender, rep *repai
 			}
 			return &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
 		}
-		events, err := openairesponses.DecodeResponse(raw)
+		events, losses, err := openairesponses.DecodeResponseLosses(raw)
+		for _, l := range losses {
+			fmt.Fprintf(os.Stderr, "reply loss: %s %s (%s)\n", l.Kind, l.Path, l.Detail)
+		}
 		if err != nil {
 			return classify(err)
 		}
@@ -279,6 +283,11 @@ func relay(ctx context.Context, resp *http.Response, out eventSender, rep *repai
 	}
 	r := sse.NewReader(resp.Body)
 	dec := openairesponses.NewStreamDecoder()
+	defer func() {
+		for _, l := range dec.Losses() {
+			fmt.Fprintf(os.Stderr, "reply loss: %s %s (%s)\n", l.Kind, l.Path, l.Detail)
+		}
+	}()
 	for {
 		e, err := r.Next()
 		eof := err == io.EOF

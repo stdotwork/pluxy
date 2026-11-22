@@ -200,6 +200,15 @@ func (b *builder) open(idx int, s *llm.ItemStart) *item {
 	return it
 }
 
+// loseMedia reports generated media a Response cannot hold: its image_generation_call item needs
+// an ID only OpenAI issues, which the client would send back on its next turn, and it has no output
+// audio item.
+func (b *builder) loseMedia(m *llm.OutputMedia) {
+	if m != nil {
+		b.lose("media."+m.Kind, "a Response has no safe place for this generated media")
+	}
+}
+
 func (b *builder) incomplete() bool {
 	return b.finish != nil && (b.finish.Reason == llm.FinishLength || b.finish.Reason == llm.FinishContentFilter)
 }
@@ -698,6 +707,9 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		}
 		s.pending = append(s.pending, ev.Index)
 		return nil
+	case llm.EventMedia:
+		b.loseMedia(ev.Media)
+		return nil
 	case llm.EventNative:
 		if b.upFormat == llm.FormatAnthropicMessages && isBlockStart(ev.Raw) {
 			// A search with its results ends when the next block starts.
@@ -938,6 +950,10 @@ func (a *Aggregator) Add(ev llm.Event) {
 			for _, c := range ev.Citations {
 				a.size += len(c.URL) + len(c.Title) + 48
 			}
+		}
+	case llm.EventMedia:
+		if b.upFormat != format {
+			b.loseMedia(ev.Media)
 		}
 	case llm.EventNative:
 		if it, added, consumed := b.searchEvent(ev.Raw); consumed {

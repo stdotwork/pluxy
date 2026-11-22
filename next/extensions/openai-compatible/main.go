@@ -722,11 +722,15 @@ func logReplyLoss(l llm.Loss) {
 	fmt.Fprintf(os.Stderr, "reply loss: %s %s (%s)\n", l.Kind, l.Path, l.Detail)
 }
 
-// decodeResponse reads a non-streamed reply, with what a Chat one had to leave out (a call that
-// never named its function); the other formats' decoders report no losses.
+// decodeResponse reads a non-streamed reply along with any reply losses its decoder reported.
 func decodeResponse(format string, raw []byte) ([]llm.Event, []llm.Loss, error) {
-	if format == llm.FormatOpenAIChat {
+	switch format {
+	case llm.FormatOpenAIChat:
 		return openaichat.DecodeResponseLosses(raw)
+	case llm.FormatGeminiGenerate:
+		return geminigenerate.DecodeResponseLosses(raw)
+	case llm.FormatOpenAIResponses:
+		return openairesponses.DecodeResponseLosses(raw)
 	}
 	events, err := decoders[format].response(raw)
 	return events, nil, err

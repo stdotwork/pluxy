@@ -255,6 +255,57 @@ func extractCodeInterpreterCall(raw json.RawMessage, fallbackCode string) (id st
 	}, true
 }
 
+// extractImageGenerationCall reads a completed Responses image_generation_call output item into
+// a canonical OutputMedia. Non-image items and non-completed items return isImg=false. Invalid,
+// unsafe (SVG), or malformed completed items return isImg=true with a non-empty problem.
+func extractImageGenerationCall(raw json.RawMessage) (id string, media *llm.OutputMedia, problem string, isImg bool) {
+	if len(raw) == 0 || raw[0] != '{' {
+		return "", nil, "", false
+	}
+	var item struct {
+		ID           string  `json:"id"`
+		Type         string  `json:"type"`
+		Status       string  `json:"status"`
+		Result       *string `json:"result"`
+		OutputFormat string  `json:"output_format"`
+	}
+	if json.Unmarshal(raw, &item) != nil || item.Type != "image_generation_call" {
+		return "", nil, "", false
+	}
+	if item.Status != "completed" {
+		return item.ID, nil, "", false
+	}
+	if item.Result == nil || *item.Result == "" {
+		return item.ID, nil, "empty image_generation_call result", true
+	}
+	data := *item.Result
+	if !llm.Base64Valid(data) {
+		return item.ID, nil, "invalid base64 data", true
+	}
+	var mt string
+	switch strings.ToLower(strings.TrimSpace(item.OutputFormat)) {
+	case "":
+		mt = llm.SniffImageMediaType(data)
+	case "png":
+		mt = "image/png"
+	case "jpeg", "jpg":
+		mt = "image/jpeg"
+	case "webp":
+		mt = "image/webp"
+	case "gif":
+		mt = "image/gif"
+	case "svg":
+		mt = "image/svg+xml"
+	default:
+		mt = "image/" + strings.ToLower(strings.TrimSpace(item.OutputFormat))
+	}
+	kind, prob := llm.SafeOutputMediaKind(mt)
+	if prob != "" {
+		return item.ID, nil, prob, true
+	}
+	return item.ID, &llm.OutputMedia{Kind: kind, MediaType: mt, Data: data}, "", true
+}
+
 // opaque returns a reasoning item's encrypted content as the opaque data its item.end carries, or
 // nil when it has none.
 func opaque(it outputItem) *llm.Opaque {
@@ -332,30 +383,38 @@ type streamEvent struct {
 // for (response.in_progress, content parts, done events, hosted tool items) become native
 // events. Use one decoder per stream.
 type StreamDecoder struct {
-	started   bool
-	done      bool
-	next      int
-	items     map[int]int               // upstream output_index -> open model item index
-	textLens  map[int]int               // model item index -> rune count of text deltas seen
-	annRaws   map[int][]json.RawMessage // model item index -> raw annotations from annotation.added
-	sources   []llm.Source
-	seenSrc   map[string]bool
-	codeBuf   map[int]*strings.Builder // upstream output_index -> streamed code_interpreter_call code
-	codeExecs []llm.CodeExecution
-	seenCode  map[string]bool
+	started    bool
+	done       bool
+	next       int
+	items      map[int]int               // upstream output_index -> open model item index
+	textLens   map[int]int               // model item index -> rune count of text deltas seen
+	annRaws    map[int][]json.RawMessage // model item index -> raw annotations from annotation.added
+	sources    []llm.Source
+	seenSrc    map[string]bool
+	codeBuf    map[int]*strings.Builder // upstream output_index -> streamed code_interpreter_call code
+	codeExecs  []llm.CodeExecution
+	seenCode   map[string]bool
+	mediaBytes int
+	seenMedia  map[string]bool
+	losses     []llm.Loss
 }
 
 // NewStreamDecoder returns a decoder for one stream.
 func NewStreamDecoder() *StreamDecoder {
 	return &StreamDecoder{
-		items:    map[int]int{},
-		textLens: map[int]int{},
-		annRaws:  map[int][]json.RawMessage{},
-		seenSrc:  map[string]bool{},
-		codeBuf:  map[int]*strings.Builder{},
-		seenCode: map[string]bool{},
+		items:     map[int]int{},
+		textLens:  map[int]int{},
+		annRaws:   map[int][]json.RawMessage{},
+		seenSrc:   map[string]bool{},
+		codeBuf:   map[int]*strings.Builder{},
+		seenCode:  map[string]bool{},
+		seenMedia: map[string]bool{},
 	}
 }
+
+// Losses returns what the reply had that the model could not carry, such as unsafe, malformed,
+// or oversized output media parts.
+func (d *StreamDecoder) Losses() []llm.Loss { return d.losses }
 
 func (d *StreamDecoder) start(out []llm.Event, info llm.ResponseInfo, raw json.RawMessage) []llm.Event {
 	d.started = true
@@ -504,6 +563,27 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 					d.codeExecs = llm.AppendCodeExecution(d.codeExecs, ce)
 				}
 			}
+			if id, media, problem, isImg := extractImageGenerationCall(ev.Item); isImg {
+				key := id
+				if key == "" {
+					key = fmt.Sprintf("#%d", ev.OutputIndex)
+				}
+				if !d.seenMedia[key] {
+					d.seenMedia[key] = true
+					path := fmt.Sprintf("output[%d]", ev.OutputIndex)
+					switch {
+					case problem != "":
+						d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: problem})
+					case len(media.Data) > llm.MaxOutputMediaPartBytes:
+						d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: "output media part exceeds per-part size limit"})
+					case d.mediaBytes+len(media.Data) > llm.MaxOutputMediaReplyBytes:
+						d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: "output media exceeds per-reply size limit"})
+					default:
+						d.mediaBytes += len(media.Data)
+						return append(out, llm.Event{Type: llm.EventMedia, Media: media, Raw: raw}), nil
+					}
+				}
+			}
 			return native(), nil
 		}
 		delete(d.items, ev.OutputIndex)
@@ -540,6 +620,27 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 					d.codeExecs = llm.AppendCodeExecution(d.codeExecs, ce)
 				}
 			}
+			if id, media, problem, isImg := extractImageGenerationCall(itemRaw); isImg {
+				key := id
+				if key == "" {
+					key = fmt.Sprintf("#%d", i)
+				}
+				if !d.seenMedia[key] {
+					d.seenMedia[key] = true
+					path := fmt.Sprintf("output[%d]", i)
+					switch {
+					case problem != "":
+						d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: problem})
+					case len(media.Data) > llm.MaxOutputMediaPartBytes:
+						d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: "output media part exceeds per-part size limit"})
+					case d.mediaBytes+len(media.Data) > llm.MaxOutputMediaReplyBytes:
+						d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: "output media exceeds per-reply size limit"})
+					default:
+						d.mediaBytes += len(media.Data)
+						out = append(out, llm.Event{Type: llm.EventMedia, Media: media})
+					}
+				}
+			}
 		}
 		f := finishOf(r)
 		return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(r.Usage), Sources: d.sources, CodeExecutions: d.codeExecs, Raw: raw}), nil
@@ -573,18 +674,28 @@ func (d *StreamDecoder) Close() ([]llm.Event, error) {
 // would have produced. The finish event carries the whole body in Raw, so a Responses client
 // gets it unchanged.
 func DecodeResponse(body []byte) ([]llm.Event, error) {
+	events, _, err := DecodeResponseLosses(body)
+	return events, err
+}
+
+// DecodeResponseLosses turns an upstream non-streamed Response object into events and returns
+// what the reply had that the model could not carry. It is the non-streamed counterpart of
+// StreamDecoder.Losses.
+func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 	var r response
 	if err := json.Unmarshal(body, &r); err != nil {
-		return nil, malformed("upstream sent a malformed response", body)
+		return nil, nil, malformed("upstream sent a malformed response", body)
 	}
 	if r.Status == "failed" {
-		return nil, failure(r, body)
+		return nil, nil, failure(r, body)
 	}
 	out := []llm.Event{{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: r.ID, Model: r.Model, Created: r.CreatedAt, Format: format}}}
 	next := 0
 	var sources []llm.Source
 	seenSrc := map[string]bool{}
 	var codeExecs []llm.CodeExecution
+	var losses []llm.Loss
+	mediaBytes := 0
 	add := func(start llm.ItemStart, deltaType, delta string, o *llm.Opaque, cits []llm.Citation) {
 		out = append(out, llm.Event{Type: llm.EventItemStart, Index: next, Item: &start})
 		if delta != "" {
@@ -593,10 +704,10 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 		out = append(out, llm.Event{Type: llm.EventItemEnd, Index: next, Opaque: o, Citations: cits})
 		next++
 	}
-	for _, raw := range r.Output {
+	for i, raw := range r.Output {
 		var it outputItem
 		if json.Unmarshal(raw, &it) != nil {
-			return nil, malformed("upstream sent a malformed response", body)
+			return nil, nil, malformed("upstream sent a malformed response", body)
 		}
 		switch kindOf(it) {
 		case llm.ItemMessage:
@@ -624,11 +735,26 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 			if _, ce, ok := extractCodeInterpreterCall(raw, ""); ok {
 				codeExecs = llm.AppendCodeExecution(codeExecs, ce)
 			}
+			if _, media, problem, isImg := extractImageGenerationCall(raw); isImg {
+				path := fmt.Sprintf("output[%d]", i)
+				switch {
+				case problem != "":
+					losses = llm.AddLoss(losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: problem})
+				case len(media.Data) > llm.MaxOutputMediaPartBytes:
+					losses = llm.AddLoss(losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: "output media part exceeds per-part size limit"})
+				case mediaBytes+len(media.Data) > llm.MaxOutputMediaReplyBytes:
+					losses = llm.AddLoss(losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: "output media exceeds per-reply size limit"})
+				default:
+					mediaBytes += len(media.Data)
+					out = append(out, llm.Event{Type: llm.EventMedia, Media: media})
+					continue
+				}
+			}
 			out = append(out, llm.Event{Type: llm.EventNative, Raw: raw})
 		}
 	}
 	f := finishOf(r)
-	return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(r.Usage), Sources: sources, CodeExecutions: codeExecs, Raw: append(json.RawMessage(nil), body...)}), nil
+	return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(r.Usage), Sources: sources, CodeExecutions: codeExecs, Raw: append(json.RawMessage(nil), body...)}), losses, nil
 }
 
 // OpaqueOutput lists, by path in the Response, the output data a client in another format has no

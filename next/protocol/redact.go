@@ -875,6 +875,7 @@ var (
 	formats  = set(llm.FormatOpenAIChat, llm.FormatOpenAIResponses, llm.FormatAnthropicMessages, llm.FormatGeminiGenerate,
 		llm.FormatOpenAIResponsesCompact, llm.FormatCodexAlphaSearch, llm.FormatGeminiInteractions,
 		llm.FormatOpenAIImagesGenerations, llm.FormatOpenAIImagesEdits, llm.OpaqueDevin)
+	mediaKinds = set(llm.MediaImage, llm.MediaAudio)
 )
 
 func set(values ...string) map[string]bool {
@@ -960,6 +961,13 @@ func (r *Redactor) Event(ev llm.Event) llm.Event {
 			runs[i].Output = r.String(runs[i].Output)
 		}
 		ev.CodeExecutions = runs
+	}
+	if ev.Media != nil {
+		m := *ev.Media
+		m.Kind = r.field(m.Kind, mediaKinds)
+		m.MediaType = r.String(m.MediaType)
+		m.Data = r.String(m.Data)
+		ev.Media = &m
 	}
 	if ev.Error != nil {
 		e := *ev.Error

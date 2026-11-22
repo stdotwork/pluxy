@@ -179,6 +179,11 @@ type StreamDecoder struct {
 	// Pending executableCode parts waiting for their codeExecutionResult, and completed runs.
 	pendingCode []pendingExecCode
 	codeExecs   []llm.CodeExecution
+	mediaBytes  int
+	losses      []llm.Loss
+	// splitText is set once a media part has closed a text item: Google's offsets then no longer
+	// map onto one item's text, so citations carry no range.
+	splitText bool
 }
 
 type pendingExecCode struct {
@@ -289,7 +294,9 @@ func (d *StreamDecoder) decodeGrounding(raw json.RawMessage) {
 			partText := fullText
 			baseRune := 0
 			mapped := true
-			if d.multiChunk {
+			if d.splitText {
+				mapped = false
+			} else if d.multiChunk {
 				mapped = partIdx == 0
 			} else if partIdx > 0 {
 				if span, ok := d.partSpans[partIdx]; ok {
@@ -489,6 +496,54 @@ func (d *StreamDecoder) part(partIdx int, raw json.RawMessage, out []llm.Event) 
 		}
 		return out
 	}
+	idRaw := pm["inlineData"]
+	if isNull(idRaw) {
+		idRaw = pm["inline_data"]
+	}
+	if !isNull(idRaw) {
+		if isThought(pm) {
+			return out
+		}
+		var blob struct {
+			MimeType      string `json:"mimeType"`
+			MimeTypeSnake string `json:"mime_type"`
+			Data          string `json:"data"`
+		}
+		path := fmt.Sprintf("candidates[0].content.parts[%d].inlineData", partIdx)
+		if json.Unmarshal(idRaw, &blob) != nil {
+			d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: "malformed inlineData part"})
+			return out
+		}
+		mt := strings.TrimSpace(blob.MimeType)
+		if mt == "" {
+			mt = strings.TrimSpace(blob.MimeTypeSnake)
+		}
+		kind, problem := llm.SafeOutputMediaKind(mt)
+		if problem != "" {
+			d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: problem})
+			return out
+		}
+		if !llm.Base64Valid(blob.Data) {
+			d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: "invalid base64 data"})
+			return out
+		}
+		if len(blob.Data) > llm.MaxOutputMediaPartBytes {
+			d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: "output media part exceeds per-part size limit"})
+			return out
+		}
+		if d.mediaBytes+len(blob.Data) > llm.MaxOutputMediaReplyBytes {
+			d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: "output media exceeds per-reply size limit"})
+			return out
+		}
+		d.splitText = d.splitText || d.text >= 0
+		out = d.closeItem(&d.think, out)
+		out = d.closeItem(&d.text, out)
+		d.mediaBytes += len(blob.Data)
+		return append(out, llm.Event{
+			Type:  llm.EventMedia,
+			Media: &llm.OutputMedia{Kind: kind, MediaType: mt, Data: blob.Data},
+		})
+	}
 	if fc := object(pm["functionCall"]); fc != nil {
 		var call struct {
 			ID   string `json:"id"`
@@ -552,6 +607,10 @@ func (d *StreamDecoder) part(partIdx int, raw json.RawMessage, out []llm.Event) 
 	return append(out, llm.Event{Type: llm.EventTextDelta, Index: d.text, Delta: text})
 }
 
+// Losses returns what the reply had that the model could not carry, such as unsafe, malformed,
+// or oversized output media parts.
+func (d *StreamDecoder) Losses() []llm.Loss { return d.losses }
+
 // Usage returns the latest usage the upstream reported, or nil. A caller that fails the stream
 // for its own reasons (the connection broke, say) puts it on the error.
 func (d *StreamDecoder) Usage() *llm.Usage { return d.usage }
@@ -588,12 +647,20 @@ func (d *StreamDecoder) Close() ([]llm.Event, error) {
 // a finish reason nor a prompt block counts as finished with reason other, and one that ended with
 // MALFORMED_FUNCTION_CALL is the error Close gives it.
 func DecodeResponse(body []byte) ([]llm.Event, error) {
+	events, _, err := DecodeResponseLosses(body)
+	return events, err
+}
+
+// DecodeResponseLosses turns an upstream non-streamed GenerateContentResponse into events and
+// returns what the reply had that the model could not carry. It is the non-streamed counterpart
+// of StreamDecoder.Losses.
+func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 	var c chunk
 	if err := json.Unmarshal(body, &c); err != nil || rawjson.Object(body) == nil {
-		return nil, malformed("upstream sent a malformed response", body)
+		return nil, nil, malformed("upstream sent a malformed response", body)
 	}
 	if !isNull(c.Error) {
-		return nil, errorOf(c.Error, body)
+		return nil, nil, errorOf(c.Error, body)
 	}
 	d := NewStreamDecoder()
 	out := d.decode(c, nil)
@@ -603,9 +670,9 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 	}
 	end, err := d.Close()
 	if err != nil {
-		return nil, err
+		return nil, d.Losses(), err
 	}
-	return append(out, end...), nil
+	return append(out, end...), d.Losses(), nil
 }
 
 // isGoogleError reports whether raw is a Google error body: {"error": {...}}.

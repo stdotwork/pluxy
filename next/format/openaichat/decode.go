@@ -151,6 +151,7 @@ type streamChoice struct {
 		Content     *string         `json:"content"`
 		Refusal     json.RawMessage `json:"refusal"`
 		Annotations json.RawMessage `json:"annotations"`
+		Audio       json.RawMessage `json:"audio"`
 		ToolCalls   []struct {
 			Index    *int   `json:"index"`
 			ID       string `json:"id"`
@@ -207,26 +208,27 @@ func extractChatAnnotations(raw json.RawMessage, prefixRunes, textRunes int) []l
 // choice (index 0) becomes items; other choices are passed on in native events. Use one decoder
 // per stream.
 type StreamDecoder struct {
-	started   bool
-	done      bool
-	next      int
-	text      int // open message item, or -1
-	reasoning int // open reasoning item, or -1
-	tools     map[int]*toolCall
-	last      *toolCall               // the tool call opened last, for chunks that leave the index out
-	extra     map[int]json.RawMessage // extra_content that came after a tool call opened, by item
-	choices   map[int]bool            // every choice index seen, true once it carried a finish reason
-	finish    *llm.Finish
-	usage     *llm.Usage
-	calls     int             // tool calls made an id so far
-	opened    int             // tool calls whose item started
-	used      map[string]bool // tool call ids the stream has used or sent
-	think     thinkFilter     // a leading think tag in the content, split across chunks
-	refused   bool            // the reply carried a refusal
-	textRunes int             // runes emitted in the current open message item
-	rawRunes  int             // runes of upstream content for it, with any leading think tag
-	annRaws   []json.RawMessage
-	losses    []llm.Loss
+	started    bool
+	done       bool
+	next       int
+	text       int // open message item, or -1
+	reasoning  int // open reasoning item, or -1
+	tools      map[int]*toolCall
+	last       *toolCall               // the tool call opened last, for chunks that leave the index out
+	extra      map[int]json.RawMessage // extra_content that came after a tool call opened, by item
+	choices    map[int]bool            // every choice index seen, true once it carried a finish reason
+	finish     *llm.Finish
+	usage      *llm.Usage
+	calls      int             // tool calls made an id so far
+	opened     int             // tool calls whose item started
+	used       map[string]bool // tool call ids the stream has used or sent
+	think      thinkFilter     // a leading think tag in the content, split across chunks
+	refused    bool            // the reply carried a refusal
+	textRunes  int             // runes emitted in the current open message item
+	rawRunes   int             // runes of upstream content for it, with any leading think tag
+	annRaws    []json.RawMessage
+	mediaBytes int
+	losses     []llm.Loss
 }
 
 // NewStreamDecoder returns a decoder for one stream.
@@ -512,6 +514,12 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			d.piece(thinkPiece{text: r}, &out)
 			d.attachTextMeta(textMeta{Logprobs: logprobs(ch.Logprobs), Refusal: true}, before, &out)
 		}
+		if len(ch.Delta.Audio) > 0 && string(ch.Delta.Audio) != "null" {
+			// OpenAI streams audio only as pcm16 at 24 kHz, in pieces with no header to read.
+			if media := decodeChatAudio(ch.Delta.Audio, "audio/pcm;rate=24000", false, "choices[0].delta.audio", &d.mediaBytes, &d.losses); media != nil {
+				out = append(out, llm.Event{Type: llm.EventMedia, Media: media})
+			}
+		}
 		if len(ch.Delta.ToolCalls) > 0 {
 			// Held content belongs before the tool call that interrupts it.
 			d.flushThink(&out)
@@ -683,6 +691,7 @@ type completionChoice struct {
 		Content     *string         `json:"content"`
 		Refusal     json.RawMessage `json:"refusal"`
 		Annotations json.RawMessage `json:"annotations"`
+		Audio       json.RawMessage `json:"audio"`
 		ToolCalls   []struct {
 			chatToolCall
 			ExtraContent json.RawMessage `json:"extra_content"`
@@ -690,6 +699,41 @@ type completionChoice struct {
 	} `json:"message"`
 	FinishReason string          `json:"finish_reason"`
 	Logprobs     json.RawMessage `json:"logprobs"`
+}
+
+// decodeChatAudio reads a Chat Completions message.audio or delta.audio object into canonical
+// output media, checking it against the safe-media and size rules. An object with no audio bytes
+// (id, transcript or expires_at alone) gives nil. sniff reads the media type from a whole clip's
+// header; a streamed piece has none.
+func decodeChatAudio(raw json.RawMessage, defaultMT string, sniff bool, path string, mediaBytes *int, losses *[]llm.Loss) *llm.OutputMedia {
+	var a struct {
+		Data string `json:"data"`
+	}
+	if json.Unmarshal(raw, &a) != nil {
+		*losses = llm.AddLoss(*losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: "malformed audio object"})
+		return nil
+	}
+	if a.Data == "" {
+		return nil
+	}
+	if !llm.Base64Valid(a.Data) {
+		*losses = llm.AddLoss(*losses, llm.Loss{Kind: llm.LossDropped, Path: path + ".data", Detail: "invalid base64 data"})
+		return nil
+	}
+	if len(a.Data) > llm.MaxOutputMediaPartBytes {
+		*losses = llm.AddLoss(*losses, llm.Loss{Kind: llm.LossDropped, Path: path + ".data", Detail: "output media part exceeds per-part size limit"})
+		return nil
+	}
+	if *mediaBytes+len(a.Data) > llm.MaxOutputMediaReplyBytes {
+		*losses = llm.AddLoss(*losses, llm.Loss{Kind: llm.LossDropped, Path: path + ".data", Detail: "output media exceeds per-reply size limit"})
+		return nil
+	}
+	*mediaBytes += len(a.Data)
+	mt := defaultMT
+	if sniff {
+		mt = llm.SniffAudioMediaType(a.Data, defaultMT)
+	}
+	return &llm.OutputMedia{Kind: llm.MediaAudio, MediaType: mt, Data: a.Data}
 }
 
 // extraContent returns a tool call's extra_content as the raw of its item.start event:
@@ -754,6 +798,7 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 		next++
 	}
 	var losses []llm.Loss
+	mediaBytes := 0
 	refused := false
 	finish := llm.Finish{Reason: llm.FinishOther}
 	used := map[string]bool{} // ids the reply has used, whether sent or made
@@ -802,6 +847,11 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 			}
 			out = append(out, llm.Event{Type: llm.EventItemEnd, Index: next, Citations: cits})
 			next++
+		}
+		if len(m.Audio) > 0 && string(m.Audio) != "null" {
+			if media := decodeChatAudio(m.Audio, "audio/wav", true, "choices[0].message.audio", &mediaBytes, &losses); media != nil {
+				out = append(out, llm.Event{Type: llm.EventMedia, Media: media})
+			}
 		}
 		for i, tc := range m.ToolCalls {
 			if tc.Function.Name == "" {

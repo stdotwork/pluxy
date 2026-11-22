@@ -965,6 +965,18 @@ Anthropic-verified `srvtoolu_` IDs, Responses `code_interpreter_call` requires a
 `container_id`, and Chat Completions has no code execution block), keep the model's text untouched,
 and report the dropped code execution results; same-format replies pass through byte-identically.
 
+**Output media.** Generated images and audio carry across formats on their own `media` events
+(protocol minor 33): Gemini `inlineData` parts, Responses `image_generation_call` items, and Chat
+Completions `message.audio` / streamed `delta.audio` parts. Only safe `image/*` (never
+`image/svg+xml`) and `audio/*` parts with valid base64 are carried, bounded at 24 MiB per part
+and 96 MiB per reply so each event fits a protocol frame; unsafe, malformed, or oversized parts
+drop with a loss while the reply's text arrives whole. Gemini clients receive both images and
+audio as `inlineData` parts in order. Responses, Chat Completions and Messages clients receive no
+media from another format, because the fields that would hold it need an ID only the vendor issues,
+which the client would send back on its next turn: they keep the model's text and the media is
+reported as dropped. Same-format replies stay as they were, so a Chat upstream's audio still does
+not reach a Chat client.
+
 **Tool shapes.** A translated request's tools get the shapes Messages takes, as today's core
 gives them: a function name with characters other than letters, digits, `_` and `-`, or longer than
 64, is sent with each other character as `_` and cut to 64 (two names that would come out the same

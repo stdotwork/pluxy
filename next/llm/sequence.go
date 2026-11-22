@@ -70,6 +70,10 @@ func (s *Sequence) Check(ev Event) error {
 			return fmt.Errorf("item.end for item %d, which is not open", ev.Index)
 		}
 		delete(s.open, ev.Index)
+	case EventMedia:
+		if ev.Media == nil {
+			return fmt.Errorf("%q without media", ev.Type)
+		}
 	case EventNative:
 		if len(ev.Raw) == 0 {
 			return fmt.Errorf("%q without raw", ev.Type)

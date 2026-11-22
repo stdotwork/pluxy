@@ -453,6 +453,12 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 			return err
 		}
 		return s.drain()
+	case llm.EventMedia:
+		if ev.Media == nil {
+			return nil
+		}
+		b.lose("media."+ev.Media.Kind, "Messages has no output image or audio block")
+		return nil
 	case llm.EventNative:
 		b.native()
 		return nil
@@ -541,6 +547,10 @@ func (a *Aggregator) Add(ev llm.Event) {
 		if blk := a.blocks[ev.Index]; blk != nil {
 			blk.signature = sig
 			a.size += len(blk.signature)
+		}
+	case llm.EventMedia:
+		if b.upFormat != format && ev.Media != nil {
+			b.lose("media."+ev.Media.Kind, "Messages has no output image or audio block")
 		}
 	case llm.EventNative:
 		if b.upFormat != format {
