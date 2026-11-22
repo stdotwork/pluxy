@@ -2,7 +2,7 @@
 // options. A host build passes the pages it offers; the shell knows nothing else about them.
 
 import type { VNode } from "preact";
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import { api } from "./api";
 import { ExtensionPage, type ExtensionPageProps } from "./extensions/page";
 import type { Host, Reply } from "./host";
@@ -285,8 +285,10 @@ export function Shell(props: {
 
   // A change of page opens the new page at its top: the window keeps its scroll position from one
   // page to the next. A change inside a page (a tab or a filter in the address) keeps it.
+  // useLayoutEffect resets the scroll synchronously on commit, before paint and before any
+  // interaction with the new page can race with a deferred effect.
   const shownPage = useRef(page);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (shownPage.current === page) return;
     shownPage.current = page;
     window.scrollTo(0, 0);
