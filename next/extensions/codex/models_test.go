@@ -375,3 +375,51 @@ func TestListModelsFallbackOnFailure(t *testing.T) {
 		}
 	})
 }
+
+// TestListModelsLiveKeepsBuiltinFields: a model of the live list that the plan's built-in list also
+// has takes the fields the live list does not give from the built-in entry, and never loses one
+// the live list gives.
+func TestListModelsLiveKeepsBuiltinFields(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"models": [
+			{"slug": "gpt-6.1-sol", "display_name": "Live Sol", "context_window": 123000,
+			 "input_modalities": ["text"], "available_in_plans": ["plus"]},
+			{"slug": "codex-live-only", "context_window": 1000, "available_in_plans": ["plus"]}
+		]}`)
+	}))
+	defer srv.Close()
+	settings, _ := json.Marshal(map[string]string{"base_url": srv.URL})
+	list, err := listModels(context.Background(), sdk.ModelsCall{
+		Account: protocol.Account{ID: "sub", Settings: settings, Credential: subscriptionWith(idTokenWithPlan("plus"))},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if list.From != protocol.ModelListFromAccount {
+		t.Fatalf("from = %q, want account", list.From)
+	}
+	byID := map[string]protocol.Model{}
+	for _, m := range list.Models {
+		byID[m.ID] = m
+	}
+	var want protocol.Model
+	for _, m := range planModels["plus"] {
+		if m.ID == "gpt-6.1-sol" {
+			want = m
+		}
+	}
+	got := byID["gpt-6.1-sol"]
+	if want.ID == "" || want.MaxCompletionTokens == 0 || want.Created == 0 || want.Version == "" || len(want.OutputModalities) == 0 {
+		t.Fatalf("built-in gpt-6.1-sol = %+v, want it to carry max_completion_tokens, created, version and output_modalities", want)
+	}
+	if got.MaxCompletionTokens != want.MaxCompletionTokens || got.Created != want.Created || got.Version != want.Version ||
+		got.Description != want.Description || !slices.Equal(got.OutputModalities, want.OutputModalities) {
+		t.Errorf("gpt-6.1-sol = %+v, want the missing fields of %+v", got, want)
+	}
+	if got.DisplayName != "Live Sol" || got.ContextLength != 123000 || !slices.Equal(got.InputModalities, []string{"text"}) {
+		t.Errorf("gpt-6.1-sol = %+v, want the live display name, context and input modalities kept", got)
+	}
+	if only := byID["codex-live-only"]; only.MaxCompletionTokens != 0 || only.Created != 0 || only.Version != "" {
+		t.Errorf("codex-live-only = %+v, want nothing filled in", only)
+	}
+}
