@@ -14,7 +14,8 @@ import (
 //   - advisor-tool-2026-03-01 for a tool whose type starts with advisor_;
 //   - the betas a body lists in a top-level betas field, which Messages does not take in the
 //     body: the field is removed and its betas sent in the header;
-//   - extended-cache-ttl-2025-04-11 for a cache_control marker with ttl "1h" (not on a token
+//   - extended-cache-ttl-2025-04-11 for a cache_control marker with ttl "1h" on a tool, system
+//     block or message content block (not a top-level cache_control marker, and not on a token
 //     count);
 //   - thinking-binding-controls-2026-08-01 for thinking.block_binding;
 //   - mid-conversation-tool-changes-2026-07-01 for tool_addition or tool_removal blocks, or

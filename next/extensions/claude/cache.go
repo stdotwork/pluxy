@@ -169,16 +169,36 @@ func applyResponsesCache(req llm.Request, losses []llm.Loss, defaultTTL string) 
 						approx = true
 					}
 					if mapped != "" {
-						if !hasRetention {
+						losses = dropLossAt(losses, "prompt_cache_options")
+						if hasRetention {
+							losses = llm.AddLoss(losses, llm.Loss{
+								Kind:   llm.LossDropped,
+								Path:   "prompt_cache_options.ttl",
+								Detail: "prompt_cache_retention took precedence",
+							})
+						} else {
 							ttl = mapped
-						}
-						if len(opts) == 1 {
-							losses = dropLossAt(losses, "prompt_cache_options")
-							if approx && !hasRetention {
+							if approx {
 								losses = llm.AddLoss(losses, llm.Loss{
 									Kind:   llm.LossApproximated,
-									Path:   "prompt_cache_options",
+									Path:   "prompt_cache_options.ttl",
 									Detail: "Messages' longest cache TTL is 1h; sent with ttl 1h",
+								})
+							}
+						}
+						if len(opts) > 1 {
+							keys := make([]string, 0, len(opts)-1)
+							for k := range opts {
+								if k != "ttl" {
+									keys = append(keys, k)
+								}
+							}
+							slices.Sort(keys)
+							for _, k := range keys {
+								losses = llm.AddLoss(losses, llm.Loss{
+									Kind:   llm.LossDropped,
+									Path:   "prompt_cache_options." + k,
+									Detail: "no place for it in anthropic.messages",
 								})
 							}
 						}
