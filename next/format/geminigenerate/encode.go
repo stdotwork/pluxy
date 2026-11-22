@@ -106,6 +106,11 @@ type EncodeOptions struct {
 	// tool is left out and reported as dropped. A Gemini client's own codeExecution tool is
 	// written either way.
 	CodeExecution bool
+	// CandidateCount says the caller knows its upstream takes generationConfig.candidateCount
+	// for this request (the Gemini API does for both streaming and non-streaming; Vertex AI does
+	// for non-streaming generateContent only). Without it a translated count > 1 is left out and
+	// reported as dropped. A Gemini client's own candidateCount > 1 is written either way.
+	CandidateCount bool
 }
 
 // EncodeRequestWith builds a GenerateContent request body as EncodeRequest does, changed by opts.
@@ -128,6 +133,23 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	}
 	if len(o.Stop) > 0 {
 		gen["stopSequences"] = o.Stop
+	}
+	if o.CandidateCount >= 1 {
+		own := req.SourceFormat() == format
+		switch {
+		case own:
+			gen["candidateCount"] = o.CandidateCount
+		case o.CandidateCount == 1:
+			// Count 1 is the default; send no field and report no loss on translation.
+		case !opts.CandidateCount:
+			e.lose(llm.LossDropped, llm.CandidateCountPath(req), llm.CandidateCountUnsent)
+		case !supportsCandidateCount(req.Model):
+			e.lose(llm.LossDropped, llm.CandidateCountPath(req), fmt.Sprintf("GenerateContent model %q does not support candidateCount > 1", req.Model))
+		case o.CandidateCount > maxGeminiCandidates:
+			e.lose(llm.LossDropped, llm.CandidateCountPath(req), fmt.Sprintf("GenerateContent candidateCount must be at most %d", maxGeminiCandidates))
+		default:
+			gen["candidateCount"] = o.CandidateCount
+		}
 	}
 	if rf := o.ResponseFormat; rf != nil {
 		switch rf.Type {
@@ -808,6 +830,46 @@ func supportsCodeExecution(model string) bool {
 		return false
 	}
 	for _, family := range codeExecutionModels {
+		if m == family || strings.HasPrefix(m, family+"-") {
+			return true
+		}
+	}
+	return false
+}
+
+// maxGeminiCandidates is the documented maximum for GenerateContent generationConfig.candidateCount
+// (https://firebase.google.com/docs/ai-logic/model-parameters: "Supported values: 1 - 8 (inclusive)").
+const maxGeminiCandidates = 8
+
+// candidateCountModels are the general-use Gemini model families documented to support
+// generationConfig.candidateCount > 1 across Google's GenerateContent reference
+// (https://ai.google.dev/api/generate-content), Gemini models page
+// (https://ai.google.dev/gemini-api/docs/models) and model parameters reference
+// (https://firebase.google.com/docs/ai-logic/model-parameters). The model parameters page
+// documents that general-use Gemini 4.x and 3.x models no longer support candidateCount (with
+// Gemini 4.x and 3.7/3.8 returning 400 errors), and that Nano Banana / image, TTS and Live API
+// models do not support it. Gemini 1.0, embedding, computer-use, transcribe and -latest aliases
+// (which route to 3.x/4.x) are excluded.
+var candidateCountModels = []string{
+	"gemini-2.5-pro",
+	"gemini-2.5-flash",
+	"gemini-2.5-flash-lite",
+	"gemini-2.0-flash",
+	"gemini-2.0-flash-lite",
+	"gemini-1.5-pro",
+	"gemini-1.5-flash",
+}
+
+// supportsCandidateCount reports whether model belongs to one of the documented Gemini model
+// families in candidateCountModels.
+func supportsCandidateCount(model string) bool {
+	m := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(model)), "models/")
+	if strings.Contains(m, "embedding") || strings.Contains(m, "-tts") || strings.Contains(m, "-image") ||
+		strings.Contains(m, "-live") || strings.Contains(m, "-native-audio") || strings.Contains(m, "-transcribe") ||
+		strings.Contains(m, "-computer-use") {
+		return false
+	}
+	for _, family := range candidateCountModels {
 		if m == family || strings.HasPrefix(m, family+"-") {
 			return true
 		}

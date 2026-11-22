@@ -710,6 +710,9 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 	case llm.EventMedia:
 		b.loseMedia(ev.Media)
 		return nil
+	case llm.EventCandidate:
+		b.lose("candidates", "Responses has no place for candidates after the first")
+		return nil
 	case llm.EventNative:
 		if b.upFormat == llm.FormatAnthropicMessages && isBlockStart(ev.Raw) {
 			// A search with its results ends when the next block starts.
@@ -954,6 +957,10 @@ func (a *Aggregator) Add(ev llm.Event) {
 	case llm.EventMedia:
 		if b.upFormat != format {
 			b.loseMedia(ev.Media)
+		}
+	case llm.EventCandidate:
+		if b.upFormat != format {
+			b.lose("candidates", "Responses has no place for candidates after the first")
 		}
 	case llm.EventNative:
 		if it, added, consumed := b.searchEvent(ev.Raw); consumed {

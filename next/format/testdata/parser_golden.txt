@@ -1,7 +1,7 @@
 # What the format packages' parsers make of requests, so TestParserVersion can tell when
 # one of them changes: one line per request, the SHA-256 (first 8 bytes, hex) of its route
 # and body, then of what an extension gets from it (its items, tools and origin, or that
-# core or the extension refuses it). Recorded at format.ParserVersion 5 by TestParserVersion.
+# core or the extension refuses it). Recorded at format.ParserVersion 6 by TestParserVersion.
 #
 # A request that is not here is not checked, and one that is here but is no longer gathered
 # is ignored: only a recorded request that parses differently fails the test. Record it
@@ -382,7 +382,7 @@
 46f6976458cfa348 4b8ca15d33dc69f8
 474d761379b254ff 9562509fd8c7ebc9
 475bc2a2ab49c5f5 b3341ae045b14bda
-4774f45620410bc8 2aca6b0f1cf5741b
+4774f45620410bc8 2d2fa6c5e0f0f3d8
 477d4d33a1dd7ee0 81cf8d7fa6f0bdc7
 47ae8e81a0895dba 9d075b34a1ec883b
 47eff6cdcc24cae3 a7ea11838f7d299e
@@ -415,7 +415,7 @@
 4ec9dec936126388 486a582c260ce98a
 4ed2d527b1c18d0c 789764d3f2d15b05
 4ee1087c4649d0df cd73019c3dc88745
-4eeecb5b61819b33 a2dfc22e718a2855
+4eeecb5b61819b33 9562509fd8c7ebc9
 4ef656454c1898e5 0ab2e8b43379521c
 4f1b2c07d2fc6d01 0ab2e8b43379521c
 4f3592deea35a8d5 0ab2e8b43379521c

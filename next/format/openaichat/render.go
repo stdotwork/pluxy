@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -229,8 +230,15 @@ type StreamWriter struct {
 	up           upstream
 	tools        map[int]int // item index -> tool_calls index
 	refused      bool        // a same-format reply carried a refusal
+	cands        map[int]*outCandStream
 	losses       []llm.Loss
 	lost         map[string]bool
+}
+
+type outCandStream struct {
+	started  bool
+	finished bool
+	tools    map[int]int
 }
 
 // NewStreamWriter returns a writer for one client stream. includeUsage adds the final usage
@@ -333,6 +341,53 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 	case llm.EventMedia:
 		s.loseMedia(ev.Media)
 		return nil
+	case llm.EventCandidate:
+		if s.up.native || ev.Candidate == nil || ev.Candidate.Index < 1 {
+			return nil
+		}
+		c := ev.Candidate
+		if s.cands == nil {
+			s.cands = map[int]*outCandStream{}
+		}
+		cs := s.cands[c.Index]
+		if cs == nil {
+			cs = &outCandStream{tools: map[int]int{}}
+			s.cands[c.Index] = cs
+		}
+		if !cs.started {
+			cs.started = true
+			empty := ""
+			if err := s.chunk([]outChoice{{Index: c.Index, Delta: &outDelta{Role: llm.RoleAssistant, Content: &empty}}}, nil); err != nil {
+				return err
+			}
+		}
+		switch c.Kind {
+		case llm.CandidateTextDelta:
+			d := c.Delta
+			return s.chunk([]outChoice{{Index: c.Index, Delta: &outDelta{Content: &d}}}, nil)
+		case llm.CandidateReasoningDelta:
+			d := c.Delta
+			return s.chunk([]outChoice{{Index: c.Index, Delta: &outDelta{ReasoningContent: &d}}}, nil)
+		case llm.CandidateToolCallStart:
+			n := len(cs.tools)
+			cs.tools[c.Item] = n
+			tc := outToolCall{Index: &n, ID: c.CallID, Type: "function"}
+			tc.Function.Name = c.Name
+			return s.chunk([]outChoice{{Index: c.Index, Delta: &outDelta{ToolCalls: []outToolCall{tc}}}}, nil)
+		case llm.CandidateToolInputDelta:
+			if n, ok := cs.tools[c.Item]; ok {
+				tc := outToolCall{Index: &n}
+				tc.Function.Arguments = c.Delta
+				return s.chunk([]outChoice{{Index: c.Index, Delta: &outDelta{ToolCalls: []outToolCall{tc}}}}, nil)
+			}
+		case llm.CandidateMedia:
+			s.loseMedia(c.Media)
+		case llm.CandidateFinish:
+			reason := finishReason(c.Finish)
+			cs.finished = true
+			return s.chunk([]outChoice{{Index: c.Index, Delta: &outDelta{}, FinishReason: &reason}}, nil)
+		}
+		return nil
 	case llm.EventNative:
 		if c := s.up.choices(ev); len(c) > 0 {
 			return s.chunk(c, nil)
@@ -355,6 +410,21 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		}
 		if err := s.chunk([]outChoice{{Delta: &outDelta{}, FinishReason: &reason}}, nil); err != nil {
 			return err
+		}
+		if len(s.cands) > 0 {
+			idxs := make([]int, 0, len(s.cands))
+			for idx, cs := range s.cands {
+				if !cs.finished {
+					idxs = append(idxs, idx)
+				}
+			}
+			slices.Sort(idxs)
+			stop := "stop"
+			for _, idx := range idxs {
+				if err := s.chunk([]outChoice{{Index: idx, Delta: &outDelta{}, FinishReason: &stop}}, nil); err != nil {
+					return err
+				}
+			}
 		}
 		if s.includeUsage && ev.Usage != nil {
 			if err := s.chunk([]outChoice{}, s.up.usage(ev.Usage)); err != nil {
@@ -395,10 +465,20 @@ type Aggregator struct {
 	msgRunes    map[int]int       // message item index -> rune count written to text
 	totalRunes  int               // total runes written to text across message items
 	annotations []outAnnotation
+	cands       map[int]*outCandAgg
 	losses      []llm.Loss
 	lost        map[string]bool
 	lossSize    int
 	size        int
+}
+
+type outCandAgg struct {
+	text      strings.Builder
+	reasoning strings.Builder
+	tools     []outToolCall
+	toolArgs  []*strings.Builder
+	toolIdx   map[int]int
+	finish    *llm.Finish
 }
 
 // NewAggregator returns an empty aggregator.
@@ -451,6 +531,44 @@ func (a *Aggregator) Add(ev llm.Event) {
 		a.size += len(a.head.ID) + len(a.head.Model) + len(a.up.fields)
 	case llm.EventMedia:
 		a.loseMedia(ev.Media)
+	case llm.EventCandidate:
+		if a.up.native || ev.Candidate == nil || ev.Candidate.Index < 1 {
+			return
+		}
+		c := ev.Candidate
+		if a.cands == nil {
+			a.cands = map[int]*outCandAgg{}
+		}
+		ca := a.cands[c.Index]
+		if ca == nil {
+			ca = &outCandAgg{toolIdx: map[int]int{}}
+			a.cands[c.Index] = ca
+		}
+		a.size += len(c.Delta)
+		switch c.Kind {
+		case llm.CandidateTextDelta:
+			ca.text.WriteString(c.Delta)
+		case llm.CandidateReasoningDelta:
+			ca.reasoning.WriteString(c.Delta)
+		case llm.CandidateToolCallStart:
+			a.size += len(c.CallID) + len(c.Name) + toolCallOverhead
+			ca.toolIdx[c.Item] = len(ca.tools)
+			tc := outToolCall{ID: c.CallID, Type: "function"}
+			tc.Function.Name = c.Name
+			ca.tools = append(ca.tools, tc)
+			ca.toolArgs = append(ca.toolArgs, new(strings.Builder))
+		case llm.CandidateToolInputDelta:
+			if i, ok := ca.toolIdx[c.Item]; ok {
+				ca.toolArgs[i].WriteString(c.Delta)
+			}
+		case llm.CandidateMedia:
+			a.loseMedia(c.Media)
+		case llm.CandidateFinish:
+			ca.finish = c.Finish
+			if c.Finish != nil {
+				a.size += len(c.Finish.RawReason)
+			}
+		}
 	case llm.EventNative:
 		for _, c := range a.up.choices(ev) {
 			a.size += len(c)
@@ -793,6 +911,30 @@ func (a *Aggregator) Response() ([]byte, error) {
 	choices := []any{outChoice{Message: msg, FinishReason: &reason, Logprobs: mergeLogprobs(a.logprobs)}}
 	for _, o := range a.others {
 		choices = append(choices, o.value())
+	}
+	if len(a.cands) > 0 {
+		idxs := make([]int, 0, len(a.cands))
+		for idx := range a.cands {
+			idxs = append(idxs, idx)
+		}
+		slices.Sort(idxs)
+		for _, idx := range idxs {
+			ca := a.cands[idx]
+			for i := range ca.tools {
+				ca.tools[i].Function.Arguments = ca.toolArgs[i].String()
+			}
+			cm := &outMsg{Role: llm.RoleAssistant, ToolCalls: ca.tools}
+			if ca.text.Len() > 0 || len(ca.tools) == 0 {
+				t := ca.text.String()
+				cm.Content = &t
+			}
+			if ca.reasoning.Len() > 0 {
+				r := ca.reasoning.String()
+				cm.ReasoningContent = &r
+			}
+			creason := finishReason(ca.finish)
+			choices = append(choices, outChoice{Index: idx, Message: cm, FinishReason: &creason})
+		}
 	}
 	c.Choices = choices
 	c.Usage = a.up.usage(a.usage)

@@ -185,6 +185,13 @@ func ParseRequest(body []byte) (llm.Request, error) {
 		req.Options.Verbosity = v
 		modelled = rawjson.With(modelled, "verbosity")
 	}
+	if rawN, ok := top["n"]; ok && !bytes.Equal(bytes.TrimSpace(rawN), []byte("null")) {
+		var n int
+		if json.Unmarshal(rawN, &n) == nil && n >= 1 {
+			modelled = rawjson.With(modelled, "n")
+			req.Options.CandidateCount = n
+		}
+	}
 	var webSearchTool *llm.Tool
 	if raw, ok := top["web_search_options"]; ok && rawjson.Object(raw) != nil {
 		webSearchTool = parseWebSearchOptions(raw)
@@ -496,6 +503,7 @@ type outTail struct {
 	ReasoningEffort   string            `json:"reasoning_effort,omitempty"`
 	ServiceTier       string            `json:"service_tier,omitempty"`
 	Verbosity         string            `json:"verbosity,omitempty"`
+	N                 *int              `json:"n,omitempty"`
 	WebSearchOptions  json.RawMessage   `json:"web_search_options,omitempty"`
 }
 
@@ -581,6 +589,11 @@ type EncodeOptions struct {
 	// without it the tool is left out and reported as dropped. A Chat client's own
 	// web_search_options is written either way.
 	WebSearch bool
+	// CandidateCount says the caller knows its upstream takes Chat Completions n (api.openai.com):
+	// a request from another format then carries a candidate count > 1 on documented models
+	// (up to 128), and without it the count is left out and reported as dropped. A Chat client's
+	// own n >= 1 is written back unchanged; a translated count <= 1 sends no field.
+	CandidateCount bool
 }
 
 // EncodeRequestWith builds a Chat Completions request body as EncodeRequest does, changed by opts.
@@ -621,6 +634,19 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			e.lose(llm.LossDropped, llm.VerbosityPath(req), fmt.Sprintf("Chat Completions lists no %q verbosity", v))
 		default:
 			out.Verbosity = v
+		}
+	}
+	if n := req.Options.CandidateCount; !own && n > 1 {
+		switch {
+		case !opts.CandidateCount:
+			e.lose(llm.LossDropped, llm.CandidateCountPath(req), llm.CandidateCountUnsent)
+		case !supportsCandidateCount(req.Model):
+			e.lose(llm.LossDropped, llm.CandidateCountPath(req), fmt.Sprintf("Chat Completions model %q does not support translated n > 1", req.Model))
+		case n > maxChatCandidates:
+			e.lose(llm.LossDropped, llm.CandidateCountPath(req), fmt.Sprintf("Chat Completions n must be at most %d", maxChatCandidates))
+		default:
+			v := n
+			out.N = &v
 		}
 	}
 	if req.Stream {
@@ -857,7 +883,16 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	if err != nil {
 		return nil, nil, err
 	}
-	return rawjson.Merge(body, e.kept(req.Origin)), e.losses, nil
+	rawOrigin := e.kept(req.Origin)
+	if own && req.Options.CandidateCount >= 1 {
+		nJSON := json.RawMessage(fmt.Sprintf(`{"n":%d}`, req.Options.CandidateCount))
+		if len(rawOrigin) == 0 {
+			rawOrigin = nJSON
+		} else {
+			rawOrigin = rawjson.Merge(rawOrigin, nJSON)
+		}
+	}
+	return rawjson.Merge(body, rawOrigin), e.losses, nil
 }
 
 // encodeBody returns out as the request body's JSON, writing the messages' JSON as it stands.

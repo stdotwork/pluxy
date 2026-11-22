@@ -229,6 +229,22 @@ type StreamDecoder struct {
 	annRaws    []json.RawMessage
 	mediaBytes int
 	losses     []llm.Loss
+	otherCands map[int]*otherCand
+}
+
+// otherCand holds streaming decode state for a Chat choice with index >= 1, completely isolated
+// from choice 0.
+type otherCand struct {
+	think    thinkFilter
+	tools    map[int]*toolCall
+	last     *toolCall
+	nextItem int
+	calls    int
+	opened   int
+	used     map[string]bool
+	refused  bool
+	finish   *llm.Finish
+	finished bool
 }
 
 // NewStreamDecoder returns a decoder for one stream.
@@ -462,19 +478,29 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 	if hasError(c.Error) {
 		return nil, d.withUsage(upstreamErrorObject(c.Error, "upstream reported an error mid-stream"))
 	}
-	choices := make([]streamChoice, len(c.Choices))
+	choices := make([]streamChoice, 0, len(c.Choices))
 	var others []json.RawMessage
 	for i, raw := range c.Choices {
-		if err := json.Unmarshal(raw, &choices[i]); err != nil {
-			return nil, d.withUsage(malformed("upstream sent a malformed stream chunk", data))
+		var ch streamChoice
+		if err := json.Unmarshal(raw, &ch); err != nil {
+			if i == 0 {
+				return nil, d.withUsage(malformed("upstream sent a malformed stream chunk", data))
+			}
+			d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: fmt.Sprintf("choices[%d]", i), Detail: "malformed candidate"})
+			continue
 		}
-		if choices[i].Index != 0 {
+		if ch.Index < 0 {
+			d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: fmt.Sprintf("choices[%d]", i), Detail: "candidate with negative index"})
+			continue
+		}
+		choices = append(choices, ch)
+		if ch.Index != 0 {
 			others = append(others, raw)
 		}
-		if f := choices[i].FinishReason; f != nil && *f != "" {
-			d.choices[choices[i].Index] = true
-		} else if _, ok := d.choices[choices[i].Index]; !ok {
-			d.choices[choices[i].Index] = false
+		if f := ch.FinishReason; f != nil && *f != "" {
+			d.choices[ch.Index] = true
+		} else if _, ok := d.choices[ch.Index]; !ok {
+			d.choices[ch.Index] = false
 		}
 	}
 	var out []llm.Event
@@ -488,6 +514,7 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 	}
 	for _, ch := range choices {
 		if ch.Index != 0 {
+			d.decodeOtherChoice(ch, &out)
 			continue
 		}
 		if r := ch.Delta.text(); r != "" {
@@ -607,6 +634,7 @@ func (d *StreamDecoder) end() []llm.Event {
 	}
 	d.flushThink(&out)
 	d.closeAll(&out)
+	d.closeOtherCands(&out)
 	f := llm.Finish{Reason: llm.FinishOther}
 	if d.finish != nil {
 		f = *d.finish
@@ -649,9 +677,268 @@ func (d *StreamDecoder) finished() bool {
 	return true
 }
 
+// unfinished returns the error for a stream that ended before every choice finished.
 func (d *StreamDecoder) unfinished() *llm.Error {
 	d.done = true
 	return d.withUsage(&llm.Error{Code: llm.CodeUpstream, Message: "upstream stream ended before the reply finished"})
+}
+
+func (d *StreamDecoder) otherCand(idx int) *otherCand {
+	if d.otherCands == nil {
+		d.otherCands = map[int]*otherCand{}
+	}
+	oc := d.otherCands[idx]
+	if oc == nil {
+		oc = &otherCand{tools: map[int]*toolCall{}, used: map[string]bool{}}
+		d.otherCands[idx] = oc
+	}
+	return oc
+}
+
+func (oc *otherCand) callID(candIdx, index int) string {
+	if index >= 0 {
+		if id := fmt.Sprintf("call_c%d_%d", candIdx, index); !oc.used[id] {
+			return id
+		}
+	}
+	for {
+		id := fmt.Sprintf("call_c%d_%d", candIdx, oc.calls)
+		oc.calls++
+		if !oc.used[id] {
+			return id
+		}
+	}
+}
+
+func (oc *otherCand) openCall(candIdx int, c *toolCall, ev *[]llm.Event) {
+	c.item = oc.nextItem
+	oc.nextItem++
+	oc.opened++
+	*ev = append(*ev, llm.Event{
+		Type:      llm.EventCandidate,
+		Candidate: &llm.CandidateEvent{Index: candIdx, Kind: llm.CandidateToolCallStart, Item: c.item, CallID: c.id, Name: c.name},
+	})
+	for _, a := range c.args {
+		*ev = append(*ev, llm.Event{
+			Type:      llm.EventCandidate,
+			Candidate: &llm.CandidateEvent{Index: candIdx, Kind: llm.CandidateToolInputDelta, Item: c.item, Delta: a},
+		})
+	}
+	c.args = nil
+}
+
+func (oc *otherCand) closeCall(candIdx int, c *toolCall, ev *[]llm.Event, losses *[]llm.Loss) {
+	if c.item >= 0 {
+		*ev = append(*ev, llm.Event{
+			Type:      llm.EventCandidate,
+			Candidate: &llm.CandidateEvent{Index: candIdx, Kind: llm.CandidateToolCallEnd, Item: c.item},
+		})
+	} else if c.name == "" {
+		path := fmt.Sprintf("choices[%d].delta.tool_calls", candIdx)
+		if c.index >= 0 {
+			path = fmt.Sprintf("%s[%d]", path, c.index)
+		}
+		*losses = llm.AddLoss(*losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: "a streamed tool call that never named its function"})
+	}
+	if c.index >= 0 && oc.tools[c.index] == c {
+		delete(oc.tools, c.index)
+	}
+	if oc.last == c {
+		oc.last = nil
+	}
+}
+
+func (oc *otherCand) flushAndClose(candIdx int, ev *[]llm.Event, losses *[]llm.Loss) {
+	for _, p := range oc.think.flush() {
+		kind := llm.CandidateTextDelta
+		if p.reasoning {
+			kind = llm.CandidateReasoningDelta
+		}
+		*ev = append(*ev, llm.Event{
+			Type:      llm.EventCandidate,
+			Candidate: &llm.CandidateEvent{Index: candIdx, Kind: kind, Delta: p.text},
+		})
+	}
+	all := make([]*toolCall, 0, len(oc.tools)+1)
+	for _, c := range oc.tools {
+		all = append(all, c)
+	}
+	if oc.last != nil && !slices.Contains(all, oc.last) {
+		all = append(all, oc.last)
+	}
+	open := make([]int, 0, len(all))
+	for _, c := range all {
+		if c.item >= 0 {
+			open = append(open, c.item)
+		}
+	}
+	slices.Sort(open)
+	for _, item := range open {
+		*ev = append(*ev, llm.Event{
+			Type:      llm.EventCandidate,
+			Candidate: &llm.CandidateEvent{Index: candIdx, Kind: llm.CandidateToolCallEnd, Item: item},
+		})
+	}
+	for _, c := range all {
+		if c.item < 0 && c.name == "" {
+			path := fmt.Sprintf("choices[%d].delta.tool_calls", candIdx)
+			if c.index >= 0 {
+				path = fmt.Sprintf("%s[%d]", path, c.index)
+			}
+			*losses = llm.AddLoss(*losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: "a streamed tool call that never named its function"})
+		}
+	}
+	clear(oc.tools)
+	oc.last = nil
+}
+
+func (d *StreamDecoder) decodeOtherChoice(ch streamChoice, out *[]llm.Event) {
+	oc := d.otherCand(ch.Index)
+	if r := ch.Delta.text(); r != "" {
+		*out = append(*out, llm.Event{
+			Type:      llm.EventCandidate,
+			Candidate: &llm.CandidateEvent{Index: ch.Index, Kind: llm.CandidateReasoningDelta, Delta: r},
+		})
+	}
+	if t := ch.Delta.Content; t != nil && *t != "" {
+		for _, p := range oc.think.feed(*t) {
+			kind := llm.CandidateTextDelta
+			if p.reasoning {
+				kind = llm.CandidateReasoningDelta
+			}
+			*out = append(*out, llm.Event{
+				Type:      llm.EventCandidate,
+				Candidate: &llm.CandidateEvent{Index: ch.Index, Kind: kind, Delta: p.text},
+			})
+		}
+	}
+	if r := refusalText(ch.Delta.Refusal); r != "" {
+		oc.refused = true
+		for _, p := range oc.think.flush() {
+			kind := llm.CandidateTextDelta
+			if p.reasoning {
+				kind = llm.CandidateReasoningDelta
+			}
+			*out = append(*out, llm.Event{
+				Type:      llm.EventCandidate,
+				Candidate: &llm.CandidateEvent{Index: ch.Index, Kind: kind, Delta: p.text},
+			})
+		}
+		*out = append(*out, llm.Event{
+			Type:      llm.EventCandidate,
+			Candidate: &llm.CandidateEvent{Index: ch.Index, Kind: llm.CandidateTextDelta, Delta: r},
+		})
+	}
+	if len(ch.Delta.Audio) > 0 && string(ch.Delta.Audio) != "null" {
+		path := fmt.Sprintf("choices[%d].delta.audio", ch.Index)
+		if media := decodeChatAudio(ch.Delta.Audio, "audio/pcm;rate=24000", false, path, &d.mediaBytes, &d.losses); media != nil {
+			*out = append(*out, llm.Event{
+				Type:      llm.EventCandidate,
+				Candidate: &llm.CandidateEvent{Index: ch.Index, Kind: llm.CandidateMedia, Media: media},
+			})
+		}
+	}
+	if len(ch.Delta.ToolCalls) > 0 {
+		for _, p := range oc.think.flush() {
+			kind := llm.CandidateTextDelta
+			if p.reasoning {
+				kind = llm.CandidateReasoningDelta
+			}
+			*out = append(*out, llm.Event{
+				Type:      llm.EventCandidate,
+				Candidate: &llm.CandidateEvent{Index: ch.Index, Kind: kind, Delta: p.text},
+			})
+		}
+	}
+	for _, tc := range ch.Delta.ToolCalls {
+		index := -1
+		if tc.Index != nil {
+			index = *tc.Index
+		}
+		var call *toolCall
+		if index >= 0 {
+			call = oc.tools[index]
+		} else {
+			call = oc.last
+		}
+		if call == nil || (tc.ID != "" && tc.ID != call.id) {
+			if call != nil {
+				oc.closeCall(ch.Index, call, out, &d.losses)
+			}
+			call = &toolCall{index: index, id: tc.ID, item: -1}
+			if call.id == "" {
+				call.id = oc.callID(ch.Index, index)
+			}
+			oc.used[call.id] = true
+			if index >= 0 {
+				oc.tools[index] = call
+			}
+			oc.last = call
+		}
+		if call.item < 0 && call.name == "" && tc.Function.Name != "" {
+			call.name = tc.Function.Name
+			oc.openCall(ch.Index, call, out)
+		}
+		if tc.Function.Arguments != "" {
+			if call.item >= 0 {
+				*out = append(*out, llm.Event{
+					Type:      llm.EventCandidate,
+					Candidate: &llm.CandidateEvent{Index: ch.Index, Kind: llm.CandidateToolInputDelta, Item: call.item, Delta: tc.Function.Arguments},
+				})
+			} else {
+				call.args = append(call.args, tc.Function.Arguments)
+			}
+		}
+	}
+	if ch.FinishReason != nil && *ch.FinishReason != "" {
+		oc.flushAndClose(ch.Index, out, &d.losses)
+		f := decodeFinish(*ch.FinishReason)
+		if f.Reason == llm.FinishToolCalls && oc.opened == 0 {
+			f.Reason = llm.FinishStop
+		}
+		if oc.refused {
+			f.Reason = llm.FinishContentFilter
+		}
+		oc.finish = &f
+		oc.finished = true
+		*out = append(*out, llm.Event{
+			Type:      llm.EventCandidate,
+			Candidate: &llm.CandidateEvent{Index: ch.Index, Kind: llm.CandidateFinish, Finish: &f},
+		})
+	}
+}
+
+func (d *StreamDecoder) closeOtherCands(out *[]llm.Event) {
+	if len(d.otherCands) == 0 {
+		return
+	}
+	idxs := make([]int, 0, len(d.otherCands))
+	for idx := range d.otherCands {
+		idxs = append(idxs, idx)
+	}
+	slices.Sort(idxs)
+	for _, idx := range idxs {
+		oc := d.otherCands[idx]
+		if oc.finished {
+			continue
+		}
+		oc.flushAndClose(idx, out, &d.losses)
+		f := llm.Finish{Reason: llm.FinishOther}
+		if oc.finish != nil {
+			f = *oc.finish
+		}
+		if f.Reason == llm.FinishToolCalls && oc.opened == 0 {
+			f.Reason = llm.FinishStop
+		}
+		if oc.refused {
+			f.Reason = llm.FinishContentFilter
+		}
+		oc.finished = true
+		*out = append(*out, llm.Event{
+			Type:      llm.EventCandidate,
+			Candidate: &llm.CandidateEvent{Index: idx, Kind: llm.CandidateFinish, Finish: &f},
+		})
+	}
 }
 
 // hasError reports whether an error field holds an error.
@@ -769,16 +1056,27 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 	if hasError(c.Error) {
 		return nil, nil, upstreamErrorObject(c.Error, "upstream reported an error")
 	}
-	choices := make([]completionChoice, len(c.Choices))
+	var losses []llm.Loss
+	choices := make([]completionChoice, 0, len(c.Choices))
 	var others []json.RawMessage
 	first := false
 	for i, raw := range c.Choices {
-		if err := json.Unmarshal(raw, &choices[i]); err != nil {
-			return nil, nil, malformed("upstream sent a malformed response", body)
+		var ch completionChoice
+		if err := json.Unmarshal(raw, &ch); err != nil {
+			if i == 0 {
+				return nil, nil, malformed("upstream sent a malformed response", body)
+			}
+			losses = llm.AddLoss(losses, llm.Loss{Kind: llm.LossDropped, Path: fmt.Sprintf("choices[%d]", i), Detail: "malformed candidate"})
+			continue
 		}
-		if choices[i].Index != 0 {
+		if ch.Index < 0 {
+			losses = llm.AddLoss(losses, llm.Loss{Kind: llm.LossDropped, Path: fmt.Sprintf("choices[%d]", i), Detail: "candidate with negative index"})
+			continue
+		}
+		choices = append(choices, ch)
+		if ch.Index != 0 {
 			others = append(others, raw)
-		} else if choices[i].Message != nil {
+		} else if ch.Message != nil {
 			first = true
 		}
 	}
@@ -797,7 +1095,6 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 		out = append(out, llm.Event{Type: llm.EventItemEnd, Index: next})
 		next++
 	}
-	var losses []llm.Loss
 	mediaBytes := 0
 	refused := false
 	finish := llm.Finish{Reason: llm.FinishOther}
@@ -886,6 +1183,76 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 	}
 	if ev := otherChoices(others); ev != nil {
 		out = append(out, *ev)
+	}
+	for _, ch := range choices {
+		if ch.Index <= 0 {
+			continue
+		}
+		candRefused := false
+		candCalls := 0
+		candUsed := map[string]bool{}
+		candMade := 0
+		candItem := 0
+		if m := ch.Message; m != nil {
+			content := ""
+			if m.Content != nil {
+				content = *m.Content
+			}
+			reasoning := m.text()
+			tagged, text := parseThink(content)
+			if reasoning != "" {
+				out = append(out, llm.Event{Type: llm.EventCandidate, Candidate: &llm.CandidateEvent{Index: ch.Index, Kind: llm.CandidateReasoningDelta, Delta: reasoning}})
+			}
+			if tagged != "" && tagged != reasoning {
+				out = append(out, llm.Event{Type: llm.EventCandidate, Candidate: &llm.CandidateEvent{Index: ch.Index, Kind: llm.CandidateReasoningDelta, Delta: tagged}})
+			}
+			if text != "" {
+				out = append(out, llm.Event{Type: llm.EventCandidate, Candidate: &llm.CandidateEvent{Index: ch.Index, Kind: llm.CandidateTextDelta, Delta: text}})
+			}
+			if r := refusalText(m.Refusal); r != "" {
+				candRefused = true
+				out = append(out, llm.Event{Type: llm.EventCandidate, Candidate: &llm.CandidateEvent{Index: ch.Index, Kind: llm.CandidateTextDelta, Delta: r}})
+			}
+			if len(m.Audio) > 0 && string(m.Audio) != "null" {
+				path := fmt.Sprintf("choices[%d].message.audio", ch.Index)
+				if media := decodeChatAudio(m.Audio, "audio/wav", true, path, &mediaBytes, &losses); media != nil {
+					out = append(out, llm.Event{Type: llm.EventCandidate, Candidate: &llm.CandidateEvent{Index: ch.Index, Kind: llm.CandidateMedia, Media: media}})
+				}
+			}
+			for i, tc := range m.ToolCalls {
+				if tc.Function.Name == "" {
+					losses = llm.AddLoss(losses, llm.Loss{Kind: llm.LossDropped,
+						Path:   fmt.Sprintf("choices[%d].message.tool_calls[%d]", ch.Index, i),
+						Detail: "a tool call that never named its function"})
+					continue
+				}
+				id := tc.ID
+				if id == "" {
+					id = fmt.Sprintf("call_c%d_%d", ch.Index, i)
+					for candUsed[id] {
+						id = fmt.Sprintf("call_c%d_%d", ch.Index, candMade)
+						candMade++
+					}
+				}
+				candUsed[id] = true
+				candCalls++
+				idx := candItem
+				candItem++
+				out = append(out, llm.Event{Type: llm.EventCandidate, Candidate: &llm.CandidateEvent{Index: ch.Index, Kind: llm.CandidateToolCallStart, Item: idx, CallID: id, Name: tc.Function.Name}})
+				if tc.Function.Arguments != "" {
+					out = append(out, llm.Event{Type: llm.EventCandidate, Candidate: &llm.CandidateEvent{Index: ch.Index, Kind: llm.CandidateToolInputDelta, Item: idx, Delta: tc.Function.Arguments}})
+				}
+				out = append(out, llm.Event{Type: llm.EventCandidate, Candidate: &llm.CandidateEvent{Index: ch.Index, Kind: llm.CandidateToolCallEnd, Item: idx}})
+			}
+		}
+		cf := decodeFinish(ch.FinishReason)
+		if cf.Reason == llm.FinishToolCalls && candCalls == 0 {
+			cf.Reason = llm.FinishStop
+		}
+		if candRefused {
+			cf.Reason = llm.FinishContentFilter
+		}
+		out = append(out, llm.Event{Type: llm.EventCandidate, Candidate: &llm.CandidateEvent{Index: ch.Index, Kind: llm.CandidateFinish, Finish: &cf}})
 	}
 	return append(out, llm.Event{Type: llm.EventFinish, Finish: &finish, Usage: decodeUsage(c.Usage)}), losses, nil
 }

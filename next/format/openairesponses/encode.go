@@ -157,6 +157,9 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			out.ServiceTier = o.ServiceTier
 		}
 	}
+	if o.CandidateCount > 1 {
+		e.lose(llm.LossDropped, llm.CandidateCountPath(req), "Responses has no candidate count setting")
+	}
 	if len(o.Stop) > 0 {
 		e.lose(llm.LossDropped, "stop", "Responses has no stop sequences")
 	}

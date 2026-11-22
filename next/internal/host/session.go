@@ -210,6 +210,11 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 		return refuse(perr)
 	}
 	t.lost = append(t.lost, tierLost...)
+	req, candLost := downgradeCandidateCount(s.ext.info.ProtocolMinor, s.ext.manifest.ID, req)
+	if perr := refuseCandidateCount(s.ext.manifest.ID, s.ext.info.ProtocolMinor, req, candLost); perr != nil {
+		return refuse(perr)
+	}
+	t.lost = append(t.lost, candLost...)
 	req = downgradeWebSearch(s.ext.info.ProtocolMinor, req)
 	req = downgradeCodeExecution(s.ext.info.ProtocolMinor, req)
 	s.mu.Lock()
