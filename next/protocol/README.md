@@ -512,6 +512,8 @@ with `native.format` naming the endpoint:
 | `openai.audio.transcriptions` | `POST /v1/audio/transcriptions` | A transcription request whose `multipart/form-data` body arrives in its JSON form: each field a member, repeated fields as lists, and the uploaded `file` as `{"filename": "...", "content_type": "...", "data": "<base64>"}`. The reply is the upstream's JSON, text or event-stream body under its `Content-Type`; it is not base64-encoded. Core refuses a request without the file. |
 | `openai.audio.translations` | `POST /v1/audio/translations` | As for transcriptions, with the same JSON form and reply. |
 | `openai.embeddings` | `POST /v1/embeddings` | An OpenAI Embeddings API request, served by OpenAI-compatible accounts whose wire is Chat or Responses and by Gemini accounts; the reply is one JSON object. |
+| `gemini.embed_content` | `POST /v1beta/models/{model}:embedContent` | A Gemini `EmbedContentRequest` JSON body (the model comes from the URL path and is placed in `request.model`), answered with one `EmbedContentResponse` JSON object. Served by Gemini accounts (passthrough on Gemini API; translated on Vertex AI) and OpenAI-compatible accounts (translated to `POST {base_url}/embeddings` on Chat or Responses wires; passthrough on a Gemini wire). Google's clients may send the client key in `x-goog-api-key` or `?key=`. |
+| `gemini.batch_embed_contents` | `POST /v1beta/models/{model}:batchEmbedContents` | A Gemini `BatchEmbedContentsRequest` JSON body (the model comes from the URL path and is placed in `request.model`), answered with one `BatchEmbedContentsResponse` JSON object. Served by Gemini accounts and OpenAI-compatible accounts as for `gemini.embed_content`. |
 | `gemini.interactions` | `POST /v1beta/interactions` | Gemini's Interactions API request, in Google's own shape; the reply is one JSON object, or server-sent events when it asks for `"stream": true`, which the extension sends with each event's name. The request names a model or an agent: core refuses one that names both or neither, a `stream` that is not a boolean, and a body that is not JSON, removes a `models/` prefix from the model, and sends a request with an agent and no model to any account, with `request.model` empty. The client's `Api-Revision` header is in `native.headers` (`api-revision`). Google's clients may send the client key in `x-goog-api-key` or `?key=`. |
 
 For `codex.models`, `non_codex` clears `prefer_websockets`, `use_responses_lite`,
@@ -1609,7 +1611,7 @@ extension below 0.23 gets none: it cannot promise alive frames.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.34. An extension reports the minor version it
+raise the minor version: this document is version 0.36. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1652,8 +1654,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.33 | Canonical output media events (`media` event and `media` field; [Events](#events)). |
 | 0.34 | Upstream rate-limit response headers on `response.start` (`response.headers`) and `error` (`error.headers`; [Events](#events), [Errors](#errors)). |
 | 0.35 | Multi-candidate request count (`options.candidate_count`) and candidate reply events (`candidate` event and `candidate` field; [Events](#events)). |
+| 0.36 | Gemini embedding endpoint formats (`gemini.embed_content` and `gemini.batch_embed_contents`; [`endpoint`](#endpoint)). |
 
-## What version 0.34 leaves out
+## What version 0.36 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

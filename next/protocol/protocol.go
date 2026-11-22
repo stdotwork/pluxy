@@ -48,8 +48,21 @@ const Version = 0
 // canonical output media events (llm.EventMedia and llm.Event.Media); minor 34 adds upstream
 // rate-limit response headers on response.start and error (llm.ResponseInfo.Headers and
 // llm.Error.Headers); minor 35 adds multi-candidate request counts and candidate reply events
-// (llm.Options.CandidateCount, llm.EventCandidate and llm.Event.Candidate).
-const Minor = 35
+// (llm.Options.CandidateCount, llm.EventCandidate and llm.Event.Candidate); minor 36 adds Gemini
+// embedding endpoint formats (FormatGeminiEmbedContent and FormatGeminiBatchEmbedContents).
+const Minor = 36
+
+// Endpoint formats added in protocol minor 36.
+const (
+	// FormatGeminiEmbedContent is Gemini's single-content embedding endpoint,
+	// POST /v1beta/models/{model}:embedContent: a Gemini EmbedContentRequest JSON body,
+	// answered with one EmbedContentResponse JSON object.
+	FormatGeminiEmbedContent = "gemini.embed_content"
+	// FormatGeminiBatchEmbedContents is Gemini's batch embedding endpoint,
+	// POST /v1beta/models/{model}:batchEmbedContents: a Gemini BatchEmbedContentsRequest JSON
+	// body, answered with one BatchEmbedContentsResponse JSON object.
+	FormatGeminiBatchEmbedContents = "gemini.batch_embed_contents"
+)
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
