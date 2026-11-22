@@ -38,8 +38,9 @@ const defaultAPIRevision = "2026-05-20"
 // maxInteractionsReply limits what is read of an upstream's whole (not streamed) reply.
 const maxInteractionsReply = 64 << 20
 
-// endpoint serves endpoint calls: OpenAI embeddings, OpenAI Images API generations, Responses
-// compaction on any Gemini account (compact.go), and the Interactions API on an account that opts in.
+// endpoint serves endpoint calls: OpenAI embeddings, Gemini embeddings, OpenAI Images API
+// generations, OpenAI Audio speech and transcriptions, Responses compaction on any Gemini account
+// (compact.go), and the Interactions API on an account that opts in.
 func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 	ctx = withAccountID(ctx, call.Account.ID)
 	format := ""
@@ -55,6 +56,10 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 		return geminiBatchEmbedContents(ctx, call, out)
 	case llm.FormatOpenAIImagesGenerations:
 		return images(ctx, call, out)
+	case llm.FormatOpenAIAudioSpeech:
+		return audioSpeech(ctx, call, out)
+	case llm.FormatOpenAIAudioTranscriptions:
+		return audioTranscriptions(ctx, call, out)
 	case llm.FormatOpenAIResponsesCompact:
 		return compact(ctx, call, out)
 	case llm.FormatGeminiInteractions:
