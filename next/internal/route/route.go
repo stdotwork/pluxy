@@ -1079,10 +1079,12 @@ func (c *call) banned() *llm.Error {
 
 // noAccountEvent is how an endpoint call ends when every account that serves its model refused
 // it as unsupported: today's core finds no usable auth and answers 503 auth_not_found. Other
-// requests keep the refusal: a request-scoped one is about the client's request, and a
-// generate or count refusal is the documented reply of drop_policy and token_count_estimate.
+// requests keep the refusal: a request-scoped one is about the client's request, an endpoint
+// refusal carrying 400 names a request feature the account cannot carry (such as token-ID
+// embeddings on Gemini), and a generate or count refusal is the documented reply of drop_policy
+// and token_count_estimate.
 func (c *call) noAccountEvent(last *llm.Error) llm.Event {
-	if !c.req.Endpoint || last == nil || last.Code != llm.CodeUnsupported || last.Scope == "" || last.Scope == llm.ScopeRequest {
+	if !c.req.Endpoint || last == nil || last.Code != llm.CodeUnsupported || last.Scope == "" || last.Scope == llm.ScopeRequest || last.Status == http.StatusBadRequest {
 		return errorEvent(last)
 	}
 	return errorEvent(&llm.Error{
