@@ -95,7 +95,6 @@ func TestCodeExecutionToCodex(t *testing.T) {
 		a    account
 	}{
 		{"api_openai", settings{BaseURL: "https://api.openai.com/v1"}, account{}},
-		{"chatgpt_codex", settings{}, account{}},
 	}
 
 	for _, tc := range cases {
@@ -394,5 +393,36 @@ func TestCodeExecutionCodexSameFormatPreserved(t *testing.T) {
 	wantChoice := `{"type":"code_interpreter"}`
 	if !bytes.Equal(got.ToolChoice, []byte(wantChoice)) {
 		t.Errorf("native tool_choice changed:\ngot:  %s\nwant: %s", got.ToolChoice, wantChoice)
+	}
+}
+
+// No page says the ChatGPT backend takes code_interpreter, so a translated tool is not sent there.
+func TestCodeExecutionNotSentToChatGPT(t *testing.T) {
+	req, err := anthropicmessages.ParseRequest([]byte(`{"model":"gpt-5.5","max_tokens":9,
+		"messages":[{"role":"user","content":"compute"}],
+		"tools":[{"type":"code_execution_20250825","name":"code_execution"}],
+		"tool_choice":{"type":"tool","name":"code_execution"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := buildRequest(roundTripReq(t, req), "acc1", settings{BaseURL: "https://chatgpt.com/backend-api/codex"}, account{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Tools      []map[string]any `json:"tools"`
+		ToolChoice any              `json:"tool_choice"`
+	}
+	if err := json.Unmarshal(u.body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if findCodeInterpreter(got.Tools) != nil {
+		t.Errorf("code_interpreter sent to the ChatGPT backend: %s", u.body)
+	}
+	if got.ToolChoice != nil {
+		t.Errorf("tool_choice = %v, want none", got.ToolChoice)
+	}
+	if dropped := u.tr.DroppedPaths(); !slices.Contains(dropped, "tools[0]") || !slices.Contains(dropped, "tool_choice") {
+		t.Errorf("dropped = %v, want tools[0] and tool_choice", dropped)
 	}
 }

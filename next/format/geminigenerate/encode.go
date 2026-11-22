@@ -186,6 +186,11 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 				droppedCodeExec = true
 				continue
 			}
+			if rf := o.ResponseFormat; rf != nil && (rf.Type == llm.ResponseFormatJSONObject || rf.Type == llm.ResponseFormatJSONSchema) && !combinesStructuredOutput(req.Model) {
+				e.lose(llm.LossDropped, p, fmt.Sprintf("GenerateContent model %q does not combine codeExecution with structured output", req.Model))
+				droppedCodeExec = true
+				continue
+			}
 			tools = append(tools, json.RawMessage(`{"codeExecution":{}}`))
 			for _, l := range rawjson.CodeExecutionLosses(t, p, format) {
 				e.losses = llm.AddLoss(e.losses, l)
@@ -746,6 +751,18 @@ func supportsGoogleSearch(model string) bool {
 	}
 	for _, family := range googleSearchModels {
 		if m == family || strings.HasPrefix(m, family+"-") {
+			return true
+		}
+	}
+	return false
+}
+
+// combinesStructuredOutput reports whether model takes structured output beside a built-in tool:
+// only the Gemini 3 and 4 series (https://ai.google.dev/gemini-api/docs/structured-output#tools).
+func combinesStructuredOutput(model string) bool {
+	m := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(model)), "models/")
+	for _, series := range []string{"gemini-3-", "gemini-3.", "gemini-4-", "gemini-4."} {
+		if strings.HasPrefix(m, series) {
 			return true
 		}
 	}

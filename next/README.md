@@ -935,11 +935,11 @@ search on Claude.
 `code_execution_*`, or Gemini `codeExecution` — carries across those formats as the canonical
 `code_execution` tool (protocol minor 30) and maps to `code_execution_20250825` on Anthropic
 (`api.anthropic.com`, Claude 4.5+ and `claude-mythos-preview`, requiring no beta header),
-`code_interpreter` with `{"container":{"type":"auto"}}` on OpenAI Responses (`api.openai.com` and
-`chatgpt.com`, models whose OpenAI model pages list `code_interpreter`), and `codeExecution` on
-Gemini GenerateContent (`generativelanguage.googleapis.com` and Google's Vertex AI hosts,
-documented Gemini model families, dropped beside `functionDeclarations` and combined with
-`googleSearch`). Chat Completions has no code execution tool and drops it with a loss. Third-party
+`code_interpreter` with `{"container":{"type":"auto"}}` on OpenAI Responses (`api.openai.com`, not
+the ChatGPT backend, on models whose OpenAI model pages list `code_interpreter` and the Responses
+endpoint), and `codeExecution` on Gemini GenerateContent (`generativelanguage.googleapis.com` and
+Google's Vertex AI hosts, documented Gemini model families, dropped beside `functionDeclarations`,
+dropped beside structured output before Gemini 3, and combined with `googleSearch`). Chat Completions has no code execution tool and drops it with a loss. Third-party
 hosts, unlisted models, and provider-specific settings (explicit containers, `file_ids`,
 `memory_limit`, `network_policy`, `cache_control`, `defer_loading`, `strict`, `allowed_callers`)
 are reported as dropped. A forced choice of the code tool (`{"type":"code_interpreter"}` on

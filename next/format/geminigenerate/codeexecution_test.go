@@ -71,3 +71,41 @@ func TestCodeExecutionToolChoiceGemini(t *testing.T) {
 		t.Errorf("own Gemini tool: unexpected losses %+v", lossesOwn)
 	}
 }
+
+// Google documents structured output beside a built-in tool only on Gemini 3 and 4.
+func TestCodeExecutionWithStructuredOutput(t *testing.T) {
+	for model, want := range map[string]bool{
+		"gemini-2.5-flash":      false,
+		"gemini-2.5-pro":        false,
+		"gemini-2.0-flash":      false,
+		"models/gemini-2.5-pro": false,
+		"gemini-3-flash":        true,
+		"gemini-3.8-flash":      true,
+		"gemini-4-neon":         true,
+	} {
+		t.Run(model, func(t *testing.T) {
+			req, err := openairesponses.ParseRequest([]byte(`{"model":"` + model + `","input":"compute",
+				"text":{"format":{"type":"json_schema","name":"r","schema":{"type":"object"}}},
+				"tools":[{"type":"code_interpreter","container":{"type":"auto"}}]}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, losses, err := geminigenerate.EncodeRequestWith(req, geminigenerate.EncodeOptions{CodeExecution: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got struct {
+				Tools []map[string]json.RawMessage `json:"tools"`
+			}
+			if err := json.Unmarshal(body, &got); err != nil {
+				t.Fatal(err)
+			}
+			if sent := len(got.Tools) == 1 && got.Tools[0]["codeExecution"] != nil; sent != want {
+				t.Errorf("codeExecution sent = %v, want %v (body: %s)", sent, want, body)
+			}
+			if lost := slices.Contains((&llm.Translation{Losses: losses}).DroppedPaths(), "tools[0]"); lost == want {
+				t.Errorf("tools[0] dropped = %v with sent = %v: %+v", lost, want, losses)
+			}
+		})
+	}
+}
