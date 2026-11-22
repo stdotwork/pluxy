@@ -130,6 +130,124 @@ func TestApplyEffort(t *testing.T) {
 	}
 }
 
+func TestApplyEffortSnakeCase(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		model     string
+		effort    string
+		body      string
+		wantKey   string
+		absentKey string
+		wantTCKey string
+		absentTC  string
+		wantTemp  float64
+		wantTC    string
+	}{
+		{
+			name:      "snake_case generation_config and thinking_config",
+			model:     "gemini-4-neon",
+			effort:    "xhigh",
+			body:      `{"contents":[],"generation_config":{"temperature":0.5,"thinking_config":{"include_thoughts":false,"thinking_level":"low"}}}`,
+			wantKey:   "generation_config",
+			absentKey: "generationConfig",
+			wantTCKey: "thinking_config",
+			absentTC:  "thinkingConfig",
+			wantTemp:  0.5,
+			wantTC:    `{"includeThoughts":false,"thinkingLevel":"xhigh"}`,
+		},
+		{
+			name:      "snake_case generation_config without thinking_config",
+			model:     "gemini-4-neon",
+			effort:    "high",
+			body:      `{"contents":[],"generation_config":{"temperature":0.5}}`,
+			wantKey:   "generation_config",
+			absentKey: "generationConfig",
+			wantTCKey: "thinkingConfig",
+			absentTC:  "thinking_config",
+			wantTemp:  0.5,
+			wantTC:    `{"includeThoughts":true,"thinkingLevel":"high"}`,
+		},
+		{
+			name:      "camelCase generationConfig with snake_case thinking_config",
+			model:     "gemini-2.5-pro",
+			effort:    "high",
+			body:      `{"contents":[],"generationConfig":{"temperature":0.5,"thinking_config":{"include_thoughts":false,"thinking_budget":1024}}}`,
+			wantKey:   "generationConfig",
+			absentKey: "generation_config",
+			wantTCKey: "thinking_config",
+			absentTC:  "thinkingConfig",
+			wantTemp:  0.5,
+			wantTC:    `{"includeThoughts":false,"thinkingBudget":24576}`,
+		},
+		{
+			name:      "null camelCase falls back to snake_case without duplicates",
+			model:     "gemini-4-neon",
+			effort:    "high",
+			body:      `{"contents":[],"generationConfig":null,"generation_config":{"temperature":0.5,"thinkingConfig":null,"thinking_config":{"include_thoughts":false}}}`,
+			wantKey:   "generation_config",
+			absentKey: "generationConfig",
+			wantTCKey: "thinking_config",
+			absentTC:  "thinkingConfig",
+			wantTemp:  0.5,
+			wantTC:    `{"includeThoughts":false,"thinkingLevel":"high"}`,
+		},
+		{
+			name:      "camelCase wins when both spellings are set",
+			model:     "gemini-4-neon",
+			effort:    "high",
+			body:      `{"contents":[],"generationConfig":{"temperature":0.5,"thinkingConfig":{"includeThoughts":false}},"generation_config":{"temperature":0.9,"thinking_config":{"include_thoughts":true}}}`,
+			wantKey:   "generationConfig",
+			absentKey: "generation_config",
+			wantTCKey: "thinkingConfig",
+			absentTC:  "thinking_config",
+			wantTemp:  0.5,
+			wantTC:    `{"includeThoughts":false,"thinkingLevel":"high"}`,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			out, losses, ok, err := ApplyEffortReport([]byte(c.body), c.model, c.effort)
+			if err != nil || !ok {
+				t.Fatalf("ApplyEffortReport() ok=%v err=%v", ok, err)
+			}
+			if len(losses) != 0 {
+				t.Errorf("losses = %+v, want none", losses)
+			}
+			var top map[string]json.RawMessage
+			if err := json.Unmarshal(out, &top); err != nil {
+				t.Fatalf("unmarshal out: %v (%s)", err, out)
+			}
+			if _, exists := top[c.absentKey]; exists {
+				t.Errorf("out has duplicate key %q: %s", c.absentKey, out)
+			}
+			genRaw, exists := top[c.wantKey]
+			if !exists {
+				t.Fatalf("out missing %q: %s", c.wantKey, out)
+			}
+			var gen map[string]json.RawMessage
+			if err := json.Unmarshal(genRaw, &gen); err != nil {
+				t.Fatalf("unmarshal %s: %v", c.wantKey, err)
+			}
+			if _, exists := gen[c.absentTC]; exists {
+				t.Errorf("%s has duplicate key %q: %s", c.wantKey, c.absentTC, genRaw)
+			}
+			var temp float64
+			if err := json.Unmarshal(gen["temperature"], &temp); err != nil || temp != c.wantTemp {
+				t.Errorf("temperature = %s, want %v", gen["temperature"], c.wantTemp)
+			}
+			if string(gen[c.wantTCKey]) != c.wantTC {
+				t.Errorf("%s = %s, want %s (full out: %s)", c.wantTCKey, gen[c.wantTCKey], c.wantTC, out)
+			}
+		})
+	}
+
+	// Non-thinking model body stays byte-identical.
+	raw := `{"contents":[],"generation_config":{"temperature":0.5}}`
+	out, losses, ok, err := ApplyEffortReport([]byte(raw), "gemini-2.0-flash", "high")
+	if err != nil || ok || len(losses) != 0 || string(out) != raw {
+		t.Errorf("non-thinking model: out=%s losses=%+v ok=%v err=%v", out, losses, ok, err)
+	}
+}
+
 func TestApplyEffortReport(t *testing.T) {
 	body := []byte(`{"contents":[]}`)
 	for _, c := range []struct {

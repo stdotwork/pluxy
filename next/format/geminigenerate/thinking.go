@@ -232,9 +232,13 @@ func ApplyEffortReport(body []byte, model, effort string) ([]byte, []llm.Loss, b
 	if err := json.Unmarshal(body, &m); err != nil {
 		return nil, nil, false, err
 	}
+	if m == nil {
+		m = map[string]json.RawMessage{}
+	}
+	genKey, genRaw := fieldForWrite(m, "generationConfig", "generation_config")
 	gen := map[string]json.RawMessage{}
-	if raw, ok := m["generationConfig"]; ok && !isNull(raw) {
-		if err := json.Unmarshal(raw, &gen); err != nil {
+	if len(genRaw) > 0 && !isNull(genRaw) {
+		if err := json.Unmarshal(genRaw, &gen); err != nil {
 			return nil, nil, false, err
 		}
 	}
@@ -243,11 +247,27 @@ func ApplyEffortReport(body []byte, model, effort string) ([]byte, []llm.Loss, b
 	} else if include {
 		cfg["includeThoughts"] = true
 	}
+	tcKey, _ := fieldForWrite(gen, "thinkingConfig", "thinking_config")
 	b, _ := json.Marshal(cfg)
-	gen["thinkingConfig"] = b
-	m["generationConfig"], _ = json.Marshal(gen)
+	gen[tcKey] = b
+	m[genKey], _ = json.Marshal(gen)
 	out, err := json.Marshal(m)
 	return out, losses, err == nil, err
+}
+
+// fieldForWrite picks which spelling of a ProtoJSON field to update in m: camelCase unless only
+// snake_case is present (or camelCase is null and snake_case is set). Any alternate spelling is
+// removed so the edited object never carries both spellings of one field.
+func fieldForWrite(m map[string]json.RawMessage, camelName, snakeName string) (string, json.RawMessage) {
+	if raw, ok := m[camelName]; ok && !isNull(raw) {
+		delete(m, snakeName)
+		return camelName, raw
+	}
+	if raw, ok := m[snakeName]; ok {
+		delete(m, camelName)
+		return snakeName, raw
+	}
+	return camelName, m[camelName]
 }
 
 func existingIncludeThoughts(gen map[string]json.RawMessage) (bool, bool) {
