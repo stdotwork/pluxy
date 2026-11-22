@@ -174,8 +174,11 @@ func TestCompactThroughExtension(t *testing.T) {
 	if u.InputTokens != 170 || u.OutputTokens != 276 || u.TotalTokens != 446 || u.InputTokensDetails.CachedTokens != 20 {
 		t.Errorf("reply usage %+v; want 170 in (20 cached), 276 out, 446 total", u)
 	}
-	if end.Usage == nil || end.Usage.InputTokens == nil || *end.Usage.InputTokens != 170 || end.Usage.OutputTokens == nil || *end.Usage.OutputTokens != 276 {
-		t.Errorf("finish usage %+v; want 170 in, 276 out", end.Usage)
+	if end.Usage == nil || end.Usage.InputTokens == nil || *end.Usage.InputTokens != 170 ||
+		end.Usage.OutputTokens == nil || *end.Usage.OutputTokens != 276 ||
+		end.Usage.CachedInputTokens == nil || *end.Usage.CachedInputTokens != 20 ||
+		end.Usage.CacheWriteInputTokens == nil || *end.Usage.CacheWriteInputTokens != 6 {
+		t.Errorf("finish usage %+v; want 170 in, 276 out, 20 cached, 6 cache write", end.Usage)
 	}
 }
 
@@ -266,4 +269,137 @@ func TestCompactEndingOnToolOutput(t *testing.T) {
 		len(sent.Messages[2].Content) != 1 || sent.Messages[2].Content[0].Type != "tool_result" {
 		t.Errorf("upstream body %s; want the conversation ending on the tool result", got)
 	}
+}
+
+// compactionReply preserves cache-write token counts in Usage and leaves counts nil when the
+// upstream omits them or omits usage altogether.
+func TestCompactionReplyUsage(t *testing.T) {
+	base := `{"id":"msg_u","type":"message","role":"assistant","model":"claude-opus-4-6",` +
+		`"content":[{"type":"compaction","content":"Short summary."}],"stop_reason":"compaction"`
+
+	t.Run("iterations with cache writes", func(t *testing.T) {
+		raw := base + `,"usage":{"input_tokens":0,"output_tokens":0,"iterations":[` +
+			`{"type":"compaction","input_tokens":100,"output_tokens":50,"cache_read_input_tokens":10,"cache_creation_input_tokens":4},` +
+			`{"type":"compaction","input_tokens":44,"output_tokens":226,"cache_read_input_tokens":10,"cache_creation_input_tokens":2}]}}`
+		_, u, err := compactionReply([]byte(raw), "claude-opus-4-6", 1700000000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u == nil || u.InputTokens == nil || *u.InputTokens != 170 ||
+			u.OutputTokens == nil || *u.OutputTokens != 276 ||
+			u.CachedInputTokens == nil || *u.CachedInputTokens != 20 ||
+			u.CacheWriteInputTokens == nil || *u.CacheWriteInputTokens != 6 {
+			t.Fatalf("usage = %+v; want 170 in, 276 out, 20 cached, 6 cache write", u)
+		}
+	})
+
+	t.Run("iterations without cache fields leave cache counts nil", func(t *testing.T) {
+		raw := base + `,"usage":{"input_tokens":0,"output_tokens":0,"iterations":[{"type":"compaction","input_tokens":144,"output_tokens":276}]}}`
+		_, u, err := compactionReply([]byte(raw), "claude-opus-4-6", 1700000000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u == nil || u.InputTokens == nil || *u.InputTokens != 144 ||
+			u.OutputTokens == nil || *u.OutputTokens != 276 ||
+			u.CachedInputTokens != nil || u.CacheWriteInputTokens != nil {
+			t.Fatalf("usage = %+v; want 144 in, 276 out, nil cached, nil cache write", u)
+		}
+	})
+
+	t.Run("top-level usage without iterations", func(t *testing.T) {
+		raw := base + `,"usage":{"input_tokens":50,"output_tokens":25,"cache_creation_input_tokens":12}}`
+		_, u, err := compactionReply([]byte(raw), "claude-opus-4-6", 1700000000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u == nil || u.InputTokens == nil || *u.InputTokens != 62 ||
+			u.OutputTokens == nil || *u.OutputTokens != 25 ||
+			u.CachedInputTokens != nil ||
+			u.CacheWriteInputTokens == nil || *u.CacheWriteInputTokens != 12 {
+			t.Fatalf("usage = %+v; want 62 in, 25 out, nil cached, 12 cache write", u)
+		}
+	})
+
+	t.Run("missing usage returns nil", func(t *testing.T) {
+		raw := base + `}`
+		_, u, err := compactionReply([]byte(raw), "claude-opus-4-6", 1700000000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u != nil {
+			t.Fatalf("usage = %+v; want nil when upstream omitted usage", u)
+		}
+	})
+
+	t.Run("null usage returns nil", func(t *testing.T) {
+		raw := base + `,"usage":null}`
+		_, u, err := compactionReply([]byte(raw), "claude-opus-4-6", 1700000000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u != nil {
+			t.Fatalf("usage = %+v; want nil when upstream sent null usage", u)
+		}
+	})
+
+	t.Run("empty usage object leaves all counts nil", func(t *testing.T) {
+		raw := base + `,"usage":{}}`
+		_, u, err := compactionReply([]byte(raw), "claude-opus-4-6", 1700000000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if u == nil || u.InputTokens != nil || u.OutputTokens != nil || u.CachedInputTokens != nil || u.CacheWriteInputTokens != nil {
+			t.Fatalf("usage = %+v; want all counts nil for empty usage object", u)
+		}
+	})
+}
+
+// A 200 reply whose JSON body is Anthropic's error object is surfaced with the upstream's error
+// type, message and raw body, instead of becoming "Claude wrote no compaction summary".
+func TestCompactErrorObjectOn200(t *testing.T) {
+	t.Run("through extension", func(t *testing.T) {
+		const errBody = `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_123"}`
+		srv := claudetest.New(t)
+		srv.Messages = func(w http.ResponseWriter, r *http.Request, req claudetest.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, errBody)
+		}
+		ext := startExtension(t)
+		evs := events(t, ext.Endpoint(context.Background(), compactAccount(srv), compactRequest(compactBody)))
+		end := evs[len(evs)-1]
+		if end.Type != llm.EventError || end.Error == nil {
+			t.Fatalf("call ended with %+v, want an error", end)
+		}
+		if end.Error.Code != llm.CodeUpstream || end.Error.ProviderCode != "overloaded_error" || end.Error.Message != "Overloaded" {
+			t.Errorf("error = %+v; want upstream overloaded_error with message Overloaded", end.Error)
+		}
+		if string(end.Error.Raw) != errBody {
+			t.Errorf("error raw = %s; want %s", end.Error.Raw, errBody)
+		}
+	})
+
+	t.Run("context overflow error on 200", func(t *testing.T) {
+		const errBody = `{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 210000 tokens > 200000 maximum"}}`
+		_, _, err := compactionReply([]byte(errBody), "claude-opus-4-6", 1700000000)
+		e, ok := err.(*llm.Error)
+		if !ok || e == nil {
+			t.Fatalf("err = %v, want *llm.Error", err)
+		}
+		if e.Code != llm.CodeInvalidRequest || e.Status != http.StatusBadRequest ||
+			e.Scope != llm.ScopeRequest || e.ProviderCode != llm.ProviderContextLengthExceeded {
+			t.Errorf("error = %+v; want 400 invalid_request context_length_exceeded on request scope", e)
+		}
+	})
+
+	t.Run("error object without message uses fallback", func(t *testing.T) {
+		const errBody = `{"type":"error","error":{}}`
+		_, _, err := compactionReply([]byte(errBody), "claude-opus-4-6", 1700000000)
+		e, ok := err.(*llm.Error)
+		if !ok || e == nil {
+			t.Fatalf("err = %v, want *llm.Error", err)
+		}
+		if e.Code != llm.CodeUpstream || e.Message != "upstream reported an error" || string(e.Raw) != errBody {
+			t.Errorf("error = %+v; want upstream fallback message and raw body", e)
+		}
+	})
 }
