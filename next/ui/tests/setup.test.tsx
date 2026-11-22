@@ -172,6 +172,7 @@ function view(
       choices={more.choices ?? {}}
       results={results}
       provider={hasProvider(setup, results, more.packages)}
+      packages={more.packages}
       accounts={more.accounts ?? 0}
       bring={
         more.bringing && {
@@ -460,8 +461,36 @@ test("with the only installed provider disabled, the page offers no sign-in and 
     packages: [pkg({ id: "pluxy/claude", enabled: false, state: "disabled" })],
   });
   expect(disabled).not.toContain('class="add-account stack"');
-  expect(disabled).toContain("This comes after a provider");
-  expect(disabled).toContain("pluxy will run with no provider");
+  // The pick says it is not running and why, in place of the Installed badge.
+  expect(disabled).toContain('data-tone="warn">Installed, not running<');
+  expect(disabled).not.toContain('data-tone="ok">Installed<');
+  expect(disabled).toContain("Claude is installed but turned off.<br/>Look at it on the Extensions page.");
+  // With nothing left to tick, Start and the account part point at Extensions, not at ticking.
+  expect(disabled).toContain(
+    'Claude is installed but not running, so pluxy will run with no provider. You can turn it on or see what went wrong on the <a href="#/extensions">Extensions</a> page.',
+  );
+  expect(disabled).toContain(
+    'This comes after a provider, and the one installed is not running. Look at it on the <a href="#/extensions">Extensions</a> page.',
+  );
+  expect(disabled).not.toContain("Nothing is ticked");
+  expect(disabled).not.toContain("tick one above");
+
+  // A package that crashed names its error; one with none still says it is not running.
+  const crashed = view(installed, {
+    packages: [pkg({ id: "pluxy/claude", state: "crashed", error: "exit status 2" })],
+  });
+  expect(crashed).toContain("Claude was installed but did not start: exit status 2<br/>");
+  const failed = view(installed, { packages: [pkg({ id: "pluxy/claude", state: "failed" })] });
+  expect(failed).toContain("Claude is installed but is not running.<br/>");
+
+  // With another provider still to tick, the page keeps its words about ticking.
+  const another: Setup = { ...installed, picks: [...installed.picks, pick("pluxy/codex", "Codex")] };
+  const tickable = view(another, {
+    packages: [pkg({ id: "pluxy/claude", enabled: false, state: "disabled" })],
+  });
+  expect(tickable).toContain('data-tone="warn">Installed, not running<');
+  expect(tickable).toContain("Nothing is ticked");
+  expect(tickable).toContain("tick one above and press Start");
   expect(primary(disabled)).toEqual(["Start without a provider"]);
   expect(disabled).toContain('data-variant="quiet">Finish</button>');
 });
