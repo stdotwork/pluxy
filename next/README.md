@@ -832,11 +832,11 @@ subscription's token an hour before it expires.
 | `model_level_cooling` | `true` keeps a used-up shared subscription window (5-hour or 7-day) on the model that hit it, so the account's other models stay in use; default `false` blocks the whole account. Today's `claude.model-level-cooling`. |
 | `cache_ttl` | Lifetime of `cache_control` markers pluxy adds to translated requests that set none: `"5m"` (default) or `"1h"`. |
 
-A Messages request passes through with its body kept as the client wrote it—so thinking blocks,
-signatures, `cache_control` markers and sampling settings arrive intact—apart from the repairs
-every body gets (empty domain lists removed from built-in web search tools, invalid tool call IDs
-replaced, conversation turns repaired and thinking settings fitted to the model, each reported),
-plus a thinking suffix or `rebuild_mid_system_message` when set. Its `anthropic-version`,
+A Messages request passes through with its body kept as the client wrote it, so thinking blocks,
+signatures, `cache_control` markers and sampling settings arrive intact. The exceptions are the
+repairs every body gets (empty domain lists removed from built-in web search tools, invalid tool
+call IDs replaced, and, each reported, conversation turns repaired and thinking settings fitted to
+the model), plus a thinking suffix or `rebuild_mid_system_message` when set. Its `anthropic-version`,
 `anthropic-beta` and identification headers (`User-Agent`, `X-App`, the `X-Stainless-*` headers of
 Anthropic's SDKs, `X-Claude-Code-Session-Id`, `X-Client-App` and
 `X-Anthropic-Additional-Protection`; and, only from a request that names itself as Claude Code
