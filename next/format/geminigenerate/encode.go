@@ -181,7 +181,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	var decls []json.RawMessage
 	var tools []json.RawMessage
 	hasOwnTools := false
-	droppedCodeExec := false
+	droppedBuiltIn := false
 	for i, t := range req.Tools {
 		p := pathOf(t.Origin, fmt.Sprintf("tools[%d]", i))
 		if t.Type == llm.ToolCodeExecution {
@@ -192,12 +192,12 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			}
 			if !opts.CodeExecution {
 				e.lose(llm.LossDropped, p, llm.ToolCodeExecutionUnsent)
-				droppedCodeExec = true
+				droppedBuiltIn = true
 				continue
 			}
 			if !supportsCodeExecution(req.Model) {
 				e.lose(llm.LossDropped, p, fmt.Sprintf("GenerateContent model %q does not support codeExecution", req.Model))
-				droppedCodeExec = true
+				droppedBuiltIn = true
 				continue
 			}
 			if hasFunctionTools {
@@ -205,12 +205,12 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 				// the Interactions API preview (https://aistudio.google.com/docs/tool-combination),
 				// not on GenerateContent; keep the function declarations and drop codeExecution.
 				e.lose(llm.LossDropped, p, "GenerateContent does not combine codeExecution with functionDeclarations")
-				droppedCodeExec = true
+				droppedBuiltIn = true
 				continue
 			}
 			if rf := o.ResponseFormat; rf != nil && (rf.Type == llm.ResponseFormatJSONObject || rf.Type == llm.ResponseFormatJSONSchema) && !combinesStructuredOutput(req.Model) {
 				e.lose(llm.LossDropped, p, fmt.Sprintf("GenerateContent model %q does not combine codeExecution with structured output", req.Model))
-				droppedCodeExec = true
+				droppedBuiltIn = true
 				continue
 			}
 			tools = append(tools, json.RawMessage(`{"codeExecution":{}}`))
@@ -242,6 +242,11 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 				// tools (such as `googleSearch`) with non-search tools (such as function calling ...)
 				// in the same `generateContent` request." Keep the function tools and drop search with a loss.
 				e.lose(llm.LossDropped, p, "GenerateContent does not combine googleSearch with functionDeclarations")
+				continue
+			}
+			if rf := o.ResponseFormat; rf != nil && (rf.Type == llm.ResponseFormatJSONObject || rf.Type == llm.ResponseFormatJSONSchema) && !combinesStructuredOutput(req.Model) {
+				e.lose(llm.LossDropped, p, fmt.Sprintf("GenerateContent model %q does not combine googleSearch with structured output", req.Model))
+				droppedBuiltIn = true
 				continue
 			}
 			tools = append(tools, json.RawMessage(`{"googleSearch":{}}`))
@@ -293,7 +298,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 		} else if o.ToolChoice != nil && (o.ToolChoice.Mode == llm.ToolChoiceRequired || o.ToolChoice.Mode == llm.ToolChoiceTool) {
 			e.lose(llm.LossDropped, "tool_choice", "GenerateContent functionCallingConfig cannot force built-in tools without functionDeclarations")
 		}
-	} else if droppedCodeExec && o.ToolChoice != nil && (o.ToolChoice.Mode == llm.ToolChoiceRequired || o.ToolChoice.Mode == llm.ToolChoiceTool) {
+	} else if droppedBuiltIn && o.ToolChoice != nil && (o.ToolChoice.Mode == llm.ToolChoiceRequired || o.ToolChoice.Mode == llm.ToolChoiceTool) {
 		e.lose(llm.LossDropped, "tool_choice", "GenerateContent has no tools left to force")
 	}
 
