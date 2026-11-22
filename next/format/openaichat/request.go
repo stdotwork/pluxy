@@ -1164,7 +1164,7 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 				sendable = true
 			}
 		case llm.PartImage:
-			if it.Role == llm.RoleAssistant && (p.Origin == nil || p.Origin.Format != format) {
+			if it.Role == llm.RoleAssistant {
 				e.lose(llm.LossDropped, pp, "Chat Completions does not accept image parts in assistant messages")
 				dropped = true
 				continue

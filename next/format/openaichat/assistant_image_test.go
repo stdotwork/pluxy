@@ -12,8 +12,8 @@ import (
 
 // OpenAI's Chat Completions create reference allows only text and refusal parts in assistant
 // message content (https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create).
-// A translated assistant image is dropped with a loss at that part's path, while a Chat client's
-// own body and user-role images stay unchanged.
+// Any assistant image that reaches EncodeRequest is dropped with a loss at that part's path,
+// leaving content "" when no tool calls are present (never []), while user-role images stay unchanged.
 func TestEncodeAssistantImage(t *testing.T) {
 	t.Run("messages_text_and_image", func(t *testing.T) {
 		req, err := anthropicmessages.ParseRequest([]byte(`{
@@ -150,7 +150,7 @@ func TestEncodeAssistantImage(t *testing.T) {
 		}
 	})
 
-	t.Run("same_format_chat_assistant_image_byte_identical", func(t *testing.T) {
+	t.Run("chat_origin_assistant_image_dropped_to_empty_content", func(t *testing.T) {
 		in := `{"model":"m","messages":[{"role":"user","content":"draw"},{"role":"assistant","content":[{"type":"image_url","image_url":{"url":"https://example.com/a.png"}}]}],"stream":false}`
 		req, err := openaichat.ParseRequest([]byte(in))
 		if err != nil {
@@ -160,11 +160,20 @@ func TestEncodeAssistantImage(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(losses) != 0 {
-			t.Errorf("losses = %+v, want none for same-format Chat body", losses)
+		if len(losses) != 1 || losses[0].Kind != llm.LossDropped || losses[0].Path != "messages[1].content[0]" {
+			t.Fatalf("losses = %+v, want one dropped loss at messages[1].content[0]", losses)
 		}
-		if string(body) != in {
-			t.Errorf("body =\n got %s\nwant %s", body, in)
+		var out struct {
+			Messages []struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.Unmarshal(body, &out); err != nil {
+			t.Fatalf("body %s: %v", body, err)
+		}
+		if len(out.Messages) != 2 || out.Messages[1].Role != "assistant" || string(out.Messages[1].Content) != `""` {
+			t.Errorf("messages = %+v in body %s, want assistant with content \"\"", out.Messages, body)
 		}
 	})
 
