@@ -206,3 +206,67 @@ func TestCallWithoutArgsIsACall(t *testing.T) {
 		t.Errorf("finish %+v, want tool calls", finish)
 	}
 }
+
+// A functionResponse with neither a name nor an id answers the earliest call still waiting, of
+// any name, so on an upstream that pairs results by id it reaches its call. Responses that carry
+// a name or an id pair as before.
+func TestParseNamelessResponsePairsWithEarliestCall(t *testing.T) {
+	call := func(name, id string) string {
+		idField := ""
+		if id != "" {
+			idField = `"id":"` + id + `",`
+		}
+		return `{"functionCall":{` + idField + `"name":"` + name + `","args":{}}}`
+	}
+	response := func(name, id string) string {
+		fields := `"response":{"result":"ok"}`
+		if name != "" {
+			fields = `"name":"` + name + `",` + fields
+		}
+		if id != "" {
+			fields = `"id":"` + id + `",` + fields
+		}
+		return `{"functionResponse":{` + fields + `}}`
+	}
+	for _, c := range []struct {
+		name      string
+		calls     []string
+		responses []string
+		want      []string
+	}{
+		{"across name queues", []string{call("a", "ca"), call("b", "cb"), call("a", "ca2")},
+			[]string{response("", ""), response("", ""), response("", "")}, []string{"ca", "cb", "ca2"}},
+		{"after a named response took a later call", []string{call("a", "ca"), call("b", "cb")},
+			[]string{response("b", ""), response("", "")}, []string{"cb", "ca"}},
+		{"after an id response took the earliest call", []string{call("a", "ca"), call("b", "cb")},
+			[]string{response("", "ca"), response("", "")}, []string{"ca", "cb"}},
+		{"calls without ids", []string{call("a", ""), call("b", "")},
+			[]string{response("", ""), response("", "")}, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			body := `{"contents":[{"role":"user","parts":[{"text":"go"}]},` +
+				`{"role":"model","parts":[` + strings.Join(c.calls, ",") + `]},` +
+				`{"role":"user","parts":[` + strings.Join(c.responses, ",") + `]}]}`
+			req, err := ParseRequest("gemini-2.5-pro", false, []byte(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var calls, results []string
+			for _, it := range req.Items {
+				switch it.Type {
+				case llm.ItemTypeToolCall:
+					calls = append(calls, it.CallID)
+				case llm.ItemTypeToolResult:
+					results = append(results, it.CallID)
+				}
+			}
+			want := c.want
+			if want == nil { // ids Gemini did not send are made up: the results must match them
+				want = calls
+			}
+			if strings.Join(results, ",") != strings.Join(want, ",") {
+				t.Errorf("result call IDs %q, want %q (calls %q)", results, want, calls)
+			}
+		})
+	}
+}

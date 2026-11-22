@@ -18,6 +18,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math/big"
 	"slices"
 	"strconv"
@@ -159,7 +160,7 @@ func ParseRequest(model string, stream bool, body []byte) (llm.Request, error) {
 			return llm.Request{}, invalid("contents must be a list")
 		}
 	}
-	p := &parser{pending: map[string][]string{}}
+	p := &parser{pending: map[string][]pendingCall{}}
 	prevRole := ""
 	for i, raw := range contents {
 		items, role, err := p.content(raw, i, prevRole)
@@ -432,9 +433,34 @@ func parseSystem(raw json.RawMessage) (*llm.Item, error) {
 
 // parser reads contents in order. pending holds, per function name, the call ids waiting for
 // their results, so a result without an id pairs with the earliest call of the same name, as
-// Gemini's function-calling guide describes.
+// Gemini's function-calling guide describes. A result with neither name nor id pairs with the
+// earliest waiting call of any name, as the Gemini-upstream repair does; seq numbers the calls in
+// the order they were read, to tell which of several queues holds it.
 type parser struct {
-	pending map[string][]string
+	pending map[string][]pendingCall
+	seq     int
+}
+
+// pendingCall is a call id waiting for its result, and where the call came in the contents.
+type pendingCall struct {
+	id  string
+	seq int
+}
+
+// earliestPending removes and returns the id of the earliest waiting call of any name.
+func (p *parser) earliestPending() (string, bool) {
+	name, best := "", -1
+	for n, q := range p.pending {
+		if len(q) > 0 && (best < 0 || q[0].seq < best) {
+			name, best = n, q[0].seq
+		}
+	}
+	if best < 0 {
+		return "", false
+	}
+	id := p.pending[name][0].id
+	p.pending[name] = p.pending[name][1:]
+	return id, true
 }
 
 // syntheticID returns the id for a call or result Gemini sent without one: deterministic, so the
@@ -592,7 +618,8 @@ func (p *parser) call(pm map[string]json.RawMessage, ci, pi int, path string) (l
 	if id == "" {
 		id = syntheticID("call", ci, pi, fc.Name, args)
 	}
-	p.pending[fc.Name] = append(p.pending[fc.Name], id)
+	p.pending[fc.Name] = append(p.pending[fc.Name], pendingCall{id: id, seq: p.seq})
+	p.seq++
 	arguments := "{}"
 	if !isNull(args) {
 		var buf bytes.Buffer
@@ -607,7 +634,8 @@ func (p *parser) call(pm map[string]json.RawMessage, ci, pi int, path string) (l
 }
 
 // response reads a functionResponse part. Without an id it pairs with the earliest waiting call
-// of the same name, or gets a made-up id when there is none. The output is the response as JSON
+// of the same name; without a name too, with the earliest waiting call of any name. It gets a
+// made-up id when there is none. The output is the response as JSON
 // text, its content when that is all it holds, or its error's value when it reports a failure.
 func (p *parser) response(pm map[string]json.RawMessage, ci, pi int, path string) (llm.Item, error) {
 	fm := object(pm["functionResponse"])
@@ -636,16 +664,31 @@ func (p *parser) response(pm map[string]json.RawMessage, ci, pi int, path string
 	queue := p.pending[fr.Name]
 	switch {
 	case id != "":
-		for i, q := range queue {
-			if q == id {
-				p.pending[fr.Name] = append(queue[:i:i], queue[i+1:]...)
+		// A result without a name still answers its call, whichever name queue holds it.
+		names := []string{fr.Name}
+		if fr.Name == "" {
+			names = slices.Collect(maps.Keys(p.pending))
+		}
+		for _, n := range names {
+			q := p.pending[n]
+			if i := slices.IndexFunc(q, func(c pendingCall) bool { return c.id == id }); i >= 0 {
+				p.pending[n] = append(q[:i:i], q[i+1:]...)
 				break
 			}
 		}
 	case len(queue) > 0:
-		id, p.pending[fr.Name] = queue[0], queue[1:]
+		id, p.pending[fr.Name] = queue[0].id, queue[1:]
 	default:
-		id = syntheticID("response", ci, pi, fr.Name, out)
+		earliest := ""
+		ok := false
+		if fr.Name == "" {
+			earliest, ok = p.earliestPending()
+		}
+		if ok {
+			id = earliest
+		} else {
+			id = syntheticID("response", ci, pi, fr.Name, out)
+		}
 	}
 	output := ""
 	switch {
