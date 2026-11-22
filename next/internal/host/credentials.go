@@ -117,17 +117,20 @@ func (l *LoginCall) markSecret(inputs []protocol.LoginInput) {
 // redirect URL), its user name, password and secret query or fragment values
 // (protocol.AccountSecretsWith).
 func (l *LoginCall) addSecrets(input map[string]string) {
+	// pieces.add rebuilds a set of every secret on each call: collect, then add once.
+	var found pieces
 	for k, v := range input {
 		var obj map[string]json.RawMessage
 		switch {
 		case l.secretInputs[k] && json.Unmarshal([]byte(v), &obj) == nil:
-			l.pieces = l.pieces.add(l.ext.accountPieces(protocol.Account{Settings: json.RawMessage(v)}))
+			found = append(found, l.ext.accountPieces(protocol.Account{Settings: json.RawMessage(v)})...)
 		case l.secretInputs[k]:
-			l.pieces = l.pieces.add(protocol.AccountSecrets(protocol.Account{Credential: &protocol.Credential{APIKey: v}}))
+			found = append(found, protocol.AccountSecrets(protocol.Account{Credential: &protocol.Credential{APIKey: v}})...)
 		default:
-			l.pieces = l.pieces.add(protocol.AccountSecretsWith(protocol.Account{}, urlOnly(v)))
+			found = append(found, protocol.AccountSecretsWith(protocol.Account{}, urlOnly(v))...)
 		}
 	}
+	l.pieces = l.pieces.add(found)
 	for k, v := range input {
 		if l.secrets == nil {
 			l.secrets = map[string]string{}
