@@ -136,12 +136,178 @@ func errorOf(raw json.RawMessage, fallback string) *llm.Error {
 type contentBlock struct {
 	Type      string          `json:"type"`
 	ID        string          `json:"id"`
+	ToolUseID string          `json:"tool_use_id"`
 	Name      string          `json:"name"`
 	Text      string          `json:"text"`
 	Think     string          `json:"thinking"`
 	Input     json.RawMessage `json:"input"`
 	Content   json.RawMessage `json:"content"`
 	Citations json.RawMessage `json:"citations"`
+}
+
+// maxCodeExecInput bounds the streamed input_json_delta buffered for a single code execution
+// server_tool_use block so a broken stream cannot grow memory without bound.
+const maxCodeExecInput = 1 << 20
+
+type pendingCodeCall struct {
+	id           string
+	name         string
+	initialInput json.RawMessage
+	partial      strings.Builder
+	overflow     bool
+}
+
+type decodedCodeCall struct {
+	name string
+	code string
+	lang string
+}
+
+func isCodeExecToolName(name string) bool {
+	switch name {
+	case "code_execution", "bash_code_execution", "text_editor_code_execution":
+		return true
+	}
+	return false
+}
+
+func isCodeExecResultBlock(typ string) bool {
+	switch typ {
+	case "code_execution_tool_result", "bash_code_execution_tool_result", "text_editor_code_execution_tool_result":
+		return true
+	}
+	return false
+}
+
+func decodeCodeExecInput(name string, raw json.RawMessage) (code, lang string, ok bool) {
+	if len(raw) == 0 || raw[0] != '{' {
+		return "", "", false
+	}
+	switch name {
+	case "code_execution":
+		var in struct {
+			Code string `json:"code"`
+		}
+		if json.Unmarshal(raw, &in) != nil || in.Code == "" {
+			return "", "", false
+		}
+		return in.Code, "python", true
+	case "bash_code_execution":
+		var in struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal(raw, &in) != nil || in.Command == "" {
+			return "", "", false
+		}
+		return in.Command, "bash", true
+	case "text_editor_code_execution":
+		var in struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal(raw, &in) != nil || in.Command == "" {
+			return "", "", false
+		}
+		compact, err := compactJSON(raw)
+		if err != nil {
+			return "", "", false
+		}
+		return compact, "text_editor", true
+	}
+	return "", "", false
+}
+
+func joinStdoutStderr(stdout, stderr string) string {
+	switch {
+	case stdout == "":
+		return stderr
+	case stderr == "":
+		return stdout
+	case strings.HasSuffix(stdout, "\n"):
+		return stdout + stderr
+	default:
+		return stdout + "\n" + stderr
+	}
+}
+
+func decodeCodeExecResult(blockType string, call decodedCodeCall, raw json.RawMessage) (llm.CodeExecution, bool) {
+	wantName := map[string]string{
+		"code_execution_tool_result":             "code_execution",
+		"bash_code_execution_tool_result":        "bash_code_execution",
+		"text_editor_code_execution_tool_result": "text_editor_code_execution",
+	}[blockType]
+	if wantName == "" || call.name != wantName || len(raw) == 0 || raw[0] != '{' {
+		return llm.CodeExecution{}, false
+	}
+	var head struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(raw, &head) != nil {
+		return llm.CodeExecution{}, false
+	}
+	switch head.Type {
+	case "code_execution_result", "bash_code_execution_result":
+		var res struct {
+			Stdout     string            `json:"stdout"`
+			Stderr     string            `json:"stderr"`
+			ReturnCode *int              `json:"return_code"`
+			Content    []json.RawMessage `json:"content"`
+		}
+		if json.Unmarshal(raw, &res) != nil {
+			return llm.CodeExecution{}, false
+		}
+		return llm.CodeExecution{
+			Code:         call.code,
+			Language:     call.lang,
+			Output:       joinStdoutStderr(res.Stdout, res.Stderr),
+			Failed:       res.ReturnCode != nil && *res.ReturnCode != 0,
+			FilesOmitted: len(res.Content) > 0,
+		}, true
+	case "code_execution_tool_result_error", "bash_code_execution_tool_result_error", "text_editor_code_execution_tool_result_error":
+		var res struct {
+			ErrorCode string `json:"error_code"`
+		}
+		if json.Unmarshal(raw, &res) != nil {
+			return llm.CodeExecution{}, false
+		}
+		return llm.CodeExecution{
+			Code:     call.code,
+			Language: call.lang,
+			Output:   res.ErrorCode,
+			Failed:   true,
+		}, true
+	case "text_editor_code_execution_view_result":
+		var res struct {
+			FileType string `json:"file_type"`
+			Content  string `json:"content"`
+		}
+		if json.Unmarshal(raw, &res) != nil {
+			return llm.CodeExecution{}, false
+		}
+		return llm.CodeExecution{
+			Code:         call.code,
+			Language:     call.lang,
+			Output:       res.Content,
+			FilesOmitted: res.FileType != "" && res.FileType != "text",
+		}, true
+	case "text_editor_code_execution_create_result":
+		return llm.CodeExecution{
+			Code:     call.code,
+			Language: call.lang,
+		}, true
+	case "text_editor_code_execution_str_replace_result":
+		var res struct {
+			Lines []string `json:"lines"`
+		}
+		if json.Unmarshal(raw, &res) != nil {
+			return llm.CodeExecution{}, false
+		}
+		return llm.CodeExecution{
+			Code:     call.code,
+			Language: call.lang,
+			Output:   strings.Join(res.Lines, "\n"),
+		}, true
+	}
+	return llm.CodeExecution{}, false
 }
 
 // extractWebSearchSources reads web_search_result entries from a web_search_tool_result block's
@@ -255,6 +421,9 @@ type StreamDecoder struct {
 	citations map[int][]llm.Citation   // model item index -> web citations collected from citations_delta
 	sources   []llm.Source
 	seenSrc   map[string]bool
+	codeBlock map[int]*pendingCodeCall // upstream block index -> open server_tool_use for code execution
+	codeCalls map[string]decodedCodeCall
+	codeExecs []llm.CodeExecution
 	stop      string
 	usage     json.RawMessage
 }
@@ -267,6 +436,8 @@ func NewStreamDecoder() *StreamDecoder {
 		textLens:  map[int]int{},
 		citations: map[int][]llm.Citation{},
 		seenSrc:   map[string]bool{},
+		codeBlock: map[int]*pendingCodeCall{},
+		codeCalls: map[string]decodedCodeCall{},
 	}
 }
 
@@ -341,6 +512,20 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		if b.Type == "web_search_tool_result" {
 			d.sources = extractWebSearchSources(b.Content, d.seenSrc, d.sources)
 		}
+		if b.Type == "server_tool_use" && b.ID != "" && isCodeExecToolName(b.Name) {
+			d.codeBlock[ev.Index] = &pendingCodeCall{
+				id:           b.ID,
+				name:         b.Name,
+				initialInput: append(json.RawMessage(nil), b.Input...),
+			}
+		} else if isCodeExecResultBlock(b.Type) && b.ToolUseID != "" {
+			if call, ok := d.codeCalls[b.ToolUseID]; ok {
+				delete(d.codeCalls, b.ToolUseID)
+				if ce, ok := decodeCodeExecResult(b.Type, call, b.Content); ok {
+					d.codeExecs = llm.AppendCodeExecution(d.codeExecs, ce)
+				}
+			}
+		}
 		kind := kindOf(b.Type)
 		if kind == "" || (kind == llm.ItemToolCall && (b.ID == "" || b.Name == "")) {
 			return native(), nil
@@ -373,6 +558,16 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 	case "content_block_delta":
 		idx, open := d.items[ev.Index]
 		if !open || ev.Delta == nil {
+			if ev.Delta != nil && ev.Delta.Type == "input_json_delta" {
+				if pc := d.codeBlock[ev.Index]; pc != nil && !pc.overflow {
+					if pc.partial.Len()+len(ev.Delta.PartialJSON) > maxCodeExecInput {
+						pc.overflow = true
+						pc.partial.Reset()
+					} else {
+						pc.partial.WriteString(ev.Delta.PartialJSON)
+					}
+				}
+			}
 			return native(), nil
 		}
 		switch ev.Delta.Type {
@@ -406,6 +601,18 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		// signature_delta, citations_delta and deltas the model has no place for.
 		return native(), nil
 	case "content_block_stop":
+		if pc := d.codeBlock[ev.Index]; pc != nil {
+			delete(d.codeBlock, ev.Index)
+			if !pc.overflow {
+				inRaw := pc.initialInput
+				if pc.partial.Len() > 0 {
+					inRaw = json.RawMessage(pc.partial.String())
+				}
+				if code, lang, ok := decodeCodeExecInput(pc.name, inRaw); ok {
+					d.codeCalls[pc.id] = decodedCodeCall{name: pc.name, code: code, lang: lang}
+				}
+			}
+		}
 		idx, open := d.items[ev.Index]
 		if !open {
 			return native(), nil
@@ -434,7 +641,7 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		d.done = true
 		out = d.closeAll(out)
 		f := finishOf(d.stop)
-		return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(d.usage), Sources: d.sources, Raw: raw}), nil
+		return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(d.usage), Sources: d.sources, CodeExecutions: d.codeExecs, Raw: raw}), nil
 	}
 	// ping, message_start after the first event, and event types added later.
 	return native(), nil
@@ -512,6 +719,8 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 	next := 0
 	var sources []llm.Source
 	seenSrc := map[string]bool{}
+	codeCalls := map[string]decodedCodeCall{}
+	var codeExecs []llm.CodeExecution
 	for i, raw := range m.Content {
 		b := rawjson.Object(raw)
 		var cb contentBlock
@@ -520,6 +729,18 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 		}
 		if cb.Type == "web_search_tool_result" {
 			sources = extractWebSearchSources(cb.Content, seenSrc, sources)
+		}
+		if cb.Type == "server_tool_use" && cb.ID != "" && isCodeExecToolName(cb.Name) {
+			if code, lang, ok := decodeCodeExecInput(cb.Name, cb.Input); ok {
+				codeCalls[cb.ID] = decodedCodeCall{name: cb.Name, code: code, lang: lang}
+			}
+		} else if isCodeExecResultBlock(cb.Type) && cb.ToolUseID != "" {
+			if call, ok := codeCalls[cb.ToolUseID]; ok {
+				delete(codeCalls, cb.ToolUseID)
+				if ce, ok := decodeCodeExecResult(cb.Type, call, cb.Content); ok {
+					codeExecs = llm.AppendCodeExecution(codeExecs, ce)
+				}
+			}
 		}
 		kind := kindOf(cb.Type)
 		if kind == llm.ItemToolCall && (cb.ID == "" || cb.Name == "") {
@@ -590,5 +811,5 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 	}
 	out = append(out, llm.Event{Type: llm.EventNative, Raw: eventJSON(delta)})
 	f := finishOf(m.StopReason)
-	return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(m.Usage), Sources: sources, Raw: append(json.RawMessage(nil), body...)}), nil
+	return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(m.Usage), Sources: sources, CodeExecutions: codeExecs, Raw: append(json.RawMessage(nil), body...)}), nil
 }

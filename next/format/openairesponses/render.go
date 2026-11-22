@@ -716,6 +716,15 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 	case llm.EventFinish:
 		b.finish, b.usage = ev.Finish, ev.Usage
 		b.reportUncitedSources(ev.Sources)
+		if b.upFormat != format && len(ev.CodeExecutions) > 0 {
+			b.lose("code_execution", "code execution results have no safe representation in a Response without an OpenAI container_id")
+			for _, ce := range ev.CodeExecutions {
+				if ce.FilesOmitted {
+					b.lose("code_execution.files", "files, images or code runs past the size limit have no place in a Response")
+					break
+				}
+			}
+		}
 		if err := s.searchesDone(b.endSearches()); err != nil {
 			return err
 		}
@@ -943,6 +952,15 @@ func (a *Aggregator) Add(ev llm.Event) {
 	case llm.EventFinish:
 		b.finish, b.usage = ev.Finish, ev.Usage
 		b.reportUncitedSources(ev.Sources)
+		if b.upFormat != format && len(ev.CodeExecutions) > 0 {
+			b.lose("code_execution", "code execution results have no safe representation in a Response without an OpenAI container_id")
+			for _, ce := range ev.CodeExecutions {
+				if ce.FilesOmitted {
+					b.lose("code_execution.files", "files, images or code runs past the size limit have no place in a Response")
+					break
+				}
+			}
+		}
 		b.endSearches()
 		if f := finalResponse(ev.Raw); b.upFormat == format && f != nil {
 			a.final = f

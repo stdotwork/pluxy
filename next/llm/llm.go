@@ -439,7 +439,10 @@ type Event struct {
 	// Sources, on finish (protocol minor version 31), are the web sources returned by the
 	// upstream's hosted web searches in this reply.
 	Sources Sources `json:"sources,omitempty"`
-	Error   *Error  `json:"error,omitempty"` // error
+	// CodeExecutions, on finish (protocol minor version 32), are the server-side code
+	// execution runs completed during this reply.
+	CodeExecutions CodeExecutions `json:"code_executions,omitempty"`
+	Error          *Error         `json:"error,omitempty"` // error
 
 	// Raw is the upstream data the event came from, for diagnostics. In a native event it is the
 	// event's content: upstream data the model has no place for, such as OpenAI choices after

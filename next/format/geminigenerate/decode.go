@@ -176,6 +176,15 @@ type StreamDecoder struct {
 	seenCit    map[string]bool
 	sources    []llm.Source
 	seenSrc    map[string]bool
+	// Pending executableCode parts waiting for their codeExecutionResult, and completed runs.
+	pendingCode []pendingExecCode
+	codeExecs   []llm.CodeExecution
+}
+
+type pendingExecCode struct {
+	id   string
+	code string
+	lang string
 }
 
 // NewStreamDecoder returns a decoder for one stream.
@@ -423,6 +432,63 @@ func (d *StreamDecoder) part(partIdx int, raw json.RawMessage, out []llm.Event) 
 		idx, out = d.open(llm.ItemReasoning, out, llm.ItemStart{})
 		out = append(out, llm.Event{Type: llm.EventItemEnd, Index: idx, Opaque: &llm.Opaque{Format: format, Data: sig}})
 	}
+	if ecRaw := pm["executableCode"]; !isNull(ecRaw) {
+		var ec struct {
+			ID       string `json:"id"`
+			Language string `json:"language"`
+			Code     string `json:"code"`
+		}
+		if json.Unmarshal(ecRaw, &ec) == nil && ec.Code != "" {
+			lang := strings.ToLower(strings.TrimSpace(ec.Language))
+			if lang == "language_unspecified" {
+				lang = ""
+			}
+			d.pendingCode = append(d.pendingCode, pendingExecCode{id: ec.ID, code: ec.Code, lang: lang})
+		}
+		return out
+	}
+	if resRaw := pm["codeExecutionResult"]; !isNull(resRaw) {
+		var res struct {
+			ID      string `json:"id"`
+			Outcome string `json:"outcome"`
+			Output  string `json:"output"`
+		}
+		if json.Unmarshal(resRaw, &res) == nil {
+			var failed bool
+			validOutcome := false
+			switch res.Outcome {
+			case "OUTCOME_OK":
+				validOutcome = true
+			case "OUTCOME_FAILED", "OUTCOME_DEADLINE_EXCEEDED":
+				validOutcome = true
+				failed = true
+			}
+			if validOutcome {
+				matchIdx := -1
+				if res.ID != "" {
+					for i, pc := range d.pendingCode {
+						if pc.id == res.ID {
+							matchIdx = i
+							break
+						}
+					}
+				} else if len(d.pendingCode) > 0 {
+					matchIdx = 0
+				}
+				if matchIdx >= 0 {
+					pc := d.pendingCode[matchIdx]
+					d.pendingCode = append(d.pendingCode[:matchIdx], d.pendingCode[matchIdx+1:]...)
+					d.codeExecs = llm.AppendCodeExecution(d.codeExecs, llm.CodeExecution{
+						Code:     pc.code,
+						Language: pc.lang,
+						Output:   res.Output,
+						Failed:   failed,
+					})
+				}
+			}
+		}
+		return out
+	}
 	if fc := object(pm["functionCall"]); fc != nil {
 		var call struct {
 			ID   string `json:"id"`
@@ -513,7 +579,7 @@ func (d *StreamDecoder) Close() ([]llm.Event, error) {
 	var out []llm.Event
 	out = d.closeItem(&d.think, out)
 	out = d.closeItem(&d.text, out)
-	return append(out, llm.Event{Type: llm.EventFinish, Finish: d.finish, Usage: d.usage, Sources: d.sources}), nil
+	return append(out, llm.Event{Type: llm.EventFinish, Finish: d.finish, Usage: d.usage, Sources: d.sources, CodeExecutions: d.codeExecs}), nil
 }
 
 // DecodeResponse turns an upstream non-streamed GenerateContentResponse into the events a stream

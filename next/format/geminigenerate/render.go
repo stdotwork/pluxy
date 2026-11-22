@@ -186,7 +186,9 @@ func (b *builder) upstreamData(ev llm.Event) {
 			switch t.Type {
 			case "", "text", "thinking", "tool_use":
 			default:
-				// redacted_thinking, server tool use and results: no place in a Gemini reply.
+				// redacted_thinking, server tool use and results: no place in a Gemini reply. A
+				// Python run is also shown as code parts (codeExecParts), but the blocks themselves
+				// are not carried.
 				b.lose("content."+t.Type, "a Messages content block with no place in a GenerateContentResponse")
 			}
 		}
@@ -283,6 +285,40 @@ func buildGroundingMetadata(segments []citedSegment, sources []llm.Source) obj {
 		gm["groundingSupports"] = supports
 	}
 	return gm
+}
+
+// codeExecParts turns canonical CodeExecution records into Gemini executableCode and
+// codeExecutionResult parts. Gemini's ExecutableCode.language enum has only PYTHON, so a run in
+// another language, such as a shell command, is left out and reported rather than shown as Python.
+// So is a result with no code to pair it with. Omitted files and images are reported as dropped.
+func (b *builder) codeExecParts(runs []llm.CodeExecution) []any {
+	if len(runs) == 0 {
+		return nil
+	}
+	var out []any
+	for _, run := range runs {
+		if run.FilesOmitted {
+			b.lose("code_execution.files", "files, images or code runs past the size limit have no place in a GenerateContentResponse")
+		}
+		if run == (llm.CodeExecution{FilesOmitted: true}) {
+			continue
+		}
+		if run.Code == "" || (run.Language != "" && !strings.EqualFold(run.Language, "python")) {
+			b.lose("code_execution", "GenerateContent executableCode holds only Python code")
+			continue
+		}
+		out = append(out, obj{"executableCode": obj{"language": "PYTHON", "code": run.Code}})
+		outcome := "OUTCOME_OK"
+		if run.Failed {
+			outcome = "OUTCOME_FAILED"
+		}
+		res := obj{"outcome": outcome}
+		if run.Output != "" {
+			res["output"] = run.Output
+		}
+		out = append(out, obj{"codeExecutionResult": res})
+	}
+	return out
 }
 
 // response returns one GenerateContentResponse with the given parts and, when finish is set,
@@ -480,7 +516,7 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 			return s.emit(b.response([]any{obj{"text": "", "thought": true, "thoughtSignature": o.Data}}, nil, nil))
 		}
 	case llm.EventFinish:
-		var parts []any
+		parts := b.codeExecParts(ev.CodeExecutions)
 		for _, idx := range s.order {
 			parts = append(parts, b.callPart(s.calls[idx]))
 		}
@@ -506,15 +542,16 @@ type aggPart struct {
 // Aggregator collects events into a non-streamed GenerateContentResponse. A reply from a Gemini
 // upstream is returned as the upstream sent it.
 type Aggregator struct {
-	b       builder
-	native  bool
-	raws    []json.RawMessage
-	parts   map[int]*aggPart
-	order   []int
-	finish  *llm.Finish
-	usage   *llm.Usage
-	sources []llm.Source
-	size    int
+	b              builder
+	native         bool
+	raws           []json.RawMessage
+	parts          map[int]*aggPart
+	order          []int
+	finish         *llm.Finish
+	usage          *llm.Usage
+	sources        []llm.Source
+	codeExecutions []llm.CodeExecution
+	size           int
 }
 
 // NewAggregator returns an empty aggregator.
@@ -577,9 +614,12 @@ func (a *Aggregator) Add(ev llm.Event) {
 			}
 		}
 	case llm.EventFinish:
-		a.finish, a.usage, a.sources = ev.Finish, ev.Usage, ev.Sources
+		a.finish, a.usage, a.sources, a.codeExecutions = ev.Finish, ev.Usage, ev.Sources, ev.CodeExecutions
 		for _, s := range ev.Sources {
 			a.size += len(s.URL) + len(s.Title) + 32
+		}
+		for _, ce := range ev.CodeExecutions {
+			a.size += len(ce.Code) + len(ce.Language) + len(ce.Output) + 64
 		}
 		if ev.Finish != nil {
 			a.size += len(ev.Finish.RawReason)
@@ -608,7 +648,7 @@ func (a *Aggregator) Response() ([]byte, error) {
 	// the model events, losing its raw fields; the extension asks a Gemini upstream to stream
 	// only when the client streams, so this does not happen yet.
 	b := &a.b
-	var parts []any
+	parts := b.codeExecParts(a.codeExecutions)
 	var cited []citedSegment
 	for _, idx := range a.order {
 		p := a.parts[idx]

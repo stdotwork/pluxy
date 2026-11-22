@@ -462,6 +462,15 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		if len(ev.Sources) > 0 {
 			b.lose("sources", "web search sources have no safe representation in a Message without Anthropic encrypted_content")
 		}
+		if len(ev.CodeExecutions) > 0 {
+			b.lose("content.code_execution", "code execution results have no safe representation in a Message without an Anthropic srvtoolu_ ID")
+			for _, ce := range ev.CodeExecutions {
+				if ce.FilesOmitted {
+					b.lose("content.code_execution.files", "files, images or code runs past the size limit have no place in a Message")
+					break
+				}
+			}
+		}
 		if err := s.emit("message_delta", obj{"delta": obj{"stop_reason": b.stopReason(), "stop_sequence": nil}, "usage": encodeUsage(ev.Usage)}); err != nil {
 			return err
 		}
@@ -542,6 +551,15 @@ func (a *Aggregator) Add(ev llm.Event) {
 		b.finished(ev)
 		if b.upFormat != format && len(ev.Sources) > 0 {
 			b.lose("sources", "web search sources have no safe representation in a Message without Anthropic encrypted_content")
+		}
+		if b.upFormat != format && len(ev.CodeExecutions) > 0 {
+			b.lose("content.code_execution", "code execution results have no safe representation in a Message without an Anthropic srvtoolu_ ID")
+			for _, ce := range ev.CodeExecutions {
+				if ce.FilesOmitted {
+					b.lose("content.code_execution.files", "files, images or code runs past the size limit have no place in a Message")
+					break
+				}
+			}
 		}
 		if ev.Finish != nil {
 			a.size += len(ev.Finish.RawReason)

@@ -1071,6 +1071,11 @@ const AccountClosedMinor = 20
 // them from an extension that reports an earlier version.
 const CitationsMinor = 31
 
+// CodeExecutionsMinor is the protocol minor version that adds canonical code execution results on
+// finish (llm.Event.CodeExecutions). Core ignores them from an extension that reports an earlier
+// version.
+const CodeExecutionsMinor = 32
+
 // normalizeEvent downgrades event fields that require a newer protocol minor version than e
 // reported in describe.
 func (e *Extension) normalizeEvent(ev llm.Event) llm.Event {
@@ -1080,6 +1085,9 @@ func (e *Extension) normalizeEvent(ev llm.Event) llm.Event {
 	if e.info.ProtocolMinor < CitationsMinor {
 		ev.Citations = nil
 		ev.Sources = nil
+	}
+	if e.info.ProtocolMinor < CodeExecutionsMinor {
+		ev.CodeExecutions = nil
 	}
 	if ev.Type != llm.EventError || ev.Error == nil {
 		return ev

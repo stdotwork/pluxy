@@ -186,6 +186,75 @@ func extractWebSearchCallSources(raw json.RawMessage, seen map[string]bool, out 
 	return out
 }
 
+// maxCodeExecInput bounds the streamed code delta buffered for a single code_interpreter_call.
+const maxCodeExecInput = 1 << 20
+
+// extractCodeInterpreterCall reads a terminal code_interpreter_call output item into a canonical
+// CodeExecution. Partial items (in_progress, interpreting) and malformed items return ok=false.
+func extractCodeInterpreterCall(raw json.RawMessage, fallbackCode string) (id string, ce llm.CodeExecution, ok bool) {
+	if len(raw) == 0 || raw[0] != '{' {
+		return "", llm.CodeExecution{}, false
+	}
+	var item struct {
+		ID      string            `json:"id"`
+		Type    string            `json:"type"`
+		Status  string            `json:"status"`
+		Code    *string           `json:"code"`
+		Outputs []json.RawMessage `json:"outputs"`
+	}
+	if json.Unmarshal(raw, &item) != nil || item.Type != "code_interpreter_call" {
+		return "", llm.CodeExecution{}, false
+	}
+	var failed bool
+	switch item.Status {
+	case "completed":
+	case "failed", "incomplete":
+		failed = true
+	default:
+		return "", llm.CodeExecution{}, false
+	}
+	code := fallbackCode
+	if item.Code != nil && *item.Code != "" {
+		code = *item.Code
+	}
+	var out strings.Builder
+	filesOmitted := false
+	for _, oRaw := range item.Outputs {
+		if len(oRaw) == 0 || oRaw[0] != '{' {
+			continue
+		}
+		var o struct {
+			Type string `json:"type"`
+			Logs string `json:"logs"`
+		}
+		if json.Unmarshal(oRaw, &o) != nil {
+			continue
+		}
+		switch o.Type {
+		case "logs":
+			if o.Logs == "" {
+				continue
+			}
+			if out.Len() > 0 && !strings.HasSuffix(out.String(), "\n") {
+				out.WriteByte('\n')
+			}
+			out.WriteString(o.Logs)
+		case "image":
+			filesOmitted = true
+		}
+	}
+	if code == "" && out.Len() == 0 && !failed && !filesOmitted {
+		return "", llm.CodeExecution{}, false
+	}
+	return item.ID, llm.CodeExecution{
+		Code:         code,
+		Language:     "python",
+		Output:       out.String(),
+		Failed:       failed,
+		FilesOmitted: filesOmitted,
+	}, true
+}
+
 // opaque returns a reasoning item's encrypted content as the opaque data its item.end carries, or
 // nil when it has none.
 func opaque(it outputItem) *llm.Opaque {
@@ -263,14 +332,17 @@ type streamEvent struct {
 // for (response.in_progress, content parts, done events, hosted tool items) become native
 // events. Use one decoder per stream.
 type StreamDecoder struct {
-	started  bool
-	done     bool
-	next     int
-	items    map[int]int               // upstream output_index -> open model item index
-	textLens map[int]int               // model item index -> rune count of text deltas seen
-	annRaws  map[int][]json.RawMessage // model item index -> raw annotations from annotation.added
-	sources  []llm.Source
-	seenSrc  map[string]bool
+	started   bool
+	done      bool
+	next      int
+	items     map[int]int               // upstream output_index -> open model item index
+	textLens  map[int]int               // model item index -> rune count of text deltas seen
+	annRaws   map[int][]json.RawMessage // model item index -> raw annotations from annotation.added
+	sources   []llm.Source
+	seenSrc   map[string]bool
+	codeBuf   map[int]*strings.Builder // upstream output_index -> streamed code_interpreter_call code
+	codeExecs []llm.CodeExecution
+	seenCode  map[string]bool
 }
 
 // NewStreamDecoder returns a decoder for one stream.
@@ -280,6 +352,8 @@ func NewStreamDecoder() *StreamDecoder {
 		textLens: map[int]int{},
 		annRaws:  map[int][]json.RawMessage{},
 		seenSrc:  map[string]bool{},
+		codeBuf:  map[int]*strings.Builder{},
+		seenCode: map[string]bool{},
 	}
 }
 
@@ -392,10 +466,44 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			d.annRaws[idx] = append(d.annRaws[idx], append(json.RawMessage(nil), ev.Annotation...))
 		}
 		return native(), nil
+	case "response.code_interpreter_call_code.delta":
+		if ev.Delta != "" {
+			buf := d.codeBuf[ev.OutputIndex]
+			if buf == nil {
+				buf = &strings.Builder{}
+				d.codeBuf[ev.OutputIndex] = buf
+			}
+			if buf.Len()+len(ev.Delta) <= maxCodeExecInput {
+				buf.WriteString(ev.Delta)
+			}
+		}
+		return native(), nil
+	case "response.code_interpreter_call_code.done":
+		if code, ok := ev.Code.(string); ok && code != "" && len(code) <= maxCodeExecInput {
+			buf := &strings.Builder{}
+			buf.WriteString(code)
+			d.codeBuf[ev.OutputIndex] = buf
+		}
+		return native(), nil
 	case "response.output_item.done":
 		idx, open := d.items[ev.OutputIndex]
 		if !open {
 			d.sources = extractWebSearchCallSources(ev.Item, d.seenSrc, d.sources)
+			fallback := ""
+			if buf := d.codeBuf[ev.OutputIndex]; buf != nil {
+				fallback = buf.String()
+				delete(d.codeBuf, ev.OutputIndex)
+			}
+			if id, ce, ok := extractCodeInterpreterCall(ev.Item, fallback); ok {
+				key := id
+				if key == "" {
+					key = fmt.Sprintf("#%d", ev.OutputIndex)
+				}
+				if !d.seenCode[key] {
+					d.seenCode[key] = true
+					d.codeExecs = llm.AppendCodeExecution(d.codeExecs, ce)
+				}
+			}
 			return native(), nil
 		}
 		delete(d.items, ev.OutputIndex)
@@ -420,11 +528,21 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 	case "response.completed", "response.incomplete":
 		d.done = true
 		out = d.closeAll(out)
-		for _, itemRaw := range r.Output {
+		for i, itemRaw := range r.Output {
 			d.sources = extractWebSearchCallSources(itemRaw, d.seenSrc, d.sources)
+			if id, ce, ok := extractCodeInterpreterCall(itemRaw, ""); ok {
+				key := id
+				if key == "" {
+					key = fmt.Sprintf("#%d", i)
+				}
+				if !d.seenCode[key] {
+					d.seenCode[key] = true
+					d.codeExecs = llm.AppendCodeExecution(d.codeExecs, ce)
+				}
+			}
 		}
 		f := finishOf(r)
-		return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(r.Usage), Sources: d.sources, Raw: raw}), nil
+		return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(r.Usage), Sources: d.sources, CodeExecutions: d.codeExecs, Raw: raw}), nil
 	case "response.failed":
 		d.done = true
 		e := failure(r, data)
@@ -466,6 +584,7 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 	next := 0
 	var sources []llm.Source
 	seenSrc := map[string]bool{}
+	var codeExecs []llm.CodeExecution
 	add := func(start llm.ItemStart, deltaType, delta string, o *llm.Opaque, cits []llm.Citation) {
 		out = append(out, llm.Event{Type: llm.EventItemStart, Index: next, Item: &start})
 		if delta != "" {
@@ -502,11 +621,14 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 			add(llm.ItemStart{Kind: llm.ItemToolCall, CallID: it.CallID, Name: it.Name}, llm.EventToolInputDelta, it.Arguments, nil, nil)
 		default:
 			sources = extractWebSearchCallSources(raw, seenSrc, sources)
+			if _, ce, ok := extractCodeInterpreterCall(raw, ""); ok {
+				codeExecs = llm.AppendCodeExecution(codeExecs, ce)
+			}
 			out = append(out, llm.Event{Type: llm.EventNative, Raw: raw})
 		}
 	}
 	f := finishOf(r)
-	return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(r.Usage), Sources: sources, Raw: append(json.RawMessage(nil), body...)}), nil
+	return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(r.Usage), Sources: sources, CodeExecutions: codeExecs, Raw: append(json.RawMessage(nil), body...)}), nil
 }
 
 // OpaqueOutput lists, by path in the Response, the output data a client in another format has no
