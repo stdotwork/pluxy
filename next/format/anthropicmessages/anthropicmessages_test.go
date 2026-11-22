@@ -1259,6 +1259,41 @@ func TestEncodeCarriesForeignCacheControl(t *testing.T) {
 	}
 }
 
+func TestEncodeReportsDroppedMessageCacheControl(t *testing.T) {
+	in := `{
+		"model": "claude-sonnet-4-6",
+		"messages": [
+			{
+				"role": "user",
+				"cache_control": {"type": "ephemeral"},
+				"content": [
+					{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+				]
+			}
+		]
+	}`
+	req, err := openaichat.ParseRequest([]byte(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, losses, err := EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sameJSON(t, "body", out, `{
+		"model": "claude-sonnet-4-6",
+		"max_tokens": 32000,
+		"stream": false,
+		"messages": [
+			{"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral", "ttl": "1h"}}]}
+		]
+	}`)
+	want := []string{"dropped messages[0].cache_control"}
+	if got := lossList(losses); !reflect.DeepEqual(got, want) {
+		t.Errorf("losses:\n got %q\nwant %q", got, want)
+	}
+}
+
 func TestEncodeResponseFormat(t *testing.T) {
 	schema := `{"type":"object","properties":{"city":{"type":"string"}},"required":["city"],"additionalProperties":false}`
 	t.Run("chat json_schema", func(t *testing.T) {

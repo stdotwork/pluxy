@@ -211,11 +211,25 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	if rf := o.ResponseFormat; rf != nil && rf.Type != "" && rf.Type != llm.ResponseFormatText {
 		switch {
 		case rf.Type == llm.ResponseFormatJSONSchema && rawjson.Object(rf.Schema) != nil:
-			out["output_config"] = map[string]any{
-				"format": map[string]any{
-					"type":   "json_schema",
-					"schema": rf.Schema,
-				},
+			if req.SourceFormat() == format {
+				out["output_config"] = map[string]any{
+					"format": map[string]any{
+						"type":   "json_schema",
+						"schema": rf.Schema,
+					},
+				}
+			} else if !supportsStructuredOutput(req.Model) {
+				e.lose(llm.LossDropped, "response_format", fmt.Sprintf("Messages model %q does not support output_config.format json_schema", req.Model))
+			} else if schema, losses, ok := adaptStructuredSchema(rf.Schema); ok {
+				e.losses = append(e.losses, losses...)
+				out["output_config"] = map[string]any{
+					"format": map[string]any{
+						"type":   "json_schema",
+						"schema": schema,
+					},
+				}
+			} else {
+				e.losses = append(e.losses, losses...)
 			}
 		case rf.Type == llm.ResponseFormatJSONSchema:
 			e.lose(llm.LossDropped, "response_format", "Messages output_config.format json_schema requires a schema object")
@@ -393,8 +407,12 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			}
 			if it.Origin != nil && it.Origin.Format != format {
 				if len(blocks) > 0 {
-					if raw := e.kept(it.Origin); len(raw) > 0 && rawjson.Object(blocks[len(blocks)-1])["cache_control"] == nil {
-						blocks[len(blocks)-1] = rawjson.Merge(blocks[len(blocks)-1], raw)
+					if raw := e.kept(it.Origin); len(raw) > 0 {
+						if rawjson.Object(blocks[len(blocks)-1])["cache_control"] == nil {
+							blocks[len(blocks)-1] = rawjson.Merge(blocks[len(blocks)-1], raw)
+						} else {
+							e.lose(llm.LossDropped, rawjson.Join(p, "cache_control"), "last content block already carries cache_control")
+						}
 					}
 				} else {
 					e.losses = append(e.losses, rawjson.Losses(it.Origin, format)...)
