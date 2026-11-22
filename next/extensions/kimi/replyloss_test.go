@@ -11,6 +11,7 @@ import (
 
 	"github.com/stdotwork/pluxy/next/conformance"
 	"github.com/stdotwork/pluxy/next/extensions/kimi/kimitest"
+	"github.com/stdotwork/pluxy/next/format/openairesponses"
 	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -100,6 +101,85 @@ func TestNonStreamNamelessToolCallLogged(t *testing.T) {
 		}
 		if strings.Contains(logs, "reply loss:") {
 			t.Errorf("unexpected reply loss logged for valid tool call: %q", logs)
+		}
+	})
+}
+
+// A non-streamed Responses reply with a dropped output item logs the reply loss, matching the
+// streamed path and the Chat path; a normal Responses reply logs no reply loss.
+func TestNonStreamResponsesReplyLossLogged(t *testing.T) {
+	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
+
+	run := func(t *testing.T, replyBody string) ([]llm.Event, string, string) {
+		t.Helper()
+		srv := kimitest.New(t)
+		var gotPath string
+		srv.Generate = func(w http.ResponseWriter, r *http.Request, req kimitest.Request) {
+			gotPath = req.Path
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, replyBody)
+		}
+		var logs syncBuffer
+		ext, err := host.Start(manifest, host.Options{Log: &logs})
+		if err != nil {
+			t.Fatal(err)
+		}
+		access, _ := srv.Grant()
+		acct := protocol.Account{
+			ID:         "kimi",
+			Settings:   srv.Settings(),
+			Credential: &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: access},
+		}
+		req, err := openairesponses.ParseRequest([]byte(`{"model":"kimi-k3","input":"Hi"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		s := ext.Generate(context.Background(), acct, req)
+		var events []llm.Event
+		for {
+			ev := s.Next()
+			events = append(events, ev)
+			if ev.Terminal() {
+				break
+			}
+		}
+		s.Close()
+		ext.Stop()
+		return events, logs.String(), gotPath
+	}
+
+	t.Run("dropped image_generation_call logs reply loss", func(t *testing.T) {
+		body := `{"id":"resp_1","object":"response","created_at":1,"status":"completed","model":"k3","output":[{"id":"ig_1","type":"image_generation_call","status":"completed","result":""}]}`
+		events, logs, gotPath := run(t, body)
+		if gotPath != "/coding/v1/responses" {
+			t.Fatalf("upstream path = %q, want /coding/v1/responses", gotPath)
+		}
+		last := events[len(events)-1]
+		if last.Type != llm.EventFinish || last.Finish == nil || last.Finish.Reason != llm.FinishStop {
+			t.Fatalf("terminal event = %+v, want finish stop", last)
+		}
+		for _, ev := range events {
+			if ev.Type == llm.EventMedia {
+				t.Errorf("empty image_generation_call was not dropped: %+v", ev.Media)
+			}
+		}
+		if !strings.Contains(logs, "reply loss: dropped output[0] (empty image_generation_call result)") {
+			t.Errorf("logs = %q, want reply loss for output[0]", logs)
+		}
+	})
+
+	t.Run("normal responses reply logs no reply loss", func(t *testing.T) {
+		body := `{"id":"resp_2","object":"response","created_at":1,"status":"completed","model":"k3","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hi"}]}]}`
+		events, logs, gotPath := run(t, body)
+		if gotPath != "/coding/v1/responses" {
+			t.Fatalf("upstream path = %q, want /coding/v1/responses", gotPath)
+		}
+		last := events[len(events)-1]
+		if last.Type != llm.EventFinish || last.Finish == nil || last.Finish.Reason != llm.FinishStop {
+			t.Fatalf("terminal event = %+v, want finish stop", last)
+		}
+		if strings.Contains(logs, "reply loss:") {
+			t.Errorf("unexpected reply loss logged for normal reply: %q", logs)
 		}
 	})
 }

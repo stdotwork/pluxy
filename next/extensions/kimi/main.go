@@ -270,7 +270,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		}
 		return &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
 	}
-	events, losses, err := decodeResponse(up.format, raw)
+	events, losses, err := dec.response(raw)
 	if err != nil {
 		return err
 	}
@@ -344,11 +344,19 @@ type streamDecoder interface {
 
 var decoders = map[string]struct {
 	stream   func() streamDecoder
-	response func([]byte) ([]llm.Event, error)
+	response func([]byte) ([]llm.Event, []llm.Loss, error)
 }{
-	llm.FormatOpenAIChat:        {func() streamDecoder { return openaichat.NewStreamDecoder() }, openaichat.DecodeResponse},
-	llm.FormatOpenAIResponses:   {func() streamDecoder { return openairesponses.NewStreamDecoder() }, openairesponses.DecodeResponse},
-	llm.FormatAnthropicMessages: {func() streamDecoder { return anthropicmessages.NewStreamDecoder() }, anthropicmessages.DecodeResponse},
+	llm.FormatOpenAIChat:        {func() streamDecoder { return openaichat.NewStreamDecoder() }, openaichat.DecodeResponseLosses},
+	llm.FormatOpenAIResponses:   {func() streamDecoder { return openairesponses.NewStreamDecoder() }, openairesponses.DecodeResponseLosses},
+	llm.FormatAnthropicMessages: {func() streamDecoder { return anthropicmessages.NewStreamDecoder() }, noLosses(anthropicmessages.DecodeResponse)},
+}
+
+// noLosses adapts a non-streamed decoder that reports no reply losses to decoders' response signature.
+func noLosses(fn func([]byte) ([]llm.Event, error)) func([]byte) ([]llm.Event, []llm.Loss, error) {
+	return func(raw []byte) ([]llm.Event, []llm.Loss, error) {
+		events, err := fn(raw)
+		return events, nil, err
+	}
 }
 
 // reportLosses logs what a stream decoder had to leave out of the reply. A decoder without losses
@@ -368,15 +376,6 @@ func reportLosses(dec streamDecoder) {
 // a loss found while reading the reply has no other way to core.
 func logReplyLoss(l llm.Loss) {
 	fmt.Fprintf(os.Stderr, "reply loss: %s %s (%s)\n", l.Kind, l.Path, l.Detail)
-}
-
-// decodeResponse reads a non-streamed reply along with any reply losses its decoder reported.
-func decodeResponse(format string, raw []byte) ([]llm.Event, []llm.Loss, error) {
-	if format == llm.FormatOpenAIChat {
-		return openaichat.DecodeResponseLosses(raw)
-	}
-	events, err := decoders[format].response(raw)
-	return events, nil, err
 }
 
 // relayStream decodes the upstream stream and sends each event as soon as it is decoded. A
