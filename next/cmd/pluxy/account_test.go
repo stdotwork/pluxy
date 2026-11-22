@@ -163,6 +163,10 @@ func fakePrompt(method string) map[string]any {
 	case "repeat":
 		return map[string]any{"kind": "input", "message": "Enter the code.",
 			"inputs": []any{map[string]any{"name": "code", "label": "Code"}}}
+	case "opt_then_secret":
+		return fakeSwitchPrompt()
+	case "opt_then_browser":
+		return fakePrompt("browser")
 	}
 	return nil
 }
@@ -244,6 +248,14 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 				"inputs": []any{
 					map[string]any{"name": "note", "label": "Note", "optional": true},
 					map[string]any{"name": "api_key", "label": "API key", "secret": true},
+				}},
+			map[string]any{"method": "opt_then_secret", "kind": "input", "label": "Optional start then secret prompt",
+				"inputs": []any{
+					map[string]any{"name": "note", "label": "Note", "optional": true},
+				}},
+			map[string]any{"method": "opt_then_browser", "kind": "browser", "label": "Optional start then browser prompt",
+				"inputs": []any{
+					map[string]any{"name": "note", "label": "Note", "optional": true},
 				}},
 		}}}})
 	case r.Method == http.MethodPost && path == "/accounts":
@@ -842,7 +854,7 @@ func TestFollowLoginSaysWhenTheSignInWasNotCancelled(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		cancel()
 	}()
-	err := x.followLogin(reply.Login, nil, signInInputs{}, lines, false)
+	err := x.followLogin(reply.Login, nil, signInInputs{}, lines, false, false)
 	if err == nil || !strings.Contains(err.Error(), "not cancelled") {
 		t.Fatalf("followLogin after an interrupt core would not cancel: %v, want it to say the sign-in is still running", err)
 	}
@@ -1035,7 +1047,7 @@ func TestFollowLoginCancelsOnInterrupt(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 		cancel()
 	}()
-	err := x.followLogin(reply.Login, nil, signInInputs{}, lines, false)
+	err := x.followLogin(reply.Login, nil, signInInputs{}, lines, false, false)
 	if err == nil || !strings.Contains(err.Error(), "cancelled") {
 		t.Fatalf("followLogin after an interrupt: %v, want a cancelled sign-in", err)
 	}

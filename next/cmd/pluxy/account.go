@@ -228,7 +228,7 @@ func runAccountAdd(x *invocation) error {
 	lines := newLineReader(x.stdin, x.terminal())
 	defer lines.close()
 	in := signInInputs{vals: maps.Clone(x.opts.input.values)}
-	input, err := x.startInputs(method.Inputs, in, lines)
+	input, ended, err := x.startInputs(method.Inputs, in, lines)
 	if err != nil {
 		return err
 	}
@@ -242,7 +242,7 @@ func runAccountAdd(x *invocation) error {
 	if reply.Login.ID == "" {
 		return errors.New("core started no sign-in")
 	}
-	return x.afterLoginStart(reply.Login, body, in, lines, false)
+	return x.afterLoginStart(reply.Login, body, in, lines, ended, false)
 }
 
 // runAccountLogin is pluxy account login <id>: it signs in to an account again.
@@ -277,7 +277,7 @@ func runAccountLogin(x *invocation) error {
 	// A sign-in again may leave empty what the account's settings already hold, as the panel
 	// does: a non-secret input the account keeps is optional (next/ui/kit/loginFlow.tsx).
 	in := signInInputs{vals: maps.Clone(x.opts.input.values), kept: settingsKeys(accounts.Accounts[i].Settings)}
-	input, err := x.startInputs(method.Inputs, in, lines)
+	input, ended, err := x.startInputs(method.Inputs, in, lines)
 	if err != nil {
 		return err
 	}
@@ -291,12 +291,12 @@ func runAccountLogin(x *invocation) error {
 	if reply.Login.ID == "" {
 		return errors.New("core started no sign-in")
 	}
-	return x.afterLoginStart(reply.Login, body, in, lines, true)
+	return x.afterLoginStart(reply.Login, body, in, lines, ended, true)
 }
 
 // afterLoginStart ends the sign-in a command started: it says where to go and stops (--no-wait,
 // exit 7) or follows it to its end. A sign-in that ended at once has nothing to wait for.
-func (x *invocation) afterLoginStart(l management.Login, body []byte, in signInInputs, lines *lineReader, again bool) error {
+func (x *invocation) afterLoginStart(l management.Login, body []byte, in signInInputs, lines *lineReader, ended, again bool) error {
 	if x.opts.noWait && l.State == management.LoginPending {
 		if l.Prompt != nil && l.Prompt.Kind == protocol.PromptInput {
 			// A prompt's values are read by this command alone, so a sign-in core keeps waiting on
@@ -319,14 +319,14 @@ func (x *invocation) afterLoginStart(l management.Login, body []byte, in signInI
 		}
 		return waitingError{fmt.Sprintf("waiting for the sign-in for %s to finish: it goes on in core, and the account appears in pluxy account list when it does", l.Account)}
 	}
-	return x.followLogin(l, body, in, lines, again)
+	return x.followLogin(l, body, in, lines, ended, again)
 }
 
 // followLogin reads a sign-in again until it ends, asking for what its prompts want. It alone
 // decides which field is being answered and what the terminal's echo is: a line belongs to the
 // field current when it is received here, and waiting for one never holds up the reads of the
 // sign-in.
-func (x *invocation) followLogin(l management.Login, body []byte, in signInInputs, lines *lineReader, again bool) error {
+func (x *invocation) followLogin(l management.Login, body []byte, in signInInputs, lines *lineReader, ended, again bool) error {
 	ctx, stop := context.WithTimeout(x.ctx, accountLoginTimeout)
 	defer stop()
 	// The terminal's echo goes back on before the sign-in is cancelled in core, which may take
@@ -340,9 +340,8 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 	// shows that prompt, so a person at a terminal may answer it again. The read made right after
 	// an answer does not count: the extension may not have updated its prompt yet.
 	answered, reshown := false, false
-	// ended says standard input has ended. giveUp is the bounded wait on a prompt that was answered
-	// and is still up with nothing that may answer it, and unanswered the field it still wants.
-	ended := false
+	// giveUp is the bounded wait on a prompt that was answered and is still up with nothing that
+	// may answer it, and unanswered the field it still wants.
 	var giveUp <-chan time.Time
 	var unanswered protocol.LoginInput
 	// browserLeft says a browser prompt was answered by a pipe and is still up, so nothing reads
@@ -871,28 +870,29 @@ func promptURL(p *protocol.Prompt) string {
 	return p.URL
 }
 
-// startInputs is what the sign-in asks for before it starts, from --input or standard input. A
-// required one it did not get is a usage error, and nothing is started.
-func (x *invocation) startInputs(fields []protocol.LoginInput, in signInInputs, lines *lineReader) (map[string]string, error) {
+// startInputs is what the sign-in asks for before it starts, from --input or standard input, and
+// whether standard input reached its end while reading them. A required one it did not get is a
+// usage error, and nothing is started.
+func (x *invocation) startInputs(fields []protocol.LoginInput, in signInInputs, lines *lineReader) (map[string]string, bool, error) {
 	out := map[string]string{}
 	ended := false
 	for _, f := range fields {
 		if v, ok := in.vals[f.Name]; ok {
 			if f.Secret {
-				return nil, usageError{fmt.Sprintf("%s is secret: the sign-in reads it from a prompt or standard input, never from --input", fieldName(f))}
+				return nil, false, usageError{fmt.Sprintf("%s is secret: the sign-in reads it from a prompt or standard input, never from --input", fieldName(f))}
 			}
 			out[f.Name] = v
 			delete(in.vals, f.Name)
 			continue
 		}
 		if err := x.asks(f); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		if ended {
 			if optionalInput(f, in.kept) {
 				continue
 			}
-			return nil, usageError{fmt.Sprintf("the sign-in needs %s: %s", fieldName(f), inputHint(f))}
+			return nil, false, usageError{fmt.Sprintf("the sign-in needs %s: %s", fieldName(f), inputHint(f))}
 		}
 		// The echo is set before the label is shown, and stays as it is until the value is whole.
 		lines.field(&f)
@@ -904,7 +904,7 @@ func (x *invocation) startInputs(fields []protocol.LoginInput, in signInInputs, 
 		for {
 			r, err := lines.next(x.ctx)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			if !r.ok {
 				if lines.hidden() {
@@ -913,16 +913,16 @@ func (x *invocation) startInputs(fields []protocol.LoginInput, in signInInputs, 
 				lines.show()
 				ended = true
 				if value.open {
-					return nil, usageError{fmt.Sprintf("%s is not a complete JSON document, and standard input ended before its end", fieldName(f))}
+					return nil, false, usageError{fmt.Sprintf("%s is not a complete JSON document, and standard input ended before its end", fieldName(f))}
 				}
 				if optionalInput(f, in.kept) {
 					break
 				}
-				return nil, usageError{fmt.Sprintf("the sign-in needs %s: %s", fieldName(f), inputHint(f))}
+				return nil, false, usageError{fmt.Sprintf("the sign-in needs %s: %s", fieldName(f), inputHint(f))}
 			}
 			var complete bool
 			if text, complete, err = value.add(r); err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			if complete {
 				if lines.hidden() {
@@ -937,7 +937,7 @@ func (x *invocation) startInputs(fields []protocol.LoginInput, in signInInputs, 
 	}
 	// Core may take a while to answer, and nothing is being typed for it.
 	lines.show()
-	return out, nil
+	return out, ended, nil
 }
 
 // fieldName is how a sign-in's input is named to a person.
