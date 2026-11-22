@@ -538,6 +538,11 @@ func (e *encoder) content(it llm.Item, msgPath string) (blocks []json.RawMessage
 			}
 			block = map[string]any{"type": "text", "text": p.Text}
 		case llm.PartImage, llm.PartFile:
+			if it.Role == llm.RoleAssistant {
+				e.lose(llm.LossDropped, pp, "Messages does not accept "+p.Type+" blocks in assistant messages")
+				dropped = true
+				continue
+			}
 			src := source(p)
 			if src == nil {
 				e.lose(llm.LossDropped, pp, "Messages cannot take this "+p.Type)

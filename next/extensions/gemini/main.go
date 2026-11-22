@@ -267,7 +267,10 @@ func relayReply(ctx context.Context, resp *http.Response, send sender, mayRetry 
 		}
 		return false, &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
 	}
-	events, err := geminigenerate.DecodeResponse(raw)
+	events, losses, err := geminigenerate.DecodeResponseLosses(raw)
+	for _, l := range losses {
+		fmt.Fprintf(os.Stderr, "reply loss: %s %s (%s)\n", l.Kind, l.Path, l.Detail)
+	}
 	if err != nil {
 		return mayRetry && geminigenerate.IsMalformedCall(err), llm.MarkContextOverflow(err)
 	}
@@ -556,6 +559,11 @@ func replyNames(req llm.Request, tr *llm.Translation) map[string]string {
 func relayStream(ctx context.Context, body io.Reader, out sender) error {
 	r := sse.NewReader(body)
 	dec := geminigenerate.NewStreamDecoder()
+	defer func() {
+		for _, l := range dec.Losses() {
+			fmt.Fprintf(os.Stderr, "reply loss: %s %s (%s)\n", l.Kind, l.Path, l.Detail)
+		}
+	}()
 	for {
 		e, err := r.Next()
 		eof := err == io.EOF

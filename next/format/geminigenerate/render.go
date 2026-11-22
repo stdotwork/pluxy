@@ -202,8 +202,11 @@ func (b *builder) eventLosses(ev llm.Event) {
 		b.start(ev.Response)
 	case llm.EventNative:
 		if b.upFormat == llm.FormatOpenAIChat {
-			// A Chat upstream's native events hold choices after the first.
-			b.lose("choices", "reply data in "+b.upFormat+" with no place in a GenerateContentResponse")
+			// A Chat upstream's native events hold choices after the first, or audio metadata
+			// (id/expires_at/transcript) for same-format Chat clients.
+			if rawjson.Object(ev.Raw)["choices"] != nil {
+				b.lose("choices", "reply data in "+b.upFormat+" with no place in a GenerateContentResponse")
+			}
 		}
 	case llm.EventFinish:
 		for _, k := range usageLosses(ev.Usage, b.upFormat) {
@@ -515,6 +518,15 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 			// writes it.
 			return s.emit(b.response([]any{obj{"text": "", "thought": true, "thoughtSignature": o.Data}}, nil, nil))
 		}
+	case llm.EventMedia:
+		if ev.Media == nil {
+			return nil
+		}
+		if err := llm.ValidOutputMedia(ev.Media); err != nil {
+			b.lose("media."+ev.Media.Kind, "invalid or unsafe output media")
+			return nil
+		}
+		return s.emit(b.response([]any{obj{"inlineData": obj{"mimeType": ev.Media.MediaType, "data": ev.Media.Data}}}, nil, nil))
 	case llm.EventFinish:
 		parts := b.codeExecParts(ev.CodeExecutions)
 		for _, idx := range s.order {
@@ -536,6 +548,7 @@ type aggPart struct {
 	kind      string
 	text      strings.Builder
 	call      *call
+	media     *llm.OutputMedia
 	citations []llm.Citation
 }
 
@@ -546,7 +559,7 @@ type Aggregator struct {
 	native         bool
 	raws           []json.RawMessage
 	parts          map[int]*aggPart
-	order          []int
+	order          []*aggPart
 	finish         *llm.Finish
 	usage          *llm.Usage
 	sources        []llm.Source
@@ -585,7 +598,18 @@ func (a *Aggregator) Add(ev llm.Event) {
 			a.size += len(p.call.signature)
 		}
 		a.parts[ev.Index] = p
-		a.order = append(a.order, ev.Index)
+		a.order = append(a.order, p)
+	case llm.EventMedia:
+		if a.native || ev.Media == nil {
+			return
+		}
+		if err := llm.ValidOutputMedia(ev.Media); err != nil {
+			a.b.lose("media."+ev.Media.Kind, "invalid or unsafe output media")
+			return
+		}
+		m := *ev.Media
+		a.size += len(m.MediaType) + len(m.Data) + partOverhead
+		a.order = append(a.order, &aggPart{kind: llm.EventMedia, media: &m})
 	case llm.EventTextDelta, llm.EventReasoningDelta:
 		if p := a.parts[ev.Index]; p != nil {
 			p.text.WriteString(ev.Delta)
@@ -650,8 +674,7 @@ func (a *Aggregator) Response() ([]byte, error) {
 	b := &a.b
 	parts := b.codeExecParts(a.codeExecutions)
 	var cited []citedSegment
-	for _, idx := range a.order {
-		p := a.parts[idx]
+	for _, p := range a.order {
 		switch p.kind {
 		case llm.ItemMessage:
 			text := p.text.String()
@@ -667,6 +690,8 @@ func (a *Aggregator) Response() ([]byte, error) {
 			parts = append(parts, obj{"text": p.text.String(), "thought": true})
 		case llm.ItemToolCall:
 			parts = append(parts, b.callPart(p.call))
+		case llm.EventMedia:
+			parts = append(parts, obj{"inlineData": obj{"mimeType": p.media.MediaType, "data": p.media.Data}})
 		}
 	}
 	finish := a.finish

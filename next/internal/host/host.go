@@ -1076,6 +1076,11 @@ const CitationsMinor = 31
 // version.
 const CodeExecutionsMinor = 32
 
+// OutputMediaMinor is the protocol minor version that adds canonical output media events
+// (llm.EventMedia and llm.Event.Media). Core ignores them from an extension that reports an
+// earlier version.
+const OutputMediaMinor = 33
+
 // normalizeEvent downgrades event fields that require a newer protocol minor version than e
 // reported in describe.
 func (e *Extension) normalizeEvent(ev llm.Event) llm.Event {
@@ -1088,6 +1093,12 @@ func (e *Extension) normalizeEvent(ev llm.Event) llm.Event {
 	}
 	if e.info.ProtocolMinor < CodeExecutionsMinor {
 		ev.CodeExecutions = nil
+	}
+	if e.info.ProtocolMinor < OutputMediaMinor {
+		ev.Media = nil
+		if ev.Type == llm.EventMedia && len(ev.Raw) > 0 {
+			ev.Type = llm.EventNative
+		}
 	}
 	if ev.Type != llm.EventError || ev.Error == nil {
 		return ev

@@ -278,9 +278,35 @@ func collect(t *testing.T, s *host.Stream) []llm.Event {
 			if err := checkReplyCodeExecutions(evs); err != nil {
 				t.Errorf("reply code_executions: %v", err)
 			}
+			if err := checkReplyOutputMedia(evs); err != nil {
+				t.Errorf("reply media: %v", err)
+			}
 			return evs
 		}
 	}
+}
+
+// checkReplyOutputMedia validates the protocol 0.33 invariants on a completed reply's events:
+// media appears only on media events, every media event carries a valid safe OutputMedia within
+// MaxOutputMediaPartBytes, and the reply's total media bytes stay within MaxOutputMediaReplyBytes.
+func checkReplyOutputMedia(evs []llm.Event) error {
+	total := 0
+	for i, ev := range evs {
+		if ev.Type != llm.EventMedia {
+			if ev.Media != nil {
+				return fmt.Errorf("event[%d] (%s) carries media; only media events may", i, ev.Type)
+			}
+			continue
+		}
+		if err := llm.ValidOutputMedia(ev.Media); err != nil {
+			return fmt.Errorf("event[%d] media: %v", i, err)
+		}
+		total += len(ev.Media.Data)
+		if total > llm.MaxOutputMediaReplyBytes {
+			return fmt.Errorf("event[%d] media pushes reply total past %d bytes", i, llm.MaxOutputMediaReplyBytes)
+		}
+	}
+	return nil
 }
 
 // checkReplyCodeExecutions validates the protocol 0.32 invariants on a completed reply's events:

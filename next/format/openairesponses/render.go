@@ -71,6 +71,9 @@ func writeEvent(w io.Writer, typ string, data []byte) error {
 	return err
 }
 
+// itemImageGen is the kind of an output item rebuilt from a canonical output image event.
+const itemImageGen = "image_generation_call"
+
 // item is one output item being rebuilt from model events.
 type item struct {
 	kind   string
@@ -82,6 +85,8 @@ type item struct {
 	// opaque is a reasoning item's opaque record from another provider (an Anthropic thinking
 	// signature), written as its encrypted_content so the client can replay it.
 	opaque string
+	// mediaData is the base64 image payload of an itemImageGen item.
+	mediaData string
 	// citations are the web search citations attached to a message item's text.
 	citations []llm.Citation
 	// out is the item's output_index: model items and web searches share one count.
@@ -117,6 +122,7 @@ type builder struct {
 	search   searches
 	messages int
 	reasons  int
+	images   int
 	finish   *llm.Finish
 	usage    *llm.Usage
 	losses   []llm.Loss
@@ -200,6 +206,20 @@ func (b *builder) open(idx int, s *llm.ItemStart) *item {
 	return it
 }
 
+func (b *builder) openImage(data string) *item {
+	it := &item{
+		kind:      itemImageGen,
+		id:        "ig_" + b.id + "_" + strconv.Itoa(b.images),
+		out:       b.nextOut,
+		mediaData: data,
+		done:      true,
+	}
+	b.images++
+	b.nextOut++
+	b.order = append(b.order, it)
+	return it
+}
+
 func (b *builder) incomplete() bool {
 	return b.finish != nil && (b.finish.Reason == llm.FinishLength || b.finish.Reason == llm.FinishContentFilter)
 }
@@ -269,6 +289,8 @@ func (b *builder) doneItem(it *item, final bool) obj {
 	switch it.kind {
 	case itemWebSearch:
 		return searchItem(it, false)
+	case itemImageGen:
+		return obj{"id": it.id, "type": "image_generation_call", "status": "completed", "result": it.mediaData}
 	case llm.ItemMessage:
 		text := it.text.String()
 		return obj{"id": it.id, "type": "message", "status": b.itemStatus(), "role": "assistant", "content": []any{textPart(text, urlAnnotations(it.citations, text))}}
@@ -698,6 +720,33 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		}
 		s.pending = append(s.pending, ev.Index)
 		return nil
+	case llm.EventMedia:
+		if ev.Media == nil {
+			return nil
+		}
+		if ev.Media.Kind == llm.MediaAudio {
+			b.lose("media.audio", "Responses has no output audio item")
+			return nil
+		}
+		if ev.Media.Kind != llm.MediaImage || llm.ValidOutputMedia(ev.Media) != nil {
+			b.lose("media."+ev.Media.Kind, "invalid or unsafe output media")
+			return nil
+		}
+		if err := s.searchesDone(b.readySearches()); err != nil {
+			return err
+		}
+		it := b.openImage(ev.Media.Data)
+		if err := s.emit("response.output_item.added", obj{"output_index": it.out,
+			"item": obj{"id": it.id, "type": "image_generation_call", "status": "in_progress", "result": nil}}); err != nil {
+			return err
+		}
+		if err := s.emit("response.image_generation_call.in_progress", obj{"output_index": it.out, "item_id": it.id}); err != nil {
+			return err
+		}
+		if err := s.emit("response.image_generation_call.completed", obj{"output_index": it.out, "item_id": it.id}); err != nil {
+			return err
+		}
+		return s.emit("response.output_item.done", obj{"output_index": it.out, "item": b.doneItem(it, false)})
 	case llm.EventNative:
 		if b.upFormat == llm.FormatAnthropicMessages && isBlockStart(ev.Raw) {
 			// A search with its results ends when the next block starts.
@@ -711,7 +760,9 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 			}
 			return nil
 		}
-		b.lose("choices", "reply data in "+b.upFormat+" with no place in a Response")
+		if b.upFormat != llm.FormatOpenAIChat || rawjson.Object(ev.Raw)["choices"] != nil {
+			b.lose("choices", "reply data in "+b.upFormat+" with no place in a Response")
+		}
 		return nil
 	case llm.EventFinish:
 		b.finish, b.usage = ev.Finish, ev.Usage
@@ -939,6 +990,20 @@ func (a *Aggregator) Add(ev llm.Event) {
 				a.size += len(c.URL) + len(c.Title) + 48
 			}
 		}
+	case llm.EventMedia:
+		if b.upFormat == format || ev.Media == nil {
+			return
+		}
+		if ev.Media.Kind == llm.MediaAudio {
+			b.lose("media.audio", "Responses has no output audio item")
+			return
+		}
+		if ev.Media.Kind != llm.MediaImage || llm.ValidOutputMedia(ev.Media) != nil {
+			b.lose("media."+ev.Media.Kind, "invalid or unsafe output media")
+			return
+		}
+		it := b.openImage(ev.Media.Data)
+		a.size += len(it.id) + len(it.mediaData) + itemOverhead
 	case llm.EventNative:
 		if it, added, consumed := b.searchEvent(ev.Raw); consumed {
 			if added {
@@ -946,7 +1011,7 @@ func (a *Aggregator) Add(ev llm.Event) {
 			}
 			// The search's query input and results come in these events.
 			a.size += len(ev.Raw)
-		} else if b.upFormat != format {
+		} else if b.upFormat != format && (b.upFormat != llm.FormatOpenAIChat || rawjson.Object(ev.Raw)["choices"] != nil) {
 			b.lose("choices", "reply data in "+b.upFormat+" with no place in a Response")
 		}
 	case llm.EventFinish:

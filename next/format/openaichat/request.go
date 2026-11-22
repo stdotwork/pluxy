@@ -1108,6 +1108,11 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 				sendable = true
 			}
 		case llm.PartImage:
+			if it.Role == llm.RoleAssistant {
+				e.lose(llm.LossDropped, pp, "Chat Completions does not accept image parts in assistant messages")
+				dropped = true
+				continue
+			}
 			if p.URL == "" && p.FileID != "" {
 				e.lose(llm.LossDropped, pp, "Chat Completions cannot take an image by file id")
 				dropped = true
@@ -1135,6 +1140,11 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 			out = append(out, marshal(op, e.kept(p.Origin)))
 			sendable = true
 		case llm.PartFile:
+			if it.Role == llm.RoleAssistant {
+				e.lose(llm.LossDropped, pp, "Chat Completions does not accept file or audio parts in assistant messages")
+				dropped = true
+				continue
+			}
 			// Chat takes audio as input_audio, with its bytes inline; a file part holding audio
 			// is that audio however the client sent it.
 			if mediaType, data, ok := audioinput.Inline(p); ok {

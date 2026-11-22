@@ -25,11 +25,12 @@ type outToolCall struct {
 }
 
 type outDelta struct {
-	Role             string        `json:"role,omitempty"`
-	Content          *string       `json:"content,omitempty"`
-	Refusal          *string       `json:"refusal,omitempty"`
-	ReasoningContent *string       `json:"reasoning_content,omitempty"`
-	ToolCalls        []outToolCall `json:"tool_calls,omitempty"`
+	Role             string          `json:"role,omitempty"`
+	Content          *string         `json:"content,omitempty"`
+	Refusal          *string         `json:"refusal,omitempty"`
+	ReasoningContent *string         `json:"reasoning_content,omitempty"`
+	Audio            json.RawMessage `json:"audio,omitempty"`
+	ToolCalls        []outToolCall   `json:"tool_calls,omitempty"`
 }
 
 type outChoice struct {
@@ -52,11 +53,19 @@ type outURLCitation struct {
 	EndIndex   int    `json:"end_index"`
 }
 
+type outAudio struct {
+	ID         string `json:"id"`
+	Data       string `json:"data"`
+	ExpiresAt  int64  `json:"expires_at"`
+	Transcript string `json:"transcript"`
+}
+
 type outMsg struct {
 	Role             string          `json:"role"`
 	Content          *string         `json:"content"`
 	Refusal          *string         `json:"refusal,omitempty"`
 	ReasoningContent *string         `json:"reasoning_content,omitempty"`
+	Audio            *outAudio       `json:"audio,omitempty"`
 	ToolCalls        []outToolCall   `json:"tool_calls,omitempty"`
 	Annotations      []outAnnotation `json:"annotations,omitempty"`
 }
@@ -253,6 +262,34 @@ func (s *StreamWriter) lose(path, detail string) {
 	s.losses = llm.AddLoss(s.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: detail})
 }
 
+// audioFromRaw extracts the wrapped {"audio": ...} payload from a Chat upstream event's Raw.
+func audioFromRaw(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 || raw[0] != '{' {
+		return nil
+	}
+	var w struct {
+		Audio json.RawMessage `json:"audio"`
+	}
+	if json.Unmarshal(raw, &w) != nil || len(w.Audio) == 0 || string(w.Audio) == "null" {
+		return nil
+	}
+	return w.Audio
+}
+
+func (s *StreamWriter) loseMedia(m *llm.OutputMedia) {
+	if m == nil {
+		return
+	}
+	switch m.Kind {
+	case llm.MediaImage:
+		s.lose("media.image", "Chat Completions has no official output image field")
+	case llm.MediaAudio:
+		s.lose("media.audio", "Chat Completions message.audio requires a server-issued id and expires_at")
+	default:
+		s.lose("media", "Chat Completions has no place for this output media")
+	}
+}
+
 func (s *StreamWriter) chunk(choices any, usage any) error {
 	c := s.head
 	c.Choices = choices
@@ -316,7 +353,21 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		return s.delta(outDelta{ToolCalls: []outToolCall{tc}})
 	case llm.EventItemEnd:
 		return nil
+	case llm.EventMedia:
+		if s.up.native {
+			if rawAudio := audioFromRaw(ev.Raw); len(rawAudio) > 0 {
+				return s.delta(outDelta{Audio: rawAudio})
+			}
+			return nil
+		}
+		s.loseMedia(ev.Media)
+		return nil
 	case llm.EventNative:
+		if s.up.native {
+			if rawAudio := audioFromRaw(ev.Raw); len(rawAudio) > 0 {
+				return s.delta(outDelta{Audio: rawAudio})
+			}
+		}
 		if c := s.up.choices(ev); len(c) > 0 {
 			return s.chunk(c, nil)
 		}
@@ -358,6 +409,13 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 	return nil
 }
 
+type aggAudio struct {
+	id         string
+	expiresAt  int64
+	data       strings.Builder
+	transcript strings.Builder
+}
+
 // Aggregator collects events into a non-streamed Chat Completions response.
 type Aggregator struct {
 	head        outCompletion
@@ -367,6 +425,7 @@ type Aggregator struct {
 	text        strings.Builder
 	refusal     strings.Builder
 	reasoning   strings.Builder
+	audio       *aggAudio
 	tools       []outToolCall
 	toolArgs    []*strings.Builder // the arguments of each tool call, as they streamed, by position in tools
 	toolIdx     map[int]int
@@ -410,6 +469,44 @@ func (a *Aggregator) lose(path, detail string) {
 	a.losses = llm.AddLoss(a.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: detail})
 }
 
+func (a *Aggregator) addAudio(raw json.RawMessage) {
+	var in struct {
+		ID         string `json:"id"`
+		Data       string `json:"data"`
+		ExpiresAt  int64  `json:"expires_at"`
+		Transcript string `json:"transcript"`
+	}
+	if json.Unmarshal(raw, &in) != nil {
+		return
+	}
+	if a.audio == nil {
+		a.audio = &aggAudio{}
+	}
+	if a.audio.id == "" && in.ID != "" {
+		a.audio.id = in.ID
+	}
+	if in.ExpiresAt != 0 {
+		a.audio.expiresAt = in.ExpiresAt
+	}
+	a.audio.data.WriteString(in.Data)
+	a.audio.transcript.WriteString(in.Transcript)
+	a.size += len(raw)
+}
+
+func (a *Aggregator) loseMedia(m *llm.OutputMedia) {
+	if m == nil {
+		return
+	}
+	switch m.Kind {
+	case llm.MediaImage:
+		a.lose("media.image", "Chat Completions has no official output image field")
+	case llm.MediaAudio:
+		a.lose("media.audio", "Chat Completions message.audio requires a server-issued id and expires_at")
+	default:
+		a.lose("media", "Chat Completions has no place for this output media")
+	}
+}
+
 // Add records one event.
 func (a *Aggregator) Add(ev llm.Event) {
 	a.size += len(ev.Delta)
@@ -418,7 +515,20 @@ func (a *Aggregator) Add(ev llm.Event) {
 		a.head.ID, a.head.Model, a.head.Created = ev.Response.ID, ev.Response.Model, created(ev.Response)
 		a.up = newUpstream(ev.Response)
 		a.size += len(a.head.ID) + len(a.head.Model) + len(a.up.fields)
+	case llm.EventMedia:
+		if a.up.native {
+			if rawAudio := audioFromRaw(ev.Raw); len(rawAudio) > 0 {
+				a.addAudio(rawAudio)
+			}
+			return
+		}
+		a.loseMedia(ev.Media)
 	case llm.EventNative:
+		if a.up.native {
+			if rawAudio := audioFromRaw(ev.Raw); len(rawAudio) > 0 {
+				a.addAudio(rawAudio)
+			}
+		}
 		for _, c := range a.up.choices(ev) {
 			a.size += len(c)
 			a.addOther(c)
@@ -739,10 +849,18 @@ func (a *Aggregator) Response() ([]byte, error) {
 		r := a.refusal.String()
 		msg.Refusal = &r
 	}
-	// A refusal leaves content out when the reply has no other text.
-	if a.text.Len() > 0 || (len(a.tools) == 0 && !a.refused) {
+	// A refusal or audio-only message leaves content out when the reply has no other text.
+	if a.text.Len() > 0 || (len(a.tools) == 0 && !a.refused && a.audio == nil) {
 		t := a.text.String()
 		msg.Content = &t
+	}
+	if a.audio != nil {
+		msg.Audio = &outAudio{
+			ID:         a.audio.id,
+			Data:       a.audio.data.String(),
+			ExpiresAt:  a.audio.expiresAt,
+			Transcript: a.audio.transcript.String(),
+		}
 	}
 	if a.reasoning.Len() > 0 {
 		r := a.reasoning.String()
