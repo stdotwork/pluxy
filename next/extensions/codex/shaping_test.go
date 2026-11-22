@@ -213,6 +213,41 @@ func TestPromptCacheKeyFollowsClaudeCodeSession(t *testing.T) {
 	}
 }
 
+// When a Claude Code request also carries the client's own Session-Id header, promptCacheKey
+// defers to it instead of deriving a conflicting prompt_cache_key from the Claude session.
+func TestPromptCacheKeyDefersToSessionIDHeader(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		headers map[string]string
+	}{
+		{
+			name:    "session header",
+			body:    `{"model":"gpt-test","max_tokens":100,"messages":[{"role":"user","content":"hello"}]}`,
+			headers: map[string]string{"x-claude-code-session-id": ccSession, "session-id": "client-sess"},
+		},
+		{
+			name:    "metadata user_id",
+			body:    `{"model":"gpt-test","max_tokens":100,"metadata":{"user_id":"user_abc_account_x_session_` + ccSession + `"},"messages":[{"role":"user","content":"hello"}]}`,
+			headers: map[string]string{"session-id": "client-sess"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := ccRequest("gpt-test", tc.body, tc.headers)
+			key, ur := cacheKeyOf(t, req, "a")
+			if key != "" || ur.sessionID != "" {
+				t.Errorf("prompt_cache_key = %q, ur.sessionID = %q; want both empty when Session-Id is set", key, ur.sessionID)
+			}
+			h := http.Header{}
+			setHeaders(h, req, ur, settings{}, account{})
+			if got := h.Get("Session-Id"); got != "client-sess" {
+				t.Errorf("wire Session-Id = %q, want client-sess", got)
+			}
+		})
+	}
+}
+
 // catalogLevels returns a catalog model's reasoning levels, in the catalog's order.
 func catalogLevels(t *testing.T, slug string) []string {
 	t.Helper()

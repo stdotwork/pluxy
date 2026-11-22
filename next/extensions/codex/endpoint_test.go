@@ -314,3 +314,111 @@ func TestAlphaSearchAPIKeyWithoutBaseURL(t *testing.T) {
 		t.Errorf("sent %v, want nothing sent", sent)
 	}
 }
+
+// POST /responses/compact applies the same effort clamping and minimum output token floor as
+// /responses: a thinking suffix, body effort, or SIWC configuration_update effort outside the
+// model's catalog levels is clamped, and an integer max_output_tokens from 1 to 15 is raised to
+// 16. Supported efforts, uncataloged models, and requests without those fields stay unchanged.
+func TestCompactClampsEffortAndMinOutputTokens(t *testing.T) {
+	manifest := conformance.BuildExtension(t, "pluxy-extension.json", ".")
+	ext, err := host.Start(manifest, host.Options{Log: io.Discard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(ext.Stop)
+	noUltra := modelWithout(t, "ultra")
+
+	compactBody := func(t *testing.T, cred *protocol.Credential, model, suffix, body string) map[string]any {
+		t.Helper()
+		u := newSearchUpstream(t)
+		acct := searchAccount(t, u, "/v1", cred, nil)
+		req := llm.Request{
+			Model:   model,
+			Options: llm.Options{ThinkingSuffix: suffix},
+			Native:  &llm.Native{Format: llm.FormatOpenAIResponsesCompact, Body: json.RawMessage(body)},
+		}
+		s := ext.Endpoint(t.Context(), acct, req)
+		defer s.Close()
+		for {
+			ev := s.Next()
+			if ev.Type == llm.EventError {
+				t.Fatalf("compact failed: %+v", ev.Error)
+			}
+			if ev.Terminal() {
+				break
+			}
+		}
+		reqs := u.requests()
+		if len(reqs) != 1 || reqs[0].path != "/v1/responses/compact" {
+			t.Fatalf("upstream requests = %+v", reqs)
+		}
+		return reqs[0].body
+	}
+
+	effortFrom := func(body map[string]any) string {
+		r, _ := body["reasoning"].(map[string]any)
+		e, _ := r["effort"].(string)
+		return e
+	}
+
+	apiKey := &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-compact"}
+	siwcData, _ := json.Marshal(credentialData{SIWC: true, ClientID: "c1"})
+	siwcCred := &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "siwc-tok", Data: siwcData}
+
+	t.Run("thinking suffix clamped", func(t *testing.T) {
+		got := compactBody(t, apiKey, noUltra, "ultra", `{"model":"`+noUltra+`","input":"hi"}`)
+		if e := effortFrom(got); e != "max" {
+			t.Errorf("reasoning.effort = %q, want max", e)
+		}
+	})
+
+	t.Run("body effort clamped", func(t *testing.T) {
+		got := compactBody(t, apiKey, noUltra, "", `{"model":"`+noUltra+`","input":"hi","reasoning":{"effort":"ultra"}}`)
+		if e := effortFrom(got); e != "max" {
+			t.Errorf("reasoning.effort = %q, want max", e)
+		}
+	})
+
+	t.Run("SIWC configuration_update effort clamped", func(t *testing.T) {
+		body := `{"model":"` + noUltra + `","input":[{"type":"configuration_update","reasoning":{"effort":"ultra"}},{"type":"message","role":"user","content":"hi"}]}`
+		got := compactBody(t, siwcCred, noUltra, "", body)
+		if e := effortFrom(got); e != "max" {
+			t.Errorf("SIWC reasoning.effort = %q, want max", e)
+		}
+	})
+
+	t.Run("small max_output_tokens raised", func(t *testing.T) {
+		for _, tc := range []struct {
+			in   string
+			want float64
+		}{
+			{"1", 16},
+			{"15", 16},
+			{"16", 16},
+			{"32", 32},
+			{"0", 0},
+		} {
+			got := compactBody(t, apiKey, noUltra, "", `{"model":"`+noUltra+`","input":"hi","max_output_tokens":`+tc.in+`}`)
+			if v, ok := got["max_output_tokens"].(float64); !ok || v != tc.want {
+				t.Errorf("max_output_tokens %s became %v, want %v", tc.in, got["max_output_tokens"], tc.want)
+			}
+		}
+	})
+
+	t.Run("supported effort and uncataloged model unchanged", func(t *testing.T) {
+		got := compactBody(t, apiKey, noUltra, "medium", `{"model":"`+noUltra+`","input":"hi"}`)
+		if e := effortFrom(got); e != "medium" {
+			t.Errorf("supported effort = %q, want medium", e)
+		}
+		if _, ok := got["max_output_tokens"]; ok {
+			t.Errorf("unexpected max_output_tokens: %v", got["max_output_tokens"])
+		}
+		got = compactBody(t, apiKey, "not-in-the-catalog", "ultra", `{"model":"not-in-the-catalog","input":"hi","max_output_tokens":32}`)
+		if e := effortFrom(got); e != "ultra" {
+			t.Errorf("uncataloged model effort = %q, want ultra", e)
+		}
+		if v, ok := got["max_output_tokens"].(float64); !ok || v != 32 {
+			t.Errorf("uncataloged model max_output_tokens = %v, want 32", got["max_output_tokens"])
+		}
+	})
+}
