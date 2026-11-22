@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -153,12 +154,15 @@ func compactionBody(body []byte) ([]byte, error) {
 }
 
 // compactionReply turns Anthropic's reply to a compaction request into OpenAI's compaction
-// reply for model, created at the given Unix time, and its usage. A reply without a summary
-// (stop_reason other than compaction, which Anthropic sends with empty content when the
+// reply for model, created at the given Unix time, and its usage. An Anthropic error object
+// (type "error") is returned as an *llm.Error with the upstream's error details; a reply without
+// a summary (stop_reason other than compaction, which Anthropic sends with empty content when the
 // summarization call ended another way) is an error about this request.
 func compactionReply(raw []byte, model string, created int64) ([]byte, *llm.Usage, error) {
 	var r struct {
-		ID      string `json:"id"`
+		Type    string          `json:"type"`
+		ID      string          `json:"id"`
+		Error   json.RawMessage `json:"error"`
 		Content []struct {
 			Type    string `json:"type"`
 			Content string `json:"content"`
@@ -168,6 +172,25 @@ func compactionReply(raw []byte, model string, created int64) ([]byte, *llm.Usag
 	}
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return nil, nil, &llm.Error{Code: llm.CodeUpstream, Status: http.StatusBadGateway, Message: "the upstream's compaction reply is not JSON", Scope: llm.ScopeEndpoint}
+	}
+	if r.Type == "error" {
+		var ae struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		}
+		_ = json.Unmarshal(r.Error, &ae)
+		msg := ae.Message
+		if msg == "" {
+			msg = "upstream reported an error"
+		}
+		e := &llm.Error{
+			Code:         llm.CodeUpstream,
+			Message:      msg,
+			ProviderCode: ae.Type,
+			Scope:        llm.ScopeRequest,
+			Raw:          append(json.RawMessage(nil), raw...),
+		}
+		return nil, nil, llm.MarkContextOverflow(e)
 	}
 	summary := ""
 	for _, b := range r.Content {
@@ -179,7 +202,19 @@ func compactionReply(raw []byte, model string, created int64) ([]byte, *llm.Usag
 		return nil, nil, &llm.Error{Code: llm.CodeUpstream, Status: http.StatusBadGateway, Scope: llm.ScopeRequest,
 			Message: fmt.Sprintf("Claude wrote no compaction summary (stop_reason %q)", r.StopReason)}
 	}
-	in, cached, out := compactionUsage(r.Usage)
+	u := compactionUsage(r.Usage)
+	var in, cached, out int64
+	if u != nil {
+		if u.InputTokens != nil {
+			in = *u.InputTokens
+		}
+		if u.CachedInputTokens != nil {
+			cached = *u.CachedInputTokens
+		}
+		if u.OutputTokens != nil {
+			out = *u.OutputTokens
+		}
+	}
 	reply := map[string]any{
 		"id":         "resp_" + strings.TrimPrefix(r.ID, "msg_"),
 		"object":     "response.compaction",
@@ -201,36 +236,73 @@ func compactionReply(raw []byte, model string, created int64) ([]byte, *llm.Usag
 	if err != nil {
 		return nil, nil, err
 	}
-	u := &llm.Usage{InputTokens: &in, OutputTokens: &out, CachedInputTokens: &cached}
-	if len(r.Usage) > 0 {
-		u.Raw = append(json.RawMessage(nil), r.Usage...)
-	}
 	return body, u, nil
 }
 
 // compactionUsage reads a compaction reply's usage: the input (cache reads and writes included),
-// the cache reads and the output of its iterations, where Anthropic reports the summarization
-// call (the top-level counts are zero), or of the top level when it lists no iterations.
-func compactionUsage(raw json.RawMessage) (in, cached, out int64) {
+// the cache reads, the cache writes and the output of its iterations, where Anthropic reports the
+// summarization call (the top-level counts are zero), or of the top level when it lists no
+// iterations. Unreported counts stay nil; a missing or null usage returns nil.
+func compactionUsage(raw json.RawMessage) *llm.Usage {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return nil
+	}
 	type counts struct {
-		InputTokens              int64 `json:"input_tokens"`
-		OutputTokens             int64 `json:"output_tokens"`
-		CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
-		CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+		InputTokens              *int64 `json:"input_tokens"`
+		OutputTokens             *int64 `json:"output_tokens"`
+		CacheReadInputTokens     *int64 `json:"cache_read_input_tokens"`
+		CacheCreationInputTokens *int64 `json:"cache_creation_input_tokens"`
 	}
 	var u struct {
 		counts
 		Iterations []counts `json:"iterations"`
 	}
-	_ = json.Unmarshal(raw, &u)
+	if json.Unmarshal(raw, &u) != nil {
+		return &llm.Usage{Raw: append(json.RawMessage(nil), raw...)}
+	}
 	list := u.Iterations
 	if len(list) == 0 {
 		list = []counts{u.counts}
 	}
+	var (
+		in, cached, cacheWrite, out             int64
+		hasIn, hasCached, hasCacheWrite, hasOut bool
+	)
 	for _, c := range list {
-		in += c.InputTokens + c.CacheReadInputTokens + c.CacheCreationInputTokens
-		cached += c.CacheReadInputTokens
-		out += c.OutputTokens
+		if c.InputTokens != nil || c.CacheReadInputTokens != nil || c.CacheCreationInputTokens != nil {
+			hasIn = true
+			for _, p := range []*int64{c.InputTokens, c.CacheReadInputTokens, c.CacheCreationInputTokens} {
+				if p != nil {
+					in += *p
+				}
+			}
+		}
+		if c.CacheReadInputTokens != nil {
+			hasCached = true
+			cached += *c.CacheReadInputTokens
+		}
+		if c.CacheCreationInputTokens != nil {
+			hasCacheWrite = true
+			cacheWrite += *c.CacheCreationInputTokens
+		}
+		if c.OutputTokens != nil {
+			hasOut = true
+			out += *c.OutputTokens
+		}
 	}
-	return in, cached, out
+	res := &llm.Usage{Raw: append(json.RawMessage(nil), raw...)}
+	if hasIn {
+		res.InputTokens = &in
+	}
+	if hasOut {
+		res.OutputTokens = &out
+	}
+	if hasCached {
+		res.CachedInputTokens = &cached
+	}
+	if hasCacheWrite {
+		res.CacheWriteInputTokens = &cacheWrite
+	}
+	return res
 }
