@@ -167,6 +167,9 @@ func needed(req llm.Request) bool {
 			}
 			continue
 		}
+		if !t.IsFunction() {
+			continue
+		}
 		if bytes.Contains(t.Origin.Raw, []byte("defer_loading")) {
 			return true
 		}
@@ -261,6 +264,8 @@ func analyze(req llm.Request) *plan {
 			if !p.spec(t.Origin.Raw, path, 0) {
 				p.entries = append(p.entries, entry{tool: t})
 			}
+		case !t.IsFunction():
+			p.entries = append(p.entries, entry{tool: t})
 		default:
 			m := rawjson.Object(t.Origin.Raw)
 			var deferred bool

@@ -34,7 +34,7 @@ func downgradeAllowedTools(minor int, req llm.Request) (llm.Request, *llm.Error)
 	}
 	tools := make([]llm.Tool, 0, len(req.Tools))
 	for _, t := range req.Tools {
-		if t.Type == llm.ToolNative || !allowed[t.Name] {
+		if !t.IsFunction() || !allowed[t.Name] {
 			continue
 		}
 		tools = append(tools, t)

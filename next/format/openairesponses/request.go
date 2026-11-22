@@ -183,7 +183,42 @@ func parseTool(raw json.RawMessage, path string) llm.Tool {
 		Parameters  json.RawMessage `json:"parameters"`
 		Strict      *bool           `json:"strict"`
 	}
-	if json.Unmarshal(raw, &t) != nil || t.Type != "function" || t.Name == "" {
+	err := json.Unmarshal(raw, &t)
+	if err == nil && (t.Type == "web_search" || strings.HasPrefix(t.Type, "web_search_preview")) {
+		var w struct {
+			ExternalWebAccess *bool             `json:"external_web_access"`
+			MaxUses           *int              `json:"max_uses"`
+			UserLocation      *llm.UserLocation `json:"user_location"`
+			Filters           *struct {
+				AllowedDomains []string `json:"allowed_domains"`
+				BlockedDomains []string `json:"blocked_domains"`
+			} `json:"filters"`
+		}
+		_ = json.Unmarshal(raw, &w)
+		ws := &llm.WebSearchTool{
+			MaxUses:      w.MaxUses,
+			UserLocation: w.UserLocation,
+			Disabled:     w.ExternalWebAccess != nil && !*w.ExternalWebAccess,
+		}
+		if s, ok := rawjson.Text(rawjson.Object(raw)["search_context_size"]); ok {
+			ws.SearchContextSize = s
+		}
+		if w.Filters != nil {
+			if len(w.Filters.AllowedDomains) > 0 {
+				ws.AllowedDomains = w.Filters.AllowedDomains
+			}
+			if len(w.Filters.BlockedDomains) > 0 {
+				ws.BlockedDomains = w.Filters.BlockedDomains
+			}
+		}
+		return llm.Tool{
+			Type:      llm.ToolWebSearch,
+			Name:      t.Name,
+			WebSearch: ws,
+			Origin:    &llm.Origin{Format: format, Path: path, Raw: append(json.RawMessage(nil), raw...)},
+		}
+	}
+	if err != nil || t.Type != "function" || t.Name == "" {
 		// Hosted and custom tools are not function tools; they survive whole.
 		return llm.Tool{Type: llm.ToolNative, Origin: &llm.Origin{Format: format, Path: path, Raw: append(json.RawMessage(nil), raw...)}}
 	}

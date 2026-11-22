@@ -492,6 +492,7 @@ func serviceOptions(opts anthropicmessages.EncodeOptions, req llm.Request, baseU
 	anthropic := isAnthropicBase(baseURL)
 	opts.ServiceTier = anthropic
 	opts.FastMode = anthropic || req.SourceFormat() == llm.FormatOpenAIResponses
+	opts.WebSearch = anthropic
 	return opts
 }
 

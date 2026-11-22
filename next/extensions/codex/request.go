@@ -69,7 +69,12 @@ func buildRequest(req llm.Request, accountID string, s settings, a account, ws b
 		if host {
 			r, narrowed = narrowToModel(r)
 		}
-		enc, losses, err := openairesponses.EncodeRequestWith(r, openairesponses.EncodeOptions{ServiceTier: host, Verbosity: host})
+		enc, losses, err := openairesponses.EncodeRequestWith(r, openairesponses.EncodeOptions{
+			ServiceTier:   host,
+			Verbosity:     host,
+			WebSearch:     host,
+			WebSearchBare: isChatGPTHost(s, a),
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -121,6 +126,14 @@ func takesTier(s settings, a account) bool {
 	}
 	h := strings.ToLower(u.Hostname())
 	return h == "api.openai.com" || h == "chatgpt.com"
+}
+
+// isChatGPTHost reports whether the account's upstream is the ChatGPT backend (chatgpt.com), where
+// translated web search tools are sent bare ({"type":"web_search"}) because filters, user_location
+// and search_context_size are not documented there.
+func isChatGPTHost(s settings, a account) bool {
+	u, err := url.Parse(baseURL(s, a))
+	return err == nil && strings.EqualFold(u.Hostname(), "chatgpt.com")
 }
 
 // Fields the Codex endpoint does not take, removed from every request. Codex's own request has no

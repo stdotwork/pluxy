@@ -95,6 +95,11 @@ type EncodeOptions struct {
 	// without it the tier is left out and reported as dropped. A Gemini client's own tier is
 	// written either way.
 	ServiceTier bool
+	// WebSearch says the caller knows its upstream takes a GenerateContent googleSearch tool:
+	// a request from another format then carries a canonical web search tool (when no function
+	// tools are present), and without it the tool is left out and reported as dropped. A Gemini
+	// client's own googleSearch tool is written either way.
+	WebSearch bool
 }
 
 // EncodeRequestWith builds a GenerateContent request body as EncodeRequest does, changed by opts.
@@ -138,13 +143,53 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	}
 
 	toolNameMap := ToolNames(req)
+	hasFunctionTools := false
+	for _, t := range req.Tools {
+		if t.IsFunction() {
+			hasFunctionTools = true
+			break
+		}
+	}
 	var decls []json.RawMessage
 	var tools []json.RawMessage
+	hasOwnTools := false
 	for i, t := range req.Tools {
 		p := pathOf(t.Origin, fmt.Sprintf("tools[%d]", i))
+		if t.Type == llm.ToolWebSearch {
+			if t.Origin != nil && t.Origin.Format == format {
+				tools = append(tools, t.Origin.Raw)
+				hasOwnTools = true
+				continue
+			}
+			if !opts.WebSearch {
+				e.lose(llm.LossDropped, p, llm.WebSearchUnsent)
+				continue
+			}
+			if t.WebSearch != nil && t.WebSearch.Disabled {
+				e.lose(llm.LossDropped, p, "GenerateContent has no external_web_access setting for googleSearch")
+				continue
+			}
+			if !supportsGoogleSearch(req.Model) {
+				e.lose(llm.LossDropped, p, fmt.Sprintf("GenerateContent model %q does not support googleSearch", req.Model))
+				continue
+			}
+			if hasFunctionTools {
+				// The Vertex grounding page notes: "The Gemini API doesn't support combining search
+				// tools (such as `googleSearch`) with non-search tools (such as function calling ...)
+				// in the same `generateContent` request." Keep the function tools and drop search with a loss.
+				e.lose(llm.LossDropped, p, "GenerateContent does not combine googleSearch with functionDeclarations")
+				continue
+			}
+			tools = append(tools, json.RawMessage(`{"googleSearch":{}}`))
+			for _, l := range rawjson.WebSearchLosses(t, p, format, rawjson.WebSearchCarried{}) {
+				e.losses = llm.AddLoss(e.losses, l)
+			}
+			continue
+		}
 		if t.Type == llm.ToolNative {
 			if t.Origin != nil && t.Origin.Format == format {
 				tools = append(tools, t.Origin.Raw)
+				hasOwnTools = true
 			} else {
 				e.lose(llm.LossDropped, p, "GenerateContent has no such tool")
 			}
@@ -167,8 +212,12 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	}
 	if len(tools) > 0 {
 		out["tools"] = tools
-		if fc := e.functionCalling(o.ToolChoice, o.ParallelToolCalls, toolNameMap); fc != nil {
-			out["toolConfig"] = map[string]any{"functionCallingConfig": fc}
+		if len(decls) > 0 || hasOwnTools {
+			if fc := e.functionCalling(o.ToolChoice, o.ParallelToolCalls, toolNameMap); fc != nil {
+				out["toolConfig"] = map[string]any{"functionCallingConfig": fc}
+			}
+		} else if o.ToolChoice != nil && (o.ToolChoice.Mode == llm.ToolChoiceRequired || o.ToolChoice.Mode == llm.ToolChoiceTool) {
+			e.lose(llm.LossDropped, "tool_choice", "GenerateContent functionCallingConfig cannot force googleSearch without functionDeclarations")
 		}
 	}
 
@@ -594,4 +643,62 @@ func (e *encoder) serviceTier(req llm.Request, opts EncodeOptions, out map[strin
 	default:
 		e.lose(llm.LossDropped, llm.ServiceTierPath(req), fmt.Sprintf("GenerateContent has no %q service tier", tier))
 	}
+}
+
+// googleSearchModels are the Gemini model families listed on Google's Grounding with Google Search
+// pages (https://ai.google.dev/gemini-api/docs/google-search and
+// https://cloud.google.com/vertex-ai/generative-ai/docs/grounding/grounding-with-google-search).
+// Each entry matches either the exact name or that name followed by "-" (for version, preview or
+// variant suffixes such as -preview, -001 or -cyber).
+//
+// shortcut: decided from a name list of documented model families, since protocol v0 has no
+// per-model search capability. Move this to per-model capabilities when describe carries them.
+var googleSearchModels = []string{
+	"gemini-4-carbon",
+	"gemini-4-argon",
+	"gemini-4-neon",
+	"gemini-4-hydrogen",
+	"gemini-3.8-live",
+	"gemini-3.8-flash",
+	"gemini-3.7-flash",
+	"gemini-3.6-flash",
+	"gemini-3.5-flash-lite",
+	"gemini-3.5-flash",
+	"gemini-3.1-pro",
+	"gemini-3.1-flash-lite",
+	"gemini-3.1-flash-image",
+	"gemini-3-pro-image",
+	"gemini-3-flash",
+	"gemini-2.5-pro",
+	"gemini-2.5-flash-lite",
+	"gemini-2.5-flash",
+	"gemini-live-2.5-flash-native-audio",
+	"gemini-2.0-flash",
+	"gemini-robotics-er-2",
+	"gemini-nano-banana-2.1",
+}
+
+// supportsGoogleSearch reports whether model belongs to one of the Gemini model families listed in
+// googleSearchModels. Models neither page lists (such as gemini-3-pro-preview, gemini-2.0-flash-lite,
+// gemini-2.5-flash-image, Gemini 1.x, Gemma, embeddings or future unlisted families) return false.
+func supportsGoogleSearch(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	m = strings.TrimPrefix(m, "models/")
+	if strings.Contains(m, "embedding") || strings.Contains(m, "-tts") {
+		return false
+	}
+	if strings.HasPrefix(m, "gemini-2.0-flash-lite") {
+		return false
+	}
+	if strings.Contains(m, "-image") {
+		if !strings.HasPrefix(m, "gemini-3.1-flash-image") && !strings.HasPrefix(m, "gemini-3-pro-image") {
+			return false
+		}
+	}
+	for _, family := range googleSearchModels {
+		if m == family || strings.HasPrefix(m, family+"-") {
+			return true
+		}
+	}
+	return false
 }

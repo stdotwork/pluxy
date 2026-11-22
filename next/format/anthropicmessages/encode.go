@@ -167,6 +167,11 @@ type EncodeOptions struct {
 	// the caller sets it only when it adds that header to the request it sends. Left off, the
 	// priority tier is dropped and reported.
 	FastMode bool
+	// WebSearch says the caller knows its upstream takes a Messages web_search_20250305 tool:
+	// a request from another format then carries a canonical web search tool, and without it the
+	// tool is left out and reported as dropped. A Messages client's own tool is written either
+	// way.
+	WebSearch bool
 }
 
 // EncodeRequestWith builds a Messages request body as EncodeRequest does, changed by opts.
@@ -227,18 +232,50 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	}
 	var tools []json.RawMessage
 	for i, t := range req.Tools {
-		if len(allowed) > 0 && (t.Type == llm.ToolNative || !allowed[t.Name]) {
+		if len(allowed) > 0 && (!t.IsFunction() || !allowed[t.Name]) {
+			continue
+		}
+		if t.Type == llm.ToolWebSearch {
+			p := pathOf(t.Origin, fmt.Sprintf("tools[%d]", i))
+			if t.Origin != nil && t.Origin.Format == format {
+				tools = append(tools, t.Origin.Raw)
+			} else if ws, skip, carried, ok := webSearchTool(t); ok {
+				if !skip {
+					tools = append(tools, ws)
+					for _, l := range rawjson.WebSearchLosses(t, p, format, carried) {
+						l.Kind = llm.LossApproximated
+						e.losses = append(e.losses, l)
+					}
+				}
+			} else if !opts.WebSearch {
+				e.lose(llm.LossDropped, p, llm.WebSearchUnsent)
+			} else if t.WebSearch != nil && t.WebSearch.Disabled {
+			} else if !supportsWebSearch(req.Model) {
+				e.lose(llm.LossDropped, p, fmt.Sprintf("Messages model %q does not support %s", req.Model, webSearchToolType))
+			} else if ws, skip, carried, ok := canonicalWebSearchTool(t); ok {
+				if !skip {
+					tools = append(tools, ws)
+					e.losses = append(e.losses, rawjson.WebSearchLosses(t, p, format, carried)...)
+				}
+			} else {
+				e.lose(llm.LossDropped, p, "Messages has no such tool")
+			}
 			continue
 		}
 		if t.Type == llm.ToolNative {
+			p := pathOf(t.Origin, fmt.Sprintf("tools[%d]", i))
 			if t.Origin != nil && t.Origin.Format == format {
 				tools = append(tools, t.Origin.Raw)
-			} else if ws, skip, ok := webSearchTool(t); ok {
+			} else if ws, skip, carried, ok := webSearchTool(t); ok {
 				if !skip {
 					tools = append(tools, ws)
+					for _, l := range rawjson.WebSearchLosses(t, p, format, carried) {
+						l.Kind = llm.LossApproximated
+						e.losses = append(e.losses, l)
+					}
 				}
 			} else {
-				e.lose(llm.LossDropped, pathOf(t.Origin, fmt.Sprintf("tools[%d]", i)), "Messages has no such tool")
+				e.lose(llm.LossDropped, p, "Messages has no such tool")
 			}
 			continue
 		}
@@ -254,7 +291,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	if len(allowed) > 0 {
 		defined := map[string]bool{}
 		for _, t := range req.Tools {
-			if t.Type != llm.ToolNative {
+			if t.IsFunction() {
 				defined[t.Name] = true
 			}
 		}

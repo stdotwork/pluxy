@@ -369,6 +369,37 @@ func takesServiceTier(s settings) bool {
 	return err == nil && strings.EqualFold(u.Hostname(), "generativelanguage.googleapis.com")
 }
 
+// takesWebSearch reports whether the account's upstream is known to take Google's googleSearch
+// tool: the Gemini API at generativelanguage.googleapis.com, or a Vertex AI account at Google's
+// own aiplatform.googleapis.com hosts (default, global, regional {location}-aiplatform.googleapis.com,
+// or multi-regional aiplatform.{us,eu}.rep.googleapis.com). Any other base_url returns false.
+func takesWebSearch(s settings) bool {
+	if s.Vertex != nil {
+		if s.BaseURL == "" {
+			return true
+		}
+		u, err := url.Parse(s.BaseURL)
+		if err != nil || !strings.EqualFold(u.Scheme, "https") || u.User != nil {
+			return false
+		}
+		return isVertexHost(u.Hostname())
+	}
+	u, err := url.Parse(s.BaseURL)
+	return err == nil && strings.EqualFold(u.Hostname(), "generativelanguage.googleapis.com")
+}
+
+// isVertexHost reports whether host is one of Google's own Vertex AI endpoints.
+func isVertexHost(host string) bool {
+	h := strings.ToLower(strings.TrimSpace(host))
+	if h == "aiplatform.googleapis.com" || h == "aiplatform.us.rep.googleapis.com" || h == "aiplatform.eu.rep.googleapis.com" {
+		return true
+	}
+	if loc, ok := strings.CutSuffix(h, "-aiplatform.googleapis.com"); ok {
+		return loc != "" && !strings.HasPrefix(loc, "-") && !strings.HasSuffix(loc, "-") && locationPattern.MatchString(loc)
+	}
+	return false
+}
+
 // buildBodyOn builds the body as buildBody does for the Gemini API, for the account with settings
 // s. A translated request's service tier is left out of the body, and reported as dropped, for an
 // account that does not take one (takesServiceTier).
@@ -401,7 +432,10 @@ func buildBodyOn(req llm.Request, s settings) ([]byte, *llm.Translation, error) 
 		req.Options.MaxOutputTokens = nil
 		extra = append(extra, llm.Loss{Kind: llm.LossDropped, Path: "max_tokens", Detail: "a Messages client's required max_tokens is left to the Gemini model's own limit"})
 	}
-	body, losses, err := geminigenerate.EncodeRequestWith(req, geminigenerate.EncodeOptions{ServiceTier: takesServiceTier(s)})
+	body, losses, err := geminigenerate.EncodeRequestWith(req, geminigenerate.EncodeOptions{
+		ServiceTier: takesServiceTier(s),
+		WebSearch:   takesWebSearch(s),
+	})
 	if err != nil {
 		return nil, nil, err
 	}
