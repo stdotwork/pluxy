@@ -194,50 +194,16 @@ func TestGeminiImageToAllFormats(t *testing.T) {
 				}
 			}
 
-			// 2. Gemini -> Responses: message("Before."), image_generation_call, message("After.") in order.
-			rBody, rSSE, rAL, rSL, rSize := renderResponses(t, evs)
-			if len(rAL) != 0 || len(rSL) != 0 {
-				t.Errorf("gemini->responses losses: agg=%+v stream=%+v", rAL, rSL)
+			// 2. Gemini -> Responses: no invented image item, the text in order, a loss reported.
+			rBody, _, rAL, rSL, _ := renderResponses(t, evs)
+			if !hasLoss(rAL, "media.image") || !hasLoss(rSL, "media.image") {
+				t.Errorf("gemini->responses missing media.image loss: %+v / %+v", rAL, rSL)
 			}
-			if rSize < len(samplePNG) {
-				t.Errorf("responses aggregator size %d < media bytes %d", rSize, len(samplePNG))
+			if strings.Contains(string(rBody), "image_generation_call") {
+				t.Errorf("gemini->responses invented an image item: %s", rBody)
 			}
-			var rResp struct {
-				Output []struct {
-					ID      string `json:"id"`
-					Type    string `json:"type"`
-					Status  string `json:"status"`
-					Result  string `json:"result"`
-					Content []struct {
-						Text string `json:"text"`
-					} `json:"content"`
-				} `json:"output"`
-			}
-			if err := json.Unmarshal(rBody, &rResp); err != nil {
-				t.Fatalf("unmarshal responses body: %v", err)
-			}
-			if len(rResp.Output) != 3 {
-				t.Fatalf("responses output len = %d, want 3: %s", len(rResp.Output), rBody)
-			}
-			if rResp.Output[0].Type != "message" || rResp.Output[0].Content[0].Text != "Before." {
-				t.Errorf("output[0] = %+v, want Before.", rResp.Output[0])
-			}
-			img := rResp.Output[1]
-			if img.Type != "image_generation_call" || img.ID == "" || img.Status != "completed" || img.Result != samplePNG {
-				t.Errorf("output[1] = %+v, want completed image_generation_call with samplePNG", img)
-			}
-			if rResp.Output[2].Type != "message" || rResp.Output[2].Content[0].Text != "After." {
-				t.Errorf("output[2] = %+v, want After.", rResp.Output[2])
-			}
-			for _, wantEv := range []string{
-				"event: response.image_generation_call.in_progress",
-				"event: response.image_generation_call.completed",
-				`"type":"image_generation_call"`,
-				`"result":"` + samplePNG + `"`,
-			} {
-				if !strings.Contains(rSSE, wantEv) {
-					t.Errorf("responses SSE missing %q:\n%s", wantEv, rSSE)
-				}
+			if b, a := strings.Index(string(rBody), "Before."), strings.Index(string(rBody), "After."); b < 0 || a < b {
+				t.Errorf("gemini->responses text out of order: %s", rBody)
 			}
 
 			// 3. Gemini -> Chat: no media, text intact, loss reported.
@@ -343,7 +309,8 @@ func TestResponsesImageToAllFormats(t *testing.T) {
 
 			// 1. Same-format Responses -> Responses byte-identical.
 			rBody, rSSE, rAL, rSL, _ := renderResponses(t, evs)
-			if len(rAL) != 0 || len(rSL) != 0 {
+			// A stream rebuilt from a non-streamed reply has no raw items, so it reports the image.
+			if len(rAL) != 0 || (stream && len(rSL) != 0) {
 				t.Errorf("responses same-format losses: %+v / %+v", rAL, rSL)
 			}
 			if !stream && string(rBody) != nonStreamBody {
@@ -442,7 +409,7 @@ func TestChatAudioToAllFormats(t *testing.T) {
 			// 1. Chat -> Gemini: inlineData audio part!
 			wantData, wantMT := sampleWAV, "audio/wav"
 			if stream {
-				wantData, wantMT = samplePCM, "audio/pcm"
+				wantData, wantMT = samplePCM, "audio/pcm;rate=24000"
 			}
 			gBody, gSSE, gAL, gSL, gSize := renderGemini(t, evs)
 			if len(gAL) != 0 || len(gSL) != 0 {
@@ -458,19 +425,13 @@ func TestChatAudioToAllFormats(t *testing.T) {
 				t.Errorf("chat->gemini SSE missing audio: %s", gSSE)
 			}
 
-			// 2. Same-format Chat -> Chat preserves audio (id, expires_at, data, transcript).
-			cBody, cSSE, cAL, cSL, cSize := renderChat(t, evs)
-			if len(cAL) != 0 || len(cSL) != 0 {
-				t.Errorf("chat same-format losses: %+v / %+v", cAL, cSL)
+			// 2. Same-format Chat -> Chat: the reply stays as it is today, with no audio field.
+			cBody, cSSE, cAL, cSL, _ := renderChat(t, evs)
+			if !hasLoss(cAL, "media.audio") || !hasLoss(cSL, "media.audio") {
+				t.Errorf("chat same-format missing media.audio loss: %+v / %+v", cAL, cSL)
 			}
-			if cSize < len(wantData) {
-				t.Errorf("chat aggregator size %d < %d", cSize, len(wantData))
-			}
-			if !strings.Contains(string(cBody), `"id":"audio_abc"`) || !strings.Contains(string(cBody), `"expires_at":1730000000`) || !strings.Contains(string(cBody), wantData) {
-				t.Errorf("chat same-format body lost audio fields: %s", cBody)
-			}
-			if !strings.Contains(cSSE, `"id":"audio_abc"`) || !strings.Contains(cSSE, wantData) {
-				t.Errorf("chat same-format SSE lost audio fields: %s", cSSE)
+			if strings.Contains(string(cBody), `"audio"`) || strings.Contains(cSSE, `"audio"`) {
+				t.Errorf("chat same-format reply changed: %s / %s", cBody, cSSE)
 			}
 
 			// 3. Chat -> Responses & Messages: no audio output, loss reported.
@@ -494,9 +455,16 @@ func TestMediaOnlyReply(t *testing.T) {
 	}
 	evs = roundTripMediaEvents(t, evs)
 
-	rBody, rSSE, _, _, _ := renderResponses(t, evs)
-	if !strings.Contains(string(rBody), `"type":"image_generation_call"`) || !strings.Contains(rSSE, `"type":"image_generation_call"`) {
-		t.Errorf("media-only reply missing image_generation_call: body=%s", rBody)
+	rBody, rSSE, rAL, rSL, _ := renderResponses(t, evs)
+	if strings.Contains(string(rBody), "image_generation_call") || strings.Contains(rSSE, "image_generation_call") {
+		t.Errorf("media-only reply invented an image item: body=%s", rBody)
+	}
+	if !hasLoss(rAL, "media.image") || !hasLoss(rSL, "media.image") {
+		t.Errorf("media-only reply missing media.image loss: %+v / %+v", rAL, rSL)
+	}
+	gBody, _, _, _, _ := renderGemini(t, evs)
+	if !strings.Contains(string(gBody), samplePNG) {
+		t.Errorf("media-only reply lost its image for a Gemini client: %s", gBody)
 	}
 }
 

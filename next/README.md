@@ -971,10 +971,11 @@ Completions `message.audio` / streamed `delta.audio` parts. Only safe `image/*` 
 `image/svg+xml`) and `audio/*` parts with valid base64 are carried, bounded at 24 MiB per part
 and 96 MiB per reply so each event fits a protocol frame; unsafe, malformed, or oversized parts
 drop with a loss while the reply's text arrives whole. Gemini clients receive both images and
-audio as `inlineData` parts in order; Responses clients receive images as `image_generation_call`
-items (and report a loss for audio); cross-format Chat Completions and Messages clients receive no
-invented media fields or audio IDs, keep the model's text untouched, and report the dropped media;
-same-format replies pass through unchanged.
+audio as `inlineData` parts in order. Responses, Chat Completions and Messages clients receive no
+media from another format, because the fields that would hold it need an ID only the vendor issues,
+which the client would send back on its next turn: they keep the model's text and the media is
+reported as dropped. Same-format replies stay as they were, so a Chat upstream's audio still does
+not reach a Chat client.
 
 **Tool shapes.** A translated request's tools get the shapes Messages takes, as today's core
 gives them: a function name with characters other than letters, digits, `_` and `-`, or longer than

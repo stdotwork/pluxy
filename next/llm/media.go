@@ -167,7 +167,7 @@ func SniffImageMediaType(b64 string) string {
 		return "image/webp"
 	default:
 		trimmed := bytes.TrimLeft(head, " \t\r\n")
-		if len(trimmed) >= 4 && (bytes.EqualFold(trimmed[:4], []byte("<svg")) || bytes.EqualFold(trimmed[:5], []byte("<?xml"))) {
+		if bytes.HasPrefix(bytes.ToLower(trimmed), []byte("<svg")) || bytes.HasPrefix(bytes.ToLower(trimmed), []byte("<?xml")) {
 			return "image/svg+xml"
 		}
 		return "image/png"

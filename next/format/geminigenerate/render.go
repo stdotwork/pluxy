@@ -202,11 +202,8 @@ func (b *builder) eventLosses(ev llm.Event) {
 		b.start(ev.Response)
 	case llm.EventNative:
 		if b.upFormat == llm.FormatOpenAIChat {
-			// A Chat upstream's native events hold choices after the first, or audio metadata
-			// (id/expires_at/transcript) for same-format Chat clients.
-			if rawjson.Object(ev.Raw)["choices"] != nil {
-				b.lose("choices", "reply data in "+b.upFormat+" with no place in a GenerateContentResponse")
-			}
+			// A Chat upstream's native events hold choices after the first.
+			b.lose("choices", "reply data in "+b.upFormat+" with no place in a GenerateContentResponse")
 		}
 	case llm.EventFinish:
 		for _, k := range usageLosses(ev.Usage, b.upFormat) {

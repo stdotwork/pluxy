@@ -181,6 +181,9 @@ type StreamDecoder struct {
 	codeExecs   []llm.CodeExecution
 	mediaBytes  int
 	losses      []llm.Loss
+	// splitText is set once a media part has closed a text item: Google's offsets then no longer
+	// map onto one item's text, so citations carry no range.
+	splitText bool
 }
 
 type pendingExecCode struct {
@@ -291,7 +294,9 @@ func (d *StreamDecoder) decodeGrounding(raw json.RawMessage) {
 			partText := fullText
 			baseRune := 0
 			mapped := true
-			if d.multiChunk {
+			if d.splitText {
+				mapped = false
+			} else if d.multiChunk {
 				mapped = partIdx == 0
 			} else if partIdx > 0 {
 				if span, ok := d.partSpans[partIdx]; ok {
@@ -530,6 +535,7 @@ func (d *StreamDecoder) part(partIdx int, raw json.RawMessage, out []llm.Event) 
 			d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: "output media exceeds per-reply size limit"})
 			return out
 		}
+		d.splitText = d.splitText || d.text >= 0
 		out = d.closeItem(&d.think, out)
 		out = d.closeItem(&d.text, out)
 		d.mediaBytes += len(blob.Data)

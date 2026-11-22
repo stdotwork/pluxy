@@ -515,14 +515,9 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			d.attachTextMeta(textMeta{Logprobs: logprobs(ch.Logprobs), Refusal: true}, before, &out)
 		}
 		if len(ch.Delta.Audio) > 0 && string(ch.Delta.Audio) != "null" {
-			d.flushThink(&out)
-			media, rawAudio := decodeChatAudio(ch.Delta.Audio, "audio/pcm", "choices[0].delta.audio", &d.mediaBytes, &d.losses)
-			if media != nil {
-				d.closeItem(&d.reasoning, &out)
-				d.closeItem(&d.text, &out)
-				out = append(out, llm.Event{Type: llm.EventMedia, Media: media, Raw: rawAudio})
-			} else if rawAudio != nil {
-				out = append(out, llm.Event{Type: llm.EventNative, Raw: rawAudio})
+			// OpenAI streams audio only as pcm16 at 24 kHz, in pieces with no header to read.
+			if media := decodeChatAudio(ch.Delta.Audio, "audio/pcm;rate=24000", false, "choices[0].delta.audio", &d.mediaBytes, &d.losses); media != nil {
+				out = append(out, llm.Event{Type: llm.EventMedia, Media: media})
 			}
 		}
 		if len(ch.Delta.ToolCalls) > 0 {
@@ -706,49 +701,39 @@ type completionChoice struct {
 	Logprobs     json.RawMessage `json:"logprobs"`
 }
 
-// audioRaw wraps a Chat delta.audio or message.audio object for same-format passthrough.
-func audioRaw(raw json.RawMessage) json.RawMessage {
-	if len(raw) == 0 || string(raw) == "null" {
-		return nil
-	}
-	b, _ := json.Marshal(map[string]json.RawMessage{"audio": raw})
-	return b
-}
-
-// decodeChatAudio reads a Chat Completions message.audio or delta.audio object. When it carries
-// base64 audio bytes, it validates them against the safe-media and size rules and returns the
-// canonical OutputMedia alongside the wrapped raw audio for same-format Chat clients. An audio
-// chunk carrying only metadata (id, transcript, expires_at) returns nil media and the wrapped
-// raw audio so same-format Chat streams keep every chunk intact.
-func decodeChatAudio(raw json.RawMessage, defaultMT, path string, mediaBytes *int, losses *[]llm.Loss) (*llm.OutputMedia, json.RawMessage) {
-	if len(raw) == 0 || string(raw) == "null" {
-		return nil, nil
-	}
+// decodeChatAudio reads a Chat Completions message.audio or delta.audio object into canonical
+// output media, checking it against the safe-media and size rules. An object with no audio bytes
+// (id, transcript or expires_at alone) gives nil. sniff reads the media type from a whole clip's
+// header; a streamed piece has none.
+func decodeChatAudio(raw json.RawMessage, defaultMT string, sniff bool, path string, mediaBytes *int, losses *[]llm.Loss) *llm.OutputMedia {
 	var a struct {
 		Data string `json:"data"`
 	}
 	if json.Unmarshal(raw, &a) != nil {
 		*losses = llm.AddLoss(*losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: "malformed audio object"})
-		return nil, nil
+		return nil
 	}
 	if a.Data == "" {
-		return nil, audioRaw(raw)
+		return nil
 	}
 	if !llm.Base64Valid(a.Data) {
 		*losses = llm.AddLoss(*losses, llm.Loss{Kind: llm.LossDropped, Path: path + ".data", Detail: "invalid base64 data"})
-		return nil, nil
+		return nil
 	}
 	if len(a.Data) > llm.MaxOutputMediaPartBytes {
 		*losses = llm.AddLoss(*losses, llm.Loss{Kind: llm.LossDropped, Path: path + ".data", Detail: "output media part exceeds per-part size limit"})
-		return nil, nil
+		return nil
 	}
 	if *mediaBytes+len(a.Data) > llm.MaxOutputMediaReplyBytes {
 		*losses = llm.AddLoss(*losses, llm.Loss{Kind: llm.LossDropped, Path: path + ".data", Detail: "output media exceeds per-reply size limit"})
-		return nil, nil
+		return nil
 	}
 	*mediaBytes += len(a.Data)
-	mt := llm.SniffAudioMediaType(a.Data, defaultMT)
-	return &llm.OutputMedia{Kind: llm.MediaAudio, MediaType: mt, Data: a.Data}, audioRaw(raw)
+	mt := defaultMT
+	if sniff {
+		mt = llm.SniffAudioMediaType(a.Data, defaultMT)
+	}
+	return &llm.OutputMedia{Kind: llm.MediaAudio, MediaType: mt, Data: a.Data}
 }
 
 // extraContent returns a tool call's extra_content as the raw of its item.start event:
@@ -864,11 +849,8 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 			next++
 		}
 		if len(m.Audio) > 0 && string(m.Audio) != "null" {
-			media, rawAudio := decodeChatAudio(m.Audio, "audio/wav", "choices[0].message.audio", &mediaBytes, &losses)
-			if media != nil {
-				out = append(out, llm.Event{Type: llm.EventMedia, Media: media, Raw: rawAudio})
-			} else if rawAudio != nil {
-				out = append(out, llm.Event{Type: llm.EventNative, Raw: rawAudio})
+			if media := decodeChatAudio(m.Audio, "audio/wav", true, "choices[0].message.audio", &mediaBytes, &losses); media != nil {
+				out = append(out, llm.Event{Type: llm.EventMedia, Media: media})
 			}
 		}
 		for i, tc := range m.ToolCalls {

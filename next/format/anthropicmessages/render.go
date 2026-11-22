@@ -460,9 +460,7 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		b.lose("media."+ev.Media.Kind, "Messages has no output image or audio block")
 		return nil
 	case llm.EventNative:
-		if b.upFormat != llm.FormatOpenAIChat || rawjson.Object(ev.Raw)["choices"] != nil {
-			b.native()
-		}
+		b.native()
 		return nil
 	case llm.EventFinish:
 		b.upstreamData(ev)
@@ -555,7 +553,7 @@ func (a *Aggregator) Add(ev llm.Event) {
 			b.lose("media."+ev.Media.Kind, "Messages has no output image or audio block")
 		}
 	case llm.EventNative:
-		if b.upFormat != format && (b.upFormat != llm.FormatOpenAIChat || rawjson.Object(ev.Raw)["choices"] != nil) {
+		if b.upFormat != format {
 			b.native()
 		}
 	case llm.EventFinish:
