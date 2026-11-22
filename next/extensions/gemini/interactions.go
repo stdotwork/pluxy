@@ -49,6 +49,10 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 	switch format {
 	case llm.FormatOpenAIEmbeddings:
 		return embeddings(ctx, call, out)
+	case llm.FormatGeminiEmbedContent:
+		return geminiEmbedContent(ctx, call, out)
+	case llm.FormatGeminiBatchEmbedContents:
+		return geminiBatchEmbedContents(ctx, call, out)
 	case llm.FormatOpenAIImagesGenerations:
 		return images(ctx, call, out)
 	case llm.FormatOpenAIResponsesCompact:

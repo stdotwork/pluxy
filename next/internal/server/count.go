@@ -164,14 +164,32 @@ func (f clientFormat) nativeHeaders(r *http.Request, req *llm.Request) {
 	}
 }
 
-// countMethod is the Gemini method that counts tokens.
-const countMethod = "countTokens"
+// Gemini action methods served apart from GenerateContent.
+const (
+	countMethod              = "countTokens"
+	embedContentMethod       = "embedContent"
+	batchEmbedContentsMethod = "batchEmbedContents"
+)
 
-// geminiAction serves /v1beta/models/{model}:{method}: countTokens counts, the other methods
-// generate.
+// geminiAction serves /v1beta/models/{model}:{method}: countTokens counts, embedContent and
+// batchEmbedContents route as embedding endpoint calls, and the other methods generate.
 func geminiAction(w http.ResponseWriter, r *http.Request, g *Generation) {
-	if _, method, _ := strings.Cut(r.PathValue("action"), ":"); method == countMethod {
+	model, method, _ := strings.Cut(r.PathValue("action"), ":")
+	switch method {
+	case countMethod:
 		serveCount(w, r, g, geminiCount)
+		return
+	case embedContentMethod, batchEmbedContentsMethod:
+		if strings.TrimSpace(model) == "" {
+			geminiFormat.writeError(w, &llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusBadRequest, Scope: llm.ScopeRequest,
+				Message: "model is required in the request path"})
+			return
+		}
+		ep := geminiEmbedContentEndpoint
+		if method == batchEmbedContentsMethod {
+			ep = geminiBatchEmbedContentsEndpoint
+		}
+		serveEndpointWithModel(w, r, g, ep, model)
 		return
 	}
 	serve(w, r, g, geminiFormat)

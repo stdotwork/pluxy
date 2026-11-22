@@ -70,6 +70,24 @@ var compactEndpoint = endpoint{
 // extension that serves it makes the call.
 var embeddingsEndpoint = endpoint{format: llm.FormatOpenAIEmbeddings}
 
+// geminiEmbedContentEndpoint is Gemini's single-content embedding route,
+// POST /v1beta/models/{model}:embedContent.
+var geminiEmbedContentEndpoint = endpoint{
+	format:      llm.FormatGeminiEmbedContent,
+	modelPrefix: "models/",
+	googleKeys:  true,
+	errorBody:   geminigenerate.ErrorResponse,
+}
+
+// geminiBatchEmbedContentsEndpoint is Gemini's batch embedding route,
+// POST /v1beta/models/{model}:batchEmbedContents.
+var geminiBatchEmbedContentsEndpoint = endpoint{
+	format:      llm.FormatGeminiBatchEmbedContents,
+	modelPrefix: "models/",
+	googleKeys:  true,
+	errorBody:   geminigenerate.ErrorResponse,
+}
+
 // alphaSearchEndpoint is Codex's search endpoint. Its body is Codex's own shape, which core passes
 // on as it came; the model is optional. The headers are those today's core passes on.
 var alphaSearchEndpoint = endpoint{
@@ -166,6 +184,13 @@ var endpointRoutes = map[string]endpoint{
 // an account that serves its model as an endpoint call, and the account's extension writes the
 // reply. Routing moves on to another account until a reply starts, as for a generate request.
 func serveEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep endpoint) {
+	serveEndpointWithModel(w, r, g, ep, "")
+}
+
+// serveEndpointWithModel is serveEndpoint with an explicit model taken from the URL path (as for
+// Gemini's /v1beta/models/{model}:embedContent and :batchEmbedContents). When pathModel is set,
+// it takes precedence over any model field in the JSON body.
+func serveEndpointWithModel(w http.ResponseWriter, r *http.Request, g *Generation, ep endpoint, pathModel string) {
 	arrived := time.Now()
 	f := clientFormat{errorBody: ep.errorBody} // OpenAI-shaped errors unless the endpoint has its own
 	if g.Endpoint == nil {
@@ -210,8 +235,10 @@ func serveEndpoint(w http.ResponseWriter, r *http.Request, g *Generation, ep end
 			return
 		}
 	}
-	var model string
-	_ = json.Unmarshal(fields["model"], &model)
+	model := pathModel
+	if model == "" {
+		_ = json.Unmarshal(fields["model"], &model)
+	}
 	if rest, ok := strings.CutPrefix(strings.TrimSpace(model), ep.modelPrefix); ok && ep.modelPrefix != "" && rest != "" {
 		model = rest
 	}

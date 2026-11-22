@@ -23,6 +23,8 @@ func endpointCall(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return inputTokens(ctx, call, out)
 	case llm.FormatOpenAIEmbeddings:
 		return embeddings(ctx, call, out)
+	case llm.FormatGeminiEmbedContent, llm.FormatGeminiBatchEmbedContents:
+		return geminiEmbeddings(ctx, call, out, format)
 	case llm.FormatOpenAIImagesGenerations, llm.FormatOpenAIImagesEdits:
 		return images(ctx, call, out)
 	case llm.FormatOpenAIAudioSpeech, llm.FormatOpenAIAudioTranscriptions, llm.FormatOpenAIAudioTranslations:

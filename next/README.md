@@ -292,7 +292,8 @@ still blocks it, and so does a 404 from the generation path. On the three token 
 off, with that 404.
 
 Gemini clients call `POST /v1beta/models/{model}:generateContent` or `:streamGenerateContent`
-(a stream is server-sent events, with or without `alt=sse`), and `:countTokens`.
+(a stream is server-sent events, with or without `alt=sse`), `:countTokens`, `:embedContent`, and
+`:batchEmbedContents`.
 
 Once a streamed reply has started, core writes the client the SSE comment `: keep-alive` whenever
 15 seconds pass with nothing written to it, so a client or proxy does not drop a reply while the
@@ -1189,6 +1190,17 @@ one input at a time to `:embedContent`, `gemini-embedding-001` one input at a ti
 bytes). Token-ID array inputs are refused as unsupported on the account so routing can move on to
 another provider (returning 400 naming `input` if only Gemini accounts serve the model); streaming
 and thinking suffixes are refused with 400 on the request.
+Gemini's own `POST /v1beta/models/{model}:embedContent` and `:batchEmbedContents` are served too:
+on a Gemini API account the client's body and reply pass through unchanged (rewriting only a
+mismatched aliased model name), and on Vertex AI the same per-model rules apply (`:embedContent`
+with `embedContentConfig` for `gemini-embedding-2*`, single-instance `:predict` for
+`gemini-embedding-001`, and batched `:predict` up to 250 instances for other text embedding
+models; non-text parts on `:predict` answer retryable unsupported so core can try another
+account). On OpenAI-compatible accounts, `:embedContent` and `:batchEmbedContents` translate to
+`POST {base_url}/embeddings` and back on Chat and Responses wires (answering retryable
+unsupported for non-text parts, `taskType` and `title` so another account on the model can serve
+them), pass through on a Gemini wire (rewriting only a mismatched aliased model name), and answer
+unsupported on a Messages wire.
 
 **Compaction.** `POST /v1/responses/compact` (also `POST /backend-api/codex/responses/compact`) is
 served on every Gemini account (Gemini API keys, Vertex AI service accounts and express mode keys,
