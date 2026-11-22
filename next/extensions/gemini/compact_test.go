@@ -322,6 +322,81 @@ func TestCompactWithoutSummary(t *testing.T) {
 			if !errors.As(err, &e) || e.Retryable || e.Scope != llm.ScopeRequest || !strings.Contains(e.Message, tc.want) {
 				t.Errorf("err = %+v; want non-retryable ScopeRequest naming %q", err, tc.want)
 			}
+			if e.Usage != nil {
+				t.Errorf("err.Usage = %+v, want nil when reply has no usageMetadata", e.Usage)
+			}
+		})
+	}
+}
+
+func TestCompactWithoutSummaryKeepsUsage(t *testing.T) {
+	const fullUsage = `"usageMetadata":{"promptTokenCount":144,"cachedContentTokenCount":20,"candidatesTokenCount":76,"thoughtsTokenCount":200}`
+	cases := []struct {
+		name      string
+		reply     string
+		wantIn    int64
+		wantOut   int64
+		wantCache int64
+		wantThink int64
+		hasOut    bool
+	}{
+		{
+			name:      "max_tokens partial",
+			reply:     `{"candidates":[{"content":{"role":"model","parts":[{"text":"cut off"}]},"finishReason":"MAX_TOKENS","index":0}],` + fullUsage + `}`,
+			wantIn:    144,
+			wantOut:   276,
+			wantCache: 20,
+			wantThink: 200,
+			hasOut:    true,
+		},
+		{
+			name:      "safety finish",
+			reply:     `{"candidates":[{"content":{"role":"model","parts":[]},"finishReason":"SAFETY","index":0}],` + fullUsage + `}`,
+			wantIn:    144,
+			wantOut:   276,
+			wantCache: 20,
+			wantThink: 200,
+			hasOut:    true,
+		},
+		{
+			name:      "thought only on stop",
+			reply:     `{"candidates":[{"content":{"role":"model","parts":[{"text":"only thought","thought":true}]},"finishReason":"STOP","index":0}],` + fullUsage + `}`,
+			wantIn:    144,
+			wantOut:   276,
+			wantCache: 20,
+			wantThink: 200,
+			hasOut:    true,
+		},
+		{
+			name:   "prompt blocked",
+			reply:  `{"promptFeedback":{"blockReason":"SAFETY"},"usageMetadata":{"promptTokenCount":144}}`,
+			wantIn: 144,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := geminitest.New(t)
+			srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				io.WriteString(w, tc.reply)
+			}
+			cred := &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: srv.IssueKey()}
+			var rec recorder
+			err := compactTo(context.Background(), compactCall(settingsFor(srv, kindGemini), cred, "gemini-2.5-pro", compactSampleBody), &rec)
+			var e *llm.Error
+			if !errors.As(err, &e) {
+				t.Fatalf("err = %v, want *llm.Error", err)
+			}
+			if e.Usage == nil || e.Usage.InputTokens == nil || *e.Usage.InputTokens != tc.wantIn {
+				t.Fatalf("err.Usage = %+v, want input %d", e.Usage, tc.wantIn)
+			}
+			if tc.hasOut {
+				if e.Usage.OutputTokens == nil || *e.Usage.OutputTokens != tc.wantOut ||
+					e.Usage.CachedInputTokens == nil || *e.Usage.CachedInputTokens != tc.wantCache ||
+					e.Usage.ReasoningTokens == nil || *e.Usage.ReasoningTokens != tc.wantThink {
+					t.Errorf("err.Usage = %+v; want %d in (%d cached), %d out (%d reasoning)", e.Usage, tc.wantIn, tc.wantCache, tc.wantOut, tc.wantThink)
+				}
+			}
 		})
 	}
 }
