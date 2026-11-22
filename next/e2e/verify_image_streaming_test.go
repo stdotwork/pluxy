@@ -133,3 +133,64 @@ func TestVerifyStreamingImageEditJSONFromCodexBecomesSSE(t *testing.T) {
 		t.Errorf("uploaded image = %v, want a PNG data URL", image)
 	}
 }
+
+// When Codex's native edits endpoint ignores stream=true and answers with a JSON body larger than
+// its 64 MiB reply limit (maxEndpointReply), the extension must not buffer and convert it into a
+// completed image event; it must report an error event instead.
+func TestVerifyStreamingImageEditJSONOverReplyLimitFails(t *testing.T) {
+	const replyLimit = 64 << 20
+	u := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/images/edits" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		// Leading JSON whitespace pushes a valid small reply past maxEndpointReply.
+		pad := bytes.Repeat([]byte{' '}, 1<<20)
+		for written := 0; written < replyLimit; written += len(pad) {
+			if _, err := w.Write(pad); err != nil {
+				return
+			}
+		}
+		_, _ = io.WriteString(w, `{"created":1713833628,"data":[{"b64_json":"aW1hZ2U="}]}`)
+	}))
+	t.Cleanup(u.Close)
+
+	base := runCore(t, map[string]any{
+		"listen":         "127.0.0.1:0",
+		"management_key": managementKey,
+		"client_keys":    []string{clientKey},
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "codex", "pluxy-extension.json"),
+			"accounts": []any{map[string]any{
+				"id":         "codex-image",
+				"settings":   map[string]any{"base_url": u.URL},
+				"credential": map[string]any{"kind": "api_key", "api_key": upstreamKey},
+			}},
+		},
+	})
+
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, base+"/v1/images/edits",
+		strings.NewReader(`{"model":"gpt-image-2","prompt":"put a hat on the cat","stream":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+clientKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "event: image_edit.completed") {
+		t.Fatalf("reply over %d MiB limit was converted to image_edit.completed: %s", replyLimit>>20, raw)
+	}
+	if !strings.Contains(string(raw), "event: error\n") {
+		t.Fatalf("reply over %d MiB limit did not emit an error event (status %d): %s", replyLimit>>20, resp.StatusCode, raw)
+	}
+}

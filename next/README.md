@@ -856,8 +856,9 @@ Claude 4.6 and later, and a thinking budget from Claude 3.7 to 4.5 (low 1024, me
 24576 tokens); a model name the extension does not know as a Claude model gets no thinking
 settings, and the effort is reported as dropped. A Responses client's `reasoning.summary` becomes
 `thinking.display` (`auto`, `concise` and `detailed` as `summarized`, `none` as `omitted`). A
-client's `json_schema` response format goes as `output_config.format` (`json_object` drops as
-unsupported), a Messages client's `output_config.format` carries over to other formats, and a
+client's `json_schema` response format goes as `output_config.format` (on Anthropic's own API it is
+fitted to the schema rules there, or left out with a reported loss on a model or schema that API
+refuses; `json_object` drops as unsupported), a Messages client's `output_config.format` carries over to other formats, and a
 content-filter stop from another upstream becomes `stop_reason` `"refusal"`.
 
 **Thinking settings.** Every request, a Messages client's own included, has its thinking settings
