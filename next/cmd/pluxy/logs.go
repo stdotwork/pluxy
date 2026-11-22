@@ -24,6 +24,12 @@ var stdoutIsTerminal = func(w io.Writer) bool {
 	return ok && isInteractive(r)
 }
 
+// stderrIsTerminal reports whether w, a command's standard error, is a terminal.
+var stderrIsTerminal = func(w io.Writer) bool {
+	r, ok := w.(io.Reader) // an *os.File, which isInteractive checks
+	return ok && isInteractive(r)
+}
+
 var logsErrorsCommand = command{words: "logs errors", args: []string{"name"}, optional: true,
 	routes:  []string{"GET /request-error-logs", "GET /request-error-logs/{name}"},
 	summary: "the error logs, or one error log's text",

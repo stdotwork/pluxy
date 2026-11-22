@@ -404,7 +404,12 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 					}
 					// A person may give the value again: the prompt is shown once more, with what
 					// core said below it.
-					x.eprintf("the sign-in did not take that (%v); give it again\n", err)
+					msg := fmt.Sprintf("the sign-in did not take that (%v); give it again\n", err)
+					if stderrIsTerminal(x.stderr) {
+						_ = writeEscaped(x.stderr, []byte(msg))
+					} else {
+						x.eprintf("%s", msg)
+					}
 					shown = ""
 					continue
 				}
@@ -511,7 +516,12 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 				return x.cancelLogin(l.ID, fmt.Errorf("the sign-in could not be read: %w", err))
 			default:
 				failures++
-				x.eprintf("could not read the sign-in (%v); trying again\n", err)
+				msg := fmt.Sprintf("could not read the sign-in (%v); trying again\n", err)
+				if stderrIsTerminal(x.stderr) {
+					_ = writeEscaped(x.stderr, []byte(msg))
+				} else {
+					x.eprintf("%s", msg)
+				}
 				timer.Reset(accountLoginWait << failures)
 			}
 		}
@@ -608,7 +618,7 @@ func (g *promptInput) ask(x *invocation) {
 		return
 	}
 	g.asked[f.Name] = true
-	x.eprintf("%s: ", fieldName(*f))
+	x.eprintf("%s: ", x.errCell(fieldName(*f)))
 }
 
 // maxInputValue bounds one value a sign-in asks for, as maxImportFile bounds the file the import
@@ -842,13 +852,17 @@ func (x *invocation) loginPrompt(p *protocol.Prompt) {
 		return
 	}
 	if p.Message != "" {
-		x.eprintf("%s\n", p.Message)
+		if stderrIsTerminal(x.stderr) {
+			_ = writeEscaped(x.stderr, []byte(p.Message+"\n"))
+		} else {
+			x.eprintf("%s\n", p.Message)
+		}
 	}
 	if p.Kind == protocol.PromptDevice && p.UserCode != "" {
-		x.eprintf("code: %s\n", p.UserCode)
+		x.eprintf("code: %s\n", x.errCell(p.UserCode))
 	}
 	if u := promptURL(p); u != "" {
-		x.eprintf("open: %s\n", u)
+		x.eprintf("open: %s\n", x.errCell(u))
 	}
 }
 
@@ -890,7 +904,7 @@ func (x *invocation) startInputs(fields []protocol.LoginInput, in signInInputs, 
 		// The echo is set before the label is shown, and stays as it is until the value is whole.
 		lines.field(&f)
 		if x.prompts() {
-			x.eprintf("%s: ", fieldName(f))
+			x.eprintf("%s: ", x.errCell(fieldName(f)))
 		}
 		value := newInputValue(f)
 		var text string
@@ -1226,9 +1240,9 @@ func runAccountImport(x *invocation) error {
 		if x.json {
 			return x.writeBody(body)
 		}
-		line := fmt.Sprintf("account %s imported: project %s, location %s", r.Account, r.ProjectID, r.Location)
+		line := fmt.Sprintf("account %s imported: project %s, location %s", x.cell(r.Account), x.cell(r.ProjectID), x.cell(r.Location))
 		if r.Email != "" {
-			line += ", " + r.Email
+			line += ", " + x.cell(r.Email)
 		}
 		x.printf("%s\n", line)
 		return nil
@@ -1256,7 +1270,7 @@ func runAccountImport(x *invocation) error {
 			x.table(rows)
 		}
 		for _, why := range r.Skipped {
-			x.printf("skipped: %s\n", why)
+			x.printf("skipped: %s\n", x.cell(why))
 		}
 	})
 }
@@ -1289,7 +1303,7 @@ func printQuota(x *invocation, r management.QuotaReply) {
 		return
 	}
 	if q.Plan != "" {
-		x.printf("plan: %s\n", q.Plan)
+		x.printf("plan: %s\n", x.cell(q.Plan))
 	}
 	if q.PlanEndsAt > 0 {
 		x.printf("subscription ends: %s\n", time.Unix(q.PlanEndsAt, 0).Local().Format("2006-01-02 15:04"))
