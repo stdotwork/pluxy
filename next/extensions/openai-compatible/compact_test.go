@@ -579,3 +579,17 @@ func TestNoEndpoint(t *testing.T) {
 		}
 	})
 }
+
+// A count path the vendor lacks says the account cannot count, so core can answer with its estimate;
+// a 404 that names an unknown model stays what it was.
+func TestNoCountEndpoint(t *testing.T) {
+	var e *llm.Error
+	err := noCountEndpoint(&llm.Error{Code: llm.CodeNotFound, Status: 404, Scope: llm.ScopeModel}, "token count", "/x")
+	if !errors.As(err, &e) || e.Code != llm.CodeUnsupported || e.Scope != llm.ScopeCredential || e.Retryable || e.Status != 404 {
+		t.Errorf("missing path = %+v, want a non-retryable unsupported on the credential, status 404", err)
+	}
+	model := &llm.Error{Code: llm.CodeNotFound, Status: 404, Scope: llm.ScopeModel, Retryable: true}
+	if got := noCountEndpoint(model, "token count", "/x"); got != error(model) || model.Code != llm.CodeNotFound || model.Scope != llm.ScopeModel {
+		t.Errorf("unknown model = %+v, want it unchanged", got)
+	}
+}
