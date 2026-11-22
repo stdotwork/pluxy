@@ -249,9 +249,10 @@ field it does not list. A client's own body goes upstream as it came, whatever t
 
 For an OpenAI-compatible account whose vendor offers a usage or balance endpoint for a normal API
 key, `GET /v0/management/accounts/{id}/quota` reads it: OpenRouter's `GET /api/v1/key` (reporting
-the plan `free` or `paid` from `is_free_tier`, the key's USD spending limit and remaining allowance
-`limit`, the daily, weekly and monthly USD spend `usage_daily`, `usage_weekly` and `usage_monthly`,
-and `free_model_daily_requests` when present) or DeepSeek's `GET /user/balance` (reporting `available`
+the plan `free` or `paid` from `is_free_tier`, the USD spending limit `limit` from `effective_budget`
+when present or otherwise the key's `limit` and `limit_remaining`, the daily, weekly and monthly USD
+spend `usage_daily`, `usage_weekly` and `usage_monthly`, and `free_model_daily_requests` when
+present) or DeepSeek's `GET /user/balance` (reporting `available`
 or `unavailable` from `is_available` and each currency's `total_balance` from `balance_infos` as
 `balance_<currency>`). An account's `settings` (or its `api_key` login input) may set `"quota"` to
 `"openrouter"`, `"deepseek"` or `"none"`; when unset, the extension picks by `base_url`'s host

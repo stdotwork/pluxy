@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -176,6 +177,21 @@ func resetIntervalSeconds(interval string) int64 {
 	}
 }
 
+func parseUnixTime(s string) int64 {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return 0
+	}
+	if u := t.Unix(); u > 0 {
+		return u
+	}
+	return 0
+}
+
 // parseOpenRouterQuota parses OpenRouter's GET /api/v1/key response.
 func parseOpenRouterQuota(body []byte) (*protocol.Quota, error) {
 	body = bytes.TrimSpace(body)
@@ -189,15 +205,24 @@ func parseOpenRouterQuota(body []byte) (*protocol.Quota, error) {
 	if json.Unmarshal(outer.Data, &fields) != nil || len(fields) == 0 {
 		return nil, &llm.Error{Code: llm.CodeUpstream, Message: "OpenRouter's key reply has no data object", Scope: llm.ScopeEndpoint}
 	}
+	type openRouterBudget struct {
+		Scope         string   `json:"scope"`
+		LimitUSD      quotaNum `json:"limit_usd"`
+		SpendUSD      quotaNum `json:"spend_usd"`
+		RemainingUSD  quotaNum `json:"remaining_usd"`
+		ResetInterval string   `json:"reset_interval"`
+		ResetsAt      string   `json:"resets_at"`
+	}
 	var d struct {
-		Limit                  quotaNum `json:"limit"`
-		LimitRemaining         quotaNum `json:"limit_remaining"`
-		LimitReset             string   `json:"limit_reset"`
-		Usage                  quotaNum `json:"usage"`
-		UsageDaily             quotaNum `json:"usage_daily"`
-		UsageWeekly            quotaNum `json:"usage_weekly"`
-		UsageMonthly           quotaNum `json:"usage_monthly"`
-		IsFreeTier             *bool    `json:"is_free_tier"`
+		Limit                  quotaNum          `json:"limit"`
+		LimitRemaining         quotaNum          `json:"limit_remaining"`
+		LimitReset             string            `json:"limit_reset"`
+		EffectiveBudget        *openRouterBudget `json:"effective_budget"`
+		Usage                  quotaNum          `json:"usage"`
+		UsageDaily             quotaNum          `json:"usage_daily"`
+		UsageWeekly            quotaNum          `json:"usage_weekly"`
+		UsageMonthly           quotaNum          `json:"usage_monthly"`
+		IsFreeTier             *bool             `json:"is_free_tier"`
 		FreeModelDailyRequests *struct {
 			Used      quotaNum `json:"used"`
 			Limit     quotaNum `json:"limit"`
@@ -218,7 +243,50 @@ func parseOpenRouterQuota(body []byte) (*protocol.Quota, error) {
 	}
 
 	_, hasLimitKey := fields["limit"]
-	if d.Limit.ok || d.LimitRemaining.ok || d.Usage.ok || hasLimitKey {
+	if b := d.EffectiveBudget; b != nil && (b.LimitUSD.ok || b.RemainingUSD.ok || b.SpendUSD.ok) {
+		label := "Budget limit"
+		if strings.TrimSpace(b.Scope) == "key_limit" {
+			label = "Key limit"
+		}
+		lim := protocol.QuotaLimit{
+			ID:            "limit",
+			Label:         label,
+			Unit:          "usd",
+			ResetsAt:      parseUnixTime(b.ResetsAt),
+			WindowSeconds: resetIntervalSeconds(b.ResetInterval),
+		}
+		if b.LimitUSD.ok {
+			v := b.LimitUSD.v
+			lim.Limit = &v
+		}
+		if b.RemainingUSD.ok {
+			r := b.RemainingUSD.v
+			lim.Remaining = &r
+		} else if b.LimitUSD.ok && b.SpendUSD.ok {
+			r := math.Max(0, b.LimitUSD.v-b.SpendUSD.v)
+			lim.Remaining = &r
+		}
+		if b.SpendUSD.ok {
+			u := b.SpendUSD.v
+			lim.Used = &u
+		} else if b.LimitUSD.ok && b.RemainingUSD.ok {
+			u := math.Max(0, b.LimitUSD.v-b.RemainingUSD.v)
+			lim.Used = &u
+		}
+		switch {
+		case b.LimitUSD.ok && b.LimitUSD.v > 0 && b.RemainingUSD.ok:
+			p := clampPercent((b.LimitUSD.v - b.RemainingUSD.v) / b.LimitUSD.v * 100)
+			lim.UsedPercent = &p
+		case b.LimitUSD.ok && b.LimitUSD.v > 0 && lim.Used != nil:
+			p := clampPercent(*lim.Used / b.LimitUSD.v * 100)
+			lim.UsedPercent = &p
+		case (b.RemainingUSD.ok && b.RemainingUSD.v <= 0) || (b.LimitUSD.ok && b.LimitUSD.v <= 0 && lim.Used != nil && *lim.Used > 0):
+			p := 100.0
+			lim.UsedPercent = &p
+		}
+		q.Limits = append(q.Limits, lim)
+	} else if d.Limit.ok || d.LimitRemaining.ok || d.Usage.ok || hasLimitKey {
+		windowed := strings.TrimSpace(d.LimitReset) != ""
 		lim := protocol.QuotaLimit{
 			ID:            "limit",
 			Label:         "Key limit",
@@ -231,15 +299,11 @@ func parseOpenRouterQuota(body []byte) (*protocol.Quota, error) {
 			if d.LimitRemaining.ok {
 				r := d.LimitRemaining.v
 				lim.Remaining = &r
-			}
-			if d.Usage.ok {
-				u := d.Usage.v
-				lim.Used = &u
-			} else if d.LimitRemaining.ok {
 				u := math.Max(0, d.Limit.v-d.LimitRemaining.v)
 				lim.Used = &u
-			}
-			if lim.Remaining == nil && d.Usage.ok {
+			} else if !windowed && d.Usage.ok {
+				u := d.Usage.v
+				lim.Used = &u
 				r := math.Max(0, d.Limit.v-d.Usage.v)
 				lim.Remaining = &r
 			}
@@ -247,16 +311,16 @@ func parseOpenRouterQuota(body []byte) (*protocol.Quota, error) {
 			case d.Limit.v > 0 && d.LimitRemaining.ok:
 				p := clampPercent((d.Limit.v - d.LimitRemaining.v) / d.Limit.v * 100)
 				lim.UsedPercent = &p
-			case d.Limit.v > 0 && d.Usage.ok:
+			case d.Limit.v > 0 && !windowed && d.Usage.ok:
 				p := clampPercent(d.Usage.v / d.Limit.v * 100)
 				lim.UsedPercent = &p
-			case (d.LimitRemaining.ok && d.LimitRemaining.v <= 0) || (d.Usage.ok && d.Usage.v > 0):
+			case (d.LimitRemaining.ok && d.LimitRemaining.v <= 0) || (!windowed && d.Usage.ok && d.Usage.v > 0):
 				p := 100.0
 				lim.UsedPercent = &p
 			}
 		} else {
 			lim.Unlimited = !d.LimitRemaining.ok
-			if d.Usage.ok {
+			if !windowed && d.Usage.ok {
 				u := d.Usage.v
 				lim.Used = &u
 			}
