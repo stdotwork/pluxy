@@ -57,9 +57,8 @@ func TestQuotaBeforeRateLimit(t *testing.T) {
 			if q == nil || q.Limits == nil || len(q.Limits) != 0 {
 				t.Fatalf("quota = %+v, want non-nil empty limits slice before any 429", q)
 			}
-			lowPlan := strings.ToLower(q.Plan)
-			if !strings.Contains(lowPlan, "no rate-limit") || !strings.Contains(lowPlan, "last-seen") {
-				t.Errorf("plan = %q, want it to state no rate-limit reply seen yet and last-seen caveat", q.Plan)
+			if q.Plan != "" {
+				t.Errorf("plan = %q, want empty (Google reports no account plan)", q.Plan)
 			}
 			var raw struct {
 				Source   string `json:"source"`
@@ -69,8 +68,9 @@ func TestQuotaBeforeRateLimit(t *testing.T) {
 			if err := json.Unmarshal(q.Raw, &raw); err != nil {
 				t.Fatalf("raw = %s, unmarshal error: %v", q.Raw, err)
 			}
-			if raw.Source != "last_429" || raw.Observed || raw.Note == "" {
-				t.Errorf("raw = %+v, want source=last_429, observed=false, and note", raw)
+			lowNote := strings.ToLower(raw.Note)
+			if raw.Source != "last_429" || raw.Observed || !strings.Contains(lowNote, "no 429") || !strings.Contains(lowNote, "no quota reading") {
+				t.Errorf("raw = %+v, want source=last_429, observed=false, and note stating no 429 seen yet", raw)
 			}
 		})
 	}
@@ -160,11 +160,8 @@ func TestQuotaParsesQuotaFailureRetryInfoErrorInfo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("quota failed: %v", err)
 	}
-	if !strings.Contains(strings.ToLower(q.Plan), "last-seen") || !strings.Contains(strings.ToLower(q.Plan), "not a live reading") {
-		t.Errorf("plan = %q, want last-seen / not a live reading caveat", q.Plan)
-	}
-	if !strings.Contains(q.Plan, "RATE_LIMIT_EXCEEDED") {
-		t.Errorf("plan = %q, want ErrorInfo reason RATE_LIMIT_EXCEEDED", q.Plan)
+	if q.Plan != "" {
+		t.Errorf("plan = %q, want empty (Google reports no account plan)", q.Plan)
 	}
 	if len(q.Limits) != 2 {
 		t.Fatalf("len(limits) = %d, want 2: %+v", len(q.Limits), q.Limits)
@@ -205,6 +202,7 @@ func TestQuotaParsesQuotaFailureRetryInfoErrorInfo(t *testing.T) {
 		Source       string            `json:"source"`
 		Observed     bool              `json:"observed"`
 		ObservedAt   time.Time         `json:"observed_at"`
+		Note         string            `json:"note"`
 		Status       string            `json:"status"`
 		RetryDelayMS int64             `json:"retry_delay_ms"`
 		ResetsAt     int64             `json:"resets_at"`
@@ -213,6 +211,10 @@ func TestQuotaParsesQuotaFailureRetryInfoErrorInfo(t *testing.T) {
 	}
 	if err := json.Unmarshal(q.Raw, &raw); err != nil {
 		t.Fatalf("raw = %s, unmarshal: %v", q.Raw, err)
+	}
+	lowNote := strings.ToLower(raw.Note)
+	if !strings.Contains(lowNote, "last-seen") || !strings.Contains(lowNote, "not a live reading") || !strings.Contains(raw.Note, "RATE_LIMIT_EXCEEDED") {
+		t.Errorf("raw.note = %q, want last-seen caveat and ErrorInfo reason RATE_LIMIT_EXCEEDED", raw.Note)
 	}
 	if raw.Source != "last_429" || !raw.Observed || raw.Status != "RESOURCE_EXHAUSTED" || raw.RetryDelayMS != 44200 || len(raw.Violations) != 2 || raw.ErrorInfo["reason"] != "RATE_LIMIT_EXCEEDED" {
 		t.Errorf("unexpected raw payload: %+v", raw)
@@ -439,6 +441,81 @@ func TestQuotaDuplicateViolationIDsAndVertexArrayAndRedaction(t *testing.T) {
 	})
 }
 
+func TestQuotaCapsViolationsAtProtocolMax(t *testing.T) {
+	const total = protocol.MaxQuotaLimits + 1
+	var violations strings.Builder
+	for i := range total {
+		if i > 0 {
+			violations.WriteByte(',')
+		}
+		fmt.Fprintf(&violations, `{"quotaId":"Quota-%d","quotaValue":"10"}`, i)
+	}
+	body := `{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","details":[{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[` + violations.String() + `]}]}}`
+
+	srv := geminitest.New(t)
+	srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		io.WriteString(w, body)
+	}
+	acct := protocol.Account{
+		ID:         "quota-cap-violations",
+		Settings:   settingsFor(srv, kindGemini),
+		Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: srv.IssueKey()},
+	}
+	_ = generateTo(context.Background(), sdk.Call{
+		Account: acct,
+		Request: llm.Request{Model: "gemini-2.5-flash", Native: &llm.Native{Format: llm.FormatGeminiGenerate, Body: json.RawMessage(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`)}},
+	}, &recorder{})
+
+	q, err := quota(context.Background(), sdk.QuotaCall{ID: "q", Account: acct})
+	if err != nil {
+		t.Fatalf("quota failed: %v", err)
+	}
+	if len(q.Limits) != protocol.MaxQuotaLimits {
+		t.Fatalf("len(limits) = %d, want %d", len(q.Limits), protocol.MaxQuotaLimits)
+	}
+	seen := make(map[string]bool, len(q.Limits))
+	for i, l := range q.Limits {
+		if l.ID == "" || seen[l.ID] {
+			t.Fatalf("limits[%d].ID = %q is empty or duplicate", i, l.ID)
+		}
+		seen[l.ID] = true
+	}
+	var raw struct {
+		Violations []json.RawMessage `json:"violations"`
+	}
+	if err := json.Unmarshal(q.Raw, &raw); err != nil {
+		t.Fatalf("unmarshal raw: %v", err)
+	}
+	if len(raw.Violations) > protocol.MaxQuotaLimits {
+		t.Errorf("len(raw.violations) = %d, want <= %d", len(raw.Violations), protocol.MaxQuotaLimits)
+	}
+
+	t.Run("stored observation above max is also capped", func(t *testing.T) {
+		oversized := make([]quotaViolation, protocol.MaxQuotaLimits+5)
+		for i := range oversized {
+			oversized[i] = quotaViolation{QuotaID: fmt.Sprintf("Stored-%d", i)}
+		}
+		acct2 := protocol.Account{
+			ID:         "quota-cap-stored",
+			Settings:   settingsFor(srv, kindGemini),
+			Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: srv.IssueKey()},
+		}
+		lastRateLimits.set(acct2.ID, rateLimitObservation{
+			ObservedAt: time.Now().UTC(),
+			Violations: oversized,
+		})
+		q2, err := quota(context.Background(), sdk.QuotaCall{ID: "q2", Account: acct2})
+		if err != nil {
+			t.Fatalf("quota failed: %v", err)
+		}
+		if len(q2.Limits) != protocol.MaxQuotaLimits {
+			t.Fatalf("len(limits) = %d, want %d", len(q2.Limits), protocol.MaxQuotaLimits)
+		}
+	})
+}
+
 func TestQuotaConcurrentAccess(t *testing.T) {
 	srv := geminitest.New(t)
 	srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
@@ -461,13 +538,39 @@ func TestQuotaConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 			for range 5 {
 				_ = generateTo(context.Background(), call, &recorder{})
-				if _, err := quota(context.Background(), sdk.QuotaCall{ID: "q", Account: acct}); err != nil {
+				q, err := quota(context.Background(), sdk.QuotaCall{ID: "q", Account: acct})
+				if err != nil {
 					t.Errorf("concurrent quota error: %v", err)
+					continue
+				}
+				if len(q.Limits) != 1 || q.Limits[0].ResetsAt == 0 {
+					t.Errorf("concurrent quota did not record 429: %+v", q.Limits)
 				}
 			}
 		}()
 	}
 	wg.Wait()
+
+	q, err := quota(context.Background(), sdk.QuotaCall{ID: "q-final", Account: acct})
+	if err != nil {
+		t.Fatalf("final quota error: %v", err)
+	}
+	if q.Plan != "" {
+		t.Errorf("final plan = %q, want empty", q.Plan)
+	}
+	if len(q.Limits) != 1 || q.Limits[0].ResetsAt == 0 {
+		t.Fatalf("final limits = %+v, want 1 limit with resets_at from recorded 429", q.Limits)
+	}
+	var raw struct {
+		Observed     bool  `json:"observed"`
+		RetryDelayMS int64 `json:"retry_delay_ms"`
+	}
+	if err := json.Unmarshal(q.Raw, &raw); err != nil {
+		t.Fatalf("unmarshal final raw: %v", err)
+	}
+	if !raw.Observed || raw.RetryDelayMS != 15000 {
+		t.Errorf("final raw = %+v, want observed=true and retry_delay_ms=15000", raw)
+	}
 }
 
 func ptrFloat(v float64) *float64 { return &v }

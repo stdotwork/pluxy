@@ -246,6 +246,9 @@ func observeRateLimit(ctx context.Context, header http.Header, raw []byte, parse
 			}
 		case d.Type == typeQuotaFailure || (d.Type == "" && len(d.Violations) > 0):
 			for _, v := range d.Violations {
+				if len(obs.Violations) >= protocol.MaxQuotaLimits {
+					break
+				}
 				qv := quotaViolation{
 					Subject:          redact.String(v.Subject),
 					Description:      truncateString(redact.String(v.Description), maxViolationDescriptionLen),
@@ -302,19 +305,18 @@ func quota(_ context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 			Note:     "Google offers no quota reading for Gemini or Vertex accounts; no 429 rate-limit reply has been seen for this account yet.",
 		})
 		return &protocol.Quota{
-			Plan:   "No rate-limit reply seen yet (last-seen only; Google offers no quota reading)",
 			Limits: []protocol.QuotaLimit{},
 			Raw:    raw,
 		}, nil
 	}
 
 	observedStr := obs.ObservedAt.UTC().Format(time.RFC3339)
-	plan := fmt.Sprintf("Last 429 at %s (last-seen value, not a live reading)", observedStr)
+	note := fmt.Sprintf("Last 429 at %s (last-seen value, not a live reading); Google offers no live quota reading.", observedStr)
 	if obs.Reason != "" {
-		plan = fmt.Sprintf("Last 429 (%s) at %s (last-seen value, not a live reading)", obs.Reason, observedStr)
+		note = fmt.Sprintf("Last 429 (%s) at %s (last-seen value, not a live reading); Google offers no live quota reading.", obs.Reason, observedStr)
 	}
 
-	limits := make([]protocol.QuotaLimit, 0, max(1, len(obs.Violations)))
+	limits := make([]protocol.QuotaLimit, 0, max(1, min(len(obs.Violations), protocol.MaxQuotaLimits)))
 	seenIDs := map[string]bool{}
 	uniqueID := func(base string) string {
 		if base == "" {
@@ -344,6 +346,9 @@ func quota(_ context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 
 	if len(obs.Violations) > 0 {
 		for _, v := range obs.Violations {
+			if len(limits) >= protocol.MaxQuotaLimits {
+				break
+			}
 			name := firstNonEmpty(v.QuotaID, v.QuotaMetric, v.Description, obs.Metadata["quota_limit"], obs.Reason, "Rate limit")
 			idBase := firstNonEmpty(v.QuotaID, v.QuotaMetric, "rate_limit")
 			if loc := v.QuotaDimensions["location"]; loc != "" && seenIDs[idBase] {
@@ -413,7 +418,7 @@ func quota(_ context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 		Source:       "last_429",
 		Observed:     true,
 		ObservedAt:   obs.ObservedAt,
-		Note:         "Last-seen values from the most recent HTTP 429 rate-limit reply; Google offers no live quota reading.",
+		Note:         note,
 		Model:        obs.Model,
 		Status:       obs.Status,
 		RetryDelayMS: obs.RetryDelayMS,
@@ -423,7 +428,6 @@ func quota(_ context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	})
 
 	return &protocol.Quota{
-		Plan:   plan,
 		Limits: limits,
 		Raw:    raw,
 	}, nil
