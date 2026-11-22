@@ -102,6 +102,36 @@ describe("the README and the code agree", () => {
     for (const slot of SLOTS) expect(source).toContain(`data-slot="${slot}"`);
   });
 
+  test('every button element with data-part="button" carries data-slot="button"', () => {
+    const kit = join(import.meta.dir, "..", "kit");
+    const missing: string[] = [];
+    let buttons = 0;
+    for (const f of (readdirSync(kit, { recursive: true }) as string[]).filter((f) => f.endsWith(".tsx"))) {
+      const text = readFileSync(join(kit, f), "utf8");
+      for (const start of text.matchAll(/<button\b/g)) {
+        // The tag ends at the first ">" outside braces (an arrow function in a prop holds one).
+        let depth = 0;
+        let end = start.index;
+        for (; end < text.length; end++) {
+          const c = text[end];
+          if (c === "{") depth++;
+          else if (c === "}") depth--;
+          else if (c === ">" && depth === 0) break;
+        }
+        const tag = text.slice(start.index, end);
+        if (!tag.includes('data-part="button"')) continue;
+        buttons++;
+        if (!tag.includes('data-slot="button"'))
+          missing.push(`${f}:${text.slice(0, start.index).split("\n").length}`);
+      }
+    }
+    expect(buttons).toBeGreaterThanOrEqual(2);
+    expect(missing).toEqual([]);
+    // The two links in logs.tsx are `<a data-part="button">`: plain links to the Config page, which the
+    // README's "A button" row also covers but T3 Code's button slot (a <button> look) does not, so they
+    // carry no slot and this test, which reads <button> elements only, leaves them out.
+  });
+
   test("a token's default is a value a theme could set, and follows only tokens that exist", () => {
     for (const [name, def] of Object.entries(TOKENS)) {
       for (const value of [def.light, "dark" in def ? def.dark : def.light]) {
