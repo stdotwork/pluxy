@@ -977,6 +977,16 @@ which the client would send back on its next turn: they keep the model's text an
 reported as dropped. Same-format replies stay as they were, so a Chat upstream's audio still does
 not reach a Chat client.
 
+**Multiple candidates.** Chat Completions `n` and Gemini `generationConfig.candidateCount` carry
+across formats (protocol minor 34) when the client asks for more than one candidate: a count of 1
+or none sends no field. Translated counts go only to documented hosts and models (`api.openai.com`
+Chat Completions on classic models up to 128, `generativelanguage.googleapis.com` GenerateContent
+on Gemini 1.5+ models, and Vertex AI non-streaming `generateContent` on Gemini 1.5+ models); other
+hosts, models, and formats without a candidate count drop it with a loss. Candidates after
+candidate 0 travel on `candidate` events so candidate 0 stays isolated for single-candidate
+consumers, each candidate keeps its own finish reason, usage counts once, malformed later
+candidates drop with a loss, and same-format requests and replies stay byte-identical.
+
 **Tool shapes.** A translated request's tools get the shapes Messages takes, as today's core
 gives them: a function name with characters other than letters, digits, `_` and `-`, or longer than
 64, is sent with each other character as `_` and cut to 64 (two names that would come out the same

@@ -391,6 +391,18 @@ func takesWebSearch(s settings) bool {
 	return err == nil && strings.EqualFold(u.Hostname(), "generativelanguage.googleapis.com")
 }
 
+// takesCandidateCount reports whether the account's upstream is documented to take
+// generationConfig.candidateCount > 1 for this request: the Gemini API at
+// generativelanguage.googleapis.com takes it for both streaming and non-streaming; Vertex AI
+// documents multiple candidates only for non-streaming generateContent (streamGenerateContent is
+// not supported). Any other host returns false.
+func takesCandidateCount(s settings, stream bool) bool {
+	if s.Vertex != nil {
+		return !stream && takesWebSearch(s)
+	}
+	return takesServiceTier(s)
+}
+
 // isVertexHost reports whether host is one of Google's own Vertex AI endpoints.
 func isVertexHost(host string) bool {
 	h := strings.ToLower(strings.TrimSpace(host))
@@ -436,9 +448,10 @@ func buildBodyOn(req llm.Request, s settings) ([]byte, *llm.Translation, error) 
 		extra = append(extra, llm.Loss{Kind: llm.LossDropped, Path: "max_tokens", Detail: "a Messages client's required max_tokens is left to the Gemini model's own limit"})
 	}
 	body, losses, err := geminigenerate.EncodeRequestWith(req, geminigenerate.EncodeOptions{
-		ServiceTier:   takesServiceTier(s),
-		WebSearch:     takesWebSearch(s),
-		CodeExecution: takesWebSearch(s),
+		ServiceTier:    takesServiceTier(s),
+		WebSearch:      takesWebSearch(s),
+		CodeExecution:  takesWebSearch(s),
+		CandidateCount: takesCandidateCount(s, req.Stream),
 	})
 	if err != nil {
 		return nil, nil, err

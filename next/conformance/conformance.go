@@ -281,9 +281,40 @@ func collect(t *testing.T, s *host.Stream) []llm.Event {
 			if err := checkReplyOutputMedia(evs); err != nil {
 				t.Errorf("reply media: %v", err)
 			}
+			if err := checkReplyCandidates(evs); err != nil {
+				t.Errorf("reply candidates: %v", err)
+			}
 			return evs
 		}
 	}
+}
+
+// checkReplyCandidates validates the protocol 0.34 invariants on a completed reply's events:
+// candidate appears only on candidate events, every candidate event satisfies ValidCandidateEvent,
+// and media bytes across candidate 0 and later candidates stay within MaxOutputMediaReplyBytes.
+func checkReplyCandidates(evs []llm.Event) error {
+	mediaTotal := 0
+	for i, ev := range evs {
+		if ev.Type == llm.EventMedia && ev.Media != nil {
+			mediaTotal += len(ev.Media.Data)
+		}
+		if ev.Type != llm.EventCandidate {
+			if ev.Candidate != nil {
+				return fmt.Errorf("event[%d] (%s) carries candidate; only candidate events may", i, ev.Type)
+			}
+			continue
+		}
+		if err := llm.ValidCandidateEvent(ev.Candidate); err != nil {
+			return fmt.Errorf("event[%d] candidate: %v", i, err)
+		}
+		if ev.Candidate.Kind == llm.CandidateMedia && ev.Candidate.Media != nil {
+			mediaTotal += len(ev.Candidate.Media.Data)
+			if mediaTotal > llm.MaxOutputMediaReplyBytes {
+				return fmt.Errorf("event[%d] candidate media pushes reply total past %d bytes", i, llm.MaxOutputMediaReplyBytes)
+			}
+		}
+	}
+	return nil
 }
 
 // checkReplyOutputMedia validates the protocol 0.33 invariants on a completed reply's events:

@@ -875,7 +875,12 @@ var (
 	formats  = set(llm.FormatOpenAIChat, llm.FormatOpenAIResponses, llm.FormatAnthropicMessages, llm.FormatGeminiGenerate,
 		llm.FormatOpenAIResponsesCompact, llm.FormatCodexAlphaSearch, llm.FormatGeminiInteractions,
 		llm.FormatOpenAIImagesGenerations, llm.FormatOpenAIImagesEdits, llm.OpaqueDevin)
-	mediaKinds = set(llm.MediaImage, llm.MediaAudio)
+	mediaKinds     = set(llm.MediaImage, llm.MediaAudio)
+	candidateKinds = set(
+		llm.CandidateTextDelta, llm.CandidateReasoningDelta,
+		llm.CandidateToolCallStart, llm.CandidateToolInputDelta, llm.CandidateToolCallEnd,
+		llm.CandidateMedia, llm.CandidateFinish,
+	)
 )
 
 func set(values ...string) map[string]bool {
@@ -968,6 +973,27 @@ func (r *Redactor) Event(ev llm.Event) llm.Event {
 		m.MediaType = r.String(m.MediaType)
 		m.Data = r.String(m.Data)
 		ev.Media = &m
+	}
+	if ev.Candidate != nil {
+		c := *ev.Candidate
+		c.Kind = r.field(c.Kind, candidateKinds)
+		c.Delta = r.String(c.Delta)
+		c.CallID = r.String(c.CallID)
+		c.Name = r.String(c.Name)
+		if c.Media != nil {
+			m := *c.Media
+			m.Kind = r.field(m.Kind, mediaKinds)
+			m.MediaType = r.String(m.MediaType)
+			m.Data = r.String(m.Data)
+			c.Media = &m
+		}
+		if c.Finish != nil {
+			f := *c.Finish
+			f.Reason = r.field(f.Reason, finishes)
+			f.RawReason = r.String(f.RawReason)
+			c.Finish = &f
+		}
+		ev.Candidate = &c
 	}
 	if ev.Error != nil {
 		e := *ev.Error

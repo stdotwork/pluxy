@@ -29,15 +29,7 @@ func malformed(msg string, data []byte) *llm.Error {
 
 // chunk is one GenerateContentResponse: a whole non-streamed reply, or one chunk of a stream.
 type chunk struct {
-	Candidates []struct {
-		Index   *int `json:"index"`
-		Content *struct {
-			Parts []json.RawMessage `json:"parts"`
-		} `json:"content"`
-		FinishReason      string          `json:"finishReason"`
-		FinishMessage     string          `json:"finishMessage"`
-		GroundingMetadata json.RawMessage `json:"groundingMetadata"`
-	} `json:"candidates"`
+	Candidates     []json.RawMessage `json:"candidates"`
 	PromptFeedback *struct {
 		BlockReason string `json:"blockReason"`
 	} `json:"promptFeedback"`
@@ -45,6 +37,21 @@ type chunk struct {
 	ModelVersion  string          `json:"modelVersion"`
 	ResponseID    string          `json:"responseId"`
 	Error         json.RawMessage `json:"error"`
+}
+
+type rawCandidate struct {
+	Index   *int `json:"index"`
+	Content *struct {
+		Parts []json.RawMessage `json:"parts"`
+	} `json:"content"`
+	FinishReason      string          `json:"finishReason"`
+	FinishMessage     string          `json:"finishMessage"`
+	GroundingMetadata json.RawMessage `json:"groundingMetadata"`
+}
+
+type candState struct {
+	calls    bool
+	nextItem int
 }
 
 type usageMetadata struct {
@@ -184,6 +191,8 @@ type StreamDecoder struct {
 	// splitText is set once a media part has closed a text item: Google's offsets then no longer
 	// map onto one item's text, so citations carry no range.
 	splitText bool
+	// cands tracks per-candidate state for candidates with index >= 1.
+	cands map[int]*candState
 }
 
 type pendingExecCode struct {
@@ -364,6 +373,12 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		d.done = true
 		return nil, d.withUsage(errorOf(c.Error, data))
 	}
+	if len(c.Candidates) > 0 {
+		var c0 rawCandidate
+		if err := json.Unmarshal(c.Candidates[0], &c0); err != nil {
+			return nil, d.withUsage(malformed("upstream sent a malformed stream chunk", data))
+		}
+	}
 	out := d.decode(c, nil)
 	if len(out) == 0 {
 		out = append(out, llm.Event{Type: llm.EventNative})
@@ -385,13 +400,31 @@ func (d *StreamDecoder) decode(c chunk, out []llm.Event) []llm.Event {
 	if u := decodeUsage(c.UsageMetadata); u != nil {
 		d.usage = u
 	}
-	for _, cand := range c.Candidates {
-		// shortcut: only the first candidate becomes model events; the others reach a Gemini
-		// client in the raw chunks and are lost to other formats. Report them when a client
-		// format other than Gemini reads Gemini upstreams (the Gemini provider extension).
-		if cand.Index != nil && *cand.Index != 0 {
+	seenZero := false
+	for i, rawCand := range c.Candidates {
+		var cand rawCandidate
+		if err := json.Unmarshal(rawCand, &cand); err != nil {
+			if i > 0 {
+				d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: fmt.Sprintf("candidates[%d]", i), Detail: "malformed candidate"})
+			}
 			continue
 		}
+		idx := i
+		if cand.Index != nil {
+			idx = *cand.Index
+		}
+		if idx < 0 {
+			d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: fmt.Sprintf("candidates[%d]", i), Detail: "candidate with negative index"})
+			continue
+		}
+		if idx > 0 {
+			out = d.decodeOtherCandidate(idx, cand, out)
+			continue
+		}
+		if seenZero {
+			continue
+		}
+		seenZero = true
 		if cand.Content != nil {
 			for pi, pr := range cand.Content.Parts {
 				out = d.part(pi, pr, out)
@@ -409,12 +442,143 @@ func (d *StreamDecoder) decode(c chunk, out []llm.Event) []llm.Event {
 			out = d.closeItem(&d.think, out)
 			out = d.closeItem(&d.text, out)
 		}
-		break
 	}
 	if len(c.Candidates) == 0 && c.PromptFeedback != nil && c.PromptFeedback.BlockReason != "" {
 		// The prompt was blocked: no candidates, and the block reason in place of a finish
 		// reason.
 		d.finish = &llm.Finish{Reason: llm.FinishContentFilter, RawReason: c.PromptFeedback.BlockReason}
+	}
+	return out
+}
+
+func (d *StreamDecoder) cand(idx int) *candState {
+	if d.cands == nil {
+		d.cands = map[int]*candState{}
+	}
+	cs := d.cands[idx]
+	if cs == nil {
+		cs = &candState{}
+		d.cands[idx] = cs
+	}
+	return cs
+}
+
+// decodeOtherCandidate emits EventCandidate events for a candidate with index >= 1. Later
+// candidates never alter candidate 0's state, finish reason or error status.
+func (d *StreamDecoder) decodeOtherCandidate(idx int, cand rawCandidate, out []llm.Event) []llm.Event {
+	cs := d.cand(idx)
+	if cand.Content != nil {
+		for pi, pr := range cand.Content.Parts {
+			pm := object(pr)
+			if pm == nil {
+				d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: fmt.Sprintf("candidates[%d].content.parts[%d]", idx, pi), Detail: "malformed candidate part"})
+				continue
+			}
+			idRaw := pm["inlineData"]
+			if isNull(idRaw) {
+				idRaw = pm["inline_data"]
+			}
+			if !isNull(idRaw) {
+				if isThought(pm) {
+					continue
+				}
+				var blob struct {
+					MimeType      string `json:"mimeType"`
+					MimeTypeSnake string `json:"mime_type"`
+					Data          string `json:"data"`
+				}
+				path := fmt.Sprintf("candidates[%d].content.parts[%d].inlineData", idx, pi)
+				if json.Unmarshal(idRaw, &blob) != nil {
+					d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: "malformed inlineData part"})
+					continue
+				}
+				mt := strings.TrimSpace(blob.MimeType)
+				if mt == "" {
+					mt = strings.TrimSpace(blob.MimeTypeSnake)
+				}
+				kind, problem := llm.SafeOutputMediaKind(mt)
+				if problem != "" {
+					d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: problem})
+					continue
+				}
+				if !llm.Base64Valid(blob.Data) {
+					d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: "invalid base64 data"})
+					continue
+				}
+				if len(blob.Data) > llm.MaxOutputMediaPartBytes {
+					d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: "output media part exceeds per-part size limit"})
+					continue
+				}
+				if d.mediaBytes+len(blob.Data) > llm.MaxOutputMediaReplyBytes {
+					d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: "output media exceeds per-reply size limit"})
+					continue
+				}
+				d.mediaBytes += len(blob.Data)
+				out = append(out, llm.Event{
+					Type: llm.EventCandidate,
+					Candidate: &llm.CandidateEvent{
+						Index: idx,
+						Kind:  llm.CandidateMedia,
+						Media: &llm.OutputMedia{Kind: kind, MediaType: mt, Data: blob.Data},
+					},
+				})
+				continue
+			}
+			if fc := object(pm["functionCall"]); fc != nil {
+				var call struct {
+					ID   string `json:"id"`
+					Name string `json:"name"`
+				}
+				b, _ := json.Marshal(fc)
+				_ = json.Unmarshal(b, &call)
+				if call.Name == "" {
+					d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: fmt.Sprintf("candidates[%d].content.parts[%d].functionCall", idx, pi), Detail: "function call without name"})
+					continue
+				}
+				cs.calls = true
+				args := "{}"
+				if a := fc["args"]; !isNull(a) {
+					var buf bytes.Buffer
+					if json.Compact(&buf, a) == nil {
+						args = buf.String()
+					}
+				}
+				id := call.ID
+				if id == "" {
+					if d.idPrefix == "" {
+						d.idPrefix = callIDPrefix(d.responseID)
+					}
+					id = fmt.Sprintf("call_%s_c%d_%d", d.idPrefix, idx, cs.nextItem)
+				}
+				item := cs.nextItem
+				cs.nextItem++
+				out = append(out,
+					llm.Event{Type: llm.EventCandidate, Candidate: &llm.CandidateEvent{Index: idx, Kind: llm.CandidateToolCallStart, Item: item, CallID: id, Name: call.Name}},
+					llm.Event{Type: llm.EventCandidate, Candidate: &llm.CandidateEvent{Index: idx, Kind: llm.CandidateToolInputDelta, Item: item, Delta: args}},
+					llm.Event{Type: llm.EventCandidate, Candidate: &llm.CandidateEvent{Index: idx, Kind: llm.CandidateToolCallEnd, Item: item}},
+				)
+				continue
+			}
+			var text string
+			if json.Unmarshal(pm["text"], &text) != nil || text == "" {
+				continue
+			}
+			kind := llm.CandidateTextDelta
+			if isThought(pm) {
+				kind = llm.CandidateReasoningDelta
+			}
+			out = append(out, llm.Event{
+				Type:      llm.EventCandidate,
+				Candidate: &llm.CandidateEvent{Index: idx, Kind: kind, Delta: text},
+			})
+		}
+	}
+	if cand.FinishReason != "" {
+		f := finishOf(cand.FinishReason, cs.calls)
+		out = append(out, llm.Event{
+			Type:      llm.EventCandidate,
+			Candidate: &llm.CandidateEvent{Index: idx, Kind: llm.CandidateFinish, Finish: &f},
+		})
 	}
 	return out
 }
@@ -661,6 +825,12 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 	}
 	if !isNull(c.Error) {
 		return nil, nil, errorOf(c.Error, body)
+	}
+	if len(c.Candidates) > 0 {
+		var c0 rawCandidate
+		if err := json.Unmarshal(c.Candidates[0], &c0); err != nil {
+			return nil, nil, malformed("upstream sent a malformed response", body)
+		}
 	}
 	d := NewStreamDecoder()
 	out := d.decode(c, nil)

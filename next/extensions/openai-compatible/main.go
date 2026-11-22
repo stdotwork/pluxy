@@ -547,7 +547,7 @@ func buildBody(req llm.Request, target string, s settings) ([]byte, *llm.Transla
 	switch target {
 	case llm.FormatOpenAIChat:
 		encode = func(r llm.Request) ([]byte, []llm.Loss, error) {
-			return openaichat.EncodeRequestWith(r, openaichat.EncodeOptions{ServiceTier: f.serviceTier, Verbosity: f.verbosity, WebSearch: f.webSearch})
+			return openaichat.EncodeRequestWith(r, openaichat.EncodeOptions{ServiceTier: f.serviceTier, Verbosity: f.verbosity, WebSearch: f.webSearch, CandidateCount: f.candidateCount})
 		}
 	case llm.FormatOpenAIResponses:
 		encode = func(r llm.Request) ([]byte, []llm.Loss, error) {
@@ -559,7 +559,7 @@ func buildBody(req llm.Request, target string, s settings) ([]byte, *llm.Transla
 		}
 	case llm.FormatGeminiGenerate:
 		encode = func(r llm.Request) ([]byte, []llm.Loss, error) {
-			return geminigenerate.EncodeRequestWith(r, geminigenerate.EncodeOptions{ServiceTier: f.serviceTier, WebSearch: f.webSearch, CodeExecution: f.codeExecution})
+			return geminigenerate.EncodeRequestWith(r, geminigenerate.EncodeOptions{ServiceTier: f.serviceTier, WebSearch: f.webSearch, CodeExecution: f.codeExecution, CandidateCount: f.candidateCount})
 		}
 	default:
 		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,

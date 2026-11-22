@@ -74,6 +74,10 @@ func (s *Sequence) Check(ev Event) error {
 		if ev.Media == nil {
 			return fmt.Errorf("%q without media", ev.Type)
 		}
+	case EventCandidate:
+		if err := ValidCandidateEvent(ev.Candidate); err != nil {
+			return err
+		}
 	case EventNative:
 		if len(ev.Raw) == 0 {
 			return fmt.Errorf("%q without raw", ev.Type)

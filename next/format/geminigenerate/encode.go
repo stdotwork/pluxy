@@ -106,6 +106,11 @@ type EncodeOptions struct {
 	// tool is left out and reported as dropped. A Gemini client's own codeExecution tool is
 	// written either way.
 	CodeExecution bool
+	// CandidateCount says the caller knows its upstream takes generationConfig.candidateCount
+	// for this request (the Gemini API does for both streaming and non-streaming; Vertex AI does
+	// for non-streaming generateContent only). Without it a translated count > 1 is left out and
+	// reported as dropped. A Gemini client's own candidateCount > 1 is written either way.
+	CandidateCount bool
 }
 
 // EncodeRequestWith builds a GenerateContent request body as EncodeRequest does, changed by opts.
@@ -128,6 +133,17 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	}
 	if len(o.Stop) > 0 {
 		gen["stopSequences"] = o.Stop
+	}
+	if o.CandidateCount > 1 {
+		own := req.SourceFormat() == format
+		switch {
+		case !opts.CandidateCount && !own:
+			e.lose(llm.LossDropped, llm.CandidateCountPath(req), llm.CandidateCountUnsent)
+		case !own && !supportsCandidateCount(req.Model):
+			e.lose(llm.LossDropped, llm.CandidateCountPath(req), fmt.Sprintf("GenerateContent model %q does not support candidateCount > 1", req.Model))
+		default:
+			gen["candidateCount"] = o.CandidateCount
+		}
 	}
 	if rf := o.ResponseFormat; rf != nil {
 		switch rf.Type {
@@ -809,6 +825,35 @@ func supportsCodeExecution(model string) bool {
 	}
 	for _, family := range codeExecutionModels {
 		if m == family || strings.HasPrefix(m, family+"-") {
+			return true
+		}
+	}
+	return false
+}
+
+// supportsCandidateCount reports whether model is a Gemini model documented to support
+// generationConfig.candidateCount > 1. Google's GenerateContent reference
+// (https://ai.google.dev/api/generate-content) notes that candidateCount does not work for
+// previous-generation models (Gemini 1.0 family); embedding, TTS, live, native-audio, transcribe
+// and non-Gemini models are also excluded.
+func supportsCandidateCount(model string) bool {
+	m := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(model)), "models/")
+	if !strings.HasPrefix(m, "gemini-") {
+		return false
+	}
+	if strings.Contains(m, "embedding") || strings.Contains(m, "-tts") ||
+		strings.Contains(m, "-live") || strings.Contains(m, "-native-audio") || strings.Contains(m, "-transcribe") {
+		return false
+	}
+	if strings.HasPrefix(m, "gemini-1.0") || m == "gemini-pro" || m == "gemini-pro-vision" || m == "gemini-ultra" {
+		return false
+	}
+	for _, prefix := range []string{
+		"gemini-1.5-", "gemini-2.0-", "gemini-2.5-",
+		"gemini-3-", "gemini-3.", "gemini-4-", "gemini-4.",
+		"gemini-flash-latest", "gemini-pro-latest", "gemini-flash-lite-latest",
+	} {
+		if strings.HasPrefix(m, prefix) {
 			return true
 		}
 	}

@@ -674,6 +674,13 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 		return s
 	}
 	lost = append(lost, tierLost...)
+	req, candLost := downgradeCandidateCount(e.info.ProtocolMinor, e.manifest.ID, req)
+	if perr := refuseCandidateCount(e.manifest.ID, e.info.ProtocolMinor, req, candLost); perr != nil {
+		s := &Stream{}
+		s.fail(perr)
+		return s
+	}
+	lost = append(lost, candLost...)
 	req = downgradeWebSearch(e.info.ProtocolMinor, req)
 	req = downgradeCodeExecution(e.info.ProtocolMinor, req)
 	redact := protocol.NewRedactor(append(e.holdAccount(account), proxy)...)
@@ -1097,6 +1104,12 @@ func (e *Extension) normalizeEvent(ev llm.Event) llm.Event {
 	if e.info.ProtocolMinor < OutputMediaMinor {
 		ev.Media = nil
 		if ev.Type == llm.EventMedia && len(ev.Raw) > 0 {
+			ev.Type = llm.EventNative
+		}
+	}
+	if e.info.ProtocolMinor < CandidatesMinor {
+		ev.Candidate = nil
+		if ev.Type == llm.EventCandidate && len(ev.Raw) > 0 {
 			ev.Type = llm.EventNative
 		}
 	}

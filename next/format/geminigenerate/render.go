@@ -123,11 +123,13 @@ func usageLosses(u *llm.Usage, upFormat string) []string {
 // builder keeps what a GenerateContent reply needs from model events whose upstream format is
 // not Gemini, and what the reply could not carry.
 type builder struct {
-	id, model string
-	upFormat  string
-	losses    []llm.Loss
-	lost      map[string]bool
-	lossSize  int
+	id, model        string
+	upFormat         string
+	losses           []llm.Loss
+	lost             map[string]bool
+	lossSize         int
+	sawCandidates    bool
+	sawNativeChoices bool
 }
 
 // lose records a loss once per path. Past llm.MaxLosses the list is closed: llm.AddLoss has written
@@ -202,10 +204,17 @@ func (b *builder) eventLosses(ev llm.Event) {
 		b.start(ev.Response)
 	case llm.EventNative:
 		if b.upFormat == llm.FormatOpenAIChat {
-			// A Chat upstream's native events hold choices after the first.
+			// A Chat upstream's native events hold choices after the first; only report them as
+			// lost if no canonical candidate events carried them (for example from an extension
+			// below protocol minor 34).
+			b.sawNativeChoices = true
+		}
+	case llm.EventCandidate:
+		b.sawCandidates = true
+	case llm.EventFinish:
+		if b.sawNativeChoices && !b.sawCandidates {
 			b.lose("choices", "reply data in "+b.upFormat+" with no place in a GenerateContentResponse")
 		}
-	case llm.EventFinish:
 		for _, k := range usageLosses(ev.Usage, b.upFormat) {
 			b.lose("usage."+k, "usage field with no place in usageMetadata")
 		}
@@ -324,10 +333,14 @@ func (b *builder) codeExecParts(runs []llm.CodeExecution) []any {
 // response returns one GenerateContentResponse with the given parts and, when finish is set,
 // the finish reason and usage.
 func (b *builder) response(parts []any, finish *llm.Finish, usage *llm.Usage) obj {
+	return b.candidateResponse(0, parts, finish, usage)
+}
+
+func (b *builder) candidateResponse(index int, parts []any, finish *llm.Finish, usage *llm.Usage) obj {
 	if parts == nil {
 		parts = []any{}
 	}
-	cand := obj{"content": obj{"role": "model", "parts": parts}, "index": 0}
+	cand := obj{"content": obj{"role": "model", "parts": parts}, "index": index}
 	r := obj{"candidates": []any{cand}}
 	if finish != nil {
 		cand["finishReason"] = finishReason(finish, b.upFormat)
@@ -409,12 +422,15 @@ type StreamWriter struct {
 	b      builder
 	native bool
 
-	calls      map[int]*call // tool calls by model item index
-	order      []int         // tool call item indexes in start order
-	msgText    map[int]*strings.Builder
-	msgBase    map[int]int
-	totalBytes int
-	cited      []citedSegment
+	calls        map[int]*call // tool calls by model item index
+	order        []int         // tool call item indexes in start order
+	msgText      map[int]*strings.Builder
+	msgBase      map[int]int
+	totalBytes   int
+	cited        []citedSegment
+	candCalls    map[int]map[int]*call
+	candOrder    map[int][]int
+	candFinished map[int]bool
 }
 
 // NewStreamWriter returns a writer for one client stream.
@@ -524,7 +540,85 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 			return nil
 		}
 		return s.emit(b.response([]any{obj{"inlineData": obj{"mimeType": ev.Media.MediaType, "data": ev.Media.Data}}}, nil, nil))
+	case llm.EventCandidate:
+		c := ev.Candidate
+		if c == nil || c.Index < 1 {
+			return nil
+		}
+		switch c.Kind {
+		case llm.CandidateTextDelta:
+			if c.Delta == "" {
+				return nil
+			}
+			return s.emit(b.candidateResponse(c.Index, []any{obj{"text": c.Delta}}, nil, nil))
+		case llm.CandidateReasoningDelta:
+			if c.Delta == "" {
+				return nil
+			}
+			return s.emit(b.candidateResponse(c.Index, []any{obj{"text": c.Delta, "thought": true}}, nil, nil))
+		case llm.CandidateMedia:
+			if c.Media == nil {
+				return nil
+			}
+			if err := llm.ValidOutputMedia(c.Media); err != nil {
+				b.lose("media."+c.Media.Kind, "invalid or unsafe output media")
+				return nil
+			}
+			return s.emit(b.candidateResponse(c.Index, []any{obj{"inlineData": obj{"mimeType": c.Media.MediaType, "data": c.Media.Data}}}, nil, nil))
+		case llm.CandidateToolCallStart:
+			if s.candCalls == nil {
+				s.candCalls = map[int]map[int]*call{}
+				s.candOrder = map[int][]int{}
+			}
+			if s.candCalls[c.Index] == nil {
+				s.candCalls[c.Index] = map[int]*call{}
+			}
+			s.candCalls[c.Index][c.Item] = &call{id: c.CallID, name: c.Name}
+			s.candOrder[c.Index] = append(s.candOrder[c.Index], c.Item)
+		case llm.CandidateToolInputDelta:
+			if m := s.candCalls[c.Index]; m != nil {
+				if fc := m[c.Item]; fc != nil {
+					fc.args.WriteString(c.Delta)
+				}
+			}
+		case llm.CandidateFinish:
+			var parts []any
+			for _, item := range s.candOrder[c.Index] {
+				if fc := s.candCalls[c.Index][item]; fc != nil {
+					parts = append(parts, b.callPart(fc))
+				}
+			}
+			delete(s.candOrder, c.Index)
+			delete(s.candCalls, c.Index)
+			if s.candFinished == nil {
+				s.candFinished = map[int]bool{}
+			}
+			s.candFinished[c.Index] = true
+			return s.emit(b.candidateResponse(c.Index, parts, c.Finish, nil))
+		}
 	case llm.EventFinish:
+		if len(s.candOrder) > 0 {
+			idxs := make([]int, 0, len(s.candOrder))
+			for idx := range s.candOrder {
+				if !s.candFinished[idx] {
+					idxs = append(idxs, idx)
+				}
+			}
+			slices.Sort(idxs)
+			for _, idx := range idxs {
+				var parts []any
+				for _, item := range s.candOrder[idx] {
+					if fc := s.candCalls[idx][item]; fc != nil {
+						parts = append(parts, b.callPart(fc))
+					}
+				}
+				if err := s.emit(b.candidateResponse(idx, parts, &llm.Finish{Reason: llm.FinishStop}, nil)); err != nil {
+					return err
+				}
+			}
+			clear(s.candOrder)
+			clear(s.candCalls)
+		}
 		parts := b.codeExecParts(ev.CodeExecutions)
 		for _, idx := range s.order {
 			parts = append(parts, b.callPart(s.calls[idx]))
@@ -549,6 +643,12 @@ type aggPart struct {
 	citations []llm.Citation
 }
 
+type candAgg struct {
+	order  []*aggPart
+	calls  map[int]*call
+	finish *llm.Finish
+}
+
 // Aggregator collects events into a non-streamed GenerateContentResponse. A reply from a Gemini
 // upstream is returned as the upstream sent it.
 type Aggregator struct {
@@ -557,6 +657,7 @@ type Aggregator struct {
 	raws           []json.RawMessage
 	parts          map[int]*aggPart
 	order          []*aggPart
+	cands          map[int]*candAgg
 	finish         *llm.Finish
 	usage          *llm.Usage
 	sources        []llm.Source
@@ -607,6 +708,71 @@ func (a *Aggregator) Add(ev llm.Event) {
 		m := *ev.Media
 		a.size += len(m.MediaType) + len(m.Data) + partOverhead
 		a.order = append(a.order, &aggPart{kind: llm.EventMedia, media: &m})
+	case llm.EventCandidate:
+		if a.native || ev.Candidate == nil || ev.Candidate.Index < 1 {
+			return
+		}
+		c := ev.Candidate
+		if a.cands == nil {
+			a.cands = map[int]*candAgg{}
+		}
+		ca := a.cands[c.Index]
+		if ca == nil {
+			ca = &candAgg{calls: map[int]*call{}}
+			a.cands[c.Index] = ca
+		}
+		a.size += len(c.Delta)
+		switch c.Kind {
+		case llm.CandidateTextDelta:
+			if c.Delta == "" {
+				return
+			}
+			if n := len(ca.order); n > 0 && ca.order[n-1].kind == llm.ItemMessage {
+				ca.order[n-1].text.WriteString(c.Delta)
+			} else {
+				p := &aggPart{kind: llm.ItemMessage}
+				p.text.WriteString(c.Delta)
+				ca.order = append(ca.order, p)
+				a.size += partOverhead
+			}
+		case llm.CandidateReasoningDelta:
+			if c.Delta == "" {
+				return
+			}
+			if n := len(ca.order); n > 0 && ca.order[n-1].kind == llm.ItemReasoning {
+				ca.order[n-1].text.WriteString(c.Delta)
+			} else {
+				p := &aggPart{kind: llm.ItemReasoning}
+				p.text.WriteString(c.Delta)
+				ca.order = append(ca.order, p)
+				a.size += partOverhead
+			}
+		case llm.CandidateToolCallStart:
+			a.size += len(c.CallID) + len(c.Name) + partOverhead
+			fc := &call{id: c.CallID, name: c.Name}
+			ca.calls[c.Item] = fc
+			ca.order = append(ca.order, &aggPart{kind: llm.ItemToolCall, call: fc})
+		case llm.CandidateToolInputDelta:
+			if fc := ca.calls[c.Item]; fc != nil {
+				fc.args.WriteString(c.Delta)
+			}
+		case llm.CandidateMedia:
+			if c.Media == nil {
+				return
+			}
+			if err := llm.ValidOutputMedia(c.Media); err != nil {
+				a.b.lose("media."+c.Media.Kind, "invalid or unsafe output media")
+				return
+			}
+			m := *c.Media
+			a.size += len(m.MediaType) + len(m.Data) + partOverhead
+			ca.order = append(ca.order, &aggPart{kind: llm.EventMedia, media: &m})
+		case llm.CandidateFinish:
+			ca.finish = c.Finish
+			if c.Finish != nil {
+				a.size += len(c.Finish.RawReason)
+			}
+		}
 	case llm.EventTextDelta, llm.EventReasoningDelta:
 		if p := a.parts[ev.Index]; p != nil {
 			p.text.WriteString(ev.Delta)
@@ -698,6 +864,40 @@ func (a *Aggregator) Response() ([]byte, error) {
 	resp := b.response(parts, finish, a.usage)
 	if gm := buildGroundingMetadata(cited, a.sources); gm != nil {
 		resp["candidates"].([]any)[0].(obj)["groundingMetadata"] = gm
+	}
+	if len(a.cands) > 0 {
+		idxs := make([]int, 0, len(a.cands))
+		for idx := range a.cands {
+			idxs = append(idxs, idx)
+		}
+		slices.Sort(idxs)
+		cands := resp["candidates"].([]any)
+		for _, idx := range idxs {
+			ca := a.cands[idx]
+			cparts := []any{}
+			for _, p := range ca.order {
+				switch p.kind {
+				case llm.ItemMessage:
+					cparts = append(cparts, obj{"text": p.text.String()})
+				case llm.ItemReasoning:
+					cparts = append(cparts, obj{"text": p.text.String(), "thought": true})
+				case llm.ItemToolCall:
+					cparts = append(cparts, b.callPart(p.call))
+				case llm.EventMedia:
+					cparts = append(cparts, obj{"inlineData": obj{"mimeType": p.media.MediaType, "data": p.media.Data}})
+				}
+			}
+			cf := ca.finish
+			if cf == nil {
+				cf = &llm.Finish{Reason: llm.FinishOther}
+			}
+			cands = append(cands, obj{
+				"content":      obj{"role": "model", "parts": cparts},
+				"index":        idx,
+				"finishReason": finishReason(cf, b.upFormat),
+			})
+		}
+		resp["candidates"] = cands
 	}
 	return json.Marshal(resp)
 }

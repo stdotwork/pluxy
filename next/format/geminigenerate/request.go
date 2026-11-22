@@ -183,6 +183,7 @@ func parseGenerationConfig(raw json.RawMessage, o *llm.Options) (json.RawMessage
 		Temperature      *number         `json:"temperature"`
 		TopP             *number         `json:"topP"`
 		MaxOutputTokens  *int32Number    `json:"maxOutputTokens"`
+		CandidateCount   *int32Number    `json:"candidateCount"`
 		StopSequences    []string        `json:"stopSequences"`
 		ResponseMimeType string          `json:"responseMimeType"`
 		ResponseSchema   json.RawMessage `json:"responseSchema"`
@@ -198,6 +199,12 @@ func parseGenerationConfig(raw json.RawMessage, o *llm.Options) (json.RawMessage
 		o.MaxOutputTokens = &n
 	}
 	modelled := []string{"temperature", "topP", "maxOutputTokens", "stopSequences"}
+	if g.CandidateCount != nil && *g.CandidateCount >= 1 {
+		modelled = append(modelled, "candidateCount")
+		if *g.CandidateCount > 1 {
+			o.CandidateCount = int(*g.CandidateCount)
+		}
+	}
 	switch strings.ToLower(strings.TrimSpace(g.ResponseMimeType)) {
 	case "application/json":
 		schema := g.JSONSchema
