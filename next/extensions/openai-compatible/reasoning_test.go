@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 
+	"github.com/stdotwork/pluxy/next/format/openairesponses"
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
@@ -106,4 +108,69 @@ func TestApplyReasoningFastPath(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A passed-through Responses body with "reasoning": null and a thinking suffix sets
+// reasoning.effort instead of panicking on a nil map; with no suffix it stays byte-identical.
+func TestUpstreamBodyNullReasoning(t *testing.T) {
+	t.Run("with thinking suffix", func(t *testing.T) {
+		raw := []byte(`{"model":"gpt-5(high)","input":"hi","reasoning":null}`)
+		req, err := openairesponses.ParseRequest(raw)
+		if err != nil {
+			t.Fatalf("ParseRequest: %v", err)
+		}
+		model, suffix := llm.SplitThinkingSuffix(req.Model)
+		if model != "gpt-5" || suffix != "high" {
+			t.Fatalf("SplitThinkingSuffix(%q) = (%q, %q), want (gpt-5, high)", req.Model, model, suffix)
+		}
+		req.Model = model
+		req.Options.ThinkingSuffix = suffix
+		req.Options.ReasoningEffort = llm.ThinkingEffort(suffix)
+		// Mirror server.takeThinkingSuffix: rename model in Native.Body while keeping reasoning: null.
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(req.Native.Body, &m); err != nil {
+			t.Fatalf("unmarshal native: %v", err)
+		}
+		m["model"], _ = json.Marshal(model)
+		req.Native.Body, _ = json.Marshal(m)
+
+		out, tr, err := upstreamBody(req, llm.FormatOpenAIResponses, settings{})
+		if err != nil {
+			t.Fatalf("upstreamBody: %v", err)
+		}
+		if tr.Passthrough {
+			t.Errorf("Passthrough = true, want false after setting reasoning.effort")
+		}
+		var got struct {
+			Model     string `json:"model"`
+			Input     string `json:"input"`
+			Reasoning struct {
+				Effort string `json:"effort"`
+			} `json:"reasoning"`
+		}
+		if err := json.Unmarshal(out, &got); err != nil {
+			t.Fatalf("unmarshal out %s: %v", out, err)
+		}
+		if got.Model != "gpt-5" || got.Input != "hi" || got.Reasoning.Effort != "high" {
+			t.Errorf("got %+v (body %s), want model=gpt-5 input=hi reasoning.effort=high", got, out)
+		}
+	})
+
+	t.Run("without thinking suffix stays byte-identical", func(t *testing.T) {
+		raw := []byte(`{ "model" : "gpt-5" , "input" : "hi" , "reasoning" : null }`)
+		req, err := openairesponses.ParseRequest(raw)
+		if err != nil {
+			t.Fatalf("ParseRequest: %v", err)
+		}
+		out, tr, err := upstreamBody(req, llm.FormatOpenAIResponses, settings{})
+		if err != nil {
+			t.Fatalf("upstreamBody: %v", err)
+		}
+		if !tr.Passthrough {
+			t.Errorf("Passthrough = false, want true")
+		}
+		if !bytes.Equal(out, raw) {
+			t.Errorf("body changed:\n got: %s\nwant: %s", out, raw)
+		}
+	})
 }
