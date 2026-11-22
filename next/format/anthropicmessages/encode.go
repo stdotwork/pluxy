@@ -19,6 +19,10 @@ import (
 // It is today's core's value for clients in other formats.
 const defaultMaxTokens = 32000
 
+// maxCacheBreakpoints is the maximum number of cache_control breakpoints Anthropic's Messages API
+// accepts per request (explicit block breakpoints plus top-level automatic caching).
+const maxCacheBreakpoints = 4
+
 type encoder struct {
 	losses []llm.Loss
 	// keepModelTurn: the conversation's trailing assistant turns are kept (EncodeOptions).
@@ -387,6 +391,13 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	searches := scanWebSearches(req.Items)
 	var system []json.RawMessage
 	var msgs []*outMessage
+	type pendingCacheControl struct {
+		turn string
+		role string
+		path string
+		raw  json.RawMessage
+	}
+	var pendingCC []pendingCacheControl
 	add := func(role, turn, path string, block json.RawMessage) {
 		if n := len(msgs); n > 0 && msgs[n-1].role == role && (msgs[n-1].turn == turn || msgs[n-1].joinNext) {
 			msgs[n-1].joinNext = false
@@ -403,9 +414,12 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 		switch it.Type {
 		case llm.ItemTypeMessage:
 			if len(it.Content) == 0 && !it.TextContent && it.Origin != nil && it.Origin.Format != format && len(it.Origin.Raw) > 0 {
-				// An empty message from another format only holds its own fields; they are
-				// reported, and nothing is sent for it.
-				e.losses = append(e.losses, rawjson.Losses(it.Origin, format)...)
+				// An empty message from another format only holds its own fields; keep a valid
+				// cache_control so it can attach to the turn's last emitted block (such as a
+				// tool_use block on a tool-call-only Chat assistant message), and report the rest.
+				if raw := e.kept(it.Origin); len(raw) > 0 {
+					pendingCC = append(pendingCC, pendingCacheControl{turn: turn, role: it.Role, path: p, raw: raw})
+				}
 				break
 			}
 			blocks, paths, sendable, dropped := e.content(it, p)
@@ -421,8 +435,8 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 							e.lose(llm.LossDropped, rawjson.Join(p, "cache_control"), "last content block already carries cache_control")
 						}
 					}
-				} else {
-					e.losses = append(e.losses, rawjson.Losses(it.Origin, format)...)
+				} else if raw := e.kept(it.Origin); len(raw) > 0 {
+					pendingCC = append(pendingCC, pendingCacheControl{turn: turn, role: it.Role, path: p, raw: raw})
 				}
 			}
 			switch {
@@ -502,6 +516,33 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Message: fmt.Sprintf("%s: unsupported item type %q", p, it.Type), Scope: llm.ScopeRequest}
 		}
 	}
+	if len(pendingCC) > 0 {
+		cacheBreakpoints := countCacheBreakpoints(req.Origin, tools, system, msgs)
+		for _, cc := range pendingCC {
+			var target *outMessage
+			for j := len(msgs) - 1; j >= 0; j-- {
+				if msgs[j].turn == cc.turn && msgs[j].role == cc.role && len(msgs[j].content) > 0 {
+					target = msgs[j]
+					break
+				}
+			}
+			if target == nil {
+				e.lose(llm.LossDropped, rawjson.Join(cc.path, "cache_control"), "message has no content block to carry cache_control")
+				continue
+			}
+			last := len(target.content) - 1
+			if rawjson.Object(target.content[last])["cache_control"] != nil {
+				e.lose(llm.LossDropped, rawjson.Join(cc.path, "cache_control"), "last content block already carries cache_control")
+				continue
+			}
+			if cacheBreakpoints >= maxCacheBreakpoints {
+				e.lose(llm.LossDropped, rawjson.Join(cc.path, "cache_control"), "Messages allows at most 4 cache breakpoints per request")
+				continue
+			}
+			target.content[last] = rawjson.Merge(target.content[last], cc.raw)
+			cacheBreakpoints++
+		}
+	}
 	if len(system) > 0 {
 		out["system"] = system
 	}
@@ -520,6 +561,50 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 		return nil, nil, err
 	}
 	return rawjson.Merge(b, e.kept(req.Origin)), e.losses, nil
+}
+
+func countCacheBreakpoints(origin *llm.Origin, tools, system []json.RawMessage, msgs []*outMessage) int {
+	n := 0
+	if origin != nil {
+		if origin.Format == format {
+			if rawjson.Object(origin.Raw)["cache_control"] != nil {
+				n++
+			}
+		} else if m := rawjson.Object(origin.Raw); m != nil {
+			if _, ok := validCacheControl(m["cache_control"]); ok {
+				n++
+			}
+		}
+	}
+	for _, t := range tools {
+		if rawjson.Object(t)["cache_control"] != nil {
+			n++
+		}
+	}
+	for _, b := range system {
+		if rawjson.Object(b)["cache_control"] != nil {
+			n++
+		}
+	}
+	for _, m := range msgs {
+		for _, b := range m.content {
+			obj := rawjson.Object(b)
+			if obj["cache_control"] != nil {
+				n++
+			}
+			if rawContent := obj["content"]; len(rawContent) > 0 {
+				var nested []json.RawMessage
+				if json.Unmarshal(rawContent, &nested) == nil {
+					for _, nb := range nested {
+						if rawjson.Object(nb)["cache_control"] != nil {
+							n++
+						}
+					}
+				}
+			}
+		}
+	}
+	return n
 }
 
 func encodeToolChoice(tc *llm.ToolChoice, parallel *bool, names map[string]string) map[string]any {

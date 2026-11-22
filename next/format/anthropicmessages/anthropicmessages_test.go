@@ -1294,6 +1294,388 @@ func TestEncodeReportsDroppedMessageCacheControl(t *testing.T) {
 	}
 }
 
+func TestEncodeCarriesToolCallOnlyMessageCacheControl(t *testing.T) {
+	t.Run("null_content_attaches_to_last_tool_use", func(t *testing.T) {
+		in := `{
+			"model": "claude-sonnet-4-6",
+			"messages": [
+				{"role": "user", "content": "Check"},
+				{
+					"role": "assistant",
+					"content": null,
+					"cache_control": {"type": "ephemeral"},
+					"tool_calls": [
+						{"id": "call_1", "type": "function", "function": {"name": "a", "arguments": "{}"}},
+						{"id": "call_2", "type": "function", "function": {"name": "b", "arguments": "{}"}}
+					]
+				},
+				{"role": "tool", "tool_call_id": "call_1", "content": "r1"},
+				{"role": "tool", "tool_call_id": "call_2", "content": "r2"},
+				{"role": "user", "content": "Done"}
+			]
+		}`
+		req, err := openaichat.ParseRequest([]byte(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, losses, err := EncodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameJSON(t, "body", out, `{
+			"model": "claude-sonnet-4-6",
+			"max_tokens": 32000,
+			"stream": false,
+			"messages": [
+				{"role": "user", "content": [{"type": "text", "text": "Check"}]},
+				{"role": "assistant", "content": [
+					{"type": "tool_use", "id": "call_1", "name": "a", "input": {}},
+					{"type": "tool_use", "id": "call_2", "name": "b", "input": {}, "cache_control": {"type": "ephemeral"}}
+				]},
+				{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "r1"}]},
+				{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_2", "content": "r2"}]},
+				{"role": "user", "content": [{"type": "text", "text": "Done"}]}
+			]
+		}`)
+		if len(losses) != 0 {
+			t.Errorf("losses = %q, want none", lossList(losses))
+		}
+	})
+
+	t.Run("empty_string_content_keeps_cache_control_and_reports_other_fields", func(t *testing.T) {
+		in := `{
+			"model": "claude-sonnet-4-6",
+			"messages": [
+				{"role": "user", "content": "Check"},
+				{
+					"role": "assistant",
+					"content": "",
+					"cache_control": {"type": "ephemeral", "ttl": "1h"},
+					"x_msg": 1,
+					"tool_calls": [
+						{"id": "call_1", "type": "function", "function": {"name": "a", "arguments": "{}"}}
+					]
+				},
+				{"role": "tool", "tool_call_id": "call_1", "content": "r1"}
+			]
+		}`
+		req, err := openaichat.ParseRequest([]byte(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, losses, err := EncodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameJSON(t, "body", out, `{
+			"model": "claude-sonnet-4-6",
+			"max_tokens": 32000,
+			"stream": false,
+			"messages": [
+				{"role": "user", "content": [{"type": "text", "text": "Check"}]},
+				{"role": "assistant", "content": [
+					{"type": "tool_use", "id": "call_1", "name": "a", "input": {}, "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+				]},
+				{"role": "user", "content": [
+					{"type": "tool_result", "tool_use_id": "call_1", "content": "r1"}
+				]}
+			]
+		}`)
+		want := []string{"dropped messages[1].x_msg"}
+		if got := lossList(losses); !reflect.DeepEqual(got, want) {
+			t.Errorf("losses:\n got %q\nwant %q", got, want)
+		}
+	})
+
+	t.Run("last_tool_call_already_has_cache_control", func(t *testing.T) {
+		in := `{
+			"model": "claude-sonnet-4-6",
+			"messages": [
+				{"role": "user", "content": "Check"},
+				{
+					"role": "assistant",
+					"content": null,
+					"cache_control": {"type": "ephemeral"},
+					"tool_calls": [
+						{"id": "call_1", "type": "function", "cache_control": {"type": "ephemeral", "ttl": "1h"}, "function": {"name": "a", "arguments": "{}"}}
+					]
+				},
+				{"role": "tool", "tool_call_id": "call_1", "content": "r1"}
+			]
+		}`
+		req, err := openaichat.ParseRequest([]byte(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, losses, err := EncodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameJSON(t, "body", out, `{
+			"model": "claude-sonnet-4-6",
+			"max_tokens": 32000,
+			"stream": false,
+			"messages": [
+				{"role": "user", "content": [{"type": "text", "text": "Check"}]},
+				{"role": "assistant", "content": [
+					{"type": "tool_use", "id": "call_1", "name": "a", "input": {}, "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+				]},
+				{"role": "user", "content": [
+					{"type": "tool_result", "tool_use_id": "call_1", "content": "r1"}
+				]}
+			]
+		}`)
+		want := []string{"dropped messages[1].cache_control"}
+		if got := lossList(losses); !reflect.DeepEqual(got, want) {
+			t.Errorf("losses:\n got %q\nwant %q", got, want)
+		}
+	})
+
+	t.Run("empty_message_without_emitted_blocks_reports_drop_and_does_not_leak", func(t *testing.T) {
+		in := `{
+			"model": "claude-sonnet-4-6",
+			"messages": [
+				{"role": "user", "content": "Check"},
+				{"role": "assistant", "content": null, "cache_control": {"type": "ephemeral"}},
+				{"role": "assistant", "content": "Later"},
+				{"role": "user", "content": "Done"}
+			]
+		}`
+		req, err := openaichat.ParseRequest([]byte(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, losses, err := EncodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameJSON(t, "body", out, `{
+			"model": "claude-sonnet-4-6",
+			"max_tokens": 32000,
+			"stream": false,
+			"messages": [
+				{"role": "user", "content": [{"type": "text", "text": "Check"}]},
+				{"role": "assistant", "content": [{"type": "text", "text": "Later"}]},
+				{"role": "user", "content": [{"type": "text", "text": "Done"}]}
+			]
+		}`)
+		want := []string{"dropped messages[1].cache_control"}
+		if got := lossList(losses); !reflect.DeepEqual(got, want) {
+			t.Errorf("losses:\n got %q\nwant %q", got, want)
+		}
+	})
+
+	t.Run("at_four_breakpoints_drops_carried_marker", func(t *testing.T) {
+		in := `{
+			"model": "claude-sonnet-4-6",
+			"tools": [
+				{"type": "function", "cache_control": {"type": "ephemeral"}, "function": {"name": "a", "parameters": {"type": "object"}}}
+			],
+			"messages": [
+				{"role": "system", "content": [{"type": "text", "text": "Rules", "cache_control": {"type": "ephemeral"}}]},
+				{"role": "user", "cache_control": {"type": "ephemeral"}, "content": "Check"},
+				{
+					"role": "assistant",
+					"content": null,
+					"cache_control": {"type": "ephemeral"},
+					"tool_calls": [
+						{"id": "call_1", "type": "function", "function": {"name": "a", "arguments": "{}"}}
+					]
+				},
+				{"role": "tool", "tool_call_id": "call_1", "cache_control": {"type": "ephemeral"}, "content": "r1"},
+				{"role": "user", "content": "Done"}
+			]
+		}`
+		req, err := openaichat.ParseRequest([]byte(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, losses, err := EncodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameJSON(t, "body", out, `{
+			"model": "claude-sonnet-4-6",
+			"max_tokens": 32000,
+			"stream": false,
+			"tools": [
+				{"name": "a", "input_schema": {"type": "object", "properties": {}}, "cache_control": {"type": "ephemeral"}}
+			],
+			"system": [{"type": "text", "text": "Rules", "cache_control": {"type": "ephemeral"}}],
+			"messages": [
+				{"role": "user", "content": [{"type": "text", "text": "Check", "cache_control": {"type": "ephemeral"}}]},
+				{"role": "assistant", "content": [{"type": "tool_use", "id": "call_1", "name": "a", "input": {}}]},
+				{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "r1", "cache_control": {"type": "ephemeral"}}]},
+				{"role": "user", "content": [{"type": "text", "text": "Done"}]}
+			]
+		}`)
+		want := []string{"dropped messages[2].cache_control"}
+		if got := lossList(losses); !reflect.DeepEqual(got, want) {
+			t.Errorf("losses:\n got %q\nwant %q", got, want)
+		}
+	})
+
+	t.Run("top_level_cache_control_counts_toward_four_breakpoint_limit", func(t *testing.T) {
+		in := `{
+			"model": "claude-sonnet-4-6",
+			"cache_control": {"type": "ephemeral"},
+			"tools": [
+				{"type": "function", "cache_control": {"type": "ephemeral"}, "function": {"name": "a", "parameters": {"type": "object"}}}
+			],
+			"messages": [
+				{"role": "system", "content": [{"type": "text", "text": "Rules", "cache_control": {"type": "ephemeral"}}]},
+				{"role": "user", "content": "First"},
+				{
+					"role": "assistant",
+					"content": null,
+					"cache_control": {"type": "ephemeral"},
+					"tool_calls": [
+						{"id": "call_1", "type": "function", "function": {"name": "a", "arguments": "{}"}}
+					]
+				},
+				{"role": "tool", "tool_call_id": "call_1", "content": "r1"},
+				{
+					"role": "assistant",
+					"content": null,
+					"cache_control": {"type": "ephemeral"},
+					"tool_calls": [
+						{"id": "call_2", "type": "function", "function": {"name": "a", "arguments": "{}"}}
+					]
+				},
+				{"role": "tool", "tool_call_id": "call_2", "content": "r2"},
+				{"role": "user", "content": "Done"}
+			]
+		}`
+		req, err := openaichat.ParseRequest([]byte(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, losses, err := EncodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameJSON(t, "body", out, `{
+			"model": "claude-sonnet-4-6",
+			"max_tokens": 32000,
+			"stream": false,
+			"cache_control": {"type": "ephemeral"},
+			"tools": [
+				{"name": "a", "input_schema": {"type": "object", "properties": {}}, "cache_control": {"type": "ephemeral"}}
+			],
+			"system": [{"type": "text", "text": "Rules", "cache_control": {"type": "ephemeral"}}],
+			"messages": [
+				{"role": "user", "content": [{"type": "text", "text": "First"}]},
+				{"role": "assistant", "content": [{"type": "tool_use", "id": "call_1", "name": "a", "input": {}, "cache_control": {"type": "ephemeral"}}]},
+				{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": "r1"}]},
+				{"role": "assistant", "content": [{"type": "tool_use", "id": "call_2", "name": "a", "input": {}}]},
+				{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_2", "content": "r2"}]},
+				{"role": "user", "content": [{"type": "text", "text": "Done"}]}
+			]
+		}`)
+		want := []string{"dropped messages[4].cache_control"}
+		if got := lossList(losses); !reflect.DeepEqual(got, want) {
+			t.Errorf("losses:\n got %q\nwant %q", got, want)
+		}
+	})
+
+	t.Run("nested_tool_result_cache_control_counts_toward_four_breakpoint_limit", func(t *testing.T) {
+		in := `{
+			"model": "claude-sonnet-4-6",
+			"tools": [
+				{"type": "function", "cache_control": {"type": "ephemeral"}, "function": {"name": "a", "parameters": {"type": "object"}}}
+			],
+			"messages": [
+				{"role": "system", "content": [{"type": "text", "text": "Rules", "cache_control": {"type": "ephemeral"}}]},
+				{"role": "user", "cache_control": {"type": "ephemeral"}, "content": "Check"},
+				{
+					"role": "assistant",
+					"content": null,
+					"cache_control": {"type": "ephemeral"},
+					"tool_calls": [
+						{"id": "call_1", "type": "function", "function": {"name": "a", "arguments": "{}"}}
+					]
+				},
+				{
+					"role": "tool",
+					"tool_call_id": "call_1",
+					"content": [
+						{"type": "text", "text": "r1", "cache_control": {"type": "ephemeral"}},
+						{"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}
+					]
+				},
+				{"role": "user", "content": "Done"}
+			]
+		}`
+		req, err := openaichat.ParseRequest([]byte(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, losses, err := EncodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameJSON(t, "body", out, `{
+			"model": "claude-sonnet-4-6",
+			"max_tokens": 32000,
+			"stream": false,
+			"tools": [
+				{"name": "a", "input_schema": {"type": "object", "properties": {}}, "cache_control": {"type": "ephemeral"}}
+			],
+			"system": [{"type": "text", "text": "Rules", "cache_control": {"type": "ephemeral"}}],
+			"messages": [
+				{"role": "user", "content": [{"type": "text", "text": "Check", "cache_control": {"type": "ephemeral"}}]},
+				{"role": "assistant", "content": [{"type": "tool_use", "id": "call_1", "name": "a", "input": {}}]},
+				{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": [
+					{"type": "text", "text": "r1", "cache_control": {"type": "ephemeral"}},
+					{"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}}
+				]}]},
+				{"role": "user", "content": [{"type": "text", "text": "Done"}]}
+			]
+		}`)
+		want := []string{"dropped messages[2].cache_control"}
+		if got := lossList(losses); !reflect.DeepEqual(got, want) {
+			t.Errorf("losses:\n got %q\nwant %q", got, want)
+		}
+	})
+
+	t.Run("never_lands_on_thinking_block", func(t *testing.T) {
+		// Responses reasoning with a valid Claude signature emits a thinking block, but each
+		// Responses input item has its own turn, so an empty assistant message's cache_control
+		// cannot attach to it.
+		in := `{
+			"model": "claude-sonnet-4-6",
+			"input": [
+				{"type": "message", "role": "user", "content": "Check"},
+				{"type": "reasoning", "summary": [{"type": "summary_text", "text": "thought"}], "encrypted_content": "Esig"},
+				{"type": "message", "role": "assistant", "content": [], "cache_control": {"type": "ephemeral"}},
+				{"type": "message", "role": "user", "content": "Done"}
+			]
+		}`
+		req, err := openairesponses.ParseRequest([]byte(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, losses, err := EncodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameJSON(t, "body", out, `{
+			"model": "claude-sonnet-4-6",
+			"max_tokens": 32000,
+			"stream": false,
+			"messages": [
+				{"role": "user", "content": [{"type": "text", "text": "Check"}]},
+				{"role": "assistant", "content": [{"type": "thinking", "thinking": "thought", "signature": "Esig"}]},
+				{"role": "user", "content": [{"type": "text", "text": "Done"}]}
+			]
+		}`)
+		want := []string{"dropped input[2].cache_control"}
+		if got := lossList(losses); !reflect.DeepEqual(got, want) {
+			t.Errorf("losses:\n got %q\nwant %q", got, want)
+		}
+	})
+}
+
 func TestEncodeResponseFormat(t *testing.T) {
 	schema := `{"type":"object","properties":{"city":{"type":"string"}},"required":["city"],"additionalProperties":false}`
 	t.Run("chat json_schema", func(t *testing.T) {
