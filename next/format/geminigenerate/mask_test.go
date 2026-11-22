@@ -227,6 +227,8 @@ func TestMaskMorePatterns(t *testing.T) {
 		"organization:555000 folder:666000 billingAccount:0123-ABCD":    "organization:[redacted] folder:[redacted] billingAccount:[redacted]",
 		"see projects/acme%2Dprod%2D4821/locations":                     "see projects/[redacted]/locations",
 		"in project:acme%2Dprod%2D4821 here":                            "in project:[redacted] here",
+		"see ?project=acme%2Dprod%2D4821&x=1":                           "see ?project=[redacted]&x=1",
+		"see ?project_id=acme%2Dprod%2D4821&x=1":                        "see ?project_id=[redacted]&x=1",
 		"owner group:team@example.com is gone":                          "owner group:[redacted] is gone",
 		"Caller foo@my-proj-2.iam.gserviceaccount.com lacks permission": "Caller [redacted] lacks permission",
 		"default 123-compute@developer.gserviceaccount.com":             "default [redacted]",
@@ -391,5 +393,73 @@ func TestMaskBareProjectIDInOwnerRepeatedInMessage(t *testing.T) {
 		`]}}`
 	if string(got.Raw) != wantRaw {
 		t.Errorf("got raw:\n%s\nwant:\n%s", got.Raw, wantRaw)
+	}
+}
+
+// Structured-field scanning stops at maxFieldDepth while the pattern pass still masks every
+// string at any depth.
+func TestMaskDepthCap(t *testing.T) {
+	wrap := func(depth int, inner string) string {
+		return strings.Repeat(`{"a":`, depth) + inner + strings.Repeat(`}`, depth)
+	}
+	inner := `{"@type":"type.googleapis.com/google.rpc.ResourceInfo","owner":"plain words","resource_name":"projects/deep-proj-42/x"}`
+
+	shallow := wrap(4, inner)
+	gotShallow := string(MaskBody([]byte(shallow)))
+	if strings.Contains(gotShallow, "plain words") || strings.Contains(gotShallow, "deep-proj-42") {
+		t.Errorf("shallow error not masked: %s", gotShallow)
+	}
+
+	deep := wrap(100, inner)
+	gotDeep := string(MaskBody([]byte(deep)))
+	if strings.Contains(gotDeep, "deep-proj-42") {
+		t.Errorf("pattern pass missed deep project name: %s", gotDeep)
+	}
+	if !strings.Contains(gotDeep, `"owner":"plain words"`) {
+		t.Errorf("structured-field scan descended past depth cap: %s", gotDeep)
+	}
+}
+
+func makeDeepError(depth, size int) []byte {
+	var b strings.Builder
+	b.Grow(size + depth*6 + 128)
+	for i := 0; i < depth; i++ {
+		b.WriteString(`{"a":`)
+	}
+	b.WriteString(`{"message":"projects/deep-proj-42","pad":"`)
+	pad := size - b.Len() - depth - 4
+	if pad < 0 {
+		pad = 0
+	}
+	b.WriteString(strings.Repeat("x", pad))
+	b.WriteString(`"}`)
+	for i := 0; i < depth; i++ {
+		b.WriteByte('}')
+	}
+	return []byte(b.String())
+}
+
+func BenchmarkMaskDeepNesting(b *testing.B) {
+	for _, depth := range []int{100, 1000, 4000} {
+		raw := makeDeepError(depth, 1<<20)
+		b.Run(depthLabel(depth), func(b *testing.B) {
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_ = MaskBody(raw)
+			}
+		})
+	}
+}
+
+func depthLabel(d int) string {
+	switch d {
+	case 100:
+		return "depth100"
+	case 1000:
+		return "depth1000"
+	case 4000:
+		return "depth4000"
+	default:
+		return "depth"
 	}
 }

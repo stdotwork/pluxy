@@ -34,7 +34,7 @@ const nameToken = `([\w%-]+(?:\.[\w%-]+)*)`
 var namePatterns = []namePattern{
 	{re: regexp.MustCompile(`(?i)\b(?:projects|organizations|folders|billingAccounts)/` + nameToken)},
 	{re: regexp.MustCompile(`(?i)\b(?:project(?:_?id|_?number)?|organization|folder|billingAccount):` + nameToken)},
-	{re: regexp.MustCompile(`(?i)\bproject(?:_?id|_?number)?=([\w.-]+)`)},
+	{re: regexp.MustCompile(`(?i)\bproject(?:_?id|_?number)?=` + nameToken)},
 	{re: regexp.MustCompile(`(?i)\bproject (?:number |id )?(\d+)\b`)},
 	{re: regexp.MustCompile("(?i)\\bproject ['\"`]([^'\"`\\s]+)['\"`]")},
 	{re: regexp.MustCompile(`(?i)\b(?:user|serviceAccount|group):([A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)`)},
@@ -67,13 +67,13 @@ var serviceAccountProject = regexp.MustCompile(`@([a-z][a-z0-9-]*)\.iam\.gservic
 // patterns above add the rest. A non-empty QuotaFailure violation's subject and ResourceInfo's
 // owner, found by the detail's @type, go whole in their own field, whatever they say; one that
 // looks like an identifier (contains :, / or @) or a project ID is also masked where another
-// string repeats it, while a plain word (such as "global") stays elsewhere. A PreconditionFailure's subject, and the
-// quota metric, ID, value and dimensions, stay. Each collected name is replaced as a whole token
-// in the message and in every string value of the raw body (an object, or the array a Google API
-// wraps one in); the keys, numbers, types, reasons, quota facts and everything else stay, and a
-// body with nothing to mask keeps its bytes. e itself is returned when nothing changed; otherwise
-// a copy, and e is not touched. Call it after the error has been classified: it changes no code,
-// scope or delay.
+// string repeats it, while a plain word (such as "global") stays elsewhere. A PreconditionFailure's
+// subject, and the quota metric, ID, value and dimensions, stay. Each collected name is replaced as
+// a whole token in the message and in every string value of the raw body (an object, or the array a
+// Google API wraps one in); the keys, numbers, types, reasons, quota facts and everything else
+// stay, and a body with nothing to mask keeps its bytes. e itself is returned when nothing changed;
+// otherwise a copy, and e is not touched. Call it after the error has been classified: it changes
+// no code, scope or delay.
 func MaskProject(e *llm.Error, known ...string) *llm.Error {
 	if e == nil {
 		return nil
@@ -112,6 +112,248 @@ func MaskBody(body []byte, known ...string) []byte {
 		return []byte(m)
 	}
 	return body
+}
+
+// MaskReply masks a reply or an event an Interactions client gets as the upstream sent it: the
+// data of an event named "error" is masked whole. When the reply's status (at the top level or in
+// a top-level object member such as interaction) is "failed", the value of every "error" member at
+// any depth, inside arrays too, is masked. Any other reply masks only the value of an "error"
+// member (an object or a string) at the top level of the JSON or one object level down, never
+// inside an array. Everything outside those values keeps its bytes, and a reply with nothing to
+// mask is returned as it is.
+func MaskReply(data []byte, event string, known ...string) []byte {
+	if event == "error" {
+		return MaskBody(data, known...)
+	}
+	if !bytes.Contains(data, []byte(`"error"`)) || !json.Valid(data) {
+		return data
+	}
+	var spans [][2]int
+	if isFailedReply(data) {
+		collectAllErrorSpans(data, 0, len(data), &spans)
+	} else {
+		collectErrorSpans(data, 0, len(data), 0, &spans)
+	}
+	if len(spans) == 0 {
+		return data
+	}
+	var out []byte
+	last := 0
+	for _, sp := range spans {
+		orig := data[sp[0]:sp[1]]
+		masked := MaskBody(orig, known...)
+		if !bytes.Equal(masked, orig) {
+			if out == nil {
+				out = make([]byte, 0, len(data)+16)
+			}
+			out = append(out, data[last:sp[0]]...)
+			out = append(out, masked...)
+			last = sp[1]
+		}
+	}
+	if out == nil {
+		return data
+	}
+	return append(out, data[last:]...)
+}
+
+func isFailedReply(raw []byte) bool {
+	if !bytes.Contains(raw, []byte(`"failed"`)) {
+		return false
+	}
+	i := skipWS(raw, 0)
+	if i >= len(raw) || raw[i] != '{' {
+		return false
+	}
+	i++
+	for {
+		i = skipWS(raw, i)
+		if i >= len(raw) || raw[i] == '}' {
+			return false
+		}
+		ke := skipString(raw, i)
+		var k string
+		_ = json.Unmarshal(raw[i:ke], &k)
+		i = skipWS(raw, ke)
+		if i >= len(raw) || raw[i] != ':' {
+			return false
+		}
+		vs := skipWS(raw, i+1)
+		ve := skipValue(raw, vs)
+		if vs < ve {
+			if k == "status" && isStatusFailed(raw[vs:ve]) {
+				return true
+			}
+			if raw[vs] == '{' && hasStatusFailed(raw[vs:ve]) {
+				return true
+			}
+		}
+		i = skipWS(raw, ve)
+		if i < len(raw) && raw[i] == ',' {
+			i++
+		} else {
+			return false
+		}
+	}
+}
+
+func hasStatusFailed(obj []byte) bool {
+	i := skipWS(obj, 0)
+	if i >= len(obj) || obj[i] != '{' {
+		return false
+	}
+	i++
+	for {
+		i = skipWS(obj, i)
+		if i >= len(obj) || obj[i] == '}' {
+			return false
+		}
+		ke := skipString(obj, i)
+		var k string
+		_ = json.Unmarshal(obj[i:ke], &k)
+		i = skipWS(obj, ke)
+		if i >= len(obj) || obj[i] != ':' {
+			return false
+		}
+		vs := skipWS(obj, i+1)
+		ve := skipValue(obj, vs)
+		if vs < ve && k == "status" && isStatusFailed(obj[vs:ve]) {
+			return true
+		}
+		i = skipWS(obj, ve)
+		if i < len(obj) && obj[i] == ',' {
+			i++
+		} else {
+			return false
+		}
+	}
+}
+
+func isStatusFailed(val []byte) bool {
+	var s string
+	return json.Unmarshal(val, &s) == nil && s == "failed"
+}
+
+// collectAllErrorSpans appends the [start, end) byte ranges of "error" member values (objects or
+// strings) at any depth, descending into arrays and objects in a single pass, and returns the byte
+// offset just after the value at pos.
+func collectAllErrorSpans(raw []byte, pos, end int, spans *[][2]int) int {
+	i := skipWS(raw, pos)
+	if i >= end {
+		return end
+	}
+	switch raw[i] {
+	case '{':
+		i++
+		for {
+			i = skipWS(raw, i)
+			if i >= end {
+				return end
+			}
+			if raw[i] == '}' {
+				return i + 1
+			}
+			ke := skipString(raw, i)
+			var k string
+			_ = json.Unmarshal(raw[i:ke], &k)
+			i = skipWS(raw, ke)
+			if i >= end || raw[i] != ':' {
+				return i
+			}
+			vs := skipWS(raw, i+1)
+			ve := end
+			if vs < end {
+				if k == "error" && (raw[vs] == '{' || raw[vs] == '"') {
+					ve = skipValue(raw, vs)
+					*spans = append(*spans, [2]int{vs, ve})
+				} else if raw[vs] == '{' || raw[vs] == '[' {
+					ve = collectAllErrorSpans(raw, vs, end, spans)
+				} else {
+					ve = skipValue(raw, vs)
+				}
+			}
+			i = skipWS(raw, ve)
+			if i < end && raw[i] == ',' {
+				i++
+			} else if i < end && raw[i] == '}' {
+				return i + 1
+			} else {
+				return i
+			}
+		}
+	case '[':
+		i++
+		for {
+			vs := skipWS(raw, i)
+			if vs >= end {
+				return end
+			}
+			if raw[vs] == ']' {
+				return vs + 1
+			}
+			var ve int
+			if raw[vs] == '{' || raw[vs] == '[' {
+				ve = collectAllErrorSpans(raw, vs, end, spans)
+			} else {
+				ve = skipValue(raw, vs)
+			}
+			if ve <= vs {
+				return end
+			}
+			i = skipWS(raw, ve)
+			if i < end && raw[i] == ',' {
+				i++
+			} else if i < end && raw[i] == ']' {
+				return i + 1
+			} else {
+				return i
+			}
+		}
+	default:
+		return skipValue(raw, i)
+	}
+}
+
+// collectErrorSpans appends the [start, end) byte ranges of "error" member values that are JSON
+// objects or strings at depth 0 (top-level object) or depth 1 (one object level down), never
+// descending into arrays or beyond depth 1.
+func collectErrorSpans(raw []byte, start, end, depth int, spans *[][2]int) {
+	i := skipWS(raw, start)
+	if i >= end || raw[i] != '{' {
+		return
+	}
+	i++
+	for {
+		i = skipWS(raw, i)
+		if i >= end || raw[i] == '}' {
+			return
+		}
+		ke := skipString(raw, i)
+		var k string
+		_ = json.Unmarshal(raw[i:ke], &k)
+		i = skipWS(raw, ke)
+		if i >= end || raw[i] != ':' {
+			return
+		}
+		vs := skipWS(raw, i+1)
+		ve := skipValue(raw, vs)
+		if vs < ve {
+			switch {
+			case k == "error":
+				if raw[vs] == '{' || raw[vs] == '"' {
+					*spans = append(*spans, [2]int{vs, ve})
+				}
+			case depth == 0 && raw[vs] == '{':
+				collectErrorSpans(raw, vs, ve, 1, spans)
+			}
+		}
+		i = skipWS(raw, ve)
+		if i < end && raw[i] == ',' {
+			i++
+		} else {
+			return
+		}
+	}
 }
 
 // IsGoogleErrorShape reports whether raw is a Google error: an object with an "error" whose code
@@ -204,9 +446,14 @@ func (d *names) learnString(s string) {
 func (d *names) learnJSON(raw []byte) map[int]bool {
 	mapStrings(raw, func(_ int, s string) string { d.learnString(s); return s })
 	var whole map[int]bool
-	d.learnFields(raw, 0, len(raw), &whole)
+	d.learnFields(raw, 0, len(raw), 0, &whole)
 	return whole
 }
+
+// maxFieldDepth caps how deeply learnFields descends into nested JSON objects and arrays. Real
+// Google error payloads are well below this, and the iterative pattern pass in mapStrings still
+// covers every string at any depth.
+const maxFieldDepth = 64
 
 // projectKeys are the members of Google's error details that hold a project, by their names
 // without case, underscores or hyphens.
@@ -214,26 +461,36 @@ var projectKeys = map[string]bool{
 	"consumer": true, "containerinfo": true, "project": true, "projectid": true, "projectnumber": true,
 }
 
-func (d *names) learnFields(raw []byte, start, end int, whole *map[int]bool) {
-	i := skipWS(raw, start)
+func (d *names) learnFields(raw []byte, pos, end, depth int, whole *map[int]bool) int {
+	i := skipWS(raw, pos)
 	if i >= end {
-		return
+		return end
+	}
+	if depth >= maxFieldDepth {
+		return skipValue(raw, i)
 	}
 	switch raw[i] {
 	case '[':
 		i++
 		for {
 			i = skipWS(raw, i)
-			if i >= end || raw[i] == ']' {
-				return
+			if i >= end {
+				return end
 			}
-			ve := skipValue(raw, i)
-			d.learnFields(raw, i, ve, whole)
-			i = skipWS(raw, ve)
+			if raw[i] == ']' {
+				return i + 1
+			}
+			next := d.learnFields(raw, i, end, depth+1, whole)
+			if next <= i {
+				return end
+			}
+			i = skipWS(raw, next)
 			if i < end && raw[i] == ',' {
 				i++
+			} else if i < end && raw[i] == ']' {
+				return i + 1
 			} else {
-				return
+				return i
 			}
 		}
 	case '{':
@@ -249,7 +506,12 @@ func (d *names) learnFields(raw []byte, start, end int, whole *map[int]bool) {
 		)
 		for {
 			i = skipWS(raw, i)
-			if i >= end || raw[i] == '}' {
+			if i >= end {
+				i = end
+				break
+			}
+			if raw[i] == '}' {
+				i++
 				break
 			}
 			ke := skipString(raw, i)
@@ -260,10 +522,11 @@ func (d *names) learnFields(raw []byte, start, end int, whole *map[int]bool) {
 				break
 			}
 			vs := skipWS(raw, i+1)
-			ve := skipValue(raw, vs)
-			if vs < ve {
+			ve := end
+			if vs < end {
 				switch raw[vs] {
 				case '"':
+					ve = skipString(raw, vs)
 					var s string
 					if json.Unmarshal(raw[vs:ve], &s) == nil {
 						if projectKeys[normalKey(k)] {
@@ -290,15 +553,20 @@ func (d *names) learnFields(raw []byte, start, end int, whole *map[int]bool) {
 						}
 					}
 				case '{', '[':
+					ve = d.learnFields(raw, vs, end, depth+1, whole)
 					if k == "violations" && raw[vs] == '[' {
 						violRanges = append(violRanges, [2]int{vs, ve})
 					}
-					d.learnFields(raw, vs, ve, whole)
+				default:
+					ve = skipValue(raw, vs)
 				}
 			}
 			i = skipWS(raw, ve)
 			if i < end && raw[i] == ',' {
 				i++
+			} else if i < end && raw[i] == '}' {
+				i++
+				break
 			} else {
 				break
 			}
@@ -317,6 +585,9 @@ func (d *names) learnFields(raw []byte, start, end int, whole *map[int]bool) {
 		if hasRname && strings.HasSuffix(strings.ToLower(rtype), "project") {
 			d.addProject(rname)
 		}
+		return i
+	default:
+		return skipValue(raw, i)
 	}
 }
 
@@ -333,19 +604,24 @@ func (d *names) learnQuotaSubjects(raw []byte, start, end int, whole *map[int]bo
 		if i >= end || raw[i] == ']' {
 			return
 		}
-		ve := skipValue(raw, i)
-		if i < ve && raw[i] == '{' {
+		var ve int
+		if raw[i] == '{' {
 			j := i + 1
 			for {
 				j = skipWS(raw, j)
-				if j >= ve || raw[j] == '}' {
+				if j >= end {
+					j = end
+					break
+				}
+				if raw[j] == '}' {
+					j++
 					break
 				}
 				ke := skipString(raw, j)
 				var k string
 				_ = json.Unmarshal(raw[j:ke], &k)
 				j = skipWS(raw, ke)
-				if j >= ve || raw[j] != ':' {
+				if j >= end || raw[j] != ':' {
 					break
 				}
 				vs := skipWS(raw, j+1)
@@ -357,12 +633,21 @@ func (d *names) learnQuotaSubjects(raw []byte, start, end int, whole *map[int]bo
 					}
 				}
 				j = skipWS(raw, vEnd)
-				if j < ve && raw[j] == ',' {
+				if j < end && raw[j] == ',' {
 					j++
+				} else if j < end && raw[j] == '}' {
+					j++
+					break
 				} else {
 					break
 				}
 			}
+			ve = j
+		} else {
+			ve = skipValue(raw, i)
+		}
+		if ve <= i {
+			return
 		}
 		i = skipWS(raw, ve)
 		if i < end && raw[i] == ',' {

@@ -215,4 +215,21 @@ func TestMaskReplyOnlyErrors(t *testing.T) {
 			t.Errorf("got  %s\nwant %s", got, want)
 		}
 	})
+	t.Run("failed interaction with deeply nested error and sibling text", func(t *testing.T) {
+		const depth = 100
+		in := []byte(`{"status":"failed","keep":"projects/keep-1","nested":` +
+			strings.Repeat(`[{"a":`, depth) +
+			`{"error":{"message":"projects/deep-99"}}` +
+			strings.Repeat(`}]`, depth) + `}`)
+		got := string(maskReply(in, "", nil))
+		if strings.Contains(got, "deep-99") {
+			t.Errorf("deep error not masked: %s", got)
+		}
+		if !strings.Contains(got, `"keep":"projects/keep-1"`) {
+			t.Errorf("sibling text changed: %s", got)
+		}
+		if !json.Valid([]byte(got)) {
+			t.Errorf("invalid JSON: %s", got)
+		}
+	})
 }
