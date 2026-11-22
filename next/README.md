@@ -826,14 +826,17 @@ subscription's token an hour before it expires.
 
 | Setting | Meaning |
 | --- | --- |
-| `base_url` | Where the Messages API is. Default `https://api.anthropic.com`; requests go to `{base_url}/v1/messages`. A token count goes to `{base_url}/v1/messages/count_tokens` only when this is Anthropic's own origin (`https` and the host `api.anthropic.com`, port 443 or none, no user info); with any other base the account cannot count and core estimates the count. |
+| `base_url` | Where the Messages API is. Default `https://api.anthropic.com`; trailing slashes and a trailing `/v1/messages` or `/v1` are stripped, and requests go to `{base_url}/v1/messages`. A token count goes to `{base_url}/v1/messages/count_tokens` only when this is Anthropic's own origin (`https` and the host `api.anthropic.com`, port 443 or none, no user info); with any other base the account cannot count and core estimates the count. |
 | `client_id` | Claude's OAuth client. Default is Claude's. |
-| `rebuild_mid_system_message` | `true` moves the text of each `system` message in a Messages client's conversation into the top-level `system` prompt, after what it holds, and removes those messages, for a Claude-compatible upstream that refuses them there; non-text blocks in them are left out. Default `false`: such messages go upstream where the client put them. Requests in other formats already have every system message in the top-level prompt. |
+| `rebuild_mid_system_message` | `true` moves the text of each `system` message in the conversation (from a Messages client or a translated request) into the top-level `system` prompt, after what it holds, and removes those messages, for a Claude-compatible upstream that refuses them there; non-text blocks in them are left out. Default `false`: a Messages client's mid-conversation `system` messages stay where the client put them, and a translated request for a Claude model keeps system and developer messages after the conversation has started in place (as `system` messages on models that take them there, or as `<system-reminder>` text in a user turn on older models); non-Claude models put every system message in the top-level prompt. |
 | `model_level_cooling` | `true` keeps a used-up shared subscription window (5-hour or 7-day) on the model that hit it, so the account's other models stay in use; default `false` blocks the whole account. Today's `claude.model-level-cooling`. |
 | `cache_ttl` | Lifetime of `cache_control` markers pluxy adds to translated requests that set none: `"5m"` (default) or `"1h"`. |
 
-A Messages request goes to Anthropic unchanged: its body, so thinking blocks, signatures and
-`cache_control` markers arrive as the client wrote them, and its `anthropic-version`,
+A Messages request passes through with its body kept as the client wrote it, so thinking blocks,
+signatures, `cache_control` markers and sampling settings arrive intact. The exceptions are the
+repairs every body gets (empty domain lists removed from built-in web search tools, invalid tool
+call IDs replaced, and, each reported, conversation turns repaired and thinking settings fitted to
+the model), plus a thinking suffix or `rebuild_mid_system_message` when set. Its `anthropic-version`,
 `anthropic-beta` and identification headers (`User-Agent`, `X-App`, the `X-Stainless-*` headers of
 Anthropic's SDKs, `X-Claude-Code-Session-Id`, `X-Client-App` and
 `X-Anthropic-Additional-Protection`; and, only from a request that names itself as Claude Code
@@ -843,7 +846,9 @@ Code's subagent, prompt, request-class and remote-session headers such as `X-Cla
 from Claude Code). An API key goes in `x-api-key`; a
 subscription's token or a setup token goes as a bearer token, with the `oauth-2025-04-20` beta added
 after the client's betas. Chat Completions, Responses and Gemini requests are
-translated to Messages; a Chat client's own `cache_control` markers (top-level, on tools, on
+translated to Messages; when the client sets no output token limit, `max_tokens` defaults to the
+model's output limit from the extension's built-in model list (or `32000` for an unlisted model).
+A Chat client's own `cache_control` markers (top-level, on tools, on
 `tool_calls`, and on messages and parts) are carried over, a Responses client's
 `prompt_cache_retention` sets the added markers' TTL (`"24h"` as `"1h"`, `"in_memory"` as `"5m"`),
 and their reasoning effort becomes adaptive thinking with that effort on
@@ -1895,7 +1900,8 @@ reload or a settings change, with a message that names the rule and the path.
 
 A default checks the body the extension built, where today's core checked the client's request
 translated to the upstream's format: a field the extension fills in itself counts as present, such
-as the Claude extension's `max_tokens` of 32000 for a client that sets none. To replace such a
+as the Claude extension's default `max_tokens` (the model's output limit from its built-in model
+list, or 32000 for an unlisted model) for a client that sets none. To replace such a
 value, use `override`, as today's example config does for `max_tokens`.
 
 A turn on an upstream WebSocket (a Codex Responses WebSocket) gets them too: they apply once to
