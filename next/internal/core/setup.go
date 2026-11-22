@@ -348,11 +348,12 @@ func (c *Core) Setup(ctx context.Context) management.Setup {
 	regs := c.Registries(ctx)
 	installed := c.cur.Load().pkgs
 	return management.Setup{
-		FirstRun:  firstRun,
-		Scanning:  scanning,
-		ScannedAt: scannedAt,
-		Found:     found,
-		Picks:     buildSetupPicks(regs, installed, found),
+		FirstRun:   firstRun,
+		Scanning:   scanning,
+		ScannedAt:  scannedAt,
+		Found:      found,
+		Picks:      buildSetupPicks(regs, installed, found),
+		Registries: len(regs),
 	}
 }
 

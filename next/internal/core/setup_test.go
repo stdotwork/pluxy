@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -624,5 +625,57 @@ func TestSetupScanAfterStop(t *testing.T) {
 		wg.Wait()
 		m.triggerScan()
 		m.wg.Wait()
+	}
+}
+
+func TestSetupReportsRegistryCount(t *testing.T) {
+	setTestHome(t)
+	t.Setenv("PATH", t.TempDir())
+	const cfg = `{"listen":"127.0.0.1:0","client_keys":["fake-client-key-1"],"management_key":"fake-mgmt-key"}`
+
+	getSetup := func(t *testing.T, opts Options) map[string]any {
+		t.Helper()
+		c, err := Start(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Stop()
+		req := httptest.NewRequest(http.MethodGet, "/v0/management/setup", nil)
+		req.Header.Set("Authorization", "Bearer fake-mgmt-key")
+		req.RemoteAddr = "127.0.0.1:12345"
+		rec := httptest.NewRecorder()
+		c.Management().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /setup: status = %d (%s)", rec.Code, rec.Body.String())
+		}
+		var body map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		return body
+	}
+
+	// No bundled registry and none in config: registries is 0.
+	dir0 := t.TempDir()
+	cfg0 := filepath.Join(dir0, "config.json")
+	writeTestFile(t, cfg0, cfg)
+	body0 := getSetup(t, Options{ConfigPath: cfg0, SafeMode: true})
+	raw0, ok := body0["registries"]
+	if !ok {
+		t.Fatalf("GET /setup omitted registries field: %v", body0)
+	}
+	if raw0 != float64(0) {
+		t.Errorf("registries with none = %v, want 0", raw0)
+	}
+
+	// With a bundled registry: registries is 1.
+	dir1 := t.TempDir()
+	cfg1 := filepath.Join(dir1, "config.json")
+	writeTestFile(t, cfg1, cfg)
+	bundled := filepath.Join(dir1, "bundled", "index.json")
+	writeTestFile(t, bundled, `{"format":0,"packages":{}}`)
+	body1 := getSetup(t, Options{ConfigPath: cfg1, SafeMode: true, Bundled: bundled})
+	if body1["registries"] != float64(1) {
+		t.Errorf("registries with bundled = %v, want 1", body1["registries"])
 	}
 }

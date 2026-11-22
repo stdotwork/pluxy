@@ -1087,3 +1087,55 @@ func TestResolveThemeID(t *testing.T) {
 		t.Errorf("themeIDFromName(%q) = %q, want %q", "", got, "custom-theme")
 	}
 }
+
+func TestCLIExtAvailableNoRegistry(t *testing.T) {
+	var body string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v0/management/registries" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	env := func(k string) string {
+		return map[string]string{"PLUXY_URL": srv.URL, "PLUXY_MANAGEMENT_KEY": "k"}[k]
+	}
+	run := func(args ...string) (string, string, int) {
+		var out, errOut bytes.Buffer
+		code := runCLI(args, &out, &errOut, env)
+		return out.String(), errOut.String(), code
+	}
+
+	// With no registries, ext available explains why and names what to run next.
+	body = `{"registries":[]}`
+	out, errOut, code := run("ext", "available")
+	if code != exitOK || errOut != "" {
+		t.Fatalf("ext available (no registries): exit=%d stderr=%q stdout=%q", code, errOut, out)
+	}
+	for _, want := range []string{"This build has no extension registry.", "pluxy-pack", "-bundled"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("ext available (no registries) stdout = %q, want %q", out, want)
+		}
+	}
+	if strings.Contains(out, "REGISTRY") {
+		t.Errorf("ext available (no registries) printed table header: %q", out)
+	}
+
+	// --json still prints the API reply unchanged.
+	out, errOut, code = run("ext", "available", "--json")
+	if code != exitOK || errOut != "" || strings.TrimSpace(out) != `{"registries":[]}` {
+		t.Errorf("ext available --json: exit=%d stderr=%q stdout=%q", code, errOut, out)
+	}
+
+	// With a registry, ext available prints the table and not the no-registry message.
+	body = `{"registries":[{"name":"bundled","url":"/tmp/bundled/index.json","packages":[{"id":"pluxy/claude","title":"Claude","kind":"provider","tier":"pick","releases":[{"version":"0.1.0","protocol":[0],"platforms":["linux/amd64"]}]}]}]}`
+	out, errOut, code = run("ext", "available")
+	if code != exitOK || errOut != "" {
+		t.Fatalf("ext available (with registry): exit=%d stderr=%q stdout=%q", code, errOut, out)
+	}
+	if !strings.Contains(out, "pluxy/claude") || strings.Contains(out, "no extension registry") {
+		t.Errorf("ext available (with registry) stdout = %q", out)
+	}
+}
