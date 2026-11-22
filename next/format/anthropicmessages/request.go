@@ -198,13 +198,20 @@ func parseTool(raw json.RawMessage, path string) llm.Tool {
 			UserLocation   *llm.UserLocation `json:"user_location"`
 		}
 		_ = rawjson.Unmarshal(raw, &w)
+		var allowed, blocked []string
+		if len(w.AllowedDomains) > 0 {
+			allowed = w.AllowedDomains
+		}
+		if len(w.BlockedDomains) > 0 {
+			blocked = w.BlockedDomains
+		}
 		return llm.Tool{
 			Type: llm.ToolWebSearch,
 			Name: t.Name,
 			WebSearch: &llm.WebSearchTool{
 				MaxUses:        w.MaxUses,
-				AllowedDomains: w.AllowedDomains,
-				BlockedDomains: w.BlockedDomains,
+				AllowedDomains: allowed,
+				BlockedDomains: blocked,
 				UserLocation:   w.UserLocation,
 			},
 			Origin: &llm.Origin{Format: format, Path: path, Raw: append(json.RawMessage(nil), raw...)},

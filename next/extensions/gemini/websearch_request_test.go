@@ -190,12 +190,15 @@ func TestWebSearchGeminiModelGate(t *testing.T) {
 		"gemini-4-carbon",
 		"gemini-robotics-er-2-preview",
 		"gemini-nano-banana-2.1",
+		"gemini-live-2.5-flash-native-audio",
 	}
 	unsupported := []string{
 		"gemini-1.5-pro",
 		"gemini-1.5-flash",
 		"gemini-2.0-flash-lite",
 		"gemini-2.5-flash-image",
+		"gemini-3.5-flash-image",
+		"gemini-2.5-pro-image",
 		"gemini-3-pro-preview",
 		"gemini-5-x",
 		"gemma-3-27b-it",

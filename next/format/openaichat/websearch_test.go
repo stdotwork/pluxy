@@ -7,6 +7,7 @@ import (
 
 	"github.com/stdotwork/pluxy/next/format/anthropicmessages"
 	"github.com/stdotwork/pluxy/next/format/geminigenerate"
+	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
 	"github.com/stdotwork/pluxy/next/format/openaichat"
 	"github.com/stdotwork/pluxy/next/format/openairesponses"
 	"github.com/stdotwork/pluxy/next/llm"
@@ -467,5 +468,174 @@ func TestWebSearchUserLocationValidation(t *testing.T) {
 	}
 	if dropped := (&llm.Translation{Losses: chLosses}).DroppedPaths(); !slices.Equal(dropped, wantMsgDropped) {
 		t.Errorf("chat dropped = %v, want %v", dropped, wantMsgDropped)
+	}
+}
+
+func TestWebSearchISOCountryCodes(t *testing.T) {
+	// UK is a 2-letter code but not an ISO 3166-1 alpha-2 code (GB is).
+	// Lowercase "us" is not uppercase.
+	// When city is present, country is dropped, city is kept.
+	chatReq, err := openaichat.ParseRequest([]byte(`{
+		"model":"claude-sonnet-4-6",
+		"messages":[{"role":"user","content":"hi"}],
+		"web_search_options":{"user_location":{"type":"approximate","approximate":{"country":"UK","city":"London"}}}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cBody, cLosses, err := anthropicmessages.EncodeRequestWith(chatReq, anthropicmessages.EncodeOptions{WebSearch: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cGot struct {
+		Tools []struct {
+			UserLocation map[string]any `json:"user_location"`
+		} `json:"tools"`
+	}
+	_ = json.Unmarshal(cBody, &cGot)
+	if len(cGot.Tools) != 1 {
+		t.Fatalf("claude tools = %+v", cGot.Tools)
+	}
+	if loc := cGot.Tools[0].UserLocation; loc["type"] != "approximate" || loc["country"] != nil || loc["city"] != "London" {
+		t.Errorf("claude user_location = %v, want type=approximate, no country, city=London", loc)
+	}
+	wantChatDropped := []string{"web_search_options.user_location.approximate.country"}
+	if dropped := (&llm.Translation{Losses: cLosses}).DroppedPaths(); !slices.Equal(dropped, wantChatDropped) {
+		t.Errorf("claude dropped = %v, want %v", dropped, wantChatDropped)
+	}
+
+	// Lowercase "us" with city "Paris" -> country dropped, city kept.
+	chatReqLower, err := openaichat.ParseRequest([]byte(`{
+		"model":"claude-sonnet-4-6",
+		"messages":[{"role":"user","content":"hi"}],
+		"web_search_options":{"user_location":{"type":"approximate","approximate":{"country":"us","city":"Paris"}}}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cLowerBody, cLowerLosses, err := anthropicmessages.EncodeRequestWith(chatReqLower, anthropicmessages.EncodeOptions{WebSearch: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cLowerGot struct {
+		Tools []struct {
+			UserLocation map[string]any `json:"user_location"`
+		} `json:"tools"`
+	}
+	_ = json.Unmarshal(cLowerBody, &cLowerGot)
+	if len(cLowerGot.Tools) != 1 || cLowerGot.Tools[0].UserLocation["country"] != nil || cLowerGot.Tools[0].UserLocation["city"] != "Paris" {
+		t.Errorf("claude lowercase user_location = %v, want no country, city=Paris", cLowerGot.Tools)
+	}
+	wantLowerDropped := []string{"web_search_options.user_location.approximate.country"}
+	if dropped := (&llm.Translation{Losses: cLowerLosses}).DroppedPaths(); !slices.Equal(dropped, wantLowerDropped) {
+		t.Errorf("claude lower dropped = %v, want %v", dropped, wantLowerDropped)
+	}
+}
+
+func TestWebSearchEmptyUserLocationDropped(t *testing.T) {
+	// When no country/city/region/timezone survives (e.g. UK only, or empty approximate),
+	// user_location must be omitted entirely and reported as dropped.
+	chatReq, err := openaichat.ParseRequest([]byte(`{
+		"model":"claude-sonnet-4-6",
+		"messages":[{"role":"user","content":"hi"}],
+		"web_search_options":{"user_location":{"type":"approximate","approximate":{"country":"UK"}}}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Translated to Claude
+	cBody, cLosses, err := anthropicmessages.EncodeRequestWith(chatReq, anthropicmessages.EncodeOptions{WebSearch: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cGot struct {
+		Tools []map[string]any `json:"tools"`
+	}
+	_ = json.Unmarshal(cBody, &cGot)
+	if len(cGot.Tools) != 1 {
+		t.Fatalf("claude tools = %+v", cGot.Tools)
+	}
+	if cGot.Tools[0]["user_location"] != nil {
+		t.Errorf("claude user_location = %v, want omitted", cGot.Tools[0]["user_location"])
+	}
+	wantDropped := []string{"web_search_options.user_location"}
+	if dropped := (&llm.Translation{Losses: cLosses}).DroppedPaths(); !slices.Equal(dropped, wantDropped) {
+		t.Errorf("claude dropped = %v, want %v", dropped, wantDropped)
+	}
+
+	// 2. Translated to Responses
+	rBody, rLosses, err := openairesponses.EncodeRequestWith(chatReq, openairesponses.EncodeOptions{WebSearch: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rGot struct {
+		Tools []map[string]any `json:"tools"`
+	}
+	_ = json.Unmarshal(rBody, &rGot)
+	if len(rGot.Tools) != 1 {
+		t.Fatalf("responses tools = %+v", rGot.Tools)
+	}
+	if rGot.Tools[0]["user_location"] != nil {
+		t.Errorf("responses user_location = %v, want omitted", rGot.Tools[0]["user_location"])
+	}
+	if dropped := (&llm.Translation{Losses: rLosses}).DroppedPaths(); !slices.Equal(dropped, wantDropped) {
+		t.Errorf("responses dropped = %v, want %v", dropped, wantDropped)
+	}
+
+	// 3. Messages -> Chat with empty approximate location
+	msgReq, err := anthropicmessages.ParseRequest([]byte(`{
+		"model":"gpt-5-search-api",
+		"max_tokens":1024,
+		"messages":[{"role":"user","content":"hi"}],
+		"tools":[{"type":"web_search_20250305","name":"web_search","user_location":{"type":"approximate","country":"UK"}}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	chBody, chLosses, err := openaichat.EncodeRequestWith(msgReq, openaichat.EncodeOptions{WebSearch: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var chGot struct {
+		WebSearchOptions map[string]any `json:"web_search_options"`
+	}
+	_ = json.Unmarshal(chBody, &chGot)
+	if chGot.WebSearchOptions["user_location"] != nil {
+		t.Errorf("chat user_location = %v, want omitted", chGot.WebSearchOptions["user_location"])
+	}
+	wantMsgDropped := []string{"tools[0].user_location"}
+	if dropped := (&llm.Translation{Losses: chLosses}).DroppedPaths(); !slices.Equal(dropped, wantMsgDropped) {
+		t.Errorf("chat dropped = %v, want %v", dropped, wantMsgDropped)
+	}
+
+	// 4. Existing Responses -> Claude mapping keeps its bytes
+	respReq, err := openairesponses.ParseRequest([]byte(`{
+		"model":"claude-sonnet-4-6",
+		"input":"hi",
+		"tools":[{"type":"web_search","user_location":{"type":"approximate"}}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rcBody, rcLosses, err := anthropicmessages.EncodeRequestWith(respReq, anthropicmessages.EncodeOptions{WebSearch: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rcGot struct {
+		Tools []map[string]any `json:"tools"`
+	}
+	_ = json.Unmarshal(rcBody, &rcGot)
+	if len(rcGot.Tools) != 1 || rcGot.Tools[0]["user_location"] == nil {
+		t.Errorf("existing Responses-to-Claude mapping: user_location = %v, want kept", rcGot.Tools)
+	}
+	if len(rcLosses) != 0 {
+		t.Errorf("existing Responses-to-Claude mapping: unexpected losses %+v", rcLosses)
+	}
+}
+
+func TestCountryCodesSetHas249Entries(t *testing.T) {
+	if n := len(rawjson.CountryCodes); n != 249 {
+		t.Fatalf("len(CountryCodes) = %d, want 249", n)
 	}
 }

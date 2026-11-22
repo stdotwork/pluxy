@@ -204,8 +204,12 @@ func parseTool(raw json.RawMessage, path string) llm.Tool {
 			ws.SearchContextSize = s
 		}
 		if w.Filters != nil {
-			ws.AllowedDomains = w.Filters.AllowedDomains
-			ws.BlockedDomains = w.Filters.BlockedDomains
+			if len(w.Filters.AllowedDomains) > 0 {
+				ws.AllowedDomains = w.Filters.AllowedDomains
+			}
+			if len(w.Filters.BlockedDomains) > 0 {
+				ws.BlockedDomains = w.Filters.BlockedDomains
+			}
 		}
 		return llm.Tool{
 			Type:      llm.ToolWebSearch,

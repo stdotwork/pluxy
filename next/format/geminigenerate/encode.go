@@ -174,9 +174,9 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 				continue
 			}
 			if hasFunctionTools {
-				// Google's tool-combination page documents combining search with function tools
-				// on the Interactions API, and nothing documents that mix for GenerateContent here.
-				// Keep the function tools and drop search with a loss.
+				// The Vertex grounding page notes: "The Gemini API doesn't support combining search
+				// tools (such as `googleSearch`) with non-search tools (such as function calling ...)
+				// in the same `generateContent` request." Keep the function tools and drop search with a loss.
 				e.lose(llm.LossDropped, p, "GenerateContent does not combine googleSearch with functionDeclarations")
 				continue
 			}
@@ -672,6 +672,7 @@ var googleSearchModels = []string{
 	"gemini-2.5-pro",
 	"gemini-2.5-flash-lite",
 	"gemini-2.5-flash",
+	"gemini-live-2.5-flash-native-audio",
 	"gemini-2.0-flash",
 	"gemini-robotics-er-2",
 	"gemini-nano-banana-2.1",
@@ -686,10 +687,13 @@ func supportsGoogleSearch(model string) bool {
 	if strings.Contains(m, "embedding") || strings.Contains(m, "-tts") {
 		return false
 	}
-	if strings.HasPrefix(m, "gemini-2.0-flash-lite") ||
-		(strings.HasPrefix(m, "gemini-2.0-flash") && strings.Contains(m, "-image")) ||
-		(strings.HasPrefix(m, "gemini-2.5-flash") && strings.Contains(m, "-image")) {
+	if strings.HasPrefix(m, "gemini-2.0-flash-lite") {
 		return false
+	}
+	if strings.Contains(m, "-image") {
+		if !strings.HasPrefix(m, "gemini-3.1-flash-image") && !strings.HasPrefix(m, "gemini-3-pro-image") {
+			return false
+		}
 	}
 	for _, family := range googleSearchModels {
 		if m == family || strings.HasPrefix(m, family+"-") {

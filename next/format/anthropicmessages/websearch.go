@@ -103,20 +103,27 @@ func canonicalWebSearchTool(t llm.Tool) (tool json.RawMessage, skip bool, carrie
 		}
 		if u := ws.UserLocation; u != nil {
 			loc := map[string]any{"type": "approximate"}
+			hasAny := false
 			if rawjson.IsCountryCode(u.Country) {
 				loc["country"] = u.Country
+				hasAny = true
 			}
 			if u.City != "" {
 				loc["city"] = u.City
+				hasAny = true
 			}
 			if u.Region != "" {
 				loc["region"] = u.Region
+				hasAny = true
 			}
 			if u.Timezone != "" {
 				loc["timezone"] = u.Timezone
+				hasAny = true
 			}
-			out["user_location"] = loc
-			carried.UserLocation = true
+			if hasAny {
+				out["user_location"] = loc
+				carried.UserLocation = true
+			}
 		}
 	}
 	b, err := json.Marshal(out)

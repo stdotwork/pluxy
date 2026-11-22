@@ -907,7 +907,7 @@ Completions (`web_search_options`), Gemini GenerateContent (`googleSearch`), and
 `web_search_preview*` names also become `web_search_20250305`, gated to Anthropic's own host
 (`api.anthropic.com`) and the Claude model families documented on Anthropic's web search page
 (Claude 4.5+ and `claude-mythos-preview`), with `user_location.type` set to `approximate`,
-two-letter `country` codes only, and `allowed_domains` preferred over `blocked_domains` when both
+assigned ISO `country` codes only, and `allowed_domains` preferred over `blocked_domains` when both
 are set; unsupported hosts, models or settings are reported as dropped. (On Chat and Gemini
 targets, `external_web_access: false` drops the tool with a loss so `drop_policy: "reject"` refuses
 it.) Claude's `server_tool_use`

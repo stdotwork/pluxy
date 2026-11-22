@@ -577,8 +577,9 @@ type EncodeOptions struct {
 	ServiceTier, Verbosity bool
 	// WebSearch says the caller knows its upstream takes web_search_options (only specialized
 	// search models such as gpt-5-search-api accept it): a request from another format then
-	// carries a canonical web search tool on those models, and without it the tool is left out
-	// and reported as dropped. A Chat client's own web_search_options is written either way.
+	// carries a canonical web search tool on those models and without function tools, and
+	// without it the tool is left out and reported as dropped. A Chat client's own
+	// web_search_options is written either way.
 	WebSearch bool
 }
 
@@ -670,20 +671,27 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 				}
 				if u := ws.UserLocation; u != nil {
 					approx := map[string]any{}
+					hasAny := false
 					if rawjson.IsCountryCode(u.Country) {
 						approx["country"] = u.Country
+						hasAny = true
 					}
 					if u.City != "" {
 						approx["city"] = u.City
+						hasAny = true
 					}
 					if u.Region != "" {
 						approx["region"] = u.Region
+						hasAny = true
 					}
 					if u.Timezone != "" {
 						approx["timezone"] = u.Timezone
+						hasAny = true
 					}
-					wsOut["user_location"] = map[string]any{"type": "approximate", "approximate": approx}
-					carried.UserLocation = true
+					if hasAny {
+						wsOut["user_location"] = map[string]any{"type": "approximate", "approximate": approx}
+						carried.UserLocation = true
+					}
 				}
 			}
 			e.losses = append(e.losses, rawjson.WebSearchLosses(t, p, format, carried)...)
