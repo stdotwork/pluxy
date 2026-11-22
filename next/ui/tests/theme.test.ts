@@ -761,4 +761,46 @@ describe("T3 Code themes", () => {
     expect(darkResolved.tokens["color.text"]).toBe(TOKENS["color.text"].dark);
     expect(darkResolved.tokens["color.accent"]).toBe(TOKENS["color.accent"].dark);
   });
+
+  test("a both-appearance file with only colors paints them in the appearance its canvas belongs to", () => {
+    const night = ok({ ...base, colors: { canvas: "#101010", text: "#eeeeee" } });
+    expect(night.theme.appearance).toBe("both");
+    expect(night.warnings).toEqual([]);
+    const nightDark = resolve(night.theme, choose({ appearance: "dark" }), env);
+    expect(nightDark.tokens["color.bg"]).toBe("#101010");
+    expect(nightDark.tokens["color.text"]).toBe("#eeeeee");
+    expect(nightDark.variables["--app-theme-canvas"]).toBe("#101010");
+    // Light keeps pluxy's own light colours instead of a dark canvas.
+    const nightLight = resolve(night.theme, choose({ appearance: "light" }), env);
+    expect(nightLight.tokens["color.bg"]).toBe(TOKENS["color.bg"].light);
+    expect(nightLight.tokens["color.text"]).toBe(TOKENS["color.text"].light);
+    expect(nightLight.variables).toEqual({});
+
+    const day = ok({ ...base, colors: { canvas: "#fafafa", text: "#111111" } });
+    expect(resolve(day.theme, choose({ appearance: "light" }), env).tokens["color.bg"]).toBe("#fafafa");
+    expect(resolve(day.theme, choose({ appearance: "dark" }), env).tokens["color.bg"]).toBe(
+      TOKENS["color.bg"].dark as string,
+    );
+
+    // The canvas seed still decides when the file has one.
+    const seeded = ok({ ...base, canvas: "#fafafa", accent: "#3355ff", colors: { canvas: "#101010" } });
+    expect(seeded.theme.t3?.appearance).toBe("light");
+  });
+
+  test("warns when colors holds no roles", () => {
+    const warning = "colors has no roles; ignored";
+    const empty = ok({ name: "X", appearance: "dark", colors: {} });
+    expect(empty.warnings).toEqual([warning]);
+    expect(empty.theme.id).toBe("t3/x");
+    expect(ok({ ...base, colors: {} }).warnings).toEqual([warning]);
+    // A file that also has seeds still gets its generated palette.
+    const seeded = ok({ name: "X", appearance: "dark", canvas: "#1a1b26", accent: "#7aa2f7", colors: {} });
+    expect(seeded.warnings).toEqual([warning]);
+    expect(resolve(seeded.theme, choose({}), env).variables["--app-theme-canvas"]).toBeDefined();
+    // A role is enough, and a bad role already has its own warning.
+    expect(ok({ name: "X", appearance: "dark", colors: { canvas: "#101010" } }).warnings).toEqual([]);
+    expect(ok({ name: "X", appearance: "dark", colors: { nope: "#101010" } }).warnings).toEqual([
+      "colors: unknown role nope; ignored",
+    ]);
+  });
 });
