@@ -1467,7 +1467,8 @@ as above, and reach their tools only through the router.
 ## Setup
 
 On a first run of a core (a new "Run core here" core is one), the window opens the kit's Setup
-page ([`../ui`](../ui/README.md), `#/setup`) in place of the Dashboard, as the web panel does:
+page ([`../ui`](../ui/README.md), `#/setup`) in place of the Dashboard when the window's address
+names no page, as the web panel does:
 what core found on its machine, the providers to install, an account, the clients, and Finish. It
 opens once the app is connected and signed in, so the Connection page still comes first. After
 Finish the page stays in the navigation and shows the same things as they are now.

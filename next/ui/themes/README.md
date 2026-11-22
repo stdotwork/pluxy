@@ -126,7 +126,10 @@ anything.
 | `color.code-text` | Their text | `var(--px-color-text)` |
 
 A default written as `var(--px-…)` follows another token, so a theme that sets only the older
-tokens looks as it did before these existed.
+tokens gets matching colours for these. It does not look exactly as it did before they existed:
+placeholder text now has one colour and full opacity in every browser (`color.placeholder`), and a
+configuration diff now has a background (`color.code-bg`), where each had only the browser's or no
+colour of its own.
 
 ### Type
 
