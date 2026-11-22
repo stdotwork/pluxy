@@ -21,6 +21,8 @@ import (
 const (
 	ownerProjectNumber = "738291456021"
 	ownerProjectID     = "acme-prod-4821"
+	ownerOrgNumber     = "555000482917"
+	ownerFolderNumber  = "666000391824"
 )
 
 // suspendedReply is Google's documented CONSUMER_SUSPENDED reply.
@@ -49,12 +51,12 @@ const quotaReply = `{"error":{"code":429,"message":"You exceeded your current qu
 // the client's address, an organization, a folder, a group, a billing account and a service account.
 const otherNamesReply = `{"error":{"code":403,"message":"Permission denied on resource project my-proj-1. Caller foo@my-proj-2.iam.gserviceaccount.com lacks permission.","status":"PERMISSION_DENIED","details":[` +
 	`{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"IAM_PERMISSION_DENIED","domain":"googleapis.com"},` +
-	`{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"subject":"clientip:203.0.113.7","quotaId":"Q"},{"subject":"organization:555000"},{"subject":"folder:666000"}]},` +
-	`{"@type":"type.googleapis.com/google.rpc.ResourceInfo","resource_name":"organizations/555000/x","owner":"group:team@example.com"},` +
+	`{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"subject":"clientip:203.0.113.7","quotaId":"Q"},{"subject":"organization:` + ownerOrgNumber + `"},{"subject":"folder:` + ownerFolderNumber + `"}]},` +
+	`{"@type":"type.googleapis.com/google.rpc.ResourceInfo","resource_name":"organizations/` + ownerOrgNumber + `/x","owner":"group:team@example.com"},` +
 	`{"@type":"type.googleapis.com/google.rpc.ResourceInfo","owner":"billingAccounts/0123-ABCD"}]}}`
 
 // ownerNames are the names the replies above carry for the owner.
-var ownerNames = []string{ownerProjectNumber, ownerProjectID, "my-proj-1", "my-proj-2", "203.0.113.7", "555000", "666000", "team@example.com", "0123-ABCD", "foo@"}
+var ownerNames = []string{ownerProjectNumber, ownerProjectID, "my-proj-1", "my-proj-2", "203.0.113.7", ownerOrgNumber, ownerFolderNumber, "team@example.com", "0123-ABCD", "foo@"}
 
 const goodChunk = `{"candidates":[{"content":{"role":"model","parts":[{"text":"Hi"}]},"index":0}]}`
 
@@ -108,6 +110,23 @@ func noProject(t *testing.T, what, reply string) {
 	for _, id := range ownerNames {
 		if strings.Contains(reply, id) {
 			t.Errorf("%s names the owner's project %s:\n%s", what, id, reply)
+		}
+	}
+}
+
+// A cooldown reply carries an RFC3339Nano timestamp whose nanoseconds can hold any 6-digit run;
+// no entry in ownerNames may match a timestamp's digits.
+func TestGoogleProjectNoProjectIgnoresTimestamp(t *testing.T) {
+	for _, ts := range []string{
+		"2026-11-22T10:58:05.455500043Z",
+		"2026-11-22T10:58:05.466600043Z",
+	} {
+		reply := `{"error":{"message":"all accounts for gemini-2.5-flash are in cooldown until ` + ts + `"}}`
+		noProject(t, "cooldown reply", reply)
+	}
+	for _, id := range ownerNames {
+		if strings.Trim(id, "0123456789") == "" && len(id) <= 9 {
+			t.Errorf("numeric ownerName %q has %d digits; use >9 digits so it cannot match timestamp nanoseconds", id, len(id))
 		}
 	}
 }
