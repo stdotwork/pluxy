@@ -1691,8 +1691,9 @@ for a client that names none); a used-up quota's reset time; the remote model ca
 `<effort>-fast` request; the usage fallback from response dimensions; images in tool results;
 signature types other than `sealed`; namespace tools and custom (freeform) tools such as
 `apply_patch`, which are reported as dropped, and today's core's checks and recovery of a malformed
-`apply_patch` call; and token counting (core estimates counts for Devin accounts). A replayed reasoning
-signature is sent as given, whoever issued it.
+`apply_patch` call; and token counting (Devin has no count route; core estimates the count instead,
+while `token_count_estimate` is on, as it is by default). A replayed reasoning signature is sent as
+given, whoever issued it.
 
 Gaps outside the extension: a Messages or Gemini client gets Devin's reasoning without its
 signature, because those renderers pass on only Responses and Gemini signatures, so such a client
