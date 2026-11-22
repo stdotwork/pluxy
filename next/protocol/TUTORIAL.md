@@ -104,7 +104,8 @@ The rules the SDK holds you to:
   Pass it to your upstream HTTP request so that request stops too.
 - Do not retry inside the extension. Core owns retries (the only exceptions are two single resends
   before any content is sent: Codex dropping foreign encrypted reasoning after an upstream HTTP 400
-  `invalid_encrypted_content` when `drop_policy` is not `reject`, and Gemini resending once after a
+  refusing it (`invalid_encrypted_content`, or a message that the encrypted content could not be
+  verified or decrypted) when `drop_policy` is not `reject`, and Gemini resending once after a
   `MALFORMED_FUNCTION_CALL` reply).
 - Write each event when you have it. Writes block while the client is slow; let them.
 

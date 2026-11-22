@@ -54,7 +54,8 @@ is Tauri 2, so its native side is Rust.
   client nothing is retried. Extensions do not retry on their own, with two single-resend
   exceptions before any content reaches the client: the Codex extension drops encrypted reasoning
   items and resends once when the upstream returns HTTP 400 refusing foreign encrypted reasoning
-  (`invalid_encrypted_content`) and `drop_policy` is not `reject`; the Gemini extension resends a
+  (`invalid_encrypted_content`, or a message that the encrypted content could not be verified or
+  decrypted) and `drop_policy` is not `reject`; the Gemini extension resends a
   `GenerateContent` request once when the upstream reply ends with `MALFORMED_FUNCTION_CALL` before
   any content is sent. Blocks after a refusal are kept per credential, model or endpoint, and an
   earlier request's failure never overrides a later success.
