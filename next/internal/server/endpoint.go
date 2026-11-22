@@ -73,7 +73,7 @@ var embeddingsEndpoint = endpoint{format: llm.FormatOpenAIEmbeddings}
 // geminiEmbedContentEndpoint is Gemini's single-content embedding route,
 // POST /v1beta/models/{model}:embedContent.
 var geminiEmbedContentEndpoint = endpoint{
-	format:      protocol.FormatGeminiEmbedContent,
+	format:      llm.FormatGeminiEmbedContent,
 	modelPrefix: "models/",
 	googleKeys:  true,
 	errorBody:   geminigenerate.ErrorResponse,
@@ -82,7 +82,7 @@ var geminiEmbedContentEndpoint = endpoint{
 // geminiBatchEmbedContentsEndpoint is Gemini's batch embedding route,
 // POST /v1beta/models/{model}:batchEmbedContents.
 var geminiBatchEmbedContentsEndpoint = endpoint{
-	format:      protocol.FormatGeminiBatchEmbedContents,
+	format:      llm.FormatGeminiBatchEmbedContents,
 	modelPrefix: "models/",
 	googleKeys:  true,
 	errorBody:   geminigenerate.ErrorResponse,

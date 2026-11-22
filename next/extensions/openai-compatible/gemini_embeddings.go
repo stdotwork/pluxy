@@ -12,7 +12,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/stdotwork/pluxy/next/llm"
-	"github.com/stdotwork/pluxy/next/protocol"
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
@@ -76,7 +75,7 @@ func geminiEmbeddingsTo(ctx context.Context, call sdk.Call, out bodySender, form
 		return badEmbeddingRequest("embeddings do not support streaming")
 	}
 
-	isBatch := format == protocol.FormatGeminiBatchEmbedContents
+	isBatch := format == llm.FormatGeminiBatchEmbedContents
 	items, err := readGeminiItemsForOpenAI(rawMap, isBatch)
 	if err != nil {
 		return err
@@ -173,12 +172,17 @@ func geminiEmbeddingsPassthrough(ctx context.Context, call sdk.Call, s settings,
 		return badEmbeddingRequest("embeddings do not support streaming")
 	}
 	model := strings.TrimPrefix(call.Request.Model, "models/")
+	isBatch := format == llm.FormatGeminiBatchEmbedContents
 	method := ":embedContent"
-	if format == protocol.FormatGeminiBatchEmbedContents {
+	if isBatch {
 		method = ":batchEmbedContents"
 	}
+	reqBody, err := geminiPassthroughBody(call.Request.Native.Body, rawMap, model, isBatch)
+	if err != nil {
+		return err
+	}
 	path := "/models/" + url.PathEscape(model) + method
-	resp, err := postBody(ctx, call, s, wire, key, path, call.Request.Native.Body)
+	resp, err := postBody(ctx, call, s, wire, key, path, reqBody)
 	if err != nil {
 		return noEndpoint(err, "embeddings", path)
 	}
@@ -276,7 +280,7 @@ func parseGeminiItemForOpenAI(item map[string]json.RawMessage, prefix string) (g
 		}
 		for k := range part {
 			if k != "text" {
-				return out, badEmbeddingRequest(fmt.Sprintf("%s[%d].%s: OpenAI embeddings only accept text parts", field("content.parts"), i, k))
+				return out, unsupportedEmbeddingFeature(fmt.Sprintf("%s[%d].%s: OpenAI embeddings only accept text parts", field("content.parts"), i, k))
 			}
 		}
 		textRaw, ok := part["text"]
@@ -316,7 +320,7 @@ func parseGeminiItemForOpenAI(item map[string]json.RawMessage, prefix string) (g
 			return out, badEmbeddingRequest(field("taskType") + " must be a string")
 		}
 		if s != "" && s != "TASK_TYPE_UNSPECIFIED" {
-			return out, badEmbeddingRequest(field("taskType") + ": OpenAI embeddings do not support taskType")
+			return out, unsupportedEmbeddingFeature(field("taskType") + ": OpenAI embeddings do not support taskType")
 		}
 	}
 	if raw, ok := pickRaw("title"); ok {
@@ -325,7 +329,7 @@ func parseGeminiItemForOpenAI(item map[string]json.RawMessage, prefix string) (g
 			return out, badEmbeddingRequest(field("title") + " must be a string")
 		}
 		if s != "" {
-			return out, badEmbeddingRequest(field("title") + ": OpenAI embeddings do not support title")
+			return out, unsupportedEmbeddingFeature(field("title") + ": OpenAI embeddings do not support title")
 		}
 	}
 	if raw, ok := pickRaw("outputDimensionality", "output_dimensionality"); ok {
@@ -527,8 +531,66 @@ func (w *chunkedBodyWriter) flush(all bool) error {
 	return nil
 }
 
+// geminiPassthroughBody returns raw unchanged when the body's model fields already match
+// models/<model> (or are omitted), and updates them only when an account alias renamed the model.
+func geminiPassthroughBody(raw []byte, rawMap map[string]json.RawMessage, model string, isBatch bool) ([]byte, error) {
+	want := "models/" + model
+	if !isBatch {
+		mRaw, ok := rawMap["model"]
+		if !ok || string(mRaw) == "null" {
+			return raw, nil
+		}
+		var cur string
+		if json.Unmarshal(mRaw, &cur) != nil || cur == "" || cur == want || cur == model {
+			return raw, nil
+		}
+		updated := make(map[string]json.RawMessage, len(rawMap))
+		for k, v := range rawMap {
+			updated[k] = v
+		}
+		updated["model"], _ = json.Marshal(want)
+		return json.Marshal(updated)
+	}
+	reqsRaw, ok := rawMap["requests"]
+	if !ok || string(reqsRaw) == "null" {
+		return raw, nil
+	}
+	var reqs []map[string]json.RawMessage
+	if json.Unmarshal(reqsRaw, &reqs) != nil {
+		return raw, nil
+	}
+	changed := false
+	for _, r := range reqs {
+		if r == nil {
+			continue
+		}
+		mRaw, ok := r["model"]
+		if !ok || string(mRaw) == "null" {
+			continue
+		}
+		var cur string
+		if json.Unmarshal(mRaw, &cur) == nil && cur != "" && cur != want && cur != model {
+			r["model"], _ = json.Marshal(want)
+			changed = true
+		}
+	}
+	if !changed {
+		return raw, nil
+	}
+	updated := make(map[string]json.RawMessage, len(rawMap))
+	for k, v := range rawMap {
+		updated[k] = v
+	}
+	updated["requests"], _ = json.Marshal(reqs)
+	return json.Marshal(updated)
+}
+
 func badEmbeddingRequest(message string) *llm.Error {
 	return &llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusBadRequest, Scope: llm.ScopeRequest, Message: message}
+}
+
+func unsupportedEmbeddingFeature(message string) *llm.Error {
+	return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Message: message}
 }
 
 func upstreamEmbeddingError(message string) *llm.Error {

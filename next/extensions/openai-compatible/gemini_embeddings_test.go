@@ -59,13 +59,13 @@ func TestGeminiEmbeddingsOpenAIWire(t *testing.T) {
 			Request: llm.Request{
 				Model: "text-embedding-3-small",
 				Native: &llm.Native{
-					Format: protocol.FormatGeminiEmbedContent,
+					Format: llm.FormatGeminiEmbedContent,
 					Body:   json.RawMessage(`{"content":{"parts":[{"text":"hello"}]},"outputDimensionality":3}`),
 				},
 			},
 		}
 		rec := &embedBodyRec{}
-		if err := geminiEmbeddingsTo(context.Background(), call, rec, protocol.FormatGeminiEmbedContent); err != nil {
+		if err := geminiEmbeddingsTo(context.Background(), call, rec, llm.FormatGeminiEmbedContent); err != nil {
 			t.Fatalf("geminiEmbeddingsTo: %v", err)
 		}
 		reqs := recorded()
@@ -119,7 +119,7 @@ func TestGeminiEmbeddingsOpenAIWire(t *testing.T) {
 			Request: llm.Request{
 				Model: "text-embedding-3-small",
 				Native: &llm.Native{
-					Format: protocol.FormatGeminiBatchEmbedContents,
+					Format: llm.FormatGeminiBatchEmbedContents,
 					Body: json.RawMessage(`{"requests":[` +
 						`{"content":{"parts":[{"text":"a"}]},"outputDimensionality":2},` +
 						`{"content":{"parts":[{"text":"b"}]},"outputDimensionality":2},` +
@@ -128,7 +128,7 @@ func TestGeminiEmbeddingsOpenAIWire(t *testing.T) {
 			},
 		}
 		rec := &embedBodyRec{}
-		if err := geminiEmbeddingsTo(context.Background(), call, rec, protocol.FormatGeminiBatchEmbedContents); err != nil {
+		if err := geminiEmbeddingsTo(context.Background(), call, rec, llm.FormatGeminiBatchEmbedContents); err != nil {
 			t.Fatalf("geminiEmbeddingsTo: %v", err)
 		}
 		if len(recorded()) != 2 {
@@ -170,13 +170,13 @@ func TestGeminiEmbeddingsOpenAIWire(t *testing.T) {
 			Request: llm.Request{
 				Model: "gemini-embedding-001",
 				Native: &llm.Native{
-					Format: protocol.FormatGeminiEmbedContent,
+					Format: llm.FormatGeminiEmbedContent,
 					Body:   json.RawMessage(reqBody),
 				},
 			},
 		}
 		rec := &embedBodyRec{}
-		if err := geminiEmbeddingsTo(context.Background(), call, rec, protocol.FormatGeminiEmbedContent); err != nil {
+		if err := geminiEmbeddingsTo(context.Background(), call, rec, llm.FormatGeminiEmbedContent); err != nil {
 			t.Fatalf("geminiEmbeddingsTo: %v", err)
 		}
 		reqs := recorded()
@@ -185,6 +185,93 @@ func TestGeminiEmbeddingsOpenAIWire(t *testing.T) {
 		}
 		if rec.body() != respBody {
 			t.Errorf("reply = %s, want %s", rec.body(), respBody)
+		}
+	})
+
+	t.Run("gemini wire rewrites aliased model in single and batch bodies", func(t *testing.T) {
+		const respSingle = `{"embedding":{"values":[0.5]}}`
+		const respBatch = `{"embeddings":[{"values":[0.1]},{"values":[0.2]}]}`
+		srv, recorded := newCompactUpstream(t, func(w http.ResponseWriter, r *http.Request, _ []byte) {
+			w.Header().Set("Content-Type", "application/json")
+			if strings.HasSuffix(r.URL.Path, ":batchEmbedContents") {
+				io.WriteString(w, respBatch)
+				return
+			}
+			io.WriteString(w, respSingle)
+		})
+		acct := protocol.Account{
+			ID:         "compat-gemini",
+			Settings:   json.RawMessage(`{"base_url":"` + srv.URL + `/v1beta","wire_api":"gemini"}`),
+			Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "goog-key"},
+		}
+
+		// Single request with aliased model.
+		singleCall := sdk.Call{
+			Account: acct,
+			Request: llm.Request{
+				Model: "gemini-embedding-001",
+				Native: &llm.Native{
+					Format: llm.FormatGeminiEmbedContent,
+					Body:   json.RawMessage(`{"model":"models/client-alias","content":{"parts":[{"text":"hi"}]}}`),
+				},
+			},
+		}
+		if err := geminiEmbeddingsTo(context.Background(), singleCall, &embedBodyRec{}, llm.FormatGeminiEmbedContent); err != nil {
+			t.Fatalf("single: %v", err)
+		}
+
+		// Batch request with aliased inner models.
+		batchCall := sdk.Call{
+			Account: acct,
+			Request: llm.Request{
+				Model: "gemini-embedding-001",
+				Native: &llm.Native{
+					Format: llm.FormatGeminiBatchEmbedContents,
+					Body:   json.RawMessage(`{"requests":[{"model":"models/client-alias","content":{"parts":[{"text":"a"}]}},{"model":"models/client-alias","content":{"parts":[{"text":"b"}]}}]}`),
+				},
+			},
+		}
+		if err := geminiEmbeddingsTo(context.Background(), batchCall, &embedBodyRec{}, llm.FormatGeminiBatchEmbedContents); err != nil {
+			t.Fatalf("batch: %v", err)
+		}
+
+		// Batch request whose models already match stays byte-identical.
+		const unchangedBatch = `{"requests": [{"model": "models/gemini-embedding-001", "content": {"parts": [{"text": "a"}]}}]}`
+		sameCall := sdk.Call{
+			Account: acct,
+			Request: llm.Request{
+				Model: "gemini-embedding-001",
+				Native: &llm.Native{
+					Format: llm.FormatGeminiBatchEmbedContents,
+					Body:   json.RawMessage(unchangedBatch),
+				},
+			},
+		}
+		if err := geminiEmbeddingsTo(context.Background(), sameCall, &embedBodyRec{}, llm.FormatGeminiBatchEmbedContents); err != nil {
+			t.Fatalf("unchanged batch: %v", err)
+		}
+
+		reqs := recorded()
+		if len(reqs) != 3 {
+			t.Fatalf("got %d upstream requests, want 3", len(reqs))
+		}
+		var singleSent struct {
+			Model string `json:"model"`
+		}
+		if err := json.Unmarshal(reqs[0].body, &singleSent); err != nil || singleSent.Model != "models/gemini-embedding-001" {
+			t.Errorf("single body = %s, want model models/gemini-embedding-001", reqs[0].body)
+		}
+		var batchSent struct {
+			Requests []struct {
+				Model string `json:"model"`
+			} `json:"requests"`
+		}
+		if err := json.Unmarshal(reqs[1].body, &batchSent); err != nil || len(batchSent.Requests) != 2 ||
+			batchSent.Requests[0].Model != "models/gemini-embedding-001" || batchSent.Requests[1].Model != "models/gemini-embedding-001" {
+			t.Errorf("batch body = %s, want rewritten inner models", reqs[1].body)
+		}
+		if string(reqs[2].body) != unchangedBatch {
+			t.Errorf("unchanged batch body = %s, want byte-identical %s", reqs[2].body, unchangedBatch)
 		}
 	})
 
@@ -201,12 +288,12 @@ func TestGeminiEmbeddingsOpenAIWire(t *testing.T) {
 			Request: llm.Request{
 				Model: "text-embedding-3-small",
 				Native: &llm.Native{
-					Format: protocol.FormatGeminiEmbedContent,
+					Format: llm.FormatGeminiEmbedContent,
 					Body:   json.RawMessage(`{"content":{"parts":[{"text":"hi"}]}}`),
 				},
 			},
 		}
-		err := geminiEmbeddingsTo(context.Background(), call, &embedBodyRec{}, protocol.FormatGeminiEmbedContent)
+		err := geminiEmbeddingsTo(context.Background(), call, &embedBodyRec{}, llm.FormatGeminiEmbedContent)
 		var e *llm.Error
 		if !errors.As(err, &e) || e.Code != llm.CodeUnsupported || e.Scope != llm.ScopeCredential || !e.Retryable {
 			t.Fatalf("err = %+v, want retryable CodeUnsupported ScopeCredential", err)
@@ -218,6 +305,46 @@ func TestGeminiEmbeddingsOpenAIWire(t *testing.T) {
 }
 
 func TestGeminiEmbeddingsOpenAIRefusalsAndScope(t *testing.T) {
+	unsupportedCases := []struct {
+		name      string
+		format    string
+		body      string
+		wantField string
+	}{
+		{"non-text part", llm.FormatGeminiEmbedContent, `{"content":{"parts":[{"inlineData":{"mimeType":"image/png","data":"AA"}}]}}`, "inlineData"},
+		{"taskType", llm.FormatGeminiEmbedContent, `{"content":{"parts":[{"text":"hi"}]},"taskType":"RETRIEVAL_QUERY"}`, "taskType"},
+		{"title", llm.FormatGeminiEmbedContent, `{"content":{"parts":[{"text":"hi"}]},"title":"Doc"}`, "title"},
+	}
+	for _, tc := range unsupportedCases {
+		t.Run("unsupported/"+tc.name, func(t *testing.T) {
+			srv, recorded := newCompactUpstream(t, func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+				w.WriteHeader(http.StatusInternalServerError)
+			})
+			call := sdk.Call{
+				Account: protocol.Account{
+					ID:         "compat",
+					Settings:   json.RawMessage(`{"base_url":"` + srv.URL + `/v1","wire_api":"chat"}`),
+					Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-test"},
+				},
+				Request: llm.Request{
+					Model:  "text-embedding-3-small",
+					Native: &llm.Native{Format: tc.format, Body: json.RawMessage(tc.body)},
+				},
+			}
+			err := geminiEmbeddingsTo(context.Background(), call, &embedBodyRec{}, tc.format)
+			var e *llm.Error
+			if !errors.As(err, &e) || e.Code != llm.CodeUnsupported || e.Scope != llm.ScopeCredential || !e.Retryable {
+				t.Fatalf("err = %+v, want retryable CodeUnsupported ScopeCredential", err)
+			}
+			if !strings.Contains(strings.ToLower(e.Message), strings.ToLower(tc.wantField)) {
+				t.Errorf("message = %q, want it to name %q", e.Message, tc.wantField)
+			}
+			if len(recorded()) != 0 {
+				t.Errorf("upstream got %d requests, want 0", len(recorded()))
+			}
+		})
+	}
+
 	cases := []struct {
 		name      string
 		format    string
@@ -225,13 +352,10 @@ func TestGeminiEmbeddingsOpenAIRefusalsAndScope(t *testing.T) {
 		suffix    string
 		wantField string
 	}{
-		{"non-text part", protocol.FormatGeminiEmbedContent, `{"content":{"parts":[{"inlineData":{"mimeType":"image/png","data":"AA"}}]}}`, "", "inlineData"},
-		{"taskType", protocol.FormatGeminiEmbedContent, `{"content":{"parts":[{"text":"hi"}]},"taskType":"RETRIEVAL_QUERY"}`, "", "taskType"},
-		{"title", protocol.FormatGeminiEmbedContent, `{"content":{"parts":[{"text":"hi"}]},"title":"Doc"}`, "", "title"},
-		{"bad dimensions", protocol.FormatGeminiEmbedContent, `{"content":{"parts":[{"text":"hi"}]},"outputDimensionality":0}`, "", "outputDimensionality"},
-		{"empty requests", protocol.FormatGeminiBatchEmbedContents, `{"requests":[]}`, "", "requests"},
-		{"streaming", protocol.FormatGeminiEmbedContent, `{"content":{"parts":[{"text":"hi"}]},"stream":true}`, "", "stream"},
-		{"thinking suffix", protocol.FormatGeminiEmbedContent, `{"content":{"parts":[{"text":"hi"}]}}`, "high", "thinking suffix"},
+		{"bad dimensions", llm.FormatGeminiEmbedContent, `{"content":{"parts":[{"text":"hi"}]},"outputDimensionality":0}`, "", "outputDimensionality"},
+		{"empty requests", llm.FormatGeminiBatchEmbedContents, `{"requests":[]}`, "", "requests"},
+		{"streaming", llm.FormatGeminiEmbedContent, `{"content":{"parts":[{"text":"hi"}]},"stream":true}`, "", "stream"},
+		{"thinking suffix", llm.FormatGeminiEmbedContent, `{"content":{"parts":[{"text":"hi"}]}}`, "high", "thinking suffix"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -278,12 +402,12 @@ func TestGeminiEmbeddingsOpenAIRefusalsAndScope(t *testing.T) {
 			Request: llm.Request{
 				Model: "text-embedding-3-small",
 				Native: &llm.Native{
-					Format: protocol.FormatGeminiEmbedContent,
+					Format: llm.FormatGeminiEmbedContent,
 					Body:   json.RawMessage(`{"content":{"parts":[{"text":"hi"}]}}`),
 				},
 			},
 		}
-		err := geminiEmbeddingsTo(context.Background(), call, &embedBodyRec{}, protocol.FormatGeminiEmbedContent)
+		err := geminiEmbeddingsTo(context.Background(), call, &embedBodyRec{}, llm.FormatGeminiEmbedContent)
 		var e *llm.Error
 		if !errors.As(err, &e) || e.Code != llm.CodeUpstream || e.Scope != llm.ScopeRequest {
 			t.Fatalf("err = %+v, want CodeUpstream ScopeRequest", err)
@@ -308,13 +432,13 @@ func TestGeminiEmbeddingsOpenAIRefusalsAndScope(t *testing.T) {
 			Request: llm.Request{
 				Model: "text-embedding-3-small",
 				Native: &llm.Native{
-					Format: protocol.FormatGeminiEmbedContent,
+					Format: llm.FormatGeminiEmbedContent,
 					Body:   json.RawMessage(`{"content":{"parts":[{"text":"hi"}]}}`),
 				},
 			},
 		}
 		rec := &embedBodyRec{}
-		if err := geminiEmbeddingsTo(context.Background(), call, rec, protocol.FormatGeminiEmbedContent); err != nil {
+		if err := geminiEmbeddingsTo(context.Background(), call, rec, llm.FormatGeminiEmbedContent); err != nil {
 			t.Fatalf("geminiEmbeddingsTo: %v", err)
 		}
 		if len(rec.pieces) < 2 {

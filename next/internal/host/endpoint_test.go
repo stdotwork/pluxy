@@ -29,3 +29,22 @@ func TestEndpointNotServed(t *testing.T) {
 		t.Fatal("ServesEndpoints = false for an extension that lists endpoint at minor 7")
 	}
 }
+
+// An extension below protocol minor 36 is skipped with a retryable credential-scoped unsupported
+// error for Gemini embedding endpoint formats.
+func TestEndpointGeminiEmbeddingsMinorGate(t *testing.T) {
+	for _, format := range []string{llm.FormatGeminiEmbedContent, llm.FormatGeminiBatchEmbedContents} {
+		t.Run(format, func(t *testing.T) {
+			req := llm.Request{Model: "gemini-embedding-001", Native: &llm.Native{Format: format, Body: []byte(`{}`)}}
+			e := &Extension{
+				info:     protocol.Info{ProtocolMinor: 35, Operations: []string{protocol.OpGenerate, protocol.OpEndpoint}},
+				manifest: &Manifest{ID: "test/old-ext"},
+			}
+			ev := e.Endpoint(context.Background(), protocol.Account{ID: "a"}, req).Next()
+			if ev.Type != llm.EventError || ev.Error == nil ||
+				ev.Error.Code != llm.CodeUnsupported || ev.Error.Scope != llm.ScopeCredential || !ev.Error.Retryable {
+				t.Fatalf("event = %+v, want retryable CodeUnsupported on ScopeCredential", ev)
+			}
+		})
+	}
+}

@@ -279,3 +279,125 @@ func TestGeminiClientEmbedRoutesE2E(t *testing.T) {
 		}
 	})
 }
+
+// When the first account on a model cannot carry an account-specific embedding field (such as
+// taskType on an OpenAI-compatible Chat account, or a non-text part on a Vertex :predict account),
+// it answers retryable credential-scoped unsupported so core routes the request to the second
+// account on the same model.
+func TestGeminiClientEmbedFallbackOnUnsupportedField(t *testing.T) {
+	postGoogle := func(base, path, body string) *http.Response {
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, base+path, strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Goog-Api-Key", clientKey)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	t.Run("openai-compatible chat falls through to gemini wire on taskType", func(t *testing.T) {
+		const wantReply = `{"embedding":{"values":[0.42,0.84]},"usageMetadata":{"promptTokenCount":3}}`
+		var mu sync.Mutex
+		var paths []string
+		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			paths = append(paths, r.URL.Path)
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			if r.URL.Path == "/v1beta/models/gemini-embedding-001:embedContent" {
+				io.WriteString(w, wantReply)
+				return
+			}
+			http.NotFound(w, r)
+		}))
+		t.Cleanup(up.Close)
+
+		base := runCore(t, map[string]any{
+			"listen":         "127.0.0.1:0",
+			"client_keys":    []string{clientKey},
+			"management_key": managementKey,
+			"routing":        map[string]any{"strategy": "fill-first"},
+			"extension": map[string]any{
+				"manifest": filepath.Join(binDir, "pluxy-extension.json"),
+				"accounts": []any{
+					map[string]any{
+						"id":         "chat-first",
+						"models":     []string{"gemini-embedding-001"},
+						"settings":   map[string]any{"base_url": up.URL + "/v1", "wire_api": "chat"},
+						"credential": map[string]any{"kind": "api_key", "api_key": upstreamKey},
+					},
+					map[string]any{
+						"id":         "gemini-second",
+						"models":     []string{"gemini-embedding-001"},
+						"settings":   map[string]any{"base_url": up.URL + "/v1beta", "wire_api": "gemini"},
+						"credential": map[string]any{"kind": "api_key", "api_key": "goog-key"},
+					},
+				},
+			},
+		})
+
+		resp := postGoogle(base, "/v1beta/models/gemini-embedding-001:embedContent",
+			`{"content":{"parts":[{"text":"hello"}]},"taskType":"RETRIEVAL_QUERY"}`)
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK || string(raw) != wantReply {
+			t.Fatalf("status %d: %s, want 200 %s", resp.StatusCode, raw, wantReply)
+		}
+		mu.Lock()
+		gotPaths := append([]string(nil), paths...)
+		mu.Unlock()
+		for _, p := range gotPaths {
+			if p == "/v1/embeddings" {
+				t.Errorf("chat-first should not have called /v1/embeddings; paths = %v", gotPaths)
+			}
+		}
+	})
+
+	t.Run("vertex predict falls through to gemini api on non-text part", func(t *testing.T) {
+		const wantReply = `{"embedding":{"values":[0.11,0.22]},"usageMetadata":{"promptTokenCount":4}}`
+		up := newFakeGemini(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if r.URL.Path == "/v1beta/models/gemini-embedding-001:embedContent" {
+				io.WriteString(w, wantReply)
+				return
+			}
+			http.NotFound(w, r)
+		})
+
+		base := runCore(t, map[string]any{
+			"listen":         "127.0.0.1:0",
+			"client_keys":    []string{clientKey},
+			"management_key": managementKey,
+			"routing":        map[string]any{"strategy": "fill-first"},
+			"extension": map[string]any{
+				"manifest": geminiManifest(t),
+				"accounts": []any{
+					map[string]any{
+						"id":         "vertex-first",
+						"models":     []string{"gemini-embedding-001"},
+						"settings":   map[string]any{"base_url": up.URL, "vertex": map[string]any{"project": "p", "location": "us-central1"}},
+						"credential": map[string]any{"kind": "api_key", "api_key": "vertex-key"},
+					},
+					map[string]any{
+						"id":         "gemini-second",
+						"models":     []string{"gemini-embedding-001"},
+						"settings":   map[string]any{"base_url": up.URL},
+						"credential": map[string]any{"kind": "api_key", "api_key": "gemini-key"},
+					},
+				},
+			},
+		})
+
+		resp := postGoogle(base, "/v1beta/models/gemini-embedding-001:embedContent",
+			`{"content":{"parts":[{"inlineData":{"mimeType":"image/png","data":"AAAA"}}]}}`)
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK || string(raw) != wantReply {
+			t.Fatalf("status %d: %s, want 200 %s", resp.StatusCode, raw, wantReply)
+		}
+	})
+}

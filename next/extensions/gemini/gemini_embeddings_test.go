@@ -73,12 +73,12 @@ func TestGeminiClientEmbedPassthrough(t *testing.T) {
 			Request: llm.Request{
 				Model: "gemini-embedding-001",
 				Native: &llm.Native{
-					Format: protocol.FormatGeminiEmbedContent,
+					Format: llm.FormatGeminiEmbedContent,
 					Body:   json.RawMessage(clientBody),
 				},
 			},
 		}
-		if err := geminiEmbedTo(context.Background(), call, rec, protocol.FormatGeminiEmbedContent); err != nil {
+		if err := geminiEmbedTo(context.Background(), call, rec, llm.FormatGeminiEmbedContent); err != nil {
 			t.Fatalf("geminiEmbedTo: %v", err)
 		}
 		if gotPath != "/v1beta/models/gemini-embedding-001:embedContent" {
@@ -90,7 +90,7 @@ func TestGeminiClientEmbedPassthrough(t *testing.T) {
 		if gotBody != clientBody {
 			t.Errorf("upstream body = %s, want byte-identical %s", gotBody, clientBody)
 		}
-		reply, usage := geminiEndpointBody(t, rec.events, protocol.FormatGeminiEmbedContent)
+		reply, usage := geminiEndpointBody(t, rec.events, llm.FormatGeminiEmbedContent)
 		if reply != upstreamReply {
 			t.Errorf("reply = %s, want byte-identical %s", reply, upstreamReply)
 		}
@@ -119,12 +119,12 @@ func TestGeminiClientEmbedPassthrough(t *testing.T) {
 			Request: llm.Request{
 				Model: "gemini-embedding-001",
 				Native: &llm.Native{
-					Format: protocol.FormatGeminiBatchEmbedContents,
+					Format: llm.FormatGeminiBatchEmbedContents,
 					Body:   json.RawMessage(clientBody),
 				},
 			},
 		}
-		if err := geminiEmbedTo(context.Background(), call, rec, protocol.FormatGeminiBatchEmbedContents); err != nil {
+		if err := geminiEmbedTo(context.Background(), call, rec, llm.FormatGeminiBatchEmbedContents); err != nil {
 			t.Fatalf("geminiEmbedTo: %v", err)
 		}
 		if gotPath != "/v1beta/models/gemini-embedding-001:batchEmbedContents" {
@@ -139,7 +139,7 @@ func TestGeminiClientEmbedPassthrough(t *testing.T) {
 			sent.Requests[0].Model != "models/gemini-embedding-001" || sent.Requests[1].Model != "models/gemini-embedding-001" {
 			t.Errorf("upstream body = %s, want rewritten model names", gotBody)
 		}
-		reply, usage := geminiEndpointBody(t, rec.events, protocol.FormatGeminiBatchEmbedContents)
+		reply, usage := geminiEndpointBody(t, rec.events, llm.FormatGeminiBatchEmbedContents)
 		if reply != upstreamReply {
 			t.Errorf("reply = %s, want %s", reply, upstreamReply)
 		}
@@ -184,14 +184,14 @@ func TestGeminiClientEmbedVertex(t *testing.T) {
 			Request: llm.Request{
 				Model: "gemini-embedding-2",
 				Native: &llm.Native{
-					Format: protocol.FormatGeminiBatchEmbedContents,
+					Format: llm.FormatGeminiBatchEmbedContents,
 					Body: json.RawMessage(`{"requests":[` +
 						`{"content":{"parts":[{"text":"first"}]},"taskType":"RETRIEVAL_DOCUMENT","title":"Doc 1","outputDimensionality":2},` +
 						`{"content":{"parts":[{"text":"second"}]},"outputDimensionality":2}]}`),
 				},
 			},
 		}
-		if err := geminiEmbedTo(context.Background(), call, rec, protocol.FormatGeminiBatchEmbedContents); err != nil {
+		if err := geminiEmbedTo(context.Background(), call, rec, llm.FormatGeminiBatchEmbedContents); err != nil {
 			t.Fatalf("geminiEmbedTo: %v", err)
 		}
 		if len(paths) != 2 || !strings.HasSuffix(paths[0], "/gemini-embedding-2:embedContent") || !strings.HasSuffix(paths[1], "/gemini-embedding-2:embedContent") {
@@ -201,7 +201,7 @@ func TestGeminiClientEmbedVertex(t *testing.T) {
 		if cfg["taskType"] != "RETRIEVAL_DOCUMENT" || cfg["title"] != "Doc 1" || cfg["outputDimensionality"] != float64(2) {
 			t.Errorf("first embedContentConfig = %+v", cfg)
 		}
-		reply, usage := geminiEndpointBody(t, rec.events, protocol.FormatGeminiBatchEmbedContents)
+		reply, usage := geminiEndpointBody(t, rec.events, llm.FormatGeminiBatchEmbedContents)
 		var out struct {
 			Embeddings []struct {
 				Values []float64 `json:"values"`
@@ -256,14 +256,14 @@ func TestGeminiClientEmbedVertex(t *testing.T) {
 			Request: llm.Request{
 				Model: "gemini-embedding-001",
 				Native: &llm.Native{
-					Format: protocol.FormatGeminiBatchEmbedContents,
+					Format: llm.FormatGeminiBatchEmbedContents,
 					Body: json.RawMessage(`{"requests":[` +
 						`{"content":{"parts":[{"text":"a"}]},"taskType":"RETRIEVAL_QUERY","outputDimensionality":2},` +
 						`{"content":{"parts":[{"text":"b"}]},"taskType":"RETRIEVAL_DOCUMENT","title":"T"}]}`),
 				},
 			},
 		}
-		if err := geminiEmbedTo(context.Background(), call, rec, protocol.FormatGeminiBatchEmbedContents); err != nil {
+		if err := geminiEmbedTo(context.Background(), call, rec, llm.FormatGeminiBatchEmbedContents); err != nil {
 			t.Fatalf("geminiEmbedTo: %v", err)
 		}
 		if !reflect.DeepEqual(instanceCounts, []int{1, 1}) {
@@ -272,7 +272,7 @@ func TestGeminiClientEmbedVertex(t *testing.T) {
 		if !strings.HasSuffix(paths[0], "/gemini-embedding-001:predict") {
 			t.Errorf("path = %q, want :predict", paths[0])
 		}
-		reply, usage := geminiEndpointBody(t, rec.events, protocol.FormatGeminiBatchEmbedContents)
+		reply, usage := geminiEndpointBody(t, rec.events, llm.FormatGeminiBatchEmbedContents)
 		if !strings.Contains(reply, `"promptTokenCount":5`) || !strings.Contains(reply, `[1,2]`) || !strings.Contains(reply, `[3,4]`) {
 			t.Fatalf("reply = %s", reply)
 		}
@@ -312,7 +312,7 @@ func TestGeminiClientEmbedVertex(t *testing.T) {
 			Request: llm.Request{
 				Model: "text-embedding-005",
 				Native: &llm.Native{
-					Format: protocol.FormatGeminiBatchEmbedContents,
+					Format: llm.FormatGeminiBatchEmbedContents,
 					Body: json.RawMessage(`{"requests":[` +
 						`{"content":{"parts":[{"text":"a"}]},"outputDimensionality":1},` +
 						`{"content":{"parts":[{"text":"b"}]},"outputDimensionality":1},` +
@@ -320,7 +320,7 @@ func TestGeminiClientEmbedVertex(t *testing.T) {
 				},
 			},
 		}
-		if err := geminiEmbedTo(context.Background(), call, rec, protocol.FormatGeminiBatchEmbedContents); err != nil {
+		if err := geminiEmbedTo(context.Background(), call, rec, llm.FormatGeminiBatchEmbedContents); err != nil {
 			t.Fatalf("geminiEmbedTo: %v", err)
 		}
 		if !reflect.DeepEqual(instanceCounts, []int{2, 1}) {
@@ -330,7 +330,7 @@ func TestGeminiClientEmbedVertex(t *testing.T) {
 }
 
 func TestGeminiClientEmbedRefusalsAndScope(t *testing.T) {
-	t.Run("non-text part refused on Vertex predict", func(t *testing.T) {
+	t.Run("non-text part on Vertex predict returns retryable credential-scoped unsupported", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t.Errorf("upstream should not be called: %s %s", r.Method, r.URL.Path)
 		}))
@@ -347,15 +347,15 @@ func TestGeminiClientEmbedRefusalsAndScope(t *testing.T) {
 			Request: llm.Request{
 				Model: "gemini-embedding-001",
 				Native: &llm.Native{
-					Format: protocol.FormatGeminiEmbedContent,
+					Format: llm.FormatGeminiEmbedContent,
 					Body:   json.RawMessage(`{"content":{"parts":[{"inlineData":{"mimeType":"image/png","data":"AAAA"}}]}}`),
 				},
 			},
 		}
-		err := geminiEmbedTo(context.Background(), call, &recorder{}, protocol.FormatGeminiEmbedContent)
+		err := geminiEmbedTo(context.Background(), call, &recorder{}, llm.FormatGeminiEmbedContent)
 		var e *llm.Error
-		if !errors.As(err, &e) || e.Code != llm.CodeInvalidRequest || e.Status != http.StatusBadRequest || e.Scope != llm.ScopeRequest {
-			t.Fatalf("err = %+v, want 400 CodeInvalidRequest ScopeRequest", err)
+		if !errors.As(err, &e) || e.Code != llm.CodeUnsupported || e.Scope != llm.ScopeCredential || !e.Retryable {
+			t.Fatalf("err = %+v, want retryable CodeUnsupported ScopeCredential", err)
 		}
 		if !strings.Contains(e.Message, "inlineData") {
 			t.Errorf("message = %q, want it to name inlineData", e.Message)
@@ -374,12 +374,12 @@ func TestGeminiClientEmbedRefusalsAndScope(t *testing.T) {
 			Request: llm.Request{
 				Model: "gemini-embedding-001",
 				Native: &llm.Native{
-					Format: protocol.FormatGeminiEmbedContent,
+					Format: llm.FormatGeminiEmbedContent,
 					Body:   json.RawMessage(`{"content":{"parts":[{"text":"hi"}]}}`),
 				},
 			},
 		}
-		err := geminiEmbedTo(context.Background(), call, &recorder{}, protocol.FormatGeminiEmbedContent)
+		err := geminiEmbedTo(context.Background(), call, &recorder{}, llm.FormatGeminiEmbedContent)
 		var e *llm.Error
 		if !errors.As(err, &e) || e.Code != llm.CodeUpstream || e.Scope != llm.ScopeRequest {
 			t.Fatalf("err = %+v, want CodeUpstream ScopeRequest", err)
@@ -404,12 +404,12 @@ func TestGeminiClientEmbedRefusalsAndScope(t *testing.T) {
 			Request: llm.Request{
 				Model: "gemini-embedding-001",
 				Native: &llm.Native{
-					Format: protocol.FormatGeminiEmbedContent,
+					Format: llm.FormatGeminiEmbedContent,
 					Body:   json.RawMessage(`{"content":{"parts":[{"text":"hi"}]}}`),
 				},
 			},
 		}
-		if err := geminiEmbedTo(context.Background(), call, rec, protocol.FormatGeminiEmbedContent); err != nil {
+		if err := geminiEmbedTo(context.Background(), call, rec, llm.FormatGeminiEmbedContent); err != nil {
 			t.Fatalf("geminiEmbedTo: %v", err)
 		}
 		nativeCount := 0
@@ -426,7 +426,7 @@ func TestGeminiClientEmbedRefusalsAndScope(t *testing.T) {
 		if nativeCount < 2 {
 			t.Fatalf("nativeCount = %d, want >= 2", nativeCount)
 		}
-		reply, _ := geminiEndpointBody(t, rec.events, protocol.FormatGeminiEmbedContent)
+		reply, _ := geminiEndpointBody(t, rec.events, llm.FormatGeminiEmbedContent)
 		if reply != upstreamReply {
 			t.Errorf("reassembled reply = %s, want %s", reply, upstreamReply)
 		}

@@ -7,7 +7,6 @@ import (
 	"io"
 
 	"github.com/stdotwork/pluxy/next/llm"
-	"github.com/stdotwork/pluxy/next/protocol"
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
@@ -24,7 +23,7 @@ func endpointCall(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return inputTokens(ctx, call, out)
 	case llm.FormatOpenAIEmbeddings:
 		return embeddings(ctx, call, out)
-	case protocol.FormatGeminiEmbedContent, protocol.FormatGeminiBatchEmbedContents:
+	case llm.FormatGeminiEmbedContent, llm.FormatGeminiBatchEmbedContents:
 		return geminiEmbeddings(ctx, call, out, format)
 	case llm.FormatOpenAIImagesGenerations, llm.FormatOpenAIImagesEdits:
 		return images(ctx, call, out)

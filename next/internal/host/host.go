@@ -612,6 +612,9 @@ func (e *Extension) Endpoint(ctx context.Context, account protocol.Account, req 
 	if !ServesEndpoints(e.info) {
 		return servesNoEndpoints(e.manifest.ID, req)
 	}
+	if req.Native != nil && (req.Native.Format == llm.FormatGeminiEmbedContent || req.Native.Format == llm.FormatGeminiBatchEmbedContents) && e.info.ProtocolMinor < GeminiEmbeddingsMinor {
+		return servesNoEndpoints(e.manifest.ID, req)
+	}
 	return e.call(ctx, protocol.OpEndpoint, account, req)
 }
 
@@ -1092,6 +1095,11 @@ const OutputMediaMinor = 33
 // headers on response.start and error (llm.ResponseInfo.Headers and llm.Error.Headers). Core
 // ignores them from an extension that reports an earlier version.
 const RateLimitHeadersMinor = 34
+
+// GeminiEmbeddingsMinor is the protocol minor version that adds Gemini embedding endpoint formats
+// (llm.FormatGeminiEmbedContent and llm.FormatGeminiBatchEmbedContents). Core skips an extension
+// that reports an earlier version with a retryable unsupported error.
+const GeminiEmbeddingsMinor = 36
 
 // normalizeEvent downgrades event fields that require a newer protocol minor version than e
 // reported in describe.

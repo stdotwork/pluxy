@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/llm"
-	"github.com/stdotwork/pluxy/next/protocol"
 	"github.com/stdotwork/pluxy/next/sdk"
 )
 
@@ -34,13 +33,13 @@ type vertexPredictEmbedRequest struct {
 
 // geminiEmbedContent serves Gemini's POST /v1beta/models/{model}:embedContent on a Gemini account.
 func geminiEmbedContent(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
-	return geminiEmbedTo(ctx, call, out, protocol.FormatGeminiEmbedContent)
+	return geminiEmbedTo(ctx, call, out, llm.FormatGeminiEmbedContent)
 }
 
 // geminiBatchEmbedContents serves Gemini's POST /v1beta/models/{model}:batchEmbedContents on a
 // Gemini account.
 func geminiBatchEmbedContents(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
-	return geminiEmbedTo(ctx, call, out, protocol.FormatGeminiBatchEmbedContents)
+	return geminiEmbedTo(ctx, call, out, llm.FormatGeminiBatchEmbedContents)
 }
 
 func geminiEmbedTo(ctx context.Context, call sdk.Call, out sender, format string) (err error) {
@@ -62,7 +61,7 @@ func geminiEmbedTo(ctx context.Context, call sdk.Call, out sender, format string
 		return err
 	}
 	model := strings.TrimPrefix(call.Request.Model, "models/")
-	isBatch := format == protocol.FormatGeminiBatchEmbedContents
+	isBatch := format == llm.FormatGeminiBatchEmbedContents
 
 	method := ":embedContent"
 	if s.Vertex != nil {
@@ -355,7 +354,12 @@ func parseGeminiEmbedItem(item map[string]json.RawMessage, prefix string) (gemin
 		}
 		for k := range part {
 			if k != "text" {
-				return out, badEmbeddingRequest(fmt.Sprintf("%s[%d].%s: only text parts are supported on this embedding endpoint", field("content.parts"), i, k))
+				return out, &llm.Error{
+					Code:      llm.CodeUnsupported,
+					Scope:     llm.ScopeCredential,
+					Retryable: true,
+					Message:   fmt.Sprintf("%s[%d].%s: only text parts are supported on this embedding endpoint", field("content.parts"), i, k),
+				}
 			}
 		}
 		textRaw, ok := part["text"]

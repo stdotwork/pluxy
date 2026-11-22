@@ -174,6 +174,14 @@ const (
 	// Interactions request in Google's own shape, which names a model or an agent; the reply is
 	// one JSON object, or server-sent events when it asks for "stream": true.
 	FormatGeminiInteractions = "gemini.interactions"
+	// FormatGeminiEmbedContent is Gemini's single-content embedding endpoint,
+	// POST /v1beta/models/{model}:embedContent: a Gemini EmbedContentRequest JSON body,
+	// answered with one EmbedContentResponse JSON object (protocol minor 36).
+	FormatGeminiEmbedContent = "gemini.embed_content"
+	// FormatGeminiBatchEmbedContents is Gemini's batch embedding endpoint,
+	// POST /v1beta/models/{model}:batchEmbedContents: a Gemini BatchEmbedContentsRequest JSON
+	// body, answered with one BatchEmbedContentsResponse JSON object (protocol minor 36).
+	FormatGeminiBatchEmbedContents = "gemini.batch_embed_contents"
 	// FormatOpenAIResponsesInputTokens is OpenAI's Responses input token count, POST
 	// /v1/responses/input_tokens: a Responses request body, answered with
 	// {"object":"response.input_tokens","input_tokens":N}.

@@ -1193,10 +1193,12 @@ on a Gemini API account the client's body and reply pass through unchanged (rewr
 mismatched aliased model name), and on Vertex AI the same per-model rules apply (`:embedContent`
 with `embedContentConfig` for `gemini-embedding-2*`, single-instance `:predict` for
 `gemini-embedding-001`, and batched `:predict` up to 250 instances for other text embedding
-models). On OpenAI-compatible accounts, `:embedContent` and `:batchEmbedContents` translate to
-`POST {base_url}/embeddings` and back on Chat and Responses wires (refusing non-text parts,
-`taskType` and `title` with 400), pass through on a Gemini wire, and answer unsupported on a
-Messages wire.
+models; non-text parts on `:predict` answer retryable unsupported so core can try another
+account). On OpenAI-compatible accounts, `:embedContent` and `:batchEmbedContents` translate to
+`POST {base_url}/embeddings` and back on Chat and Responses wires (answering retryable
+unsupported for non-text parts, `taskType` and `title` so another account on the model can serve
+them), pass through on a Gemini wire (rewriting only a mismatched aliased model name), and answer
+unsupported on a Messages wire.
 
 **Compaction.** `POST /v1/responses/compact` (also `POST /backend-api/codex/responses/compact`) is
 served on every Gemini account (Gemini API keys, Vertex AI service accounts and express mode keys,
