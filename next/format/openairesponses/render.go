@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stdotwork/pluxy/next/format/internal/clienttools"
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
@@ -81,6 +82,8 @@ type item struct {
 	// opaque is a reasoning item's opaque record from another provider (an Anthropic thinking
 	// signature), written as its encrypted_content so the client can replay it.
 	opaque string
+	// citations are the web search citations attached to a message item's text.
+	citations []llm.Citation
 	// out is the item's output_index: model items and web searches share one count.
 	out int
 	// A web search (websearch.go): its query, the input it is read from, its status once done
@@ -210,8 +213,54 @@ func (b *builder) itemStatus() string {
 
 type obj = map[string]any
 
-func textPart(text string) obj {
-	return obj{"type": "output_text", "annotations": []any{}, "logprobs": []any{}, "text": text}
+func textPart(text string, annotations []any) obj {
+	if annotations == nil {
+		annotations = []any{}
+	}
+	return obj{"type": "output_text", "annotations": annotations, "logprobs": []any{}, "text": text}
+}
+
+// urlAnnotations builds Responses url_citation annotation objects from canonical citations.
+// Valid rune ranges are preserved; citations with nil or out-of-range offsets omit start_index
+// and end_index rather than emitting a wrong range.
+func urlAnnotations(citations []llm.Citation, text string) []any {
+	if len(citations) == 0 {
+		return []any{}
+	}
+	maxRunes := utf8.RuneCountInString(text)
+	out := make([]any, 0, len(citations))
+	for _, c := range citations {
+		if !llm.ValidCitationURL(c.URL) {
+			continue
+		}
+		ann := obj{"type": "url_citation", "url": c.URL, "title": c.Title}
+		if c.StartIndex != nil && c.EndIndex != nil && *c.StartIndex >= 0 && *c.EndIndex >= *c.StartIndex && *c.EndIndex <= maxRunes {
+			ann["start_index"] = *c.StartIndex
+			ann["end_index"] = *c.EndIndex
+		}
+		out = append(out, ann)
+	}
+	return out
+}
+
+// reportUncitedSources records a loss when the upstream returned web search sources that were
+// neither cited in reply text nor carried in a Claude web_search_call item.
+func (b *builder) reportUncitedSources(sources []llm.Source) {
+	if len(sources) == 0 || b.upFormat == format || b.upFormat == llm.FormatAnthropicMessages {
+		return
+	}
+	cited := map[string]bool{}
+	for _, it := range b.order {
+		for _, c := range it.citations {
+			cited[c.URL] = true
+		}
+	}
+	for _, s := range sources {
+		if llm.ValidCitationURL(s.URL) && !cited[s.URL] {
+			b.lose("sources", "uncited web search sources have no place in a Response")
+			return
+		}
+	}
 }
 
 // doneItem is an item as response.output_item.done and the final output list show it. final
@@ -221,7 +270,8 @@ func (b *builder) doneItem(it *item, final bool) obj {
 	case itemWebSearch:
 		return searchItem(it, false)
 	case llm.ItemMessage:
-		return obj{"id": it.id, "type": "message", "status": b.itemStatus(), "role": "assistant", "content": []any{textPart(it.text.String())}}
+		text := it.text.String()
+		return obj{"id": it.id, "type": "message", "status": b.itemStatus(), "role": "assistant", "content": []any{textPart(text, urlAnnotations(it.citations, text))}}
 	case llm.ItemReasoning:
 		o := obj{"id": it.id, "type": "reasoning", "summary": []any{obj{"type": "summary_text", "text": it.text.String()}}}
 		switch {
@@ -605,7 +655,7 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 				"item": obj{"id": it.id, "type": "message", "status": "in_progress", "role": "assistant", "content": []any{}}}); err != nil {
 				return err
 			}
-			return s.emit("response.content_part.added", obj{"output_index": it.out, "item_id": it.id, "content_index": 0, "part": textPart("")})
+			return s.emit("response.content_part.added", obj{"output_index": it.out, "item_id": it.id, "content_index": 0, "part": textPart("", nil)})
 		case llm.ItemReasoning:
 			if err := s.emit("response.output_item.added", obj{"output_index": it.out,
 				"item": obj{"id": it.id, "type": "reasoning", "status": "in_progress", "summary": []any{}}}); err != nil {
@@ -638,8 +688,13 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		}
 		return s.emit("response.function_call_arguments.delta", obj{"output_index": it.out, "item_id": it.id, "delta": ev.Delta})
 	case llm.EventItemEnd:
-		if it := b.items[ev.Index]; it != nil && ev.Opaque != nil {
-			it.opaque = ev.Opaque.Data
+		if it := b.items[ev.Index]; it != nil {
+			if ev.Opaque != nil {
+				it.opaque = ev.Opaque.Data
+			}
+			if len(ev.Citations) > 0 {
+				it.citations = ev.Citations
+			}
 		}
 		s.pending = append(s.pending, ev.Index)
 		return nil
@@ -660,6 +715,7 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		return nil
 	case llm.EventFinish:
 		b.finish, b.usage = ev.Finish, ev.Usage
+		b.reportUncitedSources(ev.Sources)
 		if err := s.searchesDone(b.endSearches()); err != nil {
 			return err
 		}
@@ -697,10 +753,22 @@ func (s *StreamWriter) flushEnds(ev llm.Event) error {
 		text := it.text.String()
 		switch it.kind {
 		case llm.ItemMessage:
+			anns := urlAnnotations(it.citations, text)
+			for i, ann := range anns {
+				if err := s.emit("response.output_text.annotation.added", obj{
+					"output_index":     it.out,
+					"item_id":          it.id,
+					"content_index":    0,
+					"annotation_index": i,
+					"annotation":       ann,
+				}); err != nil {
+					return err
+				}
+			}
 			if err := s.emit("response.output_text.done", obj{"output_index": it.out, "item_id": it.id, "content_index": 0, "text": text, "logprobs": []any{}}); err != nil {
 				return err
 			}
-			if err := s.emit("response.content_part.done", obj{"output_index": it.out, "item_id": it.id, "content_index": 0, "part": textPart(text)}); err != nil {
+			if err := s.emit("response.content_part.done", obj{"output_index": it.out, "item_id": it.id, "content_index": 0, "part": textPart(text, anns)}); err != nil {
 				return err
 			}
 		case llm.ItemReasoning:
@@ -856,6 +924,12 @@ func (a *Aggregator) Add(ev llm.Event) {
 			b.items[ev.Index].opaque = ev.Opaque.Data
 			a.size += len(ev.Opaque.Data)
 		}
+		if len(ev.Citations) > 0 {
+			b.items[ev.Index].citations = ev.Citations
+			for _, c := range ev.Citations {
+				a.size += len(c.URL) + len(c.Title) + 48
+			}
+		}
 	case llm.EventNative:
 		if it, added, consumed := b.searchEvent(ev.Raw); consumed {
 			if added {
@@ -868,6 +942,7 @@ func (a *Aggregator) Add(ev llm.Event) {
 		}
 	case llm.EventFinish:
 		b.finish, b.usage = ev.Finish, ev.Usage
+		b.reportUncitedSources(ev.Sources)
 		b.endSearches()
 		if f := finalResponse(ev.Raw); b.upFormat == format && f != nil {
 			a.final = f

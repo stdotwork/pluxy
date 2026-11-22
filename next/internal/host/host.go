@@ -1066,10 +1066,22 @@ func (l *lineLogger) longLine() {
 // downgrades that code to llm.CodePermission for an extension that reports an earlier version.
 const AccountClosedMinor = 20
 
-// normalizeEvent downgrades error codes that require a newer protocol minor version than e
+// CitationsMinor is the protocol minor version that adds canonical web search citations on
+// item.end (llm.Event.Citations) and search sources on finish (llm.Event.Sources). Core ignores
+// them from an extension that reports an earlier version.
+const CitationsMinor = 31
+
+// normalizeEvent downgrades event fields that require a newer protocol minor version than e
 // reported in describe.
 func (e *Extension) normalizeEvent(ev llm.Event) llm.Event {
-	if e == nil || ev.Type != llm.EventError || ev.Error == nil {
+	if e == nil {
+		return ev
+	}
+	if e.info.ProtocolMinor < CitationsMinor {
+		ev.Citations = nil
+		ev.Sources = nil
+	}
+	if ev.Type != llm.EventError || ev.Error == nil {
 		return ev
 	}
 	if e.info.ProtocolMinor < AccountClosedMinor && ev.Error.Code == llm.CodeAccountClosed {

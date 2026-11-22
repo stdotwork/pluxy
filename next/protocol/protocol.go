@@ -42,8 +42,9 @@ const Version = 0
 // verbosity (llm.Options.ServiceTier and llm.Options.Verbosity); minor 29 adds the canonical
 // web search tool (llm.ToolWebSearch and llm.Tool.WebSearch); minor 30 adds the canonical code
 // execution tool and its forced tool choice (llm.ToolCodeExecution and
-// llm.ToolChoiceCodeExecution).
-const Minor = 30
+// llm.ToolChoiceCodeExecution); minor 31 adds canonical web search citations on message item.end
+// and search sources on finish (llm.Event.Citations and llm.Event.Sources).
+const Minor = 31
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20

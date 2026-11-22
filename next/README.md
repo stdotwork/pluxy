@@ -924,13 +924,18 @@ and results (each hit as Claude sent it, so its `encrypted_content` survives); a
 without results when it paused the turn (`pause_turn`) stays `in_progress`. A replayed
 `web_search_call` goes back as the two blocks, in the assistant message around it; a paused search
 at the end of the history goes back as its `server_tool_use` alone, so Claude carries on. Chat
-clients get the text without the search blocks, as today. Claude's `citations` on the answer's
-text are not passed on, and a replayed message's `annotations` are not sent back to Claude. Today's
-core copies each citation as it is into the text's `annotations`, in Claude's own shape
-(`web_search_result_location`), which is none of the annotation types Responses defines, so a
-Responses client has no defined way to show it. Claude does not need citations in the history: the
-replayed search blocks carry the results. Not built: the web search result cache and Codex's tool
-search on Claude.
+clients get the text without the search blocks, as today. Web search citations and sources carry
+across formats (protocol minor 31): `web_search_result_location` citations and
+`web_search_tool_result` sources from Messages, `url_citation` annotations and `web_search_call`
+sources from Responses, `url_citation` annotations from Chat Completions, and `groundingMetadata`
+(`groundingChunks` and `groundingSupports`, with UTF-8 byte offsets converted to Unicode code
+points) from Gemini render as Responses `url_citation` annotations (streaming and non-streaming),
+non-streaming Chat Completions `url_citation` annotations, and Gemini `groundingMetadata`
+(streaming and non-streaming). Cross-format citations and sources are not written into Messages
+replies (Anthropic's `web_search_result_location` requires a vendor-signed `encrypted_index` that
+is verified on replay) and are reported as dropped, and a replayed message's `annotations` are not
+sent back to Claude. Claude does not need citations in the history: the replayed search blocks
+carry the results. Not built: the web search result cache and Codex's tool search on Claude.
 
 **Code execution.** A client's hosted code execution tool — Responses `code_interpreter`, Messages
 `code_execution_*`, or Gemini `codeExecution` — carries across those formats as the canonical
