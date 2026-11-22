@@ -425,7 +425,12 @@ func resolveRefNode(x *refExpansion, node map[string]any, ref string, depth int)
 			maps.Copy(out, x.refusedTargetFields(tm))
 		}
 		for _, k := range slices.Sorted(maps.Keys(node)) {
-			if k != "$ref" && k != "$defs" && k != "definitions" {
+			if k == "$ref" || k == "$defs" || k == "definitions" {
+				continue
+			}
+			if literalKeywords[k] {
+				out[k] = deepClone(node[k])
+			} else {
 				out[k] = resolveRefs(x, node[k], depth)
 			}
 		}
