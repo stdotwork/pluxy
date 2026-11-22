@@ -594,6 +594,13 @@ type EncodeOptions struct {
 	// (up to 128), and without it the count is left out and reported as dropped. A Chat client's
 	// own n >= 1 is written back unchanged; a translated count <= 1 sends no field.
 	CandidateCount bool
+	// AssistantAnnotations says the caller knows its upstream takes annotations on replayed
+	// assistant messages (such as OpenRouter's file annotations,
+	// https://openrouter.ai/docs/features/multimodal/pdfs). Without it, annotations on a replayed
+	// Chat assistant message are stripped and reported as approximated, since OpenAI's Chat
+	// Completions request reference lists no such field and strict upstreams such as Mistral
+	// (additionalProperties: false) reject unknown assistant message fields.
+	AssistantAnnotations bool
 }
 
 // EncodeRequestWith builds a Chat Completions request body as EncodeRequest does, changed by opts.
@@ -818,6 +825,14 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 				return nil, nil, invalid("%s: nothing in this user turn can be sent to Chat Completions", p)
 			}
 			raw := e.kept(it.Origin)
+			if it.Role == llm.RoleAssistant && !opts.AssistantAnnotations && len(raw) > 0 {
+				if m := rawjson.Object(raw); m != nil {
+					if _, ok := m["annotations"]; ok {
+						raw = rawjson.Rest(m, "annotations")
+						e.lose(llm.LossApproximated, rawjson.Join(p, "annotations"), "Chat Completions assistant messages do not take annotations")
+					}
+				}
+			}
 			// Assistant text after tool calls of the same turn (Anthropic Messages allows it) joins
 			// the message holding the calls: tool results must follow that message directly.
 			if n := len(msgs); it.Role == llm.RoleAssistant && n > 0 && reasoning == "" && len(raw) == 0 && content != nil {
