@@ -61,6 +61,9 @@ func applyReasoningRef(body []byte, req llm.Request, target string, levels []str
 		}
 		r := map[string]json.RawMessage{}
 		_ = json.Unmarshal(m["reasoning"], &r)
+		if r == nil {
+			r = map[string]json.RawMessage{}
+		}
 		r["effort"] = v
 		m["reasoning"], _ = json.Marshal(r)
 	}
@@ -99,7 +102,7 @@ func TestApplyReasoningMatchesReference(t *testing.T) {
 					req := llm.Request{Model: "m", Options: llm.Options{ThinkingSuffix: suffix}}
 					got := applyOutcome(func() ([]byte, error) { b, _, err := applyReasoning([]byte(body), req, target, lv); return b, err })
 					want := applyOutcome(func() ([]byte, error) { b, _, err := applyReasoningRef([]byte(body), req, target, lv); return b, err })
-					if got.panic != want.panic {
+					if got.panic != nil || got.panic != want.panic {
 						t.Fatalf("%s/%s/%q/%q: panic = %v, reference %v", name, target, suffix, lv, got.panic, want.panic)
 					}
 					if (got.err == nil) != (want.err == nil) {
@@ -118,8 +121,7 @@ func TestApplyReasoningMatchesReference(t *testing.T) {
 	t.Logf("%d bodies, %d cases compared with the reference", len(bodies), n)
 }
 
-// outcome is what applyReasoning did, a panic included: a body holding a null reasoning (or no
-// object where one is read) makes today's decode-and-set path panic, and that answer stays too.
+// outcome is what applyReasoning did, including any unexpected panic.
 type outcome struct {
 	body  []byte
 	err   error

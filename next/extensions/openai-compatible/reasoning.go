@@ -120,10 +120,8 @@ func names(key []byte, name string) bool {
 
 // setEffort sets the body's reasoning effort to e and returns the body as today's core writes it:
 // decoded into a map and encoded again. It is only reached for a body whose effort changes, so
-// its bytes, and their cost, stay what they were.
-//
-// A body whose reasoning is null keeps today's answer here, which is a panic: decoding null into
-// the map empties it, and setting a field of it fails.
+// its bytes, and their cost, stay what they were. A null reasoning value is treated as an empty
+// object so setting effort does not write to a nil map.
 func setEffort(body []byte, target string, e string) ([]byte, error) {
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(body, &m); err != nil || m == nil {
@@ -136,6 +134,9 @@ func setEffort(body []byte, target string, e string) ([]byte, error) {
 	}
 	r := map[string]json.RawMessage{}
 	_ = json.Unmarshal(m["reasoning"], &r)
+	if r == nil {
+		r = map[string]json.RawMessage{}
+	}
 	r["effort"] = v
 	m["reasoning"], _ = json.Marshal(r)
 	return json.Marshal(m)
