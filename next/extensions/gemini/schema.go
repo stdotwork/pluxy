@@ -410,12 +410,12 @@ func resolveRefs(x *refExpansion, v any, depth int) any {
 func resolveRefNode(x *refExpansion, node map[string]any, ref string, depth int) any {
 	var target any
 	var ok bool
-	if strings.HasPrefix(ref, "#/") && !x.active[ref] && depth < maxRefDepth {
+	if strings.HasPrefix(ref, "#/") {
 		target, ok = resolveJSONPointer(x.root, ref)
-		// The target's cost is paid before it is cloned. A target that does not fit takes the
-		// fallback below, which keeps what refusedTargetFields allows of its type, nullable and
-		// description.
-		if ok && !x.charge(ref, target) {
+		// Expand only when not cyclic, within maxRefDepth, and within the request's ref budget.
+		// Otherwise the fallback below keeps what refusedTargetFields allows of the target's type,
+		// nullable and description.
+		if ok && (x.active[ref] || depth >= maxRefDepth || !x.charge(ref, target)) {
 			ok = false
 		}
 	}
@@ -938,12 +938,38 @@ func cleanEnum(m map[string]any, openAPI bool) {
 		}
 	}
 	m["enum"] = out
-	if ts, ok := m["type"].(string); !ok || !strings.EqualFold(ts, "string") {
+	if !isStringType(m["type"]) {
 		m["type"] = "string"
 	}
 	if hasNull {
 		makeNullable(m, openAPI)
 	}
+}
+
+// isStringType reports whether t is "string" (case-insensitively) or a type list whose only
+// non-null member is "string".
+func isStringType(t any) bool {
+	switch x := t.(type) {
+	case string:
+		return strings.EqualFold(x, "string")
+	case []any:
+		var nonNull string
+		for _, item := range x {
+			s, ok := item.(string)
+			if !ok {
+				return false
+			}
+			if s == "null" {
+				continue
+			}
+			if nonNull != "" {
+				return false
+			}
+			nonNull = s
+		}
+		return strings.EqualFold(nonNull, "string")
+	}
+	return false
 }
 
 // numericEnumType says whether a JSON Schema mode enum keeps its numbers, and the type it keeps

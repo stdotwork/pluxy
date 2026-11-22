@@ -208,3 +208,125 @@ func TestRefusedRefKeepsNothingOnceBudgetIsSpent(t *testing.T) {
 		t.Errorf("p = %#v, want %#v", got.Properties["p"], want)
 	}
 }
+
+// TestRefFallbackKeepsTargetFieldsForCyclesAndDepthCap checks that cyclic and depth-capped $ref
+// stubs look up their target and keep its short type, nullable, and description (when the budget
+// can pay for them), while letting sibling fields on the $ref node override the target.
+func TestRefFallbackKeepsTargetFieldsForCyclesAndDepthCap(t *testing.T) {
+	t.Run("cycle", func(t *testing.T) {
+		in := `{
+			"$defs": {
+				"list": {
+					"type": "array",
+					"nullable": true,
+					"description": "Nested list",
+					"items": {"$ref": "#/$defs/list"}
+				}
+			},
+			"type": "object",
+			"properties": {
+				"root": {"$ref": "#/$defs/list"}
+			}
+		}`
+		out, _ := cleanToolSchema(json.RawMessage(in), false, newRefBudget())
+		var got struct {
+			Properties map[string]map[string]any `json:"properties"`
+		}
+		if err := json.Unmarshal(out, &got); err != nil {
+			t.Fatal(err)
+		}
+		items, _ := got.Properties["root"]["items"].(map[string]any)
+		if !reflect.DeepEqual(items["type"], []any{"array", "null"}) {
+			t.Errorf("cyclic items type = %#v, want [array null]", items["type"])
+		}
+		if items["description"] != "Nested list (See: list)" {
+			t.Errorf("cyclic items description = %q, want %q", items["description"], "Nested list (See: list)")
+		}
+		if sub, ok := items["items"].(map[string]any); !ok || sub["type"] != "string" {
+			t.Errorf("cyclic items.items = %#v, want {type:string}", items["items"])
+		}
+	})
+
+	t.Run("cycle sibling overrides target description", func(t *testing.T) {
+		in := `{
+			"$defs": {
+				"node": {
+					"type": "object",
+					"description": "Tree node",
+					"properties": {
+						"child": {"$ref": "#/$defs/node", "description": "Child node"}
+					}
+				}
+			},
+			"type": "object",
+			"properties": {
+				"root": {"$ref": "#/$defs/node"}
+			}
+		}`
+		out, _ := cleanToolSchema(json.RawMessage(in), false, newRefBudget())
+		var got struct {
+			Properties map[string]map[string]any `json:"properties"`
+		}
+		if err := json.Unmarshal(out, &got); err != nil {
+			t.Fatal(err)
+		}
+		child := got.Properties["root"]["properties"].(map[string]any)["child"].(map[string]any)
+		if child["type"] != "object" || child["description"] != "Child node (See: node)" {
+			t.Errorf("cyclic child = %#v, want type:object description:\"Child node (See: node)\"", child)
+		}
+	})
+
+	t.Run("depth cap", func(t *testing.T) {
+		var defs []string
+		for i := 0; i < maxRefDepth; i++ {
+			defs = append(defs, fmt.Sprintf(`"d%d":{"type":"object","properties":{"next":{"$ref":"#/$defs/d%d"}}}`, i, i+1))
+		}
+		defs = append(defs, fmt.Sprintf(`"d%d":{"type":"string","nullable":true,"description":"deep leaf"}`, maxRefDepth))
+		in := `{"type":"object","$defs":{` + strings.Join(defs, ",") + `},"properties":{"x":{"$ref":"#/$defs/d0"}}}`
+
+		out, _ := cleanToolSchema(json.RawMessage(in), false, newRefBudget())
+		var m map[string]any
+		if err := json.Unmarshal(out, &m); err != nil {
+			t.Fatal(err)
+		}
+		cur := m["properties"].(map[string]any)["x"].(map[string]any)
+		for range maxRefDepth {
+			cur = cur["properties"].(map[string]any)["next"].(map[string]any)
+		}
+		if !reflect.DeepEqual(cur["type"], []any{"string", "null"}) {
+			t.Errorf("depth-capped leaf type = %#v, want [string null]", cur["type"])
+		}
+		wantDesc := fmt.Sprintf("deep leaf (See: d%d)", maxRefDepth)
+		if cur["description"] != wantDesc {
+			t.Errorf("depth-capped leaf description = %q, want %q", cur["description"], wantDesc)
+		}
+	})
+
+	t.Run("cycle respects exhausted budget", func(t *testing.T) {
+		in := `{
+			"$defs": {
+				"list": {
+					"type": "array",
+					"nullable": true,
+					"description": "Nested list",
+					"items": {"$ref": "#/$defs/list"}
+				}
+			},
+			"type": "object",
+			"properties": {
+				"root": {"$ref": "#/$defs/list"}
+			}
+		}`
+		out, _ := cleanToolSchema(json.RawMessage(in), false, &refBudget{})
+		var got struct {
+			Properties map[string]map[string]any `json:"properties"`
+		}
+		if err := json.Unmarshal(out, &got); err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]any{"type": "object", "description": "See: list"}
+		if !reflect.DeepEqual(got.Properties["root"], want) {
+			t.Errorf("root = %#v, want %#v", got.Properties["root"], want)
+		}
+	})
+}
