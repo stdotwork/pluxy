@@ -229,12 +229,28 @@ type StreamWriter struct {
 	up           upstream
 	tools        map[int]int // item index -> tool_calls index
 	refused      bool        // a same-format reply carried a refusal
+	losses       []llm.Loss
+	lost         map[string]bool
 }
 
 // NewStreamWriter returns a writer for one client stream. includeUsage adds the final usage
 // chunk that stream_options.include_usage asks for.
 func NewStreamWriter(w io.Writer, includeUsage bool) *StreamWriter {
 	return &StreamWriter{w: w, includeUsage: includeUsage, tools: map[int]int{}, head: outCompletion{Object: "chat.completion.chunk"}}
+}
+
+// Losses returns what the reply had that Chat Completions could not carry.
+func (s *StreamWriter) Losses() []llm.Loss { return s.losses }
+
+func (s *StreamWriter) lose(path, detail string) {
+	if s.lost[path] || len(s.losses) > llm.MaxLosses {
+		return
+	}
+	if s.lost == nil {
+		s.lost = map[string]bool{}
+	}
+	s.lost[path] = true
+	s.losses = llm.AddLoss(s.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: detail})
 }
 
 func (s *StreamWriter) chunk(choices any, usage any) error {
@@ -306,6 +322,15 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		}
 		return nil
 	case llm.EventFinish:
+		if !s.up.native && len(ev.CodeExecutions) > 0 {
+			s.lose("code_execution", "Chat Completions has no place for code execution results")
+			for _, ce := range ev.CodeExecutions {
+				if ce.FilesOmitted {
+					s.lose("code_execution.files", "files or images produced by code execution have no place in Chat Completions")
+					break
+				}
+			}
+		}
 		reason := finishReason(ev.Finish)
 		if s.up.native && s.refused && ev.Finish != nil && ev.Finish.RawReason != "" {
 			// A same-format reply keeps the finish reason its upstream sent.
@@ -353,6 +378,9 @@ type Aggregator struct {
 	msgRunes    map[int]int       // message item index -> rune count written to text
 	totalRunes  int               // total runes written to text across message items
 	annotations []outAnnotation
+	losses      []llm.Loss
+	lost        map[string]bool
+	lossSize    int
 	size        int
 }
 
@@ -365,6 +393,21 @@ func NewAggregator() *Aggregator {
 		msgStart: map[int]int{},
 		msgRunes: map[int]int{},
 	}
+}
+
+// Losses returns what the reply had that Chat Completions could not carry.
+func (a *Aggregator) Losses() []llm.Loss { return a.losses }
+
+func (a *Aggregator) lose(path, detail string) {
+	if a.lost[path] || len(a.losses) > llm.MaxLosses {
+		return
+	}
+	if a.lost == nil {
+		a.lost = map[string]bool{}
+	}
+	a.lost[path] = true
+	a.lossSize += len(path) + len(detail)
+	a.losses = llm.AddLoss(a.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: detail})
 }
 
 // Add records one event.
@@ -437,6 +480,15 @@ func (a *Aggregator) Add(ev llm.Event) {
 		}
 	case llm.EventFinish:
 		a.finish, a.usage = ev.Finish, ev.Usage
+		if !a.up.native && len(ev.CodeExecutions) > 0 {
+			a.lose("code_execution", "Chat Completions has no place for code execution results")
+			for _, ce := range ev.CodeExecutions {
+				if ce.FilesOmitted {
+					a.lose("code_execution.files", "files or images produced by code execution have no place in Chat Completions")
+					break
+				}
+			}
+		}
 		if ev.Finish != nil {
 			a.size += len(ev.Finish.RawReason)
 		}
@@ -675,7 +727,7 @@ const toolCallOverhead = len(`{"id":"","type":"function","function":{"name":"","
 // Size is about how many bytes of content the response holds so far: text, reasoning, tool
 // calls, extra choices and what it keeps of the upstream's reply (id, model, reply-level fields,
 // finish reason and usage), before JSON escaping. Callers use it to bound what they collect.
-func (a *Aggregator) Size() int { return a.size }
+func (a *Aggregator) Size() int { return a.size + a.lossSize }
 
 // Response returns the response body.
 func (a *Aggregator) Response() ([]byte, error) {

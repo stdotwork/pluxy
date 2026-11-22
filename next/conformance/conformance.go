@@ -275,9 +275,31 @@ func collect(t *testing.T, s *host.Stream) []llm.Event {
 			if err := checkReplyCitations(evs); err != nil {
 				t.Errorf("reply citations: %v", err)
 			}
+			if err := checkReplyCodeExecutions(evs); err != nil {
+				t.Errorf("reply code_executions: %v", err)
+			}
 			return evs
 		}
 	}
+}
+
+// checkReplyCodeExecutions validates the protocol 0.32 invariants on a completed reply's events:
+// code_executions appear only on finish and each entry carries at least one populated field.
+func checkReplyCodeExecutions(evs []llm.Event) error {
+	for i, ev := range evs {
+		if len(ev.CodeExecutions) == 0 {
+			continue
+		}
+		if ev.Type != llm.EventFinish {
+			return fmt.Errorf("event[%d] (%s) carries code_executions; only finish may", i, ev.Type)
+		}
+		for j, ce := range ev.CodeExecutions {
+			if ce.Code == "" && ce.Output == "" && !ce.Failed && !ce.FilesOmitted {
+				return fmt.Errorf("event[%d] code_executions[%d] is empty", i, j)
+			}
+		}
+	}
+	return nil
 }
 
 // checkReplyCitations validates the protocol 0.31 invariants on a completed reply's events:

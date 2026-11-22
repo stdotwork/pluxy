@@ -952,6 +952,15 @@ func (r *Redactor) Event(ev llm.Event) llm.Event {
 		}
 		ev.Sources = srcs
 	}
+	if len(ev.CodeExecutions) > 0 {
+		runs := slices.Clone(ev.CodeExecutions)
+		for i := range runs {
+			runs[i].Code = r.String(runs[i].Code)
+			runs[i].Language = r.String(runs[i].Language)
+			runs[i].Output = r.String(runs[i].Output)
+		}
+		ev.CodeExecutions = runs
+	}
 	if ev.Error != nil {
 		e := *ev.Error
 		e.Code, e.Scope = r.field(e.Code, codes), r.field(e.Scope, scopes)
