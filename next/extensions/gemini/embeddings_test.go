@@ -524,16 +524,25 @@ func TestGeminiEmbeddingsVertex(t *testing.T) {
 	})
 }
 
-// Token-ID array inputs are refused with retryable credential-scoped CodeUnsupported so routing
-// can move on to another provider; requests invalid for every account (empty, missing or malformed
-// input, bad dimensions, unsupported encoding_format, streaming, thinking suffix) are refused with
-// CodeInvalidRequest on ScopeRequest before calling the upstream.
+// Values Gemini will not serve (token-ID arrays, more than 2048 inputs, out-of-range dimensions,
+// unknown encoding_format, streaming, thinking suffix) are refused with retryable
+// credential-scoped CodeUnsupported so routing can move on to another provider; requests invalid
+// for every account (non-object body, empty/missing/malformed input, wrongly typed dimensions or
+// encoding_format) are refused with CodeInvalidRequest on ScopeRequest before calling the upstream.
 func TestGeminiEmbeddingsRefusals(t *testing.T) {
 	ext, srv, acct := embeddingTestExtension(t)
 	srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
 		t.Errorf("refused call reached the upstream: %+v", req)
 		http.Error(w, "unexpected", http.StatusInternalServerError)
 	}
+	manyInputs := make([]string, maxEmbeddingsInputs+1)
+	for i := range manyInputs {
+		manyInputs[i] = "a"
+	}
+	manyBody, _ := json.Marshal(map[string]any{
+		"model": "gemini-embedding-001",
+		"input": manyInputs,
+	})
 	for _, tc := range []struct {
 		name          string
 		req           llm.Request
@@ -542,6 +551,15 @@ func TestGeminiEmbeddingsRefusals(t *testing.T) {
 		wantRetryable bool
 		wantSub       string
 	}{
+		{
+			name: "non-object body",
+			req: llm.Request{
+				Native: &llm.Native{Format: llm.FormatOpenAIEmbeddings, Body: json.RawMessage(`["not an object"]`)},
+			},
+			wantCode:  llm.CodeInvalidRequest,
+			wantScope: llm.ScopeRequest,
+			wantSub:   "object",
+		},
 		{
 			name: "token array input",
 			req: llm.Request{
@@ -556,6 +574,16 @@ func TestGeminiEmbeddingsRefusals(t *testing.T) {
 			name: "nested token array input",
 			req: llm.Request{
 				Native: &llm.Native{Format: llm.FormatOpenAIEmbeddings, Body: json.RawMessage(`{"model":"gemini-embedding-001","input":[[1212,318],[42]]}`)},
+			},
+			wantCode:      llm.CodeUnsupported,
+			wantScope:     llm.ScopeCredential,
+			wantRetryable: true,
+			wantSub:       "input",
+		},
+		{
+			name: "more than 2048 inputs",
+			req: llm.Request{
+				Native: &llm.Native{Format: llm.FormatOpenAIEmbeddings, Body: manyBody},
 			},
 			wantCode:      llm.CodeUnsupported,
 			wantScope:     llm.ScopeCredential,
@@ -612,9 +640,20 @@ func TestGeminiEmbeddingsRefusals(t *testing.T) {
 			req: llm.Request{
 				Native: &llm.Native{Format: llm.FormatOpenAIEmbeddings, Body: json.RawMessage(`{"model":"gemini-embedding-001","input":"hi","dimensions":0}`)},
 			},
-			wantCode:  llm.CodeInvalidRequest,
-			wantScope: llm.ScopeRequest,
-			wantSub:   "dimensions",
+			wantCode:      llm.CodeUnsupported,
+			wantScope:     llm.ScopeCredential,
+			wantRetryable: true,
+			wantSub:       "dimensions",
+		},
+		{
+			name: "negative dimensions",
+			req: llm.Request{
+				Native: &llm.Native{Format: llm.FormatOpenAIEmbeddings, Body: json.RawMessage(`{"model":"gemini-embedding-001","input":"hi","dimensions":-5}`)},
+			},
+			wantCode:      llm.CodeUnsupported,
+			wantScope:     llm.ScopeCredential,
+			wantRetryable: true,
+			wantSub:       "dimensions",
 		},
 		{
 			name: "non-integer dimensions",
@@ -630,6 +669,16 @@ func TestGeminiEmbeddingsRefusals(t *testing.T) {
 			req: llm.Request{
 				Native: &llm.Native{Format: llm.FormatOpenAIEmbeddings, Body: json.RawMessage(`{"model":"gemini-embedding-001","input":"hi","encoding_format":"int8"}`)},
 			},
+			wantCode:      llm.CodeUnsupported,
+			wantScope:     llm.ScopeCredential,
+			wantRetryable: true,
+			wantSub:       "encoding_format",
+		},
+		{
+			name: "wrongly typed encoding_format",
+			req: llm.Request{
+				Native: &llm.Native{Format: llm.FormatOpenAIEmbeddings, Body: json.RawMessage(`{"model":"gemini-embedding-001","input":"hi","encoding_format":123}`)},
+			},
 			wantCode:  llm.CodeInvalidRequest,
 			wantScope: llm.ScopeRequest,
 			wantSub:   "encoding_format",
@@ -640,9 +689,10 @@ func TestGeminiEmbeddingsRefusals(t *testing.T) {
 				Stream: true,
 				Native: &llm.Native{Format: llm.FormatOpenAIEmbeddings, Body: json.RawMessage(`{"model":"gemini-embedding-001","input":"hi","stream":true}`)},
 			},
-			wantCode:  llm.CodeInvalidRequest,
-			wantScope: llm.ScopeRequest,
-			wantSub:   "stream",
+			wantCode:      llm.CodeUnsupported,
+			wantScope:     llm.ScopeCredential,
+			wantRetryable: true,
+			wantSub:       "stream",
 		},
 		{
 			name: "thinking suffix",
@@ -650,9 +700,10 @@ func TestGeminiEmbeddingsRefusals(t *testing.T) {
 				Options: llm.Options{ThinkingSuffix: "high"},
 				Native:  &llm.Native{Format: llm.FormatOpenAIEmbeddings, Body: json.RawMessage(`{"model":"gemini-embedding-001","input":"hi"}`)},
 			},
-			wantCode:  llm.CodeInvalidRequest,
-			wantScope: llm.ScopeRequest,
-			wantSub:   "thinking",
+			wantCode:      llm.CodeUnsupported,
+			wantScope:     llm.ScopeCredential,
+			wantRetryable: true,
+			wantSub:       "thinking",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
