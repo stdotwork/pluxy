@@ -335,8 +335,10 @@ func (h *shaper) clampEffort() {
 	}
 	r["effort"] = raw(to)
 	h.m["reasoning"] = raw(r)
-	h.tr.Losses = llm.AddLoss(h.tr.Losses, llm.Loss{Kind: llm.LossApproximated, Path: "reasoning.effort",
-		Detail: effort + " is not a reasoning level of " + h.model + "; sent " + to})
+	if h.tr != nil {
+		h.tr.Losses = llm.AddLoss(h.tr.Losses, llm.Loss{Kind: llm.LossApproximated, Path: "reasoning.effort",
+			Detail: effort + " is not a reasoning level of " + h.model + "; sent " + to})
+	}
 }
 
 // lite reports whether the client is a Responses-lite client (see liteRequest).
@@ -636,16 +638,19 @@ func (h *shaper) header(name string) string {
 }
 
 // promptCacheKey sets the request's prompt cache key, which keeps a conversation's requests on
-// the upstream's warm prompt cache: the client's prompt_cache_key, else a key derived from the
-// account, the model and Claude Code's session and agent, else (when the client names no session
-// of its own with Session-Id) a key derived from the account and the conversation's start, so
-// every turn of a conversation gets the same key.
+// the upstream's warm prompt cache: the client's prompt_cache_key, else nothing when the client
+// names a session of its own with Session-Id, else a key derived from the account, the model and
+// Claude Code's session and agent, else a key derived from the account, the model and the
+// conversation's start, so every turn of a conversation gets the same key.
 func (h *shaper) promptCacheKey() {
 	if k := h.str("prompt_cache_key"); k != "" {
 		h.sessionID = k
 		return
 	}
 	delete(h.m, "prompt_cache_key")
+	if h.header("session-id") != "" {
+		return
+	}
 	// Claude Code's session, with its agent (a subagent has its own prompt), keeps each agent's
 	// requests on one key.
 	if session := h.claudeCodeSession(); session != "" {
@@ -655,9 +660,6 @@ func (h *shaper) promptCacheKey() {
 		}
 		h.sessionID = uuid5("pluxy:codex:claude-code\x00" + h.accountID + "\x00" + h.model + "\x00" + session + "\x00" + agent)
 		h.m["prompt_cache_key"] = raw(h.sessionID)
-		return
-	}
-	if h.header("session-id") != "" {
 		return
 	}
 	root := conversationRoot(h.m["input"])

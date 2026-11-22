@@ -62,7 +62,8 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 
 // compact serves Responses compaction: the client's body goes to {base_url}/responses/compact
 // as today's core sends it, nearly as it came (the stream flag removed, instructions given unless
-// the request is Responses-lite, the model renamed and a thinking suffix's effort applied), and the
+// the request is Responses-lite, the model renamed, a thinking suffix's effort applied and clamped
+// to the model's levels, and a small max_output_tokens raised to 16 as on /responses), and the
 // upstream's JSON reply comes back as it is. The Codex CLI calls it to shorten a long conversation; the reply's compaction item
 // goes back in the next request's input.
 func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
@@ -116,6 +117,9 @@ func compact(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if a.siwc {
 		siwcBody(m, req.Options.ThinkingSuffix != "")
 	}
+	fit := shaper{m: m, model: req.Model}
+	fit.minOutputTokens()
+	fit.clampEffort()
 	// Replayed web searches need a web search tool, as on /responses. Lite is read from the whole
 	// body, since client_metadata may say it.
 	webSearchForHistory(m, lite)
