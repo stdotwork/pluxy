@@ -247,6 +247,7 @@ func compactionReply(raw []byte, model string, created int64) ([]byte, *llm.Usag
 			Status:  http.StatusBadGateway,
 			Scope:   llm.ScopeRequest,
 			Message: fmt.Sprintf("Chat Completions wrote no compaction summary (finish_reason %q)", reason),
+			Usage:   usage,
 		}
 	}
 	id := "resp_" + strings.TrimPrefix(responseID, "resp_")
