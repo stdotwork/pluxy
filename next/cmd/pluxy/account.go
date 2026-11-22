@@ -875,6 +875,7 @@ func promptURL(p *protocol.Prompt) string {
 // required one it did not get is a usage error, and nothing is started.
 func (x *invocation) startInputs(fields []protocol.LoginInput, in signInInputs, lines *lineReader) (map[string]string, error) {
 	out := map[string]string{}
+	ended := false
 	for _, f := range fields {
 		if v, ok := in.vals[f.Name]; ok {
 			if f.Secret {
@@ -886,6 +887,12 @@ func (x *invocation) startInputs(fields []protocol.LoginInput, in signInInputs, 
 		}
 		if err := x.asks(f); err != nil {
 			return nil, err
+		}
+		if ended {
+			if optionalInput(f, in.kept) {
+				continue
+			}
+			return nil, usageError{fmt.Sprintf("the sign-in needs %s: %s", fieldName(f), inputHint(f))}
 		}
 		// The echo is set before the label is shown, and stays as it is until the value is whole.
 		lines.field(&f)
@@ -903,6 +910,8 @@ func (x *invocation) startInputs(fields []protocol.LoginInput, in signInInputs, 
 				if lines.hidden() {
 					x.eprintf("\n")
 				}
+				lines.show()
+				ended = true
 				if value.open {
 					return nil, usageError{fmt.Sprintf("%s is not a complete JSON document, and standard input ended before its end", fieldName(f))}
 				}

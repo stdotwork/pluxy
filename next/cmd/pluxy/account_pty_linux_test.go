@@ -42,6 +42,7 @@ const (
 	ptyPaste         = "paste"          // a multi-line JSON key pasted into its field
 	ptyBack          = "back"           // a secret field, then a plain one
 	ptyStartTerm     = "startterm"      // SIGTERM while a value is read before the sign-in starts
+	ptyStartOptEOF   = "start_opt_eof"  // Ctrl-D at an optional start field before a secret start field
 	ptyAddress       = "address"        // a browser sign-in: a pasted non-address, then what comes next
 	ptyAddressSecret = "address_secret" // a browser sign-in: Ctrl-D, then a secret input prompt
 )
@@ -174,6 +175,54 @@ func TestCLIAccountTerminal(t *testing.T) {
 		p.waitEcho(true)
 		p.wantChild(t, "code=1", "cancelled=0")
 	})
+	// Ctrl-D at an optional start field must stop asking: a later secret start field prints no
+	// label, never turns echo off, starts no sign-in and exits 2.
+	t.Run("start Ctrl-D then secret", func(t *testing.T) {
+		p := startPTY(t, ptyStartOptEOF)
+		p.waitOutput("Note: ")
+		p.waitEcho(true)
+		p.write(t, "\x04")
+		echoOff := false
+		deadline := time.Now().Add(20 * time.Second)
+		for done := false; !done; {
+			if !ptyEcho(t, p.master) {
+				echoOff = true
+			}
+			select {
+			case err := <-p.done:
+				var exited *exec.ExitError
+				got := 0
+				switch {
+				case errors.As(err, &exited):
+					got = exited.ExitCode()
+				case err != nil:
+					t.Fatalf("the command: %v", err)
+				}
+				if got != 2 {
+					t.Fatalf("the command exited %d, want 2; it wrote %q", got, p.childOutput())
+				}
+				done = true
+			default:
+				if time.Now().After(deadline) {
+					t.Fatalf("the command did not exit; it wrote %q", p.childOutput())
+				}
+				time.Sleep(100 * time.Microsecond)
+			}
+		}
+		p.waitEcho(true)
+		if echoOff {
+			t.Errorf("the terminal's echo was turned off for a start field after standard input ended")
+		}
+		p.wantChild(t, "code=2", "cancelled=0", "inputs=0", "starts=0", "echo=on")
+		out := p.childOutput()
+		before, _, _ := strings.Cut(out, "pluxy: ")
+		if strings.Contains(before, "API key: ") {
+			t.Errorf("the secret field's label was printed after standard input ended: %q", out)
+		}
+		if !strings.Contains(out, "the sign-in needs API key:") {
+			t.Errorf("the end-of-input error was not printed: %q", out)
+		}
+	})
 	// A browser sign-in that was pasted a non-address asks again. The person can paste the right
 	// address, press Ctrl-D (the end of input), or press Ctrl-C.
 	t.Run("address", func(t *testing.T) {
@@ -293,6 +342,8 @@ func ptyChild(t *testing.T, scenario string) {
 		method = "back"
 	case ptyStartTerm:
 		method = "api_key"
+	case ptyStartOptEOF:
+		method = "opt_secret"
 	case ptyAddress:
 		method = "browser"
 	case ptyAddressSecret:
@@ -306,7 +357,8 @@ func ptyChild(t *testing.T, scenario string) {
 	}
 	var stderr io.Writer = os.Stderr
 	echoStayedOn := true
-	if scenario == ptyAddressSecret {
+	switch scenario {
+	case ptyAddressSecret:
 		var login *fakeAccountLogin
 		f.onCreate = func(l *fakeAccountLogin) { login = l }
 		stderr = &watchWriter{
@@ -325,12 +377,26 @@ func ptyChild(t *testing.T, scenario string) {
 				}
 			},
 		}
+	case ptyStartOptEOF:
+		stderr = &watchWriter{
+			w:       os.Stderr,
+			needle:  "Note: ",
+			onMatch: func() {},
+			afterMatch: func() {
+				if !ptyEcho(t, os.Stdin) {
+					echoStayedOn = false
+				}
+			},
+		}
 	}
 	var out bytes.Buffer
 	code := runCLIWithInput(args, os.Stdin, &out, stderr, func(string) string { return "" }, true)
 	f.mu.Lock()
 	summary := fmt.Sprintf("%s code=%d cancelled=%d inputs=%d", ptyMarker, code, len(f.cancelled), len(f.inputs))
-	if scenario == ptyAddressSecret {
+	if scenario == ptyAddressSecret || scenario == ptyStartOptEOF {
+		if scenario == ptyStartOptEOF {
+			summary += fmt.Sprintf(" starts=%d", len(f.starts))
+		}
 		if echoStayedOn {
 			summary += " echo=on"
 		} else {
