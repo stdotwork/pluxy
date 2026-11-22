@@ -264,3 +264,68 @@ func TestCountTokensEstimateInAMixedPool(t *testing.T) {
 		}
 	}
 }
+
+// A non-retryable request-scoped 404 (a vendor with no count path) triggers core's estimate when
+// token_count_estimate is on and stays a 404 when it is off. Model-scoped or retryable 404s stay
+// errors.
+func TestCountTokensMissingEndpointEstimates(t *testing.T) {
+	noPath := func(llm.Request) []llm.Event {
+		return []llm.Event{{Type: llm.EventError, Error: &llm.Error{
+			Code: llm.CodeNotFound, Status: http.StatusNotFound, Scope: llm.ScopeRequest,
+			Message: "this account's upstream has no token count endpoint (POST /messages/count_tokens answered 404)",
+		}}}
+	}
+	off := false
+	for _, c := range []struct {
+		name       string
+		cfg        Config
+		path, body string
+		want       string // "" expects 404
+	}{
+		{"messages, estimate on", Config{}, "/v1/messages/count_tokens", countBody, `{"input_tokens":27}`},
+		{"gemini, estimate on", Config{}, "/v1beta/models/m:countTokens", `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`,
+			`{"totalTokens":3,"promptTokensDetails":[{"modality":"TEXT","tokenCount":3}]}`},
+		{"messages, estimate off", Config{TokenCountEstimate: &off}, "/v1/messages/count_tokens", countBody, ""},
+		{"gemini, estimate off", Config{TokenCountEstimate: &off}, "/v1beta/models/m:countTokens", `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := c.cfg
+			cfg.ClientKeys = []string{"k"}
+			h, _ := countHandlerWith(t, &cfg, noPath)
+			w := postCount(h, c.path, c.body)
+			if c.want == "" {
+				if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "no token count endpoint") ||
+					strings.Contains(w.Body.String(), "input_tokens") || strings.Contains(w.Body.String(), "totalTokens") {
+					t.Errorf("answered %d: %s, want 404 with missing endpoint error", w.Code, w.Body)
+				}
+				return
+			}
+			if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "application/json" || w.Header().Get(TraceHeader) == "" {
+				t.Fatalf("answered %d (%q, trace %q): %s", w.Code, w.Header().Get("Content-Type"), w.Header().Get(TraceHeader), w.Body)
+			}
+			if mustCompact(w.Body.String()) != mustCompact(c.want) {
+				t.Errorf("body = %s, want %s", w.Body, c.want)
+			}
+		})
+	}
+
+	for _, c := range []struct {
+		name string
+		err  llm.Error
+	}{
+		{"model not found (retryable)", llm.Error{Code: llm.CodeNotFound, Status: http.StatusNotFound, Scope: llm.ScopeModel, Retryable: true, Message: "model m not found"}},
+		{"model not found (non-retryable)", llm.Error{Code: llm.CodeNotFound, Status: http.StatusNotFound, Scope: llm.ScopeModel, Message: "Not Found"}},
+		{"retryable request 404", llm.Error{Code: llm.CodeNotFound, Status: http.StatusNotFound, Scope: llm.ScopeRequest, Retryable: true, Message: "Not Found"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e := c.err
+			h, _ := countHandlerWith(t, &Config{ClientKeys: []string{"k"}}, func(llm.Request) []llm.Event {
+				return []llm.Event{{Type: llm.EventError, Error: &e}}
+			})
+			w := postCount(h, "/v1/messages/count_tokens", countBody)
+			if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), c.err.Message) || strings.Contains(w.Body.String(), "input_tokens") {
+				t.Errorf("answered %d: %s, want 404 %q", w.Code, w.Body, c.err.Message)
+			}
+		})
+	}
+}

@@ -177,11 +177,19 @@ func geminiAction(w http.ResponseWriter, r *http.Request, g *Generation) {
 	serve(w, r, g, geminiFormat)
 }
 
-// isCannotCount reports whether e is an account's answer that its upstream cannot count tokens. A
-// refusal under the reject drop policy (one that names what it dropped) is not: the account could
-// count, but the request cannot be carried whole.
+// isCannotCount reports whether e is an account's answer that its upstream cannot count tokens:
+// either the extension reports CodeUnsupported on a non-request scope, or the upstream answered a
+// non-retryable request-scoped 404 for a missing count path (which fails that request only and
+// blocks no model). A refusal under the reject drop policy (one that names what it dropped) is not:
+// the account could count, but the request cannot be carried whole.
 func isCannotCount(e *llm.Error) bool {
-	return e != nil && e.Code == llm.CodeUnsupported && e.Scope != llm.ScopeRequest && len(e.Dropped) == 0
+	if e == nil || len(e.Dropped) > 0 {
+		return false
+	}
+	if e.Code == llm.CodeUnsupported && e.Scope != llm.ScopeRequest {
+		return true
+	}
+	return e.Code == llm.CodeNotFound && e.Scope == llm.ScopeRequest && !e.Retryable
 }
 
 // countWatch is a count attempt's stream that notes when the account answers it cannot count.
