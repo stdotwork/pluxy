@@ -263,7 +263,7 @@ returns the upstream's reply as it came (a 404 from that path that does not say 
 means the upstream has no compaction endpoint: it fails that request only, as a request error with a
 message that says so, and blocks no model on the account); a `"chat"` account translates the Responses conversation to
 one non-streamed `POST {base_url}/chat/completions` request with `tool_choice` set to `"none"`,
-structured output cleared, and the Codex CLI's compaction prompt (`prompt.md`)
+structured output and stop sequences cleared, and the Codex CLI's compaction prompt (`prompt.md`)
 appended as a last user message, and returns OpenAI's `response.compaction` object carrying one user
 message with the Codex CLI's `summary_prefix.md` followed by a newline and the summary (`reasoning_content`
 is excluded, and an empty or cut-off summary is an error on the request); a `"messages"` or

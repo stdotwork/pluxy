@@ -187,7 +187,7 @@ func compactionRequest(call llm.Request) (llm.Request, error) {
 	req.Native.Headers = call.Native.Headers
 	req.Options.ThinkingSuffix = call.Options.ThinkingSuffix
 	req.DropPolicy, req.Caller = call.DropPolicy, call.Caller
-	req.Options.ResponseFormat = nil
+	req.Options.Stop, req.Options.ResponseFormat = nil, nil
 	req.Options.ParallelToolCalls = nil
 	req.Options.ToolChoice = &llm.ToolChoice{Mode: llm.ToolChoiceNone}
 	req.Items = append(req.Items, llm.Item{
