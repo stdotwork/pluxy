@@ -440,6 +440,9 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 	case llm.EventItemEnd:
 		blk := s.blocks[ev.Index]
 		blk.signature = b.upstreamData(ev)
+		if len(ev.Citations) > 0 {
+			b.lose("content.citations", "web search citations have no safe representation in a Message without an Anthropic encrypted_index")
+		}
 		if ev.Index != s.active {
 			blk.ended = true
 			return nil
@@ -456,6 +459,9 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 	case llm.EventFinish:
 		b.upstreamData(ev)
 		b.finished(ev)
+		if len(ev.Sources) > 0 {
+			b.lose("sources", "web search sources have no safe representation in a Message without Anthropic encrypted_content")
+		}
 		if err := s.emit("message_delta", obj{"delta": obj{"stop_reason": b.stopReason(), "stop_sequence": nil}, "usage": encodeUsage(ev.Usage)}); err != nil {
 			return err
 		}
@@ -520,6 +526,9 @@ func (a *Aggregator) Add(ev llm.Event) {
 		a.blocks[ev.Index].text.WriteString(ev.Delta)
 	case llm.EventItemEnd:
 		sig := b.upstreamData(ev)
+		if b.upFormat != format && len(ev.Citations) > 0 {
+			b.lose("content.citations", "web search citations have no safe representation in a Message without an Anthropic encrypted_index")
+		}
 		if blk := a.blocks[ev.Index]; blk != nil {
 			blk.signature = sig
 			a.size += len(blk.signature)
@@ -531,6 +540,9 @@ func (a *Aggregator) Add(ev llm.Event) {
 	case llm.EventFinish:
 		b.upstreamData(ev)
 		b.finished(ev)
+		if b.upFormat != format && len(ev.Sources) > 0 {
+			b.lose("sources", "web search sources have no safe representation in a Message without Anthropic encrypted_content")
+		}
 		if ev.Finish != nil {
 			a.size += len(ev.Finish.RawReason)
 		}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
 	"github.com/stdotwork/pluxy/next/llm"
@@ -133,12 +134,84 @@ func errorOf(raw json.RawMessage, fallback string) *llm.Error {
 }
 
 type contentBlock struct {
-	Type  string          `json:"type"`
-	ID    string          `json:"id"`
-	Name  string          `json:"name"`
-	Text  string          `json:"text"`
-	Think string          `json:"thinking"`
-	Input json.RawMessage `json:"input"`
+	Type      string          `json:"type"`
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Text      string          `json:"text"`
+	Think     string          `json:"thinking"`
+	Input     json.RawMessage `json:"input"`
+	Content   json.RawMessage `json:"content"`
+	Citations json.RawMessage `json:"citations"`
+}
+
+// extractWebSearchSources reads web_search_result entries from a web_search_tool_result block's
+// content array, keeping valid http/https URLs deduplicated in first-seen order.
+func extractWebSearchSources(raw json.RawMessage, seen map[string]bool, out []llm.Source) []llm.Source {
+	if len(raw) == 0 || raw[0] != '[' {
+		return out
+	}
+	var entries []struct {
+		Type  string `json:"type"`
+		URL   string `json:"url"`
+		Title string `json:"title"`
+	}
+	if json.Unmarshal(raw, &entries) != nil {
+		return out
+	}
+	for _, e := range entries {
+		if e.Type == "web_search_tool_result_error" || !llm.ValidCitationURL(e.URL) || seen[e.URL] {
+			continue
+		}
+		seen[e.URL] = true
+		out = append(out, llm.Source{URL: e.URL, Title: e.Title})
+	}
+	return out
+}
+
+// extractCitation reads one Anthropic web_search_result_location citation object.
+func extractCitation(raw json.RawMessage) (llm.Citation, bool) {
+	if len(raw) == 0 || raw[0] != '{' {
+		return llm.Citation{}, false
+	}
+	var c struct {
+		Type  string `json:"type"`
+		URL   string `json:"url"`
+		Title string `json:"title"`
+	}
+	if json.Unmarshal(raw, &c) != nil || c.Type != "web_search_result_location" || !llm.ValidCitationURL(c.URL) {
+		return llm.Citation{}, false
+	}
+	return llm.Citation{URL: c.URL, Title: c.Title}, true
+}
+
+// applyBlockRange sets [0, runeLen) on each citation when runeLen > 0.
+func applyBlockRange(cits []llm.Citation, runeLen int) []llm.Citation {
+	if len(cits) == 0 || runeLen <= 0 {
+		return cits
+	}
+	for i := range cits {
+		s, e := 0, runeLen
+		cits[i].StartIndex, cits[i].EndIndex = &s, &e
+	}
+	return cits
+}
+
+// extractCitations reads the web_search_result_location entries from a text block's citations array.
+func extractCitations(raw json.RawMessage, runeLen int) []llm.Citation {
+	if len(raw) == 0 || raw[0] != '[' {
+		return nil
+	}
+	var items []json.RawMessage
+	if json.Unmarshal(raw, &items) != nil {
+		return nil
+	}
+	var out []llm.Citation
+	for _, it := range items {
+		if c, ok := extractCitation(it); ok {
+			out = append(out, c)
+		}
+	}
+	return applyBlockRange(out, runeLen)
 }
 
 type streamEvent struct {
@@ -151,12 +224,13 @@ type streamEvent struct {
 	} `json:"message"`
 	ContentBlock *contentBlock `json:"content_block"`
 	Delta        *struct {
-		Type        string `json:"type"`
-		Text        string `json:"text"`
-		Thinking    string `json:"thinking"`
-		PartialJSON string `json:"partial_json"`
-		Signature   string `json:"signature"`
-		StopReason  string `json:"stop_reason"`
+		Type        string          `json:"type"`
+		Text        string          `json:"text"`
+		Thinking    string          `json:"thinking"`
+		PartialJSON string          `json:"partial_json"`
+		Signature   string          `json:"signature"`
+		Citation    json.RawMessage `json:"citation"`
+		StopReason  string          `json:"stop_reason"`
 	} `json:"delta"`
 	Usage json.RawMessage `json:"usage"`
 	Error json.RawMessage `json:"error"`
@@ -172,18 +246,28 @@ const MaxSignature = 1 << 20
 // events) become native events, so a Messages client still gets every upstream event once. Use
 // one decoder per stream.
 type StreamDecoder struct {
-	started bool
-	done    bool
-	next    int
-	items   map[int]int              // upstream block index -> open model item index
-	sigs    map[int]*strings.Builder // model item index -> signature of an open thinking block
-	stop    string
-	usage   json.RawMessage
+	started   bool
+	done      bool
+	next      int
+	items     map[int]int              // upstream block index -> open model item index
+	sigs      map[int]*strings.Builder // model item index -> signature of an open thinking block
+	textLens  map[int]int              // model item index -> rune count of text seen so far
+	citations map[int][]llm.Citation   // model item index -> web citations collected from citations_delta
+	sources   []llm.Source
+	seenSrc   map[string]bool
+	stop      string
+	usage     json.RawMessage
 }
 
 // NewStreamDecoder returns a decoder for one stream.
 func NewStreamDecoder() *StreamDecoder {
-	return &StreamDecoder{items: map[int]int{}, sigs: map[int]*strings.Builder{}}
+	return &StreamDecoder{
+		items:     map[int]int{},
+		sigs:      map[int]*strings.Builder{},
+		textLens:  map[int]int{},
+		citations: map[int][]llm.Citation{},
+		seenSrc:   map[string]bool{},
+	}
 }
 
 // closeAll closes items the upstream left open; the events it adds carry no Raw.
@@ -194,7 +278,13 @@ func (d *StreamDecoder) closeAll(out []llm.Event) []llm.Event {
 	}
 	slices.Sort(open)
 	for _, idx := range open {
-		out = append(out, llm.Event{Type: llm.EventItemEnd, Index: idx})
+		end := llm.Event{Type: llm.EventItemEnd, Index: idx}
+		if cits := d.citations[idx]; len(cits) > 0 {
+			end.Citations = applyBlockRange(cits, d.textLens[idx])
+		}
+		delete(d.citations, idx)
+		delete(d.textLens, idx)
+		out = append(out, end)
 	}
 	clear(d.items)
 	return out
@@ -248,6 +338,9 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		if b == nil {
 			return native(), nil
 		}
+		if b.Type == "web_search_tool_result" {
+			d.sources = extractWebSearchSources(b.Content, d.seenSrc, d.sources)
+		}
 		kind := kindOf(b.Type)
 		if kind == "" || (kind == llm.ItemToolCall && (b.ID == "" || b.Name == "")) {
 			return native(), nil
@@ -266,9 +359,15 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		// A block may start with content in it; carry it as a delta that keeps no raw.
 		switch {
 		case b.Type == "text" && b.Text != "":
+			d.textLens[idx] += utf8.RuneCountInString(b.Text)
 			out = append(out, llm.Event{Type: llm.EventTextDelta, Index: idx, Delta: b.Text})
 		case b.Type == "thinking" && b.Think != "":
 			out = append(out, llm.Event{Type: llm.EventReasoningDelta, Index: idx, Delta: b.Think})
+		}
+		if b.Type == "text" && len(b.Citations) > 0 {
+			if cits := extractCitations(b.Citations, 0); len(cits) > 0 {
+				d.citations[idx] = append(d.citations[idx], cits...)
+			}
 		}
 		return out, nil
 	case "content_block_delta":
@@ -278,11 +377,17 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		}
 		switch ev.Delta.Type {
 		case "text_delta":
+			d.textLens[idx] += utf8.RuneCountInString(ev.Delta.Text)
 			return append(out, llm.Event{Type: llm.EventTextDelta, Index: idx, Delta: ev.Delta.Text, Raw: raw}), nil
 		case "thinking_delta":
 			return append(out, llm.Event{Type: llm.EventReasoningDelta, Index: idx, Delta: ev.Delta.Thinking, Raw: raw}), nil
 		case "input_json_delta":
 			return append(out, llm.Event{Type: llm.EventToolInputDelta, Index: idx, Delta: ev.Delta.PartialJSON, Raw: raw}), nil
+		}
+		if ev.Delta.Type == "citations_delta" {
+			if c, ok := extractCitation(ev.Delta.Citation); ok {
+				d.citations[idx] = append(d.citations[idx], c)
+			}
 		}
 		if ev.Delta.Type == "signature_delta" {
 			// Carried on the item's end as well, for clients in other formats.
@@ -311,6 +416,11 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			end.Opaque = &llm.Opaque{Format: format, Data: sig.String()}
 		}
 		delete(d.sigs, idx)
+		if cits := d.citations[idx]; len(cits) > 0 {
+			end.Citations = applyBlockRange(cits, d.textLens[idx])
+		}
+		delete(d.citations, idx)
+		delete(d.textLens, idx)
 		return append(out, end), nil
 	case "message_delta":
 		if ev.Delta != nil && ev.Delta.StopReason != "" {
@@ -324,7 +434,7 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		d.done = true
 		out = d.closeAll(out)
 		f := finishOf(d.stop)
-		return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(d.usage), Raw: raw}), nil
+		return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(d.usage), Sources: d.sources, Raw: raw}), nil
 	}
 	// ping, message_start after the first event, and event types added later.
 	return native(), nil
@@ -400,11 +510,16 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 	out := []llm.Event{{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: m.ID, Model: m.Model, Format: format},
 		Raw: eventJSON(map[string]any{"type": "message_start", "message": head})}}
 	next := 0
+	var sources []llm.Source
+	seenSrc := map[string]bool{}
 	for i, raw := range m.Content {
 		b := rawjson.Object(raw)
 		var cb contentBlock
 		if b == nil || json.Unmarshal(raw, &cb) != nil {
 			return nil, malformed("upstream sent a malformed response", body)
+		}
+		if cb.Type == "web_search_tool_result" {
+			sources = extractWebSearchSources(cb.Content, seenSrc, sources)
 		}
 		kind := kindOf(cb.Type)
 		if kind == llm.ItemToolCall && (cb.ID == "" || cb.Name == "") {
@@ -453,6 +568,9 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 				"delta": map[string]json.RawMessage{"type": json.RawMessage(`"signature_delta"`), "signature": sig}})})
 		}
 		end := llm.Event{Type: llm.EventItemEnd, Index: next, Raw: stop}
+		if kind == llm.ItemMessage && len(cb.Citations) > 0 {
+			end.Citations = extractCitations(cb.Citations, utf8.RuneCountInString(cb.Text))
+		}
 		var sig string
 		if kind == llm.ItemReasoning && json.Unmarshal(b["signature"], &sig) == nil && sig != "" {
 			end.Opaque = &llm.Opaque{Format: format, Data: sig}
@@ -472,5 +590,5 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 	}
 	out = append(out, llm.Event{Type: llm.EventNative, Raw: eventJSON(delta)})
 	f := finishOf(m.StopReason)
-	return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(m.Usage), Raw: append(json.RawMessage(nil), body...)}), nil
+	return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(m.Usage), Sources: sources, Raw: append(json.RawMessage(nil), body...)}), nil
 }

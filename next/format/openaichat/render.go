@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stdotwork/pluxy/next/format/sse"
 	"github.com/stdotwork/pluxy/next/llm"
@@ -39,12 +40,25 @@ type outChoice struct {
 	Logprobs     json.RawMessage `json:"logprobs,omitempty"`
 }
 
+type outAnnotation struct {
+	Type        string         `json:"type"`
+	URLCitation outURLCitation `json:"url_citation"`
+}
+
+type outURLCitation struct {
+	URL        string `json:"url"`
+	Title      string `json:"title"`
+	StartIndex int    `json:"start_index"`
+	EndIndex   int    `json:"end_index"`
+}
+
 type outMsg struct {
-	Role             string        `json:"role"`
-	Content          *string       `json:"content"`
-	Refusal          *string       `json:"refusal,omitempty"`
-	ReasoningContent *string       `json:"reasoning_content,omitempty"`
-	ToolCalls        []outToolCall `json:"tool_calls,omitempty"`
+	Role             string          `json:"role"`
+	Content          *string         `json:"content"`
+	Refusal          *string         `json:"refusal,omitempty"`
+	ReasoningContent *string         `json:"reasoning_content,omitempty"`
+	ToolCalls        []outToolCall   `json:"tool_calls,omitempty"`
+	Annotations      []outAnnotation `json:"annotations,omitempty"`
 }
 
 type outUsage struct {
@@ -321,26 +335,36 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 
 // Aggregator collects events into a non-streamed Chat Completions response.
 type Aggregator struct {
-	head      outCompletion
-	up        upstream
-	others    []*otherChoice          // choices after the first, in the order they came
-	streamed  map[string]*otherChoice // the ones put together from stream fragments, by index
-	text      strings.Builder
-	refusal   strings.Builder
-	reasoning strings.Builder
-	tools     []outToolCall
-	toolArgs  []*strings.Builder // the arguments of each tool call, as they streamed, by position in tools
-	toolIdx   map[int]int
-	finish    *llm.Finish
-	usage     *llm.Usage
-	logprobs  []json.RawMessage // each text delta's logprobs, as the upstream sent them
-	refused   bool              // a same-format reply carried a refusal
-	size      int
+	head        outCompletion
+	up          upstream
+	others      []*otherChoice          // choices after the first, in the order they came
+	streamed    map[string]*otherChoice // the ones put together from stream fragments, by index
+	text        strings.Builder
+	refusal     strings.Builder
+	reasoning   strings.Builder
+	tools       []outToolCall
+	toolArgs    []*strings.Builder // the arguments of each tool call, as they streamed, by position in tools
+	toolIdx     map[int]int
+	finish      *llm.Finish
+	usage       *llm.Usage
+	logprobs    []json.RawMessage // each text delta's logprobs, as the upstream sent them
+	refused     bool              // a same-format reply carried a refusal
+	msgStart    map[int]int       // message item index -> starting rune offset in text
+	msgRunes    map[int]int       // message item index -> rune count written to text
+	totalRunes  int               // total runes written to text across message items
+	annotations []outAnnotation
+	size        int
 }
 
 // NewAggregator returns an empty aggregator.
 func NewAggregator() *Aggregator {
-	return &Aggregator{head: outCompletion{Object: "chat.completion"}, toolIdx: map[int]int{}, streamed: map[string]*otherChoice{}}
+	return &Aggregator{
+		head:     outCompletion{Object: "chat.completion"},
+		toolIdx:  map[int]int{},
+		streamed: map[string]*otherChoice{},
+		msgStart: map[int]int{},
+		msgRunes: map[int]int{},
+	}
 }
 
 // Add records one event.
@@ -357,6 +381,9 @@ func (a *Aggregator) Add(ev llm.Event) {
 			a.addOther(c)
 		}
 	case llm.EventItemStart:
+		if ev.Item.Kind == llm.ItemMessage {
+			a.msgStart[ev.Index] = a.totalRunes
+		}
 		if ev.Item.Kind == llm.ItemToolCall {
 			a.size += len(ev.Item.CallID) + len(ev.Item.Name) + toolCallOverhead
 			a.toolIdx[ev.Index] = len(a.tools)
@@ -375,10 +402,31 @@ func (a *Aggregator) Add(ev llm.Event) {
 			a.refused = true
 		} else {
 			a.text.WriteString(ev.Delta)
+			n := utf8.RuneCountInString(ev.Delta)
+			a.totalRunes += n
+			a.msgRunes[ev.Index] += n
 		}
 		if len(meta.Logprobs) > 0 {
 			a.logprobs = append(a.logprobs, meta.Logprobs)
 			a.size += len(meta.Logprobs)
+		}
+	case llm.EventItemEnd:
+		// A same-format reply keeps what it has today.
+		if len(ev.Citations) > 0 && !a.up.native {
+			base := a.msgStart[ev.Index]
+			itemRunes := a.msgRunes[ev.Index]
+			for _, c := range ev.Citations {
+				if !llm.ValidCitationURL(c.URL) {
+					continue
+				}
+				// Chat requires both indices: a citation with no narrower range covers its item.
+				uc := outURLCitation{URL: c.URL, Title: c.Title, StartIndex: base, EndIndex: base + itemRunes}
+				if c.StartIndex != nil && c.EndIndex != nil && *c.StartIndex >= 0 && *c.EndIndex >= *c.StartIndex && *c.EndIndex <= itemRunes {
+					uc.StartIndex, uc.EndIndex = base+*c.StartIndex, base+*c.EndIndex
+				}
+				a.annotations = append(a.annotations, outAnnotation{Type: "url_citation", URLCitation: uc})
+				a.size += len(c.URL) + len(c.Title) + 48
+			}
 		}
 	case llm.EventReasoningDelta:
 		a.reasoning.WriteString(ev.Delta)
@@ -647,6 +695,9 @@ func (a *Aggregator) Response() ([]byte, error) {
 	if a.reasoning.Len() > 0 {
 		r := a.reasoning.String()
 		msg.ReasoningContent = &r
+	}
+	if len(a.annotations) > 0 {
+		msg.Annotations = a.annotations
 	}
 	reason := finishReason(a.finish)
 	if a.up.native && a.refused && a.finish != nil && a.finish.RawReason != "" {

@@ -1,4 +1,4 @@
-# pluxy extension protocol, version 0.29
+# pluxy extension protocol, version 0.31
 
 This is the contract between the pluxy core and an extension program. Version 0 covers one kind
 of extension, a **provider**: a program that takes a model request from core, calls an upstream
@@ -45,7 +45,11 @@ adds [native-only calls](#native-only-calls): an extension that parses the clien
 a `generate` call's request without its parsed form, so the request's content crosses the socket
 once. Version 0.28 adds the request's [service tier and verbosity](#the-request): `options.service_tier`
 and `options.verbosity`. Version 0.29 adds the canonical [web search tool](#the-request):
-`tool.type = "web_search"` and `tool.web_search`.
+`tool.type = "web_search"` and `tool.web_search`. Version 0.30 adds the canonical
+[code execution tool](#the-request) and its forced tool choice (`tool.type = "code_execution"` and
+`tool_choice.mode = "code_execution"`). Version 0.31 adds canonical web search citations on a
+message item's `item.end` (`citations`) and web search sources on `finish` (`sources`; see
+[Events](#events)).
 
 If you want to write an extension, read [the tutorial](TUTORIAL.md) first and come back here for
 the details. A Go SDK (`github.com/stdotwork/pluxy/next/sdk`) implements the extension side of
@@ -1015,9 +1019,9 @@ with deltas and closed, then one terminal event.
 | `text.delta` | `index`, `delta` | Text for an open `message` item. |
 | `reasoning.delta` | `index`, `delta` | Reasoning text for an open `reasoning` item. |
 | `tool_input.delta` | `index`, `delta` | A fragment of the argument string for an open `tool_call` item. |
-| `item.end` | `index`; for a reasoning item, optional `opaque`: `format` and `data` | Closes item `index`. `opaque` is the provider's opaque record of the reasoning, which it needs back to continue from it (for `anthropic.messages`, the thinking block's signature; for `openai.responses`, the reasoning item's `encrypted_content`). A client format with a place for it carries it: a Responses client gets a thinking signature as the reasoning item's `encrypted_content`, and a Messages client gets a Responses reasoning item's encrypted content as the thinking block's signature. When the client replays that item or block, the request builder for the provider's format turns it back into the provider's own. |
+| `item.end` | `index`; for a reasoning item, optional `opaque`: `format` and `data`; for a message item, optional `citations` (0.31): list of `{url, title?, start_index?, end_index?}` | Closes item `index`. `opaque` is the provider's opaque record of the reasoning, which it needs back to continue from it (for `anthropic.messages`, the thinking block's signature; for `openai.responses`, the reasoning item's `encrypted_content`). A client format with a place for it carries it: a Responses client gets a thinking signature as the reasoning item's `encrypted_content`, and a Messages client gets a Responses reasoning item's encrypted content as the thinking block's signature. When the client replays that item or block, the request builder for the provider's format turns it back into the provider's own. `citations` (0.31) holds web citations attached to the message item's text: each entry has an `http` or `https` `url`, optional `title`, and optional half-open `[start_index, end_index)` range in Unicode code points (runes) from the start of the message item's text. Core ignores `citations` from an extension below 0.31. |
 | `native` | `raw` | Upstream data that has no place in the model, in the reply's `format`. For `openai.chat` it is `{"choices": [...]}`: choices after the first, as the upstream sent them. For `openai.responses` and `anthropic.messages` it is an upstream stream event the model has no event for (for example `response.in_progress`, or `ping`, `message_delta` and a thinking block's `signature_delta`). For `gemini.generate_content` it is a stream chunk that produced no other event. |
-| `finish` | `finish`: `reason`, `raw_reason`; optional `usage` | Terminal: success. |
+| `finish` | `finish`: `reason`, `raw_reason`; optional `usage`; optional `sources` (0.31): list of `{url, title?}` | Terminal: success. `sources` (0.31) lists the `http` or `https` web sources returned by the upstream's hosted web searches in this reply. Core ignores `sources` from an extension below 0.31. |
 | `error` | `error` (below) | Terminal: failure. |
 
 Any event may carry `raw`: the upstream data it came from, for diagnostics. `raw` must be valid
@@ -1596,7 +1600,7 @@ extension below 0.23 gets none: it cannot promise alive frames.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.30. An extension reports the minor version it
+raise the minor version: this document is version 0.31. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1634,8 +1638,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.28 | The request's `options.service_tier` and `options.verbosity` ([the request](#the-request)). |
 | 0.29 | The canonical `web_search` tool (`tool.type = "web_search"` and `tool.web_search`; [the request](#the-request)). |
 | 0.30 | The canonical `code_execution` tool and its forced choice (`tool.type = "code_execution"` and `tool_choice.mode = "code_execution"`; [the request](#the-request)). |
+| 0.31 | Canonical web search citations on message `item.end` (`citations`) and search sources on `finish` (`sources`; [Events](#events)). |
 
-## What version 0.30 leaves out
+## What version 0.31 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

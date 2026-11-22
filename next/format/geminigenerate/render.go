@@ -211,6 +211,80 @@ func (b *builder) eventLosses(ev llm.Event) {
 	b.upstreamData(ev)
 }
 
+// citedSegment pairs a message item's text and position with its canonical citations so
+// buildGroundingMetadata can emit Gemini groundingChunks and groundingSupports with UTF-8 byte
+// offsets.
+type citedSegment struct {
+	text      string
+	partIndex int // candidate content part index (non-streaming)
+	byteBase  int // byte offset into concatenated streamed text (streaming)
+	citations []llm.Citation
+}
+
+// buildGroundingMetadata turns canonical citations and sources into Gemini's groundingMetadata
+// object, converting Unicode code point (rune) ranges to UTF-8 byte offsets. Returns nil when
+// there are no valid http/https sources or citations.
+func buildGroundingMetadata(segments []citedSegment, sources []llm.Source) obj {
+	chunkIdx := map[string]int{}
+	var chunks []any
+	addChunk := func(u, title string) (int, bool) {
+		if !llm.ValidCitationURL(u) {
+			return -1, false
+		}
+		if idx, ok := chunkIdx[u]; ok {
+			return idx, true
+		}
+		idx := len(chunks)
+		chunkIdx[u] = idx
+		web := obj{"uri": u}
+		if title != "" {
+			web["title"] = title
+		}
+		chunks = append(chunks, obj{"web": web})
+		return idx, true
+	}
+	var supports []any
+	for _, seg := range segments {
+		for _, c := range seg.citations {
+			ci, ok := addChunk(c.URL, c.Title)
+			if !ok {
+				continue
+			}
+			if c.StartIndex == nil || c.EndIndex == nil {
+				continue
+			}
+			sb, ok1 := llm.RuneToUTF8ByteOffset(seg.text, *c.StartIndex)
+			eb, ok2 := llm.RuneToUTF8ByteOffset(seg.text, *c.EndIndex)
+			if !ok1 || !ok2 || eb < sb {
+				continue
+			}
+			gseg := obj{
+				"startIndex": seg.byteBase + sb,
+				"endIndex":   seg.byteBase + eb,
+				"text":       seg.text[sb:eb],
+			}
+			if seg.partIndex > 0 {
+				gseg["partIndex"] = seg.partIndex
+			}
+			supports = append(supports, obj{
+				"segment":               gseg,
+				"groundingChunkIndices": []int{ci},
+			})
+		}
+	}
+	for _, s := range sources {
+		addChunk(s.URL, s.Title)
+	}
+	if len(chunks) == 0 {
+		return nil
+	}
+	gm := obj{"groundingChunks": chunks}
+	if len(supports) > 0 {
+		gm["groundingSupports"] = supports
+	}
+	return gm
+}
+
 // response returns one GenerateContentResponse with the given parts and, when finish is set,
 // the finish reason and usage.
 func (b *builder) response(parts []any, finish *llm.Finish, usage *llm.Usage) obj {
@@ -299,13 +373,22 @@ type StreamWriter struct {
 	b      builder
 	native bool
 
-	calls map[int]*call // tool calls by model item index
-	order []int         // tool call item indexes in start order
+	calls      map[int]*call // tool calls by model item index
+	order      []int         // tool call item indexes in start order
+	msgText    map[int]*strings.Builder
+	msgBase    map[int]int
+	totalBytes int
+	cited      []citedSegment
 }
 
 // NewStreamWriter returns a writer for one client stream.
 func NewStreamWriter(w io.Writer) *StreamWriter {
-	return &StreamWriter{w: w, calls: map[int]*call{}}
+	return &StreamWriter{
+		w:       w,
+		calls:   map[int]*call{},
+		msgText: map[int]*strings.Builder{},
+		msgBase: map[int]int{},
+	}
 }
 
 // Losses returns what the reply had that the client format could not carry.
@@ -349,6 +432,10 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 	b.eventLosses(ev)
 	switch ev.Type {
 	case llm.EventItemStart:
+		if ev.Item.Kind == llm.ItemMessage {
+			s.msgText[ev.Index] = &strings.Builder{}
+			s.msgBase[ev.Index] = s.totalBytes
+		}
 		if ev.Item.Kind == llm.ItemToolCall {
 			s.calls[ev.Index] = b.newCall(ev)
 			s.order = append(s.order, ev.Index)
@@ -356,6 +443,12 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 	case llm.EventTextDelta, llm.EventReasoningDelta:
 		if ev.Delta == "" {
 			return nil
+		}
+		if ev.Type == llm.EventTextDelta {
+			if buf := s.msgText[ev.Index]; buf != nil {
+				buf.WriteString(ev.Delta)
+			}
+			s.totalBytes += len(ev.Delta)
 		}
 		p := obj{"text": ev.Delta}
 		if ev.Type == llm.EventReasoningDelta {
@@ -368,6 +461,19 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		}
 	case llm.EventItemEnd:
 		b.signature(s.calls[ev.Index], ev)
+		if len(ev.Citations) > 0 {
+			text := ""
+			if buf := s.msgText[ev.Index]; buf != nil {
+				text = buf.String()
+			}
+			s.cited = append(s.cited, citedSegment{
+				text:      text,
+				byteBase:  s.msgBase[ev.Index],
+				citations: ev.Citations,
+			})
+		}
+		delete(s.msgText, ev.Index)
+		delete(s.msgBase, ev.Index)
 		if o := ev.Opaque; o != nil && o.Format == llm.OpaqueDevin && o.Data != "" {
 			// A Devin reasoning signature goes in a thought part of its own, as today's core
 			// writes it.
@@ -378,7 +484,11 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		for _, idx := range s.order {
 			parts = append(parts, b.callPart(s.calls[idx]))
 		}
-		return s.emit(b.response(parts, ev.Finish, ev.Usage))
+		resp := b.response(parts, ev.Finish, ev.Usage)
+		if gm := buildGroundingMetadata(s.cited, ev.Sources); gm != nil {
+			resp["candidates"].([]any)[0].(obj)["groundingMetadata"] = gm
+		}
+		return s.emit(resp)
 	case llm.EventError:
 		return s.errorEvent(ev.Error)
 	}
@@ -387,22 +497,24 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 
 // aggPart is one part a non-streamed reply collects.
 type aggPart struct {
-	kind string
-	text strings.Builder
-	call *call
+	kind      string
+	text      strings.Builder
+	call      *call
+	citations []llm.Citation
 }
 
 // Aggregator collects events into a non-streamed GenerateContentResponse. A reply from a Gemini
 // upstream is returned as the upstream sent it.
 type Aggregator struct {
-	b      builder
-	native bool
-	raws   []json.RawMessage
-	parts  map[int]*aggPart
-	order  []int
-	finish *llm.Finish
-	usage  *llm.Usage
-	size   int
+	b       builder
+	native  bool
+	raws    []json.RawMessage
+	parts   map[int]*aggPart
+	order   []int
+	finish  *llm.Finish
+	usage   *llm.Usage
+	sources []llm.Source
+	size    int
 }
 
 // NewAggregator returns an empty aggregator.
@@ -450,14 +562,25 @@ func (a *Aggregator) Add(ev llm.Event) {
 			// Today's core leaves a Devin reasoning signature out of an unstreamed reply.
 			a.b.lose("content.thoughtSignature", "a Devin reasoning signature, which an unstreamed GenerateContentResponse does not carry")
 		}
-		if p := a.parts[ev.Index]; p != nil && p.call != nil {
-			// A late signature replaces the call's first one.
-			a.size -= len(p.call.signature)
-			a.b.signature(p.call, ev)
-			a.size += len(p.call.signature)
+		if p := a.parts[ev.Index]; p != nil {
+			if len(ev.Citations) > 0 {
+				p.citations = ev.Citations
+				for _, c := range ev.Citations {
+					a.size += len(c.URL) + len(c.Title) + 48
+				}
+			}
+			if p.call != nil {
+				// A late signature replaces the call's first one.
+				a.size -= len(p.call.signature)
+				a.b.signature(p.call, ev)
+				a.size += len(p.call.signature)
+			}
 		}
 	case llm.EventFinish:
-		a.finish, a.usage = ev.Finish, ev.Usage
+		a.finish, a.usage, a.sources = ev.Finish, ev.Usage, ev.Sources
+		for _, s := range ev.Sources {
+			a.size += len(s.URL) + len(s.Title) + 32
+		}
 		if ev.Finish != nil {
 			a.size += len(ev.Finish.RawReason)
 		}
@@ -486,11 +609,20 @@ func (a *Aggregator) Response() ([]byte, error) {
 	// only when the client streams, so this does not happen yet.
 	b := &a.b
 	var parts []any
+	var cited []citedSegment
 	for _, idx := range a.order {
 		p := a.parts[idx]
 		switch p.kind {
 		case llm.ItemMessage:
-			parts = append(parts, obj{"text": p.text.String()})
+			text := p.text.String()
+			if len(p.citations) > 0 {
+				cited = append(cited, citedSegment{
+					text:      text,
+					partIndex: len(parts),
+					citations: p.citations,
+				})
+			}
+			parts = append(parts, obj{"text": text})
 		case llm.ItemReasoning:
 			parts = append(parts, obj{"text": p.text.String(), "thought": true})
 		case llm.ItemToolCall:
@@ -501,7 +633,11 @@ func (a *Aggregator) Response() ([]byte, error) {
 	if finish == nil {
 		finish = &llm.Finish{Reason: llm.FinishOther}
 	}
-	return json.Marshal(b.response(parts, finish, a.usage))
+	resp := b.response(parts, finish, a.usage)
+	if gm := buildGroundingMetadata(cited, a.sources); gm != nil {
+		resp["candidates"].([]any)[0].(obj)["groundingMetadata"] = gm
+	}
+	return json.Marshal(resp)
 }
 
 // googleStatusOf names the Google RPC status for an HTTP status, as Google's API errors do.

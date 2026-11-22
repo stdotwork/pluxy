@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"unicode/utf8"
 
 	"github.com/stdotwork/pluxy/next/llm"
 )
@@ -147,9 +148,10 @@ type streamChoice struct {
 	Index int `json:"index"`
 	Delta struct {
 		reasoningFields
-		Content   *string         `json:"content"`
-		Refusal   json.RawMessage `json:"refusal"`
-		ToolCalls []struct {
+		Content     *string         `json:"content"`
+		Refusal     json.RawMessage `json:"refusal"`
+		Annotations json.RawMessage `json:"annotations"`
+		ToolCalls   []struct {
 			Index    *int   `json:"index"`
 			ID       string `json:"id"`
 			Function struct {
@@ -161,6 +163,44 @@ type streamChoice struct {
 	} `json:"delta"`
 	FinishReason *string         `json:"finish_reason"`
 	Logprobs     json.RawMessage `json:"logprobs"`
+}
+
+// extractChatAnnotations reads url_citation entries from a Chat message or delta annotations array.
+// prefixRunes is the number of leading runes stripped from content (for example a leading think
+// tag), and textRunes is the rune count of the message item's text. Out-of-range offsets produce a
+// citation with no range rather than a wrong range.
+func extractChatAnnotations(raw json.RawMessage, prefixRunes, textRunes int) []llm.Citation {
+	if len(raw) == 0 || raw[0] != '[' {
+		return nil
+	}
+	var entries []struct {
+		Type        string `json:"type"`
+		URLCitation *struct {
+			URL        string `json:"url"`
+			Title      string `json:"title"`
+			StartIndex *int   `json:"start_index"`
+			EndIndex   *int   `json:"end_index"`
+		} `json:"url_citation"`
+	}
+	if json.Unmarshal(raw, &entries) != nil {
+		return nil
+	}
+	var out []llm.Citation
+	for _, e := range entries {
+		if e.Type != "url_citation" || e.URLCitation == nil || !llm.ValidCitationURL(e.URLCitation.URL) {
+			continue
+		}
+		uc := e.URLCitation
+		c := llm.Citation{URL: uc.URL, Title: uc.Title}
+		if uc.StartIndex != nil && uc.EndIndex != nil {
+			s, end := *uc.StartIndex-prefixRunes, *uc.EndIndex-prefixRunes
+			if s >= 0 && end >= s && end <= textRunes {
+				c.StartIndex, c.EndIndex = &s, &end
+			}
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 // StreamDecoder turns the data of an upstream Chat Completions stream into events. The first
@@ -183,6 +223,9 @@ type StreamDecoder struct {
 	used      map[string]bool // tool call ids the stream has used or sent
 	think     thinkFilter     // a leading think tag in the content, split across chunks
 	refused   bool            // the reply carried a refusal
+	textRunes int             // runes emitted in the current open message item
+	rawRunes  int             // runes of upstream content for it, with any leading think tag
+	annRaws   []json.RawMessage
 	losses    []llm.Loss
 }
 
@@ -201,7 +244,19 @@ func (d *StreamDecoder) open(kind string, ev *[]llm.Event, item llm.ItemStart) i
 
 func (d *StreamDecoder) closeItem(idx *int, ev *[]llm.Event) {
 	if *idx >= 0 {
-		*ev = append(*ev, llm.Event{Type: llm.EventItemEnd, Index: *idx})
+		end := llm.Event{Type: llm.EventItemEnd, Index: *idx}
+		if idx == &d.text {
+			if len(d.annRaws) > 0 {
+				var cits []llm.Citation
+				for _, raw := range d.annRaws {
+					cits = append(cits, extractChatAnnotations(raw, max(d.rawRunes-d.textRunes, 0), d.textRunes)...)
+				}
+				end.Citations = cits
+				d.annRaws = nil
+			}
+			d.textRunes, d.rawRunes = 0, 0
+		}
+		*ev = append(*ev, end)
 		*idx = -1
 	}
 }
@@ -263,6 +318,7 @@ func (d *StreamDecoder) piece(p thinkPiece, ev *[]llm.Event) {
 	if d.text < 0 {
 		d.text = d.open(llm.ItemMessage, ev, llm.ItemStart{})
 	}
+	d.textRunes += utf8.RuneCountInString(p.text)
 	*ev = append(*ev, llm.Event{Type: llm.EventTextDelta, Index: d.text, Delta: p.text})
 }
 
@@ -441,8 +497,12 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		}
 		if t := ch.Delta.Content; t != nil && *t != "" {
 			before := len(out)
+			d.rawRunes += utf8.RuneCountInString(*t)
 			d.content(*t, &out)
 			d.attachTextMeta(textMeta{Logprobs: logprobs(ch.Logprobs)}, before, &out)
+		}
+		if d.text >= 0 && len(ch.Delta.Annotations) > 0 && ch.Delta.Annotations[0] == '[' {
+			d.annRaws = append(d.annRaws, append(json.RawMessage(nil), ch.Delta.Annotations...))
 		}
 		if r := refusalText(ch.Delta.Refusal); r != "" {
 			d.refused = true
@@ -620,9 +680,10 @@ type completionChoice struct {
 	Index   int `json:"index"`
 	Message *struct {
 		reasoningFields
-		Content   *string         `json:"content"`
-		Refusal   json.RawMessage `json:"refusal"`
-		ToolCalls []struct {
+		Content     *string         `json:"content"`
+		Refusal     json.RawMessage `json:"refusal"`
+		Annotations json.RawMessage `json:"annotations"`
+		ToolCalls   []struct {
 			chatToolCall
 			ExtraContent json.RawMessage `json:"extra_content"`
 		} `json:"tool_calls"`
@@ -734,7 +795,12 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 				meta := textMeta{Logprobs: logprobs(ch.Logprobs), Refusal: true}
 				out = append(out, llm.Event{Type: llm.EventTextDelta, Index: next, Delta: refusal, Raw: meta.raw()})
 			}
-			out = append(out, llm.Event{Type: llm.EventItemEnd, Index: next})
+			var cits []llm.Citation
+			if len(m.Annotations) > 0 && text != "" {
+				prefixRunes := utf8.RuneCountInString(content) - utf8.RuneCountInString(text)
+				cits = extractChatAnnotations(m.Annotations, prefixRunes, utf8.RuneCountInString(text))
+			}
+			out = append(out, llm.Event{Type: llm.EventItemEnd, Index: next, Citations: cits})
 			next++
 		}
 		for i, tc := range m.ToolCalls {

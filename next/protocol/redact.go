@@ -936,6 +936,22 @@ func (r *Redactor) Event(ev llm.Event) llm.Event {
 		o.Format, o.Data = r.field(o.Format, formats), r.String(o.Data)
 		ev.Opaque = &o
 	}
+	if len(ev.Citations) > 0 {
+		cits := slices.Clone(ev.Citations)
+		for i := range cits {
+			cits[i].URL = r.String(cits[i].URL)
+			cits[i].Title = r.String(cits[i].Title)
+		}
+		ev.Citations = cits
+	}
+	if len(ev.Sources) > 0 {
+		srcs := slices.Clone(ev.Sources)
+		for i := range srcs {
+			srcs[i].URL = r.String(srcs[i].URL)
+			srcs[i].Title = r.String(srcs[i].Title)
+		}
+		ev.Sources = srcs
+	}
 	if ev.Error != nil {
 		e := *ev.Error
 		e.Code, e.Scope = r.field(e.Code, codes), r.field(e.Scope, scopes)

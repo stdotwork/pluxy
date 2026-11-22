@@ -28,6 +28,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/llm"
@@ -262,7 +263,8 @@ func next(t *testing.T, s *host.Stream, d time.Duration) llm.Event {
 	}
 }
 
-// collect reads events up to and including the terminal one.
+// collect reads events up to and including the terminal one, checking protocol 0.31 citation and
+// source invariants on every event.
 func collect(t *testing.T, s *host.Stream) []llm.Event {
 	t.Helper()
 	var evs []llm.Event
@@ -270,9 +272,58 @@ func collect(t *testing.T, s *host.Stream) []llm.Event {
 		ev := next(t, s, wait)
 		evs = append(evs, ev)
 		if ev.Terminal() {
+			if err := checkReplyCitations(evs); err != nil {
+				t.Errorf("reply citations: %v", err)
+			}
 			return evs
 		}
 	}
+}
+
+// checkReplyCitations validates the protocol 0.31 invariants on a completed reply's events:
+// citations appear only on a message item's item.end with valid http/https URLs and valid rune
+// ranges within that item's text; sources appear only on finish with valid http/https URLs.
+func checkReplyCitations(evs []llm.Event) error {
+	kinds := map[int]string{}
+	textRunes := map[int]int{}
+	for i, ev := range evs {
+		switch ev.Type {
+		case llm.EventItemStart:
+			if ev.Item != nil {
+				kinds[ev.Index] = ev.Item.Kind
+			}
+		case llm.EventTextDelta:
+			textRunes[ev.Index] += utf8.RuneCountInString(ev.Delta)
+		}
+		if len(ev.Citations) > 0 {
+			if ev.Type != llm.EventItemEnd || kinds[ev.Index] != llm.ItemMessage {
+				return fmt.Errorf("event[%d] (%s, item kind %q) carries citations; only message item.end may", i, ev.Type, kinds[ev.Index])
+			}
+			maxRunes := textRunes[ev.Index]
+			for j, c := range ev.Citations {
+				if !llm.ValidCitationURL(c.URL) {
+					return fmt.Errorf("event[%d] citations[%d] has invalid url %q", i, j, c.URL)
+				}
+				if (c.StartIndex == nil) != (c.EndIndex == nil) {
+					return fmt.Errorf("event[%d] citations[%d] has half-set range (%v, %v)", i, j, c.StartIndex, c.EndIndex)
+				}
+				if c.StartIndex != nil && (*c.StartIndex < 0 || *c.EndIndex < *c.StartIndex || *c.EndIndex > maxRunes) {
+					return fmt.Errorf("event[%d] citations[%d] range [%d, %d) out of bounds for %d runes", i, j, *c.StartIndex, *c.EndIndex, maxRunes)
+				}
+			}
+		}
+		if len(ev.Sources) > 0 {
+			if ev.Type != llm.EventFinish {
+				return fmt.Errorf("event[%d] (%s) carries sources; only finish may", i, ev.Type)
+			}
+			for j, src := range ev.Sources {
+				if !llm.ValidCitationURL(src.URL) {
+					return fmt.Errorf("event[%d] sources[%d] has invalid url %q", i, j, src.URL)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (k *kit) handshake(t *testing.T) {

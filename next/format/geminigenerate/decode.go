@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
 	"github.com/stdotwork/pluxy/next/llm"
@@ -33,8 +34,9 @@ type chunk struct {
 		Content *struct {
 			Parts []json.RawMessage `json:"parts"`
 		} `json:"content"`
-		FinishReason  string `json:"finishReason"`
-		FinishMessage string `json:"finishMessage"`
+		FinishReason      string          `json:"finishReason"`
+		FinishMessage     string          `json:"finishMessage"`
+		GroundingMetadata json.RawMessage `json:"groundingMetadata"`
 	} `json:"candidates"`
 	PromptFeedback *struct {
 		BlockReason string `json:"blockReason"`
@@ -162,10 +164,24 @@ type StreamDecoder struct {
 	// malformed is set when the reply ended with MALFORMED_FUNCTION_CALL, with Gemini's message.
 	malformed     bool
 	malformedText string
+	// Grounding state for the current open message item and the reply as a whole.
+	textBuf   strings.Builder
+	partSpans map[int][2]int // candidate partIndex -> [byteStart, byteEnd] in textBuf
+	// A part index counts within one chunk, so partSpans holds only while the item's text came in
+	// one chunk. Once it spans chunks (multiChunk), offsets are read against the whole text.
+	chunkNo    int
+	spanChunk  int
+	multiChunk bool
+	citations  []llm.Citation
+	seenCit    map[string]bool
+	sources    []llm.Source
+	seenSrc    map[string]bool
 }
 
 // NewStreamDecoder returns a decoder for one stream.
-func NewStreamDecoder() *StreamDecoder { return &StreamDecoder{text: -1, think: -1} }
+func NewStreamDecoder() *StreamDecoder {
+	return &StreamDecoder{text: -1, think: -1, partSpans: map[int][2]int{}, seenSrc: map[string]bool{}, seenCit: map[string]bool{}}
+}
 
 func (d *StreamDecoder) open(kind string, out []llm.Event, start llm.ItemStart) (int, []llm.Event) {
 	start.Kind = kind
@@ -178,9 +194,139 @@ func (d *StreamDecoder) closeItem(idx *int, out []llm.Event) []llm.Event {
 	if *idx < 0 {
 		return out
 	}
-	out = append(out, llm.Event{Type: llm.EventItemEnd, Index: *idx})
+	end := llm.Event{Type: llm.EventItemEnd, Index: *idx}
+	if idx == &d.text {
+		if len(d.citations) > 0 {
+			end.Citations = d.citations
+			d.citations = nil
+		}
+		d.textBuf.Reset()
+		clear(d.partSpans)
+		clear(d.seenCit)
+		d.multiChunk = false
+	}
+	out = append(out, end)
 	*idx = -1
 	return out
+}
+
+// decodeGrounding reads Gemini's groundingMetadata (groundingChunks and groundingSupports).
+// Malformed metadata, out-of-range chunk indices, and non-http URLs are skipped without failing
+// the reply. Segment startIndex/endIndex are UTF-8 byte offsets per Google's GenerateContent API
+// reference and are converted to Unicode code point (rune) offsets; an offset that cannot be
+// mapped produces a citation with no range.
+func (d *StreamDecoder) decodeGrounding(raw json.RawMessage) {
+	if isNull(raw) || raw[0] != '{' {
+		return
+	}
+	var gm struct {
+		Chunks   json.RawMessage `json:"groundingChunks"`
+		Supports json.RawMessage `json:"groundingSupports"`
+	}
+	if json.Unmarshal(raw, &gm) != nil {
+		return
+	}
+	var chunks []struct {
+		Web *struct {
+			URI   string `json:"uri"`
+			Title string `json:"title"`
+		} `json:"web"`
+	}
+	if !isNull(gm.Chunks) && gm.Chunks[0] == '[' {
+		_ = json.Unmarshal(gm.Chunks, &chunks)
+	}
+	for _, ch := range chunks {
+		if ch.Web == nil || !llm.ValidCitationURL(ch.Web.URI) || d.seenSrc[ch.Web.URI] {
+			continue
+		}
+		d.seenSrc[ch.Web.URI] = true
+		d.sources = append(d.sources, llm.Source{URL: ch.Web.URI, Title: ch.Web.Title})
+	}
+	// With no open text item there is nothing to attach a citation to; its source is kept above.
+	if d.text < 0 || isNull(gm.Supports) || gm.Supports[0] != '[' || len(chunks) == 0 {
+		return
+	}
+	var supports []struct {
+		Segment *struct {
+			PartIndex  *int `json:"partIndex"`
+			StartIndex *int `json:"startIndex"`
+			EndIndex   *int `json:"endIndex"`
+		} `json:"segment"`
+		ChunkIndices []int `json:"groundingChunkIndices"`
+	}
+	if json.Unmarshal(gm.Supports, &supports) != nil {
+		return
+	}
+	fullText := d.textBuf.String()
+	for _, sup := range supports {
+		if len(sup.ChunkIndices) == 0 {
+			continue
+		}
+		var startRune, endRune *int
+		if sup.Segment != nil && sup.Segment.EndIndex != nil {
+			startByte := 0
+			if sup.Segment.StartIndex != nil {
+				startByte = *sup.Segment.StartIndex
+			}
+			endByte := *sup.Segment.EndIndex
+			partIdx := 0
+			if sup.Segment.PartIndex != nil {
+				partIdx = *sup.Segment.PartIndex
+			}
+			// Determine the text slice and base rune offset for this partIndex.
+			// Text that came in several chunks is read as one text. In a single chunk with
+			// several parts (e.g. a thought part at 0, text part at 1), partSpans maps partIndex
+			// to its byte span in fullText.
+			partText := fullText
+			baseRune := 0
+			mapped := true
+			if d.multiChunk {
+				mapped = partIdx == 0
+			} else if partIdx > 0 {
+				if span, ok := d.partSpans[partIdx]; ok {
+					partText = fullText[span[0]:span[1]]
+					baseRune = utf8.RuneCountInString(fullText[:span[0]])
+				} else {
+					mapped = false
+				}
+			} else if span, ok := d.partSpans[0]; ok && len(d.partSpans) > 1 {
+				partText = fullText[span[0]:span[1]]
+				baseRune = utf8.RuneCountInString(fullText[:span[0]])
+			}
+			if mapped && startByte >= 0 && endByte >= startByte && endByte <= len(partText) {
+				if sr, ok1 := llm.UTF8ByteToRuneOffset(partText, startByte); ok1 {
+					if er, ok2 := llm.UTF8ByteToRuneOffset(partText, endByte); ok2 {
+						s, e := baseRune+sr, baseRune+er
+						startRune, endRune = &s, &e
+					}
+				}
+			}
+		}
+		for _, ci := range sup.ChunkIndices {
+			if ci < 0 || ci >= len(chunks) {
+				continue
+			}
+			ch := chunks[ci]
+			if ch.Web == nil || !llm.ValidCitationURL(ch.Web.URI) {
+				continue
+			}
+			c := llm.Citation{URL: ch.Web.URI, Title: ch.Web.Title}
+			if startRune != nil && endRune != nil {
+				s, e := *startRune, *endRune
+				c.StartIndex, c.EndIndex = &s, &e
+			}
+			// Metadata can repeat on later chunks of a stream.
+			key := c.URL
+			if c.StartIndex != nil {
+				key = fmt.Sprintf("%s\x00%d\x00%d", c.URL, *c.StartIndex, *c.EndIndex)
+			}
+			if d.seenCit[key] {
+				continue
+			}
+			d.seenCit[key] = true
+			d.citations = append(d.citations, c)
+		}
+	}
 }
 
 // Decode takes the data of one SSE event and returns the events it produces. An error object
@@ -212,6 +358,7 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 
 // decode adds the events chunk c produces to out.
 func (d *StreamDecoder) decode(c chunk, out []llm.Event) []llm.Event {
+	d.chunkNo++
 	if d.responseID == "" {
 		d.responseID = c.ResponseID
 	}
@@ -230,9 +377,12 @@ func (d *StreamDecoder) decode(c chunk, out []llm.Event) []llm.Event {
 			continue
 		}
 		if cand.Content != nil {
-			for _, pr := range cand.Content.Parts {
-				out = d.part(pr, out)
+			for pi, pr := range cand.Content.Parts {
+				out = d.part(pi, pr, out)
 			}
+		}
+		if !isNull(cand.GroundingMetadata) {
+			d.decodeGrounding(cand.GroundingMetadata)
 		}
 		if cand.FinishReason == MalformedFunctionCall {
 			d.malformed, d.malformedText = true, cand.FinishMessage
@@ -256,7 +406,7 @@ func (d *StreamDecoder) decode(c chunk, out []llm.Event) []llm.Event {
 // part adds the events of one content part. Thought text is reasoning, other text is message
 // text, and a function call is a whole tool call (Gemini sends each call complete). Other parts
 // (inline data, code execution) reach a Gemini client in the raw chunk only.
-func (d *StreamDecoder) part(raw json.RawMessage, out []llm.Event) []llm.Event {
+func (d *StreamDecoder) part(partIdx int, raw json.RawMessage, out []llm.Event) []llm.Event {
 	pm := object(raw)
 	if pm == nil {
 		return out
@@ -326,6 +476,13 @@ func (d *StreamDecoder) part(raw json.RawMessage, out []llm.Event) []llm.Event {
 	if d.text < 0 {
 		d.text, out = d.open(llm.ItemMessage, out, llm.ItemStart{})
 	}
+	if len(d.partSpans) > 0 && d.spanChunk != d.chunkNo {
+		d.multiChunk = true
+	}
+	d.spanChunk = d.chunkNo
+	start := d.textBuf.Len()
+	d.textBuf.WriteString(text)
+	d.partSpans[partIdx] = [2]int{start, d.textBuf.Len()}
 	return append(out, llm.Event{Type: llm.EventTextDelta, Index: d.text, Delta: text})
 }
 
@@ -356,7 +513,7 @@ func (d *StreamDecoder) Close() ([]llm.Event, error) {
 	var out []llm.Event
 	out = d.closeItem(&d.think, out)
 	out = d.closeItem(&d.text, out)
-	return append(out, llm.Event{Type: llm.EventFinish, Finish: d.finish, Usage: d.usage}), nil
+	return append(out, llm.Event{Type: llm.EventFinish, Finish: d.finish, Usage: d.usage, Sources: d.sources}), nil
 }
 
 // DecodeResponse turns an upstream non-streamed GenerateContentResponse into the events a stream
