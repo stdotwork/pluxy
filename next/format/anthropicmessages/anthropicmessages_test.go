@@ -1342,11 +1342,18 @@ func TestEncodeResponseFormat(t *testing.T) {
 		}
 		sameJSON(t, "body", out, `{"model":"claude-sonnet-4-6","stream":false,"max_tokens":32000,`+
 			`"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
-		if got := lossList(losses); !reflect.DeepEqual(got, []string{"dropped response_format"}) {
-			t.Errorf("losses = %q, want [dropped response_format]", got)
+		want := []llm.Loss{{
+			Kind:   llm.LossDropped,
+			Path:   "response_format",
+			Detail: "Messages output_config.format only supports json_schema",
+		}}
+		if !reflect.DeepEqual(losses, want) {
+			t.Errorf("losses = %+v, want %+v", losses, want)
 		}
 	})
 	t.Run("text", func(t *testing.T) {
+		wantBody := `{"model":"claude-sonnet-4-6","stream":false,"max_tokens":32000,` +
+			`"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`
 		req, err := openaichat.ParseRequest([]byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hi"}],` +
 			`"response_format":{"type":"text"}}`))
 		if err != nil {
@@ -1356,10 +1363,19 @@ func TestEncodeResponseFormat(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		sameJSON(t, "body", out, `{"model":"claude-sonnet-4-6","stream":false,"max_tokens":32000,`+
-			`"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+		sameJSON(t, "body", out, wantBody)
 		if len(losses) != 0 {
 			t.Errorf("losses = %q, want none", lossList(losses))
+		}
+		// An empty ResponseFormat has no format requested and must not report a loss.
+		req.Options.ResponseFormat = &llm.ResponseFormat{}
+		out, losses, err = EncodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameJSON(t, "empty response_format body", out, wantBody)
+		if len(losses) != 0 {
+			t.Errorf("empty response_format losses = %q, want none", lossList(losses))
 		}
 	})
 }
@@ -1485,6 +1501,31 @@ func TestRefusalStopReasonBothWays(t *testing.T) {
 		}
 		if !strings.Contains(string(respBody), `"status":"incomplete"`) || !strings.Contains(string(respBody), `"reason":"content_filter"`) || !strings.Contains(string(respBody), `"text":"I cannot help with that."`) {
 			t.Errorf("responses body = %s, want incomplete content_filter with refusal text", respBody)
+		}
+
+		for _, tc := range []struct {
+			name   string
+			decode func([]byte) ([]llm.Event, error)
+			body   []byte
+		}{
+			{"chat", openaichat.DecodeResponse, chatResp},
+			{"responses", openairesponses.DecodeResponse, respBody},
+		} {
+			backEvents, err := tc.decode(tc.body)
+			if err != nil {
+				t.Fatalf("%s decode: %v", tc.name, err)
+			}
+			msgAgg := NewAggregator()
+			for _, ev := range backEvents {
+				msgAgg.Add(ev)
+			}
+			backMsg, err := msgAgg.Response()
+			if err != nil {
+				t.Fatalf("%s to messages: %v", tc.name, err)
+			}
+			if !strings.Contains(string(backMsg), `"stop_reason":"refusal"`) {
+				t.Errorf("%s to messages = %s, want stop_reason refusal", tc.name, backMsg)
+			}
 		}
 	})
 
