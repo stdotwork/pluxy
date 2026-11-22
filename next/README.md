@@ -8,9 +8,8 @@ requests and hands them to **provider extensions**: separate programs, one per k
 starts and talks to over a local socket. Today it serves OpenAI Chat Completions, OpenAI
 Responses, Anthropic Messages and Gemini GenerateContent (streamed and not, over HTTP) through the
 OpenAI-compatible API-key provider, which talks to an upstream that speaks any of them. A request
-in the upstream's own format passes through unchanged; a Responses, Messages or Gemini request to a
-Chat upstream, a Messages or Gemini request to a Responses upstream, and a Gemini request to a
-Messages upstream are translated, and what the translation could not carry is logged. The
+in the upstream's own format passes through unchanged; requests in any of the other three
+formats are translated to the upstream's format, and what the translation could not carry is logged. The
 [Codex provider](#codex) serves OpenAI's Codex models from an API key, a ChatGPT subscription or a Sign in with ChatGPT (SIWC) sign-in.
 
 This file is the reference for core. To build pluxy and send a first request, follow the
@@ -149,9 +148,8 @@ Responses (`POST {base_url}/responses`), or `"wire_api": "messages"` for one tha
 Messages (`POST {base_url}/messages`, with the key in `x-api-key` and the client's
 `anthropic-version` and `anthropic-beta` headers), or `"wire_api": "gemini"` for one that speaks
 Gemini GenerateContent (`base_url` ending in `/v1beta`; `POST {base_url}/models/{model}:generateContent`
-or `:streamGenerateContent?alt=sse`, with the key in `x-goog-api-key`); the default is `"chat"`. A
-Responses account serves Responses, Messages and Gemini clients; a Messages account serves Messages
-and Gemini clients; a Gemini account serves only Gemini clients for now.
+or `:streamGenerateContent?alt=sse`, with the key in `x-goog-api-key`); the default is `"chat"`. Each
+`wire_api` serves all four client formats, passing through its own format and translating the other three.
 
 A request translated to Chat Completions gets the tool names that API takes: ASCII letters,
 digits, `_` and `-`, at most 64 bytes. Any other name is sent with each other character as `_`
@@ -1693,7 +1691,7 @@ for a client that names none); a used-up quota's reset time; the remote model ca
 `<effort>-fast` request; the usage fallback from response dimensions; images in tool results;
 signature types other than `sealed`; namespace tools and custom (freeform) tools such as
 `apply_patch`, which are reported as dropped, and today's core's checks and recovery of a malformed
-`apply_patch` call; and token counting (core has no count-tokens route). A replayed reasoning
+`apply_patch` call; and token counting (core estimates counts for Devin accounts). A replayed reasoning
 signature is sent as given, whoever issued it.
 
 Gaps outside the extension: a Messages or Gemini client gets Devin's reasoning without its
@@ -2939,7 +2937,7 @@ are accepted silently.
 | `routing.cooldown.disable-cooling` (`disable-cooling`) | `routing.disable_cooling`. | Supported |
 | `routing.cooldown.transient-error-cooldown-seconds` (`transient-error-cooldown-seconds`) | `routing.transient_error_cooldown_ms`: above 0 that many seconds, below 0 none. 0 is this core's backoff, from a second doubling to a minute, where today's core waits a fixed minute. | Supported |
 | `routing.cooldown.quota-response-mode` (`quota-cooldown-response-mode`) | `routing.quota_response_mode`: `retryable` (default) or `usage-limit`, letter case aside; another value fails the load, as in today's core. | Supported |
-| `routing.cooldown.save-cooldown-status` (`save-cooldown-status`) | Blocks live in memory and carry over reloads. | Dropped: no need found |
+| `routing.cooldown.save-cooldown-status` (`save-cooldown-status`) | Core saves quota blocks and bans to `state/routing.json` by itself; other blocks live in memory and carry over reloads. | Dropped: no need found |
 | `quota-exceeded.switch-project`, `quota-exceeded.switch-preview-model` | | Dead |
 | `requests.proxy-url` (`proxy-url`) | `proxy_url`: the [outbound proxy](#outbound-proxy) of every account. A value that is not an `http`, `https`, `socks5` or `socks5h` URL, `direct` or `none` fails the load, where today's core logs it and goes without the proxy. | Supported |
 | Every `proxy-url` on a group or key | The account's `proxy_url`: a key's own, else its group's. | Supported |
