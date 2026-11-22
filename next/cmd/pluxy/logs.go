@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/stdotwork/pluxy/next/internal/usage"
@@ -88,8 +89,10 @@ func (x *invocation) logFile(path string) error {
 // text: the C0 controls and DEL other than newline and tab (or including them when
 // escapeWhitespace is set, for a single table cell) as \xNN (so a logged escape sequence
 // cannot move the cursor, retitle the window or rewrite what is shown), the C1 controls, which
-// some terminals act on, as \uNNNN, and bytes that are not UTF-8 as \xNN. Everything else is
-// written as it is. A character cut in two by a Write is held until its rest comes.
+// some terminals act on, the Unicode format class (Cf: bidi overrides, zero-width characters,
+// soft hyphen, BOM, tags) and line/paragraph separators (U+2028, U+2029) as \uNNNN (or
+// \UNNNNNNNN above U+FFFF), and bytes that are not UTF-8 as \xNN. Everything else is written
+// as it is. A character cut in two by a Write is held until its rest comes.
 type escapeWriter struct {
 	w                io.Writer
 	hold             []byte
@@ -128,8 +131,12 @@ func (e *escapeWriter) Write(p []byte) (int, error) {
 			switch {
 			case r == utf8.RuneError && size == 1:
 				fmt.Fprintf(&out, `\x%02x`, b)
-			case r >= 0x80 && r <= 0x9f:
-				fmt.Fprintf(&out, `\u%04x`, r)
+			case (r >= 0x80 && r <= 0x9f) || unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029':
+				if r <= 0xffff {
+					fmt.Fprintf(&out, `\u%04x`, r)
+				} else {
+					fmt.Fprintf(&out, `\U%08x`, r)
+				}
 			default:
 				out.Write(data[i : i+size])
 			}
