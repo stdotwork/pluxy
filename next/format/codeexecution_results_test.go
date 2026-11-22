@@ -396,13 +396,26 @@ func TestCodeExecutionCrossFormatMatrix(t *testing.T) {
 
 				// 1. Gemini client (non-stream and stream)
 				if up.upFormat != llm.FormatGeminiGenerate {
-					gAgg, _ := renderGeminiAgg(t, evs)
+					gAgg, gAggLosses := renderGeminiAgg(t, evs)
 					gParts := collectGeminiParts([]map[string]any{gAgg})
-					checkGeminiCodeParts(t, "agg", gParts, up.wantCode, "OUTCOME_OK", up.wantOut, up.wantText)
-
-					gStr, _ := renderGeminiStream(t, evs)
+					gStr, gStrLosses := renderGeminiStream(t, evs)
 					gStrParts := collectGeminiParts(parseGeminiSSEChunks(t, gStr))
-					checkGeminiCodeParts(t, "stream", gStrParts, up.wantCode, "OUTCOME_OK", up.wantOut, up.wantText)
+					if up.name == "messages-bash" || up.name == "messages-text-editor" {
+						// Gemini's code part holds only Python, so these runs are reported, not shown.
+						for _, ps := range [][]map[string]any{gParts, gStrParts} {
+							for _, p := range ps {
+								if p["executableCode"] != nil || p["codeExecutionResult"] != nil {
+									t.Errorf("non-Python run shown as a Gemini code part: %+v", p)
+								}
+							}
+						}
+						if !hasLossPrefix(gAggLosses, "code_execution") || !hasLossPrefix(gStrLosses, "code_execution") {
+							t.Errorf("gemini losses = %+v and %+v, want code_execution", gAggLosses, gStrLosses)
+						}
+					} else {
+						checkGeminiCodeParts(t, "agg", gParts, up.wantCode, "OUTCOME_OK", up.wantOut, up.wantText)
+						checkGeminiCodeParts(t, "stream", gStrParts, up.wantCode, "OUTCOME_OK", up.wantOut, up.wantText)
+					}
 				}
 
 				// 2. Messages client (cross-format: no structured block, text unchanged, loss reported)
@@ -585,8 +598,8 @@ func TestCodeExecutionFailedRuns(t *testing.T) {
 			if len(fin.CodeExecutions) != 1 || !fin.CodeExecutions[0].Failed || fin.CodeExecutions[0].Output != tc.wantOut {
 				t.Fatalf("got %+v, want failed=true output=%q", fin.CodeExecutions, tc.wantOut)
 			}
-			// Render to Gemini (for non-Gemini upstreams) and verify OUTCOME_FAILED.
-			if evs[0].Response.Format != llm.FormatGeminiGenerate {
+			// Render a Python run to Gemini (for non-Gemini upstreams) and verify OUTCOME_FAILED.
+			if evs[0].Response.Format != llm.FormatGeminiGenerate && fin.CodeExecutions[0].Language == "python" {
 				gAgg, _ := renderGeminiAgg(t, evs)
 				parts := collectGeminiParts([]map[string]any{gAgg})
 				var outcome string

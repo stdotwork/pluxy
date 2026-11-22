@@ -501,7 +501,7 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 				}
 				if !d.seenCode[key] {
 					d.seenCode[key] = true
-					d.codeExecs = append(d.codeExecs, ce)
+					d.codeExecs = llm.AppendCodeExecution(d.codeExecs, ce)
 				}
 			}
 			return native(), nil
@@ -537,7 +537,7 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 				}
 				if !d.seenCode[key] {
 					d.seenCode[key] = true
-					d.codeExecs = append(d.codeExecs, ce)
+					d.codeExecs = llm.AppendCodeExecution(d.codeExecs, ce)
 				}
 			}
 		}
@@ -622,7 +622,7 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 		default:
 			sources = extractWebSearchCallSources(raw, seenSrc, sources)
 			if _, ce, ok := extractCodeInterpreterCall(raw, ""); ok {
-				codeExecs = append(codeExecs, ce)
+				codeExecs = llm.AppendCodeExecution(codeExecs, ce)
 			}
 			out = append(out, llm.Event{Type: llm.EventNative, Raw: raw})
 		}

@@ -957,8 +957,9 @@ unchanged. Code execution results carry across formats on `finish` (protocol min
 `server_tool_use` (`code_execution`, `bash_code_execution`, `text_editor_code_execution`) paired
 with its result block, Responses `code_interpreter_call` items, and Gemini `executableCode` paired
 with `codeExecutionResult` render as Gemini `executableCode` and `codeExecutionResult` parts
-(streaming and non-streaming; non-Python languages are labelled `PYTHON` with an approximated loss,
-and omitted files or images are reported as dropped). Cross-format Messages, Responses, and Chat
+(streaming and non-streaming). Gemini's code part holds only Python, so a shell or file-editor run
+is left out and reported as dropped, as are omitted files and images. One reply keeps at most 4 MiB
+of runs, and runs past that are reported as dropped. Cross-format Messages, Responses, and Chat
 Completions clients receive no invented code blocks (Messages `server_tool_use` and results require
 Anthropic-verified `srvtoolu_` IDs, Responses `code_interpreter_call` requires an OpenAI
 `container_id`, and Chat Completions has no code execution block), keep the model's text untouched,

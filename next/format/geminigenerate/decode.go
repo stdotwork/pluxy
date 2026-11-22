@@ -478,7 +478,7 @@ func (d *StreamDecoder) part(partIdx int, raw json.RawMessage, out []llm.Event) 
 				if matchIdx >= 0 {
 					pc := d.pendingCode[matchIdx]
 					d.pendingCode = append(d.pendingCode[:matchIdx], d.pendingCode[matchIdx+1:]...)
-					d.codeExecs = append(d.codeExecs, llm.CodeExecution{
+					d.codeExecs = llm.AppendCodeExecution(d.codeExecs, llm.CodeExecution{
 						Code:     pc.code,
 						Language: pc.lang,
 						Output:   res.Output,

@@ -133,9 +133,7 @@ type builder struct {
 // lose records a loss once per path. Past llm.MaxLosses the list is closed: llm.AddLoss has written
 // its last entry, and nothing more is recorded. lossSize counts what the losses hold, which comes
 // from upstream data, so an aggregator can bound it with the reply.
-func (b *builder) lose(path, detail string) { b.note(llm.LossDropped, path, detail) }
-
-func (b *builder) note(kind, path, detail string) {
+func (b *builder) lose(path, detail string) {
 	if b.lost[path] || len(b.losses) > llm.MaxLosses {
 		return
 	}
@@ -144,7 +142,7 @@ func (b *builder) note(kind, path, detail string) {
 	}
 	b.lost[path] = true
 	b.lossSize += len(path) + len(detail)
-	b.losses = llm.AddLoss(b.losses, llm.Loss{Kind: kind, Path: path, Detail: detail})
+	b.losses = llm.AddLoss(b.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: detail})
 }
 
 func (b *builder) start(r *llm.ResponseInfo) {
@@ -184,23 +182,14 @@ func (b *builder) upstreamData(ev llm.Event) {
 		if json.Unmarshal(m["delta"], &t) == nil && t.Type == "signature_delta" {
 			b.lose("content.signature", "a thinking signature only a Messages upstream can check")
 		}
-		var blk struct {
-			Type string `json:"type"`
-			Name string `json:"name"`
-		}
-		if json.Unmarshal(m["content_block"], &blk) == nil {
-			switch blk.Type {
-			case "", "text", "thinking", "tool_use",
-				"code_execution_tool_result", "bash_code_execution_tool_result", "text_editor_code_execution_tool_result":
-			case "server_tool_use":
-				switch blk.Name {
-				case "code_execution", "bash_code_execution", "text_editor_code_execution":
-				default:
-					b.lose("content."+blk.Type, "a Messages content block with no place in a GenerateContentResponse")
-				}
+		if json.Unmarshal(m["content_block"], &t) == nil {
+			switch t.Type {
+			case "", "text", "thinking", "tool_use":
 			default:
-				// redacted_thinking, web search results, and other blocks: no place in a Gemini reply.
-				b.lose("content."+blk.Type, "a Messages content block with no place in a GenerateContentResponse")
+				// redacted_thinking, server tool use and results: no place in a Gemini reply. A
+				// Python run is also shown as code parts (codeExecParts), but the blocks themselves
+				// are not carried.
+				b.lose("content."+t.Type, "a Messages content block with no place in a GenerateContentResponse")
 			}
 		}
 	}
@@ -299,9 +288,9 @@ func buildGroundingMetadata(segments []citedSegment, sources []llm.Source) obj {
 }
 
 // codeExecParts turns canonical CodeExecution records into Gemini executableCode and
-// codeExecutionResult parts. Gemini's ExecutableCode.language enum only supports PYTHON, so any
-// non-Python language is labelled PYTHON with an approximated loss; omitted files/images are
-// reported as dropped.
+// codeExecutionResult parts. Gemini's ExecutableCode.language enum has only PYTHON, so a run in
+// another language, such as a shell command, is left out and reported rather than shown as Python.
+// So is a result with no code to pair it with. Omitted files and images are reported as dropped.
 func (b *builder) codeExecParts(runs []llm.CodeExecution) []any {
 	if len(runs) == 0 {
 		return nil
@@ -309,14 +298,16 @@ func (b *builder) codeExecParts(runs []llm.CodeExecution) []any {
 	var out []any
 	for _, run := range runs {
 		if run.FilesOmitted {
-			b.lose("code_execution.files", "files or images produced by code execution have no place in a GenerateContentResponse")
+			b.lose("code_execution.files", "files, images or code runs past the size limit have no place in a GenerateContentResponse")
 		}
-		if run.Code != "" {
-			if run.Language != "" && !strings.EqualFold(run.Language, "python") {
-				b.note(llm.LossApproximated, "code_execution.language", "GenerateContent executableCode only supports PYTHON; other languages are labelled PYTHON")
-			}
-			out = append(out, obj{"executableCode": obj{"language": "PYTHON", "code": run.Code}})
+		if run == (llm.CodeExecution{FilesOmitted: true}) {
+			continue
 		}
+		if run.Code == "" || (run.Language != "" && !strings.EqualFold(run.Language, "python")) {
+			b.lose("code_execution", "GenerateContent executableCode holds only Python code")
+			continue
+		}
+		out = append(out, obj{"executableCode": obj{"language": "PYTHON", "code": run.Code}})
 		outcome := "OUTCOME_OK"
 		if run.Failed {
 			outcome = "OUTCOME_FAILED"

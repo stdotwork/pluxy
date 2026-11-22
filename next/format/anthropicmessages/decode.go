@@ -522,7 +522,7 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			if call, ok := d.codeCalls[b.ToolUseID]; ok {
 				delete(d.codeCalls, b.ToolUseID)
 				if ce, ok := decodeCodeExecResult(b.Type, call, b.Content); ok {
-					d.codeExecs = append(d.codeExecs, ce)
+					d.codeExecs = llm.AppendCodeExecution(d.codeExecs, ce)
 				}
 			}
 		}
@@ -738,7 +738,7 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 			if call, ok := codeCalls[cb.ToolUseID]; ok {
 				delete(codeCalls, cb.ToolUseID)
 				if ce, ok := decodeCodeExecResult(cb.Type, call, cb.Content); ok {
-					codeExecs = append(codeExecs, ce)
+					codeExecs = llm.AppendCodeExecution(codeExecs, ce)
 				}
 			}
 		}
