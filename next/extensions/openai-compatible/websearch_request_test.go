@@ -151,3 +151,38 @@ func TestWebSearchOpenAICompatibleSameFormatByteIdentical(t *testing.T) {
 		t.Errorf("third-party anthropic web_search: tools=%v dropped=%v", got5.Tools, tr5.Dropped())
 	}
 }
+
+func TestWebSearchChatSearchModelWithFunctionToolsDropsSearch(t *testing.T) {
+	req, err := openairesponses.ParseRequest([]byte(`{
+		"model":"gpt-5-search-api",
+		"input":"weather and news",
+		"tools":[
+			{"type":"function","name":"get_weather","parameters":{"type":"object","properties":{}}},
+			{"type":"web_search"}
+		]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req = roundTripReq(t, req)
+	body, tr, err := buildBody(req, llm.FormatOpenAIChat, settings{BaseURL: "https://api.openai.com/v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Tools            []map[string]any `json:"tools"`
+		WebSearchOptions json.RawMessage  `json:"web_search_options"`
+	}
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Tools) != 1 {
+		t.Fatalf("want 1 function tool kept, got %v (body: %s)", got.Tools, body)
+	}
+	if len(got.WebSearchOptions) != 0 {
+		t.Errorf("unexpected web_search_options beside function tools: %s", got.WebSearchOptions)
+	}
+	if !tr.Dropped() {
+		t.Errorf("expected dropped loss for search tool beside function tools, got %+v", tr.Losses)
+	}
+}

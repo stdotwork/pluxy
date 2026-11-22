@@ -119,6 +119,10 @@ type EncodeOptions struct {
 	// left out and reported as dropped. A Responses client's own web_search tool is written
 	// either way.
 	WebSearch bool
+	// WebSearchBare sends only the bare {"type":"web_search"} tool when WebSearch is true,
+	// leaving out filters, user_location and search_context_size and reporting each as dropped.
+	// Used for hosts such as chatgpt.com where those settings are not documented.
+	WebSearchBare bool
 }
 
 // EncodeRequestWith builds a Responses request body as EncodeRequest does, changed by opts.
@@ -215,7 +219,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			}
 			wt := map[string]any{"type": "web_search"}
 			var carried rawjson.WebSearchCarried
-			if ws := t.WebSearch; ws != nil {
+			if ws := t.WebSearch; ws != nil && !opts.WebSearchBare {
 				if ws.SearchContextSize != "" {
 					wt["search_context_size"] = ws.SearchContextSize
 					carried.SearchContextSize = true
@@ -223,13 +227,13 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 				if len(ws.AllowedDomains) > 0 {
 					wt["filters"] = map[string]any{"allowed_domains": ws.AllowedDomains}
 					carried.AllowedDomains = true
+				} else if len(ws.BlockedDomains) > 0 {
+					wt["filters"] = map[string]any{"blocked_domains": ws.BlockedDomains}
+					carried.BlockedDomains = true
 				}
 				if u := ws.UserLocation; u != nil {
 					loc := map[string]any{"type": "approximate"}
-					if u.Type != "" {
-						loc["type"] = u.Type
-					}
-					if u.Country != "" {
+					if rawjson.IsCountryCode(u.Country) {
 						loc["country"] = u.Country
 					}
 					if u.City != "" {

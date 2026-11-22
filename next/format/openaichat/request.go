@@ -631,6 +631,13 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 		out.ResponseFormat = encodeResponseFormat(rf)
 	}
 	toolNameMap := ToolNames(req)
+	hasFunctionTools := false
+	for _, t := range req.Tools {
+		if t.IsFunction() {
+			hasFunctionTools = true
+			break
+		}
+	}
 	for i, t := range req.Tools {
 		p := path(t.Origin, fmt.Sprintf("tools[%d]", i))
 		if t.Type == llm.ToolWebSearch {
@@ -643,10 +650,15 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 				continue
 			}
 			if t.WebSearch != nil && t.WebSearch.Disabled {
+				e.lose(llm.LossDropped, p, "Chat Completions has no external_web_access setting for web_search_options")
 				continue
 			}
 			if !isSearchModel(req.Model) {
 				e.lose(llm.LossDropped, p, fmt.Sprintf("Chat Completions model %q does not support web_search_options (only specialized search models such as gpt-5-search-api do)", req.Model))
+				continue
+			}
+			if hasFunctionTools {
+				e.lose(llm.LossDropped, p, "Chat Completions web_search_options is not combined with function tools on translated requests")
 				continue
 			}
 			wsOut := map[string]any{}
@@ -658,7 +670,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 				}
 				if u := ws.UserLocation; u != nil {
 					approx := map[string]any{}
-					if u.Country != "" {
+					if rawjson.IsCountryCode(u.Country) {
 						approx["country"] = u.Country
 					}
 					if u.City != "" {
@@ -670,11 +682,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 					if u.Timezone != "" {
 						approx["timezone"] = u.Timezone
 					}
-					locType := u.Type
-					if locType == "" {
-						locType = "approximate"
-					}
-					wsOut["user_location"] = map[string]any{"type": locType, "approximate": approx}
+					wsOut["user_location"] = map[string]any{"type": "approximate", "approximate": approx}
 					carried.UserLocation = true
 				}
 			}

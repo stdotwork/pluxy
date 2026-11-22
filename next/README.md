@@ -900,7 +900,17 @@ today's core sends for clients it makes look like Claude Code.
 
 **Web search.** A Responses client's `web_search` tool becomes Claude's server web search tool
 (`web_search_20250305`, with its `name`, `max_uses`, `filters.allowed_domains` and `user_location`;
-none when `external_web_access` is `false`), as today's core sends it. Claude's `server_tool_use`
+omitted silently when `external_web_access` is `false`, and uncarried fields such as
+`search_context_size` reported as approximated so `drop_policy: "reject"` still accepts the request)
+on any `base_url` and model, as today's core sends it. Translated web search tools from Chat
+Completions (`web_search_options`), Gemini GenerateContent (`googleSearch`), and Responses
+`web_search_preview*` names also become `web_search_20250305`, gated to Anthropic's own host
+(`api.anthropic.com`) and the Claude model families documented on Anthropic's web search page
+(Claude 4.5+ and `claude-mythos-preview`), with `user_location.type` set to `approximate`,
+two-letter `country` codes only, and `allowed_domains` preferred over `blocked_domains` when both
+are set; unsupported hosts, models or settings are reported as dropped. (On Chat and Gemini
+targets, `external_web_access: false` drops the tool with a loss so `drop_policy: "reject"` refuses
+it.) Claude's `server_tool_use`
 and `web_search_tool_result` blocks come back as one `web_search_call` item with the query, status
 and results (each hit as Claude sent it, so its `encrypted_content` survives); a search Claude left
 without results when it paused the turn (`pause_turn`) stays `in_progress`. A replayed

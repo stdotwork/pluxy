@@ -457,6 +457,7 @@ func (k *kit) serviceTier(t *testing.T) {
 // webSearch checks that an extension accepts a request carrying a canonical web search tool
 // (protocol 0.29): it carries the tool where its upstream takes one and reports it or its
 // unsupported settings as dropped otherwise, and the call still finishes with the normal reply.
+// The kit cannot see the extension's upstream request, so it does not check what reaches it.
 func (k *kit) webSearch(t *testing.T) {
 	ext := k.start(t)
 	setup := k.target.Prepare(t, ScenarioText)

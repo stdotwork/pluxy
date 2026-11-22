@@ -196,6 +196,8 @@ func TestWebSearchGeminiModelGate(t *testing.T) {
 		"gemini-1.5-flash",
 		"gemini-2.0-flash-lite",
 		"gemini-2.5-flash-image",
+		"gemini-3-pro-preview",
+		"gemini-5-x",
 		"gemma-3-27b-it",
 		"gemini-embedding-001",
 		"custom-model",

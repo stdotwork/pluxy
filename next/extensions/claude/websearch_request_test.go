@@ -340,3 +340,57 @@ func TestWebSearchClaudeModelGate(t *testing.T) {
 		}
 	}
 }
+
+func TestWebSearchResponsesToClaudeRejectPolicyAllowsExtraFields(t *testing.T) {
+	req, err := openairesponses.ParseRequest([]byte(`{
+		"model":"claude-sonnet-4-6",
+		"input":"hi",
+		"tools":[{"type":"web_search","search_context_size":"low","return_token_budget":"unlimited"}]
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req = roundTripRequest(t, req)
+	req.DropPolicy = llm.DropReject
+
+	// Existing Responses web_search -> Claude must still succeed under drop_policy: reject,
+	// logging uncarried fields as approximated rather than dropped.
+	body, tr, err := buildBodyWith(req, cacheTTL5m, serviceOptions(anthropicmessages.EncodeOptions{}, req, "https://proxy.example.com"))
+	if err != nil {
+		t.Fatalf("reject policy refused existing Responses->Claude web_search: %v", err)
+	}
+	var got struct {
+		Tools []map[string]any `json:"tools"`
+	}
+	_ = json.Unmarshal(body, &got)
+	if len(got.Tools) != 1 || got.Tools[0]["type"] != "web_search_20250305" {
+		t.Fatalf("tools = %v, want web_search_20250305", got.Tools)
+	}
+	if tr.Dropped() {
+		t.Errorf("expected no dropped losses, got %+v", tr.Losses)
+	}
+	var approx []string
+	for _, l := range tr.Losses {
+		if l.Kind == llm.LossApproximated {
+			approx = append(approx, l.Path)
+		}
+	}
+	if len(approx) != 2 || approx[0] != "tools[0].return_token_budget" || approx[1] != "tools[0].search_context_size" {
+		t.Errorf("approximated paths = %v, want [tools[0].return_token_budget tools[0].search_context_size] (losses: %+v)", approx, tr.Losses)
+	}
+
+	// Newly translated Chat tool with search_context_size is still refused under reject.
+	chatReq, err := openaichat.ParseRequest([]byte(`{
+		"model":"claude-sonnet-4-6",
+		"messages":[{"role":"user","content":"hi"}],
+		"web_search_options":{"search_context_size":"low"}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	chatReq = roundTripRequest(t, chatReq)
+	chatReq.DropPolicy = llm.DropReject
+	if _, _, err := buildBodyWith(chatReq, cacheTTL5m, serviceOptions(anthropicmessages.EncodeOptions{}, chatReq, defaultBaseURL)); err == nil {
+		t.Errorf("expected reject policy to refuse Chat search_context_size on Claude, got nil")
+	}
+}

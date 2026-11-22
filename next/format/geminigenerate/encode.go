@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"strconv"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/format/internal/clienttools"
@@ -167,6 +166,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 				continue
 			}
 			if t.WebSearch != nil && t.WebSearch.Disabled {
+				e.lose(llm.LossDropped, p, "GenerateContent has no external_web_access setting for googleSearch")
 				continue
 			}
 			if !supportsGoogleSearch(req.Model) {
@@ -174,10 +174,10 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 				continue
 			}
 			if hasFunctionTools {
-				// Gemini 2.x rejects googleSearch alongside functionDeclarations; Gemini 3/4
-				// requires includeServerSideToolInvocations (which disallows AUTO mode and
-				// changes the reply format). Keep the function tools and drop search with a loss.
-				e.lose(llm.LossDropped, p, "GenerateContent cannot combine googleSearch with functionDeclarations without server-side tool invocation handling")
+				// Google's tool-combination page documents combining search with function tools
+				// on the Interactions API, and nothing documents that mix for GenerateContent here.
+				// Keep the function tools and drop search with a loss.
+				e.lose(llm.LossDropped, p, "GenerateContent does not combine googleSearch with functionDeclarations")
 				continue
 			}
 			tools = append(tools, json.RawMessage(`{"googleSearch":{}}`))
@@ -645,48 +645,56 @@ func (e *encoder) serviceTier(req llm.Request, opts EncodeOptions, out map[strin
 	}
 }
 
-// supportsGoogleSearch reports whether model is in a Gemini model family listed on Google's
-// Grounding with Google Search pages
-// (https://ai.google.dev/gemini-api/docs/google-search and
-// https://cloud.google.com/vertex-ai/generative-ai/docs/grounding/grounding-with-google-search):
-// Gemini 2.0 Flash (not Flash-Lite or image), Gemini 2.5 Pro/Flash/Flash-Lite (not image or TTS),
-// Gemini 3.x and 4.x families, Gemini Robotics ER 2+, Gemini Nano Banana 2+, and the -latest
-// Gemini aliases. Older Gemini 1.x models (which used google_search_retrieval), Gemma models,
-// embeddings and unknown models return false.
+// googleSearchModels are the Gemini model families listed on Google's Grounding with Google Search
+// pages (https://ai.google.dev/gemini-api/docs/google-search and
+// https://cloud.google.com/vertex-ai/generative-ai/docs/grounding/grounding-with-google-search).
+// Each entry matches either the exact name or that name followed by "-" (for version, preview or
+// variant suffixes such as -preview, -001 or -cyber).
+//
+// shortcut: decided from a name list of documented model families, since protocol v0 has no
+// per-model search capability. Move this to per-model capabilities when describe carries them.
+var googleSearchModels = []string{
+	"gemini-4-carbon",
+	"gemini-4-argon",
+	"gemini-4-neon",
+	"gemini-4-hydrogen",
+	"gemini-3.8-live",
+	"gemini-3.8-flash",
+	"gemini-3.7-flash",
+	"gemini-3.6-flash",
+	"gemini-3.5-flash-lite",
+	"gemini-3.5-flash",
+	"gemini-3.1-pro",
+	"gemini-3.1-flash-lite",
+	"gemini-3.1-flash-image",
+	"gemini-3-pro-image",
+	"gemini-3-flash",
+	"gemini-2.5-pro",
+	"gemini-2.5-flash-lite",
+	"gemini-2.5-flash",
+	"gemini-2.0-flash",
+	"gemini-robotics-er-2",
+	"gemini-nano-banana-2.1",
+}
+
+// supportsGoogleSearch reports whether model belongs to one of the Gemini model families listed in
+// googleSearchModels. Models neither page lists (such as gemini-3-pro-preview, gemini-2.0-flash-lite,
+// gemini-2.5-flash-image, Gemini 1.x, Gemma, embeddings or future unlisted families) return false.
 func supportsGoogleSearch(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
 	m = strings.TrimPrefix(m, "models/")
 	if strings.Contains(m, "embedding") || strings.Contains(m, "-tts") {
 		return false
 	}
-	switch m {
-	case "gemini-pro-latest", "gemini-flash-latest", "gemini-flash-lite-latest":
-		return true
-	}
-	if strings.HasPrefix(m, "gemini-nano-banana-") {
-		return true
-	}
-	if match := roboticsModel.FindStringSubmatch(m); match != nil {
-		major, _ := strconv.Atoi(match[1])
-		return major >= 2
-	}
-	match := geminiModel.FindStringSubmatch(m)
-	if match == nil {
+	if strings.HasPrefix(m, "gemini-2.0-flash-lite") ||
+		(strings.HasPrefix(m, "gemini-2.0-flash") && strings.Contains(m, "-image")) ||
+		(strings.HasPrefix(m, "gemini-2.5-flash") && strings.Contains(m, "-image")) {
 		return false
 	}
-	major, _ := strconv.Atoi(match[1])
-	minor, _ := strconv.Atoi(match[2])
-	switch {
-	case major >= 3:
-		return true
-	case major == 2 && minor == 5:
-		if strings.Contains(m, "-image") {
-			return false
+	for _, family := range googleSearchModels {
+		if m == family || strings.HasPrefix(m, family+"-") {
+			return true
 		}
-		return strings.Contains(m, "-pro") || strings.Contains(m, "-flash")
-	case major == 2 && minor == 0:
-		return strings.Contains(m, "-flash") && !strings.Contains(m, "-flash-lite") && !strings.Contains(m, "-image")
-	default:
-		return false
 	}
+	return false
 }

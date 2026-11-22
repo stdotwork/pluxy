@@ -191,6 +191,7 @@ func parseTool(raw json.RawMessage, path string) llm.Tool {
 			UserLocation      *llm.UserLocation `json:"user_location"`
 			Filters           *struct {
 				AllowedDomains []string `json:"allowed_domains"`
+				BlockedDomains []string `json:"blocked_domains"`
 			} `json:"filters"`
 		}
 		_ = json.Unmarshal(raw, &w)
@@ -204,6 +205,7 @@ func parseTool(raw json.RawMessage, path string) llm.Tool {
 		}
 		if w.Filters != nil {
 			ws.AllowedDomains = w.Filters.AllowedDomains
+			ws.BlockedDomains = w.Filters.BlockedDomains
 		}
 		return llm.Tool{
 			Type:      llm.ToolWebSearch,

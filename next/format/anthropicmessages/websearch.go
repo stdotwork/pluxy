@@ -97,14 +97,13 @@ func canonicalWebSearchTool(t llm.Tool) (tool json.RawMessage, skip bool, carrie
 		if len(ws.AllowedDomains) > 0 {
 			out["allowed_domains"] = ws.AllowedDomains
 			carried.AllowedDomains = true
-		}
-		if len(ws.BlockedDomains) > 0 {
+		} else if len(ws.BlockedDomains) > 0 {
 			out["blocked_domains"] = ws.BlockedDomains
 			carried.BlockedDomains = true
 		}
 		if u := ws.UserLocation; u != nil {
-			loc := map[string]any{"type": cmp.Or(u.Type, "approximate")}
-			if u.Country != "" {
+			loc := map[string]any{"type": "approximate"}
+			if rawjson.IsCountryCode(u.Country) {
 				loc["country"] = u.Country
 			}
 			if u.City != "" {

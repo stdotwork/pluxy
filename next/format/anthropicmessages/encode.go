@@ -242,7 +242,10 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			} else if ws, skip, carried, ok := webSearchTool(t); ok {
 				if !skip {
 					tools = append(tools, ws)
-					e.losses = append(e.losses, rawjson.WebSearchLosses(t, p, format, carried)...)
+					for _, l := range rawjson.WebSearchLosses(t, p, format, carried) {
+						l.Kind = llm.LossApproximated
+						e.losses = append(e.losses, l)
+					}
 				}
 			} else if !opts.WebSearch {
 				e.lose(llm.LossDropped, p, llm.WebSearchUnsent)
@@ -266,7 +269,10 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			} else if ws, skip, carried, ok := webSearchTool(t); ok {
 				if !skip {
 					tools = append(tools, ws)
-					e.losses = append(e.losses, rawjson.WebSearchLosses(t, p, format, carried)...)
+					for _, l := range rawjson.WebSearchLosses(t, p, format, carried) {
+						l.Kind = llm.LossApproximated
+						e.losses = append(e.losses, l)
+					}
 				}
 			} else {
 				e.lose(llm.LossDropped, p, "Messages has no such tool")

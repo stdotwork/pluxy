@@ -8,6 +8,15 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
+// IsCountryCode reports whether s is two ASCII letters (the shape of an ISO 3166-1 alpha-2 code).
+func IsCountryCode(s string) bool {
+	return len(s) == 2 && isASCIILetter(s[0]) && isASCIILetter(s[1])
+}
+
+func isASCIILetter(b byte) bool {
+	return (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z')
+}
+
 // WebSearchCarried reports which canonical web search settings an encoder actually emitted
 // in the target format's tool.
 type WebSearchCarried struct {
@@ -99,11 +108,16 @@ func WebSearchLosses(t llm.Tool, fallbackPath, target string, carried WebSearchC
 							if isNullValue(fv) {
 								continue
 							}
-							if fk == "allowed_domains" {
+							switch fk {
+							case "allowed_domains":
 								if !isEmptyArray(fv) && !carried.AllowedDomains {
 									lose(Join(fp, fk))
 								}
-							} else {
+							case "blocked_domains":
+								if !isEmptyArray(fv) && !carried.BlockedDomains {
+									lose(Join(fp, fk))
+								}
+							default:
 								lose(Join(fp, fk))
 							}
 						}
@@ -178,6 +192,13 @@ func WebSearchLosses(t llm.Tool, fallbackPath, target string, carried WebSearchC
 		}
 		if ws.UserLocation != nil && !carried.UserLocation {
 			lose(Join(p, "user_location"))
+		} else if ws.UserLocation != nil && !carried.RawUserLocation {
+			if ws.UserLocation.Type != "" && ws.UserLocation.Type != "approximate" {
+				lose(Join(p, "user_location.type"))
+			}
+			if ws.UserLocation.Country != "" && !IsCountryCode(ws.UserLocation.Country) {
+				lose(Join(p, "user_location.country"))
+			}
 		}
 		if ws.SearchContextSize != "" && !carried.SearchContextSize {
 			lose(Join(p, "search_context_size"))
@@ -198,7 +219,17 @@ func userLocationExtraLosses(raw json.RawMessage, locPath, detail string, allowA
 			continue
 		}
 		switch k {
-		case "type", "country", "city", "region", "timezone":
+		case "type":
+			var s string
+			if json.Unmarshal(v, &s) != nil || (s != "" && s != "approximate") {
+				losses = append(losses, llm.Loss{Kind: llm.LossDropped, Path: Join(locPath, k), Detail: detail})
+			}
+		case "country":
+			var s string
+			if json.Unmarshal(v, &s) != nil || (s != "" && !IsCountryCode(s)) {
+				losses = append(losses, llm.Loss{Kind: llm.LossDropped, Path: Join(locPath, k), Detail: detail})
+			}
+		case "city", "region", "timezone":
 		case "approximate":
 			if !allowApprox {
 				losses = append(losses, llm.Loss{Kind: llm.LossDropped, Path: Join(locPath, k), Detail: detail})
@@ -215,7 +246,12 @@ func userLocationExtraLosses(raw json.RawMessage, locPath, detail string, allowA
 					continue
 				}
 				switch ak {
-				case "country", "city", "region", "timezone":
+				case "country":
+					var s string
+					if json.Unmarshal(am[ak], &s) != nil || (s != "" && !IsCountryCode(s)) {
+						losses = append(losses, llm.Loss{Kind: llm.LossDropped, Path: Join(ap, ak), Detail: detail})
+					}
+				case "city", "region", "timezone":
 				default:
 					losses = append(losses, llm.Loss{Kind: llm.LossDropped, Path: Join(ap, ak), Detail: detail})
 				}
