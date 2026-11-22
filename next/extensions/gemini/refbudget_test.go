@@ -330,3 +330,113 @@ func TestRefFallbackKeepsTargetFieldsForCyclesAndDepthCap(t *testing.T) {
 		}
 	})
 }
+
+// TestRefFallbackKeepsLiteralKeywords checks that when a $ref is refused (missing, cyclic, or
+// over budget), sibling literal keywords (default, examples, enum) are copied literally rather
+// than rewritten by resolveRefs.
+func TestRefFallbackKeepsLiteralKeywords(t *testing.T) {
+	t.Run("missing ref keeps literal default examples and enum", func(t *testing.T) {
+		in := `{
+			"$defs": {
+				"existing": {"type": "string", "description": "must not be expanded into literals"}
+			},
+			"type": "object",
+			"properties": {
+				"withDefault": {
+					"$ref": "#/$defs/missing",
+					"default": {"$ref": "literal-not-ref", "$defs": {"k": 1}},
+					"examples": [{"$ref": "#/$defs/existing"}]
+				},
+				"withEnum": {
+					"$ref": "#/$defs/missing",
+					"enum": [{"$ref": "literal-enum"}]
+				}
+			}
+		}`
+		out, _ := cleanToolSchema(json.RawMessage(in), false, newRefBudget())
+		var got struct {
+			Properties map[string]map[string]any `json:"properties"`
+		}
+		if err := json.Unmarshal(out, &got); err != nil {
+			t.Fatal(err)
+		}
+
+		wd := got.Properties["withDefault"]
+		wantDefault := map[string]any{"$ref": "literal-not-ref", "$defs": map[string]any{"k": float64(1)}}
+		if !reflect.DeepEqual(wd["default"], wantDefault) {
+			t.Errorf("withDefault.default = %#v, want %#v", wd["default"], wantDefault)
+		}
+		wantExamples := []any{map[string]any{"$ref": "#/$defs/existing"}}
+		if !reflect.DeepEqual(wd["examples"], wantExamples) {
+			t.Errorf("withDefault.examples = %#v, want %#v", wd["examples"], wantExamples)
+		}
+
+		we := got.Properties["withEnum"]
+		wantEnum := []any{`{"$ref":"literal-enum"}`}
+		if !reflect.DeepEqual(we["enum"], wantEnum) {
+			t.Errorf("withEnum.enum = %#v, want %#v", we["enum"], wantEnum)
+		}
+
+		if again, changed := cleanToolSchema(out, false, newRefBudget()); changed {
+			t.Errorf("second pass changed the schema:\n%s\n%s", out, again)
+		}
+	})
+
+	t.Run("cyclic ref keeps literal default", func(t *testing.T) {
+		in := `{
+			"$defs": {
+				"node": {
+					"type": "object",
+					"properties": {
+						"child": {
+							"$ref": "#/$defs/node",
+							"default": {"$ref": "#/$defs/node"}
+						}
+					}
+				}
+			},
+			"type": "object",
+			"properties": {
+				"root": {"$ref": "#/$defs/node"}
+			}
+		}`
+		out, _ := cleanToolSchema(json.RawMessage(in), false, newRefBudget())
+		var got struct {
+			Properties map[string]map[string]any `json:"properties"`
+		}
+		if err := json.Unmarshal(out, &got); err != nil {
+			t.Fatal(err)
+		}
+		child := got.Properties["root"]["properties"].(map[string]any)["child"].(map[string]any)
+		wantDefault := map[string]any{"$ref": "#/$defs/node"}
+		if !reflect.DeepEqual(child["default"], wantDefault) {
+			t.Errorf("cyclic child.default = %#v, want %#v", child["default"], wantDefault)
+		}
+	})
+
+	t.Run("budget-exhausted ref keeps literal default", func(t *testing.T) {
+		in := `{
+			"$defs": {
+				"target": {"type": "string", "description": "expanded target"}
+			},
+			"type": "object",
+			"properties": {
+				"p": {
+					"$ref": "#/$defs/target",
+					"default": {"$ref": "#/$defs/target"}
+				}
+			}
+		}`
+		out, _ := cleanToolSchema(json.RawMessage(in), false, &refBudget{})
+		var got struct {
+			Properties map[string]map[string]any `json:"properties"`
+		}
+		if err := json.Unmarshal(out, &got); err != nil {
+			t.Fatal(err)
+		}
+		wantDefault := map[string]any{"$ref": "#/$defs/target"}
+		if !reflect.DeepEqual(got.Properties["p"]["default"], wantDefault) {
+			t.Errorf("budget-exhausted p.default = %#v, want %#v", got.Properties["p"]["default"], wantDefault)
+		}
+	})
+}
