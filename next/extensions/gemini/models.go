@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -55,7 +56,7 @@ func listModels(ctx context.Context, call sdk.ModelsCall) (*protocol.ModelList, 
 	if s.Vertex != nil {
 		return builtinModels(vertexModelsJSON)
 	}
-	if models, ok := fetchGeminiModels(ctx, s.BaseURL, call.Account.Credential); ok {
+	if models, ok := fetchGeminiModels(ctx, call.Account.ID, s.BaseURL, call.Account.Credential); ok {
 		return &protocol.ModelList{
 			OwnedBy: "google",
 			From:    protocol.ModelListFromAccount,
@@ -74,13 +75,17 @@ func builtinModels(raw []byte) (*protocol.ModelList, error) {
 	return &list, nil
 }
 
-func fetchGeminiModels(ctx context.Context, baseURL string, cred *protocol.Credential) ([]protocol.Model, bool) {
+func fetchGeminiModels(ctx context.Context, accountID, baseURL string, cred *protocol.Credential) ([]protocol.Model, bool) {
+	fail := func(reason string) ([]protocol.Model, bool) {
+		modelReadFailed(accountID, cred, reason)
+		return nil, false
+	}
 	if cred == nil || cred.Kind != protocol.CredentialAPIKey || cred.APIKey == "" {
 		return nil, false
 	}
 	base, err := url.Parse(baseURL + "/v1beta/models")
 	if err != nil {
-		return nil, false
+		return fail("the base URL is invalid")
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, modelsTimeout)
@@ -102,19 +107,22 @@ func fetchGeminiModels(ctx context.Context, baseURL string, cred *protocol.Crede
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 		if err != nil {
-			return nil, false
+			return fail("the request could not be built")
 		}
 		req.Header.Set("Accept", "application/json")
 		req.Header.Set("X-Goog-Api-Key", cred.APIKey)
 
 		resp, err := client.Do(req)
 		if err != nil {
-			return nil, false
+			return fail(requestFailure(err))
 		}
 		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, modelsMaxBody))
 		resp.Body.Close()
-		if readErr != nil || resp.StatusCode < 200 || resp.StatusCode > 299 {
-			return nil, false
+		if resp.StatusCode < 200 || resp.StatusCode > 299 {
+			return fail(fmt.Sprintf("HTTP %d", resp.StatusCode))
+		}
+		if readErr != nil {
+			return fail("reading the reply failed: " + readErr.Error())
 		}
 
 		var page struct {
@@ -130,7 +138,7 @@ func fetchGeminiModels(ctx context.Context, baseURL string, cred *protocol.Crede
 			NextPageToken string `json:"nextPageToken"`
 		}
 		if err := json.Unmarshal(raw, &page); err != nil {
-			return nil, false
+			return fail("the reply was not valid JSON")
 		}
 		for _, item := range page.Models {
 			rawName := strings.TrimSpace(item.Name)
@@ -169,7 +177,8 @@ func fetchGeminiModels(ctx context.Context, baseURL string, cred *protocol.Crede
 		pageToken = next
 	}
 	if len(models) == 0 {
-		return nil, false
+		return fail("the list holds no models")
 	}
+	modelReadOK(accountID)
 	return models, true
 }
