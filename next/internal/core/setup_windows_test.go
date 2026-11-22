@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-// On Windows, a shell such as Git Bash can set HOME to a different folder than USERPROFILE.
-// The CLIProxyAPI file a setup scan reports must be the same file importPath resolves when the
-// row's ~-prefixed Config path is passed to the import.
+// On Windows, a shell such as Git Bash can set HOME to a different folder than USERPROFILE. The
+// scan looks in USERPROFILE, and the CLIProxyAPI file it reports must be the same file importPath
+// resolves when the row's ~-prefixed Config path is passed to the import.
 func TestSetupScanImportPathWindows(t *testing.T) {
 	homeDir := t.TempDir()
 	userProfileDir := t.TempDir()
@@ -19,7 +19,7 @@ func TestSetupScanImportPathWindows(t *testing.T) {
 	t.Setenv("LOCALAPPDATA", t.TempDir())
 	t.Setenv("PATH", t.TempDir())
 
-	want := filepath.Join(homeDir, ".cli-proxy-api", "config.yaml")
+	want := filepath.Join(userProfileDir, ".cli-proxy-api", "config.yaml")
 	writeTestFile(t, want, "port: 8317\n")
 	wantInfo, err := os.Stat(want)
 	if err != nil {

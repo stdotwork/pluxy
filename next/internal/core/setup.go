@@ -576,10 +576,10 @@ func suggestPick(id string, clients map[string]string, signIns map[string]bool) 
 	return false, ""
 }
 
+// userHomeDir is the folder the scan looks in, the one server.ExpandHome expands a row's ~ with, so
+// the import reads the file the row names. On Windows that is USERPROFILE, even where a shell such
+// as Git Bash sets HOME to another folder.
 func userHomeDir() string {
-	if h := os.Getenv("HOME"); h != "" {
-		return h
-	}
 	h, _ := os.UserHomeDir()
 	return h
 }
