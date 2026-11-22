@@ -124,8 +124,8 @@ func TestResponsesClientGetsNoInventedImageItem(t *testing.T) {
 	}
 }
 
-// A Chat upstream's reply to a Chat client keeps the bytes it has without this feature.
-func TestChatSameFormatAudioReplyUnchanged(t *testing.T) {
+// A Chat upstream's reply to a Chat client keeps its message.audio.
+func TestChatSameFormatAudioReplyKept(t *testing.T) {
 	body := `{"id":"c","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":null,"audio":{"id":"a","data":"AQID","expires_at":1,"transcript":"hi"}}}]}`
 	evs, _, err := openaichat.DecodeResponseLosses([]byte(body))
 	if err != nil {
@@ -139,7 +139,7 @@ func TestChatSameFormatAudioReplyUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"id":"c","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":""},"finish_reason":"stop"}]}`
+	want := `{"id":"c","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":null,"audio":{"data":"AQID","expires_at":1,"id":"a","transcript":"hi"}},"finish_reason":"stop"}]}`
 	if string(out) != want {
 		t.Errorf("reply = %s\nwant %s", out, want)
 	}

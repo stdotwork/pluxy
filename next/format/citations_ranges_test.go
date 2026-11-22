@@ -124,10 +124,11 @@ func TestCitationWithNoRangeCoversItsItem(t *testing.T) {
 	}
 }
 
-// A Chat upstream's reply to a Chat client keeps the bytes it has without this feature.
-func TestChatSameFormatReplyUnchanged(t *testing.T) {
+// A Chat upstream's reply to a Chat client keeps the upstream's message.annotations.
+func TestChatSameFormatReplyKeepsAnnotations(t *testing.T) {
+	wantAnns := `[{"type":"url_citation","url_citation":{"url":"https://a.example/","title":"A","start_index":0,"end_index":5}}]`
 	body := `{"id":"c1","object":"chat.completion","created":1,"model":"gpt-5-search-api","choices":[{"index":0,"finish_reason":"stop",` +
-		`"message":{"role":"assistant","content":"hello world","annotations":[{"type":"url_citation","url_citation":{"url":"https://a.example/","title":"A","start_index":0,"end_index":5}}]}}]}`
+		`"message":{"role":"assistant","content":"hello world","annotations":` + wantAnns + `}}]}`
 	evs, _, err := openaichat.DecodeResponseLosses([]byte(body))
 	if err != nil {
 		t.Fatal(err)
@@ -148,7 +149,7 @@ func TestChatSameFormatReplyUnchanged(t *testing.T) {
 	if err := json.Unmarshal(out, &got); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := got.Choices[0].Message["annotations"]; ok {
-		t.Errorf("same-format reply gained annotations: %s", out)
+	if string(got.Choices[0].Message["annotations"]) != wantAnns {
+		t.Errorf("same-format reply annotations = %s, want %s", got.Choices[0].Message["annotations"], wantAnns)
 	}
 }

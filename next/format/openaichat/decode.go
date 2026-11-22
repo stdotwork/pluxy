@@ -1,6 +1,7 @@
 package openaichat
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -9,6 +10,109 @@ import (
 
 	"github.com/stdotwork/pluxy/next/llm"
 )
+
+// maxNativeAnnotationsBytes and maxNativeAudioMetaBytes bound the raw same-format annotations and
+// non-data audio metadata (id, transcript, expires_at) kept per reply, so no event approaches
+// protocol.MaxFrame (64 MiB). Audio bytes travel on EventMedia.Media.Data (bounded at 24 MiB per
+// part by llm.MaxOutputMediaPartBytes) and are not duplicated in Event.Raw.
+const (
+	maxNativeAnnotationsBytes = 4 << 20
+	maxNativeAudioMetaBytes   = 4 << 20
+)
+
+type itemEndMeta struct {
+	Annotations json.RawMessage `json:"annotations,omitempty"`
+}
+
+type audioEventMeta struct {
+	Pending json.RawMessage `json:"pending_audio,omitempty"`
+	Audio   json.RawMessage `json:"audio,omitempty"`
+}
+
+type finishMeta struct {
+	Annotations json.RawMessage `json:"annotations,omitempty"`
+	Audio       json.RawMessage `json:"audio,omitempty"`
+}
+
+func parseNonEmptyAnnotations(raw json.RawMessage) []json.RawMessage {
+	if len(raw) == 0 || raw[0] != '[' {
+		return nil
+	}
+	var items []json.RawMessage
+	if json.Unmarshal(raw, &items) != nil || len(items) == 0 {
+		return nil
+	}
+	return items
+}
+
+func encodeItemEndAnnotations(items []json.RawMessage) json.RawMessage {
+	if len(items) == 0 {
+		return nil
+	}
+	anns, err := json.Marshal(items)
+	if err != nil {
+		return nil
+	}
+	b, err := json.Marshal(itemEndMeta{Annotations: anns})
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+func encodeAudioEventMeta(pending, audio json.RawMessage) json.RawMessage {
+	if len(pending) == 0 && len(audio) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(audioEventMeta{Pending: pending, Audio: audio})
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+func encodeFinishMeta(anns []json.RawMessage, audio json.RawMessage) json.RawMessage {
+	var rawAnns json.RawMessage
+	if len(anns) > 0 {
+		rawAnns, _ = json.Marshal(anns)
+	}
+	if len(rawAnns) == 0 && len(audio) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(finishMeta{Annotations: rawAnns, Audio: audio})
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// audioMetaWithoutData parses a Chat audio object, reporting whether it is a valid JSON object and
+// whether it had a non-empty "data" string, and returns the remaining fields (id, expires_at,
+// transcript and any vendor fields) as a compact JSON object.
+func audioMetaWithoutData(raw json.RawMessage) (meta json.RawMessage, hasData bool, ok bool) {
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) != nil || obj == nil {
+		return nil, false, false
+	}
+	if d, exists := obj["data"]; exists {
+		var s string
+		if json.Unmarshal(d, &s) == nil && s != "" {
+			hasData = true
+		}
+		delete(obj, "data")
+	}
+	if len(obj) == 0 {
+		if hasData {
+			return json.RawMessage(`{}`), true, true
+		}
+		return nil, false, true
+	}
+	b, err := json.Marshal(obj)
+	if err != nil {
+		return nil, false, false
+	}
+	return b, hasData, true
+}
 
 // toolCall is one tool call of a streamed reply, open or waiting for its name.
 //
@@ -208,28 +312,34 @@ func extractChatAnnotations(raw json.RawMessage, prefixRunes, textRunes int) []l
 // choice (index 0) becomes items; other choices are passed on in native events. Use one decoder
 // per stream.
 type StreamDecoder struct {
-	started    bool
-	done       bool
-	next       int
-	text       int // open message item, or -1
-	reasoning  int // open reasoning item, or -1
-	tools      map[int]*toolCall
-	last       *toolCall               // the tool call opened last, for chunks that leave the index out
-	extra      map[int]json.RawMessage // extra_content that came after a tool call opened, by item
-	choices    map[int]bool            // every choice index seen, true once it carried a finish reason
-	finish     *llm.Finish
-	usage      *llm.Usage
-	calls      int             // tool calls made an id so far
-	opened     int             // tool calls whose item started
-	used       map[string]bool // tool call ids the stream has used or sent
-	think      thinkFilter     // a leading think tag in the content, split across chunks
-	refused    bool            // the reply carried a refusal
-	textRunes  int             // runes emitted in the current open message item
-	rawRunes   int             // runes of upstream content for it, with any leading think tag
-	annRaws    []json.RawMessage
-	mediaBytes int
-	losses     []llm.Loss
-	otherCands map[int]*otherCand
+	started          bool
+	done             bool
+	next             int
+	text             int // open message item, or -1
+	reasoning        int // open reasoning item, or -1
+	tools            map[int]*toolCall
+	last             *toolCall               // the tool call opened last, for chunks that leave the index out
+	extra            map[int]json.RawMessage // extra_content that came after a tool call opened, by item
+	choices          map[int]bool            // every choice index seen, true once it carried a finish reason
+	finish           *llm.Finish
+	usage            *llm.Usage
+	calls            int             // tool calls made an id so far
+	opened           int             // tool calls whose item started
+	used             map[string]bool // tool call ids the stream has used or sent
+	think            thinkFilter     // a leading think tag in the content, split across chunks
+	refused          bool            // the reply carried a refusal
+	textRunes        int             // runes emitted in the current open message item
+	rawRunes         int             // runes of upstream content for it, with any leading think tag
+	annRaws          []json.RawMessage
+	nativeAnns       []json.RawMessage
+	nativeAnnBytes   int
+	nativeAnnDropped bool
+	pendingAudio     map[string]any
+	audioMetaBytes   int
+	audioMetaDropped bool
+	mediaBytes       int
+	losses           []llm.Loss
+	otherCands       map[int]*otherCand
 }
 
 // otherCand holds streaming decode state for a Chat choice with index >= 1, completely isolated
@@ -272,11 +382,64 @@ func (d *StreamDecoder) closeItem(idx *int, ev *[]llm.Event) {
 				end.Citations = cits
 				d.annRaws = nil
 			}
+			if len(d.nativeAnns) > 0 {
+				end.Raw = encodeItemEndAnnotations(d.nativeAnns)
+				d.nativeAnns = nil
+			}
 			d.textRunes, d.rawRunes = 0, 0
 		}
 		*ev = append(*ev, end)
 		*idx = -1
 	}
+}
+
+func (d *StreamDecoder) addNativeAnnotations(raw json.RawMessage) {
+	items := parseNonEmptyAnnotations(raw)
+	if len(items) == 0 {
+		return
+	}
+	if d.nativeAnnBytes+len(raw) > maxNativeAnnotationsBytes {
+		if !d.nativeAnnDropped {
+			d.nativeAnnDropped = true
+			d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: "choices[0].delta.annotations", Detail: "annotations exceed size limit"})
+		}
+		return
+	}
+	d.nativeAnnBytes += len(raw)
+	d.nativeAnns = append(d.nativeAnns, items...)
+}
+
+func (d *StreamDecoder) dropAudioMeta() {
+	if !d.audioMetaDropped {
+		d.audioMetaDropped = true
+		d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: "choices[0].delta.audio", Detail: "audio metadata exceeds size limit"})
+	}
+}
+
+func (d *StreamDecoder) mergePendingAudio(raw json.RawMessage) {
+	var m map[string]any
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if dec.Decode(&m) != nil || len(m) == 0 {
+		return
+	}
+	if d.pendingAudio == nil {
+		d.pendingAudio = map[string]any{}
+	}
+	mergeDelta(d.pendingAudio, m)
+}
+
+func (d *StreamDecoder) takePendingAudio() json.RawMessage {
+	if len(d.pendingAudio) == 0 {
+		return nil
+	}
+	plain(d.pendingAudio)
+	b, err := json.Marshal(d.pendingAudio)
+	d.pendingAudio = nil
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 func (d *StreamDecoder) closeAll(ev *[]llm.Event) {
@@ -533,6 +696,9 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		if d.text >= 0 && len(ch.Delta.Annotations) > 0 && ch.Delta.Annotations[0] == '[' {
 			d.annRaws = append(d.annRaws, append(json.RawMessage(nil), ch.Delta.Annotations...))
 		}
+		if len(ch.Delta.Annotations) > 0 {
+			d.addNativeAnnotations(ch.Delta.Annotations)
+		}
 		if r := refusalText(ch.Delta.Refusal); r != "" {
 			d.refused = true
 			// Held content belongs before the refusal that interrupts it.
@@ -543,8 +709,27 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		}
 		if len(ch.Delta.Audio) > 0 && string(ch.Delta.Audio) != "null" {
 			// OpenAI streams audio only as pcm16 at 24 kHz, in pieces with no header to read.
-			if media := decodeChatAudio(ch.Delta.Audio, "audio/pcm;rate=24000", false, "choices[0].delta.audio", &d.mediaBytes, &d.losses); media != nil {
-				out = append(out, llm.Event{Type: llm.EventMedia, Media: media})
+			media := decodeChatAudio(ch.Delta.Audio, "audio/pcm;rate=24000", false, "choices[0].delta.audio", &d.mediaBytes, &d.losses)
+			meta, hasData, ok := audioMetaWithoutData(ch.Delta.Audio)
+			if media != nil {
+				var curMeta json.RawMessage
+				if ok && len(meta) > 0 {
+					if d.audioMetaBytes+len(meta) > maxNativeAudioMetaBytes {
+						d.dropAudioMeta()
+					} else {
+						d.audioMetaBytes += len(meta)
+						curMeta = meta
+					}
+				}
+				pending := d.takePendingAudio()
+				out = append(out, llm.Event{Type: llm.EventMedia, Media: media, Raw: encodeAudioEventMeta(pending, curMeta)})
+			} else if ok && !hasData && len(meta) > 0 {
+				if d.audioMetaBytes+len(meta) > maxNativeAudioMetaBytes {
+					d.dropAudioMeta()
+				} else {
+					d.audioMetaBytes += len(meta)
+					d.mergePendingAudio(meta)
+				}
 			}
 		}
 		if len(ch.Delta.ToolCalls) > 0 {
@@ -647,7 +832,9 @@ func (d *StreamDecoder) end() []llm.Event {
 	if d.refused {
 		f.Reason = llm.FinishContentFilter
 	}
-	return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: d.usage})
+	fRaw := encodeFinishMeta(d.nativeAnns, d.takePendingAudio())
+	d.nativeAnns = nil
+	return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: d.usage, Raw: fRaw})
 }
 
 // Close is called when the upstream stream ends. A stream that ended without "[DONE]" counts
@@ -1096,6 +1283,8 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 		next++
 	}
 	mediaBytes := 0
+	var finishAnns []json.RawMessage
+	var finishAudio json.RawMessage
 	refused := false
 	finish := llm.Finish{Reason: llm.FinishOther}
 	used := map[string]bool{} // ids the reply has used, whether sent or made
@@ -1122,6 +1311,14 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 		if refusal != "" {
 			refused = true
 		}
+		var nativeAnns []json.RawMessage
+		if items := parseNonEmptyAnnotations(m.Annotations); len(items) > 0 {
+			if len(m.Annotations) > maxNativeAnnotationsBytes {
+				losses = llm.AddLoss(losses, llm.Loss{Kind: llm.LossDropped, Path: "choices[0].message.annotations", Detail: "annotations exceed size limit"})
+			} else {
+				nativeAnns = items
+			}
+		}
 		if text != "" || refusal != "" {
 			start := llm.ItemStart{Kind: llm.ItemMessage}
 			out = append(out, llm.Event{Type: llm.EventItemStart, Index: next, Item: &start})
@@ -1142,12 +1339,30 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 				prefixRunes := utf8.RuneCountInString(content) - utf8.RuneCountInString(text)
 				cits = extractChatAnnotations(m.Annotations, prefixRunes, utf8.RuneCountInString(text))
 			}
-			out = append(out, llm.Event{Type: llm.EventItemEnd, Index: next, Citations: cits})
+			out = append(out, llm.Event{Type: llm.EventItemEnd, Index: next, Citations: cits, Raw: encodeItemEndAnnotations(nativeAnns)})
 			next++
+		} else if len(nativeAnns) > 0 {
+			finishAnns = append(finishAnns, nativeAnns...)
 		}
 		if len(m.Audio) > 0 && string(m.Audio) != "null" {
-			if media := decodeChatAudio(m.Audio, "audio/wav", true, "choices[0].message.audio", &mediaBytes, &losses); media != nil {
-				out = append(out, llm.Event{Type: llm.EventMedia, Media: media})
+			media := decodeChatAudio(m.Audio, "audio/wav", true, "choices[0].message.audio", &mediaBytes, &losses)
+			meta, hasData, ok := audioMetaWithoutData(m.Audio)
+			if media != nil {
+				var evRaw json.RawMessage
+				if ok && len(meta) > 0 {
+					if len(meta) > maxNativeAudioMetaBytes {
+						losses = llm.AddLoss(losses, llm.Loss{Kind: llm.LossDropped, Path: "choices[0].message.audio", Detail: "audio metadata exceeds size limit"})
+					} else {
+						evRaw = encodeAudioEventMeta(nil, meta)
+					}
+				}
+				out = append(out, llm.Event{Type: llm.EventMedia, Media: media, Raw: evRaw})
+			} else if ok && !hasData && len(meta) > 0 {
+				if len(meta) > maxNativeAudioMetaBytes {
+					losses = llm.AddLoss(losses, llm.Loss{Kind: llm.LossDropped, Path: "choices[0].message.audio", Detail: "audio metadata exceeds size limit"})
+				} else {
+					finishAudio = meta
+				}
 			}
 		}
 		for i, tc := range m.ToolCalls {
@@ -1254,5 +1469,5 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 		}
 		out = append(out, llm.Event{Type: llm.EventCandidate, Candidate: &llm.CandidateEvent{Index: ch.Index, Kind: llm.CandidateFinish, Finish: &cf}})
 	}
-	return append(out, llm.Event{Type: llm.EventFinish, Finish: &finish, Usage: decodeUsage(c.Usage)}), losses, nil
+	return append(out, llm.Event{Type: llm.EventFinish, Finish: &finish, Usage: decodeUsage(c.Usage), Raw: encodeFinishMeta(finishAnns, finishAudio)}), losses, nil
 }

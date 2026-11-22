@@ -425,13 +425,19 @@ func TestChatAudioToAllFormats(t *testing.T) {
 				t.Errorf("chat->gemini SSE missing audio: %s", gSSE)
 			}
 
-			// 2. Same-format Chat -> Chat: the reply stays as it is today, with no audio field.
-			cBody, cSSE, cAL, cSL, _ := renderChat(t, evs)
-			if !hasLoss(cAL, "media.audio") || !hasLoss(cSL, "media.audio") {
-				t.Errorf("chat same-format missing media.audio loss: %+v / %+v", cAL, cSL)
+			// 2. Same-format Chat -> Chat: keeps message.audio / delta.audio with no loss.
+			cBody, cSSE, cAL, cSL, cSize := renderChat(t, evs)
+			if len(cAL) != 0 || len(cSL) != 0 {
+				t.Errorf("chat same-format unexpected losses: %+v / %+v", cAL, cSL)
 			}
-			if strings.Contains(string(cBody), `"audio"`) || strings.Contains(cSSE, `"audio"`) {
-				t.Errorf("chat same-format reply changed: %s / %s", cBody, cSSE)
+			if cSize < len(wantData) {
+				t.Errorf("chat aggregator size %d < %d", cSize, len(wantData))
+			}
+			if !strings.Contains(string(cBody), `"audio":{`) || !strings.Contains(string(cBody), wantData) || !strings.Contains(string(cBody), `"audio_abc"`) || !strings.Contains(string(cBody), `"Hello."`) {
+				t.Errorf("chat same-format body missing audio: %s", cBody)
+			}
+			if !strings.Contains(cSSE, `"audio":{`) || !strings.Contains(cSSE, wantData) || !strings.Contains(cSSE, `"audio_abc"`) {
+				t.Errorf("chat same-format SSE missing audio: %s", cSSE)
 			}
 
 			// 3. Chat -> Responses & Messages: no audio output, loss reported.
