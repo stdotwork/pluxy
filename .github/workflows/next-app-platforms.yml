@@ -45,7 +45,7 @@ jobs:
   app:
     name: app (${{ matrix.os }})
     # On macOS, the repository variable PLUXY_MACOS_CLOUD_RUNNER, when set, gives the runner label
-    # to use instead of GitHub's, except in pull requests and merge groups (AGENTS.md, "Where jobs run"). Windows stays on GitHub's runner:
+    # to use instead of GitHub's, except in pull requests and merge groups (docs/ci.md, "Where jobs run"). Windows stays on GitHub's runner:
     # the registry tests run only on a runner that reports itself GitHub-hosted.
     runs-on: ${{ matrix.os == 'macos-latest' && github.event_name != 'pull_request' && github.event_name != 'merge_group' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
     strategy:
@@ -287,7 +287,7 @@ jobs:
     if: inputs.skip-native != true
     # It writes the account's own folders and settings, so it runs only on a disposable runner
     # (next/app/native/runner.ts): GitHub's, or on macOS the one PLUXY_MACOS_CLOUD_RUNNER names when
-    # set, outside pull requests and merge groups (AGENTS.md, "Where jobs run"). Such a runner reports itself self-hosted, so the job names
+    # set, outside pull requests and merge groups (docs/ci.md, "Where jobs run"). Such a runner reports itself self-hosted, so the job names
     # it to the test in PLUXY_EPHEMERAL_CI_RUNNER, which is empty on every other runner. Windows
     # stays on GitHub's: this names no cloud runner there (Namespace's trial plan has no Windows),
     # and the tests need a signed-in desktop. The open shard stays on GitHub's runner on macOS too:
@@ -400,7 +400,7 @@ jobs:
     name: dialogs (${{ matrix.os }})
     # It writes the account's own folders and settings, so it runs only on a disposable runner
     # (next/app/native/runner.ts): GitHub's, or on macOS the one PLUXY_MACOS_CLOUD_RUNNER names when
-    # set, outside pull requests and merge groups (AGENTS.md, "Where jobs run"). Such a runner reports itself self-hosted, so the job names
+    # set, outside pull requests and merge groups (docs/ci.md, "Where jobs run"). Such a runner reports itself self-hosted, so the job names
     # it to the test in PLUXY_EPHEMERAL_CI_RUNNER, which is empty on every other runner. Windows
     # stays on GitHub's: this names no cloud runner there (Namespace's trial plan has no Windows),
     # and the tests need a signed-in desktop.

@@ -37,7 +37,7 @@ jobs:
   # format, clippy and tests, and the app tools.
   checks:
     # Pinned: the package names below are Ubuntu 24.04's. PLUXY_LINUX_CLOUD_RUNNER first, then
-    # PLUXY_LINUX_RUNNER (AGENTS.md, "Where jobs run").
+    # PLUXY_LINUX_RUNNER (docs/ci.md, "Where jobs run").
     runs-on: ${{ (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_CLOUD_RUNNER && fromJSON(vars.PLUXY_LINUX_CLOUD_RUNNER) || (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_LINUX_RUNNER && fromJSON(vars.PLUXY_LINUX_RUNNER) || 'ubuntu-24.04' }}
     steps:
       - name: Checkout
@@ -139,7 +139,7 @@ jobs:
   # keeps the programs executable, which upload-artifact does not.
   native-build:
     if: inputs.skip-native != true
-    # PLUXY_LINUX_CLOUD_RUNNER's, else GitHub's, never PLUXY_LINUX_RUNNER (AGENTS.md, "Where jobs
+    # PLUXY_LINUX_CLOUD_RUNNER's, else GitHub's, never PLUXY_LINUX_RUNNER (docs/ci.md, "Where jobs
     # run"). The shards run what it builds on GitHub's runners: both are Ubuntu 24.04 with the same
     # packages, and the test moves the prebuilt folder's paths to where it is unpacked. Pinned: the
     # package names below are Ubuntu 24.04's.
@@ -232,7 +232,7 @@ jobs:
     # Pinned: the package names below are Ubuntu 24.04's, and so are the file paths the native
     # test starts services from (next/app/native/services.ts). Always GitHub's runners, which are
     # free for this repository and seldom queue: on PLUXY_LINUX_CLOUD_RUNNER's the shards waited
-    # for its vCPU limit longer than they ran (AGENTS.md, "Where jobs run"). Never
+    # for its vCPU limit longer than they ran (docs/ci.md, "Where jobs run"). Never
     # PLUXY_LINUX_RUNNER: the document portal needs /dev/fuse, which the maintainers' runner
     # containers don't get (FUSE in a container needs extra privilege).
     runs-on: ubuntu-24.04
@@ -347,7 +347,7 @@ jobs:
     if: ${{ !cancelled() }}
     needs: [checks, native-build, native]
     # GitHub's runners: it only compares results, and on PLUXY_LINUX_CLOUD_RUNNER it waited up to
-    # 28 minutes for a runner (AGENTS.md, "Where jobs run").
+    # 28 minutes for a runner (docs/ci.md, "Where jobs run").
     runs-on: ubuntu-latest
     steps:
       - name: Every job passed

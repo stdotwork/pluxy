@@ -41,7 +41,7 @@ jobs:
     name: app tools (${{ matrix.os }})
     # On macOS, the repository variable PLUXY_MACOS_CLOUD_RUNNER, when set, gives the runner label
     # to use instead of GitHub's for pushes, the daily run and manual runs; pull requests and merge
-    # groups use GitHub's, as the Terminal window tests run one at a time (AGENTS.md, "Where jobs
+    # groups use GitHub's, as the Terminal window tests run one at a time (docs/ci.md, "Where jobs
     # run"). On Windows the transaction and
     # recipe tests fail on Blacksmith's runner, so the Windows leg stays on GitHub's (or the
     # maintainers' PLUXY_WINDOWS_RUNNER).
