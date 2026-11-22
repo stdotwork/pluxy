@@ -18,6 +18,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/sdk"
 )
 
 // embeddingTestExtension builds the extension and returns a Gemini API account pointed at srv.
@@ -358,8 +359,10 @@ func TestGeminiEmbeddingsBatchLimit100(t *testing.T) {
 	}
 }
 
-// Vertex AI accounts send embeddings to :predict with instances and parameters, and sum
-// statistics.token_count across predictions.
+// Vertex AI accounts route by model per Google's Vertex AI docs:
+//   - gemini-embedding-001 uses :predict with one input per request;
+//   - text-embedding-005 batches up to 250 inputs per :predict request;
+//   - gemini-embedding-2 uses :embedContent (with embedContentConfig.outputDimensionality), one input per request.
 func TestGeminiEmbeddingsVertex(t *testing.T) {
 	srv := geminitest.New(t)
 	ext, err := host.Start(conformance.BuildExtension(t, "pluxy-extension.json", "."), host.Options{Log: io.Discard})
@@ -367,13 +370,6 @@ func TestGeminiEmbeddingsVertex(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(ext.Stop)
-
-	srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"predictions":[`+
-			`{"embeddings":{"values":[0.1,0.2],"statistics":{"truncated":false,"token_count":4}}},`+
-			`{"embeddings":{"values":[0.3,0.4],"statistics":{"truncated":false,"token_count":7}}}]}`)
-	}
 
 	settings, _ := json.Marshal(map[string]any{
 		"base_url": srv.URL,
@@ -385,41 +381,147 @@ func TestGeminiEmbeddingsVertex(t *testing.T) {
 		Credential: &protocol.Credential{Kind: CredentialServiceAccount, Data: srv.ServiceAccount("embed-proj", true)},
 	}
 
-	events := embeddingEvents(t, ext, acct, llm.Request{
-		Model: "gemini-embedding-001",
-		Native: &llm.Native{
-			Format: llm.FormatOpenAIEmbeddings,
-			Body:   json.RawMessage(`{"model":"gemini-embedding-001","input":["alpha","beta"],"dimensions":2}`),
-		},
+	t.Run("gemini-embedding-001 single input per predict", func(t *testing.T) {
+		before := len(srv.Requests())
+		srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
+			var body struct {
+				Instances []struct {
+					Content string `json:"content"`
+				} `json:"instances"`
+			}
+			if err := json.Unmarshal(req.Body, &body); err != nil {
+				t.Errorf("decode predict body: %v", err)
+				http.Error(w, "bad body", http.StatusBadRequest)
+				return
+			}
+			if len(body.Instances) != 1 {
+				t.Errorf("gemini-embedding-001 got %d instances in one :predict call, want 1", len(body.Instances))
+				http.Error(w, "at most 1 instance", http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if body.Instances[0].Content == "alpha" {
+				io.WriteString(w, `{"predictions":[{"embeddings":{"values":[0.1,0.2],"statistics":{"truncated":false,"token_count":4}}}]}`)
+				return
+			}
+			io.WriteString(w, `{"predictions":[{"embeddings":{"values":[0.3,0.4],"statistics":{"truncated":false,"token_count":7}}}]}`)
+		}
+
+		events := embeddingEvents(t, ext, acct, llm.Request{
+			Model: "gemini-embedding-001",
+			Native: &llm.Native{
+				Format: llm.FormatOpenAIEmbeddings,
+				Body:   json.RawMessage(`{"model":"gemini-embedding-001","input":["alpha","beta"],"dimensions":2}`),
+			},
+		})
+		reply := embeddingsReply(t, events)
+		if len(reply.Data) != 2 || reply.Data[0].Index != 0 || reply.Data[1].Index != 1 {
+			t.Fatalf("reply data = %+v", reply.Data)
+		}
+		if reply.Usage.PromptTokens != 11 || reply.Usage.TotalTokens != 11 {
+			t.Errorf("usage = %+v, want 11/11", reply.Usage)
+		}
+		reqs := srv.Requests()[before:]
+		if len(reqs) != 2 {
+			t.Fatalf("upstream got %d requests, want 2 (one per input)", len(reqs))
+		}
+		for i, wantText := range []string{"alpha", "beta"} {
+			if reqs[i].Kind != "vertex" || reqs[i].Method != "predict" {
+				t.Fatalf("reqs[%d] = %s:%s, want vertex:predict", i, reqs[i].Kind, reqs[i].Method)
+			}
+			var sent struct {
+				Instances []struct {
+					Content string `json:"content"`
+				} `json:"instances"`
+				Parameters *struct {
+					OutputDimensionality int `json:"outputDimensionality"`
+				} `json:"parameters"`
+			}
+			if err := json.Unmarshal(reqs[i].Body, &sent); err != nil {
+				t.Fatal(err)
+			}
+			if len(sent.Instances) != 1 || sent.Instances[0].Content != wantText {
+				t.Errorf("reqs[%d] instances = %+v, want [%s]", i, sent.Instances, wantText)
+			}
+			if sent.Parameters == nil || sent.Parameters.OutputDimensionality != 2 {
+				t.Errorf("reqs[%d] parameters = %+v, want outputDimensionality 2", i, sent.Parameters)
+			}
+		}
 	})
-	reply := embeddingsReply(t, events)
-	if len(reply.Data) != 2 {
-		t.Fatalf("len(data) = %d, want 2", len(reply.Data))
-	}
-	if reply.Usage.PromptTokens != 11 || reply.Usage.TotalTokens != 11 {
-		t.Errorf("usage = %+v, want 11/11", reply.Usage)
-	}
-	reqs := srv.Requests()
-	if len(reqs) != 1 || reqs[0].Kind != "vertex" || reqs[0].Method != "predict" {
-		t.Fatalf("upstream requests = %+v, want one vertex :predict", reqs)
-	}
-	var sent struct {
-		Instances []struct {
-			Content string `json:"content"`
-		} `json:"instances"`
-		Parameters *struct {
-			OutputDimensionality int `json:"outputDimensionality"`
-		} `json:"parameters"`
-	}
-	if err := json.Unmarshal(reqs[0].Body, &sent); err != nil {
-		t.Fatal(err)
-	}
-	if len(sent.Instances) != 2 || sent.Instances[0].Content != "alpha" || sent.Instances[1].Content != "beta" {
-		t.Errorf("instances = %+v", sent.Instances)
-	}
-	if sent.Parameters == nil || sent.Parameters.OutputDimensionality != 2 {
-		t.Errorf("parameters = %+v, want outputDimensionality 2", sent.Parameters)
-	}
+
+	t.Run("text-embedding-005 batches on predict", func(t *testing.T) {
+		before := len(srv.Requests())
+		srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"predictions":[`+
+				`{"embeddings":{"values":[0.1,0.2],"statistics":{"truncated":false,"token_count":4}}},`+
+				`{"embeddings":{"values":[0.3,0.4],"statistics":{"truncated":false,"token_count":7}}}]}`)
+		}
+
+		events := embeddingEvents(t, ext, acct, llm.Request{
+			Model: "text-embedding-005",
+			Native: &llm.Native{
+				Format: llm.FormatOpenAIEmbeddings,
+				Body:   json.RawMessage(`{"model":"text-embedding-005","input":["alpha","beta"],"dimensions":2}`),
+			},
+		})
+		reply := embeddingsReply(t, events)
+		if len(reply.Data) != 2 || reply.Usage.PromptTokens != 11 {
+			t.Fatalf("reply = %+v", reply)
+		}
+		reqs := srv.Requests()[before:]
+		if len(reqs) != 1 || reqs[0].Kind != "vertex" || reqs[0].Method != "predict" {
+			t.Fatalf("upstream requests = %+v, want one vertex :predict", reqs)
+		}
+	})
+
+	t.Run("gemini-embedding-2 uses embedContent on Vertex", func(t *testing.T) {
+		before := len(srv.Requests())
+		srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"embedding":{"values":[0.5,0.25]},"usageMetadata":{"promptTokenCount":5}}`)
+		}
+
+		events := embeddingEvents(t, ext, acct, llm.Request{
+			Model: "gemini-embedding-2",
+			Native: &llm.Native{
+				Format: llm.FormatOpenAIEmbeddings,
+				Body:   json.RawMessage(`{"model":"gemini-embedding-2","input":["first","second"],"dimensions":2}`),
+			},
+		})
+		reply := embeddingsReply(t, events)
+		if len(reply.Data) != 2 || reply.Usage.PromptTokens != 10 {
+			t.Fatalf("reply = %+v", reply)
+		}
+		reqs := srv.Requests()[before:]
+		if len(reqs) != 2 {
+			t.Fatalf("upstream got %d requests, want 2", len(reqs))
+		}
+		for i, wantText := range []string{"first", "second"} {
+			if reqs[i].Kind != "vertex" || reqs[i].Method != "embedContent" {
+				t.Fatalf("reqs[%d] = %s:%s, want vertex:embedContent", i, reqs[i].Kind, reqs[i].Method)
+			}
+			var sent struct {
+				Content struct {
+					Parts []struct {
+						Text string `json:"text"`
+					} `json:"parts"`
+				} `json:"content"`
+				EmbedContentConfig *struct {
+					OutputDimensionality int `json:"outputDimensionality"`
+				} `json:"embedContentConfig"`
+			}
+			if err := json.Unmarshal(reqs[i].Body, &sent); err != nil {
+				t.Fatal(err)
+			}
+			if len(sent.Content.Parts) != 1 || sent.Content.Parts[0].Text != wantText {
+				t.Errorf("reqs[%d] content = %+v, want %q", i, sent.Content, wantText)
+			}
+			if sent.EmbedContentConfig == nil || sent.EmbedContentConfig.OutputDimensionality != 2 {
+				t.Errorf("reqs[%d] embedContentConfig = %+v, want outputDimensionality 2", i, sent.EmbedContentConfig)
+			}
+		}
+	})
 }
 
 // Invalid requests (token-array input, empty input, bad dimensions, unsupported encoding_format,
@@ -528,25 +630,120 @@ func TestGeminiEmbeddingsRefusals(t *testing.T) {
 	}
 }
 
-// An upstream reply with fewer embeddings than requested fails as an upstream error on ScopeEndpoint.
-func TestGeminiEmbeddingsCountMismatch(t *testing.T) {
+// Malformed, short, streamed, or broken upstream replies fail this request only (ScopeRequest)
+// rather than ScopeEndpoint, so the account is not cooled down for later requests.
+func TestGeminiEmbeddingsUpstreamErrorScope(t *testing.T) {
 	ext, srv, acct := embeddingTestExtension(t)
+	for _, tc := range []struct {
+		name   string
+		body   string
+		handle func(w http.ResponseWriter, r *http.Request, req geminitest.Request)
+	}{
+		{
+			name: "count mismatch",
+			body: `{"model":"gemini-embedding-001","input":["a","b"]}`,
+			handle: func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				io.WriteString(w, `{"embeddings":[{"values":[0.1]}]}`)
+			},
+		},
+		{
+			name: "malformed json",
+			body: `{"model":"gemini-embedding-001","input":"a"}`,
+			handle: func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				io.WriteString(w, `{not json`)
+			},
+		},
+		{
+			name: "streamed reply",
+			body: `{"model":"gemini-embedding-001","input":"a"}`,
+			handle: func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				io.WriteString(w, "data: {}\n\n")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv.Generate = tc.handle
+			events := embeddingEvents(t, ext, acct, llm.Request{
+				Model:  "gemini-embedding-001",
+				Native: &llm.Native{Format: llm.FormatOpenAIEmbeddings, Body: json.RawMessage(tc.body)},
+			})
+			if len(events) != 1 || events[0].Type != llm.EventError || events[0].Error == nil {
+				t.Fatalf("events = %+v, want one error", events)
+			}
+			if e := events[0].Error; e.Code != llm.CodeUpstream || e.Scope != llm.ScopeRequest {
+				t.Errorf("error = %+v, want CodeUpstream on ScopeRequest", e)
+			}
+		})
+	}
+}
+
+type recordSender struct {
+	events []llm.Event
+}
+
+func (r *recordSender) Send(ev llm.Event) error {
+	r.events = append(r.events, ev)
+	return nil
+}
+
+// A large embeddings reply is split into multiple EventNative body pieces bounded by
+// embeddingBodyChunkSize rather than sent as one oversized protocol frame.
+func TestGeminiEmbeddingsReplyChunking(t *testing.T) {
+	srv := geminitest.New(t)
 	srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"embeddings":[{"values":[0.1]}]}`)
+		io.WriteString(w, `{"embeddings":[{"values":[0.125,0.25,0.5,1.0]},{"values":[1.5,2.5,3.5,4.5]},{"values":[5.5,6.5,7.5,8.5]}],"usageMetadata":{"promptTokenCount":9}}`)
 	}
+	prevChunk := embeddingBodyChunkSize
+	embeddingBodyChunkSize = 64
+	t.Cleanup(func() { embeddingBodyChunkSize = prevChunk })
 
-	events := embeddingEvents(t, ext, acct, llm.Request{
-		Model: "gemini-embedding-001",
-		Native: &llm.Native{
-			Format: llm.FormatOpenAIEmbeddings,
-			Body:   json.RawMessage(`{"model":"gemini-embedding-001","input":["a","b"]}`),
+	settings, _ := json.Marshal(map[string]any{"base_url": srv.URL})
+	call := sdk.Call{
+		Account: protocol.Account{
+			ID:         "gemini-chunk",
+			Settings:   settings,
+			Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: srv.IssueKey()},
 		},
-	})
-	if len(events) != 1 || events[0].Type != llm.EventError || events[0].Error == nil {
-		t.Fatalf("events = %+v, want one error", events)
+		Request: llm.Request{
+			Model: "gemini-embedding-001",
+			Native: &llm.Native{
+				Format: llm.FormatOpenAIEmbeddings,
+				Body:   json.RawMessage(`{"model":"gemini-embedding-001","input":["one","two","three"]}`),
+			},
+		},
 	}
-	if e := events[0].Error; e.Code != llm.CodeUpstream || e.Scope != llm.ScopeEndpoint || e.Status != http.StatusBadGateway {
-		t.Errorf("error = %+v, want CodeUpstream 502 ScopeEndpoint", e)
+	rec := &recordSender{}
+	if err := embeddingsTo(context.Background(), call, rec); err != nil {
+		t.Fatalf("embeddingsTo: %v", err)
+	}
+	var nativeCount int
+	var full strings.Builder
+	for _, ev := range rec.events {
+		if ev.Type != llm.EventNative {
+			continue
+		}
+		nativeCount++
+		var piece string
+		if err := json.Unmarshal(ev.Raw, &piece); err != nil {
+			t.Fatal(err)
+		}
+		if len(piece) > embeddingBodyChunkSize {
+			t.Errorf("piece %d length = %d, exceeds chunk limit %d", nativeCount, len(piece), embeddingBodyChunkSize)
+		}
+		full.WriteString(piece)
+	}
+	if nativeCount < 2 {
+		t.Fatalf("native events = %d, want multiple pieces when reply exceeds chunk size", nativeCount)
+	}
+	var reply openAIEmbeddingsReply
+	if err := json.Unmarshal([]byte(full.String()), &reply); err != nil {
+		t.Fatalf("joined reply %q is not valid JSON: %v", full.String(), err)
+	}
+	if len(reply.Data) != 3 || reply.Usage.PromptTokens != 9 {
+		t.Errorf("reply = %+v", reply)
 	}
 }

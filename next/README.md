@@ -1181,10 +1181,12 @@ clients, through GenerateContent with the same key.
 `interactions`). A Gemini API account sends a single string input to
 `POST {base_url}/v1beta/models/{model}:embedContent` and multiple strings to `:batchEmbedContents`,
 splitting batches past Google's 100-item limit into sequential requests and keeping input order,
-indices and summed token usage. A Vertex AI account sends them to `:predict` in batches of up to
-250 instances. `dimensions` maps to `outputDimensionality`; `encoding_format` accepts `"float"`
-(the default) and `"base64"` (IEEE 754 little-endian float32 bytes). Token-ID array inputs,
-streaming and thinking suffixes are refused with 400 on the request.
+indices and summed token usage. A Vertex AI account sends `gemini-embedding-2` (and its variants)
+one input at a time to `:embedContent`, `gemini-embedding-001` one input at a time to `:predict`
+(per Google's single-input limit for that model), and other Vertex text embedding models to
+`:predict` in batches of up to 250 instances. `dimensions` maps to `outputDimensionality`;
+`encoding_format` accepts `"float"` (the default) and `"base64"` (IEEE 754 little-endian float32
+bytes). Token-ID array inputs, streaming and thinking suffixes are refused with 400 on the request.
 
 **Compaction.** `POST /v1/responses/compact` (also `POST /backend-api/codex/responses/compact`) is
 served on every Gemini account (Gemini API keys, Vertex AI service accounts and express mode keys,
