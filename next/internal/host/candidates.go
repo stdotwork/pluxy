@@ -17,7 +17,11 @@ const CandidatesMinor = 34
 // cannot read it would leave it out without saying so. It is returned as a dropped loss at the
 // field the client wrote it in.
 func downgradeCandidateCount(minor int, id string, req llm.Request) (llm.Request, []llm.Loss) {
-	if minor >= CandidatesMinor || req.Options.CandidateCount <= 1 {
+	if minor >= CandidatesMinor || req.Options.CandidateCount == 0 {
+		return req, nil
+	}
+	if req.Options.CandidateCount <= 1 {
+		req.Options.CandidateCount = 0
 		return req, nil
 	}
 	detail := fmt.Sprintf("extension %s implements protocol 0.%d, which has no candidate count (0.%d adds it)", id, minor, CandidatesMinor)

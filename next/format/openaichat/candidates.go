@@ -8,8 +8,9 @@ const maxChatCandidates = 128
 
 // candidateModels are the OpenAI Chat Completions model families known to accept an explicit n.
 // The Chat Completions create reference notes: "Newer models reject an explicit n, even n=1."
-// Models not listed here (such as gpt-5*, gpt-6*, audio/realtime/search/codex models, and unknown
-// models) do not receive a translated n.
+// Neither the create reference nor the reasoning guide documents n > 1 support for o1, o3,
+// o3-mini or o4-mini, so reasoning models, gpt-5*, gpt-6*, audio/realtime/search/codex models,
+// and unknown models do not receive a translated n.
 var candidateModels = map[string]struct{}{
 	"gpt-3.5-turbo":       {},
 	"gpt-3.5-turbo-16k":   {},
@@ -23,10 +24,6 @@ var candidateModels = map[string]struct{}{
 	"gpt-4.1-mini":        {},
 	"gpt-4.1-nano":        {},
 	"chatgpt-4o-latest":   {},
-	"o1":                  {},
-	"o3":                  {},
-	"o3-mini":             {},
-	"o4-mini":             {},
 }
 
 // supportsCandidateCount reports whether model is a documented OpenAI Chat Completions model that

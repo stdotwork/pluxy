@@ -673,3 +673,288 @@ func TestReplayChosenLaterCandidateNextTurn(t *testing.T) {
 		t.Fatalf("anthropicmessages.EncodeRequest next turn: %v", err)
 	}
 }
+
+func TestCandidateCountDroppedAcrossAllEncoders(t *testing.T) {
+	chatReq, err := openaichat.ParseRequest([]byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}],"n":2}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	chatReq = roundTripReq(t, chatReq)
+
+	gemReq, err := geminigenerate.ParseRequest("claude-sonnet-4-5", false, []byte(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"candidateCount":2}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gemReq = roundTripReq(t, gemReq)
+
+	hasDrop := func(losses []llm.Loss, path string) bool {
+		return slices.ContainsFunc(losses, func(l llm.Loss) bool {
+			return l.Kind == llm.LossDropped && l.Path == path
+		})
+	}
+
+	t.Run("chat to anthropic.messages", func(t *testing.T) {
+		_, losses, err := anthropicmessages.EncodeRequest(chatReq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !hasDrop(losses, "n") {
+			t.Errorf("anthropicmessages.EncodeRequest(chat n=2) losses = %+v, want dropped loss at n", losses)
+		}
+	})
+	t.Run("gemini to anthropic.messages", func(t *testing.T) {
+		_, losses, err := anthropicmessages.EncodeRequest(gemReq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !hasDrop(losses, "generationConfig.candidateCount") {
+			t.Errorf("anthropicmessages.EncodeRequest(gemini candidateCount=2) losses = %+v, want dropped loss at generationConfig.candidateCount", losses)
+		}
+	})
+	t.Run("chat to openai.responses", func(t *testing.T) {
+		_, losses, err := openairesponses.EncodeRequest(chatReq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !hasDrop(losses, "n") {
+			t.Errorf("openairesponses.EncodeRequest(chat n=2) losses = %+v, want dropped loss at n", losses)
+		}
+	})
+	t.Run("gemini to openai.responses", func(t *testing.T) {
+		_, losses, err := openairesponses.EncodeRequest(gemReq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !hasDrop(losses, "generationConfig.candidateCount") {
+			t.Errorf("openairesponses.EncodeRequest(gemini candidateCount=2) losses = %+v, want dropped loss at generationConfig.candidateCount", losses)
+		}
+	})
+	t.Run("gemini to openai.chat default", func(t *testing.T) {
+		body, losses, err := openaichat.EncodeRequest(gemReq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(body), `"n"`) || !hasDrop(losses, "generationConfig.candidateCount") {
+			t.Errorf("openaichat.EncodeRequest(gemini candidateCount=2): losses=%+v body=%s", losses, body)
+		}
+	})
+	t.Run("chat to gemini.generate_content default", func(t *testing.T) {
+		body, losses, err := geminigenerate.EncodeRequest(chatReq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(body), "candidateCount") || !hasDrop(losses, "n") {
+			t.Errorf("geminigenerate.EncodeRequest(chat n=2): losses=%+v body=%s", losses, body)
+		}
+	})
+}
+
+func TestSameFormatCandidateCountByteIdenticalToBase(t *testing.T) {
+	const safetyOffJSON = `[{"category":"HARM_CATEGORY_HARASSMENT","threshold":"OFF"},{"category":"HARM_CATEGORY_HATE_SPEECH","threshold":"OFF"},{"category":"HARM_CATEGORY_SEXUALLY_EXPLICIT","threshold":"OFF"},{"category":"HARM_CATEGORY_DANGEROUS_CONTENT","threshold":"OFF"},{"category":"HARM_CATEGORY_CIVIC_INTEGRITY","threshold":"BLOCK_NONE"}]`
+
+	t.Run("chat n=1", func(t *testing.T) {
+		req, err := openaichat.ParseRequest([]byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"n":1}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, losses, err := openaichat.EncodeRequest(roundTripReq(t, req))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := `{"messages":[{"role":"user","content":"hi"}],"model":"gpt-4o","n":1,"stream":false}`
+		if string(got) != want || len(losses) != 0 {
+			t.Errorf("chat n=1:\ngot:    %s (losses=%+v)\nwant:   %s", got, losses, want)
+		}
+	})
+
+	t.Run("chat n=3", func(t *testing.T) {
+		req, err := openaichat.ParseRequest([]byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"n":3}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, losses, err := openaichat.EncodeRequest(roundTripReq(t, req))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := `{"messages":[{"role":"user","content":"hi"}],"model":"gpt-4o","n":3,"stream":false}`
+		if string(got) != want || len(losses) != 0 {
+			t.Errorf("chat n=3:\ngot:    %s (losses=%+v)\nwant:   %s", got, losses, want)
+		}
+	})
+
+	t.Run("gemini candidateCount=1", func(t *testing.T) {
+		req, err := geminigenerate.ParseRequest("gemini-2.5-pro", false, []byte(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"candidateCount":1}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, losses, err := geminigenerate.EncodeRequest(roundTripReq(t, req))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := `{"contents":[{"parts":[{"text":"hi"}],"role":"user"}],"generationConfig":{"candidateCount":1},"model":"gemini-2.5-pro","safetySettings":` + safetyOffJSON + `}`
+		if string(got) != want || len(losses) != 0 {
+			t.Errorf("gemini candidateCount=1:\ngot:    %s (losses=%+v)\nwant:   %s", got, losses, want)
+		}
+	})
+
+	t.Run("gemini candidateCount=3", func(t *testing.T) {
+		req, err := geminigenerate.ParseRequest("gemini-2.5-pro", false, []byte(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"candidateCount":3}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, losses, err := geminigenerate.EncodeRequest(roundTripReq(t, req))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := `{"contents":[{"parts":[{"text":"hi"}],"role":"user"}],"generationConfig":{"candidateCount":3},"model":"gemini-2.5-pro","safetySettings":` + safetyOffJSON + `}`
+		if string(got) != want || len(losses) != 0 {
+			t.Errorf("gemini candidateCount=3:\ngot:    %s (losses=%+v)\nwant:   %s", got, losses, want)
+		}
+	})
+}
+
+func TestGeminiCandidateCountUpperLimit(t *testing.T) {
+	// At the documented maximum (8): carried with no loss.
+	req8, err := openaichat.ParseRequest([]byte(`{"model":"gemini-2.5-pro","messages":[{"role":"user","content":"hi"}],"n":8}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body8, losses8, err := geminigenerate.EncodeRequestWith(roundTripReq(t, req8), geminigenerate.EncodeOptions{CandidateCount: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body8), `"candidateCount":8`) || len(losses8) != 0 {
+		t.Errorf("n=8 to gemini: losses=%+v body=%s", losses8, body8)
+	}
+
+	// Above the documented maximum (9): dropped with a reported loss.
+	req9, err := openaichat.ParseRequest([]byte(`{"model":"gemini-2.5-pro","messages":[{"role":"user","content":"hi"}],"n":9}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body9, losses9, err := geminigenerate.EncodeRequestWith(roundTripReq(t, req9), geminigenerate.EncodeOptions{CandidateCount: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body9), "candidateCount") {
+		t.Errorf("n=9 to gemini sent candidateCount: %s", body9)
+	}
+	if !slices.ContainsFunc(losses9, func(l llm.Loss) bool { return l.Kind == llm.LossDropped && l.Path == "n" }) {
+		t.Errorf("n=9 to gemini losses = %+v, want dropped loss at n", losses9)
+	}
+}
+
+func TestGeminiCandidateCountModelGating(t *testing.T) {
+	supported := []string{
+		"gemini-2.5-pro",
+		"gemini-2.5-flash",
+		"gemini-2.5-flash-lite",
+		"gemini-2.0-flash",
+		"gemini-2.0-flash-lite",
+		"gemini-1.5-pro",
+		"gemini-1.5-flash",
+	}
+	for _, model := range supported {
+		t.Run("supported/"+model, func(t *testing.T) {
+			req, err := openaichat.ParseRequest([]byte(`{"model":"` + model + `","messages":[{"role":"user","content":"hi"}],"n":2}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, losses, err := geminigenerate.EncodeRequestWith(roundTripReq(t, req), geminigenerate.EncodeOptions{CandidateCount: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(body), `"candidateCount":2`) || len(losses) != 0 {
+				t.Errorf("%s: losses=%+v body=%s", model, losses, body)
+			}
+		})
+	}
+
+	unsupported := []string{
+		"gemini-2.5-flash-image",
+		"gemini-2.5-flash-preview-tts",
+		"gemini-2.5-flash-native-audio-preview-12-2025",
+		"gemini-2.5-computer-use-preview-10-2025",
+		"gemini-3-flash-preview",
+		"gemini-3.1-flash-image",
+		"gemini-3.7-flash",
+		"gemini-3.8-flash",
+		"gemini-4-carbon",
+		"gemini-4-neon",
+		"gemini-flash-latest",
+		"gemini-pro-latest",
+		"gemini-1.0-pro",
+	}
+	for _, model := range unsupported {
+		t.Run("unsupported/"+model, func(t *testing.T) {
+			req, err := openaichat.ParseRequest([]byte(`{"model":"` + model + `","messages":[{"role":"user","content":"hi"}],"n":2}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, losses, err := geminigenerate.EncodeRequestWith(roundTripReq(t, req), geminigenerate.EncodeOptions{CandidateCount: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(body), "candidateCount") {
+				t.Errorf("%s: unexpectedly sent candidateCount: %s", model, body)
+			}
+			if !slices.ContainsFunc(losses, func(l llm.Loss) bool { return l.Kind == llm.LossDropped && l.Path == "n" }) {
+				t.Errorf("%s: losses = %+v, want dropped loss at n", model, losses)
+			}
+		})
+	}
+}
+
+func TestOpenAICandidateCountModelGating(t *testing.T) {
+	supported := []string{
+		"gpt-3.5-turbo",
+		"gpt-4",
+		"gpt-4o",
+		"gpt-4o-mini",
+		"gpt-4o-2024-11-20",
+		"gpt-4.1",
+		"gpt-4.1-mini",
+	}
+	for _, model := range supported {
+		t.Run("supported/"+model, func(t *testing.T) {
+			req, err := geminigenerate.ParseRequest(model, false, []byte(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"candidateCount":2}}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, losses, err := openaichat.EncodeRequestWith(roundTripReq(t, req), openaichat.EncodeOptions{CandidateCount: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(body), `"n":2`) || len(losses) != 0 {
+				t.Errorf("%s: losses=%+v body=%s", model, losses, body)
+			}
+		})
+	}
+
+	unsupported := []string{
+		"o1",
+		"o3",
+		"o3-mini",
+		"o3-mini-2025-01-31",
+		"o4-mini",
+		"gpt-5",
+	}
+	for _, model := range unsupported {
+		t.Run("unsupported/"+model, func(t *testing.T) {
+			req, err := geminigenerate.ParseRequest(model, false, []byte(`{"contents":[{"role":"user","parts":[{"text":"hi"}]}],"generationConfig":{"candidateCount":2}}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, losses, err := openaichat.EncodeRequestWith(roundTripReq(t, req), openaichat.EncodeOptions{CandidateCount: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(body), `"n"`) {
+				t.Errorf("%s: unexpectedly sent n: %s", model, body)
+			}
+			if !slices.ContainsFunc(losses, func(l llm.Loss) bool { return l.Kind == llm.LossDropped && l.Path == "generationConfig.candidateCount" }) {
+				t.Errorf("%s: losses = %+v, want dropped loss at generationConfig.candidateCount", model, losses)
+			}
+		})
+	}
+}

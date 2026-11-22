@@ -208,6 +208,9 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	if o.Verbosity != "" {
 		e.lose(llm.LossDropped, llm.VerbosityPath(req), "Messages has no verbosity setting")
 	}
+	if o.CandidateCount > 1 {
+		e.lose(llm.LossDropped, llm.CandidateCountPath(req), "Messages has no candidate count setting")
+	}
 	if rf := o.ResponseFormat; rf != nil && rf.Type != "" && rf.Type != llm.ResponseFormatText {
 		switch {
 		case rf.Type == llm.ResponseFormatJSONSchema && rawjson.Object(rf.Schema) != nil:

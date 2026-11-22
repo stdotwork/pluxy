@@ -189,9 +189,7 @@ func ParseRequest(body []byte) (llm.Request, error) {
 		var n int
 		if json.Unmarshal(rawN, &n) == nil && n >= 1 {
 			modelled = rawjson.With(modelled, "n")
-			if n > 1 {
-				req.Options.CandidateCount = n
-			}
+			req.Options.CandidateCount = n
 		}
 	}
 	var webSearchTool *llm.Tool
@@ -594,7 +592,7 @@ type EncodeOptions struct {
 	// CandidateCount says the caller knows its upstream takes Chat Completions n (api.openai.com):
 	// a request from another format then carries a candidate count > 1 on documented models
 	// (up to 128), and without it the count is left out and reported as dropped. A Chat client's
-	// own n > 1 is written either way; count <= 1 sends no field.
+	// own n >= 1 is written back unchanged; a translated count <= 1 sends no field.
 	CandidateCount bool
 }
 
@@ -638,13 +636,13 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			out.Verbosity = v
 		}
 	}
-	if n := req.Options.CandidateCount; n > 1 {
+	if n := req.Options.CandidateCount; !own && n > 1 {
 		switch {
-		case !opts.CandidateCount && !own:
+		case !opts.CandidateCount:
 			e.lose(llm.LossDropped, llm.CandidateCountPath(req), llm.CandidateCountUnsent)
-		case !own && !supportsCandidateCount(req.Model):
+		case !supportsCandidateCount(req.Model):
 			e.lose(llm.LossDropped, llm.CandidateCountPath(req), fmt.Sprintf("Chat Completions model %q does not support translated n > 1", req.Model))
-		case !own && n > maxChatCandidates:
+		case n > maxChatCandidates:
 			e.lose(llm.LossDropped, llm.CandidateCountPath(req), fmt.Sprintf("Chat Completions n must be at most %d", maxChatCandidates))
 		default:
 			v := n
@@ -885,7 +883,16 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	if err != nil {
 		return nil, nil, err
 	}
-	return rawjson.Merge(body, e.kept(req.Origin)), e.losses, nil
+	rawOrigin := e.kept(req.Origin)
+	if own && req.Options.CandidateCount >= 1 {
+		nJSON := json.RawMessage(fmt.Sprintf(`{"n":%d}`, req.Options.CandidateCount))
+		if len(rawOrigin) == 0 {
+			rawOrigin = nJSON
+		} else {
+			rawOrigin = rawjson.Merge(rawOrigin, nJSON)
+		}
+	}
+	return rawjson.Merge(body, rawOrigin), e.losses, nil
 }
 
 // encodeBody returns out as the request body's JSON, writing the messages' JSON as it stands.

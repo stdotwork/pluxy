@@ -201,9 +201,7 @@ func parseGenerationConfig(raw json.RawMessage, o *llm.Options) (json.RawMessage
 	modelled := []string{"temperature", "topP", "maxOutputTokens", "stopSequences"}
 	if g.CandidateCount != nil && *g.CandidateCount >= 1 {
 		modelled = append(modelled, "candidateCount")
-		if *g.CandidateCount > 1 {
-			o.CandidateCount = int(*g.CandidateCount)
-		}
+		o.CandidateCount = int(*g.CandidateCount)
 	}
 	switch strings.ToLower(strings.TrimSpace(g.ResponseMimeType)) {
 	case "application/json":
