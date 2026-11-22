@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -402,4 +403,17 @@ func TestCompactErrorObjectOn200(t *testing.T) {
 			t.Errorf("error = %+v; want upstream fallback message and raw body", e)
 		}
 	})
+}
+
+// An error object in a 200 is about this reply: it must not put the account's endpoint in cooldown.
+func TestCompactErrorObjectOn200IsAboutTheRequest(t *testing.T) {
+	raw := []byte(`{"type":"error","error":{"type":"invalid_request_error","message":"bad compaction request"}}`)
+	_, _, err := compactionReply(raw, "claude-sonnet-4-6", 1)
+	var e *llm.Error
+	if !errors.As(err, &e) {
+		t.Fatalf("err = %v, want *llm.Error", err)
+	}
+	if e.Scope != llm.ScopeRequest {
+		t.Errorf("scope = %q, want %q", e.Scope, llm.ScopeRequest)
+	}
 }

@@ -187,7 +187,7 @@ func compactionReply(raw []byte, model string, created int64) ([]byte, *llm.Usag
 			Code:         llm.CodeUpstream,
 			Message:      msg,
 			ProviderCode: ae.Type,
-			Scope:        llm.ScopeEndpoint,
+			Scope:        llm.ScopeRequest,
 			Raw:          append(json.RawMessage(nil), raw...),
 		}
 		return nil, nil, llm.MarkContextOverflow(e)
