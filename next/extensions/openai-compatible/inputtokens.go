@@ -34,7 +34,7 @@ func inputTokens(ctx context.Context, call sdk.Call, out bodySender) error {
 	call.Request.Stream = false
 	resp, err := postBody(ctx, call, s, wire, key, "/responses/input_tokens", upstream)
 	if err != nil {
-		return noEndpoint(err, "input token count", "/responses/input_tokens")
+		return noCountEndpoint(err, "input token count", "/responses/input_tokens")
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))

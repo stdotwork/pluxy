@@ -287,8 +287,9 @@ An OpenAI-compatible upstream may lack a side endpoint. A 404 from
 `/models/{model}:countTokens`, `/images/generations` or `/images/edits` that does not say the model
 is unknown fails that request only, as a request error that names the endpoint and path, and blocks
 no model on the account, as for `/responses/compact` above. A 404 that says the model does not exist
-still blocks it, and so does a 404 from the generation path. A token count that gets this 404 is an
-error for the client, not an estimate.
+still blocks it, and so does a 404 from the generation path. On the three token count paths such a
+404 means the account cannot count: core answers with its estimate, or, with `token_count_estimate`
+off, with that 404.
 
 Gemini clients call `POST /v1beta/models/{model}:generateContent` or `:streamGenerateContent`
 (a stream is server-sent events, with or without `alt=sse`), and `:countTokens`.

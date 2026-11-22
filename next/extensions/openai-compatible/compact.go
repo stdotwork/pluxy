@@ -120,6 +120,21 @@ func noEndpoint(err error, name, path string) error {
 	return e
 }
 
+// noCountEndpoint answers a 404 from a token count path that does not say the model is unknown as
+// an account that cannot count (unsupported, on the credential), so core answers with its estimate,
+// or with this error when token_count_estimate is off. It stays non-retryable, so that error keeps
+// its 404 and names the endpoint (name) and the path. A 404 that says the model does not exist is left as it is, and so is
+// any other error.
+func noCountEndpoint(err error, name, path string) error {
+	var e *llm.Error
+	if !errors.As(err, &e) || e.Code != llm.CodeNotFound || e.Retryable {
+		return err
+	}
+	e.Code, e.Scope = llm.CodeUnsupported, llm.ScopeCredential
+	e.Message = fmt.Sprintf("this account's upstream has no %s endpoint (POST %s answered 404)", name, path)
+	return e
+}
+
 func compactChat(ctx context.Context, call sdk.Call, s settings, wire wireInfo, key string, out bodySender) error {
 	req, err := compactionRequest(call.Request)
 	if err != nil {
