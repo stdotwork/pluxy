@@ -252,9 +252,8 @@ key, `GET /v0/management/accounts/{id}/quota` reads it: OpenRouter's `GET /api/v
 the plan `free` or `paid` from `is_free_tier`, the USD spending limit `limit` from `effective_budget`
 when present or otherwise the key's `limit` and `limit_remaining`, the daily, weekly and monthly USD
 spend `usage_daily`, `usage_weekly` and `usage_monthly`, and `free_model_daily_requests` when
-present) or DeepSeek's `GET /user/balance` (reporting `available`
-or `unavailable` from `is_available` and each currency's `total_balance` from `balance_infos` as
-`balance_<currency>`). An account's `settings` (or its `api_key` login input) may set `"quota"` to
+present) or DeepSeek's `GET /user/balance` (reporting each
+currency's `total_balance` from `balance_infos` as `balance_<currency>`). An account's `settings` (or its `api_key` login input) may set `"quota"` to
 `"openrouter"`, `"deepseek"` or `"none"`; when unset, the extension picks by `base_url`'s host
 (`openrouter.ai` for OpenRouter, `api.deepseek.com` for DeepSeek) and answers unsupported for any
 other host.
