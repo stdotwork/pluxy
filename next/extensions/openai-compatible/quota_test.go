@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -138,8 +140,327 @@ func TestParseOpenRouterQuota(t *testing.T) {
 		}
 	})
 
+	t.Run("weekly key example with effective_budget", func(t *testing.T) {
+		raw := []byte(`{
+			"data": {
+				"label": "sk-or-v1-...6ed",
+				"is_management_key": false,
+				"is_provisioning_key": false,
+				"limit": 500,
+				"limit_reset": "weekly",
+				"limit_remaining": 406.54343450199997,
+				"include_byok_in_limit": false,
+				"budgets": [],
+				"effective_budget": {
+					"scope": "key_limit",
+					"guardrail_id": null,
+					"budget_id": null,
+					"limit_usd": 500,
+					"spend_usd": 93.456565498,
+					"remaining_usd": 406.54343450199997,
+					"reset_interval": "weekly",
+					"resets_at": "2026-11-23T00:00:00.000Z",
+					"include_byok": false
+				},
+				"usage": 420.006262049,
+				"usage_daily": 93.456565498,
+				"usage_weekly": 93.456565498,
+				"usage_monthly": 420.006262049,
+				"is_free_tier": false,
+				"free_model_daily_requests": {
+					"used": 1004,
+					"limit": 1000,
+					"remaining": 0
+				}
+			}
+		}`)
+		q, err := parseOpenRouterQuota(raw)
+		if err != nil {
+			t.Fatalf("parseOpenRouterQuota: %v", err)
+		}
+		byID := map[string]protocol.QuotaLimit{}
+		for _, l := range q.Limits {
+			byID[l.ID] = l
+		}
+		l, ok := byID["limit"]
+		if !ok {
+			t.Fatalf("missing limit entry in %+v", q.Limits)
+		}
+		wantReset := time.Date(2026, 11, 23, 0, 0, 0, 0, time.UTC).Unix()
+		wantPct := (500 - 406.54343450199997) / 500 * 100
+		if l.Unlimited || l.Unit != "usd" || l.WindowSeconds != 7*86400 || l.ResetsAt != wantReset ||
+			l.Limit == nil || *l.Limit != 500 ||
+			l.Remaining == nil || *l.Remaining != 406.54343450199997 ||
+			l.Used == nil || math.Abs(*l.Used-93.456565498) > 1e-9 ||
+			l.UsedPercent == nil || math.Abs(*l.UsedPercent-wantPct) > 1e-6 {
+			t.Errorf("limit = %+v (used=%v, pct=%v)", l, l.Used, l.UsedPercent)
+		}
+	})
+
+	t.Run("weekly key without effective_budget uses window spend not all-time usage", func(t *testing.T) {
+		raw := []byte(`{
+			"data": {
+				"limit": 500,
+				"limit_reset": "weekly",
+				"limit_remaining": 406.54343450199997,
+				"usage": 420.006262049,
+				"usage_daily": 93.456565498,
+				"usage_weekly": 93.456565498,
+				"usage_monthly": 420.006262049,
+				"is_free_tier": false
+			}
+		}`)
+		q, err := parseOpenRouterQuota(raw)
+		if err != nil {
+			t.Fatalf("parseOpenRouterQuota: %v", err)
+		}
+		byID := map[string]protocol.QuotaLimit{}
+		for _, l := range q.Limits {
+			byID[l.ID] = l
+		}
+		l, ok := byID["limit"]
+		if !ok {
+			t.Fatalf("missing limit entry in %+v", q.Limits)
+		}
+		wantUsed := 500 - 406.54343450199997
+		wantPct := wantUsed / 500 * 100
+		if l.Unlimited || l.Unit != "usd" || l.WindowSeconds != 7*86400 || l.ResetsAt != 0 ||
+			l.Limit == nil || *l.Limit != 500 ||
+			l.Remaining == nil || *l.Remaining != 406.54343450199997 ||
+			l.Used == nil || math.Abs(*l.Used-wantUsed) > 1e-9 ||
+			l.UsedPercent == nil || math.Abs(*l.UsedPercent-wantPct) > 1e-6 {
+			t.Errorf("limit = %+v", l)
+		}
+	})
+
+	t.Run("windowed key without limit_remaining leaves used unset", func(t *testing.T) {
+		t.Run("with numeric limit", func(t *testing.T) {
+			raw := []byte(`{
+				"data": {
+					"limit": 500,
+					"limit_reset": "weekly",
+					"limit_remaining": null,
+					"usage": 420.006262049
+				}
+			}`)
+			q, err := parseOpenRouterQuota(raw)
+			if err != nil {
+				t.Fatalf("parseOpenRouterQuota: %v", err)
+			}
+			if len(q.Limits) != 1 {
+				t.Fatalf("Limits = %+v, want 1 entry", q.Limits)
+			}
+			l := q.Limits[0]
+			if l.ID != "limit" || l.Unlimited || l.WindowSeconds != 7*86400 ||
+				l.Limit == nil || *l.Limit != 500 ||
+				l.Used != nil || l.Remaining != nil || l.UsedPercent != nil {
+				t.Errorf("limit = %+v", l)
+			}
+		})
+		t.Run("without numeric limit", func(t *testing.T) {
+			raw := []byte(`{
+				"data": {
+					"limit": null,
+					"limit_reset": "weekly",
+					"limit_remaining": null,
+					"usage": 420.006262049
+				}
+			}`)
+			q, err := parseOpenRouterQuota(raw)
+			if err != nil {
+				t.Fatalf("parseOpenRouterQuota: %v", err)
+			}
+			if len(q.Limits) != 1 {
+				t.Fatalf("Limits = %+v, want 1 entry", q.Limits)
+			}
+			l := q.Limits[0]
+			if l.ID != "limit" || !l.Unlimited || l.WindowSeconds != 7*86400 ||
+				l.Limit != nil || l.Used != nil || l.Remaining != nil || l.UsedPercent != nil {
+				t.Errorf("limit = %+v", l)
+			}
+		})
+	})
+
+	t.Run("non-windowed key without limit_remaining keeps usage fallback", func(t *testing.T) {
+		raw := []byte(`{
+			"data": {
+				"limit": 100,
+				"limit_reset": null,
+				"limit_remaining": null,
+				"usage": 25.5
+			}
+		}`)
+		q, err := parseOpenRouterQuota(raw)
+		if err != nil {
+			t.Fatalf("parseOpenRouterQuota: %v", err)
+		}
+		l := q.Limits[0]
+		if l.ID != "limit" || l.Unlimited || l.WindowSeconds != 0 ||
+			l.Limit == nil || *l.Limit != 100 ||
+			l.Used == nil || *l.Used != 25.5 ||
+			l.Remaining == nil || *l.Remaining != 74.5 ||
+			l.UsedPercent == nil || *l.UsedPercent != 25.5 {
+			t.Errorf("limit = %+v", l)
+		}
+	})
+
+	t.Run("null key limit with effective_budget is not unlimited", func(t *testing.T) {
+		raw := []byte(`{
+			"data": {
+				"limit": null,
+				"limit_remaining": null,
+				"budgets": [
+					{
+						"scope": "workspace_default_member",
+						"guardrail_id": "0df9e665-d932-5740-b2c7-b52af166bc11",
+						"budget_id": null,
+						"limit_usd": 100,
+						"spend_usd": 40,
+						"remaining_usd": 60,
+						"reset_interval": "weekly",
+						"resets_at": "2026-10-12T00:00:00.000Z",
+						"include_byok": false
+					},
+					{
+						"scope": "member",
+						"guardrail_id": "6b1d2c3e-4f50-4a61-9b72-83c4d5e6f708",
+						"budget_id": null,
+						"limit_usd": 50,
+						"spend_usd": 40,
+						"remaining_usd": 10,
+						"reset_interval": "weekly",
+						"resets_at": "2026-10-12T00:00:00.000Z",
+						"include_byok": false
+					}
+				],
+				"effective_budget": {
+					"scope": "member",
+					"guardrail_id": "6b1d2c3e-4f50-4a61-9b72-83c4d5e6f708",
+					"budget_id": null,
+					"limit_usd": 50,
+					"spend_usd": 40,
+					"remaining_usd": 10,
+					"reset_interval": "weekly",
+					"resets_at": "2026-10-12T00:00:00.000Z",
+					"include_byok": false
+				}
+			}
+		}`)
+		q, err := parseOpenRouterQuota(raw)
+		if err != nil {
+			t.Fatalf("parseOpenRouterQuota: %v", err)
+		}
+		if len(q.Limits) != 1 {
+			t.Fatalf("Limits = %+v, want 1 entry", q.Limits)
+		}
+		l := q.Limits[0]
+		wantReset := time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC).Unix()
+		if l.ID != "limit" || l.Unlimited || l.Unit != "usd" ||
+			l.Limit == nil || *l.Limit != 50 ||
+			l.Used == nil || *l.Used != 40 ||
+			l.Remaining == nil || *l.Remaining != 10 ||
+			l.UsedPercent == nil || *l.UsedPercent != 80 ||
+			l.WindowSeconds != 7*86400 || l.ResetsAt != wantReset {
+			t.Errorf("limit = %+v", l)
+		}
+	})
+
+	t.Run("spent and lifetime effective_budget", func(t *testing.T) {
+		t.Run("spent over limit", func(t *testing.T) {
+			raw := []byte(`{
+				"data": {
+					"limit": null,
+					"limit_remaining": null,
+					"effective_budget": {
+						"scope": "member",
+						"limit_usd": 50,
+						"spend_usd": 52,
+						"remaining_usd": -2,
+						"reset_interval": "weekly",
+						"resets_at": "2026-10-12T00:00:00.000Z"
+					}
+				}
+			}`)
+			q, err := parseOpenRouterQuota(raw)
+			if err != nil {
+				t.Fatalf("parseOpenRouterQuota: %v", err)
+			}
+			if len(q.Limits) != 1 {
+				t.Fatalf("Limits = %+v, want 1 entry", q.Limits)
+			}
+			l := q.Limits[0]
+			wantReset := time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC).Unix()
+			if l.ID != "limit" || l.Unlimited ||
+				l.Limit == nil || *l.Limit != 50 ||
+				l.Used == nil || *l.Used != 52 ||
+				l.Remaining == nil || *l.Remaining != -2 ||
+				l.UsedPercent == nil || *l.UsedPercent != 100 ||
+				l.WindowSeconds != 7*86400 || l.ResetsAt != wantReset {
+				t.Errorf("limit = %+v", l)
+			}
+		})
+		t.Run("lifetime workspace budget", func(t *testing.T) {
+			raw := []byte(`{
+				"data": {
+					"limit": null,
+					"limit_remaining": null,
+					"effective_budget": {
+						"scope": "workspace",
+						"budget_id": "b-1",
+						"limit_usd": 200,
+						"spend_usd": 50,
+						"remaining_usd": 150,
+						"reset_interval": null,
+						"resets_at": null
+					}
+				}
+			}`)
+			q, err := parseOpenRouterQuota(raw)
+			if err != nil {
+				t.Fatalf("parseOpenRouterQuota: %v", err)
+			}
+			if len(q.Limits) != 1 {
+				t.Fatalf("Limits = %+v, want 1 entry", q.Limits)
+			}
+			l := q.Limits[0]
+			if l.ID != "limit" || l.Unlimited ||
+				l.Limit == nil || *l.Limit != 200 ||
+				l.Used == nil || *l.Used != 50 ||
+				l.Remaining == nil || *l.Remaining != 150 ||
+				l.UsedPercent == nil || *l.UsedPercent != 25 ||
+				l.WindowSeconds != 0 || l.ResetsAt != 0 {
+				t.Errorf("limit = %+v", l)
+			}
+		})
+		t.Run("malformed resets_at leaves ResetsAt unset", func(t *testing.T) {
+			raw := []byte(`{
+				"data": {
+					"effective_budget": {
+						"scope": "member",
+						"limit_usd": 50,
+						"spend_usd": 10,
+						"remaining_usd": 40,
+						"reset_interval": "daily",
+						"resets_at": "not-a-timestamp"
+					}
+				}
+			}`)
+			q, err := parseOpenRouterQuota(raw)
+			if err != nil {
+				t.Fatalf("parseOpenRouterQuota: %v", err)
+			}
+			if len(q.Limits) != 1 {
+				t.Fatalf("Limits = %+v, want 1 entry", q.Limits)
+			}
+			l := q.Limits[0]
+			if l.ID != "limit" || l.ResetsAt != 0 || l.WindowSeconds != 86400 || l.Remaining == nil || *l.Remaining != 40 {
+				t.Errorf("limit = %+v", l)
+			}
+		})
+	})
+
 	t.Run("invalid reply", func(t *testing.T) {
-		for _, raw := range [][]byte{[]byte(`not json`), []byte(`{}`), []byte(`{"data":null}`)} {
+		for _, raw := range [][]byte{[]byte(`not json`), []byte(`{}`), []byte(`{"data":null}`), []byte(`{"data":{"effective_budget":"bad"}}`)} {
 			_, err := parseOpenRouterQuota(raw)
 			var e *llm.Error
 			if !errors.As(err, &e) || e.Code != llm.CodeUpstream {
