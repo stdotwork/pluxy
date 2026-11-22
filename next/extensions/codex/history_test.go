@@ -103,6 +103,38 @@ func TestMissingToolOutputs(t *testing.T) {
 	}
 }
 
+// The Responses API answers a local_shell_call with a function_call_output or a
+// local_shell_call_output. Either is an answer: no interrupted output is made beside it. A local
+// shell call with neither still gets one.
+func TestLocalShellCallAnswers(t *testing.T) {
+	call := func(id string) string {
+		return `{"type":"local_shell_call","call_id":"` + id + `","status":"completed","action":{"type":"exec","command":["ls"]}}`
+	}
+	body := `{"model":"gpt-6.1-sol","input":[{"role":"user","content":"go"},` +
+		call("c1") + `,{"type":"local_shell_call_output","call_id":"c1","output":"{}"},` +
+		call("c2") + `,{"type":"function_call_output","call_id":"c2","output":"ok"},` +
+		call("c3") + `,{"role":"user","content":"next"}]}`
+	ur, m := shapeWith(t, responsesReq("gpt-6.1-sol", body, nil), settings{}, account{subscription: true})
+	items := inputOf(t, m)
+	want := []string{"message", "local_shell_call", "local_shell_call_output", "local_shell_call", "function_call_output",
+		"local_shell_call", "function_call_output", "message"}
+	if got := typesOf(items); strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("input types %v, want %v", got, want)
+	}
+	if items[2]["output"] != "{}" || items[4]["output"] != "ok" {
+		t.Errorf("a real output changed: %v, %v", items[2], items[4])
+	}
+	if items[6]["call_id"] != "c3" || items[6]["output"] != wantInterrupted {
+		t.Errorf("synthesized output for c3: %v", items[6])
+	}
+	if len(ur.tr.Losses) != 1 {
+		t.Errorf("want one loss, for c3 alone: %+v", ur.tr.Losses)
+	}
+	if l, ok := lossAt(ur.tr, "input[5]"); !ok || l.Kind != llm.LossApproximated {
+		t.Errorf("no approximated loss at input[5]: %+v", ur.tr.Losses)
+	}
+}
+
 // Claude Code on a Codex model: a tool_use its session stopped before answering (the next turn
 // has no tool_result for it) reaches Codex with an interrupted output, not as a call Codex refuses.
 func TestMessagesToolUseWithoutResultOnCodex(t *testing.T) {
