@@ -25,7 +25,8 @@ import (
 //   - A numeric bound (`minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`) that is an
 //     integer outside the 64-bit range is removed.
 //   - A property whose `oneOf` or `anyOf` is only distinct `const` branches becomes an `enum`.
-//   - An `array` schema without `items` (and without `$ref`) receives `items: {"type":"string"}`.
+//   - An `array` schema without `items` (and without `$ref`) receives `items: {}` (an empty
+//     schema, which accepts any element).
 //   - When the tool has `strict: true`, every optional property in any object schema is added to
 //     `required` and its schema is made nullable (null is added to every keyword that limits the
 //     value, or the schema is wrapped in an `anyOf` with a null branch), and every object schema
@@ -33,10 +34,12 @@ import (
 //     schema that cannot be closed without changing what the tool accepts cannot be made strict:
 //     the tool is sent with `strict: false` and none of the strict rewrites. Such a schema either
 //     accepts more than its properties (`additionalProperties` true or a schema, or an object type
-//     without `properties`), or combines its objects with other schemas (an `allOf` of more than
-//     one branch, `if`, `then`, `else`, `not`, `dependentSchemas`, `dependencies`, or `properties`
-//     beside `$ref`, `allOf`, `anyOf` or `oneOf`), where closing each object would refuse input
-//     the combination accepts. A single-branch `allOf` combines nothing and stays closable.
+//     without `properties`), has an unconstrained array item schema (`items: {}`, including one
+//     filled from a missing `items`), or combines its objects with other schemas (an `allOf` of
+//     more than one branch, `if`, `then`, `else`, `not`, `dependentSchemas`, `dependencies`, or
+//     `properties` beside `$ref`, `allOf`, `anyOf` or `oneOf`), where closing each object would
+//     refuse input the combination accepts. A single-branch `allOf` combines nothing and stays
+//     closable.
 
 // unionToEnumBranches is how many branches a union needs before it becomes an enum. Smaller
 // unions are left as written.
@@ -551,7 +554,7 @@ func schemaCanBeObject(s map[string]any) bool {
 	}
 }
 
-// addMissingArrayItems adds items: {"type":"string"} to every array schema (without $ref or items)
+// addMissingArrayItems adds items: {} to every array schema (without $ref or items)
 // under v, recursing only into schema-valued keywords.
 func addMissingArrayItems(v any) bool {
 	changed := false
@@ -566,7 +569,7 @@ func addMissingArrayItems(v any) bool {
 		if hasArrayType(s["type"]) {
 			if _, hasRef := s["$ref"]; !hasRef {
 				if items, hasItems := s["items"]; !hasItems || items == nil {
-					s["items"] = map[string]any{"type": "string"}
+					s["items"] = map[string]any{}
 					changed = true
 				}
 			}
@@ -660,9 +663,10 @@ func eachSchema(v any, fn func(map[string]any) bool) bool {
 // schemaIsOpen reports whether a schema under v cannot be closed without changing what it accepts,
 // which strict mode cannot express. That is a schema that accepts keys beyond its properties:
 // `additionalProperties` true or a schema, or an object type with no `properties` (a free-form
-// map). It is also a schema that combines its object with other schemas, where closing the object
-// would refuse input the combination accepts: an `allOf` of more than one branch, any of the
-// `combinedKeywords`, or `properties` beside `$ref`, `allOf`, `anyOf` or `oneOf`.
+// map), or an unconstrained array item schema (`items: {}`). It is also a schema that combines
+// its object with other schemas, where closing the object would refuse input the combination
+// accepts: an `allOf` of more than one branch, any of the `combinedKeywords`, or `properties`
+// beside `$ref`, `allOf`, `anyOf` or `oneOf`.
 func schemaIsOpen(v any) bool {
 	open := false
 	eachSchema(v, func(s map[string]any) bool {
@@ -670,6 +674,9 @@ func schemaIsOpen(v any) bool {
 			open = true
 		}
 		if _, ok := s["properties"]; !ok && hasObjectType(s["type"]) {
+			open = true
+		}
+		if items, ok := s["items"].(map[string]any); ok && len(items) == 0 {
 			open = true
 		}
 		if branches, ok := s["allOf"].([]any); ok && len(branches) > 1 {

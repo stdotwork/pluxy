@@ -312,19 +312,23 @@ func TestFixSchemaAddsMissingArrayItems(t *testing.T) {
 	sameJSON(t, got, `{
 		"type": "object",
 		"properties": {
-			"bare": {"type": "array", "items": {"type": "string"}},
-			"nested": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
-			"nullable": {"type": ["array", "null"], "items": {"type": "string"}},
+			"bare": {"type": "array", "items": {}},
+			"nested": {"type": "array", "items": {"type": "array", "items": {}}},
+			"nullable": {"type": ["array", "null"], "items": {}},
 			"typed": {"type": "array", "items": {"type": "number"}},
 			"refarr": {"type": "array", "$ref": "#/$defs/Arr"},
 			"nonschema": {"default": {"type": "array"}}
 		},
-		"$defs": {"Arr": {"type": "array", "items": {"type": "string"}}}
+		"$defs": {"Arr": {"type": "array", "items": {}}}
 	}`)
 
-	unchanged := `{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"}}}}`
-	if out, changed := fixSchema(json.RawMessage(unchanged)); changed {
-		t.Errorf("unchanged schema rewritten: %s", out)
+	for _, unchanged := range []string{
+		`{"type":"object","properties":{"tags":{"type":"array","items":{"type":"string"}}}}`,
+		`{"type":"object","properties":{"tags":{"type":"array","items":{}}}}`,
+	} {
+		if out, changed := fixSchema(json.RawMessage(unchanged)); changed || string(out) != unchanged {
+			t.Errorf("unchanged schema rewritten: %s", out)
+		}
 	}
 }
 
@@ -416,7 +420,7 @@ func TestFixSchemaStrictOptionalProperties(t *testing.T) {
 			"optAlreadyNull": {"type": ["integer", "null"]},
 			"optAnyOf": {"anyOf": [{"type": "string"}, {"type": "number"}]},
 			"optRef": {"$ref": "#/$defs/Child", "description": "optional child"},
-			"optArr": {"type": "array"},
+			"optArr": {"type": "array", "items": {"type": "string"}},
 			"nested": {
 				"type": "object",
 				"properties": {
@@ -436,10 +440,10 @@ func TestFixSchemaStrictOptionalProperties(t *testing.T) {
 		}
 	}`
 
-	// Non-strict leaves optional properties untouched (except adding missing array items).
+	// Non-strict leaves optional properties untouched.
 	nonStrict, changed := fixed(t, in)
-	if !changed {
-		t.Fatal("expected missing array items change in non-strict mode")
+	if changed {
+		t.Fatalf("non-strict changed a valid schema: %v", nonStrict)
 	}
 	nonStrictMap := nonStrict.(map[string]any)
 	if req := nonStrictMap["required"].([]any); len(req) != 1 || req[0] != "req" {
@@ -674,12 +678,37 @@ func TestStrictToolSchemasThroughTheExtension(t *testing.T) {
 		]
 	}`
 
-	body := `{"model":"gpt-6.1-sol","input":"hi","tools":[{"type":"function","name":"search","strict":true,"parameters":` + schema + `}]}`
+	strictSchema := `{
+		"anyOf": [
+			{
+				"type": "object",
+				"properties": {
+					"mode": {"type": "string"},
+					"query": {"type": "string", "pattern": "^(?!__)[a-z]+$"},
+					"tags": {"type": "array", "items": {"type": "string"}}
+				},
+				"required": ["mode", "query"]
+			},
+			{
+				"type": "object",
+				"properties": {
+					"mode": {"type": "string"},
+					"note": {"type": "string"}
+				},
+				"required": ["mode"]
+			}
+		]
+	}`
+
+	body := `{"model":"gpt-6.1-sol","input":"hi","tools":[{"type":"function","name":"search","strict":true,"parameters":` + strictSchema + `}]}`
 	r := send(responsesReq("gpt-6.1-sol", body, nil))
 	rawTools, _ := json.Marshal(r.Body["tools"])
 	var tools []map[string]json.RawMessage
 	if err := json.Unmarshal(rawTools, &tools); err != nil || len(tools) == 0 {
 		t.Fatalf("upstream tools = %s, err = %v", rawTools, err)
+	}
+	if !strictFlag(t, tools[0]) {
+		t.Fatalf("closable strict tool was sent non-strict: %s", rawTools)
 	}
 	sameJSON(t, mustJSON(t, tools[0]["parameters"]), `{
 		"type": "object",
@@ -691,6 +720,28 @@ func TestStrictToolSchemasThroughTheExtension(t *testing.T) {
 		},
 		"required": ["mode", "note", "query", "tags"],
 		"additionalProperties": false
+	}`)
+
+	// A strict tool with a bare array cannot be closed without inventing an element type, so it
+	// goes out non-strict with items: {}.
+	bareStrictBody := `{"model":"gpt-6.1-sol","input":"hi","tools":[{"type":"function","name":"search","strict":true,"parameters":` + schema + `}]}`
+	r = send(responsesReq("gpt-6.1-sol", bareStrictBody, nil))
+	rawTools, _ = json.Marshal(r.Body["tools"])
+	if err := json.Unmarshal(rawTools, &tools); err != nil || len(tools) == 0 {
+		t.Fatalf("bare-array strict upstream tools = %s, err = %v", rawTools, err)
+	}
+	if strictFlag(t, tools[0]) {
+		t.Fatalf("bare-array strict tool stayed strict: %s", rawTools)
+	}
+	sameJSON(t, mustJSON(t, tools[0]["parameters"]), `{
+		"type": "object",
+		"properties": {
+			"mode": {"type": "string"},
+			"query": {"type": "string"},
+			"tags": {"type": "array", "items": {}},
+			"note": {"type": "string"}
+		},
+		"required": ["mode"]
 	}`)
 
 	msgReq := llm.Request{
@@ -712,7 +763,7 @@ func TestStrictToolSchemasThroughTheExtension(t *testing.T) {
 		"properties": {
 			"mode": {"type": "string"},
 			"query": {"type": "string"},
-			"tags": {"type": "array", "items": {"type": "string"}},
+			"tags": {"type": "array", "items": {}},
 			"note": {"type": "string"}
 		},
 		"required": ["mode"]
@@ -798,6 +849,11 @@ func TestStrictClosesEveryObject(t *testing.T) {
 func TestStrictOpenSchemaGoesNonStrict(t *testing.T) {
 	for name, params := range map[string]string{
 		"a free-form map":                `{"type":"object","properties":{"meta":{"type":"object"},"tags":{"type":"array"}}}`,
+		"a bare array":                   `{"type":"object","properties":{"tags":{"type":"array"}}}`,
+		"a nested bare array":            `{"type":"object","properties":{"matrix":{"type":"array","items":{"type":"array"}}}}`,
+		"an empty array items schema":    `{"type":"object","properties":{"tags":{"type":"array","items":{}}}}`,
+		"a nullable bare array":          `{"type":"object","properties":{"tags":{"type":["array","null"]}}}`,
+		"a bare array in $defs":          `{"type":"object","properties":{"tags":{"$ref":"#/$defs/Tags"}},"$defs":{"Tags":{"type":"array"}}}`,
 		"a free-form root":               `{"type":"object"}`,
 		"a nullable free map":            `{"type":"object","properties":{"m":{"type":["object","null"]}}}`,
 		"a free map in $defs":            `{"type":"object","properties":{"c":{"$ref":"#/$defs/M"}},"$defs":{"M":{"type":"object"}}}`,
