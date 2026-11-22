@@ -22,8 +22,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 var (
@@ -65,43 +63,19 @@ type importKey struct {
 	email string
 }
 
-// loginWords are the words a login error may show that the tests below assert on.
-var loginWords = []string{
-	"Invalid JWT Signature", "token_uri", "private_key", "client_email", "not PEM", "RSA", "unreachable",
-}
-
-// newImportKey makes a service account key pair for a test, from one whose private key does not
-// spell part of a message a login test asserts on. Core removes each run of a login error's text
-// that shares four characters with a secret, and the key file is secret: a key drawn at random
-// sometimes spells four characters of the endpoint's words, and a test then reads
-// "invalid_grant (Invalid JWT [redacted])" where it wants "Invalid JWT Signature." (4 keys of 2000
-// do). Such a key is drawn again, so the tests below fail only for a reason of their own.
+// newImportKey makes a service account key pair for a test. Core removes pieces of a PEM private
+// key only at 8 consecutive bytes of its lines or unwrapped body (protocol.RemovePieces), so a
+// random key has a negligible chance of redacting the error words these tests assert on (0 of
+// 2000 keys matched).
 func newImportKey(t *testing.T, email string) importKey {
 	t.Helper()
-	for {
-		k, err := rsa.GenerateKey(rand.Reader, 2048)
-		if err != nil {
-			t.Fatal(err)
-		}
-		der, _ := x509.MarshalPKCS8PrivateKey(k)
-		pemText := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
-		// The private key is the key file's only secret long enough to count, and removing its
-		// pieces is what core does to a login error (pieces.event).
-		pieces := protocol.AccountSecretsWith(protocol.Account{}, []string{pemText})
-		if !spellsAny(loginWords, pieces) {
-			return importKey{priv: k, email: email, pem: pemText}
-		}
+	k, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-// spellsAny reports whether removing pieces would change one of words.
-func spellsAny(words, pieces []string) bool {
-	for _, w := range words {
-		if protocol.RemovePieces(w, pieces...) != w {
-			return true
-		}
-	}
-	return false
+	der, _ := x509.MarshalPKCS8PrivateKey(k)
+	pemText := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
+	return importKey{priv: k, email: email, pem: pemText}
 }
 
 // json returns the key file Google would give for project, its token_uri the fake's.
