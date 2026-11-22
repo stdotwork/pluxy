@@ -106,8 +106,9 @@ type QuotaCall struct {
 
 // QuotaHandler reads what an account's plan allows and how much of it is used, from the
 // provider's own usage endpoint, as the provider's own client does (protocol minor version 5).
-// An account that has no quota to report (for example an API key) is code unsupported with scope
-// credential. An *llm.Error is sent as it is, any other error as code internal.
+// An account that has no quota to report (for example an API key on a provider with no usage
+// endpoint) is code unsupported with scope credential. An *llm.Error is sent as it is, any other
+// error as code internal.
 type QuotaHandler func(ctx context.Context, call QuotaCall) (*protocol.Quota, error)
 
 // SessionCall is one session call: open a session of a kind on an account.

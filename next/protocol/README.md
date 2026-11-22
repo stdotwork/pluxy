@@ -482,8 +482,8 @@ name them and `feature` when it counts a feature, or core may keep the whole acc
 resets. Read the quota from the
 provider's own usage endpoint for the account's subscription, with the same client identity
 (user agent and the like) the extension uses for the account's requests, and never with a request
-that spends from the plan (a generation). An account that has no plan to report (an API key, or
-a provider with no usage endpoint) answers with code `unsupported` and scope `credential`. Core
+that spends from the plan (a generation). An account that has no plan or balance to report (for
+example, an API key on a provider with no usage endpoint) answers with code `unsupported` and scope `credential`. Core
 removes the account's credential from every string and from `raw`, as from every other reply.
 
 ### `endpoint`
