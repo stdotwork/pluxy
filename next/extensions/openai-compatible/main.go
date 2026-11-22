@@ -551,15 +551,15 @@ func buildBody(req llm.Request, target string, s settings) ([]byte, *llm.Transla
 		}
 	case llm.FormatOpenAIResponses:
 		encode = func(r llm.Request) ([]byte, []llm.Loss, error) {
-			return openairesponses.EncodeRequestWith(r, openairesponses.EncodeOptions{ServiceTier: f.serviceTier, Verbosity: f.verbosity, WebSearch: f.webSearch})
+			return openairesponses.EncodeRequestWith(r, openairesponses.EncodeOptions{ServiceTier: f.serviceTier, Verbosity: f.verbosity, WebSearch: f.webSearch, CodeExecution: f.codeExecution})
 		}
 	case llm.FormatAnthropicMessages:
 		encode = func(r llm.Request) ([]byte, []llm.Loss, error) {
-			return anthropicmessages.EncodeRequestWith(r, anthropicmessages.EncodeOptions{ServiceTier: f.serviceTier, WebSearch: f.webSearch})
+			return anthropicmessages.EncodeRequestWith(r, anthropicmessages.EncodeOptions{ServiceTier: f.serviceTier, WebSearch: f.webSearch, CodeExecution: f.codeExecution})
 		}
 	case llm.FormatGeminiGenerate:
 		encode = func(r llm.Request) ([]byte, []llm.Loss, error) {
-			return geminigenerate.EncodeRequestWith(r, geminigenerate.EncodeOptions{ServiceTier: f.serviceTier, WebSearch: f.webSearch})
+			return geminigenerate.EncodeRequestWith(r, geminigenerate.EncodeOptions{ServiceTier: f.serviceTier, WebSearch: f.webSearch, CodeExecution: f.codeExecution})
 		}
 	default:
 		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,

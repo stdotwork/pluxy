@@ -931,6 +931,22 @@ Responses client has no defined way to show it. Claude does not need citations i
 replayed search blocks carry the results. Not built: the web search result cache and Codex's tool
 search on Claude.
 
+**Code execution.** A client's hosted code execution tool — Responses `code_interpreter`, Messages
+`code_execution_*`, or Gemini `codeExecution` — carries across those formats as the canonical
+`code_execution` tool (protocol minor 30) and maps to `code_execution_20250825` on Anthropic
+(`api.anthropic.com`, Claude 4.5+ and `claude-mythos-preview`, requiring no beta header),
+`code_interpreter` with `{"container":{"type":"auto"}}` on OpenAI Responses (`api.openai.com` and
+`chatgpt.com`, models whose OpenAI model pages list `code_interpreter`), and `codeExecution` on
+Gemini GenerateContent (`generativelanguage.googleapis.com` and Google's Vertex AI hosts,
+documented Gemini model families, dropped beside `functionDeclarations` and combined with
+`googleSearch`). Chat Completions has no code execution tool and drops it with a loss. Third-party
+hosts, unlisted models, and provider-specific settings (explicit containers, `file_ids`,
+`memory_limit`, `network_policy`, `cache_control`, `defer_loading`, `strict`, `allowed_callers`)
+are reported as dropped. A forced choice of the code tool (`{"type":"code_interpreter"}` on
+Responses, `{"type":"tool","name":"code_execution"}` on Messages) maps where the target can force
+it when the tool is sent and drops with a loss otherwise; same-format requests pass through
+unchanged.
+
 **Tool shapes.** A translated request's tools get the shapes Messages takes, as today's core
 gives them: a function name with characters other than letters, digits, `_` and `-`, or longer than
 64, is sent with each other character as `_` and cut to 64 (two names that would come out the same

@@ -193,6 +193,7 @@ func Run(t *testing.T, target Target) {
 	t.Run("allowed_tools", k.allowedTools)
 	t.Run("service_tier", k.serviceTier)
 	t.Run("web_search", k.webSearch)
+	t.Run("code_execution", k.codeExecution)
 	t.Run("cancel", k.cancel)
 	t.Run("errors/rate_limited", func(t *testing.T) {
 		k.wantError(t, ScenarioRateLimited, llm.Error{Code: llm.CodeRateLimit, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: 20000}, llm.ScopeModel)
@@ -477,6 +478,43 @@ func (k *kit) webSearch(t *testing.T) {
 			Raw:    json.RawMessage(`{"type":"web_search_20250305","name":"web_search","max_uses":2,"allowed_domains":["example.com"],"user_location":{"type":"approximate","country":"US"}}`),
 		},
 	}}
+	s := ext.Generate(context.Background(), setup.Account, req)
+	defer s.Close()
+	evs := collect(t, s)
+	last := evs[len(evs)-1]
+	if last.Type != llm.EventFinish {
+		t.Fatalf("ended with %s: %v", last.Type, last.Error)
+	}
+	var text strings.Builder
+	for _, ev := range evs {
+		if ev.Type == llm.EventTextDelta {
+			text.WriteString(ev.Delta)
+		}
+	}
+	if text.String() != ReplyText {
+		t.Errorf("text = %q, want %q", text.String(), ReplyText)
+	}
+}
+
+// codeExecution checks that an extension accepts a request carrying a canonical code execution
+// tool and its forced tool choice (protocol 0.30): it carries the tool where its upstream takes
+// one and reports it or an unsupported tool choice as dropped otherwise, and the call still
+// finishes with the normal reply. The kit cannot see the extension's upstream request, so it does
+// not check what reaches it.
+func (k *kit) codeExecution(t *testing.T) {
+	ext := k.start(t)
+	setup := k.target.Prepare(t, ScenarioText)
+	req := request(true)
+	req.Tools = []llm.Tool{{
+		Type: llm.ToolCodeExecution,
+		Name: "code_execution",
+		Origin: &llm.Origin{
+			Format: llm.FormatAnthropicMessages,
+			Path:   "tools[0]",
+			Raw:    json.RawMessage(`{"type":"code_execution_20250825","name":"code_execution"}`),
+		},
+	}}
+	req.Options.ToolChoice = &llm.ToolChoice{Mode: llm.ToolChoiceCodeExecution, Name: "code_execution"}
 	s := ext.Generate(context.Background(), setup.Account, req)
 	defer s.Close()
 	evs := collect(t, s)

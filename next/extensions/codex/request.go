@@ -74,6 +74,7 @@ func buildRequest(req llm.Request, accountID string, s settings, a account, ws b
 			Verbosity:     host,
 			WebSearch:     host,
 			WebSearchBare: isChatGPTHost(s, a),
+			CodeExecution: host,
 		})
 		if err != nil {
 			return nil, err

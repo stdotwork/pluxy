@@ -2,6 +2,7 @@ package anthropicmessages
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -172,6 +173,11 @@ type EncodeOptions struct {
 	// tool is left out and reported as dropped. A Messages client's own tool is written either
 	// way.
 	WebSearch bool
+	// CodeExecution says the caller knows its upstream takes a Messages code_execution_20250825
+	// tool: a request from another format then carries a canonical code execution tool on the
+	// documented Claude model families, and without it the tool is left out and reported as
+	// dropped. A Messages client's own tool is written either way.
+	CodeExecution bool
 }
 
 // EncodeRequestWith builds a Messages request body as EncodeRequest does, changed by opts.
@@ -231,8 +237,28 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 		}
 	}
 	var tools []json.RawMessage
+	emittedCodeExecName := ""
+	droppedCodeExec := false
 	for i, t := range req.Tools {
 		if len(allowed) > 0 && (!t.IsFunction() || !allowed[t.Name]) {
+			continue
+		}
+		if t.Type == llm.ToolCodeExecution {
+			p := pathOf(t.Origin, fmt.Sprintf("tools[%d]", i))
+			if t.Origin != nil && t.Origin.Format == format {
+				tools = append(tools, t.Origin.Raw)
+				emittedCodeExecName = cmp.Or(strings.TrimSpace(t.Name), codeExecutionToolName)
+			} else if !opts.CodeExecution {
+				e.lose(llm.LossDropped, p, llm.ToolCodeExecutionUnsent)
+				droppedCodeExec = true
+			} else if !supportsCodeExecution(req.Model) {
+				e.lose(llm.LossDropped, p, fmt.Sprintf("Messages model %q does not support %s", req.Model, codeExecutionToolType))
+				droppedCodeExec = true
+			} else {
+				tools = append(tools, canonicalCodeExecutionTool())
+				emittedCodeExecName = codeExecutionToolName
+				e.losses = append(e.losses, rawjson.CodeExecutionLosses(t, p, format)...)
+			}
 			continue
 		}
 		if t.Type == llm.ToolWebSearch {
@@ -313,11 +339,28 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			e.lose(llm.LossDropped, "tool_choice", fmt.Sprintf("allowed function tools this request does not define: %s", strings.Join(missing, ", ")))
 		}
 	}
-	if len(tools) > 0 {
+	if o.ToolChoice != nil && o.ToolChoice.Mode == llm.ToolChoiceCodeExecution {
+		if emittedCodeExecName != "" && len(tools) > 0 {
+			out["tools"] = tools
+			if tc := encodeToolChoice(&llm.ToolChoice{Mode: llm.ToolChoiceTool, Name: emittedCodeExecName}, o.ParallelToolCalls, nil); tc != nil {
+				out["tool_choice"] = tc
+			}
+		} else {
+			e.lose(llm.LossDropped, "tool_choice", "Messages cannot force code_execution without a code execution tool")
+			if len(tools) > 0 {
+				out["tools"] = tools
+				if tc := encodeToolChoice(nil, o.ParallelToolCalls, names); tc != nil {
+					out["tool_choice"] = tc
+				}
+			}
+		}
+	} else if len(tools) > 0 {
 		out["tools"] = tools
 		if tc := encodeToolChoice(o.ToolChoice, o.ParallelToolCalls, names); tc != nil {
 			out["tool_choice"] = tc
 		}
+	} else if droppedCodeExec && o.ToolChoice != nil && (o.ToolChoice.Mode == llm.ToolChoiceRequired || o.ToolChoice.Mode == llm.ToolChoiceTool) {
+		e.lose(llm.LossDropped, "tool_choice", "Messages has no tools left to force")
 	}
 
 	searches := scanWebSearches(req.Items)

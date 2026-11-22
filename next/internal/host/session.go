@@ -211,6 +211,7 @@ func (s *Session) Turn(ctx context.Context, account protocol.Account, req llm.Re
 	}
 	t.lost = append(t.lost, tierLost...)
 	req = downgradeWebSearch(s.ext.info.ProtocolMinor, req)
+	req = downgradeCodeExecution(s.ext.info.ProtocolMinor, req)
 	s.mu.Lock()
 	switch {
 	case s.closed:

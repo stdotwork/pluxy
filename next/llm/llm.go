@@ -301,6 +301,9 @@ const (
 	// ToolWebSearch is a provider-hosted web search tool (protocol minor version 29). WebSearch
 	// holds the settings more than one format can say; Origin holds the client's original tool.
 	ToolWebSearch = "web_search"
+	// ToolCodeExecution is a provider-hosted code execution tool (protocol minor version 30).
+	// Origin holds the client's original tool.
+	ToolCodeExecution = "code_execution"
 	// ToolNative is a tool core could not interpret, such as a provider-hosted tool;
 	// Origin.Raw holds it whole.
 	ToolNative = "native"
@@ -362,6 +365,9 @@ const (
 	ToolChoiceNone     = "none"
 	ToolChoiceRequired = "required"
 	ToolChoiceTool     = "tool" // the function named in Name
+	// ToolChoiceCodeExecution forces the provider-hosted code execution tool (protocol minor
+	// version 30).
+	ToolChoiceCodeExecution = "code_execution"
 )
 
 // ToolChoice says whether and which tool the model must call.

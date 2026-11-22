@@ -54,18 +54,18 @@ var presets = map[string]preset{
 	"api.mistral.ai":   {developerRole: roleSystem, passback: ptr(false)},
 }
 
-// tierFields say which of a request's service tier, verbosity and web search tool an upstream's
-// API takes.
-type tierFields struct{ serviceTier, verbosity, webSearch bool }
+// tierFields say which of a request's service tier, verbosity, web search and code execution tools
+// an upstream's API takes.
+type tierFields struct{ serviceTier, verbosity, webSearch, codeExecution bool }
 
-// tierHosts are the vendors whose API documentation names a service tier, a verbosity, or a hosted
-// web search tool in the request, by base URL host and then by the format of the wire. A request
-// from another format carries the client's tier, verbosity or translated web search tool only to
-// these; any other host gets none of them, since an upstream may refuse a field or tool it does
-// not list (Mistral's Chat request does, with "additionalProperties: false", and the Codex CLI
-// sends a verbosity of its own). A client's own body goes upstream as it came whatever the host.
-// Mistral documents a service_tier of its own, whose values are not checked here, so it is not
-// listed.
+// tierHosts are the vendors whose API documentation names a service tier, a verbosity, a hosted
+// web search tool, or a hosted code execution tool in the request, by base URL host and then by
+// the format of the wire. A request from another format carries the client's tier, verbosity or
+// translated hosted tools only to these; any other host gets none of them, since an upstream may
+// refuse a field or tool it does not list (Mistral's Chat request does, with
+// "additionalProperties: false", and the Codex CLI sends a verbosity of its own). A client's own
+// body goes upstream as it came whatever the host. Mistral documents a service_tier of its own,
+// whose values are not checked here, so it is not listed.
 //
 //   - api.openai.com: service_tier and verbosity in the Chat Completions create reference
 //     (https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create)
@@ -74,26 +74,32 @@ type tierFields struct{ serviceTier, verbosity, webSearch bool }
 //     search in OpenAI's web search guide (https://developers.openai.com/api/docs/guides/tools-web-search)
 //     — Responses takes web_search (with filters, user_location and search_context_size), and Chat
 //     Completions takes web_search_options, which the Chat encoder further restricts to specialized
-//     search models (such as gpt-5-search-api) without function tools.
+//     search models (such as gpt-5-search-api) without function tools; hosted code execution
+//     (code_interpreter) in https://developers.openai.com/api/docs/guides/tools-code-interpreter
+//     for Responses only (Chat Completions has no code execution tool), gated by the Responses
+//     encoder to documented models.
 //   - api.anthropic.com: service_tier in the Messages create reference
 //     (https://platform.claude.com/docs/en/api/messages/create), described at
 //     https://platform.claude.com/docs/en/api/service-tiers. Its fast mode needs a beta header this
 //     extension does not add, so the priority tier is not sent. Messages has no verbosity. Hosted
 //     web search (web_search_20250305) is documented at
-//     https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool; the Messages
-//     encoder gates newly translated search tools to the documented Claude model families while
+//     https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool, and hosted
+//     code execution (code_execution_20250825, requiring no beta header) at
+//     https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool; the
+//     Messages encoder gates newly translated tools to the documented Claude model families while
 //     keeping the existing Responses web_search mapping ungated.
 //   - generativelanguage.googleapis.com: serviceTier in GenerateContentRequest
-//     (https://ai.google.dev/api/generate-content/generate-content) and googleSearch in
-//     https://ai.google.dev/gemini-api/docs/google-search (gated by the Gemini encoder to documented
+//     (https://ai.google.dev/api/generate-content/generate-content), googleSearch in
+//     https://ai.google.dev/gemini-api/docs/google-search and codeExecution in
+//     https://aistudio.google.com/docs/code-execution (gated by the Gemini encoder to documented
 //     model families without function declarations). GenerateContent has no verbosity.
 var tierHosts = map[string]map[string]tierFields{
 	"api.openai.com": {
 		llm.FormatOpenAIChat:      {serviceTier: true, verbosity: true, webSearch: true},
-		llm.FormatOpenAIResponses: {serviceTier: true, verbosity: true, webSearch: true},
+		llm.FormatOpenAIResponses: {serviceTier: true, verbosity: true, webSearch: true, codeExecution: true},
 	},
-	"api.anthropic.com":                 {llm.FormatAnthropicMessages: {serviceTier: true, webSearch: true}},
-	"generativelanguage.googleapis.com": {llm.FormatGeminiGenerate: {serviceTier: true, webSearch: true}},
+	"api.anthropic.com":                 {llm.FormatAnthropicMessages: {serviceTier: true, webSearch: true, codeExecution: true}},
+	"generativelanguage.googleapis.com": {llm.FormatGeminiGenerate: {serviceTier: true, webSearch: true, codeExecution: true}},
 }
 
 // tierFieldsOf returns which of a tier and a verbosity the account's upstream takes on the wire of

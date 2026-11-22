@@ -639,8 +639,16 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			break
 		}
 	}
+	droppedCodeExec := false
 	for i, t := range req.Tools {
 		p := path(t.Origin, fmt.Sprintf("tools[%d]", i))
+		if t.Type == llm.ToolCodeExecution {
+			// OpenAI Chat Completions has no code execution / code interpreter tool
+			// (https://developers.openai.com/api/docs/guides/tools-code-interpreter).
+			e.lose(llm.LossDropped, p, "Chat Completions has no code execution tool")
+			droppedCodeExec = true
+			continue
+		}
 		if t.Type == llm.ToolWebSearch {
 			if t.Origin != nil && t.Origin.Format == format {
 				out.WebSearchOptions = t.Origin.Raw
@@ -711,12 +719,19 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 		ct := chatTool{Type: "function", Function: chatFunction{Name: ToolName(toolNameMap, t.Name), Description: t.Description, Parameters: t.Parameters, Strict: t.Strict}}
 		out.Tools = append(out.Tools, marshal(ct, e.kept(t.Origin)))
 	}
-	if len(out.Tools) > 0 {
+	if tc := req.Options.ToolChoice; tc != nil && tc.Mode == llm.ToolChoiceCodeExecution {
+		e.lose(llm.LossDropped, "tool_choice", "Chat Completions has no code execution tool to force")
+		if len(out.Tools) > 0 {
+			out.ParallelToolCalls = req.Options.ParallelToolCalls
+		}
+	} else if len(out.Tools) > 0 {
 		// Chat Completions accepts these only with tools.
 		out.ParallelToolCalls = req.Options.ParallelToolCalls
 		if tc := req.Options.ToolChoice; tc != nil {
 			out.ToolChoice = encodeToolChoice(tc, toolNameMap)
 		}
+	} else if droppedCodeExec && req.Options.ToolChoice != nil && (req.Options.ToolChoice.Mode == llm.ToolChoiceRequired || req.Options.ToolChoice.Mode == llm.ToolChoiceTool) {
+		e.lose(llm.LossDropped, "tool_choice", "Chat Completions has no tools left to force")
 	}
 
 	var msgs []*outMessage

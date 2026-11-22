@@ -123,6 +123,11 @@ type EncodeOptions struct {
 	// leaving out filters, user_location and search_context_size and reporting each as dropped.
 	// Used for hosts such as chatgpt.com where those settings are not documented.
 	WebSearchBare bool
+	// CodeExecution says the caller knows its upstream takes a Responses code_interpreter tool:
+	// a request from another format then carries a canonical code execution tool on the
+	// documented OpenAI models, and without it the tool is left out and reported as dropped. A
+	// Responses client's own code_interpreter tool is written either way.
+	CodeExecution bool
 }
 
 // EncodeRequestWith builds a Responses request body as EncodeRequest does, changed by opts.
@@ -189,22 +194,31 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			out.Text = text
 		}
 	}
-	if tc := o.ToolChoice; tc != nil {
-		switch {
-		case len(tc.Allowed) > 0:
-			tools := make([]any, 0, len(tc.Allowed))
-			for _, name := range tc.Allowed {
-				tools = append(tools, map[string]any{"type": "function", "name": name})
-			}
-			out.ToolChoice = map[string]any{"type": "allowed_tools", "mode": tc.Mode, "tools": tools}
-		case tc.Mode == llm.ToolChoiceTool:
-			out.ToolChoice = map[string]string{"type": "function", "name": tc.Name}
-		default:
-			out.ToolChoice = tc.Mode
-		}
-	}
+	emittedCodeExec := false
+	droppedCodeExec := false
 	for i, t := range req.Tools {
 		p := pathOf(t.Origin, fmt.Sprintf("tools[%d]", i))
+		if t.Type == llm.ToolCodeExecution {
+			if t.Origin != nil && t.Origin.Format == format {
+				out.Tools = append(out.Tools, t.Origin.Raw)
+				emittedCodeExec = true
+				continue
+			}
+			if !opts.CodeExecution {
+				e.lose(llm.LossDropped, p, llm.ToolCodeExecutionUnsent)
+				droppedCodeExec = true
+				continue
+			}
+			if !supportsCodeExecution(req.Model) {
+				e.lose(llm.LossDropped, p, fmt.Sprintf("Responses model %q does not support code_interpreter", req.Model))
+				droppedCodeExec = true
+				continue
+			}
+			out.Tools = append(out.Tools, canonicalCodeExecutionTool())
+			emittedCodeExec = true
+			e.losses = append(e.losses, rawjson.CodeExecutionLosses(t, p, format)...)
+			continue
+		}
 		if t.Type == llm.ToolWebSearch {
 			if t.Origin != nil && t.Origin.Format == format {
 				out.Tools = append(out.Tools, t.Origin.Raw)
@@ -271,6 +285,28 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			continue
 		}
 		out.Tools = append(out.Tools, marshal(outFunctionTool{Type: "function", Name: t.Name, Description: t.Description, Parameters: t.Parameters, Strict: t.Strict}, e.kept(t.Origin)))
+	}
+	if tc := o.ToolChoice; tc != nil {
+		switch {
+		case tc.Mode == llm.ToolChoiceCodeExecution:
+			if emittedCodeExec {
+				out.ToolChoice = map[string]string{"type": "code_interpreter"}
+			} else {
+				e.lose(llm.LossDropped, "tool_choice", "Responses cannot force code_interpreter without a code_interpreter tool")
+			}
+		case droppedCodeExec && len(out.Tools) == 0 && (tc.Mode == llm.ToolChoiceRequired || tc.Mode == llm.ToolChoiceTool):
+			e.lose(llm.LossDropped, "tool_choice", "Responses has no tools left to force")
+		case len(tc.Allowed) > 0:
+			tools := make([]any, 0, len(tc.Allowed))
+			for _, name := range tc.Allowed {
+				tools = append(tools, map[string]any{"type": "function", "name": name})
+			}
+			out.ToolChoice = map[string]any{"type": "allowed_tools", "mode": tc.Mode, "tools": tools}
+		case tc.Mode == llm.ToolChoiceTool:
+			out.ToolChoice = map[string]string{"type": "function", "name": tc.Name}
+		default:
+			out.ToolChoice = tc.Mode
+		}
 	}
 
 	for i, it := range req.Items {
