@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -17,9 +16,6 @@ import (
 
 // GET /setup/clients/{id}/paste against a real core, and pluxy client show through it.
 func TestClientPaste(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX shell script fake tools")
-	}
 	t.Parallel()
 	home := t.TempDir()
 	env := isolatedSetupEnv(home, t.TempDir())

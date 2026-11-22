@@ -351,11 +351,27 @@ func TestCLISetupImportsTable(t *testing.T) {
 func TestCLISetupAndClientShow(t *testing.T) {
 	var applied [][]string
 	var doneCalled bool
+	// The paste route's requests (path and query), so a test can tell the CLI asked core for the
+	// snippet rather than building it itself.
+	var pasteMu sync.Mutex
+	var pasteCalls []string
+	takePasteCalls := func() []string {
+		pasteMu.Lock()
+		defer pasteMu.Unlock()
+		calls := pasteCalls
+		pasteCalls = nil
+		return calls
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer mgmt-secret" {
 			w.WriteHeader(http.StatusUnauthorized)
 			w.Write([]byte(`{"error":{"code":"unauthorized","message":"invalid management key"}}`))
 			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/paste") {
+			pasteMu.Lock()
+			pasteCalls = append(pasteCalls, r.Method+" "+r.URL.RequestURI())
+			pasteMu.Unlock()
 		}
 		switch r.Method + " " + r.URL.Path {
 		case "GET /v0/management/setup":
@@ -474,9 +490,16 @@ func TestCLISetupAndClientShow(t *testing.T) {
 		if code != 0 || errOut != want || !strings.Contains(out, srv.URL) || strings.Contains(out, "mgmt-secret") || strings.Contains(out, "Replace") {
 			t.Errorf("client show %s: code=%d err=%q out=%q", tool, code, errOut, out)
 		}
+		// The snippet came from core: one call to the tool's paste route, naming no key.
+		if got, want := takePasteCalls(), []string{"GET /v0/management/setup/clients/" + tool + "/paste"}; !slices.Equal(got, want) {
+			t.Errorf("client show %s called the paste route as %q, want %q", tool, got, want)
+		}
 	}
 	// Pi's files are JSON with no comment line in them.
 	out, errOut, _ := runWith("", false, "client", "show", "pi", "--json")
+	if got, want := takePasteCalls(), []string{"GET /v0/management/setup/clients/pi/paste"}; !slices.Equal(got, want) {
+		t.Errorf("client show pi --json called the paste route as %q, want %q", got, want)
+	}
 	if errOut != "" {
 		t.Errorf("client show pi --json: stderr=%q, want none", errOut)
 	}
@@ -495,6 +518,9 @@ func TestCLISetupAndClientShow(t *testing.T) {
 	const storedHint = "Replace <client-key:k1 (sk******ab)> with that key's full value from core's config file: pluxy never prints a stored key.\n"
 	if out, errOut, code := runWith("", false, "client", "show", "claude-code", "--key-id", "k1"); code != 0 || errOut != storedHint || !strings.Contains(out, "k1") || !strings.Contains(out, "sk******ab") || strings.Contains(out, "mgmt-secret") {
 		t.Errorf("client show --key-id k1: code=%d err=%q out=%q", code, errOut, out)
+	}
+	if got, want := takePasteCalls(), []string{"GET /v0/management/setup/clients/claude-code/paste?key_id=k1"}; !slices.Equal(got, want) {
+		t.Errorf("client show --key-id k1 called the paste route as %q, want %q", got, want)
 	}
 	if out, errOut, code := runWith("", false, "client", "show", "claude-code", "--key-id", "k1", "--json"); code != 0 || errOut != "" || !json.Valid([]byte(out)) {
 		t.Errorf("client show --key-id k1 --json: code=%d err=%q out=%q", code, errOut, out)
