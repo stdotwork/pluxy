@@ -74,6 +74,9 @@ func buildRequest(req llm.Request, accountID string, s settings, a account, ws b
 			Verbosity:     host,
 			WebSearch:     host,
 			WebSearchBare: isChatGPTHost(s, a),
+			// No page documents code_interpreter on the ChatGPT backend, and a tool it refuses
+			// would fail a request that works without it.
+			CodeExecution: host && !isChatGPTHost(s, a),
 		})
 		if err != nil {
 			return nil, err

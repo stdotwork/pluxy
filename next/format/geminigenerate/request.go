@@ -356,6 +356,10 @@ func parseTools(raw json.RawMessage, path string) []llm.Tool {
 			out = append(out, llm.Tool{Type: llm.ToolWebSearch, WebSearch: &llm.WebSearchTool{}, Origin: &llm.Origin{Format: format, Path: path + "." + k, Raw: one}})
 			continue
 		}
+		if k == "codeExecution" && !isNull(m[k]) {
+			out = append(out, llm.Tool{Type: llm.ToolCodeExecution, Origin: &llm.Origin{Format: format, Path: path + "." + k, Raw: one}})
+			continue
+		}
 		out = append(out, llm.Tool{Type: llm.ToolNative, Origin: &llm.Origin{Format: format, Path: path + "." + k, Raw: one}})
 	}
 	return out

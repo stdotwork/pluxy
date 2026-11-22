@@ -939,6 +939,29 @@ every `web_search` tool in `tools` to `type: "native"` with its `origin` unchang
 request's top-level `origin.raw` under `"web_search_options"` so older extensions receive the same
 request they did before 0.29.
 
+**Code execution tool.** Since 0.30, a tool with `type: "code_execution"` is a canonical
+provider-hosted code execution tool, read from Responses (`code_interpreter`), Messages
+(`code_execution_*`) and Gemini GenerateContent (`codeExecution` / `code_execution`). Chat
+Completions has no code execution tool. The client's original tool stays whole in `origin`
+(`origin.format`, `origin.path`, `origin.raw`); no provider-specific settings (containers, file
+IDs, memory limits, network policies, cache control, defer loading, strict, allowed callers) are
+shared across formats, so an encoder carries only the tool itself and reports every setting its
+target lacks as a dropped loss.
+
+Since 0.30, `options.tool_choice.mode` may also be `"code_execution"`, read from Responses
+`{"type": "code_interpreter"}` and Messages `{"type": "tool", "name": "code_execution"}` when the
+request defines a matching code execution tool. An encoder maps it where its target can force the
+code tool (`{"type": "code_interpreter"}` on Responses, `{"type": "tool", "name": "code_execution"}`
+on Messages) when the code tool is sent, and drops it with a loss otherwise or when the target has
+no way to force it.
+
+An extension below 0.30 does not receive `type: "code_execution"` or `tool_choice.mode: "code_execution"`:
+core converts every `code_execution` tool in `tools` to `type: "native"` with its `origin`
+unchanged, restores a Responses `tool_choice` back into the request's top-level `origin.raw` under
+`"tool_choice": {"type":"code_interpreter"}` (clearing `options.tool_choice`), and restores a
+Messages `tool_choice` back to `mode: "tool"` with its `name` (defaulting to `"code_execution"`),
+so older extensions receive the same request they did before 0.30.
+
 **Translation report.** The extension reports in the reply's `response.start` how it built its
 upstream request: `response.translation` with `from`, `to`, `passthrough` (true when the client's
 body went upstream rather than a body rebuilt from `items`) and `losses`, each with `kind`
@@ -1573,7 +1596,7 @@ extension below 0.23 gets none: it cannot promise alive frames.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.29. An extension reports the minor version it
+raise the minor version: this document is version 0.30. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1610,8 +1633,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.27 | [Native-only calls](#native-only-calls): describe's `native_parser` and the call's `native_only`. |
 | 0.28 | The request's `options.service_tier` and `options.verbosity` ([the request](#the-request)). |
 | 0.29 | The canonical `web_search` tool (`tool.type = "web_search"` and `tool.web_search`; [the request](#the-request)). |
+| 0.30 | The canonical `code_execution` tool and its forced choice (`tool.type = "code_execution"` and `tool_choice.mode = "code_execution"`; [the request](#the-request)). |
 
-## What version 0.29 leaves out
+## What version 0.30 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,

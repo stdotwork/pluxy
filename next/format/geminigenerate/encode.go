@@ -100,6 +100,12 @@ type EncodeOptions struct {
 	// tools are present), and without it the tool is left out and reported as dropped. A Gemini
 	// client's own googleSearch tool is written either way.
 	WebSearch bool
+	// CodeExecution says the caller knows its upstream takes a GenerateContent codeExecution
+	// tool: a request from another format then carries a canonical code execution tool on the
+	// documented Gemini model families when no function tools are present, and without it the
+	// tool is left out and reported as dropped. A Gemini client's own codeExecution tool is
+	// written either way.
+	CodeExecution bool
 }
 
 // EncodeRequestWith builds a GenerateContent request body as EncodeRequest does, changed by opts.
@@ -153,8 +159,44 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	var decls []json.RawMessage
 	var tools []json.RawMessage
 	hasOwnTools := false
+	droppedCodeExec := false
 	for i, t := range req.Tools {
 		p := pathOf(t.Origin, fmt.Sprintf("tools[%d]", i))
+		if t.Type == llm.ToolCodeExecution {
+			if t.Origin != nil && t.Origin.Format == format {
+				tools = append(tools, t.Origin.Raw)
+				hasOwnTools = true
+				continue
+			}
+			if !opts.CodeExecution {
+				e.lose(llm.LossDropped, p, llm.ToolCodeExecutionUnsent)
+				droppedCodeExec = true
+				continue
+			}
+			if !supportsCodeExecution(req.Model) {
+				e.lose(llm.LossDropped, p, fmt.Sprintf("GenerateContent model %q does not support codeExecution", req.Model))
+				droppedCodeExec = true
+				continue
+			}
+			if hasFunctionTools {
+				// Google documents combining built-in tools with custom function calling only in
+				// the Interactions API preview (https://aistudio.google.com/docs/tool-combination),
+				// not on GenerateContent; keep the function declarations and drop codeExecution.
+				e.lose(llm.LossDropped, p, "GenerateContent does not combine codeExecution with functionDeclarations")
+				droppedCodeExec = true
+				continue
+			}
+			if rf := o.ResponseFormat; rf != nil && (rf.Type == llm.ResponseFormatJSONObject || rf.Type == llm.ResponseFormatJSONSchema) && !combinesStructuredOutput(req.Model) {
+				e.lose(llm.LossDropped, p, fmt.Sprintf("GenerateContent model %q does not combine codeExecution with structured output", req.Model))
+				droppedCodeExec = true
+				continue
+			}
+			tools = append(tools, json.RawMessage(`{"codeExecution":{}}`))
+			for _, l := range rawjson.CodeExecutionLosses(t, p, format) {
+				e.losses = llm.AddLoss(e.losses, l)
+			}
+			continue
+		}
 		if t.Type == llm.ToolWebSearch {
 			if t.Origin != nil && t.Origin.Format == format {
 				tools = append(tools, t.Origin.Raw)
@@ -210,15 +252,27 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	if len(decls) > 0 {
 		tools = append([]json.RawMessage{marshalWith(map[string]any{"functionDeclarations": decls}, nil)}, tools...)
 	}
-	if len(tools) > 0 {
+	if o.ToolChoice != nil && o.ToolChoice.Mode == llm.ToolChoiceCodeExecution {
+		e.lose(llm.LossDropped, "tool_choice", "GenerateContent toolConfig cannot force codeExecution")
+		if len(tools) > 0 {
+			out["tools"] = tools
+			if (len(decls) > 0 || hasOwnTools) && o.ParallelToolCalls != nil && !*o.ParallelToolCalls {
+				if fc := e.functionCalling(nil, o.ParallelToolCalls, toolNameMap); fc != nil {
+					out["toolConfig"] = map[string]any{"functionCallingConfig": fc}
+				}
+			}
+		}
+	} else if len(tools) > 0 {
 		out["tools"] = tools
 		if len(decls) > 0 || hasOwnTools {
 			if fc := e.functionCalling(o.ToolChoice, o.ParallelToolCalls, toolNameMap); fc != nil {
 				out["toolConfig"] = map[string]any{"functionCallingConfig": fc}
 			}
 		} else if o.ToolChoice != nil && (o.ToolChoice.Mode == llm.ToolChoiceRequired || o.ToolChoice.Mode == llm.ToolChoiceTool) {
-			e.lose(llm.LossDropped, "tool_choice", "GenerateContent functionCallingConfig cannot force googleSearch without functionDeclarations")
+			e.lose(llm.LossDropped, "tool_choice", "GenerateContent functionCallingConfig cannot force built-in tools without functionDeclarations")
 		}
+	} else if droppedCodeExec && o.ToolChoice != nil && (o.ToolChoice.Mode == llm.ToolChoiceRequired || o.ToolChoice.Mode == llm.ToolChoiceTool) {
+		e.lose(llm.LossDropped, "tool_choice", "GenerateContent has no tools left to force")
 	}
 
 	var system []json.RawMessage
@@ -696,6 +750,64 @@ func supportsGoogleSearch(model string) bool {
 		}
 	}
 	for _, family := range googleSearchModels {
+		if m == family || strings.HasPrefix(m, family+"-") {
+			return true
+		}
+	}
+	return false
+}
+
+// combinesStructuredOutput reports whether model takes structured output beside a built-in tool:
+// only the Gemini 3 and 4 series (https://ai.google.dev/gemini-api/docs/structured-output#tools).
+func combinesStructuredOutput(model string) bool {
+	m := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(model)), "models/")
+	for _, series := range []string{"gemini-3-", "gemini-3.", "gemini-4-", "gemini-4."} {
+		if strings.HasPrefix(m, series) {
+			return true
+		}
+	}
+	return false
+}
+
+// codeExecutionModels are the Gemini model families whose official model pages
+// (https://aistudio.google.com/docs/models and https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/code-execution)
+// list Code execution as supported. Image, TTS, Live, native-audio, transcribe, embedding and
+// gemini-2.0-flash-lite models are excluded.
+//
+// shortcut: decided from a name list of documented model families, since protocol v0 has no
+// per-model code execution capability. Move this to per-model capabilities when describe carries them.
+var codeExecutionModels = []string{
+	"gemini-4-carbon",
+	"gemini-4-argon",
+	"gemini-4-neon",
+	"gemini-4-hydrogen",
+	"gemini-3.8-flash",
+	"gemini-3.6-flash",
+	"gemini-3.5-flash-lite",
+	"gemini-3.1-pro",
+	"gemini-3.1-flash-lite",
+	"gemini-3-pro",
+	"gemini-3-flash",
+	"gemini-2.5-pro",
+	"gemini-2.5-flash-lite",
+	"gemini-2.5-flash",
+	"gemini-2.0-flash",
+	"gemini-robotics-er-1.6",
+}
+
+// supportsCodeExecution reports whether model belongs to one of the Gemini model families listed
+// in codeExecutionModels.
+func supportsCodeExecution(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	m = strings.TrimPrefix(m, "models/")
+	if strings.Contains(m, "embedding") || strings.Contains(m, "-tts") || strings.Contains(m, "-image") ||
+		strings.Contains(m, "-live") || strings.Contains(m, "-native-audio") || strings.Contains(m, "-transcribe") {
+		return false
+	}
+	if strings.HasPrefix(m, "gemini-2.0-flash-lite") {
+		return false
+	}
+	for _, family := range codeExecutionModels {
 		if m == family || strings.HasPrefix(m, family+"-") {
 			return true
 		}

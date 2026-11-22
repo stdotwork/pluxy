@@ -109,7 +109,7 @@ func compactionRequest(call llm.Request) (llm.Request, error) {
 	req.Options.ThinkingSuffix = call.Options.ThinkingSuffix
 	req.DropPolicy, req.Caller = call.DropPolicy, call.Caller
 	req.Options.Stop, req.Options.ResponseFormat = nil, nil
-	if tc := req.Options.ToolChoice; tc != nil && (tc.Mode == llm.ToolChoiceRequired || tc.Mode == llm.ToolChoiceTool) {
+	if tc := req.Options.ToolChoice; tc != nil && (tc.Mode == llm.ToolChoiceRequired || tc.Mode == llm.ToolChoiceTool || tc.Mode == llm.ToolChoiceCodeExecution) {
 		req.Options.ToolChoice = nil
 	}
 	return req, nil

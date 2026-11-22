@@ -166,6 +166,20 @@ func ParseRequest(body []byte) (llm.Request, error) {
 	for i, raw := range in.Tools {
 		req.Tools = append(req.Tools, parseTool(raw, fmt.Sprintf("tools[%d]", i)))
 	}
+	if tc := req.Options.ToolChoice; tc != nil && tc.Mode == llm.ToolChoiceTool {
+		hasCodeExec := false
+		hasFunc := false
+		for _, t := range req.Tools {
+			if t.Type == llm.ToolCodeExecution && t.Name == tc.Name {
+				hasCodeExec = true
+			} else if t.IsFunction() && t.Name == tc.Name {
+				hasFunc = true
+			}
+		}
+		if hasCodeExec && !hasFunc {
+			tc.Mode = llm.ToolChoiceCodeExecution
+		}
+	}
 	if sys, err := parseSystem(in.System); err != nil {
 		return llm.Request{}, err
 	} else if sys != nil {
@@ -214,6 +228,13 @@ func parseTool(raw json.RawMessage, path string) llm.Tool {
 				BlockedDomains: blocked,
 				UserLocation:   w.UserLocation,
 			},
+			Origin: &llm.Origin{Format: format, Path: path, Raw: append(json.RawMessage(nil), raw...)},
+		}
+	}
+	if err == nil && strings.HasPrefix(t.Type, "code_execution_") {
+		return llm.Tool{
+			Type:   llm.ToolCodeExecution,
+			Name:   t.Name,
 			Origin: &llm.Origin{Format: format, Path: path, Raw: append(json.RawMessage(nil), raw...)},
 		}
 	}

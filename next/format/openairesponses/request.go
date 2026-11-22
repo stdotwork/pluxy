@@ -218,6 +218,12 @@ func parseTool(raw json.RawMessage, path string) llm.Tool {
 			Origin:    &llm.Origin{Format: format, Path: path, Raw: append(json.RawMessage(nil), raw...)},
 		}
 	}
+	if err == nil && t.Type == "code_interpreter" {
+		return llm.Tool{
+			Type:   llm.ToolCodeExecution,
+			Origin: &llm.Origin{Format: format, Path: path, Raw: append(json.RawMessage(nil), raw...)},
+		}
+	}
 	if err != nil || t.Type != "function" || t.Name == "" {
 		// Hosted and custom tools are not function tools; they survive whole.
 		return llm.Tool{Type: llm.ToolNative, Origin: &llm.Origin{Format: format, Path: path, Raw: append(json.RawMessage(nil), raw...)}}
@@ -246,6 +252,9 @@ func parseToolChoice(raw json.RawMessage) *llm.ToolChoice {
 	}
 	if o.Type == "allowed_tools" {
 		return allowedToolChoice(o.Mode, o.Tools)
+	}
+	if o.Type == "code_interpreter" && len(rawjson.Object(raw)) == 1 {
+		return &llm.ToolChoice{Mode: llm.ToolChoiceCodeExecution}
 	}
 	if o.Type == "function" && o.Name != "" && len(rawjson.Object(raw)) == 2 {
 		return &llm.ToolChoice{Mode: llm.ToolChoiceTool, Name: o.Name}

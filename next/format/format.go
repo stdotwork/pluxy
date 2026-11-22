@@ -11,4 +11,4 @@ package format
 // Raise it whenever a parser makes something else of a body it already read: the test next to
 // it (TestParserVersion) fails when a parser's output on a request it recorded (from the corpus
 // and the format tests) changes, and says so.
-const ParserVersion = 4
+const ParserVersion = 5

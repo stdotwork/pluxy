@@ -675,6 +675,7 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 	}
 	lost = append(lost, tierLost...)
 	req = downgradeWebSearch(e.info.ProtocolMinor, req)
+	req = downgradeCodeExecution(e.info.ProtocolMinor, req)
 	redact := protocol.NewRedactor(append(e.holdAccount(account), proxy)...)
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", e.socket)
