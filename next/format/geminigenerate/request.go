@@ -664,17 +664,26 @@ func (p *parser) response(pm map[string]json.RawMessage, ci, pi int, path string
 	queue := p.pending[fr.Name]
 	switch {
 	case id != "":
-		// A result without a name still answers its call, whichever name queue holds it.
+		// A result without a name still answers its call, whichever name queue holds it: the
+		// waiting call with that id that came first.
 		names := []string{fr.Name}
 		if fr.Name == "" {
-			names = slices.Collect(maps.Keys(p.pending))
+			names = slices.Sorted(maps.Keys(p.pending))
 		}
+		from, at, first := "", -1, -1
 		for _, n := range names {
-			q := p.pending[n]
-			if i := slices.IndexFunc(q, func(c pendingCall) bool { return c.id == id }); i >= 0 {
-				p.pending[n] = append(q[:i:i], q[i+1:]...)
-				break
+			for i, c := range p.pending[n] {
+				if c.id == id {
+					if first < 0 || c.seq < first {
+						from, at, first = n, i, c.seq
+					}
+					break
+				}
 			}
+		}
+		if at >= 0 {
+			q := p.pending[from]
+			p.pending[from] = append(q[:at:at], q[at+1:]...)
 		}
 	case len(queue) > 0:
 		id, p.pending[fr.Name] = queue[0].id, queue[1:]
