@@ -796,3 +796,65 @@ func TestRenderUsageUnknownStaysAbsent(t *testing.T) {
 		})
 	}
 }
+
+// A later Gemini stream chunk whose usageMetadata is empty, all zeros or null does not overwrite
+// the usage the upstream reported before it. A later chunk with counts does replace it, because
+// Gemini usageMetadata is cumulative.
+func TestStreamUsageLaterChunks(t *testing.T) {
+	finishOf := func(t *testing.T, chunks []string) *llm.Usage {
+		t.Helper()
+		d := NewStreamDecoder()
+		for _, c := range chunks {
+			if _, err := d.Decode([]byte(c)); err != nil {
+				t.Fatalf("Decode(%s): %v", c, err)
+			}
+		}
+		evs, err := d.Close()
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		for i := range evs {
+			if evs[i].Type == llm.EventFinish {
+				return evs[i].Usage
+			}
+		}
+		t.Fatal("Close produced no EventFinish")
+		return nil
+	}
+
+	before := []string{
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":"Hi"}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":20,"candidatesTokenCount":9,"totalTokenCount":29},"modelVersion":"m","responseId":"r1"}`,
+	}
+	cases := []struct{ name, later string }{
+		{"empty usageMetadata object", `{"candidates":[],"usageMetadata":{},"modelVersion":"m","responseId":"r1"}`},
+		{"zero-filled usageMetadata", `{"candidates":[],"usageMetadata":{"promptTokenCount":0,"candidatesTokenCount":0,"totalTokenCount":0},"modelVersion":"m","responseId":"r1"}`},
+		{"null usageMetadata", `{"candidates":[],"usageMetadata":null,"modelVersion":"m","responseId":"r1"}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			u := finishOf(t, append(append([]string{}, before...), c.later))
+			if u == nil || u.InputTokens == nil || *u.InputTokens != 20 || u.OutputTokens == nil || *u.OutputTokens != 9 {
+				t.Fatalf("usage = %+v, want the 20 prompt and 9 candidate tokens reported before the %s", u, c.name)
+			}
+		})
+	}
+
+	t.Run("later real counts replace", func(t *testing.T) {
+		later := `{"candidates":[],"usageMetadata":{"promptTokenCount":20,"candidatesTokenCount":15,"thoughtsTokenCount":4,"totalTokenCount":39},"modelVersion":"m","responseId":"r1"}`
+		u := finishOf(t, append(append([]string{}, before...), later))
+		if u == nil || u.InputTokens == nil || *u.InputTokens != 20 || u.OutputTokens == nil || *u.OutputTokens != 19 || u.ReasoningTokens == nil || *u.ReasoningTokens != 4 {
+			t.Fatalf("usage = %+v, want 20 input, 19 output, 4 reasoning", u)
+		}
+	})
+
+	t.Run("real counts replace initial zeros", func(t *testing.T) {
+		chunks := []string{
+			`{"candidates":[{"content":{"role":"model","parts":[{"text":"Hi"}]},"index":0}],"usageMetadata":{"promptTokenCount":0,"candidatesTokenCount":0,"totalTokenCount":0},"modelVersion":"m","responseId":"r1"}`,
+			`{"candidates":[{"content":{"role":"model","parts":[{"text":"!"}]},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":12,"candidatesTokenCount":5,"totalTokenCount":17},"modelVersion":"m","responseId":"r1"}`,
+		}
+		u := finishOf(t, chunks)
+		if u == nil || u.InputTokens == nil || *u.InputTokens != 12 || u.OutputTokens == nil || *u.OutputTokens != 5 {
+			t.Fatalf("usage = %+v, want 12 input and 5 output", u)
+		}
+	})
+}

@@ -91,6 +91,17 @@ func val(p *int64) int64 {
 	return *p
 }
 
+// reportsTokens reports whether the usage carries a count the upstream measured, as opposed to an
+// empty or zero-filled object a later chunk can send after the usage was already counted.
+func reportsTokens(u *llm.Usage) bool {
+	for _, p := range []*int64{u.InputTokens, u.OutputTokens, u.CachedInputTokens, u.CacheWriteInputTokens, u.ReasoningTokens} {
+		if p != nil && *p > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // contentFilterReasons are the finish reasons that mean a safety or policy filter stopped the
 // reply.
 var contentFilterReasons = map[string]bool{
@@ -397,7 +408,10 @@ func (d *StreamDecoder) decode(c chunk, out []llm.Event) []llm.Event {
 		d.started = true
 		out = append(out, llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: c.ResponseID, Model: c.ModelVersion, Format: format}})
 	}
-	if u := decodeUsage(c.UsageMetadata); u != nil {
+	// Gemini usageMetadata is cumulative and the last chunk usually carries it, but a later empty
+	// or zero-filled usageMetadata must not overwrite counts the upstream already reported; one
+	// with counts does.
+	if u := decodeUsage(c.UsageMetadata); u != nil && (d.usage == nil || reportsTokens(u)) {
 		d.usage = u
 	}
 	seenZero := false
