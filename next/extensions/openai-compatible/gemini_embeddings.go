@@ -590,7 +590,7 @@ func badEmbeddingRequest(message string) *llm.Error {
 }
 
 func unsupportedEmbeddingFeature(message string) *llm.Error {
-	return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Message: message}
+	return &llm.Error{Code: llm.CodeUnsupported, Status: http.StatusBadRequest, Scope: llm.ScopeCredential, Retryable: true, Message: message}
 }
 
 func upstreamEmbeddingError(message string) *llm.Error {

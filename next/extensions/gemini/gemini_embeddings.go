@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/llm"
@@ -356,6 +357,7 @@ func parseGeminiEmbedItem(item map[string]json.RawMessage, prefix string) (gemin
 			if k != "text" {
 				return out, &llm.Error{
 					Code:      llm.CodeUnsupported,
+					Status:    http.StatusBadRequest,
 					Scope:     llm.ScopeCredential,
 					Retryable: true,
 					Message:   fmt.Sprintf("%s[%d].%s: only text parts are supported on this embedding endpoint", field("content.parts"), i, k),
