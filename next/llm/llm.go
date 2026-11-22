@@ -63,7 +63,9 @@ const (
 )
 
 // Loss is one thing a translation could not carry over exactly. Path names it in the source
-// body (for example input[1].content[0] or metadata).
+// body (for example input[1].content[0] or metadata), or, where the translation edits the body it
+// has built, in that built body (a Codex history repair names an input[N] of the built Responses
+// body, and a Gemini thinking loss names a Gemini field, not one the client sent).
 type Loss struct {
 	Kind   string `json:"kind"`
 	Path   string `json:"path"`

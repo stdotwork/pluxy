@@ -699,7 +699,7 @@ Account `settings`, all optional:
 | `base_url` | Default `https://api.openai.com/v1` for an API key and a SIWC sign-in, `https://chatgpt.com/backend-api/codex` for a subscription. |
 | `codex_identity` | Default `true`: send the Codex client's `User-Agent` and `originator`. |
 | `image_generation_tool` | Default `true`: offer the hosted `image_generation` tool, as today's core does (never to a free plan or a `-spark` model). |
-| `image_generation_off_models` | Default none: model names, or patterns with `*` and `?` (any case), that are not offered the `image_generation` tool. A tool the client lists itself stays. |
+| `image_generation_off_models` | Default none: model names, or patterns with `*` and `?` (any case), that are not offered the `image_generation` tool. Each is matched (Go `path.Match`) against the model name sent upstream, after any alias or prefix has been applied. A tool the client lists itself stays. |
 | `codex_client_version` | Default `0.159.0`: the version in the Codex client's `User-Agent` when `codex_identity` is on, and in the ChatGPT model list's `client_version`. |
 | `prompt_cache_retention_passthrough` | Default `false`: send the client's `prompt_cache_retention` on, for an upstream that takes it (neither today's core nor the Codex client sends it to the ChatGPT backend, and a SIWC sign-in never sends it). |
 | `callback_listen` | Default `true`: let a browser or SIWC sign-in listen on port 1455. |
@@ -835,7 +835,7 @@ subscription's token an hour before it expires.
 | `client_id` | Claude's OAuth client. Default is Claude's. |
 | `rebuild_mid_system_message` | `true` moves the text of each `system` message in the conversation (from a Messages client or a translated request) into the top-level `system` prompt, after what it holds, and removes those messages, for a Claude-compatible upstream that refuses them there; non-text blocks in them are left out. Default `false`: a Messages client's mid-conversation `system` messages stay where the client put them, and a translated request for a Claude model keeps system and developer messages after the conversation has started in place (as `system` messages on models that take them there, or as `<system-reminder>` text in a user turn on older models); non-Claude models put every system message in the top-level prompt. |
 | `model_level_cooling` | `true` keeps a used-up shared subscription window (5-hour or 7-day) on the model that hit it, so the account's other models stay in use; default `false` blocks the whole account. Today's `claude.model-level-cooling`. |
-| `cache_ttl` | Lifetime of `cache_control` markers pluxy adds to translated requests that set none: `"5m"` (default) or `"1h"`. |
+| `cache_ttl` | Lifetime of `cache_control` markers pluxy adds to translated requests that set none: `"5m"` (default) or `"1h"`. A Responses client's own `prompt_cache_retention` or `prompt_cache_options.ttl` (the first wins) takes precedence over it for that request. |
 
 A Messages request passes through with its body kept as the client wrote it, so thinking blocks,
 signatures, `cache_control` markers and sampling settings arrive intact. The exceptions are the
