@@ -58,6 +58,13 @@ func (p pieces) event(ev llm.Event) llm.Event {
 	e := *ev.Error
 	e.Message = protocol.RemovePieces(e.Message, p...)
 	e.Raw = p.raw(e.Raw)
+	if len(e.Headers) > 0 {
+		h := make(map[string]string, len(e.Headers))
+		for k, v := range e.Headers {
+			h[k] = protocol.RemovePieces(v, p...)
+		}
+		e.Headers = h
+	}
 	ev.Error = &e
 	return ev
 }

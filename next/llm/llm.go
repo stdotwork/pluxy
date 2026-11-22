@@ -472,6 +472,10 @@ type ResponseInfo struct {
 	Raw json.RawMessage `json:"raw,omitempty"`
 	// Translation reports how the extension built the upstream request from the client's.
 	Translation *Translation `json:"translation,omitempty"`
+	// Headers holds the upstream's documented rate-limit response headers (protocol minor
+	// version 34), keyed by lower-case name. Only headers from the explicit allowlist for
+	// Format are carried; never cookies, tokens, or account/organization IDs.
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 // Output item kinds.
@@ -579,6 +583,10 @@ type Error struct {
 	// parts the upstream's format cannot carry (protocol 0.16). Core tells such a refusal from an
 	// account that cannot serve the call by it.
 	Dropped []string `json:"dropped,omitempty"`
+	// Headers holds the upstream's documented rate-limit response headers on an error reply
+	// (protocol minor version 34), keyed by lower-case name. Only headers from the explicit
+	// allowlist are carried; never cookies, tokens, or account/organization IDs.
+	Headers map[string]string `json:"headers,omitempty"`
 	// UsageLimit, set only by core, marks the final usage-limit reply: every account for the
 	// request is out of quota until a reset the upstream named (routing's usage-limit quota
 	// response mode). It never travels over the protocol.

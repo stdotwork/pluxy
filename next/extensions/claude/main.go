@@ -265,6 +265,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return err
 	}
 	defer resp.Body.Close()
+	send.headers = llm.ExtractRateLimitHeaders(llm.FormatAnthropicMessages, resp.Header)
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		return relayStream(ctx, resp.Body, send)
 	}
@@ -447,7 +448,11 @@ func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
-	if err := out.Start(llm.ResponseInfo{Model: call.Request.Model, Format: llm.FormatAnthropicMessages}); err != nil {
+	if err := out.Start(llm.ResponseInfo{
+		Model:   call.Request.Model,
+		Format:  llm.FormatAnthropicMessages,
+		Headers: llm.ExtractRateLimitHeaders(llm.FormatAnthropicMessages, resp.Header),
+	}); err != nil {
 		return err
 	}
 	return out.Finish(llm.Finish{Reason: llm.FinishStop}, &llm.Usage{InputTokens: &n, Raw: llm.RawJSON(raw)})
@@ -621,6 +626,7 @@ func setField(body []byte, key string, v any) ([]byte, error) {
 type reporting struct {
 	*sdk.Stream
 	tr      *llm.Translation
+	headers map[string]string
 	names   map[string]string
 	account string // the account the reply comes from, for its web search results
 	calls   *openairesponses.CustomCallCheck
@@ -630,6 +636,7 @@ func (r *reporting) Send(ev llm.Event) error {
 	if ev.Type == llm.EventResponseStart && ev.Response != nil {
 		info := *ev.Response
 		info.Translation = r.tr
+		info.Headers = r.headers
 		ev.Response = &info
 	}
 	if ev.Type == llm.EventItemStart && ev.Item != nil && ev.Item.Kind == llm.ItemToolCall {
@@ -710,7 +717,12 @@ func upstreamError(resp *http.Response, model string, modelLevelCooling bool) *l
 		} `json:"error"`
 	}
 	_ = json.Unmarshal(raw, &parsed)
-	e := &llm.Error{Status: resp.StatusCode, Message: parsed.Error.Message, ProviderCode: parsed.Error.Type}
+	e := &llm.Error{
+		Status:       resp.StatusCode,
+		Message:      parsed.Error.Message,
+		ProviderCode: parsed.Error.Type,
+		Headers:      llm.ExtractRateLimitHeaders(llm.FormatAnthropicMessages, resp.Header),
+	}
 	if e.Message == "" {
 		e.Message = fmt.Sprintf("upstream returned %s", resp.Status)
 	}
