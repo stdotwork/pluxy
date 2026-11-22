@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -55,9 +56,9 @@ var presets = map[string]preset{
 }
 
 // tierFields say which of a request's service tier, verbosity, web search, code execution tools,
-// structured output and candidate count an upstream's API takes.
+// structured output, candidate count and replayed assistant annotations an upstream's API takes.
 type tierFields struct {
-	serviceTier, verbosity, webSearch, codeExecution, structuredOutput, candidateCount bool
+	serviceTier, verbosity, webSearch, codeExecution, structuredOutput, candidateCount, assistantAnnotations bool
 }
 
 // tierHosts are the vendors whose API documentation names a service tier, a verbosity, a hosted
@@ -95,6 +96,8 @@ type tierFields struct {
 //     https://ai.google.dev/gemini-api/docs/google-search and codeExecution in
 //     https://aistudio.google.com/docs/code-execution (gated by the Gemini encoder to documented
 //     model families without function declarations). GenerateContent has no verbosity.
+//   - openrouter.ai: replayed assistant message annotations on Chat Completions
+//     (https://openrouter.ai/docs/features/multimodal/pdfs).
 var tierHosts = map[string]map[string]tierFields{
 	"api.openai.com": {
 		llm.FormatOpenAIChat:      {serviceTier: true, verbosity: true, webSearch: true, candidateCount: true},
@@ -102,6 +105,7 @@ var tierHosts = map[string]map[string]tierFields{
 	},
 	"api.anthropic.com":                 {llm.FormatAnthropicMessages: {serviceTier: true, webSearch: true, codeExecution: true, structuredOutput: true}},
 	"generativelanguage.googleapis.com": {llm.FormatGeminiGenerate: {serviceTier: true, webSearch: true, codeExecution: true, candidateCount: true}},
+	"openrouter.ai":                     {llm.FormatOpenAIChat: {assistantAnnotations: true}},
 }
 
 // tierFieldsOf returns which of a tier and a verbosity the account's upstream takes on the wire of
@@ -147,11 +151,13 @@ func checkShaping(s settings) string {
 }
 
 // shapeChat shapes the body of a Chat request for the account's upstream, whether the client's own
-// or a translation: the developer role, string content and reasoning_content passback (see
-// shaping). It returns body itself when nothing changes, and the losses it causes.
+// or a translation: the developer role, string content, reasoning_content passback (see shaping)
+// and stripping replayed assistant annotations on hosts not documented to accept them. It returns
+// body itself when nothing changes, and the losses it causes.
 func shapeChat(body []byte, s settings) ([]byte, []llm.Loss, error) {
 	sh := shapingOf(s)
-	if sh.developerRole == roleDeveloper && !sh.stringContent && sh.passback == nil {
+	stripAnnotations := !tierFieldsOf(s, llm.FormatOpenAIChat).assistantAnnotations && bytes.Contains(body, []byte(`"annotations"`))
+	if sh.developerRole == roleDeveloper && !sh.stringContent && sh.passback == nil && !stripAnnotations {
 		return body, nil, nil
 	}
 	var top map[string]json.RawMessage
@@ -178,6 +184,14 @@ func shapeChat(body []byte, s settings) ([]byte, []llm.Loss, error) {
 			if text, ok := allText(m["content"]); ok {
 				m["content"], _ = json.Marshal(text)
 				changed = true
+			}
+		}
+		if stripAnnotations && role == "assistant" {
+			if _, ok := m["annotations"]; ok {
+				delete(m, "annotations")
+				changed = true
+				losses = llm.AddLoss(losses, llm.Loss{Kind: llm.LossDropped, Path: fmt.Sprintf("messages[%d].annotations", i),
+					Detail: "Chat Completions assistant messages do not take annotations"})
 			}
 		}
 		if sh.passback == nil || role != "assistant" {

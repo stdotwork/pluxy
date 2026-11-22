@@ -254,6 +254,11 @@ func upstreamBody(req llm.Request, format string, s settings) ([]byte, *llm.Tran
 	if tr.Passthrough && (len(tr.Losses) > 0 || !bytes.Equal(sent, body)) {
 		tr.Passthrough = false
 	}
+	if req.DropPolicy == llm.DropReject && tr.Dropped() {
+		paths := tr.DroppedPaths()
+		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Dropped: paths,
+			Message: formatNames[format] + " cannot carry parts of this request: " + strings.Join(paths, ", ")}
+	}
 	return body, tr, nil
 }
 
@@ -554,7 +559,7 @@ func buildBody(req llm.Request, target string, s settings) ([]byte, *llm.Transla
 	switch target {
 	case llm.FormatOpenAIChat:
 		encode = func(r llm.Request) ([]byte, []llm.Loss, error) {
-			return openaichat.EncodeRequestWith(r, openaichat.EncodeOptions{ServiceTier: f.serviceTier, Verbosity: f.verbosity, WebSearch: f.webSearch, CandidateCount: f.candidateCount})
+			return openaichat.EncodeRequestWith(r, openaichat.EncodeOptions{ServiceTier: f.serviceTier, Verbosity: f.verbosity, WebSearch: f.webSearch, CandidateCount: f.candidateCount, AssistantAnnotations: f.assistantAnnotations})
 		}
 	case llm.FormatOpenAIResponses:
 		encode = func(r llm.Request) ([]byte, []llm.Loss, error) {
