@@ -73,6 +73,8 @@ export interface Setup {
   scanned_at?: string;
   found: SetupFound;
   picks: SetupPick[];
+  /** How many extension registries core reads from; absent on older cores. */
+  registries?: number;
 }
 
 /** One pick's outcome in the reply to an apply. */

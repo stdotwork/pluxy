@@ -131,6 +131,8 @@ const t = strings("setup", {
   providersHint: "A provider lets pluxy use one kind of account, such as a Claude subscription.",
   tickHint: "Tick the ones you have an account for.",
   noPicks: "pluxy has no provider to offer here. The Extensions page lists what can be installed.",
+  noRegistry:
+    "This build has no extension registry, so pluxy has no provider to offer. From next/ in the source tree, run go run ./cmd/pluxy-pack -out <dir>, then put the bundled folder beside pluxy or start core with -bundled <dir>/bundled/index.json.",
   installed: "Installed",
   installedNotRunning: "Installed, not running",
   installedFailed: "{title} was installed but did not start: {error}",
@@ -147,6 +149,7 @@ const t = strings("setup", {
   installing: "Installing…",
   nothingTicked:
     "Nothing is ticked, so pluxy will run with no provider. You can add one later on the Extensions page.",
+  nothingTickedNoRegistry: "This build has no extension registry, so pluxy will run with no provider.",
   nothingMore: "Nothing more to install.",
   stillLooking: "pluxy is still looking at this machine. What it suggests shows here in a few seconds.",
   allInstalled: "Every provider on the list is installed.",
@@ -157,6 +160,8 @@ const t = strings("setup", {
   accountTick: "This comes after a provider: tick one above and press {button}.",
   accountNoProvider:
     "This comes after a provider, and pluxy runs none yet. Install one on the {extensions} page.",
+  accountNoRegistry:
+    "This comes after a provider, and this build has no extension registry to install one from.",
   extensions: "Extensions",
   accountsConnected: { one: "{count} account connected.", other: "{count} accounts connected." },
   accountsLink: "See them on Accounts",
@@ -510,7 +515,11 @@ export function Providers(props: {
   return (
     <Card title={t("providers")}>
       {picks.length === 0 ? (
-        <Empty>{t("noPicks")}</Empty>
+        props.setup.registries === 0 ? (
+          <Notice tone="warn">{t("noRegistry")}</Notice>
+        ) : (
+          <Empty>{t("noPicks")}</Empty>
+        )
       ) : (
         <>
           <p class="muted setup-hint">
@@ -617,7 +626,7 @@ export function Start(props: {
     // What to tick comes with the first scan's end: until then an empty list is not a choice.
     line = t("stillLooking");
   } else if (!props.provider && setup.first_run) {
-    line = t("nothingTicked");
+    line = setup.registries === 0 ? t("nothingTickedNoRegistry") : t("nothingTicked");
     action = (
       <Button variant="primary" disabled={props.busy} onClick={props.onFinish}>
         {t("startWithout")}
@@ -660,9 +669,11 @@ export function Account(props: {
       ? t("accountAfter", { button })
       : providerPicks(setup).length > 0
         ? t("accountTick", { button })
-        : rich(t("accountNoProvider"), {
-            extensions: <a href="#/extensions">{t("extensions")}</a>,
-          });
+        : setup.registries === 0
+          ? t("accountNoRegistry")
+          : rich(t("accountNoProvider"), {
+              extensions: <a href="#/extensions">{t("extensions")}</a>,
+            });
   return (
     <Card title={t("account")}>
       {props.error && <Notice tone="danger">{props.error}</Notice>}

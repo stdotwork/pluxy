@@ -583,11 +583,12 @@ const (
 
 // Setup is GET /setup's and POST /setup/scan's reply.
 type Setup struct {
-	FirstRun  bool        `json:"first_run"`
-	Scanning  bool        `json:"scanning"`
-	ScannedAt *time.Time  `json:"scanned_at,omitempty"`
-	Found     SetupFound  `json:"found"`
-	Picks     []SetupPick `json:"picks"`
+	FirstRun   bool        `json:"first_run"`
+	Scanning   bool        `json:"scanning"`
+	ScannedAt  *time.Time  `json:"scanned_at,omitempty"`
+	Found      SetupFound  `json:"found"`
+	Picks      []SetupPick `json:"picks"`
+	Registries int         `json:"registries"`
 }
 
 // SetupFound is what core found on the machine it runs on.

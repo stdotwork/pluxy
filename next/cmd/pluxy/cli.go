@@ -287,6 +287,10 @@ var commands = []command{
 		run: func(x *invocation) error {
 			var r management.RegistriesReply
 			return x.call(http.MethodGet, "/registries", nil, nil, &r, func() {
+				if len(r.Registries) == 0 {
+					x.printf("This build has no extension registry.\nFrom next/ in the source tree, run: go run ./cmd/pluxy-pack -out <dir>\nThen put the bundled folder beside pluxy, or start core with -bundled <dir>/bundled/index.json.\n")
+					return
+				}
 				rows := [][]string{{"REGISTRY", "PACKAGE", "TITLE", "KIND", "TIER", "VERSIONS"}}
 				for _, reg := range r.Registries {
 					if reg.Error != "" {

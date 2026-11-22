@@ -741,3 +741,17 @@ test("each refusal is said in words a person can act on", () => {
   expect(onOld).not.toContain(">Bring it across</button>");
   expect(onOld).not.toContain("Or use the command");
 });
+
+test("when core has no extension registry, Setup says so and names what to do next", () => {
+  const noReg = view({ ...nothingFound, picks: [], registries: 0 });
+  expect(noReg).toContain("This build has no extension registry");
+  expect(noReg).toContain("go run ./cmd/pluxy-pack -out");
+  expect(noReg).toContain("-bundled");
+  expect(noReg).not.toContain("The Extensions page lists what can be installed.");
+  expect(noReg).not.toContain("#/extensions");
+
+  // With a registry configured (even if no setup picks match), the no-registry message does not appear.
+  const hasReg = view({ ...nothingFound, picks: [], registries: 1 });
+  expect(hasReg).not.toContain("This build has no extension registry");
+  expect(hasReg).toContain("The Extensions page lists what can be installed.");
+});
