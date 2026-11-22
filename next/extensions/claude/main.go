@@ -247,16 +247,11 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
-	body, tr, err := buildBodyWith(call.Request, s.CacheTTL, serviceOptions(anthropicmessages.EncodeOptions{
+	body, tr, err := buildBodyFor(call.Request, s, serviceOptions(anthropicmessages.EncodeOptions{
 		SearchResultOwned: func(enc string) bool { return searchOwners.mintedBy(enc, call.Account.ID) },
 	}, call.Request, s.BaseURL))
 	if err != nil {
 		return err
-	}
-	if s.RebuildMidSystemMessage {
-		if body, err = moveSystemMessages(body); err != nil {
-			return err
-		}
 	}
 	send := &reporting{Stream: out, tr: tr, names: replyNames(call.Request, tr), account: call.Account.ID,
 		calls: openairesponses.NewCustomCallCheck(call.Request, tr)}
@@ -414,16 +409,11 @@ func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
 			Message: "this account's base_url is not Anthropic's own (" + defaultBaseURL + "), which is the only one this extension sends a token count to"}
 	}
-	body, tr, err := buildBodyWith(call.Request, s.CacheTTL, serviceOptions(anthropicmessages.EncodeOptions{
+	body, tr, err := buildBodyFor(call.Request, s, serviceOptions(anthropicmessages.EncodeOptions{
 		SearchResultOwned: func(enc string) bool { return searchOwners.mintedBy(enc, call.Account.ID) },
 	}, call.Request, s.BaseURL))
 	if err != nil {
 		return err
-	}
-	if s.RebuildMidSystemMessage {
-		if body, err = moveSystemMessages(body); err != nil {
-			return err
-		}
 	}
 	count := anthropicmessages.CountRequest
 	if tr.Passthrough {
@@ -506,6 +496,15 @@ func serviceOptions(opts anthropicmessages.EncodeOptions, req llm.Request, baseU
 // buildBodyWith builds the body as buildBodyWithTTL does, encoding a request in another format
 // with opts (anthropicmessages.EncodeRequestWith).
 func buildBodyWith(req llm.Request, cacheTTL string, opts anthropicmessages.EncodeOptions) ([]byte, *llm.Translation, error) {
+	return buildBodyFor(req, settings{CacheTTL: cacheTTL}, opts)
+}
+
+// buildBodyFor builds the body for an account with settings s, encoding a request in another
+// format with opts (anthropicmessages.EncodeRequestWith). When s.RebuildMidSystemMessage is set,
+// system messages in a Messages conversation move into the top-level system prompt before
+// RepairTurns runs, so a mid-conversation system message cannot mislead turn repair.
+func buildBodyFor(req llm.Request, s settings, opts anthropicmessages.EncodeOptions) ([]byte, *llm.Translation, error) {
+	cacheTTL := s.CacheTTL
 	tr := &llm.Translation{To: llm.FormatAnthropicMessages}
 	if n := req.Native; n != nil {
 		tr.From = n.Format
@@ -513,15 +512,20 @@ func buildBodyWith(req llm.Request, cacheTTL string, opts anthropicmessages.Enco
 			tr.Passthrough = true
 			body := n.Body
 			var losses []llm.Loss
-			if s := req.Options.ThinkingSuffix; s != "" {
+			if suf := req.Options.ThinkingSuffix; suf != "" {
 				var err error
-				if body, losses, _, err = anthropicmessages.ApplyEffortReport(body, req.Model, s); err != nil {
+				if body, losses, _, err = anthropicmessages.ApplyEffortReport(body, req.Model, suf); err != nil {
 					return nil, nil, err
 				}
 			}
 			body, err := fixBody(body)
 			if err != nil {
 				return nil, nil, err
+			}
+			if s.RebuildMidSystemMessage {
+				if body, err = moveSystemMessages(body); err != nil {
+					return nil, nil, err
+				}
 			}
 			var repaired, fitted []llm.Loss
 			if body, repaired, err = anthropicmessages.RepairTurns(body, req.Model); err != nil {
@@ -594,6 +598,11 @@ func buildBodyWith(req llm.Request, cacheTTL string, opts anthropicmessages.Enco
 	tr.Losses = losses
 	if err := refuseDrops(req, tr); err != nil {
 		return nil, nil, err
+	}
+	if s.RebuildMidSystemMessage {
+		if body, err = moveSystemMessages(body); err != nil {
+			return nil, nil, err
+		}
 	}
 	return body, tr, nil
 }
