@@ -315,8 +315,13 @@ core cannot write to its client, it stops reading the connection; your writes th
 that blocking should reach your upstream read. This is how a slow client slows the upstream
 instead of filling memory.
 
-Extensions never retry on their own. Report what happened with a structured error and let core
-decide.
+Extensions do not retry on their own: report what happened with a structured error and let core
+decide. Two built-in extensions make a single resend before any content has been sent to core: the
+Codex extension drops encrypted reasoning items and resends once on an upstream HTTP 400 refusing
+foreign encrypted reasoning (`invalid_encrypted_content`, or a message that the encrypted content
+could not be verified or decrypted; not when `drop_policy` is `reject`), and
+the Gemini extension resends a `GenerateContent` request once when the upstream reply ends with
+`MALFORMED_FUNCTION_CALL` before any content is sent.
 
 ### `count_tokens`
 
