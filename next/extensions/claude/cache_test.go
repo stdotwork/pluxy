@@ -286,12 +286,122 @@ func TestResponsesPromptCacheMapping(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected DropReject failure: %v", err)
 		}
-		if len(tr.Losses) != 1 || tr.Losses[0].Kind != llm.LossApproximated || tr.Losses[0].Path != "prompt_cache_options" {
-			t.Errorf("losses = %+v, want single approximated prompt_cache_options", tr.Losses)
+		if len(tr.Losses) != 1 || tr.Losses[0].Kind != llm.LossApproximated || tr.Losses[0].Path != "prompt_cache_options.ttl" {
+			t.Errorf("losses = %+v, want single approximated prompt_cache_options.ttl", tr.Losses)
 		}
 		want := `{"model":"claude-sonnet-4-6","max_tokens":64000,"stream":false,"messages":[{"role":"user","content":[{"type":"text","text":"Hi","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}`
 		if !jsonEqual(body, json.RawMessage(want)) {
 			t.Errorf("got:\n%s\nwant:\n%s", body, want)
+		}
+	})
+
+	t.Run("prompt_cache_retention with prompt_cache_options reports options ttl dropped", func(t *testing.T) {
+		in := `{"model":"claude-sonnet-4-6","input":"Hi","prompt_cache_retention":"in_memory","prompt_cache_options":{"ttl":"1h"}}`
+		req, err := openairesponses.ParseRequest([]byte(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, tr, err := buildBodyWithTTL(req, cacheTTL1h)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(tr.Losses) != 1 || tr.Losses[0].Kind != llm.LossDropped || tr.Losses[0].Path != "prompt_cache_options.ttl" {
+			t.Errorf("losses = %+v, want single dropped prompt_cache_options.ttl", tr.Losses)
+		}
+		want := `{"model":"claude-sonnet-4-6","max_tokens":64000,"stream":false,"messages":[{"role":"user","content":[{"type":"text","text":"Hi","cache_control":{"type":"ephemeral"}}]}]}`
+		if !jsonEqual(body, json.RawMessage(want)) {
+			t.Errorf("got:\n%s\nwant:\n%s", body, want)
+		}
+
+		req.DropPolicy = llm.DropReject
+		_, _, err = buildBodyWithTTL(req, cacheTTL1h)
+		var e *llm.Error
+		if !errors.As(err, &e) || !slices.Equal(e.Dropped, []string{"prompt_cache_options.ttl"}) {
+			t.Errorf("DropReject err = %v, want prompt_cache_options.ttl dropped", err)
+		}
+	})
+
+	t.Run("prompt_cache_options ttl that agrees with prompt_cache_retention loses nothing", func(t *testing.T) {
+		for _, optTTL := range []string{"1h", "24h"} {
+			in := `{"model":"claude-sonnet-4-6","input":"Hi","prompt_cache_retention":"24h","prompt_cache_options":{"ttl":"` + optTTL + `"}}`
+			req, err := openairesponses.ParseRequest([]byte(in))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, tr, err := buildBodyWithTTL(req, cacheTTL5m)
+			if err != nil {
+				t.Fatalf("ttl %s: unexpected error: %v", optTTL, err)
+			}
+			if len(tr.Losses) != 1 || tr.Losses[0].Kind != llm.LossApproximated || tr.Losses[0].Path != "prompt_cache_retention" {
+				t.Errorf("ttl %s: losses = %+v, want only the approximated prompt_cache_retention", optTTL, tr.Losses)
+			}
+			req.DropPolicy = llm.DropReject
+			if _, _, err := buildBodyWithTTL(req, cacheTTL5m); err != nil {
+				t.Errorf("ttl %s: DropReject refused a ttl that was applied: %v", optTTL, err)
+			}
+		}
+	})
+
+	t.Run("prompt_cache_options with extra keys applies ttl and reports only extra keys dropped", func(t *testing.T) {
+		in := `{"model":"claude-sonnet-4-6","input":"Hi","prompt_cache_options":{"ttl":"24h","scope":"org","key":"k1"}}`
+		req, err := openairesponses.ParseRequest([]byte(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, tr, err := buildBodyWithTTL(req, cacheTTL5m)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := `{"model":"claude-sonnet-4-6","max_tokens":64000,"stream":false,"messages":[{"role":"user","content":[{"type":"text","text":"Hi","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}`
+		if !jsonEqual(body, json.RawMessage(want)) {
+			t.Errorf("got:\n%s\nwant:\n%s", body, want)
+		}
+		if len(tr.Losses) != 3 ||
+			tr.Losses[0].Kind != llm.LossApproximated || tr.Losses[0].Path != "prompt_cache_options.ttl" ||
+			tr.Losses[1].Kind != llm.LossDropped || tr.Losses[1].Path != "prompt_cache_options.key" ||
+			tr.Losses[2].Kind != llm.LossDropped || tr.Losses[2].Path != "prompt_cache_options.scope" {
+			t.Errorf("losses = %+v, want approximated ttl and dropped key, scope", tr.Losses)
+		}
+
+		req.DropPolicy = llm.DropReject
+		_, _, err = buildBodyWithTTL(req, cacheTTL5m)
+		var e *llm.Error
+		if !errors.As(err, &e) || !slices.Equal(e.Dropped, []string{"prompt_cache_options.key", "prompt_cache_options.scope"}) {
+			t.Errorf("DropReject err = %v, want only prompt_cache_options.key and prompt_cache_options.scope dropped", err)
+		}
+	})
+
+	t.Run("prompt_cache_options ttl 1h alone passes DropReject with no losses", func(t *testing.T) {
+		in := `{"model":"claude-sonnet-4-6","input":"Hi","prompt_cache_options":{"ttl":"1h"}}`
+		req, err := openairesponses.ParseRequest([]byte(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.DropPolicy = llm.DropReject
+		body, tr, err := buildBodyWithTTL(req, cacheTTL5m)
+		if err != nil {
+			t.Fatalf("unexpected DropReject failure: %v", err)
+		}
+		if len(tr.Losses) != 0 {
+			t.Errorf("losses = %+v, want none", tr.Losses)
+		}
+		want := `{"model":"claude-sonnet-4-6","max_tokens":64000,"stream":false,"messages":[{"role":"user","content":[{"type":"text","text":"Hi","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}`
+		if !jsonEqual(body, json.RawMessage(want)) {
+			t.Errorf("got:\n%s\nwant:\n%s", body, want)
+		}
+	})
+
+	t.Run("prompt_cache_retention with prompt_cache_options extra keys reports each field dropped", func(t *testing.T) {
+		in := `{"model":"claude-sonnet-4-6","input":"Hi","prompt_cache_retention":"in_memory","prompt_cache_options":{"ttl":"1h","key":"k1"}}`
+		req, err := openairesponses.ParseRequest([]byte(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.DropPolicy = llm.DropReject
+		_, _, err = buildBodyWithTTL(req, cacheTTL1h)
+		var e *llm.Error
+		if !errors.As(err, &e) || !slices.Equal(e.Dropped, []string{"prompt_cache_options.ttl", "prompt_cache_options.key"}) {
+			t.Errorf("DropReject err = %v, want prompt_cache_options.ttl and prompt_cache_options.key dropped", err)
 		}
 	})
 }
