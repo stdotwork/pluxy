@@ -350,7 +350,12 @@ func open(ctx context.Context, client *http.Client, loc string, limit int64) (io
 	return resp.Body, nil
 }
 
-// ReadIndex reads and checks the index of r.
+// IndexTimeout is how long ReadIndex waits for one registry's index, from the request to
+// its last byte. An index is small, so a registry that is slower than this is stalled.
+// Archive downloads are not bound by it. It is a variable so tests can shorten it.
+var IndexTimeout = 30 * time.Second
+
+// ReadIndex reads and checks the index of r. It gives up after IndexTimeout.
 func ReadIndex(ctx context.Context, client *http.Client, r Registry) (*Index, error) {
 	if client == nil {
 		client = DefaultClient()
@@ -358,14 +363,23 @@ func ReadIndex(ctx context.Context, client *http.Client, r Registry) (*Index, er
 	if err := CheckLocation(r.URL); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrRefused, err)
 	}
+	parent := ctx
+	ctx, cancel := context.WithTimeout(ctx, IndexTimeout)
+	defer cancel()
+	timedOut := func(err error) error {
+		if parent.Err() == nil && ctx.Err() != nil {
+			return fmt.Errorf("registry %s: %w: GET %s: no answer within %s", r.Name, ErrFetch, RedactURL(r.URL), IndexTimeout)
+		}
+		return err
+	}
 	body, err := open(ctx, client, r.URL, maxIndex)
 	if err != nil {
-		return nil, fmt.Errorf("registry %s: %w", r.Name, err)
+		return nil, timedOut(fmt.Errorf("registry %s: %w", r.Name, err))
 	}
 	defer body.Close()
 	b, err := io.ReadAll(io.LimitReader(body, maxIndex+1))
 	if err != nil {
-		return nil, fmt.Errorf("registry %s: %w: %v", r.Name, ErrFetch, err)
+		return nil, timedOut(fmt.Errorf("registry %s: %w: %v", r.Name, ErrFetch, err))
 	}
 	if len(b) > maxIndex {
 		return nil, fmt.Errorf("registry %s: %w: the index is larger than %d bytes", r.Name, ErrRefused, maxIndex)
