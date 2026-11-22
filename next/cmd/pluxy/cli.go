@@ -123,10 +123,44 @@ func (x *invocation) call(method, path string, q url.Values, in, out any, show f
 	return nil
 }
 
-// table writes rows as aligned columns, the first row a header.
+// writeEscaped writes b to w through escapeWriter and flushes any held trailing bytes.
+func writeEscaped(w io.Writer, b []byte) error {
+	ew := &escapeWriter{w: w}
+	if _, err := ew.Write(b); err != nil {
+		return err
+	}
+	return ew.flush()
+}
+
+// cell escapes s as a single-line cell when standard output is a terminal.
+func (x *invocation) cell(s string) string {
+	if stdoutIsTerminal(x.stdout) {
+		return escapeTableCell(s)
+	}
+	return s
+}
+
+// errCell escapes s as a single-line cell when standard error is a terminal.
+func (x *invocation) errCell(s string) string {
+	if stderrIsTerminal(x.stderr) {
+		return escapeTableCell(s)
+	}
+	return s
+}
+
+// table writes rows as aligned columns, the first row a header. On a terminal each cell is
+// escaped so foreign bytes cannot emit escape sequences or add a column or row.
 func (x *invocation) table(rows [][]string) {
+	terminal := stdoutIsTerminal(x.stdout)
 	tw := tabwriter.NewWriter(x.stdout, 0, 0, 2, ' ', 0)
 	for _, r := range rows {
+		if terminal {
+			escaped := make([]string, len(r))
+			for i, c := range r {
+				escaped[i] = escapeTableCell(c)
+			}
+			r = escaped
+		}
 		fmt.Fprintln(tw, strings.Join(r, "\t"))
 	}
 	tw.Flush()
@@ -203,7 +237,11 @@ var commands = []command{
 		run: func(x *invocation) error {
 			var c management.Config
 			return x.call(http.MethodGet, "/config", nil, nil, &c, func() {
-				x.printf("%s", c.Content)
+				if stdoutIsTerminal(x.stdout) {
+					_ = writeEscaped(x.stdout, []byte(c.Content))
+				} else {
+					x.printf("%s", c.Content)
+				}
 				if !strings.HasSuffix(c.Content, "\n") {
 					x.printf("\n")
 				}
@@ -316,7 +354,7 @@ var commands = []command{
 			var r management.PackageReply
 			req := management.InstallRequest{ID: x.args[0], Version: x.opts.version, Registry: x.opts.registry, Enable: true}
 			return x.call(http.MethodPost, "/packages", nil, req, &r, func() {
-				x.printf("%s %s installed: %s\n", r.Package.ID, r.Package.Version, r.Package.State)
+				x.printf("%s %s installed: %s\n", x.cell(r.Package.ID), x.cell(r.Package.Version), x.cell(r.Package.State))
 			})
 		}},
 	packageVerb("enable", "start routing to an installed package"),
@@ -375,7 +413,7 @@ var commands = []command{
 			return x.call(http.MethodGet, "/route", url.Values{"model": {x.args[0]}}, nil, &r, func() {
 				chain := len(r.Chain) > 0
 				if chain {
-					x.printf("chain %s: %s\n\n", r.Model, chainText(r.Chain))
+					x.printf("chain %s: %s\n\n", x.cell(r.Model), x.cell(chainText(r.Chain)))
 				}
 				// With a chain, each account's step leads its row.
 				row := func(step string, cells ...string) []string {
@@ -385,7 +423,7 @@ var commands = []command{
 					return append([]string{step}, cells...)
 				}
 				if len(r.Order) == 0 {
-					x.printf("no account would be tried for %s\n", r.Model)
+					x.printf("no account would be tried for %s\n", x.cell(r.Model))
 				} else {
 					// Under soonest-reset each account also shows the reset it was ranked by.
 					ranked := false
@@ -487,7 +525,7 @@ var commands = []command{
 			err := x.call(http.MethodPost, accountPath(x.args[0])+"/test", nil, management.TestRequest{Model: x.opts.model}, &r, func() {
 				res := r.Result
 				if res.OK {
-					x.printf("ok: %s answered in %d ms: %q\n", cmpOr(res.Served, res.Model), res.LatencyMS, res.Reply)
+					x.printf("ok: %s answered in %d ms: %q\n", x.cell(cmpOr(res.Served, res.Model)), res.LatencyMS, res.Reply)
 				}
 			})
 			if err == nil && !r.Result.OK {
@@ -506,7 +544,7 @@ var commands = []command{
 			var r management.AccountModelsReply
 			return x.call(http.MethodGet, accountPath(x.args[0])+"/models", nil, nil, &r, func() {
 				if r.From != "" {
-					x.printf("from: %s\n", r.From)
+					x.printf("from: %s\n", x.cell(r.From))
 				}
 				rows := [][]string{{"ID", "NAMES", "OWNED BY", "CONTEXT", "MAX OUTPUT", "EXCLUDED"}}
 				for _, m := range r.Models {
@@ -683,13 +721,6 @@ var commands = []command{
 					x.printf("no matching events\n")
 					return
 				}
-				terminal := stdoutIsTerminal(x.stdout)
-				cell := func(s string) string {
-					if terminal {
-						return escapeTableCell(s)
-					}
-					return s
-				}
 				rows := [][]string{{"SEQ", "TIME", "MODEL", "ACCOUNT", "KEY", "STATUS", "LATENCY", "TOKENS"}}
 				for _, ev := range r.Events {
 					status := strconv.Itoa(ev.Status)
@@ -698,7 +729,7 @@ var commands = []command{
 					}
 					if ev.Failed {
 						if ev.ErrorCode != "" {
-							status = status + " (" + cell(ev.ErrorCode) + ")"
+							status = status + " (" + ev.ErrorCode + ")"
 						} else {
 							status = status + " (failed)"
 						}
@@ -710,9 +741,9 @@ var commands = []command{
 					rows = append(rows, []string{
 						strconv.FormatUint(ev.Seq, 10),
 						ev.Timestamp.Local().Format(time.DateTime),
-						dash(cell(ev.Model)),
-						dash(cell(ev.Account)),
-						dash(cell(ev.KeyID)),
+						dash(ev.Model),
+						dash(ev.Account),
+						dash(ev.KeyID),
 						status,
 						fmt.Sprintf("%dms", ev.LatencyMS),
 						tokens,
@@ -726,7 +757,7 @@ var commands = []command{
 		run: func(x *invocation) error {
 			var r management.ThemesReply
 			return x.call(http.MethodGet, "/themes", nil, nil, &r, func() {
-				x.printf("current: %s\n", dash(r.Current))
+				x.printf("current: %s\n", dash(x.cell(r.Current)))
 				if len(r.Themes) == 0 {
 					return
 				}
@@ -747,7 +778,11 @@ var commands = []command{
 			if err != nil {
 				return err
 			}
-			if _, err := x.stdout.Write(body); err != nil {
+			if !x.json && stdoutIsTerminal(x.stdout) {
+				if err := writeEscaped(x.stdout, body); err != nil {
+					return err
+				}
+			} else if _, err := x.stdout.Write(body); err != nil {
 				return err
 			}
 			if !x.json && !bytes.HasSuffix(body, []byte("\n")) {
@@ -1035,7 +1070,7 @@ func packageVerb(verb, summary string) command {
 		run: func(x *invocation) error {
 			var r management.PackageReply
 			return x.call(http.MethodPost, management.PackagePath(x.args[0])+"/"+verb, nil, nil, &r, func() {
-				x.printf("%s %sd: %s\n", r.Package.ID, verb, r.Package.State)
+				x.printf("%s %sd: %s\n", x.cell(r.Package.ID), verb, x.cell(r.Package.State))
 			})
 		}}
 }
@@ -1054,7 +1089,7 @@ func printStatus(x *invocation, s management.Status) {
 	x.printf("%s\n", buildinfo.Format(s.Version, s.Commit, s.Built))
 	x.printf("config revision %d active", s.Active.Revision)
 	if s.Desired.Revision != s.Active.Revision {
-		x.printf("; revision %d refused: %s", s.Desired.Revision, s.Desired.Error)
+		x.printf("; revision %d refused: %s", s.Desired.Revision, x.cell(s.Desired.Error))
 	}
 	x.printf("\n")
 	if s.FirstRun {
@@ -1314,7 +1349,12 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 // reply's own body when core sent one), otherwise as a line of text.
 func printError(stderr io.Writer, asJSON bool, err error) {
 	if !asJSON {
-		fmt.Fprintf(stderr, "pluxy: %v\n", err)
+		msg := fmt.Sprintf("pluxy: %v\n", err)
+		if stderrIsTerminal(stderr) {
+			_ = writeEscaped(stderr, []byte(msg))
+			return
+		}
+		io.WriteString(stderr, msg)
 		return
 	}
 	var ae *management.APIError

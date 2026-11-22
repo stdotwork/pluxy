@@ -131,7 +131,7 @@ func runSetup(x *invocation) error {
 	}
 	todo := suggestedUninstalled(s.Picks)
 	if !x.tty || len(todo) == 0 ||
-		!confirm(x.stdin, x.stderr, fmt.Sprintf("Apply suggested picks (%s)? [y/N]: ", strings.Join(todo, ", "))) {
+		!confirm(x.stdin, x.stderr, fmt.Sprintf("Apply suggested picks (%s)? [y/N]: ", x.errCell(strings.Join(todo, ", ")))) {
 		x.nextStep(s)
 		return nil
 	}
@@ -151,7 +151,7 @@ func runSetupApply(x *invocation) error {
 	}
 	todo := suggestedUninstalled(s.Picks)
 	if len(todo) > 0 && !x.opts.yes &&
-		!confirm(x.stdin, x.stderr, fmt.Sprintf("Apply suggested picks (%s)? [y/N]: ", strings.Join(todo, ", "))) {
+		!confirm(x.stdin, x.stderr, fmt.Sprintf("Apply suggested picks (%s)? [y/N]: ", x.errCell(strings.Join(todo, ", ")))) {
 		if !x.json {
 			x.nextStep(s)
 		}
@@ -265,7 +265,11 @@ func (x *invocation) nextStep(s management.Setup) {
 		return "add an account with pluxy account add <provider> (pluxy account methods lists the providers and their ways to sign in)."
 	}()
 	if line != "" {
-		x.eprintf("Next: %s\n", line)
+		if stderrIsTerminal(x.stderr) {
+			_ = writeEscaped(x.stderr, []byte("Next: "+line+"\n"))
+		} else {
+			x.eprintf("Next: %s\n", line)
+		}
 	}
 }
 
@@ -300,7 +304,7 @@ func printSetup(x *invocation, s management.Setup) {
 		status = "scanned " + s.ScannedAt.UTC().Format("2006-01-02T15:04:05Z")
 	}
 	x.printf("first_run: %v  scan: %s  core: %s (network: %v)\n",
-		s.FirstRun, status, dash(s.Found.Core.Listen), s.Found.Core.ReachableFromNetwork)
+		s.FirstRun, status, dash(x.cell(s.Found.Core.Listen)), s.Found.Core.ReachableFromNetwork)
 	if len(s.Found.Clients) > 0 {
 		x.printf("\nClients:\n")
 		rows := [][]string{{"CLIENT", "INSTALLED", "VERSION", "STATE", "CONFIG"}}
@@ -354,12 +358,25 @@ func runClientShow(x *invocation) error {
 	}
 	var p management.ClientPaste
 	return x.call(http.MethodGet, "/setup/clients/"+url.PathEscape(x.args[0])+"/paste", q, nil, &p, func() {
-		x.printf("Client: %s\nAddress: %s\n", p.Name, p.BaseURL)
+		x.printf("Client: %s\nAddress: %s\n", x.cell(p.Name), x.cell(p.BaseURL))
+		terminal := stdoutIsTerminal(x.stdout)
 		for _, f := range p.Files {
-			x.printf("\n%s:\n%s\n", f.Path, f.Content)
+			x.printf("\n%s:\n", x.cell(f.Path))
+			if terminal {
+				_ = writeEscaped(x.stdout, []byte(f.Content))
+			} else {
+				x.printf("%s", f.Content)
+			}
+			x.printf("\n")
 		}
 		if p.Note != "" {
-			x.printf("\n%s\n", p.Note)
+			x.printf("\n")
+			if terminal {
+				_ = writeEscaped(x.stdout, []byte(p.Note))
+			} else {
+				x.printf("%s", p.Note)
+			}
+			x.printf("\n")
 		}
 		switch {
 		case p.Key == "<client-key>":

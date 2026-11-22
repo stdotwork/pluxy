@@ -25,6 +25,9 @@ func TestIsInteractiveNonTerminal(t *testing.T) {
 	if stdoutIsTerminal(devNullOut) {
 		t.Errorf("stdoutIsTerminal(%s) = true, want false", os.DevNull)
 	}
+	if stderrIsTerminal(devNullOut) {
+		t.Errorf("stderrIsTerminal(%s) = true, want false", os.DevNull)
+	}
 
 	pr, pw, err := os.Pipe()
 	if err != nil {
@@ -38,6 +41,9 @@ func TestIsInteractiveNonTerminal(t *testing.T) {
 	if stdoutIsTerminal(pw) {
 		t.Errorf("stdoutIsTerminal(pipe write end) = true, want false")
 	}
+	if stderrIsTerminal(pw) {
+		t.Errorf("stderrIsTerminal(pipe write end) = true, want false")
+	}
 
 	reg, err := os.Create(filepath.Join(t.TempDir(), "file.txt"))
 	if err != nil {
@@ -49,6 +55,9 @@ func TestIsInteractiveNonTerminal(t *testing.T) {
 	}
 	if stdoutIsTerminal(reg) {
 		t.Errorf("stdoutIsTerminal(regular file) = true, want false")
+	}
+	if stderrIsTerminal(reg) {
+		t.Errorf("stderrIsTerminal(regular file) = true, want false")
 	}
 
 	if isInteractive(strings.NewReader("")) {
