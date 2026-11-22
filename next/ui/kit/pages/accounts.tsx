@@ -174,7 +174,17 @@ function coolingTime(until: number, now: number): string {
   return t("hours", { count: Math.ceil(seconds / 3600) });
 }
 
-type BatchAction = "enable" | "disable" | "delete" | "cooldown";
+export type BatchAction = "enable" | "disable" | "delete" | "cooldown";
+
+/**
+ * The accounts of a selection a batch action is sent for. Core refuses to disable or delete an
+ * account set in its config, so those two leave config accounts out. Enable reaches them: it is
+ * what lifts a provider's ban, and core lifts one from a config account too.
+ */
+export function batchTargets(selected: Account[], action: BatchAction): Account[] {
+  if (action === "enable" || action === "cooldown") return selected;
+  return selected.filter((a) => a.source !== "config");
+}
 
 export function AccountsPage() {
   const { api, host, unauthorized } = useKit();
@@ -227,7 +237,7 @@ export function AccountsPage() {
     setConfirmDelete(false);
     setBusy(true);
     setReport(undefined);
-    const targets = selectedAccounts.filter((a) => action === "cooldown" || a.source !== "config");
+    const targets = batchTargets(selectedAccounts, action);
     const skipped = selectedAccounts.length - targets.length;
     const errors: string[] = [];
     const succeeded = new Set<string>();
