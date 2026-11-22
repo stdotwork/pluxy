@@ -235,3 +235,82 @@ func TestCheckRequestsFlag(t *testing.T) {
 		t.Fatal("-requests 0: want an error")
 	}
 }
+
+// gateReport builds a report in which every scenario passes every gate: a ratio of 1, chunk
+// delays inside the budget, and a measured footprint.
+func gateReport() *BenchReport {
+	pair := RunPair{
+		Direct: SideRunResult{TTFTP50MS: 100, TotalP50MS: 100, TotalP99MS: 100},
+		Proxy:  SideRunResult{TTFTP50MS: 100, TotalP50MS: 100, TotalP99MS: 100, ChunkSamples: 50, ChunkDelayP99MS: 0.1},
+	}
+	var rep BenchReport
+	for _, name := range []string{"stream-pass", "stream-translate", "nonstream-pass", "agents"} {
+		sc := ScenarioSummary{Name: name, IntervalMS: 10, Concurrency: 80, Runs: []RunPair{pair, pair, pair}}
+		if name == "agents" {
+			sc.PeakTotalRSSMB = MetricSummary{Median: 60}
+		}
+		rep.Scenarios = append(rep.Scenarios, sc)
+	}
+	rep.Footprint.IdleBefore = IdleSnapshot{Measured: true, Processes: []ProcessRSS{{Name: "total", RSSMB: 40}}}
+	return &rep
+}
+
+func gateByName(t *testing.T, gates []GateResult, name string) GateResult {
+	t.Helper()
+	for _, g := range gates {
+		if g.Name == name {
+			return g
+		}
+	}
+	t.Fatalf("no gate %q in %+v", name, gates)
+	return GateResult{}
+}
+
+func TestCheckGatesPassOnFullMeasurement(t *testing.T) {
+	for _, g := range EvaluateCheckGates(gateReport()) {
+		if !g.Passed {
+			t.Errorf("gate %q failed on a fully measured report: %+v", g.Name, g)
+		}
+	}
+}
+
+func TestCheckGatesUnsampledFootprint(t *testing.T) {
+	names := []string{"idle RSS (core + extensions)", "agents RSS per open stream"}
+	for _, tc := range []struct {
+		os   string
+		pass bool
+	}{{"linux", false}, {"darwin", true}, {"windows", true}} {
+		old := hostOS
+		hostOS = tc.os
+		rep := gateReport()
+		rep.Footprint.IdleBefore = IdleSnapshot{} // never sampled
+		gates := EvaluateCheckGates(rep)
+		hostOS = old
+		for _, name := range names {
+			g := gateByName(t, gates, name)
+			if g.Passed != tc.pass {
+				t.Errorf("%s: gate %q Passed = %v, want %v (%q)", tc.os, name, g.Passed, tc.pass, g.Value)
+			}
+			if !strings.HasPrefix(g.Value, "not measured") {
+				t.Errorf("%s: gate %q value %q does not say it was not measured", tc.os, name, g.Value)
+			}
+		}
+	}
+}
+
+func TestCheckGatesNoChunksRecorded(t *testing.T) {
+	rep := gateReport()
+	for i := range rep.Scenarios {
+		if rep.Scenarios[i].Name == "stream-pass" {
+			rep.Scenarios[i].Runs[1].Proxy.ChunkSamples = 0
+			rep.Scenarios[i].Runs[1].Proxy.ChunkDelayP99MS = 0
+		}
+	}
+	gates := EvaluateCheckGates(rep)
+	if g := gateByName(t, gates, "stream-pass chunk delay p99 fraction"); g.Passed {
+		t.Errorf("stream-pass chunk gate passed with a run that recorded no chunks: %+v", g)
+	}
+	if g := gateByName(t, gates, "stream-translate chunk delay p99 fraction"); !g.Passed {
+		t.Errorf("stream-translate chunk gate failed though every run recorded chunks: %+v", g)
+	}
+}
