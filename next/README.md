@@ -937,8 +937,9 @@ sources from Responses, `url_citation` annotations from Chat Completions, and `g
 points) from Gemini render as Responses `url_citation` annotations (streaming and non-streaming),
 non-streaming Chat Completions `url_citation` annotations, and Gemini `groundingMetadata`
 (streaming and non-streaming). OpenAI requires both indices on a URL citation, so a citation with
-no usable range covers its whole message there. A Chat upstream's reply to a Chat client stays as
-it was, without annotations. Cross-format citations and sources are not written into Messages
+no usable range covers its whole message there. A same-format Chat reply keeps the upstream's
+`annotations` (streamed and non-streamed, bounded at 4 MiB per reply). Cross-format citations and
+sources are not written into Messages
 replies (Anthropic's `web_search_result_location` requires a vendor-signed `encrypted_index` that
 is verified on replay) and are reported as dropped, and a replayed message's `annotations` are not
 sent back to Claude. Claude does not need citations in the history: the replayed search blocks
@@ -979,8 +980,9 @@ drop with a loss while the reply's text arrives whole. Gemini clients receive bo
 audio as `inlineData` parts in order. Responses, Chat Completions and Messages clients receive no
 media from another format, because the fields that would hold it need an ID only the vendor issues,
 which the client would send back on its next turn: they keep the model's text and the media is
-reported as dropped. Same-format replies stay as they were, so a Chat upstream's audio still does
-not reach a Chat client.
+reported as dropped. A same-format Chat reply keeps the upstream's `audio` (streamed and
+non-streamed: audio bytes under the media limit above, and audio metadata apart from the audio bytes
+bounded at 4 MiB per reply).
 
 **Rate-limit headers.** Upstream rate-limit response headers carry on `response.start` and `error`
 (protocol minor 34) and reach clients whose format documents those headers (same-format replies and
