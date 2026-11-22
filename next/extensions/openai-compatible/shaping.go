@@ -190,7 +190,7 @@ func shapeChat(body []byte, s settings) ([]byte, []llm.Loss, error) {
 			if _, ok := m["annotations"]; ok {
 				delete(m, "annotations")
 				changed = true
-				losses = llm.AddLoss(losses, llm.Loss{Kind: llm.LossDropped, Path: fmt.Sprintf("messages[%d].annotations", i),
+				losses = llm.AddLoss(losses, llm.Loss{Kind: llm.LossApproximated, Path: fmt.Sprintf("messages[%d].annotations", i),
 					Detail: "Chat Completions assistant messages do not take annotations"})
 			}
 		}

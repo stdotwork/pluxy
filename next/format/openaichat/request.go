@@ -597,8 +597,8 @@ type EncodeOptions struct {
 	// AssistantAnnotations says the caller knows its upstream takes annotations on replayed
 	// assistant messages (such as OpenRouter's file annotations,
 	// https://openrouter.ai/docs/features/multimodal/pdfs). Without it, annotations on a replayed
-	// Chat assistant message are stripped and reported as dropped, since OpenAI's Chat Completions
-	// request reference lists no such field and strict upstreams such as Mistral
+	// Chat assistant message are stripped and reported as approximated, since OpenAI's Chat
+	// Completions request reference lists no such field and strict upstreams such as Mistral
 	// (additionalProperties: false) reject unknown assistant message fields.
 	AssistantAnnotations bool
 }
@@ -829,7 +829,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 				if m := rawjson.Object(raw); m != nil {
 					if _, ok := m["annotations"]; ok {
 						raw = rawjson.Rest(m, "annotations")
-						e.lose(llm.LossDropped, rawjson.Join(p, "annotations"), "Chat Completions assistant messages do not take annotations")
+						e.lose(llm.LossApproximated, rawjson.Join(p, "annotations"), "Chat Completions assistant messages do not take annotations")
 					}
 				}
 			}

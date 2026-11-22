@@ -2,13 +2,18 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/stdotwork/pluxy/next/llm"
 )
+
+func hasLoss(losses []llm.Loss, kind, path string) bool {
+	return slices.ContainsFunc(losses, func(l llm.Loss) bool {
+		return l.Kind == kind && l.Path == path
+	})
+}
 
 func TestReplayedAssistantAnnotations(t *testing.T) {
 	const annotated = `{"model":"m","messages":[` +
@@ -17,7 +22,7 @@ func TestReplayedAssistantAnnotations(t *testing.T) {
 		`{"role":"user","content":"More?"}]}`
 
 	// Hosts not documented to accept assistant annotations on Chat Completions strip them and
-	// report a dropped loss, so drop_policy=reject refuses the request.
+	// report an approximated loss, so drop_policy=reject still sends the stripped request.
 	for _, baseURL := range []string{
 		"https://api.mistral.ai/v1",
 		"https://api.openai.com/v1",
@@ -36,16 +41,40 @@ func TestReplayedAssistantAnnotations(t *testing.T) {
 			if tr.Passthrough {
 				t.Errorf("host %s: expected Passthrough=false after stripping annotations", baseURL)
 			}
-			if !slices.Contains(tr.DroppedPaths(), "messages[1].annotations") {
-				t.Errorf("host %s: dropped paths = %v, want messages[1].annotations", baseURL, tr.DroppedPaths())
+			if tr.Dropped() {
+				t.Errorf("host %s: unexpected dropped losses = %v", baseURL, tr.DroppedPaths())
+			}
+			if !hasLoss(tr.Losses, llm.LossApproximated, "messages[1].annotations") {
+				t.Errorf("host %s: losses = %+v, want approximated messages[1].annotations", baseURL, tr.Losses)
 			}
 
 			reqReject := chatRequest(t, annotated)
 			reqReject.DropPolicy = llm.DropReject
-			_, _, err = upstreamBody(reqReject, llm.FormatOpenAIChat, settings{BaseURL: baseURL})
-			var le *llm.Error
-			if !errors.As(err, &le) || le.Code != llm.CodeUnsupported || !slices.Contains(le.Dropped, "messages[1].annotations") {
-				t.Fatalf("host %s reject policy: err = %v, want CodeUnsupported with messages[1].annotations", baseURL, err)
+			body, tr, err = upstreamBody(reqReject, llm.FormatOpenAIChat, settings{BaseURL: baseURL})
+			if err != nil {
+				t.Fatalf("host %s reject policy refused replayed annotations: %v", baseURL, err)
+			}
+			if strings.Contains(string(body), `"annotations"`) {
+				t.Fatalf("host %s reject policy leaked assistant annotations: %s", baseURL, body)
+			}
+			if tr.Passthrough || tr.Dropped() || !hasLoss(tr.Losses, llm.LossApproximated, "messages[1].annotations") {
+				t.Errorf("host %s reject policy translation = %+v, want non-passthrough with approximated messages[1].annotations", baseURL, tr)
+			}
+
+			// Re-encoding through buildBody -> openaichat.EncodeRequestWith under drop_policy=reject
+			// also sends the stripped request with an approximated loss.
+			reqEncode := chatRequest(t, annotated)
+			reqEncode.Native = nil
+			reqEncode.DropPolicy = llm.DropReject
+			body, tr, err = upstreamBody(reqEncode, llm.FormatOpenAIChat, settings{BaseURL: baseURL})
+			if err != nil {
+				t.Fatalf("host %s encode reject policy refused replayed annotations: %v", baseURL, err)
+			}
+			if strings.Contains(string(body), `"annotations"`) {
+				t.Fatalf("host %s encode reject policy leaked assistant annotations: %s", baseURL, body)
+			}
+			if tr.Dropped() || !hasLoss(tr.Losses, llm.LossApproximated, "messages[1].annotations") {
+				t.Errorf("host %s encode reject policy translation = %+v, want approximated messages[1].annotations", baseURL, tr)
 			}
 		})
 	}

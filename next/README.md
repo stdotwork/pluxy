@@ -941,8 +941,9 @@ no usable range covers its whole message there. A Chat upstream's reply to a Cha
 it was, without annotations. Cross-format citations and sources are not written into Messages
 replies (Anthropic's `web_search_result_location` requires a vendor-signed `encrypted_index` that
 is verified on replay) and are reported as dropped, and a replayed message's `annotations` are not
-sent back to Claude. Claude does not need citations in the history: the replayed search blocks
-carry the results. Not built: the web search result cache and Codex's tool search on Claude.
+sent back to Claude and are stripped (reported as approximated) for Chat Completions upstreams
+other than `openrouter.ai`. Claude does not need citations in the history: the replayed search
+blocks carry the results. Not built: the web search result cache and Codex's tool search on Claude.
 
 **Code execution.** A client's hosted code execution tool — Responses `code_interpreter`, Messages
 `code_execution_*`, or Gemini `codeExecution` — carries across those formats as the canonical

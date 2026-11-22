@@ -53,6 +53,9 @@ func TestAssistantAnnotationsStrippedByDefault(t *testing.T) {
 	}
 	for _, l := range losses {
 		if l.Kind == llm.LossDropped {
+			t.Errorf("unexpected dropped loss %+v; stripping annotations must be approximated", l)
+		}
+		if l.Kind == llm.LossApproximated {
 			if _, ok := wantPaths[l.Path]; ok {
 				wantPaths[l.Path] = true
 			}
@@ -60,7 +63,7 @@ func TestAssistantAnnotationsStrippedByDefault(t *testing.T) {
 	}
 	for p, seen := range wantPaths {
 		if !seen {
-			t.Errorf("missing dropped loss for %s; got losses %+v", p, losses)
+			t.Errorf("missing approximated loss for %s; got losses %+v", p, losses)
 		}
 	}
 }

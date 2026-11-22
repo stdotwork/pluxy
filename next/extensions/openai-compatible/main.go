@@ -254,11 +254,6 @@ func upstreamBody(req llm.Request, format string, s settings) ([]byte, *llm.Tran
 	if tr.Passthrough && (len(tr.Losses) > 0 || !bytes.Equal(sent, body)) {
 		tr.Passthrough = false
 	}
-	if req.DropPolicy == llm.DropReject && tr.Dropped() {
-		paths := tr.DroppedPaths()
-		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Dropped: paths,
-			Message: formatNames[format] + " cannot carry parts of this request: " + strings.Join(paths, ", ")}
-	}
 	return body, tr, nil
 }
 
