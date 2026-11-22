@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -791,6 +792,82 @@ func TestUsageCLI(t *testing.T) {
 	}
 	if !strings.Contains(seenQueries[2], "before=0") || !strings.Contains(seenQueries[2], "limit=5") || !strings.Contains(seenQueries[2], "key=k1") {
 		t.Errorf("usage events query = %q, want before=0, limit=5, key=k1", seenQueries[2])
+	}
+}
+
+func TestUsageEventsFailedFilter(t *testing.T) {
+	const (
+		failedEv = `{"seq":1,"timestamp":"2026-11-19T12:00:00Z","endpoint":"/v1/chat/completions","model":"gpt-failed","account":"acct-1","key_id":"k1","failed":true,"status":502,"error_code":"upstream_error","latency_ms":40,"tokens":{"total_tokens":0}}`
+		okEv     = `{"seq":2,"timestamp":"2026-11-19T12:01:00Z","endpoint":"/v1/chat/completions","model":"gpt-ok","account":"acct-1","key_id":"k1","failed":false,"status":200,"latency_ms":50,"tokens":{"total_tokens":15}}`
+	)
+	var seenQueries []url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer k" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.URL.Path != "/v0/management/usage/events" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		q := r.URL.Query()
+		seenQueries = append(seenQueries, q)
+		var events string
+		switch q.Get("failed") {
+		case "":
+			events = failedEv + "," + okEv
+		case "true":
+			events = failedEv
+		case "false":
+			events = okEv
+		default:
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.Write([]byte(`{"enabled":true,"events":[` + events + `],"next":2,"more":false,"lost":false}` + "\n"))
+	}))
+	defer srv.Close()
+
+	run := func(args ...string) (string, string, int) {
+		var out, errOut bytes.Buffer
+		env := func(k string) string {
+			return map[string]string{"PLUXY_URL": srv.URL, "PLUXY_MANAGEMENT_KEY": "k"}[k]
+		}
+		code := runCLI(args, &out, &errOut, env)
+		return out.String(), errOut.String(), code
+	}
+
+	// Without --failed: both failed and successful events are listed.
+	out, errOut, code := run("usage", "events")
+	if code != 0 || !strings.Contains(out, "gpt-failed") || !strings.Contains(out, "gpt-ok") {
+		t.Fatalf("pluxy usage events: code=%d out=%q err=%q", code, out, errOut)
+	}
+	if seenQueries[0].Has("failed") {
+		t.Errorf("without --failed, query had failed=%q", seenQueries[0].Get("failed"))
+	}
+
+	// With --failed true: only failed events are listed.
+	out, errOut, code = run("usage", "events", "--failed", "true")
+	if code != 0 || !strings.Contains(out, "gpt-failed") || strings.Contains(out, "gpt-ok") {
+		t.Fatalf("pluxy usage events --failed true: code=%d out=%q err=%q", code, out, errOut)
+	}
+	if got := seenQueries[1].Get("failed"); got != "true" {
+		t.Errorf("with --failed true, query failed=%q, want true", got)
+	}
+
+	// With --failed false: only successful events are listed.
+	out, errOut, code = run("usage", "events", "--failed", "false")
+	if code != 0 || !strings.Contains(out, "gpt-ok") || strings.Contains(out, "gpt-failed") {
+		t.Fatalf("pluxy usage events --failed false: code=%d out=%q err=%q", code, out, errOut)
+	}
+	if got := seenQueries[2].Get("failed"); got != "false" {
+		t.Errorf("with --failed false, query failed=%q, want false", got)
+	}
+
+	// Help text documents --failed with the same wording as usage export.
+	_, helpOut, code := run("usage", "events", "--help")
+	if code != 0 || !strings.Contains(helpOut, "-failed") || !strings.Contains(helpOut, "only failed requests (true) or only successful ones (false)") {
+		t.Errorf("pluxy usage events --help: code=%d err=%q", code, helpOut)
 	}
 }
 

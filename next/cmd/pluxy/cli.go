@@ -654,24 +654,14 @@ var commands = []command{
 			fs.StringVar(&o.after, "after", "", "oldest first: only events with seq above this")
 			fs.StringVar(&o.before, "before", "", "newest first: only events with seq below this (0 or no value for the latest page)")
 			fs.IntVar(&o.limit, "limit", 0, "at most this many events (default: core's, 100)")
-			fs.StringVar(&o.since, "since", "", "from this time (RFC 3339) or this long ago (such as 24h or 7d)")
-			fs.StringVar(&o.until, "until", "", "up to this time (RFC 3339)")
-			fs.StringVar(&o.model, "model", "", "only this model")
-			fs.StringVar(&o.account, "account", "", "only this account")
-			fs.StringVar(&o.provider, "provider", "", "only this provider (extension)")
-			fs.StringVar(&o.clientKey, "client-key", "", "only this client key ID")
+			usageFilterFlags(fs, o)
 		},
 		run: func(x *invocation) error {
 			q := url.Values{}
+			addUsageFilterQuery(q, x.opts)
 			for k, v := range map[string]string{
-				"after":    x.opts.after,
-				"before":   x.opts.before,
-				"since":    x.opts.since,
-				"until":    x.opts.until,
-				"model":    x.opts.model,
-				"account":  x.opts.account,
-				"provider": x.opts.provider,
-				"key":      x.opts.clientKey,
+				"after":  x.opts.after,
+				"before": x.opts.before,
 			} {
 				if v != "" {
 					q.Set(k, v)

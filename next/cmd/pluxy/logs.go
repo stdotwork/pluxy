@@ -156,35 +156,43 @@ func (e *escapeWriter) flush() error {
 // usageExportPage is how many events one call reads: the most core gives.
 const usageExportPage = 1000
 
+// usageFilterFlags registers the shared usage event filter flags for usage events and usage export.
+func usageFilterFlags(fs *flag.FlagSet, o *opts) {
+	fs.StringVar(&o.since, "since", "", "from this time (RFC 3339) or this long ago (such as 24h or 7d)")
+	fs.StringVar(&o.until, "until", "", "up to this time (RFC 3339)")
+	fs.StringVar(&o.model, "model", "", "only this model")
+	fs.StringVar(&o.account, "account", "", "only this account")
+	fs.StringVar(&o.provider, "provider", "", "only this provider (extension)")
+	fs.StringVar(&o.clientKey, "client-key", "", "only this client key ID")
+	fs.StringVar(&o.failed, "failed", "", "only failed requests (true) or only successful ones (false)")
+}
+
+// addUsageFilterQuery adds the shared usage event filter flags to q.
+func addUsageFilterQuery(q url.Values, o opts) {
+	for k, v := range map[string]string{
+		"since":    o.since,
+		"until":    o.until,
+		"model":    o.model,
+		"account":  o.account,
+		"provider": o.provider,
+		"key":      o.clientKey,
+		"failed":   o.failed,
+	} {
+		if v != "" {
+			q.Set(k, v)
+		}
+	}
+}
+
 var usageExportCommand = command{words: "usage export", routes: []string{"GET /usage/events"},
 	summary: "the recorded requests as CSV on standard output, newest first, as the panel's Export writes them",
-	flags: func(fs *flag.FlagSet, o *opts) {
-		fs.StringVar(&o.since, "since", "", "from this time (RFC 3339) or this long ago (such as 24h or 7d)")
-		fs.StringVar(&o.until, "until", "", "up to this time (RFC 3339)")
-		fs.StringVar(&o.model, "model", "", "only this model")
-		fs.StringVar(&o.account, "account", "", "only this account")
-		fs.StringVar(&o.provider, "provider", "", "only this provider (extension)")
-		fs.StringVar(&o.clientKey, "client-key", "", "only this client key ID")
-		fs.StringVar(&o.failed, "failed", "", "only failed requests (true) or only successful ones (false)")
-	},
+	flags:   usageFilterFlags,
 	run: func(x *invocation) error {
 		if x.json {
 			return usageError{"usage export writes CSV; for the recorded requests as JSON use pluxy usage events --json"}
 		}
 		q := url.Values{"limit": {strconv.Itoa(usageExportPage)}}
-		for k, v := range map[string]string{
-			"since":    x.opts.since,
-			"until":    x.opts.until,
-			"model":    x.opts.model,
-			"account":  x.opts.account,
-			"provider": x.opts.provider,
-			"key":      x.opts.clientKey,
-			"failed":   x.opts.failed,
-		} {
-			if v != "" {
-				q.Set(k, v)
-			}
-		}
+		addUsageFilterQuery(q, x.opts)
 		// Oldest first with after, until the last page. Core's Lost says events newer than after
 		// have left its record: on the first page, requests gone before this export began; on a
 		// later page, requests pushed out between two pages. Either way the export cannot hold
