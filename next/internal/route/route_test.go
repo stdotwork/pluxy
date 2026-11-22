@@ -374,6 +374,28 @@ func TestUnsupportedAccountPassesRequestOn(t *testing.T) {
 		t.Errorf("got %+v, want 503 auth_not_found: no auth available", evs[0])
 	}
 	h.wantAttempts("a", "b")
+
+	// An endpoint refusal carrying 400 (a request feature this account cannot carry) still moves
+	// on to another account, and keeps its 400 message when no account can serve it.
+	featureRefuse := fail(llm.Error{Code: llm.CodeUnsupported, Status: http.StatusBadRequest, Scope: llm.ScopeCredential, Retryable: true, Message: "input: token arrays unsupported"})
+	h = newHarness(t, Config{Strategy: StrategyFillFirst}, accts("a", "b")...)
+	h.on("a", featureRefuse)
+	req = h.req("m")
+	req.Endpoint = true
+	if evs = h.run(req); len(evs) == 0 || evs[0].Type == llm.EventError {
+		t.Fatalf("got %+v, want b to serve after a refused feature", evs)
+	}
+	h.wantAttempts("a", "b")
+
+	h = newHarness(t, Config{}, accts("a")...)
+	h.on("a", featureRefuse)
+	req = h.req("m")
+	req.Endpoint = true
+	evs = h.run(req)
+	if e := evs[0].Error; e == nil || e.Code != llm.CodeUnsupported || e.Status != http.StatusBadRequest || e.Message != "input: token arrays unsupported" {
+		t.Errorf("got %+v, want the 400 unsupported refusal preserved", evs[0])
+	}
+	h.wantAttempts("a")
 }
 
 // The slice's check: an older success never clears a newer cooldown. A reply that started

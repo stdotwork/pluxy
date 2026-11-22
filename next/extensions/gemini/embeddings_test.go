@@ -524,9 +524,10 @@ func TestGeminiEmbeddingsVertex(t *testing.T) {
 	})
 }
 
-// Invalid requests (token-array input, empty input, bad dimensions, unsupported encoding_format,
-// streaming, thinking suffix) are refused with CodeInvalidRequest and ScopeRequest before calling
-// the upstream.
+// Token-ID array inputs are refused with retryable credential-scoped CodeUnsupported so routing
+// can move on to another provider; requests invalid for every account (empty, missing or malformed
+// input, bad dimensions, unsupported encoding_format, streaming, thinking suffix) are refused with
+// CodeInvalidRequest on ScopeRequest before calling the upstream.
 func TestGeminiEmbeddingsRefusals(t *testing.T) {
 	ext, srv, acct := embeddingTestExtension(t)
 	srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
@@ -534,65 +535,104 @@ func TestGeminiEmbeddingsRefusals(t *testing.T) {
 		http.Error(w, "unexpected", http.StatusInternalServerError)
 	}
 	for _, tc := range []struct {
-		name    string
-		req     llm.Request
-		wantSub string
+		name          string
+		req           llm.Request
+		wantCode      string
+		wantScope     string
+		wantRetryable bool
+		wantSub       string
 	}{
 		{
 			name: "token array input",
 			req: llm.Request{
 				Native: &llm.Native{Format: llm.FormatOpenAIEmbeddings, Body: json.RawMessage(`{"model":"gemini-embedding-001","input":[1212,318,257]}`)},
 			},
-			wantSub: "input",
+			wantCode:      llm.CodeUnsupported,
+			wantScope:     llm.ScopeCredential,
+			wantRetryable: true,
+			wantSub:       "input",
 		},
 		{
 			name: "nested token array input",
 			req: llm.Request{
 				Native: &llm.Native{Format: llm.FormatOpenAIEmbeddings, Body: json.RawMessage(`{"model":"gemini-embedding-001","input":[[1212,318],[42]]}`)},
 			},
-			wantSub: "input",
+			wantCode:      llm.CodeUnsupported,
+			wantScope:     llm.ScopeCredential,
+			wantRetryable: true,
+			wantSub:       "input",
+		},
+		{
+			name: "mixed token and string input",
+			req: llm.Request{
+				Native: &llm.Native{Format: llm.FormatOpenAIEmbeddings, Body: json.RawMessage(`{"model":"gemini-embedding-001","input":[1212,"bad"]}`)},
+			},
+			wantCode:  llm.CodeInvalidRequest,
+			wantScope: llm.ScopeRequest,
+			wantSub:   "input",
+		},
+		{
+			name: "empty nested token array input",
+			req: llm.Request{
+				Native: &llm.Native{Format: llm.FormatOpenAIEmbeddings, Body: json.RawMessage(`{"model":"gemini-embedding-001","input":[[]]}`)},
+			},
+			wantCode:  llm.CodeInvalidRequest,
+			wantScope: llm.ScopeRequest,
+			wantSub:   "input",
 		},
 		{
 			name: "empty input array",
 			req: llm.Request{
 				Native: &llm.Native{Format: llm.FormatOpenAIEmbeddings, Body: json.RawMessage(`{"model":"gemini-embedding-001","input":[]}`)},
 			},
-			wantSub: "input",
+			wantCode:  llm.CodeInvalidRequest,
+			wantScope: llm.ScopeRequest,
+			wantSub:   "input",
 		},
 		{
 			name: "missing input",
 			req: llm.Request{
 				Native: &llm.Native{Format: llm.FormatOpenAIEmbeddings, Body: json.RawMessage(`{"model":"gemini-embedding-001"}`)},
 			},
-			wantSub: "input",
+			wantCode:  llm.CodeInvalidRequest,
+			wantScope: llm.ScopeRequest,
+			wantSub:   "input",
 		},
 		{
 			name: "non-string element in input",
 			req: llm.Request{
 				Native: &llm.Native{Format: llm.FormatOpenAIEmbeddings, Body: json.RawMessage(`{"model":"gemini-embedding-001","input":["ok",{"text":"no"}]}`)},
 			},
-			wantSub: "input",
+			wantCode:  llm.CodeInvalidRequest,
+			wantScope: llm.ScopeRequest,
+			wantSub:   "input",
 		},
 		{
 			name: "zero dimensions",
 			req: llm.Request{
 				Native: &llm.Native{Format: llm.FormatOpenAIEmbeddings, Body: json.RawMessage(`{"model":"gemini-embedding-001","input":"hi","dimensions":0}`)},
 			},
-			wantSub: "dimensions",
+			wantCode:  llm.CodeInvalidRequest,
+			wantScope: llm.ScopeRequest,
+			wantSub:   "dimensions",
 		},
 		{
 			name: "non-integer dimensions",
 			req: llm.Request{
 				Native: &llm.Native{Format: llm.FormatOpenAIEmbeddings, Body: json.RawMessage(`{"model":"gemini-embedding-001","input":"hi","dimensions":"768"}`)},
 			},
-			wantSub: "dimensions",
+			wantCode:  llm.CodeInvalidRequest,
+			wantScope: llm.ScopeRequest,
+			wantSub:   "dimensions",
 		},
 		{
 			name: "unsupported encoding_format",
 			req: llm.Request{
 				Native: &llm.Native{Format: llm.FormatOpenAIEmbeddings, Body: json.RawMessage(`{"model":"gemini-embedding-001","input":"hi","encoding_format":"int8"}`)},
 			},
-			wantSub: "encoding_format",
+			wantCode:  llm.CodeInvalidRequest,
+			wantScope: llm.ScopeRequest,
+			wantSub:   "encoding_format",
 		},
 		{
 			name: "stream",
@@ -600,7 +640,9 @@ func TestGeminiEmbeddingsRefusals(t *testing.T) {
 				Stream: true,
 				Native: &llm.Native{Format: llm.FormatOpenAIEmbeddings, Body: json.RawMessage(`{"model":"gemini-embedding-001","input":"hi","stream":true}`)},
 			},
-			wantSub: "stream",
+			wantCode:  llm.CodeInvalidRequest,
+			wantScope: llm.ScopeRequest,
+			wantSub:   "stream",
 		},
 		{
 			name: "thinking suffix",
@@ -608,7 +650,9 @@ func TestGeminiEmbeddingsRefusals(t *testing.T) {
 				Options: llm.Options{ThinkingSuffix: "high"},
 				Native:  &llm.Native{Format: llm.FormatOpenAIEmbeddings, Body: json.RawMessage(`{"model":"gemini-embedding-001","input":"hi"}`)},
 			},
-			wantSub: "thinking",
+			wantCode:  llm.CodeInvalidRequest,
+			wantScope: llm.ScopeRequest,
+			wantSub:   "thinking",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -617,8 +661,8 @@ func TestGeminiEmbeddingsRefusals(t *testing.T) {
 				t.Fatalf("events = %+v, want one error", events)
 			}
 			e := events[0].Error
-			if e.Code != llm.CodeInvalidRequest || e.Status != http.StatusBadRequest || e.Scope != llm.ScopeRequest {
-				t.Errorf("error = %+v, want CodeInvalidRequest 400 ScopeRequest", e)
+			if e.Code != tc.wantCode || e.Status != http.StatusBadRequest || e.Scope != tc.wantScope || e.Retryable != tc.wantRetryable {
+				t.Errorf("error = %+v, want code=%s status=400 scope=%s retryable=%v", e, tc.wantCode, tc.wantScope, tc.wantRetryable)
 			}
 			if !strings.Contains(strings.ToLower(e.Message), tc.wantSub) {
 				t.Errorf("message = %q, want substring %q", e.Message, tc.wantSub)
