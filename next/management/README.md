@@ -24,7 +24,7 @@ write the same types.
 - **Bodies.** JSON in, JSON out, UTF-8. These calls refuse unknown fields with 400 `invalid_request`:
   `POST /models/refresh`, `POST /config/validate`, `PUT /config`, `PATCH /settings`,
   `POST /setup/apply`, `POST /setup/import`, `PUT /chains/{name}`, `PUT /theme` and
-  `PATCH /accounts/{id}`, which takes `disabled`, `settings` and an account's routing fields. The
+  `PATCH /accounts/{id}`, which takes `disabled`, `settings` and an account's routing fields (with `timeouts`). The
   other calls that read a body ignore the fields they do not know: `POST /packages`,
   `PATCH /extensions/{id}/config`, `POST /accounts`, `POST /accounts/{id}/login`,
   `POST /logins/{id}/input`, `POST /accounts/{id}/test` and `POST /accounts/import`.
@@ -233,17 +233,17 @@ is not brought, plain or bcrypt: core keeps its own management key, and its row 
 
 | Call | Command | What it does |
 | --- | --- | --- |
-| `GET /accounts` | `pluxy account list` | Every account, with **new** `health` (below) and `public_id`: the short stable ID client replies name the account by, never an email address or a label (below) |
+| `GET /accounts` | `pluxy account list` | Every account, with its `timeouts` when it sets them, **new** `health` (below) and `public_id`: the short stable ID client replies name the account by, never an email address or a label (below) |
 | `GET /login-methods` | `pluxy account methods` | How each running extension can add an account |
 | `POST /accounts`, `GET /logins/{id}`, `POST /logins/{id}/input`, `DELETE /logins/{id}` | `pluxy account add <provider> [--id id] [--method m] [--input name=value]... [--no-wait]` | Start a sign-in and follow it to the end; prints the address to open or the code to type. `--id` names the account (default: `account-` and 12 hex digits); `--no-wait` stops once it has started, with exit code 7, unless the sign-in waits on a prompt's value, which is exit code 2 and cancels it |
 | `POST /accounts/{id}/login` | `pluxy account login <id> [--method m] [--input name=value]... [--no-wait]` | Sign in again, followed as `account add` follows a sign-in |
-| `PATCH /accounts/{id}` | `pluxy account enable <id>`, `pluxy account disable <id>`, `pluxy account set <id> name=value...` | Turn on or off; change routing settings. `name` is `disabled` or one of the fields below; its value is JSON, except `prefix` and `proxy_url`, which take their text as it is; `null` sets a field other than `disabled` back to its default |
+| `PATCH /accounts/{id}` | `pluxy account enable <id>`, `pluxy account disable <id>`, `pluxy account set <id> name=value...` | Turn on or off; change routing settings. `name` is `disabled`, `timeouts` (an object of `header_ms`, `idle_ms` and `total_ms`) or one of the fields below; its value is JSON, except `prefix` and `proxy_url`, which take their text as it is; `null` sets a field other than `disabled` back to its default |
 | `DELETE /accounts/{id}` | `pluxy account remove <id>` | Remove |
 | `POST /accounts/{id}/refresh` | `pluxy account refresh <id>` | Renew its credential now |
 | `POST /accounts/{id}/cooldown/reset` | `pluxy account clear <id>` | Forget the cooldowns routing holds against the account; a ban stays |
 | `POST /accounts/{id}/test` | `pluxy account test <id> [--model m]` | One small request through it |
 | `GET /accounts/{id}/quota` | `pluxy account quota <id>` | Its usage windows as its provider reports them, written as the panel writes them: the plan, each limit's percent, amounts, reset time and window (`--json` stays the reply) |
-| `GET /accounts/{id}/models` | `pluxy account models <id>` | The models it serves |
+| `GET /accounts/{id}/models` | `pluxy account models <id>` | The models it serves, from the list routing keeps (not a fresh read), with `from`: `account`, `extension`, or left out when its config lists them |
 | `POST /accounts/import`, `POST /vertex/import` | `pluxy account import <file>` | Add an account from a credential file. A JSON object holding a `private_key` and a `project_id` is a Google service account key and goes to `POST /vertex/import`; every other file is one of today's credential files, whose name gives the account's ID, and goes to `POST /accounts/import`. `-` reads a service account key from standard input; a file that is not a regular one, or is over the 1 MiB core reads, is refused before it is read |
 
 `health` on every account:
