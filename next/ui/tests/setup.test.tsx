@@ -555,6 +555,23 @@ test("a host's client action adds its button and its sentence to the clients it 
   expect(page.match(/>Set up</g)?.length).toBe(1);
   expect(primary(page)).toEqual(["Start"]);
 
+  // A client whose settings file was refused gets none either: its row says to paste the text, and
+  // with no other client to act on the sentence is left out.
+  const refused = view(
+    {
+      ...found,
+      found: {
+        ...found.found,
+        clients: found.found.clients.map((c) => (c.id === "claude-code" ? { ...c, state: "refused" } : c)),
+      },
+    },
+    { options },
+  );
+  const refusedRow = refused.match(/<li data-part="setup-client" data-state="refused">.*?<\/li>/s)?.[0] ?? "";
+  expect(refusedRow).toContain("you paste the text yourself");
+  expect(buttons(refusedRow)).toEqual(["Show what to paste"]);
+  expect(refused).not.toContain(hint);
+
   // A client that was not found gets none, and with no client to act on the sentence is left out.
   const none = view(nothingFound, { options });
   expect(none).not.toContain(">Set up<");

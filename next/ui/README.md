@@ -106,7 +106,8 @@ come across" list.
 A host can add one button to each client the page lists as found:
 `corePages({ setup: { clientAction, clientActionHint } })` (`SetupOptions` in `kit/pages/setup.tsx`). `clientAction` takes the client's ID from core's
 scan and returns a label and the ID of the host's page the button opens, or nothing; the hint is
-one sentence shown while a client has a button. The panel passes none; the desktop app offers
+one sentence shown while a client has a button. A client whose settings file was refused gets no
+button: the page says to paste the text there. The panel passes none; the desktop app offers
 "Set up" for the clients it can set up on its own computer.
 
 | Page (ID) | Group | Replaces (old route) |
