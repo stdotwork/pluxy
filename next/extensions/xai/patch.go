@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/llm"
@@ -333,14 +334,14 @@ func toolRef(name string) string {
 }
 
 func patchArgumentsError(name string) *llm.Error {
-	return &llm.Error{Code: llm.CodeUpstream, Scope: llm.ScopeEndpoint, Message: "invalid arguments for " + toolRef(name) + " received from upstream"}
+	return &llm.Error{Code: llm.CodeUpstream, Status: http.StatusBadGateway, Scope: llm.ScopeRequest, Message: "invalid arguments for " + toolRef(name) + " received from upstream"}
 }
 
 // patchError is the error that ends a reply whose custom tool arguments broke a rule. It says
 // which kind of rule and never repeats the arguments. name is the tool's, empty when not known.
 func patchError(err error, name string) *llm.Error {
 	if errors.Is(err, errPatchTooLarge) {
-		return &llm.Error{Code: llm.CodeUpstream, Scope: llm.ScopeEndpoint, Message: "arguments for " + toolRef(name) + " received from upstream are too large"}
+		return &llm.Error{Code: llm.CodeUpstream, Status: http.StatusBadGateway, Scope: llm.ScopeRequest, Message: "arguments for " + toolRef(name) + " received from upstream are too large"}
 	}
 	return patchArgumentsError(name)
 }

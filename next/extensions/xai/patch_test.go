@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -391,8 +392,8 @@ func TestApplyPatchBadArguments(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), "apply_patch") {
 				t.Fatalf("error %v, want one about apply_patch arguments; events %v", err, got)
 			}
-			if e, _ = err.(*llm.Error); e == nil || e.Code != llm.CodeUpstream || strings.Contains(e.Message, c.final) {
-				t.Errorf("error %+v: want an upstream error that does not repeat the arguments", err)
+			if e, _ = err.(*llm.Error); e == nil || e.Code != llm.CodeUpstream || e.Scope != llm.ScopeRequest || e.Status != http.StatusBadGateway || strings.Contains(e.Message, c.final) {
+				t.Errorf("error %+v: want a request-scoped 502 upstream error that does not repeat the arguments", err)
 			}
 			for _, line := range got {
 				if strings.Contains(line, "function_call_arguments") || strings.Contains(line, "function_call apply_patch") {
@@ -446,6 +447,8 @@ func TestApplyPatchNonStreamedReply(t *testing.T) {
 	}
 	if _, err := convert(patch, events); err == nil {
 		t.Error("a non-streamed reply with bad arguments was accepted")
+	} else if e, _ := err.(*llm.Error); e == nil || e.Code != llm.CodeUpstream || e.Scope != llm.ScopeRequest || e.Status != http.StatusBadGateway {
+		t.Errorf("non-streamed bad arguments error = %+v, want request-scoped 502 upstream error", err)
 	}
 }
 
@@ -543,8 +546,8 @@ func TestApplyPatchReplyBudget(t *testing.T) {
 				events = append(events, a, d)
 			}
 			_, err := replyStream(t, patchRequest, sseOf(events...))
-			if err == nil || !strings.Contains(err.Error(), "too large") || strings.Contains(err.Error(), "xxxx") {
-				t.Errorf("error %v, want one that says the arguments are too large", err)
+			if e, _ := err.(*llm.Error); e == nil || e.Code != llm.CodeUpstream || e.Scope != llm.ScopeRequest || e.Status != http.StatusBadGateway || !strings.Contains(e.Message, "too large") || strings.Contains(e.Message, "xxxx") {
+				t.Errorf("error %+v, want a request-scoped 502 upstream error that says the arguments are too large", err)
 			}
 		})
 	}
@@ -564,8 +567,8 @@ func TestApplyPatchReplyBudget(t *testing.T) {
 				argsDone(i*3+3, i, id, `{"input":"`+strings.Repeat("x", 900)+`"}`))
 		}
 		_, err := replyStream(t, patchRequest, sseOf(events...))
-		if err == nil || !strings.Contains(err.Error(), "too large") || strings.Contains(err.Error(), "xxxx") {
-			t.Errorf("error %v, want one that says the arguments are too large", err)
+		if e, _ := err.(*llm.Error); e == nil || e.Code != llm.CodeUpstream || e.Scope != llm.ScopeRequest || e.Status != http.StatusBadGateway || !strings.Contains(e.Message, "too large") || strings.Contains(e.Message, "xxxx") {
+			t.Errorf("error %+v, want a request-scoped 502 upstream error that says the arguments are too large", err)
 		}
 	})
 }
