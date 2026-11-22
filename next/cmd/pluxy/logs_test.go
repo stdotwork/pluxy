@@ -264,6 +264,57 @@ func TestEscapeTableCell(t *testing.T) {
 	}
 }
 
+func TestEscapeWriterUnicodeFormat(t *testing.T) {
+	in := "a\u202eb\u2066c\u200bd\u200de\ufeff" +
+		"f\u00adg\u2028h\u2029i\U000e0001j é 日本語 🔥"
+	want := `a\u202eb\u2066c\u200bd\u200de\ufefff\u00adg\u2028h\u2029i\U000e0001j é 日本語 🔥`
+
+	var buf bytes.Buffer
+	w := &escapeWriter{w: &buf}
+	if _, err := io.WriteString(w, in); err != nil {
+		t.Fatalf("escapeWriter.Write: %v", err)
+	}
+	if err := w.flush(); err != nil {
+		t.Fatalf("escapeWriter.flush: %v", err)
+	}
+	if got := buf.String(); got != want {
+		t.Errorf("escapeWriter(%q)\n got %q\nwant %q", in, got, want)
+	}
+
+	if got := escapeTableCell(in); got != want {
+		t.Errorf("escapeTableCell(%q)\n got %q\nwant %q", in, got, want)
+	}
+
+	// Splitting multi-byte format characters (3-byte and 4-byte) across two Write calls still escapes them.
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"u202e", "\u202e", `\u202e`},
+		{"u2028", "\u2028", `\u2028`},
+		{"uE0001", "\U000e0001", `\U000e0001`},
+	} {
+		raw := []byte(tc.raw)
+		for split := 1; split < len(raw); split++ {
+			var b bytes.Buffer
+			ew := &escapeWriter{w: &b}
+			if _, err := ew.Write(raw[:split]); err != nil {
+				t.Fatalf("%s split %d first write: %v", tc.name, split, err)
+			}
+			if _, err := ew.Write(raw[split:]); err != nil {
+				t.Fatalf("%s split %d second write: %v", tc.name, split, err)
+			}
+			if err := ew.flush(); err != nil {
+				t.Fatalf("%s split %d flush: %v", tc.name, split, err)
+			}
+			if got := b.String(); got != tc.want {
+				t.Errorf("%s split at %d: got %q, want %q", tc.name, split, got, tc.want)
+			}
+		}
+	}
+}
+
 // A file above the 64 MiB limit of the client's ordinary calls arrives whole.
 func TestLogsDownloadAbove64MiB(t *testing.T) {
 	const size = 64<<20 + 3<<20 + 1
