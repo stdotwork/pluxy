@@ -11,11 +11,12 @@ import (
 	"testing"
 )
 
-// A Gemini account serves text embeddings, but cannot take OpenAI's token-ID array inputs.
-// When a model is served by a Gemini account followed by an OpenAI-compatible account, token-ID
-// inputs move on to the OpenAI-compatible account; invalid requests stay 400 and end routing;
-// and when only Gemini accounts serve the model, the client still gets a clear 400 error naming
-// the input field.
+// A Gemini account serves text embeddings, but cannot take values specific to other
+// OpenAI-compatible vendors (token-ID array inputs, unknown encoding_format, more than 2048
+// inputs, stream, a thinking suffix, or out-of-range dimensions). When a model is served by a
+// Gemini account followed by an OpenAI-compatible account, those requests move on to the
+// OpenAI-compatible account; invalid requests stay 400 and end routing; and when only Gemini
+// accounts serve the model, the client still gets a clear 400 error naming the field.
 func TestGeminiEmbeddingsTokenIDFallback(t *testing.T) {
 	const openAIReply = `{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2,0.3]}],"model":"text-embedding-3-small","usage":{"prompt_tokens":3,"total_tokens":3}}`
 
@@ -160,6 +161,52 @@ func TestGeminiEmbeddingsTokenIDFallback(t *testing.T) {
 		}
 	})
 
+	t.Run("unsupported gemini values move on to openai-compatible", func(t *testing.T) {
+		manyInputs := make([]string, 2049)
+		for i := range manyInputs {
+			manyInputs[i] = "a"
+		}
+		manyBody, _ := json.Marshal(map[string]any{
+			"model": "shared-embed",
+			"input": manyInputs,
+		})
+		for _, tc := range []struct {
+			name    string
+			body    string
+			wantSub string
+		}{
+			{"unknown encoding_format", `{"model":"shared-embed","input":"hi","encoding_format":"int8"}`, `"encoding_format":"int8"`},
+			{"more than 2048 inputs", string(manyBody), `"input":[`},
+			{"stream", `{"model":"shared-embed","input":"hi","stream":true}`, `"stream":true`},
+			{"thinking suffix", `{"model":"shared-embed(high)","input":"hi"}`, `"input":"hi"`},
+			{"zero dimensions", `{"model":"shared-embed","input":"hi","dimensions":0}`, `"dimensions":0`},
+			{"negative dimensions", `{"model":"shared-embed","input":"hi","dimensions":-1}`, `"dimensions":-1`},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				beforeOpenAI := openAICount()
+				beforeGemini := geminiPosts()
+				resp := postPath(t, context.Background(), base, "/v1/embeddings", clientKey, tc.body)
+				defer resp.Body.Close()
+				raw, _ := io.ReadAll(resp.Body)
+				if resp.StatusCode != http.StatusOK || string(raw) != openAIReply {
+					t.Fatalf("status %d: %s; want 200 with OpenAI-compatible reply", resp.StatusCode, raw)
+				}
+				if got := geminiPosts() - beforeGemini; got != 0 {
+					t.Errorf("Gemini upstream got %d POSTs, want 0", got)
+				}
+				if got := openAICount() - beforeOpenAI; got != 1 {
+					t.Fatalf("OpenAI-compatible upstream got %d requests, want 1", got)
+				}
+				openAIMu.Lock()
+				last := openAIReqs[len(openAIReqs)-1]
+				openAIMu.Unlock()
+				if last.path != "/v1/embeddings" || !strings.Contains(last.body, tc.wantSub) {
+					t.Errorf("OpenAI-compatible upstream got %+v, want path /v1/embeddings and substring %q", last, tc.wantSub)
+				}
+			})
+		}
+	})
+
 	t.Run("invalid request stays 400 and does not move on", func(t *testing.T) {
 		for _, tc := range []struct {
 			name string
@@ -168,8 +215,8 @@ func TestGeminiEmbeddingsTokenIDFallback(t *testing.T) {
 		}{
 			{"missing input", `{"model":"shared-embed"}`, "input"},
 			{"mixed token and string input", `{"model":"shared-embed","input":[1212,"bad"]}`, "input"},
-			{"bad dimensions", `{"model":"shared-embed","input":"hi","dimensions":0}`, "dimensions"},
-			{"unknown encoding_format", `{"model":"shared-embed","input":"hi","encoding_format":"int8"}`, "encoding_format"},
+			{"wrongly typed dimensions", `{"model":"shared-embed","input":"hi","dimensions":"768"}`, "dimensions"},
+			{"wrongly typed encoding_format", `{"model":"shared-embed","input":"hi","encoding_format":123}`, "encoding_format"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				beforeOpenAI := openAICount()
@@ -193,24 +240,37 @@ func TestGeminiEmbeddingsTokenIDFallback(t *testing.T) {
 		}
 	})
 
-	t.Run("gemini-only model returns clear error naming input", func(t *testing.T) {
-		resp := postPath(t, context.Background(), base, "/v1/embeddings", clientKey,
-			`{"model":"gemini-embedding-001","input":[1212,318,257]}`)
-		defer resp.Body.Close()
-		raw, _ := io.ReadAll(resp.Body)
-		if resp.StatusCode != http.StatusBadRequest {
-			t.Fatalf("status %d: %s; want 400", resp.StatusCode, raw)
-		}
-		var errBody struct {
-			Error struct {
-				Message string `json:"message"`
-			} `json:"error"`
-		}
-		if err := json.Unmarshal(raw, &errBody); err != nil {
-			t.Fatalf("reply %s: %v", raw, err)
-		}
-		if !strings.Contains(strings.ToLower(errBody.Error.Message), "input") {
-			t.Errorf("error message = %q, want it to name input", errBody.Error.Message)
+	t.Run("gemini-only model returns clear 400 naming field", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			body string
+			sub  string
+		}{
+			{"token array", `{"model":"gemini-embedding-001","input":[1212,318,257]}`, "input"},
+			{"unknown encoding_format", `{"model":"gemini-embedding-001","input":"hi","encoding_format":"int8"}`, "encoding_format"},
+			{"stream", `{"model":"gemini-embedding-001","input":"hi","stream":true}`, "stream"},
+			{"thinking suffix", `{"model":"gemini-embedding-001(high)","input":"hi"}`, "thinking"},
+			{"out-of-range dimensions", `{"model":"gemini-embedding-001","input":"hi","dimensions":0}`, "dimensions"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				resp := postPath(t, context.Background(), base, "/v1/embeddings", clientKey, tc.body)
+				defer resp.Body.Close()
+				raw, _ := io.ReadAll(resp.Body)
+				if resp.StatusCode != http.StatusBadRequest {
+					t.Fatalf("status %d: %s; want 400", resp.StatusCode, raw)
+				}
+				var errBody struct {
+					Error struct {
+						Message string `json:"message"`
+					} `json:"error"`
+				}
+				if err := json.Unmarshal(raw, &errBody); err != nil {
+					t.Fatalf("reply %s: %v", raw, err)
+				}
+				if !strings.Contains(strings.ToLower(errBody.Error.Message), tc.sub) {
+					t.Errorf("error message = %q, want it to name %q", errBody.Error.Message, tc.sub)
+				}
+			})
 		}
 	})
 }

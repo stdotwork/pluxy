@@ -550,9 +550,6 @@ func upstreamEmbeddingError(message string) *llm.Error {
 // readEmbeddingsRequest validates an OpenAI /v1/embeddings body and extracts what Gemini takes.
 func readEmbeddingsRequest(r llm.Request) (embeddingsRequest, error) {
 	var out embeddingsRequest
-	if r.Options.ThinkingSuffix != "" {
-		return out, badEmbeddingRequest("a thinking suffix on the model name is not supported for embeddings")
-	}
 	if r.Native == nil {
 		return out, badEmbeddingRequest("the request body is missing")
 	}
@@ -560,22 +557,28 @@ func readEmbeddingsRequest(r llm.Request) (embeddingsRequest, error) {
 	if json.Unmarshal(r.Native.Body, &body) != nil || body == nil {
 		return out, badEmbeddingRequest("the request body is not a JSON object")
 	}
+	if r.Options.ThinkingSuffix != "" {
+		return out, unsupportedEmbedding("model: a thinking suffix on the model name is not supported for Gemini embeddings")
+	}
 	if string(body["stream"]) == "true" || r.Stream {
-		return out, badEmbeddingRequest("embeddings do not support streaming")
+		return out, unsupportedEmbedding("stream: Gemini embeddings do not support streaming")
 	}
 	inputs, err := readEmbeddingInputs(body["input"])
 	if err != nil {
 		return out, err
 	}
 	if len(inputs) > maxEmbeddingsInputs {
-		return out, badEmbeddingRequest(fmt.Sprintf("input has %d items, at most %d are supported", len(inputs), maxEmbeddingsInputs))
+		return out, unsupportedEmbedding(fmt.Sprintf("input: %d items exceeds the %d-item limit for Gemini embeddings", len(inputs), maxEmbeddingsInputs))
 	}
 	out.inputs = inputs
 
 	if raw, ok := body["dimensions"]; ok && string(raw) != "null" {
 		var dim int
-		if err := json.Unmarshal(raw, &dim); err != nil || dim < 1 {
-			return out, badEmbeddingRequest("dimensions must be a positive integer")
+		if err := json.Unmarshal(raw, &dim); err != nil {
+			return out, badEmbeddingRequest("dimensions must be an integer")
+		}
+		if dim < 1 {
+			return out, unsupportedEmbedding("dimensions: Gemini embeddings require a positive integer")
 		}
 		out.dimensions = &dim
 	}
@@ -584,13 +587,13 @@ func readEmbeddingsRequest(r llm.Request) (embeddingsRequest, error) {
 	if raw, ok := body["encoding_format"]; ok && string(raw) != "null" {
 		var format string
 		if err := json.Unmarshal(raw, &format); err != nil {
-			return out, badEmbeddingRequest(`encoding_format must be "float" or "base64"`)
+			return out, badEmbeddingRequest("encoding_format must be a string")
 		}
 		switch format {
 		case "float", "base64":
 			out.encodingFormat = format
 		default:
-			return out, badEmbeddingRequest(fmt.Sprintf("encoding_format %q is not supported; use \"float\" or \"base64\"", format))
+			return out, unsupportedEmbedding(fmt.Sprintf("encoding_format: %q is not supported by Gemini embeddings; use \"float\" or \"base64\"", format))
 		}
 	}
 	return out, nil
@@ -614,7 +617,7 @@ func readEmbeddingInputs(raw json.RawMessage) ([]string, error) {
 		return nil, badEmbeddingRequest("input must not be empty")
 	}
 	if isTokenArray(items) {
-		return nil, unsupportedEmbeddingInput("input: Gemini embeddings do not accept token-ID arrays; pass text strings instead")
+		return nil, unsupportedEmbedding("input: Gemini embeddings do not accept token-ID arrays; pass text strings instead")
 	}
 	out := make([]string, len(items))
 	for i, item := range items {
@@ -664,6 +667,6 @@ func badEmbeddingRequest(message string) *llm.Error {
 	return &llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusBadRequest, Scope: llm.ScopeRequest, Message: message}
 }
 
-func unsupportedEmbeddingInput(message string) *llm.Error {
+func unsupportedEmbedding(message string) *llm.Error {
 	return &llm.Error{Code: llm.CodeUnsupported, Status: http.StatusBadRequest, Scope: llm.ScopeCredential, Retryable: true, Message: message}
 }
