@@ -1476,7 +1476,8 @@ The app adds one thing to the page. Under "Point a client at pluxy", a client co
 **Set up** button beside "Show what to paste" when the window has a page for it and its optional
 tool is installed on this device or offered by a registry, which is the list Beginner Mode
 offers. Set up opens the client's own page, where the app writes the client's settings itself
-after its native confirmation; a tool that is not installed or enabled yet is named there. The
+after its native confirmation; a tool that is not installed or enabled yet is named there. A
+client whose settings file pluxy would not change gets no button, only the paste text. The
 paste text stays for every client. With a remote core the button is left out: the page then lists
 the clients on core's machine, and the app sets a client up on this computer only.
 
