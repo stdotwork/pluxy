@@ -9,6 +9,7 @@ import (
 	"maps"
 	"path/filepath"
 	"slices"
+	"sync"
 
 	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/internal/packages"
@@ -35,7 +36,7 @@ func (c *Core) loadPackages() (packages.State, error) {
 // installer returns an installer for the packages folder with cfg's registries, then the
 // bundled one.
 func (c *Core) installer(cfg *server.Config) *packages.Installer {
-	in := &packages.Installer{Dir: c.pkgDir, Protocols: c.opts.Host.Versions}
+	in := &packages.Installer{Dir: c.pkgDir, Protocols: c.opts.Host.Versions, Client: c.registryClient}
 	if len(in.Protocols) == 0 {
 		in.Protocols = []int{protocol.Version}
 	}
@@ -260,11 +261,26 @@ type RegistryRelease = management.RegistryRelease
 // Registries reads every registry core installs from.
 func (c *Core) Registries(ctx context.Context) []RegistryView {
 	in := c.installer(c.Config())
+	// Registries are read side by side, so a stalled one costs one timeout, not one each.
+	type read struct {
+		ix  *packages.Index
+		err error
+	}
+	reads := make([]read, len(in.Registries))
+	var wg sync.WaitGroup
+	for i, r := range in.Registries {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			reads[i].ix, reads[i].err = packages.ReadIndex(ctx, in.Client, r)
+		}()
+	}
+	wg.Wait()
 	out := []RegistryView{}
-	for _, r := range in.Registries {
+	for i, r := range in.Registries {
 		v := RegistryView{Registry: r}
 		v.URL = packages.RedactURL(r.URL)
-		ix, err := packages.ReadIndex(ctx, in.Client, r)
+		ix, err := reads[i].ix, reads[i].err
 		if err != nil {
 			v.Error = err.Error()
 			out = append(out, v)

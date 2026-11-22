@@ -94,6 +94,9 @@ type Core struct {
 	state  *route.State
 	creds  *cred.Manager // opened by the first load
 	pkgDir string        // the packages folder, fixed for core's run
+	// registryClient fetches https:// registries and archives; nil: packages.DefaultClient.
+	// Only tests set it.
+	registryClient *http.Client
 
 	settings   *extconfig.Store // extensions' settings, in the packages folder
 	pagesPort  atomic.Int64     // the pages listener's port, once main has it

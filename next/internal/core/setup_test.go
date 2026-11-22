@@ -679,3 +679,64 @@ func TestSetupReportsRegistryCount(t *testing.T) {
 		t.Errorf("registries with bundled = %v, want 1", body1["registries"])
 	}
 }
+
+// A registry that accepts the connection and never answers is reported as that registry's
+// error, and GET /setup and the registry list return while the others still answer.
+func TestSetupStalledRegistry(t *testing.T) {
+	setTestHome(t)
+	t.Setenv("PATH", t.TempDir())
+	old := packages.IndexTimeout
+	packages.IndexTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { packages.IndexTimeout = old })
+
+	release := make(chan struct{})
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/fast/index.json" {
+			_, _ = w.Write([]byte(`{"format":0,"packages":{}}`))
+			return
+		}
+		<-release
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+
+	cfgPath := filepath.Join(t.TempDir(), "config.json")
+	writeTestFile(t, cfgPath, `{"listen":"127.0.0.1:0","client_keys":["fake-client-key-1"],"management_key":"fake-mgmt-key","packages":{"registries":[`+
+		`{"name":"stalled-a","url":"`+srv.URL+`/a/index.json"},{"name":"fast","url":"`+srv.URL+`/fast/index.json"},{"name":"stalled-b","url":"`+srv.URL+`/b/index.json"}]}}`)
+	c, err := Start(Options{ConfigPath: cfgPath, SafeMode: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Stop()
+	c.registryClient = srv.Client()
+
+	start := time.Now()
+	req := httptest.NewRequest(http.MethodGet, "/v0/management/setup", nil)
+	req.Header.Set("Authorization", "Bearer fake-mgmt-key")
+	req.RemoteAddr = "127.0.0.1:12345"
+	rec := httptest.NewRecorder()
+	c.Management().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /setup: status = %d (%s)", rec.Code, rec.Body.String())
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("GET /setup took %v", d)
+	}
+
+	regs := c.Registries(context.Background())
+	if len(regs) != 3 {
+		t.Fatalf("registries = %+v", regs)
+	}
+	for _, r := range regs {
+		stalled := strings.HasPrefix(r.Name, "stalled")
+		if stalled && !strings.Contains(r.Error, "no answer within") {
+			t.Errorf("%s: error = %q, want a timeout", r.Name, r.Error)
+		}
+		if !stalled && r.Error != "" {
+			t.Errorf("%s: error = %q, want none", r.Name, r.Error)
+		}
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("two stalled registries took %v", d)
+	}
+}
