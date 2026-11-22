@@ -48,6 +48,9 @@ type GenerateFunc func(ctx context.Context, account protocol.Account, req llm.Re
 
 // clientFormat is a client API core serves: how to read its requests and write its replies.
 type clientFormat struct {
+	// format is the client's canonical wire format (such as llm.FormatOpenAIChat), used to
+	// decide which upstream rate-limit response headers belong to this client's format.
+	format    string
 	parse     func(r *http.Request, body []byte) (llm.Request, error)
 	stream    func(w io.Writer, req llm.Request) eventWriter
 	aggregate func(req llm.Request) aggregator
@@ -94,7 +97,8 @@ type aggregator interface {
 type lossReporter interface{ Losses() []llm.Loss }
 
 var chatFormat = clientFormat{
-	parse: bodyOnly(openaichat.ParseRequest),
+	format: llm.FormatOpenAIChat,
+	parse:  bodyOnly(openaichat.ParseRequest),
 	stream: func(w io.Writer, req llm.Request) eventWriter {
 		return openaichat.NewStreamWriter(w, openaichat.WantsStreamUsage(req))
 	},
@@ -104,7 +108,8 @@ var chatFormat = clientFormat{
 // completionsFormat serves OpenAI's legacy text completions as Chat Completions (see
 // openaichat.ParseCompletionsRequest).
 var completionsFormat = clientFormat{
-	parse: bodyOnly(openaichat.ParseCompletionsRequest),
+	format: llm.FormatOpenAIChat,
+	parse:  bodyOnly(openaichat.ParseCompletionsRequest),
 	stream: func(w io.Writer, req llm.Request) eventWriter {
 		return openaichat.NewCompletionsStreamWriter(w, openaichat.WantsStreamUsage(req))
 	},
@@ -112,6 +117,7 @@ var completionsFormat = clientFormat{
 }
 
 var responsesFormat = clientFormat{
+	format:    llm.FormatOpenAIResponses,
 	parse:     bodyOnly(openairesponses.ParseRequest),
 	stream:    func(w io.Writer, req llm.Request) eventWriter { return openairesponses.NewStreamWriter(w, req) },
 	aggregate: func(req llm.Request) aggregator { return openairesponses.NewAggregator(req) },
@@ -119,6 +125,7 @@ var responsesFormat = clientFormat{
 }
 
 var messagesFormat = clientFormat{
+	format:    llm.FormatAnthropicMessages,
 	parse:     bodyOnly(anthropicmessages.ParseRequest),
 	stream:    func(w io.Writer, _ llm.Request) eventWriter { return anthropicmessages.NewStreamWriter(w) },
 	aggregate: func(llm.Request) aggregator { return anthropicmessages.NewAggregator() },
@@ -131,6 +138,7 @@ var messagesFormat = clientFormat{
 // says whether the reply streams; a stream is always server-sent events, with or without
 // alt=sse, as today's core serves it.
 var geminiFormat = clientFormat{
+	format: llm.FormatGeminiGenerate,
 	parse: func(r *http.Request, body []byte) (llm.Request, error) {
 		model, method, _ := strings.Cut(r.PathValue("action"), ":")
 		switch method {
@@ -300,6 +308,27 @@ func clientToken(r *http.Request, googleKeys bool) string {
 	return token
 }
 
+// writeRateLimitHeaders writes the subset of headers that are documented rate-limit headers for
+// f.format. Headers outside f.format's allowlist are ignored.
+func (f clientFormat) writeRateLimitHeaders(w http.ResponseWriter, headers map[string]string) {
+	if f.format == "" || len(headers) == 0 {
+		return
+	}
+	allowed := llm.FilterRateLimitHeaders(f.format, headers)
+	if len(allowed) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(allowed))
+	for k := range allowed {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	h := w.Header()
+	for _, k := range keys {
+		h.Set(k, allowed[k])
+	}
+}
+
 // writeError writes e as the format's error reply and returns its status.
 func (f clientFormat) writeError(w http.ResponseWriter, e *llm.Error) int {
 	errorBody := f.errorBody
@@ -307,6 +336,9 @@ func (f clientFormat) writeError(w http.ResponseWriter, e *llm.Error) int {
 		errorBody = openaichat.ErrorResponse
 	}
 	status, body := errorBody(e)
+	if e != nil && e.UsageLimit == nil && e != errClientKey && len(e.Headers) > 0 {
+		f.writeRateLimitHeaders(w, e.Headers)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	switch {
 	case e.UsageLimit != nil:
@@ -371,8 +403,10 @@ func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat
 		return
 	}
 	var request *llm.Translation
-	if ev.Type == llm.EventResponseStart {
+	var replyHeaders map[string]string
+	if ev.Type == llm.EventResponseStart && ev.Response != nil {
 		request = ev.Response.Translation
+		replyHeaders = ev.Response.Headers
 	}
 	if !req.Stream {
 		agg := f.aggregate(req)
@@ -411,6 +445,7 @@ func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat
 			tooLarge()
 			return
 		}
+		f.writeRateLimitHeaders(w, replyHeaders)
 		w.Header().Set("Content-Type", "application/json")
 		if m != nil {
 			m.sent = http.StatusOK
@@ -423,6 +458,7 @@ func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat
 		return
 	}
 
+	f.writeRateLimitHeaders(w, replyHeaders)
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-cache")

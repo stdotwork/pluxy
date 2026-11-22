@@ -28,6 +28,7 @@ type countFormat struct {
 
 var messagesCount = countFormat{
 	clientFormat: clientFormat{
+		format:    llm.FormatAnthropicMessages,
 		parse:     bodyOnly(anthropicmessages.ParseRequest),
 		errorBody: anthropicmessages.ErrorResponse,
 		headers:   messagesFormat.headers,
@@ -110,9 +111,11 @@ func serveCount(w http.ResponseWriter, r *http.Request, g *Generation, f countFo
 	ev := stream.Next()
 	t.setHeaders(w, g.Config.Routing.ExplainOn())
 	var format string
+	var replyHeaders map[string]string
 	for ; !ev.Terminal(); ev = stream.Next() {
 		if ev.Type == llm.EventResponseStart && ev.Response != nil {
 			format = ev.Response.Format
+			replyHeaders = ev.Response.Headers
 		}
 	}
 	if ev.Type == llm.EventError {
@@ -140,6 +143,7 @@ func serveCount(w http.ResponseWriter, r *http.Request, g *Generation, f countFo
 	if format == f.format && json.Valid(u.Raw) && len(u.Raw) > 0 && u.Raw[0] == '{' {
 		out = u.Raw
 	}
+	f.writeRateLimitHeaders(w, replyHeaders)
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(out)
 }

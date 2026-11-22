@@ -200,6 +200,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		return err
 	}
 	defer resp.Body.Close()
+	send.headers = llm.ExtractRateLimitHeaders(wire.format, resp.Header)
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		return relayStream(ctx, resp.Body, send, wire.format)
 	}
@@ -435,7 +436,9 @@ func postBody(ctx context.Context, call sdk.Call, s settings, wire wireInfo, key
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		defer resp.Body.Close()
-		return nil, upstreamError(resp, call.Request.Model)
+		e := upstreamError(resp, call.Request.Model)
+		e.Headers = llm.ExtractRateLimitHeaders(wire.format, resp.Header)
+		return nil, e
 	}
 	return resp, nil
 }
@@ -514,7 +517,11 @@ func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		}
 		n = *r.TotalTokens
 	}
-	if err := out.Start(llm.ResponseInfo{Model: req.Model, Format: wire.format}); err != nil {
+	if err := out.Start(llm.ResponseInfo{
+		Model:   req.Model,
+		Format:  wire.format,
+		Headers: llm.ExtractRateLimitHeaders(wire.format, resp.Header),
+	}); err != nil {
 		return err
 	}
 	return out.Finish(llm.Finish{Reason: llm.FinishStop}, &llm.Usage{InputTokens: &n, Raw: llm.RawJSON(raw)})
@@ -583,15 +590,17 @@ func buildBody(req llm.Request, target string, s settings) ([]byte, *llm.Transla
 // call the client's own name for the tool when the request was sent under another (names).
 type reporting struct {
 	*sdk.Stream
-	tr    *llm.Translation
-	names map[string]string // the upstream's name -> the client's
-	calls *openairesponses.CustomCallCheck
+	tr      *llm.Translation
+	headers map[string]string
+	names   map[string]string // the upstream's name -> the client's
+	calls   *openairesponses.CustomCallCheck
 }
 
 func (r *reporting) Send(ev llm.Event) error {
 	if ev.Type == llm.EventResponseStart && ev.Response != nil {
 		info := *ev.Response
 		info.Translation = r.tr
+		info.Headers = r.headers
 		ev.Response = &info
 	}
 	r.restore(&ev)

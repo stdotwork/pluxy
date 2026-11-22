@@ -924,6 +924,13 @@ func (r *Redactor) Event(ev llm.Event) llm.Event {
 			}
 			resp.Translation = &tr
 		}
+		if len(resp.Headers) > 0 {
+			h := make(map[string]string, len(resp.Headers))
+			for k, v := range resp.Headers {
+				h[r.String(k)] = r.String(v)
+			}
+			resp.Headers = h
+		}
 		ev.Response = &resp
 	}
 	if ev.Item != nil {
@@ -1005,6 +1012,13 @@ func (r *Redactor) Event(ev llm.Event) llm.Event {
 			for i, p := range e.Dropped {
 				e.Dropped[i] = r.String(p)
 			}
+		}
+		if len(e.Headers) > 0 {
+			h := make(map[string]string, len(e.Headers))
+			for k, v := range e.Headers {
+				h[r.String(k)] = r.String(v)
+			}
+			e.Headers = h
 		}
 		e.Raw = r.raw(e.Raw)
 		e.Usage = r.usage(e.Usage)

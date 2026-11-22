@@ -2,7 +2,7 @@ package llm
 
 import "fmt"
 
-// Candidate event kinds (CandidateEvent.Kind, protocol minor version 34).
+// Candidate event kinds (CandidateEvent.Kind, protocol minor version 35).
 const (
 	CandidateTextDelta      = "text.delta"
 	CandidateReasoningDelta = "reasoning.delta"
@@ -14,7 +14,7 @@ const (
 )
 
 // CandidateEvent is one step of a candidate reply after candidate 0 (Index >= 1), added in
-// protocol minor version 34. Candidate 0 continues to use the top-level item, delta, media and
+// protocol minor version 35. Candidate 0 continues to use the top-level item, delta, media and
 // finish events unchanged so consumers that show only one candidate never see or mix in later
 // candidates.
 type CandidateEvent struct {
@@ -36,7 +36,7 @@ type CandidateEvent struct {
 	Finish *Finish `json:"finish,omitempty"`
 }
 
-// ValidCandidateEvent checks that c satisfies the protocol 0.34 invariants for a candidate event.
+// ValidCandidateEvent checks that c satisfies the protocol 0.35 invariants for a candidate event.
 func ValidCandidateEvent(c *CandidateEvent) error {
 	if c == nil {
 		return fmt.Errorf("candidate event without candidate payload")

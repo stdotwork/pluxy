@@ -136,10 +136,43 @@ func TestFitThinkingTypes(t *testing.T) {
 	fitCase(t, "sonnet 4.5 disabled with display", "claude-sonnet-4-5",
 		`{"model":"claude-sonnet-4-5","thinking":{"type":"disabled","display":"summarized"},`+userHi+`}`,
 		`{"model":"claude-sonnet-4-5","thinking":{"type":"disabled"},`+userHi+`}`, "dropped thinking.display")
-	// A name the parser cannot place is left alone.
-	fitCase(t, "unplaced", "claude-mythos-preview",
+	// Budget-only models (Claude 3.7-4.5) refuse adaptive thinking: send as enabled with a budget
+	// (from output_config.effort when set, clamped below max_tokens), or drop when max_tokens leaves no room.
+	fitCase(t, "sonnet 4.5 adaptive", "claude-sonnet-4-5",
+		`{"model":"claude-sonnet-4-5","max_tokens":8000,"thinking":{"type":"adaptive"},`+userHi+`}`,
+		`{"model":"claude-sonnet-4-5","max_tokens":8000,"thinking":{"type":"enabled","budget_tokens":1024},`+userHi+`}`,
+		"approximated thinking.type")
+	fitCase(t, "opus 4.5 adaptive with effort", "claude-opus-4-5",
+		`{"model":"claude-opus-4-5","max_tokens":32000,"thinking":{"type":"adaptive","display":"summarized"},"output_config":{"effort":"medium"},`+userHi+`}`,
+		`{"model":"claude-opus-4-5","max_tokens":32000,"thinking":{"type":"enabled","budget_tokens":8192,"display":"summarized"},"output_config":{"effort":"medium"},`+userHi+`}`,
+		"approximated thinking.type")
+	fitCase(t, "haiku 4.5 adaptive clamped", "claude-haiku-4-5",
+		`{"model":"claude-haiku-4-5","max_tokens":4096,"thinking":{"type":"adaptive"},"output_config":{"effort":"medium"},`+userHi+`}`,
+		`{"model":"claude-haiku-4-5","max_tokens":4096,"thinking":{"type":"enabled","budget_tokens":4095},`+userHi+`}`,
+		"approximated output_config.effort", "approximated thinking.type")
+	fitCase(t, "sonnet 4.5 adaptive small max_tokens", "claude-sonnet-4-5",
+		`{"model":"claude-sonnet-4-5","max_tokens":1024,"thinking":{"type":"adaptive"},`+userHi+`}`,
+		`{"model":"claude-sonnet-4-5","max_tokens":1024,`+userHi+`}`,
+		"dropped thinking")
+	// Adaptive-capable families stay byte-identical when sending adaptive thinking.
+	fitCase(t, "opus 4.6 adaptive unchanged", "claude-opus-4-6",
+		`{"model":"claude-opus-4-6","max_tokens":8000,"thinking":{"type":"adaptive"},`+userHi+`}`,
+		`{"model":"claude-opus-4-6","max_tokens":8000,"thinking":{"type":"adaptive"},`+userHi+`}`)
+	// Claude Mythos Preview: always thinks, supports both adaptive and extended, takes max but not xhigh.
+	fitCase(t, "mythos preview disabled", "claude-mythos-preview",
 		`{"model":"claude-mythos-preview","thinking":{"type":"disabled"},`+userHi+`}`,
-		`{"model":"claude-mythos-preview","thinking":{"type":"disabled"},`+userHi+`}`)
+		`{"model":"claude-mythos-preview","output_config":{"effort":"low"},`+userHi+`}`, "approximated thinking")
+	fitCase(t, "mythos preview xhigh", "claude-mythos-preview",
+		`{"model":"claude-mythos-preview","thinking":{"type":"adaptive"},"output_config":{"effort":"xhigh"},`+userHi+`}`,
+		`{"model":"claude-mythos-preview","thinking":{"type":"adaptive"},"output_config":{"effort":"max"},`+userHi+`}`,
+		"approximated output_config.effort")
+	fitCase(t, "mythos preview budget unchanged", "claude-mythos-preview",
+		`{"model":"claude-mythos-preview","thinking":{"type":"enabled","budget_tokens":4000},`+userHi+`}`,
+		`{"model":"claude-mythos-preview","thinking":{"type":"enabled","budget_tokens":4000},`+userHi+`}`)
+	// A name the parser cannot place is left alone.
+	fitCase(t, "unplaced", "claude-unknown-preview",
+		`{"model":"claude-unknown-preview","thinking":{"type":"disabled"},`+userHi+`}`,
+		`{"model":"claude-unknown-preview","thinking":{"type":"disabled"},`+userHi+`}`)
 }
 
 const oneTool = `"tools":[{"name":"w","input_schema":{"type":"object"}}]`
@@ -179,6 +212,15 @@ func TestFitThinkingToolChoiceAndTopK(t *testing.T) {
 	fitCase(t, "sonnet 4.5 top_k without thinking", "claude-sonnet-4-5",
 		`{"model":"claude-sonnet-4-5","top_k":40,`+userHi+`}`,
 		`{"model":"claude-sonnet-4-5","top_k":40,`+userHi+`}`)
+	fitCase(t, "mythos preview top_k", "claude-mythos-preview",
+		`{"model":"claude-mythos-preview","top_k":40,`+userHi+`}`,
+		`{"model":"claude-mythos-preview",`+userHi+`}`, "dropped top_k")
+	fitCase(t, "mythos preview any adaptive", "claude-mythos-preview",
+		`{"model":"claude-mythos-preview",`+oneTool+`,"tool_choice":{"type":"any"},"thinking":{"type":"adaptive"},`+userHi+`}`,
+		`{"model":"claude-mythos-preview",`+oneTool+`,"tool_choice":{"type":"any"},"thinking":{"type":"adaptive"},`+userHi+`}`)
+	fitCase(t, "mythos preview any budget", "claude-mythos-preview",
+		`{"model":"claude-mythos-preview",`+oneTool+`,"tool_choice":{"type":"any"},"thinking":{"type":"enabled","budget_tokens":4000},`+userHi+`}`,
+		`{"model":"claude-mythos-preview",`+oneTool+`,"tool_choice":{"type":"any"},`+userHi+`}`, "dropped thinking")
 }
 
 // The conversation is repaired for thinking: an assistant turn in the middle of a tool call with
@@ -235,6 +277,8 @@ func TestApplySummary(t *testing.T) {
 		{"none", "claude-opus-4-6", `{"model":"m","input":"hi","reasoning":{"effort":"high","summary":"none"}}`,
 			`{"thinking":{"type":"adaptive"}}`, `{"thinking":{"type":"adaptive","display":"omitted"}}`, true, nil},
 		{"auto, thinking on by default", "claude-fable-5-2", `{"model":"m","input":"hi","reasoning":{"summary":"auto"}}`,
+			`{}`, `{"thinking":{"type":"adaptive","display":"summarized"}}`, true, nil},
+		{"auto, mythos preview thinking on by default", "claude-mythos-preview", `{"model":"m","input":"hi","reasoning":{"summary":"auto"}}`,
 			`{}`, `{"thinking":{"type":"adaptive","display":"summarized"}}`, true, nil},
 		{"auto, thinking off", "claude-sonnet-5-5", `{"model":"m","input":"hi","reasoning":{"effort":"none","summary":"auto"}}`,
 			`{"thinking":{"type":"between_tools"}}`, `{"thinking":{"type":"between_tools"}}`, false, nil},
@@ -296,5 +340,47 @@ func TestReplayedCAISSignature(t *testing.T) {
 	got := strings.Join(lossList(losses), ",")
 	if !strings.Contains(got, "dropped input[4]") || !strings.Contains(got, "dropped input[5]") || strings.Contains(got, "input[1]") {
 		t.Errorf("losses %q: want input[4] and input[5] dropped and input[1] kept", got)
+	}
+}
+
+// Only Opus 4.5 among the budget-only models takes an effort, so adaptive thinking with an effort
+// on the others must not keep a field that gets a 400.
+func TestFitAdaptiveEffortOnBudgetOnlyModels(t *testing.T) {
+	const body = `{"model":"m","max_tokens":40000,"thinking":{"type":"adaptive"},"output_config":{"effort":"high"},"messages":[{"role":"user","content":"hi"}]}`
+	for model, keep := range map[string]bool{
+		"claude-sonnet-4-5":         false,
+		"claude-haiku-4-5-20251001": false,
+		"claude-opus-4-1":           false,
+		"claude-opus-4-5-20251101":  true,
+	} {
+		t.Run(model, func(t *testing.T) {
+			out, losses, err := FitThinking([]byte(body), model)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got struct {
+				Thinking struct {
+					Type   string `json:"type"`
+					Budget int    `json:"budget_tokens"`
+				} `json:"thinking"`
+				OutputConfig map[string]json.RawMessage `json:"output_config"`
+			}
+			if err := json.Unmarshal(out, &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Thinking.Type != "enabled" || got.Thinking.Budget != budgets["high"] {
+				t.Errorf("thinking = %+v", got.Thinking)
+			}
+			if _, has := got.OutputConfig["effort"]; has != keep {
+				t.Errorf("effort kept = %v, want %v: %s", has, keep, out)
+			}
+			reported := false
+			for _, l := range losses {
+				reported = reported || l.Path == "output_config.effort"
+			}
+			if reported == keep {
+				t.Errorf("effort loss reported = %v with kept = %v: %+v", reported, keep, losses)
+			}
+		})
 	}
 }

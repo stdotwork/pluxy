@@ -45,10 +45,11 @@ const Version = 0
 // llm.ToolChoiceCodeExecution); minor 31 adds canonical web search citations on message item.end
 // and search sources on finish (llm.Event.Citations and llm.Event.Sources); minor 32 adds
 // canonical code execution results on finish (llm.Event.CodeExecutions); minor 33 adds
-// canonical output media events (llm.EventMedia and llm.Event.Media); minor 34 adds
-// multi-candidate request counts and candidate reply events (llm.Options.CandidateCount,
-// llm.EventCandidate and llm.Event.Candidate).
-const Minor = 34
+// canonical output media events (llm.EventMedia and llm.Event.Media); minor 34 adds upstream
+// rate-limit response headers on response.start and error (llm.ResponseInfo.Headers and
+// llm.Error.Headers); minor 35 adds multi-candidate request counts and candidate reply events
+// (llm.Options.CandidateCount, llm.EventCandidate and llm.Event.Candidate).
+const Minor = 35
 
 // MaxFrame is the largest frame either side may send.
 const MaxFrame = 64 << 20
