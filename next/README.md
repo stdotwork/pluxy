@@ -1212,22 +1212,27 @@ service accounts and express mode keys, without needing `interactions`) through 
   Gemini's prebuilt voices (`alloy` -> `Kore`, `ash` -> `Iapetus`, `ballad` -> `Algieba`,
   `cedar` -> `Achird`, `coral` -> `Sulafat`, `echo` -> `Charon`, `fable` -> `Umbriel`,
   `marin` -> `Despina`, `onyx` -> `Orus`, `sage` -> `Vindemiatrix`, `shimmer` -> `Achernar`,
-  `verse` -> `Puck`), while `nova` and Gemini prebuilt or library voice names pass through
-  unchanged. Serves `"pcm"` (`audio/pcm`) and `"wav"` (`audio/wav`, wrapping raw PCM in a 44-byte
-  RIFF/WAVE header using the sample rate stated by the upstream's `mimeType`, default 24000 Hz).
-  Because Gemini returns raw PCM and pluxy carries no audio encoder, other formats (including
-  OpenAI's default `"mp3"` when `response_format` is omitted), `stream_format: "sse"`,
-  `speed != 1.0`, `instructions`, and custom voice objects answer retryable credential-scoped
-  `unsupported` naming the field so routing can move on to another account on the same model.
+  `verse` -> `Puck`), while `nova` has no mapping and answers retryable credential-scoped
+  `unsupported`; Gemini prebuilt or library voice names pass through unchanged. Serves `"pcm"`
+  (`audio/pcm`) and `"wav"` (`audio/wav`, wrapping raw PCM in a 44-byte RIFF/WAVE header using the
+  sample rate stated by the upstream's `mimeType`, default 24000 Hz). OpenAI's default `"mp3"`
+  format (used when `response_format` is omitted) is not served on Gemini accounts because Gemini
+  returns raw PCM and pluxy carries no audio encoder; `"mp3"` and any other format, `stream`,
+  `stream_format` other than `"audio"`, `speed != 1.0`, `instructions`, custom voice objects, and
+  thinking suffixes answer retryable credential-scoped `unsupported` naming the field so routing
+  can move on to another account on the same model. A reply whose `finishReason` is set and not
+  `"STOP"` fails as an upstream error on the request rather than returning cut-off audio.
 - **Transcription (`POST /v1/audio/transcriptions`):** sends the uploaded audio as `inlineData`
   (within Google's 20 MB total inline request limit) with a verbatim transcription instruction,
   optional `language`, `prompt` and `temperature`, and excludes thought parts from the output.
-  Serves `"json"` (`{"text":"..."}`) and `"text"` (`text/plain; charset=utf-8`). Formats needing
-  timestamps or diarization (`"verbose_json"`, `"srt"`, `"vtt"`, `"diarized_json"`),
-  `timestamp_granularities`, `stream: true`, `include`, speaker references, `chunking_strategy` and
-  files past the 20 MB inline limit answer retryable credential-scoped `unsupported` naming the
-  field. `POST /v1/audio/translations` is not served on Gemini accounts (answers retryable
-  credential-scoped `unsupported` so routing can try another account).
+  Serves `"json"` (`{"text":"..."}`) and `"text"` (`text/plain; charset=utf-8`). Any other
+  `response_format` (including `"verbose_json"`, `"srt"`, `"vtt"`, `"diarized_json"`),
+  `timestamp_granularities`, `stream: true`, `include`, speaker references, `chunking_strategy`,
+  `temperature` outside `[0, 1]`, thinking suffixes, unrecognised audio media types, and files past
+  the 20 MB inline limit answer retryable credential-scoped `unsupported` naming the field. A reply
+  whose `finishReason` is set and not `"STOP"` fails as an upstream error on the request rather than
+  returning a cut-off transcript. `POST /v1/audio/translations` is not served on Gemini accounts
+  (answers retryable credential-scoped `unsupported` so routing can try another account).
 
 **Compaction.** `POST /v1/responses/compact` (also `POST /backend-api/codex/responses/compact`) is
 served on every Gemini account (Gemini API keys, Vertex AI service accounts and express mode keys,

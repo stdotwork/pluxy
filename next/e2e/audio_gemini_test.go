@@ -186,6 +186,13 @@ func TestGeminiAudioRoutesE2E(t *testing.T) {
 		}
 	})
 
+	t.Run("speech unknown response_format ulaw falls through to second account", func(t *testing.T) {
+		code, h, reply := post("/v1/audio/speech", "application/json", []byte(`{"model":"shared-audio","input":"hello","voice":"alloy","response_format":"ulaw"}`))
+		if code != http.StatusOK || h.Get("Content-Type") != "audio/mpeg" || string(reply) != "ID3-fallback-mp3" {
+			t.Fatalf("got %d %q %q", code, h.Get("Content-Type"), reply)
+		}
+	})
+
 	t.Run("transcription json served by gemini", func(t *testing.T) {
 		ct, body := multipartBody([][2]string{{"model", "shared-audio"}, {"response_format", "json"}})
 		code, h, reply := post("/v1/audio/transcriptions", ct, body)
@@ -221,7 +228,7 @@ func TestGeminiAudioRoutesE2E(t *testing.T) {
 	oaMu.Lock()
 	gotOA := append([]string(nil), oaPaths...)
 	oaMu.Unlock()
-	if len(gotOA) != 3 {
-		t.Fatalf("second account saw %v, want 3 fallback requests", gotOA)
+	if len(gotOA) != 4 {
+		t.Fatalf("second account saw %v, want 4 fallback requests", gotOA)
 	}
 }

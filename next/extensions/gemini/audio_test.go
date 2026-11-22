@@ -141,7 +141,7 @@ func TestGeminiAudioSpeechPCMAndWAV(t *testing.T) {
 		audioBinaryChunkSize = 3
 		defer func() { audioBinaryChunkSize = prev }()
 
-		rec, err := call("gemini-2.5-flash-preview-tts", `{"model":"gemini-2.5-flash-preview-tts","input":"Chunk me","voice":"nova","response_format":"pcm"}`)
+		rec, err := call("gemini-2.5-flash-preview-tts", `{"model":"gemini-2.5-flash-preview-tts","input":"Chunk me","voice":"Kore","response_format":"pcm"}`)
 		if err != nil {
 			t.Fatalf("audioSpeechTo: %v", err)
 		}
@@ -185,22 +185,28 @@ func TestGeminiAudioSpeechErrors(t *testing.T) {
 
 	unsupported := []struct {
 		name  string
-		body  string
+		req   llm.Request
 		field string
 	}{
-		{"default mp3 format", `{"model":"tts","input":"hi","voice":"alloy"}`, "response_format"},
-		{"explicit mp3", `{"model":"tts","input":"hi","voice":"alloy","response_format":"mp3"}`, "response_format"},
-		{"opus", `{"model":"tts","input":"hi","voice":"alloy","response_format":"opus"}`, "response_format"},
-		{"aac", `{"model":"tts","input":"hi","voice":"alloy","response_format":"aac"}`, "response_format"},
-		{"flac", `{"model":"tts","input":"hi","voice":"alloy","response_format":"flac"}`, "response_format"},
-		{"sse stream_format", `{"model":"tts","input":"hi","voice":"alloy","response_format":"pcm","stream_format":"sse"}`, "stream_format"},
-		{"speed != 1", `{"model":"tts","input":"hi","voice":"alloy","response_format":"pcm","speed":1.25}`, "speed"},
-		{"instructions", `{"model":"tts","input":"hi","voice":"alloy","response_format":"pcm","instructions":"whisper"}`, "instructions"},
-		{"custom voice object", `{"model":"tts","input":"hi","voice":{"id":"voice_123"},"response_format":"pcm"}`, "voice"},
+		{"default mp3 format", llm.Request{Model: "tts", Native: &llm.Native{Format: llm.FormatOpenAIAudioSpeech, Body: json.RawMessage(`{"model":"tts","input":"hi","voice":"alloy"}`)}}, "response_format"},
+		{"explicit mp3", llm.Request{Model: "tts", Native: &llm.Native{Format: llm.FormatOpenAIAudioSpeech, Body: json.RawMessage(`{"model":"tts","input":"hi","voice":"alloy","response_format":"mp3"}`)}}, "response_format"},
+		{"opus", llm.Request{Model: "tts", Native: &llm.Native{Format: llm.FormatOpenAIAudioSpeech, Body: json.RawMessage(`{"model":"tts","input":"hi","voice":"alloy","response_format":"opus"}`)}}, "response_format"},
+		{"aac", llm.Request{Model: "tts", Native: &llm.Native{Format: llm.FormatOpenAIAudioSpeech, Body: json.RawMessage(`{"model":"tts","input":"hi","voice":"alloy","response_format":"aac"}`)}}, "response_format"},
+		{"flac", llm.Request{Model: "tts", Native: &llm.Native{Format: llm.FormatOpenAIAudioSpeech, Body: json.RawMessage(`{"model":"tts","input":"hi","voice":"alloy","response_format":"flac"}`)}}, "response_format"},
+		{"unknown response_format ulaw", llm.Request{Model: "tts", Native: &llm.Native{Format: llm.FormatOpenAIAudioSpeech, Body: json.RawMessage(`{"model":"tts","input":"hi","voice":"alloy","response_format":"ulaw"}`)}}, "response_format"},
+		{"sse stream_format", llm.Request{Model: "tts", Native: &llm.Native{Format: llm.FormatOpenAIAudioSpeech, Body: json.RawMessage(`{"model":"tts","input":"hi","voice":"alloy","response_format":"pcm","stream_format":"sse"}`)}}, "stream_format"},
+		{"unknown stream_format", llm.Request{Model: "tts", Native: &llm.Native{Format: llm.FormatOpenAIAudioSpeech, Body: json.RawMessage(`{"model":"tts","input":"hi","voice":"alloy","response_format":"pcm","stream_format":"chunked"}`)}}, "stream_format"},
+		{"stream on speech", llm.Request{Model: "tts", Stream: true, Native: &llm.Native{Format: llm.FormatOpenAIAudioSpeech, Body: json.RawMessage(`{"model":"tts","input":"hi","voice":"alloy","response_format":"pcm","stream":true}`)}}, "stream"},
+		{"speed != 1", llm.Request{Model: "tts", Native: &llm.Native{Format: llm.FormatOpenAIAudioSpeech, Body: json.RawMessage(`{"model":"tts","input":"hi","voice":"alloy","response_format":"pcm","speed":1.25}`)}}, "speed"},
+		{"speed out of range", llm.Request{Model: "tts", Native: &llm.Native{Format: llm.FormatOpenAIAudioSpeech, Body: json.RawMessage(`{"model":"tts","input":"hi","voice":"alloy","response_format":"pcm","speed":5.0}`)}}, "speed"},
+		{"instructions", llm.Request{Model: "tts", Native: &llm.Native{Format: llm.FormatOpenAIAudioSpeech, Body: json.RawMessage(`{"model":"tts","input":"hi","voice":"alloy","response_format":"pcm","instructions":"whisper"}`)}}, "instructions"},
+		{"custom voice object", llm.Request{Model: "tts", Native: &llm.Native{Format: llm.FormatOpenAIAudioSpeech, Body: json.RawMessage(`{"model":"tts","input":"hi","voice":{"id":"voice_123"},"response_format":"pcm"}`)}}, "voice"},
+		{"nova voice", llm.Request{Model: "tts", Native: &llm.Native{Format: llm.FormatOpenAIAudioSpeech, Body: json.RawMessage(`{"model":"tts","input":"hi","voice":"nova","response_format":"pcm"}`)}}, "voice"},
+		{"thinking suffix", llm.Request{Model: "tts", Options: llm.Options{ThinkingSuffix: "high"}, Native: &llm.Native{Format: llm.FormatOpenAIAudioSpeech, Body: json.RawMessage(`{"model":"tts","input":"hi","voice":"alloy","response_format":"pcm"}`)}}, "model"},
 	}
 	for _, tc := range unsupported {
 		t.Run("unsupported/"+tc.name, func(t *testing.T) {
-			e := run(llm.Request{Model: "tts", Native: &llm.Native{Format: llm.FormatOpenAIAudioSpeech, Body: json.RawMessage(tc.body)}})
+			e := run(tc.req)
 			if e.Code != llm.CodeUnsupported || e.Status != http.StatusBadRequest || e.Scope != llm.ScopeCredential || !e.Retryable {
 				t.Fatalf("got %+v, want CodeUnsupported/400/ScopeCredential/Retryable", e)
 			}
@@ -217,9 +223,7 @@ func TestGeminiAudioSpeechErrors(t *testing.T) {
 		{"missing input", llm.Request{Model: "tts", Native: &llm.Native{Format: llm.FormatOpenAIAudioSpeech, Body: json.RawMessage(`{"model":"tts","voice":"alloy","response_format":"pcm"}`)}}},
 		{"empty input", llm.Request{Model: "tts", Native: &llm.Native{Format: llm.FormatOpenAIAudioSpeech, Body: json.RawMessage(`{"model":"tts","input":"","voice":"alloy","response_format":"pcm"}`)}}},
 		{"missing voice", llm.Request{Model: "tts", Native: &llm.Native{Format: llm.FormatOpenAIAudioSpeech, Body: json.RawMessage(`{"model":"tts","input":"hi","response_format":"pcm"}`)}}},
-		{"unknown response_format", llm.Request{Model: "tts", Native: &llm.Native{Format: llm.FormatOpenAIAudioSpeech, Body: json.RawMessage(`{"model":"tts","input":"hi","voice":"alloy","response_format":"bogus"}`)}}},
-		{"speed out of range", llm.Request{Model: "tts", Native: &llm.Native{Format: llm.FormatOpenAIAudioSpeech, Body: json.RawMessage(`{"model":"tts","input":"hi","voice":"alloy","response_format":"pcm","speed":5.0}`)}}},
-		{"thinking suffix", llm.Request{Model: "tts", Options: llm.Options{ThinkingSuffix: "high"}, Native: &llm.Native{Format: llm.FormatOpenAIAudioSpeech, Body: json.RawMessage(`{"model":"tts","input":"hi","voice":"alloy","response_format":"pcm"}`)}}},
+		{"non-json body", llm.Request{Model: "tts", Native: &llm.Native{Format: llm.FormatOpenAIAudioSpeech, Body: json.RawMessage(`not json`)}}},
 	}
 	for _, tc := range invalid {
 		t.Run("invalid/"+tc.name, func(t *testing.T) {
@@ -366,6 +370,9 @@ func TestGeminiAudioTranscriptionErrors(t *testing.T) {
 		{"stream", `{"model":"m","stream":true,"file":{"filename":"a.wav","content_type":"audio/wav","data":` + mustJSON(audioB64) + `}}`, true, "stream"},
 		{"include logprobs", `{"model":"m","include[]":["logprobs"],"file":{"filename":"a.wav","content_type":"audio/wav","data":` + mustJSON(audioB64) + `}}`, false, "include"},
 		{"chunking_strategy", `{"model":"m","chunking_strategy":"auto","file":{"filename":"a.wav","content_type":"audio/wav","data":` + mustJSON(audioB64) + `}}`, false, "chunking_strategy"},
+		{"unknown response_format", `{"model":"m","response_format":"xml","file":{"filename":"a.wav","content_type":"audio/wav","data":` + mustJSON(audioB64) + `}}`, false, "response_format"},
+		{"temperature out of range", `{"model":"m","temperature":"2.5","file":{"filename":"a.wav","content_type":"audio/wav","data":` + mustJSON(audioB64) + `}}`, false, "temperature"},
+		{"unrecognised file type", `{"model":"m","file":{"filename":"a.xyz","content_type":"application/octet-stream","data":` + mustJSON(audioB64) + `}}`, false, "file"},
 	}
 	for _, tc := range unsupported {
 		t.Run("unsupported/"+tc.name, func(t *testing.T) {
@@ -378,6 +385,26 @@ func TestGeminiAudioTranscriptionErrors(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("unsupported/thinking suffix", func(t *testing.T) {
+		rec := &recorder{}
+		err := audioTranscriptionsTo(context.Background(), sdk.Call{
+			Account: protocol.Account{
+				ID:         "gem-tx",
+				Settings:   json.RawMessage(`{"base_url":"http://127.0.0.1:1"}`),
+				Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "k"},
+			},
+			Request: llm.Request{
+				Model:   "gemini-2.5-flash",
+				Options: llm.Options{ThinkingSuffix: "high"},
+				Native:  &llm.Native{Format: llm.FormatOpenAIAudioTranscriptions, Body: json.RawMessage(`{"model":"m","file":{"filename":"a.wav","content_type":"audio/wav","data":` + mustJSON(audioB64) + `}}`)},
+			},
+		}, rec)
+		e, ok := err.(*llm.Error)
+		if !ok || e.Code != llm.CodeUnsupported || e.Status != http.StatusBadRequest || e.Scope != llm.ScopeCredential || !e.Retryable {
+			t.Fatalf("got %+v, want CodeUnsupported/400/ScopeCredential/Retryable", err)
+		}
+	})
 
 	t.Run("unsupported/exceeds inline size limit", func(t *testing.T) {
 		prev := maxGeminiInlineRequestBytes
@@ -394,15 +421,8 @@ func TestGeminiAudioTranscriptionErrors(t *testing.T) {
 		}
 	})
 
-	t.Run("invalid/unknown response_format", func(t *testing.T) {
-		e := run(`{"model":"m","response_format":"xml","file":{"filename":"a.wav","content_type":"audio/wav","data":`+mustJSON(audioB64)+`}}`, false)
-		if e.Code != llm.CodeInvalidRequest || e.Status != http.StatusBadRequest || e.Scope != llm.ScopeRequest || e.Retryable {
-			t.Fatalf("got %+v, want CodeInvalidRequest/400/ScopeRequest/non-retryable", e)
-		}
-	})
-
-	t.Run("invalid/bad temperature", func(t *testing.T) {
-		e := run(`{"model":"m","temperature":"2.5","file":{"filename":"a.wav","content_type":"audio/wav","data":`+mustJSON(audioB64)+`}}`, false)
+	t.Run("invalid/bad base64", func(t *testing.T) {
+		e := run(`{"model":"m","file":{"filename":"a.wav","content_type":"audio/wav","data":"!!!not-base64!!!"}}`, false)
 		if e.Code != llm.CodeInvalidRequest || e.Status != http.StatusBadRequest || e.Scope != llm.ScopeRequest || e.Retryable {
 			t.Fatalf("got %+v, want CodeInvalidRequest/400/ScopeRequest/non-retryable", e)
 		}
@@ -480,6 +500,113 @@ func TestGeminiAudioSpeechUpstreamWAVAndVertex(t *testing.T) {
 		ct, data, _ := collectAudioReply(t, rec.events, true)
 		if ct != "audio/pcm" || !bytes.Equal(data, pcm) {
 			t.Fatalf("got %q %x, want audio/pcm %x", ct, data, pcm)
+		}
+	})
+}
+
+func TestGeminiAudioCutoffFinishReasonFails(t *testing.T) {
+	pcmB64 := base64.StdEncoding.EncodeToString([]byte{0x01, 0x02, 0x03, 0x04})
+	audioB64 := base64.StdEncoding.EncodeToString([]byte("RIFF\x24\x00\x00\x00WAVEfmt "))
+
+	t.Run("speech partial audio with MAX_TOKENS", func(t *testing.T) {
+		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"candidates": []any{map[string]any{
+					"content": map[string]any{
+						"role": "model",
+						"parts": []any{map[string]any{
+							"inlineData": map[string]any{
+								"mimeType": "audio/L16;codec=pcm;rate=24000",
+								"data":     pcmB64,
+							},
+						}},
+					},
+					"finishReason": "MAX_TOKENS",
+				}},
+			})
+		}))
+		defer up.Close()
+
+		rec := &recorder{}
+		err := audioSpeechTo(context.Background(), sdk.Call{
+			Account: protocol.Account{
+				ID:         "gem-audio",
+				Settings:   json.RawMessage(`{"base_url":` + mustJSON(up.URL) + `}`),
+				Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "k"},
+			},
+			Request: llm.Request{
+				Model:  "gemini-2.5-flash-preview-tts",
+				Native: &llm.Native{Format: llm.FormatOpenAIAudioSpeech, Body: json.RawMessage(`{"model":"gemini-2.5-flash-preview-tts","input":"hi","voice":"Kore","response_format":"pcm"}`)},
+			},
+		}, rec)
+		e, ok := err.(*llm.Error)
+		if !ok || e.Code != llm.CodeUpstream || e.Scope != llm.ScopeRequest || !strings.Contains(e.Message, "MAX_TOKENS") {
+			t.Fatalf("got %+v, want CodeUpstream/ScopeRequest naming MAX_TOKENS", err)
+		}
+	})
+
+	t.Run("transcription partial text with MAX_TOKENS", func(t *testing.T) {
+		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"candidates": []any{map[string]any{
+					"content": map[string]any{
+						"role":  "model",
+						"parts": []any{map[string]any{"text": "cut off transcript"}},
+					},
+					"finishReason": "MAX_TOKENS",
+				}},
+			})
+		}))
+		defer up.Close()
+
+		rec := &recorder{}
+		err := audioTranscriptionsTo(context.Background(), sdk.Call{
+			Account: protocol.Account{
+				ID:         "gem-tx",
+				Settings:   json.RawMessage(`{"base_url":` + mustJSON(up.URL) + `}`),
+				Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "k"},
+			},
+			Request: llm.Request{
+				Model:  "gemini-2.5-flash",
+				Native: &llm.Native{Format: llm.FormatOpenAIAudioTranscriptions, Body: json.RawMessage(`{"model":"gemini-2.5-flash","file":{"filename":"a.wav","content_type":"audio/wav","data":` + mustJSON(audioB64) + `}}`)},
+			},
+		}, rec)
+		e, ok := err.(*llm.Error)
+		if !ok || e.Code != llm.CodeUpstream || e.Scope != llm.ScopeRequest || !strings.Contains(e.Message, "MAX_TOKENS") {
+			t.Fatalf("got %+v, want CodeUpstream/ScopeRequest naming MAX_TOKENS", err)
+		}
+	})
+
+	t.Run("empty finishReason stays accepted", func(t *testing.T) {
+		up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"candidates": []any{map[string]any{
+					"content": map[string]any{
+						"role":  "model",
+						"parts": []any{map[string]any{"text": "complete without finishReason"}},
+					},
+				}},
+			})
+		}))
+		defer up.Close()
+
+		rec := &recorder{}
+		err := audioTranscriptionsTo(context.Background(), sdk.Call{
+			Account: protocol.Account{
+				ID:         "gem-tx",
+				Settings:   json.RawMessage(`{"base_url":` + mustJSON(up.URL) + `}`),
+				Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "k"},
+			},
+			Request: llm.Request{
+				Model:  "gemini-2.5-flash",
+				Native: &llm.Native{Format: llm.FormatOpenAIAudioTranscriptions, Body: json.RawMessage(`{"model":"gemini-2.5-flash","file":{"filename":"a.wav","content_type":"audio/wav","data":` + mustJSON(audioB64) + `}}`)},
+			},
+		}, rec)
+		if err != nil {
+			t.Fatalf("expected empty finishReason to succeed, got %v", err)
 		}
 	})
 }

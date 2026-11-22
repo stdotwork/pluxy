@@ -41,8 +41,9 @@ const defaultGeminiPCMRate = 24000
 
 // openAIToGeminiTTSVoices maps OpenAI's built-in TTS voice names to Gemini's prebuilt voices
 // (ported from LiteLLM's OPENAI_TO_GEMINI_TTS_VOICES in
-// litellm/llms/vertex_ai/gemini/vertex_and_google_ai_studio_gemini.py). "nova" and any Gemini
-// prebuilt or library voice name pass through unchanged.
+// litellm/llms/vertex_ai/gemini/vertex_and_google_ai_studio_gemini.py). "nova" has no entry in
+// that map and is answered unsupported; Gemini prebuilt or library voice names pass through
+// unchanged.
 var openAIToGeminiTTSVoices = map[string]string{
 	"alloy":   "Kore",
 	"ash":     "Iapetus",
@@ -404,9 +405,6 @@ func sendBinaryBase64Chunks(send *reporting, data []byte, chunkSize int) error {
 
 func readSpeechRequest(r llm.Request) (speechRequest, error) {
 	var out speechRequest
-	if r.Options.ThinkingSuffix != "" {
-		return out, badAudioRequest("a thinking suffix on the model name is not supported for speech")
-	}
 	if r.Native == nil {
 		return out, badAudioRequest("the request body is missing")
 	}
@@ -414,10 +412,6 @@ func readSpeechRequest(r llm.Request) (speechRequest, error) {
 	if json.Unmarshal(r.Native.Body, &body) != nil || body == nil {
 		return out, badAudioRequest("the request body is not a JSON object")
 	}
-	if string(body["stream"]) == "true" || r.Stream {
-		return out, badAudioRequest("speech does not support stream; use stream_format instead")
-	}
-
 	var input string
 	if raw, ok := body["input"]; !ok || string(raw) == "null" {
 		return out, badAudioRequest("input is required")
@@ -436,7 +430,11 @@ func readSpeechRequest(r llm.Request) (speechRequest, error) {
 		if voiceStr == "" {
 			return out, badAudioRequest("voice must not be empty")
 		}
-		if mapped, ok := openAIToGeminiTTSVoices[strings.ToLower(voiceStr)]; ok {
+		lower := strings.ToLower(voiceStr)
+		if lower == "nova" {
+			return out, unsupportedAudio(`voice: Gemini speech has no mapping for OpenAI voice "nova"`)
+		}
+		if mapped, ok := openAIToGeminiTTSVoices[lower]; ok {
 			out.voice = mapped
 		} else {
 			out.voice = voiceStr
@@ -449,43 +447,41 @@ func readSpeechRequest(r llm.Request) (speechRequest, error) {
 		return out, badAudioRequest("voice must be a string")
 	}
 
+	if r.Options.ThinkingSuffix != "" {
+		return out, unsupportedAudio("model: a thinking suffix on the model name is not supported for Gemini speech")
+	}
+	if string(body["stream"]) == "true" || r.Stream {
+		return out, unsupportedAudio("stream: Gemini speech does not support streaming")
+	}
+
 	// OpenAI's default response_format is "mp3".
 	format := "mp3"
 	if raw, ok := body["response_format"]; ok && string(raw) != "null" {
 		if err := json.Unmarshal(raw, &format); err != nil {
-			return out, badAudioRequest("response_format must be a string")
+			return out, unsupportedAudio("response_format: Gemini speech serves \"pcm\" and \"wav\" only")
 		}
 		format = strings.ToLower(strings.TrimSpace(format))
 	}
 	switch format {
 	case "pcm", "wav":
 		out.responseFormat = format
-	case "mp3", "opus", "aac", "flac":
-		return out, unsupportedAudio(fmt.Sprintf("response_format: Gemini speech serves \"pcm\" and \"wav\" only, not %q", format))
 	default:
-		return out, badAudioRequest(fmt.Sprintf("response_format %q is not supported", format))
+		return out, unsupportedAudio(fmt.Sprintf("response_format: Gemini speech serves \"pcm\" and \"wav\" only, not %q", format))
 	}
 
 	if raw, ok := body["stream_format"]; ok && string(raw) != "null" {
 		var sf string
 		if err := json.Unmarshal(raw, &sf); err != nil {
-			return out, badAudioRequest("stream_format must be \"audio\" or \"sse\"")
+			return out, unsupportedAudio("stream_format: Gemini speech supports \"audio\" only")
 		}
-		switch strings.ToLower(strings.TrimSpace(sf)) {
-		case "audio":
-		case "sse":
-			return out, unsupportedAudio("stream_format: Gemini speech does not support \"sse\" streaming")
-		default:
-			return out, badAudioRequest(fmt.Sprintf("stream_format %q is not supported; use \"audio\" or \"sse\"", sf))
+		if strings.ToLower(strings.TrimSpace(sf)) != "audio" {
+			return out, unsupportedAudio(fmt.Sprintf("stream_format: Gemini speech does not support %q", sf))
 		}
 	}
 
 	if raw, ok := body["speed"]; ok && string(raw) != "null" {
 		var speed float64
-		if err := json.Unmarshal(raw, &speed); err != nil || math.IsNaN(speed) || math.IsInf(speed, 0) || speed < 0.25 || speed > 4.0 {
-			return out, badAudioRequest("speed must be a number between 0.25 and 4.0")
-		}
-		if speed != 1.0 {
+		if err := json.Unmarshal(raw, &speed); err != nil || math.IsNaN(speed) || math.IsInf(speed, 0) || speed != 1.0 {
 			return out, unsupportedAudio("speed: Gemini generateContent speech does not support speed other than 1.0")
 		}
 	}
@@ -493,7 +489,7 @@ func readSpeechRequest(r llm.Request) (speechRequest, error) {
 	if raw, ok := body["instructions"]; ok && string(raw) != "null" {
 		var instr string
 		if err := json.Unmarshal(raw, &instr); err != nil {
-			return out, badAudioRequest("instructions must be a string")
+			return out, unsupportedAudio("instructions: Gemini generateContent speech does not support instructions")
 		}
 		if strings.TrimSpace(instr) != "" {
 			return out, unsupportedAudio("instructions: Gemini generateContent speech does not support instructions")
@@ -513,6 +509,9 @@ func extractSpeechAudio(reply *geminiAudioReply, wantFormat string) ([]byte, str
 		finishReason string
 	)
 	for _, cand := range reply.Candidates {
+		if cand.FinishReason != "" && cand.FinishReason != "STOP" {
+			return nil, "", upstreamAudioError("Gemini speech reply stopped early (finish reason " + cand.FinishReason + ")")
+		}
 		if finishReason == "" && cand.FinishReason != "" {
 			finishReason = cand.FinishReason
 		}
@@ -663,18 +662,12 @@ func stripWAVHeaderToPCM(wav []byte) ([]byte, error) {
 
 func readTranscriptionRequest(r llm.Request) (transcriptionRequest, error) {
 	var out transcriptionRequest
-	if r.Options.ThinkingSuffix != "" {
-		return out, badAudioRequest("a thinking suffix on the model name is not supported for transcriptions")
-	}
 	if r.Native == nil {
 		return out, badAudioRequest("the request body is missing")
 	}
 	var body map[string]json.RawMessage
 	if json.Unmarshal(r.Native.Body, &body) != nil || body == nil {
 		return out, badAudioRequest("the request body is not a JSON object")
-	}
-	if string(body["stream"]) == "true" || r.Stream {
-		return out, unsupportedAudio("stream: Gemini transcription does not support streaming")
 	}
 
 	var file struct {
@@ -688,6 +681,14 @@ func readTranscriptionRequest(r llm.Request) (transcriptionRequest, error) {
 	if _, err := base64.StdEncoding.DecodeString(file.Data); err != nil {
 		return out, badAudioRequest("file.data is not valid base64")
 	}
+
+	if r.Options.ThinkingSuffix != "" {
+		return out, unsupportedAudio("model: a thinking suffix on the model name is not supported for Gemini transcriptions")
+	}
+	if string(body["stream"]) == "true" || r.Stream {
+		return out, unsupportedAudio("stream: Gemini transcription does not support streaming")
+	}
+
 	mt, err := resolveGeminiAudioMIME(file.ContentType, file.Filename)
 	if err != nil {
 		return out, err
@@ -698,17 +699,15 @@ func readTranscriptionRequest(r llm.Request) (transcriptionRequest, error) {
 	format := "json"
 	if raw, ok := body["response_format"]; ok && string(raw) != "null" {
 		if err := json.Unmarshal(raw, &format); err != nil {
-			return out, badAudioRequest("response_format must be a string")
+			return out, unsupportedAudio("response_format: Gemini transcription serves \"json\" and \"text\" only")
 		}
 		format = strings.ToLower(strings.TrimSpace(format))
 	}
 	switch format {
 	case "json", "text":
 		out.responseFormat = format
-	case "verbose_json", "srt", "vtt", "diarized_json":
-		return out, unsupportedAudio(fmt.Sprintf("response_format: Gemini transcription serves \"json\" and \"text\" only, not %q", format))
 	default:
-		return out, badAudioRequest(fmt.Sprintf("response_format %q is not supported", format))
+		return out, unsupportedAudio(fmt.Sprintf("response_format: Gemini transcription serves \"json\" and \"text\" only, not %q", format))
 	}
 
 	for _, field := range []struct {
@@ -731,21 +730,21 @@ func readTranscriptionRequest(r llm.Request) (transcriptionRequest, error) {
 	if raw, ok := body["language"]; ok && string(raw) != "null" {
 		var lang string
 		if err := json.Unmarshal(raw, &lang); err != nil {
-			return out, badAudioRequest("language must be a string")
+			return out, unsupportedAudio("language: Gemini transcription expects language as a string")
 		}
 		out.language = strings.TrimSpace(lang)
 	}
 	if raw, ok := body["prompt"]; ok && string(raw) != "null" {
 		var p string
 		if err := json.Unmarshal(raw, &p); err != nil {
-			return out, badAudioRequest("prompt must be a string")
+			return out, unsupportedAudio("prompt: Gemini transcription expects prompt as a string")
 		}
 		out.prompt = strings.TrimSpace(p)
 	}
 	if raw, ok := body["temperature"]; ok && string(raw) != "null" {
 		temp, err := parseFormFloat(raw)
 		if err != nil || math.IsNaN(temp) || math.IsInf(temp, 0) || temp < 0 || temp > 1 {
-			return out, badAudioRequest("temperature must be a number between 0 and 1")
+			return out, unsupportedAudio("temperature: Gemini transcription supports temperature between 0 and 1")
 		}
 		out.temperature = &temp
 	}
@@ -766,15 +765,12 @@ func resolveGeminiAudioMIME(contentType, filename string) (string, error) {
 		if inferred, ok := audioExtToMIME[ext]; ok {
 			return inferred, nil
 		}
-		return "", badAudioRequest("file must have an audio content_type or supported audio filename extension")
+		return "", unsupportedAudio("file: Gemini transcription does not recognise this audio file's media type")
 	}
 	if normalized, ok := supportedGeminiAudioMIMEs[mt]; ok {
 		return normalized, nil
 	}
-	if strings.HasPrefix(mt, "audio/") || mt == "video/mp4" || mt == "video/webm" {
-		return "", unsupportedAudio(fmt.Sprintf("file: Gemini transcription does not support audio media type %q", mt))
-	}
-	return "", badAudioRequest(fmt.Sprintf("file: unsupported content_type %q", mt))
+	return "", unsupportedAudio(fmt.Sprintf("file: Gemini transcription does not support media type %q", mt))
 }
 
 func hasNonEmptyField(raw json.RawMessage) bool {
@@ -828,6 +824,9 @@ func extractTranscriptionText(reply *geminiAudioReply) (string, error) {
 		return "", upstreamAudioError(msg)
 	}
 	cand := reply.Candidates[0]
+	if cand.FinishReason != "" && cand.FinishReason != "STOP" {
+		return "", upstreamAudioError("Gemini transcription reply stopped early (finish reason " + cand.FinishReason + ")")
+	}
 	var parts []string
 	if cand.Content != nil {
 		for _, p := range cand.Content.Parts {
@@ -836,9 +835,6 @@ func extractTranscriptionText(reply *geminiAudioReply) (string, error) {
 			}
 			parts = append(parts, p.Text)
 		}
-	}
-	if len(parts) == 0 && cand.FinishReason != "" && cand.FinishReason != "STOP" {
-		return "", upstreamAudioError("Gemini returned no transcription text (finish reason " + cand.FinishReason + ")")
 	}
 	return strings.Join(parts, ""), nil
 }
