@@ -18,7 +18,8 @@ import (
 // Gemini's Interactions API (POST /v1beta/interactions) is served to Interactions clients as an
 // endpoint call, by accounts whose settings say "interactions": true, as today's core serves it
 // only on its interactions key group and on Vertex accounts that opt in. The client's body goes
-// upstream nearly as it came and the upstream's reply comes back as it is:
+// upstream nearly as it came; the upstream's reply comes back as it is except that any error's
+// Google project or account names are masked (maskReply):
 //
 //   - a Gemini API key: POST {base_url}/v1beta/interactions, the key in x-goog-api-key;
 //   - a Vertex service account: POST {host}/v1beta1/projects/{project}/locations/global/interactions
@@ -76,7 +77,7 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 	if err != nil {
 		return err
 	}
-	send := &reporting{out: out}
+	send := &reporting{out: out, known: knownNames(call.Account)}
 	if t.token != "" {
 		// As in generate: the fetched access token is redacted here, which core does not know.
 		send.redact = protocol.NewRedactor(&protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: t.token})
@@ -118,7 +119,7 @@ func endpoint(ctx context.Context, call sdk.Call, out *sdk.Stream) (err error) {
 	if err := send.StartBody(llm.FormatGeminiInteractions, "application/json"); err != nil {
 		return err
 	}
-	if err := send.Body(string(reply)); err != nil {
+	if err := send.Body(string(maskReply(reply, "", send.known))); err != nil {
 		return err
 	}
 	var r struct {
@@ -349,7 +350,8 @@ func relayInteractions(ctx context.Context, body io.Reader, out *reporting) erro
 		if e.ID != "" {
 			frame.WriteString("id: " + e.ID + "\n")
 		}
-		for _, line := range strings.Split(e.Data, "\n") {
+		data := string(maskReply([]byte(e.Data), e.Name, out.known))
+		for _, line := range strings.Split(data, "\n") {
 			frame.WriteString("data: " + line + "\n")
 		}
 		frame.WriteString("\n")

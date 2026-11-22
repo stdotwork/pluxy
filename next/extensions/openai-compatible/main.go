@@ -69,7 +69,7 @@ const (
 )
 
 func main() {
-	if err := sdk.Serve(sdk.Extension{ID: id, Version: version, Login: login, LoginMethods: loginMethods, Generate: generate, CountTokens: countTokens, Models: listModels, Check: check, Quota: quota, Endpoint: endpointCall}); err != nil {
+	if err := sdk.Serve(sdk.Extension{ID: id, Version: version, Login: login, LoginMethods: loginMethods, Generate: maskGoogle(generate), CountTokens: maskGoogle(countTokens), Models: listModels, Check: check, Quota: quota, Endpoint: maskGoogle(endpointCall)}); err != nil {
 		fmt.Fprintln(os.Stderr, "openai-compatible:", err)
 		os.Exit(1)
 	}

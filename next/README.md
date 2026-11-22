@@ -490,7 +490,14 @@ client keeps `request_id` and the text `error_code` of `error.details` from a Me
 keeps `param` from an OpenAI-format upstream, and a Gemini client keeps `details` from a Google
 upstream; no field is copied into a format that does not define it. `param` is the upstream's own
 path, so on a translated request it can name a field in the upstream's shape. A 429, 503 or 529
-carries `Retry-After` when the upstream said how long to wait.
+carries `Retry-After` when the upstream said how long to wait. A Google upstream's error names the
+Google project, organization, folder, billing account or person behind the pluxy account (in its
+message, and in its details); the Gemini extension — and the OpenAI-compatible extension for a
+`googleapis.com` host or a Google-shaped error — replace those names with `[redacted]` in what a
+client gets (a `QuotaFailure` subject and a `ResourceInfo` owner whole in their own field, and in
+an Interactions reply only the error), and keep the rest, so `RetryInfo` and the quota's metric,
+ID, value and dimensions still read. The owner's own account check and quota reading keep the
+names.
 
 When an upstream says the prompt does not fit the model's context window, the client gets it in
 the shape it acts on: status 400 with code `context_length_exceeded` on Chat, Responses and the
@@ -1063,7 +1070,8 @@ The client's `Api-Revision` header goes with it (default `2026-05-20`). A Gemini
 to `{base_url}/v1beta/interactions`; a Vertex service account to
 `/v1beta1/projects/{project}/locations/global/interactions` on the Vertex host (always `global`, as
 in today's core), and an express key to `/v1beta1/interactions` (or the project path when
-`vertex.project` is set). The upstream's reply comes back as it is: one JSON object, or, for
+`vertex.project` is set). The upstream's reply comes back as it is except that any error's
+Google project or account names are masked: one JSON object, or, for
 `"stream": true` (Vertex is also asked with `alt=sse`), each server-sent event with its name as soon
 as it arrives. Its `usage` counts toward usage statistics.
 
