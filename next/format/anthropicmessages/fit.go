@@ -26,10 +26,10 @@ import (
 // capabilities (Anthropic's model list has capabilities.effort and capabilities.thinking.types)
 // when the core's model list carries them.
 type thinkingRules struct {
-	adaptive        bool   // takes thinking type adaptive: Claude 4.6 and later
-	budget          bool   // takes thinking type enabled with budget_tokens: Claude 4.6 and earlier
+	adaptive        bool   // takes thinking type adaptive: Claude 4.6 and later, Mythos Preview
+	budget          bool   // takes thinking type enabled with budget_tokens: Claude 4.6 and earlier, Mythos Preview
 	xhigh           bool   // takes effort xhigh: Claude 4.7 and later
-	newSampling     bool   // refuses top_k on every request: Claude 4.7 and later
+	newSampling     bool   // refuses top_k on every request: Claude 4.7 and later, Mythos Preview
 	thinksByDefault bool   // thinks when the request has no thinking setting
 	off             string // the thinking type that turns thinking off; "" where thinking is always on
 	offUpToHigh     bool   // off is taken only at effort high or below
@@ -37,8 +37,17 @@ type thinkingRules struct {
 }
 
 // rulesFor returns the thinking rules for model; ok is false for a name that is not a Claude
-// model that can think (claudeVersion), which is then left as it is.
+// model that can think (claudeVersion, plus Claude Mythos Preview), which is then left as it is.
 func rulesFor(model string) (r thinkingRules, ok bool) {
+	name := claudeName(model)
+	if name == "claude-mythos-preview" || strings.HasPrefix(name, "claude-mythos-preview-") {
+		return thinkingRules{
+			adaptive:        true,
+			budget:          true,
+			newSampling:     true,
+			thinksByDefault: true,
+		}, true
+	}
 	major, minor, ok := claudeVersion(model)
 	if !ok {
 		return r, false
@@ -49,7 +58,7 @@ func rulesFor(model string) (r thinkingRules, ok bool) {
 	from := func(ma, mi int) bool { return major > ma || (major == ma && minor >= mi) }
 	r = thinkingRules{adaptive: true, budget: !from(4, 7), xhigh: from(4, 7), newSampling: from(4, 7), off: "disabled"}
 	family := ""
-	if f := claudeFamily.FindStringSubmatch(claudeName(model)); f != nil {
+	if f := claudeFamily.FindStringSubmatch(name); f != nil {
 		family = f[1]
 	}
 	switch family {
@@ -145,6 +154,8 @@ func (f *fitter) config() {
 	switch {
 	case typ == "enabled" && f.r.adaptive && !f.r.budget:
 		f.toAdaptive(th, "thinking.budget_tokens", "this model takes no thinking budget; sent as adaptive thinking")
+	case typ == "adaptive" && !f.r.adaptive && f.r.budget:
+		f.toBudget(th)
 	case typ == "disabled" || typ == "between_tools":
 		f.thinkingOff(th, typ)
 	}
@@ -152,6 +163,29 @@ func (f *fitter) config() {
 		f.setEffort("max")
 		f.lose(llm.LossApproximated, "output_config.effort", "this model has no effort xhigh; sent as max, the level above it")
 	}
+}
+
+// toBudget turns adaptive thinking into budget thinking on a model that takes only a budget,
+// sized from output_config.effort when set and minBudget otherwise, kept below max_tokens. When
+// max_tokens leaves no room for the smallest budget, thinking is left out instead.
+func (f *fitter) toBudget(th map[string]json.RawMessage) {
+	budget := minBudget
+	if b, ok := budgets[f.effort()]; ok {
+		budget = b
+	}
+	var maxTokens *int
+	if err := json.Unmarshal(f.m["max_tokens"], &maxTokens); err == nil && maxTokens != nil && budget >= *maxTokens {
+		budget = *maxTokens - 1
+	}
+	if budget < minBudget {
+		f.setThinking(nil)
+		f.lose(llm.LossDropped, "thinking", "this model takes no adaptive thinking and max_tokens leaves no room for a thinking budget; sent without thinking")
+		return
+	}
+	th["type"] = json.RawMessage(`"enabled"`)
+	th["budget_tokens"], _ = json.Marshal(budget)
+	f.setThinking(th)
+	f.lose(llm.LossApproximated, "thinking.type", "this model takes no adaptive thinking; sent as extended thinking with budget_tokens "+strconv.Itoa(budget))
 }
 
 // toAdaptive turns budget thinking into adaptive thinking at the effort the budget falls in,
@@ -240,8 +274,8 @@ func (f *fitter) toolChoice() {
 	}
 }
 
-// topK leaves out top_k where Claude refuses it: on Claude 4.7 and later, and on older models
-// while thinking is on.
+// topK leaves out top_k where Claude refuses it: on Claude 4.7 and later and Mythos Preview,
+// and on older models while thinking is on.
 func (f *fitter) topK() {
 	v, ok := f.m["top_k"]
 	if !ok || string(v) == "null" {
@@ -250,7 +284,7 @@ func (f *fitter) topK() {
 	switch {
 	case f.r.newSampling:
 		delete(f.m, "top_k")
-		f.lose(llm.LossDropped, "top_k", "Claude 4.7 and later models take no top_k")
+		f.lose(llm.LossDropped, "top_k", "this model takes no top_k")
 	case thinkingOn(f.m["thinking"]):
 		delete(f.m, "top_k")
 		f.lose(llm.LossDropped, "top_k", "Claude takes no top_k while thinking is on")
@@ -366,6 +400,8 @@ func (f *fitter) history(model string) error {
 // body:
 //   - a thinking budget on a model that takes none becomes adaptive thinking at the effort the
 //     budget falls in;
+//   - adaptive thinking on a budget-only model becomes extended thinking with a budget sized from
+//     output_config.effort (or minBudget), or is dropped when max_tokens leaves no room;
 //   - thinking turned off (disabled, or between_tools) is sent as the model turns it off: without
 //     thinking settings at effort low on a model that always thinks, as between_tools on Claude
 //     Sonnet 5.5, as disabled elsewhere, with no other field in it, and at effort high at most
