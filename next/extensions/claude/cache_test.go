@@ -321,6 +321,27 @@ func TestResponsesPromptCacheMapping(t *testing.T) {
 		}
 	})
 
+	t.Run("prompt_cache_options ttl that agrees with prompt_cache_retention loses nothing", func(t *testing.T) {
+		for _, optTTL := range []string{"1h", "24h"} {
+			in := `{"model":"claude-sonnet-4-6","input":"Hi","prompt_cache_retention":"24h","prompt_cache_options":{"ttl":"` + optTTL + `"}}`
+			req, err := openairesponses.ParseRequest([]byte(in))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, tr, err := buildBodyWithTTL(req, cacheTTL5m)
+			if err != nil {
+				t.Fatalf("ttl %s: unexpected error: %v", optTTL, err)
+			}
+			if len(tr.Losses) != 1 || tr.Losses[0].Kind != llm.LossApproximated || tr.Losses[0].Path != "prompt_cache_retention" {
+				t.Errorf("ttl %s: losses = %+v, want only the approximated prompt_cache_retention", optTTL, tr.Losses)
+			}
+			req.DropPolicy = llm.DropReject
+			if _, _, err := buildBodyWithTTL(req, cacheTTL5m); err != nil {
+				t.Errorf("ttl %s: DropReject refused a ttl that was applied: %v", optTTL, err)
+			}
+		}
+	})
+
 	t.Run("prompt_cache_options with extra keys applies ttl and reports only extra keys dropped", func(t *testing.T) {
 		in := `{"model":"claude-sonnet-4-6","input":"Hi","prompt_cache_options":{"ttl":"24h","scope":"org","key":"k1"}}`
 		req, err := openairesponses.ParseRequest([]byte(in))

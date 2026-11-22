@@ -171,11 +171,13 @@ func applyResponsesCache(req llm.Request, losses []llm.Loss, defaultTTL string) 
 					if mapped != "" {
 						losses = dropLossAt(losses, "prompt_cache_options")
 						if hasRetention {
-							losses = llm.AddLoss(losses, llm.Loss{
-								Kind:   llm.LossDropped,
-								Path:   "prompt_cache_options.ttl",
-								Detail: "prompt_cache_retention took precedence",
-							})
+							if mapped != ttl {
+								losses = llm.AddLoss(losses, llm.Loss{
+									Kind:   llm.LossDropped,
+									Path:   "prompt_cache_options.ttl",
+									Detail: "prompt_cache_retention took precedence",
+								})
+							}
 						} else {
 							ttl = mapped
 							if approx {
