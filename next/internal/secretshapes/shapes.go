@@ -103,16 +103,9 @@ func (r Row) notRedactor(why string) Row {
 	return r
 }
 
-// The kinds of field that hold a value as it is, and those that read a whole value out of a URL.
-var (
-	shapeSide = []string{InHeader, InCookie, InSettings, InUserinfo, InQuery}
-	shapeURL  = []string{InUserinfo, InQuery}
-	// shapeParsed are the kinds that read a value's structure: all but a URL's values, which are
-	// secret whole.
-	shapeParsed = []string{InCredential, InHeader, InCookie, InSettings}
-	// shapeNotCookie are those that count a single name=value whole.
-	shapeNotCookie = []string{InCredential, InHeader, InSettings, InUserinfo, InQuery}
-)
+// shapeParsed are the kinds that read a value's structure: all but a URL's values, which are
+// secret whole.
+var shapeParsed = []string{InCredential, InHeader, InCookie, InSettings}
 
 func b64(s string) string    { return base64.StdEncoding.EncodeToString([]byte(s)) }
 func b64raw(s string) string { return base64.RawStdEncoding.EncodeToString([]byte(s)) }
