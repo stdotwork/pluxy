@@ -218,8 +218,8 @@ feature, it keeps the old label, unless the label named something this core does
 
 - Prices and price sync: core records tokens, not prices. The desktop app dropped cost views too
   ([its keep/drop record](../app/PARITY.md#usage-and-sessions)).
-- The storage cap and repair of the old app's database: core keeps its record in memory, limited
-  by `usage.max_events` and `usage.max_age_ms`.
+- The storage cap and repair of the old app's database: core keeps its recent record in memory,
+  limited by `usage.max_events` and `usage.max_age_ms`, and daily files on disk (`usage.keep_days`).
 
 **Config Panel**
 
@@ -227,7 +227,8 @@ feature, it keeps the old label, unless the label named something this core does
   [`next/README.md`](../README.md#what-each-setting-does-here)): "Debug Mode", "Commercial Mode",
   "Redis Usage Queue Retention (seconds)", "Auth Auto-refresh Workers", "Pass Through Upstream
   Headers", "WebSocket Authentication", "Subagent session affinity", "Persist cooldown status"
-  (core keeps cooldowns in memory, where they last through a config reload), "GPT Image 2 Base
+  (core saves quota blocks and bans to `state/routing.json` by itself, and other cooldowns last in
+  memory through a config reload), "GPT Image 2 Base
   Model", "Video result credential cache TTL", the "LAN discovery" section, every Streaming field
   (so there is no Streaming tab), every payload rule (so there is no Payload tab), Claude's and
   Codex's cloaking and header defaults, Codex's response steering and live media relay, the
