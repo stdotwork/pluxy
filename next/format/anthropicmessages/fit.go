@@ -28,6 +28,7 @@ import (
 type thinkingRules struct {
 	adaptive        bool   // takes thinking type adaptive: Claude 4.6 and later, Mythos Preview
 	budget          bool   // takes thinking type enabled with budget_tokens: Claude 4.6 and earlier, Mythos Preview
+	noEffort        bool   // refuses output_config.effort: budget-only models but Opus 4.5
 	xhigh           bool   // takes effort xhigh: Claude 4.7 and later
 	newSampling     bool   // refuses top_k on every request: Claude 4.7 and later, Mythos Preview
 	thinksByDefault bool   // thinks when the request has no thinking setting
@@ -53,7 +54,9 @@ func rulesFor(model string) (r thinkingRules, ok bool) {
 		return r, false
 	}
 	if !adaptive(major, minor) {
-		return thinkingRules{budget: true, off: "disabled"}, true
+		f := claudeFamily.FindStringSubmatch(name)
+		opus45 := major == 4 && minor == 5 && f != nil && f[1] == "opus"
+		return thinkingRules{budget: true, noEffort: !opus45, off: "disabled"}, true
 	}
 	from := func(ma, mi int) bool { return major > ma || (major == ma && minor >= mi) }
 	r = thinkingRules{adaptive: true, budget: !from(4, 7), xhigh: from(4, 7), newSampling: from(4, 7), off: "disabled"}
@@ -176,6 +179,16 @@ func (f *fitter) toBudget(th map[string]json.RawMessage) {
 	var maxTokens *int
 	if err := json.Unmarshal(f.m["max_tokens"], &maxTokens); err == nil && maxTokens != nil && budget >= *maxTokens {
 		budget = *maxTokens - 1
+	}
+	if f.r.noEffort && f.effort() != "" {
+		cfg := rawjson.Object(f.m["output_config"])
+		delete(cfg, "effort")
+		if len(cfg) == 0 {
+			delete(f.m, "output_config")
+		} else {
+			f.set("output_config", cfg)
+		}
+		f.lose(llm.LossApproximated, "output_config.effort", "this model takes no effort; it sets the thinking budget instead")
 	}
 	if budget < minBudget {
 		f.setThinking(nil)

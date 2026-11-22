@@ -148,8 +148,8 @@ func TestFitThinkingTypes(t *testing.T) {
 		"approximated thinking.type")
 	fitCase(t, "haiku 4.5 adaptive clamped", "claude-haiku-4-5",
 		`{"model":"claude-haiku-4-5","max_tokens":4096,"thinking":{"type":"adaptive"},"output_config":{"effort":"medium"},`+userHi+`}`,
-		`{"model":"claude-haiku-4-5","max_tokens":4096,"thinking":{"type":"enabled","budget_tokens":4095},"output_config":{"effort":"medium"},`+userHi+`}`,
-		"approximated thinking.type")
+		`{"model":"claude-haiku-4-5","max_tokens":4096,"thinking":{"type":"enabled","budget_tokens":4095},`+userHi+`}`,
+		"approximated output_config.effort", "approximated thinking.type")
 	fitCase(t, "sonnet 4.5 adaptive small max_tokens", "claude-sonnet-4-5",
 		`{"model":"claude-sonnet-4-5","max_tokens":1024,"thinking":{"type":"adaptive"},`+userHi+`}`,
 		`{"model":"claude-sonnet-4-5","max_tokens":1024,`+userHi+`}`,
@@ -340,5 +340,47 @@ func TestReplayedCAISSignature(t *testing.T) {
 	got := strings.Join(lossList(losses), ",")
 	if !strings.Contains(got, "dropped input[4]") || !strings.Contains(got, "dropped input[5]") || strings.Contains(got, "input[1]") {
 		t.Errorf("losses %q: want input[4] and input[5] dropped and input[1] kept", got)
+	}
+}
+
+// Only Opus 4.5 among the budget-only models takes an effort, so adaptive thinking with an effort
+// on the others must not keep a field that gets a 400.
+func TestFitAdaptiveEffortOnBudgetOnlyModels(t *testing.T) {
+	const body = `{"model":"m","max_tokens":40000,"thinking":{"type":"adaptive"},"output_config":{"effort":"high"},"messages":[{"role":"user","content":"hi"}]}`
+	for model, keep := range map[string]bool{
+		"claude-sonnet-4-5":         false,
+		"claude-haiku-4-5-20251001": false,
+		"claude-opus-4-1":           false,
+		"claude-opus-4-5-20251101":  true,
+	} {
+		t.Run(model, func(t *testing.T) {
+			out, losses, err := FitThinking([]byte(body), model)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got struct {
+				Thinking struct {
+					Type   string `json:"type"`
+					Budget int    `json:"budget_tokens"`
+				} `json:"thinking"`
+				OutputConfig map[string]json.RawMessage `json:"output_config"`
+			}
+			if err := json.Unmarshal(out, &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Thinking.Type != "enabled" || got.Thinking.Budget != budgets["high"] {
+				t.Errorf("thinking = %+v", got.Thinking)
+			}
+			if _, has := got.OutputConfig["effort"]; has != keep {
+				t.Errorf("effort kept = %v, want %v: %s", has, keep, out)
+			}
+			reported := false
+			for _, l := range losses {
+				reported = reported || l.Path == "output_config.effort"
+			}
+			if reported == keep {
+				t.Errorf("effort loss reported = %v with kept = %v: %+v", reported, keep, losses)
+			}
+		})
 	}
 }
