@@ -56,6 +56,31 @@ func writeClaudeTextReply(w http.ResponseWriter, text string) {
 		`"usage":{"input_tokens":12,"output_tokens":8}}`, text)
 }
 
+func writeClaudeCitedTextReply(w http.ResponseWriter, text, url, title, encryptedIndex string) {
+	w.Header().Set("Content-Type", "application/json")
+	b, _ := json.Marshal(map[string]any{
+		"id":    "msg_replay",
+		"type":  "message",
+		"role":  "assistant",
+		"model": "claude-opus-4-6",
+		"content": []any{map[string]any{
+			"type": "text",
+			"text": text,
+			"citations": []any{map[string]any{
+				"type":            "web_search_result_location",
+				"url":             url,
+				"title":           title,
+				"encrypted_index": encryptedIndex,
+				"cited_text":      text,
+			}},
+		}},
+		"stop_reason":   "end_turn",
+		"stop_sequence": nil,
+		"usage":         map[string]any{"input_tokens": 12, "output_tokens": 8},
+	})
+	_, _ = w.Write(b)
+}
+
 func writeClaudeCredentialError(w http.ResponseWriter, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusBadRequest)
@@ -69,9 +94,15 @@ func claudeRequestKey(r *http.Request) string {
 
 // A Responses client's history can carry a web_search_result_location annotation whose
 // encrypted_index was minted for another Claude credential. Replaying it on the next account must
-// not send that opaque value back to Claude, so the conversation still continues.
+// not send that opaque value back to Claude, so the conversation still continues, and the
+// Responses reply must still preserve Claude's web-search citation annotations.
 func TestVerifyWebSearchReplayForeignCitationsDoNotFailCredentialFailover(t *testing.T) {
-	const badIndex = "encrypted-index-minted-for-a"
+	const (
+		badIndex      = "encrypted-index-minted-for-a"
+		replyText     = "The cited answer remains usable."
+		citationURL   = "https://example.com/result"
+		citationTitle = "Search result"
+	)
 	srv := claudetest.New(t)
 	keyA, keyB := srv.IssueKey(), srv.IssueKey()
 	srv.Messages = func(w http.ResponseWriter, r *http.Request, req claudetest.Request) {
@@ -79,7 +110,7 @@ func TestVerifyWebSearchReplayForeignCitationsDoNotFailCredentialFailover(t *tes
 			writeClaudeCredentialError(w, "messages.1.content.1.citations.0: Invalid `encrypted_index` in `text` block")
 			return
 		}
-		writeClaudeTextReply(w, "The cited answer remains usable.")
+		writeClaudeCitedTextReply(w, replyText, citationURL, citationTitle, "encrypted-index-reply")
 	}
 	base := startClaudeWebSearchFailoverCore(t, srv, keyA, keyB)
 
@@ -93,8 +124,8 @@ func TestVerifyWebSearchReplayForeignCitationsDoNotFailCredentialFailover(t *tes
 				map[string]any{
 					"type": "output_text", "text": "The result is cited below.",
 					"annotations": []any{map[string]any{
-						"type": "web_search_result_location", "url": "https://example.com/result",
-						"title": "Search result", "encrypted_index": badIndex, "cited_text": "result",
+						"type": "web_search_result_location", "url": citationURL,
+						"title": citationTitle, "encrypted_index": badIndex, "cited_text": "result",
 					}},
 				},
 			}},
@@ -106,8 +137,47 @@ func TestVerifyWebSearchReplayForeignCitationsDoNotFailCredentialFailover(t *tes
 	}
 	for turn, wantAccount := range []string{"a", "b"} {
 		code, reply := clientPost(t, base, "/v1/responses", string(body), nil)
-		if code != http.StatusOK || !strings.Contains(reply, "The cited answer remains usable.") {
+		if code != http.StatusOK || !strings.Contains(reply, replyText) {
 			t.Fatalf("turn %d on credential %s: status %d, body %s", turn+1, wantAccount, code, reply)
+		}
+		var resp struct {
+			Output []struct {
+				Type    string `json:"type"`
+				Content []struct {
+					Type        string `json:"type"`
+					Text        string `json:"text"`
+					Annotations []struct {
+						Type       string `json:"type"`
+						URL        string `json:"url"`
+						Title      string `json:"title"`
+						StartIndex int    `json:"start_index"`
+						EndIndex   int    `json:"end_index"`
+					} `json:"annotations"`
+				} `json:"content"`
+			} `json:"output"`
+		}
+		if err := json.Unmarshal([]byte(reply), &resp); err != nil {
+			t.Fatalf("turn %d on credential %s: decode reply: %v: %s", turn+1, wantAccount, err, reply)
+		}
+		var found bool
+		for _, item := range resp.Output {
+			if item.Type != "message" {
+				continue
+			}
+			for _, part := range item.Content {
+				if part.Type != "output_text" {
+					continue
+				}
+				for _, ann := range part.Annotations {
+					if ann.Type == "url_citation" && ann.URL == citationURL && ann.Title == citationTitle &&
+						ann.StartIndex == 0 && ann.EndIndex == len([]rune(replyText)) {
+						found = true
+					}
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("turn %d on credential %s: reply dropped citation annotations: %s", turn+1, wantAccount, reply)
 		}
 	}
 	requests := srv.Requests()

@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/stdotwork/pluxy/next/conformance"
@@ -229,5 +231,32 @@ func TestGeminiImagesRefusals(t *testing.T) {
 	}
 	if requests := srv.Requests(); len(requests) != 0 {
 		t.Fatalf("refused calls reached the upstream: %+v", requests)
+	}
+}
+
+// A GenerateContent reply larger than maxImagesReply (64 MiB) is refused as an upstream error
+// rather than buffered and decoded into an Images API reply.
+func TestGeminiImagesReplySizeLimit(t *testing.T) {
+	ext, srv, acct := imageTestExtension(t)
+	srv.Generate = func(w http.ResponseWriter, r *http.Request, req geminitest.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Leading JSON whitespace pushes a valid small reply past maxImagesReply while keeping
+		// the decoded image small enough to succeed if the limit stops being enforced.
+		pad := bytes.Repeat([]byte{' '}, 1<<20)
+		for written := 0; written < maxImagesReply; written += len(pad) {
+			if _, err := w.Write(pad); err != nil {
+				return
+			}
+		}
+		_, _ = io.WriteString(w, `{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"image/png","data":"aW1hZ2U="}}]},"finishReason":"STOP","index":0}]}`)
+	}
+
+	events := imageEvents(t, ext, acct, llm.FormatOpenAIImagesGenerations,
+		`{"model":"gemini-3.1-flash-image","prompt":"draw a cat"}`)
+	if len(events) != 1 || events[0].Type != llm.EventError || events[0].Error == nil {
+		t.Fatalf("events = %+v, want one upstream error for reply over %d MiB", events, maxImagesReply>>20)
+	}
+	if e := events[0].Error; e.Code != llm.CodeUpstream || e.Scope != llm.ScopeEndpoint || !strings.Contains(e.Message, "larger than") {
+		t.Fatalf("error = %+v, want CodeUpstream on ScopeEndpoint naming the reply-size limit", e)
 	}
 }
