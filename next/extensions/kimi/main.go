@@ -270,9 +270,12 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		}
 		return &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
 	}
-	events, err := dec.response(raw)
+	events, losses, err := decodeResponse(up.format, raw)
 	if err != nil {
 		return err
+	}
+	for _, l := range losses {
+		logReplyLoss(l)
 	}
 	// Kept before the reply is sent, as replayDecoder keeps a stream's turn: a client may send its
 	// next turn the moment it has the reply, and that turn must find what was kept.
@@ -356,8 +359,24 @@ func reportLosses(dec streamDecoder) {
 		return
 	}
 	for _, l := range lr.Losses() {
-		fmt.Fprintf(os.Stderr, "reply loss: %s %s (%s)\n", l.Kind, l.Path, l.Detail)
+		logReplyLoss(l)
 	}
+}
+
+// logReplyLoss writes one thing a reply had to leave out to the extension's log, which core
+// prefixes with the extension's ID. A reply's translation report goes out with its first event, so
+// a loss found while reading the reply has no other way to core.
+func logReplyLoss(l llm.Loss) {
+	fmt.Fprintf(os.Stderr, "reply loss: %s %s (%s)\n", l.Kind, l.Path, l.Detail)
+}
+
+// decodeResponse reads a non-streamed reply along with any reply losses its decoder reported.
+func decodeResponse(format string, raw []byte) ([]llm.Event, []llm.Loss, error) {
+	if format == llm.FormatOpenAIChat {
+		return openaichat.DecodeResponseLosses(raw)
+	}
+	events, err := decoders[format].response(raw)
+	return events, nil, err
 }
 
 // relayStream decodes the upstream stream and sends each event as soon as it is decoded. A
