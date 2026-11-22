@@ -835,11 +835,17 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			}
 			// Assistant text after tool calls of the same turn (Anthropic Messages allows it) joins
 			// the message holding the calls: tool results must follow that message directly.
-			if n := len(msgs); it.Role == llm.RoleAssistant && n > 0 && reasoning == "" && len(raw) == 0 && content != nil {
+			if n := len(msgs); it.Role == llm.RoleAssistant && n > 0 && reasoning == "" && len(raw) == 0 {
 				if last := msgs[n-1]; last.Role == llm.RoleAssistant && len(last.ToolCalls) > 0 && last.ToolCallID == "" {
-					last.Content = joinContent(last.Content, content)
-					e.lose(llm.LossApproximated, p, "assistant text after tool calls sent in the message with the calls")
-					break
+					if content == nil {
+						if dropped {
+							break
+						}
+					} else {
+						last.Content = joinContent(last.Content, content)
+						e.lose(llm.LossApproximated, p, "assistant text after tool calls sent in the message with the calls")
+						break
+					}
 				}
 			}
 			m := &outMessage{Role: it.Role, Content: content, raw: raw}
@@ -1242,6 +1248,9 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 		default:
 			return nil, false, false, &llm.Error{Code: llm.CodeUnsupported, Message: fmt.Sprintf("%s: unsupported content part %q", pp, p.Type), Scope: llm.ScopeRequest}
 		}
+	}
+	if len(out) == 0 && dropped && it.Role == llm.RoleAssistant {
+		return nil, false, true, nil
 	}
 	return out, sendable, dropped, nil
 }
