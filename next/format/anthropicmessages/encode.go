@@ -387,6 +387,13 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	searches := scanWebSearches(req.Items)
 	var system []json.RawMessage
 	var msgs []*outMessage
+	type pendingCacheControl struct {
+		turn string
+		role string
+		path string
+		raw  json.RawMessage
+	}
+	var pendingCC []pendingCacheControl
 	add := func(role, turn, path string, block json.RawMessage) {
 		if n := len(msgs); n > 0 && msgs[n-1].role == role && (msgs[n-1].turn == turn || msgs[n-1].joinNext) {
 			msgs[n-1].joinNext = false
@@ -403,9 +410,12 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 		switch it.Type {
 		case llm.ItemTypeMessage:
 			if len(it.Content) == 0 && !it.TextContent && it.Origin != nil && it.Origin.Format != format && len(it.Origin.Raw) > 0 {
-				// An empty message from another format only holds its own fields; they are
-				// reported, and nothing is sent for it.
-				e.losses = append(e.losses, rawjson.Losses(it.Origin, format)...)
+				// An empty message from another format only holds its own fields; keep a valid
+				// cache_control so it can attach to the turn's last emitted block (such as a
+				// tool_use block on a tool-call-only Chat assistant message), and report the rest.
+				if raw := e.kept(it.Origin); len(raw) > 0 {
+					pendingCC = append(pendingCC, pendingCacheControl{turn: turn, role: it.Role, path: p, raw: raw})
+				}
 				break
 			}
 			blocks, paths, sendable, dropped := e.content(it, p)
@@ -421,8 +431,8 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 							e.lose(llm.LossDropped, rawjson.Join(p, "cache_control"), "last content block already carries cache_control")
 						}
 					}
-				} else {
-					e.losses = append(e.losses, rawjson.Losses(it.Origin, format)...)
+				} else if raw := e.kept(it.Origin); len(raw) > 0 {
+					pendingCC = append(pendingCC, pendingCacheControl{turn: turn, role: it.Role, path: p, raw: raw})
 				}
 			}
 			switch {
@@ -500,6 +510,25 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			e.lose(llm.LossDropped, p, "Messages has no such item")
 		default:
 			return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Message: fmt.Sprintf("%s: unsupported item type %q", p, it.Type), Scope: llm.ScopeRequest}
+		}
+	}
+	for _, cc := range pendingCC {
+		var target *outMessage
+		for j := len(msgs) - 1; j >= 0; j-- {
+			if msgs[j].turn == cc.turn && msgs[j].role == cc.role && len(msgs[j].content) > 0 {
+				target = msgs[j]
+				break
+			}
+		}
+		if target == nil {
+			e.lose(llm.LossDropped, rawjson.Join(cc.path, "cache_control"), "message has no content block to carry cache_control")
+			continue
+		}
+		last := len(target.content) - 1
+		if rawjson.Object(target.content[last])["cache_control"] == nil {
+			target.content[last] = rawjson.Merge(target.content[last], cc.raw)
+		} else {
+			e.lose(llm.LossDropped, rawjson.Join(cc.path, "cache_control"), "last content block already carries cache_control")
 		}
 	}
 	if len(system) > 0 {
