@@ -101,8 +101,11 @@ func TestGeminiQuotaFromLast429(t *testing.T) {
 	if len(empty.Quota.Limits) != 0 {
 		t.Fatalf("initial quota limits = %+v, want empty before any 429", empty.Quota.Limits)
 	}
-	if !strings.Contains(strings.ToLower(empty.Quota.Plan), "no rate-limit") {
-		t.Errorf("initial plan = %q, want note that no rate-limit reply has been seen yet", empty.Quota.Plan)
+	if empty.Quota.Plan != "" {
+		t.Errorf("initial plan = %q, want empty (Google reports no account plan)", empty.Quota.Plan)
+	}
+	if note, _ := empty.Quota.Raw["note"].(string); !strings.Contains(strings.ToLower(note), "no 429") {
+		t.Errorf("initial raw.note = %q, want note that no 429 rate-limit reply has been seen yet", note)
 	}
 
 	before := time.Now().UTC()
@@ -119,8 +122,11 @@ func TestGeminiQuotaFromLast429(t *testing.T) {
 	if code := manage(t, base, "GET", "/accounts/g-quota/quota", nil, &after429); code != http.StatusOK {
 		t.Fatalf("quota after 429 status %d (%+v), want 200", code, after429.Error)
 	}
-	if !strings.Contains(strings.ToLower(after429.Quota.Plan), "last-seen") {
-		t.Errorf("plan = %q, want last-seen caveat", after429.Quota.Plan)
+	if after429.Quota.Plan != "" {
+		t.Errorf("plan = %q, want empty (Google reports no account plan)", after429.Quota.Plan)
+	}
+	if note, _ := after429.Quota.Raw["note"].(string); !strings.Contains(strings.ToLower(note), "last-seen") || !strings.Contains(note, "RATE_LIMIT_EXCEEDED") {
+		t.Errorf("raw.note = %q, want last-seen caveat and ErrorInfo reason RATE_LIMIT_EXCEEDED", note)
 	}
 	if len(after429.Quota.Limits) != 1 {
 		t.Fatalf("limits = %+v, want 1 limit from QuotaFailure", after429.Quota.Limits)
