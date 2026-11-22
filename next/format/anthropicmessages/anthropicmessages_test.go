@@ -1578,6 +1578,66 @@ func TestEncodeCarriesToolCallOnlyMessageCacheControl(t *testing.T) {
 		}
 	})
 
+	t.Run("nested_tool_result_cache_control_counts_toward_four_breakpoint_limit", func(t *testing.T) {
+		in := `{
+			"model": "claude-sonnet-4-6",
+			"tools": [
+				{"type": "function", "cache_control": {"type": "ephemeral"}, "function": {"name": "a", "parameters": {"type": "object"}}}
+			],
+			"messages": [
+				{"role": "system", "content": [{"type": "text", "text": "Rules", "cache_control": {"type": "ephemeral"}}]},
+				{"role": "user", "cache_control": {"type": "ephemeral"}, "content": "Check"},
+				{
+					"role": "assistant",
+					"content": null,
+					"cache_control": {"type": "ephemeral"},
+					"tool_calls": [
+						{"id": "call_1", "type": "function", "function": {"name": "a", "arguments": "{}"}}
+					]
+				},
+				{
+					"role": "tool",
+					"tool_call_id": "call_1",
+					"content": [
+						{"type": "text", "text": "r1", "cache_control": {"type": "ephemeral"}},
+						{"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}
+					]
+				},
+				{"role": "user", "content": "Done"}
+			]
+		}`
+		req, err := openaichat.ParseRequest([]byte(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, losses, err := EncodeRequest(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sameJSON(t, "body", out, `{
+			"model": "claude-sonnet-4-6",
+			"max_tokens": 32000,
+			"stream": false,
+			"tools": [
+				{"name": "a", "input_schema": {"type": "object", "properties": {}}, "cache_control": {"type": "ephemeral"}}
+			],
+			"system": [{"type": "text", "text": "Rules", "cache_control": {"type": "ephemeral"}}],
+			"messages": [
+				{"role": "user", "content": [{"type": "text", "text": "Check", "cache_control": {"type": "ephemeral"}}]},
+				{"role": "assistant", "content": [{"type": "tool_use", "id": "call_1", "name": "a", "input": {}}]},
+				{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "call_1", "content": [
+					{"type": "text", "text": "r1", "cache_control": {"type": "ephemeral"}},
+					{"type": "image", "source": {"type": "url", "url": "https://example.com/a.png"}}
+				]}]},
+				{"role": "user", "content": [{"type": "text", "text": "Done"}]}
+			]
+		}`)
+		want := []string{"dropped messages[2].cache_control"}
+		if got := lossList(losses); !reflect.DeepEqual(got, want) {
+			t.Errorf("losses:\n got %q\nwant %q", got, want)
+		}
+	})
+
 	t.Run("never_lands_on_thinking_block", func(t *testing.T) {
 		// Responses reasoning with a valid Claude signature emits a thinking block, but each
 		// Responses input item has its own turn, so an empty assistant message's cache_control

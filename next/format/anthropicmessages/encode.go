@@ -588,8 +588,19 @@ func countCacheBreakpoints(origin *llm.Origin, tools, system []json.RawMessage, 
 	}
 	for _, m := range msgs {
 		for _, b := range m.content {
-			if rawjson.Object(b)["cache_control"] != nil {
+			obj := rawjson.Object(b)
+			if obj["cache_control"] != nil {
 				n++
+			}
+			if rawContent := obj["content"]; len(rawContent) > 0 {
+				var nested []json.RawMessage
+				if json.Unmarshal(rawContent, &nested) == nil {
+					for _, nb := range nested {
+						if rawjson.Object(nb)["cache_control"] != nil {
+							n++
+						}
+					}
+				}
 			}
 		}
 	}
