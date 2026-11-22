@@ -1081,6 +1081,11 @@ const CodeExecutionsMinor = 32
 // earlier version.
 const OutputMediaMinor = 33
 
+// RateLimitHeadersMinor is the protocol minor version that adds upstream rate-limit response
+// headers on response.start and error (llm.ResponseInfo.Headers and llm.Error.Headers). Core
+// ignores them from an extension that reports an earlier version.
+const RateLimitHeadersMinor = 34
+
 // normalizeEvent downgrades event fields that require a newer protocol minor version than e
 // reported in describe.
 func (e *Extension) normalizeEvent(ev llm.Event) llm.Event {
@@ -1098,6 +1103,18 @@ func (e *Extension) normalizeEvent(ev llm.Event) llm.Event {
 		ev.Media = nil
 		if ev.Type == llm.EventMedia && len(ev.Raw) > 0 {
 			ev.Type = llm.EventNative
+		}
+	}
+	if e.info.ProtocolMinor < RateLimitHeadersMinor {
+		if ev.Response != nil && len(ev.Response.Headers) > 0 {
+			respCopy := *ev.Response
+			respCopy.Headers = nil
+			ev.Response = &respCopy
+		}
+		if ev.Error != nil && len(ev.Error.Headers) > 0 {
+			errCopy := *ev.Error
+			errCopy.Headers = nil
+			ev.Error = &errCopy
 		}
 	}
 	if ev.Type != llm.EventError || ev.Error == nil {

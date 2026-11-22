@@ -281,6 +281,9 @@ func collect(t *testing.T, s *host.Stream) []llm.Event {
 			if err := checkReplyOutputMedia(evs); err != nil {
 				t.Errorf("reply media: %v", err)
 			}
+			if err := checkReplyRateLimitHeaders(evs); err != nil {
+				t.Errorf("reply rate-limit headers: %v", err)
+			}
 			return evs
 		}
 	}
@@ -304,6 +307,31 @@ func checkReplyOutputMedia(evs []llm.Event) error {
 		total += len(ev.Media.Data)
 		if total > llm.MaxOutputMediaReplyBytes {
 			return fmt.Errorf("event[%d] media pushes reply total past %d bytes", i, llm.MaxOutputMediaReplyBytes)
+		}
+	}
+	return nil
+}
+
+// checkReplyRateLimitHeaders validates the protocol 0.34 invariants on a completed reply's events:
+// response headers appear only on response.start, error headers appear only on error, and every
+// carried header is in the explicit documented rate-limit allowlist with a safe value.
+func checkReplyRateLimitHeaders(evs []llm.Event) error {
+	for i, ev := range evs {
+		if ev.Response != nil && len(ev.Response.Headers) > 0 {
+			if ev.Type != llm.EventResponseStart {
+				return fmt.Errorf("event[%d] (%s) carries response.headers; only response.start may", i, ev.Type)
+			}
+			if err := llm.ValidRateLimitHeaders(ev.Response.Headers); err != nil {
+				return fmt.Errorf("event[%d] response.headers: %v", i, err)
+			}
+		}
+		if ev.Error != nil && len(ev.Error.Headers) > 0 {
+			if ev.Type != llm.EventError {
+				return fmt.Errorf("event[%d] (%s) carries error.headers; only error may", i, ev.Type)
+			}
+			if err := llm.ValidRateLimitHeaders(ev.Error.Headers); err != nil {
+				return fmt.Errorf("event[%d] error.headers: %v", i, err)
+			}
 		}
 	}
 	return nil

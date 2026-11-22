@@ -123,7 +123,8 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		}
 	}
 	defer resp.Body.Close()
-	return relay(ctx, resp, renamer{&reporting{Stream: out, tr: ur.tr}, ur.names}, ur.repairs())
+	headers := llm.ExtractRateLimitHeaders(llm.FormatOpenAIResponses, resp.Header)
+	return relay(ctx, resp, renamer{&reporting{Stream: out, tr: ur.tr, headers: headers}, ur.names}, ur.repairs())
 }
 
 // post sends body, the request ur built (or that request changed for a retry), to the account's
@@ -215,16 +216,18 @@ func setIdentity(h http.Header, client map[string]string, s settings, a account)
 	}
 }
 
-// reporting adds the translation report to the reply's response.start event.
+// reporting adds the translation report and rate-limit headers to the reply's response.start event.
 type reporting struct {
 	*sdk.Stream
-	tr *llm.Translation
+	tr      *llm.Translation
+	headers map[string]string
 }
 
 func (r *reporting) Send(ev llm.Event) error {
 	if ev.Type == llm.EventResponseStart && ev.Response != nil {
 		info := *ev.Response
 		info.Translation = r.tr
+		info.Headers = r.headers
 		ev.Response = &info
 	}
 	return r.Stream.Send(ev)
@@ -488,7 +491,12 @@ func errorObject(raw []byte) codexError {
 func statusError(resp *http.Response, model string) *llm.Error {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	ce := errorObject(raw)
-	e := &llm.Error{Status: resp.StatusCode, Message: ce.Message, ProviderCode: ce.code()}
+	e := &llm.Error{
+		Status:       resp.StatusCode,
+		Message:      ce.Message,
+		ProviderCode: ce.code(),
+		Headers:      llm.ExtractRateLimitHeaders(llm.FormatOpenAIResponses, resp.Header),
+	}
 	if e.ProviderCode == "" {
 		e.ProviderCode = ce.Type
 	}

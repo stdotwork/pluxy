@@ -977,6 +977,16 @@ which the client would send back on its next turn: they keep the model's text an
 reported as dropped. Same-format replies stay as they were, so a Chat upstream's audio still does
 not reach a Chat client.
 
+**Rate-limit headers.** Upstream rate-limit response headers carry on `response.start` and `error`
+(protocol minor 34) and reach clients whose format documents those headers (same-format replies and
+OpenAI Chat/Responses sharing `x-ratelimit-*`): Anthropic's `anthropic-ratelimit-*`,
+`anthropic-priority-*` and `anthropic-fast-*` headers on Messages replies, and OpenAI's
+`x-ratelimit-{limit,remaining,reset}-{requests,tokens,project-tokens}` plus OpenRouter's
+`x-ratelimit-{limit,remaining,reset}` headers on OpenAI Chat and Responses replies. Only explicit
+allowlisted rate-limit headers are forwarded (never cookies, auth tokens, or account/organization
+IDs); Gemini documents no rate-limit headers so none are forwarded to Gemini clients; extensions
+below minor 34 behave as before.
+
 **Tool shapes.** A translated request's tools get the shapes Messages takes, as today's core
 gives them: a function name with characters other than letters, digits, `_` and `-`, or longer than
 64, is sent with each other character as `_` and cut to 64 (two names that would come out the same

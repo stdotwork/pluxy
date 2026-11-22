@@ -1015,7 +1015,7 @@ with deltas and closed, then one terminal event.
 
 | Type | Fields | Meaning |
 | --- | --- | --- |
-| `response.start` | `response`: `id`, `model`, `created` (Unix seconds), optional `format`, `raw` and `translation` | First event. `model` is the model that actually served the request. `format` names the upstream format the reply came from (for example `openai.chat`); `raw` is a JSON object of the upstream's reply-level fields that have no place in the model (for example `system_fingerprint`). `translation` is the translation report (above). |
+| `response.start` | `response`: `id`, `model`, `created` (Unix seconds), optional `format`, `raw`, `translation` and `headers` (0.34) | First event. `model` is the model that actually served the request. `format` names the upstream format the reply came from (for example `openai.chat`); `raw` is a JSON object of the upstream's reply-level fields that have no place in the model (for example `system_fingerprint`). `translation` is the translation report (above). `headers` (0.34) holds the upstream's documented rate-limit response headers by lower-case name (at most 32 entries, each value at most 256 bytes with no control characters); only explicit vendor-documented rate-limit headers are carried, never cookies, tokens or account/organization IDs. Core ignores `headers` from an extension below 0.34 and forwards to a client only headers documented for that client's format. |
 | `item.start` | `index`, `item`: `kind` (`message`, `reasoning`, `tool_call`), and for tool calls `call_id` and `name` | Opens output item `index`. |
 | `text.delta` | `index`, `delta` | Text for an open `message` item. |
 | `reasoning.delta` | `index`, `delta` | Reasoning text for an open `reasoning` item. |
@@ -1107,6 +1107,7 @@ Usage, in `finish.usage`; a field that is absent was not reported, which is diff
 | `usage` | Usage the upstream reported before the failure, in the same form as `finish.usage`; absent when it reported none. A reply that fails partway may still have cost tokens. |
 | `quota_window_minutes` | Version 0.6. For code `quota`: the length, in minutes, of the usage window that is used up, when the upstream said (such as 300 for a five-hour window). Core passes it on in its [usage-limit reply](../README.md#accounts-and-routing). |
 | `dropped` | Version 0.16. Only on a refusal under the request's `drop_policy` `reject`: the paths of the request's parts the upstream's format cannot carry, as the translation's losses name them. Core tells such a refusal from an account that cannot serve the call by it (see [`count_tokens`](#count_tokens)). |
+| `headers` | Version 0.34. Documented upstream rate-limit response headers on an error reply (such as a 429), by lower-case name, subject to the same explicit allowlist and bounds as `response.start`'s `headers`. Core ignores `headers` from an extension below 0.34, redacts account secrets and their pieces from them, and forwards only headers documented for the client's format. |
 
 Codes an extension sends:
 
@@ -1602,7 +1603,7 @@ extension below 0.23 gets none: it cannot promise alive frames.
 The version in the handshake (`0`) is the major version: core and the extension must share it.
 Changes that keep every extension working (new optional fields; new operations, frames and event
 types that core uses only with an extension that says it supports them) keep the major version and
-raise the minor version: this document is version 0.33. An extension reports the minor version it
+raise the minor version: this document is version 0.34. An extension reports the minor version it
 implements in describe's `protocol_minor`, and core uses what a minor version adds only with an
 extension that reports it (and, for an operation, lists it in `operations`). Any other change needs
 a new major version, and core keeps speaking old versions for a while.
@@ -1643,8 +1644,9 @@ a new major version, and core keeps speaking old versions for a while.
 | 0.31 | Canonical web search citations on message `item.end` (`citations`) and search sources on `finish` (`sources`; [Events](#events)). |
 | 0.32 | Canonical code execution results on `finish` (`code_executions`; [Events](#events)). |
 | 0.33 | Canonical output media events (`media` event and `media` field; [Events](#events)). |
+| 0.34 | Upstream rate-limit response headers on `response.start` (`response.headers`) and `error` (`error.headers`; [Events](#events), [Errors](#errors)). |
 
-## What version 0.33 leaves out
+## What version 0.34 leaves out
 
 These are planned and the protocol is shaped to take them: per-credential and per-model
 capabilities in `describe`; operations beyond `generate`, sessions, token counting, model lists,
