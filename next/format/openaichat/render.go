@@ -2,6 +2,7 @@ package openaichat
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,11 +27,13 @@ type outToolCall struct {
 }
 
 type outDelta struct {
-	Role             string        `json:"role,omitempty"`
-	Content          *string       `json:"content,omitempty"`
-	Refusal          *string       `json:"refusal,omitempty"`
-	ReasoningContent *string       `json:"reasoning_content,omitempty"`
-	ToolCalls        []outToolCall `json:"tool_calls,omitempty"`
+	Role             string          `json:"role,omitempty"`
+	Content          *string         `json:"content,omitempty"`
+	Refusal          *string         `json:"refusal,omitempty"`
+	ReasoningContent *string         `json:"reasoning_content,omitempty"`
+	ToolCalls        []outToolCall   `json:"tool_calls,omitempty"`
+	Annotations      json.RawMessage `json:"annotations,omitempty"`
+	Audio            json.RawMessage `json:"audio,omitempty"`
 }
 
 type outChoice struct {
@@ -54,12 +57,13 @@ type outURLCitation struct {
 }
 
 type outMsg struct {
-	Role             string          `json:"role"`
-	Content          *string         `json:"content"`
-	Refusal          *string         `json:"refusal,omitempty"`
-	ReasoningContent *string         `json:"reasoning_content,omitempty"`
-	ToolCalls        []outToolCall   `json:"tool_calls,omitempty"`
-	Annotations      []outAnnotation `json:"annotations,omitempty"`
+	Role             string        `json:"role"`
+	Content          *string       `json:"content"`
+	Refusal          *string       `json:"refusal,omitempty"`
+	ReasoningContent *string       `json:"reasoning_content,omitempty"`
+	ToolCalls        []outToolCall `json:"tool_calls,omitempty"`
+	Annotations      any           `json:"annotations,omitempty"`
+	Audio            any           `json:"audio,omitempty"`
 }
 
 type outUsage struct {
@@ -337,8 +341,29 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		tc.Function.Arguments = ev.Delta
 		return s.delta(outDelta{ToolCalls: []outToolCall{tc}})
 	case llm.EventItemEnd:
+		if s.up.native && len(ev.Raw) > 0 {
+			var m itemEndMeta
+			if json.Unmarshal(ev.Raw, &m) == nil && len(m.Annotations) > 0 {
+				return s.delta(outDelta{Annotations: m.Annotations})
+			}
+		}
 		return nil
 	case llm.EventMedia:
+		if s.up.native && ev.Media != nil && ev.Media.Kind == llm.MediaAudio {
+			var m audioEventMeta
+			if len(ev.Raw) > 0 {
+				_ = json.Unmarshal(ev.Raw, &m)
+			}
+			if len(m.Pending) > 0 {
+				if err := s.delta(outDelta{Audio: m.Pending}); err != nil {
+					return err
+				}
+			}
+			if audio := combineAudioDelta(m.Audio, ev.Media.Data); len(audio) > 0 {
+				return s.delta(outDelta{Audio: audio})
+			}
+			return nil
+		}
 		s.loseMedia(ev.Media)
 		return nil
 	case llm.EventCandidate:
@@ -394,6 +419,21 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 		}
 		return nil
 	case llm.EventFinish:
+		if s.up.native && len(ev.Raw) > 0 {
+			var fm finishMeta
+			if json.Unmarshal(ev.Raw, &fm) == nil {
+				if len(fm.Annotations) > 0 {
+					if err := s.delta(outDelta{Annotations: fm.Annotations}); err != nil {
+						return err
+					}
+				}
+				if len(fm.Audio) > 0 {
+					if err := s.delta(outDelta{Audio: fm.Audio}); err != nil {
+						return err
+					}
+				}
+			}
+		}
 		if !s.up.native && len(ev.CodeExecutions) > 0 {
 			s.lose("code_execution", "Chat Completions has no place for code execution results")
 			for _, ce := range ev.CodeExecutions {
@@ -447,29 +487,31 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 
 // Aggregator collects events into a non-streamed Chat Completions response.
 type Aggregator struct {
-	head        outCompletion
-	up          upstream
-	others      []*otherChoice          // choices after the first, in the order they came
-	streamed    map[string]*otherChoice // the ones put together from stream fragments, by index
-	text        strings.Builder
-	refusal     strings.Builder
-	reasoning   strings.Builder
-	tools       []outToolCall
-	toolArgs    []*strings.Builder // the arguments of each tool call, as they streamed, by position in tools
-	toolIdx     map[int]int
-	finish      *llm.Finish
-	usage       *llm.Usage
-	logprobs    []json.RawMessage // each text delta's logprobs, as the upstream sent them
-	refused     bool              // a same-format reply carried a refusal
-	msgStart    map[int]int       // message item index -> starting rune offset in text
-	msgRunes    map[int]int       // message item index -> rune count written to text
-	totalRunes  int               // total runes written to text across message items
-	annotations []outAnnotation
-	cands       map[int]*outCandAgg
-	losses      []llm.Loss
-	lost        map[string]bool
-	lossSize    int
-	size        int
+	head              outCompletion
+	up                upstream
+	others            []*otherChoice          // choices after the first, in the order they came
+	streamed          map[string]*otherChoice // the ones put together from stream fragments, by index
+	text              strings.Builder
+	refusal           strings.Builder
+	reasoning         strings.Builder
+	tools             []outToolCall
+	toolArgs          []*strings.Builder // the arguments of each tool call, as they streamed, by position in tools
+	toolIdx           map[int]int
+	finish            *llm.Finish
+	usage             *llm.Usage
+	logprobs          []json.RawMessage // each text delta's logprobs, as the upstream sent them
+	refused           bool              // a same-format reply carried a refusal
+	msgStart          map[int]int       // message item index -> starting rune offset in text
+	msgRunes          map[int]int       // message item index -> rune count written to text
+	totalRunes        int               // total runes written to text across message items
+	annotations       []outAnnotation
+	nativeAnnotations []json.RawMessage
+	audio             *audioAgg
+	cands             map[int]*outCandAgg
+	losses            []llm.Loss
+	lost              map[string]bool
+	lossSize          int
+	size              int
 }
 
 type outCandAgg struct {
@@ -530,6 +572,21 @@ func (a *Aggregator) Add(ev llm.Event) {
 		a.up = newUpstream(ev.Response)
 		a.size += len(a.head.ID) + len(a.head.Model) + len(a.up.fields)
 	case llm.EventMedia:
+		if a.up.native && ev.Media != nil && ev.Media.Kind == llm.MediaAudio {
+			a.size += len(ev.Media.Data) + len(ev.Raw)
+			var m audioEventMeta
+			if len(ev.Raw) > 0 {
+				_ = json.Unmarshal(ev.Raw, &m)
+			}
+			if a.audio == nil {
+				a.audio = &audioAgg{}
+			}
+			if len(m.Pending) > 0 {
+				a.audio.add(m.Pending, "")
+			}
+			a.audio.add(m.Audio, ev.Media.Data)
+			return
+		}
 		a.loseMedia(ev.Media)
 	case llm.EventCandidate:
 		if a.up.native || ev.Candidate == nil || ev.Candidate.Index < 1 {
@@ -605,7 +662,15 @@ func (a *Aggregator) Add(ev llm.Event) {
 			a.size += len(meta.Logprobs)
 		}
 	case llm.EventItemEnd:
-		// A same-format reply keeps what it has today.
+		if a.up.native && len(ev.Raw) > 0 {
+			var m itemEndMeta
+			if json.Unmarshal(ev.Raw, &m) == nil {
+				if items := parseNonEmptyAnnotations(m.Annotations); len(items) > 0 {
+					a.nativeAnnotations = append(a.nativeAnnotations, items...)
+					a.size += len(m.Annotations)
+				}
+			}
+		}
 		if len(ev.Citations) > 0 && !a.up.native {
 			base := a.msgStart[ev.Index]
 			itemRunes := a.msgRunes[ev.Index]
@@ -631,6 +696,22 @@ func (a *Aggregator) Add(ev llm.Event) {
 		}
 	case llm.EventFinish:
 		a.finish, a.usage = ev.Finish, ev.Usage
+		if a.up.native && len(ev.Raw) > 0 {
+			var fm finishMeta
+			if json.Unmarshal(ev.Raw, &fm) == nil {
+				if items := parseNonEmptyAnnotations(fm.Annotations); len(items) > 0 {
+					a.nativeAnnotations = append(a.nativeAnnotations, items...)
+					a.size += len(fm.Annotations)
+				}
+				if len(fm.Audio) > 0 {
+					if a.audio == nil {
+						a.audio = &audioAgg{}
+					}
+					a.audio.add(fm.Audio, "")
+					a.size += len(fm.Audio)
+				}
+			}
+		}
 		if !a.up.native && len(ev.CodeExecutions) > 0 {
 			a.lose("code_execution", "Chat Completions has no place for code execution results")
 			for _, ce := range ev.CodeExecutions {
@@ -843,6 +924,87 @@ func plain(v any) any {
 	return v
 }
 
+// combineAudioDelta merges a Chat audio delta's metadata object with its base64 data field.
+func combineAudioDelta(metaRaw json.RawMessage, data string) json.RawMessage {
+	m := map[string]json.RawMessage{}
+	if len(metaRaw) > 0 {
+		_ = json.Unmarshal(metaRaw, &m)
+	}
+	if data != "" {
+		if b, err := json.Marshal(data); err == nil {
+			m["data"] = b
+		}
+	}
+	if len(m) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// audioAgg collects same-format Chat audio metadata and base64 audio chunks into a message.audio
+// object. Multiple base64 data chunks are decoded and re-encoded together so intermediate padding
+// does not corrupt the combined base64 string.
+type audioAgg struct {
+	obj       map[string]any
+	dataParts []string
+}
+
+func (a *audioAgg) add(metaRaw json.RawMessage, data string) {
+	if len(metaRaw) > 0 {
+		var m map[string]any
+		dec := json.NewDecoder(bytes.NewReader(metaRaw))
+		dec.UseNumber()
+		if dec.Decode(&m) == nil && len(m) > 0 {
+			if a.obj == nil {
+				a.obj = map[string]any{}
+			}
+			mergeDelta(a.obj, m)
+		}
+	}
+	if data != "" {
+		a.dataParts = append(a.dataParts, data)
+	}
+}
+
+func (a *audioAgg) value() any {
+	out := map[string]any{}
+	if len(a.obj) > 0 {
+		plain(a.obj)
+		for k, v := range a.obj {
+			out[k] = v
+		}
+	}
+	switch len(a.dataParts) {
+	case 0:
+	case 1:
+		out["data"] = a.dataParts[0]
+	default:
+		var raw []byte
+		ok := true
+		for _, p := range a.dataParts {
+			b, err := base64.StdEncoding.DecodeString(p)
+			if err != nil {
+				ok = false
+				break
+			}
+			raw = append(raw, b...)
+		}
+		if ok {
+			out["data"] = base64.StdEncoding.EncodeToString(raw)
+		} else {
+			out["data"] = strings.Join(a.dataParts, "")
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // mergeLogprobs puts the logprobs of the text deltas together as a message's: the entries of each
 // delta's content and refusal lists, in the order the tokens came. It returns nil when there are
 // none.
@@ -890,8 +1052,8 @@ func (a *Aggregator) Response() ([]byte, error) {
 		r := a.refusal.String()
 		msg.Refusal = &r
 	}
-	// A refusal leaves content out when the reply has no other text.
-	if a.text.Len() > 0 || (len(a.tools) == 0 && !a.refused) {
+	// A refusal, tool call or audio-only message leaves content null when the reply has no text.
+	if a.text.Len() > 0 || (len(a.tools) == 0 && !a.refused && a.audio == nil) {
 		t := a.text.String()
 		msg.Content = &t
 	}
@@ -899,8 +1061,13 @@ func (a *Aggregator) Response() ([]byte, error) {
 		r := a.reasoning.String()
 		msg.ReasoningContent = &r
 	}
-	if len(a.annotations) > 0 {
+	if len(a.nativeAnnotations) > 0 {
+		msg.Annotations = a.nativeAnnotations
+	} else if len(a.annotations) > 0 {
 		msg.Annotations = a.annotations
+	}
+	if a.audio != nil {
+		msg.Audio = a.audio.value()
 	}
 	reason := finishReason(a.finish)
 	if a.up.native && a.refused && a.finish != nil && a.finish.RawReason != "" {
