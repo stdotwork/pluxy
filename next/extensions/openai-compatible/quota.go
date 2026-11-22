@@ -69,7 +69,7 @@ func quotaURL(baseURL, vendor string) string {
 		}
 		return base + "/api/v1/key"
 	case quotaDeepSeek:
-		for _, suffix := range []string{"/anthropic/v1", "/anthropic", "/v1", "/v1beta"} {
+		for _, suffix := range []string{"/anthropic/v1", "/anthropic", "/beta/v1", "/beta", "/v1", "/v1beta"} {
 			if strings.HasSuffix(base, suffix) {
 				base = strings.TrimSuffix(base, suffix)
 				break
@@ -397,7 +397,6 @@ func parseOpenRouterQuota(body []byte) (*protocol.Quota, error) {
 func parseDeepSeekQuota(body []byte) (*protocol.Quota, error) {
 	body = bytes.TrimSpace(body)
 	var r struct {
-		IsAvailable  *bool `json:"is_available"`
 		BalanceInfos []struct {
 			Currency        string   `json:"currency"`
 			TotalBalance    quotaNum `json:"total_balance"`
@@ -410,13 +409,6 @@ func parseDeepSeekQuota(body []byte) (*protocol.Quota, error) {
 	}
 
 	q := &protocol.Quota{Limits: make([]protocol.QuotaLimit, 0, len(r.BalanceInfos)), Raw: json.RawMessage(body)}
-	if r.IsAvailable != nil {
-		if *r.IsAvailable {
-			q.Plan = "available"
-		} else {
-			q.Plan = "unavailable"
-		}
-	}
 
 	seen := map[string]bool{}
 	for _, info := range r.BalanceInfos {

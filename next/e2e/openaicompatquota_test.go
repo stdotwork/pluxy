@@ -17,7 +17,7 @@ func TestOpenAICompatibleQuota(t *testing.T) {
 	const (
 		orKey   = "made-up-or-quota-key"
 		dsKey   = "made-up-ds-quota-key"
-		noneKey = "made-up-no-quota-key"
+		noneKey = "made-up-none-acct-key"
 	)
 	var orCalls, dsCalls, noneCalls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -109,7 +109,7 @@ func TestOpenAICompatibleQuota(t *testing.T) {
 				},
 				map[string]any{
 					"id":         "none",
-					"settings":   map[string]any{"base_url": srv.URL + "/v1"},
+					"settings":   map[string]any{"base_url": srv.URL + "/v1", "quota": "none"},
 					"credential": map[string]any{"kind": "api_key", "api_key": noneKey},
 				},
 			},
@@ -182,8 +182,8 @@ func TestOpenAICompatibleQuota(t *testing.T) {
 		if dsCalls.Load() != 1 {
 			t.Fatalf("deepseek /user/balance calls = %d, want 1", dsCalls.Load())
 		}
-		if q.Quota.Plan != "available" {
-			t.Errorf("plan = %q, want %q", q.Quota.Plan, "available")
+		if q.Quota.Plan != "" {
+			t.Errorf("plan = %q, want empty", q.Quota.Plan)
 		}
 		if len(q.Quota.Limits) != 2 {
 			t.Fatalf("limits = %+v, want 2 balances", q.Quota.Limits)
@@ -202,8 +202,8 @@ func TestOpenAICompatibleQuota(t *testing.T) {
 
 	t.Run("none", func(t *testing.T) {
 		var q quotaReply
-		if code := manage(t, base, "GET", "/accounts/none/quota", nil, &q); code != http.StatusUnprocessableEntity || q.Error == nil || q.Error.Code != "unsupported" {
-			t.Fatalf("status = %d, error = %+v, want 422 unsupported", code, q.Error)
+		if code := manage(t, base, "GET", "/accounts/none/quota", nil, &q); code != http.StatusUnprocessableEntity || q.Error == nil || q.Error.Code != "unsupported" || q.Error.Message != "this account's upstream has no quota endpoint" {
+			t.Fatalf("status = %d, error = %+v, want 422 unsupported from quota: none", code, q.Error)
 		}
 		if noneCalls.Load() != 0 {
 			t.Errorf("none account made %d non-models upstream calls, want 0", noneCalls.Load())

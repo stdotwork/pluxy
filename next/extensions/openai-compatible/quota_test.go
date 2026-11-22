@@ -51,6 +51,32 @@ func TestQuotaPreset(t *testing.T) {
 	}
 }
 
+func TestQuotaURL(t *testing.T) {
+	cases := []struct {
+		name    string
+		baseURL string
+		vendor  string
+		want    string
+	}{
+		{name: "deepseek root", baseURL: "https://api.deepseek.com", vendor: quotaDeepSeek, want: "https://api.deepseek.com/user/balance"},
+		{name: "deepseek v1", baseURL: "https://api.deepseek.com/v1", vendor: quotaDeepSeek, want: "https://api.deepseek.com/user/balance"},
+		{name: "deepseek beta", baseURL: "https://api.deepseek.com/beta", vendor: quotaDeepSeek, want: "https://api.deepseek.com/user/balance"},
+		{name: "deepseek beta trailing slash", baseURL: "https://api.deepseek.com/beta/", vendor: quotaDeepSeek, want: "https://api.deepseek.com/user/balance"},
+		{name: "deepseek beta v1", baseURL: "https://api.deepseek.com/beta/v1", vendor: quotaDeepSeek, want: "https://api.deepseek.com/user/balance"},
+		{name: "deepseek anthropic", baseURL: "https://api.deepseek.com/anthropic", vendor: quotaDeepSeek, want: "https://api.deepseek.com/user/balance"},
+		{name: "deepseek anthropic v1", baseURL: "https://api.deepseek.com/anthropic/v1", vendor: quotaDeepSeek, want: "https://api.deepseek.com/user/balance"},
+		{name: "openrouter api v1", baseURL: "https://openrouter.ai/api/v1", vendor: quotaOpenRouter, want: "https://openrouter.ai/api/v1/key"},
+		{name: "openrouter leaves beta alone", baseURL: "https://openrouter.ai/beta", vendor: quotaOpenRouter, want: "https://openrouter.ai/beta/api/v1/key"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := quotaURL(tc.baseURL, tc.vendor); got != tc.want {
+				t.Fatalf("quotaURL(%q, %q) = %q, want %q", tc.baseURL, tc.vendor, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseOpenRouterQuota(t *testing.T) {
 	t.Run("capped key with free model daily requests", func(t *testing.T) {
 		raw := []byte(`{
@@ -493,8 +519,8 @@ func TestParseDeepSeekQuota(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parseDeepSeekQuota: %v", err)
 		}
-		if q.Plan != "available" {
-			t.Errorf("Plan = %q, want %q", q.Plan, "available")
+		if q.Plan != "" {
+			t.Errorf("Plan = %q, want empty", q.Plan)
 		}
 		if len(q.Limits) != 2 {
 			t.Fatalf("Limits = %+v, want 2 entries", q.Limits)
@@ -526,8 +552,8 @@ func TestParseDeepSeekQuota(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parseDeepSeekQuota: %v", err)
 		}
-		if q.Plan != "unavailable" {
-			t.Errorf("Plan = %q, want %q", q.Plan, "unavailable")
+		if q.Plan != "" {
+			t.Errorf("Plan = %q, want empty", q.Plan)
 		}
 		if len(q.Limits) != 1 || q.Limits[0].Remaining == nil || *q.Limits[0].Remaining != 0 {
 			t.Errorf("Limits = %+v", q.Limits)
@@ -591,7 +617,17 @@ func TestQuotaCall(t *testing.T) {
 		if err != nil {
 			t.Fatalf("quota: %v", err)
 		}
-		if q.Plan != "available" || len(q.Limits) != 1 || q.Limits[0].ID != "balance_usd" || *q.Limits[0].Remaining != 42 {
+		if q.Plan != "" || len(q.Limits) != 1 || q.Limits[0].ID != "balance_usd" || *q.Limits[0].Remaining != 42 {
+			t.Fatalf("quota = %+v", q)
+		}
+	})
+
+	t.Run("deepseek beta", func(t *testing.T) {
+		q, err := quota(context.Background(), callFor(map[string]string{"base_url": srv.URL + "/beta", "quota": "deepseek"}, "made-up-quota-key"))
+		if err != nil {
+			t.Fatalf("quota: %v", err)
+		}
+		if q.Plan != "" || len(q.Limits) != 1 || q.Limits[0].ID != "balance_usd" || *q.Limits[0].Remaining != 42 {
 			t.Fatalf("quota = %+v", q)
 		}
 	})
