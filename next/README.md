@@ -654,7 +654,7 @@ tokens four days before they expire (tokens that last less than that, five minut
 Every request goes to `{base_url}/responses` as Codex takes it: streamed, not stored, with the
 reasoning's encrypted content included, sampling settings removed, and the Codex terminal
 client's `User-Agent` and `originator` (turn off with `"codex_identity": false`). The client's
-`metadata` is not sent (Codex's own request has none), an integer output budget under 16, which the
+`metadata` is not sent (Codex's own request has none), an integer output budget from 1 to 15, which the
 endpoint refuses, is raised to 16, and a reasoning effort the model does not take (by the model's
 levels in the Codex catalog) is changed to the nearest level it does, below the effort when there is
 one, and reported as a loss. A Claude Code request's prompt cache key follows its session and agent
@@ -669,13 +669,19 @@ with encrypted content and an ID over the limit is left out). A translated reque
 call IDs over 64 bytes cut the same way, and function names made at most 64 bytes of the same
 characters (an MCP name `mcp__server__tool` becomes `mcp__tool`; names that come out the same get
 `_1`, `_2`); the reply gives the client its own names back. A Responses client's function names
-and call IDs go as it wrote them. Three schema forms
+and call IDs go as it wrote them. Schema forms
 the Codex endpoint rejects, which MCP servers' tools often use, are rewritten in every function
 tool's parameters (also inside namespace tools, and in compaction requests), whichever client
-sent them: a `pattern` or
-`patternProperties` key with a Unicode property escape (`\p{...}`) or `\0` is removed, a numeric
-bound that is a whole number outside the 64-bit integer range is removed, and a property whose
-`oneOf` or `anyOf` has eight or more branches that are only distinct constants becomes an `enum`.
+sent them: a root `anyOf` or `oneOf` union is flattened into a root `object` schema (merging the
+object branches' properties and keeping their common `required` fields), a `pattern` or
+`patternProperties` key with a Unicode property escape (`\p{...}`, `\P{...}`), `\0`, or an
+unescaped lookahead (`(?=...)`, `(?!...)`) outside a character class is removed, a numeric
+bound that is a whole number outside the 64-bit integer range is removed, a property whose
+`oneOf` or `anyOf` has eight or more branches that are only distinct constants becomes an `enum`,
+an `array` schema without `items` (and without `$ref`) receives `items: {"type":"string"}`, and
+when `strict` is `true`, optional properties are added to `required` and made nullable and object
+schemas with `properties` get `additionalProperties: false` (a schema that cannot be closed without
+changing what it accepts is sent with `strict: false` and a reported loss).
 Today's core also turns `number` into `integer` for named tools of the Codex app; that is not built.
 A Responses request (compaction too) that replays `web_search_call` items in `input` but declares
 no web search tool gets `{"type":"web_search"}` added to `tools`, because the upstream refuses such
@@ -711,9 +717,9 @@ an [endpoint call](protocol/README.md#endpoint); the Codex extension sends the b
 calls turned off on a Responses-lite request, the model renamed for the account, a thinking suffix's
 effort applied, and a prompt cache key (with `Session-Id`) derived as for `/responses` when the
 client names none; the upstream's JSON reply comes back to the client as it is. A request with
-`"stream": true` is refused with a 400, as today's core refuses it. xAI and Claude accounts serve it
-too (see their sections); an account of any other extension does not, so a model only those serve
-gets an error.
+`"stream": true` is refused with a 400, as today's core refuses it. xAI, Claude, Gemini and
+OpenAI-compatible (Chat and Responses) accounts serve it too (see their sections); an account of
+any other extension does not, so a model only those serve gets an error.
 
 **Alpha Search.** Codex's standalone search endpoint is `POST /v1/alpha/search` (also `POST
 /backend-api/codex/alpha/search`, for a ChatGPT sign-in's requests). Core routes it as an [endpoint call](protocol/README.md#endpoint)
@@ -876,7 +882,9 @@ made ones the model takes, by Anthropic's per-model tables, and each change is r
 - With a thinking budget, a tool result whose assistant turn has no thinking block, in a
   conversation that has none, goes with adaptive thinking on Claude 4.6 and without thinking on
   older models. On Claude 4.5 and older, a conversation that ends on an assistant turn loses that
-  turn while thinking is on, and with thinking off loses the reasoning it ends on. The extension never changes how a client presents itself: a client that is
+  turn while thinking is on, and with thinking off loses the reasoning it ends on.
+
+The extension never changes how a client presents itself: a client that is
 not Claude Code is not made to look like Claude Code.
 
 **Sampling options.** A translated request's `temperature` and `top_p` reach Claude only where
@@ -897,7 +905,7 @@ The model name is read in lower case, without a Bedrock prefix (`anthropic.`, or
 after `@`; the same reading decides the thinking settings above, so Claude Mythos models get
 thinking from a reasoning effort too. Each one left out is reported as dropped, so
 `drop_policy` `"reject"` refuses a generation request, or a token count sent to Anthropic's own
-API, that would lose one. A Messages client's own sampling settings go upstream as it wrote them.
+API, that would lose one. A Messages client's own `temperature` and `top_p` go upstream as it wrote them (`top_k` is still left out where the model refuses it, as above).
 Today's core leaves both out of every translated request, on every model.
 
 Every request, a Messages client's or a translated one, also gets the betas its body needs, after
@@ -1117,7 +1125,8 @@ A Gemini request goes upstream as the client wrote it, except for the turn fixes
 translated to GenerateContent with every safety filter off (as today's core sends them); their
 reasoning effort becomes a thinking level on Gemini 3 and later and a thinking budget on Gemini 2.5
 (low 1024, medium 8192, high 24576 tokens, within the model's range), with thought summaries
-included. A Messages client's `max_tokens` is left to the model's own limit, since Messages makes
+included unless a Messages client sets `thinking.display` to `"omitted"` or a Responses client sets
+`reasoning.summary` to `"none"` or `null`. A Messages client's `max_tokens` is left to the model's own limit, since Messages makes
 it mandatory. Each thought signature Gemini sends reaches a Messages client as a thinking block's
 signature and a Responses client as a reasoning item's `encrypted_content`; when the client replays
 it, the signature goes back on the part that follows it, so Gemini 3's function calls keep their
@@ -1201,7 +1210,7 @@ Today's core can also relay Gemini requests through a browser tab signed in to A
 connects to core over a WebSocket. This extension does not: the extension protocol gives a
 program no listener that outlives its calls, and core stops idle programs.
 
-**Quota and identity.** Google offers no quota reading or rate-limit headers for Gemini API keys or Vertex AI accounts, so `quota` reports the last-seen values from the account's most recent HTTP 429 reply (`google.rpc.QuotaFailure`, `google.rpc.RetryInfo` or HTTP `Retry-After`, and `google.rpc.ErrorInfo`), kept in extension memory only (nothing is written to disk) and labelled with when the 429 was seen and that it is not a live reading; an account that has not received a 429 answers with an empty limit list stating that no rate-limit reply has been seen yet. A `service_account` login's grant carries `identity` `{"client_email"}`, the key's service account; an API key login has none.
+**Quota and identity.** Google offers no usage endpoint or remaining-quota headers for Gemini API keys or Vertex AI accounts, so `quota` reports the last-seen values from the account's most recent HTTP 429 reply (`google.rpc.QuotaFailure`, `google.rpc.RetryInfo` or HTTP `Retry-After`, and `google.rpc.ErrorInfo`), kept in extension memory only (nothing is written to disk) and labelled with when the 429 was seen and that it is not a live reading; an account that has not received a 429 answers with an empty limit list stating that no rate-limit reply has been seen yet. A `service_account` login's grant carries `identity` `{"client_email"}`, the key's service account; an API key login has none.
 
 A request in another client format carries the client's service tier to the Gemini API as
 `serviceTier` (`standard`, `flex` or `priority`; any other tier is reported as dropped) only where
@@ -2173,7 +2182,7 @@ at start and on a reload. Send it as a bearer token. The config may set no accou
 | `POST /accounts/{id}/cooldown/reset` | Clears the account's cooldowns, on its credential, its models and its endpoint (which accounts naming the same endpoint share), with their backoff steps and its last error, so it serves again at once unless it is banned: a ban, and the last error of a banned account, stay (see [Accounts and routing](#accounts-and-routing)). Works for config accounts too. Replies with `cleared`, the number of live blocks it cleared, and the account. |
 | `GET /accounts/{id}/models` | The models the account serves: its config's `models` when it lists them, else the ones its extension lists for it (the protocol's [`models`](protocol/README.md#models)). Each has its upstream `id`, what the extension says about it, `names` (the names clients use for it after the account's exclusions, aliases and prefix, and its extension's defaults for logins) and `excluded` when `excluded_models` leaves it out. |
 | `POST /accounts/{id}/test` | Sends the account one small request (`Hi`, at most 16 tokens of reply), straight to its extension: its cooldowns are ignored and its routing state is left as it is. `{"model": ...}` names the model by its upstream name; without it, the first the account serves. Replies 200 with `result`: `ok`, `model`, `served_model`, `latency_ms`, the start of the `reply`, `finish_reason` and `usage`, or `error`. The request spends what a request that size costs. |
-| `GET /accounts/{id}/quota` | The account's plan and usage, read from its provider when asked (the protocol's [`quota`](protocol/README.md#quota)): `quota` with `plan`, optional `plan_ends_at` (the subscription end in Unix seconds), `limits` (each with `id`, `label`, and what the provider gives of `used_percent`, `used`, `limit`, `remaining`, `unit`, `unlimited`, `resets_at`, `window_seconds`, `models`) and `raw`, the provider's replies; and `fetched_at`. 422 with code `unsupported` for an account with no plan to report, such as an API key, or whose extension reads no quota; 502 with the provider's error code when the provider refused or failed. Each provider's section says what it reports. |
+| `GET /accounts/{id}/quota` | The account's plan and usage, read from its provider when asked (the protocol's [`quota`](protocol/README.md#quota)): `quota` with `plan`, optional `plan_ends_at` (the subscription end in Unix seconds), `limits` (each with `id`, `label`, and what the provider gives of `used_percent`, `used`, `limit`, `remaining`, `unit`, `unlimited`, `resets_at`, `window_seconds`, `models`) and `raw`, the provider's replies; and `fetched_at`. 422 with code `unsupported` for an account with no plan or balance to report (such as an API key on a provider with no usage endpoint), or whose extension reads no quota; 502 with the provider's error code when the provider refused or failed. Each provider's section says what it reports. |
 | `GET /login-methods` | For each running extension that signs in, its `extension` ID and `methods`: each `method`, `kind` (`browser`, `device`, `api_key`), `label` and the `inputs` it asks for (`name`, `label`, `secret`, `optional`), as its describe reports them; what a panel needs to offer "add account". |
 | `DELETE /accounts/{id}` | Removes the account and its credential. |
 
