@@ -50,10 +50,14 @@ is Tauri 2, so its native side is Rust.
   Fields the model has no place for are kept with the item, so they survive a round trip into the
   same format.
 - **One place decides retries.** For each request core picks an account, reads the extension's
-  typed outcome, and decides whether to try another account. Extensions never retry on their own,
-  and once a reply has started reaching the client nothing is retried. Blocks after a refusal are
-  kept per credential, model or endpoint, and an earlier request's failure never overrides a later
-  success.
+  typed outcome, and decides whether to try another account. Once a reply has started reaching the
+  client nothing is retried. Extensions do not retry on their own, with two single-resend
+  exceptions before any content reaches the client: the Codex extension drops encrypted reasoning
+  items and resends once when the upstream returns HTTP 400 refusing foreign encrypted reasoning
+  (`invalid_encrypted_content`) and `drop_policy` is not `reject`; the Gemini extension resends a
+  `GenerateContent` request once when the upstream reply ends with `MALFORMED_FUNCTION_CALL` before
+  any content is sent. Blocks after a refusal are kept per credential, model or endpoint, and an
+  earlier request's failure never overrides a later success.
 - **Credentials are versioned.** Core stores each credential with a version, and the provider
   extension does the login and renewal. One renewal runs per credential at a time, and a renewal
   of a version that has since changed is refused. An extension receives only the credentials of
