@@ -3,8 +3,12 @@ package main
 import (
 	"fmt"
 	"math"
+	"runtime"
 	"strings"
 )
+
+// hostOS is the platform whose footprint the gates expect to see; a test sets it.
+var hostOS = runtime.GOOS
 
 // Check-mode budgets. They were set from the median of three `-check` runs on main after
 // performance fixes 1 to 5 (#518, #522, #535, #552, #559), on GitHub's ubuntu-latest runners
@@ -164,6 +168,19 @@ func EvaluateCheckGates(rep *BenchReport) []GateResult {
 			})
 			return
 		}
+		for _, r := range sc.Runs {
+			if r.Proxy.ChunkSamples == 0 {
+				// No chunk marker was read, so there is no delay to compare with the budget.
+				gates = append(gates, GateResult{
+					Name:   name,
+					Value:  "not measured (no chunk delays recorded)",
+					Budget: fmt.Sprintf("<= %.3f", budget),
+					Passed: false,
+					RawMax: budget,
+				})
+				return
+			}
+		}
 		fracs := make([]float64, 0, len(sc.Runs))
 		for _, r := range sc.Runs {
 			fracs = append(fracs, r.Proxy.ChunkDelayP99MS/sc.IntervalMS)
@@ -225,17 +242,28 @@ func EvaluateCheckGates(rep *BenchReport) []GateResult {
 			})
 		}
 	} else {
+		// Only a platform without /proc may skip the memory gates. On Linux an unsampled
+		// footprint (for example -proxy-url without -proxy-pid) is a failure: nothing was
+		// measured, so nothing can be said to be within the budget.
+		unmeasured := "not measured (non-Linux)"
+		passed := true
+		if hostOS == "linux" {
+			unmeasured = "not measured (no footprint sample; -proxy-pid missing or process unreadable)"
+			passed = false
+		}
 		gates = append(gates, GateResult{
 			Name:   "idle RSS (core + extensions)",
-			Value:  "not measured (non-Linux)",
+			Value:  unmeasured,
 			Budget: fmt.Sprintf("<= %.2f MB", BudgetIdleRSSMB),
-			Passed: true,
+			Passed: passed,
+			RawMax: BudgetIdleRSSMB,
 		})
 		gates = append(gates, GateResult{
 			Name:   "agents RSS per open stream",
-			Value:  "not measured (non-Linux)",
+			Value:  unmeasured,
 			Budget: fmt.Sprintf("<= %.2f KB/stream", BudgetAgentsRSSPerStreamKB),
-			Passed: true,
+			Passed: passed,
+			RawMax: BudgetAgentsRSSPerStreamKB,
 		})
 	}
 

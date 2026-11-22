@@ -453,7 +453,9 @@ func buildScenarios(
 	var specs []ScenarioSpec
 	if check {
 		// Compact request counts keep the full 3-run check under 90s on a 4-vCPU runner while
-		// preserving real TTFT (100ms), interval (10ms, >=100 chunks/run for p99), and 8s agents.
+		// preserving real TTFT (100ms), interval (10ms) and 8s agents. A stream-pass or
+		// stream-translate run reads 50 chunks (5 requests of 10), so its chunk delay p99 is
+		// close to its slowest chunk; the gate takes the median over the runs.
 		specs = []ScenarioSpec{
 			{
 				Name:        "stream-pass",
