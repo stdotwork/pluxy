@@ -12,13 +12,14 @@ const roleSystem = "system"
 // placeSystem places the system messages EncodeRequest kept inside the conversation, the
 // consecutive ones as one, by Anthropic's rules for them
 // (https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages): one
-// follows a user turn and precedes an assistant turn or ends the conversation. So one is placed
-// after the user turns that follow it, if any, as LiteLLM places them too. Where it then follows a
-// user turn, a model that takes system messages there (takes) gets it as one; any other gets its
-// text in that user turn, in place, as LiteLLM does, inside <system-reminder> tags (the form
-// Claude Code gives such text) where LiteLLM adds an operator note. Where it follows an assistant
-// turn with no user turn after it, its text goes in a user turn of its own. A move and a change of
-// form are each reported as approximated.
+// follows a user turn and precedes an assistant turn or ends the conversation. So on a model that
+// takes system messages there (takes), runs separated only by user turns are placed together after
+// all user turns up to the next assistant turn (or the end), merging runs that meet; on any other
+// model, each run's text goes in the user turn after it (or the one before it if none follows), in
+// place, as LiteLLM does, inside <system-reminder> tags (the form Claude Code gives such text)
+// where LiteLLM adds an operator note. Where a run follows an assistant turn with no user turn
+// after it, its text goes in a user turn of its own. A move and a change of form are each reported
+// as approximated.
 func (e *encoder) placeSystem(msgs []*outMessage, takes bool) []*outMessage {
 	out := make([]*outMessage, 0, len(msgs))
 	for i := 0; i < len(msgs); {
@@ -28,18 +29,31 @@ func (e *encoder) placeSystem(msgs []*outMessage, takes bool) []*outMessage {
 			continue
 		}
 		run := &outMessage{role: roleSystem, path: msgs[i].path}
-		for i < len(msgs) && msgs[i].role == roleSystem {
-			run.content = append(run.content, msgs[i].content...)
-			run.paths = append(run.paths, msgs[i].paths...)
-			i++
+		var movedPaths []string
+		for {
+			runStart := i
+			for i < len(msgs) && msgs[i].role == roleSystem {
+				run.content = append(run.content, msgs[i].content...)
+				run.paths = append(run.paths, msgs[i].paths...)
+				i++
+			}
+			j := i
+			for j < len(msgs) && msgs[j].role == llm.RoleUser {
+				j++
+			}
+			if j > i {
+				p := msgs[runStart].path
+				if len(msgs[runStart].paths) > 0 {
+					p = msgs[runStart].paths[0]
+				}
+				movedPaths = append(movedPaths, p)
+				out = append(out, msgs[i:j]...)
+				i = j
+			}
+			if !takes || i >= len(msgs) || msgs[i].role != roleSystem {
+				break
+			}
 		}
-		j := i
-		for j < len(msgs) && msgs[j].role == llm.RoleUser {
-			j++
-		}
-		moved := j > i
-		out = append(out, msgs[i:j]...)
-		i = j
 		path := run.path
 		if len(run.paths) > 0 {
 			path = run.paths[0]
@@ -51,8 +65,8 @@ func (e *encoder) placeSystem(msgs []*outMessage, takes bool) []*outMessage {
 		switch {
 		case takes && user != nil:
 			out = append(out, run)
-			if moved {
-				e.lose(llm.LossApproximated, path, "a system message may not come before a user turn; moved after the user turn that follows it")
+			for _, p := range movedPaths {
+				e.lose(llm.LossApproximated, p, "a system message may not come before a user turn; moved after the user turn that follows it")
 			}
 		case user != nil:
 			user.content = append(user.content, reminders(run.content)...)
