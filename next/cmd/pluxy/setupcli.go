@@ -305,7 +305,11 @@ func printSetup(x *invocation, s management.Setup) {
 		x.printf("\nClients:\n")
 		rows := [][]string{{"CLIENT", "INSTALLED", "VERSION", "STATE", "CONFIG"}}
 		for _, c := range s.Found.Clients {
-			rows = append(rows, []string{c.ID, yesNo(c.Installed), dash(c.Version), c.State, c.Config})
+			state := c.State
+			if !c.Installed && state == "not-configured" {
+				state = "-"
+			}
+			rows = append(rows, []string{c.ID, yesNo(c.Installed), dash(c.Version), state, c.Config})
 		}
 		x.table(rows)
 	}

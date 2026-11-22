@@ -647,6 +647,68 @@ func TestCLISetupNextStep(t *testing.T) {
 	}
 }
 
+// In the human Clients table of pluxy setup, a client that is not installed and not-configured
+// shows "-" in the STATE column; installed clients and non-installed clients with any other state
+// still show their state, and --json output is byte-for-byte unchanged.
+func TestCLISetupClientsTable(t *testing.T) {
+	const body = `{"first_run":false,"scanning":false,"scanned_at":"2026-11-19T12:00:00Z","found":{"clients":[` +
+		`{"id":"codex","name":"Codex CLI","installed":false,"config":"~/.codex/config.toml","state":"not-configured"},` +
+		`{"id":"claude-code","name":"Claude Code","installed":true,"version":"2.4.1","config":"~/.claude/settings.json","state":"not-configured"},` +
+		`{"id":"opencode","name":"OpenCode","installed":false,"config":"~/.config/opencode/opencode.json","state":"configured"},` +
+		`{"id":"pi","name":"Pi","installed":false,"config":"~/.pi/agent/models.json","state":"refused"}` +
+		`],"sign_ins":[],"imports":[],"core":{"listen":"127.0.0.1:8317","reachable_from_network":false}},"picks":[]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/v0/management/setup" {
+			w.Write([]byte(body))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"error":{"code":"not_found","message":"nope"}}`))
+	}))
+	defer srv.Close()
+	env := func(k string) string {
+		return map[string]string{"PLUXY_URL": srv.URL, "PLUXY_MANAGEMENT_KEY": "k"}[k]
+	}
+	run := func(args ...string) (string, string, int) {
+		var out, errOut bytes.Buffer
+		code := runCLIWithInput(args, strings.NewReader(""), &out, &errOut, env, false)
+		return out.String(), errOut.String(), code
+	}
+
+	out, errOut, code := run("setup")
+	if code != 0 || errOut != "" {
+		t.Fatalf("setup: code=%d stderr=%q stdout=%q", code, errOut, out)
+	}
+	wantRows := [][]string{
+		{"CLIENT", "INSTALLED", "VERSION", "STATE", "CONFIG"},
+		{"codex", "no", "-", "-", "~/.codex/config.toml"},
+		{"claude-code", "yes", "2.4.1", "not-configured", "~/.claude/settings.json"},
+		{"opencode", "no", "-", "configured", "~/.config/opencode/opencode.json"},
+		{"pi", "no", "-", "refused", "~/.pi/agent/models.json"},
+	}
+	_, after, ok := strings.Cut(out, "\nClients:\n")
+	if !ok {
+		t.Fatalf("setup output missing Clients section:\n%s", out)
+	}
+	lines := strings.Split(strings.TrimRight(after, "\n"), "\n")
+	if len(lines) != len(wantRows) {
+		t.Fatalf("Clients table has %d rows, want %d:\n%s", len(lines), len(wantRows), after)
+	}
+	for i, want := range wantRows {
+		if got := strings.Fields(lines[i]); !slices.Equal(got, want) {
+			t.Errorf("Clients row %d = %v, want %v (line: %q)", i, got, want, lines[i])
+		}
+	}
+
+	jsonOut, jsonErr, jsonCode := run("setup", "--json")
+	if jsonCode != 0 || jsonErr != "" {
+		t.Fatalf("setup --json: code=%d stderr=%q", jsonCode, jsonErr)
+	}
+	if jsonOut != body {
+		t.Errorf("setup --json changed:\ngot:  %q\nwant: %q", jsonOut, body)
+	}
+}
+
 // pluxy import cpa says what core could not read in core's own words, with no error code after
 // them; the reply, its code and the exit code stay as they are.
 func TestCLIImportCPAUnreadable(t *testing.T) {
