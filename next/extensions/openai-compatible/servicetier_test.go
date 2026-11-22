@@ -176,7 +176,7 @@ func TestTierFieldsOf(t *testing.T) {
 		{"https://api.openai.com/v1", llm.FormatOpenAIChat, tierFields{serviceTier: true, verbosity: true, webSearch: true}},
 		{"https://API.OpenAI.com/v1/", llm.FormatOpenAIResponses, tierFields{serviceTier: true, verbosity: true, webSearch: true, codeExecution: true}},
 		{"https://api.openai.com/v1", llm.FormatAnthropicMessages, tierFields{}},
-		{"https://api.anthropic.com", llm.FormatAnthropicMessages, tierFields{serviceTier: true, webSearch: true, codeExecution: true}},
+		{"https://api.anthropic.com", llm.FormatAnthropicMessages, tierFields{serviceTier: true, webSearch: true, codeExecution: true, structuredOutput: true}},
 		{"https://api.anthropic.com", llm.FormatOpenAIChat, tierFields{}},
 		{"https://generativelanguage.googleapis.com/v1beta", llm.FormatGeminiGenerate, tierFields{serviceTier: true, webSearch: true, codeExecution: true}},
 		{"https://api.mistral.ai/v1", llm.FormatOpenAIChat, tierFields{}},
