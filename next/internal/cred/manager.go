@@ -268,7 +268,8 @@ func (m *Manager) Credential(ctx context.Context, extension, id string) (*protoc
 		return nil, 0, credentialError(llm.CodeAuth, "the provider refused the grant; the account needs a new login")
 	}
 	now := m.now()
-	expired := rec.Credential.ExpiresAt != 0 && rec.Credential.ExpiresAt <= now.Unix()
+	// A renewable credential with no key has nothing to present, so it counts as expired.
+	expired := keyless(rec.Credential) || rec.Credential.ExpiresAt != 0 && rec.Credential.ExpiresAt <= now.Unix()
 	if !m.due(rec) && expired && m.Refreshable(rec) {
 		// Renewal is waiting after a failure, and the credential no longer works.
 		msg := "the credential has expired and renewal is waiting after a failure"
@@ -363,15 +364,24 @@ func renewAt(c protocol.Credential) int64 {
 	return 0
 }
 
-// due reports whether rec's credential should be renewed before use.
+// keyless reports whether c holds no key to present, such as an imported Meta device token or a
+// lone refresh token: it can only be renewed. It matters only for a credential core renews
+// (see Refreshable); a service account or other kind that no extension renews is not this.
+func keyless(c protocol.Credential) bool {
+	return c.Kind != protocol.CredentialAPIKey && c.AccessToken == ""
+}
+
+// due reports whether rec's credential should be renewed before use. A keyless one is due
+// whenever its backoff is not running.
 func (m *Manager) due(rec Record) bool {
-	at := renewAt(rec.Credential)
-	if at == 0 || !m.Refreshable(rec) {
+	if !m.Refreshable(rec) {
 		return false
 	}
 	now := m.now()
-	if now.Unix() < at {
-		return false
+	if !keyless(rec.Credential) {
+		if at := renewAt(rec.Credential); at == 0 || now.Unix() < at {
+			return false
+		}
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()

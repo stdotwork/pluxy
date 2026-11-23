@@ -320,6 +320,55 @@ func TestFailedRenewalBacksOff(t *testing.T) {
 	}
 }
 
+// An account that holds no key yet (an imported Meta device token, or a refresh token alone) has
+// nothing to present until its first renewal works. While that renewal waits out its backoff, a
+// request gets the renewal's failure, never a credential with an empty key.
+func TestKeylessCredentialIsNeverHandedOut(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		refreshAt int64 // 0 for none, else seconds from now
+	}{
+		{"refresh due", -1},
+		{"no refresh time", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &fakeProvider{fail: &llm.Error{Code: llm.CodeUnavailable, Retryable: true, Scope: llm.ScopeEndpoint, Message: "mint failed"}}
+			m, store := newManager(t, p, time.Hour)
+			rec, _ := store.Get("acct")
+			if _, err := store.Update("acct", rec.Registration, rec.Version, func(r *Record) {
+				r.Credential.AccessToken, r.Credential.ExpiresAt = "", 0
+				if tc.refreshAt != 0 {
+					r.Credential.RefreshAt = time.Now().Add(time.Duration(tc.refreshAt) * time.Second).Unix()
+				}
+			}); err != nil {
+				t.Fatal(err)
+			}
+			for i := range 3 {
+				c, _, e := m.Credential(context.Background(), provID, "acct")
+				if c != nil || e == nil || e.Code != llm.CodeUnavailable || !e.Retryable || e.Scope != llm.ScopeCredential || e.RetryAfterMS <= 0 {
+					t.Errorf("request %d: Credential = %+v, %+v; want no credential and a retryable credential-scoped unavailable with retry_after_ms", i+1, c, e)
+				}
+				if e != nil && !strings.Contains(e.Message, "mint failed") {
+					t.Errorf("request %d: error %q does not carry the renewal failure", i+1, e.Message)
+				}
+			}
+			if c := p.refreshCalls(); c != 1 {
+				t.Errorf("refresh calls = %d, want 1 (the later requests wait out the backoff)", c)
+			}
+			// Once the renewal works, the new key is handed out.
+			p.mu.Lock()
+			p.fail = nil
+			p.mu.Unlock()
+			if _, err := m.Refresh(context.Background(), "acct"); err != nil {
+				t.Fatal(err)
+			}
+			if c, _, e := m.Credential(context.Background(), provID, "acct"); e != nil || c.AccessToken == "" {
+				t.Errorf("Credential after a renewal = %+v, %v; want the minted key", c, e)
+			}
+		})
+	}
+}
+
 // A renewal that gives a credential already due for renewal is not repeated on every request.
 func TestIneffectiveRenewalBacksOff(t *testing.T) {
 	p := &fakeProvider{ttl: time.Minute}
