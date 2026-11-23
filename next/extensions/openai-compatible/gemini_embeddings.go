@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -86,7 +87,7 @@ func geminiEmbeddingsTo(ctx context.Context, call sdk.Call, out bodySender, form
 	all := make([][]float64, 0, len(items))
 	var totalValues int
 	var promptTokens int64
-	var hasUsage bool
+	var hasUsage, missing bool
 
 	for start := 0; start < len(items); {
 		end := start + 1
@@ -116,7 +117,7 @@ func geminiEmbeddingsTo(ctx context.Context, call sdk.Call, out bodySender, form
 		}
 		resp, err := postBody(ctx, call, s, chat, key, "/embeddings", reqBody)
 		if err != nil {
-			return noEndpoint(err, "embeddings", "/embeddings")
+			return embeddingNotFound(err, call.Request.Model, "/embeddings")
 		}
 		raw, err := readEmbeddingReply(ctx, resp)
 		if err != nil {
@@ -136,8 +137,12 @@ func geminiEmbeddingsTo(ctx context.Context, call sdk.Call, out bodySender, form
 		if ok {
 			promptTokens += tokens
 			hasUsage = true
+		} else {
+			missing = true
 		}
 	}
+	// A total over only some of the calls would understate the usage: report none instead.
+	hasUsage = hasUsage && !missing
 
 	var usage *llm.Usage
 	if hasUsage {
@@ -184,14 +189,14 @@ func geminiEmbeddingsPassthrough(ctx context.Context, call sdk.Call, s settings,
 	path := "/models/" + url.PathEscape(model) + method
 	resp, err := postBody(ctx, call, s, wire, key, path, reqBody)
 	if err != nil {
-		return noEndpoint(err, "embeddings", path)
+		return embeddingNotFound(err, call.Request.Model, path)
 	}
 	raw, err := readEmbeddingReply(ctx, resp)
 	if err != nil {
 		return err
 	}
-	if !json.Valid(raw) {
-		return upstreamEmbeddingError("upstream embedding reply is not JSON")
+	if err := checkGeminiEmbedReply(raw, "upstream", isBatch, geminiBatchLen(rawMap)); err != nil {
+		return err
 	}
 	var usage *llm.Usage
 	var meta struct {
@@ -299,6 +304,15 @@ func parseGeminiItemForOpenAI(item map[string]json.RawMessage, prefix string) (g
 	if rawCfg, ok := item["embedContentConfig"]; ok && len(rawCfg) > 0 && string(rawCfg) != "null" {
 		if err := json.Unmarshal(rawCfg, &cfg); err != nil || cfg == nil {
 			return out, badEmbeddingRequest(field("embedContentConfig") + " must be a JSON object")
+		}
+	}
+	for k, v := range cfg {
+		switch k {
+		case "taskType", "task_type", "title", "outputDimensionality", "output_dimensionality":
+		default:
+			if len(v) > 0 && string(v) != "null" {
+				return out, unsupportedEmbeddingFeature(fmt.Sprintf("%s.%s: OpenAI embeddings do not support it", field("embedContentConfig"), k))
+			}
 		}
 	}
 	pickRaw := func(names ...string) (json.RawMessage, bool) {
@@ -555,6 +569,9 @@ func geminiPassthroughBody(raw []byte, rawMap map[string]json.RawMessage, model 
 	if !ok || string(reqsRaw) == "null" {
 		return raw, nil
 	}
+	if err := checkGeminiBatchItems(reqsRaw); err != nil {
+		return nil, err
+	}
 	var reqs []map[string]json.RawMessage
 	if json.Unmarshal(reqsRaw, &reqs) != nil {
 		return raw, nil
@@ -585,8 +602,87 @@ func geminiPassthroughBody(raw []byte, rawMap map[string]json.RawMessage, model 
 	return json.Marshal(updated)
 }
 
+// checkGeminiBatchItems refuses a batch whose requests is not a list of objects, so a model name
+// the client wrote in an item is never left in a body that could not be rewritten.
+func checkGeminiBatchItems(reqsRaw json.RawMessage) error {
+	var items []json.RawMessage
+	if err := json.Unmarshal(reqsRaw, &items); err != nil {
+		return badEmbeddingRequest("requests must be an array of request objects")
+	}
+	for i, it := range items {
+		if t := bytes.TrimSpace(it); len(t) == 0 || (t[0] != '{' && string(t) != "null") {
+			return badEmbeddingRequest(fmt.Sprintf("requests[%d] must be a JSON object", i))
+		}
+	}
+	return nil
+}
+
+// geminiBatchLen is the number of requests in a batch body that checkGeminiBatchItems accepted.
+func geminiBatchLen(rawMap map[string]json.RawMessage) int {
+	var items []json.RawMessage
+	_ = json.Unmarshal(rawMap["requests"], &items)
+	return len(items)
+}
+
+// checkGeminiEmbedReply refuses a 200 that is not a full answer, as the translated paths do:
+// an error object, an embedding without values, or (for a batch) fewer or more embeddings than
+// the want requests sent. Passing it to the client would record the request as a success.
+func checkGeminiEmbedReply(raw []byte, vendor string, isBatch bool, want int) error {
+	var resp struct {
+		Error     json.RawMessage `json:"error"`
+		Embedding *struct {
+			Values json.RawMessage `json:"values"`
+		} `json:"embedding"`
+		Embeddings []struct {
+			Values json.RawMessage `json:"values"`
+		} `json:"embeddings"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return upstreamEmbeddingError(vendor + " embedding reply is not JSON")
+	}
+	if e := bytes.TrimSpace(resp.Error); len(e) > 0 && string(e) != "null" {
+		// Fixed text: the upstream's own message can name the account's project, which the
+		// masking of a normal error reply would remove.
+		return upstreamEmbeddingError(vendor + " answered 200 with an error")
+	}
+	hasValues := func(v json.RawMessage) bool {
+		v = bytes.TrimSpace(v)
+		return len(v) > 0 && v[0] == '['
+	}
+	if !isBatch {
+		if resp.Embedding == nil || !hasValues(resp.Embedding.Values) {
+			return upstreamEmbeddingError(vendor + " returned no embedding values")
+		}
+		return nil
+	}
+	if len(resp.Embeddings) != want {
+		return upstreamEmbeddingError(fmt.Sprintf("%s returned %d embeddings for %d inputs", vendor, len(resp.Embeddings), want))
+	}
+	for _, e := range resp.Embeddings {
+		if !hasValues(e.Values) {
+			return upstreamEmbeddingError(vendor + " returned an embedding without values")
+		}
+	}
+	return nil
+}
+
 func badEmbeddingRequest(message string) *llm.Error {
 	return &llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusBadRequest, Scope: llm.ScopeRequest, Message: message}
+}
+
+// embeddingNotFound keeps a 404 from an embedding call from blocking the model's generation: core
+// blocks a model after a model-scoped not-found for hours, but an embedding call proves nothing
+// about generation, and a chat model can answer it with a 404 that names the model. A 404 that
+// names the model becomes a refusal on this account (retryable unsupported, so routing tries
+// another account, with 400 if none can); any other 404 fails the request only, as noEndpoint
+// says. Another error is returned as it is.
+func embeddingNotFound(err error, model, path string) error {
+	var e *llm.Error
+	if errors.As(err, &e) && e.Code == llm.CodeNotFound && e.Retryable {
+		return &llm.Error{Code: llm.CodeUnsupported, Status: http.StatusBadRequest, Scope: llm.ScopeCredential, Retryable: true,
+			Message: fmt.Sprintf("this account cannot embed with model %q (POST %s): %s", model, path, e.Message)}
+	}
+	return noEndpoint(err, "embeddings", path)
 }
 
 func unsupportedEmbeddingFeature(message string) *llm.Error {
