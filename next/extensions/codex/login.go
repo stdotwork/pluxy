@@ -85,7 +85,7 @@ func login(ctx context.Context, call sdk.LoginCall, s *sdk.LoginSession) (*proto
 // loginClient is client without redirects: a redirect answer to the key check is not an
 // acceptance, and following it would send the key again to wherever it points.
 var loginClient = &http.Client{
-	Transport:     client.Transport,
+	Transport:     sdk.Upstream(upstreamTransport()),
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 }
 
