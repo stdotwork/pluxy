@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import {
   type ImportReport,
   type ImportRow,
+  type Package,
   problem,
   type Setup,
   type SetupClient,
@@ -41,11 +42,13 @@ import {
   onThisMachine,
   providerPicks,
   type Results,
+  type Stopped,
   scanState,
   signInsToName,
   splitClients,
   start,
   startInstalls,
+  stoppedPicks,
   toInstall,
   withKey,
 } from "./setup.helpers";
@@ -136,6 +139,8 @@ const t = strings("setup", {
   installed: "Installed",
   installedNotRunning: "Installed, not running",
   installedFailed: "{title} was installed but did not start: {error}",
+  installedDisabled: "{title} is installed but turned off.",
+  installedStopped: "{title} is installed but is not running.",
   installedFailedWhere: "Look at it on the Extensions page.",
   failed: "Could not install {title}: {error}",
   failedRetry: "Press {button} to try again.",
@@ -150,6 +155,8 @@ const t = strings("setup", {
   nothingTicked:
     "Nothing is ticked, so pluxy will run with no provider. You can add one later on the Extensions page.",
   nothingTickedNoRegistry: "This build has no extension registry, so pluxy will run with no provider.",
+  noneRunning:
+    "{names} is installed but not running, so pluxy will run with no provider. You can turn it on or see what went wrong on the {extensions} page.",
   nothingMore: "Nothing more to install.",
   stillLooking: "pluxy is still looking at this machine. What it suggests shows here in a few seconds.",
   allInstalled: "Every provider on the list is installed.",
@@ -158,6 +165,8 @@ const t = strings("setup", {
   accountHint: "An account is your sign-in with a provider. pluxy sends requests through it.",
   accountAfter: "This comes after {button}: an account signs in through a provider.",
   accountTick: "This comes after a provider: tick one above and press {button}.",
+  accountStopped:
+    "This comes after a provider, and the one installed is not running. Look at it on the {extensions} page.",
   accountNoProvider:
     "This comes after a provider, and pluxy runs none yet. Install one on the {extensions} page.",
   accountNoRegistry:
@@ -507,6 +516,8 @@ export function Providers(props: {
   setup: Setup;
   choices: Choices;
   results: Results;
+  /** The installed picks that do not run, by pick ID. */
+  stopped?: Record<string, Stopped>;
   busy?: boolean;
   onTick: (id: string, ticked: boolean) => void;
 }) {
@@ -542,14 +553,22 @@ function PickRow(props: {
   button: string;
   choices: Choices;
   results: Results;
+  stopped?: Record<string, Stopped>;
   busy?: boolean;
   onTick: (id: string, ticked: boolean) => void;
 }) {
   const { pick } = props;
   const installed = isInstalled(pick, props.results);
   const result = props.results[pick.id];
-  // Core keeps a package whose program did not start: an installed pick can be the one that failed.
-  const notRunning = installed && result?.status === "error";
+  // Core keeps a package whose program did not start, and one that was turned off or has failed
+  // since: an installed pick can be one that does not run.
+  const stopped =
+    props.stopped?.[pick.id] ??
+    (installed && result?.status === "error"
+      ? ({ why: "start", error: result.error } as Stopped)
+      : undefined);
+  const notRunning = stopped !== undefined;
+  const title = pick.title || pick.id;
   return (
     <li
       data-part="setup-pick"
@@ -574,7 +593,11 @@ function PickRow(props: {
       </div>
       {notRunning ? (
         <Notice tone="danger">
-          {t("installedFailed", { title: pick.title || pick.id, error: result.error ?? "" })}
+          {stopped.why === "disabled"
+            ? t("installedDisabled", { title })
+            : stopped.why === "failed" && !stopped.error
+              ? t("installedStopped", { title })
+              : t("installedFailed", { title, error: stopped.error ?? "" })}
           <br />
           {t("installedFailedWhere")}
         </Notice>
@@ -600,6 +623,7 @@ export function Start(props: {
   busy?: boolean;
   error?: string;
   provider: boolean;
+  stopped?: Record<string, Stopped>;
   onStart: () => void;
   onFinish: () => void;
 }) {
@@ -608,7 +632,7 @@ export function Start(props: {
   const ids = toInstall(setup, props.choices, props.results);
   const names = picks.filter((pick) => ids.includes(pick.id)).map((pick) => pick.title || pick.id);
   const button = setup.first_run ? t("start") : t("install");
-  let line: string;
+  let line: ComponentChildren;
   let action: ComponentChildren = null;
   if (ids.length > 0) {
     const list = names.join(", ");
@@ -626,7 +650,17 @@ export function Start(props: {
     // What to tick comes with the first scan's end: until then an empty list is not a choice.
     line = t("stillLooking");
   } else if (!props.provider && setup.first_run) {
-    line = setup.registries === 0 ? t("nothingTickedNoRegistry") : t("nothingTicked");
+    // With every pick installed there is nothing to tick: what holds pluxy back is on Extensions.
+    const down = picks.filter((pick) => props.stopped?.[pick.id]).map((pick) => pick.title || pick.id);
+    line =
+      setup.registries === 0
+        ? t("nothingTickedNoRegistry")
+        : down.length > 0 && picks.every((pick) => isInstalled(pick, props.results))
+          ? rich(t("noneRunning"), {
+              names: down.join(", "),
+              extensions: <a href="#/extensions">{t("extensions")}</a>,
+            })
+          : t("nothingTicked");
     action = (
       <Button variant="primary" disabled={props.busy} onClick={props.onFinish}>
         {t("startWithout")}
@@ -663,17 +697,20 @@ export function Account(props: {
   const { setup } = props;
   const button = setup.first_run ? t("start") : t("install");
   // What leads to an account while core runs no provider: the button, when it would install one;
-  // a tick first, when providers are offered; another page, when none is.
+  // a tick first, when a provider is left to tick; another page, when the installed ones do not
+  // run or none is offered.
+  const picks = providerPicks(setup);
+  const extensions = <a href="#/extensions">{t("extensions")}</a>;
   const before =
     toInstall(setup, props.choices, props.results).length > 0
       ? t("accountAfter", { button })
-      : providerPicks(setup).length > 0
+      : picks.some((pick) => !isInstalled(pick, props.results))
         ? t("accountTick", { button })
-        : setup.registries === 0
-          ? t("accountNoRegistry")
-          : rich(t("accountNoProvider"), {
-              extensions: <a href="#/extensions">{t("extensions")}</a>,
-            });
+        : picks.length > 0
+          ? rich(t("accountStopped"), { extensions })
+          : setup.registries === 0
+            ? t("accountNoRegistry")
+            : rich(t("accountNoProvider"), { extensions });
   return (
     <Card title={t("account")}>
       {props.error && <Notice tone="danger">{props.error}</Notice>}
@@ -1003,6 +1040,7 @@ export function SetupPage(props: { options?: SetupOptions }) {
       choices={choices}
       results={results}
       provider={hasProvider(setup, results, packages.data?.packages)}
+      packages={packages.data?.packages}
       accounts={accounts.data?.accounts.length}
       applying={applying}
       finishing={finish.busy}
@@ -1038,6 +1076,8 @@ export function SetupView(props: {
   results: Results;
   /** Core runs a provider. */
   provider: boolean;
+  /** Core's installed packages, once it has listed them: they say which installed pick does not run. */
+  packages?: Package[];
   /** How many accounts core has; undefined until it has said. */
   accounts?: number;
   applying?: boolean;
@@ -1055,6 +1095,7 @@ export function SetupView(props: {
   const { setup, choices, results, errors } = props;
   // One primary button at a time: Finish takes it once Start has nothing left to do.
   const finishNext = toInstall(setup, choices, results).length === 0 && props.provider;
+  const stopped = stoppedPicks(setup, results, props.packages);
   return (
     <>
       <PageHead title={t("title")} />
@@ -1076,6 +1117,7 @@ export function SetupView(props: {
           setup={setup}
           choices={choices}
           results={results}
+          stopped={stopped}
           busy={props.applying}
           onTick={props.onTick}
         />
@@ -1086,6 +1128,7 @@ export function SetupView(props: {
           busy={props.applying || props.finishing}
           error={errors?.apply}
           provider={props.provider}
+          stopped={stopped}
           onStart={props.onStart}
           onFinish={props.onFinish}
         />

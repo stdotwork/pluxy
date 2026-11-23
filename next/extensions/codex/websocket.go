@@ -151,7 +151,10 @@ func (s *wsSession) drop(c *wsConn) {
 }
 
 // Turn sends one response.create on the session's socket, connecting first when there is none,
-// and relays the upstream's messages until the turn ends.
+// and relays the upstream's messages until the turn ends. Unlike the HTTP path (generate),
+// it does not drop foreign encrypted reasoning and resend: an upstream refusal of it arrives as an
+// error message, which fails the turn, and the socket is given up like after any other error. The
+// next turn connects again and sends whatever history the client sends then.
 func (s *wsSession) Turn(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	a, err := accountOf(call.Account.Credential)
 	if err != nil {

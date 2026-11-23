@@ -239,6 +239,34 @@ func TestManageUsage30Days5kPerDayTiming(t *testing.T) {
 	}
 }
 
+// The first ?since=30d query in a usage folder that holds raw day files and no summaries, which
+// builds the 29 closed days' summaries from the raw files. Each run seeds a new folder, off the
+// clock; it only reports the time, there is no limit on it.
+func BenchmarkManageUsage30DaysFirstQueryFromRawFiles(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		c, cfgPath := seedMonthUsage5kPerDay(b)
+		summaries := filepath.Join(UsageDir(cfgPath), "summary")
+		if entries, _ := os.ReadDir(summaries); len(entries) != 0 {
+			b.Fatalf("the usage folder already holds %d summary files before the first query", len(entries))
+		}
+		req := httptest.NewRequest(http.MethodGet, management.Prefix+"/usage?since=30d&by=account", nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+		req.Header.Set("Authorization", "Bearer fake-management-key")
+		rec := httptest.NewRecorder()
+		b.StartTimer()
+		c.Management().ServeHTTP(rec, req)
+		b.StopTimer()
+		var reply management.UsageReply
+		if err := json.Unmarshal(rec.Body.Bytes(), &reply); rec.Code != http.StatusOK || err != nil || reply.Requests != 150000 {
+			b.Fatalf("status %d, requests %d, err %v: %s", rec.Code, reply.Requests, err, rec.Body.String())
+		}
+		if entries, _ := os.ReadDir(summaries); len(entries) == 0 {
+			b.Fatal("the first query built no summary files, so it did not measure building them")
+		}
+	}
+}
+
 func BenchmarkManageUsage30Days5kPerDay(b *testing.B) {
 	c, cfgPath := seedMonthUsage5kPerDay(b)
 

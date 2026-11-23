@@ -680,7 +680,6 @@ func (c *core) stop() {
 	}
 }
 
-// disablePackage disables installed package id through core's management API.
 // installPackage installs and enables the package id from the bundled registry.
 func installPackage(base, key, id string) error {
 	body := strings.NewReader(`{"id":"` + id + `","registry":"bundled","enable":true}`)
@@ -703,6 +702,7 @@ func installPackage(base, key, id string) error {
 	return nil
 }
 
+// disablePackage disables installed package id through core's management API.
 func disablePackage(base, key, id string) error {
 	req, err := http.NewRequest(http.MethodPost, base+"/v0/management/packages/"+id+"/disable", nil)
 	if err != nil {

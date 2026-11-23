@@ -13,8 +13,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // entry is one archive entry; typ 0 is a regular file.
@@ -338,4 +340,74 @@ func TestIndexDescriptions(t *testing.T) {
 			t.Errorf("%s: validate = %v, want ok %v", c.name, err, c.ok)
 		}
 	}
+}
+
+// A registry that accepts the connection and then says nothing, before or after the response
+// headers, ends in an error within IndexTimeout.
+func TestReadIndexStalledRegistry(t *testing.T) {
+	old := IndexTimeout
+	IndexTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { IndexTimeout = old })
+	release := make(chan struct{})
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/headers/index.json":
+			<-release
+		case "/body/index.json":
+			w.Header().Set("Content-Length", "1000")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"format":0,`))
+			w.(http.Flusher).Flush()
+			<-release
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+
+	for _, name := range []string{"headers", "body"} {
+		start := time.Now()
+		_, err := ReadIndex(context.Background(), srv.Client(), Registry{Name: name, URL: srv.URL + "/" + name + "/index.json"})
+		if err == nil || !errors.Is(err, ErrFetch) || !strings.Contains(err.Error(), "no answer within") {
+			t.Errorf("%s: error = %v, want a fetch error naming the timeout", name, err)
+		}
+		if d := time.Since(start); d > 5*time.Second {
+			t.Errorf("%s: ReadIndex took %v", name, d)
+		}
+	}
+
+	// The caller's own cancel is not reported as a timeout.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := ReadIndex(ctx, srv.Client(), Registry{Name: "x", URL: srv.URL + "/headers/index.json"}); err == nil || strings.Contains(err.Error(), "no answer within") {
+		t.Errorf("cancelled: error = %v", err)
+	}
+}
+
+// IndexTimeout does not cut a slow archive download.
+func TestSlowDownloadOutlastsIndexTimeout(t *testing.T) {
+	old := IndexTimeout
+	IndexTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { IndexTimeout = old })
+	arc := archive(t, good())
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/index.json":
+			_ = json.NewEncoder(w).Encode(Index{Packages: map[string]Package{"test/ext": {Releases: []Release{{Version: "1.0.0", Protocol: []int{0},
+				Artifacts: map[string]Artifact{Platform: {URL: "ext.tar.gz", SHA256: digest(arc), Size: int64(len(arc))}}}}}}})
+		case "/ext.tar.gz":
+			w.Header().Set("Content-Length", strconv.Itoa(len(arc)))
+			_, _ = w.Write(arc[:1])
+			w.(http.Flusher).Flush()
+			time.Sleep(600 * time.Millisecond)
+			_, _ = w.Write(arc[1:])
+		}
+	}))
+	t.Cleanup(srv.Close)
+	in, _ := installer(t, srv.URL+"/index.json")
+	in.Client = srv.Client()
+	s, err := in.Fetch(context.Background(), Request{ID: "test/ext"})
+	if err != nil {
+		t.Fatalf("a download slower than IndexTimeout failed: %v", err)
+	}
+	s.Discard()
 }

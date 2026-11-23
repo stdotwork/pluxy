@@ -17,7 +17,7 @@ import {
 
 const t = strings("routing", {
   title: "Routing",
-  short: "Routing",
+  short: "Route",
   tip: "Priority tiers and failover",
   refresh: "Refresh",
   loading: "Loading routing…",

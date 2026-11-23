@@ -71,14 +71,40 @@ export function scanState(setup: Setup): "first" | "again" | "never" | "done" {
 /** Package states where the package is installed but its program did not run. */
 const failedStates = new Set(["failed", "crashed", "quarantined"]);
 
+/** Why an installed provider pick does not run: its Start failed, or its package is off or failed. */
+export interface Stopped {
+  why: "start" | "disabled" | "failed";
+  error?: string;
+}
+
+/** The installed provider picks that do not run, by pick ID. */
+export function stoppedPicks(
+  setup: Setup,
+  results: Results,
+  packages: Package[] = [],
+): Record<string, Stopped> {
+  const out: Record<string, Stopped> = {};
+  for (const pick of providerPicks(setup)) {
+    if (!isInstalled(pick, results)) continue;
+    const result = results[pick.id];
+    const p = packages.find((p) => p.id === pick.id);
+    if (result?.status === "error") out[pick.id] = { why: "start", error: result.error };
+    else if (p && failedStates.has(p.state)) out[pick.id] = { why: "failed", error: p.error };
+    else if (p && !p.enabled) out[pick.id] = { why: "disabled" };
+  }
+  return out;
+}
+
 /**
- * Whether core runs a provider: a provider pick it installed whose last Start did not fail, or a
- * package that is not a client pick, is enabled and has not failed.
+ * Whether core runs a provider: a provider pick it installed whose last Start did not fail and
+ * whose package, when the list has it, is enabled and has not failed; or a package that is not a
+ * client pick, is enabled and has not failed.
  */
 export function hasProvider(setup: Setup, results: Results, packages: Package[] = []): boolean {
   const clients = new Set(setup.picks.filter((pick) => pick.kind === "client").map((pick) => pick.id));
+  const stopped = stoppedPicks(setup, results, packages);
   return (
-    providerPicks(setup).some((pick) => isInstalled(pick, results) && results[pick.id]?.status !== "error") ||
+    providerPicks(setup).some((pick) => isInstalled(pick, results) && !stopped[pick.id]) ||
     packages.some((p) => !clients.has(p.id) && p.enabled && !failedStates.has(p.state))
   );
 }

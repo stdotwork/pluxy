@@ -4,6 +4,7 @@ import type { VNode } from "preact";
 import render from "preact-render-to-string";
 import { api, type ImportReport, type Package, type Setup, type SetupApplyResult } from "../kit/api";
 import type { Feature, Host, Method, Reply } from "../kit/host";
+import { groupMethods } from "../kit/pages/addAccount";
 import {
   type ImportState,
   importCommand,
@@ -160,6 +161,7 @@ function view(
     remote?: boolean;
     options?: SetupOptions;
     bringing?: ImportState | "offered";
+    packages?: Package[];
   } = {},
 ) {
   const results = more.results ?? {};
@@ -170,7 +172,8 @@ function view(
       remote={more.remote ?? false}
       choices={more.choices ?? {}}
       results={results}
-      provider={hasProvider(setup, results)}
+      provider={hasProvider(setup, results, more.packages)}
+      packages={more.packages}
       accounts={more.accounts ?? 0}
       bring={
         more.bringing && {
@@ -425,12 +428,72 @@ test("only a provider that is enabled and has not failed counts as running", () 
   expect(hasProvider(noPicks, {}, [pkg({ state: "failed" })])).toBe(false);
   expect(hasProvider(noPicks, {}, [pkg({ state: "crashed" })])).toBe(false);
   expect(hasProvider(noPicks, {}, [pkg({ state: "quarantined" })])).toBe(false);
+  // An installed pick whose package is disabled or has failed is not running, whatever the pick says.
+  const installed: Setup = {
+    ...nothingFound,
+    picks: [pick("pluxy/claude", "Claude", { installed: true })],
+  };
+  const claude = (more: Partial<Package> = {}) => pkg({ id: "pluxy/claude", ...more });
+  expect(hasProvider(installed, {}, [claude()])).toBe(true);
+  expect(hasProvider(installed, {}, [claude({ enabled: false, state: "disabled" })])).toBe(false);
+  expect(hasProvider(installed, {}, [claude({ state: "failed" })])).toBe(false);
+  expect(hasProvider(installed, {}, [claude({ state: "crashed" })])).toBe(false);
+  expect(hasProvider(installed, {}, [claude({ state: "quarantined" })])).toBe(false);
+  // Another provider that runs still counts.
+  expect(hasProvider(installed, {}, [claude({ state: "crashed" }), pkg()])).toBe(true);
   // A client pick's package is a client, not a provider.
   const clientPick: Setup = {
     ...nothingFound,
     picks: [{ ...pick("pluxy/claude-code", "Claude Code settings"), kind: "client" }],
   };
   expect(hasProvider(clientPick, {}, [pkg({ id: "pluxy/claude-code" })])).toBe(false);
+});
+
+test("with the only installed provider disabled, the page offers no sign-in and Finish is not primary", () => {
+  const installed: Setup = {
+    ...nothingFound,
+    picks: [pick("pluxy/claude", "Claude", { installed: true })],
+  };
+  const running = view(installed, { packages: [pkg({ id: "pluxy/claude" })] });
+  expect(running).toContain('class="add-account stack"');
+  expect(primary(running)).toEqual(["Finish"]);
+
+  const disabled = view(installed, {
+    packages: [pkg({ id: "pluxy/claude", enabled: false, state: "disabled" })],
+  });
+  expect(disabled).not.toContain('class="add-account stack"');
+  // The pick says it is not running and why, in place of the Installed badge.
+  expect(disabled).toContain('data-tone="warn">Installed, not running<');
+  expect(disabled).not.toContain('data-tone="ok">Installed<');
+  expect(disabled).toContain("Claude is installed but turned off.<br/>Look at it on the Extensions page.");
+  // With nothing left to tick, Start and the account part point at Extensions, not at ticking.
+  expect(disabled).toContain(
+    'Claude is installed but not running, so pluxy will run with no provider. You can turn it on or see what went wrong on the <a href="#/extensions">Extensions</a> page.',
+  );
+  expect(disabled).toContain(
+    'This comes after a provider, and the one installed is not running. Look at it on the <a href="#/extensions">Extensions</a> page.',
+  );
+  expect(disabled).not.toContain("Nothing is ticked");
+  expect(disabled).not.toContain("tick one above");
+
+  // A package that crashed names its error; one with none still says it is not running.
+  const crashed = view(installed, {
+    packages: [pkg({ id: "pluxy/claude", state: "crashed", error: "exit status 2" })],
+  });
+  expect(crashed).toContain("Claude was installed but did not start: exit status 2<br/>");
+  const failed = view(installed, { packages: [pkg({ id: "pluxy/claude", state: "failed" })] });
+  expect(failed).toContain("Claude is installed but is not running.<br/>");
+
+  // With another provider still to tick, the page keeps its words about ticking.
+  const another: Setup = { ...installed, picks: [...installed.picks, pick("pluxy/codex", "Codex")] };
+  const tickable = view(another, {
+    packages: [pkg({ id: "pluxy/claude", enabled: false, state: "disabled" })],
+  });
+  expect(tickable).toContain('data-tone="warn">Installed, not running<');
+  expect(tickable).toContain("Nothing is ticked");
+  expect(tickable).toContain("tick one above and press Start");
+  expect(primary(disabled)).toEqual(["Start without a provider"]);
+  expect(disabled).toContain('data-variant="quiet">Finish</button>');
 });
 
 test("a pick that was installed and started keeps its Installed badge and offers Finish", () => {
@@ -771,4 +834,21 @@ test("when core has no extension registry, Setup says so and names what to do ne
   const hasReg = view({ ...nothingFound, picks: [], registries: 1 });
   expect(hasReg).not.toContain("This build has no extension registry");
   expect(hasReg).toContain("The Extensions page lists what can be installed.");
+});
+
+test("sign-in ways are grouped by provider, named by its title or else its package ID", () => {
+  const apiKey = { method: "api_key", kind: "api_key", label: "API key" };
+  const extensions = [
+    {
+      extension: "pluxy/claude",
+      methods: [{ method: "browser", kind: "browser", label: "Claude subscription" }, apiKey],
+    },
+    { extension: "pluxy/gemini", methods: [apiKey] },
+    { extension: "pluxy/none", methods: [] },
+  ];
+  const groups = groupMethods(extensions, { "pluxy/claude": "Claude" });
+  expect(groups.map((g) => [g.extension, g.title, g.tiles.map((t) => t.id)])).toEqual([
+    ["pluxy/claude", "Claude", ["pluxy/claude/browser", "pluxy/claude/api_key"]],
+    ["pluxy/gemini", "pluxy/gemini", ["pluxy/gemini/api_key"]],
+  ]);
 });

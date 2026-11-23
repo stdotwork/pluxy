@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { type Account, leftOut } from "../kit/api/accounts";
-import { filterAccounts, hasProblem } from "../kit/pages/accounts";
+import { batchTargets, filterAccounts, hasProblem } from "../kit/pages/accounts";
 
 const now = Date.parse("2026-01-01T00:00:00Z");
 const account = (id: string, fields: Partial<Account> = {}): Account => ({
@@ -104,4 +104,15 @@ test("an account core leaves out of routing is a problem, unless a person turned
     "needs_login",
     "broken",
   ]);
+});
+
+test("batch Enable and Clear cooldown reach config accounts; Disable and Delete leave them out", () => {
+  const selected = [
+    account("signed-in"),
+    account("from-config", { source: "config", health: { state: "banned" } }),
+  ];
+  expect(batchTargets(selected, "enable").map((a) => a.id)).toEqual(["signed-in", "from-config"]);
+  expect(batchTargets(selected, "cooldown").map((a) => a.id)).toEqual(["signed-in", "from-config"]);
+  expect(batchTargets(selected, "disable").map((a) => a.id)).toEqual(["signed-in"]);
+  expect(batchTargets(selected, "delete").map((a) => a.id)).toEqual(["signed-in"]);
 });

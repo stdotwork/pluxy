@@ -291,7 +291,7 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
                 main,
                 "test/alpha's Test API key method",
                 &format!(
-                    "const t = [...({}?.querySelectorAll('[data-part=method]') ?? [])].find((t) => t.textContent.includes('test/alpha') && [...t.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Test API key')); \
+                    "const t = [...({}?.querySelectorAll('[data-part=method]') ?? [])].find((t) => t.closest('[data-extension]')?.dataset.extension === 'test/alpha' && [...t.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Test API key')); \
                      const b = t && [...t.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Test API key'); if (!b || b.disabled) return false; b.click(); return true;",
                     within(step1)
                 ),

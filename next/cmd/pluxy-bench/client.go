@@ -220,6 +220,7 @@ type SideRunResult struct {
 	ReqPathP99MS    float64 `json:"req_path_p99_ms"`
 	TTFTP50MS       float64 `json:"ttft_p50_ms,omitempty"`
 	TTFTP99MS       float64 `json:"ttft_p99_ms,omitempty"`
+	ChunkSamples    int     `json:"chunk_samples,omitempty"` // chunk markers the client read; 0 means no chunk delay was measured
 	ChunkDelayP50MS float64 `json:"chunk_delay_p50_ms,omitempty"`
 	ChunkDelayP99MS float64 `json:"chunk_delay_p99_ms,omitempty"`
 	TotalP50MS      float64 `json:"total_p50_ms"`
@@ -488,6 +489,7 @@ func RunSide(
 	if spec.Stream {
 		res.TTFTP50MS = Percentile(ttfts, 0.50)
 		res.TTFTP99MS = Percentile(ttfts, 0.99)
+		res.ChunkSamples = len(chunkDelays)
 		res.ChunkDelayP50MS = Percentile(chunkDelays, 0.50)
 		res.ChunkDelayP99MS = Percentile(chunkDelays, 0.99)
 	}

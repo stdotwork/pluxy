@@ -102,7 +102,17 @@ export function AccountDetail(props: AccountDetailProps) {
       {out === "broken" && <Notice tone="warn">{t("brokenHint")}</Notice>}
       {(act.error ?? remove.error) && <Notice tone="danger">{p.text(act.error ?? remove.error, ids)}</Notice>}
       {a.source === "config" ? (
-        <p class="muted">{t("setInConfig")}</p>
+        <>
+          <p class="muted">{t("setInConfig")}</p>
+          {/* Core lifts a ban from a config account too; nothing else about it changes here. */}
+          {out === "banned" && (
+            <div class="actions">
+              <Button disabled={act.busy} onClick={() => act.run(() => api.setDisabled(a.id, false))}>
+                {t("enable")}
+              </Button>
+            </div>
+          )}
+        </>
       ) : (
         <div class="actions">
           {/* Core refuses every change to a broken account but its removal. */}
