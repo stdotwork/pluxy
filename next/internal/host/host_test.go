@@ -34,18 +34,19 @@ import (
 func TestMain(m *testing.M) {
 	if mode, ok := strings.CutPrefix(os.Getenv(protocol.EnvExtensionID), "hosttest/"); ok {
 		fakeExtension(mode)
-		os.Exit(0)
+		syscall.Exit(0) // not os.Exit: under -race that sleeps a second first, which each test would wait out
 	}
 	os.Exit(m.Run())
 }
 
 // exitWhenStdinCloses makes a fake extension that does not use the SDK follow the protocol's
 // shutdown rule: core closes its stdin to ask it to stop, and it exits. Without it, Stop waits out
-// the whole StopTimeout and kills the fake.
+// the whole StopTimeout and kills the fake. It exits with syscall.Exit: under -race, os.Exit(0)
+// sleeps a second first (the race runtime's atexit_sleep_ms), which each test would wait out.
 func exitWhenStdinCloses() {
 	go func() {
 		_, _ = io.Copy(io.Discard, os.Stdin)
-		os.Exit(0)
+		syscall.Exit(0)
 	}()
 }
 
@@ -211,7 +212,7 @@ func fakeExtension(mode string) {
 		if err != nil {
 			os.Exit(1)
 		}
-		os.Exit(0)
+		syscall.Exit(0) // see TestMain
 	case "child-holds-stderr":
 		// Start a child that keeps our stderr open after we are killed, then stay silent.
 		self, _ := os.Executable()
