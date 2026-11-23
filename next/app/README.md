@@ -1467,7 +1467,8 @@ as above, and reach their tools only through the router.
 ## Setup
 
 On a first run of a core (a new "Run core here" core is one), the window opens the kit's Setup
-page ([`../ui`](../ui/README.md), `#/setup`) in place of the Dashboard, as the web panel does:
+page ([`../ui`](../ui/README.md), `#/setup`) in place of the Dashboard when the window's address
+names no page, as the web panel does:
 what core found on its machine, the providers to install, an account, the clients, and Finish. It
 opens once the app is connected and signed in, so the Connection page still comes first. After
 Finish the page stays in the navigation and shows the same things as they are now.
@@ -1476,7 +1477,8 @@ The app adds one thing to the page. Under "Point a client at pluxy", a client co
 **Set up** button beside "Show what to paste" when the window has a page for it and its optional
 tool is installed on this device or offered by a registry, which is the list Beginner Mode
 offers. Set up opens the client's own page, where the app writes the client's settings itself
-after its native confirmation; a tool that is not installed or enabled yet is named there. The
+after its native confirmation; a tool that is not installed or enabled yet is named there. A
+client whose settings file pluxy would not change gets no button, only the paste text. The
 paste text stays for every client. With a remote core the button is left out: the page then lists
 the clients on core's machine, and the app sets a client up on this computer only.
 

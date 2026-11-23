@@ -359,6 +359,42 @@ func TestCompactWithoutSummary(t *testing.T) {
 			if !errors.As(err, &e) || e.Retryable || e.Scope != llm.ScopeRequest || !strings.Contains(e.Message, tc.want) {
 				t.Errorf("err = %+v; want non-retryable ScopeRequest naming %q", err, tc.want)
 			}
+			if e.Usage != nil {
+				t.Errorf("err.Usage = %+v, want nil when reply has no usage", e.Usage)
+			}
+		})
+	}
+}
+
+func TestCompactWithoutSummaryKeepsUsage(t *testing.T) {
+	const fullUsage = `"usage":{"prompt_tokens":144,"prompt_tokens_details":{"cached_tokens":20},"completion_tokens":276,"completion_tokens_details":{"reasoning_tokens":200},"total_tokens":420}`
+	cases := []struct {
+		name, reply string
+	}{
+		{"length partial", `{"id":"c1","choices":[{"index":0,"message":{"role":"assistant","content":"cut off"},"finish_reason":"length"}],` + fullUsage + `}`},
+		{"content_filter", `{"id":"c1","choices":[{"index":0,"message":{"role":"assistant","content":""},"finish_reason":"content_filter"}],` + fullUsage + `}`},
+		{"reasoning only on stop", `{"id":"c1","choices":[{"index":0,"message":{"role":"assistant","reasoning_content":"only thought","content":""},"finish_reason":"stop"}],` + fullUsage + `}`},
+		{"tool call on stop", `{"id":"c1","choices":[{"index":0,"message":{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"shell","arguments":"{}"}}]},"finish_reason":"stop"}],` + fullUsage + `}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _ := newCompactUpstream(t, func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				w.Header().Set("Content-Type", "application/json")
+				io.WriteString(w, tc.reply)
+			})
+			settings := json.RawMessage(`{"base_url":"` + srv.URL + `/v1","wire_api":"chat"}`)
+			var rec compactRecorder
+			err := compactTo(context.Background(), compactCall(settings, "sk-test", "gpt-4.1", compactSampleBody), &rec)
+			var e *llm.Error
+			if !errors.As(err, &e) {
+				t.Fatalf("err = %v, want *llm.Error", err)
+			}
+			if e.Usage == nil || e.Usage.InputTokens == nil || *e.Usage.InputTokens != 144 ||
+				e.Usage.OutputTokens == nil || *e.Usage.OutputTokens != 276 ||
+				e.Usage.CachedInputTokens == nil || *e.Usage.CachedInputTokens != 20 ||
+				e.Usage.ReasoningTokens == nil || *e.Usage.ReasoningTokens != 200 {
+				t.Errorf("err.Usage = %+v; want 144 in (20 cached), 276 out (200 reasoning)", e.Usage)
+			}
 		})
 	}
 }

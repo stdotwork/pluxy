@@ -324,14 +324,17 @@ export class ThemeState {
     }
     const id = r.body.current || DEFAULT_THEME;
     const mark = this.mark(r.body.current);
-    if (first || mark !== this.followed) {
+    // The size cannot tell a file replaced by one of the same length, so the file of the theme
+    // that is on is read again, and followed only when what it holds changed.
+    const reread = first || mark !== this.followed ? undefined : await this.replacedFile(id);
+    if (first || mark !== this.followed || reread) {
       if (this.builtInFiles.has(id)) {
         this.followed = mark;
         this.apply(id);
         return;
       }
       if (this.stored.some((s) => s.id === id)) {
-        const why = await this.fetchFile(id, true);
+        const why = await this.fetchFile(id, true, reread);
         if (why === undefined) {
           this.followed = mark;
           this.apply(id);
@@ -358,9 +361,23 @@ export class ThemeState {
     else for (const fn of this.listeners) fn();
   }
 
-  /** Reads one stored theme's file from core. Returns why it cannot be used, or undefined. */
-  private async fetchFile(id: string, byItself = false): Promise<string | undefined> {
+  /**
+   * Reads the file of the stored theme id when it is the one on and this state holds a usable
+   * copy, and returns core's reply when the file differs from the copy; else undefined.
+   */
+  private async replacedFile(id: string): Promise<Reply<unknown> | undefined> {
+    const held = this.usable(id);
+    if (!held || !this.stored.some((s) => s.id === id)) return undefined;
     const r = await this.api.themeFile(id);
+    return ok(r) && JSON.stringify(r.body) !== JSON.stringify(held.file) ? r : undefined;
+  }
+
+  /**
+   * Reads one stored theme's file from core, or takes the reply of a read just made. Returns why
+   * it cannot be used, or undefined.
+   */
+  private async fetchFile(id: string, byItself = false, reply?: Reply<unknown>): Promise<string | undefined> {
+    const r = reply ?? (await this.api.themeFile(id));
     if (r.status === 404) {
       this.forget(id);
       return GONE;

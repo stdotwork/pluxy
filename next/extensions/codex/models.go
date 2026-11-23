@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	_ "embed"
 	"encoding/json"
@@ -60,8 +61,9 @@ func listModels(ctx context.Context, call sdk.ModelsCall) (*protocol.ModelList, 
 	if err != nil {
 		return nil, err
 	}
+	builtin := builtinModels(call.Account.Credential)
 	if a, err := accountOf(call.Account.Credential); err == nil && a.subscription {
-		if models, ok := fetchCodexModels(ctx, call, s, a); ok {
+		if models, ok := fetchCodexModels(ctx, call, s, a, builtin.Models); ok {
 			return &protocol.ModelList{
 				Models:  models,
 				OwnedBy: modelsOwner,
@@ -69,7 +71,36 @@ func listModels(ctx context.Context, call sdk.ModelsCall) (*protocol.ModelList, 
 			}, nil
 		}
 	}
-	return builtinModels(call.Account.Credential), nil
+	return builtin, nil
+}
+
+// fillFromBuiltin gives a model of the account's live list the fields it lacks from the built-in
+// entry of the same slug in list: the live list names only some fields, and core merges the
+// built-in list only for a list that is not live. A value the live list gives is never replaced.
+func fillFromBuiltin(m protocol.Model, list []protocol.Model) protocol.Model {
+	i := slices.IndexFunc(list, func(b protocol.Model) bool { return b.ID == m.ID })
+	if i < 0 {
+		return m
+	}
+	b := list[i]
+	m.DisplayName = cmp.Or(m.DisplayName, b.DisplayName)
+	m.Description = cmp.Or(m.Description, b.Description)
+	m.Version = cmp.Or(m.Version, b.Version)
+	m.Created = cmp.Or(m.Created, b.Created)
+	m.ContextLength = cmp.Or(m.ContextLength, b.ContextLength)
+	m.MaxCompletionTokens = cmp.Or(m.MaxCompletionTokens, b.MaxCompletionTokens)
+	if len(m.InputModalities) == 0 {
+		m.InputModalities = slices.Clone(b.InputModalities)
+	}
+	if len(m.OutputModalities) == 0 {
+		m.OutputModalities = slices.Clone(b.OutputModalities)
+	}
+	if m.Capabilities == nil && b.Capabilities != nil {
+		c := *b.Capabilities
+		c.ReasoningLevels = slices.Clone(c.ReasoningLevels)
+		m.Capabilities = &c
+	}
+	return m
 }
 
 func builtinModels(c *protocol.Credential) *protocol.ModelList {
@@ -102,7 +133,9 @@ func builtinModels(c *protocol.Credential) *protocol.ModelList {
 	}
 }
 
-func fetchCodexModels(ctx context.Context, call sdk.ModelsCall, s settings, a account) ([]protocol.Model, bool) {
+// fetchCodexModels reads the account's live model list, each model filled from the built-in entry of
+// its slug in builtin.
+func fetchCodexModels(ctx context.Context, call sdk.ModelsCall, s settings, a account, builtin []protocol.Model) ([]protocol.Model, bool) {
 	fail := func(reason string) ([]protocol.Model, bool) {
 		modelReadFailed(call.Account.ID, call.Account.Credential, reason)
 		return nil, false
@@ -178,14 +211,14 @@ func fetchCodexModels(ctx context.Context, call sdk.ModelsCall, s settings, a ac
 				modalities = append(modalities, m)
 			}
 		}
-		models = append(models, protocol.Model{
+		models = append(models, fillFromBuiltin(protocol.Model{
 			ID:              slug,
 			DisplayName:     strings.TrimSpace(item.DisplayName),
 			Description:     strings.TrimSpace(item.Description),
 			OwnedBy:         modelsOwner,
 			ContextLength:   max(item.ContextWindow, 0),
 			InputModalities: modalities,
-		})
+		}, builtin))
 	}
 	if len(models) == 0 {
 		return fail("the list holds no model for the account")

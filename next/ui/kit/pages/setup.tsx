@@ -714,7 +714,10 @@ export interface ClientAction {
  * to set a client up on its own computer.
  */
 export interface SetupOptions {
-  /** The action for a client found installed, by its ID in core's scan; nothing for no action. */
+  /**
+   * The action for a client found installed, by its ID in core's scan; nothing for no action. The
+   * page asks for none for a client whose settings file was refused: there only the paste text works.
+   */
   clientAction?: (client: string) => ClientAction | undefined;
   /** One sentence under the clients' heading, shown while a client has an action: what it does. */
   clientActionHint?: string;
@@ -838,7 +841,13 @@ function ClientRow(props: { client: SetupClient; action?: ClientAction }) {
 export function Clients(props: { setup: Setup; options?: SetupOptions }) {
   const { found, others } = splitClients(props.setup);
   const scanning = scanState(props.setup) === "first";
-  const actions = new Map(found.map((client) => [client.id, props.options?.clientAction?.(client.id)]));
+  // A refused file is one the host's own page would not write either, so its button would lead nowhere.
+  const actions = new Map(
+    found.map((client) => [
+      client.id,
+      client.state === "refused" ? undefined : props.options?.clientAction?.(client.id),
+    ]),
+  );
   const hint = props.options?.clientActionHint;
   return (
     <Card title={t("clients")}>

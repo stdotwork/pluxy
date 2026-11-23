@@ -620,19 +620,37 @@ fn opens(app: &AppHandle, input: Value, line: &str, file: &Path) -> Result<Value
         d.iter().any(|(_, p)| p == file).then_some(d)
     })
     .map_err(|e| format!("{e}; the last look found {last}"))?;
-    let urls: Vec<&str> = docs
-        .iter()
-        .filter(|(_, p)| p == file)
-        .map(|(u, _)| u.as_str())
-        .collect();
-    for u in &urls {
-        mac::textedit_close(u)?;
-    }
+    // Each look at the windows' documents decides: none shows the file (the proof that it closed),
+    // or the windows that still do get a close click, and the look is repeated. A click can miss
+    // (a window's index shifts as windows close or reorder), so one click is not the proof.
+    let mut tried = String::from("no close click yet");
     wait_for("TextEdit to close the file", || {
-        mac::textedit_documents()
-            .ok()
-            .filter(|d| !d.iter().any(|(_, p)| p == file))
-    })?;
+        let d = match mac::textedit_documents() {
+            Ok(d) => d,
+            Err(e) => {
+                tried = format!("the last look failed: {e}");
+                return None;
+            }
+        };
+        let shown: Vec<&str> = d
+            .iter()
+            .filter(|(_, p)| p == file)
+            .map(|(u, _)| u.as_str())
+            .collect();
+        if shown.is_empty() {
+            return Some(());
+        }
+        tried = shown
+            .iter()
+            .map(|u| match mac::textedit_close(u) {
+                Ok(skipped) => format!("clicked, the script skipped: [{skipped}]"),
+                Err(e) => format!("the close script failed: {e}"),
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        None
+    })
+    .map_err(|e| format!("{e}; the last close: {tried}"))?;
     if !was {
         mac::textedit_quit()?;
         wait_for("TextEdit to quit", || {
@@ -1047,28 +1065,45 @@ mod mac {
         PathBuf::from(String::from_utf8_lossy(&out).into_owned())
     }
 
-    /// Closes TextEdit's windows that show the document at url (unchanged, so none asks to save)
-    /// with their close buttons, through System Events' accessibility.
-    pub(super) fn textedit_close(url: &str) -> Result<(), String> {
+    /// Clicks the close button of each of TextEdit's windows that shows the document at url
+    /// (unchanged, so none asks to save), through System Events' accessibility; returns what the
+    /// script skipped. It does not prove a window closed: the caller looks at the windows' documents.
+    ///
+    /// A window's index in System Events' list shifts when windows close or come forward, so a
+    /// `repeat with w in (windows of p)` reference (`item N of every window`) fails with -1719
+    /// when its window went. The script instead walks the indexes from last to first (a close
+    /// leaves the lower ones in place), reads and clicks each window inside a `try`, and
+    /// returns the errors it skipped; a window it missed still shows the document, so the caller's
+    /// next look finds it and clicks again.
+    pub(super) fn textedit_close(url: &str) -> Result<String, String> {
         osascript(
             &[
                 "on run argv",
+                "set skipped to \"\"",
                 "tell application \"System Events\"",
                 "repeat with p in (every process whose bundle identifier is \"com.apple.TextEdit\")",
-                "repeat with w in (windows of p)",
-                "set d to missing value",
+                "set n to 0",
                 "try",
-                "set d to value of attribute \"AXDocument\" of w",
+                "set n to count of windows of p",
+                "on error m",
+                "set skipped to skipped & m & linefeed",
                 "end try",
+                "repeat with i from n to 1 by -1",
+                "try",
+                "set w to window i of p",
+                "set d to value of attribute \"AXDocument\" of w",
                 "if d is (item 1 of argv) then click (first button of w whose subrole is \"AXCloseButton\")",
+                "on error m",
+                "set skipped to skipped & m & linefeed",
+                "end try",
                 "end repeat",
                 "end repeat",
                 "end tell",
+                "return skipped",
                 "end run",
             ],
             &[url],
         )
-        .map(|_| ())
     }
 
     /// Quits TextEdit with its own Quit command (its application menu's "Quit TextEdit", as an

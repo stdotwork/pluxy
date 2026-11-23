@@ -51,7 +51,7 @@ working as the UI changes. Custom CSS can only rely on the hooks listed under
 | `id` | yes (pluxy files) | `publisher/name`. Each part is 1 to 64 characters from `a-z`, `0-9` and `-`. Optional in a T3 Code theme, where the ID becomes `t3/<id>` or is derived from `name`. |
 | `name` | yes | The name people see. 1 to 64 characters. |
 | `description` | no | One line, up to 200 characters. |
-| `appearance` | no (yes for T3 Code) | `both` (the default for pluxy files), `light` or `dark`: the appearances the theme offers. See [Appearance](#appearance). |
+| `appearance` | no (yes for T3 Code) | `both` (the default for pluxy files), `light` or `dark`: the appearances the theme offers. See [Appearance](#appearance). In a `both` file, T3 Code's `canvas`, `accent` and `colors` apply to one appearance only: the one `variants` does not cover, else dark when the `canvas` seed (or, without one, `colors.canvas`) is a dark colour, else light. |
 | `tokens` | no | Token values, by token name. Missing tokens keep the UI's default value. |
 | `dark` | no | Token values that replace `tokens` while the appearance is dark. |
 | `layout` | no | The theme's layout options. Missing options keep the UI's default. |
@@ -71,10 +71,10 @@ A theme file is at most 256 KiB.
 - **Used, with a warning shown on the Themes page:** an unknown field, token, T3 Code role or layout
   option is ignored; a token or T3 Code role value that breaks the rules below is ignored and the
   default is kept; `canvas` or `accent` seeds outside hex, `rgb()`/`rgba()` or `oklch()` skip the
-  generated palette; a `variants` key other than `light` or `dark`, or repeating the file's own
-  appearance, is ignored; a layout value the UI does not offer falls back to that option's default;
-  an unknown `appearance` falls back to `both`; custom CSS containing `@import` is dropped as a
-  whole.
+  generated palette; a `colors` object with no roles is ignored; a `variants` key other than `light`
+  or `dark`, or repeating the file's own appearance, is ignored; a layout value the UI does not
+  offer falls back to that option's default; an unknown `appearance` falls back to `both`; custom
+  CSS containing `@import` is dropped as a whole.
 
 So a theme written for a later version 0 UI, with tokens this UI does not know yet, still loads.
 
@@ -126,7 +126,10 @@ anything.
 | `color.code-text` | Their text | `var(--px-color-text)` |
 
 A default written as `var(--px-…)` follows another token, so a theme that sets only the older
-tokens looks as it did before these existed.
+tokens gets matching colours for these. It does not look exactly as it did before they existed:
+placeholder text now has one colour and full opacity in every browser (`color.placeholder`), and a
+configuration diff now has a background (`color.code-bg`), where each had only the browser's or no
+colour of its own.
 
 ### Type
 

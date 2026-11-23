@@ -26,13 +26,21 @@ import (
 // it.
 const interruptedOutput = "Tool call was interrupted before any output was recorded."
 
-// outputTypes maps each tool call type to the type of the output that answers it. A local shell
-// call is answered by a function call output, as the Codex client records it.
+// outputTypes maps each tool call type to the type of the output sent for it when the
+// conversation has none. A local shell call gets a function call output, as the Codex client
+// records it.
 var outputTypes = map[string]string{
 	"function_call":    "function_call_output",
 	"local_shell_call": "function_call_output",
 	"custom_tool_call": "custom_tool_call_output",
 	"tool_search_call": "tool_search_output",
+}
+
+// altOutputTypes maps a tool call type to a second output type that also answers it. The Responses
+// API answers a local shell call with a local_shell_call_output as well, which carries the call's
+// call_id, and a client that sends one has answered the call.
+var altOutputTypes = map[string]string{
+	"local_shell_call": "local_shell_call_output",
 }
 
 // history makes the repairs described above on the request's input, which input has made a list.
@@ -105,6 +113,9 @@ func missingOutput(typ string, o map[string]json.RawMessage, answered map[string
 	outType, ok := outputTypes[typ]
 	id, _ := str(o["call_id"])
 	if !ok || id == "" || answered[outType+"\x00"+id] {
+		return nil
+	}
+	if alt, ok := altOutputTypes[typ]; ok && answered[alt+"\x00"+id] {
 		return nil
 	}
 	answered[outType+"\x00"+id] = true

@@ -132,7 +132,9 @@ function inferPluxyBaseAppearance(raw: Record<string, unknown>): T3Appearance {
     if (hasDark && !hasLight) return "light";
     if (hasLight && !hasDark) return "dark";
   }
-  const parsed = parseThemeColor(raw.canvas);
+  // The canvas seed decides; without one, the canvas role in colors does.
+  const parsed =
+    parseThemeColor(raw.canvas) ?? (isObject(raw.colors) ? parseThemeColor(raw.colors.canvas) : null);
   if (parsed) {
     return themeRelativeLuminance(themeOklchToRgb(parsed.color)) < 0.179 ? "dark" : "light";
   }
@@ -172,6 +174,8 @@ function readT3Data(
   let colors: T3RoleMap | undefined;
   if (raw.colors !== undefined) {
     colors = readT3Roles("colors", raw.colors, warnings);
+    if (isObject(raw.colors) && Object.keys(raw.colors).length === 0)
+      warnings.push("colors has no roles; ignored");
   }
 
   const variants: Partial<Record<T3Appearance, T3RoleMap>> = {};

@@ -350,6 +350,44 @@ test("re-reads core's themes when the window gets focus or shows again, and stop
   expect(s.core.count("GET /themes")).toBe(reads);
 });
 
+test("follows the theme that is on when its file is replaced by one of the same length", async () => {
+  const s = setup();
+  s.core.files.set("t3/nightfall", nightfall);
+  s.core.current = "t3/nightfall";
+  const themes = s.state();
+  themes.connect();
+  await until(() => themes.current.theme.id === "t3/nightfall");
+  const before = themes.resolved.variables[CANVAS];
+  expect(before).toBeString();
+
+  // `pluxy theme add` replaced the file with one of the same byte length (#1a1b26 to #1a1b27).
+  const swapped = { ...nightfall, canvas: "#1a1b27" };
+  expect(JSON.stringify(swapped).length).toBe(JSON.stringify(nightfall).length);
+  s.core.files.set("t3/nightfall", swapped);
+  s.win.dispatchEvent(new Event("focus"));
+  await themes.refresh();
+  expect(themes.resolved.variables[CANVAS]).not.toBe(before);
+  expect((JSON.parse(s.kept.get("applied-theme") ?? "{}") as { file: { canvas: string } }).file.canvas).toBe(
+    "#1a1b27",
+  );
+});
+
+test("reads the file of the theme that is on when the window gets focus, and repaints nothing when it is the same", async () => {
+  const s = setup();
+  s.core.files.set("t3/nightfall", nightfall);
+  s.core.current = "t3/nightfall";
+  const themes = s.state();
+  themes.connect();
+  await until(() => themes.current.theme.id === "t3/nightfall");
+  const painted = themes.resolved;
+  const reads = s.core.count("GET /themes/t3/nightfall");
+
+  s.win.dispatchEvent(new Event("focus"));
+  await themes.refresh();
+  expect(s.core.count("GET /themes/t3/nightfall")).toBe(reads + 1);
+  expect(themes.resolved).toBe(painted);
+});
+
 test("a stored file the reader refuses is listed with the reason and cannot be turned on", async () => {
   const s = setup();
   s.core.files.set("me/broken", { name: "Broken" });
