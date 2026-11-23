@@ -264,6 +264,31 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	var tools []json.RawMessage
 	emittedCodeExecName := ""
 	droppedCodeExec := false
+	// Messages refuses a request whose tools share a name. The client's functions win: a hosted
+	// tool translated from another format is sent only when no tool already has its name.
+	sent := map[string]bool{}
+	if len(allowed) == 0 {
+		for _, t := range req.Tools {
+			if t.IsFunction() {
+				sent[toolName(names, t.Name)] = true
+			}
+		}
+	}
+	// claim reports whether a translated hosted tool may be sent, and if so takes its name. When
+	// the name is taken it reports the loss and returns false.
+	claim := func(tool json.RawMessage, path string) bool {
+		var named struct {
+			Name string `json:"name"`
+		}
+		_ = json.Unmarshal(tool, &named)
+		name := named.Name
+		if sent[name] {
+			e.lose(llm.LossDropped, path, fmt.Sprintf("Messages needs each tool name once and another tool is already named %q", name))
+			return false
+		}
+		sent[name] = true
+		return true
+	}
 	for i, t := range req.Tools {
 		if len(allowed) > 0 && (!t.IsFunction() || !allowed[t.Name]) {
 			continue
@@ -279,6 +304,8 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			} else if !supportsCodeExecution(req.Model) {
 				e.lose(llm.LossDropped, p, fmt.Sprintf("Messages model %q does not support %s", req.Model, codeExecutionToolType))
 				droppedCodeExec = true
+			} else if !claim(canonicalCodeExecutionTool(), p) {
+				droppedCodeExec = true
 			} else {
 				tools = append(tools, canonicalCodeExecutionTool())
 				emittedCodeExecName = codeExecutionToolName
@@ -291,7 +318,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			if t.Origin != nil && t.Origin.Format == format {
 				tools = append(tools, t.Origin.Raw)
 			} else if ws, skip, carried, ok := webSearchTool(t); ok {
-				if !skip {
+				if !skip && claim(ws, p) {
 					tools = append(tools, ws)
 					for _, l := range rawjson.WebSearchLosses(t, p, format, carried) {
 						l.Kind = llm.LossApproximated
@@ -304,7 +331,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			} else if !supportsWebSearch(req.Model) {
 				e.lose(llm.LossDropped, p, fmt.Sprintf("Messages model %q does not support %s", req.Model, webSearchToolType))
 			} else if ws, skip, carried, ok := canonicalWebSearchTool(t); ok {
-				if !skip {
+				if !skip && claim(ws, p) {
 					tools = append(tools, ws)
 					e.losses = append(e.losses, rawjson.WebSearchLosses(t, p, format, carried)...)
 				}
@@ -318,7 +345,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			if t.Origin != nil && t.Origin.Format == format {
 				tools = append(tools, t.Origin.Raw)
 			} else if ws, skip, carried, ok := webSearchTool(t); ok {
-				if !skip {
+				if !skip && claim(ws, p) {
 					tools = append(tools, ws)
 					for _, l := range rawjson.WebSearchLosses(t, p, format, carried) {
 						l.Kind = llm.LossApproximated
