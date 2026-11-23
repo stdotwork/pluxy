@@ -432,7 +432,8 @@ describe("controls and status", () => {
         [1792890000, 60],
       ]);
     } finally {
-      process.env.TZ = before;
+      if (before === undefined) delete process.env.TZ;
+      else process.env.TZ = before;
     }
   });
 });

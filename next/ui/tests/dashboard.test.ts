@@ -37,8 +37,71 @@ describe("success percent", () => {
 });
 
 describe("the window", () => {
-  test("is 20 buckets of 10 minutes, asked for by duration", () => {
-    expect(usageQuery()).toBe("since=200m&bucket=10m&buckets=20");
+  // A reply to the usage call as core gives it: one step per 10 minutes, oldest first, quiet steps
+  // included. Each pair is [requests, failure_count]; `drawn` is the same steps as [success, failure].
+  const asked: [number, number][] = [
+    [0, 0],
+    [0, 0],
+    [3, 0],
+    [12, 1],
+    [7, 7],
+    [0, 0],
+    [1, 0],
+    [25, 4],
+    [40, 0],
+    [9, 2],
+    [0, 0],
+    [0, 0],
+    [2, 1],
+    [18, 0],
+    [33, 3],
+    [5, 5],
+    [0, 0],
+    [14, 2],
+    [6, 0],
+    [21, 1],
+  ];
+  const drawn: [number, number][] = [
+    [0, 0],
+    [0, 0],
+    [3, 0],
+    [11, 1],
+    [0, 7],
+    [0, 0],
+    [1, 0],
+    [21, 4],
+    [40, 0],
+    [7, 2],
+    [0, 0],
+    [0, 0],
+    [1, 1],
+    [18, 0],
+    [30, 3],
+    [0, 5],
+    [0, 0],
+    [12, 2],
+    [6, 0],
+    [20, 1],
+  ];
+  const at = (i: number) => new Date(Date.UTC(2026, 10, 11, 7, 10 * i)).toISOString();
+
+  test("the chart gets as many rows as the series core answers the query with, with the right values", () => {
+    const series: UsageBucket[] = asked.map(([requests, failures], i) => ({
+      start: at(i),
+      requests,
+      failure_count: failures,
+      total_tokens: 100 * i,
+    }));
+    const rows = bucketRows(series);
+    expect(rows).toHaveLength(20);
+    expect(rows.map((r) => [r.success, r.failure])).toEqual(drawn);
+    expect(rows.map((r) => r.total)).toEqual(asked.map(([requests]) => requests));
+    expect(rows.map((r) => r.start)).toEqual(series.map((b) => b.start));
+    // And the query asks core for exactly that many.
+    const query = new URLSearchParams(usageQuery());
+    expect(Number(query.get("buckets"))).toBe(rows.length);
+    expect(query.get("bucket")).toBe("10m");
+    expect(query.get("since")).toBe("200m");
   });
 
   test("is named in hours and minutes", () => {
