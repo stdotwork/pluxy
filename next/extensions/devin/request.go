@@ -160,6 +160,10 @@ func buildRequest(req *llm.Request) (*chatRequest, error) {
 	if o.Temperature != nil {
 		c.temperature = *o.Temperature
 	}
+	if o.CandidateCount > 1 {
+		// The format parsers take the count out of the origin's raw fields, so kept no longer lists it.
+		lose(llm.LossDropped, llm.CandidateCountPath(*req), "Devin returns one candidate")
+	}
 	if o.TopP != nil {
 		lose(llm.LossDropped, "top_p", "Devin takes no top_p")
 	}
