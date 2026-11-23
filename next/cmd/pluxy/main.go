@@ -49,7 +49,8 @@ func main() {
 
 // serve runs core: pluxy serve, or pluxy with no subcommand.
 func serve(args []string) {
-	fs := flag.NewFlagSet("pluxy serve", flag.ExitOnError)
+	fs := flag.NewFlagSet("pluxy serve", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
 	configPath := fs.String("config", "config.json", "path to the config file")
 	safeMode := fs.Bool("safe-mode", false, "start no extensions: client requests fail, the management API works")
 	watch := fs.Duration("watch-interval", time.Second, "how often to look for config file changes (0: do not watch)")
@@ -60,7 +61,17 @@ func serve(args []string) {
 		fmt.Fprintln(fs.Output(), "usage: pluxy [serve] [flags]   run core; pluxy help lists the client commands")
 		fs.PrintDefaults()
 	}
-	_ = fs.Parse(args) // ExitOnError
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fs.SetOutput(os.Stdout)
+			fs.Usage()
+			return
+		}
+		fs.SetOutput(os.Stderr)
+		fmt.Fprintln(os.Stderr, err)
+		fs.Usage()
+		os.Exit(exitUsage)
+	}
 	if fs.NArg() > 0 {
 		fmt.Fprintf(os.Stderr, "pluxy: unexpected argument %q (pluxy help lists the commands)\n", fs.Arg(0))
 		os.Exit(exitUsage)
@@ -167,20 +178,26 @@ func setupStartLine(panelBuilt bool, local, configPath, listen string) string {
 // core, and returns the exit code.
 func initConfig(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("pluxy init", flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	fs.SetOutput(io.Discard)
 	configPath := fs.String("config", "config.json", "where to write the config file; an existing file is never replaced")
 	port := fs.Int("port", -1, "the port core listens on (default: 8317, or a free port when 8317 is taken; 0: a free port)")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: pluxy init [-config file] [-port n]   write a first config: listening on 127.0.0.1, with a new client key and management key")
+		fmt.Fprintln(fs.Output(), "usage: pluxy init [-config file] [-port n]   write a first config: listening on 127.0.0.1, with a new client key and management key")
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
+			fs.SetOutput(stdout)
+			fs.Usage()
 			return exitOK
 		}
+		fs.SetOutput(stderr)
+		fmt.Fprintln(stderr, err)
+		fs.Usage()
 		return exitUsage
 	}
 	if fs.NArg() > 0 || *port < -1 || *port > 65535 {
+		fs.SetOutput(stderr)
 		fs.Usage()
 		return exitUsage
 	}

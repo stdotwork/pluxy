@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -26,6 +27,12 @@ type target struct {
 // listens on every interface) and its management key. A core serving TLS with its own
 // certificate is called with that certificate trusted.
 func findCore(configPath, addr, key string) (target, error) {
+	if addr != "" {
+		u, err := url.Parse(addr)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return target{}, usageError{fmt.Sprintf("--url %q must start with http:// or https://, such as http://127.0.0.1:8317", addr)}
+		}
+	}
 	t := target{url: addr, key: key, http: &http.Client{Timeout: 2 * time.Minute}}
 	if addr != "" && key != "" {
 		return t, nil

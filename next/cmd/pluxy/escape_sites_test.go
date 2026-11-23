@@ -92,7 +92,7 @@ func TestForeignTextSitesTerminalEscaping(t *testing.T) {
 		{
 			name:    "route with no account to try",
 			args:    []string{"route", "m"},
-			routes:  map[string]string{"GET /route": `{"model":` + q + `,"order":[],"left_out":[]}`},
+			routes:  map[string]string{"GET /route": `{"model":` + q + `,"order":[],"left_out":[{"id":"a1","account":"acc_1","state":"disabled"}]}`},
 			wantOut: []string{"no account would be tried for {cell}\n"},
 		},
 		{
