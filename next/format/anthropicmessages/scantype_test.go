@@ -3,6 +3,8 @@ package anthropicmessages
 import (
 	"encoding/json"
 	"math/rand"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -107,24 +109,7 @@ func TestScansMatchDecodingOnEditedEvents(t *testing.T) {
 	cases, textTaken, typeTaken := 0, 0, 0
 	check := func(data string) {
 		cases++
-		if index, text, ok := scanTextDelta([]byte(data)); ok {
-			textTaken++
-			var ev streamEvent
-			if err := json.Unmarshal([]byte(data), &ev); err != nil {
-				t.Fatalf("%q: scanTextDelta took an event encoding/json rejects: %v", data, err)
-			}
-			if ev.Type != "content_block_delta" || ev.Index != index || ev.Delta == nil || ev.Delta.Type != "text_delta" || ev.Delta.Text != text ||
-				ev.Message != nil || ev.ContentBlock != nil || ev.Usage != nil || ev.Error != nil || ev.Delta.Thinking != "" || ev.Delta.PartialJSON != "" ||
-				ev.Delta.Signature != "" || ev.Delta.Citation != nil || ev.Delta.StopReason != "" {
-				t.Fatalf("%q: scanTextDelta = %d, %q; decoding gives %+v %+v", data, index, text, ev, ev.Delta)
-			}
-		}
-		if got, want := rawType(json.RawMessage(data)), rawTypeDecoded(json.RawMessage(data)); got != want {
-			t.Fatalf("rawType(%q) = %q, decoding gives %q", data, got, want)
-		}
-		if _, ok := scanType([]byte(data)); ok {
-			typeTaken++
-		}
+		compareScans(t, data, &textTaken, &typeTaken)
 	}
 	for _, s := range seeds {
 		check(s)
@@ -154,4 +139,75 @@ func TestScansMatchDecodingOnEditedEvents(t *testing.T) {
 		t.Fatalf("the scans took %d and %d of the events: the test covers nothing", textTaken, typeTaken)
 	}
 	t.Logf("%d events compared; scanTextDelta took %d, scanType %d", cases, textTaken, typeTaken)
+}
+
+// compareScans checks scanTextDelta and rawType on data against decoding, and counts in the two
+// counters the events each scan took.
+func compareScans(t *testing.T, data string, textTaken, typeTaken *int) {
+	t.Helper()
+	if index, text, ok := scanTextDelta([]byte(data)); ok {
+		*textTaken++
+		var ev streamEvent
+		if err := json.Unmarshal([]byte(data), &ev); err != nil {
+			t.Fatalf("%q: scanTextDelta took an event encoding/json rejects: %v", data, err)
+		}
+		if ev.Type != "content_block_delta" || ev.Index != index || ev.Delta == nil || ev.Delta.Type != "text_delta" || ev.Delta.Text != text ||
+			ev.Message != nil || ev.ContentBlock != nil || ev.Usage != nil || ev.Error != nil || ev.Delta.Thinking != "" || ev.Delta.PartialJSON != "" ||
+			ev.Delta.Signature != "" || ev.Delta.Citation != nil || ev.Delta.StopReason != "" {
+			t.Fatalf("%q: scanTextDelta = %d, %q; decoding gives %+v %+v", data, index, text, ev, ev.Delta)
+		}
+	}
+	if got, want := rawType(json.RawMessage(data)), rawTypeDecoded(json.RawMessage(data)); got != want {
+		t.Fatalf("rawType(%q) = %q, decoding gives %q", data, got, want)
+	}
+	if _, ok := scanType([]byte(data)); ok {
+		*typeTaken++
+	}
+}
+
+// TestScansMatchDecodingOnRecordedEvents runs the same comparison over every stream event in the
+// differential corpus's recorded replies.
+func TestScansMatchDecodingOnRecordedEvents(t *testing.T) {
+	files, _ := filepath.Glob("../../corpus/cases/*/*/*.json")
+	if len(files) == 0 {
+		t.Skip("no corpus cases found")
+	}
+	events, textTaken, typeTaken := 0, 0, 0
+	var walk func(v any)
+	walk = func(v any) {
+		switch x := v.(type) {
+		case map[string]any:
+			if data, ok := x["data"]; ok && x["event"] != nil {
+				// A recorded server-sent event: its data is an object or text.
+				text, isText := data.(string)
+				if !isText {
+					b, _ := json.Marshal(data)
+					text = string(b)
+				}
+				events++
+				compareScans(t, text, &textTaken, &typeTaken)
+			}
+			for _, e := range x {
+				walk(e)
+			}
+		case []any:
+			for _, e := range x {
+				walk(e)
+			}
+		}
+	}
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var v any
+		if json.Unmarshal(b, &v) == nil {
+			walk(v)
+		}
+	}
+	if events == 0 || textTaken == 0 {
+		t.Fatalf("%d recorded events, %d text deltas taken: the test covers nothing", events, textTaken)
+	}
+	t.Logf("%d recorded events from %d case files; scanTextDelta took %d, scanType %d", events, len(files), textTaken, typeTaken)
 }
