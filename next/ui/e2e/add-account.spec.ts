@@ -12,10 +12,10 @@ async function startBrowser(page: Page) {
     .locator('[data-extension="test/alpha"] [data-part="method"]')
     .getByRole("button", { name: "Test browser", exact: true })
     .click();
-  await expect(page.getByLabel("Callback URL")).toBeVisible();
+  await expect(page.getByLabel("Address the browser ended on")).toBeVisible();
 }
 
-for (const action of ["Submit Callback URL", "Cancel"]) {
+for (const action of ["Submit", "Cancel"]) {
   test("action error survives a following poll: " + action, async ({ page }) => {
     await startBrowser(page);
     await page.route("**/v0/management/logins/**", async (route) => {
@@ -25,7 +25,7 @@ for (const action of ["Submit Callback URL", "Cancel"]) {
         json: { error: { code: "invalid_request", message: "Action refused" } },
       });
     });
-    if (action === "Submit Callback URL") await page.getByLabel("Callback URL").fill("invalid-callback");
+    if (action === "Submit") await page.getByLabel("Address the browser ended on").fill("invalid-callback");
     await page.getByRole("button", { name: action, exact: true }).click();
     await expect(page.getByRole("alert")).toHaveText("Action refused");
     await page.waitForResponse((r) => r.request().method() === "GET" && /\/logins\/[^/]+$/.test(r.url()));
@@ -51,15 +51,83 @@ for (const status of [404, 503]) {
   });
 }
 
-test("leaving a pending login stops polling without cancelling it", async ({ page }) => {
+test("the paste field takes its words from the provider's prompt and names no address", async ({ page }) => {
   await startBrowser(page);
-  let requests = 0;
+  const field = page.getByLabel("Address the browser ended on");
+  await expect(field).toHaveAttribute("type", "text");
+  expect((await field.getAttribute("placeholder")) ?? "").not.toMatch(/localhost|1455|auth\/callback/);
+  await expect(page.getByText("Callback URL")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Submit", exact: true })).toBeVisible();
+});
+
+test("leaving a pending login cancels it and stops polling", async ({ page }) => {
+  await startBrowser(page);
+  const cancels: string[] = [];
+  let reads = 0;
   page.on("request", (r) => {
-    if (r.url().includes("/management/logins/")) requests++;
+    if (!r.url().includes("/management/logins/")) return;
+    if (r.method() === "DELETE") cancels.push(r.url());
+    if (r.method() === "GET") reads++;
   });
   await goTo(page, "Accounts");
+  await expect.poll(() => cancels.length).toBe(1);
   await page.waitForTimeout(4500);
-  expect(requests).toBe(0);
+  expect(reads).toBe(0);
+  expect(cancels.length).toBe(1);
+});
+
+test("closing the page cancels a pending login once", async ({ page }) => {
+  await startBrowser(page);
+  const cancels: string[] = [];
+  page.on("request", (r) => {
+    if (r.method() === "DELETE" && r.url().includes("/management/logins/")) cancels.push(r.url());
+  });
+  await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
+  await expect.poll(() => cancels.length).toBe(1);
+  await goTo(page, "Accounts");
+  await page.waitForTimeout(500);
+  expect(cancels.length).toBe(1);
+});
+
+test("a sign-in that already finished is not cancelled when the page is left", async ({ page }) => {
+  await openAddAccount(page);
+  await page
+    .locator('[data-extension="test/alpha"] [data-part="method"]')
+    .getByRole("button", { name: "Test device", exact: true })
+    .click();
+  await expect(page.getByRole("status")).toContainText("Authentication successful!", { timeout: 15_000 });
+  const cancels: string[] = [];
+  page.on("request", (r) => {
+    if (r.method() === "DELETE") cancels.push(r.url());
+  });
+  await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
+  await goTo(page, "Accounts");
+  await page.waitForTimeout(500);
+  expect(cancels).toEqual([]);
+});
+
+test("an Account ID whose sign-in still runs is said so in plain words", async ({ page }) => {
+  const started = await core.mgmt<{ login: { id: string } }>("POST", "/accounts", {
+    id: "still-running",
+    extension: "test/alpha",
+    method: "browser",
+  });
+  expect(started.status).toBeLessThan(300);
+  try {
+    await openAddAccount(page);
+    await page.getByLabel("Account ID", { exact: true }).fill("still-running");
+    await page
+      .locator('[data-extension="test/alpha"] [data-part="method"]')
+      .getByRole("button", { name: "Test browser", exact: true })
+      .click();
+    await expect(page.getByRole("alert")).toContainText(
+      "A sign-in for this Account ID is already running. Use another Account ID, or start over once it has ended.",
+    );
+    await expect(page.getByRole("alert")).not.toContainText("conflict");
+    await expect(page.getByRole("button", { name: "Start over" })).toBeVisible();
+  } finally {
+    await core.mgmt("DELETE", `/logins/${started.body.login.id}`);
+  }
 });
 
 test("double click starts one login and successful submit clears the redirect", async ({ page }) => {
@@ -75,12 +143,12 @@ test("double click starts one login and successful submit clears the redirect", 
     (element as HTMLButtonElement).click();
     (element as HTMLButtonElement).click();
   });
-  const callback = page.getByLabel("Callback URL");
+  const callback = page.getByLabel("Address the browser ended on");
   await expect(callback).toBeVisible();
   expect(starts).toBe(1);
   await page.route("**/v0/management/logins/*/input", (route) => route.fulfill({ status: 204 }));
   await callback.fill("http://localhost/callback?code=ok");
-  await page.getByRole("button", { name: "Submit Callback URL" }).click();
+  await page.getByRole("button", { name: "Submit" }).click();
   await expect(callback).toHaveValue("");
 });
 
@@ -95,7 +163,7 @@ test("invalid account IDs explain disabled methods and typed IDs survive restart
     .locator('[data-extension="test/alpha"] [data-part="method"]')
     .getByRole("button", { name: "Test browser", exact: true })
     .click();
-  await expect(page.getByLabel("Callback URL")).toBeFocused();
+  await expect(page.getByLabel("Address the browser ended on")).toBeFocused();
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await page.getByRole("button", { name: "Start over" }).click();
   await expect(id).toHaveValue("typed-account");
@@ -160,16 +228,18 @@ async function captureSignInStates(page: Page) {
     await expect(page.getByText("Generating sign-in link…", { exact: true })).toBeVisible();
     await shot("generating");
     release?.();
-    await expect(page.getByLabel("Callback URL")).toBeVisible();
+    await expect(page.getByLabel("Address the browser ended on")).toBeVisible();
     await page.unroute("**/v0/management/accounts");
     await shot("browser-waiting");
-    await page.getByLabel("Callback URL").fill("http://localhost:1455/auth/callback?code=bad&state=bad");
-    await page.getByRole("button", { name: "Submit Callback URL" }).click();
+    await page
+      .getByLabel("Address the browser ended on")
+      .fill("http://localhost:1455/auth/callback?code=bad&state=bad");
+    await page.getByRole("button", { name: "Submit" }).click();
     await expect(page.getByRole("alert")).toContainText("the test provider refused this sign-in");
     await shot("failed");
     await page.getByRole("button", { name: "Start over" }).click();
     await tile("Test browser").getByRole("button", { name: "Test browser" }).click();
-    await expect(page.getByLabel("Callback URL")).toBeVisible();
+    await expect(page.getByLabel("Address the browser ended on")).toBeVisible();
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(page.getByRole("status")).toHaveText("Sign-in cancelled.");
     await shot("cancelled");
@@ -214,14 +284,18 @@ test("browser sign-in accepts a callback and reports provider failures", async (
     .filter({ hasText: "Test browser" });
   await tile.getByRole("button", { name: "Test browser" }).click();
   await expect(page.getByRole("button", { name: "Open Link" })).toBeVisible();
-  await page.getByLabel("Callback URL").fill("http://localhost:1455/auth/callback?code=ok&state=ok");
-  await page.getByRole("button", { name: "Submit Callback URL" }).click();
+  await page
+    .getByLabel("Address the browser ended on")
+    .fill("http://localhost:1455/auth/callback?code=ok&state=ok");
+  await page.getByRole("button", { name: "Submit" }).click();
   await expect(page.getByRole("status")).toContainText("Authentication successful!");
 
   await page.getByRole("button", { name: "Log in another account" }).click();
   await tile.getByRole("button", { name: "Test browser" }).click();
-  await page.getByLabel("Callback URL").fill("http://localhost:1455/auth/callback?code=bad&state=bad");
-  await page.getByRole("button", { name: "Submit Callback URL" }).click();
+  await page
+    .getByLabel("Address the browser ended on")
+    .fill("http://localhost:1455/auth/callback?code=bad&state=bad");
+  await page.getByRole("button", { name: "Submit" }).click();
   await expect(page.getByRole("alert")).toContainText("the test provider refused this sign-in");
   await captureSignInStates(page);
 });
