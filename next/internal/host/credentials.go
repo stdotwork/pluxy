@@ -131,17 +131,20 @@ func (l *LoginCall) addForms(forms map[string]string) {
 // add records the values of input for removal; with typed set they are what a person typed, of
 // which a plain address counts by its user info only (wholeSecrets).
 func (l *LoginCall) add(input map[string]string, typed bool) {
+	// pieces.add rebuilds a set of every secret on each call: collect, then add once.
+	var found pieces
 	for k, v := range input {
 		var obj map[string]json.RawMessage
 		switch {
 		case l.secretInputs[k] && json.Unmarshal([]byte(v), &obj) == nil:
-			l.pieces = l.pieces.add(l.ext.accountPieces(protocol.Account{Settings: json.RawMessage(v)}))
+			found = append(found, l.ext.accountPieces(protocol.Account{Settings: json.RawMessage(v)})...)
 		case l.secretInputs[k]:
-			l.pieces = l.pieces.add(protocol.AccountSecrets(protocol.Account{Credential: &protocol.Credential{APIKey: v}}))
+			found = append(found, protocol.AccountSecrets(protocol.Account{Credential: &protocol.Credential{APIKey: v}})...)
 		default:
-			l.pieces = l.pieces.add(protocol.AccountSecretsWith(protocol.Account{}, urlOnly(v)))
+			found = append(found, protocol.AccountSecretsWith(protocol.Account{}, urlOnly(v))...)
 		}
 	}
+	l.pieces = l.pieces.add(found)
 	for k, v := range input {
 		if l.secrets == nil {
 			l.secrets = map[string]string{}

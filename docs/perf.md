@@ -21,7 +21,9 @@ go run ./cmd/pluxy-bench -requests 500 -profile DIR -scenarios stream-translate 
 a subset of scenarios, `-requests` (the request count of the scenarios that send a fixed number:
 all but `agents` and `throughput`; refused with `-check`), and `-proxy-url` to measure another proxy that is already running against
 the same mock. The memory and CPU figures read `/proc`, so they are Linux only; elsewhere the
-report says they were not measured.
+report says they were not measured. On Linux, `-check` fails its memory gates when the footprint
+was not sampled (`-proxy-url` without `-proxy-pid`, say), and its chunk delay gates when no chunk
+was read, rather than passing on nothing.
 
 Run it on a machine with nothing else busy. The report's header gives the commit, the CPU, and
 the load average before and after, so a reader can tell when a machine was not idle.
@@ -44,8 +46,9 @@ alternate which goes first, run after run.
   measured on one clock.
 - **Request path:** from the client starting its request to the mock having read the whole
   request body.
-- **Fidelity:** every chunk arrives, in order, with the text the mock sent. A chunk lost, merged
-  or reordered counts as a failure.
+- **Fidelity:** every chunk marker arrives, in order, and the text read back equals the text the
+  mock sent. A chunk lost, duplicated or reordered, or text changed, counts as a failure. Two
+  chunks merged into one event are not seen: the client counts markers, not events.
 - **Memory and CPU:** resident memory (RSS) of core and of each extension process, idle and
   sampled every 250 ms under load, and CPU time per request.
 - **Start time and binary sizes.**

@@ -64,8 +64,8 @@ config layouts it reads, and a key is never shown after it is added.
 
 ## The Usage page
 
-Core keeps a record of recent requests, in memory and within the limits `usage.max_events` and
-`usage.max_age_ms`. The panel's Usage page lists these requests, newest first, with filters,
+Core keeps a record of recent requests, in memory within the limits `usage.max_events` and
+`usage.max_age_ms`, and in day files on disk. The panel's Usage page lists these requests, newest first, with filters,
 paging and a CSV export, and links each request's trace ID to its request log in the Logs Viewer.
 A request pluxy sent upstream more than once is marked with its number of tries, and a row opens
 the request's detail, which lists each try in order: the account, its provider and model, and

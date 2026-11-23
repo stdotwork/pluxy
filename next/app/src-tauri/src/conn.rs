@@ -1758,7 +1758,7 @@ fn check_key(client: &Client, key: &str) -> Result<(), String> {
     match r.status {
         200 => Ok(()),
         401 => Err("core refused this key".into()),
-        404 => Err("core's management API is off: set management_key in its config".into()),
+        404 => Err("no pluxy management API answered at this address".into()),
         0 => Err(match r.error.as_ref().map(|e| e.code.as_str()) {
             Some("tls") => "TLS verification or handshake failed; check the certificate authority",
             Some("timeout") => "the connection to core timed out",
