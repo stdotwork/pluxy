@@ -4,6 +4,7 @@ package protocol
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -12,7 +13,9 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 
+	"github.com/stdotwork/pluxy/next/internal/jsonscan"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/sdk/payload"
 )
@@ -588,25 +591,115 @@ var ErrFrameTooLarge = errors.New("protocol: frame too large")
 // WriteFrame writes v as one frame. It returns ErrFrameTooLarge, having written nothing, when v
 // encodes to more than MaxFrame bytes.
 func WriteFrame(w io.Writer, v any) error {
+	switch c := v.(type) {
+	case Call:
+		if done, err := writeSplicedCall(w, &c); done {
+			return err
+		}
+	case *Call:
+		if c != nil {
+			if done, err := writeSplicedCall(w, c); done {
+				return err
+			}
+		}
+	}
 	// The header goes first in the same buffer, so the frame is encoded once and not copied.
 	var buf bytes.Buffer
 	buf.Write(make([]byte, 4))
-	enc := json.NewEncoder(&buf)
-	// No HTML escaping: it would turn each "<", ">" and "&" in the request or reply into six
-	// bytes, and the frame goes to a program, not a web page.
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(v); err != nil {
+	b, err := encodeFrame(&buf, v)
+	if err != nil {
 		return err
 	}
-	b := buf.Bytes()
-	b = b[:len(b)-1] // Encode ends the value with a newline
 	n := len(b) - 4
 	if n > MaxFrame {
 		return ErrFrameTooLarge
 	}
 	binary.BigEndian.PutUint32(b, uint32(n))
-	_, err := w.Write(b)
+	_, err = w.Write(b)
 	return err
+}
+
+// encodeFrame appends v's JSON to buf, which holds the frame's header, and returns buf's bytes.
+func encodeFrame(buf *bytes.Buffer, v any) ([]byte, error) {
+	enc := json.NewEncoder(buf)
+	// No HTML escaping: it would turn each "<", ">" and "&" in the request or reply into six
+	// bytes, and the frame goes to a program, not a web page.
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	b := buf.Bytes()
+	return b[:len(b)-1], nil // Encode ends the value with a newline
+}
+
+// spliceMin is the size of a native body from which a call frame is written around it, not through
+// the encoder: below it the encoder's own pass over the body costs less than the extra bookkeeping.
+const spliceMin = 4 << 10
+
+// maxPooled is the largest buffer writeSplicedCall keeps for the next frame.
+const maxPooled = 4 << 20
+
+// spliceMark stands in for a call's native body while the rest of the call is encoded. It is a
+// JSON string, made at random for each process, so no frame holds it by chance.
+var spliceMark = []byte(`"` + rand.Text() + `"`)
+
+var framePool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
+
+func getBuffer() *bytes.Buffer {
+	b := framePool.Get().(*bytes.Buffer)
+	b.Reset()
+	return b
+}
+
+func putBuffer(b *bytes.Buffer) {
+	if b.Cap() <= maxPooled {
+		framePool.Put(b)
+	}
+}
+
+// writeSplicedCall writes the call frame of c, a call that carries a large native body, with the
+// bytes WriteFrame's encoder writes for it: the call is encoded with a mark in place of the body,
+// and the body, valid and with its whitespace outside strings removed (what the encoder does to a
+// json.RawMessage), takes the mark's place. The encoder otherwise walks the whole body twice
+// (to check it, then to compact it) with its general scanner, byte by byte. done is false, with
+// nothing written, for a call it leaves to the encoder, among them any with an error.
+func writeSplicedCall(w io.Writer, c *Call) (done bool, err error) {
+	if c.Request == nil || c.Request.Native == nil || len(c.Request.Native.Body) < spliceMin {
+		return false, nil
+	}
+	body := c.Request.Native.Body
+	// Encode a copy of the call whose body is the mark.
+	call, req, native := *c, *c.Request, *c.Request.Native
+	native.Body = spliceMark
+	req.Native = &native
+	call.Request = &req
+	head := getBuffer()
+	defer putBuffer(head)
+	frame, err := encodeFrame(head, call)
+	if err != nil {
+		return false, nil
+	}
+	at := bytes.Index(frame, spliceMark)
+	if at < 0 || bytes.Contains(frame[at+len(spliceMark):], spliceMark) {
+		return false, nil
+	}
+	out := getBuffer()
+	defer putBuffer(out)
+	out.Grow(4 + len(frame) + len(body))
+	b := append(out.AvailableBuffer(), 0, 0, 0, 0)
+	b = append(b, frame[:at]...)
+	b, ok := jsonscan.AppendCompact(b, body)
+	if !ok {
+		return false, nil
+	}
+	b = append(b, frame[at+len(spliceMark):]...)
+	n := len(b) - 4
+	if n > MaxFrame {
+		return true, ErrFrameTooLarge
+	}
+	binary.BigEndian.PutUint32(b, uint32(n))
+	_, err = w.Write(b)
+	return true, err
 }
 
 // ReadFrame reads one frame into v. It returns io.EOF only when the stream ends cleanly between
@@ -629,6 +722,12 @@ func ReadFrame(r io.Reader, v any) error {
 			err = io.ErrUnexpectedEOF
 		}
 		return fmt.Errorf("protocol: truncated frame: %w", err)
+	}
+	if c, ok := v.(*Call); ok && c != nil && len(body) >= spliceMin {
+		// Checks the frame once and sets the call's native body as a slice of it (the frame is
+		// this call's alone), where json.Unmarshal checks it, then walks it again to decode it
+		// and copies the body. The result and the error are json.Unmarshal's.
+		return jsonscan.Unmarshal(body, c)
 	}
 	return json.Unmarshal(body, v)
 }
