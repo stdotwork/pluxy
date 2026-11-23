@@ -69,7 +69,8 @@ a group's work takes about 23 minutes.
 It applies to these jobs:
 - the `app` job in `next-app-platforms.yml`;
 - the macOS legs of the `native` and `dialogs` jobs in `next-app-platforms.yml`, except the `native`
-  job's `open` shard, whose session runs only on a GitHub-hosted runner. Their tests write
+  job's `open` shard, whose session runs only on a GitHub-hosted runner, and its `update` shard,
+  whose sessions need passwordless `sudo`, which Namespace's macOS runner no longer gives. Their tests write
   the account's own folders, so they also check the runner (`next/app/native/runner.ts`): the job
   passes the label in `PLUXY_EPHEMERAL_CI_RUNNER`, and the check accepts only a Namespace profile
   label, a runner Namespace named and Namespace's own variable. Another provider needs a change to
