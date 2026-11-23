@@ -1042,7 +1042,11 @@ general-use models up to 8, and Vertex AI non-streaming `generateContent` on tho
 to 8); other hosts, models, and formats without a candidate count drop it with a loss. Candidates
 after candidate 0 travel on `candidate` events so candidate 0 stays isolated for single-candidate
 consumers, each candidate keeps its own finish reason, usage counts once, malformed later
-candidates drop with a loss, and same-format requests and replies stay byte-identical.
+candidates drop with a loss, and same-format requests and replies stay byte-identical. A later
+candidate carries text, reasoning, tool calls and media only: its code runs, files, thought
+signatures and citations are reported as dropped losses at its path. A later candidate the reply
+ends before it finishes ends as `length` with a loss, and one that ends with Gemini's
+`MALFORMED_FUNCTION_CALL` ends as `stop` with a loss, since a client format has no word for either.
 
 **Tool shapes.** A translated request's tools get the shapes Messages takes, as today's core
 gives them: a function name with characters other than letters, digits, `_` and `-`, or longer than

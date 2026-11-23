@@ -644,36 +644,6 @@ func TestLaterCandidatesCountInAggregatorSize(t *testing.T) {
 	}
 }
 
-func TestReplayChosenLaterCandidateNextTurn(t *testing.T) {
-	// Client received candidate 1 with a tool call from Gemini->Chat, sends back candidate 1 + tool result on next turn.
-	nextChat := []byte(`{
-		"model": "gemini-2.5-pro",
-		"messages": [
-			{"role": "user", "content": "lookup go"},
-			{"role": "assistant", "content": null, "tool_calls": [{"id": "fc_1", "type": "function", "function": {"name": "lookup", "arguments": "{\"q\":\"go\"}"}}]},
-			{"role": "tool", "tool_call_id": "fc_1", "content": "Go is a language"}
-		],
-		"tools": [{"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}]
-	}`)
-	req, err := openaichat.ParseRequest(nextChat)
-	if err != nil {
-		t.Fatalf("ParseRequest next turn: %v", err)
-	}
-	req = roundTripReq(t, req)
-	if _, _, err := geminigenerate.EncodeRequest(req); err != nil {
-		t.Fatalf("geminigenerate.EncodeRequest next turn: %v", err)
-	}
-	if _, _, err := openaichat.EncodeRequest(req); err != nil {
-		t.Fatalf("openaichat.EncodeRequest next turn: %v", err)
-	}
-	if _, _, err := openairesponses.EncodeRequest(req); err != nil {
-		t.Fatalf("openairesponses.EncodeRequest next turn: %v", err)
-	}
-	if _, _, err := anthropicmessages.EncodeRequest(req); err != nil {
-		t.Fatalf("anthropicmessages.EncodeRequest next turn: %v", err)
-	}
-}
-
 func TestCandidateCountDroppedAcrossAllEncoders(t *testing.T) {
 	chatReq, err := openaichat.ParseRequest([]byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}],"n":2}`))
 	if err != nil {

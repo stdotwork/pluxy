@@ -185,14 +185,29 @@ func (b *CiteBudget) WithLoss(losses []Loss) []Loss {
 
 // ReplyLosses returns the losses of a reply that its client suffers. A client that is given the
 // upstream's body (bodyReaches; see Request.BodyReachesClient) gets everything the size limits left
-// out of the model, so it loses none of that.
+// out of the model, and everything a candidate after the first held that the model has no place
+// for, so it loses none of that.
 func ReplyLosses(losses []Loss, bodyReaches bool) []Loss {
 	if !bodyReaches {
 		return losses
 	}
 	return slices.DeleteFunc(slices.Clone(losses), func(l Loss) bool {
-		return l.Path == LossPathCitations || l.Path == LossPathFinish
+		return l.Path == LossPathCitations || l.Path == LossPathFinish || laterCandidatePath(l.Path)
 	})
+}
+
+// laterCandidatePath reports whether path is in a candidate after the first: candidates[N] or
+// choices[N] with N at least 1.
+func laterCandidatePath(path string) bool {
+	for _, p := range []string{"candidates[", "choices["} {
+		rest, ok := strings.CutPrefix(path, p)
+		if !ok {
+			continue
+		}
+		n, _, ok := strings.Cut(rest, "]")
+		return ok && n != "" && n != "0" && strings.Trim(n, "0123456789") == ""
+	}
+	return false
 }
 
 // BodyReachesClient reports whether the client of r is given the body of the upstream's reply, in

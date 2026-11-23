@@ -184,7 +184,7 @@ func parseGenerationConfig(raw json.RawMessage, o *llm.Options) (json.RawMessage
 		Temperature      *number         `json:"temperature"`
 		TopP             *number         `json:"topP"`
 		MaxOutputTokens  *int32Number    `json:"maxOutputTokens"`
-		CandidateCount   *int32Number    `json:"candidateCount"`
+		CandidateCount   json.RawMessage `json:"candidateCount"`
 		StopSequences    []string        `json:"stopSequences"`
 		ResponseMimeType string          `json:"responseMimeType"`
 		ResponseSchema   json.RawMessage `json:"responseSchema"`
@@ -200,9 +200,12 @@ func parseGenerationConfig(raw json.RawMessage, o *llm.Options) (json.RawMessage
 		o.MaxOutputTokens = &n
 	}
 	modelled := []string{"temperature", "topP", "maxOutputTokens", "stopSequences"}
-	if g.CandidateCount != nil && *g.CandidateCount >= 1 {
+	// Only a plain whole number is a count. Anything else (a string, 1.5, 2.0, a number past int32)
+	// stays in Origin as the client wrote it, so a same-format upstream gets what it always did.
+	var n int32
+	if json.Unmarshal(g.CandidateCount, &n) == nil && n >= 1 {
 		modelled = append(modelled, "candidateCount")
-		o.CandidateCount = int(*g.CandidateCount)
+		o.CandidateCount = int(n)
 	}
 	switch strings.ToLower(strings.TrimSpace(g.ResponseMimeType)) {
 	case "application/json":
