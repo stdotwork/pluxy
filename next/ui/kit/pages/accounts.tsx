@@ -1,6 +1,6 @@
 // The Accounts list; accountDetail.tsx owns one account's details.
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { type Account, leftOut, problem } from "../api";
+import { type Account, countAccounts, leftOut, problem, providerMissing, runningExtensions } from "../api";
 import { one } from "../api/path";
 import { accountIdentities, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
@@ -114,8 +114,9 @@ function coolingUntil(a: Account): number {
   );
 }
 
-export function hasProblem(a: Account, now = Date.now()): boolean {
+export function hasProblem(a: Account, now = Date.now(), running?: ReadonlySet<string>): boolean {
   return (
+    providerMissing(a, running) ||
     a.state === "reauth_required" ||
     a.check?.state === "failed" ||
     !!a.last_error ||
@@ -125,7 +126,12 @@ export function hasProblem(a: Account, now = Date.now()): boolean {
 }
 
 /** Case insensitive search: * matches any text; other characters are literal. */
-export function filterAccounts(accounts: Account[], filters: AccountFilters, now = Date.now()): Account[] {
+export function filterAccounts(
+  accounts: Account[],
+  filters: AccountFilters,
+  now = Date.now(),
+  running?: ReadonlySet<string>,
+): Account[] {
   const terms = filters.search?.trim().toLowerCase().split("*").filter(Boolean) ?? [];
   const matches = (text: string) => {
     const value = text.toLowerCase();
@@ -142,7 +148,7 @@ export function filterAccounts(accounts: Account[], filters: AccountFilters, now
     if (filters.source && a.source !== filters.source) return false;
     if (filters.status === "enabled" && a.disabled) return false;
     if (filters.status === "disabled" && !a.disabled) return false;
-    if (filters.status === "problem" && !hasProblem(a, now)) return false;
+    if (filters.status === "problem" && !hasProblem(a, now, running)) return false;
     return (
       terms.length === 0 ||
       [
@@ -189,6 +195,7 @@ export function batchTargets(selected: Account[], action: BatchAction): Account[
 export function AccountsPage() {
   const { api, host, unauthorized } = useKit();
   const accounts = useLoad(api.accounts);
+  const status = useLoad(api.status);
   const [selected, setSelected] = useState<string>();
   const [filters, setFilters] = useState<AccountFilters>({});
   const [page, setPage] = useState(1);
@@ -205,7 +212,9 @@ export function AccountsPage() {
   // Notices name accounts by ID, with their labels masked inside when privacy mode is on.
   const labels = list.flatMap(accountIdentities);
   const chosen = list.find((a) => a.id === selected);
-  const filtered = useMemo(() => filterAccounts(list, filters, now), [list, filters, now]);
+  const running = useMemo(() => runningExtensions(status.data), [status.data]);
+  const counts = useMemo(() => countAccounts(list, running), [list, running]);
+  const filtered = useMemo(() => filterAccounts(list, filters, now, running), [list, filters, now, running]);
   const total = Math.max(1, Math.ceil(filtered.length / perPage));
   const current = Math.min(page, total);
   const pageItems = filtered.slice((current - 1) * perPage, current * perPage);
@@ -313,7 +322,14 @@ export function AccountsPage() {
     accounts.reload();
   };
   const toolbarActions = [
-    { id: "refresh", label: t("refresh"), run: accounts.reload },
+    {
+      id: "refresh",
+      label: t("refresh"),
+      run: () => {
+        accounts.reload();
+        status.reload();
+      },
+    },
     { id: "upload", label: t("upload"), run: () => fileInput.current?.click() },
   ];
 
@@ -324,9 +340,9 @@ export function AccountsPage() {
         {t("meta", {
           credentials: t("credentials", { count: list.length }),
           active: t("active", {
-            count: list.filter((a) => !a.disabled && a.state === "active" && !hasProblem(a, now)).length,
+            count: counts.active,
           }),
-          problem: t("problems", { count: list.filter((a) => hasProblem(a, now)).length }),
+          problem: t("problems", { count: counts.unavailable }),
         })}
       </p>
       {accounts.error && <Notice tone="danger">{p.text(accounts.error, labels)}</Notice>}
@@ -499,7 +515,7 @@ export function AccountsPage() {
                     ),
                   },
                   { label: t("extension"), value: (a) => a.extension ?? "", mono: true },
-                  { label: t("state"), value: (a) => <AccountState a={a} /> },
+                  { label: t("state"), value: (a) => <AccountState a={a} running={running} /> },
                   { label: t("label"), value: (a) => p.id(a.label) ?? "" },
                   { label: t("credential"), value: (a) => a.kind ?? "" },
                   {
@@ -538,6 +554,7 @@ export function AccountsPage() {
             chosen && (
               <AccountDetail
                 account={chosen}
+                running={running}
                 onClose={() => setSelected(undefined)}
                 onChanged={accounts.reload}
               />
