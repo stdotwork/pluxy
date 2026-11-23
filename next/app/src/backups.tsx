@@ -6,8 +6,8 @@
 // the names of the settings a restore would add, change or remove, never a value. Each write asks
 // in the tool's native confirmation. Labels follow the old app's backup dialog.
 
-import { invoke } from "@tauri-apps/api/core";
 import { useRef, useState } from "preact/hooks";
+import type { Reply } from "../../ui/kit/host";
 import { strings } from "../../ui/kit/strings";
 import {
   Button,
@@ -21,6 +21,7 @@ import {
   useLoad,
 } from "../../ui/kit/ui";
 import type { Selection } from "./environment";
+import { reply } from "./host";
 
 const t = strings("backups", {
   title: "Backup and restore",
@@ -47,17 +48,6 @@ const t = strings("backups", {
   deleteHint: "This deletes only this backup version. Current configuration and other backups are unchanged.",
   id: "ID",
 });
-
-export type Reply<T> = { status: number; body?: T; error?: { code: string; message: string } };
-
-/** A window command's answer as the kit's loaders take it. */
-export async function reply<T>(cmd: string, args?: Record<string, unknown>): Promise<Reply<T>> {
-  try {
-    return { status: 200, body: await invoke<T>(cmd, args) };
-  } catch (e) {
-    return { status: 400, error: { code: "refused", message: String(e) } };
-  }
-}
 
 interface Version {
   id: string;

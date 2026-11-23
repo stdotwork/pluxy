@@ -1,21 +1,7 @@
-// The Codex page's form logic: the keys it offers from the vault and the form it fills from the
-// tool's read-back of config.toml and the model catalog.
+// The Codex page's form logic: the form it fills from the tool's read-back of config.toml and the
+// model catalog.
 
 export const PACKAGE = "pluxy/codex-setup";
-
-/** A vault secret as `vault_secrets` lists it: never its value. */
-export interface Secret {
-  id: string;
-  label: string;
-  /** Set for a captured client key: the package it may be given to. */
-  client_key?: { client: string };
-}
-
-/** The keys the page offers from `vault_secrets`'s answer (`{secrets: [...]}`): plain secrets, and
- * client keys bound to this package; a client key bound to another package would be refused. */
-export function keysOf(body: { secrets?: Secret[] } | undefined): Secret[] {
-  return (body?.secrets ?? []).filter((s) => !s.client_key || s.client_key.client === PACKAGE);
-}
 
 export interface Model {
   slug: string;

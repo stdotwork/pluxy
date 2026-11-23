@@ -22,26 +22,25 @@ import {
   useAction,
   useLoad,
 } from "../../ui/kit/ui";
-import { Backups, reply } from "./backups";
+import { Backups } from "./backups";
 import {
   CLIENT,
   type Form,
   fresh,
   fromFile,
-  keysOf,
   MODELS,
   PACKAGE,
   type ReadBack,
   ROLES,
   type Role,
   ready,
-  type Secret,
   settingsNote,
   toolUnavailable,
   WINDOW_1M,
   WINDOW_DEFAULT,
 } from "./claudeCodeForm";
 import { folderWait, NeedsKey, NoKeys, toolMissing, withDeviceLink } from "./clientHelp";
+import { keysOf, type Secret, Text, usePreview } from "./clientPage";
 import type { AgentPage } from "./easyMode";
 import { historyKey, inHome } from "./environment";
 import {
@@ -52,7 +51,7 @@ import {
   plainPath,
   useEnvironment,
 } from "./environmentBlock";
-import { connectionGet } from "./host";
+import { connectionGet, reply } from "./host";
 import { keptTerminal, launcherProblem, useDeviceChanged } from "./startCli";
 
 const t = strings("claudeCode", {
@@ -138,31 +137,6 @@ interface Preview {
   targets: { selected: string; target: string; link: string | null; [k: string]: unknown }[];
   applied: boolean;
   settings: ReadBack;
-}
-
-function Text(props: {
-  label: string;
-  hint?: string;
-  value: string;
-  onInput: (v: string) => void;
-  list?: string;
-}) {
-  const id = useId();
-  return (
-    <label class="field" data-part="field" for={id}>
-      <span class="label">{props.label}</span>
-      <input
-        id={id}
-        type="text"
-        autocomplete="off"
-        spellcheck={false}
-        list={props.list}
-        value={props.value}
-        onInput={(e) => props.onInput(e.currentTarget.value)}
-      />
-      {props.hint && <small class="hint">{props.hint}</small>}
-    </label>
-  );
 }
 
 function Num(props: {
@@ -291,19 +265,15 @@ export function ClaudeCodePage() {
   const [file, setFile] = useState("");
   const [root, setRoot] = useState("");
   const [inRoot, setInRoot] = useState("settings.json");
-  const [preview, setPreview] = useState<Preview>();
   const [form, setForm] = useState<Form>(fresh);
   const [secret, setSecret] = useState("");
   const [core, setCore] = useState<string>();
   // Another environment is another file: its preview and form start over.
-  const env = useEnvironment(PACKAGE, () => {
-    setPreview(undefined);
-    setForm(fresh());
-  });
+  const env = useEnvironment(PACKAGE, () => setForm(fresh()));
   const tool = toolIn(env);
   const distro = env.selection?.wsl.distro;
   const secrets = useLoad(() => reply<{ secrets: Secret[] }>("vault_secrets"));
-  const keys = keysOf(secrets.data);
+  const keys = keysOf(PACKAGE, secrets.data);
   const listId = useId();
   useEffect(() => {
     connectionGet().then(
@@ -317,25 +287,19 @@ export function ClaudeCodePage() {
       : where === "root"
         ? { targets: [{ root: root.trim(), path: inRoot.trim() }] }
         : {};
+  // A write acts on the file the last preview pinned (the tool refuses it if the file changed
+  // since); the preview belongs to the file and environment it was read for, so a write never pins
+  // a file unread.
+  const selected = JSON.stringify([env.selection, selection()]);
+  const { preview, accept } = usePreview<Preview>(selected);
   const read = useAction(() => {});
   const load = () =>
     read.run(async () => {
       const r = await tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) });
-      if (r.body) {
-        setPreview(r.body);
-        setForm(fromFile(r.body.settings));
-      }
+      if (r.body && accept(selected, r.body)) setForm(fromFile(r.body.settings));
       return r;
     });
   const write = useAction(load);
-  // A write acts on the file the last preview pinned (the tool refuses it if the file changed
-  // since); choosing another file drops that preview, so a write never pins a file unread.
-  const reselect =
-    <T,>(f: (v: T) => void) =>
-    (v: T) => {
-      f(v);
-      setPreview(undefined);
-    };
   const set = (patch: Partial<Form>) => setForm((f) => ({ ...f, ...patch }));
   const setOneM = (role: Role, on: boolean) =>
     setForm((f) => {
@@ -404,27 +368,21 @@ export function ClaudeCodePage() {
             { value: "file", label: t("fileSelected") },
             { value: "root", label: t("fileInRoot") },
           ]}
-          onChange={reselect(setWhere)}
+          onChange={setWhere}
         />
         {where === "file" && (
           <PathText
             label={t("filePath")}
             hint={t("filePathHint")}
             value={file}
-            onInput={reselect(setFile)}
+            onInput={setFile}
             distro={distro}
           />
         )}
         {where === "root" && (
           <>
-            <PathText
-              label={t("root")}
-              hint={t("rootHint")}
-              value={root}
-              onInput={reselect(setRoot)}
-              distro={distro}
-            />
-            <Text label={t("inRoot")} value={inRoot} onInput={reselect(setInRoot)} />
+            <PathText label={t("root")} hint={t("rootHint")} value={root} onInput={setRoot} distro={distro} />
+            <Text label={t("inRoot")} value={inRoot} onInput={setInRoot} />
           </>
         )}
         {read.error && !toolMissing(read.error, PACKAGE) && <Notice tone="danger">{read.error}</Notice>}

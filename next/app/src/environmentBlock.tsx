@@ -9,7 +9,6 @@
 import { useEffect, useId, useRef, useState } from "preact/hooks";
 import { strings } from "../../ui/kit/strings";
 import { Button, Card, Choices, Notice, useAction, useKit, useLoad } from "../../ui/kit/ui";
-import { reply } from "./backups";
 import {
   type Distro,
   type EnvRecord,
@@ -26,6 +25,7 @@ import {
   WSL_PACKAGE,
   type WslUser,
 } from "./environment";
+import { reply } from "./host";
 
 const t = strings("environment", {
   title: "Environment / configuration directory",

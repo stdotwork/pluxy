@@ -21,12 +21,12 @@ import {
   useKit,
   useLoad,
 } from "../../ui/kit/ui";
-import { Backups, reply } from "./backups";
-import { folderWait, NeedsKey, NoKeys, toolMissing, withDeviceLink } from "./clientHelp";
+import { Backups } from "./backups";
+import { NeedsKey, NoKeys, toolMissing, withDeviceLink } from "./clientHelp";
+import { keysOf, type Secret, StartCli, Text, usePreview } from "./clientPage";
 import type { AgentPage } from "./easyMode";
-import { connectionGet } from "./host";
+import { connectionGet, reply } from "./host";
 import { selectionFor, type Where } from "./piForm";
-import { keptTerminal, launcherProblem, useDeviceChanged } from "./startCli";
 
 const t = strings("pi", {
   title: "Pi",
@@ -152,100 +152,18 @@ const refused = {
   error: { code: "refused", message: "the configuration files could not be read" },
 };
 
-function Text(props: {
-  label: string;
-  hint?: string;
-  value: string;
-  onInput: (v: string) => void;
-  list?: string;
-}) {
-  const id = useId();
-  return (
-    <label class="field" data-part="field" for={id}>
-      <span class="label">{props.label}</span>
-      <input
-        id={id}
-        type="text"
-        autocomplete="off"
-        spellcheck={false}
-        list={props.list}
-        value={props.value}
-        onInput={(e) => props.onInput(e.currentTarget.value)}
-      />
-      {props.hint && <small class="hint">{props.hint}</small>}
-    </label>
-  );
-}
-
-function StartCli(props: { available: boolean }) {
-  const [cwd, setCwd] = useState("");
-  const [override, setOverride] = useState("");
-  const [terminal, setTerminal] = useState("automatic");
-  const state = useLoad(() => reply<{ history: Record<string, string[]> }>("launcher_state"));
-  const terminals = useLoad(() =>
-    reply<{ terminals: { id: string; label: string }[] }>("launcher_terminals"),
-  );
-  useDeviceChanged(terminals.reload);
-  const action = useAction(state.reload);
-  const recent = state.data?.history[t("title")] ?? [];
-  const shownTerminal = keptTerminal(terminal, terminals.data?.terminals);
-  const start = () =>
-    action.run(async () => {
-      const recipe = await tool<Record<string, unknown>>("recipe", {});
-      if (!recipe.body) return recipe;
-      return reply("launcher_launch", {
-        launch: {
-          ...recipe.body,
-          cwd: cwd.trim(),
-          terminal: shownTerminal,
-          ...(override.trim() ? { override: override.trim() } : {}),
-        },
-      });
-    });
-  return (
-    <Card title={t("start")}>
-      <Text label={t("cwd")} hint={folderWait(cwd)} value={cwd} onInput={setCwd} />
-      {recent.length > 0 && (
-        <Choices
-          label={t("recent")}
-          value={recent.includes(cwd) ? cwd : undefined}
-          choices={recent.map((r) => ({ value: r, label: r }))}
-          onChange={setCwd}
-        />
-      )}
-      <Text label={t("override")} hint={t("overrideHint")} value={override} onInput={setOverride} />
-      {terminals.data && (
-        <Choices
-          label={t("terminal")}
-          value={shownTerminal}
-          choices={terminals.data.terminals.map((x) => ({ value: x.id, label: x.label }))}
-          onChange={setTerminal}
-        />
-      )}
-      {terminals.error && <Notice tone="warn">{launcherProblem(terminals.error)}</Notice>}
-      {action.error && <Notice tone="danger">{launcherProblem(action.error)}</Notice>}
-      <Button variant="primary" onClick={start} disabled={action.busy || !props.available || !cwd.trim()}>
-        {t("launch")}
-      </Button>
-    </Card>
-  );
-}
-
 export function PiPage() {
   const { api } = useKit();
   const [where, setWhere] = useState<Where>("default");
   const [folder, setFolder] = useState("");
-  const [preview, setPreview] = useState<Preview>();
   const [model, setModel] = useState("");
   const [served, setServed] = useState<string[]>([]);
   const [secret, setSecret] = useState("");
   const [core, setCore] = useState<string>();
   const [notice, setNotice] = useState<string>();
-  const secrets = useLoad(() =>
-    reply<{ secrets: { id: string; label: string; client_key?: { client: string } }[] }>("vault_secrets"),
-  );
+  const secrets = useLoad(() => reply<{ secrets: Secret[] }>("vault_secrets"));
   // Keys the person entered, and client keys made for this tool; never another tool's client key.
-  const keys = (secrets.data?.secrets ?? []).filter((s) => !s.client_key || s.client_key.client === PACKAGE);
+  const keys = keysOf(PACKAGE, secrets.data);
   const listId = useId();
   useEffect(() => {
     connectionGet().then(
@@ -254,12 +172,13 @@ export function PiPage() {
     );
   }, []);
   const selection = () => selectionFor(where, folder);
+  const selected = JSON.stringify(selection());
+  const { preview, accept } = usePreview<Preview>(selected);
   const read = useAction(() => {});
   const load = () =>
     read.run(async () => {
       const r = await tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) });
-      if (r.body) {
-        setPreview(r.body);
+      if (r.body && accept(selected, r.body)) {
         setModel(r.body.pi.model ?? "");
       }
       return r;
@@ -345,20 +264,14 @@ export function PiPage() {
             { value: "folder", label: t("fileFolder") },
             { value: "links", label: t("fileLinks") },
           ]}
-          onChange={(v: Where) => {
-            setWhere(v);
-            setPreview(undefined);
-          }}
+          onChange={setWhere}
         />
         {where !== "default" && (
           <Text
             label={t("folder")}
             hint={where === "links" ? t("linksHint") : t("folderHint")}
             value={folder}
-            onInput={(v) => {
-              setFolder(v);
-              setPreview(undefined);
-            }}
+            onInput={setFolder}
           />
         )}
         {read.error && !toolMissing(read.error, PACKAGE) && <Notice tone="danger">{read.error}</Notice>}
@@ -506,7 +419,12 @@ export function PiPage() {
           <Backups pkg={PACKAGE} pins={async () => preview.targets} disabled={busy} onChange={load} />
         </>
       )}
-      <StartCli available={!unavailable} />
+      <StartCli
+        available={!unavailable}
+        client={t("title")}
+        recipe={() => tool<Record<string, unknown>>("recipe", {})}
+        t={t}
+      />
     </div>
   );
 }
