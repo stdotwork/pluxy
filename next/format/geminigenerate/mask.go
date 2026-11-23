@@ -27,20 +27,27 @@ const Redacted = protocol.Redacted
 type namePattern struct {
 	re *regexp.Regexp
 	ok func(name string) bool
+	// legacy, when set, is also applied to the name: what it matches at the start of the name is
+	// learned as well, as the narrower name pattern those forms used to be did.
+	legacy *regexp.Regexp
 }
 
-// nameToken is a name: words joined by dots, behind a domain and a colon when the project is
+// legacyName is the name the patterns of projects/, project: and project= matched before they
+// took a domain, a leading dot or two dots in a row.
+var legacyName = regexp.MustCompile(`^[\w%-]+(?:\.[\w%-]+)*`)
+
+// nameToken is a name: words joined by dots, or a domain, a colon and one word when the project is
 // scoped to a domain ("example.com:acme-prod-4821"). looseNameToken is the same for a query
 // parameter, which also takes a dot at the start or two dots in a row.
 const (
-	nameToken      = `((?:[\w%-]+(?:\.[\w%-]+)*\.[\w%-]+:)?[\w%-]+(?:\.[\w%-]+)*)`
-	looseNameToken = `((?:\.*[\w%-]+(?:\.+[\w%-]+)*\.+[\w%-]+:)?\.*[\w%-]+(?:\.+[\w%-]+)*)`
+	nameToken      = `([\w%-]+(?:\.[\w%-]+)*\.[\w%-]+:[\w%-]+|[\w%-]+(?:\.[\w%-]+)*)`
+	looseNameToken = `(\.*[\w%-]+(?:\.+[\w%-]+)*\.+[\w%-]+:\.*[\w%-]+|\.*[\w%-]+(?:\.+[\w%-]+)*)`
 )
 
 var namePatterns = []namePattern{
-	{re: regexp.MustCompile(`(?i)\b(?:projects|organizations|folders|billingAccounts)/` + nameToken)},
-	{re: regexp.MustCompile(`(?i)\b(?:project(?:_?id|_?number)?|organization|folder|billingAccount):` + nameToken)},
-	{re: regexp.MustCompile(`(?i)\bproject(?:_?id|_?number)?=` + looseNameToken)},
+	{re: regexp.MustCompile(`(?i)\b(?:projects|organizations|folders|billingAccounts)/` + nameToken), legacy: legacyName},
+	{re: regexp.MustCompile(`(?i)\b(?:project(?:_?id|_?number)?|organization|folder|billingAccount):` + nameToken), legacy: legacyName},
+	{re: regexp.MustCompile(`(?i)\bproject(?:_?id|_?number)?=` + looseNameToken), legacy: legacyName},
 	{re: regexp.MustCompile(`(?i)\bproject (?:number |id )?(\d+)\b`)},
 	{re: regexp.MustCompile("(?i)\\bproject ['\"`]([^'\"`\\s]+)['\"`]")},
 	{re: regexp.MustCompile(`(?i)\b(?:user|serviceAccount|group):([A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)`)},
@@ -67,8 +74,14 @@ func looksLikeProjectID(id string) bool {
 // serviceAccountProject finds the project in a service account's address.
 var serviceAccountProject = regexp.MustCompile(`@([a-z][a-z0-9-]*)\.iam\.gserviceaccount\.com$`)
 
-// domainScoped is a project scoped to a domain: "example.com:acme-prod-4821".
-var domainScoped = regexp.MustCompile(`^((?:[\w%-]+\.)+[\w%-]+):([\w%-]+(?:\.[\w%-]+)*)$`)
+// domainScoped is a project scoped to a domain: "example.com:acme-prod-4821". Its second half is
+// taken for a project's own ID only when it can be one (6 to 30 lowercase letters, digits and
+// hyphens, starting with a letter), so a method ("acme.prod:setIamPolicy") or a port
+// ("host.example.com:443") is not learned as a name.
+var (
+	domainScoped = regexp.MustCompile(`^((?:[\w%-]+\.)+[\w%-]+):([\w%-]+)$`)
+	projectID    = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
+)
 
 // MaskProject returns e without the Google project or account its message and its raw body name.
 // known are identifiers the caller knows belong to the upstream account (its project, a service
@@ -441,9 +454,9 @@ func (d *names) addProject(v string) {
 	}
 	d.add(v)
 	// A project scoped to a domain ("example.com:acme-prod-4821") is masked whole, and its two
-	// halves wherever else the body names them.
+	// halves wherever else the body names them, when the second can be a project ID.
 	if strings.IndexByte(v, ':') > 0 {
-		if m := domainScoped.FindStringSubmatch(v); m != nil {
+		if m := domainScoped.FindStringSubmatch(v); m != nil && projectID.MatchString(m[2]) {
 			d.add(m[1])
 			d.add(m[2])
 		}
@@ -456,6 +469,11 @@ func (d *names) learnString(s string) {
 		for _, m := range p.re.FindAllStringSubmatch(s, -1) {
 			if p.ok == nil || p.ok(m[1]) {
 				d.addProject(m[1])
+				if p.legacy != nil {
+					if l := p.legacy.FindString(m[1]); l != "" && l != m[1] {
+						d.addProject(l)
+					}
+				}
 			}
 		}
 	}

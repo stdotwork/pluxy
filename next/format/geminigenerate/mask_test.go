@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"slices"
 	"strings"
 	"testing"
 
@@ -559,64 +560,131 @@ func TestMaskWorkDoesNotGrowWithNames(t *testing.T) {
 	}
 }
 
-// maskOneByOne is the plain way to replace names: each in turn, longest first, in the text the
-// ones before it left. The matcher must give the same text.
+// maskOneByOne is the plain way to replace names: every name in turn, longest first, in the text
+// the ones before it left. The matcher must give the same text without trying them all.
 func maskOneByOne(s string, list []string) string {
 	for _, id := range list {
-		var b strings.Builder
-		i := 0
-		for {
-			k := strings.Index(s[i:], id)
-			if k < 0 {
-				break
-			}
-			k += i
-			end := k + len(id)
-			if standalone(s, nil, k, end) {
-				b.WriteString(s[i:k])
-				b.WriteString(Redacted)
-				i = end
-			} else {
-				b.WriteString(s[i : k+1])
-				i = k + 1
-			}
-		}
-		b.WriteString(s[i:])
-		s = b.String()
+		s = replaceToken(s, id)
 	}
 	return s
 }
 
 func TestNameMatcherMatchesNameByName(t *testing.T) {
 	r := rand.New(rand.NewSource(7))
-	const alphabet = "ab1-_. /:"
+	// Pieces of the marker's own text are in the mix, so names that hold part of a marker, or all
+	// of "redacted", are met by the replacements.
+	pieces := []string{"a", "b", "1", "-", "_", ".", " ", "/", ":", "[", "]", "redacted", "red", "acted", "d]", "[r", "]/"}
 	word := func(max int) string {
-		n := 1 + r.Intn(max)
-		b := make([]byte, n)
-		for i := range b {
-			b[i] = alphabet[r.Intn(len(alphabet))]
+		var b strings.Builder
+		for n := 1 + r.Intn(max); n > 0; n-- {
+			b.WriteString(pieces[r.Intn(len(pieces))])
 		}
-		return string(b)
+		return b.String()
 	}
-	for i := 0; i < 20000; i++ {
+	checked := 0
+	for i := 0; i < 40000; i++ {
 		d := newNames(nil)
 		for n := 1 + r.Intn(6); n > 0; n-- {
-			d.add(word(4))
+			d.add(word(3))
 		}
 		if len(d.list) == 0 {
 			continue
 		}
-		s := word(24)
-		sortedList := append([]string(nil), d.list...)
+		s := word(14)
+		sorted := append([]string(nil), d.list...)
 		// the order maskString uses: longest first, then as learned
-		for a := 1; a < len(sortedList); a++ {
-			for b := a; b > 0 && len(sortedList[b]) > len(sortedList[b-1]); b-- {
-				sortedList[b], sortedList[b-1] = sortedList[b-1], sortedList[b]
-			}
-		}
-		want := maskOneByOne(s, sortedList)
+		slices.SortStableFunc(sorted, func(a, b string) int { return len(b) - len(a) })
+		want := maskOneByOne(s, sorted)
 		if got := d.maskString(s); got != want {
-			t.Fatalf("names %q in %q\n got  %q\n want %q", sortedList, s, got, want)
+			t.Fatalf("names %q in %q\n got  %q\n want %q", sorted, s, got, want)
 		}
+		if want != s {
+			checked++
+		}
+	}
+	if checked < 1000 {
+		t.Errorf("only %d cases replaced anything; the generator is too thin to mean anything", checked)
+	}
+}
+
+// A name made of a marker's text and what stands next to it is still found: a name learned from
+// a field can be a name only once another name has been replaced.
+func TestMaskNameAcrossMarker(t *testing.T) {
+	raw := `{"error":{"code":403,"message":"acme-prod-4821-long-name-x/topsecret","details":[` +
+		`{"@type":"type.googleapis.com/google.rpc.ResourceInfo","owner":"acme-prod-4821-long-name-x"},` +
+		`{"@type":"type.googleapis.com/google.rpc.ResourceInfo","owner":"redacted]/topsecret"}]}}`
+	got := string(MaskBody([]byte(raw)))
+	if strings.Contains(got, "topsecret") {
+		t.Errorf("the tail of a name that spans a marker is shown: %s", got)
+	}
+}
+
+// Names nested in one another (a, aa, aaa, ... or a, a/a, a/a/a, ...) and a long string of them
+// must not make the search cost the string's length times the names that end at each place.
+func TestMaskWorkWithNestedNames(t *testing.T) {
+	const names = 200
+	for _, tc := range []struct {
+		name, sep string
+	}{{"adjacent", ""}, {"separated", "/"}} {
+		var b strings.Builder
+		b.WriteString(`{"error":{"code":403,"message":"x","details":[`)
+		if tc.sep == "" {
+			// learned from the text pattern, one name for each length
+			for i := 1; i <= names; i++ {
+				b.WriteString(`"projects/` + strings.Repeat("a", i) + `",`)
+			}
+			b.WriteString(`"` + strings.Repeat("a", 20000) + `"]}}`)
+		} else {
+			// learned from QuotaFailure subjects, which are masked whole and learned as names
+			b.WriteString(`{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[`)
+			for i := 1; i <= names; i++ {
+				if i > 1 {
+					b.WriteByte(',')
+				}
+				b.WriteString(`{"subject":"` + strings.Repeat("a/", i-1) + `a"}`)
+			}
+			b.WriteString(`]},"` + strings.Repeat("a/", 10000) + `a"]}}`)
+		}
+		body := []byte(b.String())
+		if !json.Valid(body) {
+			t.Fatalf("%s: the test body is not valid JSON", tc.name)
+		}
+		w := countWork(func() { MaskBody(body) })
+		// every name is found once in the long string and tried there once; nothing more
+		if bound := 8 * len(body); w > bound {
+			t.Errorf("%s: work %d over %d bytes of body and %d names, want at most %d", tc.name, w, len(body), names, bound)
+		}
+	}
+}
+
+// A malformed project= value is masked whole, and the name the narrower pattern took from it is
+// still learned, so it is masked where the body repeats it.
+func TestMaskMalformedProjectValueKeepsItsName(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"?project=zqbeta..prod-4821&x=1 and zqbeta again", "?project=[redacted]&x=1 and [redacted] again"},
+		{"?project=example.com:.zqbeta&x=1 and example.com again", "?project=[redacted]&x=1 and [redacted] again"},
+	} {
+		if got := string(MaskBody([]byte(tc.in))); got != tc.want {
+			t.Errorf("MaskBody(%q)\n got  %q\n want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// The second half of a name with a dot before its colon is learned only when it can be a
+// project ID; a method or a port is not, though the whole name is masked where it stands.
+func TestMaskDomainScopedHalvesNeedAProjectID(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"POST projects/acme.prod:setIamPolicy failed; setIamPolicy denied", "POST projects/[redacted] failed; setIamPolicy denied"},
+		{"projects/acme.prod:setIamPolicy and acme.prod", "projects/[redacted] and [redacted]"},
+		{"projects/host.example.com:443 and retry in 443 s", "projects/[redacted] and retry in 443 s"},
+	} {
+		if got := string(MaskBody([]byte(tc.in))); got != tc.want {
+			t.Errorf("MaskBody(%q)\n got  %q\n want %q", tc.in, got, tc.want)
+		}
+	}
+	raw := `{"error":{"message":"retry in 443 s","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","metadata":{"containerInfo":"host.example.com:443"}}]}}`
+	want := `{"error":{"message":"retry in 443 s","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","metadata":{"containerInfo":"[redacted]"}}]}}`
+	if got := string(MaskBody([]byte(raw))); got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
 	}
 }
