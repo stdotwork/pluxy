@@ -65,8 +65,10 @@ var serviceAccountProject = regexp.MustCompile(`@([a-z][a-z0-9-]*)\.iam\.gservic
 // known are identifiers the caller knows belong to the upstream account (its project, a service
 // account's project and address); the structured fields of Google's error details and the text
 // patterns above add the rest. A non-empty QuotaFailure violation's subject and ResourceInfo's
-// owner, found by the detail's @type, go whole in their own field, whatever they say; one that
-// looks like an identifier (contains :, / or @) or a project ID is also masked where another
+// owner, found by the detail's @type, go whole in their own field, whatever they say, while the
+// detail is fewer than maxFieldDepth levels of objects and arrays down in the body; below that
+// only the text patterns and the names learned from elsewhere mask what those fields hold. One
+// that looks like an identifier (contains :, / or @) or a project ID is also masked where another
 // string repeats it, while a plain word (such as "global") stays elsewhere. A PreconditionFailure's
 // subject, and the quota metric, ID, value and dimensions, stay. Each collected name is replaced as
 // a whole token in the message and in every string value of the raw body (an object, or the array a
@@ -397,6 +399,8 @@ func (e errorShape) ok() bool {
 type names struct {
 	list []string
 	seen map[string]bool
+	// matcher finds list in a string; it is built on first use, with the list longest name first.
+	matcher *nameMatcher
 }
 
 func newNames(known []string) *names {
@@ -451,8 +455,10 @@ func (d *names) learnJSON(raw []byte) map[int]bool {
 }
 
 // maxFieldDepth caps how deeply learnFields descends into nested JSON objects and arrays. Real
-// Google error payloads are well below this, and the iterative pattern pass in mapStrings still
-// covers every string at any depth.
+// Google error payloads are well below this. Below it a detail's structured fields teach and
+// mask nothing: the pattern pass in mapStrings still looks at every string at any depth, but it
+// masks only what a text pattern or an already learned name matches, so a bare project ID in a
+// field down there stays unless the body names it in a pattern form elsewhere.
 const maxFieldDepth = 64
 
 // projectKeys are the members of Google's error details that hold a project, by their names
@@ -696,16 +702,21 @@ func normalKey(k string) string {
 	return strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(k))
 }
 
-// maskString replaces the names in s: the pattern forms, then each known name as a whole token.
+// maskString replaces the names in s: the pattern forms, then each known name as a whole token,
+// the longest name first, then masks a little more (widen).
 func (d *names) maskString(s string) string {
+	out := s
 	for _, p := range namePatterns {
-		s = replaceGroup(s, p)
+		out = replaceGroup(out, p)
 	}
-	sort.SliceStable(d.list, func(i, j int) bool { return len(d.list[i]) > len(d.list[j]) })
-	for _, id := range d.list {
-		s = replaceToken(s, id)
+	if len(d.list) > 0 {
+		if d.matcher == nil || len(d.matcher.list) != len(d.list) {
+			sort.SliceStable(d.list, func(i, j int) bool { return len(d.list[i]) > len(d.list[j]) })
+			d.matcher = newNameMatcher(d.list)
+		}
+		out = d.matcher.mask(out)
 	}
-	return s
+	return widen(s, out)
 }
 
 func (d *names) maskJSON(raw []byte, whole map[int]bool) []byte {
@@ -737,40 +748,83 @@ func replaceGroup(s string, p namePattern) string {
 	return b.String()
 }
 
-func isAlnum(c byte) bool {
-	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+// The patterns above take a dotted name up to a colon, and a project= value only if it starts with
+// a word. A project scoped to a domain ("example.com:acme-prod-4821") therefore keeps its ID after
+// the marker, and a project= value that starts with a dot, or has two dots in a row, keeps what the
+// patterns did not take. widen masks those too.
+var (
+	// A pattern prefix, a dotted domain and a colon, then the project's ID.
+	domainScopedID = regexp.MustCompile(`(?i)(?:\b(?:projects|organizations|folders|billingAccounts)/|` +
+		`\b(?:project(?:_?id|_?number)?|organization|folder|billingAccount):|\bproject(?:_?id|_?number)?=)` +
+		`(?:[\w%-]+\.)+[\w%-]+:([\w%-]+)`)
+	// What the patterns leave of that: the marker for the domain, a colon and the ID.
+	markedID = regexp.MustCompile(regexp.QuoteMeta(Redacted) + `:([\w%-]+)`)
+	// A project= value that starts with dots (group 1), or goes on with dots after the part the
+	// patterns took (group 2).
+	dottedValue = regexp.MustCompile(`(?i)\bproject(?:_?id|_?number)?=(?:(\.+[\w%-]+(?:\.+[\w%-]+)*(?::[\w%-]+)?)|` +
+		regexp.QuoteMeta(Redacted) + `(\.+[\w%-]+(?:\.+[\w%-]+)*))`)
+)
+
+// widen takes the text s and what the patterns and names made of it, out, and masks more of it:
+//   - the ID of a project scoped to a domain: where s has a pattern prefix, a dotted domain, a
+//     colon and an ID, each marker, colon and that ID in out become one marker. A method after a
+//     project with no dot in its name ("projects/foo:predict") is not one, and stays.
+//   - what a project= value that starts with a dot or has two dots in a row has left in out.
+//
+// widen only replaces text with the marker or takes text out, and only the text it names, so it
+// shows nothing that out hides: everything out masks stays masked. It makes one pass over each of
+// s and out. A half of a domain-scoped name that the body repeats elsewhere is not masked there
+// unless the names already mask it.
+func widen(s, out string) string {
+	if strings.IndexByte(s, ':') >= 0 {
+		var ids map[string]bool
+		for _, m := range domainScopedID.FindAllStringSubmatch(s, -1) {
+			if ids == nil {
+				ids = map[string]bool{}
+			}
+			ids[m[1]] = true
+		}
+		if ids != nil {
+			out = replaceMarked(out, ids)
+		}
+	}
+	if strings.IndexByte(out, '=') >= 0 && strings.IndexByte(out, '.') >= 0 {
+		if idx := dottedValue.FindAllStringSubmatchIndex(out, -1); len(idx) > 0 {
+			var b strings.Builder
+			last := 0
+			for _, m := range idx {
+				if m[2] >= 0 {
+					b.WriteString(out[last:m[2]])
+					b.WriteString(Redacted)
+					last = m[3]
+				} else {
+					b.WriteString(out[last:m[4]])
+					last = m[5]
+				}
+			}
+			b.WriteString(out[last:])
+			out = b.String()
+		}
+	}
+	return out
 }
 
-func isTokenByte(c byte) bool { return isAlnum(c) || c == '_' || c == '-' }
-
-// replaceToken replaces id in s where it stands alone: not next to a letter, digit, underscore
-// or hyphen, nor to a dot that has a letter or digit beyond it (so 12 leaves 123, 12.5 and a
-// model name such as gemini-2.5-flash alone).
-func replaceToken(s, id string) string {
-	if id == "" || !strings.Contains(s, id) {
-		return s
-	}
+// replaceMarked turns each marker, colon and ID of ids in out into the marker.
+func replaceMarked(out string, ids map[string]bool) string {
+	idx := markedID.FindAllStringSubmatchIndex(out, -1)
 	var b strings.Builder
-	i := 0
-	for {
-		k := strings.Index(s[i:], id)
-		if k < 0 {
-			break
+	last := 0
+	for _, m := range idx {
+		if !ids[out[m[2]:m[3]]] {
+			continue
 		}
-		k += i
-		end := k + len(id)
-		before := k == 0 || !isTokenByte(s[k-1]) && !(s[k-1] == '.' && k >= 2 && isAlnum(s[k-2]))
-		after := end == len(s) || !isTokenByte(s[end]) && !(s[end] == '.' && end+1 < len(s) && isAlnum(s[end+1]))
-		if before && after {
-			b.WriteString(s[i:k])
-			b.WriteString(Redacted)
-			i = end
-		} else {
-			b.WriteString(s[i : k+1])
-			i = k + 1
-		}
+		b.WriteString(out[last : m[2]-1])
+		last = m[3]
 	}
-	b.WriteString(s[i:])
+	if last == 0 {
+		return out
+	}
+	b.WriteString(out[last:])
 	return b.String()
 }
 

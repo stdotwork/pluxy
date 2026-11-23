@@ -2,6 +2,10 @@ package geminigenerate
 
 import (
 	"encoding/json"
+	"fmt"
+	"math/rand"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -396,8 +400,8 @@ func TestMaskBareProjectIDInOwnerRepeatedInMessage(t *testing.T) {
 	}
 }
 
-// Structured-field scanning stops at maxFieldDepth while the pattern pass still masks every
-// string at any depth.
+// Structured-field scanning stops at maxFieldDepth; the pattern pass still looks at every string
+// at any depth, so a name in a pattern form is masked there.
 func TestMaskDepthCap(t *testing.T) {
 	wrap := func(depth int, inner string) string {
 		return strings.Repeat(`{"a":`, depth) + inner + strings.Repeat(`}`, depth)
@@ -461,5 +465,280 @@ func depthLabel(d int) string {
 		return "depth4000"
 	default:
 		return "depth"
+	}
+}
+
+// A project scoped to a domain is one name in the output: the domain's marker, the colon and the
+// ID become one marker.
+func TestMaskDomainScopedProject(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"see projects/example.com:acme-prod-4821/locations", "see projects/[redacted]/locations"},
+		{"see ?project=example.com:acme-prod-4821&x=1", "see ?project=[redacted]&x=1"},
+		{"the project:example.com:acme-prod-4821 is off", "the project:[redacted] is off"},
+		{"folders/example.com:acme-prod-4821.", "folders/[redacted]."},
+		// The domain goes wherever the body names it again, as before. The ID alone does not, unless
+		// the names already mask it.
+		{"projects/example.com:acme-prod-4821 and acme-prod-4821 and example.com", "projects/[redacted] and acme-prod-4821 and [redacted]"},
+		// Without a dot before the colon the colon ends the name, as before.
+		{"POST projects/acme-prod-4821:setIamPolicy", "POST projects/[redacted]:setIamPolicy"},
+		{"projects/12345: denied", "projects/[redacted]: denied"},
+	} {
+		if got := string(MaskBody([]byte(tc.in))); got != tc.want {
+			t.Errorf("MaskBody(%q)\n got  %q\n want %q", tc.in, got, tc.want)
+		}
+	}
+	got := string(MaskBody([]byte(`{"error":{"message":"projects/example.com:acme-prod-4821 is off","details":[{"metadata":{"consumer":"projects/example.com:acme-prod-4821"}}]}}`)))
+	if strings.Contains(got, "acme-prod-4821") || strings.Contains(got, "example.com") {
+		t.Errorf("domain-scoped project named in %s", got)
+	}
+}
+
+// project= takes a value with a dot at its start or two dots in a row, as it did before names
+// were read as dotted words; a dot that ends a sentence stays outside the name.
+func TestMaskProjectQueryOddDots(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"see ?project=.acme-prod-4821&x=1", "see ?project=[redacted]&x=1"},
+		{"see ?project=acme..prod-4821&x=1", "see ?project=[redacted]&x=1"},
+		{"see ?project=acme-prod-4821.", "see ?project=[redacted]."},
+		{"see ?projectId=a.b-c%2Fd&x=1", "see ?projectId=[redacted]&x=1"},
+	} {
+		if got := string(MaskBody([]byte(tc.in))); got != tc.want {
+			t.Errorf("MaskBody(%q)\n got  %q\n want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// countWork returns the work f makes the masking code do: the bytes its JSON scanners pass over
+// and the steps of its name matcher. It stands in for a clock, which a slow or busy machine
+// makes useless as a bound.
+func countWork(f func()) int {
+	var n int
+	onScan = func(k int) { n += k }
+	defer func() { onScan = nil }()
+	f()
+	return n
+}
+
+// What masking a body costs is a few passes over the body, whatever the depth of its nesting.
+// Scanning each level's whole subtree again would multiply the work by the depth.
+func TestMaskWorkDoesNotGrowWithDepth(t *testing.T) {
+	const bound = 8 // passes over the body; masking measures about 5
+	for _, depth := range []int{100, 4000} {
+		raw := makeDeepError(depth, 1<<20)
+		if w := countWork(func() { MaskBody(raw) }); w > bound*len(raw) {
+			t.Errorf("MaskBody at depth %d: work %d is %.1f passes over %d bytes, want at most %d", depth, w, float64(w)/float64(len(raw)), len(raw), bound)
+		}
+		in := []byte(`{"status":"failed","nested":` + strings.Repeat(`[{"a":`, depth) +
+			`{"error":{"message":"projects/deep-99"}}` + strings.Repeat(`}]`, depth) + `}`)
+		if w := countWork(func() { MaskReply(in, "") }); w > bound*len(in) {
+			t.Errorf("MaskReply at depth %d: work %d is %.1f passes over %d bytes, want at most %d", depth, w, float64(w)/float64(len(in)), len(in), bound)
+		}
+	}
+}
+
+// What masking a body costs does not grow with the number of names it holds: each string is
+// matched against all names in one pass, so a body of N names costs N times a name, not N times N.
+func TestMaskWorkDoesNotGrowWithNames(t *testing.T) {
+	const bound = 8
+	for _, n := range []int{500, 8000} {
+		var b strings.Builder
+		b.WriteString(`{"error":{"code":403,"message":"x","details":[`)
+		for i := 0; i < n; i++ {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			// Each name is learned from a structured field and again named in plain text.
+			fmt.Fprintf(&b, `{"consumer":"projects/p-%06d"},"p-%06d is off","projects/q-%06d"`, i, i, i)
+		}
+		b.WriteString(`]}}`)
+		body := []byte(b.String())
+		var out []byte
+		w := countWork(func() { out = MaskBody(body) })
+		if w > bound*len(body) {
+			t.Errorf("%d names: work %d is %.1f passes over %d bytes, want at most %d", n, w, float64(w)/float64(len(body)), len(body), bound)
+		}
+		if strings.Contains(string(out), "p-000001") || strings.Contains(string(out), "q-000001") {
+			t.Errorf("%d names: a name is left in the body", n)
+		}
+	}
+}
+
+// maskOneByOne is the plain way to replace names: every name in turn, longest first, in the text
+// the ones before it left. The matcher must give the same text without trying them all.
+func maskOneByOne(s string, list []string) string {
+	for _, id := range list {
+		s = replaceToken(s, id)
+	}
+	return s
+}
+
+func TestNameMatcherMatchesNameByName(t *testing.T) {
+	r := rand.New(rand.NewSource(7))
+	// Pieces of the marker's own text are in the mix, so names that hold part of a marker, or all
+	// of "redacted", are met by the replacements.
+	pieces := []string{"a", "b", "1", "-", "_", ".", " ", "/", ":", "[", "]", "redacted", "red", "acted", "d]", "[r", "]/"}
+	word := func(max int) string {
+		var b strings.Builder
+		for n := 1 + r.Intn(max); n > 0; n-- {
+			b.WriteString(pieces[r.Intn(len(pieces))])
+		}
+		return b.String()
+	}
+	checked := 0
+	for i := 0; i < 40000; i++ {
+		d := newNames(nil)
+		for n := 1 + r.Intn(6); n > 0; n-- {
+			d.add(word(3))
+		}
+		if len(d.list) == 0 {
+			continue
+		}
+		s := word(14)
+		sorted := append([]string(nil), d.list...)
+		// the order maskString uses: longest first, then as learned
+		slices.SortStableFunc(sorted, func(a, b string) int { return len(b) - len(a) })
+		want := maskOneByOne(s, sorted)
+		if got := d.maskString(s); got != want {
+			t.Fatalf("names %q in %q\n got  %q\n want %q", sorted, s, got, want)
+		}
+		if want != s {
+			checked++
+		}
+	}
+	if checked < 1000 {
+		t.Errorf("only %d cases replaced anything; the generator is too thin to mean anything", checked)
+	}
+}
+
+// A name made of a marker's text and what stands next to it is still found: a name learned from
+// a field can be a name only once another name has been replaced.
+func TestMaskNameAcrossMarker(t *testing.T) {
+	raw := `{"error":{"code":403,"message":"acme-prod-4821-long-name-x/topsecret","details":[` +
+		`{"@type":"type.googleapis.com/google.rpc.ResourceInfo","owner":"acme-prod-4821-long-name-x"},` +
+		`{"@type":"type.googleapis.com/google.rpc.ResourceInfo","owner":"redacted]/topsecret"}]}}`
+	got := string(MaskBody([]byte(raw)))
+	if strings.Contains(got, "topsecret") {
+		t.Errorf("the tail of a name that spans a marker is shown: %s", got)
+	}
+}
+
+// Names nested in one another (a, aa, aaa, ... or a, a/a, a/a/a, ...) and a long string of them
+// must not make the search cost the string's length times the names that end at each place.
+func TestMaskWorkWithNestedNames(t *testing.T) {
+	const names = 200
+	for _, tc := range []struct {
+		name, sep string
+	}{{"adjacent", ""}, {"separated", "/"}} {
+		var b strings.Builder
+		b.WriteString(`{"error":{"code":403,"message":"x","details":[`)
+		if tc.sep == "" {
+			// learned from the text pattern, one name for each length
+			for i := 1; i <= names; i++ {
+				b.WriteString(`"projects/` + strings.Repeat("a", i) + `",`)
+			}
+			b.WriteString(`"` + strings.Repeat("a", 20000) + `"]}}`)
+		} else {
+			// learned from QuotaFailure subjects, which are masked whole and learned as names
+			b.WriteString(`{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[`)
+			for i := 1; i <= names; i++ {
+				if i > 1 {
+					b.WriteByte(',')
+				}
+				b.WriteString(`{"subject":"` + strings.Repeat("a/", i-1) + `a"}`)
+			}
+			b.WriteString(`]},"` + strings.Repeat("a/", 10000) + `a"]}}`)
+		}
+		body := []byte(b.String())
+		if !json.Valid(body) {
+			t.Fatalf("%s: the test body is not valid JSON", tc.name)
+		}
+		w := countWork(func() { MaskBody(body) })
+		// every name is found once in the long string and tried there once; nothing more
+		if bound := 8 * len(body); w > bound {
+			t.Errorf("%s: work %d over %d bytes of body and %d names, want at most %d", tc.name, w, len(body), names, bound)
+		}
+	}
+}
+
+// A project= value that is not a clean name is masked whole, and the name the pattern took from it
+// is masked where the body repeats it, as before.
+func TestMaskMalformedProjectValueKeepsItsName(t *testing.T) {
+	in := "?project=zqbeta..prod-4821&x=1 and zqbeta again"
+	if got, want := string(MaskBody([]byte(in))), "?project=[redacted]&x=1 and [redacted] again"; got != want {
+		t.Errorf("MaskBody(%q)\n got  %q\n want %q", in, got, want)
+	}
+}
+
+// A method or a port after a domain-scoped project is masked with it where it stands, and is not
+// learned as a name, so the same word elsewhere stays.
+func TestMaskDomainScopedMethodIsNotLearned(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"POST projects/acme.prod:setIamPolicy failed; setIamPolicy denied", "POST projects/[redacted] failed; setIamPolicy denied"},
+		{"projects/acme.prod:setIamPolicy and acme.prod", "projects/[redacted] and [redacted]"},
+		{"projects/host.example.com:443 and retry in 443 s", "projects/[redacted] and retry in 443 s"},
+	} {
+		if got := string(MaskBody([]byte(tc.in))); got != tc.want {
+			t.Errorf("MaskBody(%q)\n got  %q\n want %q", tc.in, got, tc.want)
+		}
+	}
+	raw := `{"error":{"message":"retry in 443 s","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","metadata":{"containerInfo":"host.example.com:443"}}]}}`
+	want := `{"error":{"message":"retry in 443 s","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","metadata":{"containerInfo":"[redacted]"}}]}}`
+	if got := string(MaskBody([]byte(raw))); got != want {
+		t.Errorf("got  %s\nwant %s", got, want)
+	}
+}
+
+// What widen adds must not take anything from the patterns and names: when a domain-scoped form
+// runs into a keyword, an address or a name that goes on, they still mask what they masked.
+func TestMaskWideFormsKeepWhatTheNarrowOnesMask(t *testing.T) {
+	for _, in := range []string{
+		"projects/a.b:projects/zqbeta",
+		"projects/a.b:acme-projects/zqbeta",
+		"?project=.svc@acme-prod-4821.iam.gserviceaccount.com",
+		"projects/host.example.com:443_svc@acme-prod-4821.iam.gserviceaccount.com",
+	} {
+		got := string(MaskBody([]byte(in)))
+		if strings.Contains(got, "zqbeta") || strings.Contains(got, "acme-prod-4821") {
+			t.Errorf("MaskBody(%q) = %q, a name is shown", in, got)
+		}
+	}
+	// A name that continues past the part a wider form took: "acme..prod-4821" is learned from the
+	// field, and the text names it after a domain and a colon.
+	raw := `{"error":{"message":"projects/a.b:acme..prod-4821 is off","details":[` +
+		`{"@type":"type.googleapis.com/google.rpc.ErrorInfo","metadata":{"consumer":"acme..prod-4821"}}]}}`
+	if got := string(MaskBody([]byte(raw))); strings.Contains(got, "prod-4821") {
+		t.Errorf("a name that goes on past a domain-scoped form is shown: %s", got)
+	}
+}
+
+// An address followed by a colon and a project's ID, in a body that also names that ID after a
+// domain, is masked whole.
+func TestMaskAddressBeforeDomainScopedID(t *testing.T) {
+	in := "projects/example.com:acme-prod-4821 denied for user:alice@example.com; caller alice@example.com:acme-prod-4821"
+	got := string(MaskBody([]byte(in)))
+	if strings.Contains(got, "alice") || strings.Contains(got, "acme-prod-4821") {
+		t.Errorf("MaskBody(%q) = %q, a name is shown", in, got)
+	}
+}
+
+// Many different domain-scoped IDs in one string cost a few passes over it. Every ID that was a
+// name of its own would copy the string once more. Memory allocated stands in for a clock.
+func TestMaskDomainScopedIDsAreNotNames(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`{"error":{"code":403,"message":"`)
+	for i := 0; i < 3000; i++ {
+		fmt.Fprintf(&b, "projects/e.c:aa%04d ", i)
+	}
+	b.WriteString(`"}}`)
+	body := []byte(b.String())
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	out := MaskBody(body)
+	runtime.ReadMemStats(&after)
+	if alloc := after.TotalAlloc - before.TotalAlloc; alloc > uint64(2000*len(body)) {
+		t.Errorf("masking %d bytes allocated %d bytes, want at most %d", len(body), alloc, 2000*len(body))
+	}
+	if strings.Contains(string(out), "aa0001") {
+		t.Errorf("an ID is shown")
 	}
 }
