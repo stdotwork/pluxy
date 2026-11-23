@@ -727,7 +727,7 @@ func ReadFrame(r io.Reader, v any) error {
 		// Checks the frame once and sets the call's native body as a slice of it (the frame is
 		// this call's alone), where json.Unmarshal checks it, then walks it again to decode it
 		// and copies the body. The result and the error are json.Unmarshal's.
-		return jsonscan.Unmarshal(body, c)
+		return jsonscan.StdError(jsonscan.Unmarshal(body, c))
 	}
 	return json.Unmarshal(body, v)
 }
