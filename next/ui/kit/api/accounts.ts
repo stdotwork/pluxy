@@ -87,6 +87,41 @@ export function leftOut(a: Account): LeftOut | undefined {
   return LEFT_OUT.find((state) => state === a.health?.state);
 }
 
+/**
+ * The extension IDs core runs, from its status, or undefined while the status is not read. An
+ * account whose extension is not among them has no provider that can serve it.
+ */
+export function runningExtensions(status?: {
+  extensions: { id: string }[];
+}): ReadonlySet<string> | undefined {
+  return status && new Set(status.extensions.map((e) => e.id));
+}
+
+/** An account whose extension core does not run: requests for its models find no account to serve them. */
+export function providerMissing(a: Account, running?: ReadonlySet<string>): boolean {
+  return !a.disabled && !!running && !!a.extension && !running.has(a.extension);
+}
+
+export type Standing = "active" | "unavailable" | "disabled";
+
+/**
+ * The one rule every page counts accounts by: disabled when a person turned it off; unavailable
+ * when its login is gone, core leaves it out (see leftOut) or its provider is not running; else
+ * active. An account cooling for a short while still counts active: it serves other requests.
+ */
+export function standing(a: Account, running?: ReadonlySet<string>): Standing {
+  if (a.disabled) return "disabled";
+  if (a.state !== "active" || leftOut(a) || providerMissing(a, running)) return "unavailable";
+  return "active";
+}
+
+/** How many accounts stand each way (see standing). */
+export function countAccounts(list: Account[], running?: ReadonlySet<string>): Record<Standing, number> {
+  const n: Record<Standing, number> = { active: 0, unavailable: 0, disabled: 0 };
+  for (const a of list) n[standing(a, running)]++;
+  return n;
+}
+
 export interface AccountModelEntry {
   name: string;
   alias?: string;
