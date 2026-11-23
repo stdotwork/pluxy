@@ -984,9 +984,9 @@ and report the dropped code execution results; same-format replies pass through 
 
 **Output media.** Generated images and audio carry across formats on their own `media` events
 (protocol minor 33): Gemini `inlineData` parts, Responses `image_generation_call` items, and Chat
-Completions `message.audio` / streamed `delta.audio` parts. Only safe `image/*` (never
-`image/svg+xml`) and `audio/*` parts with valid base64 are carried, bounded at 24 MiB per part
-and 96 MiB per reply so each event fits a protocol frame; unsafe, malformed, or oversized parts
+Completions `message.audio` / streamed `delta.audio` parts. Only parts with a well-formed type
+from a list of image and audio types (never `image/svg+xml`) and valid base64 are carried,
+bounded at 24 MiB per part and 96 MiB per reply so each event fits a protocol frame; unsafe, malformed, or oversized parts
 drop with a loss while the reply's text arrives whole. Gemini clients receive both images and
 audio as `inlineData` parts in order. Responses, Chat Completions and Messages clients receive no
 media from another format, because the fields that would hold it need an ID only the vendor issues,
