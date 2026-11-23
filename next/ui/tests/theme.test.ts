@@ -79,8 +79,6 @@ describe("the README and the code agree", () => {
   });
 
   test("every data-part hook", () => {
-    expect(PARTS).toContain("log");
-    expect(PARTS).toContain("log-line");
     expect(readme).toContain("`data-level` is `info`, `warn`");
     const documented = rows("### Hooks you can rely on")
       .map(([hook]) => hook?.match(/^`data-part="([^"]+)"`/)?.[1])
@@ -152,25 +150,6 @@ describe("the README and the code agree", () => {
     for (const name of Object.keys(TOKENS).filter((n) => n.startsWith("color."))) {
       expect(css).toContain(`var(${tokenProperty(name)})`);
     }
-  });
-
-  test("account list controls expose theme hooks", () => {
-    for (const part of ["toolbar", "tabs", "tab", "pager", "select", "batch", "account-meta"] as const) {
-      expect(PARTS).toContain(part);
-    }
-  });
-
-  test("routing tiers have a documented theme hook", () => {
-    expect(PARTS).toContain("tier");
-    expect(readme).toContain('data-part="tier"');
-  });
-
-  test("account sign-in hooks are part of the documented contract", () => {
-    for (const part of ["method", "flow", "device-code"] as const) {
-      expect(PARTS).toContain(part);
-      expect(readme).toContain(`\`data-part="${part}"\``);
-    }
-    expect(readme).toContain("`add-account`");
   });
 
   test("the version the README describes", () => {

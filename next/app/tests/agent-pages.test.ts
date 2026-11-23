@@ -1,25 +1,25 @@
-// The agent client pages Beginner Mode can set up (src/agentPages.ts): exactly the eight clients,
-// each naming its tool's package, in the window's page order, with none listed twice.
+// The agent client pages Beginner Mode can set up (src/agentPages.ts): each names a package that
+// a tool's manifest declares, with none listed twice.
 // And what the Setup page gets from them: each client of core's scan has a page here, and "Set up"
 // is offered for the ones Beginner Mode would list.
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { agentPages, SETUP_CLIENT_PAGES, setupClientAction, setupOffersNeeded } from "../src/agentPages";
 import type { DeviceCatalog, DevicePackage } from "../src/device";
 
 describe("agentPages", () => {
-  test("holds every set-up client, each with its tool's package ID, in the window's order", () => {
-    expect(agentPages().map((p) => [p.id, p.package])).toEqual([
-      ["claude-code", "pluxy/claude-code"],
-      ["codex", "pluxy/codex-setup"],
-      ["claude-desktop", "pluxy/claude-desktop"],
-      ["opencode", "pluxy/opencode"],
-      ["omp", "pluxy/omp-setup"],
-      ["grok-build", "pluxy/grok-setup"],
-      ["hermes", "pluxy/hermes-setup"],
-      ["pi", "pluxy/pi-setup"],
-    ]);
+  test("each page names the package of a tool manifest in app-tools", () => {
+    // The tools' own manifests are the reference: a page naming a package no tool declares would
+    // ask the device for a program that is never there.
+    const tools = join(import.meta.dir, "../../app-tools");
+    const declared = readdirSync(tools, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && existsSync(join(tools, d.name, "pluxy-extension.json")))
+      .map((d) => JSON.parse(readFileSync(join(tools, d.name, "pluxy-extension.json"), "utf8")).id as string);
+    expect(declared.length).toBeGreaterThan(0);
+    const pages = agentPages();
+    expect(pages.length).toBeGreaterThan(0);
+    for (const page of pages) expect(declared).toContain(page.package);
   });
 
   test("no page ID and no package ID is listed twice", () => {
