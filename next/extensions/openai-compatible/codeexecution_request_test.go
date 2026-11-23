@@ -200,3 +200,36 @@ func TestCodeExecutionOpenAICompatibleSameFormatByteIdentical(t *testing.T) {
 		t.Errorf("gemini passthrough changed: passthrough=%v body=%s", trGem.Passthrough, bodyGem)
 	}
 }
+
+// A translated code tool asks for its outputs, and only where the tool is sent.
+func TestCodeExecutionOutputsIncludeOpenAICompatible(t *testing.T) {
+	req, err := geminigenerate.ParseRequest("gpt-5.2", false, []byte(`{
+		"contents":[{"role":"user","parts":[{"text":"compute"}]}],"tools":[{"codeExecution":{}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req = roundTripReq(t, req)
+	for base, want := range map[string]bool{
+		"https://api.openai.com/v1":    true,
+		"https://openrouter.ai/api/v1": false,
+		"https://proxy.example.com/v1": false,
+	} {
+		body, _, err := buildBody(req, llm.FormatOpenAIResponses, settings{BaseURL: base})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got struct {
+			Tools   []map[string]any `json:"tools"`
+			Include []string         `json:"include"`
+		}
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatal(err)
+		}
+		if tool := len(got.Tools) == 1 && got.Tools[0]["type"] == "code_interpreter"; tool != want {
+			t.Fatalf("%s: code tool sent = %v, want %v (body: %s)", base, tool, want, body)
+		}
+		if asked := slices.Contains(got.Include, "code_interpreter_call.outputs"); asked != want {
+			t.Errorf("%s: include = %v, outputs asked for = %v, want %v", base, got.Include, asked, want)
+		}
+	}
+}
