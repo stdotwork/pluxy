@@ -999,9 +999,16 @@ OpenAI Chat/Responses sharing `x-ratelimit-*`): Anthropic's `anthropic-ratelimit
 `anthropic-priority-*` and `anthropic-fast-*` headers on Messages replies, and OpenAI's
 `x-ratelimit-{limit,remaining,reset}-{requests,tokens,project-tokens}` plus OpenRouter's
 `x-ratelimit-{limit,remaining,reset}` headers on OpenAI Chat and Responses replies. Only explicit
-allowlisted rate-limit headers are forwarded (never cookies, auth tokens, or account/organization
-IDs); Gemini documents no rate-limit headers so none are forwarded to Gemini clients; extensions
-below minor 34 behave as before.
+allowlisted rate-limit headers are forwarded, and only a value of a shape the vendors document: a
+non-negative integer (or exactly `-1`, which OpenAI and Azure OpenAI send for a limit that does not
+apply), an RFC 3339 time or a duration such as `1s`, `6m0s` or `17ms` (OpenRouter's reset is an
+integer, in milliseconds since the Unix epoch). A value of any other shape is dropped whole, so no
+cookie, token or text ID reaches a client in a header; an all-digit ID cannot be told from a
+number and does. Core also removes the account's key pieces from every value but a plain time or
+duration (a time with no fraction, a duration whose numbers have at most 4 digits), and drops a
+value that loses any, so a piece of the key does not reach a client; a plain time or duration
+stays whole even when a key shares a few characters with it. Gemini documents no rate-limit headers
+so none are forwarded to Gemini clients; extensions below minor 34 behave as before.
 
 **Multiple candidates.** Chat Completions `n` and Gemini `generationConfig.candidateCount` carry
 across formats (protocol minor 35) when the client asks for more than one candidate: a translated
