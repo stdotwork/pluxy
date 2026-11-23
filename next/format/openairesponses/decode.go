@@ -255,9 +255,13 @@ func extractCodeInterpreterCall(raw json.RawMessage, fallbackCode string) (id st
 	}, true
 }
 
-// extractImageGenerationCall reads a completed Responses image_generation_call output item into
-// a canonical OutputMedia. Non-image items and non-completed items return isImg=false. Invalid,
-// unsafe (SVG), or malformed completed items return isImg=true with a non-empty problem.
+// extractImageGenerationCall reads a final Responses image_generation_call output item into a
+// canonical OutputMedia. Callers pass only items that arrived whole (an output_item.done event,
+// a terminal event's output, a non-streamed Response), never a partial image. Such an item with
+// image data is carried whatever its status says: "generating" and a missing status happen on a
+// finished image (a Codex route is reported to end on "generating"). Non-image items return
+// isImg=false. A failed item, an item with no data, and an invalid or unsafe (SVG) one return
+// isImg=true with a non-empty problem.
 func extractImageGenerationCall(raw json.RawMessage) (id string, media *llm.OutputMedia, problem string, isImg bool) {
 	if len(raw) == 0 || raw[0] != '{' {
 		return "", nil, "", false
@@ -272,8 +276,8 @@ func extractImageGenerationCall(raw json.RawMessage) (id string, media *llm.Outp
 	if json.Unmarshal(raw, &item) != nil || item.Type != "image_generation_call" {
 		return "", nil, "", false
 	}
-	if item.Status != "completed" {
-		return item.ID, nil, "", false
+	if item.Status == "failed" {
+		return item.ID, nil, "image_generation_call failed", true
 	}
 	if item.Result == nil || *item.Result == "" {
 		return item.ID, nil, "empty image_generation_call result", true
