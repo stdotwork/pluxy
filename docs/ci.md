@@ -55,8 +55,10 @@ A third variable, `PLUXY_MACOS_CLOUD_RUNNER`, sends some macOS jobs to another p
 runners, Namespace's. It holds a bare runner profile label, for example
 `namespace-profile-macos-26` (no `;key=value` settings: the runner check refuses them). When it is not set, those jobs run on `macos-latest`.
 
-Pull requests and merge groups do not use it: all their macOS jobs run on `macos-latest`, which
-leaves Namespace's Mac to pushes, the daily runs and manual runs. The app tools' Terminal launch
+Pull requests do not use it: all their macOS jobs run on `macos-latest`. Merge groups, pushes, the
+daily runs and manual runs use it for the jobs listed below, except the `tools` job in
+`next-app-tools-platforms.yml`, which in pull requests and merge groups also runs on `macos-latest`.
+The app tools' Terminal launch
 tests failed on GitHub's macOS runners in both runs tried on 2026-11-19 (Terminal did not take the
 launch's Apple event in time, error -1712), which kept the `tools` job on Namespace; those tests now
 run one at a time. Namespace runs one macOS job at a time, about 20 an hour. From 19:30
@@ -67,7 +69,8 @@ a group's work takes about 23 minutes.
 It applies to these jobs:
 - the `app` job in `next-app-platforms.yml`;
 - the macOS legs of the `native` and `dialogs` jobs in `next-app-platforms.yml`, except the `native`
-  job's `open` shard, whose session runs only on a GitHub-hosted runner. Their tests write
+  job's `open` shard, whose session runs only on a GitHub-hosted runner, and its `update` shard,
+  whose sessions need passwordless `sudo`, which Namespace's macOS runner no longer gives. Their tests write
   the account's own folders, so they also check the runner (`next/app/native/runner.ts`): the job
   passes the label in `PLUXY_EPHEMERAL_CI_RUNNER`, and the check accepts only a Namespace profile
   label, a runner Namespace named and Namespace's own variable. Another provider needs a change to
