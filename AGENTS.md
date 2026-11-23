@@ -25,6 +25,8 @@ dependencies are `github.com/coder/websocket` and `gopkg.in/yaml.v3`), and chang
 protocol only together with its README (`next/protocol/README.md`).
 
 If `.private/AGENTS.md` exists, read it too: it holds the owner's private instructions and notes.
+Start with [`docs/map.md`](docs/map.md) to find the entry files, tests, fakes and handbook sections
+for common changes before searching the tree.
 Confirmed plans, decisions and major tradeoffs are written up in `docs/`: the new core's design
 in `docs/design.md`, and how the corpus holds it to the old core in `docs/corpus.md`.
 
