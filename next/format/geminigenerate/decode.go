@@ -182,18 +182,23 @@ type StreamDecoder struct {
 	// malformed is set when the reply ended with MALFORMED_FUNCTION_CALL, with Gemini's message.
 	malformed     bool
 	malformedText string
-	// Grounding state for the current open message item and the reply as a whole.
-	textBuf   strings.Builder
-	partSpans map[int][2]int // candidate partIndex -> [byteStart, byteEnd] in textBuf
-	// A part index counts within one chunk, so partSpans holds only while the item's text came in
+	// Grounding state for the reply as a whole. Google's segment offsets count bytes within one
+	// Part (partIndex), and a thought signature, a function call or media can close the open text
+	// item between parts, so the message text of every item is kept, in order, in allText, and
+	// items records which bytes of it each message item holds.
+	allText   strings.Builder
+	items     []*msgItem
+	partSpans map[int][2]int // candidate partIndex -> [byteStart, byteEnd] in allText
+	// A part index counts within one chunk, so partSpans holds only while the reply's text came in
 	// one chunk. Once it spans chunks (multiChunk), offsets are read against the whole text.
 	chunkNo    int
 	spanChunk  int
 	multiChunk bool
-	citations  []llm.Citation
-	seenCit    map[string]bool
-	sources    []llm.Source
-	seenSrc    map[string]bool
+	// citations are the open message item's, put on its item.end when it closes.
+	citations []llm.Citation
+	citLosses map[string]bool
+	sources   []llm.Source
+	seenSrc   map[string]bool
 	// Pending executableCode parts waiting for their codeExecutionResult, and completed runs.
 	pendingCode []pendingExecCode
 	codeExecs   []llm.CodeExecution
@@ -206,6 +211,15 @@ type StreamDecoder struct {
 	cands map[int]*candState
 }
 
+// msgItem is one message item of the reply: its bytes in allText and the citations it already
+// has, so metadata that repeats on later chunks cites once.
+type msgItem struct {
+	idx        int
+	start, end int
+	closed     bool
+	seen       map[string]bool
+}
+
 type pendingExecCode struct {
 	id   string
 	code string
@@ -214,7 +228,7 @@ type pendingExecCode struct {
 
 // NewStreamDecoder returns a decoder for one stream.
 func NewStreamDecoder() *StreamDecoder {
-	return &StreamDecoder{text: -1, think: -1, partSpans: map[int][2]int{}, seenSrc: map[string]bool{}, seenCit: map[string]bool{}}
+	return &StreamDecoder{text: -1, think: -1, partSpans: map[int][2]int{}, seenSrc: map[string]bool{}, citLosses: map[string]bool{}}
 }
 
 func (d *StreamDecoder) open(kind string, out []llm.Event, start llm.ItemStart) (int, []llm.Event) {
@@ -234,10 +248,9 @@ func (d *StreamDecoder) closeItem(idx *int, out []llm.Event) []llm.Event {
 			end.Citations = d.citations
 			d.citations = nil
 		}
-		d.textBuf.Reset()
-		clear(d.partSpans)
-		clear(d.seenCit)
-		d.multiChunk = false
+		if n := len(d.items); n > 0 {
+			d.items[n-1].closed = true
+		}
 	}
 	out = append(out, end)
 	*idx = -1
@@ -246,10 +259,14 @@ func (d *StreamDecoder) closeItem(idx *int, out []llm.Event) []llm.Event {
 
 // decodeGrounding reads Gemini's groundingMetadata (groundingChunks and groundingSupports).
 // Malformed metadata, out-of-range chunk indices, and non-http URLs are skipped without failing
-// the reply. Segment startIndex/endIndex are UTF-8 byte offsets per Google's GenerateContent API
-// reference and are converted to Unicode code point (rune) offsets; an offset that cannot be
-// mapped produces a citation with no range.
-func (d *StreamDecoder) decodeGrounding(raw json.RawMessage) {
+// the reply. Segment startIndex/endIndex are UTF-8 byte offsets within the Part that partIndex
+// names (Google's GenerateContent API reference, Segment) and are converted to Unicode code point
+// (rune) offsets within the message item that holds them. A citation goes to the item its range
+// falls in, even when a thought signature or a function call has closed that item since: out
+// holds the events of the chunk being decoded, and an item closed within it still takes the
+// citation on its item.end. A range that cannot be placed on one item is reported as a loss,
+// except that one with no usable range covers the open message item when the reply has only one.
+func (d *StreamDecoder) decodeGrounding(raw json.RawMessage, out []llm.Event) {
 	if isNull(raw) || raw[0] != '{' {
 		return
 	}
@@ -276,8 +293,7 @@ func (d *StreamDecoder) decodeGrounding(raw json.RawMessage) {
 		d.seenSrc[ch.Web.URI] = true
 		d.sources = append(d.sources, llm.Source{URL: ch.Web.URI, Title: ch.Web.Title})
 	}
-	// With no open text item there is nothing to attach a citation to; its source is kept above.
-	if d.text < 0 || isNull(gm.Supports) || gm.Supports[0] != '[' || len(chunks) == 0 {
+	if isNull(gm.Supports) || gm.Supports[0] != '[' || len(chunks) == 0 {
 		return
 	}
 	var supports []struct {
@@ -291,51 +307,29 @@ func (d *StreamDecoder) decodeGrounding(raw json.RawMessage) {
 	if json.Unmarshal(gm.Supports, &supports) != nil {
 		return
 	}
-	fullText := d.textBuf.String()
-	for _, sup := range supports {
+	for si, sup := range supports {
 		if len(sup.ChunkIndices) == 0 {
 			continue
 		}
-		var startRune, endRune *int
+		var it *msgItem
+		var startRune, endRune int
+		ranged := false
 		if sup.Segment != nil && sup.Segment.EndIndex != nil {
 			startByte := 0
 			if sup.Segment.StartIndex != nil {
 				startByte = *sup.Segment.StartIndex
 			}
-			endByte := *sup.Segment.EndIndex
 			partIdx := 0
 			if sup.Segment.PartIndex != nil {
 				partIdx = *sup.Segment.PartIndex
 			}
-			// Determine the text slice and base rune offset for this partIndex.
-			// Text that came in several chunks is read as one text. In a single chunk with
-			// several parts (e.g. a thought part at 0, text part at 1), partSpans maps partIndex
-			// to its byte span in fullText.
-			partText := fullText
-			baseRune := 0
-			mapped := true
-			if d.splitText {
-				mapped = false
-			} else if d.multiChunk {
-				mapped = partIdx == 0
-			} else if partIdx > 0 {
-				if span, ok := d.partSpans[partIdx]; ok {
-					partText = fullText[span[0]:span[1]]
-					baseRune = utf8.RuneCountInString(fullText[:span[0]])
-				} else {
-					mapped = false
-				}
-			} else if span, ok := d.partSpans[0]; ok && len(d.partSpans) > 1 {
-				partText = fullText[span[0]:span[1]]
-				baseRune = utf8.RuneCountInString(fullText[:span[0]])
-			}
-			if mapped && startByte >= 0 && endByte >= startByte && endByte <= len(partText) {
-				if sr, ok1 := llm.UTF8ByteToRuneOffset(partText, startByte); ok1 {
-					if er, ok2 := llm.UTF8ByteToRuneOffset(partText, endByte); ok2 {
-						s, e := baseRune+sr, baseRune+er
-						startRune, endRune = &s, &e
-					}
-				}
+			it, startRune, endRune, ranged = d.placeSegment(partIdx, startByte, *sup.Segment.EndIndex)
+		}
+		if !ranged {
+			it = nil
+			// No usable range: the citation covers the open message item, if it is the only one.
+			if d.text >= 0 && (len(d.items) == 1 || d.splitText) {
+				it = d.items[len(d.items)-1]
 			}
 		}
 		for _, ci := range sup.ChunkIndices {
@@ -347,22 +341,98 @@ func (d *StreamDecoder) decodeGrounding(raw json.RawMessage) {
 				continue
 			}
 			c := llm.Citation{URL: ch.Web.URI, Title: ch.Web.Title}
-			if startRune != nil && endRune != nil {
-				s, e := *startRune, *endRune
-				c.StartIndex, c.EndIndex = &s, &e
-			}
 			// Metadata can repeat on later chunks of a stream.
 			key := c.URL
-			if c.StartIndex != nil {
-				key = fmt.Sprintf("%s\x00%d\x00%d", c.URL, *c.StartIndex, *c.EndIndex)
+			if ranged {
+				s, e := startRune, endRune
+				c.StartIndex, c.EndIndex = &s, &e
+				key = fmt.Sprintf("%s\x00%d\x00%d", c.URL, s, e)
 			}
-			if d.seenCit[key] {
+			if it != nil && it.seen[key] {
 				continue
 			}
-			d.seenCit[key] = true
-			d.citations = append(d.citations, c)
+			if it != nil && !it.closed {
+				it.seen[key] = true
+				d.citations = append(d.citations, c)
+				continue
+			}
+			if it != nil {
+				// The item closed: its item.end is still ours to change only if this chunk emitted it.
+				if k := endEventOf(out, it.idx); k >= 0 {
+					it.seen[key] = true
+					out[k].Citations = append(out[k].Citations, c)
+					continue
+				}
+			}
+			path := fmt.Sprintf("candidates[0].groundingMetadata.groundingSupports[%d]", si)
+			detail := "citation not placed: its range does not fall inside one message item"
+			if it != nil {
+				detail = "citation not placed: the message item it cites ended in an earlier chunk"
+			}
+			if !d.citLosses[path+detail] {
+				d.citLosses[path+detail] = true
+				d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: detail})
+			}
 		}
 	}
+}
+
+// endEventOf returns the position in out of the item.end of item idx, or -1.
+func endEventOf(out []llm.Event, idx int) int {
+	for k := len(out) - 1; k >= 0; k-- {
+		if out[k].Type == llm.EventItemEnd && out[k].Index == idx {
+			return k
+		}
+	}
+	return -1
+}
+
+// placeSegment finds the message item that holds the bytes [startByte, endByte) of the Part
+// partIdx, and returns that range as rune offsets within the item. Text that came in several
+// chunks is read as one text, whose part is part 0, across the items a thought signature or a
+// function call split it into. In a single chunk with several parts (e.g. a thought part at 0,
+// text part at 1), partSpans maps partIndex to the part's bytes. It reports false when the
+// offsets do not map onto one item's text.
+func (d *StreamDecoder) placeSegment(partIdx, startByte, endByte int) (it *msgItem, startRune, endRune int, ok bool) {
+	all := d.allText.String()
+	ps, pe := 0, len(all)
+	switch {
+	case d.splitText:
+		return nil, 0, 0, false
+	case d.multiChunk:
+		if partIdx != 0 {
+			return nil, 0, 0, false
+		}
+	case partIdx > 0:
+		span, found := d.partSpans[partIdx]
+		if !found {
+			return nil, 0, 0, false
+		}
+		ps, pe = span[0], span[1]
+	default:
+		if span, found := d.partSpans[0]; found && len(d.partSpans) > 1 {
+			ps, pe = span[0], span[1]
+		} else if len(d.items) > 1 {
+			return nil, 0, 0, false
+		}
+	}
+	if startByte < 0 || endByte < startByte || endByte > pe-ps {
+		return nil, 0, 0, false
+	}
+	part := all[ps:pe]
+	if _, ok1 := llm.UTF8ByteToRuneOffset(part, startByte); !ok1 {
+		return nil, 0, 0, false
+	}
+	if _, ok2 := llm.UTF8ByteToRuneOffset(part, endByte); !ok2 {
+		return nil, 0, 0, false
+	}
+	gs, ge := ps+startByte, ps+endByte
+	for _, m := range d.items {
+		if m.start <= gs && ge <= m.end {
+			return m, utf8.RuneCountInString(all[m.start:gs]), utf8.RuneCountInString(all[m.start:ge]), true
+		}
+	}
+	return nil, 0, 0, false
 }
 
 // Decode takes the data of one SSE event and returns the events it produces. An error object
@@ -445,7 +515,7 @@ func (d *StreamDecoder) decode(c chunk, out []llm.Event) []llm.Event {
 			}
 		}
 		if !isNull(cand.GroundingMetadata) {
-			d.decodeGrounding(cand.GroundingMetadata)
+			d.decodeGrounding(cand.GroundingMetadata, out)
 		}
 		if cand.FinishReason == MalformedFunctionCall {
 			d.malformed, d.malformedText = true, cand.FinishMessage
@@ -774,14 +844,16 @@ func (d *StreamDecoder) part(partIdx int, raw json.RawMessage, out []llm.Event) 
 	out = d.closeItem(&d.think, out)
 	if d.text < 0 {
 		d.text, out = d.open(llm.ItemMessage, out, llm.ItemStart{})
+		d.items = append(d.items, &msgItem{idx: d.text, start: d.allText.Len(), seen: map[string]bool{}})
 	}
 	if len(d.partSpans) > 0 && d.spanChunk != d.chunkNo {
 		d.multiChunk = true
 	}
 	d.spanChunk = d.chunkNo
-	start := d.textBuf.Len()
-	d.textBuf.WriteString(text)
-	d.partSpans[partIdx] = [2]int{start, d.textBuf.Len()}
+	start := d.allText.Len()
+	d.allText.WriteString(text)
+	d.items[len(d.items)-1].end = d.allText.Len()
+	d.partSpans[partIdx] = [2]int{start, d.allText.Len()}
 	return append(out, llm.Event{Type: llm.EventTextDelta, Index: d.text, Delta: text})
 }
 
