@@ -652,10 +652,34 @@ fn opens(app: &AppHandle, input: Value, line: &str, file: &Path) -> Result<Value
     })
     .map_err(|e| format!("{e}; the last close: {tried}"))?;
     if !was {
-        mac::textedit_quit()?;
+        // The read-back decides: the step passes only once TextEdit does not run. The menu click
+        // can fail while TextEdit is up (System Events answers -1719 when the process or its menu
+        // bar is not there at that moment, e.g. TextEdit just lost its last window or is already
+        // quitting), so it is repeated until one succeeds, and a failure is kept for the timeout
+        // instead of ending the step.
+        let mut clicked = false;
+        let mut tried = String::from("no quit click yet");
         wait_for("TextEdit to quit", || {
-            mac::running(mac::TEXTEDIT).ok().filter(|r| !r).map(|_| ())
-        })?;
+            match mac::running(mac::TEXTEDIT) {
+                Ok(false) => return Some(()),
+                Ok(true) => {}
+                Err(e) => {
+                    tried = format!("the last look failed: {e}");
+                    return None;
+                }
+            }
+            if !clicked {
+                match mac::textedit_quit() {
+                    Ok(()) => {
+                        clicked = true;
+                        tried = "clicked, TextEdit still ran".into();
+                    }
+                    Err(e) => tried = format!("the quit script failed: {e}"),
+                }
+            }
+            None
+        })
+        .map_err(|e| format!("{e}; the last quit: {tried}"))?;
     }
     let docs: Vec<&str> = docs.iter().map(|(u, _)| u.as_str()).collect();
     Ok(json!({"app": "TextEdit", "documents": docs, "quit": !was}))
