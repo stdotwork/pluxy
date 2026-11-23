@@ -236,7 +236,7 @@ func TestGeminiEmbeddingsOpenAIWire(t *testing.T) {
 		}
 
 		// Batch request whose models already match stays byte-identical.
-		const unchangedBatch = `{"requests": [{"model": "models/gemini-embedding-001", "content": {"parts": [{"text": "a"}]}}]}`
+		const unchangedBatch = `{"requests": [{"model": "models/gemini-embedding-001", "content": {"parts": [{"text": "a"}]}}, {"model": "models/gemini-embedding-001", "content": {"parts": [{"text": "b"}]}}]}`
 		sameCall := sdk.Call{
 			Account: acct,
 			Request: llm.Request{

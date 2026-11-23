@@ -24,6 +24,12 @@ func TestMain(m *testing.M) {
 	case "minor-24":
 		serveFakeModels(24)
 		return
+	case "endpoint-35":
+		serveFakeEndpoint(35)
+		return
+	case "endpoint-36":
+		serveFakeEndpoint(36)
+		return
 	}
 	os.Exit(m.Run())
 }
