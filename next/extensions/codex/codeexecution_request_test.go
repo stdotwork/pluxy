@@ -426,3 +426,55 @@ func TestCodeExecutionNotSentToChatGPT(t *testing.T) {
 		t.Errorf("dropped = %v, want tools[0] and tool_choice", dropped)
 	}
 }
+
+// The Codex path rebuilds include, so a translated code tool's outputs are kept only where the
+// tool itself is sent: api.openai.com. The ChatGPT backend and a custom base_url get neither.
+func TestCodeExecutionOutputsIncludeCodex(t *testing.T) {
+	include := func(t *testing.T, req llm.Request, base string) ([]string, bool) {
+		t.Helper()
+		u, err := buildRequest(roundTripReq(t, req), "acc1", settings{BaseURL: base}, account{}, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got struct {
+			Tools   []map[string]any `json:"tools"`
+			Include []string         `json:"include"`
+		}
+		if err := json.Unmarshal(u.body, &got); err != nil {
+			t.Fatal(err)
+		}
+		return got.Include, findCodeInterpreter(got.Tools) != nil
+	}
+	messages, err := anthropicmessages.ParseRequest([]byte(`{"model":"gpt-5.4","max_tokens":9,
+		"messages":[{"role":"user","content":"compute"}],
+		"tools":[{"type":"code_execution_20250825","name":"code_execution"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const outputs = "code_interpreter_call.outputs"
+	for base, wantTool := range map[string]bool{
+		"https://api.openai.com/v1":             true,
+		"https://chatgpt.com/backend-api/codex": false,
+		"https://proxy.example.com/v1":          false,
+	} {
+		inc, tool := include(t, messages, base)
+		if tool != wantTool {
+			t.Fatalf("%s: code tool sent = %v, want %v", base, tool, wantTool)
+		}
+		if got := slices.Contains(inc, outputs); got != wantTool {
+			t.Errorf("%s: include = %v, outputs asked for = %v, want %v", base, inc, got, wantTool)
+		}
+		if !slices.Contains(inc, "reasoning.encrypted_content") {
+			t.Errorf("%s: include = %v lost reasoning.encrypted_content", base, inc)
+		}
+	}
+
+	// A Responses client's request is passed through: the shaper keeps its include as before.
+	native, err := openairesponses.ParseRequest([]byte(`{"model":"gpt-5.4","input":"run","include":["` + outputs + `"],"tools":[{"type":"code_interpreter","container":{"type":"auto"}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inc, _ := include(t, native, "https://api.openai.com/v1"); slices.Contains(inc, outputs) {
+		t.Errorf("same-format request: include = %v, want it filtered as before", inc)
+	}
+}
