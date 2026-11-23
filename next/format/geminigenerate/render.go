@@ -164,14 +164,15 @@ func (b *builder) start(r *llm.ResponseInfo) {
 
 // upstreamData looks at the upstream data an event from another format carries for what a
 // GenerateContentResponse cannot hold: thinking signatures from a Messages upstream, and opaque
-// reasoning and annotations from a Responses upstream.
+// reasoning and annotations that are no url_citation from a Responses upstream (a url_citation
+// becomes a grounding support).
 func (b *builder) upstreamData(ev llm.Event) {
 	if len(ev.Raw) == 0 {
 		return
 	}
 	switch b.upFormat {
 	case llm.FormatOpenAIResponses:
-		for _, p := range openairesponses.OpaqueOutput(ev.Raw) {
+		for _, p := range openairesponses.OpaqueOutputExceptCitations(ev.Raw) {
 			b.lose(p, "reply data with no place in a GenerateContentResponse")
 		}
 	case llm.FormatAnthropicMessages:

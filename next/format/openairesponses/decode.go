@@ -442,14 +442,15 @@ func failure(r response, raw []byte) *llm.Error {
 }
 
 type streamEvent struct {
-	Type        string          `json:"type"`
-	OutputIndex int             `json:"output_index"`
-	Item        json.RawMessage `json:"item"`
-	Delta       string          `json:"delta"`
-	Annotation  json.RawMessage `json:"annotation"`
-	Response    json.RawMessage `json:"response"`
-	Code        any             `json:"code"`
-	Message     string          `json:"message"`
+	Type         string          `json:"type"`
+	OutputIndex  int             `json:"output_index"`
+	ContentIndex int             `json:"content_index"`
+	Item         json.RawMessage `json:"item"`
+	Delta        string          `json:"delta"`
+	Annotation   json.RawMessage `json:"annotation"`
+	Response     json.RawMessage `json:"response"`
+	Code         any             `json:"code"`
+	Message      string          `json:"message"`
 }
 
 // StreamDecoder turns the events of an upstream Responses stream into model events. Every model
@@ -460,9 +461,9 @@ type StreamDecoder struct {
 	started    bool
 	done       bool
 	next       int
-	items      map[int]int               // upstream output_index -> open model item index
-	textLens   map[int]int               // model item index -> rune count of text deltas seen
-	annRaws    map[int][]json.RawMessage // model item index -> raw annotations from annotation.added
+	items      map[int]int              // upstream output_index -> open model item index
+	textParts  map[int][]int            // model item index -> rune count of the text deltas seen, by content part
+	annRaws    map[int][]partAnnotation // model item index -> annotations from annotation.added
 	sources    []llm.Source
 	seenSrc    map[string]bool
 	cites      llm.CiteBudget
@@ -485,8 +486,8 @@ type StreamDecoder struct {
 func NewStreamDecoder() *StreamDecoder {
 	return &StreamDecoder{
 		items:        map[int]int{},
-		textLens:     map[int]int{},
-		annRaws:      map[int][]json.RawMessage{},
+		textParts:    map[int][]int{},
+		annRaws:      map[int][]partAnnotation{},
 		seenSrc:      map[string]bool{},
 		codeBuf:      map[int]*strings.Builder{},
 		codeOver:     map[int]bool{},
@@ -509,15 +510,80 @@ func (d *StreamDecoder) start(out []llm.Event, info llm.ResponseInfo, raw json.R
 	return append(out, llm.Event{Type: llm.EventResponseStart, Response: &info, Raw: raw})
 }
 
-// closeAll closes items the upstream left open; the events it adds carry no Raw.
-func (d *StreamDecoder) closeAll(out []llm.Event) []llm.Event {
-	open := make([]int, 0, len(d.items))
-	for _, idx := range d.items {
-		open = append(open, idx)
+// maxContentParts bounds the content parts of one message item whose text the decoder counts. A
+// part past it has no text counted, so an annotation on it carries no range.
+const maxContentParts = 1024
+
+// partAnnotation is an annotation.added event's annotation and the content part it is on.
+type partAnnotation struct {
+	raw  json.RawMessage
+	part int
+}
+
+// messageCitations returns the citations of the message item idx, as its done item (it, when the
+// upstream sent one) holds them, or else as its annotation events gave them, and lets go of what
+// it kept for the item. An annotation's offsets count within its content part, so they are
+// shifted by the text of the parts before it.
+func (d *StreamDecoder) messageCitations(idx int, it *outputItem) []llm.Citation {
+	var cits []llm.Citation
+	if it != nil {
+		cits = extractContentCitations(it.Content, &d.cites)
 	}
-	slices.Sort(open)
-	for _, idx := range open {
-		out = append(out, llm.Event{Type: llm.EventItemEnd, Index: idx})
+	if len(cits) == 0 && len(d.annRaws[idx]) > 0 {
+		parts := d.textParts[idx]
+		for _, ar := range d.annRaws[idx] {
+			// A part with no text seen has no range to check, so its citation has none.
+			offset, runes := 0, -1
+			for i, n := range parts {
+				if i < ar.part {
+					offset += n
+				} else if i == ar.part {
+					runes = n
+				}
+			}
+			if c, ok := extractURLCitation(ar.raw, offset, runes); ok {
+				cits = append(cits, c)
+			}
+		}
+		cits = d.cites.KeepCitations(cits)
+	}
+	d.releaseItem(idx)
+	return cits
+}
+
+// releaseItem lets go of what the decoder kept for the item idx.
+func (d *StreamDecoder) releaseItem(idx int) {
+	for _, ar := range d.annRaws[idx] {
+		d.annRawSize -= len(ar.raw)
+	}
+	delete(d.annRaws, idx)
+	delete(d.textParts, idx)
+}
+
+// closeAll closes items the upstream left open; the events it adds carry no Raw. final is the
+// output of the terminal event: an item that never had its done event gets its citations from
+// there, or else from its annotation events.
+func (d *StreamDecoder) closeAll(out []llm.Event, final []json.RawMessage) []llm.Event {
+	type openItem struct{ output, idx int }
+	open := make([]openItem, 0, len(d.items))
+	for o, idx := range d.items {
+		open = append(open, openItem{o, idx})
+	}
+	slices.SortFunc(open, func(a, b openItem) int { return a.idx - b.idx })
+	for _, o := range open {
+		end := llm.Event{Type: llm.EventItemEnd, Index: o.idx}
+		var it outputItem
+		if o.output < len(final) {
+			_ = json.Unmarshal(final[o.output], &it)
+		}
+		if it.Type == "message" {
+			end.Citations = d.messageCitations(o.idx, &it)
+		} else if it.Type == "" {
+			end.Citations = d.messageCitations(o.idx, nil)
+		} else {
+			d.releaseItem(o.idx)
+		}
+		out = append(out, end)
 	}
 	clear(d.items)
 	return out
@@ -597,8 +663,13 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		if !open {
 			return native(), nil
 		}
-		if ev.Type == "response.output_text.delta" {
-			d.textLens[idx] += utf8.RuneCountInString(ev.Delta)
+		if ev.Type == "response.output_text.delta" && ev.ContentIndex >= 0 && ev.ContentIndex < maxContentParts {
+			parts := d.textParts[idx]
+			for len(parts) <= ev.ContentIndex {
+				parts = append(parts, 0)
+			}
+			parts[ev.ContentIndex] += utf8.RuneCountInString(ev.Delta)
+			d.textParts[idx] = parts
 		}
 		t := map[string]string{
 			"response.output_text.delta":             llm.EventTextDelta,
@@ -615,7 +686,7 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 				d.cites.LeftOut()
 			} else {
 				d.annRawSize += len(ev.Annotation)
-				d.annRaws[idx] = append(d.annRaws[idx], append(json.RawMessage(nil), ev.Annotation...))
+				d.annRaws[idx] = append(d.annRaws[idx], partAnnotation{append(json.RawMessage(nil), ev.Annotation...), ev.ContentIndex})
 			}
 		}
 		return native(), nil
@@ -692,27 +763,14 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		_ = json.Unmarshal(ev.Item, &it)
 		end := llm.Event{Type: llm.EventItemEnd, Index: idx, Opaque: opaque(it), Raw: raw}
 		if it.Type == "message" {
-			cits := extractContentCitations(it.Content, &d.cites)
-			if len(cits) == 0 && len(d.annRaws[idx]) > 0 {
-				maxRunes := d.textLens[idx]
-				for _, ar := range d.annRaws[idx] {
-					if c, ok := extractURLCitation(ar, 0, maxRunes); ok {
-						cits = append(cits, c)
-					}
-				}
-				cits = d.cites.KeepCitations(cits)
-			}
-			end.Citations = cits
+			end.Citations = d.messageCitations(idx, &it)
+		} else {
+			d.releaseItem(idx)
 		}
-		for _, ar := range d.annRaws[idx] {
-			d.annRawSize -= len(ar)
-		}
-		delete(d.annRaws, idx)
-		delete(d.textLens, idx)
 		return append(out, end), nil
 	case "response.completed", "response.incomplete":
 		d.done = true
-		out = d.closeAll(out)
+		out = d.closeAll(out, r.Output)
 		for i, itemRaw := range r.Output {
 			d.sources = extractWebSearchCallSources(itemRaw, d.seenSrc, d.sources, &d.cites)
 			d.noteCodeCall(itemRaw, i, "", false)
@@ -874,7 +932,14 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 // place for: a reasoning item's encrypted content, an assistant message's phase (commentary or
 // final_answer, which Codex asks clients to send back) and the annotations on output text. raw is
 // an output_item.done event, a terminal event or a Response object.
-func OpaqueOutput(raw json.RawMessage) []string {
+func OpaqueOutput(raw json.RawMessage) []string { return opaqueOutput(raw, false) }
+
+// OpaqueOutputExceptCitations is OpaqueOutput for a client that is given a url_citation
+// annotation as a citation: a content part's annotations are listed only when one of them is
+// something else, or a url_citation the model leaves out (see llm.ValidCitationURL).
+func OpaqueOutputExceptCitations(raw json.RawMessage) []string { return opaqueOutput(raw, true) }
+
+func opaqueOutput(raw json.RawMessage, citationsCarried bool) []string {
 	var out []string
 	outputItems(raw, func(i int, item json.RawMessage) {
 		var it struct {
@@ -894,12 +959,22 @@ func OpaqueOutput(raw json.RawMessage) []string {
 			out = append(out, fmt.Sprintf("output[%d].phase", i))
 		}
 		for j, c := range it.Content {
-			if len(c.Annotations) > 0 {
+			if len(c.Annotations) > 0 && !(citationsCarried && allCitations(c.Annotations)) {
 				out = append(out, fmt.Sprintf("output[%d].content[%d].annotations", i, j))
 			}
 		}
 	})
 	return out
+}
+
+// allCitations reports whether every annotation is a url_citation the model carries as a citation.
+func allCitations(anns []json.RawMessage) bool {
+	for _, raw := range anns {
+		if _, ok := extractURLCitation(raw, 0, 0); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // outputItems calls fn with each output item in raw, by its index in the Response: the item of a
