@@ -99,7 +99,8 @@ type Extension struct {
 // held are the credentials core has given the extension or got back from it, so that its output
 // is logged without them: for each account the latest two (after a refresh the extension may
 // still write the one it replaced), the secrets of every settings it has had (a call still
-// running after changes has old ones), and what a user entered during a login. Outside a hold,
+// running after changes has old ones), and what a user entered during a login (a typed plain
+// address, of which only its user info: wholeSecrets). Outside a hold,
 // this grows only with the accounts the extension has served and their settings changes, and goes
 // with the program. A credential the extension makes (a refresh or login result) is added when the
 // result arrives; output is held until then (output), and while it is, the credentials a newer one

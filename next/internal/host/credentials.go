@@ -22,7 +22,8 @@ import (
 func (e *Extension) Login(ctx context.Context, account protocol.Account, login protocol.Login) *LoginCall {
 	account.Credential = nil
 	// What the user entered (an API key, a pasted redirect URL with its code) and the secrets in
-	// the account's settings count as secret in everything the call sends back.
+	// the account's settings count as secret in everything the call sends back, but for a typed
+	// plain address (wholeSecrets), of which only its user info counts.
 	l := &LoginCall{ext: e, ctx: ctx, account: account.ID, settings: e.holdSettings(account), secretInputs: map[string]bool{}}
 	for _, m := range e.info.LoginMethods {
 		if m.Method == login.Method {
@@ -36,7 +37,7 @@ func (e *Extension) Login(ctx context.Context, account protocol.Account, login p
 		return l
 	}
 	if proxy != nil {
-		l.addSecrets(outboundSecrets(proxy))
+		l.addForms(outboundSecrets(proxy))
 	}
 	l.pieces = l.pieces.add(e.accountPieces(account))
 	conn, lerr := e.dial(ctx)
@@ -118,6 +119,18 @@ func (l *LoginCall) markSecret(inputs []protocol.LoginInput) {
 // redirect URL), its user name, password and secret query or fragment values
 // (protocol.AccountSecretsWith).
 func (l *LoginCall) addSecrets(input map[string]string) {
+	l.add(input, true)
+}
+
+// addForms is addSecrets for the forms of the account's proxy and secret headers, which count
+// whole whatever they hold, a plain address too: a proxy password can be one.
+func (l *LoginCall) addForms(forms map[string]string) {
+	l.add(forms, false)
+}
+
+// add records the values of input for removal; with typed set they are what a person typed, of
+// which a plain address counts by its user info only (wholeSecrets).
+func (l *LoginCall) add(input map[string]string, typed bool) {
 	for k, v := range input {
 		var obj map[string]json.RawMessage
 		switch {
@@ -133,7 +146,11 @@ func (l *LoginCall) addSecrets(input map[string]string) {
 		if l.secrets == nil {
 			l.secrets = map[string]string{}
 		}
-		for _, s := range wholeSecrets(v, l.secretInputs[k]) {
+		whole := []string{v}
+		if typed {
+			whole = wholeSecrets(v, l.secretInputs[k])
+		}
+		for _, s := range whole {
 			l.secrets[fmt.Sprintf("%s.%d", k, len(l.secrets))] = s
 		}
 	}
@@ -154,28 +171,45 @@ func (l *LoginCall) errorPieces() pieces {
 	return slices.Clone(l.pieces)
 }
 
+// pathChars are the characters of a plain address's host and path (wholeSecrets).
+const pathChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~/"
+
+// minBareName is the shortest user name that counts on its own, as the proxy's rule has it
+// (proxyurl's minBare): a shorter one would remove its letters from every word of an error. Its
+// "user:password" form and the password always count.
+const minBareName = 8
+
 // wholeSecrets returns what of a login input v the call's redactor removes whole. It is v itself,
 // but for an input the login does not mark secret that is a plain address: an absolute http or
-// https URL with no query or fragment, such as a base URL a person typed, whose words are no
-// secret and which an error should quote. Of such an address only its user name and password count,
-// as the user info as written and by each part; its path is as public as the base URL an account
-// keeps in its settings, and a query or fragment, which can hold a secret under any name (an OAuth
-// redirect's code), keeps the whole value secret.
+// https URL with no query or fragment, whose host holds only letters, digits and "-.:[]" and whose
+// path only the characters of pathChars (so no "@", ";", "%", "," or a second address that Go reads
+// as part of the path or host, which would hide a password), such as a base URL a person typed, whose
+// words are no secret and which an error should quote. Of such an address only its user info
+// counts: as written, and its password, its user name from minBareName bytes, and "user:password".
+// The path and host show, as an account's saved base URL does. Anything else keeps the whole
+// value secret, a query or fragment included, which can hold a secret under any name (an OAuth
+// redirect's code).
 func wholeSecrets(v string, secret bool) []string {
 	if secret {
 		return []string{v}
 	}
 	t := strings.TrimSpace(v)
 	u, err := url.Parse(t)
-	if err != nil || u.Host == "" || u.Scheme != "http" && u.Scheme != "https" ||
-		strings.ContainsAny(t, "?#") || strings.IndexFunc(t, unicode.IsSpace) >= 0 {
+	if err != nil || u.Host == "" || u.Opaque != "" || u.Scheme != "http" && u.Scheme != "https" ||
+		strings.ContainsAny(t, "?#") || strings.IndexFunc(t, unicode.IsSpace) >= 0 ||
+		strings.Trim(u.EscapedPath(), pathChars) != "" ||
+		strings.Trim(u.Host, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-.:[]") != "" {
 		return []string{v}
 	}
 	if u.User == nil {
 		return nil
 	}
-	out := []string{u.User.String()}
-	if name := u.User.Username(); name != "" {
+	// With the host and path as above, the user info is what stands before the last "@" of the
+	// authority, as written.
+	authority := t[strings.Index(t, "://")+3:]
+	authority, _, _ = strings.Cut(authority, "/")
+	out := []string{authority[:strings.LastIndexByte(authority, '@')], u.User.String()}
+	if name := u.User.Username(); len(name) >= minBareName {
 		out = append(out, name)
 	}
 	if p, ok := u.User.Password(); ok && p != "" {
@@ -375,7 +409,8 @@ func callError(ctx context.Context, e *Extension, redact *protocol.Redactor, err
 	return &llm.Error{Code: llm.CodeExtensionCrashed, Message: fmt.Sprintf("extension %s ended the call without finishing it", e.manifest.ID)}
 }
 
-// inputCredential holds what a user entered as a credential, so all of it counts as secret.
+// inputCredential holds what a user entered as a credential, so all of it counts as secret: the
+// values addSecrets keeps (wholeSecrets), and an account's proxy and header forms.
 func inputCredential(input map[string]string) *protocol.Credential {
 	if len(input) == 0 {
 		return nil
@@ -394,8 +429,8 @@ func secretsCredential(secrets []string) *protocol.Credential {
 	return &protocol.Credential{Kind: "settings", Data: data}
 }
 
-// redactPrompt removes what the user entered from every text a prompt shows, in case the
-// extension echoes it.
+// redactPrompt removes what the user entered (but for a typed plain address, wholeSecrets) from
+// every text a prompt shows, in case the extension echoes it.
 func redactPrompt(r *protocol.Redactor, p protocol.Prompt) protocol.Prompt {
 	for _, f := range []*string{&p.Kind, &p.Message, &p.URL, &p.UserCode, &p.VerificationURI, &p.VerificationURIComplete} {
 		*f = r.String(*f)

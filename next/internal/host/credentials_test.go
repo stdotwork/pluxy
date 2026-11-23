@@ -151,7 +151,7 @@ func TestLoginErrorShowsTheTypedAddress(t *testing.T) {
 			`user sam:hunter2 refused`,
 		} {
 			got := loginError(t, in, secret, text)
-			for _, s := range []string{"hunter2", "sam:"} {
+			for _, s := range []string{"hunter2", "sam:hunter2"} {
 				if strings.Contains(got, s) {
 					t.Errorf("%q shows %q: %q", text, s, got)
 				}
@@ -194,4 +194,66 @@ func TestLoginErrorShowsTheTypedAddress(t *testing.T) {
 			t.Errorf("got %q", got)
 		}
 	})
+}
+
+// An address whose user info Go reads as part of its host or path is not a plain address, and an
+// address that hides its query in other characters is not either: both stay secret whole.
+func TestLoginErrorKeepsAnAddressWithHiddenSecretsWhole(t *testing.T) {
+	cases := []struct{ name, input, secret string }{
+		{"password after a slash", "http://localhost:41234/Hunter2@gw.invalid/v1", "Hunter2"},
+		{"digits before a slash", "https://sam:2024/Hunter2xyz@gateway.invalid/v1", "Hunter2xyz"},
+		{"slash in the user name", "https://te/am:Hunter2xyz@gateway.invalid/v1", "Hunter2xyz"},
+		{"two addresses", "https://a:b@one.invalid/v1,https://sam:Hunter2xyz@two.invalid/v1", "Hunter2xyz"},
+		{"escaped query", "http://localhost:1455/auth/callback%3Fcode%3DAuthCode12345%26state%3Dabc", "AuthCode12345"},
+		{"escaped fragment", "http://localhost:1455/auth/callback%23access_token%3DAuthCode12345", "AuthCode12345"},
+		{"semicolon parameter", "http://localhost:1455/auth/callback;code=AuthCode12345", "AuthCode12345"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := loginError(t, map[string]string{"redirect_url": c.input}, nil, "bad "+c.input+" now")
+			if strings.Contains(got, c.secret) {
+				t.Errorf("shows %q: %q", c.secret, got)
+			}
+		})
+	}
+}
+
+// A user name shorter than 8 bytes alone is no secret of its own, so its letters stay in the error's
+// words; its password and "user:password" are.
+func TestLoginErrorShortUserName(t *testing.T) {
+	in := map[string]string{"base_url": "https://a:Pw9xQ2@gateway.invalid/v1"}
+	got := loginError(t, in, nil, `could not reach the model list: Get "https://a:Pw9xQ2@gateway.invalid/v1/models": Pw9xQ2 a:Pw9xQ2`)
+	if !strings.Contains(got, "could not reach the model list") || strings.Contains(got, "Pw9xQ2") || !strings.Contains(got, "gateway.invalid/v1/models") {
+		t.Errorf("got %q", got)
+	}
+	in = map[string]string{"base_url": "https://username8:Pw9xQ2@gateway.invalid/v1"}
+	if got := loginError(t, in, nil, "who username8 asked"); strings.Contains(got, "username8") {
+		t.Errorf("an 8-byte user name shows: %q", got)
+	}
+	// The user info as written is removed too, however it is escaped.
+	in = map[string]string{"base_url": "https://sam:hunter%32xyz@gateway.invalid/v1"}
+	if got := loginError(t, in, nil, "Get https://sam:hunter%32xyz@gateway.invalid/v1 and hunter2xyz"); strings.Contains(got, "hunter") {
+		t.Errorf("got %q", got)
+	}
+}
+
+// What core records of an account's proxy and headers counts whole, a plain address too: a proxy
+// password can be one.
+func TestLoginPromptHidesAProxyPasswordThatIsAnAddress(t *testing.T) {
+	const secret = "https://vault.invalid/XXsecretXX"
+	core, ext := net.Pipe()
+	defer core.Close()
+	defer ext.Close()
+	l := &LoginCall{ext: &Extension{manifest: &Manifest{ID: "test/x"}}, ctx: context.Background(), conn: core, secretInputs: map[string]bool{}}
+	l.addForms(map[string]string{"proxy 0": secret})
+	go protocol.WriteFrame(ext, protocol.Reply{Event: llm.Event{Type: protocol.TypeLoginPrompt}, Prompt: &protocol.Prompt{
+		Kind: protocol.PromptBrowser, Message: "via " + secret,
+	}})
+	r := l.Next()
+	if r.Prompt == nil {
+		t.Fatalf("got %+v, want a prompt", r)
+	}
+	if strings.Contains(r.Prompt.Message, "vault.invalid") {
+		t.Errorf("prompt shows the proxy password: %q", r.Prompt.Message)
+	}
 }
