@@ -43,8 +43,8 @@
 // "report_usage" makes each reply carry token counts (derived from the request, so the same
 // request always reports the same), "five_hour_percent" and "weekly_percent" move how much of the
 // two windows the quota shows used, and "no_limits" makes quota report the plan and no windows.
-// A signed-in account whose refresh token is "revoked-refresh-token" (the browser login with
-// code=revoked) has its renewal refused for good, as a provider does that revoked the sign-in.
+// A browser login with code=revoked signs in an account whose renewal is then refused for good,
+// as a provider's is that revoked the sign-in: the account needs a new login.
 //
 // A file named crash-on-start in the package folder makes it exit before its handshake. Each
 // start appends the process ID to the file starts in the package folder.
@@ -120,7 +120,7 @@ const (
 	refusedKey    = "bad"
 	// revokedRefreshToken is the refresh token of a sign-in the provider revoked (login code=revoked):
 	// its renewal is refused.
-	revokedRefreshToken = "revoked-refresh-token"
+	revokedRefreshToken = "demo-rt-9a41c07e"
 )
 
 var loginMethods = []protocol.LoginMethod{
@@ -324,6 +324,8 @@ func login(ctx context.Context, call sdk.LoginCall, s *sdk.LoginSession) (*proto
 			switch code {
 			case "ok":
 				return grant(call.Account.ID, oauthCredential("fake-refresh-token")), nil
+			case "revoked":
+				return grant(call.Account.ID, oauthCredential(revokedRefreshToken)), nil
 			case "bad":
 				return nil, &llm.Error{Code: llm.CodeAuth, Message: refusedReason}
 			}
