@@ -42,6 +42,8 @@ type fakeAccountCore struct {
 	deleteDelay time.Duration
 	// onCreate runs on each sign-in the fake starts, so a test can make one fail or end late.
 	onCreate func(*fakeAccountLogin)
+	// firstLabel is the label of the "triple" method's first input, when set.
+	firstLabel string
 }
 
 // fakeAccountLogin is one sign-in the fake runs.
@@ -54,6 +56,8 @@ type fakeAccountLogin struct {
 	failPolls int
 	// failInputs: how many answers the sign-in refuses with 422 before taking one.
 	failInputs int
+	// failMessage is what a refused answer says, when set.
+	failMessage string
 	// gone makes every read of the sign-in answer 404, as core does for one it does not have.
 	gone bool
 	// doneAfter ends the sign-in on its own, so a test that never answers has an end.
@@ -229,7 +233,7 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 			map[string]any{"method": "ask_later", "kind": "input", "label": "Asks later"},
 			map[string]any{"method": "triple", "kind": "api_key", "label": "Three values",
 				"inputs": []any{
-					map[string]any{"name": "one", "label": "First"},
+					map[string]any{"name": "one", "label": cmpOr(f.firstLabel, "First")},
 					map[string]any{"name": "two", "label": "Second", "optional": true},
 					map[string]any{"name": "three", "label": "Third"},
 				}},
@@ -366,7 +370,7 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 		if l.failInputs > 0 {
 			l.failInputs--
 			w.WriteHeader(http.StatusUnprocessableEntity)
-			write(map[string]any{"error": map[string]any{"code": "invalid_request", "message": "the test core did not take that value"}})
+			write(map[string]any{"error": map[string]any{"code": "invalid_request", "message": cmpOr(l.failMessage, "the test core did not take that value")}})
 			return
 		}
 		f.inputs = append(f.inputs, in)
