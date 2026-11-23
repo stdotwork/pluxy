@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -61,6 +62,9 @@ func builtinModels() (*protocol.ModelList, error) {
 
 func fetchModels(ctx context.Context, call sdk.ModelsCall) ([]protocol.Model, bool) {
 	fail := func(reason string) ([]protocol.Model, bool) {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return nil, false // the caller is gone; nobody is served the built-in list
+		}
 		modelReadFailed(call.Account.ID, call.Account.Credential, reason)
 		return nil, false
 	}
@@ -113,7 +117,7 @@ func fetchModels(ctx context.Context, call sdk.ModelsCall) ([]protocol.Model, bo
 			return fail(fmt.Sprintf("HTTP %d", resp.StatusCode))
 		}
 		if readErr != nil {
-			return fail("reading the reply failed: " + readErr.Error())
+			return fail("reading the reply failed")
 		}
 
 		var page struct {

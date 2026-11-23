@@ -1,10 +1,11 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
+	"net"
 	"os"
 	"sync"
 
@@ -20,9 +21,10 @@ var (
 )
 
 // modelReadFailed writes one stderr line for an account's failed live model read, which the
-// caller answers with the built-in list. The reason passes through the redactor of the account's
-// credential and holds no URL or reply body. A read that fails again for the same reason as its
-// last failure is not logged again; modelReadOK ends a streak, so the next failure is.
+// caller answers with the built-in list. The reason is fixed text, never text of an error or a
+// reply, and still passes through the redactor of the account's credential. A read that fails
+// again for the same reason as its last failure is not logged again, whatever the credential;
+// modelReadOK ends a streak, so the next failure is logged.
 func modelReadFailed(accountID string, cred *protocol.Credential, reason string) {
 	reason = protocol.NewRedactor(cred).String(reason)
 	modelLogMu.Lock()
@@ -41,11 +43,18 @@ func modelReadOK(accountID string) {
 	modelLogMu.Unlock()
 }
 
-// requestFailure describes a failed request without its URL, which the HTTP client puts in its errors.
+// requestFailure names why a request failed in fixed words. Text of the error is never logged: the
+// HTTP client quotes bytes of the reply in it, and a reply can hold an account's email or ID.
 func requestFailure(err error) string {
-	var ue *url.Error
-	if errors.As(err, &ue) {
-		err = ue.Err
+	var dns *net.DNSError
+	var op *net.OpError
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "the request timed out"
+	case errors.As(err, &dns):
+		return "the host name could not be resolved"
+	case errors.As(err, &op):
+		return "the connection failed"
 	}
-	return "request failed: " + err.Error()
+	return "the request failed"
 }

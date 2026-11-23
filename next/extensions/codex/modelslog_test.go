@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +15,8 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 	"github.com/stdotwork/pluxy/next/sdk"
 )
+
+const logTestExt = "codex"
 
 const logTestSecret = "SECRET-0123456789abcdefghij"
 
@@ -104,8 +107,9 @@ func TestModelReadLogCannotReachProvider(t *testing.T) {
 	if _, err := listModels(context.Background(), call); err != nil {
 		t.Fatal(err)
 	}
-	if got := buf.String(); !strings.Contains(got, "request failed") || strings.Contains(got, url) {
-		t.Errorf("log = %q, want a request failure without the URL", got)
+	want := logTestExt + ": reading the model list failed (the connection failed); serving the built-in list\n"
+	if got := buf.String(); got != want {
+		t.Errorf("log = %q, want %q", got, want)
 	}
 }
 
@@ -113,4 +117,59 @@ func logTestCredential() *protocol.Credential {
 	c := subscriptionWith(idTokenWithPlan("plus"))
 	c.AccessToken = logTestSecret
 	return c
+}
+
+// TestModelReadLogHoldsNoReplyText: an upstream that answers with garbage holding an email and an
+// account ID, which the HTTP client quotes in its error, reaches the log as neither.
+func TestModelReadLogHoldsNoReplyText(t *testing.T) {
+	buf := captureModelLog(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			io.WriteString(c, "denied-for-person@example.test-acct-claim-123456\r\n\r\n")
+			c.Close()
+		}
+	}()
+	settings, _ := json.Marshal(map[string]string{"base_url": "http://" + ln.Addr().String()})
+	call := sdk.ModelsCall{Account: protocol.Account{ID: "acct", Settings: settings, Credential: logTestCredential()}}
+	if _, err := listModels(context.Background(), call); err != nil {
+		t.Fatal(err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, "the request failed") {
+		t.Errorf("log = %q, want the failed request logged", got)
+	}
+	for _, leak := range []string{"person@example.test", "acct-claim-123456", "denied-for", "127.0.0.1"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("log = %q, holds %q", got, leak)
+		}
+	}
+}
+
+// TestModelReadCancelledIsNotLogged: a read the caller cancelled logs nothing, as nobody is served
+// the built-in list.
+func TestModelReadCancelledIsNotLogged(t *testing.T) {
+	buf := captureModelLog(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+	settings, _ := json.Marshal(map[string]string{"base_url": srv.URL})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	call := sdk.ModelsCall{Account: protocol.Account{ID: "acct", Settings: settings, Credential: logTestCredential()}}
+	if _, err := listModels(ctx, call); err != nil {
+		t.Fatal(err)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("log = %q, want nothing", buf.String())
+	}
 }

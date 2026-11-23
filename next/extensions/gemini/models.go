@@ -4,6 +4,7 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -77,6 +78,9 @@ func builtinModels(raw []byte) (*protocol.ModelList, error) {
 
 func fetchGeminiModels(ctx context.Context, accountID, baseURL string, cred *protocol.Credential) ([]protocol.Model, bool) {
 	fail := func(reason string) ([]protocol.Model, bool) {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return nil, false // the caller is gone; nobody is served the built-in list
+		}
 		modelReadFailed(accountID, cred, reason)
 		return nil, false
 	}
@@ -122,7 +126,7 @@ func fetchGeminiModels(ctx context.Context, accountID, baseURL string, cred *pro
 			return fail(fmt.Sprintf("HTTP %d", resp.StatusCode))
 		}
 		if readErr != nil {
-			return fail("reading the reply failed: " + readErr.Error())
+			return fail("reading the reply failed")
 		}
 
 		var page struct {
