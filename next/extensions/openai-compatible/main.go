@@ -703,12 +703,42 @@ func relayStream(ctx context.Context, body io.Reader, out eventSender, upstreamF
 				return err
 			}
 			if ev.Terminal() {
+				readToEnd(ctx, body)
 				return nil
 			}
 		}
 		if eof {
 			return nil
 		}
+	}
+}
+
+// Bounds on what readToEnd reads of a reply after its last event: more than an upstream sends after
+// "[DONE]" or its last event, which is nothing but the end of the transfer, and short enough not
+// to hold the call's return back for long.
+const (
+	afterEndBytes = 64 << 10
+	afterEndWait  = time.Second
+)
+
+// readToEnd reads what comes after the last event of a streamed reply that ended cleanly, which is
+// nothing but the end of the transfer, so that the body is read to its end. The transport reuses
+// a connection only when its body was read to its end: a stream that stops at its last event
+// leaves the connection to be closed, and the next request dials a new one in the time to first
+// token, and for an upstream behind TLS, handshakes. It gives up after afterEndBytes, or after
+// afterEndWait while the upstream holds the stream open; the caller's close then ends what is
+// still reading. The last event has been sent, so the client does not wait for this.
+func readToEnd(ctx context.Context, body io.Reader) {
+	ctx, cancel := context.WithTimeout(ctx, afterEndWait)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = io.Copy(io.Discard, io.LimitReader(body, afterEndBytes))
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
 	}
 }
 
