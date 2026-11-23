@@ -225,6 +225,30 @@ func skipString(data []byte, i int) int {
 	return len(data)
 }
 
+// AppendCompact appends to dst the JSON text src without the whitespace outside its strings, as
+// json.Compact writes it (and json.Marshal does a json.RawMessage, with HTML escaping off), and
+// reports whether src is one valid JSON value as Valid does. For text that is not, it appends
+// nothing and returns dst.
+func AppendCompact(dst, src []byte) ([]byte, bool) {
+	if !Valid(src) {
+		return dst, false
+	}
+	start := 0
+	for i := 0; i < len(src); {
+		switch c := src[i]; {
+		case c == '"':
+			i = skipString(src, i)
+		case isSpace(c):
+			dst = append(dst, src[start:i]...)
+			i++
+			start = i
+		default:
+			i++
+		}
+	}
+	return append(dst, src[start:]...), true
+}
+
 // Trim returns data without the JSON whitespace around it.
 func Trim(data []byte) []byte {
 	i := skipSpace(data, 0)

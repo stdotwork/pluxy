@@ -42,6 +42,17 @@ func Unmarshal(data []byte, v any) error {
 	return json.Unmarshal(data, v)
 }
 
+// StdError returns json.Unmarshal's own error where err is the error Unmarshal gives for a value
+// of another JSON type than v, which only wraps it (and makes it when read): for a caller that
+// passes the error on and must give the one json.Unmarshal gives, type and all. Any other error
+// it returns as it is.
+func StdError(err error) error {
+	if te, ok := err.(*typeError); ok {
+		return te.Unwrap()
+	}
+	return err
+}
+
 // typeError is json.Unmarshal's error for data of another JSON type than t, made when read.
 type typeError struct {
 	data []byte
@@ -219,6 +230,10 @@ func build(t reflect.Type, building map[reflect.Type]bool) decodeFunc {
 			elems, ok := arrayOf(data, top)
 			if !ok {
 				return notContainer(v, data, top)
+			}
+			if !v.IsNil() {
+				// A repeated key: json.Unmarshal decodes into the slice already there.
+				return other
 			}
 			s := reflect.MakeSlice(t, len(elems), len(elems))
 			for i, el := range elems {
