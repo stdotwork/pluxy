@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -213,5 +214,27 @@ func TestGeminiOpenAIEmbeddingsUsageNeedsEveryCall(t *testing.T) {
 	last := rec.events[len(rec.events)-1]
 	if last.Type != llm.EventFinish || last.Usage != nil {
 		t.Errorf("last event = %+v, want a finish without usage, as one call reported none", last)
+	}
+}
+
+// A 200 with an error object does not carry the upstream's text to the client: it can name the
+// account's project, which an ordinary error reply has masked.
+func TestGeminiEmbedErrorBodyDoesNotLeakProject(t *testing.T) {
+	const reply = `{"error":{"code":403,"message":"Permission denied on resource project projects/acme-prod-4821.","status":"PERMISSION_DENIED"}}`
+	const one = `{"content":{"parts":[{"text":"a"}]}}`
+	for _, tc := range []struct {
+		name, model string
+		vertex      bool
+	}{{"gemini api", "gemini-embedding-001", false}, {"vertex embedContent", "gemini-embedding-2", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec, err, _ := embedAttempt(t, tc.vertex, tc.model, llm.FormatGeminiEmbedContent, one, func(w http.ResponseWriter, _ int) { io.WriteString(w, reply) })
+			var e *llm.Error
+			if !errors.As(err, &e) || e.Code != llm.CodeUpstream {
+				t.Fatalf("err = %v, want an upstream error", err)
+			}
+			if got := fmt.Sprintf("%+v %s", e, e.Raw); strings.Contains(got, "acme-prod-4821") || len(rec.events) != 0 {
+				t.Errorf("error %s, events %d: the project reached the client or the reply was sent", got, len(rec.events))
+			}
+		})
 	}
 }

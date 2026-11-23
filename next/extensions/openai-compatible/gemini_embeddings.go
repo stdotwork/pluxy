@@ -640,15 +640,9 @@ func checkGeminiEmbedReply(raw []byte, vendor string, isBatch bool, want int) er
 		return upstreamEmbeddingError(vendor + " embedding reply is not JSON")
 	}
 	if e := bytes.TrimSpace(resp.Error); len(e) > 0 && string(e) != "null" {
-		var detail struct {
-			Message string `json:"message"`
-		}
-		_ = json.Unmarshal(e, &detail)
-		msg := vendor + " answered 200 with an error"
-		if detail.Message != "" {
-			msg += ": " + detail.Message
-		}
-		return upstreamEmbeddingError(msg)
+		// Fixed text: the upstream's own message can name the account's project, which the
+		// masking of a normal error reply would remove.
+		return upstreamEmbeddingError(vendor + " answered 200 with an error")
 	}
 	hasValues := func(v json.RawMessage) bool {
 		v = bytes.TrimSpace(v)

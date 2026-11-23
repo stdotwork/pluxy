@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -118,5 +119,20 @@ func TestChatWireEmbedUsageNeedsEveryCall(t *testing.T) {
 	}
 	if rec.usage != nil || strings.Contains(rec.body(), "usageMetadata") {
 		t.Errorf("usage = %+v, body = %s, want no usage when one call reported none", rec.usage, rec.body())
+	}
+}
+
+// A 200 with an error object does not carry the upstream's text to the client: it can name the
+// account's project, which an ordinary error reply has masked.
+func TestGeminiWireEmbedErrorBodyDoesNotLeakProject(t *testing.T) {
+	const reply = `{"error":{"code":403,"message":"Permission denied on resource project projects/acme-prod-4821.","status":"PERMISSION_DENIED"}}`
+	rec, err, _ := embedAttempt(t, "gemini", "gemini-embedding-001", llm.FormatGeminiEmbedContent, `{"content":{"parts":[{"text":"a"}]}}`,
+		func(w http.ResponseWriter, _ int) { io.WriteString(w, reply) })
+	var e *llm.Error
+	if !errors.As(err, &e) || e.Code != llm.CodeUpstream {
+		t.Fatalf("err = %v, want an upstream error", err)
+	}
+	if got := fmt.Sprintf("%+v %s", e, e.Raw); strings.Contains(got, "acme-prod-4821") || rec.finished {
+		t.Errorf("error %s, finished %v: the project reached the client or the reply was sent", got, rec.finished)
 	}
 }
