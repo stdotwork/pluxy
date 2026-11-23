@@ -29,12 +29,18 @@ type namePattern struct {
 	ok func(name string) bool
 }
 
-const nameToken = `([\w%-]+(?:\.[\w%-]+)*)`
+// nameToken is a name: words joined by dots, behind a domain and a colon when the project is
+// scoped to a domain ("example.com:acme-prod-4821"). looseNameToken is the same for a query
+// parameter, which also takes a dot at the start or two dots in a row.
+const (
+	nameToken      = `((?:[\w%-]+(?:\.[\w%-]+)*\.[\w%-]+:)?[\w%-]+(?:\.[\w%-]+)*)`
+	looseNameToken = `((?:\.*[\w%-]+(?:\.+[\w%-]+)*\.+[\w%-]+:)?\.*[\w%-]+(?:\.+[\w%-]+)*)`
+)
 
 var namePatterns = []namePattern{
 	{re: regexp.MustCompile(`(?i)\b(?:projects|organizations|folders|billingAccounts)/` + nameToken)},
 	{re: regexp.MustCompile(`(?i)\b(?:project(?:_?id|_?number)?|organization|folder|billingAccount):` + nameToken)},
-	{re: regexp.MustCompile(`(?i)\bproject(?:_?id|_?number)?=` + nameToken)},
+	{re: regexp.MustCompile(`(?i)\bproject(?:_?id|_?number)?=` + looseNameToken)},
 	{re: regexp.MustCompile(`(?i)\bproject (?:number |id )?(\d+)\b`)},
 	{re: regexp.MustCompile("(?i)\\bproject ['\"`]([^'\"`\\s]+)['\"`]")},
 	{re: regexp.MustCompile(`(?i)\b(?:user|serviceAccount|group):([A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)`)},
@@ -61,12 +67,17 @@ func looksLikeProjectID(id string) bool {
 // serviceAccountProject finds the project in a service account's address.
 var serviceAccountProject = regexp.MustCompile(`@([a-z][a-z0-9-]*)\.iam\.gserviceaccount\.com$`)
 
+// domainScoped is a project scoped to a domain: "example.com:acme-prod-4821".
+var domainScoped = regexp.MustCompile(`^((?:[\w%-]+\.)+[\w%-]+):([\w%-]+(?:\.[\w%-]+)*)$`)
+
 // MaskProject returns e without the Google project or account its message and its raw body name.
 // known are identifiers the caller knows belong to the upstream account (its project, a service
 // account's project and address); the structured fields of Google's error details and the text
 // patterns above add the rest. A non-empty QuotaFailure violation's subject and ResourceInfo's
-// owner, found by the detail's @type, go whole in their own field, whatever they say; one that
-// looks like an identifier (contains :, / or @) or a project ID is also masked where another
+// owner, found by the detail's @type, go whole in their own field, whatever they say, while the
+// detail is fewer than maxFieldDepth levels of objects and arrays down in the body; below that
+// only the text patterns and the names learned from elsewhere mask what those fields hold. One
+// that looks like an identifier (contains :, / or @) or a project ID is also masked where another
 // string repeats it, while a plain word (such as "global") stays elsewhere. A PreconditionFailure's
 // subject, and the quota metric, ID, value and dimensions, stay. Each collected name is replaced as
 // a whole token in the message and in every string value of the raw body (an object, or the array a
@@ -397,6 +408,8 @@ func (e errorShape) ok() bool {
 type names struct {
 	list []string
 	seen map[string]bool
+	// matcher finds list in a string; it is built on first use, with the list longest name first.
+	matcher *nameMatcher
 }
 
 func newNames(known []string) *names {
@@ -427,6 +440,14 @@ func (d *names) addProject(v string) {
 		v = v[:i]
 	}
 	d.add(v)
+	// A project scoped to a domain ("example.com:acme-prod-4821") is masked whole, and its two
+	// halves wherever else the body names them.
+	if strings.IndexByte(v, ':') > 0 {
+		if m := domainScoped.FindStringSubmatch(v); m != nil {
+			d.add(m[1])
+			d.add(m[2])
+		}
+	}
 }
 
 // learnString adds the names text holds in the forms of namePatterns.
@@ -451,8 +472,10 @@ func (d *names) learnJSON(raw []byte) map[int]bool {
 }
 
 // maxFieldDepth caps how deeply learnFields descends into nested JSON objects and arrays. Real
-// Google error payloads are well below this, and the iterative pattern pass in mapStrings still
-// covers every string at any depth.
+// Google error payloads are well below this. Below it a detail's structured fields teach and
+// mask nothing: the pattern pass in mapStrings still looks at every string at any depth, but it
+// masks only what a text pattern or an already learned name matches, so a bare project ID in a
+// field down there stays unless the body names it in a pattern form elsewhere.
 const maxFieldDepth = 64
 
 // projectKeys are the members of Google's error details that hold a project, by their names
@@ -696,16 +719,20 @@ func normalKey(k string) string {
 	return strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(k))
 }
 
-// maskString replaces the names in s: the pattern forms, then each known name as a whole token.
+// maskString replaces the names in s: the pattern forms, then each known name as a whole token,
+// the longest name first.
 func (d *names) maskString(s string) string {
 	for _, p := range namePatterns {
 		s = replaceGroup(s, p)
 	}
-	sort.SliceStable(d.list, func(i, j int) bool { return len(d.list[i]) > len(d.list[j]) })
-	for _, id := range d.list {
-		s = replaceToken(s, id)
+	if len(d.list) == 0 {
+		return s
 	}
-	return s
+	if d.matcher == nil || len(d.matcher.list) != len(d.list) {
+		sort.SliceStable(d.list, func(i, j int) bool { return len(d.list[i]) > len(d.list[j]) })
+		d.matcher = newNameMatcher(d.list)
+	}
+	return d.matcher.mask(s)
 }
 
 func (d *names) maskJSON(raw []byte, whole map[int]bool) []byte {
@@ -734,43 +761,6 @@ func replaceGroup(s string, p namePattern) string {
 		last = m[3]
 	}
 	b.WriteString(s[last:])
-	return b.String()
-}
-
-func isAlnum(c byte) bool {
-	return c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
-}
-
-func isTokenByte(c byte) bool { return isAlnum(c) || c == '_' || c == '-' }
-
-// replaceToken replaces id in s where it stands alone: not next to a letter, digit, underscore
-// or hyphen, nor to a dot that has a letter or digit beyond it (so 12 leaves 123, 12.5 and a
-// model name such as gemini-2.5-flash alone).
-func replaceToken(s, id string) string {
-	if id == "" || !strings.Contains(s, id) {
-		return s
-	}
-	var b strings.Builder
-	i := 0
-	for {
-		k := strings.Index(s[i:], id)
-		if k < 0 {
-			break
-		}
-		k += i
-		end := k + len(id)
-		before := k == 0 || !isTokenByte(s[k-1]) && !(s[k-1] == '.' && k >= 2 && isAlnum(s[k-2]))
-		after := end == len(s) || !isTokenByte(s[end]) && !(s[end] == '.' && end+1 < len(s) && isAlnum(s[end+1]))
-		if before && after {
-			b.WriteString(s[i:k])
-			b.WriteString(Redacted)
-			i = end
-		} else {
-			b.WriteString(s[i : k+1])
-			i = k + 1
-		}
-	}
-	b.WriteString(s[i:])
 	return b.String()
 }
 
@@ -823,6 +813,7 @@ func skipString(b []byte, i int) int {
 	if i >= len(b) || b[i] != '"' {
 		return i
 	}
+	start := i
 	i++
 	for i < len(b) {
 		if b[i] == '\\' {
@@ -830,10 +821,12 @@ func skipString(b []byte, i int) int {
 			continue
 		}
 		if b[i] == '"' {
+			scanned(i + 1 - start)
 			return i + 1
 		}
 		i++
 	}
+	scanned(len(b) - start)
 	return len(b)
 }
 
@@ -841,6 +834,7 @@ func skipValue(b []byte, i int) int {
 	if i >= len(b) {
 		return i
 	}
+	start := i
 	switch b[i] {
 	case '"':
 		return skipString(b, i)
@@ -859,15 +853,18 @@ func skipValue(b []byte, i int) int {
 			}
 			i++
 		}
+		scanned(i - start)
 		return i
 	default:
 		for i < len(b) {
 			switch b[i] {
 			case ' ', '\t', '\n', '\r', ',', '}', ']':
+				scanned(i - start)
 				return i
 			}
 			i++
 		}
+		scanned(i - start)
 		return i
 	}
 }
