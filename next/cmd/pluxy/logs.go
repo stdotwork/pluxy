@@ -56,8 +56,27 @@ var logsRequestCommand = command{words: "logs request", args: []string{"id"},
 	routes:  []string{"GET /request-log-by-id/{id}"},
 	summary: "the request log of the request with a trace ID",
 	run: func(x *invocation) error {
-		return x.logFile("/request-log-by-id/" + url.PathEscape(x.args[0]))
+		err := x.logFile("/request-log-by-id/" + url.PathEscape(x.args[0]))
+		return x.explainNoRequestLog(err)
 	}}
+
+// explainNoRequestLog adds to core's 404 for a trace ID that request logging being off is why
+// there may be none: with it off, core writes only the logs of requests that failed. The
+// settings are read only for this; if they cannot be read, or request logging is on, core's own
+// error stands. With --json the error is core's body as it is.
+func (x *invocation) explainNoRequestLog(err error) error {
+	var ae *management.APIError
+	if err == nil || x.json || !errors.As(err, &ae) || ae.Status != http.StatusNotFound || ae.Code != "not_found" {
+		return err
+	}
+	var s management.Settings
+	if _, serr := x.client.Call(x.ctx, http.MethodGet, "/settings", nil, nil, &s); serr != nil || s.Observability.Logs.RequestLog {
+		return err
+	}
+	named := *ae
+	named.Message += `; request logging is off, so only requests that failed are logged: turn on "Enable request logging" in the Config Panel, then send the request again`
+	return &named
+}
 
 var logsClearCommand = command{words: "logs clear", routes: []string{"DELETE /logs"},
 	summary: "empty main.log and delete its rotated files; request logs and error logs stay",

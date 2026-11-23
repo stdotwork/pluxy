@@ -242,6 +242,12 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 			map[string]any{"method": "repeat", "kind": "input", "label": "The same prompt after a wrong answer"},
 			map[string]any{"method": "service_account", "kind": "api_key", "label": "Service account",
 				"inputs": []any{map[string]any{"name": "service_account", "label": "Service account key", "secret": true}}},
+			map[string]any{"method": "url_key", "kind": "api_key", "label": "Address and key",
+				"inputs": []any{
+					map[string]any{"name": "base_url", "label": "Base URL"},
+					map[string]any{"name": "api_key", "label": "API key", "secret": true},
+					map[string]any{"name": "quota", "label": "Quota", "optional": true},
+				}},
 			map[string]any{"method": "kept", "kind": "api_key", "label": "Base URL",
 				"inputs": []any{map[string]any{"name": "base_url", "label": "Base URL"}}},
 			map[string]any{"method": "opt_secret", "kind": "api_key", "label": "Optional then secret",
@@ -599,6 +605,9 @@ func TestCLIAccountLogin(t *testing.T) {
 	}
 	if strings.Contains(out+errOut, key) {
 		t.Errorf("the key reached the terminal: %q %q", out, errOut)
+	}
+	if _, errOut, _ := f.run("account", "login", "nobody", "--method", "api_key"); errOut != "pluxy: no such account \"nobody\" (not_found)\n" {
+		t.Errorf("account login for an account that is not there: %q", errOut)
 	}
 	if _, _, code := f.run("account", "login", "nobody", "--method", "api_key"); code != 5 {
 		t.Errorf("account login of an account core has not: %d, want 5", code)
@@ -1432,5 +1441,44 @@ func TestCLIAccountUnknownSubcommand(t *testing.T) {
 	}
 	if _, errOut, code := f.run("account"); code != 2 || !strings.Contains(errOut, "needs a command") {
 		t.Errorf("pluxy account alone: %d %q", code, errOut)
+	}
+}
+
+// A short extension name with one installed package of that name is taken as that package, for an
+// account to add; more than one is refused with the list.
+func TestCLIAccountAddShortExtensionName(t *testing.T) {
+	f := newFakeAccountCore(t)
+	out, errOut, code := f.runIn("sk-short\n", false, "account", "add", "ext", "--method", "api_key", "--id", "short-1")
+	if code != 0 || !strings.Contains(out, "account short-1 added") {
+		t.Fatalf("account add with a short name: code=%d out=%q err=%q", code, out, errOut)
+	}
+	if starts, _ := f.start(); len(starts) != 1 || starts[0]["extension"] != "test/ext" {
+		t.Fatalf("core was sent %v, want the extension test/ext", starts)
+	}
+	r := management.LoginMethodsReply{Extensions: []management.LoginMethods{{Extension: "a/ext"}, {Extension: "b/ext"}, {Extension: "b/other"}}}
+	if _, err := methodsFor(r, "ext"); err == nil || !strings.Contains(err.Error(), "a/ext, b/ext") || strings.Contains(err.Error(), "other") {
+		t.Errorf("a name two extensions share: %v, want an error that lists both", err)
+	}
+	if m, err := methodsFor(r, "other"); err != nil || m.Extension != "b/other" {
+		t.Errorf("a name one extension has: %v %v", m, err)
+	}
+	if _, err := methodsFor(r, "x/ext"); err == nil || !strings.Contains(err.Error(), "no extension") {
+		t.Errorf("a full ID that is not installed: %v, want the refusal", err)
+	}
+}
+
+// When standard input runs out, the error names every value still missing and the order lines
+// are read in, so a line taken for the first value is not a surprise.
+func TestCLIAccountAddMissingValuesNamed(t *testing.T) {
+	f := newFakeAccountCore(t)
+	_, errOut, code := f.runIn("only-one\n", false, "account", "add", "test/ext", "--method", "url_key", "--id", "uk-1")
+	want := "the sign-in needs API key: standard input gave 1 line, and it reads one line for each value, in this order: Base URL, API key, Quota (optional)"
+	if code != 2 || !strings.Contains(errOut, want) {
+		t.Fatalf("one line for two values: code=%d err=%q, want it to contain %q", code, errOut, want)
+	}
+	_, errOut, code = f.runIn("", false, "account", "add", "test/ext", "--method", "url_key", "--id", "uk-2")
+	want = "the sign-in needs Base URL, API key: standard input gave no line, and"
+	if code != 2 || !strings.Contains(errOut, want) {
+		t.Fatalf("no line for two values: code=%d err=%q, want it to contain %q", code, errOut, want)
 	}
 }

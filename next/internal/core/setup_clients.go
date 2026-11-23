@@ -830,7 +830,7 @@ var ClientSnippetTools = []string{"claude-code", "codex", "opencode", "pi", "omp
 // clientSnippetNames maps what a person may call a tool (its ID, its setup package's ID, a
 // longer name) to its SetupClient ID.
 var clientSnippetNames = map[string]string{
-	"claude-code": "claude-code", "pluxy/claude-code": "claude-code",
+	"claude-code": "claude-code", "claude": "claude-code", "pluxy/claude-code": "claude-code",
 	"codex": "codex", "codex-cli": "codex", "pluxy/codex-setup": "codex",
 	"opencode": "opencode", "pluxy/opencode": "opencode",
 	"pi": "pi", "pluxy/pi-setup": "pi",

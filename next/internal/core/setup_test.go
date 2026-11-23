@@ -260,6 +260,9 @@ func TestClientSnippetsReadAsConfigured(t *testing.T) {
 	if _, ok := ClientSnippetFor("pluxy/omp-setup", coreURL, "k"); !ok {
 		t.Error("the setup package's ID names no tool")
 	}
+	if snip, ok := ClientSnippetFor("claude", coreURL, "k"); !ok || snip.Tool != "claude-code" {
+		t.Errorf("claude is not taken as claude-code: %+v", snip)
+	}
 	if _, ok := ClientSnippetFor("cursor", coreURL, "k"); ok {
 		t.Error("an unknown tool has a snippet")
 	}
