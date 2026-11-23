@@ -30,7 +30,8 @@ ui: ## UI kit: install, type check, Biome, unit tests
 ui-browser: ## UI kit browser test (headless Chromium)
 	cd ui && bun run test:browser
 
-app: ## Desktop app, bun side: install, check, lint, test, build
+app: ## Desktop app, bun side: install (the kit's packages too), check, lint, test, build
+	cd ui && bun install --frozen-lockfile
 	cd app && bun install --frozen-lockfile && bun run check && bun run lint && bun run test && bun run build
 
 app-rust: ## Desktop app, Rust side: cargo fmt --check, cargo test
