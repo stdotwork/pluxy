@@ -5,6 +5,8 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -62,7 +64,7 @@ func listModels(ctx context.Context, call sdk.ModelsCall) (*protocol.ModelList, 
 	}
 	builtin := builtinModels(call.Account.Credential)
 	if a, err := accountOf(call.Account.Credential); err == nil && a.subscription {
-		if models, ok := fetchCodexModels(ctx, s, a, builtin.Models); ok {
+		if models, ok := fetchCodexModels(ctx, call, s, a, builtin.Models); ok {
 			return &protocol.ModelList{
 				Models:  models,
 				OwnedBy: modelsOwner,
@@ -134,10 +136,17 @@ func builtinModels(c *protocol.Credential) *protocol.ModelList {
 
 // fetchCodexModels reads the account's live model list, each model filled from the built-in entry of
 // its slug in builtin.
-func fetchCodexModels(ctx context.Context, s settings, a account, builtin []protocol.Model) ([]protocol.Model, bool) {
+func fetchCodexModels(ctx context.Context, call sdk.ModelsCall, s settings, a account, builtin []protocol.Model) ([]protocol.Model, bool) {
+	fail := func(reason string) ([]protocol.Model, bool) {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return nil, false // the caller is gone; nobody is served the built-in list
+		}
+		modelReadFailed(call.Account.ID, call.Account.Credential, reason)
+		return nil, false
+	}
 	u, err := url.Parse(baseURL(s, a) + "/models")
 	if err != nil {
-		return nil, false
+		return fail("the base URL is invalid")
 	}
 	q := u.Query()
 	q.Set("client_version", s.clientVersion())
@@ -148,7 +157,7 @@ func fetchCodexModels(ctx context.Context, s settings, a account, builtin []prot
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return nil, false
+		return fail("the request could not be built")
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+a.token)
@@ -156,12 +165,15 @@ func fetchCodexModels(ctx context.Context, s settings, a account, builtin []prot
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, false
+		return fail(requestFailure(err))
 	}
 	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, modelsMaxBody))
 	resp.Body.Close()
-	if readErr != nil || resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, false
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fail(fmt.Sprintf("HTTP %d", resp.StatusCode))
+	}
+	if readErr != nil {
+		return fail("reading the reply failed")
 	}
 
 	var payload struct {
@@ -175,7 +187,7 @@ func fetchCodexModels(ctx context.Context, s settings, a account, builtin []prot
 		} `json:"models"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return nil, false
+		return fail("the reply was not valid JSON")
 	}
 
 	plan := strings.ToLower(strings.TrimSpace(a.planType))
@@ -213,8 +225,9 @@ func fetchCodexModels(ctx context.Context, s settings, a account, builtin []prot
 		}, builtin))
 	}
 	if len(models) == 0 {
-		return nil, false
+		return fail("the list holds no model for the account")
 	}
+	modelReadOK(call.Account.ID)
 	for _, im := range imageModels {
 		if !seen[im.ID] {
 			models = append(models, im)

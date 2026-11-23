@@ -4,6 +4,8 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -59,16 +61,23 @@ func builtinModels() (*protocol.ModelList, error) {
 }
 
 func fetchModels(ctx context.Context, call sdk.ModelsCall) ([]protocol.Model, bool) {
-	if authorize(make(http.Header), call.Account.Credential) != nil {
+	fail := func(reason string) ([]protocol.Model, bool) {
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return nil, false // the caller is gone; nobody is served the built-in list
+		}
+		modelReadFailed(call.Account.ID, call.Account.Credential, reason)
 		return nil, false
+	}
+	if authorize(make(http.Header), call.Account.Credential) != nil {
+		return fail("the account has no usable credential")
 	}
 	s, err := readSettings(call.Account.Settings)
 	if err != nil {
-		return nil, false
+		return fail("the account's settings are invalid")
 	}
 	base, err := url.Parse(s.BaseURL + "/v1/models")
 	if err != nil {
-		return nil, false
+		return fail("the base URL is invalid")
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, modelsTimeout)
@@ -90,22 +99,25 @@ func fetchModels(ctx context.Context, call sdk.ModelsCall) ([]protocol.Model, bo
 
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 		if err != nil {
-			return nil, false
+			return fail("the request could not be built")
 		}
 		req.Header.Set("Accept", "application/json")
 		req.Header.Set("Anthropic-Version", anthropicVersion)
 		if err := authorize(req.Header, call.Account.Credential); err != nil {
-			return nil, false
+			return fail("the account has no usable credential")
 		}
 
 		resp, err := client.Do(req)
 		if err != nil {
-			return nil, false
+			return fail(requestFailure(err))
 		}
 		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, modelsMaxBody))
 		resp.Body.Close()
-		if readErr != nil || resp.StatusCode < 200 || resp.StatusCode > 299 {
-			return nil, false
+		if resp.StatusCode < 200 || resp.StatusCode > 299 {
+			return fail(fmt.Sprintf("HTTP %d", resp.StatusCode))
+		}
+		if readErr != nil {
+			return fail("reading the reply failed")
 		}
 
 		var page struct {
@@ -120,7 +132,7 @@ func fetchModels(ctx context.Context, call sdk.ModelsCall) ([]protocol.Model, bo
 			LastID  string `json:"last_id"`
 		}
 		if err := json.Unmarshal(raw, &page); err != nil {
-			return nil, false
+			return fail("the reply was not valid JSON")
 		}
 		for _, item := range page.Data {
 			id := strings.TrimSpace(item.ID)
@@ -156,8 +168,9 @@ func fetchModels(ctx context.Context, call sdk.ModelsCall) ([]protocol.Model, bo
 		afterID = next
 	}
 	if len(models) == 0 {
-		return nil, false
+		return fail("the list holds no models")
 	}
+	modelReadOK(call.Account.ID)
 	return models, true
 }
 
