@@ -887,7 +887,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 				var tc customToolCall
 				tc.ID, tc.Type = it.CallID, "custom"
 				tc.Custom.Name, tc.Custom.Input = it.Name, it.Arguments
-				last.ToolCalls = append(last.ToolCalls, marshal(tc, e.kept(it.Origin)))
+				last.ToolCalls = append(last.ToolCalls, customToolCallJSON(tc, e.kept(it.Origin)))
 				break
 			}
 			var tc chatToolCall
@@ -898,7 +898,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			if extra != nil {
 				raw = rawjson.Merge(extra, raw)
 			}
-			last.ToolCalls = append(last.ToolCalls, marshal(tc, raw))
+			last.ToolCalls = append(last.ToolCalls, chatToolCallJSON(tc, raw))
 		case llm.ItemTypeToolResult:
 			content, err := e.toolResult(it, p, &relay)
 			if err != nil {
@@ -1067,7 +1067,7 @@ func (m *toolMedia) take() any {
 	}
 	what := m.what()
 	text := strings.ToUpper(what[:1]) + what[1:] + " returned by the preceding tool call(s):"
-	notice := marshal(outPart{Type: "text", Text: &text}, nil)
+	notice := partJSON(outPart{Type: "text", Text: &text}, nil)
 	out := append([]json.RawMessage{notice}, m.parts...)
 	*m = toolMedia{}
 	return out
@@ -1186,7 +1186,7 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 		switch p.Type {
 		case llm.PartText:
 			text := p.Text
-			out = append(out, marshal(outPart{Type: "text", Text: &text}, e.kept(p.Origin)))
+			out = append(out, partJSON(outPart{Type: "text", Text: &text}, e.kept(p.Origin)))
 			if p.Text != "" {
 				sendable = true
 			}
@@ -1220,7 +1220,7 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 				URL    string `json:"url"`
 				Detail string `json:"detail,omitempty"`
 			}{URL: p.URL, Detail: p.Detail}
-			out = append(out, marshal(op, e.kept(p.Origin)))
+			out = append(out, partJSON(op, e.kept(p.Origin)))
 			sendable = true
 		case llm.PartFile:
 			if it.Role == llm.RoleAssistant {
@@ -1232,7 +1232,7 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 			// is that audio however the client sent it.
 			if mediaType, data, ok := audioinput.Inline(p); ok {
 				op := outPart{Type: "input_audio", InputAudio: &chatInputAudio{Data: data, Format: audioinput.Format(mediaType)}}
-				out = append(out, marshal(op, e.kept(p.Origin)))
+				out = append(out, partJSON(op, e.kept(p.Origin)))
 				sendable = true
 				continue
 			}
@@ -1253,7 +1253,7 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 				FileData string `json:"file_data,omitempty"`
 				Filename string `json:"filename,omitempty"`
 			}{p.FileID, p.FileData, p.Filename}
-			out = append(out, marshal(op, e.kept(p.Origin)))
+			out = append(out, partJSON(op, e.kept(p.Origin)))
 			sendable = true
 		case llm.PartNative:
 			if p.Format == format {
@@ -1265,7 +1265,7 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 			if p.Format == llm.FormatAnthropicMessages {
 				if text, title, ok := textdoc.FromAnthropic(p.Data); ok {
 					wrapped := textdoc.Wrap(title, text)
-					out = append(out, marshal(outPart{Type: "text", Text: &wrapped}, nil))
+					out = append(out, partJSON(outPart{Type: "text", Text: &wrapped}, nil))
 					e.lose(llm.LossApproximated, pp, "a Messages plain-text document, carried as text")
 					sendable = true
 					continue

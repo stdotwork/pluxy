@@ -1,54 +1,202 @@
 package openaichat
 
 import (
-	"bytes"
 	"encoding/json"
+	"unicode/utf8"
 )
 
-// bodyWriter writes a request body into one buffer, as the bytes json.Marshal would write for the
-// same values. A string goes through an Encoder, which escapes it as Marshal does (HTML
-// characters, U+2028 and U+2029 and invalid UTF-8 included) straight into the buffer, so a long
-// text is not copied into a result of its own first.
-type bodyWriter struct {
-	buf bytes.Buffer
-	enc *json.Encoder
-}
+// This file writes the request body into one slice, as the bytes json.Marshal writes for the same
+// values. json.Marshal builds each value in a buffer of its own and copies it out, so a long text
+// was escaped into a buffer, copied to a result, copied into its message, copied into the body.
+// Here a text is escaped once, into the slice that is sent.
 
-func newBodyWriter(size int) *bodyWriter {
-	w := &bodyWriter{}
-	w.buf.Grow(size)
-	w.enc = json.NewEncoder(&w.buf)
-	return w
-}
+const hexDigits = "0123456789abcdef"
 
-// str writes s as a JSON string.
-func (w *bodyWriter) str(s string) {
-	w.enc.Encode(s)                 // a string always encodes, and a Buffer always takes the write
-	w.buf.Truncate(w.buf.Len() - 1) // the newline Encode adds
-}
-
-// raw writes b, which is JSON a marshal wrote, as Marshal writes a RawMessage: nil is null.
-func (w *bodyWriter) raw(b json.RawMessage) {
-	if b == nil {
-		w.buf.WriteString("null")
-		return
+// escapeClass says what appendString does with a byte: 0 writes it as it is, 1 escapes it, 2
+// starts a multi-byte rune that may need escaping. It matches encoding/json's HTML-safe set; the
+// test compares the two for every byte value.
+var escapeClass = func() (t [256]uint8) {
+	for b := range t {
+		switch {
+		case b >= utf8.RuneSelf:
+			t[b] = 2
+		case b < 0x20, b == '"', b == '\\', b == '<', b == '>', b == '&':
+			t[b] = 1
+		}
 	}
-	w.buf.Write(b)
+	return t
+}()
+
+// appendString appends s to dst as a JSON string, as json.Marshal writes it: <, > and & are
+// escaped, so are U+2028 and U+2029, and a byte that is not valid UTF-8 becomes the escape for U+FFFD.
+func appendString(dst []byte, s string) []byte {
+	dst = append(dst, '"')
+	start := 0
+	for i := 0; i < len(s); {
+		b := s[i]
+		switch escapeClass[b] {
+		case 0:
+			i++
+			continue
+		case 1:
+			dst = append(dst, s[start:i]...)
+			switch b {
+			case '\\', '"':
+				dst = append(dst, '\\', b)
+			case '\b':
+				dst = append(dst, '\\', 'b')
+			case '\f':
+				dst = append(dst, '\\', 'f')
+			case '\n':
+				dst = append(dst, '\\', 'n')
+			case '\r':
+				dst = append(dst, '\\', 'r')
+			case '\t':
+				dst = append(dst, '\\', 't')
+			default:
+				dst = append(dst, '\\', 'u', '0', '0', hexDigits[b>>4], hexDigits[b&0xF])
+			}
+			i++
+		default:
+			c, size := utf8.DecodeRuneInString(s[i:])
+			switch {
+			case c == utf8.RuneError && size == 1:
+				dst = append(dst, s[start:i]...)
+				dst = append(dst, `\ufffd`...)
+			case c == '\u2028' || c == '\u2029':
+				dst = append(dst, s[start:i]...)
+				dst = append(dst, '\\', 'u', '2', '0', '2', hexDigits[c&0xF])
+			default:
+				i += size
+				continue
+			}
+			i += size
+		}
+		start = i
+	}
+	dst = append(dst, s[start:]...)
+	return append(dst, '"')
 }
 
-// list writes items as a JSON array.
-func (w *bodyWriter) list(items []json.RawMessage) {
-	w.buf.WriteByte('[')
+// quoted estimates the bytes appendString writes for s: the text, its quotes, and room for the
+// escapes of a text that has a few.
+func quoted(s string) int { return len(s) + len(s)/16 + 2 }
+
+// appendRaw appends b, which is JSON a marshal wrote, as Marshal writes a RawMessage: nil is null.
+func appendRaw(dst []byte, b json.RawMessage) []byte {
+	if b == nil {
+		return append(dst, "null"...)
+	}
+	return append(dst, b...)
+}
+
+// appendList appends items as a JSON array.
+func appendList(dst []byte, items []json.RawMessage) []byte {
+	dst = append(dst, '[')
 	for i, it := range items {
 		if i > 0 {
-			w.buf.WriteByte(',')
+			dst = append(dst, ',')
 		}
-		w.raw(it)
+		dst = appendRaw(dst, it)
 	}
-	w.buf.WriteByte(']')
+	return append(dst, ']')
 }
 
-// knownContent reports whether message writes content c itself: the types the encoder puts there.
+// partJSON returns p as marshal(p, raw) does. A part with no kept fields is written directly into
+// a slice of its own size.
+func partJSON(p outPart, raw json.RawMessage) json.RawMessage {
+	if len(raw) > 0 {
+		return marshal(p, raw)
+	}
+	n := 64 + len(p.Type)
+	if p.Text != nil {
+		n += quoted(*p.Text)
+	}
+	if v := p.ImageURL; v != nil {
+		n += quoted(v.URL) + quoted(v.Detail) + 32
+	}
+	if v := p.File; v != nil {
+		n += quoted(v.FileID) + quoted(v.FileData) + quoted(v.Filename) + 64
+	}
+	if v := p.InputAudio; v != nil {
+		n += quoted(v.Data) + quoted(v.Format) + 32
+	}
+	b := make([]byte, 0, n)
+	b = append(b, `{"type":`...)
+	b = appendString(b, p.Type)
+	if p.Text != nil {
+		b = append(b, `,"text":`...)
+		b = appendString(b, *p.Text)
+	}
+	if v := p.ImageURL; v != nil {
+		b = append(b, `,"image_url":{"url":`...)
+		b = appendString(b, v.URL)
+		if v.Detail != "" {
+			b = append(b, `,"detail":`...)
+			b = appendString(b, v.Detail)
+		}
+		b = append(b, '}')
+	}
+	if v := p.File; v != nil {
+		b = append(b, `,"file":{`...)
+		sep := ""
+		for _, f := range [...]struct{ key, val string }{{`"file_id":`, v.FileID}, {`"file_data":`, v.FileData}, {`"filename":`, v.Filename}} {
+			if f.val != "" {
+				b = append(append(b, sep...), f.key...)
+				b = appendString(b, f.val)
+				sep = ","
+			}
+		}
+		b = append(b, '}')
+	}
+	if v := p.InputAudio; v != nil {
+		b = append(b, `,"input_audio":{"data":`...)
+		b = appendString(b, v.Data)
+		if v.Format != "" {
+			b = append(b, `,"format":`...)
+			b = appendString(b, v.Format)
+		}
+		b = append(b, '}')
+	}
+	return append(b, '}')
+}
+
+// chatToolCallJSON returns tc as marshal(tc, raw) does, written directly when raw adds nothing.
+func chatToolCallJSON(tc chatToolCall, raw json.RawMessage) json.RawMessage {
+	if len(raw) > 0 {
+		return marshal(tc, raw)
+	}
+	b := make([]byte, 0, 96+quoted(tc.ID)+quoted(tc.Type)+quoted(tc.Function.Name)+quoted(tc.Function.Arguments))
+	b = append(b, `{"id":`...)
+	b = appendString(b, tc.ID)
+	b = append(b, `,"type":`...)
+	b = appendString(b, tc.Type)
+	b = append(b, `,"function":{"name":`...)
+	b = appendString(b, tc.Function.Name)
+	b = append(b, `,"arguments":`...)
+	b = appendString(b, tc.Function.Arguments)
+	return append(b, "}}"...)
+}
+
+// customToolCallJSON returns tc as marshal(tc, raw) does, written directly when raw adds nothing.
+func customToolCallJSON(tc customToolCall, raw json.RawMessage) json.RawMessage {
+	if len(raw) > 0 {
+		return marshal(tc, raw)
+	}
+	b := make([]byte, 0, 96+quoted(tc.ID)+quoted(tc.Type)+quoted(tc.Custom.Name)+quoted(tc.Custom.Input))
+	b = append(b, `{"id":`...)
+	b = appendString(b, tc.ID)
+	b = append(b, `,"type":`...)
+	b = appendString(b, tc.Type)
+	b = append(b, `,"custom":{"name":`...)
+	b = appendString(b, tc.Custom.Name)
+	b = append(b, `,"input":`...)
+	b = appendString(b, tc.Custom.Input)
+	return append(b, "}}"...)
+}
+
+// knownContent reports whether appendMessage writes content c itself: the types the encoder puts
+// there.
 func knownContent(c any) bool {
 	switch c.(type) {
 	case nil, string, *string, []json.RawMessage:
@@ -57,59 +205,58 @@ func knownContent(c any) bool {
 	return false
 }
 
-// message writes m as marshal(m, m.raw) does, when it can without a marshal of its own: the
-// message holds nothing kept from a client, and its parts and calls are compact JSON written by
-// marshal.
-func (w *bodyWriter) message(m *outMessage) {
+// appendMessage appends m as marshal(m, m.raw) writes it, when it can without a marshal of its
+// own: the message holds nothing kept from a client, and its parts and calls are compact JSON
+// written by marshal or by the writers above.
+func appendMessage(dst []byte, m *outMessage) []byte {
 	if len(m.raw) > 0 || !knownContent(m.Content) {
-		w.raw(marshal(m, m.raw))
-		return
+		return appendRaw(dst, marshal(m, m.raw))
 	}
-	w.buf.WriteString(`{"role":`)
-	w.str(m.Role)
+	dst = append(dst, `{"role":`...)
+	dst = appendString(dst, m.Role)
 	switch c := m.Content.(type) {
 	case string:
-		w.buf.WriteString(`,"content":`)
-		w.str(c)
+		dst = append(dst, `,"content":`...)
+		dst = appendString(dst, c)
 	case *string:
-		w.buf.WriteString(`,"content":`)
+		dst = append(dst, `,"content":`...)
 		if c == nil {
-			w.buf.WriteString("null")
+			dst = append(dst, "null"...)
 		} else {
-			w.str(*c)
+			dst = appendString(dst, *c)
 		}
 	case []json.RawMessage:
-		w.buf.WriteString(`,"content":`)
+		dst = append(dst, `,"content":`...)
 		if c == nil {
-			w.buf.WriteString("null")
+			dst = append(dst, "null"...)
 		} else {
-			w.list(c)
+			dst = appendList(dst, c)
 		}
 	}
 	if m.ReasoningContent != "" {
-		w.buf.WriteString(`,"reasoning_content":`)
-		w.str(m.ReasoningContent)
+		dst = append(dst, `,"reasoning_content":`...)
+		dst = appendString(dst, m.ReasoningContent)
 	}
 	if len(m.ToolCalls) > 0 {
-		w.buf.WriteString(`,"tool_calls":`)
-		w.list(m.ToolCalls)
+		dst = append(dst, `,"tool_calls":`...)
+		dst = appendList(dst, m.ToolCalls)
 	}
 	if m.ToolCallID != "" {
-		w.buf.WriteString(`,"tool_call_id":`)
-		w.str(m.ToolCallID)
+		dst = append(dst, `,"tool_call_id":`...)
+		dst = appendString(dst, m.ToolCallID)
 	}
-	w.buf.WriteByte('}')
+	return append(dst, '}')
 }
 
-// size estimates the bytes of m's JSON, so that the body's buffer is one allocation.
+// size estimates the bytes of m's JSON, so that the body's slice is one allocation.
 func (m *outMessage) size() int {
-	n := 64 + len(m.Role) + len(m.raw) + len(m.ReasoningContent) + len(m.ToolCallID)
+	n := 64 + len(m.Role) + len(m.raw) + quoted(m.ReasoningContent) + quoted(m.ToolCallID)
 	switch c := m.Content.(type) {
 	case string:
-		n += len(c)
+		n += quoted(c)
 	case *string:
 		if c != nil {
-			n += len(*c)
+			n += quoted(*c)
 		}
 	case []json.RawMessage:
 		for _, p := range c {
@@ -124,17 +271,10 @@ func (m *outMessage) size() int {
 
 // encodeBodyFast returns out as the request body's JSON, with msgs as its messages, as
 // encodeBody returns it for those messages marshaled. Every message and tool is written once into
-// one buffer: nothing is marshaled again, and a long text is escaped into the body itself. The
+// one slice: nothing is marshaled again, and a long text is escaped into the body itself. The
 // caller has seen to it that no part or tool is JSON the client wrote (encoder.foreign), which
 // a marshal would compact and escape.
 func encodeBodyFast(out *outRequest, msgs []*outMessage) ([]byte, error) {
-	size := 128 + len(out.Model) + 2*len(out.Stop)
-	for _, m := range msgs {
-		size += m.size() + 1
-	}
-	for _, t := range out.Tools {
-		size += len(t) + 1
-	}
 	head, err := json.Marshal(out.tailHead)
 	if err != nil {
 		return nil, err
@@ -143,29 +283,34 @@ func encodeBodyFast(out *outRequest, msgs []*outMessage) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	size += len(head) + len(rest)
-	w := newBodyWriter(size + size/32)
-	w.buf.WriteString(`{"model":`)
-	w.str(out.Model)
-	w.buf.WriteString(`,"messages":[`)
+	size := 64 + quoted(out.Model) + len(head) + len(rest)
+	for _, m := range msgs {
+		size += m.size() + 1
+	}
+	for _, t := range out.Tools {
+		size += len(t) + 1
+	}
+	b := make([]byte, 0, size)
+	b = append(b, `{"model":`...)
+	b = appendString(b, out.Model)
+	b = append(b, `,"messages":[`...)
 	for i, m := range msgs {
 		if i > 0 {
-			w.buf.WriteByte(',')
+			b = append(b, ',')
 		}
-		w.message(m)
+		b = appendMessage(b, m)
 	}
-	w.buf.WriteString(`],`)
+	b = append(b, `],`...)
 	// The head always holds stream, so it starts with the object's brace and its fields follow
 	// the messages' array after a comma; it ends with the brace the tail's other parts take over.
-	w.buf.Write(head[1 : len(head)-1])
+	b = append(b, head[1:len(head)-1]...)
 	if len(out.Tools) > 0 {
-		w.buf.WriteString(`,"tools":`)
-		w.list(out.Tools)
+		b = append(b, `,"tools":`...)
+		b = appendList(b, out.Tools)
 	}
 	if len(rest) > len("{}") {
-		w.buf.WriteByte(',')
-		w.buf.Write(rest[1 : len(rest)-1])
+		b = append(b, ',')
+		b = append(b, rest[1:len(rest)-1]...)
 	}
-	w.buf.WriteByte('}')
-	return w.buf.Bytes(), nil
+	return append(b, '}'), nil
 }
