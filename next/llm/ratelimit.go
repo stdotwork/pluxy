@@ -3,7 +3,9 @@ package llm
 import (
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
+	"time"
 )
 
 // Bounds on upstream rate-limit headers carried over the extension protocol (minor version 34).
@@ -13,8 +15,9 @@ const (
 )
 
 // Documented rate-limit response header names (lower-case) per wire format.
-// Only headers explicitly documented by each vendor are listed; never cookies,
-// auth tokens, or account/organization/workspace identifiers.
+// Only headers explicitly documented by each vendor are listed, and a value is carried only in
+// a shape the vendors document (ValidRateLimitHeaderValue): never cookies, auth tokens, or
+// account/organization/workspace identifiers.
 var (
 	// Anthropic Messages: https://platform.claude.com/docs/en/api/rate-limits
 	// and https://platform.claude.com/docs/en/build-with-claude/fast-mode.
@@ -90,14 +93,51 @@ func AllowedRateLimitHeader(format, name string) bool {
 	}
 }
 
-// ValidRateLimitHeaderValue reports whether v is a safe single-line header value within
-// MaxRateLimitHeaderValue bytes: non-empty, no control characters (including CR and LF).
+// maxRateLimitShapedValue bounds a time or a duration: the longest RFC 3339 time (nanoseconds and
+// an offset) is 35 bytes, and a duration is shorter than that.
+const maxRateLimitShapedValue = 40
+
+// rateLimitDuration matches the durations the vendors write, as Go prints them: hours, minutes
+// and seconds with a fraction on the seconds ("1s", "6m0s", "1h2m3.5s"), or one sub-second unit
+// ("17ms").
+var rateLimitDuration = regexp.MustCompile(`^(?:[0-9]+h)?(?:[0-9]+m)?(?:[0-9]+(?:\.[0-9]+)?s)?$|^[0-9]+(?:\.[0-9]+)?(?:ms|us|[\x{b5}\x{3bc}]s|ns)$`)
+
+// ValidRateLimitHeaderValue reports whether v is a value a vendor documents for a rate-limit
+// header, and nothing else: a non-negative integer (a limit, a count left, or OpenRouter's reset
+// in milliseconds since the Unix epoch), an RFC 3339 time (Anthropic's resets), or a duration
+// such as "1s", "6m0s" or "17ms" (OpenAI's resets). Any other text, such as an ID or a piece of
+// a key, is not one, and a caller drops it.
+//
+//   - Anthropic: https://platform.claude.com/docs/en/api/rate-limits ("provided in RFC 3339 format")
+//   - OpenAI: https://developers.openai.com/api/docs/guides/rate-limits (limits and counts as
+//     integers, resets as "1s", "6m0s")
+//   - OpenRouter: https://openrouter.ai/docs/api_reference/limits ("X-RateLimit-Reset ... in
+//     milliseconds since the Unix epoch")
 func ValidRateLimitHeaderValue(v string) bool {
 	if len(v) == 0 || len(v) > MaxRateLimitHeaderValue {
 		return false
 	}
+	if RateLimitInteger(v) {
+		return true
+	}
+	if len(v) > maxRateLimitShapedValue {
+		return false
+	}
+	if rateLimitDuration.MatchString(v) {
+		return true
+	}
+	_, err := time.Parse(time.RFC3339, v)
+	return err == nil
+}
+
+// RateLimitInteger reports whether v is a non-negative integer of at most 20 digits: the one
+// rate-limit shape that is plain digits, which a number in a credential can look like.
+func RateLimitInteger(v string) bool {
+	if len(v) == 0 || len(v) > 20 {
+		return false
+	}
 	for i := 0; i < len(v); i++ {
-		if v[i] < 0x20 || v[i] == 0x7f {
+		if v[i] < '0' || v[i] > '9' {
 			return false
 		}
 	}

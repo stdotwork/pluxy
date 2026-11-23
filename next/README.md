@@ -999,8 +999,11 @@ OpenAI Chat/Responses sharing `x-ratelimit-*`): Anthropic's `anthropic-ratelimit
 `anthropic-priority-*` and `anthropic-fast-*` headers on Messages replies, and OpenAI's
 `x-ratelimit-{limit,remaining,reset}-{requests,tokens,project-tokens}` plus OpenRouter's
 `x-ratelimit-{limit,remaining,reset}` headers on OpenAI Chat and Responses replies. Only explicit
-allowlisted rate-limit headers are forwarded (never cookies, auth tokens, or account/organization
-IDs); Gemini documents no rate-limit headers so none are forwarded to Gemini clients; extensions
+allowlisted rate-limit headers are forwarded, and only a value of a shape the vendors document: a
+non-negative integer, an RFC 3339 time or a duration such as `1s`, `6m0s` or `17ms` (OpenRouter's
+reset is an integer, in milliseconds since the Unix epoch). A value of any other shape is dropped
+whole, so no cookie, token, ID or piece of a key reaches a client in a header. An integer or other value that holds a piece of the account's key is dropped; a time or a
+duration is kept whole, even when a key shares a few characters with it. Gemini documents no rate-limit headers so none are forwarded to Gemini clients; extensions
 below minor 34 behave as before.
 
 **Multiple candidates.** Chat Completions `n` and Gemini `generationConfig.candidateCount` carry

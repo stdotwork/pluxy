@@ -14,10 +14,12 @@ import (
 // token in part. The call's Redactor removes only whole secrets and their parts, so core also
 // removes every run of text that holds 4 or more characters of one of these, or 8 of a long token
 // or of a PEM private key's body (protocol.RemovePieces), from the upstream's error
-// text: an error event's message and the string values of its raw data, and in the call's capture
-// the body of an upstream reply with an error status, or of every reply when the call ended in an
-// error. A call that succeeded keeps its replies as they are: the rule would cut words of a
-// model's output that share 4 characters (8 for a long token) with a secret.
+// text: an error event's message, the string values of its raw data and the values of its
+// rate-limit headers (rateLimitHeaders), and in the call's capture the body of an upstream reply
+// with an error status, or of every reply when the call ended in an error. A call that succeeded
+// keeps its replies as they are, but for the integers among its response.start rate-limit
+// headers: the rule would cut words of a model's output that share 4 characters (8 for a long
+// token) with a secret.
 type pieces []string
 
 // accountPieces returns the pieces of account a, after outbound has resolved its proxy: its
@@ -49,24 +51,47 @@ func (p pieces) add(q pieces) pieces {
 	return p
 }
 
-// event returns ev with p's pieces removed from its error's message and raw data, if it is an
-// error.
+// event returns ev with p's pieces removed from its error's message, raw data and rate-limit
+// headers if it is an error, and from the rate-limit headers of a response.start.
 func (p pieces) event(ev llm.Event) llm.Event {
-	if len(p) == 0 || ev.Error == nil {
+	if len(p) == 0 {
+		return ev
+	}
+	if ev.Response != nil && len(ev.Response.Headers) > 0 {
+		r := *ev.Response
+		r.Headers = p.rateLimitHeaders(r.Headers)
+		ev.Response = &r
+	}
+	if ev.Error == nil {
 		return ev
 	}
 	e := *ev.Error
 	e.Message = protocol.RemovePieces(e.Message, p...)
 	e.Raw = p.raw(e.Raw)
-	if len(e.Headers) > 0 {
-		h := make(map[string]string, len(e.Headers))
-		for k, v := range e.Headers {
-			h[k] = protocol.RemovePieces(v, p...)
-		}
-		e.Headers = h
-	}
+	e.Headers = p.rateLimitHeaders(e.Headers)
 	ev.Error = &e
 	return ev
+}
+
+// rateLimitHeaders returns h with p's pieces removed from each value, but for a time or a
+// duration (an RFC 3339 time such as "2026-11-22T08:00:00Z", or "6m0s"): its few characters are
+// not a key's, and a key that shares 4 of them ("2026", "00:00") would cut a real reset into
+// "[redacted]:00:00Z". A value that a piece takes anything from is no longer one of the shapes
+// llm.ValidRateLimitHeaderValue allows, so the call's reply drops it. Integers lose their pieces
+// too: a numeric secret's piece is one.
+func (p pieces) rateLimitHeaders(h map[string]string) map[string]string {
+	if len(h) == 0 {
+		return h
+	}
+	out := make(map[string]string, len(h))
+	for k, v := range h {
+		if !llm.RateLimitInteger(v) && llm.ValidRateLimitHeaderValue(v) {
+			out[k] = v
+			continue
+		}
+		out[k] = protocol.RemovePieces(v, p...)
+	}
+	return out
 }
 
 // raw returns the JSON b with p's pieces removed from each of its string values; object keys are
