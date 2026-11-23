@@ -1214,16 +1214,20 @@ bytes). Values Gemini will not serve — token-ID array inputs, more than 2048 i
 unsupported on the account so routing can move on to another provider (returning 400 naming the
 field if only Gemini accounts serve the model).
 Gemini's own `POST /v1beta/models/{model}:embedContent` and `:batchEmbedContents` are served too:
-on a Gemini API account the client's body and reply pass through unchanged (rewriting only a
-mismatched aliased model name), and on Vertex AI the same per-model rules apply (`:embedContent`
+on a Gemini API account the client's body and reply pass through unchanged (except that a model
+named in the body, or in a batch's requests, that is not the model the account serves is rewritten
+to it; a reply that is an error object, or lacks an embedding for any request, is answered as an
+upstream error instead of passed on), and on Vertex AI the same per-model rules apply (`:embedContent`
 with `embedContentConfig` for `gemini-embedding-2*`, single-instance `:predict` for
 `gemini-embedding-001`, and batched `:predict` up to 250 instances for other text embedding
-models; non-text parts on `:predict` answer retryable unsupported so core can try another
+models; non-text parts, and `embedContentConfig` fields other than `taskType`, `title` and
+`outputDimensionality`, on `:predict` answer retryable unsupported so core can try another
 account). On OpenAI-compatible accounts, `:embedContent` and `:batchEmbedContents` translate to
 `POST {base_url}/embeddings` and back on Chat and Responses wires (answering retryable
-unsupported for non-text parts, `taskType` and `title` so another account on the model can serve
-them), pass through on a Gemini wire (rewriting only a mismatched aliased model name), and answer
-unsupported on a Messages wire.
+unsupported for non-text parts, `taskType`, `title` and other `embedContentConfig` fields so
+another account on the model can serve them), pass through on a Gemini wire (as on a Gemini API
+account), and answer unsupported on a Messages wire. When an embedding call is split over several
+upstream calls, the reply reports usage only if every call did.
 
 **Audio (speech and transcription).** OpenAI's `POST /v1/audio/speech` and
 `POST /v1/audio/transcriptions` are served on every Gemini account (Gemini API keys, Vertex AI

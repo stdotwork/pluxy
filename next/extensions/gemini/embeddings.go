@@ -349,7 +349,7 @@ func runGeminiBatchEmbeddings(ctx context.Context, t target, model string, req e
 	all := make([][]float64, 0, len(req.inputs))
 	var totalValues int
 	var promptTokens int64
-	var hasUsage bool
+	var hasUsage, missing bool
 	modelName := "models/" + model
 
 	for start := 0; start < len(req.inputs); start += maxGeminiEmbedBatch {
@@ -394,16 +394,19 @@ func runGeminiBatchEmbeddings(ctx context.Context, t target, model string, req e
 		if resp.UsageMetadata != nil && resp.UsageMetadata.PromptTokenCount != nil {
 			promptTokens += *resp.UsageMetadata.PromptTokenCount
 			hasUsage = true
+		} else {
+			missing = true
 		}
 	}
-	return all, promptTokens, hasUsage, nil
+	// A total over only some of the calls would understate the usage: report none instead.
+	return all, promptTokens, hasUsage && !missing, nil
 }
 
 func runVertexEmbedContent(ctx context.Context, t target, model string, req embeddingsRequest) ([][]float64, int64, bool, error) {
 	all := make([][]float64, 0, len(req.inputs))
 	var totalValues int
 	var promptTokens int64
-	var hasUsage bool
+	var hasUsage, missing bool
 
 	var cfg *vertexEmbedContentAttrs
 	if req.dimensions != nil {
@@ -431,16 +434,19 @@ func runVertexEmbedContent(ctx context.Context, t target, model string, req embe
 		if ok {
 			promptTokens += tokens
 			hasUsage = true
+		} else {
+			missing = true
 		}
 	}
-	return all, promptTokens, hasUsage, nil
+	// A total over only some of the calls would understate the usage: report none instead.
+	return all, promptTokens, hasUsage && !missing, nil
 }
 
 func runVertexPredictEmbeddings(ctx context.Context, t target, model string, req embeddingsRequest) ([][]float64, int64, bool, error) {
 	all := make([][]float64, 0, len(req.inputs))
 	var totalValues int
 	var promptTokens int64
-	var hasUsage bool
+	var hasUsage, missing bool
 
 	var params *vertexEmbedParams
 	if req.dimensions != nil {
@@ -487,10 +493,13 @@ func runVertexPredictEmbeddings(ctx context.Context, t target, model string, req
 			if pred.Embeddings.Statistics != nil && pred.Embeddings.Statistics.TokenCount != nil {
 				promptTokens += int64(*pred.Embeddings.Statistics.TokenCount)
 				hasUsage = true
+			} else {
+				missing = true
 			}
 		}
 	}
-	return all, promptTokens, hasUsage, nil
+	// A total over only some of the calls would understate the usage: report none instead.
+	return all, promptTokens, hasUsage && !missing, nil
 }
 
 func decodeEmbedContentReply(raw []byte, vendor string) ([]float64, int64, bool, error) {
