@@ -340,7 +340,9 @@ func parseToolConfig(raw json.RawMessage) (*llm.ToolChoice, json.RawMessage) {
 }
 
 // parseTools reads one Tool object: each function declaration becomes a function tool; any other
-// tool in it (googleSearch, codeExecution, ...) survives whole as a native tool.
+// tool in it survives whole as a native tool, except googleSearch, which becomes a canonical web
+// search tool, and a non-null codeExecution, a canonical code execution tool; each keeps the
+// client's JSON in its origin.
 func parseTools(raw json.RawMessage, path string) []llm.Tool {
 	m := object(raw)
 	if m == nil {

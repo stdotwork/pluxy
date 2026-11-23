@@ -451,6 +451,7 @@ func buildBodyOn(req llm.Request, s settings) ([]byte, *llm.Translation, error) 
 		ServiceTier:    takesServiceTier(s),
 		WebSearch:      takesWebSearch(s),
 		CodeExecution:  takesWebSearch(s),
+		Vertex:         s.Vertex != nil,
 		CandidateCount: takesCandidateCount(s, req.Stream),
 	})
 	if err != nil {
