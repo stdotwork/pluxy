@@ -76,13 +76,56 @@ func login(ctx context.Context, call sdk.LoginCall, s *sdk.LoginSession) (*proto
 	case "siwc":
 		return siwcLogin(ctx, set, s)
 	case "api_key":
-		key := strings.TrimSpace(call.Input["api_key"])
-		if key == "" {
-			return nil, refused("enter an API key")
-		}
-		return &protocol.Grant{Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: key}}, nil
+		return apiKeyLogin(ctx, set, call.Input["api_key"])
 	}
 	return nil, &llm.Error{Code: llm.CodeUnsupported, Message: fmt.Sprintf("no login method %q", call.Method), Scope: llm.ScopeRequest}
+}
+
+// apiKeyLogin checks a key by listing models, which costs nothing, and keeps it when the upstream
+// accepts it. The check goes to the account's base_url, as model requests do. An upstream with no
+// model list (a 404 or 405) has no call that checks a key without running a model, so the key is
+// taken as it is, as Gemini's extension takes a Vertex express mode key.
+func apiKeyLogin(ctx context.Context, set settings, key string) (*protocol.Grant, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil, refused("enter an API key")
+	}
+	grant := &protocol.Grant{Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: key}}
+	parent := ctx
+	// The shared client has no timeout, so a silent upstream must not hold the sign-in forever.
+	ctx, cancel := context.WithTimeout(ctx, authClient.Timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL(set, account{})+"/models", nil)
+	if err != nil {
+		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+key)
+	req, sent := sdk.TrackSend(req)
+	resp, err := client.Do(req)
+	if err != nil {
+		if parent.Err() != nil {
+			return nil, parent.Err()
+		}
+		// A login error is retryable only when the request never reached the upstream.
+		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach OpenAI: " + err.Error(), Retryable: !sent(), Scope: llm.ScopeEndpoint}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
+		return grant, nil
+	}
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
+		return grant, nil
+	}
+	e := statusError(resp, "")
+	if e.Code == llm.CodeAuth || e.Code == llm.CodePermission || e.Code == llm.CodeAccountClosed {
+		return nil, refused("OpenAI refused the key")
+	}
+	// A login call that got an answer reached the upstream and may have run: it is not retried.
+	e.Retryable = false
+	// Core redacts the key as the user entered it; this one is trimmed, so remove it here.
+	r := protocol.NewRedactor(grant.Credential)
+	return nil, r.Event(llm.Event{Type: llm.EventError, Error: e}).Error
 }
 
 // browserLogin runs the authorization code flow with PKCE. The user opens the sign-in URL; the

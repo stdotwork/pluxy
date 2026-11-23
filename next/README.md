@@ -646,7 +646,7 @@ key, a ChatGPT subscription or a Sign in with ChatGPT (SIWC) sign-in (below). Bu
 
 A subscription is added by signing in through the management API (see
 [Accounts added by login](#accounts-added-by-login)), with method `browser` or `device`; `api_key`
-adds an API key the same way. A browser sign-in listens for its redirect on `localhost:1455`
+adds an API key the same way, after checking it with `GET {base_url}/models` (the account's `base_url`, by default OpenAI's): a key the provider refuses is not added, and an upstream that cannot be reached is reported as that, not as a wrong key. An upstream with no model list (it answers 404 or 405) cannot check a key, so the key is kept as entered. A browser sign-in listens for its redirect on `localhost:1455`
 when that port is free on core's machine; otherwise, or when core runs elsewhere, send the
 address the browser ended on as the login's `redirect_url` input. Core renews a subscription's
 tokens four days before they expire (tokens that last less than that, five minutes before).

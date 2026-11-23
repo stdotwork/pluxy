@@ -38,6 +38,9 @@ func newVerifyImageUpstream(t *testing.T, handle func(http.ResponseWriter, *http
 	t.Helper()
 	u := &verifyImageUpstream{}
 	u.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if answersModelList(w, r) {
+			return
+		}
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -284,4 +287,15 @@ func TestVerifyImagesMultipartEditRoundTrip(t *testing.T) {
 		t.Fatalf("edit mask was not preserved: got %s, want %s",
 			verifyBytesSummary([]byte(sent.Mask.ImageURL)), verifyBytesSummary([]byte("data:image/png;base64,"+base64.StdEncoding.EncodeToString(mask))))
 	}
+}
+
+// answersModelList answers the model list request an API key sign-in makes to a fake Codex
+// upstream, so the fake's own record holds only the requests the test is about.
+func answersModelList(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodGet || !strings.HasSuffix(r.URL.Path, "/models") {
+		return false
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = io.WriteString(w, `{"object":"list","data":[]}`)
+	return true
 }

@@ -29,6 +29,9 @@ func newDroidUpstream(t *testing.T, handler http.HandlerFunc) *droidUpstream {
 	t.Helper()
 	u := &droidUpstream{}
 	u.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if answersModelList(w, r) {
+			return
+		}
 		body, _ := io.ReadAll(r.Body)
 		u.mu.Lock()
 		u.reqs = append(u.reqs, droidRequest{path: r.URL.Path, header: r.Header.Clone(), body: body})

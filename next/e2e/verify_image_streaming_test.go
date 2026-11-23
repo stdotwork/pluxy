@@ -25,6 +25,9 @@ func TestVerifyStreamingImageEditJSONFromCodexBecomesSSE(t *testing.T) {
 		accepts []string
 	)
 	u := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if answersModelList(w, r) {
+			return
+		}
 		if r.Method != http.MethodPost || r.URL.Path != "/images/edits" {
 			t.Errorf("upstream got %s %s, want POST /images/edits", r.Method, r.URL.Path)
 			http.NotFound(w, r)

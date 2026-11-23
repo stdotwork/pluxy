@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
+
+	"github.com/stdotwork/pluxy/next/extensions/codex/codextest"
 )
 
 func TestCodexClientModels(t *testing.T) {
@@ -65,10 +68,11 @@ func TestCodexClientModels(t *testing.T) {
 func TestCodexCatalogNoEnabledAccounts(t *testing.T) {
 	for _, disabled := range []bool{false, true} {
 		t.Run(fmt.Sprint(disabled), func(t *testing.T) {
+			srv := codextest.New(t)
 			base := runCore(t, map[string]any{"listen": "127.0.0.1:0", "client_keys": []string{clientKey}, "management_key": managementKey, "credentials_dir": filepath.Join(t.TempDir(), "credentials"), "extension": map[string]any{"manifest": filepath.Join(binDir, "codex", "pluxy-extension.json"), "accounts": []any{}}})
 			if disabled {
 				var login loginReply
-				if code := manage(t, base, "POST", "/accounts", map[string]any{"id": "off", "method": "api_key", "input": map[string]string{"api_key": "catalog-test"}}, &login); code != http.StatusAccepted {
+				if code := manage(t, base, "POST", "/accounts", map[string]any{"id": "off", "method": "api_key", "settings": map[string]any{"base_url": srv.URL}, "input": map[string]string{"api_key": srv.IssueToken("text")}}, &login); code != http.StatusAccepted {
 					t.Fatalf("login status %d", code)
 				}
 				waitLogin(t, base, login)
@@ -91,5 +95,53 @@ func TestCodexCatalogNoEnabledAccounts(t *testing.T) {
 				t.Fatalf("no enabled accounts: status=%d body=%s", resp.StatusCode, b)
 			}
 		})
+	}
+}
+
+// An API key the provider refuses is not added: the sign-in ends failed and says so, and no account
+// exists. A key it accepts is added.
+func TestCodexAPIKeySignInChecksTheKey(t *testing.T) {
+	srv := codextest.New(t)
+	base := runCore(t, map[string]any{"listen": "127.0.0.1:0", "client_keys": []string{clientKey}, "management_key": managementKey, "credentials_dir": filepath.Join(t.TempDir(), "credentials"), "extension": map[string]any{"manifest": filepath.Join(binDir, "codex", "pluxy-extension.json"), "accounts": []any{}}})
+	add := func(id, key string) loginReply {
+		var l loginReply
+		body := map[string]any{"id": id, "method": "api_key", "settings": map[string]any{"base_url": srv.URL}, "input": map[string]string{"api_key": key}}
+		if code := manage(t, base, "POST", "/accounts", body, &l); code != http.StatusAccepted {
+			t.Fatalf("login status %d", code)
+		}
+		for i := 0; l.Login.State == "pending" && i < 150; i++ {
+			time.Sleep(100 * time.Millisecond)
+			manage(t, base, "GET", "/logins/"+l.Login.ID, nil, &l)
+		}
+		return l
+	}
+	accounts := func() []string {
+		var list struct {
+			Accounts []struct {
+				ID string `json:"id"`
+			} `json:"accounts"`
+		}
+		if code := manage(t, base, "GET", "/accounts", nil, &list); code != http.StatusOK {
+			t.Fatalf("accounts status %d", code)
+		}
+		var ids []string
+		for _, a := range list.Accounts {
+			ids = append(ids, a.ID)
+		}
+		return ids
+	}
+
+	bad := add("bad", "sk-test-not-issued")
+	if bad.Login.State != "failed" || bad.Login.Error == nil || bad.Login.Error.Message != "OpenAI refused the key" {
+		t.Fatalf("a refused key: login %s %+v, want failed with \"OpenAI refused the key\"", bad.Login.State, bad.Login.Error)
+	}
+	if ids := accounts(); len(ids) != 0 {
+		t.Fatalf("accounts after a refused key = %v, want none", ids)
+	}
+	if good := add("good", srv.IssueToken("text")); good.Login.State != "done" {
+		t.Fatalf("a good key: login %s %+v, want done", good.Login.State, good.Login.Error)
+	}
+	if ids := accounts(); len(ids) != 1 || ids[0] != "good" {
+		t.Fatalf("accounts after a good key = %v, want [good]", ids)
 	}
 }
