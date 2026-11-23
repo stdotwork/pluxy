@@ -49,6 +49,7 @@ if (!bin || !core || !identifier || !probe) {
 }
 
 const SECOND_EXIT_MS = 10_000;
+const END_MS = 15_000;
 const UP_MS = 60_000;
 const coreName = basename(core);
 const appComm = "pluxy-app";
@@ -58,7 +59,8 @@ const say = (line: string) => console.log(`instances: ${line}`);
 function check(ok: unknown, what: string) {
   if (!ok) {
     problems.push(what);
-    console.log(`instances-problem: ${what}`);
+    // One line: the runner reads a problem as one line, and a stuck app's report has several.
+    console.log(`instances-problem: ${what.replace(/\s*\n\s*/g, " | ")}`);
   }
 }
 
@@ -150,6 +152,21 @@ async function owner(label: string, env: Record<string, string | undefined>) {
   return { app, corePid: up?.core_pid as number | undefined };
 }
 
+/** Waits (bounded) for a launch to end, after it was asked to quit or was killed: its process has
+ * exited and its output has closed, which its webview's helper processes can hold open after the
+ * app itself is gone. A launch that does not end in time is a problem that says which it was, and
+ * is killed. */
+async function ended(l: Launch, what: string): Promise<number | null> {
+  const code = await l.exitWithin(END_MS);
+  if (code !== "timeout") return code;
+  check(
+    false,
+    `${what}: the app did not end within ${END_MS / 1000}s: ${await l.stuck()}\nits output: ${l.dump()}`,
+  );
+  l.kill("SIGKILL");
+  return null;
+}
+
 /** A second launch with the same profile: exits 0 in time, and starts nothing of its own. */
 async function second(
   label: string,
@@ -166,7 +183,7 @@ async function second(
       `${label}: the second launch did not exit within ${SECOND_EXIT_MS / 1000}s (it ran: ${s.printed("up")}): ${s.dump()}`,
     );
     s.kill();
-    await s.exited;
+    await ended(s, `${label} (after it was killed)`);
   } else {
     check(code === 0, `${label}: the second launch exited with ${code}: ${s.dump()}`);
   }
@@ -283,7 +300,7 @@ async function main() {
   // It is its own instance: a second launch of it raises it, not the first.
   await second("second of other profile", other, [first.app.pid, control.app.pid]);
   control.app.send("quit");
-  await control.app.exited;
+  await ended(control.app, "other profile: quit");
   const addressB = join(b.dirs.data, identifier as string, "instance", "address");
   check(!existsSync(addressB), "other profile: its address stays after it quit");
   check(
@@ -294,7 +311,7 @@ async function main() {
   // 5. The owner dies without any cleanup: its lock and socket stay on disk, and the next launch
   // takes over, starts normally, and is then the one a launch after it raises.
   first.app.kill("SIGKILL");
-  await first.app.exited;
+  await ended(first.app, "kill: the first");
   check(first.corePid && (await gone(first.corePid, 15_000)), "kill: the first's core still runs");
   check(existsSync(socket), "kill: no stale socket was left to recover from");
   check(existsSync(address), "kill: no stale address was left to recover from");
@@ -311,7 +328,7 @@ async function main() {
 
   // 6. The owner quits: its socket goes with it.
   taken.app.send("quit");
-  const code = await taken.app.exitWithin(15_000);
+  const code = await ended(taken.app, "quit: the owner");
   check(code === 0, `quit: the owner exited with ${code}`);
   check(!existsSync(socket), "quit: the socket stays after the owner quit");
   check(!existsSync(address), "quit: the address stays after the owner quit");
