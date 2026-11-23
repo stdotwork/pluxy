@@ -33,8 +33,8 @@ jobs:
   build:
     name: build (${{ matrix.platform }})
     # On macOS, the repository variable PLUXY_MACOS_CLOUD_RUNNER, when set, gives the runner label
-    # to use instead of GitHub's, except in pull requests and merge groups (docs/ci.md, "Where jobs run").
-    runs-on: ${{ matrix.os == 'macos-latest' && github.event_name != 'pull_request' && github.event_name != 'merge_group' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
+    # to use instead of GitHub's, except in pull requests (docs/ci.md, "Where jobs run").
+    runs-on: ${{ matrix.os == 'macos-latest' && github.event_name != 'pull_request' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
     timeout-minutes: 40
     strategy:
       fail-fast: false
