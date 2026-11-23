@@ -32,6 +32,11 @@ in `docs/design.md`, and how the corpus holds it to the old core in `docs/corpus
 
 Run each command from the folder named in its heading.
 
+The short way: `make` in `next/` lists targets that run these same commands (`make check`,
+`make test`, `make ui`, `make app`, `make app-rust`, `make tools`; `make all` runs `check`, `ui`
+and `app`). The commands below stay the reference CI mirrors. `make hooks` turns on an opt-in
+pre-commit hook that checks the formatting of staged files.
+
 ### `next/`
 
 Go version comes from `next/go.mod` (currently `go 1.26.10`). Besides the standard library, the

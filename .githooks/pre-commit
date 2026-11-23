@@ -12,7 +12,7 @@ staged=$(git -c core.quotePath=off diff --cached --name-only --diff-filter=ACMR)
 # quote prints its arguments single-quoted, so the fix commands paste safely.
 quote() {
 	for a in "$@"; do
-		printf "'%s' " "$(printf '%s' "$a" | sed "s/'/'\\\\''/g")"
+		printf " '%s'" "$(printf '%s' "$a" | sed "s/'/'\\\\''/g")"
 	done
 }
 
@@ -30,7 +30,7 @@ if [ $# -gt 0 ]; then
 			failed=1
 			echo "These staged files need gofmt:"
 			echo "$bad" | sed 's/^/  /'
-			echo "Fix: gofmt -w $(quote "$@")"
+			echo "Fix: gofmt -w$(quote "$@")"
 		fi
 	else
 		echo "pre-commit: gofmt not found, skipping the Go check"
@@ -58,7 +58,7 @@ EOF
 		failed=1
 		echo "Biome rejects staged files in $dir:"
 		echo "$out" | sed 's/^/  /'
-		echo "Fix: (cd $dir && node_modules/.bin/biome check --write $(quote "$@"))"
+		echo "Fix: (cd $dir && node_modules/.bin/biome check --write$(quote "$@"))"
 	fi
 done
 
