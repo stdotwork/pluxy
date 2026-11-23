@@ -99,7 +99,7 @@ func TestReportingRewritesTranslatedIntegralArguments(t *testing.T) {
 	}}}
 	tr := &llm.Translation{To: llm.FormatGeminiGenerate, From: llm.FormatAnthropicMessages}
 	rec := &recorder{}
-	r := &reporting{out: rec, tr: tr, names: replyNames(req, tr), schemas: toolSchemas(req), callNames: map[int]string{}}
+	r := &reporting{out: rec, tr: tr, names: replyNames(req, tr), schemas: toolSchemas(req), callNames: map[callKey]string{}}
 	if err := r.Send(llm.Event{Type: llm.EventItemStart, Index: 0, Item: &llm.ItemStart{
 		Kind: llm.ItemToolCall, CallID: "c1", Name: "mcp_server.tool"}}); err != nil {
 		t.Fatal(err)
