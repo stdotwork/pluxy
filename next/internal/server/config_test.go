@@ -407,7 +407,7 @@ func TestConfigUsageKeepDays(t *testing.T) {
 // reads) are never reported, and no value is logged.
 func TestConfigWarnsAboutUnknownKeys(t *testing.T) {
 	const secret = "sk-very-secret-value-1234"
-	cfg := `{"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","bogus_setting":"` + secret + `",
+	cfg := `{"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","bogus_setting":"` + secret + `","two\nlines":1,
 	 "routing":{"explian":true,"chains":{"my-chain":[{"model":"m","provider":"pluxy/x"}]}},
 	 "extension":{"manifest":"m.json","accounts":[{"id":"a","bogus_account_key":1,"headers":{"X-Anything":"` + secret + `"},"settings":{"free_form":{"inner":1}}}]},
 	 "extensions":{"pluxy/other":{"accounts":[{"id":"b","priorty":1}]}}}`
@@ -434,6 +434,9 @@ func TestConfigWarnsAboutUnknownKeys(t *testing.T) {
 		if strings.Contains(w, never) {
 			t.Errorf("warning %q holds %q, which is the user's own key or a value", w, never)
 		}
+	}
+	if strings.ContainsAny(w, "\n\r") || !strings.Contains(w, `"two\nlines"`) {
+		t.Errorf("warning %q does not quote a key that is not plain text", w)
 	}
 	if !strings.Contains(w, `priorty (did you mean "priority"?)`) {
 		t.Errorf("warning %q does not offer the known key a typo is one edit from", w)
@@ -467,6 +470,8 @@ func TestConfigJSONErrorsInTheFilesTerms(t *testing.T) {
 		{"top level", `[1]`, []string{"the file", "expected an object, found a list"}},
 		{"syntax", "{\n  \"listen\": \"x\",\n  \"client_keys\": [\"k\"],\n}", []string{"not valid JSON at line 4, column 1"}},
 		{"truncated", "{\n  \"listen\": \"x\"\n", []string{"not valid JSON at line 2"}},
+		{"empty", "", []string{"not valid JSON at line 1, column 1"}},
+		{"blank", " \n", []string{"not valid JSON at line 1"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := ParseConfig([]byte(c.cfg), "/tmp/config.json")

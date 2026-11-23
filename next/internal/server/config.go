@@ -738,6 +738,9 @@ func jsonConfigError(b []byte, err error) error {
 
 // lineColumn is the line and column, both counted from 1, of byte off of b.
 func lineColumn(b []byte, off int) (line, col int) {
+	if len(b) == 0 {
+		return 1, 1
+	}
 	off = max(0, min(off, len(b)-1))
 	head := b[:off+1]
 	line = 1 + bytes.Count(head, []byte("\n"))
@@ -834,6 +837,10 @@ func walkKeys(v any, t reflect.Type, path string, out []string) []string {
 					}
 				}
 				if !ok {
+					if strings.ContainsFunc(k, func(r rune) bool { return r <= ' ' || r == ',' || !strconv.IsPrint(r) }) {
+						// A key that is not plain text is quoted, so it cannot break the log line.
+						sub = strings.TrimSuffix(sub, k) + strconv.Quote(k)
+					}
 					sub += closestKey(k, fields)
 					out = append(out, sub)
 					continue
