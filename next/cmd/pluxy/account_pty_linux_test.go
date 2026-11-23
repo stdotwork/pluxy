@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -215,7 +216,7 @@ func TestCLIAccountTerminal(t *testing.T) {
 		if echoOff {
 			t.Errorf("the terminal's echo was turned off for a start field after standard input ended")
 		}
-		p.wantChild(t, "code=2", "cancelled=0", "inputs=0", "starts=0", "echo=on")
+		p.wantChild(t, "code=2", "cancelled=0", "inputs=0", "starts=0", "noecho=0", "echo=on")
 		out := p.childOutput()
 		before, _, _ := strings.Cut(out, "pluxy: ")
 		if strings.Contains(before, "API key: ") {
@@ -264,7 +265,7 @@ func TestCLIAccountTerminal(t *testing.T) {
 		if echoOff {
 			t.Errorf("the terminal's echo was turned off for a prompt after standard input ended")
 		}
-		p.wantChild(t, "code=2", "cancelled=1", "inputs=0", "starts=1", "echo=on")
+		p.wantChild(t, "code=2", "cancelled=1", "inputs=0", "starts=1", "noecho=0", "echo=on")
 		out := p.childOutput()
 		if strings.Contains(out, "API key: ") {
 			t.Errorf("the secret field's label was printed after standard input ended: %q", out)
@@ -287,7 +288,7 @@ func TestCLIAccountTerminal(t *testing.T) {
 		p.signal(t, syscall.SIGINT)
 		p.waitExit(t, 1)
 		p.waitEcho(true)
-		p.wantChild(t, "code=1", "cancelled=1", "inputs=0", "starts=1", "echo=on")
+		p.wantChild(t, "code=1", "cancelled=1", "inputs=0", "starts=1", "noecho=0", "echo=on")
 		out := p.childOutput()
 		if strings.Contains(out, "Address the browser ended on: ") {
 			t.Errorf("the browser paste label was printed after standard input ended: %q", out)
@@ -368,7 +369,7 @@ func TestCLIAccountTerminal(t *testing.T) {
 			if echoOff {
 				t.Errorf("the terminal's echo was turned off for a prompt after standard input ended")
 			}
-			p.wantChild(t, "code=2", "cancelled=1", "inputs=1", "echo=on")
+			p.wantChild(t, "code=2", "cancelled=1", "inputs=1", "noecho=0", "echo=on")
 			out := p.childOutput()
 			if strings.Contains(out, "API key: ") {
 				t.Errorf("the secret field's label was printed after standard input ended: %q", out)
@@ -466,6 +467,13 @@ func ptyChild(t *testing.T, scenario string) {
 			},
 		}
 	}
+	// The terminal's echo is read by the parent when it can, but only a count of the times the
+	// command turned it off cannot miss a turn-off that lasted a moment.
+	var noEchoCalls atomic.Int32
+	setNoEcho = func(f *os.File) func() {
+		noEchoCalls.Add(1)
+		return terminalNoEcho(f)
+	}
 	var out bytes.Buffer
 	code := runCLIWithInput(args, os.Stdin, &out, stderr, func(string) string { return "" }, true)
 	f.mu.Lock()
@@ -474,6 +482,7 @@ func ptyChild(t *testing.T, scenario string) {
 		if scenario != ptyAddressSecret {
 			summary += fmt.Sprintf(" starts=%d", len(f.starts))
 		}
+		summary += fmt.Sprintf(" noecho=%d", noEchoCalls.Load())
 		if echoStayedOn {
 			summary += " echo=on"
 		} else {

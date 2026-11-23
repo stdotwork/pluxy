@@ -167,6 +167,9 @@ func fakePrompt(method string) map[string]any {
 		return fakeSwitchPrompt()
 	case "opt_then_browser":
 		return fakePrompt("browser")
+	case "opt_then_passphrase":
+		return map[string]any{"kind": "input", "message": "Enter the passphrase.",
+			"inputs": []any{map[string]any{"name": "passphrase", "label": "Passphrase", "secret": true, "optional": true}}}
 	}
 	return nil
 }
@@ -254,6 +257,10 @@ func (f *fakeAccountCore) serve(w http.ResponseWriter, r *http.Request) {
 					map[string]any{"name": "note", "label": "Note", "optional": true},
 				}},
 			map[string]any{"method": "opt_then_browser", "kind": "browser", "label": "Optional start then browser prompt",
+				"inputs": []any{
+					map[string]any{"name": "note", "label": "Note", "optional": true},
+				}},
+			map[string]any{"method": "opt_then_passphrase", "kind": "input", "label": "Optional start then optional secret prompt",
 				"inputs": []any{
 					map[string]any{"name": "note", "label": "Note", "optional": true},
 				}},
@@ -1432,5 +1439,62 @@ func TestCLIAccountUnknownSubcommand(t *testing.T) {
 	}
 	if _, errOut, code := f.run("account"); code != 2 || !strings.Contains(errOut, "needs a command") {
 		t.Errorf("pluxy account alone: %d %q", code, errOut)
+	}
+}
+
+// After standard input has ended on a terminal, the sign-in asks for nothing again: a prompt that
+// stays up after its (empty) answer is not shown a second time with "give the value again", since
+// nothing reads a value and a person who typed one would see it on the screen and hand it to the
+// shell. The command waits for the prompt to move on, then cancels the sign-in.
+func TestFollowLoginAsksNothingAgainAfterEndOfInput(t *testing.T) {
+	shortLoginWait(t)
+	old := accountAnswerWait
+	accountAnswerWait = 200 * time.Millisecond
+	t.Cleanup(func() { accountAnswerWait = old })
+	f := newFakeAccountCore(t)
+	_, errOut, code := f.runIn("", true, "account", "add", "test/ext", "--method", "opt_then_passphrase", "--id", "again-1")
+	if code != 2 || !strings.Contains(errOut, "the sign-in still asks for Passphrase") {
+		t.Fatalf("account add with a prompt that stays up after input ended: code=%d err=%q, want 2 and why", code, errOut)
+	}
+	if strings.Contains(errOut, "give the value again") {
+		t.Errorf("the command asked for the value again after standard input ended: %q", errOut)
+	}
+	if _, cancelled := f.start(); len(cancelled) != 1 {
+		t.Errorf("the sign-in was not cancelled: %v", cancelled)
+	}
+}
+
+// The error for a field that needs a value after standard input ended starts on its own line, not
+// after the label of the field where input ended.
+func TestCLIAccountEndOfInputErrorStartsOnItsOwnLine(t *testing.T) {
+	f := newFakeAccountCore(t)
+	_, errOut, code := f.runIn("", true, "account", "add", "test/ext", "--method", "opt_secret", "--id", "line-1")
+	if code != 2 || !strings.Contains(errOut, "Note: \npluxy: the sign-in needs API key:") {
+		t.Fatalf("account add with input ended at an optional field: code=%d err=%q, want 2 and the error on its own line", code, errOut)
+	}
+	// Piped, no label was written, so no empty line is.
+	_, errOut, code = f.runIn("", false, "account", "add", "test/ext", "--method", "opt_secret", "--id", "line-2")
+	if code != 2 || strings.HasPrefix(errOut, "\n") || strings.Contains(errOut, "\n\n") {
+		t.Fatalf("piped account add with no input: code=%d err=%q, want 2 and no empty line", code, errOut)
+	}
+}
+
+// A sign-in again follows the same rule: once standard input has ended at its start field, a
+// prompt that comes next prints no label for a value nothing can read.
+func TestCLIAccountLoginPromptAfterEndOfInput(t *testing.T) {
+	shortLoginWait(t)
+	f := newFakeAccountCore(t)
+	_, errOut, code := f.runIn("", true, "account", "login", "work", "--method", "opt_then_secret")
+	if code != 2 || !strings.Contains(errOut, "the sign-in needs API key and standard input has no more lines:") {
+		t.Fatalf("account login with input ended: code=%d err=%q, want 2 and what it needs", code, errOut)
+	}
+	if strings.Contains(errOut, "API key: ") {
+		t.Errorf("the secret field's label was printed after standard input ended: %q", errOut)
+	}
+	if !strings.Contains(errOut, "Enter the key.") {
+		t.Errorf("the prompt's message was not printed: %q", errOut)
+	}
+	if _, cancelled := f.start(); len(cancelled) != 1 {
+		t.Errorf("the sign-in was not cancelled: %v", cancelled)
 	}
 }

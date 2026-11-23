@@ -373,7 +373,7 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 				lines.field(prompt.next())
 			}
 			lines.dropTyped()
-			if repeated {
+			if repeated && !ended {
 				x.eprintf("the sign-in is still asking; give the value again if the last one was wrong\n")
 			}
 			x.loginPrompt(l.Prompt)
@@ -428,7 +428,8 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 			if err := x.asks(*field); err != nil {
 				return x.cancelLogin(l.ID, err)
 			}
-			// Once standard input has ended, no prompt asks for a value: nothing can read one.
+			// Once standard input has ended nothing can read a value, so no label asks for one and
+			// no line says to give it again.
 			if x.prompts() && !ended {
 				prompt.ask(x)
 			}
@@ -921,7 +922,8 @@ func (x *invocation) startInputs(fields []protocol.LoginInput, in signInInputs, 
 				return nil, false, err
 			}
 			if !r.ok {
-				if lines.hidden() {
+				// The label's line is ended, so the error that follows starts on its own.
+				if lines.hidden() || x.prompts() {
 					x.eprintf("\n")
 				}
 				lines.show()
@@ -1052,6 +1054,9 @@ func readBoundedLine(src *bufio.Reader) (string, bool, error) {
 	}
 }
 
+// setNoEcho is terminalNoEcho, a variable so a test can count the times echo is turned off.
+var setNoEcho = terminalNoEcho
+
 // field sets the terminal's echo for the field now being read, or for none: off for a value that
 // must not show, on otherwise. It changes the terminal only when that differs from what it is, so
 // the echo stays off across all the lines of one value.
@@ -1061,7 +1066,7 @@ func (l *lineReader) field(f *protocol.LoginInput) {
 		return
 	}
 	if l.restore == nil && l.term != nil {
-		l.restore = terminalNoEcho(l.term)
+		l.restore = setNoEcho(l.term)
 	}
 }
 
