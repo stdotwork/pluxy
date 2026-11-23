@@ -486,30 +486,46 @@ type outRequest struct {
 }
 
 // outTail holds the request body's fields after its messages, in the body's order, so that one
-// marshal of it gives the body's tail.
+// marshal of it gives the body's tail. It is in three parts so that the tools, which are already
+// compact JSON, can be written between the other two without a marshal that would compact them
+// again.
 type outTail struct {
+	tailHead
+	Tools []json.RawMessage `json:"tools,omitempty"`
+	tailRest
+}
+
+// tailHead holds the fields before the tools. It always has stream, so it is never empty.
+type tailHead struct {
 	Stream        bool `json:"stream"`
 	StreamOptions *struct {
 		IncludeUsage bool `json:"include_usage"`
 	} `json:"stream_options,omitempty"`
-	MaxTokens         *int              `json:"max_tokens,omitempty"`
-	Temperature       *float64          `json:"temperature,omitempty"`
-	TopP              *float64          `json:"top_p,omitempty"`
-	Stop              []string          `json:"stop,omitempty"`
-	Tools             []json.RawMessage `json:"tools,omitempty"`
-	ToolChoice        any               `json:"tool_choice,omitempty"`
-	ParallelToolCalls *bool             `json:"parallel_tool_calls,omitempty"`
-	ResponseFormat    any               `json:"response_format,omitempty"`
-	ReasoningEffort   string            `json:"reasoning_effort,omitempty"`
-	ServiceTier       string            `json:"service_tier,omitempty"`
-	Verbosity         string            `json:"verbosity,omitempty"`
-	N                 *int              `json:"n,omitempty"`
-	WebSearchOptions  json.RawMessage   `json:"web_search_options,omitempty"`
+	MaxTokens   *int     `json:"max_tokens,omitempty"`
+	Temperature *float64 `json:"temperature,omitempty"`
+	TopP        *float64 `json:"top_p,omitempty"`
+	Stop        []string `json:"stop,omitempty"`
+}
+
+// tailRest holds the fields after the tools.
+type tailRest struct {
+	ToolChoice        any             `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
+	ResponseFormat    any             `json:"response_format,omitempty"`
+	ReasoningEffort   string          `json:"reasoning_effort,omitempty"`
+	ServiceTier       string          `json:"service_tier,omitempty"`
+	Verbosity         string          `json:"verbosity,omitempty"`
+	N                 *int            `json:"n,omitempty"`
+	WebSearchOptions  json.RawMessage `json:"web_search_options,omitempty"`
 }
 
 // encoder builds one Chat Completions request and records what it could not carry over.
 type encoder struct {
 	losses []llm.Loss
+	// foreign is set when a content part or a tool was taken as a client sent it, so it may not be
+	// the compact, escaped JSON a marshal writes. The body is then built by marshaling each
+	// message, which writes it so.
+	foreign bool
 }
 
 func (e *encoder) lose(kind, path, detail string) {
@@ -612,12 +628,14 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 		Model:    req.Model,
 		Messages: []json.RawMessage{},
 		outTail: outTail{
-			Stream:          req.Stream,
-			MaxTokens:       req.Options.MaxOutputTokens,
-			Temperature:     req.Options.Temperature,
-			TopP:            req.Options.TopP,
-			Stop:            req.Options.Stop,
-			ReasoningEffort: req.Options.ReasoningEffort,
+			tailHead: tailHead{
+				Stream:      req.Stream,
+				MaxTokens:   req.Options.MaxOutputTokens,
+				Temperature: req.Options.Temperature,
+				TopP:        req.Options.TopP,
+				Stop:        req.Options.Stop,
+			},
+			tailRest: tailRest{ReasoningEffort: req.Options.ReasoningEffort},
 		},
 	}
 	// A request from another format carries a tier or verbosity only if the Chat Completions
@@ -744,6 +762,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 		if t.Type == llm.ToolNative {
 			if t.Origin != nil && t.Origin.Format == format {
 				out.Tools = append(out.Tools, t.Origin.Raw)
+				e.foreign = true
 			} else {
 				e.lose(llm.LossDropped, p, "Chat Completions has no such tool")
 			}
@@ -868,7 +887,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 				var tc customToolCall
 				tc.ID, tc.Type = it.CallID, "custom"
 				tc.Custom.Name, tc.Custom.Input = it.Name, it.Arguments
-				last.ToolCalls = append(last.ToolCalls, marshal(tc, e.kept(it.Origin)))
+				last.ToolCalls = append(last.ToolCalls, customToolCallJSON(tc, e.kept(it.Origin)))
 				break
 			}
 			var tc chatToolCall
@@ -879,7 +898,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			if extra != nil {
 				raw = rawjson.Merge(extra, raw)
 			}
-			last.ToolCalls = append(last.ToolCalls, marshal(tc, raw))
+			last.ToolCalls = append(last.ToolCalls, chatToolCallJSON(tc, raw))
 		case llm.ItemTypeToolResult:
 			content, err := e.toolResult(it, p, &relay)
 			if err != nil {
@@ -898,9 +917,17 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 		if m.Role == llm.RoleAssistant && m.Content == nil && len(m.ToolCalls) == 0 {
 			m.Content = "" // Chat Completions needs content when there are no tool calls
 		}
-		out.Messages = append(out.Messages, marshal(m, m.raw))
 	}
-	body, err := encodeBody(&out)
+	var body []byte
+	var err error
+	if e.foreign {
+		for _, m := range msgs {
+			out.Messages = append(out.Messages, marshal(m, m.raw))
+		}
+		body, err = encodeBody(&out)
+	} else {
+		body, err = encodeBodyFast(&out, msgs)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1040,7 +1067,7 @@ func (m *toolMedia) take() any {
 	}
 	what := m.what()
 	text := strings.ToUpper(what[:1]) + what[1:] + " returned by the preceding tool call(s):"
-	notice := marshal(outPart{Type: "text", Text: &text}, nil)
+	notice := partJSON(outPart{Type: "text", Text: &text}, nil)
 	out := append([]json.RawMessage{notice}, m.parts...)
 	*m = toolMedia{}
 	return out
@@ -1159,7 +1186,7 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 		switch p.Type {
 		case llm.PartText:
 			text := p.Text
-			out = append(out, marshal(outPart{Type: "text", Text: &text}, e.kept(p.Origin)))
+			out = append(out, partJSON(outPart{Type: "text", Text: &text}, e.kept(p.Origin)))
 			if p.Text != "" {
 				sendable = true
 			}
@@ -1193,7 +1220,7 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 				URL    string `json:"url"`
 				Detail string `json:"detail,omitempty"`
 			}{URL: p.URL, Detail: p.Detail}
-			out = append(out, marshal(op, e.kept(p.Origin)))
+			out = append(out, partJSON(op, e.kept(p.Origin)))
 			sendable = true
 		case llm.PartFile:
 			if it.Role == llm.RoleAssistant {
@@ -1205,7 +1232,7 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 			// is that audio however the client sent it.
 			if mediaType, data, ok := audioinput.Inline(p); ok {
 				op := outPart{Type: "input_audio", InputAudio: &chatInputAudio{Data: data, Format: audioinput.Format(mediaType)}}
-				out = append(out, marshal(op, e.kept(p.Origin)))
+				out = append(out, partJSON(op, e.kept(p.Origin)))
 				sendable = true
 				continue
 			}
@@ -1226,18 +1253,19 @@ func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, d
 				FileData string `json:"file_data,omitempty"`
 				Filename string `json:"filename,omitempty"`
 			}{p.FileID, p.FileData, p.Filename}
-			out = append(out, marshal(op, e.kept(p.Origin)))
+			out = append(out, partJSON(op, e.kept(p.Origin)))
 			sendable = true
 		case llm.PartNative:
 			if p.Format == format {
 				out = append(out, p.Data)
+				e.foreign = true
 				sendable = true
 				continue
 			}
 			if p.Format == llm.FormatAnthropicMessages {
 				if text, title, ok := textdoc.FromAnthropic(p.Data); ok {
 					wrapped := textdoc.Wrap(title, text)
-					out = append(out, marshal(outPart{Type: "text", Text: &wrapped}, nil))
+					out = append(out, partJSON(outPart{Type: "text", Text: &wrapped}, nil))
 					e.lose(llm.LossApproximated, pp, "a Messages plain-text document, carried as text")
 					sendable = true
 					continue

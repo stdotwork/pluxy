@@ -41,7 +41,9 @@ test.beforeAll(async () => {
   }
 });
 
-test("provider errors stay on the card and unsupported accounts disappear", async ({ page }) => {
+test("provider errors stay on the card and an account whose provider reports no quota stays and says so", async ({
+  page,
+}) => {
   await openPanel(page, core);
   await signIn(page, core);
   await goTo(page, "Quota Management");
@@ -63,7 +65,9 @@ test("provider errors stay on the card and unsupported accounts disappear", asyn
   await expect(a.getByRole("button", { name: "Refresh Quota", exact: true })).toBeEnabled();
   unsupported = true;
   await a.getByRole("button", { name: "Refresh Quota", exact: true }).click();
-  await expect(a).toHaveCount(0);
+  await expect(a).toHaveCount(1);
+  await expect(a.getByText("This provider reports no quota for this account.")).toBeVisible();
+  await expect(a.getByRole("alert")).toHaveCount(0);
 });
 
 test("quota is read on request and shows plan, limits and reset times", async ({ page }) => {

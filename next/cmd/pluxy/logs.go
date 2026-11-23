@@ -93,8 +93,8 @@ var logsClearCommand = command{words: "logs clear", routes: []string{"DELETE /lo
 
 // logFile prints a log file core serves at path. With --json it is core's bounded JSON reply
 // (a file over 2 MiB is core's 413 log_too_large), unchanged. Otherwise the plain download is
-// copied to standard output as it arrives, whatever its size; on a terminal its control
-// characters are shown escaped, since it holds text clients and upstreams sent.
+// copied to standard output as it arrives, whatever its size; on a terminal its control and
+// Unicode format characters are shown escaped, since it holds text clients and upstreams sent.
 func (x *invocation) logFile(path string) error {
 	if x.json {
 		return x.call(http.MethodGet, path, url.Values{"format": {"json"}}, nil, nil, nil)

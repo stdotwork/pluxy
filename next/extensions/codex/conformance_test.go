@@ -69,10 +69,11 @@ func prepareLogin(t *testing.T, s conformance.LoginScenario, method string) conf
 			srv.DenyBrowser = !approve
 			return conformance.LoginSetup{Account: testAccount(srv, nil), Act: browserUser}
 		case "api_key":
-			// An API key is not checked when it is entered; an empty one is refused.
-			key := ""
+			// The key is checked against the upstream's model list: an issued one is kept, any other
+			// is refused.
+			key := "sk-conformance-not-issued"
 			if approve {
-				key = "sk-conformance"
+				key = srv.IssueToken("text")
 			}
 			return conformance.LoginSetup{Account: testAccount(srv, nil), Input: map[string]string{"api_key": key}}
 		}

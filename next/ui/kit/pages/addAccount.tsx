@@ -3,7 +3,7 @@ import type { LoginMethod, LoginMethodsExtension } from "../api";
 import { LoginFlow, suggestedAccountId, validAccountId } from "../loginFlow";
 import { usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
-import { strings } from "../strings";
+import { rich, strings } from "../strings";
 import { Button, Empty, List, Notice, PageHead, useKit, useLoad } from "../ui";
 
 const t = strings("addAccount", {
@@ -20,6 +20,8 @@ const t = strings("addAccount", {
     "Use 1–128 letters, digits, dots, underscores or hyphens, starting with a letter or digit. The ID must not end with a dot.",
   loading: "Loading sign-in methods…",
   empty: "No running extension offers a sign-in method.",
+  emptyNext: "A provider comes first: install one on {page}.",
+  setupPage: "Set up pluxy",
   retry: "Retry",
 });
 
@@ -100,7 +102,14 @@ export function AddAccountPage(props: { onSuccess?: (accountId: string) => void;
           </>
         )}
         {methods.loading && <Notice tone="muted">{t("loading")}</Notice>}
-        {methods.data && tiles.length === 0 && <Empty>{t("empty")}</Empty>}
+        {methods.data && tiles.length === 0 && (
+          <Empty>
+            {t("empty")}
+            {!props.embedded && (
+              <> {rich(t("emptyNext"), { page: <a href="#/setup">{t("setupPage")}</a> })}</>
+            )}
+          </Empty>
+        )}
         {tiles.length > 0 && (
           <>
             <label class="field" data-part="field">

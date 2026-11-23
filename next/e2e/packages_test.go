@@ -349,7 +349,7 @@ func TestInstallAndRemoveCodexWhileCoreRuns(t *testing.T) {
 	if code := manage(t, base, "POST", "/accounts", map[string]any{"id": "second", "method": "api_key", "input": map[string]string{"api_key": "k"}}, &l); code != http.StatusBadRequest {
 		t.Errorf("login without an extension while two run: status %d, want 400", code)
 	}
-	if code := manage(t, base, "POST", "/accounts", map[string]any{"id": "second", "extension": "pluxy/codex", "method": "api_key", "input": map[string]string{"api_key": "k"}}, &l); code != http.StatusAccepted {
+	if code := manage(t, base, "POST", "/accounts", map[string]any{"id": "second", "extension": "pluxy/codex", "method": "api_key", "settings": map[string]any{"base_url": srv.URL}, "input": map[string]string{"api_key": srv.IssueToken("text")}}, &l); code != http.StatusAccepted {
 		t.Errorf("login for pluxy/codex: status %d: %+v", code, l.Login)
 	}
 

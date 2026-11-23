@@ -20,7 +20,8 @@ const t = strings("quota", {
   soonest: "Soonest recovery",
   empty: "No quota-capable credentials",
   noMatch: "No matching accounts",
-  idle: "Click here to refresh quota",
+  idle: "Not read yet. Press Refresh Quota.",
+  unsupported: "This provider reports no quota for this account.",
   loading: "Loading quota...",
   plan: "Plan",
   ends: "Subscription ends {time}",
@@ -165,7 +166,7 @@ function QuotaBody({
         </Button>
       </div>
       {state?.busy && <Notice tone="muted">{t("loading")}</Notice>}
-      {state?.error && <Notice tone="danger">{p.text(state.error, ids)}</Notice>}
+      {state?.error && !state.unsupported && <Notice tone="danger">{p.text(state.error, ids)}</Notice>}
       {state?.data ? (
         <>
           <QuotaSummary data={state.data} />
@@ -177,6 +178,8 @@ function QuotaBody({
             <Empty>{t("noLimits")}</Empty>
           )}
         </>
+      ) : state?.unsupported ? (
+        <Empty>{t("unsupported")}</Empty>
       ) : (
         !state?.busy && !state?.error && <Empty>{t("idle")}</Empty>
       )}
@@ -217,13 +220,17 @@ export function QuotaPage() {
         busy: false,
         data: r.body,
         error: problem(r),
+        // Core answers 422 "unsupported" when the provider has no quota to read; any other failure
+        // (core unreachable, 5xx) is a real error and shows as one.
         unsupported: r.status === 422 && r.error?.code === "unsupported",
       });
     } finally {
       inFlight.current.delete(id);
     }
   };
-  const all = (accounts.data?.accounts ?? []).filter((a) => !states[a.id]?.unsupported);
+  const listed = accounts.data?.accounts ?? [];
+  // Refresh all skips accounts already known to report no quota; their rows stay.
+  const all = listed.filter((a) => !states[a.id]?.unsupported);
   const refreshAll = async () => {
     setBatch(true);
     let next = 0;
@@ -240,7 +247,7 @@ export function QuotaPage() {
     }
   };
   const query = search.trim().toLocaleLowerCase();
-  const shown = all.filter((a) =>
+  const shown = listed.filter((a) =>
     [a.id, a.label, a.extension].some((value) => value?.toLocaleLowerCase().includes(query)),
   );
   if (sort === "soonest")

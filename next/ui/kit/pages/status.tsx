@@ -4,10 +4,10 @@
 
 import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { type Account, type ExtensionStatus, leftOut, type UsageGroup } from "../api";
+import { countAccounts, type ExtensionStatus, runningExtensions, type UsageGroup } from "../api";
 import { accountIdentities, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
-import { strings } from "../strings";
+import { rich, strings } from "../strings";
 import { bucketRows, successPercent, TrafficChart } from "../trafficChart";
 import {
   Button,
@@ -51,7 +51,8 @@ const t = strings("dashboard", {
   successRate: "Success rate",
   successHint: "Across {total} requests in the window",
   credentials: "Credentials",
-  credentialsHint: "{active} active · {disabled} not serving",
+  credentialsHint: "{active} active · {notServing}",
+  notServing: "{count} not serving",
   models: "Models",
   modelsHint: "Served through the proxy endpoint",
   trafficEyebrow: "Live traffic",
@@ -68,6 +69,7 @@ const t = strings("dashboard", {
   byProvider: "By provider",
   accounts: "Accounts",
   noAccounts: "No credentials yet.",
+  addAccount: "Add Account",
   unattributed: "Unattributed",
   openAccounts: "Open auth files",
   runtimeEyebrow: "Runtime",
@@ -155,9 +157,6 @@ const verdictText = (v: Verdict) =>
     offline: t("verdictOffline"),
   })[v];
 
-/** An account is serving unless it is turned off, needs a new login, or core leaves it out. */
-const isActive = (a: Account) => !a.disabled && a.state === "active" && !leftOut(a);
-
 function Panel(props: { eyebrow: string; title: string; children: ComponentChildren }) {
   return (
     <section class="card" data-part="card" aria-label={props.title}>
@@ -172,7 +171,7 @@ function Panel(props: { eyebrow: string; title: string; children: ComponentChild
   );
 }
 
-function Stat(props: { label: string; value: string; hint?: string; tone?: Tone }) {
+function Stat(props: { label: string; value: string; hint?: ComponentChildren; tone?: Tone }) {
   return (
     <section class="stat" data-part="stat" data-tone={props.tone} aria-label={props.label}>
       <span class="stat-label" aria-hidden="true">
@@ -240,7 +239,8 @@ export function StatusPage() {
   const span = windowLabel(BUCKET_MINUTES * BUCKETS);
   const percent = u && successPercent(u.success_count, u.total_requests);
 
-  const active = list?.filter(isActive).length ?? 0;
+  const counts = countAccounts(list ?? [], runningExtensions(s));
+  const active = counts.active;
   const providers = new Map<string, number>();
   for (const a of list ?? []) providers.set(a.extension ?? "", (providers.get(a.extension ?? "") ?? 0) + 1);
   const byProvider = [...providers].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
@@ -307,7 +307,18 @@ export function StatusPage() {
           <Stat
             label={t("credentials")}
             value={list ? list.length.toLocaleString() : dash}
-            hint={list && t("credentialsHint", { active, disabled: list.length - active })}
+            hint={
+              list &&
+              rich(t("credentialsHint"), {
+                active,
+                notServing:
+                  list.length === active ? (
+                    t("notServing", { count: 0 })
+                  ) : (
+                    <a href="#/accounts">{t("notServing", { count: list.length - active })}</a>
+                  ),
+              })
+            }
           />
           <Stat
             label={t("models")}
@@ -345,17 +356,16 @@ export function StatusPage() {
           <Panel eyebrow={t("healthEyebrow")} title={t("healthTitle")}>
             {list &&
               (list.length === 0 ? (
-                <Empty>{t("noAccounts")}</Empty>
+                <Empty>
+                  {t("noAccounts")} <a href="#/add-account">{t("addAccount")}</a>
+                </Empty>
               ) : (
                 <>
                   <Facts
                     rows={[
                       [t("healthActive"), active.toLocaleString()],
-                      [
-                        t("healthUnavailable"),
-                        (list?.filter((a) => !a.disabled && !isActive(a)).length ?? 0).toLocaleString(),
-                      ],
-                      [t("healthDisabled"), (list?.filter((a) => a.disabled).length ?? 0).toLocaleString()],
+                      [t("healthUnavailable"), counts.unavailable.toLocaleString()],
+                      [t("healthDisabled"), counts.disabled.toLocaleString()],
                     ]}
                   />
                   <List<[string, number]>

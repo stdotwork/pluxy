@@ -66,18 +66,20 @@ type Server struct {
 	// SIWCGrantScope, if set, is the scope a SIWC grant names in place of SIWCScope.
 	SIWCGrantScope string
 
-	mu        sync.Mutex
-	codes     map[string]codeGrant // authorization code -> grant
-	devices   map[string]*device   // device_auth_id -> device
-	refresh   map[string]bool      // refresh token -> still valid
-	access    map[string]string    // access token -> behaviour
-	issued    int
-	refreshes int
-	requests  []Request
-	siwc      []url.Values // SIWC authorize queries and token forms, in order
-	hangs     map[string]chan struct{}
-	block     chan struct{}
-	started   chan struct{}
+	mu          sync.Mutex
+	codes       map[string]codeGrant // authorization code -> grant
+	devices     map[string]*device   // device_auth_id -> device
+	refresh     map[string]bool      // refresh token -> still valid
+	access      map[string]string    // access token -> behaviour
+	issued      int
+	refreshes   int
+	requests    []Request
+	listings    int
+	listHeaders []http.Header
+	siwc        []url.Values // SIWC authorize queries and token forms, in order
+	hangs       map[string]chan struct{}
+	block       chan struct{}
+	started     chan struct{}
 }
 
 // Request is one model request the fake received.
@@ -111,6 +113,8 @@ func New(t testing.TB) *Server {
 	mux.HandleFunc("POST /api/accounts/oauth/token", s.siwcToken)
 	mux.HandleFunc("POST /responses", s.responses)
 	mux.HandleFunc("POST /backend-api/codex/responses", s.responses)
+	mux.HandleFunc("GET /models", s.models)
+	mux.HandleFunc("GET /backend-api/codex/models", s.models)
 	mux.HandleFunc("GET /backend-api/wham/usage", s.usage)
 	mux.HandleFunc("GET /backend-api/subscriptions", s.quotaExtra)
 	mux.HandleFunc("GET /backend-api/wham/rate-limit-reset-credits", s.quotaExtra)
@@ -212,6 +216,14 @@ func (s *Server) BlockRefresh() (release func()) {
 	s.mu.Unlock()
 	var once sync.Once
 	return func() { once.Do(func() { close(ch) }) }
+}
+
+// ModelListRequests returns how many model list requests (the call that checks an API key) the fake
+// received, and the headers of each.
+func (s *Server) ModelListRequests() (int, []http.Header) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.listings, append([]http.Header(nil), s.listHeaders...)
 }
 
 // Requests returns the model requests received so far.
@@ -539,6 +551,23 @@ func (s *Server) responses(w http.ResponseWriter, r *http.Request) {
 	resp["status"], resp["output"] = "completed", []any{item}
 	resp["usage"] = map[string]any{"input_tokens": conformance.InputTokens, "output_tokens": conformance.OutputTokens, "total_tokens": conformance.InputTokens + conformance.OutputTokens}
 	ev("response.completed", map[string]any{"response": resp})
+}
+
+// models answers the model list as OpenAI does for a key it issued (IssueToken) and 401 for any
+// other; the request is counted by ModelListRequests and kept out of Requests, which are model requests. The list itself is one model: callers
+// of the fake use it only to check a key.
+func (s *Server) models(w http.ResponseWriter, r *http.Request) {
+	tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	s.mu.Lock()
+	s.listings++
+	s.listHeaders = append(s.listHeaders, r.Header.Clone())
+	_, known := s.access[tok]
+	s.mu.Unlock()
+	if !known {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]string{"message": "Incorrect API key provided", "type": "invalid_request_error", "code": "invalid_api_key"}})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": []any{map[string]any{"id": "gpt-codextest", "object": "model", "owned_by": "codextest"}}})
 }
 
 // usage answers the usage endpoint for an access token the fake issued; like the responses endpoint

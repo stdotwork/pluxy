@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { type Account, leftOut } from "../kit/api/accounts";
+import { type Account, countAccounts, leftOut, runningExtensions, standing } from "../kit/api/accounts";
 import { batchTargets, filterAccounts, hasProblem } from "../kit/pages/accounts";
 
 const now = Date.parse("2026-01-01T00:00:00Z");
@@ -115,4 +115,35 @@ test("batch Enable and Clear cooldown reach config accounts; Disable and Delete 
   expect(batchTargets(selected, "cooldown").map((a) => a.id)).toEqual(["signed-in", "from-config"]);
   expect(batchTargets(selected, "disable").map((a) => a.id)).toEqual(["signed-in"]);
   expect(batchTargets(selected, "delete").map((a) => a.id)).toEqual(["signed-in"]);
+});
+
+test("one rule counts accounts: cooling and a last error still serve, a missing provider does not", () => {
+  const running = runningExtensions({ extensions: [{ id: "test/alpha" }] });
+  const rows = [
+    account("ok", { extension: "test/alpha" }),
+    account("cool", {
+      extension: "test/alpha",
+      cooldowns: [{ scope: "account", kind: "rate_limit", until: "2026-01-01T00:01:00Z" }],
+    }),
+    account("err", { extension: "test/alpha", last_error: { code: "rate_limit", message: "429" } }),
+    account("banned", { extension: "test/alpha", health: { state: "banned" } }),
+    account("login", { extension: "test/alpha", state: "reauth_required" }),
+    account("off", { extension: "test/alpha", disabled: true }),
+    account("ghost", { extension: "ghost/gone" }),
+    account("ghost-off", { extension: "ghost/gone", disabled: true }),
+  ];
+  expect(rows.map((a) => standing(a, running))).toEqual([
+    "active",
+    "active",
+    "active",
+    "unavailable",
+    "unavailable",
+    "disabled",
+    "unavailable",
+    "disabled",
+  ]);
+  expect(countAccounts(rows, running)).toEqual({ active: 3, unavailable: 3, disabled: 2 });
+  // Before the running extensions are read, no account is held against its provider.
+  expect(standing(rows[6] as Account)).toBe("active");
+  expect(hasProblem(rows[6] as Account, now, running)).toBe(true);
 });

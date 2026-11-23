@@ -1,7 +1,7 @@
 // One account's details, opened from the Accounts list (accounts.tsx). The list passes
 // AccountDetailProps and nothing else; it uses AccountState for its own state column.
 
-import { type Account, leftOut } from "../api";
+import { type Account, leftOut, providerMissing } from "../api";
 import { accountIdentities, usePrivacy } from "../privacy";
 import { strings } from "../strings";
 import {
@@ -41,6 +41,9 @@ const t = strings("accountDetail", {
   exhausted: "exhausted",
   needs_login: "needs login",
   broken: "broken",
+  noProvider: "no provider",
+  noProviderHint:
+    "{extension} is not running, so no request reaches this account. Install or turn on its provider on Extensions.",
   leftOutBecause: "Left out because",
   leftOutUntil: "Left out until",
   bannedHint: "No request is sent to this account until you enable it again.",
@@ -52,15 +55,18 @@ const t = strings("accountDetail", {
  * An account's state as a badge: "disabled" when it is turned off, the health state that keeps
  * requests away from it when there is one, else its state.
  */
-export function AccountState(props: { a: Account }) {
+export function AccountState(props: { a: Account; running?: ReadonlySet<string> }) {
   if (props.a.disabled) return <Badge tone="muted">{t("disabled")}</Badge>;
   const out = leftOut(props.a);
   if (out) return <Badge tone={out === "exhausted" ? "warn" : "danger"}>{t(out)}</Badge>;
+  if (providerMissing(props.a, props.running)) return <Badge tone="warn">{t("noProvider")}</Badge>;
   return <StateBadge state={props.a.state} />;
 }
 
 export interface AccountDetailProps {
   account: Account;
+  /** The extensions core runs, when known: an account of another one is shown as having no provider. */
+  running?: ReadonlySet<string>;
   /** Closes the details. */
   onClose: () => void;
   /** Called after the account changed or was removed: the list loads the accounts again. */
@@ -84,7 +90,7 @@ export function AccountDetail(props: AccountDetailProps) {
     <Detail title={p.text(a.id, ids)} onClose={props.onClose}>
       <Facts
         rows={[
-          [t("state"), <AccountState a={a} />],
+          [t("state"), <AccountState a={a} running={props.running} />],
           [t("extension"), a.extension && <span class="mono">{a.extension}</span>],
           [t("label"), p.id(a.label)],
           [t("credential"), a.kind],
@@ -98,6 +104,9 @@ export function AccountDetail(props: AccountDetailProps) {
           [t("changed"), when(a.updated_at)],
         ]}
       />
+      {providerMissing(a, props.running) && (
+        <Notice tone="warn">{t("noProviderHint", { extension: a.extension ?? "" })}</Notice>
+      )}
       {out === "banned" && <Notice tone="warn">{t("bannedHint")}</Notice>}
       {out === "broken" && <Notice tone="warn">{t("brokenHint")}</Notice>}
       {(act.error ?? remove.error) && <Notice tone="danger">{p.text(act.error ?? remove.error, ids)}</Notice>}

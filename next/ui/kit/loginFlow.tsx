@@ -15,7 +15,6 @@ const t = strings("loginFlow", {
   signInAgain: "Sign in again",
   generating: "Generating sign-in link…",
   waiting: "Waiting for authentication…",
-  closing: "Closing this window won't stop sign-in",
   authorize: "Open the sign-in page and authorize",
   device: "Enter this code on the sign-in page",
   deviceCode: "Device code:",
@@ -24,15 +23,15 @@ const t = strings("loginFlow", {
   copy: "Copy Link",
   copied: "Copied",
   copyFailed: "Could not copy. Select and copy the text instead.",
-  callback: "Callback URL",
-  callbackPlaceholder: "http://localhost:1455/auth/callback?code=...&state=...",
-  submitCallback: "Submit Callback URL",
+  addressOrCode: "Address or code",
   submit: "Submit",
   remaining: "Time left: {time}",
   success: "Authentication successful!",
   viewAccounts: "View accounts",
   another: "Log in another account",
   failed: "Authentication failed: {reason}",
+  alreadyRunning:
+    "A sign-in for this Account ID is already running. Use another Account ID, or start over once it has ended.",
   noReason: "No reason was provided.",
   invalidReply: "Core returned no login.",
   pollStopped: "Could not check sign-in after three attempts. {reason}",
@@ -49,7 +48,6 @@ function LoginField(props: {
   field: LoginInput;
   value: string;
   disabled: boolean;
-  callback?: boolean;
   onChange(value: string): void;
   onReading(reading: boolean): void;
 }) {
@@ -57,7 +55,7 @@ function LoginField(props: {
   const controlId = useId();
   const [reading, setReading] = useState(false);
   const [error, setError] = useState<string>();
-  const label = props.callback ? t("callback") : props.field.label || props.field.name;
+  const label = props.field.label || props.field.name;
   const control = {
     id: controlId,
     autoComplete: props.field.secret ? "new-password" : "off",
@@ -65,7 +63,6 @@ function LoginField(props: {
     required: !props.field.optional,
     disabled: props.disabled || reading,
     value: props.value,
-    placeholder: props.callback ? t("callbackPlaceholder") : undefined,
     onInput: (e: TargetedInputEvent<HTMLInputElement>) => props.onChange(e.currentTarget.value),
   };
   return (
@@ -122,7 +119,6 @@ function LoginFields(props: {
   fields: LoginInput[];
   values: Record<string, string>;
   disabled: boolean;
-  browser?: boolean;
   onChange(name: string, value: string): void;
   onReading(name: string, reading: boolean): void;
 }) {
@@ -134,7 +130,6 @@ function LoginFields(props: {
           field={field}
           value={props.values[field.name] ?? ""}
           disabled={props.disabled}
-          callback={props.browser && field.name === "redirect_url"}
           onChange={(value) => props.onChange(field.name, value)}
           onReading={(reading) => props.onReading(field.name, reading)}
         />
@@ -191,8 +186,14 @@ export function validAccountId(id: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id) && !id.endsWith(".");
 }
 
-/** Shared by adding an account and signing in to an existing account again. Unmounting leaves
- * the login running in core; only Cancel sends DELETE. */
+/** Whether core refused a start because a sign-in for that account is already running. Core's
+ * reply carries no field for it beyond the code `conflict`, so the sentence is matched too. */
+export function signInRunning(r: Reply<unknown>): boolean {
+  return r.status === 409 && r.error?.code === "conflict" && /already running/.test(r.error.message);
+}
+
+/** Shared by adding an account and signing in to an existing account again. A sign-in still
+ * waiting when the flow unmounts or the page is hidden for good is cancelled, as Cancel does. */
 export function LoginFlow(props: LoginFlowProps) {
   const { api, unauthorized } = useKit();
   const p = usePrivacy();
@@ -217,6 +218,9 @@ export function LoginFlow(props: LoginFlowProps) {
   const succeeded = useRef<string | undefined>(undefined);
   const locked = useRef(false);
   const success = useRef(props.onSuccess);
+  const waiting = useRef<string | undefined>(undefined);
+  const cancelApi = useRef(api);
+  cancelApi.current = api;
   const root = useRef<HTMLElement>(null);
   const typedId = useRef(false);
   const idHint = useId();
@@ -233,13 +237,24 @@ export function LoginFlow(props: LoginFlowProps) {
 
   useEffect(() => {
     live.current = true;
+    // Best effort and not awaited: the page may be going away. A login that finished is not touched.
+    const leave = () => {
+      const running = waiting.current;
+      if (!running) return;
+      waiting.current = undefined;
+      void Promise.resolve(cancelApi.current.cancelLogin(running)).catch(() => {});
+    };
+    addEventListener("pagehide", leave);
     return () => {
+      removeEventListener("pagehide", leave);
       live.current = false;
       operation.current++;
+      leave();
     };
   }, []);
 
   const accept = (next: Login) => {
+    waiting.current = next.state === "pending" ? next.id : undefined;
     setLogin(next);
     const key = JSON.stringify(next.prompt) ?? "";
     if (key !== promptKey.current) {
@@ -276,10 +291,16 @@ export function LoginFlow(props: LoginFlowProps) {
             method: props.method.method,
             input: values,
           });
-      if (!live.current || version !== operation.current) return;
+      if (!live.current) {
+        // Left while the start was in flight: the login it began is cancelled like any other.
+        if (r.body?.login?.state === "pending") void api.cancelLogin(r.body.login.id);
+        return;
+      }
+      if (version !== operation.current) return;
       if (replyError(r)) return;
       const why = problem(r);
-      if (why || !r.body?.login) setStartError(why ?? t("invalidReply"));
+      if (why || !r.body?.login)
+        setStartError(signInRunning(r) ? t("alreadyRunning") : (why ?? t("invalidReply")));
       else accept(r.body.login);
     } finally {
       if (live.current && version === operation.current) {
@@ -386,6 +407,7 @@ export function LoginFlow(props: LoginFlowProps) {
       const why = problem(r);
       setError(why);
       if (!why) {
+        waiting.current = undefined;
         setCancelling(true);
         setAnswer({});
       }
@@ -420,7 +442,8 @@ export function LoginFlow(props: LoginFlowProps) {
     safeLink(prompt?.kind === "browser" ? prompt.url : prompt?.verification_uri_complete) ??
     safeLink(prompt?.verification_uri);
   const promptInputs =
-    prompt?.inputs ?? (prompt?.kind === "browser" ? [{ name: "redirect_url", label: t("callback") }] : []);
+    prompt?.inputs ??
+    (prompt?.kind === "browser" ? [{ name: "redirect_url", label: t("addressOrCode") }] : []);
   const remaining = Math.max(0, Math.ceil(((deadline ?? now) - now) / 1000));
   const terminalFailure = login?.state === "failed" || startError || pollStopped;
   const focusState = [
@@ -559,12 +582,11 @@ export function LoginFlow(props: LoginFlowProps) {
                 values={answer}
                 disabled={busy}
                 onReading={fileReading}
-                browser={prompt.kind === "browser"}
                 onChange={(name, value) => setAnswer((all) => ({ ...all, [name]: value }))}
               />
               <div>
                 <Button type="submit" variant="primary" disabled={busy || readingFile}>
-                  {t(prompt.kind === "browser" ? "submitCallback" : "submit")}
+                  {t("submit")}
                 </Button>
               </div>
             </form>
@@ -574,7 +596,6 @@ export function LoginFlow(props: LoginFlowProps) {
       {login?.state === "pending" && !pollStopped && (
         <>
           <Notice tone="muted">{t(cancelling ? "cancelling" : "waiting")}</Notice>
-          <p class="hint">{t("closing")}</p>
           <div data-login-cancel="">
             <Button onClick={() => void cancel()} disabled={busy || cancelling}>
               {t("cancel")}
