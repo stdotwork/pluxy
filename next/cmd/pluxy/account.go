@@ -373,10 +373,15 @@ func (x *invocation) followLogin(l management.Login, body []byte, in signInInput
 				lines.field(prompt.next())
 			}
 			lines.dropTyped()
-			if repeated && !ended {
-				x.eprintf("the sign-in is still asking; give the value again if the last one was wrong\n")
+			// A prompt shown again after input ended says nothing new, and its text could invite a
+			// value that nothing reads: it is left out. One seen for the first time is shown, since
+			// it may hold a sign-in link.
+			if !(repeated && ended) {
+				if repeated {
+					x.eprintf("the sign-in is still asking; give the value again if the last one was wrong\n")
+				}
+				x.loginPrompt(l.Prompt)
 			}
-			x.loginPrompt(l.Prompt)
 		}
 		var field *protocol.LoginInput
 		if prompt != nil {

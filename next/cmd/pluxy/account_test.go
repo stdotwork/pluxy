@@ -1459,6 +1459,9 @@ func TestFollowLoginAsksNothingAgainAfterEndOfInput(t *testing.T) {
 	if strings.Contains(errOut, "give the value again") {
 		t.Errorf("the command asked for the value again after standard input ended: %q", errOut)
 	}
+	if n := strings.Count(errOut, "Enter the passphrase."); n != 1 {
+		t.Errorf("the prompt's message was printed %d times, want once: %q", n, errOut)
+	}
 	if _, cancelled := f.start(); len(cancelled) != 1 {
 		t.Errorf("the sign-in was not cancelled: %v", cancelled)
 	}
