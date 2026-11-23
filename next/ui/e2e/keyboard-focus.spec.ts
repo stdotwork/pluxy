@@ -203,7 +203,7 @@ test("a page change moves focus to the page heading and announces the title", as
     .click();
   await expect(page.getByRole("heading", { level: 1, name: "Accounts", exact: true })).toBeFocused();
   await expect(page.locator('[data-part="page-announcer"]')).toHaveText("Accounts · pluxy");
-  await expect(page.locator('[data-part="page-announcer"]')).toHaveAttribute("role", "status");
+  await expect(page.locator('[data-part="page-announcer"]')).toHaveAttribute("aria-live", "polite");
 });
 
 test("opening the panel is not a page change, so it moves no focus", async ({ page }) => {

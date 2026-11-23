@@ -453,7 +453,7 @@ export function Shell(props: {
           <main class="main" data-part="main" tabIndex={-1} ref={mainRef}>
             <div class="content">{active?.render()}</div>
           </main>
-          <div class="sr-only" data-part="page-announcer" role="status">
+          <div class="sr-only" data-part="page-announcer" aria-live="polite" aria-atomic="true">
             {announced}
           </div>
         </div>
