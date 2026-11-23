@@ -132,6 +132,13 @@ func writeEscaped(w io.Writer, b []byte) error {
 	return ew.flush()
 }
 
+// writeEscapedText is writeEscaped for a text file shown on a terminal: a CR directly before an
+// LF cannot overwrite anything, so each CRLF line break is shown as the LF it ends in, and a
+// lone CR stays escaped.
+func writeEscapedText(w io.Writer, b []byte) error {
+	return writeEscaped(w, bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n")))
+}
+
 // cell escapes s as a single-line cell when standard output is a terminal.
 func (x *invocation) cell(s string) string {
 	if stdoutIsTerminal(x.stdout) {
@@ -238,7 +245,7 @@ var commands = []command{
 			var c management.Config
 			return x.call(http.MethodGet, "/config", nil, nil, &c, func() {
 				if stdoutIsTerminal(x.stdout) {
-					_ = writeEscaped(x.stdout, []byte(c.Content))
+					_ = writeEscapedText(x.stdout, []byte(c.Content))
 				} else {
 					x.printf("%s", c.Content)
 				}
@@ -779,7 +786,7 @@ var commands = []command{
 				return err
 			}
 			if !x.json && stdoutIsTerminal(x.stdout) {
-				if err := writeEscaped(x.stdout, body); err != nil {
+				if err := writeEscapedText(x.stdout, body); err != nil {
 					return err
 				}
 			} else if _, err := x.stdout.Write(body); err != nil {

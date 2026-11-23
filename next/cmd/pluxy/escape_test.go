@@ -12,6 +12,12 @@ import (
 
 // runWithTerminals runs a CLI command against srv with independent terminal flags for stdout and stderr.
 func runWithTerminals(srv *httptest.Server, stdoutTerm, stderrTerm bool, stdin io.Reader, args ...string) (string, string, int) {
+	return runWithTerminalsTTY(srv, stdoutTerm, stderrTerm, false, stdin, args...)
+}
+
+// runWithTerminalsTTY is runWithTerminals with the command's own tty flag too: standard input is a
+// terminal, so the command asks for what it needs.
+func runWithTerminalsTTY(srv *httptest.Server, stdoutTerm, stderrTerm, tty bool, stdin io.Reader, args ...string) (string, string, int) {
 	oldOut, oldErr := stdoutIsTerminal, stderrIsTerminal
 	stdoutIsTerminal = func(io.Writer) bool { return stdoutTerm }
 	stderrIsTerminal = func(io.Writer) bool { return stderrTerm }
@@ -26,7 +32,7 @@ func runWithTerminals(srv *httptest.Server, stdoutTerm, stderrTerm bool, stdin i
 	if stdin == nil {
 		stdin = strings.NewReader("")
 	}
-	code := runCLIWithInput(args, stdin, &out, &errOut, env, false)
+	code := runCLIWithInput(args, stdin, &out, &errOut, env, tty)
 	return out.String(), errOut.String(), code
 }
 
@@ -57,9 +63,11 @@ func assertNoRawControls(t *testing.T, label, s string) {
 	}
 }
 
-// TestTableCommandsTerminalEscaping checks that every table command printing foreign text escapes
-// ESC, newline, tab, and C1 controls on a terminal without adding rows or columns, while keeping
-// piped and --json output exact.
+// TestTableCommandsTerminalEscaping checks the commands in its table (usage, account, model, ext,
+// status, theme, setup and import cpa): each escapes ESC, newline, tab, and C1 controls on a
+// terminal without adding rows or columns, while piped and --json output stay exact. The other
+// table commands (logs errors, key list, route, chain list) reach the same x.table, which this
+// test does not cover.
 func TestTableCommandsTerminalEscaping(t *testing.T) {
 	q := mustJSONString(t, foreignSample)
 
@@ -227,7 +235,8 @@ func TestMultilineCommandsTerminalEscaping(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		wantTerm := "listen: 127.0.0.1:8317\n# " + foreignMultiEscaped + "\\x0d\n"
+		// The CR before the LF is dropped on a terminal: it could not overwrite anything.
+		wantTerm := "listen: 127.0.0.1:8317\n# " + foreignMultiEscaped + "\n"
 		if out, errOut, code := runWithTerminals(srv, true, false, nil, "config", "show"); code != 0 || errOut != "" || out != wantTerm {
 			t.Errorf("config show terminal: code=%d err=%q\n got %q\nwant %q", code, errOut, out, wantTerm)
 		}
@@ -237,6 +246,51 @@ func TestMultilineCommandsTerminalEscaping(t *testing.T) {
 		for _, term := range []bool{false, true} {
 			if out, errOut, code := runWithTerminals(srv, term, term, nil, "config", "show", "--json"); code != 0 || errOut != "" || out != body {
 				t.Errorf("config show --json (term=%v): code=%d err=%q\n got %q\nwant %q", term, code, errOut, out, body)
+			}
+		}
+	})
+
+	t.Run("config show CRLF and lone CR", func(t *testing.T) {
+		// A CRLF file shows plain line breaks on a terminal; a CR that is not before an LF could
+		// overwrite the line, so it stays escaped. Piped and --json bytes are the file's own.
+		rawCfg := "a: 1\r\nb: 2\rc: 3\r\n\r\nd: 4\r"
+		body := `{"content":` + mustJSONString(t, rawCfg) + `}` + "\n"
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(body))
+		}))
+		defer srv.Close()
+
+		wantTerm := "a: 1\nb: 2\\x0dc: 3\n\nd: 4\\x0d\n"
+		if out, errOut, code := runWithTerminals(srv, true, false, nil, "config", "show"); code != 0 || errOut != "" || out != wantTerm {
+			t.Errorf("config show terminal: code=%d err=%q\n got %q\nwant %q", code, errOut, out, wantTerm)
+		}
+		if out, errOut, code := runWithTerminals(srv, false, false, nil, "config", "show"); code != 0 || errOut != "" || out != rawCfg+"\n" {
+			t.Errorf("config show piped: code=%d err=%q\n got %q\nwant %q", code, errOut, out, rawCfg+"\n")
+		}
+		for _, term := range []bool{false, true} {
+			if out, errOut, code := runWithTerminals(srv, term, term, nil, "config", "show", "--json"); code != 0 || errOut != "" || out != body {
+				t.Errorf("config show --json (term=%v): code=%d err=%q\n got %q\nwant %q", term, code, errOut, out, body)
+			}
+		}
+	})
+
+	t.Run("theme show CRLF and lone CR", func(t *testing.T) {
+		rawTheme := "{\r\n\t\"name\": \"a\rb\"\r\n}"
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Write([]byte(rawTheme))
+		}))
+		defer srv.Close()
+
+		wantTerm := "{\n\t\"name\": \"a\\x0db\"\n}\n"
+		if out, errOut, code := runWithTerminals(srv, true, false, nil, "theme", "show", "my/t"); code != 0 || errOut != "" || out != wantTerm {
+			t.Errorf("theme show terminal: code=%d err=%q\n got %q\nwant %q", code, errOut, out, wantTerm)
+		}
+		if out, errOut, code := runWithTerminals(srv, false, false, nil, "theme", "show", "my/t"); code != 0 || errOut != "" || out != rawTheme+"\n" {
+			t.Errorf("theme show piped: code=%d err=%q\n got %q\nwant %q", code, errOut, out, rawTheme+"\n")
+		}
+		for _, term := range []bool{false, true} {
+			if out, errOut, code := runWithTerminals(srv, term, term, nil, "theme", "show", "my/t", "--json"); code != 0 || errOut != "" || out != rawTheme {
+				t.Errorf("theme show --json (term=%v): code=%d err=%q\n got %q\nwant %q", term, code, errOut, out, rawTheme)
 			}
 		}
 	})
@@ -375,7 +429,7 @@ func TestLoginPromptStderrTerminalEscaping(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// stdout=pipe, stderr=tty -> prompt message, code, URL, and waiting error all escaped.
+	// stdout=pipe, stderr=tty -> prompt message, code and URL escaped.
 	_, errTerm, code := runWithTerminals(srv, false, true, nil, "account", "add", "pluxy/ext", "--no-wait")
 	if code != exitWaiting {
 		t.Fatalf("stderr=tty: code=%d err=%q", code, errTerm)
