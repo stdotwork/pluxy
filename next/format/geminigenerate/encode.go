@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/stdotwork/pluxy/next/format/internal/clienttools"
@@ -106,6 +107,16 @@ type EncodeOptions struct {
 	// tool is left out and reported as dropped. A Gemini client's own codeExecution tool is
 	// written either way.
 	CodeExecution bool
+	// Vertex says the upstream is Vertex AI. Its grounding page allows several tools in one
+	// generateContent request only when all are search tools
+	// (https://docs.cloud.google.com/vertex-ai/generative-ai/docs/grounding/grounding-with-google-search),
+	// so a codeExecution tool translated from another format is left out, and reported as
+	// dropped, when googleSearch is sent too. The same holds on any upstream for the Gemini 2.0
+	// models, which answer 400 "Code execution and search tool is not supported."
+	// (https://discuss.ai.google.dev/t/can-i-use-both-web-search-and-code-execution-tool/99056).
+	// The Gemini API documents the pair for its later models
+	// (https://ai.google.dev/gemini-api/docs/google-search#tool-combination).
+	Vertex bool
 	// CandidateCount says the caller knows its upstream takes generationConfig.candidateCount
 	// for this request (the Gemini API does for both streaming and non-streaming; Vertex AI does
 	// for non-streaming generateContent only). Without it a translated count > 1 is left out and
@@ -182,6 +193,15 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	var tools []json.RawMessage
 	hasOwnTools := false
 	droppedBuiltIn := false
+	// Translated codeExecution tools are placed in tools as the loop reaches them but judged
+	// after it, since a googleSearch that comes later in the list decides whether they may stay.
+	type translatedCode struct {
+		tool llm.Tool
+		at   int
+		path string
+	}
+	var codeTools []translatedCode
+	searchSent := false
 	for i, t := range req.Tools {
 		p := pathOf(t.Origin, fmt.Sprintf("tools[%d]", i))
 		if t.Type == llm.ToolCodeExecution {
@@ -213,10 +233,8 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 				droppedBuiltIn = true
 				continue
 			}
+			codeTools = append(codeTools, translatedCode{t, len(tools), p})
 			tools = append(tools, json.RawMessage(`{"codeExecution":{}}`))
-			for _, l := range rawjson.CodeExecutionLosses(t, p, format) {
-				e.losses = llm.AddLoss(e.losses, l)
-			}
 			continue
 		}
 		if t.Type == llm.ToolWebSearch {
@@ -249,6 +267,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 				droppedBuiltIn = true
 				continue
 			}
+			searchSent = true
 			tools = append(tools, json.RawMessage(`{"googleSearch":{}}`))
 			for _, l := range rawjson.WebSearchLosses(t, p, format, rawjson.WebSearchCarried{}) {
 				e.losses = llm.AddLoss(e.losses, l)
@@ -275,6 +294,30 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			e.lose(llm.LossDropped, rawjson.Join(p, "strict"), "GenerateContent has no strict function arguments")
 		}
 		decls = append(decls, marshalWith(fd, e.kept(t.Origin)))
+	}
+	if len(codeTools) > 0 {
+		var why string
+		switch {
+		case searchSent && opts.Vertex:
+			why = "Vertex AI allows several tools in one request only when all are search tools, so codeExecution is not sent beside googleSearch"
+		case searchSent && !allowsSearchWithCode(req.Model):
+			why = fmt.Sprintf("GenerateContent model %q does not take codeExecution beside googleSearch", req.Model)
+		}
+		if why != "" {
+			for k := len(codeTools) - 1; k >= 0; k-- { // from the back, so the earlier indexes hold
+				tools = slices.Delete(tools, codeTools[k].at, codeTools[k].at+1)
+			}
+		}
+		for _, c := range codeTools {
+			if why != "" {
+				e.lose(llm.LossDropped, c.path, why)
+				droppedBuiltIn = true
+				continue
+			}
+			for _, l := range rawjson.CodeExecutionLosses(c.tool, c.path, format) {
+				e.losses = llm.AddLoss(e.losses, l)
+			}
+		}
 	}
 	if len(decls) > 0 {
 		tools = append([]json.RawMessage{marshalWith(map[string]any{"functionDeclarations": decls}, nil)}, tools...)
@@ -782,6 +825,14 @@ func supportsGoogleSearch(model string) bool {
 		}
 	}
 	return false
+}
+
+// allowsSearchWithCode reports whether model takes googleSearch and codeExecution in one request
+// on the Gemini API: every model but the Gemini 2.0 ones, for which Google's developer forum
+// reports a 400 (https://discuss.ai.google.dev/t/can-i-use-both-web-search-and-code-execution-tool/99056).
+func allowsSearchWithCode(model string) bool {
+	m := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(model)), "models/")
+	return !strings.HasPrefix(m, "gemini-2.0-")
 }
 
 // combinesStructuredOutput reports whether model takes structured output beside a built-in tool:

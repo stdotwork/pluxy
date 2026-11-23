@@ -239,8 +239,8 @@ func parseTool(raw json.RawMessage, path string) llm.Tool {
 		}
 	}
 	if err != nil || (t.Type != "" && t.Type != "custom") || t.Name == "" || len(t.InputSchema) == 0 {
-		// Server tools (web search, code execution, ...) and versioned client tools (bash,
-		// text editor, ...) are not function tools; they survive whole.
+		// Other server tools (web fetch, ...) and versioned client tools (bash, text editor, ...)
+		// are not function tools; they survive whole. Web search and code execution returned above.
 		return llm.Tool{Type: llm.ToolNative, Origin: &llm.Origin{Format: format, Path: path, Raw: append(json.RawMessage(nil), raw...)}}
 	}
 	return llm.Tool{Name: t.Name, Description: t.Description, Parameters: t.InputSchema, Strict: t.Strict,

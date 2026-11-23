@@ -108,8 +108,7 @@ var tierHosts = map[string]map[string]tierFields{
 	"openrouter.ai":                     {llm.FormatOpenAIChat: {assistantAnnotations: true}},
 }
 
-// tierFieldsOf returns which of a tier and a verbosity the account's upstream takes on the wire of
-// format.
+// tierFieldsOf returns which of the tierFields the account's upstream takes on the wire of format.
 func tierFieldsOf(s settings, format string) tierFields {
 	u, err := url.Parse(s.BaseURL)
 	if err != nil {

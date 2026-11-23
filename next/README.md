@@ -962,7 +962,7 @@ blocks carry the results. Not built: the web search result cache and Codex's too
 the ChatGPT backend, on models whose OpenAI model pages list `code_interpreter` and the Responses
 endpoint), and `codeExecution` on Gemini GenerateContent (`generativelanguage.googleapis.com` and
 Google's Vertex AI hosts, documented Gemini model families, dropped beside `functionDeclarations`,
-dropped beside structured output before Gemini 3, and combined with `googleSearch`). Chat Completions has no code execution tool and drops it with a loss. Third-party
+dropped beside structured output before Gemini 3, combined with `googleSearch` on the Gemini API, and dropped beside it on Vertex AI and on Gemini 2.0). Chat Completions has no code execution tool and drops it with a loss. Third-party
 hosts, unlisted models, and provider-specific settings (explicit containers, `file_ids`,
 `memory_limit`, `network_policy`, `cache_control`, `defer_loading`, `strict`, `allowed_callers`)
 are reported as dropped. A forced choice of the code tool (`{"type":"code_interpreter"}` on
