@@ -34,9 +34,6 @@ type payloadWSUpstream struct {
 func newPayloadWSUpstream(t *testing.T) *payloadWSUpstream {
 	u := &payloadWSUpstream{}
 	u.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if answersModelList(w, r) {
-			return
-		}
 		if r.URL.Path != "/v1/responses" || r.Method != http.MethodGet {
 			u.mu.Lock()
 			u.posts++

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,7 +106,7 @@ func TestCodexAPIKeySignInChecksTheKey(t *testing.T) {
 	base := runCore(t, map[string]any{"listen": "127.0.0.1:0", "client_keys": []string{clientKey}, "management_key": managementKey, "credentials_dir": filepath.Join(t.TempDir(), "credentials"), "extension": map[string]any{"manifest": filepath.Join(binDir, "codex", "pluxy-extension.json"), "accounts": []any{}}})
 	add := func(id, key string) loginReply {
 		var l loginReply
-		body := map[string]any{"id": id, "method": "api_key", "settings": map[string]any{"base_url": srv.URL}, "input": map[string]string{"api_key": key}}
+		body := map[string]any{"id": id, "method": "api_key", "input": map[string]string{"api_key": key, "base_url": srv.URL}}
 		if code := manage(t, base, "POST", "/accounts", body, &l); code != http.StatusAccepted {
 			t.Fatalf("login status %d", code)
 		}
@@ -132,14 +133,24 @@ func TestCodexAPIKeySignInChecksTheKey(t *testing.T) {
 	}
 
 	bad := add("bad", "sk-test-not-issued")
-	if bad.Login.State != "failed" || bad.Login.Error == nil || bad.Login.Error.Message != "OpenAI refused the key" {
-		t.Fatalf("a refused key: login %s %+v, want failed with \"OpenAI refused the key\"", bad.Login.State, bad.Login.Error)
+	if bad.Login.State != "failed" || bad.Login.Error == nil || !strings.HasSuffix(bad.Login.Error.Message, " refused the key") {
+		t.Fatalf("a refused key: login %s %+v, want failed saying the provider refused the key", bad.Login.State, bad.Login.Error)
 	}
 	if ids := accounts(); len(ids) != 0 {
 		t.Fatalf("accounts after a refused key = %v, want none", ids)
 	}
 	if good := add("good", srv.IssueToken("text")); good.Login.State != "done" {
 		t.Fatalf("a good key: login %s %+v, want done", good.Login.State, good.Login.Error)
+	}
+	// The address the key was checked at is the account's own, so its requests go there too.
+	var list struct {
+		Accounts []struct {
+			ID       string         `json:"id"`
+			Settings map[string]any `json:"settings"`
+		} `json:"accounts"`
+	}
+	if code := manage(t, base, "GET", "/accounts", nil, &list); code != http.StatusOK || len(list.Accounts) != 1 || list.Accounts[0].Settings["base_url"] != srv.URL {
+		t.Fatalf("accounts = %+v (status %d), want base_url %s from the sign-in", list.Accounts, code, srv.URL)
 	}
 	if ids := accounts(); len(ids) != 1 || ids[0] != "good" {
 		t.Fatalf("accounts after a good key = %v, want [good]", ids)
