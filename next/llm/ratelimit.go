@@ -16,8 +16,8 @@ const (
 
 // Documented rate-limit response header names (lower-case) per wire format.
 // Only headers explicitly documented by each vendor are listed, and a value is carried only in
-// a shape the vendors document (ValidRateLimitHeaderValue): never cookies, auth tokens, or
-// account/organization/workspace identifiers.
+// a shape the vendors document (ValidRateLimitHeaderValue), so no cookie, auth token or text
+// ID is carried. A numeric ID cannot be told from a number and is.
 var (
 	// Anthropic Messages: https://platform.claude.com/docs/en/api/rate-limits
 	// and https://platform.claude.com/docs/en/build-with-claude/fast-mode.
@@ -93,8 +93,10 @@ func AllowedRateLimitHeader(format, name string) bool {
 	}
 }
 
-// maxRateLimitShapedValue bounds a time or a duration: the longest RFC 3339 time (nanoseconds and
-// an offset) is 35 bytes, and a duration is shorter than that.
+// maxRateLimitShapedValue bounds a time or a duration at 40 bytes: a time with nanoseconds and an
+// offset is 35, and a duration is shorter. The bound is on length only: a time's fraction or a
+// duration's number may be longer than any vendor writes, so PlainRateLimitValue is the narrower
+// check for a value whose characters cannot be a key's.
 const maxRateLimitShapedValue = 40
 
 // rateLimitDuration matches the durations the vendors write, as Go prints them: hours, minutes
@@ -102,11 +104,18 @@ const maxRateLimitShapedValue = 40
 // ("17ms").
 var rateLimitDuration = regexp.MustCompile(`^(?:[0-9]+h)?(?:[0-9]+m)?(?:[0-9]+(?:\.[0-9]+)?s)?$|^[0-9]+(?:\.[0-9]+)?(?:ms|us|[\x{b5}\x{3bc}]s|ns)$`)
 
+// rateLimitPlainDuration matches a duration whose every number has at most 4 digits, with a
+// fraction of at most 3 digits on the seconds or on a sub-second unit: "1s", "6m0s", "1h2m3.5s",
+// "17ms". A longer number, such as "4829175306s", could hold a key's digits.
+var rateLimitPlainDuration = regexp.MustCompile(`^(?:[0-9]{1,4}h)?(?:[0-9]{1,4}m)?(?:[0-9]{1,4}(?:\.[0-9]{1,3})?s)?$|^[0-9]{1,4}(?:\.[0-9]{1,3})?(?:ms|us|[\x{b5}\x{3bc}]s|ns)$`)
+
 // ValidRateLimitHeaderValue reports whether v is a value a vendor documents for a rate-limit
 // header, and nothing else: a non-negative integer (a limit, a count left, or OpenRouter's reset
-// in milliseconds since the Unix epoch), an RFC 3339 time (Anthropic's resets), or a duration
-// such as "1s", "6m0s" or "17ms" (OpenAI's resets). Any other text, such as an ID or a piece of
-// a key, is not one, and a caller drops it.
+// in milliseconds since the Unix epoch), exactly "-1" (which OpenAI and Azure OpenAI send for a
+// limit that does not apply), an RFC 3339 time (Anthropic's resets), or a duration such as "1s",
+// "6m0s" or "17ms" (OpenAI's resets). Any other text, such as a token or a piece of a key, is not
+// one, and a caller drops it. A number cannot be told from a numeric ID, so an all-digit ID is
+// one.
 //
 //   - Anthropic: https://platform.claude.com/docs/en/api/rate-limits ("provided in RFC 3339 format")
 //   - OpenAI: https://developers.openai.com/api/docs/guides/rate-limits (limits and counts as
@@ -117,7 +126,7 @@ func ValidRateLimitHeaderValue(v string) bool {
 	if len(v) == 0 || len(v) > MaxRateLimitHeaderValue {
 		return false
 	}
-	if RateLimitInteger(v) {
+	if RateLimitInteger(v) || v == "-1" {
 		return true
 	}
 	if len(v) > maxRateLimitShapedValue {
@@ -125,6 +134,26 @@ func ValidRateLimitHeaderValue(v string) bool {
 	}
 	if rateLimitDuration.MatchString(v) {
 		return true
+	}
+	_, err := time.Parse(time.RFC3339, v)
+	return err == nil
+}
+
+// PlainRateLimitValue reports whether v is a value whose characters are too few and too fixed to
+// hold a piece of a key, so removing the account's key pieces from it would only cut a real
+// value: an RFC 3339 time with no fractional seconds ("2026-11-22T08:00:00Z"), or a duration
+// whose every number has at most 4 digits, with one fraction of at most 3 digits on the seconds
+// or on a sub-second unit ("6m0s", "1h2m3.5s", "17ms"). A longer number or a fraction is not
+// plain: a key's digits could be in it.
+func PlainRateLimitValue(v string) bool {
+	if len(v) == 0 || len(v) > maxRateLimitShapedValue {
+		return false
+	}
+	if rateLimitPlainDuration.MatchString(v) {
+		return true
+	}
+	if strings.Contains(v, ".") {
+		return false
 	}
 	_, err := time.Parse(time.RFC3339, v)
 	return err == nil

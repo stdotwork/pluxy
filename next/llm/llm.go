@@ -493,7 +493,8 @@ type ResponseInfo struct {
 	// Headers holds the upstream's documented rate-limit response headers (protocol minor
 	// version 34), keyed by lower-case name. Only headers from the explicit allowlist for
 	// Format are carried, and only values of a documented shape (ValidRateLimitHeaderValue: an
-	// integer, an RFC 3339 time or a duration); never cookies, tokens, or account/organization IDs.
+	// integer, an RFC 3339 time or a duration); no cookie, token or text ID. A numeric ID cannot be
+	// told from a number and is carried.
 	Headers map[string]string `json:"headers,omitempty"`
 }
 
@@ -605,7 +606,8 @@ type Error struct {
 	// Headers holds the upstream's documented rate-limit response headers on an error reply
 	// (protocol minor version 34), keyed by lower-case name. Only headers from the explicit
 	// allowlist are carried, and only values of a documented shape (ValidRateLimitHeaderValue: an
-	// integer, an RFC 3339 time or a duration); never cookies, tokens, or account/organization IDs.
+	// integer, an RFC 3339 time or a duration); no cookie, token or text ID. A numeric ID cannot be
+	// told from a number and is carried.
 	Headers map[string]string `json:"headers,omitempty"`
 	// UsageLimit, set only by core, marks the final usage-limit reply: every account for the
 	// request is out of quota until a reset the upstream named (routing's usage-limit quota

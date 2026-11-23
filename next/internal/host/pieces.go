@@ -17,9 +17,10 @@ import (
 // text: an error event's message, the string values of its raw data and the values of its
 // rate-limit headers (rateLimitHeaders), and in the call's capture the body of an upstream reply
 // with an error status, or of every reply when the call ended in an error. A call that succeeded
-// keeps its replies as they are, but for the integers among its response.start rate-limit
-// headers: the rule would cut words of a model's output that share 4 characters (8 for a long
-// token) with a secret.
+// keeps its replies as they are, but for the rate-limit headers of its response.start, which
+// lose pieces like an error's (but a plain time or duration, llm.PlainRateLimitValue): the rule
+// would cut words of a model's output that share 4 characters (8 for a long token) with a
+// secret.
 type pieces []string
 
 // accountPieces returns the pieces of account a, after outbound has resolved its proxy: its
@@ -73,19 +74,20 @@ func (p pieces) event(ev llm.Event) llm.Event {
 	return ev
 }
 
-// rateLimitHeaders returns h with p's pieces removed from each value, but for a time or a
-// duration (an RFC 3339 time such as "2026-11-22T08:00:00Z", or "6m0s"): its few characters are
-// not a key's, and a key that shares 4 of them ("2026", "00:00") would cut a real reset into
-// "[redacted]:00:00Z". A value that a piece takes anything from is no longer one of the shapes
-// llm.ValidRateLimitHeaderValue allows, so the call's reply drops it. Integers lose their pieces
-// too: a numeric secret's piece is one.
+// rateLimitHeaders returns h with p's pieces removed from each value, but for a plain time or
+// duration (llm.PlainRateLimitValue, such as "2026-11-22T08:00:00Z" or "6m0s"): it has too few
+// characters to hold a key's, and a key that shares 4 of them ("2026", "00:00") would cut a real
+// reset into "[redacted]:00:00Z". Every other value loses its pieces, an integer too (a numeric
+// key's piece is one), and a time with a fraction or a duration with a long number (which a key's
+// digits could fill). A value that a piece takes anything from is no longer one of the shapes
+// llm.ValidRateLimitHeaderValue allows, so the call's reply drops it.
 func (p pieces) rateLimitHeaders(h map[string]string) map[string]string {
 	if len(h) == 0 {
 		return h
 	}
 	out := make(map[string]string, len(h))
 	for k, v := range h {
-		if !llm.RateLimitInteger(v) && llm.ValidRateLimitHeaderValue(v) {
+		if llm.PlainRateLimitValue(v) {
 			out[k] = v
 			continue
 		}

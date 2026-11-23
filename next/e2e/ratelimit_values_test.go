@@ -11,16 +11,21 @@ import (
 
 // TestRateLimitHeaderValues checks that a client sees the numbers, times and durations an
 // upstream sends in its rate-limit headers, and no other text: an ID, or a piece of the account's
-// key, under an allowed header name is dropped, on a 200 and on a 429, through each extension.
+// key, under an allowed header name is dropped, on a 200, a streamed 200 and a 429, through each extension.
 func TestRateLimitHeaderValues(t *testing.T) {
 	const (
 		accountKey = "sk-sweepSecretKey0123456789abcdefXYZ"
 		keyPiece   = "sk-sweepSecret" // its first 14 characters
 		orgID      = "org_sweep_ID_123"
 	)
-	reply := func(w http.ResponseWriter, r *http.Request, set func(h http.Header), ok string) {
+	reply := func(w http.ResponseWriter, r *http.Request, set func(h http.Header), ok, sse string) {
 		set(w.Header())
 		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), `"stream":true`) && !strings.Contains(string(body), "trigger-429") {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, sse)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		if strings.Contains(string(body), "trigger-429") {
 			w.WriteHeader(http.StatusTooManyRequests)
@@ -37,7 +42,13 @@ func TestRateLimitHeaderValues(t *testing.T) {
 			h.Set("anthropic-ratelimit-requests-remaining", "49")
 			h.Set("anthropic-ratelimit-requests-reset", "2026-11-22T08:00:00Z")
 			h.Set("anthropic-ratelimit-tokens-reset", "2026-11-22T18:00:00.5+10:00")
-		}, `{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":1}}`)
+		}, `{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":1}}`,
+			"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-test\",\"content\":[],\"usage\":{\"input_tokens\":3,\"output_tokens\":0}}}\n\n"+
+				"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n"+
+				"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n"+
+				"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n"+
+				"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n"+
+				"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
 	}))
 	defer claudeUpstream.Close()
 
@@ -51,11 +62,17 @@ func TestRateLimitHeaderValues(t *testing.T) {
 		h.Set("x-ratelimit-reset", "1795248000000")
 	}
 	chatUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reply(w, r, openaiHeaders, `{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"chat-test","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`)
+		reply(w, r, openaiHeaders, `{"id":"chatcmpl-1","object":"chat.completion","created":1,"model":"chat-test","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`,
+			"data: {\"id\":\"chatcmpl-1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"chat-test\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
 	}))
 	defer chatUpstream.Close()
 	responsesUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reply(w, r, openaiHeaders, `{"id":"resp_1","object":"response","created_at":1,"status":"completed","model":"codex-test","output":[{"id":"msg_1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok","annotations":[]}]}],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}`)
+		reply(w, r, openaiHeaders, `{"id":"resp_1","object":"response","created_at":1,"status":"completed","model":"codex-test","output":[{"id":"msg_1","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok","annotations":[]}]}],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}`,
+			"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"created_at\":1,\"status\":\"in_progress\",\"model\":\"codex-test\",\"output\":[]}}\n\n"+
+				"data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\n\n"+
+				"data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"ok\"}\n\n"+
+				"data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\",\"annotations\":[]}]}}\n\n"+
+				"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"created_at\":1,\"status\":\"completed\",\"model\":\"codex-test\",\"output\":[{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\",\"annotations\":[]}]}],\"usage\":{\"input_tokens\":2,\"output_tokens\":1,\"total_tokens\":3}}}\n\n")
 	}))
 	defer responsesUpstream.Close()
 
@@ -102,13 +119,22 @@ func TestRateLimitHeaderValues(t *testing.T) {
 		{"openai chat", chatBase, "/v1/chat/completions", "chat-test", `{"model":"chat-test","messages":[{"role":"user","content":"%s"}]}`, openaiWant, openaiDropped},
 		{"codex", codexBase, "/v1/responses", "codex-test", `{"model":"codex-test","input":"%s"}`, openaiWant, openaiDropped},
 	} {
-		for _, status := range []int{http.StatusOK, http.StatusTooManyRequests} {
-			t.Run(tc.name+" "+http.StatusText(status), func(t *testing.T) {
+		for _, c := range []struct {
+			name   string
+			status int
+			stream bool
+		}{{"200", http.StatusOK, false}, {"200 streamed", http.StatusOK, true}, {"429", http.StatusTooManyRequests, false}} {
+			status := c.status
+			t.Run(tc.name+" "+c.name, func(t *testing.T) {
 				prompt := "hi"
 				if status == http.StatusTooManyRequests {
 					prompt = "trigger-429"
 				}
-				req, err := http.NewRequest(http.MethodPost, tc.base+tc.path, strings.NewReader(strings.Replace(tc.body, "%s", prompt, 1)))
+				body := strings.Replace(tc.body, "%s", prompt, 1)
+				if c.stream {
+					body = strings.Replace(body, `{"model"`, `{"stream":true,"model"`, 1)
+				}
+				req, err := http.NewRequest(http.MethodPost, tc.base+tc.path, strings.NewReader(body))
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -122,6 +148,9 @@ func TestRateLimitHeaderValues(t *testing.T) {
 				resp.Body.Close()
 				if resp.StatusCode != status {
 					t.Fatalf("status = %d, want %d", resp.StatusCode, status)
+				}
+				if got := resp.Header.Get("Content-Type"); c.stream && !strings.HasPrefix(got, "text/event-stream") {
+					t.Errorf("Content-Type = %q, want an event stream", got)
 				}
 				for k, want := range tc.want {
 					if got := resp.Header.Get(k); got != want {
