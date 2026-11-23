@@ -1537,6 +1537,9 @@ cargo build --release  # target/release/pluxy-app
 
 `cargo test` runs `tests/modes.rs`: each mode against a real core with fake extensions,
 started by `go run ./e2e/panelcore` from `next/`, on random loopback ports in temporary folders.
+To look at the app against a core with accounts in every state, usage and request logs, start
+`go run ./e2e/panelcore -demo` ([how](../ui/README.md#a-core-with-data-to-look-at)) and give the
+app its `base` and `key` as a core on this computer.
 
 `bun run test:native` runs the native test: it builds the app with the `native-test` and
 `artifact-test-trust` features and runs it on a private X server (`xvfb-run`) with a private session bus (`dbus-run-session`),
