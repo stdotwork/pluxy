@@ -134,6 +134,9 @@ func deviceLogin(ctx context.Context, set settings, s prompter) (*protocol.Grant
 			"client_id": {clientID}, "device_code": {dc.DeviceCode}, "grant_type": {deviceGrant},
 		}, &tr)
 		if f == nil {
+			if err := tr.requireToken(); err != nil {
+				return nil, err
+			}
 			return &protocol.Grant{Credential: tr.credential(deviceID, "")}, nil
 		}
 		if ctx.Err() != nil {
@@ -177,6 +180,9 @@ func refresh(ctx context.Context, call sdk.RefreshCall) (*protocol.Credential, e
 		}
 		return nil, tokenError(f)
 	}
+	if err := tr.requireToken(); err != nil {
+		return nil, err
+	}
 	return tr.credential(data.DeviceID, c.RefreshToken), nil
 }
 
@@ -184,6 +190,14 @@ type tokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
 	ExpiresIn    int64  `json:"expires_in"`
+}
+
+// requireToken refuses a reply that is not an error but gives no access token.
+func (tr *tokenResponse) requireToken() error {
+	if tr.AccessToken == "" {
+		return &llm.Error{Code: llm.CodeUpstream, Message: "Kimi's token endpoint sent no access token", Scope: llm.ScopeEndpoint}
+	}
+	return nil
 }
 
 // credential builds a credential from a token reply. A reply without a refresh token keeps
