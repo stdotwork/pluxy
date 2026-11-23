@@ -195,7 +195,7 @@ func generateTo(ctx context.Context, call sdk.Call, out sender) (err error) {
 		// Gemini's function arguments are a protobuf Struct, so an integer parameter comes
 		// back as a double; the request's schemas say which ones are integers.
 		send.schemas = toolSchemas(call.Request)
-		send.callNames = map[int]string{}
+		send.callNames = map[callKey]string{}
 	}
 	t, err := resolve(ctx, s, call.Account.Credential, call.Request.Model, call.Request.Stream)
 	if err != nil {
@@ -520,9 +520,12 @@ type reporting struct {
 	// schemas are the request's function schemas by the client's tool name, and callNames the
 	// client's name of each open call, for integralArguments; both nil on a passthrough body.
 	schemas   map[string]json.RawMessage
-	callNames map[int]string
+	callNames map[callKey]string
 	calls     *openairesponses.CustomCallCheck
 }
+
+// callKey names one open tool call: its candidate (0 is the top-level reply) and its item.
+type callKey struct{ candidate, item int }
 
 func (r *reporting) Send(ev llm.Event) error {
 	if ev.Type == llm.EventResponseStart && ev.Response != nil {
@@ -539,15 +542,36 @@ func (r *reporting) Send(ev llm.Event) error {
 			ev.Item = &item
 		}
 		if r.callNames != nil {
-			r.callNames[ev.Index] = name
+			r.callNames[callKey{0, ev.Index}] = name
 		}
 	}
 	if ev.Type == llm.EventToolInputDelta && r.callNames != nil {
-		if name, ok := r.callNames[ev.Index]; ok {
+		if name, ok := r.callNames[callKey{0, ev.Index}]; ok {
 			if schema := r.schemas[name]; schema != nil {
 				ev.Delta = string(integralArguments([]byte(ev.Delta), schema))
 			}
 		}
+	}
+	// A later candidate's calls get the same two repairs as candidate 0's.
+	if ev.Type == llm.EventCandidate && ev.Candidate != nil {
+		c := *ev.Candidate
+		key := callKey{c.Index, c.Item}
+		switch c.Kind {
+		case llm.CandidateToolCallStart:
+			if client, ok := r.names[c.Name]; ok {
+				c.Name = client
+			}
+			if r.callNames != nil {
+				r.callNames[key] = c.Name
+			}
+		case llm.CandidateToolInputDelta:
+			if name, ok := r.callNames[key]; ok {
+				if schema := r.schemas[name]; schema != nil {
+					c.Delta = string(integralArguments([]byte(c.Delta), schema))
+				}
+			}
+		}
+		ev.Candidate = &c
 	}
 	if err := r.calls.Check(ev); err != nil {
 		return err

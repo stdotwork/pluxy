@@ -612,6 +612,15 @@ func (r *reporting) Send(ev llm.Event) error {
 
 // restore gives a tool call the client's own name for the tool.
 func (r *reporting) restore(ev *llm.Event) {
+	// A later candidate's call gets the same name as candidate 0's.
+	if ev.Type == llm.EventCandidate && ev.Candidate != nil && ev.Candidate.Kind == llm.CandidateToolCallStart {
+		if name, ok := r.names[ev.Candidate.Name]; ok {
+			c := *ev.Candidate
+			c.Name = name
+			ev.Candidate = &c
+		}
+		return
+	}
 	if ev.Type != llm.EventItemStart || ev.Item == nil || ev.Item.Kind != llm.ItemToolCall {
 		return
 	}
