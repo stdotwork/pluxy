@@ -1245,11 +1245,11 @@ func TestCLIExitCodesAndStreams(t *testing.T) {
 		t.Errorf("usage --since nonsense: code=%d, want 2", code)
 	}
 
-	// route for a model nothing serves exits 5 and prints to stderr; --json keeps core's body.
+	// route for a model nothing serves exits 5 and prints to stderr; --json keeps core's body on stdout and exits 5 too.
 	if o, e, code := run("route", "nosuch"); code != exitNotFound || o != "" || !strings.Contains(e, "no account serves nosuch") {
 		t.Errorf("route nosuch: code=%d out=%q err=%q", code, o, e)
 	}
-	if o, e, code := run("route", "nosuch", "--json"); code != exitOK || e != "" || !strings.Contains(o, `"order":[]`) {
+	if o, e, code := run("route", "nosuch", "--json"); code != exitNotFound || !strings.Contains(e, `"not_found"`) || !strings.Contains(o, `"order":[]`) {
 		t.Errorf("route nosuch --json: code=%d out=%q err=%q", code, o, e)
 	}
 	// route with left-out accounts still prints to stdout and exits 0.

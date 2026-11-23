@@ -422,10 +422,11 @@ var commands = []command{
 	{words: "route", args: []string{"model"}, routes: []string{"GET /route"}, summary: "the accounts a request for a model would try now, in order, and those it would leave out",
 		run: func(x *invocation) error {
 			var r management.RouteReply
-			var noAccount bool
+			// The exit code is the same with and without --json: a script that reads the body
+			// still learns from the code that nothing serves the model.
+			noAccount := func() bool { return len(r.Order) == 0 && len(r.LeftOut) == 0 && len(r.Chain) == 0 }
 			err := x.call(http.MethodGet, "/route", url.Values{"model": {x.args[0]}}, nil, &r, func() {
-				if len(r.Order) == 0 && len(r.LeftOut) == 0 && len(r.Chain) == 0 {
-					noAccount = true
+				if noAccount() {
 					return
 				}
 				chain := len(r.Chain) > 0
@@ -489,7 +490,7 @@ var commands = []command{
 			if err != nil {
 				return err
 			}
-			if noAccount {
+			if noAccount() {
 				return notFoundError{fmt.Sprintf("no account serves %s. See pluxy model list.", r.Model)}
 			}
 			return nil
