@@ -14,7 +14,8 @@ import (
 // only the request to the endpoint, with a message that names the endpoint (or core's token count
 // estimate on the count endpoints while token_count_estimate is on): generation for the same model
 // on the same account still reaches the upstream. A 404 that says the model does not exist still
-// blocks the model, and so does a 404 from the generation path.
+// blocks the model, except from embeddings (a refusal of that endpoint on the account, which leaves
+// generation alone), and so does a 404 from the generation path.
 func TestOpenAICompatibleSideEndpointMissing(t *testing.T) {
 	const (
 		chatReply = `{"id":"chatcmpl_1","object":"chat.completion","created":1700000000,"model":"gpt-test",` +
@@ -40,6 +41,10 @@ func TestOpenAICompatibleSideEndpointMissing(t *testing.T) {
 		want string
 		// estimateWant, when non-empty, is a substring of core's estimate returned with token_count_estimate on.
 		estimateWant string
+		// refusesModel marks an endpoint that answers a 404 saying the model does not exist as a
+		// refusal of that endpoint on the account (400, naming the model) that leaves the model's
+		// generation alone: embeddings, which a chat model need not serve.
+		refusesModel bool
 		// generation: the client's request, the path it reaches and the upstream's reply
 		genPath, genBody, upstreamGen, genReply string
 	}{
@@ -57,6 +62,7 @@ func TestOpenAICompatibleSideEndpointMissing(t *testing.T) {
 			sidePath: "/v1/embeddings", sideBody: `{"model":"gpt-test","input":"hello"}`,
 			upstreamSide: "/v1/embeddings",
 			want:         "no embeddings endpoint (POST /embeddings answered 404)",
+			refusesModel: true,
 			genPath:      "/v1/chat/completions", genBody: `{"model":"gpt-test","messages":[{"role":"user","content":"hello"}]}`,
 			upstreamGen: "/v1/chat/completions", genReply: chatReply,
 		},
@@ -204,11 +210,24 @@ func TestOpenAICompatibleSideEndpointMissing(t *testing.T) {
 
 			t.Run("side endpoint says the model does not exist", func(t *testing.T) {
 				base, hits := run(t, modelNotFound, http.StatusOK, false)
-				code, _ := clientPost(t, base, tc.sidePath, tc.sideBody, nil)
+				code, reply := clientPost(t, base, tc.sidePath, tc.sideBody, nil)
+				if tc.refusesModel {
+					if code != http.StatusBadRequest || !strings.Contains(reply, `"gpt-test"`) {
+						t.Errorf("side endpoint: status %d, reply %s; want a 400 naming the model", code, reply)
+					}
+					code, reply = clientPost(t, base, tc.genPath, tc.genBody, nil)
+					if code != http.StatusOK {
+						t.Fatalf("generation after the side endpoint's model 404: status %d, reply %s; want 200", code, reply)
+					}
+					if got := hits(tc.upstreamGen); got != 1 {
+						t.Errorf("upstream got %d generation requests, want 1", got)
+					}
+					return
+				}
 				if code != http.StatusNotFound {
 					t.Errorf("side endpoint: status %d, want 404", code)
 				}
-				code, reply := clientPost(t, base, tc.genPath, tc.genBody, nil)
+				code, reply = clientPost(t, base, tc.genPath, tc.genBody, nil)
 				if code == http.StatusOK {
 					t.Errorf("generation after a model_not_found: status 200, want the model blocked: %s", reply)
 				}
