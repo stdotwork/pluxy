@@ -16,7 +16,7 @@ async function startBrowser(page: Page) {
 }
 
 for (const action of ["Submit", "Cancel"]) {
-  test("action error survives a following poll: " + action, async ({ page }) => {
+  test(`action error survives a following poll: ${action}`, async ({ page }) => {
     await startBrowser(page);
     await page.route("**/v0/management/logins/**", async (route) => {
       if (route.request().method() === "GET") return route.continue();
@@ -34,7 +34,7 @@ for (const action of ["Submit", "Cancel"]) {
 }
 
 for (const status of [404, 503]) {
-  test("poll failure offers Start over: " + status, async ({ page }) => {
+  test(`poll failure offers Start over: ${status}`, async ({ page }) => {
     await startBrowser(page);
     let reads = 0;
     await page.route("**/v0/management/logins/*", async (route) => {

@@ -12,7 +12,16 @@
     "rules": {
       "preset": "recommended",
       "style": {
-        "noDescendingSpecificity": "off"
+        "noDescendingSpecificity": "off",
+        "noNonNullAssertion": "error"
+      },
+      "suspicious": {
+        "noExplicitAny": "error"
+      },
+      "correctness": {
+        "noUnusedImports": "error",
+        "noUnusedVariables": "error",
+        "noUnusedFunctionParameters": "error"
       }
     }
   }

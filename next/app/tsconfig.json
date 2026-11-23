@@ -7,6 +7,8 @@
     "jsx": "react-jsx",
     "jsxImportSource": "preact",
     "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
     "noEmit": true,
     "skipLibCheck": true,

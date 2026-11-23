@@ -15,15 +15,15 @@ test("filters recorded requests and exports the matching rows", async ({ page })
   await expect
     .poll(
       async () =>
-        (await core.mgmt<{ login: { state: string } }>("GET", "/logins/" + started.body.login.id)).body.login
+        (await core.mgmt<{ login: { state: string } }>("GET", `/logins/${started.body.login.id}`)).body.login
           .state,
     )
     .toBe("done");
   const traces: string[] = [];
   for (const model of ["fake-model", "server-error"]) {
-    const response = await fetch(core.base + "/v1/chat/completions", {
+    const response = await fetch(`${core.base}/v1/chat/completions`, {
       method: "POST",
-      headers: { Authorization: "Bearer " + core.clientKey, "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${core.clientKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({ model, messages: [{ role: "user", content: "hi" }] }),
     });
     expect(response.status).toBe(model === "fake-model" ? 200 : 500);
@@ -60,18 +60,18 @@ test("filters recorded requests and exports the matching rows", async ({ page })
   await expect(rows.first()).toContainText("fake-model");
   await expect(rows.first().getByRole("link", { name: traces[0] })).toHaveAttribute(
     "href",
-    "#/logs/" + traces[0],
+    `#/logs/${traces[0]}`,
   );
   if (process.env.USAGE_SHOTS) {
     for (const theme of ["default", "terminal"]) {
       await nav(page).getByRole("link", { name: "Themes", exact: true }).click();
-      await page.getByRole("radio", { name: new RegExp("^" + theme, "i") }).check();
+      await page.getByRole("radio", { name: new RegExp(`^${theme}`, "i") }).check();
       await page.locator('nav a[href="#/usage"]').click();
       await expect(rows).toHaveCount(2);
-      await page.screenshot({ path: process.env.USAGE_SHOTS + "/" + theme + "-rows.png", fullPage: true });
+      await page.screenshot({ path: `${process.env.USAGE_SHOTS}/${theme}-rows.png`, fullPage: true });
       await page.getByLabel("Model", { exact: true }).fill("fake-model");
       await expect(rows).toHaveCount(1);
-      await page.screenshot({ path: process.env.USAGE_SHOTS + "/" + theme + "-filter.png", fullPage: true });
+      await page.screenshot({ path: `${process.env.USAGE_SHOTS}/${theme}-filter.png`, fullPage: true });
     }
   }
   await page.getByLabel("Model", { exact: true }).fill("");
@@ -100,22 +100,22 @@ test("a request that fell back says how many tries it took, and its detail what 
       settings,
       extension: "test/local",
       method: "api_key",
-      input: { api_key: "test-" + id },
+      input: { api_key: `test-${id}` },
     });
     expect(started.status).toBe(202);
     await expect
       .poll(
         async () =>
-          (await core.mgmt<{ login: { state: string } }>("GET", "/logins/" + started.body.login.id)).body
+          (await core.mgmt<{ login: { state: string } }>("GET", `/logins/${started.body.login.id}`)).body
             .login.state,
       )
       .toBe("done");
   };
   await add("tries-first", 9, { exhausted_until: Math.floor(Date.now() / 1000) + 3600 });
   await add("tries-second", 8);
-  const response = await fetch(core.base + "/v1/chat/completions", {
+  const response = await fetch(`${core.base}/v1/chat/completions`, {
     method: "POST",
-    headers: { Authorization: "Bearer " + core.clientKey, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${core.clientKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({ model: "fake-model", messages: [{ role: "user", content: "hi" }] }),
   });
   expect(response.status).toBe(200);
@@ -125,7 +125,7 @@ test("a request that fell back says how many tries it took, and its detail what 
 
   await openPanel(page, core);
   await signIn(page, core);
-  await page.goto(core.base + "/panel/#/usage");
+  await page.goto(`${core.base}/panel/#/usage`);
   const row = page.locator('[data-part="item"]').filter({ hasText: trace });
   await expect(row).toContainText("tries-second");
   await expect(row).toContainText("2 tries");
