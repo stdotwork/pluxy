@@ -51,6 +51,7 @@ var loginMethods = []protocol.LoginMethod{
 	{Method: "siwc", Kind: protocol.LoginBrowser, Label: "Sign in with ChatGPT (SIWC)"},
 	{Method: "api_key", Kind: protocol.LoginAPIKey, Label: "OpenAI API key", Inputs: []protocol.LoginInput{
 		{Name: "api_key", Label: "API key", Secret: true},
+		{Name: "base_url", Label: "Base URL, for a compatible provider including its /v1 (default OpenAI's)", Optional: true},
 	}},
 }
 
@@ -76,13 +77,142 @@ func login(ctx context.Context, call sdk.LoginCall, s *sdk.LoginSession) (*proto
 	case "siwc":
 		return siwcLogin(ctx, set, s)
 	case "api_key":
-		key := strings.TrimSpace(call.Input["api_key"])
-		if key == "" {
-			return nil, refused("enter an API key")
-		}
-		return &protocol.Grant{Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: key}}, nil
+		return apiKeyLogin(ctx, set, call.Input)
 	}
 	return nil, &llm.Error{Code: llm.CodeUnsupported, Message: fmt.Sprintf("no login method %q", call.Method), Scope: llm.ScopeRequest}
+}
+
+// loginClient is client without redirects: a redirect answer to the key check is not an
+// acceptance, and following it would send the key again to wherever it points.
+var loginClient = &http.Client{
+	Transport:     sdk.Upstream(upstreamTransport()),
+	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+}
+
+// openAIHost is the host of the default API address, the one that always has a model list.
+const openAIHost = "api.openai.com"
+
+// apiKeyBase returns where an API key sign-in checks the key and whether that address was chosen
+// (an account setting, which wins, or the base_url input) and is not the default. The address is
+// held to the rules of the openai-compatible extension's base_url: an HTTP or HTTPS URL with a host
+// and no user information, query or fragment.
+func apiKeyBase(set settings, input string) (base string, chosen bool, err error) {
+	raw := strings.TrimSpace(set.BaseURL)
+	if raw == "" {
+		raw = strings.TrimSpace(input)
+	}
+	if raw == "" {
+		return strings.TrimRight(defaultAPIBaseURL, "/"), false, nil
+	}
+	raw = strings.TrimRight(raw, "/")
+	u, perr := url.Parse(raw)
+	if perr != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", true, &llm.Error{Code: llm.CodeInvalidRequest, Scope: llm.ScopeRequest,
+			Message: "base_url must be an HTTP or HTTPS URL without user information, a query or a fragment"}
+	}
+	return raw, !strings.EqualFold(u.Hostname(), openAIHost), nil
+}
+
+// keyRefusal reports whether an upstream error says the key is refused or the account closed,
+// by its status or by what its body names, whatever the status.
+func keyRefusal(e *llm.Error) bool {
+	if e.Code == llm.CodeAuth || e.Code == llm.CodePermission || e.Code == llm.CodeAccountClosed {
+		return true
+	}
+	switch strings.ToLower(e.ProviderCode) {
+	case "invalid_api_key", "incorrect_api_key", "account_deactivated":
+		return true
+	}
+	m := strings.ToLower(e.Message)
+	return strings.Contains(m, "incorrect api key") || strings.Contains(m, "invalid api key")
+}
+
+// apiKeyLogin checks a key by listing models, which costs nothing, and keeps it when the upstream
+// accepts it: a 200 whose body has a model list (a "data" array). The check goes to the base_url
+// the sign-in gives or the account sets, and that address is returned in the grant's settings; with
+// none it goes to OpenAI's. No redirect is followed. An upstream other than OpenAI's that has no
+// model list (a 404 or 405 whose body does not refuse the key) has no call that checks a key
+// without running a model, so the key is taken as it is, as Gemini's extension takes a Vertex
+// express mode key; OpenAI's own address always has one, so there a 404 or 405 is an error.
+func apiKeyLogin(ctx context.Context, set settings, input map[string]string) (*protocol.Grant, error) {
+	key := strings.TrimSpace(input["api_key"])
+	if key == "" {
+		return nil, refused("enter an API key")
+	}
+	if strings.ContainsFunc(key, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "the API key has a line break or another control character in it; paste the key alone", Scope: llm.ScopeRequest}
+	}
+	base, chosen, err := apiKeyBase(set, input["base_url"])
+	if err != nil {
+		return nil, err
+	}
+	who := "OpenAI"
+	if chosen {
+		u, _ := url.Parse(base)
+		who = "the provider at " + u.Host
+	}
+	grant := &protocol.Grant{Credential: &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: key}}
+	if b := strings.TrimSpace(input["base_url"]); b != "" && strings.TrimSpace(set.BaseURL) == "" {
+		grant.Settings, _ = json.Marshal(map[string]string{"base_url": base})
+	}
+	// Core redacts the key as the user entered it; this one is trimmed, so remove it here too.
+	redact := protocol.NewRedactor(grant.Credential)
+	clean := func(e *llm.Error) error {
+		e = redact.Event(llm.Event{Type: llm.EventError, Error: e}).Error
+		e.Message = sdk.UpstreamText(e.Message, key)
+		e.ProviderCode = sdk.LoginCode(e.ProviderCode)
+		// A login needs the reason, not a raw body that may echo credentials.
+		e.Raw = nil
+		// A login call that got an answer reached the upstream and may have run: it is not retried.
+		e.Retryable = false
+		return e
+	}
+	parent := ctx
+	// The shared client has no timeout, so a silent upstream must not hold the sign-in forever.
+	ctx, cancel := context.WithTimeout(ctx, authClient.Timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/models", nil)
+	if err != nil {
+		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url", Scope: llm.ScopeRequest}
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+key)
+	req, sent := sdk.TrackSend(req)
+	resp, err := loginClient.Do(req)
+	if err != nil {
+		if parent.Err() != nil {
+			return nil, parent.Err()
+		}
+		// A login error is retryable only when the request never reached the upstream.
+		e := &llm.Error{Code: llm.CodeUnavailable, Message: "could not reach " + who + ": " + err.Error(), Retryable: !sent(), Scope: llm.ScopeEndpoint}
+		e = redact.Event(llm.Event{Type: llm.EventError, Error: e}).Error
+		e.Message = sdk.UpstreamText(e.Message, key)
+		return nil, e
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, modelsMaxBody))
+		var list struct {
+			Data []json.RawMessage `json:"data"`
+		}
+		if json.Unmarshal(raw, &list) == nil && list.Data != nil {
+			return grant, nil
+		}
+		return nil, &llm.Error{Code: llm.CodeUpstream, Scope: llm.ScopeEndpoint, Status: resp.StatusCode,
+			Message: who + " did not answer with a model list, so the key could not be checked"}
+	}
+	if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
+		return nil, &llm.Error{Code: llm.CodeUpstream, Scope: llm.ScopeEndpoint, Status: resp.StatusCode,
+			Message: who + " did not answer with a model list, so the key could not be checked"}
+	}
+	e := statusError(resp, "")
+	if keyRefusal(e) {
+		return nil, refused(who + " refused the key")
+	}
+	if (resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed) && chosen {
+		return grant, nil
+	}
+	return nil, clean(e)
 }
 
 // browserLogin runs the authorization code flow with PKCE. The user opens the sign-in URL; the

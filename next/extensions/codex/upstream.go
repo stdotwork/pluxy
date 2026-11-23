@@ -59,17 +59,22 @@ var passedHeaders = []string{
 	"x-openai-internal-codex-responses-lite",
 }
 
-// client has no timeouts after the connection is made: a long generation is not a failure, and
-// cancellation comes from the call's context. It follows a redirect only to the same scheme and
-// host, so the account's token never goes to another host.
-var client = &http.Client{
-	Transport: sdk.Upstream(&http.Transport{
+// upstreamTransport is the transport settings every upstream call of this extension uses.
+func upstreamTransport() *http.Transport {
+	return &http.Transport{
 		DialContext:         (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		TLSHandshakeTimeout: 30 * time.Second,
 		ForceAttemptHTTP2:   true,
 		MaxIdleConns:        100,
 		IdleConnTimeout:     90 * time.Second,
-	}),
+	}
+}
+
+// client has no timeouts after the connection is made: a long generation is not a failure, and
+// cancellation comes from the call's context. It follows a redirect only to the same scheme and
+// host, so the account's token never goes to another host.
+var client = &http.Client{
+	Transport: sdk.Upstream(upstreamTransport()),
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		first := via[0].URL
 		if req.URL.Scheme != first.Scheme || req.URL.Host != first.Host {

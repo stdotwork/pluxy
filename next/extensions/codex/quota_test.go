@@ -334,7 +334,7 @@ func TestLoginGrantsCarryIdentity(t *testing.T) {
 	}
 
 	srv := codextest.New(t)
-	k, err := login(context.Background(), sdk.LoginCall{Account: testAccount(srv, nil), Method: "api_key", Input: map[string]string{"api_key": "sk-test"}}, nil)
+	k, err := login(context.Background(), sdk.LoginCall{Account: testAccount(srv, nil), Method: "api_key", Input: map[string]string{"api_key": srv.IssueToken("text")}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
