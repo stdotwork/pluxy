@@ -343,7 +343,7 @@ fn browser_log() -> Vec<String> {
 fn polling(c: &mut Checks, app: &AppHandle) {
     // The page draws every method from one reply, so once one shows, test/alpha's shows too, if
     // core runs test/alpha. A failure names the step that did not happen.
-    let tile = "[...document.querySelectorAll('[data-part=method]')].find((t) => t.textContent.includes('test/alpha') && t.textContent.includes('Test browser'))";
+    let tile = "[...document.querySelectorAll('[data-part=method]')].find((t) => t.closest('[data-extension]')?.dataset.extension === 'test/alpha' && t.textContent.includes('Test browser'))";
     let missing = if !goto(app, "add-account", "[data-part=method]") {
         Some("Add account shows no sign-in method within 10 s")
     } else if main_eval(

@@ -4,6 +4,7 @@ import type { VNode } from "preact";
 import render from "preact-render-to-string";
 import { api, type ImportReport, type Package, type Setup, type SetupApplyResult } from "../kit/api";
 import type { Feature, Host, Method, Reply } from "../kit/host";
+import { groupMethods } from "../kit/pages/addAccount";
 import {
   type ImportState,
   importCommand,
@@ -833,4 +834,21 @@ test("when core has no extension registry, Setup says so and names what to do ne
   const hasReg = view({ ...nothingFound, picks: [], registries: 1 });
   expect(hasReg).not.toContain("This build has no extension registry");
   expect(hasReg).toContain("The Extensions page lists what can be installed.");
+});
+
+test("sign-in ways are grouped by provider, named by its title or else its package ID", () => {
+  const apiKey = { method: "api_key", kind: "api_key", label: "API key" };
+  const extensions = [
+    {
+      extension: "pluxy/claude",
+      methods: [{ method: "browser", kind: "browser", label: "Claude subscription" }, apiKey],
+    },
+    { extension: "pluxy/gemini", methods: [apiKey] },
+    { extension: "pluxy/none", methods: [] },
+  ];
+  const groups = groupMethods(extensions, { "pluxy/claude": "Claude" });
+  expect(groups.map((g) => [g.extension, g.title, g.tiles.map((t) => t.id)])).toEqual([
+    ["pluxy/claude", "Claude", ["pluxy/claude/browser", "pluxy/claude/api_key"]],
+    ["pluxy/gemini", "pluxy/gemini", ["pluxy/gemini/api_key"]],
+  ]);
 });

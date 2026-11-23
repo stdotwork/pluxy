@@ -1,5 +1,5 @@
 import { useId, useLayoutEffect, useRef, useState } from "preact/hooks";
-import type { LoginMethod } from "../api";
+import type { LoginMethod, LoginMethodsExtension } from "../api";
 import { LoginFlow, suggestedAccountId, validAccountId } from "../loginFlow";
 import { usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
@@ -29,6 +29,32 @@ interface MethodTile {
   method: LoginMethod;
 }
 
+/** One provider's sign-in ways, under the provider's name. */
+export interface MethodGroup {
+  extension: string;
+  /** The provider's title as people know it, or its package ID where no title is known. */
+  title: string;
+  tiles: MethodTile[];
+}
+
+/** The sign-in ways grouped by provider, in the order core lists them; a provider with none is left out. */
+export function groupMethods(
+  extensions: LoginMethodsExtension[],
+  titles: Record<string, string>,
+): MethodGroup[] {
+  return extensions
+    .filter((extension) => (extension.methods ?? []).length > 0)
+    .map((extension) => ({
+      extension: extension.extension,
+      title: titles[extension.extension] || extension.extension,
+      tiles: extension.methods.map((method) => ({
+        id: `${extension.extension}/${method.method}`,
+        extension: extension.extension,
+        method,
+      })),
+    }));
+}
+
 /**
  * onSuccess: called with the new account's ID once a sign-in adds it (Beginner Mode counts it).
  * embedded: the sign-in without the page's own title, for a page that shows it as one of its parts.
@@ -46,13 +72,12 @@ export function AddAccountPage(props: { onSuccess?: (accountId: string) => void;
   useLayoutEffect(() => {
     if (selected === undefined && attempt > 0) idField.current?.focus();
   }, [selected, attempt]);
-  const tiles: MethodTile[] = (methods.data?.extensions ?? []).flatMap((extension) =>
-    (extension.methods ?? []).map((method) => ({
-      id: `${extension.extension}/${method.method}`,
-      extension: extension.extension,
-      method,
-    })),
-  );
+  // The providers' titles come from the setup read; without them a group is named by its package ID.
+  const setup = useLoad(api.setup);
+  const titles: Record<string, string> = {};
+  for (const pick of setup.data?.picks ?? []) if (pick.title) titles[pick.id] = pick.title;
+  const groups = groupMethods(methods.data?.extensions ?? [], titles);
+  const tiles = groups.flatMap((group) => group.tiles);
   const reset = (completed = false) => {
     setSelected(undefined);
     if (!typedId.current || completed) {
@@ -103,46 +128,63 @@ export function AddAccountPage(props: { onSuccess?: (accountId: string) => void;
                 {t("invalidId")}
               </small>
             )}
-            <List<MethodTile>
-              label={t("methods")}
-              items={selected ? tiles.filter((tile) => tile.id === selected) : tiles}
-              id={(tile) => tile.id}
-              columns={[
-                {
-                  label: t("method"),
-                  value: (tile) => (
-                    <section class="account-method stack" data-part="method">
-                      <div class="actions">
-                        <Button
-                          disabled={!validId || selected !== undefined}
-                          onClick={() => setSelected(tile.id)}
-                        >
-                          {tile.method.label || tile.method.method}
-                        </Button>
-                        <span class="muted">
-                          {tile.method.kind === "browser" ||
-                          tile.method.kind === "device" ||
-                          tile.method.kind === "api_key"
-                            ? t(tile.method.kind)
-                            : tile.method.kind}
-                        </span>
-                      </div>
-                      <span class="mono muted">{tile.extension}</span>
-                      {selected === tile.id && (
-                        <LoginFlow
-                          key={`${tile.id}/${attempt}`}
-                          extension={tile.extension}
-                          method={tile.method}
-                          newAccountId={accountId}
-                          onSuccess={(id) => props.onSuccess?.(id)}
-                          onReset={reset}
-                        />
-                      )}
-                    </section>
-                  ),
-                },
-              ]}
-            />
+            {groups.map((group) => {
+              const shown = selected ? group.tiles.filter((tile) => tile.id === selected) : group.tiles;
+              if (shown.length === 0) return null;
+              return (
+                <section
+                  key={group.extension}
+                  class="account-group stack"
+                  data-part="method-group"
+                  data-extension={group.extension}
+                  aria-label={group.title}
+                >
+                  <header class="card-head">
+                    <h2>{group.title}</h2>
+                    {group.title !== group.extension && <span class="mono muted">{group.extension}</span>}
+                  </header>
+                  <List<MethodTile>
+                    label={`${t("methods")}: ${group.title}`}
+                    items={shown}
+                    id={(tile) => tile.id}
+                    columns={[
+                      {
+                        label: t("method"),
+                        value: (tile) => (
+                          <section class="account-method stack" data-part="method">
+                            <div class="actions">
+                              <Button
+                                disabled={!validId || selected !== undefined}
+                                onClick={() => setSelected(tile.id)}
+                              >
+                                {tile.method.label || tile.method.method}
+                              </Button>
+                              <span class="muted">
+                                {tile.method.kind === "browser" ||
+                                tile.method.kind === "device" ||
+                                tile.method.kind === "api_key"
+                                  ? t(tile.method.kind)
+                                  : tile.method.kind}
+                              </span>
+                            </div>
+                            {selected === tile.id && (
+                              <LoginFlow
+                                key={`${tile.id}/${attempt}`}
+                                extension={tile.extension}
+                                method={tile.method}
+                                newAccountId={accountId}
+                                onSuccess={(id) => props.onSuccess?.(id)}
+                                onReset={reset}
+                              />
+                            )}
+                          </section>
+                        ),
+                      },
+                    ]}
+                  />
+                </section>
+              );
+            })}
           </>
         )}
       </div>
