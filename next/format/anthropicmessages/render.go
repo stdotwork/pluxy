@@ -56,7 +56,8 @@ func rawType(raw json.RawMessage) string {
 // matching ignores case and reads escapes). It reports false for any other object, which rawType
 // decodes.
 func scanType(raw []byte) (string, bool) {
-	members, ok := jsonscan.Object(raw)
+	var space [8]jsonscan.Member
+	members, ok := jsonscan.AppendObject(space[:0], raw)
 	if !ok {
 		return "", false
 	}

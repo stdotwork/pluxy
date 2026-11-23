@@ -109,7 +109,8 @@ func (f *FrameReader) Read(v any) error {
 // false, having changed nothing, for any other frame, which the caller decodes with
 // encoding/json.
 func decodeReply(body []byte, r *Reply) bool {
-	members, ok := jsonscan.Object(body)
+	var space [4]jsonscan.Member // an object of up to four members costs no allocation
+	members, ok := jsonscan.AppendObject(space[:0], body)
 	if !ok || len(members) == 0 || len(members) > 4 {
 		return false
 	}

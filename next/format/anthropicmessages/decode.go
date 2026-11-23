@@ -416,7 +416,8 @@ type streamEvent struct {
 // an event of exactly the members type "content_block_delta", index and a delta of exactly type
 // "text_delta" and text, each once. It reports false for any other event, which Decode decodes.
 func scanTextDelta(data []byte) (index int, text string, ok bool) {
-	members, ok := jsonscan.Object(data)
+	var space [4]jsonscan.Member
+	members, ok := jsonscan.AppendObject(space[:0], data)
 	if !ok || len(members) != 3 {
 		return 0, "", false
 	}
@@ -442,7 +443,8 @@ func scanTextDelta(data []byte) (index int, text string, ok bool) {
 			}
 		case `"delta"`:
 			bit = 4
-			dm, ok := jsonscan.Object(m.Value)
+			var dspace [2]jsonscan.Member
+			dm, ok := jsonscan.AppendObject(dspace[:0], m.Value)
 			if !ok || len(dm) != 2 {
 				return 0, "", false
 			}

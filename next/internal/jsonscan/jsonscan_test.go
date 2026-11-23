@@ -208,3 +208,26 @@ func BenchmarkValidString(b *testing.B) {
 		}
 	}
 }
+
+func TestAppendObjectMatchesObject(t *testing.T) {
+	for _, s := range []string{`{}`, ` { } `, `{"a":1}`, `{"a":1,"a":[1,2],"b":{"c":"d"}}`, `{"a":1,"b":2,"c":3,"d":4,"e":5}`,
+		`{"a":}`, `{"a":1`, `[]`, `{"a":1} x`, ``, `null`} {
+		want, wantOK := Object([]byte(s))
+		var space [2]Member
+		got, gotOK := AppendObject(space[:0], []byte(s))
+		if gotOK != wantOK || len(got) != len(want) {
+			t.Errorf("%q: AppendObject = %d members, %v; Object = %d, %v", s, len(got), gotOK, len(want), wantOK)
+			continue
+		}
+		for i := range got {
+			if string(got[i].Key) != string(want[i].Key) || string(got[i].Value) != string(want[i].Value) {
+				t.Errorf("%q: member %d differs", s, i)
+			}
+		}
+	}
+	data := []byte(`{"a":1,"b":2}`)
+	var space [4]Member
+	if n := testing.AllocsPerRun(100, func() { _, _ = AppendObject(space[:0], data) }); n != 0 {
+		t.Errorf("AppendObject into room allocated %v times", n)
+	}
+}
