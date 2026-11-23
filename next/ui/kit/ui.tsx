@@ -1,8 +1,8 @@
 // The kit's components. Each carries the data-part hook themes/README.md promises; class names
 // are internal.
 
-import { type ComponentChildren, createContext } from "preact";
-import { useCallback, useContext, useEffect, useId, useRef, useState } from "preact/hooks";
+import { type ComponentChildren, createContext, type Ref } from "preact";
+import { useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { type Api, problem } from "./api";
 import type { Host, Reply } from "./host";
 import type { PrivacyState } from "./privacy";
@@ -144,10 +144,13 @@ export function Button(props: {
   label?: string;
   /** Names the control for restoring focus after a re-render, when its label may not be unique. */
   focusKey?: string;
+  /** For a component that moves focus to this button. */
+  buttonRef?: Ref<HTMLButtonElement>;
   children: ComponentChildren;
 }) {
   return (
     <button
+      ref={props.buttonRef}
       type={props.type ?? "button"}
       class="btn"
       data-part="button"
@@ -166,9 +169,26 @@ export function Button(props: {
 /** A button that asks once more before it acts. */
 export function ConfirmButton(props: { onConfirm: () => void; disabled?: boolean; children: string }) {
   const [asking, setAsking] = useState(false);
+  const ask = useRef<HTMLButtonElement>(null);
+  const cancel = useRef<HTMLButtonElement>(null);
+  // The button in focus is replaced when the question opens or closes: focus goes to the button
+  // that takes its place (Cancel, the safe answer, or the button that asked), not to the page.
+  const moved = useRef(false);
+  useEffect(() => {
+    if (!moved.current) return;
+    (asking ? cancel : ask).current?.focus();
+  }, [asking]);
   if (!asking) {
     return (
-      <Button variant="danger" disabled={props.disabled} onClick={() => setAsking(true)}>
+      <Button
+        variant="danger"
+        disabled={props.disabled}
+        buttonRef={ask}
+        onClick={() => {
+          moved.current = true;
+          setAsking(true);
+        }}
+      >
         {props.children}
       </Button>
     );
@@ -180,12 +200,15 @@ export function ConfirmButton(props: { onConfirm: () => void; disabled?: boolean
         disabled={props.disabled}
         onClick={() => {
           setAsking(false);
+          moved.current = false;
           props.onConfirm();
         }}
       >
         {t("confirm", { action: props.children.toLowerCase() })}
       </Button>
-      <Button onClick={() => setAsking(false)}>{t("cancel")}</Button>
+      <Button buttonRef={cancel} onClick={() => setAsking(false)}>
+        {t("cancel")}
+      </Button>
     </span>
   );
 }
@@ -234,7 +257,10 @@ export function Card(props: { title?: string; actions?: ComponentChildren; child
 export function PageHead(props: { title: string; actions?: ComponentChildren }) {
   return (
     <header class="page-head">
-      <h1 data-part="page-title">{props.title}</h1>
+      {/* Focusable by script, so the shell can move focus here when the page opens. */}
+      <h1 data-part="page-title" tabIndex={-1}>
+        {props.title}
+      </h1>
       {props.actions && <div class="actions">{props.actions}</div>}
     </header>
   );
@@ -377,9 +403,30 @@ export function MasterDetail(props: { list: ComponentChildren; detail?: Componen
 
 export function Detail(props: { title: string; onClose: () => void; children: ComponentChildren }) {
   const ref = useRef<HTMLElement>(null);
-  useEffect(() => {
+  // The control that opened the detail (or switched it to another item), for focus to return to
+  // when the detail closes.
+  const opener = useRef<HTMLElement | null>(null);
+  // A layout effect: it runs in the same task as the click that opened the detail, before the
+  // person can move focus on.
+  useLayoutEffect(() => {
+    const from = document.activeElement;
+    if (from instanceof HTMLElement && from !== document.body && !ref.current?.contains(from)) {
+      opener.current = from;
+    }
     ref.current?.focus();
   }, [props.title]);
+  // A layout effect too: a passive one has not run yet when the detail closes straight away, and
+  // then its cleanup is never set.
+  useLayoutEffect(
+    () => () => {
+      // Closing with focus inside the detail (or lost) puts it back on the opener, when that
+      // is still on the page; focus the person moved elsewhere stays there.
+      const at = document.activeElement;
+      const here = at === document.body || at === null || ref.current?.contains(at);
+      if (here && opener.current?.isConnected) opener.current.focus();
+    },
+    [],
+  );
   return (
     <aside
       class="detail"
@@ -387,6 +434,12 @@ export function Detail(props: { title: string; onClose: () => void; children: Co
       aria-label={t("details", { title: props.title })}
       tabIndex={-1}
       ref={ref}
+      onKeyDown={(e) => {
+        // Escape closes the detail, unless it belongs to a dialog or a field inside it.
+        if (e.key !== "Escape" || e.defaultPrevented) return;
+        if (e.target instanceof Element && e.target.closest("dialog")) return;
+        props.onClose();
+      }}
     >
       <header class="card-head">
         <h2 class="mono">{props.title}</h2>
