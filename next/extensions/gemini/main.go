@@ -722,8 +722,10 @@ func upstreamErrorFor(ctx context.Context, resp *http.Response, model string, re
 		e.Code, e.Scope, e.Retryable = llm.CodePermission, llm.ScopeCredential, true
 	case s == http.StatusNotFound:
 		e.Code, e.Scope = llm.CodeNotFound, llm.ScopeModel
-		// Gemini names the model when it does not have it: then it did not run the request, and
-		// another account may serve the model.
+		// Gemini names the model when it does not have it, or does not have it for the method
+		// (an embedding call on a chat model): then it did not run the request, and another account
+		// may serve the model. The embedding calls turn this into a refusal on the account instead
+		// (embeddingNotFound), so their 404 does not block the model's generation.
 		e.Retryable = model != "" && strings.Contains(e.Message, model)
 	case s == http.StatusTooManyRequests:
 		now := time.Now()

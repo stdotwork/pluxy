@@ -586,7 +586,7 @@ func runVertexPredictGeminiItems(ctx context.Context, t target, model string, it
 func postEmbeddingRaw(ctx context.Context, t target, model string, body []byte) ([]byte, error) {
 	resp, err := postBody(ctx, t, body, false, model)
 	if err != nil {
-		return nil, err
+		return nil, embeddingNotFound(err, model)
 	}
 	defer resp.Body.Close()
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
