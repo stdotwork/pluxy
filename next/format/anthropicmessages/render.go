@@ -472,7 +472,7 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 			b.lose("content.code_execution", "code execution results have no safe representation in a Message without an Anthropic srvtoolu_ ID")
 			for _, ce := range ev.CodeExecutions {
 				if ce.FilesOmitted {
-					b.lose("content.code_execution.files", "files, images or code runs past the size limit have no place in a Message")
+					b.lose("content.code_execution.files", "files, images, and runs left out (past the size limit or with no result to read) have no place in a Message")
 					break
 				}
 			}
@@ -566,7 +566,7 @@ func (a *Aggregator) Add(ev llm.Event) {
 			b.lose("content.code_execution", "code execution results have no safe representation in a Message without an Anthropic srvtoolu_ ID")
 			for _, ce := range ev.CodeExecutions {
 				if ce.FilesOmitted {
-					b.lose("content.code_execution.files", "files, images or code runs past the size limit have no place in a Message")
+					b.lose("content.code_execution.files", "files, images, and runs left out (past the size limit or with no result to read) have no place in a Message")
 					break
 				}
 			}

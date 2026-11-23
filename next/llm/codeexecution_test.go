@@ -2,6 +2,8 @@ package llm_test
 
 import (
 	"encoding/json"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stdotwork/pluxy/next/llm"
@@ -59,5 +61,27 @@ func TestCodeExecutionsEmptyListParsesToNil(t *testing.T) {
 	}
 	if ev.CodeExecutions != nil {
 		t.Errorf("null code_executions = %#v, want nil", ev.CodeExecutions)
+	}
+}
+
+func TestAppendCodeExecutionLeavesOutALongRunAndKeepsTheRest(t *testing.T) {
+	long := llm.CodeExecution{Code: strings.Repeat("x", llm.MaxCodeExecutionCodeBytes+1)}
+	runs := llm.AppendCodeExecution(nil, llm.CodeExecution{Code: "a"})
+	runs = llm.AppendCodeExecution(runs, long)
+	runs = llm.AppendCodeExecution(runs, llm.CodeExecution{Code: "b"})
+	want := []llm.CodeExecution{{Code: "a"}, {Code: "b"}, {FilesOmitted: true}}
+	if !slices.Equal(runs, want) {
+		t.Errorf("runs = %+v, want %+v", runs, want)
+	}
+	if got := llm.AppendCodeExecution(nil, llm.CodeExecution{Code: strings.Repeat("x", llm.MaxCodeExecutionCodeBytes)}); len(got) != 1 || got[0].FilesOmitted {
+		t.Errorf("code at the limit is left out: %d runs", len(got))
+	}
+}
+
+func TestLeaveOutCodeExecutionsEndsTheListOnce(t *testing.T) {
+	runs := llm.LeaveOutCodeExecutions([]llm.CodeExecution{{Code: "a"}})
+	runs = llm.LeaveOutCodeExecutions(runs)
+	if want := []llm.CodeExecution{{Code: "a"}, {FilesOmitted: true}}; !slices.Equal(runs, want) {
+		t.Errorf("runs = %+v, want %+v", runs, want)
 	}
 }

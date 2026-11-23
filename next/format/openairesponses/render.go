@@ -735,7 +735,7 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 			b.lose("code_execution", "code execution results have no safe representation in a Response without an OpenAI container_id")
 			for _, ce := range ev.CodeExecutions {
 				if ce.FilesOmitted {
-					b.lose("code_execution.files", "files, images or code runs past the size limit have no place in a Response")
+					b.lose("code_execution.files", "files, images, and runs left out (past the size limit or with no result to read) have no place in a Response")
 					break
 				}
 			}
@@ -979,7 +979,7 @@ func (a *Aggregator) Add(ev llm.Event) {
 			b.lose("code_execution", "code execution results have no safe representation in a Response without an OpenAI container_id")
 			for _, ce := range ev.CodeExecutions {
 				if ce.FilesOmitted {
-					b.lose("code_execution.files", "files, images or code runs past the size limit have no place in a Response")
+					b.lose("code_execution.files", "files, images, and runs left out (past the size limit or with no result to read) have no place in a Response")
 					break
 				}
 			}

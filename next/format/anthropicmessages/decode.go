@@ -147,8 +147,10 @@ type contentBlock struct {
 }
 
 // maxCodeExecInput bounds the streamed input_json_delta buffered for a single code execution
-// server_tool_use block so a broken stream cannot grow memory without bound.
-const maxCodeExecInput = 1 << 20
+// server_tool_use block so a broken stream cannot grow memory without bound. It holds the most
+// JSON a run's code of llm.MaxCodeExecutionCodeBytes can take (six bytes per byte, as \u0000), so a
+// stream and the same reply not streamed keep the same runs.
+const maxCodeExecInput = 6*llm.MaxCodeExecutionCodeBytes + 1<<10
 
 type pendingCodeCall struct {
 	id           string
@@ -430,7 +432,9 @@ type StreamDecoder struct {
 	finishCut []llm.Loss               // what the finish event left out to fit a frame
 	codeBlock map[int]*pendingCodeCall // upstream block index -> open server_tool_use for code execution
 	codeCalls map[string]decodedCodeCall
+	codeDone  map[string]bool // IDs of calls a result has answered, so a repeated result is ignored
 	codeExecs []llm.CodeExecution
+	codeLost  bool // a code call or result that gave no run, so the runs end with the left-out record
 	stop      string
 	usage     json.RawMessage
 }
@@ -445,6 +449,7 @@ func NewStreamDecoder() *StreamDecoder {
 		seenSrc:   map[string]bool{},
 		codeBlock: map[int]*pendingCodeCall{},
 		codeCalls: map[string]decodedCodeCall{},
+		codeDone:  map[string]bool{},
 	}
 }
 
@@ -526,11 +531,19 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 				initialInput: append(json.RawMessage(nil), b.Input...),
 			}
 		} else if isCodeExecResultBlock(b.Type) && b.ToolUseID != "" {
-			if call, ok := d.codeCalls[b.ToolUseID]; ok {
-				delete(d.codeCalls, b.ToolUseID)
-				if ce, ok := decodeCodeExecResult(b.Type, call, b.Content); ok {
+			call, ok := d.codeCalls[b.ToolUseID]
+			delete(d.codeCalls, b.ToolUseID)
+			repeated := !ok && d.codeDone[b.ToolUseID]
+			if ok {
+				d.codeDone[b.ToolUseID] = true
+				var ce llm.CodeExecution
+				if ce, ok = decodeCodeExecResult(b.Type, call, b.Content); ok {
 					d.codeExecs = llm.AppendCodeExecution(d.codeExecs, ce)
 				}
+			}
+			// A result repeated for a call already answered adds nothing, and loses nothing.
+			if !ok && !repeated {
+				d.codeLost = true
 			}
 		}
 		kind := kindOf(b.Type)
@@ -617,7 +630,11 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 				}
 				if code, lang, ok := decodeCodeExecInput(pc.name, inRaw); ok {
 					d.codeCalls[pc.id] = decodedCodeCall{name: pc.name, code: code, lang: lang}
+				} else {
+					d.codeLost = true
 				}
+			} else {
+				d.codeLost = true
 			}
 		}
 		idx, open := d.items[ev.Index]
@@ -648,6 +665,10 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		d.done = true
 		out = d.closeAll(out)
 		f := finishOf(d.stop)
+		if d.codeLost || len(d.codeCalls) > 0 || len(d.codeBlock) > 0 {
+			// A call with no result, or a call or result the decoder could not read, is a run left out.
+			d.codeExecs = llm.LeaveOutCodeExecutions(d.codeExecs)
+		}
 		fin := llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(d.usage), Sources: d.sources, CodeExecutions: d.codeExecs, Raw: raw}
 		if l, cut := protocol.FitFinish(&fin); cut {
 			d.finishCut = append(d.finishCut, l)
@@ -744,7 +765,9 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 	var cites llm.CiteBudget
 	seenSrc := map[string]bool{}
 	codeCalls := map[string]decodedCodeCall{}
+	codeDone := map[string]bool{}
 	var codeExecs []llm.CodeExecution
+	codeLost := false
 	for i, raw := range m.Content {
 		b := rawjson.Object(raw)
 		var cb contentBlock
@@ -757,13 +780,22 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 		if cb.Type == "server_tool_use" && cb.ID != "" && isCodeExecToolName(cb.Name) {
 			if code, lang, ok := decodeCodeExecInput(cb.Name, cb.Input); ok {
 				codeCalls[cb.ID] = decodedCodeCall{name: cb.Name, code: code, lang: lang}
+			} else {
+				codeLost = true
 			}
 		} else if isCodeExecResultBlock(cb.Type) && cb.ToolUseID != "" {
-			if call, ok := codeCalls[cb.ToolUseID]; ok {
-				delete(codeCalls, cb.ToolUseID)
-				if ce, ok := decodeCodeExecResult(cb.Type, call, cb.Content); ok {
+			call, ok := codeCalls[cb.ToolUseID]
+			delete(codeCalls, cb.ToolUseID)
+			repeated := !ok && codeDone[cb.ToolUseID]
+			if ok {
+				codeDone[cb.ToolUseID] = true
+				var ce llm.CodeExecution
+				if ce, ok = decodeCodeExecResult(cb.Type, call, cb.Content); ok {
 					codeExecs = llm.AppendCodeExecution(codeExecs, ce)
 				}
+			}
+			if !ok && !repeated {
+				codeLost = true
 			}
 		}
 		kind := kindOf(cb.Type)
@@ -835,6 +867,9 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 	}
 	out = append(out, llm.Event{Type: llm.EventNative, Raw: eventJSON(delta)})
 	f := finishOf(m.StopReason)
+	if codeLost || len(codeCalls) > 0 {
+		codeExecs = llm.LeaveOutCodeExecutions(codeExecs)
+	}
 	fin := llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(m.Usage), Sources: sources, CodeExecutions: codeExecs, Raw: append(json.RawMessage(nil), body...)}
 	var losses []llm.Loss
 	if l, cut := protocol.FitFinish(&fin); cut {
