@@ -193,10 +193,15 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	var tools []json.RawMessage
 	hasOwnTools := false
 	droppedBuiltIn := false
-	// A translated codeExecution tool is placed in tools as the loop reaches it but judged after
-	// the loop, since a googleSearch that comes later in the list decides whether it may stay.
-	var codeTool llm.Tool
-	codeAt, codePath, searchSent := -1, "", false
+	// Translated codeExecution tools are placed in tools as the loop reaches them but judged
+	// after it, since a googleSearch that comes later in the list decides whether they may stay.
+	type translatedCode struct {
+		tool llm.Tool
+		at   int
+		path string
+	}
+	var codeTools []translatedCode
+	searchSent := false
 	for i, t := range req.Tools {
 		p := pathOf(t.Origin, fmt.Sprintf("tools[%d]", i))
 		if t.Type == llm.ToolCodeExecution {
@@ -228,7 +233,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 				droppedBuiltIn = true
 				continue
 			}
-			codeTool, codeAt, codePath = t, len(tools), p
+			codeTools = append(codeTools, translatedCode{t, len(tools), p})
 			tools = append(tools, json.RawMessage(`{"codeExecution":{}}`))
 			continue
 		}
@@ -290,18 +295,26 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 		}
 		decls = append(decls, marshalWith(fd, e.kept(t.Origin)))
 	}
-	if codeAt >= 0 {
+	if len(codeTools) > 0 {
+		var why string
 		switch {
 		case searchSent && opts.Vertex:
-			e.lose(llm.LossDropped, codePath, "Vertex AI allows several tools in one request only when all are search tools, so codeExecution is not sent beside googleSearch")
-			tools = slices.Delete(tools, codeAt, codeAt+1)
-			droppedBuiltIn = true
+			why = "Vertex AI allows several tools in one request only when all are search tools, so codeExecution is not sent beside googleSearch"
 		case searchSent && !allowsSearchWithCode(req.Model):
-			e.lose(llm.LossDropped, codePath, fmt.Sprintf("GenerateContent model %q does not take codeExecution beside googleSearch", req.Model))
-			tools = slices.Delete(tools, codeAt, codeAt+1)
-			droppedBuiltIn = true
-		default:
-			for _, l := range rawjson.CodeExecutionLosses(codeTool, codePath, format) {
+			why = fmt.Sprintf("GenerateContent model %q does not take codeExecution beside googleSearch", req.Model)
+		}
+		if why != "" {
+			for k := len(codeTools) - 1; k >= 0; k-- { // from the back, so the earlier indexes hold
+				tools = slices.Delete(tools, codeTools[k].at, codeTools[k].at+1)
+			}
+		}
+		for _, c := range codeTools {
+			if why != "" {
+				e.lose(llm.LossDropped, c.path, why)
+				droppedBuiltIn = true
+				continue
+			}
+			for _, l := range rawjson.CodeExecutionLosses(c.tool, c.path, format) {
 				e.losses = llm.AddLoss(e.losses, l)
 			}
 		}

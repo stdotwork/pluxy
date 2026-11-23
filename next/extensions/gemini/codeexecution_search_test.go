@@ -84,3 +84,70 @@ func TestCodeExecutionBesideSearch(t *testing.T) {
 		})
 	}
 }
+
+// Every translated code tool is judged, not only the last: two of them beside a search are both
+// dropped where the pair is refused, and both report their own losses where it is kept.
+func TestTwoCodeExecutionToolsBesideSearch(t *testing.T) {
+	const tools = `[{"type":"code_interpreter","container":"cntr_a"},{"type":"web_search"},{"type":"code_interpreter","container":"cntr_b"}]`
+	cases := []struct {
+		name  string
+		set   settings
+		model string
+		drop  bool
+	}{
+		{"vertex", settings{Vertex: &vertexSettings{Project: "p", Location: "us-central1"}}, "gemini-2.5-flash", true},
+		{"gemini api, 2.0", settings{BaseURL: defaultBaseURL}, "gemini-2.0-flash", true},
+		{"gemini api, 2.5", settings{BaseURL: defaultBaseURL}, "gemini-2.5-flash", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := openairesponses.ParseRequest([]byte(`{"model":"` + tc.model + `","input":"x","tools":` + tools + `}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req = roundTripReq(t, req)
+			body, tr, err := buildBodyOn(req, tc.set)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got struct {
+				Tools []map[string]json.RawMessage `json:"tools"`
+			}
+			if err := json.Unmarshal(body, &got); err != nil {
+				t.Fatal(err)
+			}
+			var search, code int
+			for _, tool := range got.Tools {
+				if tool["googleSearch"] != nil {
+					search++
+				}
+				if tool["codeExecution"] != nil {
+					code++
+				}
+			}
+			if search != 1 {
+				t.Errorf("googleSearch sent %d times, want once (body: %s)", search, body)
+			}
+			paths := tr.DroppedPaths()
+			if tc.drop {
+				if code != 0 {
+					t.Errorf("codeExecution sent %d times beside googleSearch, want none (body: %s)", code, body)
+				}
+				for _, want := range []string{"tools[0]", "tools[2]"} {
+					if !slices.Contains(paths, want) {
+						t.Errorf("dropped = %v, want %q reported", paths, want)
+					}
+				}
+				return
+			}
+			if code != 2 {
+				t.Errorf("codeExecution sent %d times, want 2 (body: %s)", code, body)
+			}
+			for _, want := range []string{"tools[0].container", "tools[2].container"} {
+				if !slices.Contains(paths, want) {
+					t.Errorf("dropped = %v, want %q reported for the kept tool", paths, want)
+				}
+			}
+		})
+	}
+}
