@@ -336,6 +336,7 @@ type StreamDecoder struct {
 	nativeAnns       []json.RawMessage
 	nativeAnnBytes   int
 	nativeAnnDropped bool
+	annOutsideText   bool // annotations that arrived with no text open were reported lost
 	pendingAudio     map[string]any
 	audioMetaBytes   int
 	audioMetaDropped bool
@@ -707,6 +708,12 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 				d.annRawBytes += len(ch.Delta.Annotations)
 				d.annRaws = append(d.annRaws, append(json.RawMessage(nil), ch.Delta.Annotations...))
 			}
+		} else if d.text < 0 && !d.annOutsideText && len(extractChatAnnotations(ch.Delta.Annotations, 0, 0)) > 0 {
+			// A Chat client is given these as they came (the same-format body carries them); for
+			// any other client, an annotation with no open text has no item to cite.
+			d.annOutsideText = true
+			d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: llm.LossPathCitations,
+				Detail: "annotations that arrived with no text open have no message text to cite"})
 		}
 		if len(ch.Delta.Annotations) > 0 {
 			d.addNativeAnnotations(ch.Delta.Annotations)

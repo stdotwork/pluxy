@@ -249,7 +249,7 @@ func request(stream bool) llm.Request {
 }
 
 // next returns the stream's next event, failing the test if it takes longer than d.
-func next(t *testing.T, s *host.Stream, d time.Duration) llm.Event {
+func next(t testing.TB, s *host.Stream, d time.Duration) llm.Event {
 	t.Helper()
 	ch := make(chan llm.Event, 1)
 	go func() { ch <- s.Next() }()
@@ -265,7 +265,7 @@ func next(t *testing.T, s *host.Stream, d time.Duration) llm.Event {
 
 // collect reads events up to and including the terminal one, checking protocol 0.31 citation and
 // source invariants on every event.
-func collect(t *testing.T, s *host.Stream) []llm.Event {
+func collect(t testing.TB, s *host.Stream) []llm.Event {
 	t.Helper()
 	var evs []llm.Event
 	for {

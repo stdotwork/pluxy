@@ -254,6 +254,16 @@ func NewStreamWriter(w io.Writer, includeUsage bool) *StreamWriter {
 // Losses returns what the reply had that Chat Completions could not carry.
 func (s *StreamWriter) Losses() []llm.Loss { return s.losses }
 
+// hasValidCitation reports whether cs holds a citation a client would be given.
+func hasValidCitation(cs []llm.Citation) bool {
+	return slices.ContainsFunc(cs, func(c llm.Citation) bool { return llm.ValidCitationURL(c.URL) })
+}
+
+// hasValidSource reports whether ss holds a source a client would be given.
+func hasValidSource(ss []llm.Source) bool {
+	return slices.ContainsFunc(ss, func(s llm.Source) bool { return llm.ValidCitationURL(s.URL) })
+}
+
 func (s *StreamWriter) lose(path, detail string) {
 	if s.lost[path] || len(s.losses) > llm.MaxLosses {
 		return
@@ -347,6 +357,9 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 				return s.delta(outDelta{Annotations: m.Annotations})
 			}
 		}
+		if !s.up.native && hasValidCitation(ev.Citations) {
+			s.lose("content.citations", "Chat Completions streams carry annotations only for a Chat upstream's reply")
+		}
 		return nil
 	case llm.EventMedia:
 		if s.up.native && ev.Media != nil && ev.Media.Kind == llm.MediaAudio {
@@ -434,6 +447,9 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 				}
 			}
 		}
+		if !s.up.native && hasValidSource(ev.Sources) {
+			s.lose("sources", "Chat Completions streams carry no web search sources from another format")
+		}
 		if !s.up.native && len(ev.CodeExecutions) > 0 {
 			s.lose("code_execution", "Chat Completions has no place for code execution results")
 			for _, ce := range ev.CodeExecutions {
@@ -505,6 +521,7 @@ type Aggregator struct {
 	msgRunes          map[int]int       // message item index -> rune count written to text
 	totalRunes        int               // total runes written to text across message items
 	annotations       []outAnnotation
+	citedURLs         map[string]bool // the URLs the annotations cite
 	nativeAnnotations []json.RawMessage
 	audio             *audioAgg
 	cands             map[int]*outCandAgg
@@ -684,6 +701,10 @@ func (a *Aggregator) Add(ev llm.Event) {
 					uc.StartIndex, uc.EndIndex = base+*c.StartIndex, base+*c.EndIndex
 				}
 				a.annotations = append(a.annotations, outAnnotation{Type: "url_citation", URLCitation: uc})
+				if a.citedURLs == nil {
+					a.citedURLs = map[string]bool{}
+				}
+				a.citedURLs[c.URL] = true
 				a.size += len(c.URL) + len(c.Title) + 48
 			}
 		}
@@ -709,6 +730,14 @@ func (a *Aggregator) Add(ev llm.Event) {
 					}
 					a.audio.add(fm.Audio, "")
 					a.size += len(fm.Audio)
+				}
+			}
+		}
+		if !a.up.native {
+			for _, src := range ev.Sources {
+				if llm.ValidCitationURL(src.URL) && !a.citedURLs[src.URL] {
+					a.lose("sources", "uncited web search sources have no place in a Chat Completions message")
+					break
 				}
 			}
 		}

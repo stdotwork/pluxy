@@ -956,7 +956,10 @@ upstream but streamed to the client. Those two lose what passed the limit, and i
 Gemini client of another format has `groundingSupports` that repeat each citation's cited text, so
 they repeat at most 1 MiB of it in all and leave `segment.text` out past that (the offsets stay, and
 it is reported as dropped); a Gemini reply built again from its own chunks keeps all of it. A same-format Chat reply keeps the upstream's
-`annotations` (streamed and non-streamed, bounded at 4 MiB per reply). Cross-format citations and
+`annotations` (streamed and non-streamed, bounded at 4 MiB per reply). For a client of another
+format, the annotations of a Chat upstream's reply that arrive with no message text open are reported
+as dropped. A Chat client of another format gets citations only in a non-streamed reply; those of a
+streamed one, and the sources no annotation cites, are reported as dropped. Cross-format citations and
 sources are not written into Messages
 replies (Anthropic's `web_search_result_location` requires a vendor-signed `encrypted_index` that
 is verified on replay) and are reported as dropped, and a replayed message's `annotations` are not

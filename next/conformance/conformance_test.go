@@ -24,6 +24,9 @@ func TestMain(m *testing.M) {
 	case "minor-24":
 		serveFakeModels(24)
 		return
+	case "reply-cited", "reply-cited-badurl":
+		serveFakeCitedReply(os.Getenv("PLUXY_CONFORMANCE_TEST_MODE") == "reply-cited-badurl")
+		return
 	case "endpoint-35":
 		serveFakeEndpoint(35)
 		return
