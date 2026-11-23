@@ -400,3 +400,89 @@ func TestConfigUsageKeepDays(t *testing.T) {
 		})
 	}
 }
+
+// A key a JSON config has that core does not read is warned about once, by its path in the file,
+// and the config still loads: a typo is not an outage, and a file from a newer core still runs.
+// Keys the user chooses (extension IDs, header names, chain names, the settings an extension
+// reads) are never reported, and no value is logged.
+func TestConfigWarnsAboutUnknownKeys(t *testing.T) {
+	const secret = "sk-very-secret-value-1234"
+	cfg := `{"listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","bogus_setting":"` + secret + `",
+	 "routing":{"explian":true,"chains":{"my-chain":[{"model":"m","provider":"pluxy/x"}]}},
+	 "extension":{"manifest":"m.json","accounts":[{"id":"a","bogus_account_key":1,"headers":{"X-Anything":"` + secret + `"},"settings":{"free_form":{"inner":1}}}]},
+	 "extensions":{"pluxy/other":{"accounts":[{"id":"b","priorty":1}]}}}`
+	c, err := ParseConfig([]byte(cfg), "/tmp/config.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var warns []string
+	for _, n := range c.Notices {
+		if strings.Contains(n, "unknown keys") {
+			warns = append(warns, n)
+		}
+	}
+	if len(warns) != 1 || !strings.HasPrefix(warns[0], "warning: ") || !strings.Contains(warns[0], "/tmp/config.json") {
+		t.Fatalf("notices = %q, want one warning that names the file", c.Notices)
+	}
+	w := warns[0]
+	for _, want := range []string{"bogus_setting", "routing.explian", "extension.accounts[0].bogus_account_key", `extensions["pluxy/other"].accounts[0].priorty`} {
+		if strings.Count(w, want) != 1 {
+			t.Errorf("warning %q names %q %d times, want once", w, want, strings.Count(w, want))
+		}
+	}
+	for _, never := range []string{secret, "X-Anything", "my-chain", "free_form", "inner"} {
+		if strings.Contains(w, never) {
+			t.Errorf("warning %q holds %q, which is the user's own key or a value", w, never)
+		}
+	}
+	if !strings.Contains(w, `priorty (did you mean "priority"?)`) {
+		t.Errorf("warning %q does not offer the known key a typo is one edit from", w)
+	}
+}
+
+// A JSON config with only keys core knows (in any letter case, as encoding/json reads them)
+// gets no warning.
+func TestConfigKnownKeysGetNoWarning(t *testing.T) {
+	cfg := `{"Listen":"127.0.0.1:0","client_keys":["k"],"management_key":"m","extension":{"manifest":"m.json","accounts":[{"id":"a","models":["x",{"name":"y","alias":"z"}]}]}}`
+	c, err := ParseConfig([]byte(cfg), "/tmp/config.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Notices) != 0 {
+		t.Errorf("notices = %q, want none", c.Notices)
+	}
+}
+
+// A value of the wrong type is refused naming the file, the key path as written, what was
+// expected and what was found, with no Go type names; a syntax error names its line and column.
+func TestConfigJSONErrorsInTheFilesTerms(t *testing.T) {
+	for _, c := range []struct {
+		name, cfg string
+		want      []string
+	}{
+		{"type", `{"listen": 8400, "client_keys":["k"]}`,
+			[]string{"config /tmp/config.json:", "listen", "expected a string, found a number", "line 1"}},
+		{"nested type", "{\n\"client_keys\":[\"k\"],\n\"extension\":{\"accounts\":[{\"id\":\"a\",\"priority\":\"high\"}]}}",
+			[]string{"extension.accounts.priority", "expected a whole number, found a string", "line 3"}},
+		{"top level", `[1]`, []string{"the file", "expected an object, found a list"}},
+		{"syntax", "{\n  \"listen\": \"x\",\n  \"client_keys\": [\"k\"],\n}", []string{"not valid JSON at line 4, column 1"}},
+		{"truncated", "{\n  \"listen\": \"x\"\n", []string{"not valid JSON at line 2"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := ParseConfig([]byte(c.cfg), "/tmp/config.json")
+			if err == nil {
+				t.Fatal("ParseConfig = nil, want an error")
+			}
+			for _, want := range c.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q lacks %q", err, want)
+				}
+			}
+			for _, never := range []string{"Go struct", "Go value", "server.Config", "route.", "unmarshal"} {
+				if strings.Contains(err.Error(), never) {
+					t.Errorf("error %q holds %q", err, never)
+				}
+			}
+		})
+	}
+}

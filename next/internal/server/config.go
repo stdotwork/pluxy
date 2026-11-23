@@ -3,7 +3,9 @@
 package server
 
 import (
+	"bytes"
 	"crypto/sha256"
+	"encoding"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,9 +16,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/internal/legacy"
@@ -499,7 +503,13 @@ func ParseConfig(b []byte, path string) (*Config, error) {
 		hashed = res.HashedManagementKey
 	}
 	if err := json.Unmarshal(b, &c); err != nil {
-		return nil, fmt.Errorf("config %s: %w", path, err)
+		return nil, fmt.Errorf("config %s: %w", path, jsonConfigError(b, err))
+	}
+	if !IsYAML(path) {
+		// A config.yaml's unknown keys are noticed by package legacy.
+		if keys := unknownKeys(b, reflect.TypeOf(c)); len(keys) > 0 {
+			c.Notices = append(c.Notices, unknownKeysNotice(path, keys))
+		}
 	}
 	if c.Listen == "" {
 		return nil, errors.New("config: listen is required")
@@ -698,4 +708,206 @@ func ReachedURL(r *http.Request) (string, error) {
 		scheme = "https"
 	}
 	return scheme + "://" + r.Host, nil
+}
+
+// jsonConfigError says what is wrong with a JSON config in the file's own terms: where it is
+// (the key path as written, the line and column of a syntax error), what was expected and what
+// was found, with no Go type names and no value from the file (it may be a secret). Any other
+// error is returned as it is.
+func jsonConfigError(b []byte, err error) error {
+	var syn *json.SyntaxError
+	var typ *json.UnmarshalTypeError
+	switch {
+	case errors.As(err, &syn):
+		off := int(syn.Offset) - 1 // the offset is after the byte that broke the syntax
+		if syn.Error() == "unexpected end of JSON input" {
+			off = len(bytes.TrimRight(b, " \t\r\n")) - 1
+		}
+		line, col := lineColumn(b, off)
+		return fmt.Errorf("not valid JSON at line %d, column %d: %s", line, col, syn)
+	case errors.As(err, &typ) && typ.Type != nil:
+		line, _ := lineColumn(b, int(typ.Offset)-1)
+		where := "the file"
+		if typ.Field != "" {
+			where = typ.Field
+		}
+		return fmt.Errorf("%s (line %d): expected %s, found %s", where, line, jsonWant(typ.Type), jsonFound(typ.Value))
+	}
+	return err
+}
+
+// lineColumn is the line and column, both counted from 1, of byte off of b.
+func lineColumn(b []byte, off int) (line, col int) {
+	off = max(0, min(off, len(b)-1))
+	head := b[:off+1]
+	line = 1 + bytes.Count(head, []byte("\n"))
+	return line, utf8.RuneCount(head[bytes.LastIndexByte(head, '\n')+1:])
+}
+
+// jsonWant names a JSON value of the kind of t, which may be a pointer.
+func jsonWant(t reflect.Type) string {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	switch t.Kind() {
+	case reflect.String:
+		return "a string"
+	case reflect.Bool:
+		return "true or false"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "a whole number"
+	case reflect.Float32, reflect.Float64:
+		return "a number"
+	case reflect.Slice, reflect.Array:
+		return "a list"
+	case reflect.Struct, reflect.Map:
+		return "an object"
+	}
+	return "a different kind of value"
+}
+
+// jsonFound names the kind of JSON value the decoder reports in an UnmarshalTypeError.
+func jsonFound(v string) string {
+	switch {
+	case v == "string", v == "number":
+		return "a " + v
+	case v == "array":
+		return "a list"
+	case v == "object":
+		return "an object"
+	case v == "bool":
+		return "true or false"
+	case strings.HasPrefix(v, "number "):
+		return "a number that is not a whole number or is out of range"
+	}
+	return v
+}
+
+// unknownKeys returns the path of every key of the JSON document b that type t does not
+// read, in the order the file has them, matched as encoding/json matches a key to a field. A
+// map's keys are the user's own and never listed, nor are the keys of a value that keeps its
+// own decoding (an extension's settings, a model alias). A document that does not fit t has
+// none: the decoder has said so already.
+func unknownKeys(b []byte, t reflect.Type) []string {
+	var doc any
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.UseNumber()
+	if d.Decode(&doc) != nil {
+		return nil
+	}
+	return walkKeys(doc, t, "", nil)
+}
+
+var (
+	unmarshalerType     = reflect.TypeFor[json.Unmarshaler]()
+	textUnmarshalerType = reflect.TypeFor[encoding.TextUnmarshaler]()
+)
+
+func walkKeys(v any, t reflect.Type, path string, out []string) []string {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if reflect.PointerTo(t).Implements(unmarshalerType) || reflect.PointerTo(t).Implements(textUnmarshalerType) {
+		return out
+	}
+	switch v := v.(type) {
+	case map[string]any:
+		switch t.Kind() {
+		case reflect.Map:
+			for _, k := range slices.Sorted(maps.Keys(v)) {
+				out = walkKeys(v[k], t.Elem(), path+"["+strconv.Quote(k)+"]", out)
+			}
+		case reflect.Struct:
+			fields := jsonFields(t)
+			for _, k := range slices.Sorted(maps.Keys(v)) {
+				sub := k
+				if path != "" {
+					sub = path + "." + k
+				}
+				f, ok := fields[k]
+				if !ok {
+					for name, g := range fields {
+						if strings.EqualFold(name, k) {
+							f, ok = g, true
+						}
+					}
+				}
+				if !ok {
+					sub += closestKey(k, fields)
+					out = append(out, sub)
+					continue
+				}
+				out = walkKeys(v[k], f.Type, sub, out)
+			}
+		}
+	case []any:
+		if t.Kind() == reflect.Slice || t.Kind() == reflect.Array {
+			for i, e := range v {
+				out = walkKeys(e, t.Elem(), path+"["+strconv.Itoa(i)+"]", out)
+			}
+		}
+	}
+	return out
+}
+
+// jsonFields maps the key of each field of struct type t that encoding/json reads to the field,
+// including those of embedded structs.
+func jsonFields(t reflect.Type) map[string]reflect.StructField {
+	fields := map[string]reflect.StructField{}
+	for i := range t.NumField() {
+		f := t.Field(i)
+		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+		switch {
+		case name == "-" && f.Tag.Get("json") == "-":
+		case f.Anonymous && name == "" && f.Type.Kind() == reflect.Struct:
+			for k, g := range jsonFields(f.Type) {
+				fields[k] = g
+			}
+		case f.IsExported():
+			if name == "" {
+				name = f.Name
+			}
+			fields[name] = f
+		}
+	}
+	return fields
+}
+
+// closestKey is " (did you mean "x"?)" for the known key x that k is one edit away from or
+// that differs from it only in the letters' order, else "".
+func closestKey(k string, fields map[string]reflect.StructField) string {
+	for _, name := range slices.Sorted(maps.Keys(fields)) {
+		if editsAway(strings.ToLower(k), strings.ToLower(name)) {
+			return " (did you mean " + strconv.Quote(name) + "?)"
+		}
+	}
+	return ""
+}
+
+// editsAway reports whether a and b differ by one letter added, dropped or changed, or by two
+// letters side by side swapped.
+func editsAway(a, b string) bool {
+	if len(a) > len(b) {
+		a, b = b, a
+	}
+	i := 0
+	for i < len(a) && a[i] == b[i] {
+		i++
+	}
+	switch {
+	case a == b:
+		return false
+	case len(b)-len(a) > 1:
+		return false
+	case len(a) == len(b):
+		return a[i+1:] == b[i+1:] || (i+1 < len(a) && a[i] == b[i+1] && a[i+1] == b[i] && a[i+2:] == b[i+2:])
+	}
+	return a[i:] == b[i+1:]
+}
+
+// unknownKeysNotice is the line core logs when a config file has keys it does not read: it
+// names the file and the keys, never a value.
+func unknownKeysNotice(path string, keys []string) string {
+	return fmt.Sprintf("warning: config %s: unknown keys, ignored (check the spelling; core does not read them): %s", path, strings.Join(keys, ", "))
 }
