@@ -331,6 +331,8 @@ type StreamDecoder struct {
 	textRunes        int             // runes emitted in the current open message item
 	rawRunes         int             // runes of upstream content for it, with any leading think tag
 	annRaws          []json.RawMessage
+	annRawBytes      int
+	cites            llm.CiteBudget
 	nativeAnns       []json.RawMessage
 	nativeAnnBytes   int
 	nativeAnnDropped bool
@@ -379,8 +381,8 @@ func (d *StreamDecoder) closeItem(idx *int, ev *[]llm.Event) {
 				for _, raw := range d.annRaws {
 					cits = append(cits, extractChatAnnotations(raw, max(d.rawRunes-d.textRunes, 0), d.textRunes)...)
 				}
-				end.Citations = cits
-				d.annRaws = nil
+				end.Citations = d.cites.KeepCitations(cits)
+				d.annRaws, d.annRawBytes = nil, 0
 			}
 			if len(d.nativeAnns) > 0 {
 				end.Raw = encodeItemEndAnnotations(d.nativeAnns)
@@ -612,7 +614,7 @@ func (d *StreamDecoder) callID(index int) string {
 
 // Losses returns what the reply had that the model could not carry, the calls that never named
 // their function, one loss each.
-func (d *StreamDecoder) Losses() []llm.Loss { return d.losses }
+func (d *StreamDecoder) Losses() []llm.Loss { return d.cites.WithLoss(d.losses) }
 
 // Decode takes the data of one SSE event and returns the events it produces. After "[DONE]" it
 // returns the finish event and the decoder is done; a "[DONE]" before every choice the upstream
@@ -694,7 +696,14 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			d.attachTextMeta(textMeta{Logprobs: logprobs(ch.Logprobs)}, before, &out)
 		}
 		if d.text >= 0 && len(ch.Delta.Annotations) > 0 && ch.Delta.Annotations[0] == '[' {
-			d.annRaws = append(d.annRaws, append(json.RawMessage(nil), ch.Delta.Annotations...))
+			// The raw entries take about what the citations made of them will, so the citation
+			// limit bounds them while they wait for their item to end.
+			if d.annRawBytes+len(ch.Delta.Annotations) > llm.MaxCitationBytes {
+				d.cites.LeftOut()
+			} else {
+				d.annRawBytes += len(ch.Delta.Annotations)
+				d.annRaws = append(d.annRaws, append(json.RawMessage(nil), ch.Delta.Annotations...))
+			}
 		}
 		if len(ch.Delta.Annotations) > 0 {
 			d.addNativeAnnotations(ch.Delta.Annotations)
@@ -1283,6 +1292,7 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 		next++
 	}
 	mediaBytes := 0
+	var cites llm.CiteBudget
 	var finishAnns []json.RawMessage
 	var finishAudio json.RawMessage
 	refused := false
@@ -1337,7 +1347,7 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 			var cits []llm.Citation
 			if len(m.Annotations) > 0 && text != "" {
 				prefixRunes := utf8.RuneCountInString(content) - utf8.RuneCountInString(text)
-				cits = extractChatAnnotations(m.Annotations, prefixRunes, utf8.RuneCountInString(text))
+				cits = cites.KeepCitations(extractChatAnnotations(m.Annotations, prefixRunes, utf8.RuneCountInString(text)))
 			}
 			out = append(out, llm.Event{Type: llm.EventItemEnd, Index: next, Citations: cits, Raw: encodeItemEndAnnotations(nativeAnns)})
 			next++
@@ -1469,5 +1479,5 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 		}
 		out = append(out, llm.Event{Type: llm.EventCandidate, Candidate: &llm.CandidateEvent{Index: ch.Index, Kind: llm.CandidateFinish, Finish: &cf}})
 	}
-	return append(out, llm.Event{Type: llm.EventFinish, Finish: &finish, Usage: decodeUsage(c.Usage), Raw: encodeFinishMeta(finishAnns, finishAudio)}), losses, nil
+	return append(out, llm.Event{Type: llm.EventFinish, Finish: &finish, Usage: decodeUsage(c.Usage), Raw: encodeFinishMeta(finishAnns, finishAudio)}), cites.WithLoss(losses), nil
 }

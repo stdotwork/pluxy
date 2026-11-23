@@ -199,6 +199,7 @@ type StreamDecoder struct {
 	citLosses map[string]bool
 	sources   []llm.Source
 	seenSrc   map[string]bool
+	cites     llm.CiteBudget
 	// Pending executableCode parts waiting for their codeExecutionResult, and completed runs.
 	pendingCode []pendingExecCode
 	codeExecs   []llm.CodeExecution
@@ -290,8 +291,12 @@ func (d *StreamDecoder) decodeGrounding(raw json.RawMessage, out []llm.Event) {
 		if ch.Web == nil || !llm.ValidCitationURL(ch.Web.URI) || d.seenSrc[ch.Web.URI] {
 			continue
 		}
+		src := llm.Source{URL: ch.Web.URI, Title: ch.Web.Title}
+		if !d.cites.AddSource(src) {
+			continue
+		}
 		d.seenSrc[ch.Web.URI] = true
-		d.sources = append(d.sources, llm.Source{URL: ch.Web.URI, Title: ch.Web.Title})
+		d.sources = append(d.sources, src)
 	}
 	if isNull(gm.Supports) || gm.Supports[0] != '[' || len(chunks) == 0 {
 		return
@@ -349,6 +354,9 @@ func (d *StreamDecoder) decodeGrounding(raw json.RawMessage, out []llm.Event) {
 				key = fmt.Sprintf("%s\x00%d\x00%d", c.URL, s, e)
 			}
 			if it != nil && it.seen[key] {
+				continue
+			}
+			if !d.cites.AddCitation(c) {
 				continue
 			}
 			if it != nil && !it.closed {
@@ -859,7 +867,7 @@ func (d *StreamDecoder) part(partIdx int, raw json.RawMessage, out []llm.Event) 
 
 // Losses returns what the reply had that the model could not carry, such as unsafe, malformed,
 // or oversized output media parts.
-func (d *StreamDecoder) Losses() []llm.Loss { return d.losses }
+func (d *StreamDecoder) Losses() []llm.Loss { return d.cites.WithLoss(d.losses) }
 
 // Usage returns the latest usage the upstream reported, or nil. A caller that fails the stream
 // for its own reasons (the connection broke, say) puts it on the error.

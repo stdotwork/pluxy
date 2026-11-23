@@ -947,7 +947,15 @@ non-streaming Chat Completions `url_citation` annotations, and Gemini `grounding
 (streaming and non-streaming). OpenAI requires both indices on a URL citation, so a citation with
 no usable range covers its whole message there. A Gemini citation lands on the message item that holds
 its text, also when a thought signature or a function call split the reply's text into several items;
-one that cannot be placed on a single item is reported as dropped. A same-format Chat reply keeps the upstream's
+one that cannot be placed on a single item is reported as dropped. One reply keeps at most 4 MiB of
+citations and, apart from them, 4 MiB of sources, whichever format they come from; the rest are left
+out and reported as dropped. A client of the upstream's own format is given the upstream's body and
+has them all, with no loss reported, except when the reply is built again from the model's events,
+which keep only what fits: a Gemini stream sent whole and a Responses reply sent whole by the
+upstream but streamed to the client. Those two lose what passed the limit, and it is reported. A
+Gemini client of another format has `groundingSupports` that repeat each citation's cited text, so
+they repeat at most 1 MiB of it in all and leave `segment.text` out past that (the offsets stay, and
+it is reported as dropped); a Gemini reply built again from its own chunks keeps all of it. A same-format Chat reply keeps the upstream's
 `annotations` (streamed and non-streamed, bounded at 4 MiB per reply). Cross-format citations and
 sources are not written into Messages
 replies (Anthropic's `web_search_result_location` requires a vendor-signed `encrypted_index` that
@@ -976,7 +984,10 @@ with its result block, Responses `code_interpreter_call` items, and Gemini `exec
 with `codeExecutionResult` render as Gemini `executableCode` and `codeExecutionResult` parts
 (streaming and non-streaming). Gemini's code part holds only Python, so a shell or file-editor run
 is left out and reported as dropped, as are omitted files and images. One reply keeps at most 4 MiB
-of runs, and runs past that are reported as dropped. Cross-format Messages, Responses, and Chat
+of runs, and runs past that are reported as dropped. A reply that already carries its runs and
+sources in its own body (same format) leaves them out of the `finish` event when that event would
+not fit a protocol frame beside the body; the client still gets the body unchanged, and a client of
+another format has the runs and sources that were left out reported as dropped. Cross-format Messages, Responses, and Chat
 Completions clients receive no invented code blocks (Messages `server_tool_use` and results require
 Anthropic-verified `srvtoolu_` IDs, Responses `code_interpreter_call` requires an OpenAI
 `container_id`, and Chat Completions has no code execution block), keep the model's text untouched,
@@ -987,7 +998,11 @@ and report the dropped code execution results; same-format replies pass through 
 Completions `message.audio` / streamed `delta.audio` parts. Only parts with a well-formed type
 from a list of image and audio types (never `image/svg+xml`) and valid base64 are carried,
 bounded at 24 MiB per part and 96 MiB per reply so each event fits a protocol frame; unsafe, malformed, or oversized parts
-drop with a loss while the reply's text arrives whole. Gemini clients receive both images and
+drop with a loss while the reply's text arrives whole. A reply sent whole (not streamed) to a
+Gemini client also has to fit 64 MiB: when its parts together pass that, the last parts are left
+out with a loss and the text and the earlier parts arrive. A part of a streamed upstream must also
+fit one server-sent event (16 MiB): a larger event ends the stream with the error
+`upstream stream broke: sse: event too large`, and no part of it is dropped with a loss. Gemini clients receive both images and
 audio as `inlineData` parts in order. Responses, Chat Completions and Messages clients receive no
 media from another format, because the fields that would hold it need an ID only the vendor issues,
 which the client would send back on its next turn: they keep the model's text and the media is

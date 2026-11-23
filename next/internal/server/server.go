@@ -35,7 +35,7 @@ const MaxRequestBody = 24 << 20
 // MaxResponseBody limits what core collects for a non-streamed reply; streamed replies are not
 // collected, so they have no limit. It matches what the provider extension reads of a plain
 // JSON upstream body (protocol.MaxFrame).
-const MaxResponseBody = 64 << 20
+const MaxResponseBody = llm.MaxNonStreamedReplyBytes
 
 // Stream is the reply to a generate call: events until one terminal event.
 type Stream interface {

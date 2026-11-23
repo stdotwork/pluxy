@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 // maxErrorRaw limits the upstream bytes an error keeps for diagnostics. Longer data is not kept:
@@ -117,7 +118,7 @@ func extractURLCitation(raw json.RawMessage, runeOffset, maxRunes int) (llm.Cita
 
 // extractContentCitations reads url_citation annotations across all output_text parts of a
 // Responses message item, shifting each part's rune offsets into the concatenated message text.
-func extractContentCitations(content []outputContent) []llm.Citation {
+func extractContentCitations(content []outputContent, budget *llm.CiteBudget) []llm.Citation {
 	var out []llm.Citation
 	runeOffset := 0
 	for _, part := range content {
@@ -130,6 +131,9 @@ func extractContentCitations(content []outputContent) []llm.Citation {
 			if json.Unmarshal(part.Annotations, &list) == nil {
 				for _, raw := range list {
 					if c, ok := extractURLCitation(raw, runeOffset, partRunes); ok {
+						if !budget.AddCitation(c) {
+							return out
+						}
 						out = append(out, c)
 					}
 				}
@@ -142,7 +146,7 @@ func extractContentCitations(content []outputContent) []llm.Citation {
 
 // extractWebSearchCallSources reads URL sources from a Responses web_search_call item's
 // action.sources and results arrays, deduplicated in first-seen order.
-func extractWebSearchCallSources(raw json.RawMessage, seen map[string]bool, out []llm.Source) []llm.Source {
+func extractWebSearchCallSources(raw json.RawMessage, seen map[string]bool, out []llm.Source, budget *llm.CiteBudget) []llm.Source {
 	var ws struct {
 		Type   string `json:"type"`
 		Action *struct {
@@ -161,8 +165,12 @@ func extractWebSearchCallSources(raw json.RawMessage, seen map[string]bool, out 
 		if !llm.ValidCitationURL(u) || seen[u] {
 			return
 		}
+		src := llm.Source{URL: u, Title: title}
+		if !budget.AddSource(src) {
+			return
+		}
 		seen[u] = true
-		out = append(out, llm.Source{URL: u, Title: title})
+		out = append(out, src)
 	}
 	if ws.Action != nil {
 		for _, s := range ws.Action.Sources {
@@ -395,6 +403,9 @@ type StreamDecoder struct {
 	annRaws    map[int][]json.RawMessage // model item index -> raw annotations from annotation.added
 	sources    []llm.Source
 	seenSrc    map[string]bool
+	cites      llm.CiteBudget
+	annRawSize int // bytes of annRaws
+	finishCut  []llm.Loss
 	codeBuf    map[int]*strings.Builder // upstream output_index -> streamed code_interpreter_call code
 	codeExecs  []llm.CodeExecution
 	seenCode   map[string]bool
@@ -418,7 +429,9 @@ func NewStreamDecoder() *StreamDecoder {
 
 // Losses returns what the reply had that the model could not carry, such as unsafe, malformed,
 // or oversized output media parts.
-func (d *StreamDecoder) Losses() []llm.Loss { return d.losses }
+func (d *StreamDecoder) Losses() []llm.Loss {
+	return d.cites.WithLoss(append(slices.Clip(d.losses), d.finishCut...))
+}
 
 func (d *StreamDecoder) start(out []llm.Event, info llm.ResponseInfo, raw json.RawMessage) []llm.Event {
 	d.started = true
@@ -526,7 +539,14 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		return append(out, llm.Event{Type: t, Index: idx, Delta: ev.Delta, Raw: raw}), nil
 	case "response.output_text.annotation.added":
 		if idx, open := d.items[ev.OutputIndex]; open && len(ev.Annotation) > 0 {
-			d.annRaws[idx] = append(d.annRaws[idx], append(json.RawMessage(nil), ev.Annotation...))
+			// The raw entries take about what the citations made of them will, so the citation
+			// limit bounds them while they wait for their item to end.
+			if d.annRawSize+len(ev.Annotation) > llm.MaxCitationBytes {
+				d.cites.LeftOut()
+			} else {
+				d.annRawSize += len(ev.Annotation)
+				d.annRaws[idx] = append(d.annRaws[idx], append(json.RawMessage(nil), ev.Annotation...))
+			}
 		}
 		return native(), nil
 	case "response.code_interpreter_call_code.delta":
@@ -551,7 +571,7 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 	case "response.output_item.done":
 		idx, open := d.items[ev.OutputIndex]
 		if !open {
-			d.sources = extractWebSearchCallSources(ev.Item, d.seenSrc, d.sources)
+			d.sources = extractWebSearchCallSources(ev.Item, d.seenSrc, d.sources, &d.cites)
 			fallback := ""
 			if buf := d.codeBuf[ev.OutputIndex]; buf != nil {
 				fallback = buf.String()
@@ -582,6 +602,10 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 						d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: "output media part exceeds per-part size limit"})
 					case d.mediaBytes+len(media.Data) > llm.MaxOutputMediaReplyBytes:
 						d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: "output media exceeds per-reply size limit"})
+					case len(media.Data)+len(raw) > protocol.MaxFrame-protocol.FrameHeadroom:
+						// The event holds the image twice, as media and in Raw. A native event keeps
+						// the upstream item for a client of this format.
+						d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path, Detail: "output media with its upstream event would not fit one protocol frame"})
 					default:
 						d.mediaBytes += len(media.Data)
 						return append(out, llm.Event{Type: llm.EventMedia, Media: media, Raw: raw}), nil
@@ -595,7 +619,7 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		_ = json.Unmarshal(ev.Item, &it)
 		end := llm.Event{Type: llm.EventItemEnd, Index: idx, Opaque: opaque(it), Raw: raw}
 		if it.Type == "message" {
-			cits := extractContentCitations(it.Content)
+			cits := extractContentCitations(it.Content, &d.cites)
 			if len(cits) == 0 && len(d.annRaws[idx]) > 0 {
 				maxRunes := d.textLens[idx]
 				for _, ar := range d.annRaws[idx] {
@@ -603,8 +627,12 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 						cits = append(cits, c)
 					}
 				}
+				cits = d.cites.KeepCitations(cits)
 			}
 			end.Citations = cits
+		}
+		for _, ar := range d.annRaws[idx] {
+			d.annRawSize -= len(ar)
 		}
 		delete(d.annRaws, idx)
 		delete(d.textLens, idx)
@@ -613,7 +641,7 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		d.done = true
 		out = d.closeAll(out)
 		for i, itemRaw := range r.Output {
-			d.sources = extractWebSearchCallSources(itemRaw, d.seenSrc, d.sources)
+			d.sources = extractWebSearchCallSources(itemRaw, d.seenSrc, d.sources, &d.cites)
 			if id, ce, ok := extractCodeInterpreterCall(itemRaw, ""); ok {
 				key := id
 				if key == "" {
@@ -647,7 +675,11 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			}
 		}
 		f := finishOf(r)
-		return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(r.Usage), Sources: d.sources, CodeExecutions: d.codeExecs, Raw: raw}), nil
+		fin := llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(r.Usage), Sources: d.sources, CodeExecutions: d.codeExecs, Raw: raw}
+		if l, cut := protocol.FitFinish(&fin); cut {
+			d.finishCut = append(d.finishCut, l)
+		}
+		return append(out, fin), nil
 	case "response.failed":
 		d.done = true
 		e := failure(r, data)
@@ -697,6 +729,7 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 	next := 0
 	var sources []llm.Source
 	seenSrc := map[string]bool{}
+	var cites llm.CiteBudget
 	var codeExecs []llm.CodeExecution
 	var losses []llm.Loss
 	mediaBytes := 0
@@ -721,7 +754,7 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 					text.WriteString(c.Text)
 				}
 			}
-			add(llm.ItemStart{Kind: llm.ItemMessage}, llm.EventTextDelta, text.String(), nil, extractContentCitations(it.Content))
+			add(llm.ItemStart{Kind: llm.ItemMessage}, llm.EventTextDelta, text.String(), nil, extractContentCitations(it.Content, &cites))
 		case llm.ItemReasoning:
 			var text strings.Builder
 			for _, s := range it.Summary {
@@ -735,7 +768,7 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 			}
 			add(llm.ItemStart{Kind: llm.ItemToolCall, CallID: it.CallID, Name: it.Name}, llm.EventToolInputDelta, it.Arguments, nil, nil)
 		default:
-			sources = extractWebSearchCallSources(raw, seenSrc, sources)
+			sources = extractWebSearchCallSources(raw, seenSrc, sources, &cites)
 			if _, ce, ok := extractCodeInterpreterCall(raw, ""); ok {
 				codeExecs = llm.AppendCodeExecution(codeExecs, ce)
 			}
@@ -758,7 +791,11 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 		}
 	}
 	f := finishOf(r)
-	return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(r.Usage), Sources: sources, CodeExecutions: codeExecs, Raw: append(json.RawMessage(nil), body...)}), losses, nil
+	fin := llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(r.Usage), Sources: sources, CodeExecutions: codeExecs, Raw: append(json.RawMessage(nil), body...)}
+	if l, cut := protocol.FitFinish(&fin); cut {
+		losses = llm.AddLoss(losses, l)
+	}
+	return append(out, fin), cites.WithLoss(losses), nil
 }
 
 // OpaqueOutput lists, by path in the Response, the output data a client in another format has no

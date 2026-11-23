@@ -262,7 +262,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	defer resp.Body.Close()
 	send.headers = llm.ExtractRateLimitHeaders(llm.FormatAnthropicMessages, resp.Header)
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
-		return relayStream(ctx, resp.Body, send)
+		return relayStream(ctx, resp.Body, send, call.Request.BodyReachesClient(llm.FormatAnthropicMessages, true))
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
 	if err != nil {
@@ -271,7 +271,10 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		}
 		return &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
 	}
-	events, err := anthropicmessages.DecodeResponse(raw)
+	events, losses, err := anthropicmessages.DecodeResponseLosses(raw)
+	for _, l := range llm.ReplyLosses(losses, call.Request.BodyReachesClient(llm.FormatAnthropicMessages, false)) {
+		fmt.Fprintf(os.Stderr, "reply loss: %s %s (%s)\n", l.Kind, l.Path, l.Detail)
+	}
 	if err != nil {
 		return llm.MarkContextOverflow(err)
 	}
@@ -678,9 +681,14 @@ func replyNames(req llm.Request, tr *llm.Translation) map[string]string {
 
 // relayStream decodes the upstream Messages stream and sends each event as soon as it is
 // decoded. A blocked send blocks the next upstream read.
-func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Event) error }) error {
+func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Event) error }, bodyReaches bool) error {
 	r := sse.NewReader(body)
 	dec := anthropicmessages.NewStreamDecoder()
+	defer func() {
+		for _, l := range llm.ReplyLosses(dec.Losses(), bodyReaches) {
+			fmt.Fprintf(os.Stderr, "reply loss: %s %s (%s)\n", l.Kind, l.Path, l.Detail)
+		}
+	}()
 	for {
 		e, err := r.Next()
 		eof := err == io.EOF

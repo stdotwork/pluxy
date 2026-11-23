@@ -2,6 +2,7 @@ package llm_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stdotwork/pluxy/next/llm"
@@ -130,5 +131,74 @@ func TestUTF8ByteAndRuneOffsets(t *testing.T) {
 		if _, ok := llm.RuneToUTF8ByteOffset(s, bad); ok {
 			t.Errorf("RuneToUTF8ByteOffset(%d) succeeded, want false", bad)
 		}
+	}
+}
+
+func TestCiteBudgetKeepsWhatFitsAndReportsTheRest(t *testing.T) {
+	var b llm.CiteBudget
+	if got := b.WithLoss(nil); len(got) != 0 {
+		t.Fatalf("losses with nothing left out = %+v", got)
+	}
+	big := strings.Repeat("t", llm.MaxCitationBytes/4)
+	cs := []llm.Citation{{URL: "https://a.example/1", Title: big}, {URL: "https://a.example/2", Title: big},
+		{URL: "https://a.example/3", Title: big}, {URL: "https://a.example/4", Title: big}}
+	kept := b.KeepCitations(cs)
+	if len(kept) != 3 {
+		t.Errorf("kept %d of 4 citations of a quarter of the limit each, want 3 (their URLs and overhead take the fourth's room)", len(kept))
+	}
+	if !b.AddSource(llm.Source{URL: "https://s.example/1"}) {
+		t.Error("a source did not fit after citations filled their own room: each has a limit of its own")
+	}
+	if got := b.WithLoss(nil); len(got) != 1 || got[0].Path != "citations" || got[0].Kind != llm.LossDropped {
+		t.Errorf("losses = %+v, want one dropped loss at citations", got)
+	}
+}
+
+func TestReplyLossesSparesAClientOfTheUpstreamsFormat(t *testing.T) {
+	losses := []llm.Loss{
+		{Kind: llm.LossDropped, Path: llm.LossPathCitations, Detail: "x"},
+		{Kind: llm.LossDropped, Path: llm.LossPathFinish, Detail: "x"},
+		{Kind: llm.LossDropped, Path: "output[0]", Detail: "x"},
+	}
+	if got := llm.ReplyLosses(losses, false); len(got) != 3 {
+		t.Errorf("a client of another format loses %+v, want all three", got)
+	}
+	if got := llm.ReplyLosses(losses, true); len(got) != 1 || got[0].Path != "output[0]" {
+		t.Errorf("a client of the upstream's format loses %+v, want only the media", got)
+	}
+	if len(losses) != 3 {
+		t.Error("ReplyLosses changed its argument")
+	}
+}
+
+func TestBodyReachesClient(t *testing.T) {
+	req := func(format string, stream bool) *llm.Request {
+		return &llm.Request{Stream: stream, Native: &llm.Native{Format: format}}
+	}
+	for _, c := range []struct {
+		format                   string
+		clientStreams, upStreams bool
+		want                     bool
+	}{
+		{llm.FormatAnthropicMessages, false, true, true},
+		{llm.FormatAnthropicMessages, true, false, true},
+		{llm.FormatOpenAIResponses, true, true, true},
+		{llm.FormatOpenAIResponses, false, true, true},
+		{llm.FormatOpenAIResponses, false, false, true},
+		{llm.FormatOpenAIResponses, true, false, false}, // a stream built from a whole reply
+		{llm.FormatGeminiGenerate, true, true, true},
+		{llm.FormatGeminiGenerate, true, false, true},
+		{llm.FormatGeminiGenerate, false, false, true},
+		{llm.FormatGeminiGenerate, false, true, false}, // a whole reply built from a stream
+	} {
+		if got := req(c.format, c.clientStreams).BodyReachesClient(c.format, c.upStreams); got != c.want {
+			t.Errorf("%s, client streams %v, upstream streams %v: %v, want %v", c.format, c.clientStreams, c.upStreams, got, c.want)
+		}
+	}
+	if req(llm.FormatOpenAIResponses, false).BodyReachesClient(llm.FormatGeminiGenerate, false) {
+		t.Error("a request of another format gets the body")
+	}
+	if (&llm.Request{}).BodyReachesClient(llm.FormatOpenAIResponses, false) || (*llm.Request)(nil).BodyReachesClient("x", false) {
+		t.Error("a request with no native body gets the body")
 	}
 }
