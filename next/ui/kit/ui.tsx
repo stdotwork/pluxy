@@ -257,10 +257,7 @@ export function Card(props: { title?: string; actions?: ComponentChildren; child
 export function PageHead(props: { title: string; actions?: ComponentChildren }) {
   return (
     <header class="page-head">
-      {/* Focusable by script, so the shell can move focus here when the page opens. */}
-      <h1 data-part="page-title" tabIndex={-1}>
-        {props.title}
-      </h1>
+      <h1 data-part="page-title">{props.title}</h1>
       {props.actions && <div class="actions">{props.actions}</div>}
     </header>
   );

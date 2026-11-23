@@ -339,6 +339,8 @@ export function Shell(props: {
     announcedPage.current = page;
     if (!signedIn || first || !changed) return;
     const heading = mainRef.current?.querySelector<HTMLElement>("h1");
+    // A heading takes focus from script only with a tabindex.
+    heading?.setAttribute("tabindex", "-1");
     (heading ?? mainRef.current)?.focus({ preventScroll: true });
     setAnnounced(title);
   }, [page, signedIn, title]);
