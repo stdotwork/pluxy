@@ -727,7 +727,9 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 // Stream is the reply to a generate call. Next returns events until and including exactly one
 // terminal event (finish or error), then keeps returning that terminal event.
 type Stream struct {
-	conn   net.Conn
+	conn net.Conn
+	// frames reads the call's reply frames from conn; it is made by the first read.
+	frames *protocol.FrameReader
 	ctx    context.Context
 	ext    *Extension
 	redact *protocol.Redactor
@@ -857,7 +859,10 @@ func (s *Stream) read(reply *protocol.Reply) error {
 	if s.watch > 0 {
 		_ = s.conn.SetReadDeadline(time.Now().Add(s.watch))
 	}
-	return protocol.ReadFrame(s.conn, reply)
+	if s.frames == nil {
+		s.frames = protocol.NewFrameReader(s.conn)
+	}
+	return s.frames.Read(reply)
 }
 
 func (s *Stream) readError(err error) *llm.Error {
