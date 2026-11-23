@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -132,7 +133,9 @@ func (l *LoginCall) addSecrets(input map[string]string) {
 		if l.secrets == nil {
 			l.secrets = map[string]string{}
 		}
-		l.secrets[fmt.Sprintf("%s.%d", k, len(l.secrets))] = v
+		for _, s := range wholeSecrets(v, l.secretInputs[k]) {
+			l.secrets[fmt.Sprintf("%s.%d", k, len(l.secrets))] = s
+		}
 	}
 	l.redact = protocol.NewRedactor(inputCredential(l.secrets), l.settings)
 	l.ext.held.add(l.account+" login input", inputCredential(l.secrets))
@@ -149,6 +152,36 @@ func (l *LoginCall) errorPieces() pieces {
 	l.wmu.Lock()
 	defer l.wmu.Unlock()
 	return slices.Clone(l.pieces)
+}
+
+// wholeSecrets returns what of a login input v the call's redactor removes whole. It is v itself,
+// but for an input the login does not mark secret that is a plain address: an absolute http or
+// https URL with no query or fragment, such as a base URL a person typed, whose words are no
+// secret and which an error should quote. Of such an address only its user name and password count,
+// as the user info as written and by each part; its path is as public as the base URL an account
+// keeps in its settings, and a query or fragment, which can hold a secret under any name (an OAuth
+// redirect's code), keeps the whole value secret.
+func wholeSecrets(v string, secret bool) []string {
+	if secret {
+		return []string{v}
+	}
+	t := strings.TrimSpace(v)
+	u, err := url.Parse(t)
+	if err != nil || u.Host == "" || u.Scheme != "http" && u.Scheme != "https" ||
+		strings.ContainsAny(t, "?#") || strings.IndexFunc(t, unicode.IsSpace) >= 0 {
+		return []string{v}
+	}
+	if u.User == nil {
+		return nil
+	}
+	out := []string{u.User.String()}
+	if name := u.User.Username(); name != "" {
+		out = append(out, name)
+	}
+	if p, ok := u.User.Password(); ok && p != "" {
+		out = append(out, p, u.User.Username()+":"+p)
+	}
+	return out
 }
 
 // urlOnly returns s alone when it is an absolute URL, and nothing otherwise.
