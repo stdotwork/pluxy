@@ -22,6 +22,7 @@ import {
   useLoad,
 } from "../../ui/kit/ui";
 import { Backups, reply } from "./backups";
+import { folderWait, NeedsKey, NoKeys, toolMissing, withDeviceLink } from "./clientHelp";
 import type { AgentPage } from "./easyMode";
 import { connectionGet } from "./host";
 import { selectionFor, type Where } from "./piForm";
@@ -34,7 +35,7 @@ const t = strings("pi", {
   intro:
     "Loads models dynamically in Pi through the CLIProxyAPI provider. pluxy installs its reviewed copy of the provider plugin in Pi's agent folder, writes the core's address and a client key into cliproxyapi.json, and makes a model through it Pi's default. Install, Update, Uninstall, Clear and Restore Backup each ask in a native confirmation; everything else in the files stays. Restart Pi afterward.",
   unavailable:
-    "Install and enable the curated Pi tool (pluxy/pi-setup) on the Device extensions page to set up Pi from here.",
+    "Install and enable the curated Pi tool (pluxy/pi-setup) on the {device} page to set up Pi from here.",
   files: "Configuration files",
   fileDefault: "Pi's agent folder",
   fileDefaultNote: "~/.pi/agent",
@@ -81,7 +82,6 @@ const t = strings("pi", {
   keyHint: "The client API key Pi uses to connect to this core, kept by native key entry.",
   addKey: "Add key…",
   keyLabel: "Pi client key",
-  noKeys: "No keys yet: add one.",
   install: "Install Pi Plugin",
   connect: "Connect in One Click",
   repair: "Repair Connection",
@@ -204,7 +204,7 @@ function StartCli(props: { available: boolean }) {
     });
   return (
     <Card title={t("start")}>
-      <Text label={t("cwd")} value={cwd} onInput={setCwd} />
+      <Text label={t("cwd")} hint={folderWait(cwd)} value={cwd} onInput={setCwd} />
       {recent.length > 0 && (
         <Choices
           label={t("recent")}
@@ -334,7 +334,7 @@ export function PiPage() {
     <div class="stack">
       <PageHead title={t("title")} />
       <p class="muted">{t("intro")}</p>
-      {unavailable && <Notice tone="warn">{t("unavailable")}</Notice>}
+      {unavailable && <Notice tone="warn">{withDeviceLink(t("unavailable"))}</Notice>}
       {!core && <Notice tone="warn">{t("noCore")}</Notice>}
       <Card title={t("files")}>
         <Choices
@@ -361,7 +361,7 @@ export function PiPage() {
             }}
           />
         )}
-        {read.error && <Notice tone="danger">{read.error}</Notice>}
+        {read.error && !toolMissing(read.error, PACKAGE) && <Notice tone="danger">{read.error}</Notice>}
         <Button onClick={load} disabled={busy}>
           {t("read")}
         </Button>
@@ -444,7 +444,7 @@ export function PiPage() {
                     onChange={setSecret}
                   />
                 ) : (
-                  <p class="muted">{t("noKeys")}</p>
+                  <NoKeys />
                 )}
                 {addKey.error && <Notice tone="danger">{addKey.error}</Notice>}
                 <Button
@@ -471,6 +471,7 @@ export function PiPage() {
             >
               {applyLabel}
             </Button>
+            <NeedsKey missing={!secret} />
             <ConfirmButton
               disabled={busy || refusedFiles || !preview.applied}
               onConfirm={() => undo("clear")}

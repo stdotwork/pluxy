@@ -22,6 +22,7 @@ import {
   useLoad,
 } from "../../ui/kit/ui";
 import { Backups, reply } from "./backups";
+import { folderWait, NeedsKey, NoKeys, toolMissing, withDeviceLink } from "./clientHelp";
 import {
   type Agents,
   fresh,
@@ -43,7 +44,7 @@ const t = strings("codex", {
   intro:
     "Points Codex's config.toml at this core through the Responses API, with a client key, and writes the model catalog Codex lists. Apply, Clear and Restore Backup each ask in a native confirmation; comments and everything else in the files stay. Restart Codex afterward.",
   unavailable:
-    "Install and enable the curated Codex tool (pluxy/codex-setup) on the Device extensions page to set up Codex from here.",
+    "Install and enable the curated Codex tool (pluxy/codex-setup) on the {device} page to set up Codex from here.",
   files: "Configuration files",
   filesDefault: "Codex's folder",
   filesSelected: "Selected files",
@@ -120,7 +121,6 @@ const t = strings("codex", {
   keyHint: "The client API key Codex uses to connect to this core, kept by native key entry.",
   addKey: "Add key…",
   keyLabel: "Codex client key",
-  noKeys: "No keys yet: add one.",
   apply: "Apply Configuration",
   update: "Update Configuration",
   repair: "Repair Connection",
@@ -332,7 +332,7 @@ function Launch(props: { available: boolean }) {
   return (
     <>
       <Card title={t("start")}>
-        <Text label={t("cwd")} value={cwd} onInput={setCwd} />
+        <Text label={t("cwd")} hint={folderWait(cwd)} value={cwd} onInput={setCwd} />
         {recent.length > 0 && (
           <Choices
             label={t("recent")}
@@ -494,7 +494,7 @@ export function CodexPage() {
     <div class="stack">
       <PageHead title={t("title")} />
       <p class="muted">{t("intro")}</p>
-      {unavailable && <Notice tone="warn">{t("unavailable")}</Notice>}
+      {unavailable && <Notice tone="warn">{withDeviceLink(t("unavailable"))}</Notice>}
       {!core && <Notice tone="warn">{t("noCore")}</Notice>}
       <datalist id={listId}>
         {slugs.map((m) => (
@@ -531,7 +531,7 @@ export function CodexPage() {
         {where === "root" && (
           <Text label={t("root")} hint={t("rootHint")} value={root} onInput={reselect(setRoot)} />
         )}
-        {read.error && <Notice tone="danger">{read.error}</Notice>}
+        {read.error && !toolMissing(read.error, PACKAGE) && <Notice tone="danger">{read.error}</Notice>}
         <Button onClick={load} disabled={busy}>
           {t("read")}
         </Button>
@@ -662,7 +662,7 @@ export function CodexPage() {
                 onChange={setSecret}
               />
             ) : (
-              <p class="muted">{t("noKeys")}</p>
+              <NoKeys />
             )}
             {secrets.error && <Notice tone="danger">{secrets.error}</Notice>}
             {addKey.error && <Notice tone="danger">{addKey.error}</Notice>}
@@ -688,6 +688,7 @@ export function CodexPage() {
           <Button variant="primary" onClick={apply} disabled={busy || !files || !secret || !core || !modelOk}>
             {applyLabel}
           </Button>
+          <NeedsKey missing={!secret} />
           <ConfirmButton disabled={busy || !files || !preview.applied} onConfirm={() => undo("clear")}>
             {t("clear")}
           </ConfirmButton>

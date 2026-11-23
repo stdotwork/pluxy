@@ -21,6 +21,7 @@ import {
   useLoad,
 } from "../../ui/kit/ui";
 import { Backups, reply } from "./backups";
+import { folderWait, NeedsKey, NoKeys, toolMissing, withDeviceLink } from "./clientHelp";
 import type { AgentPage } from "./easyMode";
 import { connectionGet } from "./host";
 import { CLIENT, keysOf, modelOf, PACKAGE, type ReadBack, type Secret, validModel } from "./ompForm";
@@ -33,7 +34,7 @@ const t = strings("omp", {
   intro:
     "Adds this core to Oh My Pi's models.yml as the pluxy provider, with a client key, and makes a model through it Oh My Pi's default model. Oh My Pi discovers the core's models from its model list. Apply, Clear and Restore Backup each ask in a native confirmation; comments and everything else in the files stay. Restart Oh My Pi afterward.",
   unavailable:
-    "Install and enable the curated Oh My Pi tool (pluxy/omp-setup) on the Device extensions page to set up Oh My Pi from here.",
+    "Install and enable the curated Oh My Pi tool (pluxy/omp-setup) on the {device} page to set up Oh My Pi from here.",
   files: "Configuration files",
   fileDefault: "Oh My Pi's agent folder",
   fileDefaultNote: "~/.omp/agent",
@@ -71,7 +72,6 @@ const t = strings("omp", {
   keyHint: "The client API key Oh My Pi uses to connect to this core, kept by native key entry.",
   addKey: "Add key…",
   keyLabel: "Oh My Pi client key",
-  noKeys: "No keys yet: add one.",
   connect: "Connect in One Click",
   repair: "Repair Connection",
   update: "Update Configuration",
@@ -151,7 +151,7 @@ function StartCli(props: { available: boolean }) {
     });
   return (
     <Card title={t("start")}>
-      <Text label={t("cwd")} value={cwd} onInput={setCwd} />
+      <Text label={t("cwd")} hint={folderWait(cwd)} value={cwd} onInput={setCwd} />
       {recent.length > 0 && (
         <Choices
           label={t("recent")}
@@ -250,7 +250,7 @@ export function OmpPage() {
     <div class="stack">
       <PageHead title={t("title")} />
       <p class="muted">{t("intro")}</p>
-      {unavailable && <Notice tone="warn">{t("unavailable")}</Notice>}
+      {unavailable && <Notice tone="warn">{withDeviceLink(t("unavailable"))}</Notice>}
       {!core && <Notice tone="warn">{t("noCore")}</Notice>}
       <Card title={t("files")}>
         <Choices
@@ -282,7 +282,7 @@ export function OmpPage() {
             />
           </>
         )}
-        {read.error && <Notice tone="danger">{read.error}</Notice>}
+        {read.error && !toolMissing(read.error, PACKAGE) && <Notice tone="danger">{read.error}</Notice>}
         <Button onClick={load} disabled={busy}>
           {t("read")}
         </Button>
@@ -346,7 +346,7 @@ export function OmpPage() {
                 onChange={setSecret}
               />
             ) : (
-              <p class="muted">{t("noKeys")}</p>
+              <NoKeys />
             )}
             {addKey.error && <Notice tone="danger">{addKey.error}</Notice>}
             <Button
@@ -374,6 +374,7 @@ export function OmpPage() {
           >
             {applyLabel}
           </Button>
+          <NeedsKey missing={!secret} />
           <ConfirmButton disabled={busy || refused || !preview.applied} onConfirm={() => undo("clear")}>
             {t("clear")}
           </ConfirmButton>

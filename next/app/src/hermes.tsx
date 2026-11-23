@@ -21,6 +21,7 @@ import {
   useLoad,
 } from "../../ui/kit/ui";
 import { Backups, reply } from "./backups";
+import { folderWait, NeedsKey, NoKeys, toolMissing, withDeviceLink } from "./clientHelp";
 import type { AgentPage } from "./easyMode";
 import { CLIENT, keysOf, modelOf, PACKAGE, type ReadBack, type Secret, validModel } from "./hermesForm";
 import { connectionGet } from "./host";
@@ -33,7 +34,7 @@ const t = strings("hermes", {
   intro:
     "Uses pluxy's core as a custom provider: adds it to Hermes Agent's config.yaml with a client key, and makes a model through it Hermes Agent's default model. Connect in One Click, Clear and Restore Backup each ask in a native confirmation; comments and everything else in the file stay. Restart Hermes Agent afterward.",
   unavailable:
-    "Install and enable the curated Hermes Agent tool (pluxy/hermes-setup) on the Device extensions page to set up Hermes Agent from here.",
+    "Install and enable the curated Hermes Agent tool (pluxy/hermes-setup) on the {device} page to set up Hermes Agent from here.",
   files: "Configuration file",
   fileDefault: "Hermes Agent's default home",
   fileDefaultNote: "~/.hermes (or its active profile)",
@@ -70,7 +71,6 @@ const t = strings("hermes", {
   keyHint: "The client API key Hermes Agent uses to connect to this core, kept by native key entry.",
   addKey: "Add key…",
   keyLabel: "Hermes Agent client key",
-  noKeys: "No keys yet: add one.",
   connect: "Connect in One Click",
   repair: "Repair Connection",
   update: "Update Configuration",
@@ -150,7 +150,7 @@ function StartCli(props: { available: boolean }) {
     });
   return (
     <Card title={t("start")}>
-      <Text label={t("cwd")} value={cwd} onInput={setCwd} />
+      <Text label={t("cwd")} hint={folderWait(cwd)} value={cwd} onInput={setCwd} />
       {recent.length > 0 && (
         <Choices
           label={t("recent")}
@@ -248,7 +248,7 @@ export function HermesPage() {
     <div class="stack">
       <PageHead title={t("title")} />
       <p class="muted">{t("intro")}</p>
-      {unavailable && <Notice tone="warn">{t("unavailable")}</Notice>}
+      {unavailable && <Notice tone="warn">{withDeviceLink(t("unavailable"))}</Notice>}
       {!core && <Notice tone="warn">{t("noCore")}</Notice>}
       <Card title={t("files")}>
         <Choices
@@ -272,7 +272,7 @@ export function HermesPage() {
             onInput={reselect(setConfigFile)}
           />
         )}
-        {read.error && <Notice tone="danger">{read.error}</Notice>}
+        {read.error && !toolMissing(read.error, PACKAGE) && <Notice tone="danger">{read.error}</Notice>}
         <Button onClick={load} disabled={busy}>
           {t("read")}
         </Button>
@@ -336,7 +336,7 @@ export function HermesPage() {
                 onChange={setSecret}
               />
             ) : (
-              <p class="muted">{t("noKeys")}</p>
+              <NoKeys />
             )}
             {addKey.error && <Notice tone="danger">{addKey.error}</Notice>}
             <Button
@@ -364,6 +364,7 @@ export function HermesPage() {
           >
             {applyLabel}
           </Button>
+          <NeedsKey missing={!secret} />
           <ConfirmButton disabled={busy || refused || !preview.applied} onConfirm={() => undo("clear")}>
             {t("clear")}
           </ConfirmButton>

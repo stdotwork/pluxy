@@ -16,7 +16,7 @@ const t = strings("clients", {
   tip: "Choose which agent clients the navigation lists",
   description:
     "Choose the clients to keep in the navigation, then save. Installed clients come first. The client you are on stays listed while you are on it.",
-  listed: { one: "{count} client listed", other: "{count} clients listed" },
+  listed: { one: "{count} client in the navigation", other: "{count} clients in the navigation" },
   search: "Search clients",
   detected: "Client detected",
   noResults: "No matching clients found",
@@ -27,6 +27,9 @@ const t = strings("clients", {
   save: "Save",
   saved: "Saved.",
 });
+
+/** The Manage Clients count: how many clients the navigation lists now (not how many this page shows). */
+export const listedText = (count: number) => t("listed", { count });
 
 function ClientList(props: {
   clients: Client[];
@@ -53,7 +56,7 @@ function ClientList(props: {
       <p class="muted">{t("description")}</p>
       <Card>
         <p class="muted" data-part="client-count">
-          {t("listed", { count: props.listed })}
+          {listedText(props.listed)}
         </p>
         <label class="field" data-part="field">
           <span class="label">{t("search")}</span>

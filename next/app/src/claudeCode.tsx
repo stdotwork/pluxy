@@ -41,6 +41,7 @@ import {
   WINDOW_1M,
   WINDOW_DEFAULT,
 } from "./claudeCodeForm";
+import { folderWait, NeedsKey, NoKeys, toolMissing, withDeviceLink } from "./clientHelp";
 import type { AgentPage } from "./easyMode";
 import { historyKey, inHome } from "./environment";
 import {
@@ -61,7 +62,7 @@ const t = strings("claudeCode", {
   intro:
     "Points Claude Code's settings at this core, with a client key and the models each role uses. Apply, Clear and Restore Backup each ask in a native confirmation; everything else in the file stays. Restart Claude Code afterward.",
   unavailable:
-    "Install and enable the curated Claude Code tool (pluxy/claude-code) on the Device extensions page to set up Claude Code from here.",
+    "Install and enable the curated Claude Code tool (pluxy/claude-code) on the {device} page to set up Claude Code from here.",
   file: "Settings file",
   fileDefault: "Claude Code's user settings",
   fileSelected: "A selected file",
@@ -100,7 +101,6 @@ const t = strings("claudeCode", {
   keyHint: "The client API key Claude Code uses to connect to this core, kept by native key entry.",
   addKey: "Add key…",
   keyLabel: "Claude Code client key",
-  noKeys: "No keys yet: add one.",
   connect: "Connect in One Click",
   repair: "Repair Connection",
   update: "Update Configuration",
@@ -229,7 +229,14 @@ function StartCli(props: { available: boolean; env: Environment }) {
     <Card title={t("start")}>
       <PathText
         label={t("cwd")}
-        hint={sel ? t("cwdWsl", { example: inHome(env.record?.home ?? "~", "project") }) : undefined}
+        hint={
+          [
+            sel ? t("cwdWsl", { example: inHome(env.record?.home ?? "~", "project") }) : undefined,
+            folderWait(cwd),
+          ]
+            .filter(Boolean)
+            .join(" ") || undefined
+        }
         value={cwd}
         onInput={setCwd}
         distro={distro}
@@ -381,7 +388,7 @@ export function ClaudeCodePage() {
       <PageHead title={t("title")} />
       <p class="muted">{t("intro")}</p>
       <EnvironmentBlock env={env} />
-      {unavailable && <Notice tone="warn">{t("unavailable")}</Notice>}
+      {unavailable && <Notice tone="warn">{withDeviceLink(t("unavailable"))}</Notice>}
       {!core && <Notice tone="warn">{t("noCore")}</Notice>}
       <datalist id={listId}>
         {[...ROLES, ...MODELS].map((m) => (
@@ -420,7 +427,7 @@ export function ClaudeCodePage() {
             <Text label={t("inRoot")} value={inRoot} onInput={reselect(setInRoot)} />
           </>
         )}
-        {read.error && <Notice tone="danger">{read.error}</Notice>}
+        {read.error && !toolMissing(read.error, PACKAGE) && <Notice tone="danger">{read.error}</Notice>}
         <LinuxBuildOffer error={read.error} pkg={PACKAGE} record={env.record} onInstalled={load} />
         <Button onClick={load} disabled={busy || env.pending || !plainPath(typed, distro)}>
           {t("read")}
@@ -524,7 +531,7 @@ export function ClaudeCodePage() {
                 onChange={setSecret}
               />
             ) : (
-              <p class="muted">{t("noKeys")}</p>
+              <NoKeys />
             )}
             {addKey.error && <Notice tone="danger">{addKey.error}</Notice>}
             <Button
@@ -549,6 +556,7 @@ export function ClaudeCodePage() {
           <Button variant="primary" onClick={apply} disabled={busy || refused || !valid || !secret || !core}>
             {applyLabel}
           </Button>
+          <NeedsKey missing={!secret} />
           <ConfirmButton disabled={busy || refused || !preview.applied} onConfirm={() => undo("clear")}>
             {t("clear")}
           </ConfirmButton>
