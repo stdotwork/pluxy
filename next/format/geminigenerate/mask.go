@@ -24,35 +24,17 @@ const Redacted = protocol.Redacted
 
 // namePattern is a way text names a project, an organization, a folder, a billing account or a
 // person. Group 1 is the name; ok, when set, tells a name from a word that happens to follow.
-//
-// ext, when set, is a wider form of the same pattern: it also takes a project scoped to a domain
-// ("example.com:acme-prod-4821") and, for project=, a value with a dot at its start or two dots in
-// a row. What ext matches is learned like what re matches, and is masked at the end, but only
-// where re's own replacements and the names have not already taken it: re is the pattern as it
-// was, and replaces what it matches first, so the text the later patterns and the names see is the
-// text they always saw. A wider match therefore never hides what they would have found.
 type namePattern struct {
-	re  *regexp.Regexp
-	ext *regexp.Regexp
-	ok  func(name string) bool
+	re *regexp.Regexp
+	ok func(name string) bool
 }
 
-// nameToken is a name: words joined by dots. wideNameToken may instead be a domain, a colon and
-// one word (a project scoped to a domain); wideQueryToken is the same for a query parameter,
-// which also takes a dot at the start or two dots in a row.
-const (
-	nameToken      = `([\w%-]+(?:\.[\w%-]+)*)`
-	wideNameToken  = `([\w%-]+(?:\.[\w%-]+)*\.[\w%-]+:[\w%-]+|[\w%-]+(?:\.[\w%-]+)*)`
-	wideQueryToken = `(\.*[\w%-]+(?:\.+[\w%-]+)*\.+[\w%-]+:\.*[\w%-]+|\.*[\w%-]+(?:\.+[\w%-]+)*)`
-)
+const nameToken = `([\w%-]+(?:\.[\w%-]+)*)`
 
 var namePatterns = []namePattern{
-	{re: regexp.MustCompile(`(?i)\b(?:projects|organizations|folders|billingAccounts)/` + nameToken),
-		ext: regexp.MustCompile(`(?i)\b(?:projects|organizations|folders|billingAccounts)/` + wideNameToken)},
-	{re: regexp.MustCompile(`(?i)\b(?:project(?:_?id|_?number)?|organization|folder|billingAccount):` + nameToken),
-		ext: regexp.MustCompile(`(?i)\b(?:project(?:_?id|_?number)?|organization|folder|billingAccount):` + wideNameToken)},
-	{re: regexp.MustCompile(`(?i)\bproject(?:_?id|_?number)?=` + nameToken),
-		ext: regexp.MustCompile(`(?i)\bproject(?:_?id|_?number)?=` + wideQueryToken)},
+	{re: regexp.MustCompile(`(?i)\b(?:projects|organizations|folders|billingAccounts)/` + nameToken)},
+	{re: regexp.MustCompile(`(?i)\b(?:project(?:_?id|_?number)?|organization|folder|billingAccount):` + nameToken)},
+	{re: regexp.MustCompile(`(?i)\bproject(?:_?id|_?number)?=` + nameToken)},
 	{re: regexp.MustCompile(`(?i)\bproject (?:number |id )?(\d+)\b`)},
 	{re: regexp.MustCompile("(?i)\\bproject ['\"`]([^'\"`\\s]+)['\"`]")},
 	{re: regexp.MustCompile(`(?i)\b(?:user|serviceAccount|group):([A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)`)},
@@ -78,15 +60,6 @@ func looksLikeProjectID(id string) bool {
 
 // serviceAccountProject finds the project in a service account's address.
 var serviceAccountProject = regexp.MustCompile(`@([a-z][a-z0-9-]*)\.iam\.gserviceaccount\.com$`)
-
-// domainScoped is a project scoped to a domain: "example.com:acme-prod-4821". Its second half is
-// taken for a project's own ID only when it can be one (6 to 30 lowercase letters, digits and
-// hyphens, starting with a letter), so a method ("acme.prod:setIamPolicy") or a port
-// ("host.example.com:443") is not learned as a name.
-var (
-	domainScoped = regexp.MustCompile(`^((?:[\w%-]+\.)+[\w%-]+):([\w%-]+)$`)
-	projectID    = regexp.MustCompile(`^[a-z][a-z0-9-]{4,28}[a-z0-9]$`)
-)
 
 // MaskProject returns e without the Google project or account its message and its raw body name.
 // known are identifiers the caller knows belong to the upstream account (its project, a service
@@ -458,14 +431,6 @@ func (d *names) addProject(v string) {
 		v = v[:i]
 	}
 	d.add(v)
-	// A project scoped to a domain ("example.com:acme-prod-4821") is masked whole, and its two
-	// halves wherever else the body names them, when the second can be a project ID.
-	if strings.IndexByte(v, ':') > 0 {
-		if m := domainScoped.FindStringSubmatch(v); m != nil && projectID.MatchString(m[2]) {
-			d.add(m[1])
-			d.add(m[2])
-		}
-	}
 }
 
 // learnString adds the names text holds in the forms of namePatterns.
@@ -473,11 +438,6 @@ func (d *names) learnString(s string) {
 	for _, p := range namePatterns {
 		for _, m := range p.re.FindAllStringSubmatch(s, -1) {
 			if p.ok == nil || p.ok(m[1]) {
-				d.addProject(m[1])
-			}
-		}
-		if p.ext != nil {
-			for _, m := range p.ext.FindAllStringSubmatch(s, -1) {
 				d.addProject(m[1])
 			}
 		}
@@ -743,20 +703,20 @@ func normalKey(k string) string {
 }
 
 // maskString replaces the names in s: the pattern forms, then each known name as a whole token,
-// the longest name first.
+// the longest name first, then masks a little more (widen).
 func (d *names) maskString(s string) string {
-	t := maskText{s: s}
+	out := s
 	for _, p := range namePatterns {
-		t = t.maskPattern(p)
+		out = replaceGroup(out, p)
 	}
 	if len(d.list) > 0 {
 		if d.matcher == nil || len(d.matcher.list) != len(d.list) {
 			sort.SliceStable(d.list, func(i, j int) bool { return len(d.list[i]) > len(d.list[j]) })
 			d.matcher = newNameMatcher(d.list)
 		}
-		t = d.matcher.mask(t)
+		out = d.matcher.mask(out)
 	}
-	return t.finish()
+	return widen(s, out)
 }
 
 func (d *names) maskJSON(raw []byte, whole map[int]bool) []byte {
@@ -766,6 +726,106 @@ func (d *names) maskJSON(raw []byte, whole map[int]bool) []byte {
 		}
 		return d.maskString(s)
 	})
+}
+
+// replaceGroup replaces group 1 of each match of p in s.
+func replaceGroup(s string, p namePattern) string {
+	idx := p.re.FindAllStringSubmatchIndex(s, -1)
+	if len(idx) == 0 {
+		return s
+	}
+	var b strings.Builder
+	last := 0
+	for _, m := range idx {
+		if p.ok != nil && !p.ok(s[m[2]:m[3]]) {
+			continue
+		}
+		b.WriteString(s[last:m[2]])
+		b.WriteString(Redacted)
+		last = m[3]
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
+
+// The patterns above take a dotted name up to a colon, and a project= value only if it starts with
+// a word. A project scoped to a domain ("example.com:acme-prod-4821") therefore keeps its ID after
+// the marker, and a project= value that starts with a dot, or has two dots in a row, keeps what the
+// patterns did not take. widen masks those too.
+var (
+	// A pattern prefix, a dotted domain and a colon, then the project's ID.
+	domainScopedID = regexp.MustCompile(`(?i)(?:\b(?:projects|organizations|folders|billingAccounts)/|` +
+		`\b(?:project(?:_?id|_?number)?|organization|folder|billingAccount):|\bproject(?:_?id|_?number)?=)` +
+		`(?:[\w%-]+\.)+[\w%-]+:([\w%-]+)`)
+	// What the patterns leave of that: the marker for the domain, a colon and the ID.
+	markedID = regexp.MustCompile(regexp.QuoteMeta(Redacted) + `:([\w%-]+)`)
+	// A project= value that starts with dots (group 1), or goes on with dots after the part the
+	// patterns took (group 2).
+	dottedValue = regexp.MustCompile(`(?i)\bproject(?:_?id|_?number)?=(?:(\.+[\w%-]+(?:\.+[\w%-]+)*(?::[\w%-]+)?)|` +
+		regexp.QuoteMeta(Redacted) + `(\.+[\w%-]+(?:\.+[\w%-]+)*))`)
+)
+
+// widen takes the text s and what the patterns and names made of it, out, and masks more of it:
+//   - the ID of a project scoped to a domain: where s has a pattern prefix, a dotted domain, a
+//     colon and an ID, each marker, colon and that ID in out become one marker. A method after a
+//     project with no dot in its name ("projects/foo:predict") is not one, and stays.
+//   - what a project= value that starts with a dot or has two dots in a row has left in out.
+//
+// widen only replaces text with the marker or takes text out, and only the text it names, so it
+// shows nothing that out hides: everything out masks stays masked. It makes one pass over each of
+// s and out. A half of a domain-scoped name that the body repeats elsewhere is not masked there
+// unless the names already mask it.
+func widen(s, out string) string {
+	if strings.IndexByte(s, ':') >= 0 {
+		var ids map[string]bool
+		for _, m := range domainScopedID.FindAllStringSubmatch(s, -1) {
+			if ids == nil {
+				ids = map[string]bool{}
+			}
+			ids[m[1]] = true
+		}
+		if ids != nil {
+			out = replaceMarked(out, ids)
+		}
+	}
+	if strings.IndexByte(out, '=') >= 0 && strings.IndexByte(out, '.') >= 0 {
+		if idx := dottedValue.FindAllStringSubmatchIndex(out, -1); len(idx) > 0 {
+			var b strings.Builder
+			last := 0
+			for _, m := range idx {
+				if m[2] >= 0 {
+					b.WriteString(out[last:m[2]])
+					b.WriteString(Redacted)
+					last = m[3]
+				} else {
+					b.WriteString(out[last:m[4]])
+					last = m[5]
+				}
+			}
+			b.WriteString(out[last:])
+			out = b.String()
+		}
+	}
+	return out
+}
+
+// replaceMarked turns each marker, colon and ID of ids in out into the marker.
+func replaceMarked(out string, ids map[string]bool) string {
+	idx := markedID.FindAllStringSubmatchIndex(out, -1)
+	var b strings.Builder
+	last := 0
+	for _, m := range idx {
+		if !ids[out[m[2]:m[3]]] {
+			continue
+		}
+		b.WriteString(out[last : m[2]-1])
+		last = m[3]
+	}
+	if last == 0 {
+		return out
+	}
+	b.WriteString(out[last:])
+	return b.String()
 }
 
 // mapStrings calls f with the starting byte offset and decoded text of each string value (not key)
@@ -817,7 +877,6 @@ func skipString(b []byte, i int) int {
 	if i >= len(b) || b[i] != '"' {
 		return i
 	}
-	start := i
 	i++
 	for i < len(b) {
 		if b[i] == '\\' {
@@ -825,12 +884,10 @@ func skipString(b []byte, i int) int {
 			continue
 		}
 		if b[i] == '"' {
-			scanned(i + 1 - start)
 			return i + 1
 		}
 		i++
 	}
-	scanned(len(b) - start)
 	return len(b)
 }
 
@@ -838,7 +895,6 @@ func skipValue(b []byte, i int) int {
 	if i >= len(b) {
 		return i
 	}
-	start := i
 	switch b[i] {
 	case '"':
 		return skipString(b, i)
@@ -857,18 +913,15 @@ func skipValue(b []byte, i int) int {
 			}
 			i++
 		}
-		scanned(i - start)
 		return i
 	default:
 		for i < len(b) {
 			switch b[i] {
 			case ' ', '\t', '\n', '\r', ',', '}', ']':
-				scanned(i - start)
 				return i
 			}
 			i++
 		}
-		scanned(i - start)
 		return i
 	}
 }

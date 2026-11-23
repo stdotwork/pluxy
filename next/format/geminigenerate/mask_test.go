@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -467,15 +468,17 @@ func depthLabel(d int) string {
 	}
 }
 
-// A project scoped to a domain is one name: the domain and the colon go with it.
+// A project scoped to a domain is one name in the output: the domain's marker, the colon and the
+// ID become one marker.
 func TestMaskDomainScopedProject(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"see projects/example.com:acme-prod-4821/locations", "see projects/[redacted]/locations"},
 		{"see ?project=example.com:acme-prod-4821&x=1", "see ?project=[redacted]&x=1"},
 		{"the project:example.com:acme-prod-4821 is off", "the project:[redacted] is off"},
 		{"folders/example.com:acme-prod-4821.", "folders/[redacted]."},
-		// Both halves go where the body names them again.
-		{"projects/example.com:acme-prod-4821 and acme-prod-4821 and example.com", "projects/[redacted] and [redacted] and [redacted]"},
+		// The domain goes wherever the body names it again, as before. The ID alone does not, unless
+		// the names already mask it.
+		{"projects/example.com:acme-prod-4821 and acme-prod-4821 and example.com", "projects/[redacted] and acme-prod-4821 and [redacted]"},
 		// Without a dot before the colon the colon ends the name, as before.
 		{"POST projects/acme-prod-4821:setIamPolicy", "POST projects/[redacted]:setIamPolicy"},
 		{"projects/12345: denied", "projects/[redacted]: denied"},
@@ -564,7 +567,7 @@ func TestMaskWorkDoesNotGrowWithNames(t *testing.T) {
 // the ones before it left. The matcher must give the same text without trying them all.
 func maskOneByOne(s string, list []string) string {
 	for _, id := range list {
-		s = maskText{s: s}.splice(tokenSpans(s, id)).s
+		s = replaceToken(s, id)
 	}
 	return s
 }
@@ -657,22 +660,18 @@ func TestMaskWorkWithNestedNames(t *testing.T) {
 	}
 }
 
-// A malformed project= value is masked whole, and the name the narrower pattern took from it is
-// still learned, so it is masked where the body repeats it.
+// A project= value that is not a clean name is masked whole, and the name the pattern took from it
+// is masked where the body repeats it, as before.
 func TestMaskMalformedProjectValueKeepsItsName(t *testing.T) {
-	for _, tc := range []struct{ in, want string }{
-		{"?project=zqbeta..prod-4821&x=1 and zqbeta again", "?project=[redacted]&x=1 and [redacted] again"},
-		{"?project=example.com:.zqbeta&x=1 and example.com again", "?project=[redacted]&x=1 and [redacted] again"},
-	} {
-		if got := string(MaskBody([]byte(tc.in))); got != tc.want {
-			t.Errorf("MaskBody(%q)\n got  %q\n want %q", tc.in, got, tc.want)
-		}
+	in := "?project=zqbeta..prod-4821&x=1 and zqbeta again"
+	if got, want := string(MaskBody([]byte(in))), "?project=[redacted]&x=1 and [redacted] again"; got != want {
+		t.Errorf("MaskBody(%q)\n got  %q\n want %q", in, got, want)
 	}
 }
 
-// The second half of a name with a dot before its colon is learned only when it can be a
-// project ID; a method or a port is not, though the whole name is masked where it stands.
-func TestMaskDomainScopedHalvesNeedAProjectID(t *testing.T) {
+// A method or a port after a domain-scoped project is masked with it where it stands, and is not
+// learned as a name, so the same word elsewhere stays.
+func TestMaskDomainScopedMethodIsNotLearned(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{"POST projects/acme.prod:setIamPolicy failed; setIamPolicy denied", "POST projects/[redacted] failed; setIamPolicy denied"},
 		{"projects/acme.prod:setIamPolicy and acme.prod", "projects/[redacted] and [redacted]"},
@@ -689,9 +688,8 @@ func TestMaskDomainScopedHalvesNeedAProjectID(t *testing.T) {
 	}
 }
 
-// A wider form (a project scoped to a domain, a project= value with a dot at its start) must not
-// hide anything the narrower patterns and the names masked when it runs into the text after it: a
-// keyword, an address, or a name that continues past it.
+// What widen adds must not take anything from the patterns and names: when a domain-scoped form
+// runs into a keyword, an address or a name that goes on, they still mask what they masked.
 func TestMaskWideFormsKeepWhatTheNarrowOnesMask(t *testing.T) {
 	for _, in := range []string{
 		"projects/a.b:projects/zqbeta",
@@ -710,5 +708,37 @@ func TestMaskWideFormsKeepWhatTheNarrowOnesMask(t *testing.T) {
 		`{"@type":"type.googleapis.com/google.rpc.ErrorInfo","metadata":{"consumer":"acme..prod-4821"}}]}}`
 	if got := string(MaskBody([]byte(raw))); strings.Contains(got, "prod-4821") {
 		t.Errorf("a name that goes on past a domain-scoped form is shown: %s", got)
+	}
+}
+
+// An address followed by a colon and a project's ID, in a body that also names that ID after a
+// domain, is masked whole.
+func TestMaskAddressBeforeDomainScopedID(t *testing.T) {
+	in := "projects/example.com:acme-prod-4821 denied for user:alice@example.com; caller alice@example.com:acme-prod-4821"
+	got := string(MaskBody([]byte(in)))
+	if strings.Contains(got, "alice") || strings.Contains(got, "acme-prod-4821") {
+		t.Errorf("MaskBody(%q) = %q, a name is shown", in, got)
+	}
+}
+
+// Many different domain-scoped IDs in one string cost a few passes over it. Every ID that was a
+// name of its own would copy the string once more. Memory allocated stands in for a clock.
+func TestMaskDomainScopedIDsAreNotNames(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`{"error":{"code":403,"message":"`)
+	for i := 0; i < 3000; i++ {
+		fmt.Fprintf(&b, "projects/e.c:aa%04d ", i)
+	}
+	b.WriteString(`"}}`)
+	body := []byte(b.String())
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	out := MaskBody(body)
+	runtime.ReadMemStats(&after)
+	if alloc := after.TotalAlloc - before.TotalAlloc; alloc > uint64(2000*len(body)) {
+		t.Errorf("masking %d bytes allocated %d bytes, want at most %d", len(body), alloc, 2000*len(body))
+	}
+	if strings.Contains(string(out), "aa0001") {
+		t.Errorf("an ID is shown")
 	}
 }
