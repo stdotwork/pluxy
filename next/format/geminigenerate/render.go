@@ -890,15 +890,15 @@ func (a *Aggregator) Response() ([]byte, error) {
 	if a.native && len(a.raws) == 1 {
 		return a.raws[0], nil
 	}
-	// shortcut: a Gemini upstream that streamed to a non-streaming client would be rebuilt from
-	// the model events, losing its raw fields; the extension asks a Gemini upstream to stream
-	// only when the client streams, so this does not happen yet.
+	// shortcut: a Gemini upstream that streamed to a non-streaming client (an SSE answer to a
+	// non-streaming request) is rebuilt from the model events, losing its raw fields.
 	b := &a.b
 	runParts := b.codeExecParts(a.codeExecutions)
 	var parts []any
 	var cited []citedSegment
 	// The runs carry no position, so they go where a stream puts them: after the last text,
-	// thought or media part, and before the calls that follow it.
+	// thought or media part. A reply of this format rebuilt from its chunks keeps them first, as
+	// it always has.
 	runsAt := 0
 	for _, p := range a.order {
 		switch p.kind {
@@ -922,6 +922,9 @@ func (a *Aggregator) Response() ([]byte, error) {
 			parts = append(parts, obj{"inlineData": obj{"mimeType": p.media.MediaType, "data": p.media.Data}})
 			runsAt = len(parts)
 		}
+	}
+	if a.native {
+		runsAt = 0
 	}
 	parts = slices.Insert(parts, runsAt, runParts...)
 	finish := a.finish

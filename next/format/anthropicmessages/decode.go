@@ -432,6 +432,7 @@ type StreamDecoder struct {
 	finishCut []llm.Loss               // what the finish event left out to fit a frame
 	codeBlock map[int]*pendingCodeCall // upstream block index -> open server_tool_use for code execution
 	codeCalls map[string]decodedCodeCall
+	codeDone  map[string]bool // IDs of calls a result has answered, so a repeated result is ignored
 	codeExecs []llm.CodeExecution
 	codeLost  bool // a code call or result that gave no run, so the runs end with the left-out record
 	stop      string
@@ -448,6 +449,7 @@ func NewStreamDecoder() *StreamDecoder {
 		seenSrc:   map[string]bool{},
 		codeBlock: map[int]*pendingCodeCall{},
 		codeCalls: map[string]decodedCodeCall{},
+		codeDone:  map[string]bool{},
 	}
 }
 
@@ -531,13 +533,16 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		} else if isCodeExecResultBlock(b.Type) && b.ToolUseID != "" {
 			call, ok := d.codeCalls[b.ToolUseID]
 			delete(d.codeCalls, b.ToolUseID)
+			repeated := !ok && d.codeDone[b.ToolUseID]
 			if ok {
+				d.codeDone[b.ToolUseID] = true
 				var ce llm.CodeExecution
 				if ce, ok = decodeCodeExecResult(b.Type, call, b.Content); ok {
 					d.codeExecs = llm.AppendCodeExecution(d.codeExecs, ce)
 				}
 			}
-			if !ok {
+			// A result repeated for a call already answered adds nothing, and loses nothing.
+			if !ok && !repeated {
 				d.codeLost = true
 			}
 		}
@@ -760,6 +765,7 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 	var cites llm.CiteBudget
 	seenSrc := map[string]bool{}
 	codeCalls := map[string]decodedCodeCall{}
+	codeDone := map[string]bool{}
 	var codeExecs []llm.CodeExecution
 	codeLost := false
 	for i, raw := range m.Content {
@@ -780,13 +786,15 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 		} else if isCodeExecResultBlock(cb.Type) && cb.ToolUseID != "" {
 			call, ok := codeCalls[cb.ToolUseID]
 			delete(codeCalls, cb.ToolUseID)
+			repeated := !ok && codeDone[cb.ToolUseID]
 			if ok {
+				codeDone[cb.ToolUseID] = true
 				var ce llm.CodeExecution
 				if ce, ok = decodeCodeExecResult(cb.Type, call, cb.Content); ok {
 					codeExecs = llm.AppendCodeExecution(codeExecs, ce)
 				}
 			}
-			if !ok {
+			if !ok && !repeated {
 				codeLost = true
 			}
 		}

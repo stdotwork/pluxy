@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -206,6 +207,10 @@ type StreamDecoder struct {
 	pendingCode []pendingExecCode
 	codeExecs   []llm.CodeExecution
 	codeLost    bool
+	// codeGuessed holds the runs paired by that guess, and codeDropped says a code was left out
+	// that way; a result with nothing to pair with after that shows the guess was wrong.
+	codeGuessed []llm.CodeExecution
+	codeDropped bool
 	mediaBytes  int
 	losses      []llm.Loss
 	// splitText is set once a media part has closed a text item: Google's offsets then no longer
@@ -228,6 +233,9 @@ type pendingExecCode struct {
 	id   string
 	code string
 	lang string
+	// afterDrop is set on a code with no ID that came while an older one with no ID still had no
+	// result, which was left out: which of the two a later result answers is a guess.
+	afterDrop bool
 }
 
 // NewStreamDecoder returns a decoder for one stream.
@@ -710,7 +718,21 @@ func (d *StreamDecoder) part(partIdx int, raw json.RawMessage, out []llm.Event) 
 			if lang == "language_unspecified" {
 				lang = ""
 			}
-			d.pendingCode = append(d.pendingCode, pendingExecCode{id: ec.ID, code: ec.Code, lang: lang})
+			pc := pendingExecCode{id: ec.ID, code: ec.Code, lang: lang}
+			if ec.ID == "" {
+				// A code with no ID is answered by the result that follows it. If an older one with
+				// no ID has no result yet, that one never got one: it is left out.
+				kept := d.pendingCode[:0]
+				for _, old := range d.pendingCode {
+					if old.id != "" {
+						kept = append(kept, old)
+						continue
+					}
+					d.codeLost, d.codeDropped, pc.afterDrop = true, true, true
+				}
+				d.pendingCode = kept
+			}
+			d.pendingCode = append(d.pendingCode, pc)
 		} else {
 			d.codeLost = true
 		}
@@ -727,7 +749,9 @@ func (d *StreamDecoder) part(partIdx int, raw json.RawMessage, out []llm.Event) 
 			return out
 		}
 		// A result takes the code it answers whatever its outcome, so a result this decoder
-		// cannot read never leaves its code to pair with the next result.
+		// cannot read never leaves its code to pair with the next result. A result with no ID
+		// answers the one code that waits; with none or several waiting it answers nothing it
+		// can be shown to.
 		matchIdx := -1
 		if res.ID != "" {
 			for i, pc := range d.pendingCode {
@@ -736,11 +760,20 @@ func (d *StreamDecoder) part(partIdx int, raw json.RawMessage, out []llm.Event) 
 					break
 				}
 			}
-		} else if len(d.pendingCode) > 0 {
+		} else if len(d.pendingCode) == 1 {
 			matchIdx = 0
 		}
 		if matchIdx < 0 {
 			d.codeLost = true
+			if res.ID == "" && d.codeDropped {
+				// The runs paired after a code was left out may have taken the wrong result.
+				for _, g := range d.codeGuessed {
+					if i := slices.Index(d.codeExecs, g); i >= 0 {
+						d.codeExecs = slices.Delete(d.codeExecs, i, i+1)
+					}
+				}
+				d.codeGuessed = nil
+			}
 			return out
 		}
 		pc := d.pendingCode[matchIdx]
@@ -755,12 +788,18 @@ func (d *StreamDecoder) part(partIdx int, raw json.RawMessage, out []llm.Event) 
 			d.codeLost = true
 			return out
 		}
-		d.codeExecs = llm.AppendCodeExecution(d.codeExecs, llm.CodeExecution{
+		run := llm.CodeExecution{
 			Code:     pc.code,
 			Language: pc.lang,
 			Output:   res.Output,
 			Failed:   failed,
-		})
+		}
+		if pc.afterDrop && res.ID == "" {
+			d.codeGuessed = append(d.codeGuessed, run)
+		} else if !pc.afterDrop {
+			d.codeGuessed, d.codeDropped = nil, false
+		}
+		d.codeExecs = llm.AppendCodeExecution(d.codeExecs, run)
 		return out
 	}
 	idRaw := pm["inlineData"]

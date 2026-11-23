@@ -984,8 +984,9 @@ with its result block, Responses `code_interpreter_call` items, and Gemini `exec
 with `codeExecutionResult` render as Gemini `executableCode` and `codeExecutionResult` parts
 (streaming and non-streaming). Gemini's code part holds only Python, so a shell or file-editor run
 is left out and reported as dropped, as are omitted files and images. A run carries no position in
-the reply, so a Gemini client gets the runs after the reply's text and before its function calls,
-streamed or not. One reply keeps at most 4 MiB of runs, and one run's code at most 1 MiB (streamed or
+the reply, so a Gemini client gets the runs after the reply's last text, thought or image part,
+streamed or not (a stream also sends its function calls last, after the runs). A Gemini upstream's
+own reply that is rebuilt for a non-streaming client keeps its runs first, as before. One reply keeps at most 4 MiB of runs, and one run's code at most 1 MiB (streamed or
 not); a run over either limit is left out whole, never cut. A run with no result the decoder can read
 (a call that has no result yet, a result in a shape it does not know, an outcome Gemini leaves
 unspecified, or a Responses call whose `outputs` the upstream did not give) is left out too. Left-out

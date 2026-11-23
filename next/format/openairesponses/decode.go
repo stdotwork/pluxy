@@ -2,6 +2,7 @@ package openairesponses
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -273,13 +274,19 @@ func extractCodeInterpreterCall(raw json.RawMessage, fallbackCode string) (id st
 	}, true
 }
 
-// codeInterpreterCallID reports whether raw is a code_interpreter_call output item, and its ID.
+// codeInterpreterCallID reports whether raw is a code_interpreter_call output item, and its ID. An
+// item whose ID is not a string is still a call, with no ID, so it is counted as a call left out
+// rather than passed over.
 func codeInterpreterCallID(raw json.RawMessage) (id string, ok bool) {
 	var item struct {
 		ID   string `json:"id"`
 		Type string `json:"type"`
 	}
-	if len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &item) != nil {
+	if len(raw) == 0 || raw[0] != '{' {
+		return "", false
+	}
+	var typeErr *json.UnmarshalTypeError
+	if err := json.Unmarshal(raw, &item); err != nil && !errors.As(err, &typeErr) {
 		return "", false
 	}
 	return item.ID, item.Type == "code_interpreter_call"
