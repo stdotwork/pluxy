@@ -190,6 +190,7 @@ func refreshOddReply() {
 		os.Exit(1)
 	}
 	fmt.Print(protocol.HandshakeLine(protocol.Version, socket))
+	exitWhenStdinCloses()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {

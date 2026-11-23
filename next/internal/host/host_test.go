@@ -39,6 +39,16 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// exitWhenStdinCloses makes a fake extension that does not use the SDK follow the protocol's
+// shutdown rule: core closes its stdin to ask it to stop, and it exits. Without it, Stop waits out
+// the whole StopTimeout and kills the fake.
+func exitWhenStdinCloses() {
+	go func() {
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		os.Exit(0)
+	}()
+}
+
 // fakeExtension misbehaves during startup. It writes its process ID to the file "pid" in its
 // working folder (the package folder) so the test can check it was reaped.
 func fakeExtension(mode string) {
@@ -738,6 +748,7 @@ func accountClosedExtension(minor int) {
 		os.Exit(1)
 	}
 	fmt.Print(protocol.HandshakeLine(protocol.Version, socket))
+	exitWhenStdinCloses()
 	closedReply := protocol.Reply{Event: llm.Event{
 		Type:  llm.EventError,
 		Error: &llm.Error{Code: llm.CodeAccountClosed, Status: 403, Retryable: true, Scope: llm.ScopeCredential, Message: "Account suspended."},
@@ -846,6 +857,7 @@ func modelsFrom(minor int) {
 		os.Exit(1)
 	}
 	fmt.Print(protocol.HandshakeLine(protocol.Version, socket))
+	exitWhenStdinCloses()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
