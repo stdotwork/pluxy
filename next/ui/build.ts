@@ -14,6 +14,8 @@ const result = await Bun.build({
   entrypoints: [join(import.meta.dir, "panel", "index.html")],
   outdir: out,
   minify: true,
+  // A design direction (kit/designs) is a chunk of its own, loaded only when one is set.
+  splitting: true,
   define: { "process.env.NODE_ENV": JSON.stringify("production") },
   publicPath: "/panel/",
   naming: { entry: "[name].[ext]", chunk: "[name]-[hash].[ext]", asset: "[name]-[hash].[ext]" },

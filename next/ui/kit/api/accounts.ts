@@ -70,7 +70,10 @@ export interface AccountHealth {
   /** When the block ends, if core knows. */
   until?: string;
   why?: string;
+  /** Who says so: `provider`, core's own `backoff`, or `unverified`. */
   source?: string;
+  /** When core next checks whether the block still holds. */
+  next_check?: string;
 }
 
 const LEFT_OUT = ["banned", "exhausted", "needs_login", "broken"] as const;

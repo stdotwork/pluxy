@@ -11,6 +11,7 @@ import { loginsApi } from "./logins";
 import { logsApi } from "./logs";
 import { packagesApi } from "./packages";
 import { quotaApi } from "./quota";
+import { routeApi } from "./route";
 import { settingsApi } from "./settings";
 import { setupApi } from "./setup";
 import { statusApi } from "./status";
@@ -26,6 +27,7 @@ export * from "./logins";
 export * from "./logs";
 export * from "./packages";
 export * from "./quota";
+export * from "./route";
 export * from "./settings";
 export * from "./setup";
 export * from "./status";
@@ -41,6 +43,7 @@ export const api = (host: Host) => ({
   ...accountsApi(host),
   ...packagesApi(host),
   ...quotaApi(host),
+  ...routeApi(host),
   ...extensionsApi(host),
   ...loginsApi(host),
   ...settingsApi(host),

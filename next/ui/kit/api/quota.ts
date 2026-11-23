@@ -13,6 +13,8 @@ export interface QuotaLimit {
   resets_at?: number;
   window_seconds?: number;
   models?: string[];
+  /** A limit on one feature of the plan, not on the account's requests as a whole. */
+  feature?: boolean;
 }
 
 export interface Quota {

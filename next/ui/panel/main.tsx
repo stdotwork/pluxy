@@ -1,6 +1,7 @@
 // The panel core serves: the kit's shell with the core pages, in a browser.
 
 import { render } from "preact";
+import { currentDesign, DESIGN_PARAM } from "../kit/designs";
 import { corePages } from "../kit/pages/core";
 import { prefsPrivacy } from "../kit/privacy";
 import { Shell } from "../kit/shell";
@@ -24,7 +25,26 @@ if (url.searchParams.has("safe")) {
   history.replaceState(null, "", url);
 }
 
-render(
-  <Shell host={host} themes={themes} privacy={privacy} pages={corePages()} extensionPages safeAddress />,
-  document.body,
-);
+const today = () =>
+  render(
+    <Shell host={host} themes={themes} privacy={privacy} pages={corePages()} extensionPages safeAddress />,
+    document.body,
+  );
+
+// A design direction (?design=a|b|c, remembered until ?design=off) takes the place of today's
+// Shell. Its code is loaded only then; without one, or if it cannot load, the panel is today's.
+const design = currentDesign();
+if (url.searchParams.has(DESIGN_PARAM)) {
+  url.searchParams.delete(DESIGN_PARAM);
+  history.replaceState(null, "", url);
+}
+if (design) {
+  import("../kit/designs/mount")
+    .then((m) => m.mountDesign(design, { host, themes, privacy, pages: corePages() }))
+    .catch((e) => {
+      console.error("design direction did not load", e);
+      today();
+    });
+} else {
+  today();
+}

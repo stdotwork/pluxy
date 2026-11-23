@@ -31,6 +31,10 @@ export interface Status {
   version: string;
   commit: string;
   built: string;
+  /** True until setup is finished on a new install. */
+  first_run?: boolean;
+  /** The management API's version. */
+  management_api?: number;
 }
 
 export const statusApi = (host: Host) => ({
