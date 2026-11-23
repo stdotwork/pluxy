@@ -171,11 +171,11 @@ class FakeText extends FakeNode {
     this.data = String(data);
   }
 
-  get textContent() {
+  override get textContent() {
     return this.data;
   }
 
-  set textContent(value: string) {
+  override set textContent(value: string) {
     this.data = value;
   }
 }

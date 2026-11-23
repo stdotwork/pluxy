@@ -111,14 +111,14 @@ export function UsageDetail(props: {
           [
             t("status"),
             <>
-              {(e.status ? String(e.status) : t("missing")) + (e.failed ? " · " + t("yes") : "")}{" "}
+              {(e.status ? String(e.status) : t("missing")) + (e.failed ? ` · ${t("yes")}` : "")}{" "}
               {fallbackStep(e)}
             </>,
           ],
           [t("triesFact"), e.attempts ? String(e.attempts) : undefined],
           [t("latency"), t("milliseconds", { value: e.latency_ms })],
           [t("tokens"), e.tokens.total_tokens?.toLocaleString()],
-          [t("trace"), e.id && <a href={"#/logs/" + encodeURIComponent(e.id)}>{e.id}</a>],
+          [t("trace"), e.id && <a href={`#/logs/${encodeURIComponent(e.id)}`}>{e.id}</a>],
         ]}
       />
       {e.tried && e.tried.length > 0 && (
@@ -127,13 +127,12 @@ export function UsageDetail(props: {
           <small class="hint">{t("triedHint")}</small>
           <ol class="usage-tried">
             {e.tried.map((a, i) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: the tries of one request never reorder
               <li key={i}>
                 <span class="mono">{mask(props.name(a.account))}</span>
                 <small class="muted">
                   {" "}
                   {a.provider}
-                  {a.model ? " · " + a.model : ""}
+                  {a.model ? ` · ${a.model}` : ""}
                 </small>
                 <br />
                 {a.result === "ok" ? t("answered") : t("failedWith", { result: a.result })}
@@ -339,7 +338,7 @@ export function UsagePage() {
                     label: t("status"),
                     value: (e) => (
                       <>
-                        {(e.status ? String(e.status) : t("missing")) + (e.failed ? " · " + t("yes") : "")}{" "}
+                        {(e.status ? String(e.status) : t("missing")) + (e.failed ? ` · ${t("yes")}` : "")}{" "}
                         {fallbackStep(e)} {tries(e)}
                       </>
                     ),
@@ -352,7 +351,7 @@ export function UsagePage() {
                   {
                     label: t("trace"),
                     value: (e) =>
-                      e.id ? <a href={"#/logs/" + encodeURIComponent(e.id)}>{e.id}</a> : t("missing"),
+                      e.id ? <a href={`#/logs/${encodeURIComponent(e.id)}`}>{e.id}</a> : t("missing"),
                   },
                 ]}
               />
