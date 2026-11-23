@@ -336,8 +336,11 @@ type idleTimeoutBody struct {
 	limit     time.Duration
 	accountID string
 
-	mu     sync.Mutex
-	timer  *time.Timer
+	mu    sync.Mutex
+	timer *time.Timer
+	// last is when the body last returned data. The timer is not moved for each read: when it
+	// goes off before limit has passed since last, fire sets it again for the rest.
+	last   time.Time
 	gen    uint64
 	closed bool
 	fired  *timeoutError
@@ -361,6 +364,7 @@ func newIdleTimeoutBody(rc io.ReadCloser, parentCtx, rtCtx context.Context, canc
 func (b *idleTimeoutBody) armLocked() {
 	b.gen++
 	g := b.gen
+	b.last = time.Now()
 	if b.timer != nil {
 		b.timer.Stop()
 	}
@@ -372,6 +376,12 @@ func (b *idleTimeoutBody) armLocked() {
 func (b *idleTimeoutBody) fire(g uint64) {
 	b.mu.Lock()
 	if b.closed || b.gen != g || b.fired != nil || b.parentCtx.Err() != nil {
+		b.mu.Unlock()
+		return
+	}
+	if rest := b.limit - time.Since(b.last); rest > 0 {
+		// Data came in since the timer was set: wait out the rest of the limit.
+		b.timer.Reset(rest)
 		b.mu.Unlock()
 		return
 	}
@@ -393,7 +403,7 @@ func (b *idleTimeoutBody) Read(p []byte) (int, error) {
 		}
 		b.gen++
 	case n > 0 && err == nil && fired == nil && !b.closed:
-		b.armLocked()
+		b.last = time.Now()
 	}
 	b.mu.Unlock()
 	if err != nil && err != io.EOF {

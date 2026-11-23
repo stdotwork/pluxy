@@ -3,7 +3,6 @@
 package protocol
 
 import (
-	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -589,17 +588,41 @@ var ErrFrameTooLarge = errors.New("protocol: frame too large")
 // encodes to more than MaxFrame bytes.
 func WriteFrame(w io.Writer, v any) error {
 	// The header goes first in the same buffer, so the frame is encoded once and not copied.
-	var buf bytes.Buffer
-	buf.Write(make([]byte, 4))
-	enc := json.NewEncoder(&buf)
-	// No HTML escaping: it would turn each "<", ">" and "&" in the request or reply into six
-	// bytes, and the frame goes to a program, not a web page.
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(v); err != nil {
-		return err
+	fb := framePool.Get().(*frameBuf)
+	defer func() {
+		if cap(fb.b) <= maxPooledFrame && fb.buf.Cap() <= maxPooledFrame {
+			framePool.Put(fb)
+		}
+	}()
+	var r *Reply
+	switch x := v.(type) {
+	case Reply:
+		r = &x
+	case *Reply:
+		r = x
 	}
-	b := buf.Bytes()
-	b = b[:len(b)-1] // Encode ends the value with a newline
+	var b []byte
+	if r != nil {
+		var fast bool
+		if b, fast = appendReply(append(fb.b[:0], 0, 0, 0, 0), r); fast {
+			fb.b = b[:0]
+		} else {
+			b = nil
+		}
+	}
+	if b == nil {
+		fb.buf.Reset()
+		fb.buf.Write([]byte{0, 0, 0, 0})
+		enc := json.NewEncoder(&fb.buf)
+		// No HTML escaping: it would turn each "<", ">" and "&" in the request or reply into six
+		// bytes, and the frame goes to a program, not a web page.
+		enc.SetEscapeHTML(false)
+		if err := enc.Encode(v); err != nil {
+			return err
+		}
+		b = fb.buf.Bytes()
+		b = b[:len(b)-1] // Encode ends the value with a newline
+	}
 	n := len(b) - 4
 	if n > MaxFrame {
 		return ErrFrameTooLarge

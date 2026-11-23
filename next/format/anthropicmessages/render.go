@@ -13,6 +13,7 @@ import (
 
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
 	"github.com/stdotwork/pluxy/next/format/openairesponses"
+	"github.com/stdotwork/pluxy/next/internal/jsonscan"
 	"github.com/stdotwork/pluxy/next/llm"
 )
 
@@ -38,6 +39,9 @@ func rawType(raw json.RawMessage) string {
 	if len(raw) == 0 || raw[0] != '{' {
 		return ""
 	}
+	if t, ok := scanType(raw); ok {
+		return t
+	}
 	var e struct {
 		Type string `json:"type"`
 	}
@@ -45,6 +49,42 @@ func rawType(raw json.RawMessage) string {
 		return ""
 	}
 	return e.Type
+}
+
+// scanType is rawType for the common object, found without decoding it: one "type" member that
+// is a string, or none, and no other member whose name encoding/json could match to "type" (its
+// matching ignores case and reads escapes). It reports false for any other object, which rawType
+// decodes.
+func scanType(raw []byte) (string, bool) {
+	members, ok := jsonscan.Object(raw)
+	if !ok {
+		return "", false
+	}
+	var typ string
+	found := false
+	for _, m := range members {
+		if string(m.Key) == `"type"` {
+			if found || !jsonscan.IsString(m.Value) {
+				return "", false
+			}
+			t, ok := jsonscan.Unquote(m.Value)
+			if !ok {
+				return "", false
+			}
+			typ, found = t, true
+			continue
+		}
+		for _, c := range m.Key {
+			if c >= 0x80 || c == '\\' {
+				// Maybe another spelling of type, which encoding/json matches.
+				return "", false
+			}
+		}
+		if bytes.EqualFold(m.Key, []byte(`"type"`)) {
+			return "", false
+		}
+	}
+	return typ, true
 }
 
 // upstreamEvent returns the Messages event type of raw when raw is a Messages stream event: any
