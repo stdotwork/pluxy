@@ -3,6 +3,7 @@ package openaichat
 import (
 	"encoding/json"
 	"math/rand"
+	"runtime"
 	"testing"
 )
 
@@ -30,5 +31,31 @@ func TestAppendStringMatchesMarshal(t *testing.T) {
 		if got := appendString([]byte("x"), s); string(got) != "x"+string(want) {
 			t.Fatalf("appendString(%q) = %s, json.Marshal %s", s, got[1:], want)
 		}
+	}
+}
+
+// TestEncodeRequestAllocation holds the body to one copy of its text: building a request with a
+// 100 KB turn allocates under two and a half times the body. Escaping the text into a buffer of
+// its own and copying it from one buffer to the next had made it four times.
+func TestEncodeRequestAllocation(t *testing.T) {
+	req := benchRequest()
+	body, _, err := EncodeRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const runs = 20
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	for range runs {
+		if _, _, err := EncodeRequest(req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runtime.ReadMemStats(&after)
+	perRun := (after.TotalAlloc - before.TotalAlloc) / runs
+	t.Logf("%d bytes allocated for a %d byte body", perRun, len(body))
+	if limit := uint64(len(body)) * 5 / 2; perRun > limit {
+		t.Errorf("%d bytes allocated for a %d byte body, want at most %d", perRun, len(body), limit)
 	}
 }
