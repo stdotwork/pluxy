@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -394,7 +395,7 @@ func TestCLISetupAndClientShow(t *testing.T) {
 			w.Write([]byte(`{"first_run":false}`))
 		case "GET /v0/management/client-keys":
 			w.Write([]byte(`{"keys":[{"id":"k1","masked":"sk******ab"}]}`))
-		case "GET /v0/management/setup/clients/claude-code/paste", "GET /v0/management/setup/clients/codex/paste",
+		case "GET /v0/management/setup/clients/claude-code/paste", "GET /v0/management/setup/clients/claude/paste", "GET /v0/management/setup/clients/codex/paste",
 			"GET /v0/management/setup/clients/opencode/paste", "GET /v0/management/setup/clients/pi/paste",
 			"GET /v0/management/setup/clients/omp/paste":
 			key := "<client-key>"
@@ -494,6 +495,16 @@ func TestCLISetupAndClientShow(t *testing.T) {
 		if got, want := takePasteCalls(), []string{"GET /v0/management/setup/clients/" + tool + "/paste"}; !slices.Equal(got, want) {
 			t.Errorf("client show %s called the paste route as %q, want %q", tool, got, want)
 		}
+	}
+	// "claude" is taken as claude-code, as "codex-cli" is taken as codex.
+	if out, errOut, code := runWith("", false, "client", "show", "claude"); code != 0 || !strings.Contains(out, srv.URL) {
+		t.Errorf("client show claude: code=%d err=%q out=%q", code, errOut, out)
+	}
+	takePasteCalls()
+	// With no tool, the usage line is followed by the tools and their names.
+	if out, errOut, code := runWith("", false, "client", "show"); code != 2 || out != "" ||
+		!strings.Contains(errOut, "usage: pluxy client show <tool>") || !strings.Contains(errOut, "claude-code") || !strings.Contains(errOut, "Claude Code") || !strings.Contains(errOut, "omp") {
+		t.Errorf("client show with no tool: code=%d err=%q out=%q", code, errOut, out)
 	}
 	// Pi's files are JSON with no comment line in them.
 	out, errOut, _ := runWith("", false, "client", "show", "pi", "--json")
@@ -1163,5 +1174,30 @@ func TestCLIExtAvailableNoRegistry(t *testing.T) {
 	}
 	if !strings.Contains(out, "pluxy/claude") || strings.Contains(out, "no extension registry") {
 		t.Errorf("ext available (with registry) stdout = %q", out)
+	}
+}
+
+// An account that is not there is named in one wording, whichever of core's words reported it.
+func TestNameMissingAccount(t *testing.T) {
+	remove := &command{words: "account remove", args: []string{"id"}}
+	add := &command{words: "account add", args: []string{"provider"}}
+	body := []byte(`{"error":{"code":"not_found","message":"no such account"}}`)
+	for _, msg := range []string{"no such account", `no account "nobody"`} {
+		err := &management.APIError{Status: http.StatusNotFound, Code: "not_found", Message: msg, Body: body}
+		got := nameMissingAccount(remove, []string{"nobody"}, err)
+		if got.Error() != `no such account "nobody" (not_found)` {
+			t.Errorf("%q became %q", msg, got)
+		}
+		var ae *management.APIError
+		if !errors.As(got, &ae) || !bytes.Equal(ae.Body, body) || ae.Status != http.StatusNotFound {
+			t.Errorf("%q: the body or status changed: %+v", msg, ae)
+		}
+		if got := nameMissingAccount(add, []string{"nobody"}, err); got != error(err) {
+			t.Errorf("account add changed %q to %q", msg, got)
+		}
+	}
+	other := &management.APIError{Status: http.StatusNotFound, Code: "not_found", Message: "no log file of that name"}
+	if got := nameMissingAccount(remove, []string{"nobody"}, other); got != error(other) {
+		t.Errorf("another 404 changed to %q", got)
 	}
 }

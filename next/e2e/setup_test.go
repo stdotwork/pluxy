@@ -304,6 +304,9 @@ func TestCLISetupAndClientShow(t *testing.T) {
 	if !strings.Contains(r.stdout, base) || !strings.Contains(r.stdout, "ANTHROPIC_BASE_URL") || !strings.Contains(r.stdout, "ANTHROPIC_AUTH_TOKEN") {
 		t.Errorf("pluxy client show claude-code output missing config values:\n%s", r.stdout)
 	}
+	if short := runCLI(t, cliEnv, "client", "show", "claude"); short.code != 0 || short.stdout != r.stdout {
+		t.Errorf("pluxy client show claude is not claude-code's:\n%s", short)
+	}
 	if strings.Contains(r.stdout, managementKey) {
 		t.Errorf("pluxy client show printed the management key!")
 	}

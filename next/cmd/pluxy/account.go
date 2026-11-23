@@ -92,14 +92,27 @@ func (x *invocation) loginMethods() (management.LoginMethodsReply, error) {
 	return r, err
 }
 
-// methodsFor is the extension named by id and its login methods.
+// methodsFor is the extension named by id and its login methods. A short name with no publisher
+// (claude) is the one extension whose ID ends with it (pluxy/claude); more than one is refused.
 func methodsFor(r management.LoginMethodsReply, id string) (*management.LoginMethods, error) {
-	var have []string
+	var have, short []string
+	found := -1
 	for i := range r.Extensions {
-		if r.Extensions[i].Extension == id {
+		name := r.Extensions[i].Extension
+		if name == id {
 			return &r.Extensions[i], nil
 		}
-		have = append(have, r.Extensions[i].Extension)
+		have = append(have, name)
+		if !strings.Contains(id, "/") && strings.HasSuffix(name, "/"+id) {
+			short = append(short, name)
+			found = i
+		}
+	}
+	if len(short) == 1 {
+		return &r.Extensions[found], nil
+	}
+	if len(short) > 1 {
+		return nil, usageError{fmt.Sprintf("%q is the name of more than one extension: %s; give the whole ID", id, strings.Join(short, ", "))}
 	}
 	if len(have) == 0 {
 		return nil, usageError{"no extension offers a sign-in: install one with pluxy ext install (pluxy ext list shows what is installed)"}
@@ -234,7 +247,7 @@ func runAccountAdd(x *invocation) error {
 	}
 	var reply management.LoginReply
 	body, err := x.client.Call(x.ctx, http.MethodPost, "/accounts", nil, management.AddAccountRequest{
-		ID: id, Extension: provider, Method: method.Method, Input: input,
+		ID: id, Extension: ext.Extension, Method: method.Method, Input: input,
 	}, &reply)
 	if err != nil {
 		return err
@@ -254,7 +267,7 @@ func runAccountLogin(x *invocation) error {
 	}
 	i := slices.IndexFunc(accounts.Accounts, func(a management.Account) bool { return a.ID == id })
 	if i < 0 {
-		return &management.APIError{Status: http.StatusNotFound, Code: "not_found", Message: fmt.Sprintf("no account %q", id)}
+		return &management.APIError{Status: http.StatusNotFound, Code: "not_found", Message: fmt.Sprintf("no such account %q", id)}
 	}
 	ext := accounts.Accounts[i].Extension
 	if ext == "" {
@@ -896,6 +909,8 @@ func promptURL(p *protocol.Prompt) string {
 func (x *invocation) startInputs(fields []protocol.LoginInput, in signInInputs, lines *lineReader) (map[string]string, bool, error) {
 	out := map[string]string{}
 	ended := false
+	// read counts the values taken from standard input so far.
+	read := 0
 	for _, f := range fields {
 		if v, ok := in.vals[f.Name]; ok {
 			if f.Secret {
@@ -912,7 +927,7 @@ func (x *invocation) startInputs(fields []protocol.LoginInput, in signInInputs, 
 			if optionalInput(f, in.kept) {
 				continue
 			}
-			return nil, false, usageError{fmt.Sprintf("the sign-in needs %s: %s", fieldName(f), inputHint(f))}
+			return nil, false, missingInputs(fields, in, f, read)
 		}
 		// The echo is set before the label is shown, and stays as it is until the value is whole.
 		lines.field(&f)
@@ -939,7 +954,7 @@ func (x *invocation) startInputs(fields []protocol.LoginInput, in signInInputs, 
 				if optionalInput(f, in.kept) {
 					break
 				}
-				return nil, false, usageError{fmt.Sprintf("the sign-in needs %s: %s", fieldName(f), inputHint(f))}
+				return nil, false, missingInputs(fields, in, f, read)
 			}
 			var complete bool
 			if text, complete, err = value.add(r); err != nil {
@@ -952,6 +967,7 @@ func (x *invocation) startInputs(fields []protocol.LoginInput, in signInInputs, 
 				break
 			}
 		}
+		read++
 		if text != "" || !optionalInput(f, in.kept) {
 			out[f.Name] = text
 		}
@@ -959,6 +975,52 @@ func (x *invocation) startInputs(fields []protocol.LoginInput, in signInInputs, 
 	// Core may take a while to answer, and nothing is being typed for it.
 	lines.show()
 	return out, ended, nil
+}
+
+// missingInputs is the error for a sign-in whose standard input ended at field first: it names every
+// required value still missing, and the order standard input is read in, since a line is taken
+// for the first value that --input did not give, not for the one a person had in mind. read is
+// the number of lines already taken.
+func missingInputs(fields []protocol.LoginInput, in signInInputs, first protocol.LoginInput, read int) error {
+	var missing, order []string
+	secret, flagOK := false, false
+	started := false
+	for _, f := range fields {
+		if _, ok := in.vals[f.Name]; ok {
+			continue
+		}
+		name := fieldName(f)
+		if optionalInput(f, in.kept) {
+			name += " (optional)"
+		}
+		order = append(order, name)
+		if f.Name == first.Name {
+			started = true
+		}
+		if started && !optionalInput(f, in.kept) {
+			missing = append(missing, fieldName(f))
+			if f.Secret {
+				secret = true
+			} else {
+				flagOK = true
+			}
+		}
+	}
+	taken := "no line"
+	switch {
+	case read == 1:
+		taken = "1 line"
+	case read > 1:
+		taken = fmt.Sprintf("%d lines", read)
+	}
+	msg := fmt.Sprintf("the sign-in needs %s: standard input gave %s, and it reads one line for each value, in this order: %s", strings.Join(missing, ", "), taken, strings.Join(order, ", "))
+	if secret {
+		msg += " (a secret is never taken from a flag)"
+	}
+	if flagOK {
+		msg += "; a value that is not secret can be given with --input name=<value> instead, which leaves its line out"
+	}
+	return usageError{msg}
 }
 
 // fieldName is how a sign-in's input is named to a person.

@@ -23,6 +23,7 @@ import (
 	"unicode/utf16"
 
 	"github.com/stdotwork/pluxy/next/internal/buildinfo"
+	"github.com/stdotwork/pluxy/next/internal/core"
 	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/management"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -728,7 +729,7 @@ var commands = []command{
 					x.printf("no matching events\n")
 					return
 				}
-				rows := [][]string{{"SEQ", "TIME", "MODEL", "ACCOUNT", "KEY", "STATUS", "LATENCY", "TOKENS"}}
+				rows := [][]string{{"SEQ", "TIME", "MODEL", "ACCOUNT", "KEY", "STATUS", "TRIES", "LATENCY", "TOKENS"}}
 				for _, ev := range r.Events {
 					status := strconv.Itoa(ev.Status)
 					if ev.Status == 0 {
@@ -741,6 +742,11 @@ var commands = []command{
 							status = status + " (failed)"
 						}
 					}
+					// Attempts is how many accounts the request went to: more than 1 is a fallback.
+					tries := "-"
+					if ev.Attempts > 0 {
+						tries = strconv.Itoa(ev.Attempts)
+					}
 					tokens := "-"
 					if ev.Tokens.Total != nil {
 						tokens = strconv.FormatInt(*ev.Tokens.Total, 10)
@@ -752,6 +758,7 @@ var commands = []command{
 						dash(ev.Account),
 						dash(ev.KeyID),
 						status,
+						tries,
 						fmt.Sprintf("%dms", ev.LatencyMS),
 						tokens,
 					})
@@ -1328,6 +1335,13 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 	}
 	if len(pos) != len(cmd.args) && !(cmd.more && len(pos) > len(cmd.args)) && !(cmd.optional && len(pos) == len(cmd.args)-1) {
 		fmt.Fprintf(stderr, "pluxy: usage: pluxy %s%s [flags]\n", cmd.words, argsUsage(cmd))
+		if cmd.words == "client show" && len(pos) == 0 {
+			fmt.Fprintln(stderr, "tools:")
+			for _, id := range core.ClientSnippetTools {
+				snip, _ := core.ClientSnippetFor(id, "", "")
+				fmt.Fprintf(stderr, "  %-12s %s\n", id, snip.Name)
+			}
+		}
 		return exitUsage
 	}
 	// A --input pair the flag could not take is refused here, where nothing quotes the value it
@@ -1348,8 +1362,26 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 	if err == nil {
 		return exitOK
 	}
+	err = nameMissingAccount(cmd, pos, err)
 	printError(stderr, *jsonOut, err)
 	return exitCode(err, cmd.changesNothing())
+}
+
+// nameMissingAccount gives a refusal for an account that is not there the one wording, no such
+// account "id", whichever of core's words it came in. Only the line the command prints changes:
+// the reply's body, which --json prints, is left as core sent it.
+func nameMissingAccount(cmd *command, pos []string, err error) error {
+	var ae *management.APIError
+	if !errors.As(err, &ae) || ae.Status != http.StatusNotFound || ae.Code != "not_found" ||
+		!strings.HasPrefix(cmd.words, "account ") || len(cmd.args) == 0 || cmd.args[0] != "id" || len(pos) == 0 {
+		return err
+	}
+	if ae.Message != "no such account" && ae.Message != fmt.Sprintf("no account %q", pos[0]) {
+		return err
+	}
+	named := *ae
+	named.Message = fmt.Sprintf("no such account %q", pos[0])
+	return &named
 }
 
 // printError writes a command's error to stderr: with --json, as the API's error object (the
