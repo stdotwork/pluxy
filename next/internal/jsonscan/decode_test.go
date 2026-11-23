@@ -237,3 +237,26 @@ func TestUnmarshalTypeErrorUnwraps(t *testing.T) {
 }
 
 func errorsAs(err error, target any) bool { return errors.As(err, target) }
+
+// A repeated list key decodes into the list already there, as json.Unmarshal does: the elements
+// of both occurrences are merged into one element.
+func TestUnmarshalRepeatedSliceKeyMatchesEncodingJSON(t *testing.T) {
+	type item struct {
+		X string `json:"x"`
+		Y string `json:"y"`
+	}
+	type holder struct {
+		A []item `json:"a"`
+	}
+	data := []byte(`{"a":[{"x":"1"}],"a":[{"y":"2"}]}`)
+	var got, want holder
+	if err := Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &want); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Unmarshal = %+v, json.Unmarshal = %+v", got, want)
+	}
+}

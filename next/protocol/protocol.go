@@ -662,7 +662,8 @@ func putBuffer(b *bytes.Buffer) {
 // and the body, valid and with its whitespace outside strings removed (what the encoder does to a
 // json.RawMessage), takes the mark's place. The encoder otherwise walks the whole body twice
 // (to check it, then to compact it) with its general scanner, byte by byte. done is false, with
-// nothing written, for a call it leaves to the encoder, among them any with an error.
+// nothing written, for a call it leaves to the encoder, which is any call this cannot encode; a
+// frame over MaxFrame is done, with ErrFrameTooLarge.
 func writeSplicedCall(w io.Writer, c *Call) (done bool, err error) {
 	if c.Request == nil || c.Request.Native == nil || len(c.Request.Native.Body) < spliceMin {
 		return false, nil

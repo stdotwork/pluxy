@@ -231,6 +231,10 @@ func build(t reflect.Type, building map[reflect.Type]bool) decodeFunc {
 			if !ok {
 				return notContainer(v, data, top)
 			}
+			if !v.IsNil() {
+				// A repeated key: json.Unmarshal decodes into the slice already there.
+				return other
+			}
 			s := reflect.MakeSlice(t, len(elems), len(elems))
 			for i, el := range elems {
 				if elem(s.Index(i), el, false) != decoded {

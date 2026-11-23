@@ -8,6 +8,7 @@ import (
 	"io"
 	"math/rand"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -243,6 +244,8 @@ func TestCallFrameReadSameAsUnmarshal(t *testing.T) {
 		`{` + call + `,"request":{"native":null,"pad":"` + strings.Repeat("p", spliceMin) + `"}}`,
 		`{` + call + `,"request":"` + strings.Repeat("p", spliceMin) + `"}`,
 		`{` + call + `,"request":{"stream":"yes","native":{"body":` + body + `}},"account":7}`,
+		// A repeated list key, with different elements, past 4 KB of padding in another field.
+		`{` + call + `,"request":{"model":"m","pad":"` + strings.Repeat("p", 4<<10) + `","items":[{"role":"user"}],"items":[{"type":"message"}]}}`,
 		` ` + req(nat) + "\n",
 		`[` + req(nat) + `]`,
 		`null`, `{}`, ``,
@@ -287,6 +290,40 @@ func TestCallFrameReadSameAsUnmarshal(t *testing.T) {
 		cases++
 	}
 	t.Logf("%d frames", cases)
+}
+
+// TestLargeCallFrameTakesFastPaths fails if writeSplicedCall or ReadFrame stops taking its fast
+// path for a plain large call, which would still give the right bytes but at a higher cost.
+func TestLargeCallFrameTakesFastPaths(t *testing.T) {
+	call := benchCall(100 << 10)
+	var spliced bytes.Buffer
+	done, err := writeSplicedCall(&spliced, &call)
+	if !done || err != nil {
+		t.Fatalf("writeSplicedCall: done %v, err %v; want done and no error", done, err)
+	}
+	var framed bytes.Buffer
+	if err := WriteFrame(&framed, call); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(spliced.Bytes(), framed.Bytes()) {
+		t.Errorf("writeSplicedCall wrote %d bytes, WriteFrame %d: they differ", spliced.Len(), framed.Len())
+	}
+
+	frame := framed.Bytes()
+	const runs = 20
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for range runs {
+		var c Call
+		if err := ReadFrame(bytes.NewReader(frame), &c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runtime.ReadMemStats(&after)
+	perRead := float64(after.TotalAlloc-before.TotalAlloc) / runs
+	if limit := 1.5 * float64(len(frame)); perRead >= limit {
+		t.Errorf("ReadFrame allocated %.0f bytes per call for a %d byte frame, want less than %.0f: the fast path is not used", perRead, len(frame), limit)
+	}
 }
 
 func BenchmarkWriteCallFrame(b *testing.B) {
