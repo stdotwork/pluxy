@@ -740,6 +740,8 @@ func decodeResponse(format string, raw []byte) ([]llm.Event, []llm.Loss, error) 
 		return geminigenerate.DecodeResponseLosses(raw)
 	case llm.FormatOpenAIResponses:
 		return openairesponses.DecodeResponseLosses(raw)
+	case llm.FormatAnthropicMessages:
+		return anthropicmessages.DecodeResponseLosses(raw)
 	}
 	events, err := decoders[format].response(raw)
 	return events, nil, err

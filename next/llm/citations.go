@@ -2,7 +2,9 @@ package llm
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -109,4 +111,65 @@ func RuneToUTF8ByteOffset(s string, runeOff int) (int, bool) {
 		return len(s), true
 	}
 	return 0, false
+}
+
+// MaxCitationBytes bounds what one reply's citations and sources hold. Citations ride on their
+// message item's end and sources on the finish event, so without a limit a reply whose blocks
+// each fit a protocol frame could still fail on the last one. What does not fit is left out and
+// reported as a loss.
+const MaxCitationBytes = 4 << 20
+
+// citationOverhead is about the JSON one citation or source adds around its URL and title.
+const citationOverhead = 64
+
+// CiteBudget counts the citations and sources one reply has kept against MaxCitationBytes. Use one
+// per reply; the zero value is ready.
+type CiteBudget struct {
+	used int
+	full bool // one did not fit
+	cut  bool // one was left out, whatever the reason
+}
+
+func (b *CiteBudget) take(n int) bool {
+	if b.full || b.used+n > MaxCitationBytes {
+		b.full, b.cut = true, true
+		return false
+	}
+	b.used += n
+	return true
+}
+
+// AddCitation reports whether c fits, and counts it if so. Once one does not fit, none after it does.
+func (b *CiteBudget) AddCitation(c Citation) bool {
+	return b.take(len(c.URL) + len(c.Title) + citationOverhead)
+}
+
+// AddSource reports whether s fits, and counts it if so. Once one does not fit, none after it does.
+func (b *CiteBudget) AddSource(s Source) bool {
+	return b.take(len(s.URL) + len(s.Title) + citationOverhead)
+}
+
+// KeepCitations returns the leading citations of cs that fit.
+func (b *CiteBudget) KeepCitations(cs []Citation) []Citation {
+	for i, c := range cs {
+		if !b.AddCitation(c) {
+			return cs[:i]
+		}
+	}
+	return cs
+}
+
+// LeftOut records that a citation or source was left out for a reason of the caller's.
+func (b *CiteBudget) LeftOut() { b.cut = true }
+
+// Cut reports whether any citation or source was left out.
+func (b *CiteBudget) Cut() bool { return b.cut }
+
+// WithLoss adds the loss for citations and sources left out, if there were any, to losses.
+func (b *CiteBudget) WithLoss(losses []Loss) []Loss {
+	if !b.cut {
+		return losses
+	}
+	return AddLoss(slices.Clip(losses), Loss{Kind: LossDropped, Path: "citations",
+		Detail: fmt.Sprintf("the reply's citations and sources passed %d MiB; the rest are left out", MaxCitationBytes>>20)})
 }

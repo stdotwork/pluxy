@@ -234,8 +234,12 @@ type citedSegment struct {
 
 // buildGroundingMetadata turns canonical citations and sources into Gemini's groundingMetadata
 // object, converting Unicode code point (rune) ranges to UTF-8 byte offsets. Returns nil when
-// there are no valid http/https sources or citations.
-func buildGroundingMetadata(segments []citedSegment, sources []llm.Source) obj {
+// there are no valid http/https sources or citations, and, as its second result, the bytes of
+// cited text it wrote. Each support repeats its cited text, so one long message with many
+// citations would grow by that text each time; past maxSegmentTextBytes in all the text is left
+// out (the offsets stay) and b records the loss.
+func buildGroundingMetadata(segments []citedSegment, sources []llm.Source, b *builder) (obj, int) {
+	textBytes := 0
 	chunkIdx := map[string]int{}
 	var chunks []any
 	addChunk := func(u, title string) (int, bool) {
@@ -272,7 +276,12 @@ func buildGroundingMetadata(segments []citedSegment, sources []llm.Source) obj {
 			gseg := obj{
 				"startIndex": seg.byteBase + sb,
 				"endIndex":   seg.byteBase + eb,
-				"text":       seg.text[sb:eb],
+			}
+			if textBytes+eb-sb <= maxSegmentTextBytes {
+				gseg["text"] = seg.text[sb:eb]
+				textBytes += eb - sb
+			} else {
+				b.lose("groundingMetadata.groundingSupports.segment.text", fmt.Sprintf("the cited text repeated in the supports passed %d MiB; the rest is left out and the offsets stay", maxSegmentTextBytes>>20))
 			}
 			if seg.partIndex > 0 {
 				gseg["partIndex"] = seg.partIndex
@@ -287,14 +296,17 @@ func buildGroundingMetadata(segments []citedSegment, sources []llm.Source) obj {
 		addChunk(s.URL, s.Title)
 	}
 	if len(chunks) == 0 {
-		return nil
+		return nil, 0
 	}
 	gm := obj{"groundingChunks": chunks}
 	if len(supports) > 0 {
 		gm["groundingSupports"] = supports
 	}
-	return gm
+	return gm, textBytes
 }
+
+// maxSegmentTextBytes bounds the cited text a reply's groundingSupports repeat, in all.
+const maxSegmentTextBytes = 1 << 20
 
 // codeExecParts turns canonical CodeExecution records into Gemini executableCode and
 // codeExecutionResult parts. Gemini's ExecutableCode.language enum has only PYTHON, so a run in
@@ -624,7 +636,7 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 			parts = append(parts, b.callPart(s.calls[idx]))
 		}
 		resp := b.response(parts, ev.Finish, ev.Usage)
-		if gm := buildGroundingMetadata(s.cited, ev.Sources); gm != nil {
+		if gm, _ := buildGroundingMetadata(s.cited, ev.Sources, b); gm != nil {
 			resp["candidates"].([]any)[0].(obj)["groundingMetadata"] = gm
 		}
 		return s.emit(resp)
@@ -663,6 +675,7 @@ type Aggregator struct {
 	sources        []llm.Source
 	codeExecutions []llm.CodeExecution
 	size           int
+	media          []*aggPart // the media parts the reply still holds, in the order they came
 }
 
 // NewAggregator returns an empty aggregator.
@@ -671,8 +684,21 @@ func NewAggregator() *Aggregator { return &Aggregator{parts: map[int]*aggPart{}}
 // Losses returns what the reply had that the client format could not carry.
 func (a *Aggregator) Losses() []llm.Loss { return a.b.losses }
 
-// Add records one event.
+// Add records one event. Once the reply passes llm.MaxNonStreamedReplyBytes it leaves out media
+// parts, last first, until it fits or none is left, so a reply whose images do not all fit keeps
+// its text and the images that do, with a loss for each kind it left out.
 func (a *Aggregator) Add(ev llm.Event) {
+	a.add(ev)
+	for a.Size() > llm.MaxNonStreamedReplyBytes && len(a.media) > 0 {
+		p := a.media[len(a.media)-1]
+		a.media = a.media[:len(a.media)-1]
+		a.size -= len(p.media.MediaType) + len(p.media.Data) + partOverhead
+		a.b.lose("media."+p.media.Kind, fmt.Sprintf("left out: the reply would pass %d MiB, the limit for a non-streamed reply", llm.MaxNonStreamedReplyBytes>>20))
+		p.kind, p.media = "", nil
+	}
+}
+
+func (a *Aggregator) add(ev llm.Event) {
 	if ev.Type == llm.EventResponseStart {
 		a.native = ev.Response.Format == format
 	}
@@ -707,7 +733,9 @@ func (a *Aggregator) Add(ev llm.Event) {
 		}
 		m := *ev.Media
 		a.size += len(m.MediaType) + len(m.Data) + partOverhead
-		a.order = append(a.order, &aggPart{kind: llm.EventMedia, media: &m})
+		p := &aggPart{kind: llm.EventMedia, media: &m}
+		a.order = append(a.order, p)
+		a.media = append(a.media, p)
 	case llm.EventCandidate:
 		if a.native || ev.Candidate == nil || ev.Candidate.Index < 1 {
 			return
@@ -766,7 +794,9 @@ func (a *Aggregator) Add(ev llm.Event) {
 			}
 			m := *c.Media
 			a.size += len(m.MediaType) + len(m.Data) + partOverhead
-			ca.order = append(ca.order, &aggPart{kind: llm.EventMedia, media: &m})
+			p := &aggPart{kind: llm.EventMedia, media: &m}
+			ca.order = append(ca.order, p)
+			a.media = append(a.media, p)
 		case llm.CandidateFinish:
 			ca.finish = c.Finish
 			if c.Finish != nil {
@@ -787,7 +817,8 @@ func (a *Aggregator) Add(ev llm.Event) {
 			a.b.lose("content.thoughtSignature", "a Devin reasoning signature, which an unstreamed GenerateContentResponse does not carry")
 		}
 		if p := a.parts[ev.Index]; p != nil {
-			if len(ev.Citations) > 0 {
+			// A reply of this format keeps its citations in the chunks it holds already.
+			if len(ev.Citations) > 0 && !a.native {
 				p.citations = ev.Citations
 				for _, c := range ev.Citations {
 					a.size += len(c.URL) + len(c.Title) + 48
@@ -802,11 +833,14 @@ func (a *Aggregator) Add(ev llm.Event) {
 		}
 	case llm.EventFinish:
 		a.finish, a.usage, a.sources, a.codeExecutions = ev.Finish, ev.Usage, ev.Sources, ev.CodeExecutions
-		for _, s := range ev.Sources {
-			a.size += len(s.URL) + len(s.Title) + 32
-		}
-		for _, ce := range ev.CodeExecutions {
-			a.size += len(ce.Code) + len(ce.Language) + len(ce.Output) + 64
+		// A reply of this format keeps its sources and runs in the chunks it holds already.
+		if !a.native {
+			for _, s := range ev.Sources {
+				a.size += len(s.URL) + len(s.Title) + 32
+			}
+			for _, ce := range ev.CodeExecutions {
+				a.size += len(ce.Code) + len(ce.Language) + len(ce.Output) + 64
+			}
 		}
 		if ev.Finish != nil {
 			a.size += len(ev.Finish.RawReason)
@@ -862,8 +896,9 @@ func (a *Aggregator) Response() ([]byte, error) {
 		finish = &llm.Finish{Reason: llm.FinishOther}
 	}
 	resp := b.response(parts, finish, a.usage)
-	if gm := buildGroundingMetadata(cited, a.sources); gm != nil {
+	if gm, textBytes := buildGroundingMetadata(cited, a.sources, b); gm != nil {
 		resp["candidates"].([]any)[0].(obj)["groundingMetadata"] = gm
+		a.size += textBytes
 	}
 	if len(a.cands) > 0 {
 		idxs := make([]int, 0, len(a.cands))

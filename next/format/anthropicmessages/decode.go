@@ -9,6 +9,7 @@ import (
 
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
 	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 // maxErrorRaw limits the upstream bytes an error keeps for diagnostics. Longer data is not kept:
@@ -312,7 +313,7 @@ func decodeCodeExecResult(blockType string, call decodedCodeCall, raw json.RawMe
 
 // extractWebSearchSources reads web_search_result entries from a web_search_tool_result block's
 // content array, keeping valid http/https URLs deduplicated in first-seen order.
-func extractWebSearchSources(raw json.RawMessage, seen map[string]bool, out []llm.Source) []llm.Source {
+func extractWebSearchSources(raw json.RawMessage, seen map[string]bool, out []llm.Source, budget *llm.CiteBudget) []llm.Source {
 	if len(raw) == 0 || raw[0] != '[' {
 		return out
 	}
@@ -328,8 +329,12 @@ func extractWebSearchSources(raw json.RawMessage, seen map[string]bool, out []ll
 		if e.Type == "web_search_tool_result_error" || !llm.ValidCitationURL(e.URL) || seen[e.URL] {
 			continue
 		}
+		src := llm.Source{URL: e.URL, Title: e.Title}
+		if !budget.AddSource(src) {
+			break
+		}
 		seen[e.URL] = true
-		out = append(out, llm.Source{URL: e.URL, Title: e.Title})
+		out = append(out, src)
 	}
 	return out
 }
@@ -421,6 +426,8 @@ type StreamDecoder struct {
 	citations map[int][]llm.Citation   // model item index -> web citations collected from citations_delta
 	sources   []llm.Source
 	seenSrc   map[string]bool
+	cites     llm.CiteBudget
+	finishCut []llm.Loss               // what the finish event left out to fit a frame
 	codeBlock map[int]*pendingCodeCall // upstream block index -> open server_tool_use for code execution
 	codeCalls map[string]decodedCodeCall
 	codeExecs []llm.CodeExecution
@@ -510,7 +517,7 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			return native(), nil
 		}
 		if b.Type == "web_search_tool_result" {
-			d.sources = extractWebSearchSources(b.Content, d.seenSrc, d.sources)
+			d.sources = extractWebSearchSources(b.Content, d.seenSrc, d.sources, &d.cites)
 		}
 		if b.Type == "server_tool_use" && b.ID != "" && isCodeExecToolName(b.Name) {
 			d.codeBlock[ev.Index] = &pendingCodeCall{
@@ -550,7 +557,7 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			out = append(out, llm.Event{Type: llm.EventReasoningDelta, Index: idx, Delta: b.Think})
 		}
 		if b.Type == "text" && len(b.Citations) > 0 {
-			if cits := extractCitations(b.Citations, 0); len(cits) > 0 {
+			if cits := d.cites.KeepCitations(extractCitations(b.Citations, 0)); len(cits) > 0 {
 				d.citations[idx] = append(d.citations[idx], cits...)
 			}
 		}
@@ -580,7 +587,7 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			return append(out, llm.Event{Type: llm.EventToolInputDelta, Index: idx, Delta: ev.Delta.PartialJSON, Raw: raw}), nil
 		}
 		if ev.Delta.Type == "citations_delta" {
-			if c, ok := extractCitation(ev.Delta.Citation); ok {
+			if c, ok := extractCitation(ev.Delta.Citation); ok && d.cites.AddCitation(c) {
 				d.citations[idx] = append(d.citations[idx], c)
 			}
 		}
@@ -641,11 +648,19 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		d.done = true
 		out = d.closeAll(out)
 		f := finishOf(d.stop)
-		return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(d.usage), Sources: d.sources, CodeExecutions: d.codeExecs, Raw: raw}), nil
+		fin := llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(d.usage), Sources: d.sources, CodeExecutions: d.codeExecs, Raw: raw}
+		if l, cut := protocol.FitFinish(&fin); cut {
+			d.finishCut = append(d.finishCut, l)
+		}
+		return append(out, fin), nil
 	}
 	// ping, message_start after the first event, and event types added later.
 	return native(), nil
 }
+
+// Losses returns what the reply had that the model could not carry: the citations and sources, and
+// the runs the finish event left out, that did not fit.
+func (d *StreamDecoder) Losses() []llm.Loss { return d.cites.WithLoss(slices.Clip(d.finishCut)) }
 
 // Close is called when the upstream stream ends. A stream that ends before message_stop is an
 // error: the reply may have been cut short.
@@ -689,18 +704,26 @@ func eventJSON(fields map[string]any) json.RawMessage {
 // body in Raw, so a non-streaming Messages client gets it unchanged. A body of type error becomes
 // an *llm.Error.
 func DecodeResponse(body []byte) ([]llm.Event, error) {
+	events, _, err := DecodeResponseLosses(body)
+	return events, err
+}
+
+// DecodeResponseLosses turns an upstream non-streamed message into events and returns what the
+// reply had that the model could not carry. It is the non-streamed counterpart of
+// StreamDecoder.Losses.
+func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 	var m message
 	top := rawjson.Object(body)
 	if err := json.Unmarshal(body, &m); err != nil || top == nil {
-		return nil, malformed("upstream sent a malformed response", body)
+		return nil, nil, malformed("upstream sent a malformed response", body)
 	}
 	if m.Type == "error" {
 		e := errorOf(m.Error, "upstream reported an error")
 		e.Raw = append(json.RawMessage(nil), body...)
-		return nil, e
+		return nil, nil, e
 	}
 	if m.Type != "message" {
-		return nil, malformed("upstream sent a response that is not a message", body)
+		return nil, nil, malformed("upstream sent a response that is not a message", body)
 	}
 	head := map[string]json.RawMessage{}
 	for k, v := range top {
@@ -718,6 +741,7 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 		Raw: eventJSON(map[string]any{"type": "message_start", "message": head})}}
 	next := 0
 	var sources []llm.Source
+	var cites llm.CiteBudget
 	seenSrc := map[string]bool{}
 	codeCalls := map[string]decodedCodeCall{}
 	var codeExecs []llm.CodeExecution
@@ -725,10 +749,10 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 		b := rawjson.Object(raw)
 		var cb contentBlock
 		if b == nil || json.Unmarshal(raw, &cb) != nil {
-			return nil, malformed("upstream sent a malformed response", body)
+			return nil, nil, malformed("upstream sent a malformed response", body)
 		}
 		if cb.Type == "web_search_tool_result" {
-			sources = extractWebSearchSources(cb.Content, seenSrc, sources)
+			sources = extractWebSearchSources(cb.Content, seenSrc, sources, &cites)
 		}
 		if cb.Type == "server_tool_use" && cb.ID != "" && isCodeExecToolName(cb.Name) {
 			if code, lang, ok := decodeCodeExecInput(cb.Name, cb.Input); ok {
@@ -773,7 +797,7 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 			start.CallID, start.Name = cb.ID, cb.Name
 			args, err := compactJSON(cb.Input)
 			if err != nil {
-				return nil, malformed("upstream sent a malformed response", body)
+				return nil, nil, malformed("upstream sent a malformed response", body)
 			}
 			startBlock["input"] = json.RawMessage("{}")
 			deltaType, delta = llm.EventToolInputDelta, args
@@ -790,7 +814,7 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 		}
 		end := llm.Event{Type: llm.EventItemEnd, Index: next, Raw: stop}
 		if kind == llm.ItemMessage && len(cb.Citations) > 0 {
-			end.Citations = extractCitations(cb.Citations, utf8.RuneCountInString(cb.Text))
+			end.Citations = cites.KeepCitations(extractCitations(cb.Citations, utf8.RuneCountInString(cb.Text)))
 		}
 		var sig string
 		if kind == llm.ItemReasoning && json.Unmarshal(b["signature"], &sig) == nil && sig != "" {
@@ -811,5 +835,10 @@ func DecodeResponse(body []byte) ([]llm.Event, error) {
 	}
 	out = append(out, llm.Event{Type: llm.EventNative, Raw: eventJSON(delta)})
 	f := finishOf(m.StopReason)
-	return append(out, llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(m.Usage), Sources: sources, CodeExecutions: codeExecs, Raw: append(json.RawMessage(nil), body...)}), nil
+	fin := llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(m.Usage), Sources: sources, CodeExecutions: codeExecs, Raw: append(json.RawMessage(nil), body...)}
+	var losses []llm.Loss
+	if l, cut := protocol.FitFinish(&fin); cut {
+		losses = llm.AddLoss(losses, l)
+	}
+	return append(out, fin), cites.WithLoss(losses), nil
 }

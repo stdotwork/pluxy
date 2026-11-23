@@ -2,6 +2,7 @@ package llm_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stdotwork/pluxy/next/llm"
@@ -130,5 +131,25 @@ func TestUTF8ByteAndRuneOffsets(t *testing.T) {
 		if _, ok := llm.RuneToUTF8ByteOffset(s, bad); ok {
 			t.Errorf("RuneToUTF8ByteOffset(%d) succeeded, want false", bad)
 		}
+	}
+}
+
+func TestCiteBudgetKeepsWhatFitsAndReportsTheRest(t *testing.T) {
+	var b llm.CiteBudget
+	if got := b.WithLoss(nil); len(got) != 0 {
+		t.Fatalf("losses with nothing left out = %+v", got)
+	}
+	big := strings.Repeat("t", llm.MaxCitationBytes/4)
+	cs := []llm.Citation{{URL: "https://a.example/1", Title: big}, {URL: "https://a.example/2", Title: big},
+		{URL: "https://a.example/3", Title: big}, {URL: "https://a.example/4", Title: big}}
+	kept := b.KeepCitations(cs)
+	if len(kept) != 3 {
+		t.Errorf("kept %d of 4 citations of a quarter of the limit each, want 3 (their URLs and overhead take the fourth's room)", len(kept))
+	}
+	if b.AddSource(llm.Source{URL: "https://s.example/1"}) {
+		t.Error("a source fit after a citation did not")
+	}
+	if got := b.WithLoss(nil); len(got) != 1 || got[0].Path != "citations" || got[0].Kind != llm.LossDropped {
+		t.Errorf("losses = %+v, want one dropped loss at citations", got)
 	}
 }

@@ -348,15 +348,7 @@ var decoders = map[string]struct {
 }{
 	llm.FormatOpenAIChat:        {func() streamDecoder { return openaichat.NewStreamDecoder() }, openaichat.DecodeResponseLosses},
 	llm.FormatOpenAIResponses:   {func() streamDecoder { return openairesponses.NewStreamDecoder() }, openairesponses.DecodeResponseLosses},
-	llm.FormatAnthropicMessages: {func() streamDecoder { return anthropicmessages.NewStreamDecoder() }, noLosses(anthropicmessages.DecodeResponse)},
-}
-
-// noLosses adapts a non-streamed decoder that reports no reply losses to decoders' response signature.
-func noLosses(fn func([]byte) ([]llm.Event, error)) func([]byte) ([]llm.Event, []llm.Loss, error) {
-	return func(raw []byte) ([]llm.Event, []llm.Loss, error) {
-		events, err := fn(raw)
-		return events, nil, err
-	}
+	llm.FormatAnthropicMessages: {func() streamDecoder { return anthropicmessages.NewStreamDecoder() }, anthropicmessages.DecodeResponseLosses},
 }
 
 // reportLosses logs what a stream decoder had to leave out of the reply. A decoder without losses

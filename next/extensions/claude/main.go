@@ -271,7 +271,10 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 		}
 		return &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
 	}
-	events, err := anthropicmessages.DecodeResponse(raw)
+	events, losses, err := anthropicmessages.DecodeResponseLosses(raw)
+	for _, l := range losses {
+		fmt.Fprintf(os.Stderr, "reply loss: %s %s (%s)\n", l.Kind, l.Path, l.Detail)
+	}
 	if err != nil {
 		return llm.MarkContextOverflow(err)
 	}
@@ -681,6 +684,11 @@ func replyNames(req llm.Request, tr *llm.Translation) map[string]string {
 func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Event) error }) error {
 	r := sse.NewReader(body)
 	dec := anthropicmessages.NewStreamDecoder()
+	defer func() {
+		for _, l := range dec.Losses() {
+			fmt.Fprintf(os.Stderr, "reply loss: %s %s (%s)\n", l.Kind, l.Path, l.Detail)
+		}
+	}()
 	for {
 		e, err := r.Next()
 		eof := err == io.EOF
