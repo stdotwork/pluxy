@@ -254,10 +254,10 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	dec := decoders[up.format]
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		if turn == nil {
-			return relayStream(ctx, resp.Body, send, dec.stream(), call.Request.SameFormat(up.format))
+			return relayStream(ctx, resp.Body, send, dec.stream(), call.Request.BodyReachesClient(up.format, true))
 		}
 		capture := newReplayCapture()
-		err := relayStream(ctx, resp.Body, send, replayDecoder{dec.stream(), capture, turn}, call.Request.SameFormat(up.format))
+		err := relayStream(ctx, resp.Body, send, replayDecoder{dec.stream(), capture, turn}, call.Request.BodyReachesClient(up.format, true))
 		if capture.failed {
 			turn.forget()
 		}
@@ -274,7 +274,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return err
 	}
-	for _, l := range llm.ReplyLosses(losses, call.Request.SameFormat(up.format)) {
+	for _, l := range llm.ReplyLosses(losses, call.Request.BodyReachesClient(up.format, false)) {
 		logReplyLoss(l)
 	}
 	// Kept before the reply is sent, as replayDecoder keeps a stream's turn: a client may send its
@@ -353,12 +353,12 @@ var decoders = map[string]struct {
 
 // reportLosses logs what a stream decoder had to leave out of the reply. A decoder without losses
 // has none to log.
-func reportLosses(dec streamDecoder, sameFormat bool) {
+func reportLosses(dec streamDecoder, bodyReaches bool) {
 	lr, ok := dec.(interface{ Losses() []llm.Loss })
 	if !ok {
 		return
 	}
-	for _, l := range llm.ReplyLosses(lr.Losses(), sameFormat) {
+	for _, l := range llm.ReplyLosses(lr.Losses(), bodyReaches) {
 		logReplyLoss(l)
 	}
 }
@@ -372,11 +372,11 @@ func logReplyLoss(l llm.Loss) {
 
 // relayStream decodes the upstream stream and sends each event as soon as it is decoded. A
 // blocked send blocks the next upstream read.
-func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Event) error }, dec streamDecoder, sameFormat bool) error {
+func relayStream(ctx context.Context, body io.Reader, out interface{ Send(llm.Event) error }, dec streamDecoder, bodyReaches bool) error {
 	r := sse.NewReader(body)
 	// The report in response.start has gone by the time a decoder finds something it had to
 	// leave out of a reply, so its losses are logged, with core's prefix for this extension.
-	defer reportLosses(dec, sameFormat)
+	defer reportLosses(dec, bodyReaches)
 	for {
 		e, err := r.Next()
 		eof := err == io.EOF

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"slices"
 	"strings"
@@ -237,7 +238,7 @@ type citedSegment struct {
 // there are no valid http/https sources or citations. Each support repeats its cited text, so one long message with many
 // citations would grow by that text each time; past maxSegmentTextBytes in all the text is left
 // out (the offsets stay) and b records the loss.
-func buildGroundingMetadata(segments []citedSegment, sources []llm.Source, b *builder) obj {
+func buildGroundingMetadata(segments []citedSegment, sources []llm.Source, b *builder, maxText int) obj {
 	textBytes := 0
 	chunkIdx := map[string]int{}
 	var chunks []any
@@ -276,11 +277,11 @@ func buildGroundingMetadata(segments []citedSegment, sources []llm.Source, b *bu
 				"startIndex": seg.byteBase + sb,
 				"endIndex":   seg.byteBase + eb,
 			}
-			if textBytes+eb-sb <= maxSegmentTextBytes {
+			if textBytes+eb-sb <= maxText {
 				gseg["text"] = seg.text[sb:eb]
 				textBytes += eb - sb
 			} else {
-				b.lose("groundingMetadata.groundingSupports.segment.text", fmt.Sprintf("the cited text repeated in the supports passed %d MiB; the rest is left out and the offsets stay", maxSegmentTextBytes>>20))
+				b.lose("groundingMetadata.groundingSupports.segment.text", fmt.Sprintf("the cited text repeated in the supports passed %d MiB; the rest is left out and the offsets stay", maxText>>20))
 			}
 			if seg.partIndex > 0 {
 				gseg["partIndex"] = seg.partIndex
@@ -635,7 +636,7 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 			parts = append(parts, b.callPart(s.calls[idx]))
 		}
 		resp := b.response(parts, ev.Finish, ev.Usage)
-		if gm := buildGroundingMetadata(s.cited, ev.Sources, b); gm != nil {
+		if gm := buildGroundingMetadata(s.cited, ev.Sources, b, maxSegmentTextBytes); gm != nil {
 			resp["candidates"].([]any)[0].(obj)["groundingMetadata"] = gm
 		}
 		return s.emit(resp)
@@ -919,7 +920,13 @@ func (a *Aggregator) Response() ([]byte, error) {
 		finish = &llm.Finish{Reason: llm.FinishOther}
 	}
 	resp := b.response(parts, finish, a.usage)
-	if gm := buildGroundingMetadata(cited, a.sources, b); gm != nil {
+	// A reply of this format rebuilt from its chunks has the text its supports repeat in them
+	// already, which are counted, so it keeps all of it as the upstream sent it.
+	maxText := maxSegmentTextBytes
+	if a.native {
+		maxText = math.MaxInt32
+	}
+	if gm := buildGroundingMetadata(cited, a.sources, b, maxText); gm != nil {
 		resp["candidates"].([]any)[0].(obj)["groundingMetadata"] = gm
 	}
 	if len(a.cands) > 0 {

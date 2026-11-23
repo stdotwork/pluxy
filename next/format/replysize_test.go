@@ -415,3 +415,33 @@ func TestImagesOverTheNonStreamedLimitAreLeftOut(t *testing.T) {
 		t.Errorf("Size after the response = %d MiB, over the limit", got>>20)
 	}
 }
+
+// A reply of the client's own format that is built again from its chunks keeps the cited text its
+// supports repeat, whatever its size, as the upstream sent it.
+func TestSameFormatGeminiStreamKeepsLongCitedText(t *testing.T) {
+	text := strings.Repeat("a", 2<<20)
+	d := geminigenerate.NewStreamDecoder()
+	chunks := []string{
+		fmt.Sprintf(`{"responseId":"g","modelVersion":"gemini","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":%q}]}}]}`, text),
+		fmt.Sprintf(`{"responseId":"g","modelVersion":"gemini","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":""}]},"finishReason":"STOP","groundingMetadata":{"groundingChunks":[{"web":{"uri":"https://a.example/1","title":"A"}}],"groundingSupports":[{"segment":{"startIndex":0,"endIndex":%d,"text":%q},"groundingChunkIndices":[0]}]}}]}`, len(text), text),
+	}
+	evs := decodeStreamChunks(t, d, chunks)
+	end, err := d.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := geminigenerate.NewAggregator()
+	for _, ev := range append(evs, end...) {
+		a.Add(ev)
+	}
+	out, err := a.Response()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) < 2*len(text) {
+		t.Errorf("response is %d bytes, want the text and the cited text it repeats (%d)", len(out), 2*len(text))
+	}
+	if hasLoss(a.Losses(), "groundingMetadata") {
+		t.Errorf("losses = %+v, want none", a.Losses())
+	}
+}

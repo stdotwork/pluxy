@@ -949,10 +949,13 @@ no usable range covers its whole message there. A Gemini citation lands on the m
 its text, also when a thought signature or a function call split the reply's text into several items;
 one that cannot be placed on a single item is reported as dropped. One reply keeps at most 4 MiB of
 citations and, apart from them, 4 MiB of sources, whichever format they come from; the rest are left
-out and reported as dropped (not for a client of the upstream's own format, whose reply holds them
-all). A Gemini client's `groundingSupports` repeat each citation's cited text, so they repeat
-at most 1 MiB of it in all and leave `segment.text` out past that (the offsets stay, and it is
-reported as dropped). A same-format Chat reply keeps the upstream's
+out and reported as dropped. A client of the upstream's own format is given the upstream's body and
+has them all, with no loss reported, except when the reply is built again from the model's events,
+which keep only what fits: a Gemini stream sent whole and a Responses reply sent whole by the
+upstream but streamed to the client. Those two lose what passed the limit, and it is reported. A
+Gemini client of another format has `groundingSupports` that repeat each citation's cited text, so
+they repeat at most 1 MiB of it in all and leave `segment.text` out past that (the offsets stay, and
+it is reported as dropped); a Gemini reply built again from its own chunks keeps all of it. A same-format Chat reply keeps the upstream's
 `annotations` (streamed and non-streamed, bounded at 4 MiB per reply). Cross-format citations and
 sources are not written into Messages
 replies (Anthropic's `web_search_result_location` requires a vendor-signed `encrypted_index` that

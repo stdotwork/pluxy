@@ -167,7 +167,7 @@ func (b *CiteBudget) LeftOut() { b.cut = true }
 func (b *CiteBudget) Cut() bool { return b.cut }
 
 // LossPathCitations and LossPathFinish are the paths of the losses for what a reply's size limits
-// left out. A client of the upstream's own format has all of it in the reply it gets, so
+// left out of the model's events. A client that is given the upstream's body has all of it, so
 // ReplyLosses leaves them out for such a client.
 const (
 	LossPathCitations = "citations"
@@ -183,11 +183,11 @@ func (b *CiteBudget) WithLoss(losses []Loss) []Loss {
 		Detail: fmt.Sprintf("the reply's citations, or its sources, passed %d MiB; the rest are left out", MaxCitationBytes>>20)})
 }
 
-// ReplyLosses returns the losses of a reply that its client suffers. A client in the upstream's
-// own format (sameFormat) gets the reply's body as the upstream sent it, which holds everything
-// the size limits left out of the model, so it loses none of that.
-func ReplyLosses(losses []Loss, sameFormat bool) []Loss {
-	if !sameFormat {
+// ReplyLosses returns the losses of a reply that its client suffers. A client that is given the
+// upstream's body (bodyReaches; see Request.BodyReachesClient) gets everything the size limits left
+// out of the model, so it loses none of that.
+func ReplyLosses(losses []Loss, bodyReaches bool) []Loss {
+	if !bodyReaches {
 		return losses
 	}
 	return slices.DeleteFunc(slices.Clone(losses), func(l Loss) bool {
@@ -195,8 +195,23 @@ func ReplyLosses(losses []Loss, sameFormat bool) []Loss {
 	})
 }
 
-// SameFormat reports whether the request came in the format of the upstream the extension calls,
-// so its reply goes back as the upstream sent it.
-func (r *Request) SameFormat(upstream string) bool {
-	return r != nil && r.Native != nil && r.Native.Format == upstream
+// BodyReachesClient reports whether the client of r is given the body of the upstream's reply, in
+// the upstream's format, rather than a reply built again from the model's events: the request came
+// in that format, and the renderer of that format passes the body on for this pair of shapes of
+// reply (upstreamStreamed says whether the upstream's reply is a stream). A Messages renderer
+// always does. A Responses one does but for a stream built from a whole reply, a Gemini one but for
+// a whole reply built from a stream, and a Chat one keeps the annotations the upstream sent.
+func (r *Request) BodyReachesClient(upstream string, upstreamStreamed bool) bool {
+	if r == nil || r.Native == nil || r.Native.Format != upstream {
+		return false
+	}
+	switch upstream {
+	case FormatAnthropicMessages, FormatOpenAIChat:
+		return true
+	case FormatOpenAIResponses:
+		return !r.Stream || upstreamStreamed
+	case FormatGeminiGenerate:
+		return r.Stream || !upstreamStreamed
+	}
+	return false
 }

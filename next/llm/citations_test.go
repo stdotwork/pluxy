@@ -171,12 +171,34 @@ func TestReplyLossesSparesAClientOfTheUpstreamsFormat(t *testing.T) {
 	}
 }
 
-func TestRequestSameFormat(t *testing.T) {
-	r := &llm.Request{Native: &llm.Native{Format: llm.FormatOpenAIResponses}}
-	if !r.SameFormat(llm.FormatOpenAIResponses) || r.SameFormat(llm.FormatOpenAIChat) {
-		t.Error("SameFormat does not compare the native format")
+func TestBodyReachesClient(t *testing.T) {
+	req := func(format string, stream bool) *llm.Request {
+		return &llm.Request{Stream: stream, Native: &llm.Native{Format: format}}
 	}
-	if (&llm.Request{}).SameFormat(llm.FormatOpenAIResponses) || (*llm.Request)(nil).SameFormat("x") {
-		t.Error("a request with no native body is not of the upstream's format")
+	for _, c := range []struct {
+		format                   string
+		clientStreams, upStreams bool
+		want                     bool
+	}{
+		{llm.FormatAnthropicMessages, false, true, true},
+		{llm.FormatAnthropicMessages, true, false, true},
+		{llm.FormatOpenAIResponses, true, true, true},
+		{llm.FormatOpenAIResponses, false, true, true},
+		{llm.FormatOpenAIResponses, false, false, true},
+		{llm.FormatOpenAIResponses, true, false, false}, // a stream built from a whole reply
+		{llm.FormatGeminiGenerate, true, true, true},
+		{llm.FormatGeminiGenerate, true, false, true},
+		{llm.FormatGeminiGenerate, false, false, true},
+		{llm.FormatGeminiGenerate, false, true, false}, // a whole reply built from a stream
+	} {
+		if got := req(c.format, c.clientStreams).BodyReachesClient(c.format, c.upStreams); got != c.want {
+			t.Errorf("%s, client streams %v, upstream streams %v: %v, want %v", c.format, c.clientStreams, c.upStreams, got, c.want)
+		}
+	}
+	if req(llm.FormatOpenAIResponses, false).BodyReachesClient(llm.FormatGeminiGenerate, false) {
+		t.Error("a request of another format gets the body")
+	}
+	if (&llm.Request{}).BodyReachesClient(llm.FormatOpenAIResponses, false) || (*llm.Request)(nil).BodyReachesClient("x", false) {
+		t.Error("a request with no native body gets the body")
 	}
 }

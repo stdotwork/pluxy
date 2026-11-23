@@ -202,7 +202,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	defer resp.Body.Close()
 	send.headers = llm.ExtractRateLimitHeaders(wire.format, resp.Header)
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
-		return relayStream(ctx, resp.Body, send, wire.format, call.Request.SameFormat(wire.format))
+		return relayStream(ctx, resp.Body, send, wire.format, call.Request.BodyReachesClient(wire.format, true))
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
 	if err != nil {
@@ -215,7 +215,7 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	if err != nil {
 		return llm.MarkContextOverflow(err)
 	}
-	for _, l := range llm.ReplyLosses(losses, call.Request.SameFormat(wire.format)) {
+	for _, l := range llm.ReplyLosses(losses, call.Request.BodyReachesClient(wire.format, false)) {
 		logReplyLoss(l)
 	}
 	for _, ev := range events {
@@ -671,12 +671,12 @@ var decoders = map[string]struct {
 
 // relayStream decodes the upstream stream and sends each event as soon as it is decoded. A
 // blocked send blocks the next upstream read.
-func relayStream(ctx context.Context, body io.Reader, out eventSender, upstreamFormat string, sameFormat bool) error {
+func relayStream(ctx context.Context, body io.Reader, out eventSender, upstreamFormat string, bodyReaches bool) error {
 	r := sse.NewReader(body)
 	dec := decoders[upstreamFormat].stream()
 	// The report in response.start has gone by the time a decoder finds something it had to
 	// leave out of a reply, so its losses are logged, with core's prefix for this extension.
-	defer reportLosses(dec, sameFormat)
+	defer reportLosses(dec, bodyReaches)
 	for {
 		e, err := r.Next()
 		eof := err == io.EOF
@@ -714,12 +714,12 @@ func relayStream(ctx context.Context, body io.Reader, out eventSender, upstreamF
 
 // reportLosses logs what a stream decoder had to leave out of the reply. A decoder without losses
 // has none to log.
-func reportLosses(dec streamDecoder, sameFormat bool) {
+func reportLosses(dec streamDecoder, bodyReaches bool) {
 	lr, ok := dec.(interface{ Losses() []llm.Loss })
 	if !ok {
 		return
 	}
-	for _, l := range llm.ReplyLosses(lr.Losses(), sameFormat) {
+	for _, l := range llm.ReplyLosses(lr.Losses(), bodyReaches) {
 		logReplyLoss(l)
 	}
 }
