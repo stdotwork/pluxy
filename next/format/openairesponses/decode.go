@@ -198,19 +198,29 @@ func extractWebSearchCallSources(raw json.RawMessage, seen map[string]bool, out 
 const maxCodeExecInput = 1 << 20
 
 // extractCodeInterpreterCall reads a terminal code_interpreter_call output item into a canonical
-// CodeExecution. Partial items (in_progress, interpreting) and malformed items return ok=false.
+// CodeExecution. Partial items (in_progress, interpreting) and malformed items return ok=false, and
+// so does a completed item whose outputs the upstream did not give (null or missing): its logs are
+// unknown, so it must not read as a run that printed nothing.
 func extractCodeInterpreterCall(raw json.RawMessage, fallbackCode string) (id string, ce llm.CodeExecution, ok bool) {
 	if len(raw) == 0 || raw[0] != '{' {
 		return "", llm.CodeExecution{}, false
 	}
 	var item struct {
-		ID      string            `json:"id"`
-		Type    string            `json:"type"`
-		Status  string            `json:"status"`
-		Code    *string           `json:"code"`
-		Outputs []json.RawMessage `json:"outputs"`
+		ID      string          `json:"id"`
+		Type    string          `json:"type"`
+		Status  string          `json:"status"`
+		Code    *string         `json:"code"`
+		Outputs json.RawMessage `json:"outputs"`
 	}
 	if json.Unmarshal(raw, &item) != nil || item.Type != "code_interpreter_call" {
+		return "", llm.CodeExecution{}, false
+	}
+	var outputs []json.RawMessage
+	if len(item.Outputs) > 0 && string(item.Outputs) != "null" {
+		if json.Unmarshal(item.Outputs, &outputs) != nil {
+			return "", llm.CodeExecution{}, false
+		}
+	} else if item.Status == "completed" {
 		return "", llm.CodeExecution{}, false
 	}
 	var failed bool
@@ -227,7 +237,7 @@ func extractCodeInterpreterCall(raw json.RawMessage, fallbackCode string) (id st
 	}
 	var out strings.Builder
 	filesOmitted := false
-	for _, oRaw := range item.Outputs {
+	for _, oRaw := range outputs {
 		if len(oRaw) == 0 || oRaw[0] != '{' {
 			continue
 		}
@@ -261,6 +271,51 @@ func extractCodeInterpreterCall(raw json.RawMessage, fallbackCode string) (id st
 		Failed:       failed,
 		FilesOmitted: filesOmitted,
 	}, true
+}
+
+// codeInterpreterCallID reports whether raw is a code_interpreter_call output item, and its ID.
+func codeInterpreterCallID(raw json.RawMessage) (id string, ok bool) {
+	var item struct {
+		ID   string `json:"id"`
+		Type string `json:"type"`
+	}
+	if len(raw) == 0 || raw[0] != '{' || json.Unmarshal(raw, &item) != nil {
+		return "", false
+	}
+	return item.ID, item.Type == "code_interpreter_call"
+}
+
+// noteCodeCall adds the run a code_interpreter_call item holds, or remembers that the item gave
+// none yet. index is its output index, which names an item with no ID. fallback is the code the
+// stream's deltas gave; over says those deltas passed the limit, so the code is left out unless the
+// item itself holds it.
+func (d *StreamDecoder) noteCodeCall(raw json.RawMessage, index int, fallback string, over bool) {
+	id, isCall := codeInterpreterCallID(raw)
+	if !isCall {
+		return
+	}
+	key := id
+	if key == "" {
+		key = fmt.Sprintf("#%d", index)
+	}
+	if d.seenCode[key] {
+		return
+	}
+	if over {
+		d.codeOverKeys[key] = true
+	}
+	over = d.codeOverKeys[key]
+	_, ce, ok := extractCodeInterpreterCall(raw, fallback)
+	if ok && over && ce.Code == "" {
+		ok = false
+	}
+	if !ok {
+		d.codeUnread[key] = true
+		return
+	}
+	d.seenCode[key] = true
+	delete(d.codeUnread, key)
+	d.codeExecs = llm.AppendCodeExecution(d.codeExecs, ce)
 }
 
 // extractImageGenerationCall reads a final Responses image_generation_call output item into a
@@ -407,23 +462,31 @@ type StreamDecoder struct {
 	annRawSize int // bytes of annRaws
 	finishCut  []llm.Loss
 	codeBuf    map[int]*strings.Builder // upstream output_index -> streamed code_interpreter_call code
+	codeOver   map[int]bool             // upstream output_index -> its streamed code passed maxCodeExecInput
 	codeExecs  []llm.CodeExecution
 	seenCode   map[string]bool
-	mediaBytes int
-	seenMedia  map[string]bool
-	losses     []llm.Loss
+	codeUnread map[string]bool // code_interpreter_call items that gave no run, by ID or output index
+	// codeOverKeys are the items whose streamed code passed the limit: only the item's own code
+	// can stand for it, since what was kept is part of the code.
+	codeOverKeys map[string]bool
+	mediaBytes   int
+	seenMedia    map[string]bool
+	losses       []llm.Loss
 }
 
 // NewStreamDecoder returns a decoder for one stream.
 func NewStreamDecoder() *StreamDecoder {
 	return &StreamDecoder{
-		items:     map[int]int{},
-		textLens:  map[int]int{},
-		annRaws:   map[int][]json.RawMessage{},
-		seenSrc:   map[string]bool{},
-		codeBuf:   map[int]*strings.Builder{},
-		seenCode:  map[string]bool{},
-		seenMedia: map[string]bool{},
+		items:        map[int]int{},
+		textLens:     map[int]int{},
+		annRaws:      map[int][]json.RawMessage{},
+		seenSrc:      map[string]bool{},
+		codeBuf:      map[int]*strings.Builder{},
+		codeOver:     map[int]bool{},
+		seenCode:     map[string]bool{},
+		codeUnread:   map[string]bool{},
+		codeOverKeys: map[string]bool{},
+		seenMedia:    map[string]bool{},
 	}
 }
 
@@ -550,22 +613,32 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		}
 		return native(), nil
 	case "response.code_interpreter_call_code.delta":
-		if ev.Delta != "" {
+		if ev.Delta != "" && !d.codeOver[ev.OutputIndex] {
 			buf := d.codeBuf[ev.OutputIndex]
 			if buf == nil {
 				buf = &strings.Builder{}
 				d.codeBuf[ev.OutputIndex] = buf
 			}
-			if buf.Len()+len(ev.Delta) <= maxCodeExecInput {
+			if buf.Len()+len(ev.Delta) > maxCodeExecInput {
+				// The code is too long to keep: drop what came, never keep a part as the run's code.
+				d.codeOver[ev.OutputIndex] = true
+				delete(d.codeBuf, ev.OutputIndex)
+			} else {
 				buf.WriteString(ev.Delta)
 			}
 		}
 		return native(), nil
 	case "response.code_interpreter_call_code.done":
-		if code, ok := ev.Code.(string); ok && code != "" && len(code) <= maxCodeExecInput {
-			buf := &strings.Builder{}
-			buf.WriteString(code)
-			d.codeBuf[ev.OutputIndex] = buf
+		if code, ok := ev.Code.(string); ok && code != "" {
+			if len(code) > maxCodeExecInput {
+				d.codeOver[ev.OutputIndex] = true
+				delete(d.codeBuf, ev.OutputIndex)
+			} else {
+				buf := &strings.Builder{}
+				buf.WriteString(code)
+				d.codeBuf[ev.OutputIndex] = buf
+				delete(d.codeOver, ev.OutputIndex)
+			}
 		}
 		return native(), nil
 	case "response.output_item.done":
@@ -577,16 +650,9 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 				fallback = buf.String()
 				delete(d.codeBuf, ev.OutputIndex)
 			}
-			if id, ce, ok := extractCodeInterpreterCall(ev.Item, fallback); ok {
-				key := id
-				if key == "" {
-					key = fmt.Sprintf("#%d", ev.OutputIndex)
-				}
-				if !d.seenCode[key] {
-					d.seenCode[key] = true
-					d.codeExecs = llm.AppendCodeExecution(d.codeExecs, ce)
-				}
-			}
+			over := d.codeOver[ev.OutputIndex]
+			delete(d.codeOver, ev.OutputIndex)
+			d.noteCodeCall(ev.Item, ev.OutputIndex, fallback, over)
 			if id, media, problem, isImg := extractImageGenerationCall(ev.Item); isImg {
 				key := id
 				if key == "" {
@@ -642,16 +708,7 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		out = d.closeAll(out)
 		for i, itemRaw := range r.Output {
 			d.sources = extractWebSearchCallSources(itemRaw, d.seenSrc, d.sources, &d.cites)
-			if id, ce, ok := extractCodeInterpreterCall(itemRaw, ""); ok {
-				key := id
-				if key == "" {
-					key = fmt.Sprintf("#%d", i)
-				}
-				if !d.seenCode[key] {
-					d.seenCode[key] = true
-					d.codeExecs = llm.AppendCodeExecution(d.codeExecs, ce)
-				}
-			}
+			d.noteCodeCall(itemRaw, i, "", false)
 			if id, media, problem, isImg := extractImageGenerationCall(itemRaw); isImg {
 				key := id
 				if key == "" {
@@ -675,6 +732,10 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			}
 		}
 		f := finishOf(r)
+		if len(d.codeUnread) > 0 {
+			// A call with no result the decoder could read is a run left out.
+			d.codeExecs = llm.LeaveOutCodeExecutions(d.codeExecs)
+		}
 		fin := llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(r.Usage), Sources: d.sources, CodeExecutions: d.codeExecs, Raw: raw}
 		if l, cut := protocol.FitFinish(&fin); cut {
 			d.finishCut = append(d.finishCut, l)
@@ -769,8 +830,12 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 			add(llm.ItemStart{Kind: llm.ItemToolCall, CallID: it.CallID, Name: it.Name}, llm.EventToolInputDelta, it.Arguments, nil, nil)
 		default:
 			sources = extractWebSearchCallSources(raw, seenSrc, sources, &cites)
-			if _, ce, ok := extractCodeInterpreterCall(raw, ""); ok {
-				codeExecs = llm.AppendCodeExecution(codeExecs, ce)
+			if _, isCall := codeInterpreterCallID(raw); isCall {
+				if _, ce, ok := extractCodeInterpreterCall(raw, ""); ok {
+					codeExecs = llm.AppendCodeExecution(codeExecs, ce)
+				} else {
+					codeExecs = llm.LeaveOutCodeExecutions(codeExecs)
+				}
 			}
 			if _, media, problem, isImg := extractImageGenerationCall(raw); isImg {
 				path := fmt.Sprintf("output[%d]", i)

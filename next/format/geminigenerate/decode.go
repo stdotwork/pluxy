@@ -201,8 +201,11 @@ type StreamDecoder struct {
 	seenSrc   map[string]bool
 	cites     llm.CiteBudget
 	// Pending executableCode parts waiting for their codeExecutionResult, and completed runs.
+	// codeLost is set by a code part that never became a run, so the reply's runs end with the
+	// record that says runs were left out.
 	pendingCode []pendingExecCode
 	codeExecs   []llm.CodeExecution
+	codeLost    bool
 	mediaBytes  int
 	losses      []llm.Loss
 	// splitText is set once a media part has closed a text item: Google's offsets then no longer
@@ -676,8 +679,9 @@ func (d *StreamDecoder) decodeOtherCandidate(idx int, cand rawCandidate, out []l
 }
 
 // part adds the events of one content part. Thought text is reasoning, other text is message
-// text, and a function call is a whole tool call (Gemini sends each call complete). Other parts
-// (inline data, code execution) reach a Gemini client in the raw chunk only.
+// text, and a function call is a whole tool call (Gemini sends each call complete). Code execution
+// parts become runs on the finish event, and a part that cannot become one is reported as left
+// out. Inline data is media. Other parts reach a Gemini client in the raw chunk only.
 func (d *StreamDecoder) part(partIdx int, raw json.RawMessage, out []llm.Event) []llm.Event {
 	pm := object(raw)
 	if pm == nil {
@@ -707,6 +711,8 @@ func (d *StreamDecoder) part(partIdx int, raw json.RawMessage, out []llm.Event) 
 				lang = ""
 			}
 			d.pendingCode = append(d.pendingCode, pendingExecCode{id: ec.ID, code: ec.Code, lang: lang})
+		} else {
+			d.codeLost = true
 		}
 		return out
 	}
@@ -716,40 +722,45 @@ func (d *StreamDecoder) part(partIdx int, raw json.RawMessage, out []llm.Event) 
 			Outcome string `json:"outcome"`
 			Output  string `json:"output"`
 		}
-		if json.Unmarshal(resRaw, &res) == nil {
-			var failed bool
-			validOutcome := false
-			switch res.Outcome {
-			case "OUTCOME_OK":
-				validOutcome = true
-			case "OUTCOME_FAILED", "OUTCOME_DEADLINE_EXCEEDED":
-				validOutcome = true
-				failed = true
-			}
-			if validOutcome {
-				matchIdx := -1
-				if res.ID != "" {
-					for i, pc := range d.pendingCode {
-						if pc.id == res.ID {
-							matchIdx = i
-							break
-						}
-					}
-				} else if len(d.pendingCode) > 0 {
-					matchIdx = 0
-				}
-				if matchIdx >= 0 {
-					pc := d.pendingCode[matchIdx]
-					d.pendingCode = append(d.pendingCode[:matchIdx], d.pendingCode[matchIdx+1:]...)
-					d.codeExecs = llm.AppendCodeExecution(d.codeExecs, llm.CodeExecution{
-						Code:     pc.code,
-						Language: pc.lang,
-						Output:   res.Output,
-						Failed:   failed,
-					})
-				}
-			}
+		if json.Unmarshal(resRaw, &res) != nil {
+			d.codeLost = true
+			return out
 		}
+		// A result takes the code it answers whatever its outcome, so a result this decoder
+		// cannot read never leaves its code to pair with the next result.
+		matchIdx := -1
+		if res.ID != "" {
+			for i, pc := range d.pendingCode {
+				if pc.id == res.ID {
+					matchIdx = i
+					break
+				}
+			}
+		} else if len(d.pendingCode) > 0 {
+			matchIdx = 0
+		}
+		if matchIdx < 0 {
+			d.codeLost = true
+			return out
+		}
+		pc := d.pendingCode[matchIdx]
+		d.pendingCode = append(d.pendingCode[:matchIdx], d.pendingCode[matchIdx+1:]...)
+		var failed bool
+		switch res.Outcome {
+		case "OUTCOME_OK":
+		case "OUTCOME_FAILED", "OUTCOME_DEADLINE_EXCEEDED":
+			failed = true
+		default:
+			// OUTCOME_UNSPECIFIED and outcomes added later say nothing about how the run ended.
+			d.codeLost = true
+			return out
+		}
+		d.codeExecs = llm.AppendCodeExecution(d.codeExecs, llm.CodeExecution{
+			Code:     pc.code,
+			Language: pc.lang,
+			Output:   res.Output,
+			Failed:   failed,
+		})
 		return out
 	}
 	idRaw := pm["inlineData"]
@@ -896,7 +907,12 @@ func (d *StreamDecoder) Close() ([]llm.Event, error) {
 	var out []llm.Event
 	out = d.closeItem(&d.think, out)
 	out = d.closeItem(&d.text, out)
-	return append(out, llm.Event{Type: llm.EventFinish, Finish: d.finish, Usage: d.usage, Sources: d.sources, CodeExecutions: d.codeExecs}), nil
+	runs := d.codeExecs
+	if d.codeLost || len(d.pendingCode) > 0 {
+		// Code that never got a result, or a result that could not be read, is a run left out.
+		runs = llm.LeaveOutCodeExecutions(runs)
+	}
+	return append(out, llm.Event{Type: llm.EventFinish, Finish: d.finish, Usage: d.usage, Sources: d.sources, CodeExecutions: runs}), nil
 }
 
 // DecodeResponse turns an upstream non-streamed GenerateContentResponse into the events a stream

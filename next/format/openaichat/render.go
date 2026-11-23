@@ -438,7 +438,7 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 			s.lose("code_execution", "Chat Completions has no place for code execution results")
 			for _, ce := range ev.CodeExecutions {
 				if ce.FilesOmitted {
-					s.lose("code_execution.files", "files, images or code runs past the size limit have no place in Chat Completions")
+					s.lose("code_execution.files", "files, images, and runs left out (past the size limit or with no result to read) have no place in Chat Completions")
 					break
 				}
 			}
@@ -716,7 +716,7 @@ func (a *Aggregator) Add(ev llm.Event) {
 			a.lose("code_execution", "Chat Completions has no place for code execution results")
 			for _, ce := range ev.CodeExecutions {
 				if ce.FilesOmitted {
-					a.lose("code_execution.files", "files, images or code runs past the size limit have no place in Chat Completions")
+					a.lose("code_execution.files", "files, images, and runs left out (past the size limit or with no result to read) have no place in Chat Completions")
 					break
 				}
 			}

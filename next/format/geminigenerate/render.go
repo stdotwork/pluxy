@@ -311,7 +311,8 @@ const maxSegmentTextBytes = 1 << 20
 // codeExecParts turns canonical CodeExecution records into Gemini executableCode and
 // codeExecutionResult parts. Gemini's ExecutableCode.language enum has only PYTHON, so a run in
 // another language, such as a shell command, is left out and reported rather than shown as Python.
-// So is a result with no code to pair it with. Omitted files and images are reported as dropped.
+// So is a result with no code to pair it with. Omitted files and images, and the record for runs left
+// out (past the size limit, or with no result the decoder could read), are reported as dropped.
 func (b *builder) codeExecParts(runs []llm.CodeExecution) []any {
 	if len(runs) == 0 {
 		return nil
@@ -319,7 +320,7 @@ func (b *builder) codeExecParts(runs []llm.CodeExecution) []any {
 	var out []any
 	for _, run := range runs {
 		if run.FilesOmitted {
-			b.lose("code_execution.files", "files, images or code runs past the size limit have no place in a GenerateContentResponse")
+			b.lose("code_execution.files", "files, images, and runs left out (past the size limit or with no result to read) have no place in a GenerateContentResponse")
 		}
 		if run == (llm.CodeExecution{FilesOmitted: true}) {
 			continue
@@ -893,8 +894,12 @@ func (a *Aggregator) Response() ([]byte, error) {
 	// the model events, losing its raw fields; the extension asks a Gemini upstream to stream
 	// only when the client streams, so this does not happen yet.
 	b := &a.b
-	parts := b.codeExecParts(a.codeExecutions)
+	runParts := b.codeExecParts(a.codeExecutions)
+	var parts []any
 	var cited []citedSegment
+	// The runs carry no position, so they go where a stream puts them: after the last text,
+	// thought or media part, and before the calls that follow it.
+	runsAt := 0
 	for _, p := range a.order {
 		switch p.kind {
 		case llm.ItemMessage:
@@ -907,14 +912,18 @@ func (a *Aggregator) Response() ([]byte, error) {
 				})
 			}
 			parts = append(parts, obj{"text": text})
+			runsAt = len(parts)
 		case llm.ItemReasoning:
 			parts = append(parts, obj{"text": p.text.String(), "thought": true})
+			runsAt = len(parts)
 		case llm.ItemToolCall:
 			parts = append(parts, b.callPart(p.call))
 		case llm.EventMedia:
 			parts = append(parts, obj{"inlineData": obj{"mimeType": p.media.MediaType, "data": p.media.Data}})
+			runsAt = len(parts)
 		}
 	}
+	parts = slices.Insert(parts, runsAt, runParts...)
 	finish := a.finish
 	if finish == nil {
 		finish = &llm.Finish{Reason: llm.FinishOther}

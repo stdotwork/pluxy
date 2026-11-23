@@ -691,8 +691,17 @@ func TestCodeExecutionOnlyReplyNoText(t *testing.T) {
 	checkGeminiCodeParts(t, "code-only-stream", collectGeminiParts(parseGeminiSSEChunks(t, gStr)), "print(42)", "OUTCOME_OK", "42\n", "")
 }
 
+// wantOnlyLeftOut fails unless runs is exactly the one record that says runs were left out.
+func wantOnlyLeftOut(t *testing.T, label string, runs []llm.CodeExecution) {
+	t.Helper()
+	if len(runs) != 1 || runs[0] != (llm.CodeExecution{FilesOmitted: true}) {
+		t.Errorf("%s runs = %+v, want only the record that runs were left out", label, runs)
+	}
+}
+
+// A run that gave no usable result is not carried, and is reported as left out.
 func TestCodeExecutionMalformedAndUnmatchedDropped(t *testing.T) {
-	// 1. Messages: result with no matching call + unknown result type -> dropped, text intact.
+	// 1. Messages: result with no matching call + unknown result type -> reported as left out, text intact.
 	msgBad := `{
 		"id":"m_bad","type":"message","role":"assistant","model":"claude-sonnet-5",
 		"content":[
@@ -707,11 +716,9 @@ func TestCodeExecutionMalformedAndUnmatchedDropped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("messages bad: %v", err)
 	}
-	if len(mevs[len(mevs)-1].CodeExecutions) != 0 {
-		t.Errorf("messages bad produced %+v, want 0", mevs[len(mevs)-1].CodeExecutions)
-	}
+	wantOnlyLeftOut(t, "messages bad", mevs[len(mevs)-1].CodeExecutions)
 
-	// 2. Responses: in_progress (partial) and malformed outputs -> dropped, text intact.
+	// 2. Responses: in_progress (partial) and malformed outputs -> reported as left out, text intact.
 	respBad := `{
 		"id":"r_bad","object":"response","created_at":1,"status":"completed","model":"gpt-6.2-astra",
 		"output":[
@@ -723,11 +730,9 @@ func TestCodeExecutionMalformedAndUnmatchedDropped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("responses bad: %v", err)
 	}
-	if len(revs[len(revs)-1].CodeExecutions) != 0 {
-		t.Errorf("responses bad produced %+v, want 0", revs[len(revs)-1].CodeExecutions)
-	}
+	wantOnlyLeftOut(t, "responses bad", revs[len(revs)-1].CodeExecutions)
 
-	// 3. Gemini: result with no matching executableCode + unknown outcome -> dropped, text intact.
+	// 3. Gemini: result with no matching executableCode + unknown outcome -> reported as left out, text intact.
 	gemBad := `{
 		"responseId":"g_bad","modelVersion":"gemini-3.8-flash",
 		"candidates":[{"index":0,"content":{"role":"model","parts":[
@@ -741,9 +746,7 @@ func TestCodeExecutionMalformedAndUnmatchedDropped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gemini bad: %v", err)
 	}
-	if len(gevs[len(gevs)-1].CodeExecutions) != 0 {
-		t.Errorf("gemini bad produced %+v, want 0", gevs[len(gevs)-1].CodeExecutions)
-	}
+	wantOnlyLeftOut(t, "gemini bad", gevs[len(gevs)-1].CodeExecutions)
 }
 
 func TestCodeExecutionFilesAndImagesReportedAsLoss(t *testing.T) {
@@ -805,6 +808,15 @@ func compactBody(t *testing.T, raw string) string {
 	return buf.String()
 }
 
+// wantRuns fails unless the finish event of evs holds n runs, so a test that then shows a
+// byte-identical reply has proved the decoder read the runs and the renderer left the reply alone.
+func wantRuns(t *testing.T, label string, evs []llm.Event, n int) {
+	t.Helper()
+	if got := len(evs[len(evs)-1].CodeExecutions); got != n {
+		t.Errorf("%s: finish holds %d runs, want %d", label, got, n)
+	}
+}
+
 func TestCodeExecutionSameFormatByteIdentical(t *testing.T) {
 	// 1. Messages non-stream & stream.
 	msgWire := compactBody(t, messagesBashReply)
@@ -812,6 +824,7 @@ func TestCodeExecutionSameFormatByteIdentical(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	wantRuns(t, "messages", mevs, 1)
 	mBody, mLosses := renderMessagesAgg(t, roundTripEvents(t, mevs))
 	if string(mBody) != msgWire {
 		t.Errorf("messages non-stream changed:\ngot:  %s\nwant: %s", mBody, msgWire)
@@ -850,6 +863,7 @@ func TestCodeExecutionSameFormatByteIdentical(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	wantRuns(t, "responses", revs, 1)
 	ra := openairesponses.NewAggregator(llm.Request{Model: "gpt-6.2-astra"})
 	for _, ev := range roundTripEvents(t, revs) {
 		ra.Add(ev)
@@ -892,6 +906,7 @@ func TestCodeExecutionSameFormatByteIdentical(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	wantRuns(t, "gemini", gevs, 1)
 	ga := geminigenerate.NewAggregator()
 	for _, ev := range roundTripEvents(t, gevs) {
 		ga.Add(ev)

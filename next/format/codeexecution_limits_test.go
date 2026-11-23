@@ -64,30 +64,36 @@ func geminiReplyFrom(t *testing.T, body string) (string, []llm.Loss) {
 	return string(out), a.Losses()
 }
 
-// Gemini's language enum has only Python, so a shell command must not be shown as Python.
+// Gemini's language enum has only Python, so a shell command must not be shown as Python, while a
+// Python run beside it is shown.
 func TestBashRunIsNotShownAsPython(t *testing.T) {
 	out, losses := geminiReplyFrom(t, `{"id":"m","type":"message","role":"assistant","model":"claude-opus-4-5","content":[
+		{"type":"server_tool_use","id":"srvtoolu_p","name":"code_execution","input":{"code":"print(40+2)"}},
+		{"type":"code_execution_tool_result","tool_use_id":"srvtoolu_p","content":{"type":"code_execution_result","stdout":"42\n","stderr":"","return_code":0,"content":[]}},
 		{"type":"server_tool_use","id":"srvtoolu_b","name":"bash_code_execution","input":{"command":"ls -la"}},
 		{"type":"bash_code_execution_tool_result","tool_use_id":"srvtoolu_b","content":{"type":"bash_code_execution_result","stdout":"a","stderr":"","return_code":0,"content":[]}},
 		{"type":"text","text":"done"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
-	if strings.Contains(out, "executableCode") || strings.Contains(out, "codeExecutionResult") {
+	if strings.Count(out, `"executableCode"`) != 1 || !strings.Contains(out, "print(40+2)") {
+		t.Errorf("the Python run is not shown as one Gemini code part: %s", out)
+	}
+	if strings.Contains(out, "ls -la") {
 		t.Errorf("bash run shown as a Gemini code part: %s", out)
 	}
 	if !strings.Contains(out, "done") {
 		t.Errorf("text lost: %s", out)
 	}
-	if len(losses) == 0 {
-		t.Error("no loss reported for the bash run")
+	if !hasLossPrefix(losses, "code_execution") {
+		t.Errorf("no code execution loss reported for the bash run: %+v", losses)
 	}
 }
 
-// A block the decoder cannot read still counts as lost for a Gemini client.
+// A block the decoder cannot read is reported as a code execution loss for a Gemini client.
 func TestUnreadCodeBlockIsReportedLost(t *testing.T) {
 	_, losses := geminiReplyFrom(t, `{"id":"m","type":"message","role":"assistant","model":"claude-opus-4-5","content":[
 		{"type":"server_tool_use","id":"srvtoolu_u","name":"bash_code_execution","input":{"command":"ls"}},
 		{"type":"bash_code_execution_tool_result","tool_use_id":"srvtoolu_u","content":{"type":"future_result"}},
 		{"type":"text","text":"hi"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
-	if len(losses) == 0 {
-		t.Error("no loss reported for a code block that was not carried")
+	if !hasLossPrefix(losses, "code_execution") {
+		t.Errorf("no code execution loss reported for a code block that was not carried: %+v", losses)
 	}
 }
