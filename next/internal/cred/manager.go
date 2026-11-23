@@ -268,19 +268,10 @@ func (m *Manager) Credential(ctx context.Context, extension, id string) (*protoc
 		return nil, 0, credentialError(llm.CodeAuth, "the provider refused the grant; the account needs a new login")
 	}
 	now := m.now()
-	// A renewable credential with no key has nothing to present, so it counts as expired.
-	expired := keyless(rec.Credential) || rec.Credential.ExpiresAt != 0 && rec.Credential.ExpiresAt <= now.Unix()
+	expired := rec.Credential.ExpiresAt != 0 && rec.Credential.ExpiresAt <= now.Unix()
 	if !m.due(rec) && expired && m.Refreshable(rec) {
 		// Renewal is waiting after a failure, and the credential no longer works.
-		msg := "the credential has expired and renewal is waiting after a failure"
-		if last := m.LastRenewalError(rec); last != nil {
-			msg += ": " + last.Message
-		}
-		out := credentialError(llm.CodeUnavailable, msg)
-		if until := m.retryAt(rec); until.After(now) {
-			out.RetryAfterMS = until.Sub(now).Milliseconds()
-		}
-		return nil, 0, out
+		return nil, 0, m.waitingError(rec, now)
 	}
 	if m.due(rec) {
 		r, e := m.renew(ctx, rec, false)
@@ -297,7 +288,7 @@ func (m *Manager) Credential(ctx context.Context, extension, id string) (*protoc
 			}
 		case e.Code == llm.CodeCancelled && ctx.Err() != nil:
 			return nil, 0, &llm.Error{Code: llm.CodeCancelled, Message: "the request was cancelled"}
-		case rec.Credential.ExpiresAt > now.Unix() && !rejectedGrant(e):
+		case rec.Credential.ExpiresAt > now.Unix() && !rejectedGrant(e) && !keyless(rec.Credential):
 			// Renewal failed but the credential still works for now: use it.
 		default:
 			out := credentialError(llm.CodeUnavailable, "the credential has expired and renewing it failed: "+e.Message)
@@ -309,8 +300,27 @@ func (m *Manager) Credential(ctx context.Context, extension, id string) (*protoc
 			return nil, 0, out
 		}
 	}
+	// The one place a credential leaves: a keyless one has nothing to present, whichever way it
+	// got here (a renewal that gave no key, or one that failed while another request renewed).
+	if keyless(rec.Credential) && m.Refreshable(rec) {
+		return nil, 0, m.waitingError(rec, now)
+	}
 	c := rec.Credential
 	return &c, rec.Version, nil
+}
+
+// waitingError is what a request gets while rec's renewal waits out its backoff and the
+// credential has nothing to present.
+func (m *Manager) waitingError(rec Record, now time.Time) *llm.Error {
+	msg := "the credential has expired and renewal is waiting after a failure"
+	if last := m.LastRenewalError(rec); last != nil {
+		msg += ": " + last.Message
+	}
+	out := credentialError(llm.CodeUnavailable, msg)
+	if until := m.retryAt(rec); until.After(now) {
+		out.RetryAfterMS = until.Sub(now).Milliseconds()
+	}
+	return out
 }
 
 // Rejected renews account id's credential after the upstream refused version, and reports
@@ -364,11 +374,12 @@ func renewAt(c protocol.Credential) int64 {
 	return 0
 }
 
-// keyless reports whether c holds no key to present, such as an imported Meta device token or a
-// lone refresh token: it can only be renewed. It matters only for a credential core renews
-// (see Refreshable); a service account or other kind that no extension renews is not this.
+// keyless reports whether c is an OAuth credential with no access token, such as an imported
+// Meta device token or a lone refresh token: it can only be renewed. A credential of an
+// extension's own kind keeps its secret in its data, so it is never keyless. Core acts on this
+// only for a credential it renews (see Refreshable).
 func keyless(c protocol.Credential) bool {
-	return c.Kind != protocol.CredentialAPIKey && c.AccessToken == ""
+	return c.Kind == protocol.CredentialOAuth && c.AccessToken == ""
 }
 
 // due reports whether rec's credential should be renewed before use. A keyless one is due
@@ -506,8 +517,9 @@ func (m *Manager) apply(cur Record, cred *protocol.Credential, perr *llm.Error) 
 			return cur, credentialError(llm.CodeInternal, "saving the renewed credential failed")
 		}
 		rn := &renewal{at: now}
-		if at := renewAt(*cred); at != 0 && now.Unix() >= at {
-			// Ineffective: the new credential is already due for renewal again.
+		if at := renewAt(*cred); at != 0 && now.Unix() >= at || keyless(*cred) {
+			// Ineffective: the new credential is already due for renewal again, or has no key
+			// to present.
 			rn.until = now.Add(ineffectiveBackoff)
 		}
 		m.setRenewal(next, rn)

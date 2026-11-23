@@ -34,9 +34,16 @@ type fakeProvider struct {
 	started chan struct{} // gets a value as each refresh starts
 	fail    *llm.Error    // returned instead of a credential, when set
 	ttl     time.Duration // lifetime of issued access tokens
+	noKey   bool          // renew successfully but without an access token, as a provider answering {} does
+	onInfo  func(n int)   // called with the count of Info calls so far, when not nil
+	infos   int
 }
 
 func (p *fakeProvider) Info() protocol.Info {
+	if p.onInfo != nil {
+		p.infos++
+		p.onInfo(p.infos)
+	}
 	return protocol.Info{ID: provID, Operations: []string{protocol.OpGenerate, protocol.OpLogin, protocol.OpRefresh},
 		LoginMethods: []protocol.LoginMethod{{Method: "device", Kind: protocol.LoginDevice}}}
 }
@@ -61,6 +68,9 @@ func (p *fakeProvider) Refresh(ctx context.Context, a protocol.Account) (*protoc
 	p.calls++
 	if p.fail != nil {
 		return nil, p.fail
+	}
+	if p.noKey {
+		return &protocol.Credential{Kind: protocol.CredentialOAuth, RefreshToken: "refresh-nokey"}, nil
 	}
 	if p.used == nil {
 		p.used = map[string]bool{}
@@ -322,27 +332,30 @@ func TestFailedRenewalBacksOff(t *testing.T) {
 
 // An account that holds no key yet (an imported Meta device token, or a refresh token alone) has
 // nothing to present until its first renewal works. While that renewal waits out its backoff, a
-// request gets the renewal's failure, never a credential with an empty key.
+// request gets the renewal's failure, never a credential with an empty key, whatever the
+// credential's expiry says.
 func TestKeylessCredentialIsNeverHandedOut(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		refreshAt int64 // 0 for none, else seconds from now
+		expiresIn int64 // 0 for none, else seconds from now
 	}{
-		{"refresh due", -1},
-		{"no refresh time", 0},
+		{"refresh due", -1, 0},
+		{"no refresh time", 0, 0},
+		{"future expiry", 0, 3600},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &fakeProvider{fail: &llm.Error{Code: llm.CodeUnavailable, Retryable: true, Scope: llm.ScopeEndpoint, Message: "mint failed"}}
 			m, store := newManager(t, p, time.Hour)
-			rec, _ := store.Get("acct")
-			if _, err := store.Update("acct", rec.Registration, rec.Version, func(r *Record) {
-				r.Credential.AccessToken, r.Credential.ExpiresAt = "", 0
+			makeKeyless(t, store, func(c *protocol.Credential) {
+				c.AccessToken, c.ExpiresAt = "", 0
 				if tc.refreshAt != 0 {
-					r.Credential.RefreshAt = time.Now().Add(time.Duration(tc.refreshAt) * time.Second).Unix()
+					c.RefreshAt = time.Now().Add(time.Duration(tc.refreshAt) * time.Second).Unix()
 				}
-			}); err != nil {
-				t.Fatal(err)
-			}
+				if tc.expiresIn != 0 {
+					c.ExpiresAt = time.Now().Add(time.Duration(tc.expiresIn) * time.Second).Unix()
+				}
+			})
 			for i := range 3 {
 				c, _, e := m.Credential(context.Background(), provID, "acct")
 				if c != nil || e == nil || e.Code != llm.CodeUnavailable || !e.Retryable || e.Scope != llm.ScopeCredential || e.RetryAfterMS <= 0 {
@@ -364,6 +377,127 @@ func TestKeylessCredentialIsNeverHandedOut(t *testing.T) {
 			}
 			if c, _, e := m.Credential(context.Background(), provID, "acct"); e != nil || c.AccessToken == "" {
 				t.Errorf("Credential after a renewal = %+v, %v; want the minted key", c, e)
+			}
+		})
+	}
+}
+
+// makeKeyless changes the stored credential of the account "acct".
+func makeKeyless(t *testing.T, store *Store, change func(*protocol.Credential)) {
+	t.Helper()
+	rec, _ := store.Get("acct")
+	if _, err := store.Update("acct", rec.Registration, rec.Version, func(r *Record) { change(&r.Credential) }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A renewal that succeeds without a key (a token endpoint answering {}) gives nothing to present.
+// It counts as ineffective: no request gets an empty key, and the renewal is repeated only after
+// the ineffective backoff, not on every request.
+func TestRenewalWithoutKeyIsIneffective(t *testing.T) {
+	p := &fakeProvider{noKey: true}
+	m, _ := newManager(t, p, time.Minute) // due at once
+	var offset atomic.Int64
+	start := time.Now()
+	m.now = func() time.Time { return start.Add(time.Duration(offset.Load())) }
+	for i := range 20 {
+		c, _, e := m.Credential(context.Background(), provID, "acct")
+		if c != nil || e == nil || e.Code != llm.CodeUnavailable || !e.Retryable || e.Scope != llm.ScopeCredential || e.RetryAfterMS <= 0 {
+			t.Fatalf("request %d: Credential = %+v, %+v; want no credential and a retryable credential-scoped unavailable with retry_after_ms", i+1, c, e)
+		}
+	}
+	if c := p.refreshCalls(); c != 1 {
+		t.Errorf("refresh calls after 20 requests = %d, want 1", c)
+	}
+	offset.Store(int64(ineffectiveBackoff + time.Second))
+	for range 20 {
+		if c, _, _ := m.Credential(context.Background(), provID, "acct"); c != nil {
+			t.Fatalf("Credential = %+v after the backoff, want none", c)
+		}
+	}
+	if c := p.refreshCalls(); c != 2 {
+		t.Errorf("refresh calls after the backoff = %d, want 2 (one more)", c)
+	}
+}
+
+// A credential of an extension's own kind keeps its secret in data, not in the access token: it
+// is not keyless, and core hands it out as it is, without renewing it first.
+func TestOwnKindCredentialIsNotKeyless(t *testing.T) {
+	p := &fakeProvider{}
+	m, store := newManager(t, p, time.Hour)
+	makeKeyless(t, store, func(c *protocol.Credential) {
+		*c = protocol.Credential{Kind: "session", Data: json.RawMessage(`{"cookie":"c"}`)}
+	})
+	for i := range 3 {
+		c, _, e := m.Credential(context.Background(), provID, "acct")
+		if e != nil || c == nil || c.Kind != "session" || string(c.Data) != `{"cookie":"c"}` {
+			t.Fatalf("request %d: Credential = %+v, %+v; want the stored credential", i+1, c, e)
+		}
+	}
+	if c := p.refreshCalls(); c != 0 {
+		t.Errorf("refresh calls = %d, want 0", c)
+	}
+}
+
+// noRefresh is a provider extension without a refresh operation.
+type noRefresh struct{ *fakeProvider }
+
+func (noRefresh) Info() protocol.Info {
+	return protocol.Info{ID: provID, Operations: []string{protocol.OpGenerate}}
+}
+
+// A credential without a key that no extension renews is handed out as it is, as before.
+func TestKeylessCredentialWithoutRefreshIsHandedOut(t *testing.T) {
+	p := &fakeProvider{}
+	store, err := Open(FileBackend{Dir: filepath.Join(t.TempDir(), "credentials")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(Record{ID: "acct", Extension: provID, State: StateActive,
+		Credential: protocol.Credential{Kind: protocol.CredentialOAuth, RefreshToken: "r"}}); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager(store, single{noRefresh{p}}, Options{})
+	t.Cleanup(m.Close)
+	c, _, e := m.Credential(context.Background(), provID, "acct")
+	if e != nil || c == nil || c.RefreshToken != "r" {
+		t.Fatalf("Credential = %+v, %+v; want the stored credential", c, e)
+	}
+	if n := p.refreshCalls(); n != 0 {
+		t.Errorf("refresh calls = %d, want 0", n)
+	}
+}
+
+// Another request's failed renewal can land between the moments one request decides whether to
+// renew and whether to hand the credential out. Whenever it lands, the request does not get an
+// empty key.
+func TestKeylessCredentialIsNotHandedOutWhenARenewalFailsMeanwhile(t *testing.T) {
+	// Info is asked once per decision: whether to renew first, whether again.
+	for landsAt := 1; landsAt <= 2; landsAt++ {
+		t.Run(fmt.Sprintf("at Info call %d", landsAt), func(t *testing.T) {
+			p := &fakeProvider{}
+			m, store := newManager(t, p, time.Hour)
+			makeKeyless(t, store, func(c *protocol.Credential) { c.AccessToken, c.ExpiresAt = "", 0 })
+			fired := false
+			p.onInfo = func(n int) {
+				if n != landsAt || fired {
+					return
+				}
+				fired = true
+				p.mu.Lock()
+				p.fail = &llm.Error{Code: llm.CodeUnavailable, Retryable: true, Scope: llm.ScopeEndpoint, Message: "mint failed"}
+				p.mu.Unlock()
+				p.onInfo = nil // the renewal below asks for Info too
+				if _, err := m.Refresh(context.Background(), "acct"); err == nil {
+					t.Error("the other request's renewal worked, want it to fail")
+				}
+			}
+			c, _, e := m.Credential(context.Background(), provID, "acct")
+			if !fired {
+				t.Fatalf("the request asked for Info only %d times; the other renewal never landed", p.infos)
+			}
+			if c != nil || e == nil {
+				t.Errorf("Credential = %+v, %+v; want no credential", c, e)
 			}
 		})
 	}
