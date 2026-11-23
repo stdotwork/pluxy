@@ -234,11 +234,10 @@ type citedSegment struct {
 
 // buildGroundingMetadata turns canonical citations and sources into Gemini's groundingMetadata
 // object, converting Unicode code point (rune) ranges to UTF-8 byte offsets. Returns nil when
-// there are no valid http/https sources or citations, and, as its second result, the bytes of
-// cited text it wrote. Each support repeats its cited text, so one long message with many
+// there are no valid http/https sources or citations. Each support repeats its cited text, so one long message with many
 // citations would grow by that text each time; past maxSegmentTextBytes in all the text is left
 // out (the offsets stay) and b records the loss.
-func buildGroundingMetadata(segments []citedSegment, sources []llm.Source, b *builder) (obj, int) {
+func buildGroundingMetadata(segments []citedSegment, sources []llm.Source, b *builder) obj {
 	textBytes := 0
 	chunkIdx := map[string]int{}
 	var chunks []any
@@ -296,13 +295,13 @@ func buildGroundingMetadata(segments []citedSegment, sources []llm.Source, b *bu
 		addChunk(s.URL, s.Title)
 	}
 	if len(chunks) == 0 {
-		return nil, 0
+		return nil
 	}
 	gm := obj{"groundingChunks": chunks}
 	if len(supports) > 0 {
 		gm["groundingSupports"] = supports
 	}
-	return gm, textBytes
+	return gm
 }
 
 // maxSegmentTextBytes bounds the cited text a reply's groundingSupports repeat, in all.
@@ -636,7 +635,7 @@ func (s *StreamWriter) Write(ev llm.Event) error {
 			parts = append(parts, b.callPart(s.calls[idx]))
 		}
 		resp := b.response(parts, ev.Finish, ev.Usage)
-		if gm, _ := buildGroundingMetadata(s.cited, ev.Sources, b); gm != nil {
+		if gm := buildGroundingMetadata(s.cited, ev.Sources, b); gm != nil {
 			resp["candidates"].([]any)[0].(obj)["groundingMetadata"] = gm
 		}
 		return s.emit(resp)
@@ -676,6 +675,8 @@ type Aggregator struct {
 	codeExecutions []llm.CodeExecution
 	size           int
 	media          []*aggPart // the media parts the reply still holds, in the order they came
+	segText        int        // the cited text the supports will repeat, by the most they can
+	reserve        int        // what Response adds beyond what Size counts, for the loss it may report
 }
 
 // NewAggregator returns an empty aggregator.
@@ -689,13 +690,32 @@ func (a *Aggregator) Losses() []llm.Loss { return a.b.losses }
 // its text and the images that do, with a loss for each kind it left out.
 func (a *Aggregator) Add(ev llm.Event) {
 	a.add(ev)
-	for a.Size() > llm.MaxNonStreamedReplyBytes && len(a.media) > 0 {
+	for a.Size()+a.reserve > llm.MaxNonStreamedReplyBytes && len(a.media) > 0 {
 		p := a.media[len(a.media)-1]
 		a.media = a.media[:len(a.media)-1]
 		a.size -= len(p.media.MediaType) + len(p.media.Data) + partOverhead
 		a.b.lose("media."+p.media.Kind, fmt.Sprintf("left out: the reply would pass %d MiB, the limit for a non-streamed reply", llm.MaxNonStreamedReplyBytes>>20))
 		p.kind, p.media = "", nil
 	}
+}
+
+// segmentText returns how many bytes more of cited text the supports of a message item of textLen
+// bytes with cits may repeat, at most, counting every cited range at its largest (four bytes a
+// code point, and no more than the text) and all of them against maxSegmentTextBytes. Response
+// writes no more than this, so the check against the reply limit sees the reply it makes.
+func (a *Aggregator) segmentText(textLen int, cits []llm.Citation) int {
+	n := 0
+	for _, c := range cits {
+		if c.StartIndex != nil && c.EndIndex != nil && *c.EndIndex >= *c.StartIndex {
+			n += min(textLen, 4*(*c.EndIndex-*c.StartIndex))
+		}
+	}
+	grown := min(maxSegmentTextBytes, a.segText+n) - a.segText
+	a.segText += grown
+	if a.segText >= maxSegmentTextBytes {
+		a.reserve = 1 << 10 // the loss Response reports for text left out
+	}
+	return grown
 }
 
 func (a *Aggregator) add(ev llm.Event) {
@@ -817,11 +837,14 @@ func (a *Aggregator) add(ev llm.Event) {
 			a.b.lose("content.thoughtSignature", "a Devin reasoning signature, which an unstreamed GenerateContentResponse does not carry")
 		}
 		if p := a.parts[ev.Index]; p != nil {
-			// A reply of this format keeps its citations in the chunks it holds already.
-			if len(ev.Citations) > 0 && !a.native {
+			if len(ev.Citations) > 0 {
 				p.citations = ev.Citations
-				for _, c := range ev.Citations {
-					a.size += len(c.URL) + len(c.Title) + 48
+				// A reply of this format that is rebuilt from its chunks has them counted already.
+				if !a.native {
+					for _, c := range ev.Citations {
+						a.size += len(c.URL) + len(c.Title) + 48
+					}
+					a.size += a.segmentText(p.text.Len(), ev.Citations)
 				}
 			}
 			if p.call != nil {
@@ -896,9 +919,8 @@ func (a *Aggregator) Response() ([]byte, error) {
 		finish = &llm.Finish{Reason: llm.FinishOther}
 	}
 	resp := b.response(parts, finish, a.usage)
-	if gm, textBytes := buildGroundingMetadata(cited, a.sources, b); gm != nil {
+	if gm := buildGroundingMetadata(cited, a.sources, b); gm != nil {
 		resp["candidates"].([]any)[0].(obj)["groundingMetadata"] = gm
-		a.size += textBytes
 	}
 	if len(a.cands) > 0 {
 		idxs := make([]int, 0, len(a.cands))

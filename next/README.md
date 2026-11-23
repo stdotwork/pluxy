@@ -948,8 +948,9 @@ non-streaming Chat Completions `url_citation` annotations, and Gemini `grounding
 no usable range covers its whole message there. A Gemini citation lands on the message item that holds
 its text, also when a thought signature or a function call split the reply's text into several items;
 one that cannot be placed on a single item is reported as dropped. One reply keeps at most 4 MiB of
-citations and sources in all, whichever format they come from; the rest are left out and reported
-as dropped. A Gemini client's `groundingSupports` repeat each citation's cited text, so they repeat
+citations and, apart from them, 4 MiB of sources, whichever format they come from; the rest are left
+out and reported as dropped (not for a client of the upstream's own format, whose reply holds them
+all). A Gemini client's `groundingSupports` repeat each citation's cited text, so they repeat
 at most 1 MiB of it in all and leave `segment.text` out past that (the offsets stay, and it is
 reported as dropped). A same-format Chat reply keeps the upstream's
 `annotations` (streamed and non-streamed, bounded at 4 MiB per reply). Cross-format citations and
@@ -981,8 +982,9 @@ with `codeExecutionResult` render as Gemini `executableCode` and `codeExecutionR
 (streaming and non-streaming). Gemini's code part holds only Python, so a shell or file-editor run
 is left out and reported as dropped, as are omitted files and images. One reply keeps at most 4 MiB
 of runs, and runs past that are reported as dropped. A reply that already carries its runs and
-sources in its own body (same format) leaves them out of the `finish` event, with a loss, when that
-event would not fit a protocol frame beside the body; the client still gets the body unchanged. Cross-format Messages, Responses, and Chat
+sources in its own body (same format) leaves them out of the `finish` event when that event would
+not fit a protocol frame beside the body; the client still gets the body unchanged, and a client of
+another format has the runs and sources that were left out reported as dropped. Cross-format Messages, Responses, and Chat
 Completions clients receive no invented code blocks (Messages `server_tool_use` and results require
 Anthropic-verified `srvtoolu_` IDs, Responses `code_interpreter_call` requires an OpenAI
 `container_id`, and Chat Completions has no code execution block), keep the model's text untouched,

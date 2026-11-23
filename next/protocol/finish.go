@@ -3,6 +3,7 @@ package protocol
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 
 	"github.com/stdotwork/pluxy/next/llm"
 )
@@ -26,20 +27,26 @@ func JSONSize(v any) int {
 // body in Raw, which holds the reply's sources and code execution runs already, so what ev adds
 // beside Raw could push its frame over MaxFrame for a reply the upstream sent within the limit. It
 // leaves the runs out first, keeping the one record that says they were left out, and then the
-// sources. It returns a loss for what it left out, and false if it left out nothing.
+// sources. It returns a loss naming what it left out, and false if it left out nothing.
 func FitFinish(ev *llm.Event) (llm.Loss, bool) {
 	limit := MaxFrame - FrameHeadroom
 	size := len(ev.Raw) + JSONSize(ev.Sources) + JSONSize(ev.CodeExecutions)
 	if size <= limit {
 		return llm.Loss{}, false
 	}
-	if len(ev.CodeExecutions) > 0 {
+	var left []string
+	if len(ev.CodeExecutions) > 0 && !(len(ev.CodeExecutions) == 1 && ev.CodeExecutions[0] == (llm.CodeExecution{FilesOmitted: true})) {
 		ev.CodeExecutions = llm.CodeExecutions{{FilesOmitted: true}}
+		left = append(left, "code execution runs")
 		size = len(ev.Raw) + JSONSize(ev.Sources) + JSONSize(ev.CodeExecutions)
 	}
-	if size > limit {
+	if size > limit && len(ev.Sources) > 0 {
 		ev.Sources = nil
+		left = append(left, "sources")
 	}
-	return llm.Loss{Kind: llm.LossDropped, Path: "finish",
-		Detail: "the reply's code execution runs and sources are left out: with the reply they would not fit one protocol frame"}, true
+	if len(left) == 0 {
+		return llm.Loss{}, false
+	}
+	return llm.Loss{Kind: llm.LossDropped, Path: llm.LossPathFinish,
+		Detail: "the reply's " + strings.Join(left, " and ") + " are left out: with the reply they would not fit one protocol frame"}, true
 }

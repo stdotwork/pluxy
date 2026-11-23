@@ -25,27 +25,27 @@ const (
 
 func bigTitle() string { return strings.Repeat("t", citeTitle) }
 
-// citedBytes is what a reply's events hold in citations and sources.
-func citedBytes(evs []llm.Event) (n int) {
+// citedBytes is what a reply's events hold in citations, and in sources.
+func citedBytes(evs []llm.Event) (cites, sources int) {
 	for _, ev := range evs {
 		for _, c := range ev.Citations {
-			n += len(c.URL) + len(c.Title)
+			cites += len(c.URL) + len(c.Title)
 		}
 		for _, s := range ev.Sources {
-			n += len(s.URL) + len(s.Title)
+			sources += len(s.URL) + len(s.Title)
 		}
 	}
-	return n
+	return cites, sources
 }
 
 func checkCitationsCapped(t *testing.T, evs []llm.Event, losses []llm.Loss) {
 	t.Helper()
-	got := citedBytes(evs)
-	if got == 0 {
+	cites, sources := citedBytes(evs)
+	if cites+sources == 0 {
 		t.Fatal("no citation or source kept: the cap must keep what fits")
 	}
-	if got > llm.MaxCitationBytes {
-		t.Errorf("the reply keeps %d MiB of citations and sources, want at most %d MiB", got>>20, llm.MaxCitationBytes>>20)
+	if cites > llm.MaxCitationBytes || sources > llm.MaxCitationBytes {
+		t.Errorf("the reply keeps %d MiB of citations and %d MiB of sources, want at most %d MiB of each", cites>>20, sources>>20, llm.MaxCitationBytes>>20)
 	}
 	for _, ev := range evs {
 		if err := protocol.WriteFrame(io.Discard, protocol.Reply{Event: ev}); err != nil {
@@ -225,8 +225,10 @@ func TestFinishFitsOneFrameBesideItsRawBody(t *testing.T) {
 }
 
 // A Gemini reply of the client's own format holds its runs and sources in the chunks it keeps, so
-// the aggregator counts them once.
-func TestGeminiNativeReplyCountsRunsOnce(t *testing.T) {
+// the aggregator does not count them again. The event here is built by hand, with its text only in
+// Raw; the decoder also puts the text in Delta, which counts twice (a separate row), so this does
+// not show that a plain reply of 33 to 64 MiB passes.
+func TestGeminiAggregatorDoesNotCountANativeRepliesRunsAgain(t *testing.T) {
 	a := geminigenerate.NewAggregator()
 	raw := json.RawMessage(`{"candidates":[{"content":{"parts":[{"text":"` + strings.Repeat("x", 62<<20) + `"}]}}]}`)
 	a.Add(llm.Event{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "g", Model: "gemini", Format: llm.FormatGeminiGenerate}})
@@ -235,6 +237,110 @@ func TestGeminiNativeReplyCountsRunsOnce(t *testing.T) {
 		CodeExecutions: llm.CodeExecutions{{Code: strings.Repeat("c", 3<<20), Language: "python"}}})
 	if got := a.Size(); got > llm.MaxNonStreamedReplyBytes {
 		t.Errorf("Size = %d MiB for a %d MiB reply that holds its runs in its chunks: it would be refused as too large", got>>20, len(raw)>>20)
+	}
+}
+
+// A Gemini upstream that streams to a client that asked for the whole reply: the reply is built
+// again from the chunks, and keeps its supports.
+func TestSameFormatGeminiStreamKeepsItsGroundingSupports(t *testing.T) {
+	d := geminigenerate.NewStreamDecoder()
+	chunks := []string{
+		`{"responseId":"g","modelVersion":"gemini","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Alpha beta. "}]}}]}`,
+		`{"responseId":"g","modelVersion":"gemini","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Gamma delta."}]}}]}`,
+		`{"responseId":"g","modelVersion":"gemini","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":""}]},"finishReason":"STOP","groundingMetadata":{"groundingChunks":[{"web":{"uri":"https://a.example/1","title":"A"}},{"web":{"uri":"https://a.example/2","title":"B"}},{"web":{"uri":"https://a.example/3","title":"C"}}],"groundingSupports":[{"segment":{"startIndex":0,"endIndex":5,"text":"Alpha"},"groundingChunkIndices":[0]},{"segment":{"startIndex":6,"endIndex":10,"text":"beta"},"groundingChunkIndices":[1]},{"segment":{"startIndex":12,"endIndex":17,"text":"Gamma"},"groundingChunkIndices":[2]}]}}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}`,
+	}
+	evs := decodeStreamChunks(t, d, chunks)
+	end, err := d.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := geminigenerate.NewAggregator()
+	for _, ev := range append(evs, end...) {
+		a.Add(ev)
+	}
+	out, err := a.Response()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Candidates []struct {
+			GroundingMetadata struct {
+				GroundingChunks   []json.RawMessage `json:"groundingChunks"`
+				GroundingSupports []json.RawMessage `json:"groundingSupports"`
+			} `json:"groundingMetadata"`
+		} `json:"candidates"`
+	}
+	if err := json.Unmarshal(out, &got); err != nil || len(got.Candidates) == 0 {
+		t.Fatalf("response: %v: %s", err, out)
+	}
+	gm := got.Candidates[0].GroundingMetadata
+	if len(gm.GroundingChunks) != 3 || len(gm.GroundingSupports) != 3 {
+		t.Errorf("chunks %d, supports %d, want 3 and 3: %s", len(gm.GroundingChunks), len(gm.GroundingSupports), out)
+	}
+}
+
+// A message whose citation covers it all is written twice over, as text and as the text a support
+// repeats, and that growth has to be seen while images can still be left out.
+func TestCitedTextIsCountedBeforeImagesAreLeftOut(t *testing.T) {
+	image := strings.Repeat("QUJD", (16515072)/4) // 15.75 MiB of valid base64, shared by every part
+	text := strings.Repeat("a", 700<<10)
+	end := len([]rune(text))
+	zero := 0
+	evs := []llm.Event{
+		{Type: llm.EventResponseStart, Response: &llm.ResponseInfo{ID: "r", Model: "gpt", Format: llm.FormatOpenAIResponses}},
+		{Type: llm.EventItemStart, Index: 0, Item: &llm.ItemStart{Kind: llm.ItemMessage}},
+		{Type: llm.EventTextDelta, Index: 0, Delta: text},
+		{Type: llm.EventItemEnd, Index: 0, Citations: llm.Citations{{URL: "https://a.example/1", Title: "A", StartIndex: &zero, EndIndex: &end}}},
+	}
+	for range 4 {
+		evs = append(evs, llm.Event{Type: llm.EventMedia, Media: &llm.OutputMedia{Kind: llm.MediaImage, MediaType: "image/png", Data: image}})
+	}
+	evs = append(evs, llm.Event{Type: llm.EventFinish, Finish: &llm.Finish{Reason: llm.FinishStop}})
+	a := geminigenerate.NewAggregator()
+	for _, ev := range evs {
+		a.Add(ev)
+	}
+	out, err := a.Response()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := a.Size(); got > llm.MaxNonStreamedReplyBytes {
+		t.Errorf("Size after the response = %d MiB, over the %d MiB limit the server then fails the reply at", got>>20, llm.MaxNonStreamedReplyBytes>>20)
+	}
+	if n := strings.Count(string(out), `"inlineData"`); n < 1 {
+		t.Errorf("%d images kept, want the ones that fit", n)
+	}
+	if !strings.Contains(string(out), text[:100]) {
+		t.Error("the reply lost its text")
+	}
+}
+
+// Sources a Chat client never sees do not use up the room of the citations it does.
+func TestSourcesDoNotUseUpTheCitationBudget(t *testing.T) {
+	title := strings.Repeat("t", 20<<10)
+	var srcs, anns []string
+	for i := range 200 {
+		srcs = append(srcs, fmt.Sprintf(`{"type":"url","url":"https://s.example/%d","title":%q}`, i, title))
+		anns = append(anns, fmt.Sprintf(`{"type":"url_citation","url":"https://a.example/%d","title":%q,"start_index":0,"end_index":5}`, i, title))
+	}
+	body := fmt.Sprintf(`{"id":"r","object":"response","status":"completed","model":"gpt","output":[
+		{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","sources":[%s]}},
+		{"type":"message","id":"m1","role":"assistant","content":[{"type":"output_text","text":"Alpha beta.","annotations":[%s]}]}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`,
+		strings.Join(srcs, ","), strings.Join(anns, ","))
+	evs, losses, err := openairesponses.DecodeResponseLosses([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cites, sources int
+	for _, ev := range evs {
+		cites += len(ev.Citations)
+		sources += len(ev.Sources)
+	}
+	if cites != 200 || sources != 200 {
+		t.Errorf("kept %d of 200 citations and %d of 200 sources, want all of both: each has 4 MiB to itself", cites, sources)
+	}
+	if hasLoss(losses, "citations") {
+		t.Errorf("losses = %+v, want none: both fit", losses)
 	}
 }
 

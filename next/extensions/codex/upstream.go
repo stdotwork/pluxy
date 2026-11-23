@@ -129,7 +129,9 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
 	}
 	defer resp.Body.Close()
 	headers := llm.ExtractRateLimitHeaders(llm.FormatOpenAIResponses, resp.Header)
-	return relay(ctx, resp, renamer{&reporting{Stream: out, tr: ur.tr, headers: headers}, ur.names}, ur.repairs())
+	rep := ur.repairs()
+	rep.sameFormat = call.Request.SameFormat(llm.FormatOpenAIResponses)
+	return relay(ctx, resp, renamer{&reporting{Stream: out, tr: ur.tr, headers: headers}, ur.names}, rep)
 }
 
 // post sends body, the request ur built (or that request changed for a retry), to the account's
@@ -276,7 +278,7 @@ func relay(ctx context.Context, resp *http.Response, out eventSender, rep *repai
 			return &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
 		}
 		events, losses, err := openairesponses.DecodeResponseLosses(raw)
-		for _, l := range losses {
+		for _, l := range llm.ReplyLosses(losses, rep.sameFormat) {
 			fmt.Fprintf(os.Stderr, "reply loss: %s %s (%s)\n", l.Kind, l.Path, l.Detail)
 		}
 		if err != nil {
@@ -292,7 +294,7 @@ func relay(ctx context.Context, resp *http.Response, out eventSender, rep *repai
 	r := sse.NewReader(resp.Body)
 	dec := openairesponses.NewStreamDecoder()
 	defer func() {
-		for _, l := range dec.Losses() {
+		for _, l := range llm.ReplyLosses(dec.Losses(), rep.sameFormat) {
 			fmt.Fprintf(os.Stderr, "reply loss: %s %s (%s)\n", l.Kind, l.Path, l.Detail)
 		}
 	}()
@@ -351,6 +353,9 @@ type repairs struct {
 	// keepOutput leaves the terminal event's output as it came, ids and emptiness included: a
 	// Responses-lite client's reply, as today's core sends it.
 	keepOutput bool
+	// sameFormat is set when the client's request came in Responses, so its reply goes back as the
+	// upstream sent it.
+	sameFormat bool
 }
 
 func newRepairs() *repairs { return &repairs{done: map[int]json.RawMessage{}} }

@@ -146,10 +146,37 @@ func TestCiteBudgetKeepsWhatFitsAndReportsTheRest(t *testing.T) {
 	if len(kept) != 3 {
 		t.Errorf("kept %d of 4 citations of a quarter of the limit each, want 3 (their URLs and overhead take the fourth's room)", len(kept))
 	}
-	if b.AddSource(llm.Source{URL: "https://s.example/1"}) {
-		t.Error("a source fit after a citation did not")
+	if !b.AddSource(llm.Source{URL: "https://s.example/1"}) {
+		t.Error("a source did not fit after citations filled their own room: each has a limit of its own")
 	}
 	if got := b.WithLoss(nil); len(got) != 1 || got[0].Path != "citations" || got[0].Kind != llm.LossDropped {
 		t.Errorf("losses = %+v, want one dropped loss at citations", got)
+	}
+}
+
+func TestReplyLossesSparesAClientOfTheUpstreamsFormat(t *testing.T) {
+	losses := []llm.Loss{
+		{Kind: llm.LossDropped, Path: llm.LossPathCitations, Detail: "x"},
+		{Kind: llm.LossDropped, Path: llm.LossPathFinish, Detail: "x"},
+		{Kind: llm.LossDropped, Path: "output[0]", Detail: "x"},
+	}
+	if got := llm.ReplyLosses(losses, false); len(got) != 3 {
+		t.Errorf("a client of another format loses %+v, want all three", got)
+	}
+	if got := llm.ReplyLosses(losses, true); len(got) != 1 || got[0].Path != "output[0]" {
+		t.Errorf("a client of the upstream's format loses %+v, want only the media", got)
+	}
+	if len(losses) != 3 {
+		t.Error("ReplyLosses changed its argument")
+	}
+}
+
+func TestRequestSameFormat(t *testing.T) {
+	r := &llm.Request{Native: &llm.Native{Format: llm.FormatOpenAIResponses}}
+	if !r.SameFormat(llm.FormatOpenAIResponses) || r.SameFormat(llm.FormatOpenAIChat) {
+		t.Error("SameFormat does not compare the native format")
+	}
+	if (&llm.Request{}).SameFormat(llm.FormatOpenAIResponses) || (*llm.Request)(nil).SameFormat("x") {
+		t.Error("a request with no native body is not of the upstream's format")
 	}
 }

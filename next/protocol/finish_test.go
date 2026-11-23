@@ -34,3 +34,18 @@ func TestFitFinishLeavesRunsOutBeforeSources(t *testing.T) {
 		t.Errorf("finish is %d bytes, over MaxFrame", n)
 	}
 }
+
+func TestFitFinishNamesWhatItLeftOutAndNothingElse(t *testing.T) {
+	// A body that fills the frame, beside no runs and no sources: there is nothing to leave out.
+	ev := llm.Event{Type: llm.EventFinish, Raw: []byte(strings.Repeat("x", MaxFrame-FrameHeadroom+1<<20))}
+	if loss, cut := FitFinish(&ev); cut {
+		t.Errorf("loss %+v for a reply with no runs and no sources", loss)
+	}
+	// Runs alone: the sources, which fit once the runs are gone, are not named.
+	ev = llm.Event{Type: llm.EventFinish, Raw: []byte(strings.Repeat("x", MaxFrame-FrameHeadroom-1<<20)),
+		CodeExecutions: llm.CodeExecutions{{Code: strings.Repeat("c", 2<<20)}}}
+	loss, cut := FitFinish(&ev)
+	if !cut || !strings.Contains(loss.Detail, "code execution runs") || strings.Contains(loss.Detail, "sources") {
+		t.Errorf("cut=%v loss=%+v, want one that names the runs only", cut, loss)
+	}
+}

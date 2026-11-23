@@ -221,7 +221,7 @@ func generateTo(ctx context.Context, call sdk.Call, out sender) (err error) {
 		if err != nil {
 			return err
 		}
-		again, err := relayReply(ctx, resp, send, first)
+		again, err := relayReply(ctx, resp, send, first, call.Request.SameFormat(llm.FormatGeminiGenerate))
 		if again {
 			continue
 		}
@@ -242,14 +242,14 @@ func generateTo(ctx context.Context, call sdk.Call, out sender) (err error) {
 // reports that it should be asked for once more. A stream is held back from send only until its
 // first content event (holding), so a reply that fails before that can still be asked for again,
 // while one that fails after content went out reaches the client as the error.
-func relayReply(ctx context.Context, resp *http.Response, send sender, mayRetry bool) (again bool, err error) {
+func relayReply(ctx context.Context, resp *http.Response, send sender, mayRetry, sameFormat bool) (again bool, err error) {
 	defer resp.Body.Close()
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		if !mayRetry {
-			return false, relayStream(ctx, resp.Body, send)
+			return false, relayStream(ctx, resp.Body, send, sameFormat)
 		}
 		h := &holding{out: send}
-		err := relayStream(ctx, resp.Body, h)
+		err := relayStream(ctx, resp.Body, h, sameFormat)
 		if !h.open {
 			if geminigenerate.IsMalformedCall(err) {
 				return true, nil
@@ -268,7 +268,7 @@ func relayReply(ctx context.Context, resp *http.Response, send sender, mayRetry 
 		return false, &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
 	}
 	events, losses, err := geminigenerate.DecodeResponseLosses(raw)
-	for _, l := range losses {
+	for _, l := range llm.ReplyLosses(losses, sameFormat) {
 		fmt.Fprintf(os.Stderr, "reply loss: %s %s (%s)\n", l.Kind, l.Path, l.Detail)
 	}
 	if err != nil {
@@ -570,11 +570,11 @@ func replyNames(req llm.Request, tr *llm.Translation) map[string]string {
 
 // relayStream decodes the upstream GenerateContent stream and sends each event as soon as it is
 // decoded. A blocked send blocks the next upstream read.
-func relayStream(ctx context.Context, body io.Reader, out sender) error {
+func relayStream(ctx context.Context, body io.Reader, out sender, sameFormat bool) error {
 	r := sse.NewReader(body)
 	dec := geminigenerate.NewStreamDecoder()
 	defer func() {
-		for _, l := range dec.Losses() {
+		for _, l := range llm.ReplyLosses(dec.Losses(), sameFormat) {
 			fmt.Fprintf(os.Stderr, "reply loss: %s %s (%s)\n", l.Kind, l.Path, l.Detail)
 		}
 	}()
