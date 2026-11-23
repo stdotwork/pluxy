@@ -227,6 +227,7 @@ func fakeExtension(mode string) {
 }
 
 func TestStartFailuresStayUnderTheDeadline(t *testing.T) {
+	t.Parallel() // each case has its own package folder and process
 	const startTimeout = 2 * time.Second
 	// Killing a failed start and collecting its exit takes milliseconds, or up to waitDelay when
 	// a child of the extension holds its output open. The rest is slack for a loaded machine.
@@ -241,6 +242,7 @@ func TestStartFailuresStayUnderTheDeadline(t *testing.T) {
 		{"child-holds-stderr", "no handshake"},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
+			t.Parallel()
 			dir := fakePackage(t, tc.mode)
 			if tc.mode == "child-holds-stderr" {
 				t.Cleanup(func() { killFromFile(filepath.Join(dir, "child.pid")) })
@@ -326,6 +328,7 @@ func TestStartLimitErrorSaysWhereTheStartWas(t *testing.T) {
 // and waiting for the handshake until both are ready, as a stalled start in CI was, so each run
 // is a coin toss between the two; a dozen runs see both.
 func TestLateHandshakeFailsWithTheStartLimitError(t *testing.T) {
+	t.Parallel()
 	const startTimeout = 300 * time.Millisecond
 	for i := range 12 {
 		dir := fakePackage(t, "no-describe")
@@ -358,6 +361,7 @@ func TestLateHandshakeFailsWithTheStartLimitError(t *testing.T) {
 // in CI) still gets the whole limit for its handshake and describe: the limit counts from the
 // program running.
 func TestStartLimitCountsFromTheProgramRunning(t *testing.T) {
+	t.Parallel()
 	const startTimeout = 2 * time.Second
 	dir := fakePackage(t, "serve")
 	slow := func() { time.Sleep(startTimeout + 500*time.Millisecond) }
