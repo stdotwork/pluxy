@@ -2037,7 +2037,11 @@ echoes its start (`invalid x-api-key: sk-ant-api03-AbCdEf...`), which whole-secr
 misses. The secrets are the credential's key and tokens, secret header values, the proxy's user
 name and password and the secrets core finds in the settings (a URL by its user name, password
 and secret query or fragment values only), and on a login the inputs it marks secret (the
-extension protocol's [Accounts](protocol/README.md#accounts) says which). A value counts by its
+extension protocol's [Accounts](protocol/README.md#accounts) says which). A typed plain address
+that a login does not mark secret (an http or https URL with no query or fragment, such as a base URL)
+counts only by its user name and password, so its scheme, host, port and path show in an error, and a
+short secret placed in its path would show too; any other value the login does not mark secret, and an
+address with a query or fragment, counts whole. A value counts by its
 parts, so only a scheme, a public prefix, a real cookie list's names and Basic's user name beside
 a password stay out of the pieces. A value that is one `name=value`, or holds one behind a scheme
 or prefix, counts that pair whole as well as by its value, except in the `Cookie` header; a list
