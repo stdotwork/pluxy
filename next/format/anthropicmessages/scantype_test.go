@@ -30,3 +30,49 @@ func TestRawTypeMatchesDecoding(t *testing.T) {
 		}
 	}
 }
+
+func TestScanTextDeltaMatchesDecoding(t *testing.T) {
+	taken := 0
+	for _, data := range []string{
+		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`,
+		`{"delta":{"text":"a\nb\"\\é😀","type":"text_delta"},"index":12,"type":"content_block_delta"}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":""}}`,
+		` {"type" : "content_block_delta" , "index":1 , "delta":{"type":"text_delta","text":"x"}} `,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"x"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x","extra":1}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":null}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":1}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a","text":"b"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"Type":"text_delta","text":"a"}}`,
+		`{"type":"content_block_delta","index":0,"delta":null}`,
+		`{"type":"content_block_delta","index":1.0,"delta":{"type":"text_delta","text":"a"}}`,
+		`{"type":"content_block_delta","index":-1,"delta":{"type":"text_delta","text":"a"}}`,
+		`{"type":"content_block_delta","index":"1","delta":{"type":"text_delta","text":"a"}}`,
+		`{"type":"content_block_delta","index":1234567890,"delta":{"type":"text_delta","text":"a"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"\ud800"}}`,
+		"{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"bad\xff\"}}",
+		`{"type":"content_block_delta","index":0,"index":1,"delta":{"type":"text_delta","text":"a"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"},"usage":{}}`,
+		`{"type":"content_block_start","index":0,"delta":{"type":"text_delta","text":"a"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}`, `{}`, ``, `[]`,
+	} {
+		index, text, ok := scanTextDelta([]byte(data))
+		if !ok {
+			continue
+		}
+		taken++
+		var ev streamEvent
+		if err := json.Unmarshal([]byte(data), &ev); err != nil {
+			t.Errorf("%q: scanTextDelta took an event encoding/json rejects: %v", data, err)
+			continue
+		}
+		if ev.Type != "content_block_delta" || ev.Index != index || ev.Delta == nil || ev.Delta.Type != "text_delta" || ev.Delta.Text != text ||
+			ev.Message != nil || ev.ContentBlock != nil || ev.Usage != nil || ev.Error != nil || ev.Delta.Thinking != "" || ev.Delta.PartialJSON != "" {
+			t.Errorf("%q: scanTextDelta = %d, %q; decoding gives %+v %+v", data, index, text, ev, ev.Delta)
+		}
+	}
+	if taken != 4 {
+		t.Errorf("scanTextDelta took %d of the events, want the 4 well-formed ones", taken)
+	}
+}
