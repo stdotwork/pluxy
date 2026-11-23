@@ -93,3 +93,31 @@ func TestSequenceMediaEvent(t *testing.T) {
 		t.Fatalf("Check(EventMedia without Media) = %v, want error", err)
 	}
 }
+
+func TestSafeOutputMediaKind(t *testing.T) {
+	good := map[string]string{
+		"image/png":                      MediaImage,
+		" Image/JPEG ":                   MediaImage,
+		"image/webp; q=1":                MediaImage,
+		"audio/wav":                      MediaAudio,
+		"audio/L16;codec=pcm;rate=24000": MediaAudio,
+		"audio/pcm;rate=24000":           MediaAudio,
+		"AUDIO/MPEG":                     MediaAudio,
+		"audio/ogg; codecs=\"opus\"":     MediaAudio,
+	}
+	for mt, want := range good {
+		if kind, problem := SafeOutputMediaKind(mt); kind != want || problem != "" {
+			t.Errorf("SafeOutputMediaKind(%q) = %q, %q; want %q", mt, kind, problem, want)
+		}
+	}
+	for _, mt := range []string{
+		"", "   ", "image", "image/", "/png", "image/svg+xml", "IMAGE/SVG+XML;charset=utf-8", " image/svg+xml ",
+		"image/svg+xml,<svg/onload=alert(1)>", "image/svg+xml,", "image/svg+xml <svg>", "image/svg+xml\n",
+		"image/png,<svg>", "image/png; charset", "image/png\x00", "image/ png", "image/png/extra",
+		"image/svg", "image/x-unlisted", "audio/x-unlisted", "text/html", "application/pdf", "video/mp4",
+	} {
+		if kind, problem := SafeOutputMediaKind(mt); kind != "" || problem == "" {
+			t.Errorf("SafeOutputMediaKind(%q) = %q, %q; want a refusal", mt, kind, problem)
+		}
+	}
+}
