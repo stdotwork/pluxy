@@ -36,6 +36,7 @@ import {
   rowsFrom,
   type Secret,
 } from "./claudeDesktopForm";
+import { NeedsKey, NoKeys, toolMissing, withDeviceLink } from "./clientHelp";
 import type { AgentPage } from "./easyMode";
 import { connectionGet } from "./host";
 import { launcherProblem } from "./startCli";
@@ -47,7 +48,7 @@ const t = strings("claudeDesktop", {
   intro:
     "Uses this core as Claude Desktop's third-party inference gateway (Linux beta): its sign-in choice, a gateway profile with a client key and the models Claude Desktop lists, and that profile applied. Apply, Clear and Restore Backup each ask in a native confirmation; everything else in the files stays. Quit and reopen Claude Desktop afterward: it reads its configuration at launch.",
   unavailable:
-    "Install and enable the curated Claude Desktop tool (pluxy/claude-desktop) on the Device extensions page to set up Claude Desktop from here.",
+    "Install and enable the curated Claude Desktop tool (pluxy/claude-desktop) on the {device} page to set up Claude Desktop from here.",
   files: "Configuration files",
   filesDefault: "Claude Desktop's third-party folder",
   filesInRoot: "A selected folder",
@@ -94,7 +95,6 @@ const t = strings("claudeDesktop", {
   keyHint: "The client API key Claude Desktop uses to connect to this core, kept by native key entry.",
   addKey: "Add key…",
   keyLabel: "Claude Desktop client key",
-  noKeys: "No keys yet: add one.",
   connect: "Connect in One Click",
   repair: "Repair Connection",
   update: "Update Configuration",
@@ -294,7 +294,7 @@ export function ClaudeDesktopPage() {
     <div class="stack">
       <PageHead title={t("title")} />
       <p class="muted">{t("intro")}</p>
-      {unavailable && <Notice tone="warn">{t("unavailable")}</Notice>}
+      {unavailable && <Notice tone="warn">{withDeviceLink(t("unavailable"))}</Notice>}
       {!core && <Notice tone="warn">{t("noCore")}</Notice>}
       <datalist id={listId}>
         {SUGGESTED.map((m) => (
@@ -325,7 +325,7 @@ export function ClaudeDesktopPage() {
               onInput={reselect((v: string) => setFiles((fs) => fs.map((f, j) => (j === i ? v : f))))}
             />
           ))}
-        {read.error && <Notice tone="danger">{read.error}</Notice>}
+        {read.error && !toolMissing(read.error, PACKAGE) && <Notice tone="danger">{read.error}</Notice>}
         {missing && (
           <>
             <Notice tone="warn">{t("missing")}</Notice>
@@ -420,7 +420,7 @@ export function ClaudeDesktopPage() {
                 onChange={setSecret}
               />
             ) : (
-              <p class="muted">{t("noKeys")}</p>
+              <NoKeys />
             )}
             {addKey.error && <Notice tone="danger">{addKey.error}</Notice>}
             <Button
@@ -445,6 +445,7 @@ export function ClaudeDesktopPage() {
           <Button variant="primary" onClick={apply} disabled={busy || refused || !rowsOk || !secret || !core}>
             {applyLabel}
           </Button>
+          <NeedsKey missing={!secret} />
           <ConfirmButton disabled={busy || refused || !preview.applied} onConfirm={() => undo("clear")}>
             {t("clear")}
           </ConfirmButton>

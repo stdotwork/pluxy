@@ -22,6 +22,7 @@ import {
   useLoad,
 } from "../../ui/kit/ui";
 import { Backups, reply } from "./backups";
+import { folderWait, NeedsKey, NoKeys, toolMissing, withDeviceLink } from "./clientHelp";
 import type { AgentPage } from "./easyMode";
 import {
   blocked,
@@ -46,7 +47,7 @@ const t = strings("grok", {
   intro:
     "Adds this core's models to Grok Build's config.toml, using the core's OpenAI Chat Completions API with a client key, and makes one of them Grok Build's default model. Apply, Clear and Restore Backup each ask in a native confirmation; comments and everything else in the file stay. Restart Grok Build afterward.",
   unavailable:
-    "Install and enable the curated Grok Build tool (pluxy/grok-setup) on the Device extensions page to set up Grok Build from here.",
+    "Install and enable the curated Grok Build tool (pluxy/grok-setup) on the {device} page to set up Grok Build from here.",
   file: "Configuration file",
   fileDefault: "Grok Build's user config",
   fileSelected: "A selected file",
@@ -86,7 +87,6 @@ const t = strings("grok", {
   keyHint: "The client API key Grok Build uses to connect to this core, kept by native key entry.",
   addKey: "Add key…",
   keyLabel: "Grok Build client key",
-  noKeys: "No keys yet: add one.",
   connect: "Connect in One Click",
   repair: "Repair Connection",
   update: "Update Configuration",
@@ -185,7 +185,7 @@ function StartCli(props: { available: boolean }) {
     });
   return (
     <Card title={t("start")}>
-      <Text label={t("cwd")} value={cwd} onInput={setCwd} />
+      <Text label={t("cwd")} hint={folderWait(cwd)} value={cwd} onInput={setCwd} />
       {recent.length > 0 && (
         <Choices
           label={t("recent")}
@@ -300,7 +300,7 @@ export function GrokPage() {
     <div class="stack">
       <PageHead title={t("title")} />
       <p class="muted">{t("intro")}</p>
-      {unavailable && <Notice tone="warn">{t("unavailable")}</Notice>}
+      {unavailable && <Notice tone="warn">{withDeviceLink(t("unavailable"))}</Notice>}
       {!core && <Notice tone="warn">{t("noCore")}</Notice>}
       <datalist id={listId}>
         {chosen.map((r) => (
@@ -327,7 +327,7 @@ export function GrokPage() {
             <Text label={t("inRoot")} value={inRoot} onInput={reselect(setInRoot)} />
           </>
         )}
-        {read.error && <Notice tone="danger">{read.error}</Notice>}
+        {read.error && !toolMissing(read.error, PACKAGE) && <Notice tone="danger">{read.error}</Notice>}
         <Button onClick={load} disabled={busy}>
           {t("read")}
         </Button>
@@ -403,7 +403,7 @@ export function GrokPage() {
                 onChange={setSecret}
               />
             ) : (
-              <p class="muted">{t("noKeys")}</p>
+              <NoKeys />
             )}
             {addKey.error && <Notice tone="danger">{addKey.error}</Notice>}
             <Button
@@ -431,6 +431,7 @@ export function GrokPage() {
           >
             {applyLabel}
           </Button>
+          <NeedsKey missing={!secret} />
           <ConfirmButton disabled={busy || refused || !preview.applied} onConfirm={() => undo("clear")}>
             {t("clear")}
           </ConfirmButton>
