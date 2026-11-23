@@ -564,7 +564,7 @@ func TestMaskWorkDoesNotGrowWithNames(t *testing.T) {
 // the ones before it left. The matcher must give the same text without trying them all.
 func maskOneByOne(s string, list []string) string {
 	for _, id := range list {
-		s = replaceToken(s, id)
+		s = maskText{s: s}.splice(tokenSpans(s, id)).s
 	}
 	return s
 }
@@ -686,5 +686,29 @@ func TestMaskDomainScopedHalvesNeedAProjectID(t *testing.T) {
 	want := `{"error":{"message":"retry in 443 s","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","metadata":{"containerInfo":"[redacted]"}}]}}`
 	if got := string(MaskBody([]byte(raw))); got != want {
 		t.Errorf("got  %s\nwant %s", got, want)
+	}
+}
+
+// A wider form (a project scoped to a domain, a project= value with a dot at its start) must not
+// hide anything the narrower patterns and the names masked when it runs into the text after it: a
+// keyword, an address, or a name that continues past it.
+func TestMaskWideFormsKeepWhatTheNarrowOnesMask(t *testing.T) {
+	for _, in := range []string{
+		"projects/a.b:projects/zqbeta",
+		"projects/a.b:acme-projects/zqbeta",
+		"?project=.svc@acme-prod-4821.iam.gserviceaccount.com",
+		"projects/host.example.com:443_svc@acme-prod-4821.iam.gserviceaccount.com",
+	} {
+		got := string(MaskBody([]byte(in)))
+		if strings.Contains(got, "zqbeta") || strings.Contains(got, "acme-prod-4821") {
+			t.Errorf("MaskBody(%q) = %q, a name is shown", in, got)
+		}
+	}
+	// A name that continues past the part a wider form took: "acme..prod-4821" is learned from the
+	// field, and the text names it after a domain and a colon.
+	raw := `{"error":{"message":"projects/a.b:acme..prod-4821 is off","details":[` +
+		`{"@type":"type.googleapis.com/google.rpc.ErrorInfo","metadata":{"consumer":"acme..prod-4821"}}]}}`
+	if got := string(MaskBody([]byte(raw))); strings.Contains(got, "prod-4821") {
+		t.Errorf("a name that goes on past a domain-scoped form is shown: %s", got)
 	}
 }

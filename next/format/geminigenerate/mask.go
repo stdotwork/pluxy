@@ -24,30 +24,35 @@ const Redacted = protocol.Redacted
 
 // namePattern is a way text names a project, an organization, a folder, a billing account or a
 // person. Group 1 is the name; ok, when set, tells a name from a word that happens to follow.
+//
+// ext, when set, is a wider form of the same pattern: it also takes a project scoped to a domain
+// ("example.com:acme-prod-4821") and, for project=, a value with a dot at its start or two dots in
+// a row. What ext matches is learned like what re matches, and is masked at the end, but only
+// where re's own replacements and the names have not already taken it: re is the pattern as it
+// was, and replaces what it matches first, so the text the later patterns and the names see is the
+// text they always saw. A wider match therefore never hides what they would have found.
 type namePattern struct {
-	re *regexp.Regexp
-	ok func(name string) bool
-	// legacy, when set, is also applied to the name: what it matches at the start of the name is
-	// learned as well, as the narrower name pattern those forms used to be did.
-	legacy *regexp.Regexp
+	re  *regexp.Regexp
+	ext *regexp.Regexp
+	ok  func(name string) bool
 }
 
-// legacyName is the name the patterns of projects/, project: and project= matched before they
-// took a domain, a leading dot or two dots in a row.
-var legacyName = regexp.MustCompile(`^[\w%-]+(?:\.[\w%-]+)*`)
-
-// nameToken is a name: words joined by dots, or a domain, a colon and one word when the project is
-// scoped to a domain ("example.com:acme-prod-4821"). looseNameToken is the same for a query
-// parameter, which also takes a dot at the start or two dots in a row.
+// nameToken is a name: words joined by dots. wideNameToken may instead be a domain, a colon and
+// one word (a project scoped to a domain); wideQueryToken is the same for a query parameter,
+// which also takes a dot at the start or two dots in a row.
 const (
-	nameToken      = `([\w%-]+(?:\.[\w%-]+)*\.[\w%-]+:[\w%-]+|[\w%-]+(?:\.[\w%-]+)*)`
-	looseNameToken = `(\.*[\w%-]+(?:\.+[\w%-]+)*\.+[\w%-]+:\.*[\w%-]+|\.*[\w%-]+(?:\.+[\w%-]+)*)`
+	nameToken      = `([\w%-]+(?:\.[\w%-]+)*)`
+	wideNameToken  = `([\w%-]+(?:\.[\w%-]+)*\.[\w%-]+:[\w%-]+|[\w%-]+(?:\.[\w%-]+)*)`
+	wideQueryToken = `(\.*[\w%-]+(?:\.+[\w%-]+)*\.+[\w%-]+:\.*[\w%-]+|\.*[\w%-]+(?:\.+[\w%-]+)*)`
 )
 
 var namePatterns = []namePattern{
-	{re: regexp.MustCompile(`(?i)\b(?:projects|organizations|folders|billingAccounts)/` + nameToken), legacy: legacyName},
-	{re: regexp.MustCompile(`(?i)\b(?:project(?:_?id|_?number)?|organization|folder|billingAccount):` + nameToken), legacy: legacyName},
-	{re: regexp.MustCompile(`(?i)\bproject(?:_?id|_?number)?=` + looseNameToken), legacy: legacyName},
+	{re: regexp.MustCompile(`(?i)\b(?:projects|organizations|folders|billingAccounts)/` + nameToken),
+		ext: regexp.MustCompile(`(?i)\b(?:projects|organizations|folders|billingAccounts)/` + wideNameToken)},
+	{re: regexp.MustCompile(`(?i)\b(?:project(?:_?id|_?number)?|organization|folder|billingAccount):` + nameToken),
+		ext: regexp.MustCompile(`(?i)\b(?:project(?:_?id|_?number)?|organization|folder|billingAccount):` + wideNameToken)},
+	{re: regexp.MustCompile(`(?i)\bproject(?:_?id|_?number)?=` + nameToken),
+		ext: regexp.MustCompile(`(?i)\bproject(?:_?id|_?number)?=` + wideQueryToken)},
 	{re: regexp.MustCompile(`(?i)\bproject (?:number |id )?(\d+)\b`)},
 	{re: regexp.MustCompile("(?i)\\bproject ['\"`]([^'\"`\\s]+)['\"`]")},
 	{re: regexp.MustCompile(`(?i)\b(?:user|serviceAccount|group):([A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)`)},
@@ -469,11 +474,11 @@ func (d *names) learnString(s string) {
 		for _, m := range p.re.FindAllStringSubmatch(s, -1) {
 			if p.ok == nil || p.ok(m[1]) {
 				d.addProject(m[1])
-				if p.legacy != nil {
-					if l := p.legacy.FindString(m[1]); l != "" && l != m[1] {
-						d.addProject(l)
-					}
-				}
+			}
+		}
+		if p.ext != nil {
+			for _, m := range p.ext.FindAllStringSubmatch(s, -1) {
+				d.addProject(m[1])
 			}
 		}
 	}
@@ -740,17 +745,18 @@ func normalKey(k string) string {
 // maskString replaces the names in s: the pattern forms, then each known name as a whole token,
 // the longest name first.
 func (d *names) maskString(s string) string {
+	t := maskText{s: s}
 	for _, p := range namePatterns {
-		s = replaceGroup(s, p)
+		t = t.maskPattern(p)
 	}
-	if len(d.list) == 0 {
-		return s
+	if len(d.list) > 0 {
+		if d.matcher == nil || len(d.matcher.list) != len(d.list) {
+			sort.SliceStable(d.list, func(i, j int) bool { return len(d.list[i]) > len(d.list[j]) })
+			d.matcher = newNameMatcher(d.list)
+		}
+		t = d.matcher.mask(t)
 	}
-	if d.matcher == nil || len(d.matcher.list) != len(d.list) {
-		sort.SliceStable(d.list, func(i, j int) bool { return len(d.list[i]) > len(d.list[j]) })
-		d.matcher = newNameMatcher(d.list)
-	}
-	return d.matcher.mask(s)
+	return t.finish()
 }
 
 func (d *names) maskJSON(raw []byte, whole map[int]bool) []byte {
@@ -760,26 +766,6 @@ func (d *names) maskJSON(raw []byte, whole map[int]bool) []byte {
 		}
 		return d.maskString(s)
 	})
-}
-
-// replaceGroup replaces group 1 of each match of p in s.
-func replaceGroup(s string, p namePattern) string {
-	idx := p.re.FindAllStringSubmatchIndex(s, -1)
-	if len(idx) == 0 {
-		return s
-	}
-	var b strings.Builder
-	last := 0
-	for _, m := range idx {
-		if p.ok != nil && !p.ok(s[m[2]:m[3]]) {
-			continue
-		}
-		b.WriteString(s[last:m[2]])
-		b.WriteString(Redacted)
-		last = m[3]
-	}
-	b.WriteString(s[last:])
-	return b.String()
 }
 
 // mapStrings calls f with the starting byte offset and decoded text of each string value (not key)

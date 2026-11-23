@@ -144,13 +144,13 @@ func (m *nameMatcher) hold(s string) []int32 {
 	return m.found
 }
 
-// mask replaces the names in s one after the other in rank order, each where it stands alone, in
+// mask replaces the names in t one after the other in rank order, each where it stands alone, in
 // the text the ones before left; the result is the same as trying every name, because a name that
-// s does not hold can match only across the text of a marker an earlier replacement wrote, and
-// the names that can are tried whenever s holds a marker.
-func (m *nameMatcher) mask(s string) string {
-	held := m.hold(s)
-	marked := strings.Contains(s, Redacted)
+// t does not hold can match only across the text of a marker an earlier replacement wrote, and
+// the names that can are tried whenever t holds a marker.
+func (m *nameMatcher) mask(t maskText) maskText {
+	held := m.hold(t.s)
+	marked := strings.Contains(t.s, Redacted)
 	special := m.special
 	for len(held) > 0 || len(special) > 0 {
 		var rank int32
@@ -169,11 +169,97 @@ func (m *nameMatcher) mask(s string) string {
 			}
 		}
 		scanned(1)
-		if r := replaceToken(s, m.list[rank]); r != s {
-			s, marked = r, true
+		if spans := tokenSpans(t.s, m.list[rank]); len(spans) > 0 {
+			t, marked = t.splice(spans), true
 		}
 	}
-	return s
+	return t
+}
+
+// maskText is a string being masked, and which of its bytes are to be masked at the end
+// whatever else happens to them (force, nil when none are).
+type maskText struct {
+	s     string
+	force []bool
+}
+
+// maskPattern replaces what p.re matches, and notes what p.ext matches to be masked at the end.
+func (t maskText) maskPattern(p namePattern) maskText {
+	if p.ext != nil {
+		for _, m := range p.ext.FindAllStringSubmatchIndex(t.s, -1) {
+			t = t.forced(m[2], m[3])
+		}
+	}
+	idx := p.re.FindAllStringSubmatchIndex(t.s, -1)
+	var spans [][2]int
+	for _, m := range idx {
+		if p.ok == nil || p.ok(t.s[m[2]:m[3]]) {
+			spans = append(spans, [2]int{m[2], m[3]})
+		}
+	}
+	if len(spans) == 0 {
+		return t
+	}
+	return t.splice(spans)
+}
+
+func (t maskText) forced(from, to int) maskText {
+	if t.force == nil {
+		t.force = make([]bool, len(t.s))
+	}
+	for i := from; i < to; i++ {
+		t.force[i] = true
+	}
+	return t
+}
+
+// splice replaces each span (in order, not overlapping) with the marker.
+func (t maskText) splice(spans [][2]int) maskText {
+	var b strings.Builder
+	var force []bool
+	last := 0
+	for _, sp := range spans {
+		b.WriteString(t.s[last:sp[0]])
+		b.WriteString(Redacted)
+		if t.force != nil {
+			force = append(force, t.force[last:sp[0]]...)
+			force = append(force, make([]bool, len(Redacted))...)
+		}
+		last = sp[1]
+	}
+	b.WriteString(t.s[last:])
+	if t.force != nil {
+		force = append(force, t.force[last:]...)
+	}
+	return maskText{b.String(), force}
+}
+
+// finish returns the text with what is still to be masked masked. A run of such bytes next to a
+// marker is part of it: the marker takes it in.
+func (t maskText) finish() string {
+	if t.force == nil {
+		return t.s
+	}
+	var b strings.Builder
+	for i := 0; i < len(t.s); {
+		if !t.force[i] {
+			b.WriteByte(t.s[i])
+			i++
+			continue
+		}
+		j := i
+		for j < len(t.s) && t.force[j] {
+			j++
+		}
+		if !strings.HasSuffix(b.String(), Redacted) {
+			b.WriteString(Redacted)
+		}
+		i = j
+		if strings.HasPrefix(t.s[i:], Redacted) && (i+len(Redacted) == len(t.s) || !t.force[i]) {
+			i += len(Redacted)
+		}
+	}
+	return b.String()
 }
 
 func isAlnum(c byte) bool {
@@ -182,33 +268,29 @@ func isAlnum(c byte) bool {
 
 func isTokenByte(c byte) bool { return isAlnum(c) || c == '_' || c == '-' }
 
-// replaceToken replaces id in s where it stands alone: not next to a letter, digit, underscore
-// or hyphen, nor to a dot that has a letter or digit beyond it (so 12 leaves 123, 12.5 and a
-// model name such as gemini-2.5-flash alone).
-func replaceToken(s, id string) string {
-	if id == "" || !strings.Contains(s, id) {
-		return s
+// tokenSpans returns the spans of s where id stands alone: not next to a letter, digit,
+// underscore or hyphen, nor to a dot that has a letter or digit beyond it (so 12 leaves 123, 12.5
+// and a model name such as gemini-2.5-flash alone).
+func tokenSpans(s, id string) [][2]int {
+	if id == "" {
+		return nil
 	}
-	var b strings.Builder
+	var spans [][2]int
 	i := 0
 	for {
 		k := strings.Index(s[i:], id)
 		if k < 0 {
-			break
+			return spans
 		}
 		k += i
 		end := k + len(id)
 		before := k == 0 || !isTokenByte(s[k-1]) && !(s[k-1] == '.' && k >= 2 && isAlnum(s[k-2]))
 		after := end == len(s) || !isTokenByte(s[end]) && !(s[end] == '.' && end+1 < len(s) && isAlnum(s[end+1]))
 		if before && after {
-			b.WriteString(s[i:k])
-			b.WriteString(Redacted)
+			spans = append(spans, [2]int{k, end})
 			i = end
 		} else {
-			b.WriteString(s[i : k+1])
 			i = k + 1
 		}
 	}
-	b.WriteString(s[i:])
-	return b.String()
 }
