@@ -357,6 +357,7 @@ type otherCand struct {
 	refused  bool
 	finish   *llm.Finish
 	finished bool
+	annLost  bool // its annotations were reported lost
 }
 
 // NewStreamDecoder returns a decoder for one stream.
@@ -655,7 +656,9 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			continue
 		}
 		if ch.Index < 0 {
+			// No candidate reads it, but a same-format client still gets it as it came.
 			d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: fmt.Sprintf("choices[%d]", i), Detail: "candidate with negative index"})
+			others = append(others, raw)
 			continue
 		}
 		choices = append(choices, ch)
@@ -990,6 +993,11 @@ func (oc *otherCand) flushAndClose(candIdx int, ev *[]llm.Event, losses *[]llm.L
 
 func (d *StreamDecoder) decodeOtherChoice(ch streamChoice, out *[]llm.Event) {
 	oc := d.otherCand(ch.Index)
+	if !oc.annLost && parseNonEmptyAnnotations(ch.Delta.Annotations) != nil {
+		oc.annLost = true
+		d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: fmt.Sprintf("choices[%d].delta.annotations", ch.Index),
+			Detail: "citations of a candidate after the first have no place in the reply"})
+	}
 	if r := ch.Delta.text(); r != "" {
 		*out = append(*out, llm.Event{
 			Type:      llm.EventCandidate,
@@ -1086,7 +1094,7 @@ func (d *StreamDecoder) decodeOtherChoice(ch streamChoice, out *[]llm.Event) {
 			}
 		}
 	}
-	if ch.FinishReason != nil && *ch.FinishReason != "" {
+	if ch.FinishReason != nil && *ch.FinishReason != "" && !oc.finished {
 		oc.flushAndClose(ch.Index, out, &d.losses)
 		f := decodeFinish(*ch.FinishReason)
 		if f.Reason == llm.FinishToolCalls && oc.opened == 0 {
@@ -1266,7 +1274,9 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 			continue
 		}
 		if ch.Index < 0 {
+			// No candidate reads it, but a same-format client still gets it as it came.
 			losses = llm.AddLoss(losses, llm.Loss{Kind: llm.LossDropped, Path: fmt.Sprintf("choices[%d]", i), Detail: "candidate with negative index"})
+			others = append(others, raw)
 			continue
 		}
 		choices = append(choices, ch)
@@ -1425,6 +1435,10 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 			}
 			reasoning := m.text()
 			tagged, text := parseThink(content)
+			if parseNonEmptyAnnotations(m.Annotations) != nil {
+				losses = llm.AddLoss(losses, llm.Loss{Kind: llm.LossDropped, Path: fmt.Sprintf("choices[%d].message.annotations", ch.Index),
+					Detail: "citations of a candidate after the first have no place in the reply"})
+			}
 			if reasoning != "" {
 				out = append(out, llm.Event{Type: llm.EventCandidate, Candidate: &llm.CandidateEvent{Index: ch.Index, Kind: llm.CandidateReasoningDelta, Delta: reasoning}})
 			}

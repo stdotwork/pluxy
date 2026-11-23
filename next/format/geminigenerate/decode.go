@@ -48,11 +48,13 @@ type rawCandidate struct {
 	FinishReason      string          `json:"finishReason"`
 	FinishMessage     string          `json:"finishMessage"`
 	GroundingMetadata json.RawMessage `json:"groundingMetadata"`
+	CitationMetadata  json.RawMessage `json:"citationMetadata"`
 }
 
 type candState struct {
 	calls    bool
 	nextItem int
+	finished bool
 }
 
 type usageMetadata struct {
@@ -512,9 +514,14 @@ func (d *StreamDecoder) decode(c chunk, out []llm.Event) []llm.Event {
 			}
 			continue
 		}
+		// ProtoJSON leaves out a zero index. A candidate with none is candidate 0 while this
+		// chunk has not shown one, and otherwise sits where it is listed.
 		idx := i
-		if cand.Index != nil {
+		switch {
+		case cand.Index != nil:
 			idx = *cand.Index
+		case !seenZero:
+			idx = 0
 		}
 		if idx < 0 {
 			d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: fmt.Sprintf("candidates[%d]", i), Detail: "candidate with negative index"})
@@ -577,6 +584,7 @@ func (d *StreamDecoder) decodeOtherCandidate(idx int, cand rawCandidate, out []l
 				d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: fmt.Sprintf("candidates[%d].content.parts[%d]", idx, pi), Detail: "malformed candidate part"})
 				continue
 			}
+			d.reportLaterPartLosses(idx, pi, pm)
 			idRaw := pm["inlineData"]
 			if isNull(idRaw) {
 				idRaw = pm["inline_data"]
@@ -676,14 +684,63 @@ func (d *StreamDecoder) decodeOtherCandidate(idx int, cand rawCandidate, out []l
 			})
 		}
 	}
+	for _, m := range []struct {
+		raw  json.RawMessage
+		name string
+	}{{cand.GroundingMetadata, "groundingMetadata"}, {cand.CitationMetadata, "citationMetadata"}} {
+		if !isNull(m.raw) {
+			d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: fmt.Sprintf("candidates[%d].%s", idx, m.name),
+				Detail: "citations and sources of a candidate after the first have no place in the reply"})
+		}
+	}
 	if cand.FinishReason != "" {
 		f := finishOf(cand.FinishReason, cs.calls)
+		if cand.FinishReason == MalformedFunctionCall {
+			// For candidate 0 this ends the reply in an error, which would fail the other
+			// candidates too. Here it ends the one candidate with no raw reason a client format
+			// does not know.
+			f = llm.Finish{Reason: llm.FinishOther}
+			d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: fmt.Sprintf("candidates[%d].finishReason", idx),
+				Detail: "the candidate ended with " + MalformedFunctionCall + ": the model wrote a function call Gemini could not parse"})
+		}
+		cs.finished = true
 		out = append(out, llm.Event{
 			Type:      llm.EventCandidate,
 			Candidate: &llm.CandidateEvent{Index: idx, Kind: llm.CandidateFinish, Finish: &f},
 		})
 	}
 	return out
+}
+
+// laterPartKeys are the part fields decodeOtherCandidate reads, or that only go with one it reads.
+var laterPartKeys = map[string]bool{
+	"text": true, "thought": true, "thoughtSignature": true, "thought_signature": true,
+	"inlineData": true, "inline_data": true, "functionCall": true, "videoMetadata": true, "video_metadata": true,
+}
+
+// reportLaterPartLosses reports what part pi of a candidate after the first holds that the reply
+// cannot carry: a thought signature, and any part field decodeOtherCandidate does not read, such
+// as a code run or a file. A code run also marks the reply's runs as having some left out.
+func (d *StreamDecoder) reportLaterPartLosses(idx, pi int, pm map[string]json.RawMessage) {
+	path := fmt.Sprintf("candidates[%d].content.parts[%d]", idx, pi)
+	for _, k := range []string{"thoughtSignature", "thought_signature"} {
+		var sig string
+		if json.Unmarshal(pm[k], &sig) == nil && sig != "" {
+			d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path + "." + k,
+				Detail: "a thought signature in a candidate after the first has no place in the reply"})
+			break
+		}
+	}
+	for _, k := range sortedKeys(pm) {
+		if laterPartKeys[k] || isNull(pm[k]) {
+			continue
+		}
+		d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: path + "." + k,
+			Detail: "a " + k + " part in a candidate after the first has no place in the reply"})
+		if k == "executableCode" || k == "codeExecutionResult" {
+			d.codeLost = true
+		}
+	}
 }
 
 // part adds the events of one content part. Thought text is reasoning, other text is message
@@ -946,12 +1003,36 @@ func (d *StreamDecoder) Close() ([]llm.Event, error) {
 	var out []llm.Event
 	out = d.closeItem(&d.think, out)
 	out = d.closeItem(&d.text, out)
+	out = d.finishUnfinishedCands(out)
 	runs := d.codeExecs
 	if d.codeLost || len(d.pendingCode) > 0 {
 		// Code that never got a result, or a result that could not be read, is a run left out.
 		runs = llm.LeaveOutCodeExecutions(runs)
 	}
 	return append(out, llm.Event{Type: llm.EventFinish, Finish: d.finish, Usage: d.usage, Sources: d.sources, CodeExecutions: runs}), nil
+}
+
+// finishUnfinishedCands ends each candidate after the first that the reply never finished. Gemini
+// gave it no reason, so it is reported lost and ends as cut off (length) in place of one a client
+// would read as a normal stop.
+func (d *StreamDecoder) finishUnfinishedCands(out []llm.Event) []llm.Event {
+	idxs := make([]int, 0, len(d.cands))
+	for idx, cs := range d.cands {
+		if !cs.finished {
+			idxs = append(idxs, idx)
+		}
+	}
+	slices.Sort(idxs)
+	for _, idx := range idxs {
+		d.cands[idx].finished = true
+		d.losses = llm.AddLoss(d.losses, llm.Loss{Kind: llm.LossDropped, Path: fmt.Sprintf("candidates[%d].finishReason", idx),
+			Detail: "the reply ended before the candidate had a finish reason, so it is reported as cut off"})
+		out = append(out, llm.Event{
+			Type:      llm.EventCandidate,
+			Candidate: &llm.CandidateEvent{Index: idx, Kind: llm.CandidateFinish, Finish: &llm.Finish{Reason: llm.FinishLength}},
+		})
+	}
+	return out
 }
 
 // DecodeResponse turns an upstream non-streamed GenerateContentResponse into the events a stream

@@ -623,6 +623,44 @@ func TestCustomToolCallWhole(t *testing.T) {
 	}
 }
 
+// A Responses client is shown candidate 0 only, so the check reads candidate 0 only: a later
+// candidate's call that is not one whole input neither fails the reply nor reaches the client.
+func TestCustomCallCheckReadsCandidateZeroOnly(t *testing.T) {
+	for _, tg := range targets() {
+		t.Run(tg.name, func(t *testing.T) {
+			req := parse(t, `{"model":"m","stream":true,"tools":[`+patchTool+`],"input":"go"}`)
+			events := replyEvents(tg, req, "apply_patch", `{"input":"zero"}`)
+			cand := func(c llm.CandidateEvent) llm.Event { return llm.Event{Type: llm.EventCandidate, Candidate: &c} }
+			name := events[1].Item.Name
+			later := []llm.Event{
+				cand(llm.CandidateEvent{Index: 1, Kind: llm.CandidateToolCallStart, CallID: "call_2", Name: name}),
+				cand(llm.CandidateEvent{Index: 1, Kind: llm.CandidateToolInputDelta, Delta: `{"input":"LATERCANDIDATE`}),
+				cand(llm.CandidateEvent{Index: 1, Kind: llm.CandidateToolCallEnd}),
+				cand(llm.CandidateEvent{Index: 1, Kind: llm.CandidateFinish, Finish: &llm.Finish{Reason: llm.FinishToolCalls}}),
+			}
+			n := len(events) - 1
+			events = append(events[:n:n], append(later, events[n])...)
+
+			check := openairesponses.NewCustomCallCheck(req, &llm.Translation{From: llm.FormatOpenAIResponses, To: tg.format})
+			for _, ev := range events {
+				if err := check.Check(ev); err != nil {
+					t.Fatalf("the check failed the reply on %s: %v", ev.Type, err)
+				}
+			}
+			var buf bytes.Buffer
+			w := openairesponses.NewStreamWriter(&buf, req)
+			for _, ev := range events {
+				if err := w.Write(ev); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if strings.Contains(buf.String(), "LATERCANDIDATE") || !strings.Contains(buf.String(), `"zero"`) {
+				t.Errorf("the client's stream is not candidate 0 alone: %s", buf.String())
+			}
+		})
+	}
+}
+
 // A body passed through, or a request with no custom tool, needs no check.
 func TestCustomCallCheckOnlyForTranslatedCustomTools(t *testing.T) {
 	custom := parse(t, `{"model":"m","tools":[`+patchTool+`],"input":"go"}`)

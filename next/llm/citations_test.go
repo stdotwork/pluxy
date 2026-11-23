@@ -171,6 +171,31 @@ func TestReplyLossesSparesAClientOfTheUpstreamsFormat(t *testing.T) {
 	}
 }
 
+// A client the upstream's body reaches has every candidate after the first whole, so it loses
+// nothing at one; candidate 0 and what is not a candidate stay reported.
+func TestReplyLossesSparesLaterCandidatesOfAClientTheBodyReaches(t *testing.T) {
+	for path, spared := range map[string]bool{
+		"candidates[1].groundingMetadata":          true,
+		"candidates[12].content.parts[0].fileData": true,
+		"choices[2].message.annotations":           true,
+		"candidates[0].content.parts[0].fileData":  false,
+		"choices[0].message.annotations":           false,
+		"candidates":                               false,
+		"candidates[x]":                            false,
+		"candidates[]":                             false,
+		"candidates[01":                            false,
+		"output[1]":                                false,
+	} {
+		got := llm.ReplyLosses([]llm.Loss{{Kind: llm.LossDropped, Path: path}}, true)
+		if (len(got) == 0) != spared {
+			t.Errorf("%s: spared = %v, want %v", path, len(got) == 0, spared)
+		}
+		if got := llm.ReplyLosses([]llm.Loss{{Kind: llm.LossDropped, Path: path}}, false); len(got) != 1 {
+			t.Errorf("%s: a client of another format must hear of it", path)
+		}
+	}
+}
+
 func TestBodyReachesClient(t *testing.T) {
 	req := func(format string, stream bool) *llm.Request {
 		return &llm.Request{Stream: stream, Native: &llm.Native{Format: format}}

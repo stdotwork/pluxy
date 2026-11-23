@@ -843,6 +843,10 @@ func (s *StreamWriter) searchesDone(ended []*item) error {
 // an upstream error when a call to one of the client's custom tools is not one whole input string
 // and the finish does not explain it (a token limit or a filter), so core handles the reply as it
 // does any failed one. Use one per reply. A nil check passes everything.
+//
+// It reads candidate 0 only. A Responses client is shown no other candidate (the writers drop
+// them and report the loss), so a call in one never reaches it, and failing the reply for such a
+// call would fail a reply whose client got a whole one.
 type CustomCallCheck struct {
 	refs map[string]clienttools.Ref
 	open map[int]*customCall
