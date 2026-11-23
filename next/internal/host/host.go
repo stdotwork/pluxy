@@ -752,6 +752,9 @@ type Stream struct {
 	watch   time.Duration
 	started bool
 	alives  atomic.Int64
+	// closed is set when Close starts: frames the reader already holds are not delivered after it
+	// (read).
+	closed atomic.Bool
 	// pieces are the account's secrets, whose pieces are removed from the upstream's error text.
 	pieces pieces
 	// held is the call's capture, redacted, until the call ends: whether it ended in an error
@@ -855,7 +858,14 @@ func bodyPiece(text string) json.RawMessage {
 }
 
 // read reads the next frame, within the watchdog's limit when the call has one.
+//
+// A call that has ended gets no frame the reader holds: the context's end and Close close the
+// connection, and a read of a closed connection fails, so one that is served from the reader's
+// buffer must fail the same way.
 func (s *Stream) read(reply *protocol.Reply) error {
+	if s.closed.Load() || (s.ctx != nil && s.ctx.Err() != nil) {
+		return net.ErrClosed
+	}
 	if s.watch > 0 {
 		_ = s.conn.SetReadDeadline(time.Now().Add(s.watch))
 	}
@@ -882,6 +892,7 @@ func (s *Stream) readError(err error) *llm.Error {
 
 // Close ends the call; if it had not finished, the extension sees it cancelled.
 func (s *Stream) Close() {
+	s.closed.Store(true)
 	if s.onClose != nil {
 		defer s.onClose()
 	}

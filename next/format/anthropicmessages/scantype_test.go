@@ -211,3 +211,33 @@ func TestScansMatchDecodingOnRecordedEvents(t *testing.T) {
 	}
 	t.Logf("%d recorded events from %d case files; scanTextDelta took %d, scanType %d", events, len(files), textTaken, typeTaken)
 }
+
+// TestScanHooksStayHooked fails when a fast path is unhooked: each call below takes many more
+// allocations through encoding/json than through the scan. The limits hold with and without -race.
+func TestScanHooksStayHooked(t *testing.T) {
+	raw := json.RawMessage(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`)
+	// Measured: 1 allocation with scanType, 7 through encoding/json.
+	if got := testing.AllocsPerRun(100, func() { _ = rawType(raw) }); got > 3 {
+		t.Errorf("rawType took %v allocations, want at most 3: it no longer uses scanType", got)
+	}
+
+	d := NewStreamDecoder()
+	for _, data := range []string{
+		`{"type":"message_start","message":{"id":"m","model":"x","usage":{"input_tokens":1}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+	} {
+		if _, err := d.Decode([]byte(data)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	delta := []byte(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello there"}}`)
+	// Measured: 5 allocations with scanTextDelta, about 14 through encoding/json.
+	got := testing.AllocsPerRun(100, func() {
+		if _, err := d.Decode(delta); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if got > 8 {
+		t.Errorf("Decode of a text delta took %v allocations, want at most 8: it no longer uses scanTextDelta", got)
+	}
+}

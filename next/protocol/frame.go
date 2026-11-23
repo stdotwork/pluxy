@@ -33,7 +33,8 @@ type FrameReader struct {
 func NewFrameReader(r io.Reader) *FrameReader { return &FrameReader{r: r} }
 
 // fill reads until at least n bytes are buffered. A frame the buffer cannot hold is read into a
-// buffer of its own size, which the reader does not keep.
+// buffer of its own size, which the reader keeps only while that frame is being read: Read drops it
+// once the frame is used, and fill drops it when the read fails.
 func (f *FrameReader) fill(n int) error {
 	if f.end-f.start >= n {
 		return nil
@@ -58,13 +59,22 @@ func (f *FrameReader) fill(n int) error {
 			return nil
 		}
 		if err != nil {
+			if len(f.buf) > frameBufSize {
+				// A frame of its own size is not kept, whatever became of the frame.
+				f.buf = nil
+				f.start, f.end = 0, 0
+			}
 			return err
 		}
 	}
 	return nil
 }
 
-// Read reads one frame into v, as ReadFrame does, with the same value and the same errors.
+// Read reads one frame into v, as ReadFrame does, with the same value and, for a connection that
+// reads as it should, the same errors. The first error a read of the connection returns ends its
+// use: what the reader holds after one is not defined by ReadFrame, so read no more frames. In
+// particular, after ErrFrameTooLarge the frame's header stays buffered and a second Read repeats
+// that error, where ReadFrame would read on into the frame's body.
 func (f *FrameReader) Read(v any) error {
 	if err := f.fill(4); err != nil {
 		if err == io.EOF && f.end-f.start > 0 {
@@ -191,7 +201,7 @@ func plainInt(v []byte) (int, bool) {
 		}
 	}
 	n, err := strconv.ParseInt(string(v), 10, 64)
-	if err != nil {
+	if err != nil || int64(int(n)) != n {
 		return 0, false
 	}
 	return int(n), true

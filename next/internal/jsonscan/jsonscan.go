@@ -38,7 +38,8 @@ type Member struct {
 func Object(data []byte) ([]Member, bool) { return AppendObject(nil, data) }
 
 // AppendObject is Object with the members appended to dst, so a caller that keeps a small array
-// for them allocates nothing for an object that fits it. On false, it returns nil.
+// for them allocates nothing for an object that fits it. On false, the returned slice is not to be
+// used: it may be nil or dst.
 func AppendObject(dst []Member, data []byte) ([]Member, bool) {
 	i := skipSpace(data, 0)
 	if i >= len(data) || data[i] != '{' {

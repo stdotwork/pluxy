@@ -292,3 +292,47 @@ func BenchmarkReadReplyFrame(b *testing.B) {
 		}
 	})
 }
+
+// A frame too big for the kept buffer that fails to arrive in full, as when the connection ends or
+// passes its deadline, leaves no big buffer behind: an ended call holds no more than the reader's
+// own.
+func TestFrameReaderDropsBigBufferOfFailedFrame(t *testing.T) {
+	boom := errors.New("boom")
+	head := binary.BigEndian.AppendUint32(nil, 64<<20)
+	for name, tail := range map[string]error{"eof": io.EOF, "deadline": boom} {
+		fr := NewFrameReader(&failAfter{data: append(head, 'x'), err: tail})
+		if err := fr.Read(new(Reply)); err == nil {
+			t.Fatalf("%s: read of a frame cut short succeeded", name)
+		}
+		if len(fr.buf) > frameBufSize {
+			t.Errorf("%s: after the failed read the reader holds %d bytes, want at most %d", name, len(fr.buf), frameBufSize)
+		}
+		if fr.start != 0 || fr.end != 0 {
+			t.Errorf("%s: reader positions %d, %d, want 0, 0", name, fr.start, fr.end)
+		}
+	}
+}
+
+// TestFrameReaderUsesReplyDecoder fails when Read stops decoding a Reply with decodeReply: the
+// frame below then goes through encoding/json, which takes many more allocations.
+func TestFrameReaderUsesReplyDecoder(t *testing.T) {
+	body := []byte(`{"type":"text.delta","index":0,"delta":"hello there","raw":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello there"}}}`)
+	data := headed(body)
+	src := bytes.NewReader(data)
+	fr := NewFrameReader(src)
+	got := testing.AllocsPerRun(100, func() {
+		src.Reset(data)
+		var r Reply
+		if err := fr.Read(&r); err != nil {
+			t.Fatal(err)
+		}
+	})
+	slow := testing.AllocsPerRun(100, func() {
+		var r Reply
+		_ = json.Unmarshal(body, &r)
+	})
+	// Measured: 4 allocations with decodeReply, 11 through encoding/json.
+	if got > 6 || got >= slow {
+		t.Fatalf("a reply frame took %v allocations to read, want at most 6 and fewer than encoding/json's %v", got, slow)
+	}
+}
