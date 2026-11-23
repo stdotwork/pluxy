@@ -322,7 +322,7 @@ func (d *StreamDecoder) noteCodeCall(raw json.RawMessage, index int, fallback st
 	}
 	d.seenCode[key] = true
 	delete(d.codeUnread, key)
-	d.codeExecs = llm.AppendCodeExecution(d.codeExecs, ce)
+	d.codeExecs.Append(ce)
 }
 
 // extractImageGenerationCall reads a final Responses image_generation_call output item into a
@@ -470,7 +470,7 @@ type StreamDecoder struct {
 	finishCut  []llm.Loss
 	codeBuf    map[int]*strings.Builder // upstream output_index -> streamed code_interpreter_call code
 	codeOver   map[int]bool             // upstream output_index -> its streamed code passed maxCodeExecInput
-	codeExecs  []llm.CodeExecution
+	codeExecs  llm.CodeRuns
 	seenCode   map[string]bool
 	codeUnread map[string]bool // code_interpreter_call items that gave no run, by ID or output index
 	// codeOverKeys are the items whose streamed code passed the limit: only the item's own code
@@ -741,9 +741,9 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		f := finishOf(r)
 		if len(d.codeUnread) > 0 {
 			// A call with no result the decoder could read is a run left out.
-			d.codeExecs = llm.LeaveOutCodeExecutions(d.codeExecs)
+			d.codeExecs.LeaveOut()
 		}
-		fin := llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(r.Usage), Sources: d.sources, CodeExecutions: d.codeExecs, Raw: raw}
+		fin := llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(r.Usage), Sources: d.sources, CodeExecutions: d.codeExecs.List(), Raw: raw}
 		if l, cut := protocol.FitFinish(&fin); cut {
 			d.finishCut = append(d.finishCut, l)
 		}
@@ -798,7 +798,7 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 	var sources []llm.Source
 	seenSrc := map[string]bool{}
 	var cites llm.CiteBudget
-	var codeExecs []llm.CodeExecution
+	var codeExecs llm.CodeRuns
 	var losses []llm.Loss
 	mediaBytes := 0
 	add := func(start llm.ItemStart, deltaType, delta string, o *llm.Opaque, cits []llm.Citation) {
@@ -839,9 +839,9 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 			sources = extractWebSearchCallSources(raw, seenSrc, sources, &cites)
 			if _, isCall := codeInterpreterCallID(raw); isCall {
 				if _, ce, ok := extractCodeInterpreterCall(raw, ""); ok {
-					codeExecs = llm.AppendCodeExecution(codeExecs, ce)
+					codeExecs.Append(ce)
 				} else {
-					codeExecs = llm.LeaveOutCodeExecutions(codeExecs)
+					codeExecs.LeaveOut()
 				}
 			}
 			if _, media, problem, isImg := extractImageGenerationCall(raw); isImg {
@@ -863,7 +863,7 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 		}
 	}
 	f := finishOf(r)
-	fin := llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(r.Usage), Sources: sources, CodeExecutions: codeExecs, Raw: append(json.RawMessage(nil), body...)}
+	fin := llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(r.Usage), Sources: sources, CodeExecutions: codeExecs.List(), Raw: append(json.RawMessage(nil), body...)}
 	if l, cut := protocol.FitFinish(&fin); cut {
 		losses = llm.AddLoss(losses, l)
 	}

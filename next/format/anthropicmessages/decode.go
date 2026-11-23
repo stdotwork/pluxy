@@ -146,10 +146,12 @@ type contentBlock struct {
 	Citations json.RawMessage `json:"citations"`
 }
 
-// maxCodeExecInput bounds the streamed input_json_delta buffered for a single code execution
-// server_tool_use block so a broken stream cannot grow memory without bound. It holds the most
-// JSON a run's code of llm.MaxCodeExecutionCodeBytes can take (six bytes per byte, as \u0000), so a
-// stream and the same reply not streamed keep the same runs.
+// maxCodeExecInput bounds the input JSON of a code execution server_tool_use block: what a stream
+// buffers for it, across every such block open at once, so a broken stream cannot grow memory
+// without bound, and what a reply not streamed accepts for one block. It holds the most JSON a run's
+// code of llm.MaxCodeExecutionCodeBytes can take (six bytes per byte, as \u0000). An input over it
+// is left out in both modes, whatever fields it holds, so a stream and the same reply not streamed
+// keep the same runs.
 const maxCodeExecInput = 6*llm.MaxCodeExecutionCodeBytes + 1<<10
 
 type pendingCodeCall struct {
@@ -158,12 +160,26 @@ type pendingCodeCall struct {
 	initialInput json.RawMessage
 	partial      strings.Builder
 	overflow     bool
+	held         int // bytes of the input this block counts against the decoder's budget
 }
 
 type decodedCodeCall struct {
 	name string
 	code string
 	lang string
+}
+
+// hold sets what a code block's input holds to size bytes. When that would take the blocks open
+// together past maxCodeExecInput, the block overflows instead: it is left out and holds nothing.
+func (d *StreamDecoder) hold(pc *pendingCodeCall, size int) bool {
+	if size > maxCodeExecInput || d.codeHeld-pc.held+size > maxCodeExecInput {
+		d.codeHeld -= pc.held
+		pc.held, pc.overflow = 0, true
+		return false
+	}
+	d.codeHeld += size - pc.held
+	pc.held = size
+	return true
 }
 
 func isCodeExecToolName(name string) bool {
@@ -433,10 +449,12 @@ type StreamDecoder struct {
 	codeBlock map[int]*pendingCodeCall // upstream block index -> open server_tool_use for code execution
 	codeCalls map[string]decodedCodeCall
 	codeDone  map[string]bool // IDs of calls a result has answered, so a repeated result is ignored
-	codeExecs []llm.CodeExecution
-	codeLost  bool // a code call or result that gave no run, so the runs end with the left-out record
-	stop      string
-	usage     json.RawMessage
+	codeExecs llm.CodeRuns
+	// codeHeld is the input JSON the open code blocks hold together; it stays within maxCodeExecInput.
+	codeHeld int
+	codeLost bool // a code call or result that gave no run, so the runs end with the left-out record
+	stop     string
+	usage    json.RawMessage
 }
 
 // NewStreamDecoder returns a decoder for one stream.
@@ -525,11 +543,11 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 			d.sources = extractWebSearchSources(b.Content, d.seenSrc, d.sources, &d.cites)
 		}
 		if b.Type == "server_tool_use" && b.ID != "" && isCodeExecToolName(b.Name) {
-			d.codeBlock[ev.Index] = &pendingCodeCall{
-				id:           b.ID,
-				name:         b.Name,
-				initialInput: append(json.RawMessage(nil), b.Input...),
+			pc := &pendingCodeCall{id: b.ID, name: b.Name}
+			if d.hold(pc, len(b.Input)) {
+				pc.initialInput = append(json.RawMessage(nil), b.Input...)
 			}
+			d.codeBlock[ev.Index] = pc
 		} else if isCodeExecResultBlock(b.Type) && b.ToolUseID != "" {
 			call, ok := d.codeCalls[b.ToolUseID]
 			delete(d.codeCalls, b.ToolUseID)
@@ -538,7 +556,7 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 				d.codeDone[b.ToolUseID] = true
 				var ce llm.CodeExecution
 				if ce, ok = decodeCodeExecResult(b.Type, call, b.Content); ok {
-					d.codeExecs = llm.AppendCodeExecution(d.codeExecs, ce)
+					d.codeExecs.Append(ce)
 				}
 			}
 			// A result repeated for a call already answered adds nothing, and loses nothing.
@@ -579,12 +597,14 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		idx, open := d.items[ev.Index]
 		if !open || ev.Delta == nil {
 			if ev.Delta != nil && ev.Delta.Type == "input_json_delta" {
-				if pc := d.codeBlock[ev.Index]; pc != nil && !pc.overflow {
-					if pc.partial.Len()+len(ev.Delta.PartialJSON) > maxCodeExecInput {
-						pc.overflow = true
-						pc.partial.Reset()
-					} else {
+				if pc := d.codeBlock[ev.Index]; pc != nil && !pc.overflow && ev.Delta.PartialJSON != "" {
+					if pc.partial.Len() == 0 {
+						pc.initialInput = nil
+					}
+					if d.hold(pc, pc.partial.Len()+len(ev.Delta.PartialJSON)) {
 						pc.partial.WriteString(ev.Delta.PartialJSON)
+					} else {
+						pc.partial.Reset()
 					}
 				}
 			}
@@ -623,6 +643,7 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 	case "content_block_stop":
 		if pc := d.codeBlock[ev.Index]; pc != nil {
 			delete(d.codeBlock, ev.Index)
+			d.codeHeld -= pc.held
 			if !pc.overflow {
 				inRaw := pc.initialInput
 				if pc.partial.Len() > 0 {
@@ -667,9 +688,9 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		f := finishOf(d.stop)
 		if d.codeLost || len(d.codeCalls) > 0 || len(d.codeBlock) > 0 {
 			// A call with no result, or a call or result the decoder could not read, is a run left out.
-			d.codeExecs = llm.LeaveOutCodeExecutions(d.codeExecs)
+			d.codeExecs.LeaveOut()
 		}
-		fin := llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(d.usage), Sources: d.sources, CodeExecutions: d.codeExecs, Raw: raw}
+		fin := llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(d.usage), Sources: d.sources, CodeExecutions: d.codeExecs.List(), Raw: raw}
 		if l, cut := protocol.FitFinish(&fin); cut {
 			d.finishCut = append(d.finishCut, l)
 		}
@@ -766,7 +787,7 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 	seenSrc := map[string]bool{}
 	codeCalls := map[string]decodedCodeCall{}
 	codeDone := map[string]bool{}
-	var codeExecs []llm.CodeExecution
+	var codeExecs llm.CodeRuns
 	codeLost := false
 	for i, raw := range m.Content {
 		b := rawjson.Object(raw)
@@ -778,7 +799,7 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 			sources = extractWebSearchSources(cb.Content, seenSrc, sources, &cites)
 		}
 		if cb.Type == "server_tool_use" && cb.ID != "" && isCodeExecToolName(cb.Name) {
-			if code, lang, ok := decodeCodeExecInput(cb.Name, cb.Input); ok {
+			if code, lang, ok := decodeCodeExecInput(cb.Name, cb.Input); ok && len(cb.Input) <= maxCodeExecInput {
 				codeCalls[cb.ID] = decodedCodeCall{name: cb.Name, code: code, lang: lang}
 			} else {
 				codeLost = true
@@ -791,7 +812,7 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 				codeDone[cb.ToolUseID] = true
 				var ce llm.CodeExecution
 				if ce, ok = decodeCodeExecResult(cb.Type, call, cb.Content); ok {
-					codeExecs = llm.AppendCodeExecution(codeExecs, ce)
+					codeExecs.Append(ce)
 				}
 			}
 			if !ok && !repeated {
@@ -868,9 +889,9 @@ func DecodeResponseLosses(body []byte) ([]llm.Event, []llm.Loss, error) {
 	out = append(out, llm.Event{Type: llm.EventNative, Raw: eventJSON(delta)})
 	f := finishOf(m.StopReason)
 	if codeLost || len(codeCalls) > 0 {
-		codeExecs = llm.LeaveOutCodeExecutions(codeExecs)
+		codeExecs.LeaveOut()
 	}
-	fin := llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(m.Usage), Sources: sources, CodeExecutions: codeExecs, Raw: append(json.RawMessage(nil), body...)}
+	fin := llm.Event{Type: llm.EventFinish, Finish: &f, Usage: decodeUsage(m.Usage), Sources: sources, CodeExecutions: codeExecs.List(), Raw: append(json.RawMessage(nil), body...)}
 	var losses []llm.Loss
 	if l, cut := protocol.FitFinish(&fin); cut {
 		losses = llm.AddLoss(losses, l)
