@@ -35,12 +35,17 @@ type Member struct {
 
 // Object returns the members of the JSON object data in their order, duplicates included, and
 // whether data is one valid JSON object with optional whitespace around it.
-func Object(data []byte) ([]Member, bool) {
+func Object(data []byte) ([]Member, bool) { return AppendObject(nil, data) }
+
+// AppendObject is Object with the members appended to dst, so a caller that keeps a small array
+// for them allocates nothing for an object that fits it. On false, the returned slice is not to be
+// used: it may be nil or dst.
+func AppendObject(dst []Member, data []byte) ([]Member, bool) {
 	i := skipSpace(data, 0)
 	if i >= len(data) || data[i] != '{' {
 		return nil, false
 	}
-	var members []Member
+	members := dst
 	i = skipSpace(data, i+1)
 	if i < len(data) && data[i] == '}' {
 		return members, skipSpace(data, i+1) == len(data)

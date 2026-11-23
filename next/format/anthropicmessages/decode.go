@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
+	"github.com/stdotwork/pluxy/next/internal/jsonscan"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
@@ -387,6 +388,16 @@ func extractCitations(raw json.RawMessage, runeLen int) []llm.Citation {
 	return applyBlockRange(out, runeLen)
 }
 
+type streamDelta struct {
+	Type        string          `json:"type"`
+	Text        string          `json:"text"`
+	Thinking    string          `json:"thinking"`
+	PartialJSON string          `json:"partial_json"`
+	Signature   string          `json:"signature"`
+	Citation    json.RawMessage `json:"citation"`
+	StopReason  string          `json:"stop_reason"`
+}
+
 type streamEvent struct {
 	Type    string `json:"type"`
 	Index   int    `json:"index"`
@@ -395,18 +406,82 @@ type streamEvent struct {
 		Model string          `json:"model"`
 		Usage json.RawMessage `json:"usage"`
 	} `json:"message"`
-	ContentBlock *contentBlock `json:"content_block"`
-	Delta        *struct {
-		Type        string          `json:"type"`
-		Text        string          `json:"text"`
-		Thinking    string          `json:"thinking"`
-		PartialJSON string          `json:"partial_json"`
-		Signature   string          `json:"signature"`
-		Citation    json.RawMessage `json:"citation"`
-		StopReason  string          `json:"stop_reason"`
-	} `json:"delta"`
-	Usage json.RawMessage `json:"usage"`
-	Error json.RawMessage `json:"error"`
+	ContentBlock *contentBlock   `json:"content_block"`
+	Delta        *streamDelta    `json:"delta"`
+	Usage        json.RawMessage `json:"usage"`
+	Error        json.RawMessage `json:"error"`
+}
+
+// scanTextDelta reads a text delta, which is nearly every event of a reply, without decoding it:
+// an event of exactly the members type "content_block_delta", index and a delta of exactly type
+// "text_delta" and text, each once. It reports false for any other event, which Decode decodes.
+func scanTextDelta(data []byte) (index int, text string, ok bool) {
+	var space [4]jsonscan.Member
+	members, ok := jsonscan.AppendObject(space[:0], data)
+	if !ok || len(members) != 3 {
+		return 0, "", false
+	}
+	var seen uint8
+	for _, m := range members {
+		var bit uint8
+		switch string(m.Key) {
+		case `"type"`:
+			bit = 1
+			if string(m.Value) != `"content_block_delta"` {
+				return 0, "", false
+			}
+		case `"index"`:
+			bit = 2
+			if len(m.Value) == 0 || len(m.Value) > 9 {
+				return 0, "", false
+			}
+			for _, c := range m.Value {
+				if c < '0' || c > '9' {
+					return 0, "", false
+				}
+				index = index*10 + int(c-'0')
+			}
+		case `"delta"`:
+			bit = 4
+			var dspace [2]jsonscan.Member
+			dm, ok := jsonscan.AppendObject(dspace[:0], m.Value)
+			if !ok || len(dm) != 2 {
+				return 0, "", false
+			}
+			var dseen uint8
+			for _, f := range dm {
+				var dbit uint8
+				switch string(f.Key) {
+				case `"type"`:
+					dbit = 1
+					if string(f.Value) != `"text_delta"` {
+						return 0, "", false
+					}
+				case `"text"`:
+					dbit = 2
+					if !jsonscan.IsString(f.Value) {
+						return 0, "", false
+					}
+					if text, ok = jsonscan.Unquote(f.Value); !ok {
+						return 0, "", false
+					}
+				default:
+					return 0, "", false
+				}
+				if dseen&dbit != 0 {
+					return 0, "", false
+				}
+				dseen |= dbit
+			}
+		default:
+			return 0, "", false
+		}
+		if seen&bit != 0 {
+			return 0, "", false
+		}
+		seen |= bit
+	}
+	return index, text, true
 }
 
 // MaxSignature bounds the thinking signature the stream decoder collects for one block. Claude's
@@ -480,7 +555,9 @@ func (d *StreamDecoder) Decode(data []byte) ([]llm.Event, error) {
 		return nil, fmt.Errorf("anthropicmessages: data after the end of the stream")
 	}
 	var ev streamEvent
-	if err := json.Unmarshal(data, &ev); err != nil || ev.Type == "" {
+	if index, text, ok := scanTextDelta(data); ok {
+		ev = streamEvent{Type: "content_block_delta", Index: index, Delta: &streamDelta{Type: "text_delta", Text: text}}
+	} else if err := json.Unmarshal(data, &ev); err != nil || ev.Type == "" {
 		return nil, d.withUsage(malformed("upstream sent a malformed stream event", data))
 	}
 	raw := append(json.RawMessage(nil), data...)
