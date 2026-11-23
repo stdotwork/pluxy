@@ -3,6 +3,9 @@ package openairesponses
 import (
 	"encoding/json"
 	"strings"
+
+	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
+	"github.com/stdotwork/pluxy/next/llm"
 )
 
 // codeInterpreterModels holds the OpenAI model IDs whose official model pages under
@@ -90,4 +93,28 @@ func stripDateSuffix(m string) (string, bool) {
 // the default auto-provisioned 1g container.
 func canonicalCodeExecutionTool() json.RawMessage {
 	return json.RawMessage(`{"type":"code_interpreter","container":{"type":"auto"}}`)
+}
+
+// codeInterpreterOutputs is the include value that makes a code_interpreter_call item carry its
+// outputs. The Responses create reference lists it under include, and a call returns outputs only
+// when it is asked for: https://developers.openai.com/api/reference/resources/responses/create
+const codeInterpreterOutputs = "code_interpreter_call.outputs"
+
+// withInclude returns the request's include list with value added: the client's own include values
+// when its request came from Responses (kept as they were, in order), then value unless it is
+// already there. Only a Responses upstream is asked for this value, and only when the code tool
+// was translated, so a request that carries its own tool is left as the client sent it.
+func withInclude(client *llm.Origin, value string) []json.RawMessage {
+	var out []json.RawMessage
+	if client != nil && client.Format == format {
+		_ = json.Unmarshal(rawjson.Object(client.Raw)["include"], &out)
+	}
+	want, _ := json.Marshal(value)
+	for _, v := range out {
+		var s string
+		if json.Unmarshal(v, &s) == nil && s == value {
+			return out
+		}
+	}
+	return append(out, want)
 }

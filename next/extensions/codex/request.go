@@ -462,6 +462,11 @@ func (h *shaper) include() {
 	if slices.Contains(asked, "web_search_call.action.sources") {
 		inc = append(inc, "web_search_call.action.sources")
 	}
+	// A translated request's code interpreter outputs, asked for where the code tool was sent
+	// (api.openai.com; the ChatGPT backend gets no translated code tool).
+	if !h.passthrough() && !isChatGPTHost(h.s, h.a) && slices.Contains(asked, "code_interpreter_call.outputs") {
+		inc = append(inc, "code_interpreter_call.outputs")
+	}
 	h.m["include"] = raw(inc)
 }
 

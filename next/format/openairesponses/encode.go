@@ -81,6 +81,7 @@ type outRequest struct {
 	Text              any               `json:"text,omitempty"`
 	Reasoning         any               `json:"reasoning,omitempty"`
 	ServiceTier       string            `json:"service_tier,omitempty"`
+	Include           []json.RawMessage `json:"include,omitempty"`
 }
 
 type outFunctionTool struct {
@@ -199,6 +200,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 	}
 	emittedCodeExec := false
 	droppedCodeExec := false
+	translatedCodeExec := false
 	for i, t := range req.Tools {
 		p := pathOf(t.Origin, fmt.Sprintf("tools[%d]", i))
 		if t.Type == llm.ToolCodeExecution {
@@ -219,6 +221,7 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 			}
 			out.Tools = append(out.Tools, canonicalCodeExecutionTool())
 			emittedCodeExec = true
+			translatedCodeExec = true
 			e.losses = append(e.losses, rawjson.CodeExecutionLosses(t, p, format)...)
 			continue
 		}
@@ -310,6 +313,10 @@ func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss,
 		default:
 			out.ToolChoice = tc.Mode
 		}
+	}
+
+	if translatedCodeExec {
+		out.Include = withInclude(req.Origin, codeInterpreterOutputs)
 	}
 
 	for i, it := range req.Items {
