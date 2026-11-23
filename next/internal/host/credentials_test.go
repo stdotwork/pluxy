@@ -257,3 +257,17 @@ func TestLoginPromptHidesAProxyPasswordThatIsAnAddress(t *testing.T) {
 		t.Errorf("prompt shows the proxy password: %q", r.Prompt.Message)
 	}
 }
+
+// A user name with no password counts only from 8 bytes, as written or decoded: a one-letter name
+// leaves the words of an error alone.
+func TestLoginErrorUserNameWithoutPassword(t *testing.T) {
+	for _, addr := range []string{"http://a@gw.test/v1", "http://%61@gw.test/v1", "http://a:@gw.test/v1"} {
+		got := loginError(t, map[string]string{"base_url": addr}, nil, "could not reach the address "+addr)
+		if want := "could not reach the address " + addr; got != want {
+			t.Errorf("%s: got %q, want %q", addr, got, want)
+		}
+	}
+	if got := loginError(t, map[string]string{"base_url": "http://username8@gw.test/v1"}, nil, "who username8 asked"); strings.Contains(got, "username8") {
+		t.Errorf("an 8-byte user name shows: %q", got)
+	}
+}

@@ -208,12 +208,21 @@ func wholeSecrets(v string, secret bool) []string {
 	// authority, as written.
 	authority := t[strings.Index(t, "://")+3:]
 	authority, _, _ = strings.Cut(authority, "/")
-	out := []string{authority[:strings.LastIndexByte(authority, '@')], u.User.String()}
-	if name := u.User.Username(); len(name) >= minBareName {
-		out = append(out, name)
+	name, p, hasPassword := u.User.Username(), "", false
+	if p, hasPassword = u.User.Password(); p == "" {
+		hasPassword = false
 	}
-	if p, ok := u.User.Password(); ok && p != "" {
-		out = append(out, p, u.User.Username()+":"+p)
+	forms := []string{authority[:strings.LastIndexByte(authority, '@')], u.User.String(), name}
+	var out []string
+	for _, f := range forms {
+		// With a password the user info as written counts whatever its length; a user name alone, or
+		// with an empty password, counts only from minBareName bytes, as written or decoded.
+		if len(f) >= minBareName || hasPassword && f != name {
+			out = append(out, f)
+		}
+	}
+	if hasPassword {
+		out = append(out, p, name+":"+p)
 	}
 	return out
 }
