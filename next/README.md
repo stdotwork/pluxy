@@ -945,7 +945,9 @@ sources from Responses, `url_citation` annotations from Chat Completions, and `g
 points) from Gemini render as Responses `url_citation` annotations (streaming and non-streaming),
 non-streaming Chat Completions `url_citation` annotations, and Gemini `groundingMetadata`
 (streaming and non-streaming). OpenAI requires both indices on a URL citation, so a citation with
-no usable range covers its whole message there. A same-format Chat reply keeps the upstream's
+no usable range covers its whole message there. A Gemini citation lands on the message item that holds
+its text, also when a thought signature or a function call split the reply's text into several items;
+one that cannot be placed on a single item is reported as dropped. A same-format Chat reply keeps the upstream's
 `annotations` (streamed and non-streamed, bounded at 4 MiB per reply). Cross-format citations and
 sources are not written into Messages
 replies (Anthropic's `web_search_result_location` requires a vendor-signed `encrypted_index` that
