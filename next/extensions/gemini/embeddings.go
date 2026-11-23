@@ -524,7 +524,7 @@ func postEmbeddingJSON(ctx context.Context, t target, model string, payload any)
 	}
 	resp, err := postBody(ctx, t, body, false, model)
 	if err != nil {
-		return nil, err
+		return nil, embeddingNotFound(err, model)
 	}
 	defer resp.Body.Close()
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
@@ -541,6 +541,25 @@ func postEmbeddingJSON(ctx context.Context, t target, model string, payload any)
 		return nil, upstreamEmbeddingError(fmt.Sprintf("the upstream's reply is larger than %d MiB", maxEmbeddingsReply>>20))
 	}
 	return raw, nil
+}
+
+// embeddingNotFound keeps a 404 from an embedding call from blocking the model's generation.
+// Core blocks a model after a model-scoped not-found for hours, but an embedding call proves
+// nothing about generation: a chat model answers :embedContent with a 404 that names it. A 404
+// that names the model becomes a refusal on this account (retryable unsupported, so routing tries
+// another account, with 400 if none can); any other 404 fails the request only. Another error is
+// returned as it is.
+func embeddingNotFound(err error, model string) error {
+	var e *llm.Error
+	if !errors.As(err, &e) || e.Code != llm.CodeNotFound {
+		return err
+	}
+	if e.Retryable {
+		return &llm.Error{Code: llm.CodeUnsupported, Status: http.StatusBadRequest, Scope: llm.ScopeCredential, Retryable: true,
+			Message: fmt.Sprintf("this account cannot embed with model %q: %s", model, e.Message)}
+	}
+	e.Scope = llm.ScopeRequest
+	return e
 }
 
 func upstreamEmbeddingError(message string) *llm.Error {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -116,7 +117,7 @@ func geminiEmbeddingsTo(ctx context.Context, call sdk.Call, out bodySender, form
 		}
 		resp, err := postBody(ctx, call, s, chat, key, "/embeddings", reqBody)
 		if err != nil {
-			return noEndpoint(err, "embeddings", "/embeddings")
+			return embeddingNotFound(err, call.Request.Model, "/embeddings")
 		}
 		raw, err := readEmbeddingReply(ctx, resp)
 		if err != nil {
@@ -184,7 +185,7 @@ func geminiEmbeddingsPassthrough(ctx context.Context, call sdk.Call, s settings,
 	path := "/models/" + url.PathEscape(model) + method
 	resp, err := postBody(ctx, call, s, wire, key, path, reqBody)
 	if err != nil {
-		return noEndpoint(err, "embeddings", path)
+		return embeddingNotFound(err, call.Request.Model, path)
 	}
 	raw, err := readEmbeddingReply(ctx, resp)
 	if err != nil {
@@ -587,6 +588,21 @@ func geminiPassthroughBody(raw []byte, rawMap map[string]json.RawMessage, model 
 
 func badEmbeddingRequest(message string) *llm.Error {
 	return &llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusBadRequest, Scope: llm.ScopeRequest, Message: message}
+}
+
+// embeddingNotFound keeps a 404 from an embedding call from blocking the model's generation: core
+// blocks a model after a model-scoped not-found for hours, but an embedding call proves nothing
+// about generation, and a chat model can answer it with a 404 that names the model. A 404 that
+// names the model becomes a refusal on this account (retryable unsupported, so routing tries
+// another account, with 400 if none can); any other 404 fails the request only, as noEndpoint
+// says. Another error is returned as it is.
+func embeddingNotFound(err error, model, path string) error {
+	var e *llm.Error
+	if errors.As(err, &e) && e.Code == llm.CodeNotFound && e.Retryable {
+		return &llm.Error{Code: llm.CodeUnsupported, Status: http.StatusBadRequest, Scope: llm.ScopeCredential, Retryable: true,
+			Message: fmt.Sprintf("this account cannot embed with model %q (POST %s): %s", model, path, e.Message)}
+	}
+	return noEndpoint(err, "embeddings", path)
 }
 
 func unsupportedEmbeddingFeature(message string) *llm.Error {
