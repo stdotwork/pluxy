@@ -68,11 +68,19 @@ function logLevel(line: string) {
   return line.match(/^\[[^\]]+\] \[(info|warn)\s*\]/)?.[1] ?? "";
 }
 
-function LogText({ content, wrap }: { content: string; wrap: boolean }) {
+/** A log's text. It scrolls, so the keyboard reaches it and it has a name. */
+function LogText({ content, wrap, label }: { content: string; wrap: boolean; label: string }) {
   return (
-    <pre class="logs-text" data-part="log" data-wrap={wrap ? "" : undefined}>
+    <section
+      class="logs-text"
+      data-part="log"
+      data-wrap={wrap ? "" : undefined}
+      aria-label={label}
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must take focus for the keyboard to scroll it
+      tabIndex={0}
+    >
       {content}
-    </pre>
+    </section>
   );
 }
 
@@ -287,6 +295,8 @@ export function LogsPage() {
           data-part="log"
           class="logs-text logs-core"
           data-wrap={wrap ? "" : undefined}
+          // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must take focus for the keyboard to scroll it
+          tabIndex={0}
         >
           {shown.length ? (
             shownAt.map((i) => (
@@ -371,7 +381,7 @@ export function LogsPage() {
                 {detail && (
                   <>
                     <Button onClick={() => saveLog(detail.name, detail.content)}>{t("download")}</Button>
-                    <LogText content={mask(detail.content) ?? ""} wrap={wrap} />
+                    <LogText content={mask(detail.content) ?? ""} wrap={wrap} label={t("errorDetail")} />
                   </>
                 )}
               </Detail>
@@ -411,7 +421,7 @@ export function LogsPage() {
             {request && (
               <>
                 <Button onClick={() => saveLog(request.name, request.content)}>{t("download")}</Button>
-                <LogText content={mask(request.content) ?? ""} wrap={wrap} />
+                <LogText content={mask(request.content) ?? ""} wrap={wrap} label={t("request")} />
               </>
             )}
           </section>

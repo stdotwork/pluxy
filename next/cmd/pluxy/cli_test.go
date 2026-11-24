@@ -772,10 +772,10 @@ func TestCLIImportCPAUnreadable(t *testing.T) {
 		code := runCLI(args, &out, &errOut, env)
 		return out.String(), errOut.String(), code
 	}
-	if out, errOut, code := run("import", "cpa", "/srv/cpa/config.yaml"); code != 1 || out != "" || errOut != "pluxy: there is no file at /srv/cpa/config.yaml\n" {
+	if out, errOut, code := run("import", "cpa", "/srv/cpa/config.yaml"); code != exitUsage || out != "" || errOut != "pluxy: there is no file at /srv/cpa/config.yaml\n" {
 		t.Errorf("import cpa: code=%d out=%q stderr=%q", code, out, errOut)
 	}
-	if out, errOut, code := run("import", "cpa", "/srv/cpa/config.yaml", "--json"); code != 1 || out != "" || errOut != body+"\n" {
+	if out, errOut, code := run("import", "cpa", "/srv/cpa/config.yaml", "--json"); code != exitUsage || out != "" || errOut != body+"\n" {
 		t.Errorf("import cpa --json: code=%d out=%q stderr=%q, want the reply's body", code, out, errOut)
 	}
 	// Every other refusal keeps its code.
@@ -967,9 +967,9 @@ func TestUsageEventsFailedFilter(t *testing.T) {
 	}
 
 	// Help text documents --failed with the same wording as usage export.
-	_, helpOut, code := run("usage", "events", "--help")
-	if code != 0 || !strings.Contains(helpOut, "-failed") || !strings.Contains(helpOut, "only failed requests (true) or only successful ones (false)") {
-		t.Errorf("pluxy usage events --help: code=%d err=%q", code, helpOut)
+	helpOut, helpErr, code := run("usage", "events", "--help")
+	if code != 0 || helpErr != "" || !strings.Contains(helpOut, "-failed") || !strings.Contains(helpOut, "only failed requests (true) or only successful ones (false)") {
+		t.Errorf("pluxy usage events --help: code=%d out=%q err=%q", code, helpOut, helpErr)
 	}
 }
 
@@ -1245,9 +1245,9 @@ func TestCLIMessages(t *testing.T) {
 	}
 
 	// Leaf help uses the same usage style as group help and includes the command summary.
-	_, errOut, code = run(nil, "status", "-h")
-	if code != exitOK || !strings.HasPrefix(errOut, "usage: pluxy status [flags]\n  core's state:") || strings.Contains(errOut, "Usage of") {
-		t.Errorf("status -h: code=%d err=%q", code, errOut)
+	out, errOut, code = run(nil, "status", "-h")
+	if code != exitOK || errOut != "" || !strings.HasPrefix(out, "usage: pluxy status [flags]\n  core's state:") || strings.Contains(out, "Usage of") {
+		t.Errorf("status -h: code=%d out=%q err=%q", code, out, errOut)
 	}
 
 	// Bad flag value prints one line pointing to pluxy help, not the full flag dump.
@@ -1290,8 +1290,8 @@ func TestCLIMessages(t *testing.T) {
 
 	// init -h hides Go's -1 sentinel; init on an existing file names pluxy serve -config.
 	var initOut, initErr bytes.Buffer
-	if code := initConfig([]string{"-h"}, &initOut, &initErr); code != exitOK || strings.Contains(initErr.String(), "(default -1)") {
-		t.Errorf("init -h: code=%d err=%q", code, initErr.String())
+	if code := initConfig([]string{"-h"}, &initOut, &initErr); code != exitOK || initErr.Len() != 0 || !strings.Contains(initOut.String(), "pluxy init") || strings.Contains(initOut.String(), "(default -1)") {
+		t.Errorf("init -h: code=%d out=%q err=%q", code, initOut.String(), initErr.String())
 	}
 	existing := filepath.Join(t.TempDir(), "config.json")
 	if err := os.WriteFile(existing, []byte("{}"), 0o600); err != nil {
@@ -1301,5 +1301,109 @@ func TestCLIMessages(t *testing.T) {
 	initErr.Reset()
 	if code := initConfig([]string{"-config", existing, "-port", "0"}, &initOut, &initErr); code != exitFailed || !strings.Contains(initErr.String(), "pluxy serve -config "+existing) {
 		t.Errorf("init existing: code=%d err=%q", code, initErr.String())
+	}
+}
+
+func TestCLIExitCodesAndStreams(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /v0/management/usage":
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"error":{"code":"invalid_request","message":"since \"nonsense\" must be an RFC 3339 time or a duration"}}`))
+		case "GET /v0/management/route":
+			if r.URL.Query().Get("model") == "nosuch" {
+				w.Write([]byte(`{"model":"nosuch","order":[],"left_out":[]}`))
+				return
+			}
+			w.Write([]byte(`{"model":"leftout","order":[],"left_out":[{"id":"a1","account":"acc_1","state":"disabled"}]}`))
+		case "DELETE /v0/management/themes/t3/x":
+			w.WriteHeader(http.StatusNoContent)
+		case "DELETE /v0/management/chains/c1":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"error":{"code":"not_found","message":"nothing here"}}`))
+		}
+	}))
+	defer srv.Close()
+
+	run := func(args ...string) (string, string, int) {
+		var out, errOut bytes.Buffer
+		env := func(k string) string {
+			return map[string]string{"PLUXY_URL": srv.URL, "PLUXY_MANAGEMENT_KEY": "k"}[k]
+		}
+		code := runCLI(args, &out, &errOut, env)
+		return out.String(), errOut.String(), code
+	}
+
+	// Malformed --url is a usage error (exit 2).
+	var out, errOut bytes.Buffer
+	if code := runCLI([]string{"status", "--url", "127.0.0.1:8317", "--key", "k"}, &out, &errOut, func(string) string { return "" }); code != exitUsage || !strings.Contains(errOut.String(), "http://") {
+		t.Errorf("malformed --url: code=%d err=%q", code, errOut.String())
+	}
+
+	// Core 400 invalid_request exits 2.
+	if _, _, code := run("usage", "--since", "nonsense"); code != exitUsage {
+		t.Errorf("usage --since nonsense: code=%d, want 2", code)
+	}
+
+	// route for a model nothing serves exits 5 and prints to stderr; --json keeps core's body on stdout and exits 5 too.
+	if o, e, code := run("route", "nosuch"); code != exitNotFound || o != "" || !strings.Contains(e, "no account serves nosuch") {
+		t.Errorf("route nosuch: code=%d out=%q err=%q", code, o, e)
+	}
+	if o, e, code := run("route", "nosuch", "--json"); code != exitNotFound || !strings.Contains(e, `"not_found"`) || !strings.Contains(o, `"order":[]`) {
+		t.Errorf("route nosuch --json: code=%d out=%q err=%q", code, o, e)
+	}
+	// route with left-out accounts still prints to stdout and exits 0.
+	if o, e, code := run("route", "leftout"); code != exitOK || e != "" || !strings.Contains(o, "left out:") {
+		t.Errorf("route leftout: code=%d out=%q err=%q", code, o, e)
+	}
+
+	// help <unknown> exits 2 with one line on stderr; help serve/init exit 0 on stdout.
+	if o, e, code := run("help", "nosuch"); code != exitUsage || o != "" || strings.Count(strings.TrimSpace(e), "\n") != 0 || !strings.Contains(e, `no command "nosuch"`) {
+		t.Errorf("help nosuch: code=%d out=%q err=%q", code, o, e)
+	}
+	for _, sub := range []string{"serve", "init", "status"} {
+		if o, e, code := run("help", sub); code != exitOK || e != "" || o == "" {
+			t.Errorf("help %s: code=%d out=%q err=%q", sub, code, o, e)
+		}
+	}
+
+	// Help asked for goes to stdout everywhere (leaf commands and init).
+	if o, e, code := run("status", "-h"); code != exitOK || e != "" || !strings.Contains(o, "-config") {
+		t.Errorf("status -h: code=%d out=%q err=%q", code, o, e)
+	}
+	out.Reset()
+	errOut.Reset()
+	if code := initConfig([]string{"-h"}, &out, &errOut); code != exitOK || errOut.Len() != 0 || !strings.Contains(out.String(), "pluxy init") {
+		t.Errorf("init -h: code=%d out=%q err=%q", code, out.String(), errOut.String())
+	}
+
+	// With --json, flag and usage errors emit JSON on stderr in core's error shape.
+	for _, args := range [][]string{
+		{"status", "--bogus", "--json"},
+		{"status", "--json", "--bogus"},
+		{"theme", "add", "--json"},
+	} {
+		o, e, code := run(args...)
+		var eb struct {
+			Error struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if code != exitUsage || o != "" || json.Unmarshal([]byte(e), &eb) != nil || eb.Error.Code != "invalid_request" || eb.Error.Message == "" {
+			t.Errorf("%v: code=%d out=%q err=%q, want exit 2 and JSON error", args, code, o, e)
+		}
+	}
+
+	// --json success with empty 204 body prints {}.
+	for _, args := range [][]string{
+		{"theme", "remove", "t3/x", "--json"},
+		{"chain", "remove", "c1", "--json"},
+	} {
+		if o, e, code := run(args...); code != exitOK || e != "" || o != "{}\n" {
+			t.Errorf("%v: code=%d out=%q err=%q, want {}\n", args, code, o, e)
+		}
 	}
 }

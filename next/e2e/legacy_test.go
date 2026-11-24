@@ -532,21 +532,22 @@ func TestImportCPARefusalShowsNoSecret(t *testing.T) {
 
 // An import of a file or an auth folder that is not there says so in plain words naming the
 // path, with no error code after them; with --json the error is still the API's object with
-// its code, and the exit code is 1 either way.
+// its code, and the exit code is 2 either way: core refused the request as invalid, which the
+// command line reports like any other wrong argument.
 func TestImportCPAMissingFile(t *testing.T) {
 	work := t.TempDir()
 	core := filepath.Join(t.TempDir(), "config.json")
 	startJSONCore(t, core)
 	gone := filepath.Join(work, "does-not-exist.yaml")
 	r := importCPA(t, core, gone)
-	if r.code != 1 || r.stdout != "" || r.stderr != "pluxy: there is no file at "+gone+"\n" {
+	if r.code != 2 || r.stdout != "" || r.stderr != "pluxy: there is no file at "+gone+"\n" {
 		t.Errorf("import of a missing file: %s", r)
 	}
 	r = importCPA(t, core, "--json", gone)
 	var reply struct {
 		Error struct{ Code, Message string }
 	}
-	if r.code != 1 || r.stdout != "" || json.Unmarshal([]byte(r.stderr), &reply) != nil ||
+	if r.code != 2 || r.stdout != "" || json.Unmarshal([]byte(r.stderr), &reply) != nil ||
 		reply.Error.Code != "invalid_request" || reply.Error.Message != "there is no file at "+gone {
 		t.Errorf("import --json of a missing file: %s", r)
 	}
@@ -557,7 +558,7 @@ func TestImportCPAMissingFile(t *testing.T) {
 	}
 	noDir := filepath.Join(work, "no-auths")
 	r = importCPA(t, core, "--dry-run", "--auth-dir", noDir, yamlPath)
-	if r.code != 1 || r.stdout != "" || r.stderr != "pluxy: there is no auth folder at "+noDir+"\n" {
+	if r.code != 2 || r.stdout != "" || r.stderr != "pluxy: there is no auth folder at "+noDir+"\n" {
 		t.Errorf("import with a missing auth folder: %s", r)
 	}
 }

@@ -18,6 +18,7 @@ const t = strings("shell", {
   signIn: "Sign in",
   refused: "Core refused the management key. Sign in again.",
   navigation: "Main",
+  skip: "Skip to main content",
   signOut: "Sign out",
   signOutShort: "Out",
   safeAddress: "If custom CSS hides the panel, add ?safe to the URL to disable it.",
@@ -318,11 +319,30 @@ export function Shell(props: {
     sizes.observe(bar);
     return () => sizes.disconnect();
   }, [page, signedIn, pages]);
+  const title = active && signedIn ? `${active.title} · ${props.brand ?? "pluxy"}` : (props.brand ?? "pluxy");
   useEffect(() => {
     document.documentElement.dataset.page = signedIn ? page : "signin";
-    document.title =
-      active && signedIn ? `${active.title} · ${props.brand ?? "pluxy"}` : (props.brand ?? "pluxy");
-  }, [page, signedIn, active, props.brand]);
+    document.title = title;
+  }, [page, signedIn, title]);
+
+  // After a change of page, focus moves to the new page's heading (the main area when the page
+  // has none, as an extension page's frame does), and the new title goes to a live region, so a
+  // keyboard or screen reader user is told where they are. Opening the panel on a page is not a
+  // change: nothing takes focus then.
+  const mainRef = useRef<HTMLElement>(null);
+  const [announced, setAnnounced] = useState("");
+  const announcedPage = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const first = announcedPage.current === undefined;
+    const changed = announcedPage.current !== page;
+    announcedPage.current = page;
+    if (!signedIn || first || !changed) return;
+    const heading = mainRef.current?.querySelector<HTMLElement>("h1");
+    // A heading takes focus from script only with a tabindex.
+    heading?.setAttribute("tabindex", "-1");
+    (heading ?? mainRef.current)?.focus({ preventScroll: true });
+    setAnnounced(title);
+  }, [page, signedIn, title]);
 
   if (!signedIn) {
     return (
@@ -344,6 +364,17 @@ export function Shell(props: {
     <KitContext.Provider value={kit}>
       <PrivacyContext.Provider value={masks}>
         <div class="shell" data-part="shell">
+          <a
+            class="skip-link"
+            href={`#/${page}`}
+            onClick={(e) => {
+              // Not a jump to an element ID: the address's hash names the page.
+              e.preventDefault();
+              mainRef.current?.focus();
+            }}
+          >
+            {t("skip")}
+          </a>
           <nav class="nav" data-part="nav" data-slot="sidebar" aria-label={t("navigation")} ref={navRef}>
             <a class="brand" href={`#/${pages[0]?.id ?? ""}`}>
               {props.brand ?? "pluxy"}
@@ -418,9 +449,12 @@ export function Shell(props: {
               </button>
             )}
           </nav>
-          <main class="main" data-part="main">
+          <main class="main" data-part="main" tabIndex={-1} ref={mainRef}>
             <div class="content">{active?.render()}</div>
           </main>
+          <div class="sr-only" data-part="page-announcer" aria-live="polite" aria-atomic="true">
+            {announced}
+          </div>
         </div>
       </PrivacyContext.Provider>
     </KitContext.Provider>
