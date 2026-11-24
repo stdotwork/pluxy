@@ -306,7 +306,7 @@ pub(crate) fn run(
             main,
             "document.querySelector('[data-part=release-error]')?.textContent ?? null",
         )
-        .filter(|t| t.as_str().is_some_and(|t| t.contains("was not changed")))
+        .filter(|t| t.as_str().is_some_and(|t| t.contains("Could not change the release feed")))
     })?;
     evidence["voided"] = json!({
         "channel_disabled": channel_disabled, "channel_set": channel_set, "error": voided,

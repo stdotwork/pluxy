@@ -784,7 +784,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 &seen,
                 "backup-restore",
                 input,
-                &[&txt(&config), "No automatic backup is created"],
+                &[&txt(&config), "without creating a backup first"],
                 &hidden,
             )?;
             require(
