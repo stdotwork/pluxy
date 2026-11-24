@@ -233,7 +233,7 @@ pub(crate) fn run(
         .map_err(|e| e.to_string())?;
     evidence["confirmed"] = json!(kept["source"] == feed);
 
-    // Check for Updates: the stable channel's releases.
+    // Check for updates: the stable channel's releases.
     click(main, "[data-part=release-check]")?;
     let app_card = "[data-part=release-product][data-product=app]";
     let core_card = "[data-part=release-product][data-product=core]";

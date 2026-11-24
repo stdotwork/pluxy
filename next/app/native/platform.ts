@@ -443,7 +443,7 @@ async function singleInstance() {
     check(state?.exists && state.visible, `after close: the first's window is ${JSON.stringify(state)}`);
     say(`window after close: ${JSON.stringify(state)}`);
 
-    // 3b. A login launch is a second launch too, with Silent Launch on (which hides the window of a
+    // 3b. A login launch is a second launch too, with Silent launch on (which hides the window of a
     // login launch that is the first): the first's window is shown, hidden and closed.
     writeFileSync(
       join(p.dir, "startup.json"),
@@ -694,7 +694,7 @@ async function windowAndTray() {
     tray.app.send("quit");
     await tray.app.exitWithin(30_000);
 
-    // Exit App: closing the window quits the app.
+    // Exit app: closing the window quits the app.
     writeFileSync(file, JSON.stringify({ close_behavior: "exit" }));
     const exit = await owner(p, "exit");
     exit.app.send("close");

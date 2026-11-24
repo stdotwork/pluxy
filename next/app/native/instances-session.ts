@@ -9,7 +9,7 @@
 // - a second launch with the same HOME and XDG folders exits 0 within a bound, starts no second
 //   app, window or core, and the first's window is shown again: after it was hidden, and after it
 //   was closed to the tray;
-// - so is a login launch (`--autostart`, as the autostart entry runs it, with Silent Launch on):
+// - so is a login launch (`--autostart`, as the autostart entry runs it, with Silent launch on):
 //   the first's window is shown, after it was hidden and after it was closed to the tray;
 // - a launch with other HOME and XDG folders is an instance of its own, with its own core; its
 //   data folder is too long for a socket path there, and a second launch of it still raises it;
