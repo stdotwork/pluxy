@@ -222,7 +222,7 @@ pluxy: logging to file is off (invalid_request)
 
 Exit code 2 from `pluxy logs`. Core writes to standard error by default and only writes `main.log` when file logging is enabled.
 
-Add `"logs": {"to_file": true}` to `config.json` and run `pluxy reload` (or turn on file logging on the panel's **Config** > **Logging** page).
+Add `"logs": {"to_file": true}` to `config.json` and run `pluxy reload` (or turn on file logging on the panel's **Config Panel** page, **Logging** tab).
 
 ### Request logging is off when reading a request log
 
@@ -242,7 +242,7 @@ To inspect routing without sending a request, run `pluxy route <model>`. To insp
 
 ## Still stuck
 
-Before asking for help, collect these three items (pluxy redacts keys and tokens from them):
+Before asking for help, collect these three items. Read them before you share them: pluxy replaces keys and tokens it recognises, but a request log holds the text of the request and its reply.
 
 1. Core and extension state: `pluxy status`
 2. The failing request's trace ID from the `X-CPA-TRACE-ID` response header or `error.pluxy.trace`
