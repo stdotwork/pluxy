@@ -224,6 +224,7 @@ func TestSIWCRequestRules(t *testing.T) {
 			t.Errorf("%s: %q, want %q", name, got, want)
 		}
 	}
+	//lint:ignore SA1008 the request carries the lowercase key session_id as the SIWC rules require, so the map is read without canonicalizing
 	if got := h["session_id"]; len(got) != 1 || got[0] != "cache-1" {
 		t.Errorf("session_id %v, want cache-1", got)
 	}
