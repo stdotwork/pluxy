@@ -1,0 +1,59 @@
+/* Direction B: today's pages shown inside the Plain shell (those it has not redesigned), and
+   today's account settings, tools and sign-in flow inside an account's page. They keep the kit's
+   own layout and take this direction's sheet, ink and type through the theme tokens set in b.css;
+   the rules here only fit them to the page and quieten their boxes. */
+
+:root[data-design="b"] .db-legacy {
+  color: var(--px-color-text);
+  font-size: var(--px-font-size);
+  line-height: var(--px-font-line-height);
+}
+
+:root[data-design="b"] .db-today .db-legacy [data-part="page-title"] {
+  font-size: clamp(30px, 3.2vw, 40px);
+  line-height: 1.12;
+  font-weight: var(--db-w-display);
+  letter-spacing: -0.014em;
+}
+
+:root[data-design="b"] .db-legacy [data-part="card"],
+:root[data-design="b"] .db-legacy [data-part="detail"] {
+  box-shadow: none;
+}
+
+:root[data-design="b"] .db-legacy [data-part="button"][data-variant="primary"] {
+  font-weight: var(--db-w-strong);
+}
+
+:root[data-design="b"] .db-legacy .mono,
+:root[data-design="b"] .db-legacy code,
+:root[data-design="b"] .db-legacy pre {
+  font-size: 0.88em;
+}
+
+/* Today's parts set into one of this direction's own pages. */
+:root[data-design="b"] .db-legacy-inset {
+  max-width: 44rem;
+  margin-top: 16px;
+  padding: 4px 0 4px 18px;
+  border-left: 2px solid var(--db-rule);
+
+  h3 {
+    margin: 18px 0 8px;
+    font-size: 15px;
+    font-weight: var(--db-w-strong);
+  }
+}
+
+:root[data-design="b"] .db-legacy-button {
+  display: inline-flex;
+}
+
+:root[data-design="b"] .db-legacy-button [data-part="button"] {
+  min-height: 38px;
+  padding: 6px 16px;
+  font-size: 14.5px;
+  font-weight: var(--db-w-mid);
+  border-color: var(--db-edge);
+  background: transparent;
+}
