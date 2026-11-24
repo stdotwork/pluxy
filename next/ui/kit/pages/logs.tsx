@@ -7,6 +7,7 @@ import { strings } from "../strings";
 import {
   Button,
   Card,
+  CopyTrace,
   Detail,
   Empty,
   List,
@@ -298,15 +299,27 @@ export function LogsPage() {
           // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must take focus for the keyboard to scroll it
           tabIndex={0}
         >
-          {shown.length ? (
-            shownAt.map((i) => (
-              <div key={i} data-part="log-line" data-level={logLevel(lines[i] as string)}>
-                {masked[i]}
-              </div>
-            ))
-          ) : (
-            <Empty>{t(search || level ? "noMatch" : "empty")}</Empty>
-          )}
+          {shown.length
+            ? shownAt.map((i) => (
+                <div key={i} data-part="log-line" data-level={logLevel(lines[i] as string)}>
+                  {masked[i]}
+                </div>
+              ))
+            : // A read that failed has its notice above: nothing is known to be empty.
+              !error &&
+              (search || level ? (
+                <Empty
+                  onClear={() => {
+                    setSearch("");
+                    setLevel("");
+                  }}
+                >
+                  {t("noMatch")}
+                </Empty>
+              ) : (
+                // With file logging off, the notice above already leads to the setting.
+                <Empty action={!off && <a href="#/config/logging">{t("config")}</a>}>{t("empty")}</Empty>
+              ))}
         </section>
         <div class="actions">
           <Button disabled={off || shown.length === 0} onClick={() => saveLog("logs.txt", shown.join("\n"))}>
@@ -334,7 +347,7 @@ export function LogsPage() {
           list={
             files.loading ? (
               <Notice tone="muted">{t("loading")}</Notice>
-            ) : !files.data ? null : files.data.files.length === 0 ? (
+            ) : !files.data || files.error ? null : files.data.files.length === 0 ? (
               <Empty>{t("noErrors")}</Empty>
             ) : (
               <List<ErrorLogFile>
@@ -344,7 +357,7 @@ export function LogsPage() {
                 selected={selected}
                 columns={[
                   { label: t("name"), value: (file) => mask(file.name), mono: true },
-                  { label: t("size"), value: (file) => t("bytes", { count: file.size }) },
+                  { label: t("size"), value: (file) => t("bytes", { count: file.size }), numeric: true },
                   { label: t("modified"), value: (file) => when(file.modified) },
                   {
                     label: t("actions"),
@@ -407,7 +420,9 @@ export function LogsPage() {
         </form>
         {requested && (
           <section data-part="card" aria-label={t("viewRequest", { id: requested })}>
-            <h3>{t("viewRequest", { id: requested })}</h3>
+            <h3>
+              {t("viewRequest", { id: requested })} <CopyTrace id={requested} />
+            </h3>
             {requestBusy && <Notice tone="muted">{t("loading")}</Notice>}
             {requestError && <Notice tone="danger">{mask(requestError)}</Notice>}
             {requestMissing && (

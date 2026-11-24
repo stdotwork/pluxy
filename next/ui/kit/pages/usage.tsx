@@ -15,6 +15,7 @@ import {
   MasterDetail,
   Notice,
   PageHead,
+  TraceId,
   useKit,
   useLoad,
   when,
@@ -42,6 +43,7 @@ const t = strings("usage", {
   tokens: "Tokens",
   trace: "Trace ID",
   empty: "No requests yet. Send traffic through pluxy, or clear your filters.",
+  setup: "Set up pluxy",
   loading: "Loading requests…",
   previous: "Previous",
   next: "Next",
@@ -118,7 +120,7 @@ export function UsageDetail(props: {
           [t("triesFact"), e.attempts ? String(e.attempts) : undefined],
           [t("latency"), t("milliseconds", { value: e.latency_ms })],
           [t("tokens"), e.tokens.total_tokens?.toLocaleString()],
-          [t("trace"), e.id && <a href={`#/logs/${encodeURIComponent(e.id)}`}>{e.id}</a>],
+          [t("trace"), e.id && <TraceId id={e.id} href={`#/logs/${encodeURIComponent(e.id)}`} />],
         ]}
       />
       {e.tried && e.tried.length > 0 && (
@@ -309,7 +311,12 @@ export function UsagePage() {
       {loading ? (
         <Notice tone="muted">{t("loading")}</Notice>
       ) : events.length === 0 ? (
-        <Empty>{t("empty")}</Empty>
+        // A load that failed has its notice above: nothing is known to be empty.
+        error ? null : Object.values(filters).some(Boolean) ? (
+          <Empty onClear={() => changeFilters(initial)}>{t("empty")}</Empty>
+        ) : (
+          <Empty action={<a href="#/setup">{t("setup")}</a>}>{t("empty")}</Empty>
+        )
       ) : (
         <>
           <MasterDetail
@@ -343,15 +350,20 @@ export function UsagePage() {
                       </>
                     ),
                   },
-                  { label: t("latency"), value: (e) => t("milliseconds", { value: e.latency_ms }) },
+                  {
+                    label: t("latency"),
+                    value: (e) => t("milliseconds", { value: e.latency_ms }),
+                    numeric: true,
+                  },
                   {
                     label: t("tokens"),
                     value: (e) => e.tokens.total_tokens?.toLocaleString() ?? t("missing"),
+                    numeric: true,
                   },
                   {
                     label: t("trace"),
                     value: (e) =>
-                      e.id ? <a href={`#/logs/${encodeURIComponent(e.id)}`}>{e.id}</a> : t("missing"),
+                      e.id ? <TraceId id={e.id} href={`#/logs/${encodeURIComponent(e.id)}`} /> : t("missing"),
                   },
                 ]}
               />

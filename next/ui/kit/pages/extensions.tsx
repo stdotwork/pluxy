@@ -1,4 +1,4 @@
-import { useState } from "preact/hooks";
+import { useRef, useState } from "preact/hooks";
 import type { Package } from "../api";
 import { SettingsForm } from "../extensions/settings";
 import { useAccountLabels, usePrivacy } from "../privacy";
@@ -45,6 +45,7 @@ const t = strings("extensions", {
   refresh: "Refresh",
   registryError: "Registry {name}: {error}",
   nothingMore: "Nothing more to install from the registries in core's config.",
+  config: "Config Panel",
   availableExtensions: "Extensions not installed",
   extension: "Extension",
   install: "Install",
@@ -149,8 +150,8 @@ function Available(props: { installed: Set<string>; onInstalled: () => void }) {
         </Notice>
       ))}
       {install.error && <Notice tone="danger">{install.error}</Notice>}
-      {registries.data && offers.length === 0 ? (
-        <Empty>{t("nothingMore")}</Empty>
+      {registries.error && offers.length === 0 ? null : registries.data && offers.length === 0 ? (
+        <Empty action={<a href="#/config">{t("config")}</a>}>{t("nothingMore")}</Empty>
       ) : (
         <List<Offer>
           label={t("availableExtensions")}
@@ -180,6 +181,7 @@ function Available(props: { installed: Set<string>; onInstalled: () => void }) {
 
 export function ExtensionsPage() {
   const { api, extensionsChanged } = useKit();
+  const available = useRef<HTMLDivElement>(null);
   const loaded = useLoad(api.packages);
   // After a change, the navigation's extension pages may differ too.
   const packages = {
@@ -208,8 +210,21 @@ export function ExtensionsPage() {
       <div class="stack">
         <MasterDetail
           list={
-            packages.data && list.length === 0 ? (
-              <Empty>{t("noInstalled")}</Empty>
+            packages.error && list.length === 0 ? null : packages.data && list.length === 0 ? (
+              <Empty
+                action={
+                  <Button
+                    onClick={() => {
+                      available.current?.scrollIntoView?.({ block: "nearest" });
+                      available.current?.focus();
+                    }}
+                  >
+                    {t("available")}
+                  </Button>
+                }
+              >
+                {t("noInstalled")}
+              </Empty>
             ) : (
               <List<Package>
                 label={t("installedExtensions")}
@@ -238,7 +253,10 @@ export function ExtensionsPage() {
             )
           }
         />
-        <Available installed={new Set(list.map((p) => p.id))} onInstalled={packages.reload} />
+        {/* Takes focus from the empty list's button, which leads here. */}
+        <div ref={available} tabIndex={-1}>
+          <Available installed={new Set(list.map((p) => p.id))} onInstalled={packages.reload} />
+        </div>
       </div>
     </>
   );

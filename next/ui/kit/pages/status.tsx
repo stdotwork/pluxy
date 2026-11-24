@@ -344,7 +344,7 @@ export function StatusPage() {
               id={(g) => g.name}
               columns={[
                 { label: t("extension"), value: (g) => g.name, mono: true },
-                { label: t("requests"), value: (g) => g.total_requests.toLocaleString() },
+                { label: t("requests"), value: (g) => g.total_requests.toLocaleString(), numeric: true },
                 {
                   label: t("successRate"),
                   value: (g) => successPercent(g.success_count, g.total_requests) ?? dash,
@@ -376,7 +376,7 @@ export function StatusPage() {
                     id={([name]) => name}
                     columns={[
                       { label: t("byProvider"), value: ([name]) => name || t("unattributed"), mono: true },
-                      { label: t("accounts"), value: ([, n]) => n.toLocaleString() },
+                      { label: t("accounts"), value: ([, n]) => n.toLocaleString(), numeric: true },
                     ]}
                   />
                 </>
@@ -438,8 +438,8 @@ export function StatusPage() {
                       label: t("state"),
                       value: (e) => <StateBadge state={e.current ? e.state : "draining"} />,
                     },
-                    { label: t("requests"), value: (e) => e.active_requests },
-                    { label: t("restarts"), value: (e) => e.restarts },
+                    { label: t("requests"), value: (e) => e.active_requests, numeric: true },
+                    { label: t("restarts"), value: (e) => e.restarts, numeric: true },
                     { label: t("lastError"), value: (e) => p.text(e.last_error, ids) ?? "" },
                   ]}
                 />

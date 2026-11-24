@@ -19,7 +19,9 @@ const t = strings("quota", {
   default: "Default",
   soonest: "Soonest reset",
   empty: "No accounts report quota yet. Add one on Add Account.",
+  addAccount: "Add Account",
   noMatch: "No matching accounts. Clear or change your search.",
+  clearSearch: "Clear search",
   idle: "Not read yet. Press Refresh.",
   unsupported: "This provider reports no quota for this account.",
   loading: "Loading quota…",
@@ -290,8 +292,16 @@ export function QuotaPage() {
           </select>
         </label>
       </div>
-      {accounts.data && shown.length === 0 && !accounts.loading ? (
-        <Empty>{t(query ? "noMatch" : "empty")}</Empty>
+      {accounts.error && shown.length === 0 ? null : accounts.data &&
+        shown.length === 0 &&
+        !accounts.loading ? (
+        query ? (
+          <Empty onClear={() => setSearch("")} clearLabel={t("clearSearch")}>
+            {t("noMatch")}
+          </Empty>
+        ) : (
+          <Empty action={<a href="#/add-account">{t("addAccount")}</a>}>{t("empty")}</Empty>
+        )
       ) : (
         <List<Account>
           label={t("title")}
