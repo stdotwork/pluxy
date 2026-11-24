@@ -16,6 +16,7 @@ import {
   Switch,
   useKit,
   useLoad,
+  usePoll,
   when,
 } from "../ui";
 
@@ -187,13 +188,7 @@ export function LogsPage() {
       window.removeEventListener("hashchange", fromAddress);
     };
   }, []);
-  useEffect(() => {
-    if (!continuous || off) return;
-    const timer = setInterval(() => {
-      if (document.visibilityState === "visible") void read(true);
-    }, 2000);
-    return () => clearInterval(timer);
-  }, [continuous, off]);
+  usePoll(() => read(true), 2000, continuous && !off);
   const clear = async () => {
     if (inFlight.current) return;
     inFlight.current = true;

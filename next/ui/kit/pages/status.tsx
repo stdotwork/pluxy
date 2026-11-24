@@ -3,7 +3,7 @@
 // the theme hook `data-page`.
 
 import type { ComponentChildren } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { countAccounts, type ExtensionStatus, runningExtensions, type UsageGroup } from "../api";
 import { accountIdentities, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
@@ -22,6 +22,7 @@ import {
   useAction,
   useKit,
   useLoad,
+  usePoll,
   when,
 } from "../ui";
 
@@ -196,28 +197,13 @@ export function StatusPage() {
   const reload = useAction(status.reload);
   const [updatedAt, setUpdatedAt] = useState<Date>();
 
-  const last = useRef(Date.now());
   const refresh = () => {
-    last.current = Date.now();
     for (const reloadOne of [status.reload, usage.reload, accounts.reload, settings.reload, served.reload])
       reloadOne();
   };
-  const refreshRef = useRef(refresh);
-  refreshRef.current = refresh;
 
   // Reads again every minute and when the page is shown after a longer time, never while hidden.
-  useEffect(() => {
-    const visible = () => document.visibilityState === "visible";
-    const timer = setInterval(() => visible() && refreshRef.current(), REFRESH_MS);
-    const shown = () => {
-      if (visible() && Date.now() - last.current >= REFRESH_MS) refreshRef.current();
-    };
-    document.addEventListener("visibilitychange", shown);
-    return () => {
-      clearInterval(timer);
-      document.removeEventListener("visibilitychange", shown);
-    };
-  }, []);
+  usePoll(refresh, REFRESH_MS);
 
   const loading = usage.loading;
   useEffect(() => {
