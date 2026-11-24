@@ -918,10 +918,7 @@ export function SetupPage(props: { options?: SetupOptions }) {
   const loaded = useLoad(api.setup);
   const accounts = useLoad(api.accounts);
   const packages = useLoad(api.packages);
-  // The last good reply stays on screen while the next one loads, and when one fails.
-  const kept = useRef<Setup | undefined>(undefined);
-  if (loaded.data) kept.current = loaded.data;
-  const setup = kept.current;
+  const setup = loaded.data;
   const [choices, setChoices] = useState<Choices>({});
   const [results, setResults] = useState<Results>({});
   const [applying, setApplying] = useState(false);
