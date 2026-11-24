@@ -162,7 +162,7 @@ func TestChainServesFromTheNextStep(t *testing.T) {
 	}
 	// Without the chain, the request gets Claude's error again.
 	codexBefore := len(codex.Requests())
-	resp, b = ask()
+	resp, _ = ask()
 	if resp.StatusCode != http.StatusTooManyRequests || len(codex.Requests()) != codexBefore {
 		t.Errorf("after chain remove: status %d, Codex requests %d then %d; want Claude's 429 and none", resp.StatusCode, codexBefore, len(codex.Requests()))
 	}

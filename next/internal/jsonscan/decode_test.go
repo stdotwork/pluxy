@@ -38,8 +38,9 @@ type (
 		Count         int32             "json:\"count\""
 		Ratio         float32           "json:\"ratio\""
 		Untagged      string
-		skipped       string
-		Ignored       string "json:\"-\""
+		//lint:ignore U1000 an unexported field the decoder must skip
+		skipped string
+		Ignored string "json:\"-\""
 	}
 	// Shapes Unmarshal leaves to json.Unmarshal.
 	testEmbedded struct {

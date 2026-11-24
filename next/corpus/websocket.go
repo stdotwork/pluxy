@@ -82,7 +82,7 @@ steps:
 	for i, s := range c.Client.WebSocket {
 		switch {
 		case len(s.Send) > 0 || s.SendText != nil:
-			text := []byte{}
+			var text []byte
 			if s.SendText != nil {
 				text = []byte(*s.SendText)
 			} else if text, err = compactJSON(s.Send); err != nil {

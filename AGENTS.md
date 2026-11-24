@@ -49,6 +49,8 @@ go build ./...
 go vet ./...
 CGO_ENABLED=1 go test -race -count=1 ./...   # -race needs cgo; includes e2e/ and the conformance kit
 gofmt -l .                                   # must print nothing
+go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...         # must print nothing; not a module dependency
+go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...         # needs network (vuln.go.dev)
 ```
 
 The `e2e` and conformance tests build `cmd/pluxy` and the extensions with `go build`, run them on

@@ -218,8 +218,7 @@ func TestFetchAndCommit(t *testing.T) {
 // redirect to plain http is not followed.
 func TestHTTPSRegistry(t *testing.T) {
 	arc := archive(t, good())
-	var srv *httptest.Server
-	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/reg/index.json", "/redirect/index.json":
 			url := "ext.tar.gz"

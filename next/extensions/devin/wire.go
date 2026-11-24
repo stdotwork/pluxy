@@ -127,7 +127,7 @@ func readFrame(r io.Reader) (end bool, payload []byte, err error) {
 		return false, nil, fmt.Errorf("invalid Connect frame flags %#x", flags)
 	}
 	if n > maxFrame {
-		return false, nil, fmt.Errorf("Connect frame of %d bytes is over the %d byte limit", n, maxFrame)
+		return false, nil, fmt.Errorf("a Connect frame of %d bytes is over the %d byte limit", n, maxFrame)
 	}
 	payload = make([]byte, n)
 	if _, err := io.ReadFull(r, payload); err != nil {
