@@ -259,7 +259,7 @@ func refBuiltRequests(t *testing.T) []refCase {
 		out = append(out, refCase{name: "parsed-stream-toggled/" + b.name, req: req})
 	}
 	strict := true
-	for _, c := range []refCase{
+	out = append(out, []refCase{
 		{"empty-assistant-content", llm.Request{Model: "m", Items: []llm.Item{
 			{Type: llm.ItemTypeMessage, Role: llm.RoleUser, Content: []llm.Part{{Type: llm.PartText, Text: "hi"}}, TextContent: true},
 			{Type: llm.ItemTypeMessage, Role: llm.RoleAssistant, Content: []llm.Part{{Type: llm.PartText, Text: ""}}},
@@ -272,9 +272,7 @@ func refBuiltRequests(t *testing.T) []refCase {
 			},
 			Tools:   []llm.Tool{{Name: "f", Parameters: json.RawMessage(`{"type":"object"}`), Strict: &strict}},
 			Options: llm.Options{MaxOutputTokens: ptr(10), Temperature: ptrF(0.25), ReasoningEffort: "high"}}},
-	} {
-		out = append(out, c)
-	}
+	}...)
 	return out
 }
 

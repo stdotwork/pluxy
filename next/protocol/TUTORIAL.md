@@ -99,7 +99,11 @@ The rules the SDK holds you to:
   order returns an error rather than sending a bad stream.
 - End with `Finish`, or return an error. Return an `*llm.Error` to tell core exactly what went
   wrong: its code, whether retrying is safe (`Retryable`), what it is about (`Scope`) and when to
-  try again (`RetryAfterMS`). Any other error is sent as `internal`.
+  try again (`RetryAfterMS`). Any other error is sent as `internal`. To fill `RetryAfterMS` from
+  an upstream's `Retry-After` header, call `sdk.RetryAfter(value, time.Now())`: it reads seconds
+  or an HTTP date and returns milliseconds from now, or 0 when the header is absent, malformed or
+  not in the future. A provider's own hint (a body field, a vendor header) is yours to read;
+  fall back on `sdk.RetryAfter` for the standard header.
 - Watch `ctx`. When the client goes away, pluxy closes the connection and the SDK cancels `ctx`.
   Pass it to your upstream HTTP request so that request stops too.
 - Do not retry inside the extension. Core owns retries (the only exceptions are two single resends

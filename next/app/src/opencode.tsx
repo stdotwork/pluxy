@@ -6,7 +6,7 @@
 // never reaches this webview: native key entry keeps it, and the tool's preview reads back only
 // whether one is set. Labels follow the old app's Agents page.
 
-import { useEffect, useId, useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { strings } from "../../ui/kit/strings";
 import {
   Button,
@@ -21,19 +21,18 @@ import {
   useKit,
   useLoad,
 } from "../../ui/kit/ui";
-import { Backups, reply } from "./backups";
+import { Backups } from "./backups";
 import { folderWait, NeedsKey, NoKeys, toolMissing, withDeviceLink } from "./clientHelp";
+import { keysOf, type Secret, Text, usePreview } from "./clientPage";
 import type { AgentPage } from "./easyMode";
-import { connectionGet } from "./host";
+import { connectionGet, reply } from "./host";
 import {
   attachmentDefault,
   CLIENT,
-  keysOf,
   type Model,
   PACKAGE,
   type ReadBack,
   ready,
-  type Secret,
   withModels,
 } from "./opencodeForm";
 import { keptTerminal, launcherProblem, useDeviceChanged } from "./startCli";
@@ -128,24 +127,6 @@ interface Preview {
   config: ReadBack;
 }
 
-function Text(props: { label: string; hint?: string; value: string; onInput: (v: string) => void }) {
-  const id = useId();
-  return (
-    <label class="field" data-part="field" for={id}>
-      <span class="label">{props.label}</span>
-      <input
-        id={id}
-        type="text"
-        autocomplete="off"
-        spellcheck={false}
-        value={props.value}
-        onInput={(e) => props.onInput(e.currentTarget.value)}
-      />
-      {props.hint && <small class="hint">{props.hint}</small>}
-    </label>
-  );
-}
-
 /** Start CLI and Start App, through the launcher. */
 function Launch(props: { available: boolean }) {
   const [cwd, setCwd] = useState("");
@@ -223,14 +204,13 @@ export function OpenCodePage() {
   const [file, setFile] = useState("");
   const [root, setRoot] = useState("");
   const [inRoot, setInRoot] = useState("opencode.jsonc");
-  const [preview, setPreview] = useState<Preview>();
   const [models, setModels] = useState<Model[]>([]);
   const [model, setModel] = useState("");
   const [newModel, setNewModel] = useState("");
   const [secret, setSecret] = useState("");
   const [core, setCore] = useState<string>();
   const secrets = useLoad(() => reply<{ secrets: Secret[] }>("vault_secrets"));
-  const keys = keysOf(secrets.data);
+  const keys = keysOf(PACKAGE, secrets.data);
   useEffect(() => {
     connectionGet().then(
       (c) => setCore(c.signed_in ? c.target : undefined),
@@ -243,12 +223,15 @@ export function OpenCodePage() {
       : where === "root"
         ? { targets: [{ root: root.trim(), path: inRoot.trim() }] }
         : {};
+  // A write acts on the file the last preview pinned (the tool refuses it if the file changed
+  // since); the preview belongs to the selection it was read for, so a write never pins a file unread.
+  const selected = JSON.stringify(selection());
+  const { preview, accept } = usePreview<Preview>(selected);
   const read = useAction(() => {});
   const load = () =>
     read.run(async () => {
       const r = await tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) });
-      if (r.body) {
-        setPreview(r.body);
+      if (r.body && accept(selected, r.body)) {
         const listed = r.body.config.models ?? [];
         setModels(listed);
         setModel(r.body.config.model ?? listed[0]?.id ?? "");
@@ -256,14 +239,6 @@ export function OpenCodePage() {
       return r;
     });
   const write = useAction(load);
-  // A write acts on the file the last preview pinned (the tool refuses it if the file changed
-  // since); choosing another file drops that preview, so a write never pins a file unread.
-  const reselect =
-    <T,>(f: (v: T) => void) =>
-    (v: T) => {
-      f(v);
-      setPreview(undefined);
-    };
   const addModels = (found: Model[]) => setModels((have) => withModels(have, found));
   const importModels = useAction(() => {});
   const doImport = () =>
@@ -319,15 +294,15 @@ export function OpenCodePage() {
             { value: "file", label: t("fileSelected") },
             { value: "root", label: t("fileInRoot") },
           ]}
-          onChange={reselect(setWhere)}
+          onChange={setWhere}
         />
         {where === "file" && (
-          <Text label={t("filePath")} hint={t("filePathHint")} value={file} onInput={reselect(setFile)} />
+          <Text label={t("filePath")} hint={t("filePathHint")} value={file} onInput={setFile} />
         )}
         {where === "root" && (
           <>
-            <Text label={t("root")} hint={t("rootHint")} value={root} onInput={reselect(setRoot)} />
-            <Text label={t("inRoot")} value={inRoot} onInput={reselect(setInRoot)} />
+            <Text label={t("root")} hint={t("rootHint")} value={root} onInput={setRoot} />
+            <Text label={t("inRoot")} value={inRoot} onInput={setInRoot} />
           </>
         )}
         {read.error && !toolMissing(read.error, PACKAGE) && <Notice tone="danger">{read.error}</Notice>}
@@ -422,7 +397,7 @@ export function OpenCodePage() {
                 onChange={setSecret}
               />
             ) : (
-              <NoKeys />
+              <NoKeys secrets={secrets} />
             )}
             {addKey.error && <Notice tone="danger">{addKey.error}</Notice>}
             <Button

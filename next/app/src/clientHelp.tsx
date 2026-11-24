@@ -4,9 +4,11 @@
 
 import type { ComponentChildren } from "preact";
 import { rich, strings } from "../../ui/kit/strings";
+import { type Loaded, Notice } from "../../ui/kit/ui";
 
 const t = strings("clientHelp", {
   noKeys: "No keys yet: add one.",
+  loadingKeys: "Loading keys…",
   keyFrom:
     "A client key is made on the {config} page under Client API Keys, or with the command pluxy key add.",
   config: "Config Panel",
@@ -19,8 +21,14 @@ const t = strings("clientHelp", {
 export const keySource = (): ComponentChildren =>
   rich(t("keyFrom"), { config: <a href="#/config">{t("config")}</a> });
 
-/** The key card's empty state: there is no key yet, and where one comes from. */
-export function NoKeys() {
+/**
+ * The key card's empty state: the keys loaded and there is none yet, and where one comes from.
+ * Before the first read it says the keys are loading; after a failed first read it says nothing,
+ * as the page shows the error.
+ */
+export function NoKeys(props: { secrets: Loaded<unknown> }) {
+  if (props.secrets.phase === "loading") return <Notice tone="muted">{t("loadingKeys")}</Notice>;
+  if (props.secrets.phase === "failed" && !props.secrets.data) return null;
   return (
     <p class="muted">
       {t("noKeys")} {keySource()}

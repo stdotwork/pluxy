@@ -13,38 +13,8 @@ import (
 	"github.com/stdotwork/pluxy/next/extensions/meta/metatest"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/sdk/sdktest"
 )
-
-func wantError(t *testing.T, err error, code string, retryable bool) {
-	t.Helper()
-	var e *llm.Error
-	if !errors.As(err, &e) {
-		t.Fatalf("got %v, want an *llm.Error", err)
-	}
-	if e.Code != code || e.Retryable != retryable {
-		t.Errorf("got code %s retryable %v, want code %s retryable %v (%s)", e.Code, e.Retryable, code, retryable, e.Message)
-	}
-}
-
-// closedURL returns the address of a port nothing listens on: port 1 on loopback, which no test
-// server can be given, unlike a just-closed ephemeral port that the next httptest server may reuse.
-func closedURL(t *testing.T) string {
-	t.Helper()
-	const addr = "127.0.0.1:1"
-	if c, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
-		c.Close()
-		t.Fatalf("something listens on %s; the connection-refused cases need it closed", addr)
-	}
-	return "http://" + addr
-}
-
-// hangUp closes the connection of the request being answered without a reply.
-func hangUp(w http.ResponseWriter) {
-	c, _, err := w.(http.Hijacker).Hijack()
-	if err == nil {
-		c.Close()
-	}
-}
 
 // A renewal's error is retryable only when the request never reached Meta, or when Meta rate
 // limited it.
@@ -57,7 +27,7 @@ func TestMintRetryOnlyWhenNotSent(t *testing.T) {
 		retryable bool
 	}{
 		{name: "connection refused", closed: true, code: llm.CodeUnavailable, retryable: true},
-		{name: "hung up after the request", answer: func(w http.ResponseWriter, r *http.Request) bool { hangUp(w); return true },
+		{name: "hung up after the request", answer: func(w http.ResponseWriter, r *http.Request) bool { sdktest.HangUp(w); return true },
 			code: llm.CodeUnavailable},
 		{name: "503", answer: func(w http.ResponseWriter, r *http.Request) bool {
 			http.Error(w, "down", http.StatusServiceUnavailable)
@@ -67,7 +37,7 @@ func TestMintRetryOnlyWhenNotSent(t *testing.T) {
 			w.Header().Set("Content-Length", "100")
 			w.WriteHeader(http.StatusOK)
 			io.WriteString(w, `{"api_key":`)
-			hangUp(w)
+			sdktest.HangUp(w)
 			return true
 		}, code: llm.CodeUnavailable},
 		{name: "429", answer: func(w http.ResponseWriter, r *http.Request) bool {
@@ -81,10 +51,10 @@ func TestMintRetryOnlyWhenNotSent(t *testing.T) {
 			srv.Answer = c.answer
 			set, _ := readSettings(srv.Settings())
 			if c.closed {
-				set.MintURL = closedURL(t) + "/muse-code/key"
+				set.MintURL = sdktest.ClosedURL(t) + "/muse-code/key"
 			}
 			_, err := mint(context.Background(), set, "dca:x")
-			wantError(t, err, c.code, c.retryable)
+			sdktest.WantError(t, err, c.code, c.retryable)
 		})
 	}
 }
@@ -93,14 +63,14 @@ func TestMintRetryOnlyWhenNotSent(t *testing.T) {
 func TestDeviceStartRetryOnlyWhenNotSent(t *testing.T) {
 	srv := metatest.New(t)
 	set, _ := readSettings(srv.Settings())
-	set.AuthBaseURL = closedURL(t)
+	set.AuthBaseURL = sdktest.ClosedURL(t)
 	_, err := deviceLogin(context.Background(), set, promptFunc(func(protocol.Prompt) {}))
-	wantError(t, err, llm.CodeUnavailable, true)
+	sdktest.WantError(t, err, llm.CodeUnavailable, true)
 
-	srv.Answer = func(w http.ResponseWriter, r *http.Request) bool { hangUp(w); return true }
+	srv.Answer = func(w http.ResponseWriter, r *http.Request) bool { sdktest.HangUp(w); return true }
 	set, _ = readSettings(srv.Settings())
 	_, err = deviceLogin(context.Background(), set, promptFunc(func(protocol.Prompt) {}))
-	wantError(t, err, llm.CodeUnavailable, false)
+	sdktest.WantError(t, err, llm.CodeUnavailable, false)
 }
 
 // A poll that fails after it was sent stops the login.
@@ -112,12 +82,12 @@ func TestPollStopsAfterSendFailure(t *testing.T) {
 			return false
 		}
 		polls.Add(1)
-		hangUp(w)
+		sdktest.HangUp(w)
 		return true
 	}
 	set, _ := readSettings(srv.Settings())
 	_, err := deviceLogin(context.Background(), set, promptFunc(func(p protocol.Prompt) { srv.Approve(p.UserCode) }))
-	wantError(t, err, llm.CodeUnavailable, false)
+	sdktest.WantError(t, err, llm.CodeUnavailable, false)
 	if polls.Load() != 1 {
 		t.Errorf("%d polls reached Meta, want 1", polls.Load())
 	}

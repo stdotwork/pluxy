@@ -115,6 +115,7 @@ const t = strings("device", {
   rollBack: "Roll back to {version}",
   remove: "Remove",
   noInstalled: "No extensions installed on this device.",
+  loading: "Loading…",
   installedList: "Extensions on this device",
   available: "Available",
   noRegistries: "No registries are named in device-registries.json in the app's config folder.",
@@ -230,7 +231,13 @@ function AccessDetail(props: { p: DevicePackage }) {
             return [
               `${r.id} (${t("resourceKind", { kind: r.kind === "file" ? t("file") : t("folder"), ops: r.operations.join(", ") })})`,
               <>
-                {g ? <span class="mono">{grantText(g)}</span> : <span class="muted">{t("notGranted")}</span>}{" "}
+                {g ? (
+                  <span class="mono">{grantText(g)}</span>
+                ) : grants.data ? (
+                  <span class="muted">{t("notGranted")}</span>
+                ) : (
+                  grants.phase === "loading" && <span class="muted">{t("loading")}</span>
+                )}{" "}
                 {g?.session_only && <Badge tone="warn">{t("sessionOnly")}</Badge>}{" "}
                 {g?.changed && <Badge tone="danger">{t("changedBadge")}</Badge>}{" "}
                 {g && !current && <Badge tone="warn">{t("otherRelease")}</Badge>}{" "}
@@ -359,6 +366,7 @@ function Available(props: { installed: DevicePackage[]; onInstalled: () => void 
         </Button>
       }
     >
+      {registries.phase === "loading" && <Notice tone="muted">{t("loading")}</Notice>}
       {registries.error && <Notice tone="danger">{registries.error}</Notice>}
       {broken.map((r) => (
         <Notice key={r.name} tone="warn">
@@ -430,6 +438,7 @@ export function DevicePage(props: { onChanged: () => void }) {
       <p class="muted">{t("intro")}</p>
       {catalog.data?.safe_mode && <Notice tone="warn">{t("safeMode")}</Notice>}
       {catalog.data?.warning && <Notice tone="warn">{catalog.data.warning}</Notice>}
+      {catalog.phase === "loading" && <Notice tone="muted">{t("loading")}</Notice>}
       {(catalog.error ?? file.error) && <Notice tone="danger">{catalog.error ?? file.error}</Notice>}
       <div class="stack">
         <MasterDetail

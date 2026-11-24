@@ -21,20 +21,12 @@ import {
   useKit,
   useLoad,
 } from "../../ui/kit/ui";
-import { Backups, reply } from "./backups";
+import { Backups } from "./backups";
 import { folderWait, NeedsKey, NoKeys, toolMissing, withDeviceLink } from "./clientHelp";
-import {
-  type Agents,
-  fresh,
-  fromFile,
-  keysOf,
-  type Model,
-  PACKAGE,
-  type ReadBack,
-  type Secret,
-} from "./codexForm";
+import { keysOf, type Secret, Text, usePreview } from "./clientPage";
+import { type Agents, fresh, fromFile, type Model, PACKAGE, type ReadBack } from "./codexForm";
 import type { AgentPage } from "./easyMode";
-import { connectionGet } from "./host";
+import { connectionGet, reply } from "./host";
 import { keptTerminal, launcherProblem, useDeviceChanged } from "./startCli";
 
 const t = strings("codex", {
@@ -159,37 +151,6 @@ interface Preview {
   targets: { selected: string; target: string; link: string | null; [k: string]: unknown }[];
   applied: boolean;
   settings: ReadBack;
-}
-
-function Text(props: {
-  label: string;
-  hint?: string;
-  value: string;
-  onInput: (v: string) => void;
-  list?: string;
-  area?: boolean;
-}) {
-  const id = useId();
-  const input = (e: { currentTarget: { value: string } }) => props.onInput(e.currentTarget.value);
-  return (
-    <label class="field" data-part="field" for={id}>
-      <span class="label">{props.label}</span>
-      {props.area ? (
-        <textarea id={id} rows={4} spellcheck={false} value={props.value} onInput={input} />
-      ) : (
-        <input
-          id={id}
-          type="text"
-          autocomplete="off"
-          spellcheck={false}
-          list={props.list}
-          value={props.value}
-          onInput={input}
-        />
-      )}
-      {props.hint && <small class="hint">{props.hint}</small>}
-    </label>
-  );
 }
 
 /** A whole number, or blank (null). */
@@ -390,7 +351,6 @@ export function CodexPage() {
   const [configPath, setConfigPath] = useState("");
   const [catalogPath, setCatalogPath] = useState("");
   const [root, setRoot] = useState("");
-  const [preview, setPreview] = useState<Preview>();
   const [model, setModel] = useState("");
   const [approval, setApproval] = useState("");
   const [compaction, setCompaction] = useState(false);
@@ -400,7 +360,7 @@ export function CodexPage() {
   const [secret, setSecret] = useState("");
   const [core, setCore] = useState<string>();
   const secrets = useLoad(() => reply<{ secrets?: Secret[] }>("vault_secrets"));
-  const keys = keysOf(secrets.data);
+  const keys = keysOf(PACKAGE, secrets.data);
   const listId = useId();
   useEffect(() => {
     connectionGet().then(
@@ -419,13 +379,16 @@ export function CodexPage() {
             ],
           }
         : {};
+  // A write acts on the files the last preview pinned (the tool refuses them if one changed
+  // since); the preview belongs to the selection it was read for, so a write never pins files unread.
+  const selected = JSON.stringify(selection());
+  const { preview, accept } = usePreview<Preview>(selected);
   const read = useAction(() => {});
   const load = () =>
     read.run(async () => {
       const r = await tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) });
-      if (r.body) {
+      if (r.body && accept(selected, r.body)) {
         const f = fromFile(r.body.settings);
-        setPreview(r.body);
         setModel(f.model);
         setApproval(f.approval);
         setCompaction(f.compaction);
@@ -435,14 +398,6 @@ export function CodexPage() {
       return r;
     });
   const write = useAction(load);
-  // A write acts on the files the last preview pinned (the tool refuses it if a file changed
-  // since); choosing other files drops that preview, so a write never pins files unread.
-  const reselect =
-    <T,>(f: (v: T) => void) =>
-    (v: T) => {
-      f(v);
-      setPreview(undefined);
-    };
   const importModels = useAction(() => {});
   const doImport = () =>
     importModels.run(async () => {
@@ -510,27 +465,20 @@ export function CodexPage() {
             { value: "files", label: t("filesSelected") },
             { value: "root", label: t("filesInRoot") },
           ]}
-          onChange={reselect(setWhere)}
+          onChange={setWhere}
         />
         {where === "files" && (
           <>
-            <Text
-              label={t("configPath")}
-              hint={t("pathHint")}
-              value={configPath}
-              onInput={reselect(setConfigPath)}
-            />
+            <Text label={t("configPath")} hint={t("pathHint")} value={configPath} onInput={setConfigPath} />
             <Text
               label={t("catalogPath")}
               hint={t("pathHint")}
               value={catalogPath}
-              onInput={reselect(setCatalogPath)}
+              onInput={setCatalogPath}
             />
           </>
         )}
-        {where === "root" && (
-          <Text label={t("root")} hint={t("rootHint")} value={root} onInput={reselect(setRoot)} />
-        )}
+        {where === "root" && <Text label={t("root")} hint={t("rootHint")} value={root} onInput={setRoot} />}
         {read.error && !toolMissing(read.error, PACKAGE) && <Notice tone="danger">{read.error}</Notice>}
         <Button onClick={load} disabled={busy}>
           {t("read")}
@@ -662,7 +610,7 @@ export function CodexPage() {
                 onChange={setSecret}
               />
             ) : (
-              <NoKeys />
+              <NoKeys secrets={secrets} />
             )}
             {secrets.error && <Notice tone="danger">{secrets.error}</Notice>}
             {addKey.error && <Notice tone="danger">{addKey.error}</Notice>}

@@ -63,7 +63,7 @@ export const usageEventsApi = (host: Host) => ({
   usageEvents: (filters: UsageFilters, after: number) => {
     const query = new URLSearchParams({ after: String(after), limit: "1000" });
     for (const [key, value] of Object.entries(filters)) if (value.trim()) query.set(key, value.trim());
-    return host.call<UsageEventsReply>("GET", "/usage/events?" + query);
+    return host.call<UsageEventsReply>("GET", `/usage/events?${query}`);
   },
   /**
    * One page of requests by core's own query, such as `before=0&limit=50&since=1h` for the newest

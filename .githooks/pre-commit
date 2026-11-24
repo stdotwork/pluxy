@@ -1,0 +1,86 @@
+#!/bin/sh
+# Opt-in pre-commit hook: formatting checks on staged files only. Turn on: `make hooks` in next/.
+# Turn off: git config --unset core.hooksPath
+# Checks the working-tree copy of each staged file, so stage the fix after running the command shown.
+
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+failed=0
+staged=$(git -c core.quotePath=off diff --cached --name-only --diff-filter=ACMR)
+[ -n "$staged" ] || exit 0
+
+# quote prints its arguments single-quoted, so the fix commands paste safely.
+quote() {
+	for a in "$@"; do
+		printf " '%s'" "$(printf '%s' "$a" | sed "s/'/'\\\\''/g")"
+	done
+}
+
+# Staged .go files.
+set --
+while IFS= read -r f; do
+	case $f in *.go) set -- "$@" "$f" ;; esac
+done <<EOF
+$staged
+EOF
+if [ $# -gt 0 ]; then
+	if command -v gofmt >/dev/null 2>&1; then
+		bad=$(gofmt -l "$@")
+		if [ -n "$bad" ]; then
+			failed=1
+			echo "These staged files need gofmt:"
+			echo "$bad" | sed 's/^/  /'
+			echo "Fix: gofmt -w$(quote "$@")"
+		fi
+	else
+		echo "pre-commit: gofmt not found, skipping the Go check"
+	fi
+fi
+
+# Staged files under next/ui and next/app: Biome from that folder's own node_modules.
+for dir in next/ui next/app; do
+	set --
+	while IFS= read -r f; do
+		case $f in
+		"$dir"/*.ts | "$dir"/*.tsx | "$dir"/*.js | "$dir"/*.jsx | "$dir"/*.mjs | "$dir"/*.cjs | "$dir"/*.json | "$dir"/*.jsonc | "$dir"/*.css | "$dir"/*.html)
+			set -- "$@" "${f#"$dir"/}"
+			;;
+		esac
+	done <<EOF
+$staged
+EOF
+	[ $# -gt 0 ] || continue
+	if [ ! -x "$dir/node_modules/.bin/biome" ]; then
+		echo "pre-commit: $dir/node_modules missing, skipping Biome (run bun install in $dir)"
+		continue
+	fi
+	if ! out=$(cd "$dir" && node_modules/.bin/biome check --no-errors-on-unmatched "$@" 2>&1); then
+		failed=1
+		echo "Biome rejects staged files in $dir:"
+		echo "$out" | sed 's/^/  /'
+		echo "Fix: (cd $dir && node_modules/.bin/biome check --write$(quote "$@"))"
+	fi
+done
+
+# Staged .rs files: cargo fmt per workspace.
+for dir in next/app/src-tauri next/app-tools; do
+	has=0
+	while IFS= read -r f; do
+		case $f in "$dir"/*.rs) has=1 ;; esac
+	done <<EOF
+$staged
+EOF
+	[ $has -eq 1 ] || continue
+	if ! command -v cargo >/dev/null 2>&1; then
+		echo "pre-commit: cargo not found, skipping the Rust check in $dir"
+		continue
+	fi
+	if ! out=$(cd "$dir" && cargo fmt --check 2>&1); then
+		failed=1
+		echo "These staged Rust files in $dir need cargo fmt:"
+		echo "$out" | sed 's/^/  /'
+		echo "Fix: (cd $dir && cargo fmt)"
+	fi
+done
+
+exit $failed

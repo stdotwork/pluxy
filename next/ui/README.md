@@ -363,6 +363,36 @@ webkit` (WebKit also needs its system libraries: `bunx playwright install-deps w
 starts its own core through `go run ./e2e/panelcore` (from `next/`), with fake extensions, on a
 random port.
 
+### A core with data to look at
+
+`go run ./e2e/panelcore` starts a real core with fake extensions and three accounts, all healthy
+and unused, so most pages are empty. Add `-demo` for a core that looks lived in, with no real
+provider account:
+
+```bash
+go build ./... && go generate ./internal/panel   # once: the panel is not kept in git
+go run ./e2e/panelcore -demo -listen 127.0.0.1:8330
+```
+
+It prints one line of JSON and then runs until its stdin ends or you press Ctrl-C:
+`{"base":"http://127.0.0.1:8330","key":"…","client_key":"…","config":"…"}`. Open `<base>/panel/` and
+sign in with `key` (the management key); `client_key` is the one to send requests with. Without
+`-listen` the port is random and never 8317. It is ready in a few seconds, and seeded, so every run
+has the same accounts, models and requests.
+
+With `-demo` core holds 11 accounts of four providers in these states: healthy, cooling after a
+rate limit, exhausted, near its quota limits, with and without quota windows, closed by the
+provider (banned), needing a new sign-in, and turned off; one account name and one model name are
+very long. It has three client keys, a fallback chain (`demo-best`), and about 600 usage events
+over the last week and today (several models, keys and providers, some failed, a few that fell
+back to another account), with a request log for each request. The requests are real: the demo
+sends them to core, which routes them to the fake extensions, so the usage, the logs and the
+accounts' states are core's own. The one exception is the time: nothing in core moves its clock,
+so the days before today are written into core's usage folder as day files before core starts
+(`e2e/panelcore/demo.go` says how). A broken credential file is the one state it does not make.
+
+`e2e/panelcore_demo_test.go` starts it and checks all of this through the management API.
+
 ### How core gets the panel
 
 The built panel is not kept in git. `go generate ./internal/panel` (from `next/`) runs

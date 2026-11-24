@@ -79,10 +79,10 @@ func quotaError(status int, h http.Header) *llm.Error {
 		e.Code, e.Scope, e.Message = llm.CodeAuth, llm.ScopeCredential, "Meta refused the device token; log in again"
 	case status == http.StatusTooManyRequests:
 		e.Code, e.Scope, e.Retryable, e.Message = llm.CodeRateLimit, llm.ScopeCredential, true, "Meta is rate limiting this account"
-		e.RetryAfterMS = retryAfter(h.Get("Retry-After"), time.Now())
+		e.RetryAfterMS = sdk.RetryAfter(h.Get("Retry-After"), time.Now())
 	case status == http.StatusServiceUnavailable || status == 529:
 		e.Code, e.Scope, e.Message = llm.CodeUnavailable, llm.ScopeEndpoint, "Meta's key endpoint is unavailable"
-		e.RetryAfterMS = retryAfter(h.Get("Retry-After"), time.Now())
+		e.RetryAfterMS = sdk.RetryAfter(h.Get("Retry-After"), time.Now())
 	case status >= 500:
 		e.Code, e.Scope, e.Message = llm.CodeUpstream, llm.ScopeEndpoint, "Meta's key endpoint failed"
 	default:

@@ -264,6 +264,7 @@ export function QuotaPage() {
           </Button>
         }
       />
+      {accounts.phase === "loading" && <Notice tone="muted">{t("loading")}</Notice>}
       {accounts.error && <Notice tone="danger">{p.text(accounts.error)}</Notice>}
       <div class="quota-controls">
         <label class="field" data-part="field">
@@ -289,7 +290,7 @@ export function QuotaPage() {
           </select>
         </label>
       </div>
-      {shown.length === 0 && !accounts.loading ? (
+      {accounts.data && shown.length === 0 && !accounts.loading ? (
         <Empty>{t(query ? "noMatch" : "empty")}</Empty>
       ) : (
         <List<Account>

@@ -3,7 +3,6 @@ package host
 import (
 	"context"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -30,11 +29,7 @@ func watchFake(minor int) {
 		os.Exit(1)
 	}
 	fmt.Print(protocol.HandshakeLine(protocol.Version, socket))
-	// Core closes stdin to stop the extension.
-	go func() {
-		_, _ = io.Copy(io.Discard, os.Stdin)
-		os.Exit(0)
-	}()
+	exitWhenStdinCloses()
 	answer := func(conn net.Conn, call protocol.Call) {
 		model := ""
 		if call.Request != nil {

@@ -6,6 +6,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -104,12 +105,32 @@ func documentedErrorCodes(path string) (map[string]bool, error) {
 	return codes, nil
 }
 
-func noTests(fi os.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }
+// parseNonTestFiles parses the non-test Go files of dir, grouped by package name. It reads the
+// files as written, whatever their build constraints, as parser.ParseDir did.
+func parseNonTestFiles(fset *token.FileSet, dir string) (map[string][]*ast.File, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	pkgs := map[string][]*ast.File{}
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, 0)
+		if err != nil {
+			return nil, err
+		}
+		pkgs[f.Name.Name] = append(pkgs[f.Name.Name], f)
+	}
+	return pkgs, nil
+}
 
 // stringConsts returns the package's constants whose value is a string.
-func stringConsts(pkg *ast.Package) map[string]string {
+func stringConsts(files []*ast.File) map[string]string {
 	out := map[string]string{}
-	for _, f := range pkg.Files {
+	for _, f := range files {
 		for _, d := range f.Decls {
 			gd, ok := d.(*ast.GenDecl)
 			if !ok || gd.Tok != token.CONST {
@@ -147,13 +168,13 @@ func handlerErrorCodes(t *testing.T, llmConsts map[string]string, dirs ...string
 	t.Helper()
 	c := &handlerCodes{fset: token.NewFileSet(), codes: map[string]bool{}}
 	for _, dir := range dirs {
-		pkgs, err := parser.ParseDir(c.fset, dir, noTests, 0)
+		pkgs, err := parseNonTestFiles(c.fset, dir)
 		if err != nil {
 			return nil, err
 		}
-		for _, pkg := range pkgs {
-			consts := stringConsts(pkg)
-			for _, f := range pkg.Files {
+		for _, files := range pkgs {
+			consts := stringConsts(files)
+			for _, f := range files {
 				for _, d := range f.Decls {
 					fd, ok := d.(*ast.FuncDecl)
 					if !ok || fd.Body == nil {
@@ -174,13 +195,13 @@ func handlerErrorCodes(t *testing.T, llmConsts map[string]string, dirs ...string
 
 // llmCodeConsts returns llm's constants that are error codes, by name.
 func llmCodeConsts(dir string) (map[string]string, error) {
-	pkgs, err := parser.ParseDir(token.NewFileSet(), dir, noTests, 0)
+	pkgs, err := parseNonTestFiles(token.NewFileSet(), dir)
 	if err != nil {
 		return nil, err
 	}
 	out := map[string]string{}
-	for _, pkg := range pkgs {
-		for name, value := range stringConsts(pkg) {
+	for _, files := range pkgs {
+		for name, value := range stringConsts(files) {
 			if strings.HasPrefix(name, "Code") {
 				out[name] = value
 			}

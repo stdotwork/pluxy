@@ -742,6 +742,7 @@ func connectMessage(raw []byte, secrets []string) (string, []byte) {
 // used up: the period, "quota" and "exhausted" must all be in the message, so a monthly or
 // unnamed quota holds back only the model, as in today's core.
 func statusError(status int, msg string, raw []byte, retryAfterHeader string) *llm.Error {
+	retryAfterHeader = strings.TrimSpace(retryAfterHeader) // sdk.RetryAfter reads a padded date as malformed
 	if msg == "" {
 		msg = fmt.Sprintf("Devin answered %d %s", status, http.StatusText(status))
 	}
@@ -760,14 +761,14 @@ func statusError(status int, msg string, raw []byte, retryAfterHeader string) *l
 		e.Code, e.Scope = llm.CodeCancelled, llm.ScopeRequest
 	case status == http.StatusTooManyRequests:
 		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeModel, true
-		e.RetryAfterMS = retryAfter(retryAfterHeader, time.Now())
+		e.RetryAfterMS = sdk.RetryAfter(retryAfterHeader, time.Now())
 		if m := strings.ToLower(msg); strings.Contains(m, "quota") && strings.Contains(m, "exhausted") && containsAny(m, "daily", "weekly") {
 			e.Code, e.Scope = llm.CodeQuota, llm.ScopeCredential
 		}
 	case status == http.StatusServiceUnavailable:
 		// Not retry-safe: Devin may have started the request.
 		e.Code, e.Scope = llm.CodeUnavailable, llm.ScopeEndpoint
-		e.RetryAfterMS = retryAfter(retryAfterHeader, time.Now())
+		e.RetryAfterMS = sdk.RetryAfter(retryAfterHeader, time.Now())
 	case status >= 500:
 		e.Code, e.Scope = llm.CodeUpstream, llm.ScopeEndpoint
 	case status >= 300 && status < 400:
@@ -777,20 +778,4 @@ func statusError(status int, msg string, raw []byte, retryAfterHeader string) *l
 		e.Code, e.Scope = llm.CodeInvalidRequest, llm.ScopeRequest
 	}
 	return e
-}
-
-// retryAfter reads a Retry-After header (seconds or an HTTP date) as milliseconds from now.
-func retryAfter(v string, now time.Time) int64 {
-	if v = strings.TrimSpace(v); v == "" {
-		return 0
-	}
-	if secs, err := strconv.ParseInt(v, 10, 64); err == nil && secs >= 0 {
-		return secs * 1000
-	}
-	if t, err := http.ParseTime(v); err == nil {
-		if d := t.Sub(now); d > 0 {
-			return d.Milliseconds()
-		}
-	}
-	return 0
 }

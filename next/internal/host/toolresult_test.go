@@ -26,6 +26,7 @@ func toolResultEcho(minor int, passthrough bool) {
 		os.Exit(1)
 	}
 	fmt.Print(protocol.HandshakeLine(protocol.Version, socket))
+	exitWhenStdinCloses()
 	reply := func(conn net.Conn, req *llm.Request) {
 		raw, _ := json.Marshal(map[string]any{"items": req.Items, "options": req.Options})
 		tr := &llm.Translation{From: llm.FormatAnthropicMessages, To: llm.FormatOpenAIChat, Passthrough: passthrough,

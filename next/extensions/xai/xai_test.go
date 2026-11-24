@@ -193,10 +193,10 @@ func TestErrorMapping(t *testing.T) {
 
 func TestRetryAfterDate(t *testing.T) {
 	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
-	if got := retryAfter(now.Add(90*time.Second).Format(http.TimeFormat), now); got != 90000 {
+	if got := sdk.RetryAfter(now.Add(90*time.Second).Format(http.TimeFormat), now); got != 90000 {
 		t.Errorf("retryAfter(date) = %d, want 90000", got)
 	}
-	if got := retryAfter("soon", now); got != 0 {
+	if got := sdk.RetryAfter("soon", now); got != 0 {
 		t.Errorf("retryAfter(bad) = %d, want 0", got)
 	}
 }
