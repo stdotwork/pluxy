@@ -127,14 +127,14 @@ test("closing the Edit dialog returns focus to the Edit button", async ({ page }
   await expect(edit, `focus is on ${await focused(page)}`).toBeFocused();
 });
 
-test("closing the delete confirm returns focus to the Delete button", async ({ page }) => {
+test("closing the remove confirm returns focus to the Remove button", async ({ page }) => {
   await openAccounts(page);
   await page.getByRole("button", { name: "Select filtered", exact: true }).click();
-  const del = page.getByRole("button", { name: "Delete", exact: true });
+  const del = page.getByRole("button", { name: "Remove", exact: true });
   await del.focus();
   await page.keyboard.press("Enter");
   const dialog = page.getByRole("dialog");
-  await expect(dialog).toContainText("Are you sure you want to delete");
+  await expect(dialog).toContainText("Are you sure you want to remove");
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await expect(del, `focus is on ${await focused(page)}`).toBeFocused();
