@@ -24,5 +24,51 @@
         "noUnusedFunctionParameters": "error"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["src/**", "native/**", "page/**", "build.ts", "preact.ts", "package.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["**/tests", "**/tests/**", "**/e2e", "**/e2e/**"],
+                    "message": "Product code must not import from a tests or e2e folder. Test helpers stay in tests/e2e; code a product file needs belongs in next/ui/kit (or the file's own folder)."
+                  },
+                  {
+                    "group": ["**/ui/**", "!**/ui/kit/**", "!**/ui/themes/**"],
+                    "message": "The desktop app may import only next/ui/kit and next/ui/themes from next/ui, never the panel, next/ui/extension-pages, next/ui/tests or next/ui/e2e. Code the app and the panel share belongs in next/ui/kit."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["tests/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["**/ui/**", "!**/ui/kit/**", "!**/ui/themes/**"],
+                    "message": "The desktop app may import only next/ui/kit and next/ui/themes from next/ui, never the panel, next/ui/extension-pages, next/ui/tests or next/ui/e2e. Code the app and the panel share belongs in next/ui/kit."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

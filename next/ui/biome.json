@@ -24,5 +24,80 @@
         "noUnusedFunctionParameters": "error"
       }
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["kit/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "**/panel",
+                      "**/panel/**",
+                      "**/e2e",
+                      "**/e2e/**",
+                      "**/tests",
+                      "**/tests/**",
+                      "**/app",
+                      "**/app/**"
+                    ],
+                    "message": "The UI kit (next/ui/kit) is shared by the web panel and the desktop app, so it must not import from the panel, next/ui/e2e, next/ui/tests or next/app. Code both sides need belongs in next/ui/kit: move it there and import it from each side."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["panel/**", "extension-pages/**", "build.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["**/app", "**/app/**"],
+                    "message": "Nothing in next/ui may import from next/app: the UI kit and the web panel build without the desktop app. Code both need belongs in next/ui/kit."
+                  },
+                  {
+                    "group": ["**/e2e", "**/e2e/**", "**/tests", "**/tests/**"],
+                    "message": "Product code must not import from a tests or e2e folder. Test helpers stay in tests/e2e; code a product file needs belongs in next/ui/kit (or the file's own folder)."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["tests/**", "e2e/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["**/app", "**/app/**"],
+                    "message": "Nothing in next/ui may import from next/app: the UI kit and the web panel build without the desktop app. Code both need belongs in next/ui/kit."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

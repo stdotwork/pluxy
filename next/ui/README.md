@@ -326,6 +326,14 @@ side touch shared files only by one line each:
 - **Tests:** a browser test for the page in `e2e/<page>.spec.ts`; unit tests in `tests/` only for
   pure code.
 
+Three checks in `bun run lint` and `bun run test` hold the kit's rules, and each failure says what
+to do. Imports (Biome's `noRestrictedImports`, in `biome.json` here and in `../app/biome.json`): the
+kit imports nothing from the panel, `e2e/`, `tests/` or `../app`, and the app imports only `kit` and
+`themes` from `ui`, so shared code belongs in `kit/`. Colours (`tests/colours.test.ts`): no raw
+colour value outside the theme tokens, except the baseline in that file, which may only shrink.
+Texts (`tests/terms.test.ts`): no `strings(...)` text uses a term that the "Do not use" column of
+[`docs/terms.md`](../../docs/terms.md) bans, except the baseline in that file, which may only shrink.
+
 ## Why Preact, built with Bun
 
 The priorities are a small, fast panel, and a kit the desktop app can build in unchanged.
