@@ -1,0 +1,1107 @@
+/* Direction C, "Flow": tokens, the shell and the shared parts.
+
+   The panel is drawn as the machine it manages: requests enter at a client key, are routed to a
+   model, and land on an account. Everything is ordered along that line, left to right on the
+   map and top to bottom in the navigation.
+
+   Colour has two jobs and no others. A provider has a colour, and it is the only colour a
+   surface or a line ever takes (the palette is --dc-p0 to --dc-p4, checked for colour-blind
+   separation on every pair, with --dc-p5 for every provider past the fifth). A state has a
+   colour and always a glyph and a word beside it. Everything else, from the primary button to
+   the current page, is ink on soft paper. */
+
+:root[data-design="c"] {
+  --dc-font: "Barlow", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --dc-font-label: "Barlow Semi Condensed", "Barlow", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --dc-font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --dc-bg: #eef0f5;
+  --dc-surface: #ffffff;
+  --dc-soft: #f5f6fa;
+  --dc-sunken: #e4e7ef;
+  --dc-line: #dde1ea;
+  --dc-line-strong: #bcc2d0;
+  --dc-ink: #161922;
+  --dc-ink-2: #454b5c;
+  --dc-ink-3: #5f6678;
+  --dc-on-ink: #ffffff;
+  --dc-ok: #17754a;
+  --dc-warn: #8f5600;
+  --dc-danger: #bd2a20;
+  --dc-ok-soft: #e3f3ea;
+  --dc-warn-soft: #f8ecd6;
+  --dc-danger-soft: #fbe6e3;
+
+  --dc-p0: #255ebc;
+  --dc-p1: #0b93a6;
+  --dc-p2: #9884f3;
+  --dc-p3: #dd6b20;
+  --dc-p4: #8c2f73;
+  --dc-p5: #707789;
+  --dc-ribbon: #8a91a3;
+  --dc-ribbon-alpha: 0.3;
+
+  --dc-radius: 12px;
+  --dc-radius-control: 8px;
+  --dc-shadow: 0 1px 2px rgb(22 25 34 / 0.05), 0 10px 28px -18px rgb(22 25 34 / 0.22);
+  --dc-shadow-pop: 0 2px 6px rgb(22 25 34 / 0.08), 0 18px 40px -16px rgb(22 25 34 / 0.3);
+  --dc-ease: 140ms ease-out;
+  --dc-nav: 216px;
+
+  /* Today's pages, shown inside this shell, take its paper and ink. */
+  --px-color-bg: var(--dc-bg);
+  --px-color-surface: var(--dc-surface);
+  --px-color-surface-raised: var(--dc-soft);
+  --px-color-text: var(--dc-ink);
+  --px-color-text-muted: var(--dc-ink-3);
+  --px-color-border: var(--dc-line);
+  --px-color-accent: var(--dc-ink);
+  --px-color-accent-text: var(--dc-on-ink);
+  --px-color-ok: var(--dc-ok);
+  --px-color-warn: var(--dc-warn);
+  --px-color-danger: var(--dc-danger);
+  --px-color-focus: var(--dc-ink);
+  --px-color-input-border: var(--dc-line-strong);
+  --px-color-overlay: var(--dc-surface);
+  --px-color-nav-selected: var(--dc-sunken);
+  --px-font-body: var(--dc-font);
+  --px-font-mono: var(--dc-font-mono);
+  --px-font-size: 15px;
+  --px-font-size-small: 13px;
+  --px-font-size-title: 22px;
+  --px-font-line-height: 1.45;
+  --px-shape-radius: 10px;
+  --px-shadow-raised: var(--dc-shadow);
+}
+
+/* Dark is its own design: deep slate paper with surfaces a step lighter than the page, so the
+   ribbons read as light on water, and each provider colour stepped again for this ground. */
+:root[data-design="c"][data-appearance="dark"] {
+  --dc-bg: #11131a;
+  --dc-surface: #1b1e27;
+  --dc-soft: #232733;
+  --dc-sunken: #0c0e13;
+  --dc-line: #2b303d;
+  --dc-line-strong: #454c5e;
+  --dc-ink: #eceef4;
+  --dc-ink-2: #b9bece;
+  --dc-ink-3: #949bae;
+  --dc-on-ink: #11131a;
+  --dc-ok: #62d294;
+  --dc-warn: #ecb658;
+  --dc-danger: #ff9080;
+  --dc-ok-soft: #173326;
+  --dc-warn-soft: #3a2e14;
+  --dc-danger-soft: #45201c;
+
+  --dc-p0: #4e97de;
+  --dc-p1: #09ae8a;
+  --dc-p2: #575ae8;
+  --dc-p3: #975f15;
+  --dc-p4: #925388;
+  --dc-p5: #7d8496;
+  --dc-ribbon: #7d8496;
+  --dc-ribbon-alpha: 0.38;
+
+  --dc-shadow: 0 1px 0 rgb(255 255 255 / 0.03) inset, 0 12px 30px -18px rgb(0 0 0 / 0.7);
+  --dc-shadow-pop: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 20px 44px -14px rgb(0 0 0 / 0.8);
+}
+
+:root[data-design="c"] {
+  body {
+    margin: 0;
+    font-family: var(--dc-font);
+    font-size: 15px;
+    line-height: 1.45;
+    color: var(--dc-ink);
+    background: var(--dc-bg);
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---- the shell ------------------------------------------------------------------------- */
+
+  .dc-shell {
+    display: grid;
+    grid-template-columns: var(--dc-nav) minmax(0, 1fr);
+    min-height: 100vh;
+  }
+
+  .dc-skip {
+    position: absolute;
+    left: 12px;
+    top: -60px;
+    z-index: 50;
+    padding: 8px 12px;
+    color: var(--dc-on-ink);
+    background: var(--dc-ink);
+    border-radius: var(--dc-radius-control);
+  }
+
+  .dc-skip:focus {
+    top: 12px;
+  }
+
+  .dc-nav {
+    position: sticky;
+    top: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    height: 100vh;
+    padding: 18px 12px 12px;
+    overflow-y: auto;
+    box-sizing: border-box;
+  }
+
+  .dc-brand {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: 0 6px 14px;
+    padding: 2px;
+    color: var(--dc-ink);
+    text-decoration: none;
+    border-radius: var(--dc-radius-control);
+  }
+
+  .dc-brand-word {
+    font-size: 21px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1;
+  }
+
+  .dc-mark-tile {
+    fill: var(--dc-ink);
+  }
+
+  .dc-mark-line {
+    fill: none;
+    stroke: var(--dc-on-ink);
+    stroke-width: 2.3;
+    stroke-linecap: round;
+  }
+
+  .dc-mark-dot {
+    fill: var(--dc-on-ink);
+  }
+
+  /* The navigation is one line with stops, in the order a request travels. */
+  .dc-line-nav {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .dc-line-nav::before {
+    content: "";
+    position: absolute;
+    left: 20px;
+    top: 20px;
+    bottom: 20px;
+    width: 2px;
+    background: var(--dc-line-strong);
+    border-radius: 2px;
+  }
+
+  .dc-stop {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 40px;
+    padding: 0 10px 0 8px;
+    color: var(--dc-ink-2);
+    text-decoration: none;
+    border-radius: 10px;
+    transition:
+      background var(--dc-ease),
+      color var(--dc-ease);
+  }
+
+  .dc-stop-dot {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    color: var(--dc-ink-2);
+    background: var(--dc-bg);
+    border: 2px solid var(--dc-line-strong);
+    border-radius: 50%;
+    box-sizing: border-box;
+    transition:
+      background var(--dc-ease),
+      border-color var(--dc-ease),
+      color var(--dc-ease);
+  }
+
+  .dc-stop-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .dc-stop:hover {
+    color: var(--dc-ink);
+    background: var(--dc-sunken);
+  }
+
+  .dc-stop:hover .dc-stop-dot {
+    border-color: var(--dc-ink);
+  }
+
+  .dc-stop[aria-current] {
+    color: var(--dc-ink);
+  }
+
+  .dc-stop[aria-current] .dc-stop-dot {
+    color: var(--dc-on-ink);
+    background: var(--dc-ink);
+    border-color: var(--dc-ink);
+  }
+
+  .dc-substops {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .dc-substop {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 30px;
+    padding: 0 10px 0 8px;
+    font-size: 14px;
+    color: var(--dc-ink-3);
+    text-decoration: none;
+    border-radius: 8px;
+  }
+
+  .dc-substop::before {
+    content: "";
+    position: relative;
+    z-index: 1;
+    flex: none;
+    width: 8px;
+    height: 8px;
+    margin: 0 9px;
+    background: var(--dc-bg);
+    border: 2px solid var(--dc-line-strong);
+    border-radius: 50%;
+    box-sizing: border-box;
+  }
+
+  .dc-substop:hover {
+    color: var(--dc-ink);
+    background: var(--dc-sunken);
+  }
+
+  .dc-substop[aria-current] {
+    color: var(--dc-ink);
+    font-weight: 600;
+  }
+
+  .dc-substop[aria-current]::before {
+    background: var(--dc-ink);
+    border-color: var(--dc-ink);
+  }
+
+  .dc-substop span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .dc-nav-count {
+    flex: none;
+    min-width: 20px;
+    padding: 0 6px;
+    font: 600 12px / 20px var(--dc-font-label);
+    text-align: center;
+    color: var(--dc-danger);
+    background: var(--dc-danger-soft);
+    border-radius: 999px;
+    box-sizing: border-box;
+  }
+
+  .dc-nav-foot {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: auto;
+    padding-top: 12px;
+  }
+
+  .dc-nav-tool {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 34px;
+    padding: 0 12px;
+    font: inherit;
+    font-size: 14px;
+    color: var(--dc-ink-3);
+    text-align: left;
+    background: none;
+    border: 0;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+
+  .dc-nav-tool:hover {
+    color: var(--dc-ink);
+    background: var(--dc-sunken);
+  }
+
+  .dc-nav-tool[aria-pressed="true"] {
+    color: var(--dc-ink);
+  }
+
+  .dc-main {
+    min-width: 0;
+    padding: 22px 28px 56px 12px;
+  }
+
+  .dc-page {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    max-width: 1320px;
+    margin: 0 auto;
+  }
+
+  /* Today's pages inside this shell keep their own layout; they only get its width. */
+  .dc-legacy {
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  /* ---- focus, links, text ---------------------------------------------------------------- */
+
+  :focus-visible {
+    outline: 2px solid var(--dc-ink);
+    outline-offset: 2px;
+  }
+
+  .dc-page a,
+  .dc-signin a {
+    color: var(--dc-ink);
+    text-decoration-color: var(--dc-line-strong);
+    text-underline-offset: 3px;
+  }
+
+  .dc-page a:hover {
+    text-decoration-color: var(--dc-ink);
+  }
+
+  .dc-muted {
+    color: var(--dc-ink-3);
+  }
+
+  .dc-mono {
+    font-family: var(--dc-font-mono);
+    font-size: 0.87em;
+  }
+
+  .dc-sr {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .dc-ellipsis {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .dc-num {
+    font-family: var(--dc-font-label);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---- page head ------------------------------------------------------------------------- */
+
+  .dc-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 16px;
+    min-height: 40px;
+  }
+
+  .dc-head h1 {
+    margin: 0;
+    font-size: 24px;
+    font-weight: 600;
+    letter-spacing: -0.012em;
+    line-height: 1.15;
+  }
+
+  .dc-head-sub {
+    flex: 1 1 260px;
+    min-width: 0;
+    margin: 0;
+    color: var(--dc-ink-2);
+  }
+
+  .dc-head-tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+  }
+
+  .dc-crumb {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 24px;
+    color: var(--dc-ink-2);
+    text-decoration: none;
+  }
+
+  .dc-updated {
+    font-size: 13px;
+    color: var(--dc-ink-3);
+  }
+
+  /* ---- controls -------------------------------------------------------------------------- */
+
+  .dc-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    min-height: 34px;
+    padding: 0 13px;
+    font: inherit;
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--dc-ink);
+    text-decoration: none;
+    white-space: nowrap;
+    background: var(--dc-surface);
+    border: 1px solid var(--dc-line-strong);
+    border-radius: var(--dc-radius-control);
+    cursor: pointer;
+    transition:
+      background var(--dc-ease),
+      border-color var(--dc-ease);
+  }
+
+  .dc-btn:hover {
+    border-color: var(--dc-ink);
+  }
+
+  .dc-btn[data-kind="primary"] {
+    color: var(--dc-on-ink);
+    background: var(--dc-ink);
+    border-color: var(--dc-ink);
+  }
+
+  .dc-btn[data-kind="primary"]:hover {
+    background: var(--dc-ink-2);
+    border-color: var(--dc-ink-2);
+  }
+
+  .dc-btn[data-kind="plain"] {
+    padding: 0 8px;
+    background: none;
+    border-color: transparent;
+  }
+
+  .dc-btn[data-kind="plain"]:hover {
+    background: var(--dc-sunken);
+  }
+
+  .dc-btn[data-kind="danger"] {
+    color: var(--dc-danger);
+  }
+
+  .dc-btn[data-size="small"] {
+    min-height: 28px;
+    padding: 0 10px;
+    font-size: 13px;
+  }
+
+  .dc-btn:disabled {
+    color: var(--dc-ink-3);
+    cursor: default;
+    opacity: 0.7;
+  }
+
+  .dc-btn[data-icon-only] {
+    width: 34px;
+    padding: 0;
+  }
+
+  .dc-seg {
+    display: inline-flex;
+    padding: 3px;
+    background: var(--dc-sunken);
+    border-radius: 10px;
+  }
+
+  .dc-seg label {
+    position: relative;
+    display: block;
+  }
+
+  .dc-seg input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  .dc-seg span {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 28px;
+    padding: 0 11px;
+    font: 500 14px / 1 var(--dc-font-label);
+    color: var(--dc-ink-2);
+    border-radius: 7px;
+    transition:
+      background var(--dc-ease),
+      color var(--dc-ease);
+  }
+
+  .dc-seg input:checked + span {
+    color: var(--dc-ink);
+    background: var(--dc-surface);
+    box-shadow: 0 1px 2px rgb(22 25 34 / 0.14);
+  }
+
+  .dc-seg input:focus-visible + span {
+    outline: 2px solid var(--dc-ink);
+    outline-offset: 1px;
+  }
+
+  .dc-field {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 34px;
+    padding: 0 10px;
+    color: var(--dc-ink-3);
+    background: var(--dc-surface);
+    border: 1px solid var(--dc-line-strong);
+    border-radius: var(--dc-radius-control);
+    box-sizing: border-box;
+  }
+
+  .dc-field:focus-within {
+    outline: 2px solid var(--dc-ink);
+    outline-offset: 1px;
+  }
+
+  .dc-field input {
+    flex: 1;
+    min-width: 0;
+    height: 30px;
+    padding: 0;
+    font: inherit;
+    color: var(--dc-ink);
+    background: none;
+    border: 0;
+    outline: 0;
+  }
+
+  .dc-field input::placeholder {
+    color: var(--dc-ink-3);
+  }
+
+  .dc-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    min-height: 26px;
+    padding: 0 4px 0 10px;
+    font-size: 14px;
+    background: var(--dc-surface);
+    border: 1px solid var(--dc-line-strong);
+    border-radius: 999px;
+    box-sizing: border-box;
+  }
+
+  .dc-chip button {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    color: var(--dc-ink-2);
+    background: none;
+    border: 0;
+    border-radius: 50%;
+    cursor: pointer;
+  }
+
+  .dc-chip button:hover {
+    color: var(--dc-ink);
+    background: var(--dc-sunken);
+  }
+
+  /* ---- surfaces -------------------------------------------------------------------------- */
+
+  .dc-card {
+    min-width: 0;
+    background: var(--dc-surface);
+    border-radius: var(--dc-radius);
+    box-shadow: var(--dc-shadow);
+  }
+
+  .dc-card-pad {
+    padding: 16px 18px;
+  }
+
+  .dc-card-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+    padding: 14px 18px 0;
+  }
+
+  .dc-card-head h2,
+  .dc-h2 {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.25;
+  }
+
+  .dc-card-head .dc-head-tools {
+    margin-left: auto;
+  }
+
+  .dc-h3 {
+    margin: 0;
+    font: 600 14px / 1.3 var(--dc-font-label);
+    letter-spacing: 0.01em;
+    color: var(--dc-ink-2);
+  }
+
+  /* ---- state ----------------------------------------------------------------------------- */
+
+  .dc-state {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    font: 500 14px / 1.2 var(--dc-font-label);
+    white-space: nowrap;
+  }
+
+  .dc-state[data-tone="ok"] {
+    color: var(--dc-ok);
+  }
+
+  .dc-state[data-tone="warn"] {
+    color: var(--dc-warn);
+  }
+
+  .dc-state[data-tone="danger"] {
+    color: var(--dc-danger);
+  }
+
+  .dc-state[data-tone="off"] {
+    color: var(--dc-ink-3);
+  }
+
+  .dc-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin: 0;
+    padding: 11px 14px;
+    background: var(--dc-soft);
+    border-radius: 10px;
+  }
+
+  .dc-note[data-tone="danger"] {
+    background: var(--dc-danger-soft);
+  }
+
+  .dc-note[data-tone="warn"] {
+    background: var(--dc-warn-soft);
+  }
+
+  .dc-note[data-tone="danger"] > .dc-icon {
+    color: var(--dc-danger);
+  }
+
+  .dc-note[data-tone="warn"] > .dc-icon {
+    color: var(--dc-warn);
+  }
+
+  .dc-note > .dc-icon {
+    flex: none;
+    margin-top: 2px;
+  }
+
+  .dc-note-body {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .dc-note .dc-btn {
+    flex: none;
+  }
+
+  .dc-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 26px 22px;
+  }
+
+  .dc-empty h2 {
+    margin: 0;
+    font-size: 19px;
+    font-weight: 600;
+  }
+
+  .dc-empty p {
+    max-width: 56ch;
+    margin: 0;
+    color: var(--dc-ink-2);
+  }
+
+  /* A provider: its colour as a small tile with two letters, so the colour is never alone. */
+  .dc-prov {
+    display: inline-grid;
+    flex: none;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    font: 600 11px / 1 var(--dc-font-label);
+    letter-spacing: 0.01em;
+    color: #ffffff;
+    background: var(--dc-pc, var(--dc-p5));
+    border-radius: 6px;
+  }
+
+  [data-slot-p="0"] {
+    --dc-pc: var(--dc-p0);
+  }
+
+  [data-slot-p="1"] {
+    --dc-pc: var(--dc-p1);
+  }
+
+  [data-slot-p="2"] {
+    --dc-pc: var(--dc-p2);
+  }
+
+  [data-slot-p="3"] {
+    --dc-pc: var(--dc-p3);
+  }
+
+  [data-slot-p="4"] {
+    --dc-pc: var(--dc-p4);
+  }
+
+  [data-slot-p="5"] {
+    --dc-pc: var(--dc-p5);
+  }
+
+  /* A share of something, as a thin bar; the failed part is hatched as well as coloured. */
+  .dc-bar {
+    display: flex;
+    gap: 2px;
+    width: 100%;
+    height: 6px;
+  }
+
+  .dc-bar i {
+    display: block;
+    min-width: 2px;
+    height: 100%;
+    background: var(--dc-pc, var(--dc-ink-2));
+    border-radius: 3px;
+  }
+
+  .dc-bar i[data-failed] {
+    background: repeating-linear-gradient(
+      135deg,
+      var(--dc-danger) 0 2px,
+      color-mix(in srgb, var(--dc-danger) 45%, transparent) 2px 4px
+    );
+  }
+
+  /* A usage window: how much is used, and a tick for how much of its time has gone. */
+  .dc-win {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 3px 10px;
+    align-items: baseline;
+    min-width: 0;
+  }
+
+  .dc-win-name {
+    font: 500 13px / 1.2 var(--dc-font-label);
+    color: var(--dc-ink-2);
+  }
+
+  .dc-win-left {
+    font: 500 13px / 1.2 var(--dc-font-label);
+    color: var(--dc-ink);
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .dc-win-track {
+    position: relative;
+    grid-column: 1 / -1;
+    height: 6px;
+    background: var(--dc-sunken);
+    border-radius: 3px;
+  }
+
+  .dc-win-fill {
+    display: block;
+    height: 100%;
+    background: var(--dc-ink-2);
+    border-radius: 3px;
+  }
+
+  .dc-win[data-tone="warn"] .dc-win-fill {
+    background: var(--dc-warn);
+  }
+
+  .dc-win[data-tone="danger"] .dc-win-fill {
+    background: var(--dc-danger);
+  }
+
+  .dc-win-now {
+    position: absolute;
+    top: -3px;
+    width: 2px;
+    height: 12px;
+    margin-left: -1px;
+    background: var(--dc-ink);
+    border-radius: 1px;
+    box-shadow: 0 0 0 1.5px var(--dc-surface);
+  }
+
+  .dc-win-reset {
+    grid-column: 1 / -1;
+    font-size: 13px;
+    color: var(--dc-ink-3);
+  }
+
+  .dc-skel {
+    display: block;
+    height: 12px;
+    background: var(--dc-sunken);
+    border-radius: 6px;
+  }
+
+  /* ---- signing in ------------------------------------------------------------------------ */
+
+  .dc-signin {
+    display: grid;
+    place-items: center;
+    min-height: 100vh;
+    padding: 24px 16px;
+    box-sizing: border-box;
+  }
+
+  .dc-signin form {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    width: min(380px, 100%);
+    padding: 26px 26px 22px;
+    box-sizing: border-box;
+  }
+
+  .dc-signin h1 {
+    margin: 0;
+    font-size: 15px;
+    font-weight: 400;
+    color: var(--dc-ink-2);
+  }
+
+  .dc-signin label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-weight: 600;
+    font-size: 14px;
+  }
+
+  .dc-signin .dc-check {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    min-height: 24px;
+    font-weight: 400;
+  }
+
+  .dc-signin .dc-check input {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: var(--dc-ink);
+  }
+
+  .dc-signin small {
+    color: var(--dc-ink-3);
+  }
+
+  /* ---- narrow windows: the line lies down --------------------------------------------- */
+
+  @media (max-width: 860px) {
+    .dc-shell {
+      display: block;
+    }
+
+    .dc-nav {
+      position: sticky;
+      z-index: 20;
+      flex-direction: row;
+      align-items: center;
+      gap: 6px;
+      height: auto;
+      padding: 8px 12px;
+      overflow: visible;
+      background: var(--dc-bg);
+      border-bottom: 1px solid var(--dc-line);
+    }
+
+    .dc-brand {
+      margin: 0 4px 0 0;
+    }
+
+    .dc-brand-word {
+      display: none;
+    }
+
+    .dc-line-nav {
+      flex: 1;
+      flex-direction: row;
+      gap: 2px;
+      min-width: 0;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+
+    .dc-line-nav::before {
+      left: 20px;
+      right: 20px;
+      top: 50%;
+      bottom: auto;
+      width: auto;
+      height: 2px;
+    }
+
+    .dc-line-nav li {
+      flex: none;
+    }
+
+    .dc-stop {
+      gap: 6px;
+      padding: 0 8px 0 6px;
+      background: var(--dc-bg);
+    }
+
+    .dc-stop:not([aria-current]) .dc-stop-name,
+    .dc-stop .dc-nav-count {
+      display: none;
+    }
+
+    .dc-substops {
+      display: none;
+    }
+
+    .dc-nav-foot {
+      flex-direction: row;
+      margin: 0;
+      padding: 0;
+    }
+
+    .dc-nav-tool {
+      width: 34px;
+      padding: 0;
+      justify-content: center;
+    }
+
+    .dc-nav-tool span {
+      display: none;
+    }
+
+    .dc-main {
+      padding: 14px 16px 64px;
+    }
+
+    .dc-head h1 {
+      font-size: 21px;
+    }
+
+    .dc-subnav {
+      display: flex;
+    }
+  }
+
+  /* The sub-pages of the current stop, as a row under the page head, only where the side
+     navigation has no room for them. */
+  .dc-subnav {
+    display: none;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 0 0 14px;
+    padding: 0;
+    list-style: none;
+  }
+
+  .dc-subnav a {
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 0 11px;
+    font-size: 14px;
+    color: var(--dc-ink-2);
+    text-decoration: none;
+    background: var(--dc-sunken);
+    border-radius: 999px;
+  }
+
+  .dc-subnav a[aria-current] {
+    color: var(--dc-on-ink);
+    background: var(--dc-ink);
+  }
+
+  /* Every transition here runs for --dc-ease, and nothing else moves. */
+  @media (prefers-reduced-motion: reduce) {
+    --dc-ease: 0ms linear;
+  }
+}
