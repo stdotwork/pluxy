@@ -266,6 +266,8 @@ export function StatusPage() {
       />
       {status.error && <Notice tone="danger">{p.text(status.error, ids)}</Notice>}
       {usage.error && <Notice tone="danger">{p.text(usage.error, ids)}</Notice>}
+      {accounts.error && <Notice tone="danger">{p.text(accounts.error, ids)}</Notice>}
+      {settings.error && <Notice tone="danger">{p.text(settings.error, ids)}</Notice>}
       {served.error && <Notice tone="danger">{p.text(served.error, ids)}</Notice>}
       {reload.error && (
         <Notice tone="danger">{t("reloadRefused", { error: p.text(reload.error, ids) })}</Notice>
@@ -301,7 +303,7 @@ export function StatusPage() {
           <Stat
             label={t("successRate")}
             value={percent ?? dash}
-            hint={t("successHint", { total: (u?.total_requests ?? 0).toLocaleString() })}
+            hint={u && t("successHint", { total: u.total_requests.toLocaleString() })}
             tone={percent ? VERDICT_TONE[verdict] : undefined}
           />
           <Stat
