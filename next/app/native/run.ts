@@ -1995,7 +1995,7 @@ function checkRelease(
   const escaped = `${feed.base}/escaped/a%5B1%5D?q=x%7Cy`;
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
   check(release.no_default === true, "release settings existed before any feed was confirmed");
-  // With 0.2.0 on the feed, Update Now is refused, on the page and by its command: a build without
+  // With 0.2.0 on the feed, Update now is refused, on the page and by its command: a build without
   // updater trust is not configured for it, and the fixture has no signed update for the test package.
   const u = release.updater ?? {};
   const why = gate === "passes" ? /no update for this system/ : /not configured/;
@@ -2004,7 +2004,7 @@ function checkRelease(
       u.offered === false &&
       u.call?.ok === false &&
       why.test(String(u.call?.error)),
-    `Update Now was offered or started without ${why}: ${JSON.stringify(u)}`,
+    `Update now was offered or started without ${why}: ${JSON.stringify(u)}`,
   );
   check(release.confirmed === true, "the confirmed feed was not kept in release.json");
   check(

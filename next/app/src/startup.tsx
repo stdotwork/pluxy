@@ -51,7 +51,7 @@ export function StartupSettings() {
         <fieldset disabled={busy || !preferences}>
           <Switch
             label="Launch at startup"
-            hint="Start pluxy at login. Silent launch hides the window."
+            hint="Start pluxy at login. Silent launch hides the window on login launches."
             checked={preferences?.autostart_enabled ?? false}
             onChange={(v) => change("autostart_enabled", v)}
           />

@@ -32,7 +32,7 @@
 //!   nothing; a new preview's restore puts the original back through the link;
 //! - root: an apply to files inside the selected root creates both, the root link kept; clear
 //!   removes them again;
-//! - backups: a cancelled Manual Backup keeps nothing; a confirmed one keeps both files (the
+//! - backups: a cancelled Create backup keeps nothing; a confirmed one keeps both files (the
 //!   catalog as absent); the diff names the person's changed setting, never its value; restore
 //!   puts the backed-up bytes back; delete removes it;
 //! - cli: the package's CLI recipe is the terminal running `codex`; through the launcher, a
@@ -737,9 +737,9 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             require(
                 r["ok"] == false,
-                format!("a cancelled Manual Backup went ahead: {r}"),
+                format!("a cancelled Create backup went ahead: {r}"),
             )?;
-            require(list()?.is_empty(), "a cancelled Manual Backup kept one")?;
+            require(list()?.is_empty(), "a cancelled Create backup kept one")?;
             let o = written(
                 app,
                 main,
@@ -761,7 +761,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                             {"selected": txt(&catalog), "path": null, "target": txt(&catalog),
                                 "exists": false, "size": 0}
                         ]),
-                format!("the list after Manual Backup: {l:?}"),
+                format!("the list after Create backup: {l:?}"),
             )?;
             let b = &x["backups"];
             edit(&config, &s(&b["edit"][0]), &s(&b["edit"][1]))?;

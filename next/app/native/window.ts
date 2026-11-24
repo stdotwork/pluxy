@@ -121,7 +121,7 @@ if (noTray) {
   );
   await coreStopped("first", first);
   const kept = saved();
-  check(kept.close_behavior === "exit", `first: window.json keeps Exit App (${JSON.stringify(kept)})`);
+  check(kept.close_behavior === "exit", `first: window.json keeps Exit app (${JSON.stringify(kept)})`);
   check(kept.geometry !== undefined, `first: window.json keeps the window's size and place`);
 
   const second = await stage("second");
@@ -129,11 +129,11 @@ if (noTray) {
   await coreStopped("second", second);
   check(
     saved().close_behavior === "exit",
-    `second: Remember this choice kept Exit App (${saved().close_behavior})`,
+    `second: Remember this choice kept Exit app (${saved().close_behavior})`,
   );
 
   const third = await stage("third");
-  check(third.prompts === 0, `third: the remembered Exit App quit without asking (${third.prompts} prompts)`);
+  check(third.prompts === 0, `third: the remembered Exit app quit without asking (${third.prompts} prompts)`);
   await coreStopped("third", third);
 }
 

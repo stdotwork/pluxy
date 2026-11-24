@@ -5,7 +5,7 @@
 //! the set is applied nowhere. Each refusal has a positive control on the same route:
 //!
 //! - list: no manual backup yet, answered without asking;
-//! - create: a cancelled Manual Backup keeps nothing; a confirmed one keeps one, listed with its
+//! - create: a cancelled Create backup keeps nothing; a confirmed one keeps one, listed with its
 //!   ID, file, presence and size only;
 //! - diff: unchanged, then after the person's edits, the changed settings by name, never a value;
 //! - restore: a cancelled restore writes nothing; a confirmed one, naming the backup and saying no
@@ -16,7 +16,7 @@
 //!   records on disk), which stays in the vault; a backup restored onto another file is refused;
 //! - absence: a backup of a file that does not exist lists as absent; restoring it, after an
 //!   apply created the file, removes the file again;
-//! - retention: with ten manual backups kept, Manual Backup deletes the oldest manual one, from
+//! - retention: with ten manual backups kept, Create backup deletes the oldest manual one, from
 //!   the list and the vault, and none the applied set's record names;
 //! - delete: a cancelled delete keeps the backup; a confirmed one removes it from the list and
 //!   the vault;
@@ -143,7 +143,7 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
         note(&v);
         Ok(v)
     };
-    // A confirmed Manual Backup of the file sel previews: its output.
+    // A confirmed Create backup of the file sel previews: its output.
     let create = |sel: &Value, at: &Path, note: &mut dyn FnMut(&Value)| -> Result<Value, String> {
         let v = preview(sel)?;
         let o = written(
@@ -203,7 +203,7 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
     )?;
     require(
         list(&mut note)?.is_empty(),
-        "a cancelled Manual Backup kept one",
+        "a cancelled Create backup kept one",
     )?;
     let backed_up_mode = mode(&settings);
     let first = s(&create(&file(&settings), &settings, &mut note)?["backup"]);
@@ -214,7 +214,7 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
             && l[0]["files"]
                 == json!([{"selected": txt(&settings), "path": null, "target": txt(&settings),
                     "exists": true, "size": bytes("cleared").len()}]),
-        format!("the list after Manual Backup: {l:?}"),
+        format!("the list after Create backup: {l:?}"),
     )?;
     require(in_vault(app, &first)?, "the backup is not in the vault")?;
 
@@ -409,7 +409,7 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
         "the library's backup left the vault",
     )?;
 
-    // ---- retention: the eleventh Manual Backup deletes the oldest manual one, nothing else
+    // ---- retention: the eleventh Create backup deletes the oldest manual one, nothing else
     for _ in 0..KEEP - 2 {
         create(&file(&settings), &settings, &mut note)?;
     }
@@ -421,7 +421,7 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
     let o = create(&file(&settings), &settings, &mut note)?;
     require(
         o["deleted"] == json!([first]),
-        format!("the eleventh Manual Backup: {o}"),
+        format!("the eleventh Create backup: {o}"),
     )?;
     let l = list(&mut note)?;
     require(

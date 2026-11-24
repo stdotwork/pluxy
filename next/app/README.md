@@ -1218,7 +1218,7 @@ Code page it is the window's own page, because **Apply** gives the tool the clie
 provider Codex uses now. When that provider is not pluxy's, it says that Codex hides conversations
 of another provider from resume, and that the app does not sync or change past conversations;
 nothing is rewritten. Files Codex would not take (config.toml not TOML, for example, or a catalog
-with no models list) show why instead of the form: Apply and Close configuration stay off, and
+with no models list) show why instead of the form: Apply and Clear stay off, and
 Restore backup and the backups stay reachable. Choosing other files drops the last preview, so read
 them again before a write. The form keeps the old app's controls: **Model**, **Approval model** (Codex
 default or a catalog model), **Remote compaction (experimental)**, **Codex subagent settings**
@@ -1228,16 +1228,15 @@ default or a catalog model), **Remote compaction (experimental)**, **Codex subag
 silent fetch) and adds those pluxy has a Codex template for; each model's display name,
 description, context windows, effective context, auto-compaction threshold, reasoning levels, input
 types, visibility, Tool Search and system prompt can be edited, or the model removed. The old app's
-OAuth sign-in method and openai-provider-identity switch are not carried. The **Authentication
-Key** is one of the vault's plain secrets or client keys captured for this tool
+OAuth sign-in method and openai-provider-identity switch are not carried. The **Client key** is one of the vault's plain secrets or client keys captured for this tool
 (`src/codexForm.ts`), or a new one through native key entry (**Add key…**).
 
-**Apply Configuration** (or **Update** / **Repair** once applied),
-**Clear** (Clear) and **Restore backup** each call the tool with the files the last
+**Apply** (or **Update** / **Repair** once applied),
+**Clear** and **Restore backup** each call the tool with the files the last
 preview pinned (refused if a file changed since); its native confirmation names both files, the key's label for Apply, and that an edit made
 in the same instant by another program may be lost; **Backup and restore** shows once the files
 have been read and keeps both files in each manual backup. **Start Codex CLI** starts `codex` in a terminal through the launcher, **Start Codex
-App** starts the program the person names (Codex has no Linux app) in the working directory
+App** starts the program the person names (Codex has no Linux app) in the working folder
 entered under Start CLI, which its card asks for while it is empty, and **Restart CLI service**,
 after its own confirmation that active CLI sessions are interrupted, runs `codex app-server daemon
 restart` detached; the launcher's confirmation shows each in full. The key is not part of any
@@ -1257,9 +1256,9 @@ Desktop**, the execution program. Like the Claude Code page it is the window's o
 (links followed and kept). When nothing is at `~/.config/Claude-3p/configLibrary` yet (Claude
 Desktop makes it only once a configuration is saved in its own window), the page offers **Create
 configuration folder**, which asks in a native confirmation. Files Claude Desktop would not take
-are shown as such: Apply and Clear integration stay disabled, Restore backup and the backups stay
+are shown as such: Apply and Clear stay disabled, Restore backup and the backups stay
 reachable. The form keeps the
-old app's **Claude Desktop Models and Aliases** list: rows of **Original model**, **Alias (optional
+old app's **Claude Desktop models and aliases** list: rows of **Original model**, **Alias (optional
 for Claude models)** and **1M**, **Add model** and **Remove model**, three Claude models to start
 with. Claude Desktop takes only Claude model names, so a non-Claude model needs an alias, and Claude
 Desktop sends that alias to the core, which must serve the model under it too. For a row whose alias
@@ -1268,14 +1267,13 @@ confirmation naming the core, the alias, the model and the accounts, the app add
 the management API (`PATCH /v0/management/accounts/{id}`, its `model_alias`) to every account added
 by login that serves the model. An account set in core's config is changed only in core's config,
 so it is named and left alone, and a model only such accounts serve is refused; so is an alias the
-core already serves for anything else. Clear integration and Restore backup leave an alias made in
+core already serves for anything else. Clear and Restore backup leave an alias made in
 core: the core's config is not the tool's file. The old app wrote the alias into the core's config
 file itself. The **Client key** is one of the
 vault's secrets (a client key only when it is bound to this tool), or a new one through native key
 entry.
 
-**Apply** (or **Update** / **Repair**), **Clear
-integration** and **Restore backup** each write the files the last preview pinned (the tool refuses
+**Apply** (or **Update** / **Repair**), **Clear** and **Restore backup** each write the files the last preview pinned (the tool refuses
 one that changed since; choosing other files drops the preview), in the tool's native confirmation,
 which names the three files, the key's label for Apply and the same-instant warning.
 **Start Claude Desktop** asks the tool for its recipe (`claude-desktop`, run directly with no
@@ -1288,7 +1286,7 @@ backups of the three files, as on the Claude Code page.
 
 The OpenCode page sets up and starts OpenCode with this core (`src/opencode.tsx`). It needs the
 curated native tool `pluxy/opencode` ([app tools](../app-tools/README.md#opencode)) and, for
-**Start CLI** and **Start App**, the execution program, both installed and enabled on the Device
+**Start CLI** and **Start app**, the execution program, both installed and enabled on the Device
 extensions page. Like the Claude Code page it is the window's own page, because **Apply** gives the
 tool the client key.
 
@@ -1299,8 +1297,8 @@ makes, is followed and kept) or a file in a selected folder (for example `OPENCO
 shows whether pluxy's integration is applied, the file it writes to, whether a key is in it and the
 default model, never the key, and warns when the old desktop app's `cpa-gui` provider is still
 there, or when OpenCode 2's own `providers.pluxy` is (OpenCode uses that one, so Apply stays off
-until it is removed). A file OpenCode would not take is shown with the reason: Apply and Close
-configuration stay off, Restore backup and the backups still work on it. Choosing another file
+until it is removed). A file OpenCode would not take is shown with the reason: Apply and Clear
+stay off, Restore backup and the backups still work on it. Choosing another file
 drops the last preview: every write uses the pins of the preview on screen. **Models** lists the models OpenCode shows under the pluxy provider: **Import models from
 core** adds the core's served models, **Add model** one by ID; each has a display name, an
 **Attachments** switch (images and PDFs; new models start from the old app's list of model names
@@ -1309,13 +1307,13 @@ one of the vault's secrets (plain ones, or client keys bound to this tool), or a
 native key entry (**Add key…**).
 
 **Apply** (or **Update** / **Repair** once applied),
-**Clear** (Clear) and **Restore backup** each preview the file again and call the
+**Clear** and **Restore backup** each preview the file again and call the
 tool, whose native confirmation names the file it resolves to, the key's label for Apply, and that
 an edit made in the same instant by another program may be lost; comments and everything else in
 the file stay. **Backup and restore** is the shared backup browser. **Start CLI** asks the tool for
 its CLI recipe (`opencode` in a terminal, no arguments; `~/.opencode/bin/opencode`, where OpenCode's
 install script puts it, when that exists) and starts it through the launcher in the chosen working
-directory (recently used ones offered), terminal and optional program path. **Start App** starts
+folder (recently used ones offered), terminal and optional program path. **Start app** starts
 OpenCode Desktop (`/opt/OpenCode/ai.opencode`, or OpenCode 1's `ai.opencode.desktop` there, where its
 .deb and .rpm install it, or a given path such as an AppImage) in the home folder. Each launch's confirmation shows it in full; the key is not
 part of a launch: OpenCode reads it from its config. There is no Restart App: the app never stops a
@@ -1365,7 +1363,7 @@ a selected file (such as `$GROK_HOME/config.toml`; a link is followed and kept) 
 selected folder; it shows the status, the file it writes to, Grok Build's default model now and
 whether a key is in pluxy's entry, never the key, and notes model entries an older app left
 (`cpa-gui/…`), which pluxy leaves alone. A file Grok Build would not take shows as refused, with the
-reason: Apply and Close configuration stay off, Restore backup and the backups stay available. The **Model catalog** holds the models pluxy's entries
+reason: Apply and Clear stay off, Restore backup and the backups stay available. The **Model catalog** holds the models pluxy's entries
 list: those the file has, and the core's served models, added (all selected, as the old app wrote
 them all) when **Refresh models** is pressed, never in the background. Each can be left out or
 given its **Context window**; the **Default model** is one of the selected models. Apply stays off,
@@ -1373,13 +1371,13 @@ with a notice, while more than 256 models are selected. The **Client key** is on
 vault's plain secrets or this tool's client keys, or a new one through native key entry.
 
 **Apply** (or **Update** / **Repair** once applied),
-**Clear** (Clear) and **Restore backup** call the tool on the file the last preview
+**Clear** and **Restore backup** call the tool on the file the last preview
 pinned (changing the file selection drops that preview; the tool refuses a file changed since),
 whose native confirmation names the file, the key's label for Apply, and that an edit made in
 the same instant by another program may be lost; **Backup and restore** keeps the file in manual
 backups, as on the Claude Code page. **Start CLI** asks the tool for its recipe (`~/.grok/bin/grok`
 when Grok Build's installer put it there, else `grok` from PATH, in a terminal with no arguments)
-and starts it through the launcher in the chosen working directory, terminal and optional program
+and starts it through the launcher in the chosen working folder, terminal and optional program
 path. The key is not part of the launch: Grok Build reads it from config.toml. Grok Build has no
 Linux desktop app.
 
@@ -1404,8 +1402,7 @@ is this tool's), or a new one through native key entry (**Add key…**).
 
 A file Hermes would not take shows as refused, with the reason: **Apply** and **Clear**
 stay off, and **Restore backup** and the backups stay available. Choosing another file or folder
-drops the last preview. **Apply** (or **Update** / **Repair
-Connection** once applied), **Clear** and **Restore backup** call the tool with the file
+drops the last preview. **Apply** (or **Update** / **Repair** once applied), **Clear** and **Restore backup** call the tool with the file
 the last preview pinned (the tool refuses it if the file changed since), and its native
 confirmation names the file it resolves to, the key's label for Apply, and that an edit made
 in the same instant by another program may be lost; comments and everything else in the file stay,
@@ -1440,8 +1437,7 @@ model Pi starts with through this core (the core's served models are suggested; 
 reloads them; the plugin itself lists the core's Codex catalog in Pi). The **Client key**
 is one of the vault's secrets, or a new one through native key entry (**Add key…**).
 
-**Install plugin** (or **Apply**, **Update** / **Repair
-Connection** once installed) installs the plugin when it is not there and writes the core's
+**Install plugin** (or **Apply**, **Update** / **Repair** once installed) installs the plugin when it is not there and writes the core's
 address, the key and Pi's defaults. **Plugin management** has **Update plugin** (the tool's copy
 replaces the installed one) and **Uninstall plugin** (its entry and folder go; the connection
 settings stay). **Clear** and **Restore backup** also remove the plugin's folder once
@@ -1491,14 +1487,14 @@ is still there and unchanged.
 Beginner Mode (`src/easyMode.tsx`, in the Operate group) is the guided setup of the old app's Easy
 mode, in its two steps. **Connect a model** is the Add Account page's own sign-in (every browser,
 device code and API-key method core's extensions offer); it counts core's accounts, and **Next:
-Configure Agent** stays off until there is one. **Connect an agent** lists the agent clients this
+connect an agent** stays off until there is one. **Connect an agent** lists the agent clients this
 window can set up (the eight client pages above, Claude Code to Pi) whose optional tool is
 installed on this device or offered by a registry, and the launcher (`pluxy/execution`) that
 **Start CLI** runs through: **Install** installs a tool from its registry, **Enable** opens the
 tool's native confirmation ("full access to your user account"), answered in that dialog only,
 and **Set up** shows the client's own page below, where its configuration is applied and the
 client started as on that page. The guide writes nothing itself and keeps no draft: a cancelled
-confirmation, or leaving the guide, leaves files and packages as they were; Close configuration
+confirmation, or leaving the guide, leaves files and packages as they were; Clear
 and Restore backup on the client's page undo an apply.
 
 A client joins the list by being an agent page: a window page that names the package it drives

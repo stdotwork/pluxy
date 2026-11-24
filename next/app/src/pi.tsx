@@ -69,7 +69,7 @@ const t = strings("pi", {
   defaultModel: "Default model",
   none: "None",
   legacy:
-    "settings.json lists the CLIProxyAPI provider an older app installed from npm. Apply replaces it with pluxy's reviewed copy; Clear and Restore Backup put it back.",
+    "settings.json lists the CLIProxyAPI provider an older app installed from npm. Apply replaces it with pluxy's reviewed copy; Clear and Restore backup put it back.",
   foreign:
     "The agent folder has a pluxy-cliproxyapi-provider folder pluxy did not install: move it away to install pluxy's Pi plugin.",
   model: "Model",

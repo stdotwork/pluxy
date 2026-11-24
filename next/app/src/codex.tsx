@@ -139,7 +139,7 @@ const t = strings("codex", {
   appCwd: "Enter a working folder under Start CLI first: the app starts there.",
   restartCli: "Restart CLI service",
   restartCliMessage:
-    "Restarting loads the latest config and models, interrupting all active CLI sessions. Wait for tasks to finish first.",
+    "Restarting loads the latest config and models and interrupts all active CLI sessions, including those in other terminals. Wait for tasks to finish first.",
 });
 
 const EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
