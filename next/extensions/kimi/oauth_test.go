@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,5 +104,30 @@ func TestRenewalRetryAfter(t *testing.T) {
 		if !errors.As(err, &e) || e.Retryable != c.retryable || e.RetryAfterMS < c.min {
 			t.Errorf("%d with Retry-After %q: %+v, want retryable %v after at least %dms", c.status, c.header, err, c.retryable, c.min)
 		}
+	}
+}
+
+// A token reply with no access token (a 200 with an empty object) fails a login or a renewal;
+// it is never kept as a credential.
+func TestTokenReplyWithoutAccessTokenFails(t *testing.T) {
+	t.Setenv(protocol.EnvTestLoginHosts, "1")
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/device_authorization") {
+			_, _ = w.Write([]byte(`{"device_code":"d","user_code":"u","verification_uri":"https://example.invalid","expires_in":60,"interval":1}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer ts.Close()
+	set := json.RawMessage(`{"auth_base_url":"` + ts.URL + `"}`)
+	acct := protocol.Account{Settings: set, Credential: &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "a", RefreshToken: "r"}}
+	_, err := refresh(context.Background(), sdk.RefreshCall{Account: acct})
+	var e *llm.Error
+	if !errors.As(err, &e) || e.Code != llm.CodeUpstream || e.Scope != llm.ScopeEndpoint {
+		t.Errorf("renewal err = %v, want an upstream error", err)
+	}
+	g, err := deviceLogin(context.Background(), settingsOf(t, set), noPrompt{})
+	if g != nil || !errors.As(err, &e) || e.Code != llm.CodeUpstream {
+		t.Errorf("login = %+v, %v, want an upstream error", g, err)
 	}
 }
