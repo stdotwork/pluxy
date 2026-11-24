@@ -234,7 +234,7 @@ export function Accounts(props: { rest: string }) {
             {typed ? `Nothing matches “${typed}”` : "No account is in this state"}
             {show !== "all" && typed ? ` among the ${SHOWS.find((s) => s.id === show)?.label} accounts` : ""}.
           </Blank>
-        ) : (
+        ) : !data ? null : (
           <div class="da-table-wrap" ref={table}>
             <table class="da-table da-accounts-table" aria-label="Accounts">
               <thead>
@@ -305,6 +305,8 @@ export function Accounts(props: { rest: string }) {
             </header>
             {fleet.accounts.loading ? (
               <Skeleton rows={8} label="Reading the account" />
+            ) : !data ? (
+              <Blank title="Not read">The accounts could not be read, so this one cannot be shown.</Blank>
             ) : (
               <Blank title="No such account" action={<Btn href="#/accounts">All accounts</Btn>}>
                 Core has no account with this name. It may have been removed or renamed.

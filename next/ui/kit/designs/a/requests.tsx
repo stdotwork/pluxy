@@ -582,7 +582,7 @@ function List(props: {
             {onlyBack ? "No loaded request fell back" : `Nothing loaded matches “${typed}”`}
             {more ? ". Older requests are not loaded yet." : "."}
           </Blank>
-        ) : (
+        ) : !data ? null : (
           <div class="da-table-wrap" ref={table}>
             <table class="da-table da-requests-table" aria-label="Requests, newest first">
               <thead>
