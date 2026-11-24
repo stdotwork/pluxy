@@ -1,35 +1,16 @@
-// The Claude Desktop page's form logic (src/claudeDesktopForm.ts): the keys it offers from the vault,
-// the rows it fills from the tool's read-back, when Apply is allowed, and when it offers to create
-// Claude Desktop's library folder.
+// The Claude Desktop page's form logic (src/claudeDesktopForm.ts): the rows it fills from
+// the tool's read-back, when Apply is allowed, and when it offers to create Claude Desktop's library
+// folder.
 import { describe, expect, test } from "bun:test";
 import {
   aliasCancelled,
   aliasState,
   fresh,
-  keysOf,
   MISSING_LIBRARY,
   missingLibrary,
   ready,
   rowsFrom,
 } from "../src/claudeDesktopForm";
-
-describe("keys", () => {
-  test("lists plain secrets and this package's client keys from vault_secrets' answer", () => {
-    const body = {
-      secrets: [
-        { id: "a", label: "Plain" },
-        { id: "b", label: "Ours", client_key: { client: "pluxy/claude-desktop" } },
-        { id: "c", label: "Claude Code's", client_key: { client: "pluxy/claude-code" } },
-      ],
-    };
-    expect(keysOf(body).map((s) => s.id)).toEqual(["a", "b"]);
-  });
-
-  test("lists nothing while the answer is missing or empty", () => {
-    expect(keysOf(undefined)).toEqual([]);
-    expect(keysOf({})).toEqual([]);
-  });
-});
 
 describe("rows from the files", () => {
   test("the files' rows, or the three starting rows when they hold none or are refused", () => {

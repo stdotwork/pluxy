@@ -70,6 +70,15 @@ export interface Versions {
   bundled?: { version: string; problem?: string };
 }
 
+/** A window command's answer as the kit's loaders take it: its result, or a refusal with the error. */
+export async function reply<T>(cmd: string, args?: Record<string, unknown>): Promise<Reply<T>> {
+  try {
+    return { status: 200, body: await invoke<T>(cmd, args) };
+  } catch (e) {
+    return { status: 400, error: { code: "refused", message: String(e) } };
+  }
+}
+
 export const connectionGet = () => invoke<Connection>("connection_get");
 export const connectionSet = (change: ConnectionChange) => invoke<Connection>("connection_set", { change });
 export interface KeyEntryResult {
