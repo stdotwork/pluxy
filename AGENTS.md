@@ -67,7 +67,7 @@ git. Build it before building or testing core, or the panel's e2e tests skip
 ```bash
 go generate ./internal/panel     # bun install and bun run build in ui/, writing internal/panel/dist
 cd ui && bun run check && bun run lint && bun run test   # type check, Biome, unit tests
-cd ui && bun run test:browser    # the browser test, headless Chromium (bunx playwright install chromium once)
+cd ui && bun run test:browser    # the browser test, headless Chromium (bunx playwright install chromium once); PLUXY_ALL_BROWSERS=1 also runs Firefox and WebKit, as CI does
 ```
 
 The desktop app in `next/app` (see `next/app/README.md`) builds the kit from `next/ui`, so run
