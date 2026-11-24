@@ -404,8 +404,9 @@ make dev
 
 It builds the panel, starts `panelcore -demo` with a temporary `HOME`, and prints the URL to open
 and the management key to paste. On any edit under `kit/`, `panel/`, `themes/` or
-`extension-pages/`, it rebuilds the panel, restarts the demo core on the same port, and prints one
-line with the elapsed time (and the new management key). A build error is printed without stopping
+`extension-pages/`, it rebuilds the panel, restarts the demo core on the same port with the same
+management key (the key stays the same until `make dev` is stopped, so a browser reload stays
+signed in), and prints one line with the elapsed time. A build error is printed without stopping
 the loop, so the next save rebuilds again. Ctrl-C stops the core and its extensions.
 
 ### How core gets the panel

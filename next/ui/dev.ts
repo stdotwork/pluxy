@@ -204,9 +204,10 @@ async function drainStream(stream: ReadableStream<Uint8Array>): Promise<void> {
 async function startCore(
   binPath: string,
   port: number,
+  keyFile: string,
   env: Record<string, string>,
 ): Promise<{ core: RunningCore; ready: ReadyLine }> {
-  const proc = Bun.spawn([binPath, "-demo", "-listen", `127.0.0.1:${port}`], {
+  const proc = Bun.spawn([binPath, "-demo", "-listen", `127.0.0.1:${port}`, "-key-file", keyFile], {
     cwd: nextDir,
     env,
     stdin: "pipe",
@@ -285,6 +286,7 @@ async function main(): Promise<void> {
     const goEnv = await goEnvValues();
     const childEnv = makeChildEnv(homeDir, goEnv);
     const panelcoreBin = join(tmp, `panelcore${exe}`);
+    const keyFile = join(tmp, "mgmt.key");
 
     const [buildRes] = await Promise.all([runPanelBuild(), buildPanelcore(panelcoreBin, childEnv)]);
     if (!buildRes.ok) {
@@ -293,7 +295,7 @@ async function main(): Promise<void> {
       process.exit(1);
     }
 
-    const started = await startCore(panelcoreBin, port, childEnv);
+    const started = await startCore(panelcoreBin, port, keyFile, childEnv);
     current = started.core;
     console.log(`URL: ${started.ready.base}/panel/`);
     console.log(`Key: ${started.ready.key}`);
@@ -318,14 +320,14 @@ async function main(): Promise<void> {
         current = null;
         if (shuttingDown) break;
         try {
-          const next = await startCore(panelcoreBin, port, childEnv);
+          const next = await startCore(panelcoreBin, port, keyFile, childEnv);
           if (shuttingDown) {
             await stopCore(next.core);
             break;
           }
           current = next.core;
           const elapsed = ((performance.now() - t0) / 1000).toFixed(2);
-          console.log(`rebuilt in ${elapsed}s (key: ${next.ready.key})`);
+          console.log(`rebuilt in ${elapsed}s`);
         } catch (err) {
           console.error(`restart failed: ${err instanceof Error ? err.message : String(err)}`);
         }

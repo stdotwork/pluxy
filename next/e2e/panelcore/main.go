@@ -33,6 +33,10 @@
 //
 // With -listen <address>, core listens there (default 127.0.0.1:0, a random free port).
 //
+// With -key-file <path>, core's management key is read from that file when it exists and is not
+// empty (trimmed); otherwise the freshly generated key is written to it with mode 0600, so
+// restarts in one dev session keep the same key without putting it on the command line.
+//
 // With -prepare <folder>, it starts nothing: it builds core into <folder>/pluxy and writes the
 // test packages as core's bundled packages, <folder>/bundled/index.json (where core looks for
 // them beside its program; a core started from there installs none of them until asked), prints
@@ -88,6 +92,7 @@ func main() {
 	cpa := flag.Bool("cpa", false, "with -first-run: put a CLIProxyAPI setup (a config.yaml and three auth files, all made up) in the home folder")
 	demoMode := flag.Bool("demo", false, "fill core with accounts in every state, usage and request logs (not with -first-run or -prepare)")
 	listen := flag.String("listen", "127.0.0.1:0", "the address core listens on (default: a random free port on loopback)")
+	keyFile := flag.String("key-file", "", "read core's management key from this file when non-empty, or write the generated key to it (mode 0600)")
 	// The claude program of -first-run is a copy of this one: asked for its version, it prints one.
 	if len(os.Args) == 2 && os.Args[1] == "--version" {
 		fmt.Println(fakeClaudeVersion + " (Claude Code)")
@@ -110,9 +115,9 @@ func main() {
 		err = prepareOnly(*prepare)
 	case *firstRun:
 		testPackages = []pkg{firstRunPackage}
-		err = serve(*withTLS, true, *cpa, false, *listen)
+		err = serve(*withTLS, true, *cpa, false, *listen, *keyFile)
 	default:
-		err = serve(*withTLS, false, false, *demoMode, *listen)
+		err = serve(*withTLS, false, false, *demoMode, *listen, *keyFile)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "panelcore:", err)
@@ -156,7 +161,7 @@ func prepareOnly(dir string) error {
 // and then remove the temporary folder, also when setup fails. firstRun: core starts as a new
 // install does (see the package comment). cpa: its home folder holds a CLIProxyAPI setup. demo:
 // core is filled as -demo says. listen is the address core listens on.
-func serve(withTLS, firstRun, cpa, demo bool, listen string) error {
+func serve(withTLS, firstRun, cpa, demo bool, listen, keyFile string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -187,7 +192,7 @@ func serve(withTLS, firstRun, cpa, demo bool, listen string) error {
 	if err != nil {
 		return err
 	}
-	mgmtKey, err := randomKey()
+	mgmtKey, err := managementKey(keyFile)
 	if err != nil {
 		return err
 	}
@@ -591,6 +596,30 @@ func packageArchive(p pkg, prog []byte, ui map[string][]byte) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
+}
+
+// managementKey reads the management key from path when path is non-empty and holds a non-empty
+// key, or generates a fresh random key (and writes it to path with mode 0600 when path is set).
+func managementKey(path string) (string, error) {
+	if path == "" {
+		return randomKey()
+	}
+	b, err := os.ReadFile(path)
+	if err == nil {
+		if k := strings.TrimSpace(string(b)); k != "" {
+			return k, nil
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("reading key file %s: %w", path, err)
+	}
+	k, err := randomKey()
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, []byte(k+"\n"), 0o600); err != nil {
+		return "", fmt.Errorf("writing key file %s: %w", path, err)
+	}
+	return k, nil
 }
 
 // randomKey returns 32 random bytes, hex-encoded.
