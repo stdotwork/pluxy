@@ -433,7 +433,7 @@ export function AccountsPage() {
             </select>
           </label>
           {toolbarActions.map((action) => (
-            <Button key={action.id} onClick={action.run} disabled={busy}>
+            <Button key={action.id} onClick={action.run} disabled={busy || accounts.phase === "loading"}>
               {action.label}
             </Button>
           ))}
