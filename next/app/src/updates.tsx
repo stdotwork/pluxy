@@ -75,13 +75,13 @@ export interface AppUpdateView {
 
 const PHASES: Record<AppUpdateView["task"]["phase"], string> = {
   idle: "Waiting",
-  confirming: "Waiting for Confirmation",
+  confirming: "Waiting for confirmation",
   downloading: "Downloading",
   verifying: "Verifying",
-  installing: "Preparing Update",
+  installing: "Preparing update",
   restarting: "Restarting",
-  failed: "Update Failed",
-  cancelled: "Download Canceled",
+  failed: "Update failed",
+  cancelled: "Download cancelled",
 };
 
 function megabytes(n: number): string {
@@ -107,19 +107,19 @@ function AppUpdate(props: { update: AppUpdateView; check: number; onError: (e: s
       data-error={t.error ?? ""}
       data-check={String(props.check)}
     >
-      <Card title="Application Update">
+      <Card title="App update">
         <div class="stack">
           {u.reason && <Notice tone="warn">{u.reason}</Notice>}
           {u.available && u.version && !busy && (
             <>
               <p>
-                Version {u.version} will be downloaded and installed. The app will restart, and a managed core
-                will briefly stop and resume.
+                Downloads and installs version {u.version}. The app restarts, and a managed core briefly
+                stops.
               </p>
               <div class="actions">
                 <span data-part="app-update-now">
                   <Button variant="primary" onClick={() => call("app_update_start")}>
-                    Update Now
+                    Update now
                   </Button>
                 </span>
               </div>
@@ -138,7 +138,7 @@ function AppUpdate(props: { update: AppUpdateView; check: number; onError: (e: s
           {t.phase === "downloading" && (
             <div class="actions">
               <span data-part="app-update-cancel">
-                <Button onClick={() => call("app_update_cancel")}>Cancel Download</Button>
+                <Button onClick={() => call("app_update_cancel")}>Cancel download</Button>
               </span>
             </div>
           )}
@@ -281,7 +281,7 @@ function NotesView(props: {
   return (
     <>
       {error && (
-        <Notice tone="danger">Unable to load release notes. Please check again later. ({error})</Notice>
+        <Notice tone="danger">Could not load release notes: {error}. Check for updates again later.</Notice>
       )}
       <section
         ref={area}
@@ -323,7 +323,7 @@ function ReleaseNotes(props: {
         <div class="stack">
           {l && (
             <p>
-              <strong class="mono">v{l.version}</strong> Latest Version
+              <strong class="mono">v{l.version}</strong> Latest version
               {when(l.published) && <> · Published {when(l.published)}</>}
             </p>
           )}
@@ -340,7 +340,7 @@ function ReleaseNotes(props: {
               {l
                 ? "This release has no notes."
                 : props.listed
-                  ? "No release on this channel."
+                  ? "No release on this channel. Switch channels or check again later."
                   : "Check for software updates to see the latest release notes."}
             </p>
           )}
@@ -366,11 +366,11 @@ function ProductCard(props: {
 }) {
   const l = props.view.latest;
   const status = !props.checked ? (
-    <Badge tone={props.failed ? "danger" : "muted"}>{props.failed ? "Check Failed" : "Not Checked"}</Badge>
+    <Badge tone={props.failed ? "danger" : "muted"}>{props.failed ? "Check failed" : "Not checked"}</Badge>
   ) : l?.newer === true ? (
     <Badge tone="warn">Version {l.version} is available</Badge>
   ) : l?.newer === false ? (
-    <Badge tone="ok">Up to Date</Badge>
+    <Badge tone="ok">Up to date</Badge>
   ) : undefined;
   return (
     <div
@@ -382,9 +382,9 @@ function ProductCard(props: {
       <Card title={props.title} actions={status}>
         <Facts
           rows={[
-            ["Current Version", <span class="mono">{props.view.installed ?? "unknown"}</span>],
+            ["Current version", <span class="mono">{props.view.installed ?? "unknown"}</span>],
             [
-              "Latest Version",
+              "Latest version",
               l ? (
                 <span>
                   <span class="mono">{l.version}</span>{" "}
@@ -393,7 +393,7 @@ function ProductCard(props: {
               ) : props.checked ? (
                 "none on this channel"
               ) : (
-                "Not Checked"
+                "Not checked"
               ),
             ],
             ["Published", l ? when(l.published) : undefined],
@@ -447,7 +447,8 @@ export function UpdatesPage() {
     // A feed change is settled in its native confirmation; one confirmed but not applied is an error.
     const off = listen<Settled>("pluxy-release", async (e) => {
       await reload();
-      if (e.payload?.error) setError(`The release feed was not changed: ${e.payload.error}`);
+      if (e.payload?.error)
+        setError(`Could not change the release feed: ${e.payload.error}. Check the address and try again.`);
     });
     // The event carries only the task; when it ends, the rest (last outcome, kept copies) is read again.
     const offUpdate = listen<{ task: AppUpdateView["task"] }>("pluxy-app-update", (e) => {
@@ -482,7 +483,7 @@ export function UpdatesPage() {
         actions={
           <span data-part="release-check">
             <Button variant="primary" disabled={busy || !v?.source} onClick={check}>
-              {checking ? "Checking" : "Check for Updates"}
+              {checking ? "Checking…" : "Check for updates"}
             </Button>
           </span>
         }
@@ -502,13 +503,7 @@ export function UpdatesPage() {
       )}
       {v && (
         <div class="stack">
-          <ProductCard
-            product="app"
-            title="Desktop Application"
-            view={v.app}
-            checked={checked}
-            failed={failed}
-          />
+          <ProductCard product="app" title="Desktop app" view={v.app} checked={checked} failed={failed} />
           {update && <AppUpdate update={update} check={checks} onError={setError} />}
           <ProductCard product="core" title="Core" view={v.core} checked={checked} failed={failed} />
           <ReleaseNotes

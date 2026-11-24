@@ -183,6 +183,13 @@ export function Button(props: {
   );
 }
 
+/** Lower-cases a button label for confirmation text while keeping all-capital words (such as CLI). */
+export function confirmActionLabel(label: string): string {
+  return label.replace(/\b[A-Za-z]+\b/g, (word) =>
+    word.length > 1 && word === word.toUpperCase() ? word : word.toLowerCase(),
+  );
+}
+
 /** A button that asks once more before it acts. */
 export function ConfirmButton(props: { onConfirm: () => void; disabled?: boolean; children: string }) {
   const [asking, setAsking] = useState(false);
@@ -221,7 +228,7 @@ export function ConfirmButton(props: { onConfirm: () => void; disabled?: boolean
           props.onConfirm();
         }}
       >
-        {t("confirm", { action: props.children.toLowerCase() })}
+        {t("confirm", { action: confirmActionLabel(props.children) })}
       </Button>
       <Button buttonRef={cancel} onClick={() => setAsking(false)}>
         {t("cancel")}

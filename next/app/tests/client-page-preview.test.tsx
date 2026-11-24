@@ -366,13 +366,13 @@ const piRead = (folder: string) => ({
 const A = "/home/me/A.json";
 const B = "/home/me/B.json";
 
-/** Presses Read settings on A, edits the field to B while the read runs, then lets A's answer in. */
+/** Presses Refresh on A, edits the field to B while the read runs, then lets A's answer in. */
 async function lateReplyForA() {
   const c = channel();
   const page = await mount(() => <ClaudeCodePage />, c.invoke);
   await page.pick("A selected file");
   await page.type("File", A);
-  await page.click("Read settings");
+  await page.click("Refresh");
   expect(c.reads.map((r) => r.input.targets?.[0]?.file)).toEqual([A]);
   await page.type("File", B);
   c.reads[0]?.answer(claudeCodeRead(A));
@@ -385,15 +385,15 @@ test("Claude Code: a read that answers after the path changed is dropped", async
   expect(page.shown("File")).toBe(B);
   expect(page.text()).not.toContain("Writes to");
   expect(page.text()).not.toContain(A);
-  expect(page.hasButton("Connect in One Click")).toBe(false);
+  expect(page.hasButton("Apply")).toBe(false);
 });
 
 test("Claude Code: Apply never writes to a file other than the one the field shows", async () => {
   const { c, page } = await lateReplyForA();
   // On the old page the late answer pinned A: Apply was offered, for A, beside a field showing B.
-  if (page.hasButton("Connect in One Click")) {
+  if (page.hasButton("Apply")) {
     await page.pick("My key");
-    await page.click("Connect in One Click");
+    await page.click("Apply");
   }
   const sent = c.writes
     .filter((w) => w.op === "apply")
@@ -406,13 +406,13 @@ test("Claude Code: a read of the path the field shows is kept, and Apply writes 
   const page = await mount(() => <ClaudeCodePage />, c.invoke);
   await page.pick("A selected file");
   await page.type("File", A);
-  await page.click("Read settings");
+  await page.click("Refresh");
   c.reads[0]?.answer(claudeCodeRead(A));
   await settle();
   expect(page.text()).toContain("Writes to");
   expect(page.text()).toContain(A);
   await page.pick("My key");
-  await page.click("Connect in One Click");
+  await page.click("Apply");
   const applies = c.writes.filter((w) => w.op === "apply");
   expect(applies.map((w) => w.input.targets?.[0]?.target)).toEqual([A]);
 });
@@ -422,12 +422,12 @@ test("Pi: a read that answers after the folder changed is dropped", async () => 
   const page = await mount(() => <PiPage />, c.invoke);
   await page.pick("A selected agent folder");
   await page.type("Folder", "/home/me/a");
-  await page.click("Read settings");
+  await page.click("Refresh");
   await page.type("Folder", "/home/me/b");
   c.reads[0]?.answer(piRead("/home/me/a"));
   await settle();
   expect(page.shown("Folder")).toBe("/home/me/b");
-  expect(page.text()).not.toContain("Installation Status");
+  expect(page.text()).not.toContain("Installation status");
   expect(page.text()).not.toContain("/home/me/a");
 });
 
@@ -436,10 +436,10 @@ test("Pi: a read of the folder the field shows is kept", async () => {
   const page = await mount(() => <PiPage />, c.invoke);
   await page.pick("A selected agent folder");
   await page.type("Folder", "/home/me/a");
-  await page.click("Read settings");
+  await page.click("Refresh");
   c.reads[0]?.answer(piRead("/home/me/a"));
   await settle();
-  expect(page.text()).toContain("Installation Status");
+  expect(page.text()).toContain("Installation status");
   expect(page.text()).toContain("/home/me/a/cliproxyapi.json");
 });
 
@@ -475,7 +475,7 @@ const pages: PageCase[] = [
     page: () => <ClaudeCodePage />,
     pick: "A selected file",
     field: "File",
-    read: "Read settings",
+    read: "Refresh",
     body: (path) => ({
       targets: pinned(path),
       applied: false,
@@ -487,7 +487,7 @@ const pages: PageCase[] = [
     page: () => <ClaudeDesktopPage />,
     pick: "A selected folder",
     field: "Folder",
-    read: "Read configuration",
+    read: "Refresh",
     body: (path) => ({ targets: pinned(path), applied: false, settings: unconfigured }),
   },
   {
@@ -495,7 +495,7 @@ const pages: PageCase[] = [
     page: () => <CodexPage />,
     pick: "Files in a selected folder",
     field: "Folder",
-    read: "Read configuration",
+    read: "Refresh",
     body: (path) => ({ targets: pinned(path), applied: false, settings: codexRead }),
   },
   {
@@ -503,7 +503,7 @@ const pages: PageCase[] = [
     page: () => <GrokPage />,
     pick: "A selected file",
     field: "File",
-    read: "Read configuration",
+    read: "Refresh",
     body: (path) => ({ targets: pinned(path), applied: false, settings: unconfigured }),
   },
   {
@@ -511,7 +511,7 @@ const pages: PageCase[] = [
     page: () => <HermesPage />,
     pick: "A selected config file",
     field: "Config file",
-    read: "Read settings",
+    read: "Refresh",
     body: (path) => ({ targets: pinned(path), applied: false, config: unconfigured }),
   },
   {
@@ -519,7 +519,7 @@ const pages: PageCase[] = [
     page: () => <OmpPage />,
     pick: "A selected agent folder",
     field: "Folder",
-    read: "Read settings",
+    read: "Refresh",
     body: (path) => ({ targets: pinned(path), applied: false, config: unconfigured }),
   },
   {
@@ -527,7 +527,7 @@ const pages: PageCase[] = [
     page: () => <OpenCodePage />,
     pick: "A selected file",
     field: "File",
-    read: "Read configuration",
+    read: "Refresh",
     body: (path) => ({ targets: pinned(path), applied: false, config: unconfigured }),
   },
   {
@@ -535,7 +535,7 @@ const pages: PageCase[] = [
     page: () => <PiPage />,
     pick: "A selected agent folder",
     field: "Folder",
-    read: "Read settings",
+    read: "Refresh",
     body: (path) => ({
       targets: pinned(path),
       applied: false,
@@ -618,15 +618,15 @@ async function wslPage() {
   const ch = channel({ distros: [UBUNTU, DEBIAN] });
   const page = await mount(() => <ClaudeCodePage />, ch.invoke);
   const read = async () => {
-    await page.click("Read settings");
+    await page.click("Refresh");
     ch.reads[ch.reads.length - 1]?.answer(claudeCodeRead(SETTINGS));
     await settle();
   };
   /** Presses Apply if the page offers it, with the vault's key. */
   const apply = async () => {
-    if (!page.hasButton("Connect in One Click")) return;
+    if (!page.hasButton("Apply")) return;
     await page.pick("My key");
-    await page.click("Connect in One Click");
+    await page.click("Apply");
   };
   return { ch, page, read, apply };
 }

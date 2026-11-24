@@ -822,7 +822,7 @@ async fn window_close(
     trusted(&webview)?;
     let app = webview.app_handle().clone();
     match action {
-        window::Close::Ask => return Err("choose Exit App or Minimize to Tray".into()),
+        window::Close::Ask => return Err("choose Exit app or Minimize to tray".into()),
         window::Close::MinimizeToTray => usable_tray(&app).map_err(|e| {
             format!("The system tray is unavailable ({e}); keep the window open or exit the app")
         })?,

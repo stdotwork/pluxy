@@ -30,7 +30,7 @@
 //!   nothing; a new preview's restore puts the original back through the link;
 //! - root: an apply to a file inside the selected root creates it, the root link kept; clear
 //!   removes it again;
-//! - backups: a cancelled Manual Backup keeps nothing; a confirmed one keeps the file; the diff
+//! - backups: a cancelled Create backup keeps nothing; a confirmed one keeps the file; the diff
 //!   names the person's changed settings, never a value; restore puts the backed-up bytes back;
 //!   delete removes it;
 //! - launch: the package's recipe is the terminal running `grok`; through the launcher, a
@@ -660,9 +660,9 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             )?;
             require(
                 r["ok"] == false,
-                format!("a cancelled Manual Backup went ahead: {r}"),
+                format!("a cancelled Create backup went ahead: {r}"),
             )?;
-            require(list()?.is_empty(), "a cancelled Manual Backup kept one")?;
+            require(list()?.is_empty(), "a cancelled Create backup kept one")?;
             let o = written(
                 app,
                 main,
@@ -680,7 +680,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                     && l[0]["files"]
                         == json!([{"selected": txt(&config), "path": null, "target": txt(&config),
                             "exists": true, "size": bytes("cleared").len()}]),
-                format!("the list after Manual Backup: {l:?}"),
+                format!("the list after Create backup: {l:?}"),
             )?;
             let b = &x["backups"];
             for e in b["edits"].as_array().into_iter().flatten() {
