@@ -16,6 +16,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"hash/crc32"
@@ -27,6 +28,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/stdotwork/pluxy/next/internal/configdoc"
@@ -55,6 +57,11 @@ const (
 	chainName = "demo-best"
 	// longAccount is an account ID as long as a real one can get.
 	longAccount = "alpha-shared-research-workspace-account-with-a-deliberately-very-long-name-0123456789"
+	// demoHoldPrompt is the prompt prefix that tells testext (via its hold_prompt setting) to
+	// stream a chunk every second until cancelled, without slowing down the seeded requests.
+	demoHoldPrompt = "[demo:hold] "
+	// demoRetryPause is how long a held demo request waits before starting again if it ends.
+	demoRetryPause = 500 * time.Millisecond
 )
 
 // demoAccount is a config account of the demo: its extension and the account entry of the config.
@@ -75,6 +82,7 @@ type demoSetup struct {
 func demoSettings(now time.Time, extra map[string]any) map[string]any {
 	s := map[string]any{
 		"report_usage":        true,
+		"hold_prompt":         demoHoldPrompt,
 		"five_hour_resets_at": now.Add(2 * time.Hour).Unix(),
 		"weekly_resets_at":    now.Add(3 * 24 * time.Hour).Unix(),
 	}
@@ -165,6 +173,93 @@ func seedDemo(base, key string, setup *demoSetup) error {
 		return fmt.Errorf("demo chain: %w", err)
 	}
 	return d.requests(setup.keys)
+}
+
+// startDemoRunning keeps four streaming client requests open against core on different accounts,
+// models and client keys for as long as parent runs. If one ends for any reason, it starts
+// another after demoRetryPause. The returned function cancels all of them and waits for their
+// goroutines to exit.
+func startDemoRunning(parent context.Context, base string, keys []string) func() {
+	ctx, cancel := context.WithCancel(parent)
+	client := &http.Client{Transport: &http.Transport{}}
+	// Each spec routes to a distinct healthy demo account:
+	// modelLarge -> aurora-pro, modelSonnet -> borealis-main,
+	// modelPro -> longAccount, modelMini -> aurora-team.
+	specs := []struct {
+		model        string
+		keyIndex     int
+		useResponses bool
+	}{
+		{modelLarge, 0, false},
+		{modelSonnet, 1, false},
+		{modelPro, 2, false},
+		{modelMini, 0, true},
+	}
+	var wg sync.WaitGroup
+	for _, sp := range specs {
+		req := buildHoldRequest(sp.model, sp.useResponses)
+		key := keys[sp.keyIndex%len(keys)]
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				holdStream(ctx, client, base, key, req)
+				if ctx.Err() != nil {
+					return
+				}
+				timer := time.NewTimer(demoRetryPause)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
+			}
+		}()
+	}
+	return func() {
+		cancel()
+		client.CloseIdleConnections()
+		wg.Wait()
+	}
+}
+
+// buildHoldRequest builds a streaming client request whose prompt starts with demoHoldPrompt.
+func buildHoldRequest(model string, useResponses bool) clientRequest {
+	text := demoHoldPrompt + "streaming demo request for " + model
+	switch {
+	case strings.HasPrefix(model, "claude"):
+		return clientRequest{"/v1/messages", map[string]any{"model": model, "max_tokens": 256, "stream": true,
+			"messages": []any{map[string]any{"role": "user", "content": text}}}}
+	case strings.HasPrefix(model, "gemini"):
+		return clientRequest{"/v1beta/models/" + url.PathEscape(model) + ":streamGenerateContent?alt=sse", map[string]any{
+			"contents":         []any{map[string]any{"role": "user", "parts": []any{map[string]any{"text": text}}}},
+			"generationConfig": map[string]any{"maxOutputTokens": 256}}}
+	case useResponses:
+		return clientRequest{"/v1/responses", map[string]any{"model": model, "input": text, "max_output_tokens": 256, "stream": true}}
+	}
+	return clientRequest{"/v1/chat/completions", map[string]any{"model": model, "max_tokens": 256, "stream": true,
+		"messages": []any{map[string]any{"role": "user", "content": text}}}}
+}
+
+// holdStream sends one streaming client request and reads until the stream ends or ctx is done.
+func holdStream(ctx context.Context, client *http.Client, base, key string, r clientRequest) {
+	b, err := json.Marshal(r.body)
+	if err != nil {
+		return
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+r.path, bytes.NewReader(b))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
 }
 
 // call sends a management request with body (when not nil) and reads the reply into out (when

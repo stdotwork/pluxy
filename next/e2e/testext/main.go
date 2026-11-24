@@ -39,10 +39,12 @@
 // window full until then; "generate_log" names a file each request on the account appends the
 // account's ID to, one line each.
 //
-// Four more settings are for the demo mode of e2e/panelcore, each off unless an account sets it:
+// Five more settings are for the demo mode of e2e/panelcore, each off unless an account sets it:
 // "report_usage" makes each reply carry token counts (derived from the request, so the same
 // request always reports the same), "five_hour_percent" and "weekly_percent" move how much of the
-// two windows the quota shows used, and "no_limits" makes quota report the plan and no windows.
+// two windows the quota shows used, "no_limits" makes quota report the plan and no windows, and
+// "hold_prompt" makes a streaming request whose first text part starts with that prefix send a
+// small chunk every second until the call is cancelled.
 // A browser login with code=revoked signs in an account whose renewal is then refused for good,
 // as a provider's is that revoked the sign-in: the account needs a new login.
 //
@@ -91,6 +93,9 @@ type settings struct {
 	WeeklyPercent   *float64 `json:"weekly_percent"`
 	// NoLimits makes the quota show the plan and no windows.
 	NoLimits bool `json:"no_limits"`
+	// HoldPrompt, when set, makes a streaming request whose first text part starts with this
+	// prefix send a chunk every second until the call is cancelled.
+	HoldPrompt string `json:"hold_prompt"`
 }
 
 // The models that fail on purpose.
@@ -266,6 +271,20 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream, reply string)
 		}
 		resp.Body.Close()
 	}
+	if s.HoldPrompt != "" && call.Request.Stream && requestHasPrefix(call.Request, s.HoldPrompt) {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-ticker.C:
+				if err := out.Text(item, " ."); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	if err := out.Text(item, " done"); err != nil {
 		return err
 	}
@@ -277,6 +296,18 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream, reply string)
 		usage = reportedUsage(call.Request)
 	}
 	return out.Finish(llm.Finish{Reason: llm.FinishStop, RawReason: "stop"}, usage)
+}
+
+// requestHasPrefix reports whether req's first text part starts with prefix.
+func requestHasPrefix(req llm.Request, prefix string) bool {
+	for _, it := range req.Items {
+		for _, p := range it.Content {
+			if p.Type == llm.PartText {
+				return strings.HasPrefix(p.Text, prefix)
+			}
+		}
+	}
+	return false
 }
 
 // reportedUsage derives token counts from the request, so a request always reports the same: the

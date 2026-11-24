@@ -18,10 +18,11 @@ import (
 
 // listedAccount is an account of GET /accounts, as far as the demo test reads it.
 type listedAccount struct {
-	ID        string `json:"id"`
-	Extension string `json:"extension"`
-	Source    string `json:"source"`
-	Health    struct {
+	ID             string `json:"id"`
+	Extension      string `json:"extension"`
+	Source         string `json:"source"`
+	ActiveRequests int    `json:"active_requests"`
+	Health         struct {
 		State string `json:"state"`
 	} `json:"health"`
 }
@@ -63,9 +64,12 @@ func TestPanelcoreDemo(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	stopped := false
 	t.Cleanup(func() {
-		stdin.Close() // panelcore stops core when its stdin ends
-		_ = cmd.Wait()
+		if !stopped {
+			stdin.Close() // panelcore stops core when its stdin ends
+			_ = cmd.Wait()
+		}
 		cancel()
 		if t.Failed() {
 			t.Logf("panelcore's stderr:\n%s", stderr.String())
@@ -246,5 +250,55 @@ func TestPanelcoreDemo(t *testing.T) {
 	}
 	if fellBack == 0 || failedWithLog == 0 {
 		t.Errorf("%d requests fell back, %d failed requests have a log; want some of both (of %d events)", fellBack, failedWithLog, len(events.Events))
+	}
+
+	// Running requests: at least two accounts have active_requests > 0 shortly after ready, and
+	// the total stays above zero over a few samples.
+	sampleActive := func() (withActive, total int, counts map[string]int) {
+		var cur struct {
+			Accounts []listedAccount `json:"accounts"`
+		}
+		get("/accounts", &cur)
+		counts = map[string]int{}
+		for _, a := range cur.Accounts {
+			if a.ActiveRequests > 0 {
+				withActive++
+				total += a.ActiveRequests
+				counts[a.ID] = a.ActiveRequests
+			}
+		}
+		return withActive, total, counts
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	var withActive, total int
+	var counts map[string]int
+	for {
+		withActive, total, counts = sampleActive()
+		if withActive >= 2 && total > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("after 5s, %d accounts have active requests (total %d, counts %v); want at least 2 accounts", withActive, total, counts)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	for i := range 3 {
+		time.Sleep(time.Second)
+		withActive, total, counts = sampleActive()
+		if withActive < 2 || total == 0 {
+			t.Errorf("sample %d: %d accounts have active requests (total %d, counts %v); want at least 2 accounts and total > 0", i+1, withActive, total, counts)
+		}
+	}
+
+	// Stopping panelcore ends promptly even with held requests in flight.
+	stopAt := time.Now()
+	stdin.Close()
+	err = cmd.Wait()
+	stopped = true
+	if err != nil {
+		t.Errorf("panelcore -demo exited with error on stdin close: %v", err)
+	}
+	if took := time.Since(stopAt); took > 5*time.Second {
+		t.Errorf("panelcore -demo took %s to stop after stdin close, want <= 5s", took)
 	}
 }

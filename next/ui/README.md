@@ -394,7 +394,9 @@ rate limit, exhausted, near its quota limits, with and without quota windows, cl
 provider (banned), needing a new sign-in, and turned off; one account name and one model name are
 very long. It has three client keys, a fallback chain (`demo-best`), and about 600 usage events
 over the last week and today (several models, keys and providers, some failed, a few that fell
-back to another account), with a request log for each request. The requests are real: the demo
+back to another account), with a request log for each request. While it runs, the demo also keeps
+a few streaming requests in flight across different accounts, models and client keys. The requests
+are real: the demo
 sends them to core, which routes them to the fake extensions, so the usage, the logs and the
 accounts' states are core's own. The one exception is the time: nothing in core moves its clock,
 so the days before today are written into core's usage folder as day files before core starts
