@@ -143,7 +143,7 @@ feature, it keeps the old label, unless the label named something this core does
 - "Management keys", a count of client keys: the Config Panel lists the client keys.
 - "Debug" and "WebSocket auth": core has neither setting (see the config.yaml table in
   [`next/README.md`](../README.md#what-each-setting-does-here)).
-- "Server version" and "Build date": on the System page, as "Core version" and "Build Time".
+- "Server version" and "Build date": on the System page, as "Core version" and "Build time".
 - "Provider keys", a count of the keys in the config's provider sections: "Credentials" counts
   every account, from the config or from a sign-in.
 - The six "Where to go from here" cards, and the "Manage providers" and "Inspect logs" links: the
@@ -154,7 +154,7 @@ feature, it keeps the old label, unless the label named something this core does
 - "Download", "Download selected" and "Auth file JSON (preview)": core never hands a credential
   back out. Only the extension that created an account receives its credential.
 - "Delete All", "Delete filtered results" and "Delete Problem Files": "Select filtered" and then
-  "Delete" do the same, with the status filter set to "Problem" for problem accounts.
+  "Remove" do the same, with the status filter set to "Problem" for problem accounts.
 - Provider tabs for providers this core has no extension for (Qwen, iFlow, AIStudio, "Empty"): the
   tabs are the running extensions.
 - "Card layout": a theme's `list` layout option (`table` or `cards`) sets it.
@@ -173,7 +173,7 @@ feature, it keeps the old label, unless the label named something this core does
 - The OAuth excluded models and OAuth model alias pages: these rules are now an extension's
   `excluded_models` and `model_alias` settings, written in the Config Panel's Source tab.
 - The OAuth model alias page's "Diagram", which drew each provider's models and their aliases
-  joined by lines: the System page's "Available Models" lists each extension's models with their
+  joined by lines: the System page's "Available models" lists each extension's models with their
   aliases and the accounts that serve them. A sign-in's own aliases are changed in "Account model
   aliases" on its Edit form.
 - "Invert page", which flipped the selection on the current page: "Select page", "Select

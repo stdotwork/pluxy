@@ -48,7 +48,7 @@ const t = strings("accountDetail", {
   leftOutUntil: "Left out until",
   bannedHint: "pluxy skips this account until you enable it again.",
   brokenHint:
-    "pluxy cannot read this account's auth file, so it sends no requests. Fix or replace the file and restart pluxy, or remove the account.",
+    "pluxy cannot read this account's auth file, so it sends no requests. Fix or replace the file and restart pluxy, or remove the account (which deletes the file).",
 });
 
 /**

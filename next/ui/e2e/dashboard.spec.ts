@@ -155,7 +155,7 @@ test("the Dashboard says when core could not save requests to its usage files", 
   });
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(notice).toContainText(
-    "Core could not save 3 requests to its usage files. Check Logs Viewer for details.",
+    "Core could not save 3 requests to its usage files since it last started. Check Logs Viewer for details.",
   );
 });
 

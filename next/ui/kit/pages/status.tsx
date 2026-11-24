@@ -36,7 +36,8 @@ const t = strings("dashboard", {
   safeMode: "Core runs in safe mode: no extension runs, so client requests fail.",
   usageOff:
     "Core is not recording requests, so the figures below stay empty. Turn on usage statistics in the Config Panel.",
-  usageNotSaved: "Core could not save {count} requests to its usage files. Check Logs Viewer for details.",
+  usageNotSaved:
+    "Core could not save {count} requests to its usage files since it last started. Check Logs Viewer for details.",
   verdictGood: "All systems steady",
   verdictWarning: "Minor turbulence",
   verdictCritical: "Needs attention",

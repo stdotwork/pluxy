@@ -32,7 +32,8 @@ const t = strings("accountSettings", {
   priorityPlaceholder: "e.g. 10 or -1",
   priorityHint: "Integers only. Larger value means higher priority.",
   weight: "Scheduling weight (weight)",
-  weightHint: "Defaults to 1. Values of 0 or less exclude this credential from weighted round-robin.",
+  weightHint:
+    "Defaults to 1. Takes effect only with weighted round-robin; 0 or less excludes this credential.",
   disableCooling: "Disable exponential cooldown (disable_cooling)",
   disableCoolingHint:
     "Skip failure cooldown and exponential backoff only for this credential; other credentials are unaffected.",

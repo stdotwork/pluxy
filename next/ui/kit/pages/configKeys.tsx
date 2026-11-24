@@ -23,7 +23,7 @@ const t = strings("configKeys", {
   once: "Copy this key now. pluxy hides it once you close this notice or leave the tab.",
   rotationHint:
     "Rotating replaces the management key immediately. Other management clients must sign in with the new key.",
-  rotationUnavailable: "You cannot rotate the management key here. Edit core's config file instead.",
+  rotationUnavailable: "Management key rotation is unavailable in this host.",
   rotationUnknown:
     "The management key may have changed. Find the current key in core's config file and sign in with it before rotating again.",
   rotatedApart:

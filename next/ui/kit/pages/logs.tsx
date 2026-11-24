@@ -39,7 +39,7 @@ const t = strings("logs", {
   cancel: "Cancel",
   clearConfirm: "Clear all logs? You cannot undo this.",
   errors: "Error request logs",
-  noErrors: "No error logs yet. Failed requests appear here when file logging is on.",
+  noErrors: "No error request logs yet. Failed requests appear here.",
   size: "Size",
   bytes: { one: "{count} byte", other: "{count} bytes" },
   modified: "Last modified",

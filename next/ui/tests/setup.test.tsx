@@ -675,7 +675,7 @@ const config = "~/.cli-proxy-api/config.yaml";
 test("a found CLIProxyAPI setup offers to bring it across, with the command beside it", () => {
   const page = view(found, { bringing: "offered" });
   expect(page).toContain(">Bring it across</button>");
-  expect(page).toContain("pluxy previews changes before importing");
+  expect(page).toContain("writes nothing until you confirm");
   // The command does what the button does: it names the folder the accounts were counted in.
   expect(page).toContain("<summary>Or use the command</summary>");
   expect(importCommand(found.found.imports[0] as Setup["found"]["imports"][number])).toBe(
@@ -760,7 +760,7 @@ test("a setup core has brought across says so, when and with what counts, and of
     expect(page).toContain(">Brought across</span>");
     // No button offers it again; the command still can, and says what a second import does.
     expect(page).not.toContain(">Bring it across</button>");
-    expect(page).not.toContain("pluxy previews changes before importing");
+    expect(page).not.toContain("writes nothing until you confirm");
     expect(page).not.toContain("Or use the command");
     expect(page).toContain("<summary>Bring it across again</summary>");
     expect(page).toContain("Run this where pluxy is installed to overwrite changed settings");

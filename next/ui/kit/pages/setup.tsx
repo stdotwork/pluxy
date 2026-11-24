@@ -78,7 +78,7 @@ const t = strings("setup", {
     other: "A CLIProxyAPI setup with {count} accounts",
   },
   importWhere:
-    "Found at {config}. pluxy previews changes before importing settings, client keys, and accounts.",
+    "Found at {config}. pluxy previews settings, client keys, and accounts and writes nothing until you confirm.",
   importOld: "It is at {config}. To bring it across, run this where pluxy is installed:",
   importCommand: "Or use the command",
   importCommandHow:
@@ -134,7 +134,7 @@ const t = strings("setup", {
   tickHint: "Tick the ones you have an account for.",
   noPicks: "No extensions to offer here. Check the Extensions page to install one.",
   noRegistry:
-    "This build has no extension registry. Run go run ./cmd/pluxy-pack -out <dir> from next/ and start core with -bundled <dir>/bundled/index.json.",
+    "This build has no extension registry. Run go run ./cmd/pluxy-pack -out <dir> from next/, then put bundled beside pluxy or start core with -bundled <dir>/bundled/index.json.",
   installed: "Installed",
   installedNotRunning: "Installed, not running",
   installedFailed: "Installed {title}, but it failed to start: {error}",
