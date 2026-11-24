@@ -191,7 +191,7 @@ app keeps the running version, the one before it and the core it came with, and 
 ones after a switch. Rolling back reaches only an installed version.
 
 A **core program** you name on the Connection page (or `pluxy` beside the app, unless that is the
-core the app came with) is never run in place. **Adopt this core program** shows its path, size and SHA-256 in the native confirmation;
+core the app came with) is never run in place. **Adopt core** shows its path, size and SHA-256 in the native confirmation;
 once confirmed, the app copies it into a version of its own, `custom-<its SHA-256>`, if it is
 still a regular file of that size and digest (at most 512 MiB; a FIFO or device is refused
 without being read; on Unix it must be executable, on Windows a program image named `.exe` or
@@ -266,9 +266,9 @@ through Adopt.
 ## The window and the tray
 
 What closing the window does is the Connection page's **Close behavior**: **Ask every time**
-(the default), **Minimize to Tray** or **Exit App**. Ask every time shows "What would you like to
-do?" with Minimize to Tray, Exit App, Cancel and **Remember this choice**. Exit App quits as the
-tray's Quit does. Minimize to Tray destroys the window and its webviews, so they hold no memory
+(the default), **Minimize to tray** or **Exit app**. Ask every time shows "What would you like to
+do?" with Minimize to tray, Exit app, Cancel and **Remember this choice**. Exit app quits as the
+tray's Quit does. Minimize to tray destroys the window and its webviews, so they hold no memory
 while the app sits in the tray. A window that does not answer the question within three seconds
 (its page still loading, or busy) closes to the tray.
 
@@ -289,7 +289,7 @@ that budget, so a core that keeps crashing still stops being restarted. After th
 recovery or another crash within that window, the tray shows "Core recovery paused" and the
 Connection page shows the reason. An explicit Start, Stop or Restart, from the tray or the
 window, or a mode change, cancels any scheduled recovery and clears the budget. A core you
-stopped stays stopped, and so does one that Start Core on Launch left unstarted.
+stopped stays stopped, and so does one that Start core on launch left unstarted.
 
 The window opens at the size and place it last had, kept when it closes and when the app quits:
 the size in logical pixels, the place in physical ones, never noted while minimized, maximized
@@ -306,7 +306,7 @@ runs only while its page is visible, stops until the window is restored.
 
 The app runs once per profile: your user and the app's data folder (on Linux
 `~/.local/share/dev.pluxy.desktop/`), not the place the program is installed. Launching it again
-on that profile, from the app menu, a shortcut or the login autostart entry (Silent Launch applies
+on that profile, from the app menu, a shortcut or the login autostart entry (Silent launch applies
 only to a login launch that is the first), shows the first app's window (a new one if it was
 closed to the tray) and exits with status 0, starting no core, tray icon or webview. Another `HOME` or `XDG_*` folder is another
 profile, with its own app and core.
@@ -367,20 +367,20 @@ The Connection page has three startup choices:
 - **Launch at startup** registers pluxy for your Linux login. Saving it writes
   `$XDG_CONFIG_HOME/autostart/dev.pluxy.desktop.desktop` (or
   `~/.config/autostart/dev.pluxy.desktop.desktop`). Its Exec command names the app by absolute
-  path with `--autostart`. Silent Launch controls whether a login launch shows a window.
+  path with `--autostart`. Silent launch controls whether a login launch shows a window.
   Turning Launch at startup off and saving removes pluxy's entry. Merely opening the app does
   not register it. The displayed choice is read from that entry, including desktop disable flags.
   A file without pluxy's ownership marker is shown as a conflict and left alone.
-- **Silent Launch** suppresses the window only for an autostart launch in managed mode when
+- **Silent launch** suppresses the window only for an autostart launch in managed mode when
   the session has a StatusNotifier watcher and a registered tray host. Local and remote modes
   host no core, so they open normally. In that case no window or webview is
   created. Without a host the app logs why and opens a window. Opening the app from its menu
   or shortcut always shows the window.
-- **Start Core on Launch** starts the app's own core in managed mode. Turning it off leaves
+- **Start core on launch** starts the app's own core in managed mode. Turning it off leaves
   the saved managed connection stopped until you press Start core. Local and remote modes
   only connect; their core processes are never started or stopped by these choices.
 
-The defaults are login registration off, Silent Launch off, and Start Core on Launch on.
+The defaults are login registration off, Silent launch off, and Start core on launch on.
 Preferences live in `startup.json` beside `connection.json`, readable only by your user.
 A malformed file is moved to `startup.damaged-<random>.json` and defaults are used; failure to
 read or keep it aside is logged and still does not prevent startup. Saving preferences does
@@ -419,7 +419,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `page_send` | Passes the window's channel messages to a page's webview |
 | `confirmation_request` | Opens native review for an opaque action ID already prepared by native code; returns no approval or token |
 | `confirmation_settings` | Opens native settings to inspect and revoke exact remembered launches |
-| `release_get`, `release_check` | The release feed's view (versions, dates, status); `release_check` reads the feed first ("Check for Updates") |
+| `release_get`, `release_check` | The release feed's view (versions, dates, status); `release_check` reads the feed first ("Check for updates") |
 | `release_channel_set` | Picks the Stable or the Preview (latest) channel |
 | `release_source_set` | Asks to change or remove the feed's address; opens a native confirmation and applies nothing itself |
 | `release_notes_open`, `release_notes_place`, `release_notes_close` | Opens a release's notes in a webview of their own over part of the window, moves it, closes it |
@@ -451,12 +451,12 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `launcher_start` | Starts a remembered launch again in one click, from the window only, with its remembered approval |
 | `launcher_forget` | Forgets a remembered launch, revoking its approval |
 | `launcher_settings` | Whether a one-click start shows a launch notice |
-| `app_update_get` | The Application Update card's state |
-| `app_update_start` | **Update Now**: downloads, checks and installs the newer release, then restarts the app; the window hears `pluxy-app-update` as it goes |
-| `app_update_cancel` | **Cancel Download** |
+| `app_update_get` | The App update card's state |
+| `app_update_start` | **Update now**: downloads, checks and installs the newer release, then restarts the app; the window hears `pluxy-app-update` as it goes |
+| `app_update_cancel` | **Cancel download** |
 | `app_update_rollback` | Rolls back to a version that ran here and was kept, by its digest, after the native confirmation |
 | `window_get`, `window_set` | Reads or saves the Close behavior, and whether there is a usable tray |
-| `window_close` | Answers the close prompt: Exit App or Minimize to Tray, and whether to remember it |
+| `window_close` | Answers the close prompt: Exit app or Minimize to tray, and whether to remember it |
 | `privacy_get`, `privacy_set` | Reads or saves privacy mode |
 | `file_save` | Saves a file one of the window's own pages made (a theme file, a log, the usage table) in the Downloads folder, never over another file, and returns its path |
 
@@ -503,7 +503,7 @@ Permissions and extension settings still use the shared kit's channel. No page r
 
 ## Version Management and release notes
 
-The Version Management page (Control group) shows, for the app ("Desktop Application") and for
+The Version Management page (Control group) shows, for the app ("Desktop app") and for
 core, the current version, the latest version on the chosen channel and when it was published,
 then the app release's notes. Stable shows the
 highest stable version; Preview (latest) shows the highest version on either channel, so it is a
@@ -523,7 +523,7 @@ address that fails the checks above) is shown as an error saying to fix or delet
 overwritten; until then no feed is used. The channel is a plain setting there too. The kept feed
 is read only up to 2 MiB.
 
-"Check for Updates" reads the feed: https only, the public certificate roots, no redirects, at
+"Check for updates" reads the feed: https only, the public certificate roots, no redirects, at
 most 1 MiB, 30 seconds. The last good feed is kept in `release-feed.json` in the app's cache
 folder with the time it was read, and shown again after a restart. When a check fails (offline,
 an error answer, a feed the app refuses) the page says why and keeps showing the last good feed
@@ -595,7 +595,7 @@ feed addresses, keys and formats are decided at release; until then there is no 
 
 ### Application update
 
-Version Management's Application Update card offers **Update Now** when the feed's latest app
+Version Management's App update card offers **Update now** when the feed's latest app
 release on the chosen channel is newer than the running version and has an artifact for this
 system, and says why not otherwise. It uses the stock Tauri updater plugin
 (`tauri-plugin-updater` 2.14.1) for its release check and signature check only, never for
@@ -680,7 +680,7 @@ In this order:
    version. No custom comparison is set, so the feed can never offer a downgrade.
 4. The app downloads the artifact itself, as it reads the feed (https only, no redirects, the same
    certificate roots), exactly the announced size, showing progress. A server that sends nothing
-   for 30 seconds fails the download; **Cancel Download** stops it within that time and changes
+   for 30 seconds fails the download; **Cancel download** stops it within that time and changes
    nothing.
 5. The plugin checks the signature against the compiled updater key. Then the bytes must be this
    system's: a type-2 AppImage; on Windows a `.tar.gz` of the program set; or, on macOS, a
@@ -792,9 +792,9 @@ In this order:
 **Roll back to <version>…** lists versions that ran here and were kept. It restores only such a
 copy, only while it still has its pinned digest, and only after the native confirmation (with
 the version, digest and installed copy); then the same restart and acceptance follow. It passes the
-updater gate first, as Update Now does, so a build without updater trust refuses it. A version
+updater gate first, as Update now does, so a build without updater trust refuses it. A version
 never installed here, or a kept copy that changed, is refused without a dialog. While its
-confirmation is open, Update Now and other rollbacks wait.
+confirmation is open, Update now and other rollbacks wait.
 
 ## Extensions on this device
 
@@ -1147,24 +1147,24 @@ for **Start CLI**, the execution program, both installed and enabled on the Devi
 It is the window's own page, not an extension page: **Apply** gives the tool the client key, and
 only the window can name a vault secret for an operation (an extension page cannot pass secrets).
 
-**Read settings** previews the settings file: Claude Code's user settings
+**Refresh** previews the settings file: Claude Code's user settings
 (`~/.claude/settings.json`), a selected file (a link, as stow makes, is followed and kept) or a file
 in a selected folder; it shows whether pluxy's integration is applied, the file it writes to and
 whether a key is in it, never the key, and fills the form from the file. A file Claude Code would
 not take (not strict JSON, or another `$schema`) shows why instead of the form: Apply and Close
-configuration stay off, and Restore Backup stays reachable. Choosing another file drops the last
+configuration stay off, and Restore backup stays reachable. Choosing another file drops the last
 preview, so read it again before a write. The form keeps the old
 app's controls: **Claude Code Model → Upstream Model** (Sonnet, Opus, Fable, Haiku, each with a
 **1M** switch; Fable follows Sonnet when empty), **Default model**, **Subagent model**, and under
 **Context and auto-compaction (advanced)** the **Auto-compact window**, **Auto-compact trigger**
 and **Disable auto-compaction**. Model fields suggest Claude Code's own models and aliases until the
 model picker lists the core's; Opus, Sonnet and Haiku each need one (not only `[1m]`), and the
-window and percentage are whole numbers. The **Authentication Key** is one of the vault's plain
+window and percentage are whole numbers. The **Client key** is one of the vault's plain
 secrets or client keys captured for this tool (`src/claudeCodeForm.ts`), or a new one through native
 key entry (**Add key…**).
 
-**Connect in One Click** (or **Update Configuration** / **Repair Connection** once applied),
-**Close configuration** (Clear) and **Restore Backup** each call the tool with the file the last
+**Apply** (or **Update** / **Repair** once applied),
+**Clear** (Clear) and **Restore backup** each call the tool with the file the last
 preview pinned (refused if the file changed since); the tool's native confirmation names the file it resolves to, the key's label for Apply, and that
 an edit made in the same instant by another program may be lost. **Start CLI** asks the tool for its
 recipe (`claude` in a terminal, no arguments) and starts it through the launcher in the chosen
@@ -1175,12 +1175,12 @@ settings. The card's terminal list loads again whenever this device's packages c
 list no longer offers falls back to Automatic (`src/startCli.ts`). Every client page's Start CLI
 does the same.
 
-**In WSL** (Windows): the page's **Environment / configuration directory** block
+**In WSL** (Windows): the page's **Environment and configuration folder** block
 (`src/environmentBlock.tsx`, shared by client pages) chooses **Windows local** or **WSL
 subsystem**, then a **Distribution** and a **User**. Choosing WSL lists the distributions without
 starting any (`pluxy/wsl`, which must be installed and enabled); reading a distribution's users
 starts it, which the block says. Picking a user has the app check that distribution and user and
-keep its record ([Tools in WSL](app-host/README.md#tools-in-wsl-windows)); **Detect again** lists
+keep its record ([Tools in WSL](app-host/README.md#tools-in-wsl-windows)); **Refresh** lists
 them again. Every call of the page then goes to Claude Code's Linux build running in that
 distribution as that user, so the default file is that user's `~/.claude/settings.json` and typed
 paths are paths in the distribution (a `\\wsl.localhost\<distribution>\…` or `\\wsl$\…` path of the
@@ -1196,7 +1196,7 @@ there is no key to give. Reading, previewing, backups and **Start CLI** work the
 manual backups of the previewed file in the app's vault through the tool's standard backup
 operations ([app tools](../app-tools/README.md#libtransactions)). It shows once the file has been
 read, a file Claude Code would not take included, and acts on the file that read pinned.
-**Manual Backup** saves the file as it is on disk (or that it does not exist) and selects the new
+**Create backup** saves the file as it is on disk (or that it does not exist) and selects the new
 backup, leaving the form as it is; the newest 10 are kept, and saving another deletes the oldest,
 which its confirmation says. **Backup versions** lists each by date; selecting one
 shows its ID, whether the file was present and its size, and the settings restoring it would add,
@@ -1212,14 +1212,14 @@ native tool `pluxy/codex-setup` ([app tools](../app-tools/README.md#codex)) and,
 the execution program, both installed and enabled on the Device extensions page. Like the Claude
 Code page it is the window's own page, because **Apply** gives the tool the client key.
 
-**Read configuration** previews Codex's `config.toml` and model catalog: in Codex's folder
+**Refresh** previews Codex's `config.toml` and model catalog: in Codex's folder
 (`~/.codex`), selected files (links followed and kept), or a selected folder (such as a
 `CODEX_HOME`); it shows the status, the files it writes to, whether a key is in config.toml and the
 provider Codex uses now. When that provider is not pluxy's, it says that Codex hides conversations
 of another provider from resume, and that the app does not sync or change past conversations;
 nothing is rewritten. Files Codex would not take (config.toml not TOML, for example, or a catalog
 with no models list) show why instead of the form: Apply and Close configuration stay off, and
-Restore Backup and the backups stay reachable. Choosing other files drops the last preview, so read
+Restore backup and the backups stay reachable. Choosing other files drops the last preview, so read
 them again before a write. The form keeps the old app's controls: **Model**, **Approval model** (Codex
 default or a catalog model), **Remote compaction (experimental)**, **Codex subagent settings**
 (**Enable subagents**, **Maximum concurrent threads per session**, **Default subagent model**,
@@ -1232,13 +1232,13 @@ OAuth sign-in method and openai-provider-identity switch are not carried. The **
 Key** is one of the vault's plain secrets or client keys captured for this tool
 (`src/codexForm.ts`), or a new one through native key entry (**Add key…**).
 
-**Apply Configuration** (or **Update Configuration** / **Repair Connection** once applied),
-**Close configuration** (Clear) and **Restore Backup** each call the tool with the files the last
+**Apply Configuration** (or **Update** / **Repair** once applied),
+**Clear** (Clear) and **Restore backup** each call the tool with the files the last
 preview pinned (refused if a file changed since); its native confirmation names both files, the key's label for Apply, and that an edit made
 in the same instant by another program may be lost; **Backup and restore** shows once the files
 have been read and keeps both files in each manual backup. **Start Codex CLI** starts `codex` in a terminal through the launcher, **Start Codex
 App** starts the program the person names (Codex has no Linux app) in the working directory
-entered under Start CLI, which its card asks for while it is empty, and **Restart CLI Service**,
+entered under Start CLI, which its card asks for while it is empty, and **Restart CLI service**,
 after its own confirmation that active CLI sessions are interrupted, runs `codex app-server daemon
 restart` detached; the launcher's confirmation shows each in full. The key is not part of any
 launch: Codex reads it from config.toml.
@@ -1251,13 +1251,13 @@ third-party inference gateway (`src/claudeDesktop.tsx`). It needs the curated na
 Desktop**, the execution program. Like the Claude Code page it is the window's own page, because
 **Apply** gives the tool the client key.
 
-**Read configuration** previews Claude Desktop's three third-party files: in its folder
+**Refresh** previews Claude Desktop's three third-party files: in its folder
 `~/.config/Claude-3p` (`claude_desktop_config.json`, pluxy's gateway profile in `configLibrary` and
 `configLibrary/_meta.json`), in a selected folder (which may be a link) or as three selected files
 (links followed and kept). When nothing is at `~/.config/Claude-3p/configLibrary` yet (Claude
 Desktop makes it only once a configuration is saved in its own window), the page offers **Create
 configuration folder**, which asks in a native confirmation. Files Claude Desktop would not take
-are shown as such: Apply and Clear integration stay disabled, Restore Backup and the backups stay
+are shown as such: Apply and Clear integration stay disabled, Restore backup and the backups stay
 reachable. The form keeps the
 old app's **Claude Desktop Models and Aliases** list: rows of **Original model**, **Alias (optional
 for Claude models)** and **1M**, **Add model** and **Remove model**, three Claude models to start
@@ -1268,14 +1268,14 @@ confirmation naming the core, the alias, the model and the accounts, the app add
 the management API (`PATCH /v0/management/accounts/{id}`, its `model_alias`) to every account added
 by login that serves the model. An account set in core's config is changed only in core's config,
 so it is named and left alone, and a model only such accounts serve is refused; so is an alias the
-core already serves for anything else. Clear integration and Restore Backup leave an alias made in
+core already serves for anything else. Clear integration and Restore backup leave an alias made in
 core: the core's config is not the tool's file. The old app wrote the alias into the core's config
-file itself. The **Authentication Key** is one of the
+file itself. The **Client key** is one of the
 vault's secrets (a client key only when it is bound to this tool), or a new one through native key
 entry.
 
-**Connect in One Click** (or **Update Configuration** / **Repair Connection**), **Clear
-integration** and **Restore Backup** each write the files the last preview pinned (the tool refuses
+**Apply** (or **Update** / **Repair**), **Clear
+integration** and **Restore backup** each write the files the last preview pinned (the tool refuses
 one that changed since; choosing other files drops the preview), in the tool's native confirmation,
 which names the three files, the key's label for Apply and the same-instant warning.
 **Start Claude Desktop** asks the tool for its recipe (`claude-desktop`, run directly with no
@@ -1292,7 +1292,7 @@ curated native tool `pluxy/opencode` ([app tools](../app-tools/README.md#opencod
 extensions page. Like the Claude Code page it is the window's own page, because **Apply** gives the
 tool the client key.
 
-**Read configuration** previews the config file: OpenCode's global config
+**Refresh** previews the config file: OpenCode's global config
 (`~/.config/opencode/opencode.jsonc`, or `opencode.json` when only that exists, as OpenCode picks
 the file it writes), a selected file (for example the one `OPENCODE_CONFIG` names; a link, as stow
 makes, is followed and kept) or a file in a selected folder (for example `OPENCODE_CONFIG_DIR`). It
@@ -1300,16 +1300,16 @@ shows whether pluxy's integration is applied, the file it writes to, whether a k
 default model, never the key, and warns when the old desktop app's `cpa-gui` provider is still
 there, or when OpenCode 2's own `providers.pluxy` is (OpenCode uses that one, so Apply stays off
 until it is removed). A file OpenCode would not take is shown with the reason: Apply and Close
-configuration stay off, Restore Backup and the backups still work on it. Choosing another file
+configuration stay off, Restore backup and the backups still work on it. Choosing another file
 drops the last preview: every write uses the pins of the preview on screen. **Models** lists the models OpenCode shows under the pluxy provider: **Import models from
 core** adds the core's served models, **Add model** one by ID; each has a display name, an
 **Attachments** switch (images and PDFs; new models start from the old app's list of model names
-that take images) and **Remove**; **Default model** is one of them. The **Authentication Key** is
+that take images) and **Remove**; **Default model** is one of them. The **Client key** is
 one of the vault's secrets (plain ones, or client keys bound to this tool), or a new one through
 native key entry (**Add key…**).
 
-**Connect in One Click** (or **Update Configuration** / **Repair Connection** once applied),
-**Close configuration** (Clear) and **Restore Backup** each preview the file again and call the
+**Apply** (or **Update** / **Repair** once applied),
+**Clear** (Clear) and **Restore backup** each preview the file again and call the
 tool, whose native confirmation names the file it resolves to, the key's label for Apply, and that
 an edit made in the same instant by another program may be lost; comments and everything else in
 the file stay. **Backup and restore** is the shared backup browser. **Start CLI** asks the tool for
@@ -1328,7 +1328,7 @@ native tool `pluxy/omp-setup` ([app tools](../app-tools/README.md#omp-setup)) an
 CLI**, the execution program, both installed and enabled on the Device extensions page. Like the
 Claude Code page it is the window's own page, because **Apply** gives the tool the client key.
 
-**Read settings** previews Oh My Pi's two files, `models.yml` and `config.yml`: in its agent folder
+**Refresh** previews Oh My Pi's two files, `models.yml` and `config.yml`: in its agent folder
 (`~/.omp/agent`), in a selected agent folder (for example a profile's
 `~/.omp/profiles/<name>/agent`, or the folder `PI_CODING_AGENT_DIR` names; the folder may be a link,
 as chezmoi can make) or as two selected files (a link, as stow makes, is followed and kept). It
@@ -1336,13 +1336,13 @@ shows whether pluxy's integration is applied, the files it writes to, whether a 
 file and the default model role, never the key, and warns when the old desktop app's
 `easy-cliproxyapi` provider is still there. **Default model** is the model Oh My Pi starts with
 through this core (the core's served models are suggested; **Refresh models** reloads them); Oh My
-Pi lists the core's other models itself. The **Authentication Key** is one of the vault's secrets (a captured
+Pi lists the core's other models itself. The **Client key** is one of the vault's secrets (a captured
 client key only when it is this tool's), or a new one through native key entry (**Add key…**).
 
-Files Oh My Pi would not take show as refused, with the reason: **Apply** and **Clear integration**
-stay off, and **Restore Backup** and the backups stay available. Choosing other files drops the last
-preview. **Connect in One Click** (or **Update Configuration** / **Repair Connection** once applied),
-**Clear integration** and **Restore Backup** call the tool with the files the last preview pinned
+Files Oh My Pi would not take show as refused, with the reason: **Apply** and **Clear**
+stay off, and **Restore backup** and the backups stay available. Choosing other files drops the last
+preview. **Apply** (or **Update** / **Repair** once applied),
+**Clear** and **Restore backup** call the tool with the files the last preview pinned
 (the tool refuses them if a file changed since), and its native confirmation names both files they
 resolve to, the key's label for Apply, and that an edit
 made in the same instant by another program may be lost; comments and everything else in the files
@@ -1360,20 +1360,20 @@ curated native tool `pluxy/grok-setup` ([app tools](../app-tools/README.md#grok-
 **Start CLI**, the execution program, both installed and enabled on the Device extensions page. Like
 the Claude Code page it is the window's own page, because **Apply** gives the tool the client key.
 
-**Read configuration** previews Grok Build's `config.toml`: its user config (`~/.grok/config.toml`),
+**Refresh** previews Grok Build's `config.toml`: its user config (`~/.grok/config.toml`),
 a selected file (such as `$GROK_HOME/config.toml`; a link is followed and kept) or a file in a
 selected folder; it shows the status, the file it writes to, Grok Build's default model now and
 whether a key is in pluxy's entry, never the key, and notes model entries an older app left
 (`cpa-gui/…`), which pluxy leaves alone. A file Grok Build would not take shows as refused, with the
-reason: Apply and Close configuration stay off, Restore Backup and the backups stay available. The **Model catalog** holds the models pluxy's entries
+reason: Apply and Close configuration stay off, Restore backup and the backups stay available. The **Model catalog** holds the models pluxy's entries
 list: those the file has, and the core's served models, added (all selected, as the old app wrote
 them all) when **Refresh models** is pressed, never in the background. Each can be left out or
 given its **Context window**; the **Default model** is one of the selected models. Apply stays off,
-with a notice, while more than 256 models are selected. The **Authentication Key** is one of the
+with a notice, while more than 256 models are selected. The **Client key** is one of the
 vault's plain secrets or this tool's client keys, or a new one through native key entry.
 
-**Connect in One Click** (or **Update Configuration** / **Repair Connection** once applied),
-**Close configuration** (Clear) and **Restore Backup** call the tool on the file the last preview
+**Apply** (or **Update** / **Repair** once applied),
+**Clear** (Clear) and **Restore backup** call the tool on the file the last preview
 pinned (changing the file selection drops that preview; the tool refuses a file changed since),
 whose native confirmation names the file, the key's label for Apply, and that an edit made in
 the same instant by another program may be lost; **Backup and restore** keeps the file in manual
@@ -1391,7 +1391,7 @@ and, for **Start CLI**, the execution program, both installed and enabled on the
 page. Like the Claude Code page it is the window's own page, because **Apply** gives the tool the
 client key.
 
-**Read settings** previews Hermes Agent's `config.yaml`: in its default home (`~/.hermes`, or the
+**Refresh** previews Hermes Agent's `config.yaml`: in its default home (`~/.hermes`, or the
 profile `~/.hermes/active_profile` names), in a selected Hermes home folder (the folder
 `HERMES_HOME` names, or a profile's `~/.hermes/profiles/<name>`; the folder may be a link, as
 chezmoi can make) or as a selected file (a link, as stow makes, is followed and kept). It shows
@@ -1399,13 +1399,13 @@ whether pluxy's integration is applied, the file it writes to, the provider's ad
 key is in the file, the selected provider and the default model, never the key, and warns when the
 old desktop app's `cpa-gui` provider is still there. **Default model** is the model Hermes Agent
 starts with through this core (the core's served models are suggested; **Refresh models** reloads
-them). The **Authentication Key** is one of the vault's secrets (a captured client key only when it
+them). The **Client key** is one of the vault's secrets (a captured client key only when it
 is this tool's), or a new one through native key entry (**Add key…**).
 
-A file Hermes would not take shows as refused, with the reason: **Apply** and **Clear integration**
-stay off, and **Restore Backup** and the backups stay available. Choosing another file or folder
-drops the last preview. **Connect in One Click** (or **Update Configuration** / **Repair
-Connection** once applied), **Clear integration** and **Restore Backup** call the tool with the file
+A file Hermes would not take shows as refused, with the reason: **Apply** and **Clear**
+stay off, and **Restore backup** and the backups stay available. Choosing another file or folder
+drops the last preview. **Apply** (or **Update** / **Repair
+Connection** once applied), **Clear** and **Restore backup** call the tool with the file
 the last preview pinned (the tool refuses it if the file changed since), and its native
 confirmation names the file it resolves to, the key's label for Apply, and that an edit made
 in the same instant by another program may be lost; comments and everything else in the file stay,
@@ -1426,25 +1426,25 @@ page it is the window's own page, because **Apply** gives the tool the client ke
 
 Pi reaches the core through the CLIProxyAPI provider plugin. The tool carries a reviewed copy of
 it and installs it as a local Pi package in Pi's agent folder; it never runs `pi install` or npm.
-**Read settings** previews Pi's files, `cliproxyapi.json`, `settings.json` and the plugin's model
+**Refresh** previews Pi's files, `cliproxyapi.json`, `settings.json` and the plugin's model
 cache `cliproxyapi-models.json`, in its agent folder (`~/.pi/agent`) or in a selected agent folder
 (the one `PI_CODING_AGENT_DIR` names; the folder may be a link, as chezmoi can make), or as the
 linked files in a folder (links, as stow makes, are followed and kept). Files Pi would not take
-are still read: the page says why, leaves Apply, Clear and Uninstall off, and keeps Restore Backup
+are still read: the page says why, leaves Apply, Clear and Uninstall off, and keeps Restore backup
 and the backups. It shows whether the plugin is
 installed and its version (with **Update available** when the tool carries another), whether
 pluxy's integration is applied, the files it writes to, whether a key is in `cliproxyapi.json` and
 Pi's default provider and model, never the key; it warns when `settings.json` still lists the npm
 copy an older app installed, or when a folder of the plugin's name is not pluxy's. **Model** is the
 model Pi starts with through this core (the core's served models are suggested; **Refresh models**
-reloads them; the plugin itself lists the core's Codex catalog in Pi). The **Authentication Key**
+reloads them; the plugin itself lists the core's Codex catalog in Pi). The **Client key**
 is one of the vault's secrets, or a new one through native key entry (**Add key…**).
 
-**Install Pi Plugin** (or **Connect in One Click**, **Update Configuration** / **Repair
+**Install plugin** (or **Apply**, **Update** / **Repair
 Connection** once installed) installs the plugin when it is not there and writes the core's
-address, the key and Pi's defaults. **Plugin management** has **Update Pi Plugin** (the tool's copy
-replaces the installed one) and **Uninstall Pi Plugin** (its entry and folder go; the connection
-settings stay). **Clear integration** and **Restore Backup** also remove the plugin's folder once
+address, the key and Pi's defaults. **Plugin management** has **Update plugin** (the tool's copy
+replaces the installed one) and **Uninstall plugin** (its entry and folder go; the connection
+settings stay). **Clear** and **Restore backup** also remove the plugin's folder once
 `settings.json` no longer lists it. Each of these previews the files again and calls the tool,
 whose native confirmation names the files it resolves to (or the agent folder, for Update), the
 key's label for Apply, and that an edit made in the same instant by another program may be lost;
@@ -1499,7 +1499,7 @@ tool's native confirmation ("full access to your user account"), answered in tha
 and **Set up** shows the client's own page below, where its configuration is applied and the
 client started as on that page. The guide writes nothing itself and keeps no draft: a cancelled
 confirmation, or leaving the guide, leaves files and packages as they were; Close configuration
-and Restore Backup on the client's page undo an apply.
+and Restore backup on the client's page undo an apply.
 
 A client joins the list by being an agent page: a window page that names the package it drives
 (`AgentPage` in `src/easyMode.tsx`), listed in `agentPages` in `src/agentPages.ts`. The list itself
@@ -1581,8 +1581,8 @@ core does not outlive the app.
 In separate runs, the startup sequence enables login registration through the main webview command,
 checks the entry in its temporary XDG config folder, launches it with the real Desktop Entry consumer (gio launch), checks
 zero windows/webviews and no web process, and verifies that the app's real tray item belongs to
-its PID in the tray watcher's registered item list. It checks login with Silent Launch on and
-off, an app-menu launch with Silent Launch on, managed-core startup, core startup off, foreign
+its PID in the tray watcher's registered item list. It checks login with Silent launch on and
+off, an app-menu launch with Silent launch on, managed-core startup, core startup off, foreign
 core ownership, and removal. In the core-startup-off launch it waits past the first recovery
 delay and checks that no core started and no recovery ran, then starts the core with the
 tray's Start core and crashes it: that core is recovered. A separate session with no watcher verifies that a silent login
@@ -1658,13 +1658,13 @@ file.
 In managed mode, two more sessions run the window checks (`native/window.ts`, which launches
 the app through the stages in `src-tauri/src/native_window.rs`), one with a tray watcher and
 one without. They close the window as its window manager would (a GTK delete event) and answer the prompt in the window:
-Cancel keeps it, Minimize to Tray and the remembered choices close it with no webview or web
+Cancel keeps it, Minimize to tray and the remembered choices close it with no webview or web
 process left, and the app's own tray item (through the watcher and its menu, `session_probe tray`)
-opens it again at the size and place it had; Exit App, from the prompt or the setting, quits and
+opens it again at the size and place it had; Exit app, from the prompt or the setting, quits and
 stops the app's own core; the next launch opens where the window was. A pending test sign-in's
 polls are counted while the window shows, while it is unmapped (as a window manager minimizes it;
 GDK then reports it minimized) and once it is mapped again. Without a tray watcher, closing quits
-without asking, with Minimize to Tray or Ask saved.
+without asking, with Minimize to tray or Ask saved.
 
 One more session in managed mode (`native/privacy.ts`) runs the privacy mode checks
 (`src-tauri/src/native_privacy.rs`) and then the themes checks (`src-tauri/src/native_themes.rs`):
@@ -1691,7 +1691,7 @@ ends on that page in GTK's dark variant.
 Then, in a session of its own (`native/instances-session.ts`), with the core program adopted in
 each profile, it launches the app again and again on one profile and checks that each later launch exits 0 within 10 seconds, starts no app or core of its own (it counts the
 app and core processes), and has the first show its window, also after the window was hidden and
-after it was closed to the tray, and for a login launch (`--autostart` with Silent Launch on) as
+after it was closed to the tray, and for a login launch (`--autostart` with Silent launch on) as
 well; that the socket is in the runtime folder, where `instance/address`
 says; that a launch with other `HOME` and `XDG_*` folders is an app and
 core of its own; that after the first app is killed with SIGKILL (its lock file and socket stay)
@@ -1702,7 +1702,7 @@ for a socket path, and a second launch of it still raises it.
 Then, in another session (`native/update.ts`, `native/update-session.ts`, with the cases in
 `native/update-cases.ts` that the platform runner's update session shares, and `update_native.rs`),
 the [application update](#application-update) on one profile with a test trust profile, against
-a fake https feed whose releases the check switches: the test package refuses Update Now without
+a fake https feed whose releases the check switches: the test package refuses Update now without
 its trust profile's nonce, and as its own program with the bundle type a .deb, an .rpm or no
 package gives it (patched as Tauri's bundler patches it; the .deb one with `APPIMAGE` pointing at
 the AppImage), with a rollback refused for the same reason each time, before any download and with stand-ins for `pkexec`, `sudo`, `dpkg`, `rpm`, `apt`,
@@ -1787,7 +1787,7 @@ its own XDG folders, logs each address it is asked to open. The check confirms a
 the real dialog, then cancels a second change and finds the old address, its file and its copy
 kept; asks for a third, finds Channel disabled, changes the channel by a direct call and confirms,
 and finds the change not applied and the page saying why; checks for updates and reads the stable and the Preview (latest) versions, and finds
-Update Now not offered and refused (a build without updater trust is not configured for it, and the
+Update now not offered and refused (a build without updater trust is not configured for it, and the
 fixture has no signed update for the test package); opens hostile
 notes and finds no script, image, frame, handler or extra link, the Markdown rendered and the
 raw HTML left out; probes every app and plugin command from the notes webview (each refused)

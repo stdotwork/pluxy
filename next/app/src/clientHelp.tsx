@@ -7,8 +7,7 @@ import { rich, strings } from "../../ui/kit/strings";
 
 const t = strings("clientHelp", {
   noKeys: "No keys yet: add one.",
-  keyFrom:
-    "A client key is made on the {config} page under Client API Keys, or with the command pluxy key add.",
+  keyFrom: "Create a client key in {config} under Client keys, or run pluxy key add.",
   config: "Config Panel",
   needKey: "Choose a client key above: this button stays off until one is chosen.",
   needFolder: "Start stays off until you enter the folder to start in.",

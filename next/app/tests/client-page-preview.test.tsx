@@ -301,13 +301,13 @@ const piRead = (folder: string) => ({
 const A = "/home/me/A.json";
 const B = "/home/me/B.json";
 
-/** Presses Read settings on A, edits the field to B while the read runs, then lets A's answer in. */
+/** Presses Refresh on A, edits the field to B while the read runs, then lets A's answer in. */
 async function lateReplyForA() {
   const c = channel();
   const page = await mount(() => <ClaudeCodePage />, c.invoke);
   await page.pick("A selected file");
   await page.type("File", A);
-  await page.click("Read settings");
+  await page.click("Refresh");
   expect(c.reads.map((r) => r.input.targets?.[0]?.file)).toEqual([A]);
   await page.type("File", B);
   c.reads[0]?.answer(claudeCodeRead(A));
@@ -320,15 +320,15 @@ test("Claude Code: a read that answers after the path changed is dropped", async
   expect(page.shown("File")).toBe(B);
   expect(page.text()).not.toContain("Writes to");
   expect(page.text()).not.toContain(A);
-  expect(page.hasButton("Connect in One Click")).toBe(false);
+  expect(page.hasButton("Apply")).toBe(false);
 });
 
 test("Claude Code: Apply never writes to a file other than the one the field shows", async () => {
   const { c, page } = await lateReplyForA();
   // On the old page the late answer pinned A: Apply was offered, for A, beside a field showing B.
-  if (page.hasButton("Connect in One Click")) {
+  if (page.hasButton("Apply")) {
     await page.pick("My key");
-    await page.click("Connect in One Click");
+    await page.click("Apply");
   }
   const sent = c.writes
     .filter((w) => w.op === "apply")
@@ -341,13 +341,13 @@ test("Claude Code: a read of the path the field shows is kept, and Apply writes 
   const page = await mount(() => <ClaudeCodePage />, c.invoke);
   await page.pick("A selected file");
   await page.type("File", A);
-  await page.click("Read settings");
+  await page.click("Refresh");
   c.reads[0]?.answer(claudeCodeRead(A));
   await settle();
   expect(page.text()).toContain("Writes to");
   expect(page.text()).toContain(A);
   await page.pick("My key");
-  await page.click("Connect in One Click");
+  await page.click("Apply");
   const applies = c.writes.filter((w) => w.op === "apply");
   expect(applies.map((w) => w.input.targets?.[0]?.target)).toEqual([A]);
 });
@@ -357,12 +357,12 @@ test("Pi: a read that answers after the folder changed is dropped", async () => 
   const page = await mount(() => <PiPage />, c.invoke);
   await page.pick("A selected agent folder");
   await page.type("Folder", "/home/me/a");
-  await page.click("Read settings");
+  await page.click("Refresh");
   await page.type("Folder", "/home/me/b");
   c.reads[0]?.answer(piRead("/home/me/a"));
   await settle();
   expect(page.shown("Folder")).toBe("/home/me/b");
-  expect(page.text()).not.toContain("Installation Status");
+  expect(page.text()).not.toContain("Installation status");
   expect(page.text()).not.toContain("/home/me/a");
 });
 
@@ -371,9 +371,9 @@ test("Pi: a read of the folder the field shows is kept", async () => {
   const page = await mount(() => <PiPage />, c.invoke);
   await page.pick("A selected agent folder");
   await page.type("Folder", "/home/me/a");
-  await page.click("Read settings");
+  await page.click("Refresh");
   c.reads[0]?.answer(piRead("/home/me/a"));
   await settle();
-  expect(page.text()).toContain("Installation Status");
+  expect(page.text()).toContain("Installation status");
   expect(page.text()).toContain("/home/me/a/cliproxyapi.json");
 });

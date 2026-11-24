@@ -51,24 +51,24 @@ export function StartupSettings() {
         <fieldset disabled={busy || !preferences}>
           <Switch
             label="Launch at startup"
-            hint="Start pluxy when you sign in. Silent Launch controls whether login launches show a window."
+            hint="Start pluxy at login. Silent launch hides the window."
             checked={preferences?.autostart_enabled ?? false}
             onChange={(v) => change("autostart_enabled", v)}
           />
           <Switch
-            label="Silent Launch"
+            label="Silent launch"
             hint="At login, run the managed core in the system tray if a tray host is available. Opening the app yourself shows its window."
             checked={preferences?.silent_start_enabled ?? false}
             onChange={(v) => change("silent_start_enabled", v)}
           />
           <Switch
-            label="Start Core on Launch"
-            hint="Start the app's managed core. Local and remote cores are left running as they are."
+            label="Start core on launch"
+            hint="Start the app's managed core. Local and remote cores stay as they are."
             checked={preferences?.start_core_on_launch ?? true}
             onChange={(v) => change("start_core_on_launch", v)}
           />
           <Button type="submit" variant="primary">
-            {busy ? "Saving…" : "Save startup preferences"}
+            {busy ? "Saving…" : "Save"}
           </Button>
         </fieldset>
         {preferences?.registration_conflict && (

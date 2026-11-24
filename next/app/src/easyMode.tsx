@@ -25,31 +25,29 @@ export const LAUNCHER = "pluxy/execution";
 const t = strings("easyMode", {
   title: "Beginner Mode",
   short: "Easy",
-  tip: "Streamlined Agent and Model Setup Wizard",
-  intro: "Connect a model, then connect an agent to it. Each step can be done again later from its own page.",
+  tip: "Guided model and agent setup",
+  intro: "Connect a model, then connect an agent. You can repeat either step later from its own page.",
   stepsLabel: "Connection wizard steps",
   current: "Step {current} of {total}",
   step1: "Connect a model",
-  step1Description: "Sign in or connect an API",
+  step1Description: "Sign in or add an API key",
   step2: "Connect an agent",
   step2Description: "Select a client and model, then apply the configuration",
-  providerDescription:
-    "Sign in to your own account through browser authorization and use its quota, or enter the API key a model platform gave you. Choose a method below and finish its sign-in.",
+  providerDescription: "Sign in with your account or enter an API key. Choose a method below to begin.",
   connected: {
     one: "{count} connected source detected",
     other: "{count} connected sources detected",
   },
   none: "No source connected yet. Sign in or add an API key first.",
-  next: "Next: Configure Agent",
+  next: "Next: connect an agent",
   back: "Previous",
-  agentDescription:
-    "Select a client. Its setup runs through an optional native tool: install and enable it, then set the client up below, choose the model each role uses, apply the configuration and start the client.",
+  agentDescription: "Select a client, install and enable its tool, then set up its models and start it.",
   clients: "Agent clients",
   noClients: "No agent client this app can set up is installed or offered by a registry on this device.",
   launcher: "Launcher",
-  launcherHint: "Start CLI runs a client through this tool.",
+  launcherHint: "Client pages use this tool to launch clients.",
   noLauncher:
-    "The launcher (pluxy/execution) is not installed or offered by a registry, so Start CLI will not run.",
+    "The launcher (pluxy/execution) is not installed or offered by a registry, so clients cannot launch from here.",
   fullAccess:
     "A native tool has full access to your user account. Enabling one opens a native confirmation that shows its source, digest and signer; answer it there.",
   offered: "Not installed",
@@ -60,7 +58,7 @@ const t = strings("easyMode", {
   waiting: "Waiting for the native confirmation…",
   setUp: "Set up",
   registryError: "Registry {name}: {error}",
-  safeMode: "This device's extensions are in safe mode: no native tool runs until it is turned off.",
+  safeMode: "Extensions are in safe mode, so native tools are off. Restart the app without --safe-mode.",
 });
 
 /** A package's row: its state, and the one action that moves it on. */

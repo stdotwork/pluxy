@@ -30,9 +30,9 @@ import { lifetimeFor } from "./launcherForm";
 const t = strings("launcher", {
   title: "Launcher",
   short: "Launch",
-  tip: "Start agents and terminals you remembered, from host data",
+  tip: "Start remembered agents and terminals",
   intro:
-    "Launches you remembered start again in one click, here or from the tray's Start… menu. A new launch, or one whose program, folder or environment changed, asks in a native confirmation first. Detached launches keep running after the app quits.",
+    "Start remembered launches in one click here or from the tray's Start… menu. New or changed launches ask for confirmation. Detached launches keep running after you quit.",
   unavailable:
     "Install and enable the curated execution program (pluxy/execution) on the Device extensions page to launch from here.",
   remembered: "Remembered launches",
@@ -63,10 +63,10 @@ const t = strings("launcher", {
   managed: "Managed",
   managedNote: "the app stops it",
   terminalDetached:
-    "A launch in a terminal is detached: it keeps running after the app quits. Many terminals hand their windows to a server process and exit at once, so the app could not stop it. Launch directly to have the app stop it.",
+    "Terminal launches run detached and keep running after you quit. Launch directly if you want the app to stop them.",
   launch: "Start…",
   runtimes: "Managed runtimes",
-  noRuntimes: "No managed runtimes.",
+  noRuntimes: "No managed runtimes. Start a direct launch with Lifetime set to Managed.",
   stop: "Stop",
   restart: "Restart",
   notice: "Show a notice after a one-click start",

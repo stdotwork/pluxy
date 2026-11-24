@@ -28,7 +28,7 @@ import {
 import { reply } from "./host";
 
 const t = strings("environment", {
-  title: "Environment / configuration directory",
+  title: "Environment and configuration folder",
   description: "Choose where this client is set up and started.",
   where: "Environment",
   windows: "Windows local",
@@ -39,9 +39,9 @@ const t = strings("environment", {
   default: "default",
   version: "WSL {version}",
   startsDistro: "Reading users starts this distribution.",
-  detect: "Detect again",
+  detect: "Refresh",
   detecting: "Detecting available environments…",
-  empty: "No WSL distributions found. Install and start WSL, then detect again.",
+  empty: "No WSL distributions found. Install and start WSL, then press Refresh.",
   pickUser: "Pick a user to set up and start this client in WSL.",
   installLinux: "Install the Linux build for WSL",
   converted: "Converted the WSL path to {path}.",
