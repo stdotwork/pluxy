@@ -382,12 +382,14 @@ export function CodexPage() {
   // A write acts on the files the last preview pinned (the tool refuses them if one changed
   // since); the preview belongs to the selection it was read for, so a write never pins files unread.
   const selected = JSON.stringify(selection());
-  const { preview, accept } = usePreview<Preview>(selected);
+  const { preview, readFor } = usePreview<Preview>(selected);
   const read = useAction(() => {});
   const load = () =>
     read.run(async () => {
-      const r = await tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) });
-      if (r.body && accept(selected, r.body)) {
+      const r = await readFor(selected, () =>
+        tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) }),
+      );
+      if (r.body) {
         const f = fromFile(r.body.settings);
         setModel(f.model);
         setApproval(f.approval);

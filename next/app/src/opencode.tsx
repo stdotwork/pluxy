@@ -226,12 +226,14 @@ export function OpenCodePage() {
   // A write acts on the file the last preview pinned (the tool refuses it if the file changed
   // since); the preview belongs to the selection it was read for, so a write never pins a file unread.
   const selected = JSON.stringify(selection());
-  const { preview, accept } = usePreview<Preview>(selected);
+  const { preview, readFor } = usePreview<Preview>(selected);
   const read = useAction(() => {});
   const load = () =>
     read.run(async () => {
-      const r = await tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) });
-      if (r.body && accept(selected, r.body)) {
+      const r = await readFor(selected, () =>
+        tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) }),
+      );
+      if (r.body) {
         const listed = r.body.config.models ?? [];
         setModels(listed);
         setModel(r.body.config.model ?? listed[0]?.id ?? "");
