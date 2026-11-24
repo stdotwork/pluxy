@@ -305,7 +305,7 @@ func tokenPost(ctx context.Context, endpoint string, fields map[string]string, o
 			Error any `json:"error"`
 		}
 		_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&e)
-		f := &tokenFailure{status: resp.StatusCode, retryAfterMS: retryAfter(resp.Header.Get("Retry-After"), time.Now()), sent: true}
+		f := &tokenFailure{status: resp.StatusCode, retryAfterMS: sdk.RetryAfter(resp.Header.Get("Retry-After"), time.Now()), sent: true}
 		switch v := e.Error.(type) {
 		case string:
 			f.code = v

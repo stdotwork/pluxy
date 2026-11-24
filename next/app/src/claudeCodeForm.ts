@@ -1,6 +1,5 @@
 // The Claude Code page's form logic (claudeCode.tsx), apart from the page so its unit tests need no
-// webview: which vault keys the page offers, the form from what the settings file holds, and
-// whether the form can be applied.
+// webview: the form from what the settings file holds, and whether the form can be applied.
 
 import { inHome, linuxBuildMissing, notInWsl } from "./environment";
 
@@ -19,20 +18,6 @@ export const PACKAGE = "pluxy/claude-code";
 export const CLIENT = "Claude Code";
 export const WINDOW_DEFAULT = 200000;
 export const WINDOW_1M = 1000000;
-
-/** A vault secret as `vault_secrets` lists it: never its value. */
-export interface Secret {
-  id: string;
-  label: string;
-  /** Set for a captured client key: the package it may be given to. */
-  client_key?: { client: string };
-}
-
-/** The keys the page offers from `vault_secrets`'s answer (`{secrets: [...]}`): plain secrets, and
- * client keys bound to this package; a client key bound to another package would be refused. */
-export function keysOf(body: { secrets?: Secret[] } | undefined): Secret[] {
-  return (body?.secrets ?? []).filter((s) => !s.client_key || s.client_key.client === PACKAGE);
-}
 
 /** What the tool's preview reads back of the settings file; `refused` (with `reason`) for a file
  * Claude Code would not take, which apply and clear refuse and Restore Backup still reaches. */

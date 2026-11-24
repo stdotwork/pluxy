@@ -262,17 +262,21 @@ func (t upstreamTransport) oneShot(proxy string) (http.RoundTripper, error) {
 	conns := &dialedConns{}
 	dial := c.DialContext
 	if dial == nil {
+		//lint:ignore SA1019 the transport is the caller's: it may set only the deprecated hook, and a copy must keep honouring it
 		if d := c.Dial; d != nil {
 			dial = func(_ context.Context, network, addr string) (net.Conn, error) { return d(network, addr) }
 		} else {
 			dial = (&net.Dialer{}).DialContext
 		}
 	}
+	//lint:ignore SA1019 the transport is the caller's: it may set only the deprecated hook, and a copy must keep honouring it
 	c.Dial, c.DialContext = nil, conns.wrap(dial)
+	//lint:ignore SA1019 the transport is the caller's: it may set only the deprecated hook, and a copy must keep honouring it
 	if d := c.DialTLS; d != nil && c.DialTLSContext == nil {
 		c.DialTLSContext = func(_ context.Context, network, addr string) (net.Conn, error) { return d(network, addr) }
 	}
 	if c.DialTLSContext != nil {
+		//lint:ignore SA1019 the transport is the caller's: it may set only the deprecated hook, and a copy must keep honouring it
 		c.DialTLS, c.DialTLSContext = nil, conns.wrap(c.DialTLSContext)
 	}
 	return oneShotTransport{c, conns}, nil

@@ -31,7 +31,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -425,10 +424,10 @@ func upstreamError(resp *http.Response, model string) *llm.Error {
 			e.Code, e.RetryAfterMS = llm.CodeQuota, freeUsageCooldownMS
 			break
 		}
-		e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"), time.Now())
+		e.RetryAfterMS = sdk.RetryAfter(resp.Header.Get("Retry-After"), time.Now())
 	case s == http.StatusServiceUnavailable || s == 529:
 		e.Code, e.Scope = llm.CodeUnavailable, llm.ScopeEndpoint
-		e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"), time.Now())
+		e.RetryAfterMS = sdk.RetryAfter(resp.Header.Get("Retry-After"), time.Now())
 	case s >= 500:
 		e.Code, e.Scope = llm.CodeUpstream, llm.ScopeEndpoint
 	default:
@@ -447,20 +446,4 @@ func badCredentials(lower string) bool {
 // markers today's core uses.
 func freeUsageUsedUp(lower string) bool {
 	return strings.Contains(lower, "free-usage-exhausted") || strings.Contains(lower, "included free usage")
-}
-
-// retryAfter reads a Retry-After header: delay seconds or an HTTP date.
-func retryAfter(v string, now time.Time) int64 {
-	if v == "" {
-		return 0
-	}
-	if secs, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil && secs >= 0 {
-		return secs * 1000
-	}
-	if t, err := http.ParseTime(v); err == nil {
-		if d := t.Sub(now); d > 0 {
-			return d.Milliseconds()
-		}
-	}
-	return 0
 }

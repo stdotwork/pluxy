@@ -6,7 +6,7 @@
   "scripts": {
     "build": "bun build.ts",
     "check": "tsc --noEmit",
-    "lint": "biome check .",
+    "lint": "biome check --error-on-warnings .",
     "test": "bun test tests",
     "test:native": "bun native/run.ts",
     "test:native:platform": "bun native/platform.ts",

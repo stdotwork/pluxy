@@ -22,6 +22,17 @@
 // With -cpa as well, that home folder holds a CLIProxyAPI setup (~/.cli-proxy-api: a config.yaml
 // and an auth folder of three made-up accounts), which the scan finds and an import can read.
 //
+// With -demo, core looks lived in, for people and agents who work on the panel or the app
+// without real provider accounts: eleven accounts of four providers in the states the product
+// has (healthy, cooling after a rate limit, exhausted, near a limit, with and without usage
+// windows, closed by the provider, needing a new sign-in, turned off), three client keys, a
+// fallback chain, a few hundred usage events over a week, and request logs, failed requests
+// included. The requests are real ones sent to core, which routes them to the fake extensions,
+// so the usage and the routing state are core's own; only the days before today are written
+// into core's usage folder (demo.go says why). The seed is fixed and the output the same line.
+//
+// With -listen <address>, core listens there (default 127.0.0.1:0, a random free port).
+//
 // With -prepare <folder>, it starts nothing: it builds core into <folder>/pluxy and writes the
 // test packages as core's bundled packages, <folder>/bundled/index.json (where core looks for
 // them beside its program; a core started from there installs none of them until asked), prints
@@ -75,14 +86,23 @@ func main() {
 	probe := flag.Bool("probe", false, "also offer test/probe, the desktop app's native test page")
 	firstRun := flag.Bool("first-run", false, "start core as a new install: nothing installed, no accounts, a home folder and PATH of its own")
 	cpa := flag.Bool("cpa", false, "with -first-run: put a CLIProxyAPI setup (a config.yaml and three auth files, all made up) in the home folder")
+	demoMode := flag.Bool("demo", false, "fill core with accounts in every state, usage and request logs (not with -first-run or -prepare)")
+	listen := flag.String("listen", "127.0.0.1:0", "the address core listens on (default: a random free port on loopback)")
 	// The claude program of -first-run is a copy of this one: asked for its version, it prints one.
 	if len(os.Args) == 2 && os.Args[1] == "--version" {
 		fmt.Println(fakeClaudeVersion + " (Claude Code)")
 		return
 	}
 	flag.Parse()
+	if *demoMode && (*firstRun || *prepare != "") {
+		fmt.Fprintln(os.Stderr, "panelcore: -demo fills a running core with data: it does not go with -first-run or -prepare")
+		os.Exit(2)
+	}
 	if *probe {
 		testPackages = append(testPackages, probePackage)
+	}
+	if *demoMode {
+		testPackages = append(testPackages, demoPackages...)
 	}
 	var err error
 	switch {
@@ -90,9 +110,9 @@ func main() {
 		err = prepareOnly(*prepare)
 	case *firstRun:
 		testPackages = []pkg{firstRunPackage}
-		err = serve(*withTLS, true, *cpa)
+		err = serve(*withTLS, true, *cpa, false, *listen)
 	default:
-		err = serve(*withTLS, false, false)
+		err = serve(*withTLS, false, false, *demoMode, *listen)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "panelcore:", err)
@@ -134,8 +154,9 @@ func prepareOnly(dir string) error {
 // serve builds core and the test extension, starts core with them, prints its address and
 // management key, and runs until stdin ends or a signal arrives. The deferred calls stop core
 // and then remove the temporary folder, also when setup fails. firstRun: core starts as a new
-// install does (see the package comment). cpa: its home folder holds a CLIProxyAPI setup.
-func serve(withTLS, firstRun, cpa bool) error {
+// install does (see the package comment). cpa: its home folder holds a CLIProxyAPI setup. demo:
+// core is filled as -demo says. listen is the address core listens on.
+func serve(withTLS, firstRun, cpa, demo bool, listen string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -174,9 +195,26 @@ func serve(withTLS, firstRun, cpa bool) error {
 	if err != nil {
 		return err
 	}
-	cfgPath, err := writeConfig(dir, clientKey, mgmtKey, withTLS, firstRun)
+	var setup *demoSetup
+	if demo {
+		keys := []string{clientKey}
+		for range 2 {
+			k, err := randomKey()
+			if err != nil {
+				return err
+			}
+			keys = append(keys, k)
+		}
+		setup = &demoSetup{now: time.Now(), keys: keys}
+	}
+	cfgPath, err := writeConfig(dir, clientKey, mgmtKey, listen, withTLS, firstRun, setup)
 	if err != nil {
 		return err
+	}
+	if setup != nil {
+		if err := writeDemoUsage(dir, setup); err != nil {
+			return err
+		}
 	}
 	var env []string
 	if firstRun {
@@ -208,6 +246,11 @@ func serve(withTLS, firstRun, cpa bool) error {
 			}
 		}
 		if err := disablePackage(base, mgmtKey, "test/beta"); err != nil {
+			return err
+		}
+	}
+	if setup != nil {
+		if err := seedDemo(base, mgmtKey, setup); err != nil {
 			return err
 		}
 	}
@@ -559,14 +602,14 @@ func randomKey() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-// writeConfig writes core's config file with the local extension's account and the two accounts
-// of test/alpha, and returns its path.
-// writeConfig writes core's config. remote: core stands for a remote core behind an https
+// writeConfig writes core's config, with the local extension's account and the two accounts of
+// test/alpha, and returns its path. core listens on listen. demo, when not nil: the
+// config also holds the demo's keys and accounts (see demoConfig). remote: core stands for a remote core behind an https
 // proxy, whose forwarded calls the management API answers only with management_allow_remote.
 // firstRun: the config names no extension and no account.
-func writeConfig(dir, clientKey, mgmtKey string, remote, firstRun bool) (string, error) {
+func writeConfig(dir, clientKey, mgmtKey, listen string, remote, firstRun bool, demo *demoSetup) (string, error) {
 	cfg := map[string]any{
-		"listen":          "127.0.0.1:0",
+		"listen":          listen,
 		"client_keys":     []string{clientKey},
 		"management_key":  mgmtKey,
 		"credentials_dir": filepath.Join(dir, "credentials"),
@@ -593,6 +636,9 @@ func writeConfig(dir, clientKey, mgmtKey string, remote, firstRun bool) (string,
 	if firstRun {
 		delete(cfg, "extension")
 		delete(cfg, "extensions")
+	}
+	if demo != nil {
+		demoConfig(cfg, demo)
 	}
 	if remote {
 		cfg["management_allow_remote"] = true

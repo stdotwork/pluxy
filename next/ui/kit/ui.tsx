@@ -49,17 +49,25 @@ export function useLayout(): Layout {
   return useThemeState().resolved.layout;
 }
 
-export interface Loaded<T> {
-  data?: T;
-  error?: string;
-  loading: boolean;
-  reload(): void;
-}
+/**
+ * What useLoad knows. phase tells the cases apart: "loading" is no reply yet (never loaded);
+ * "ready" is the last reply worked, and data is what it carried, which may be empty; "failed" is
+ * the last reply did not work, with its error, and data is whatever the last good reply carried
+ * (none when the first reply failed). loading is true while a request is on its way, also on a
+ * reload, when data and error are still the last reply's.
+ */
+export type Loaded<T> = LoadState<T> & { reload(): void };
 
-/** Loads one management API reply, again on reload(). */
+type LoadState<T> = { loading: boolean } & (
+  | { phase: "loading"; data?: undefined; error?: undefined }
+  | { phase: "ready"; data?: T; error?: undefined }
+  | { phase: "failed"; data?: T; error: string }
+);
+
+/** Loads one management API reply, again on reload(). A failed reload keeps the last good data. */
 export function useLoad<T>(load: () => Promise<Reply<T>>): Loaded<T> {
   const { unauthorized } = useKit();
-  const [state, setState] = useState<{ data?: T; error?: string; loading: boolean }>({ loading: true });
+  const [state, setState] = useState<LoadState<T>>({ phase: "loading", loading: true });
   const [n, setN] = useState(0);
   const loadRef = useRef(load);
   loadRef.current = load;
@@ -69,7 +77,12 @@ export function useLoad<T>(load: () => Promise<Reply<T>>): Loaded<T> {
     loadRef.current().then((r) => {
       if (!live) return;
       if (r.status === 401) return unauthorized();
-      setState({ data: r.body, error: problem(r), loading: false });
+      const error = problem(r);
+      setState((s) =>
+        error === undefined
+          ? { phase: "ready", data: r.body, loading: false }
+          : { phase: "failed", data: s.data, error, loading: false },
+      );
     });
     return () => {
       live = false;

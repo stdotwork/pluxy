@@ -6,8 +6,8 @@
 // only names a remembered launch or the fields of a new one: the native side prepares, confirms and
 // spawns.
 
-import { invoke } from "@tauri-apps/api/core";
 import { useId, useState } from "preact/hooks";
+import type { Reply } from "../../ui/kit/host";
 import type { PageDef } from "../../ui/kit/shell";
 import { strings } from "../../ui/kit/strings";
 import {
@@ -24,6 +24,7 @@ import {
   useLoad,
   when,
 } from "../../ui/kit/ui";
+import { reply } from "./host";
 import { lifetimeFor } from "./launcherForm";
 
 const t = strings("launcher", {
@@ -66,6 +67,7 @@ const t = strings("launcher", {
   launch: "Start…",
   runtimes: "Managed runtimes",
   noRuntimes: "No managed runtimes.",
+  loading: "Loading…",
   stop: "Stop",
   restart: "Restart",
   notice: "Show a notice after a one-click start",
@@ -99,16 +101,6 @@ interface Runtime {
   pid: number;
   executable: string;
   argv: string[];
-}
-
-type Reply<T> = { status: number; body?: T; error?: { code: string; message: string } };
-
-async function reply<T>(cmd: string, args?: Record<string, unknown>): Promise<Reply<T>> {
-  try {
-    return { status: 200, body: await invoke<T>(cmd, args) };
-  } catch (e) {
-    return { status: 400, error: { code: "refused", message: String(e) } };
-  }
 }
 
 const PACKAGE = "pluxy/execution";
@@ -243,9 +235,11 @@ function Runtimes() {
   const live = (list.data ?? []).filter((r) => r.state === "running" || r.state === "stopping");
   return (
     <Card title={t("runtimes")}>
+      {list.phase === "loading" && <Notice tone="muted">{t("loading")}</Notice>}
+      {list.error && <Notice tone="danger">{list.error}</Notice>}
       {action.error && <Notice tone="danger">{action.error}</Notice>}
       {live.length === 0 ? (
-        <Empty>{t("noRuntimes")}</Empty>
+        list.data && <Empty>{t("noRuntimes")}</Empty>
       ) : (
         <List
           label={t("runtimes")}
@@ -288,6 +282,7 @@ export function LauncherPage() {
     <div class="stack">
       <PageHead title={t("title")} />
       <p class="muted">{t("intro")}</p>
+      {state.phase === "loading" && <Notice tone="muted">{t("loading")}</Notice>}
       {state.error && <Notice tone="danger">{state.error}</Notice>}
       {action.error && <Notice tone="danger">{action.error}</Notice>}
       {s && !s.available && <Notice tone="warn">{t("unavailable")}</Notice>}

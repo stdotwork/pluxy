@@ -484,6 +484,13 @@ when it shares its extension with an account that serves it. The member holds co
 never the words of an upstream's reply. `routing.explain` `false` leaves out the `X-Pluxy-*` headers
 and the member, and keeps the trace ID.
 
+Core's log line for such an error says the same to the operator, after the error's own message:
+`model=gpt-5 tried=[work-codex(pluxy/codex): quota] left_out=[spare: exhausted until
+2026-11-09T17:00:00Z; old-key: banned]`. It names each account by its ID in the config, as the line's
+`account` and core's other log lines do (the client's member has the public ID), and the first 8
+accounts of each list, counting the rest (`+3 more`). It is written when `routing.explain` is
+`false` too, since the log is the operator's, not the client's.
+
 An upstream's error keeps the fields the client's format shares with the upstream's. A Messages
 client keeps `request_id` and the text `error_code` of `error.details` from a Messages upstream
 (the rest of `details` is not forwarded, since it can identify the upstream's organization), a Chat or Responses client
@@ -2314,6 +2321,9 @@ the running config in place, and management shows why. That reason, in the log, 
 when core refuses to start, has the config's secrets replaced by placeholders, as `GET
 /v0/management/config` shows them. `listen`, `tls`, `credentials_dir`,
 `packages.dir` and `extension_pages.listen` cannot change without a restart.
+A key a JSON config has that core does not read is not an error: each load logs one `warning:` line
+naming the file and the keys (such as `routing.explian`), and core ignores them; a wrong type or a
+syntax error names the key path or the line and column.
 
 When the extension's manifest or program changes, a reload starts the new version and waits for
 its handshake before switching. The old version then drains: it finishes the requests that
@@ -2420,7 +2430,7 @@ its keys and its indent. `PUT /config` writes the document as sent.
 | Call | What it does |
 | --- | --- |
 | `GET /v0/management/config` | The config file: `format` (`json` or `yaml`), `hash` (as in status) and `content`, the file as written with each secret replaced by a placeholder such as `pluxy-redacted-4f1c...`. Secrets are found by key name, in both layouts of a `config.yaml` and in the JSON config: client keys, the management key, every `api-key` and `api_key`, everything in an account's `credential` except its `kind`, passwords, tokens and secrets (names are compared in lower case whatever joins their words, or none, so `accessToken` and `accesstoken` are `access_token`, with letters folded as core matches a JSON key to a setting, so `client_keyſ` is `client_keys`; `aws_secret_access_key`, `client_secrets` and `passwords` are ones too, and so is a name that ends in a number or a word saying how the value is written, such as `apiKey2`, `api_key_value` or `privateKeyPem`), header values about authentication (`Authorization`, `X-Api-Key`, cookies) or named like a secret in any mapping whose name holds `header` (`extra_headers`, `headers_override`), and any URL with a user name, password or query, or with a parameter named like a secret in its fragment. Everything below a key named like a secret is a secret, however deep, also when given through a YAML alias (as a value, or as a key's name), as `GET /accounts` shows a login account's settings, except in today's core's provider sections at the top of a `config.yaml` (the sections of the v8 `api-keys` mapping, such as `codex`, and the older lists such as `codex-api-key`), whose entries are read by these rules; any other key of the v8 `api-keys` mapping is read as a secret key. A string secret of 8 bytes or more written again as a whole value anywhere else in the file (a note holding a key) is hidden there too; a shorter copy, or a number, is shown, and so is a copy of a value that is a secret only for being in a mapping below a secret key. `true`, `false`, `null` and the empty string never are secrets, as they carry none. Comments are shown as written. 422 when the file does not parse. Today's core returns its config, the management key's hash and provider keys included, as they are. |
-| `POST /v0/management/config/validate` | `{"content": "..."}`: checks a document as a reload would, without starting extensions or writing anything, placeholders put back as `PUT /config` puts them (below). 200 with `valid: true` and the `notices` a `config.yaml` load logs, or `valid: false` and `error`, such as for a placeholder where its secret is not. |
+| `POST /v0/management/config/validate` | `{"content": "..."}`: checks a document as a reload would, without starting extensions or writing anything, placeholders put back as `PUT /config` puts them (below). 200 with `valid: true` and the `notices` a load logs (such as a `config.yaml`'s unsupported settings or a JSON config's unknown keys), or `valid: false` and `error`, such as for a placeholder where its secret is not. |
 | `PUT /v0/management/config` | `{"content": "...", "base_hash": "..."}`: replaces the file with the document and applies it. Each placeholder goes back only where its own secret is in the file now: the same account or list item (by its `id` or `name` when it holds that item's secrets, else by its secrets), and the same keys, also where a YAML alias or merge key reads it (below). 200 with the file as `GET /config` shows it; 409 when `base_hash` is set and the file has changed since; 422 with `error` when core refuses the document, such as for a placeholder anywhere else, naming its line; a refused document writes nothing. |
 | `GET /v0/management/client-keys` | The client keys: each one's `id` (a keyed hash whose key is kept in `state/key-id.key` beside the config file, mode `0600`, so IDs stay the same across restarts) and `masked` form (first and last two characters, as the old panel showed them; a key shorter than 8 characters is hidden whole). |
 | `POST /v0/management/client-keys` | Adds a new random client key (`sk-` and 26 random characters). 201 with the key's `id` and `masked` form and its `value`, which no later call shows. |

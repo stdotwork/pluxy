@@ -3,8 +3,7 @@
 // and curated native tools (src-tauri/src/device_admission.rs). Each call
 // answers in the kit's reply shape, so pages can use the kit's loading and action helpers.
 
-import { invoke } from "@tauri-apps/api/core";
-import type { Reply } from "../../ui/kit/host";
+import { reply } from "./host";
 
 export interface DevicePage {
   id: string;
@@ -138,14 +137,6 @@ export interface DeviceRegistry {
   url: string;
   error?: string;
   packages: DeviceOffer[];
-}
-
-async function reply<T>(cmd: string, args?: Record<string, unknown>): Promise<Reply<T>> {
-  try {
-    return { status: 200, body: await invoke<T>(cmd, args) };
-  } catch (e) {
-    return { status: 400, error: { code: "refused", message: String(e) } };
-  }
 }
 
 /** Applies only the newest of the replies it is given, in the order it was given them: a reply

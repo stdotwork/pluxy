@@ -1,6 +1,6 @@
 // The Grok Build page's form logic (grok.tsx), apart from the page so its unit tests need no
-// webview: which vault keys the page offers, the catalog rows from what the config holds and from
-// the core's models, and whether the form can be applied.
+// webview: the catalog rows from what the config holds and from the core's models, and whether the
+// form can be applied.
 
 export const PACKAGE = "pluxy/grok-setup";
 /** The client label the tool's recipe gives its launches, which the launcher keys recent folders by. */
@@ -9,20 +9,6 @@ export const CLIENT = "Grok Build";
 export const WINDOW = 200000;
 /** The most models one apply writes (the tool's limit). */
 export const MODELS_MAX = 256;
-
-/** A vault secret as `vault_secrets` lists it: never its value. */
-export interface Secret {
-  id: string;
-  label: string;
-  /** Set for a captured client key: the package it may be given to. */
-  client_key?: { client: string };
-}
-
-/** The keys the page offers from `vault_secrets`'s answer (`{secrets: [...]}`): plain secrets, and
- * client keys bound to this package; a client key bound to another package would be refused. */
-export function keysOf(body: { secrets?: Secret[] } | undefined): Secret[] {
-  return (body?.secrets ?? []).filter((s) => !s.client_key || s.client_key.client === PACKAGE);
-}
 
 /** One of pluxy's model entries as the preview reads it back. */
 export interface Entry {

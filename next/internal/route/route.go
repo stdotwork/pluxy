@@ -537,9 +537,7 @@ func (c *call) route() llm.Event {
 		if u := c.usageLimit(ev.Error); u != nil {
 			ev.Error = u
 		}
-		if c.r.cfg.ExplainOn() {
-			ev.Error = c.explained(ev.Error)
-		}
+		ev.Error = c.explained(ev.Error)
 	}
 	return ev
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 	"github.com/stdotwork/pluxy/next/sdk"
+	"github.com/stdotwork/pluxy/next/sdk/sdktest"
 )
 
 // siwcCred is a SIWC credential as the login makes it.
@@ -150,10 +151,10 @@ func TestSIWCGrantChecks(t *testing.T) {
 	set, _ := readSettings(testAccount(srv, nil).Settings)
 	_, refreshToken := srv.SIWCGrant()
 	_, err := refresh(context.Background(), sdk.RefreshCall{Account: testAccount(srv, siwcCred("a", refreshToken))})
-	wantError(t, err, llm.CodeAuth, false)
+	sdktest.WantError(t, err, llm.CodeAuth, false)
 
 	_, err = siwcExchange(context.Background(), set, url.Values{"code": {"c"}, "state": {"s"}}, "v", "d")
-	wantError(t, err, llm.CodeAuth, false)
+	sdktest.WantError(t, err, llm.CodeAuth, false)
 	if n := len(srv.SIWCCalls()); n != 1 {
 		t.Errorf("a result without an issued client reached the token endpoint (%d calls)", n)
 	}
@@ -165,7 +166,7 @@ func TestSIWCGrantChecks(t *testing.T) {
 	raw, _ := json.Marshal(map[string]any{"auth_base_url": noID.URL})
 	set, _ = readSettings(raw)
 	_, err = siwcExchange(context.Background(), set, url.Values{"code": {"c"}, "client_id": {"x"}}, "v", "d")
-	wantError(t, err, llm.CodeUpstream, false)
+	sdktest.WantError(t, err, llm.CodeUpstream, false)
 
 	// A renewal reply without a refresh token is refused, as today's core refuses it, so core
 	// keeps the stored credential and its refresh token.
@@ -175,7 +176,7 @@ func TestSIWCGrantChecks(t *testing.T) {
 	defer noRefresh.Close()
 	raw, _ = json.Marshal(map[string]any{"auth_base_url": noRefresh.URL})
 	renewed, err := refresh(context.Background(), sdk.RefreshCall{Account: protocol.Account{Settings: raw, Credential: siwcCred("a", "r")}})
-	wantError(t, err, llm.CodeUpstream, false)
+	sdktest.WantError(t, err, llm.CodeUpstream, false)
 	if renewed != nil {
 		t.Errorf("renewed without a refresh token: %+v", renewed)
 	}
@@ -183,7 +184,7 @@ func TestSIWCGrantChecks(t *testing.T) {
 	c := siwcCred("a", "r")
 	c.Data = json.RawMessage(`{"siwc":true}`)
 	_, err = refresh(context.Background(), sdk.RefreshCall{Account: testAccount(srv, c)})
-	wantError(t, err, llm.CodeAuth, false)
+	sdktest.WantError(t, err, llm.CodeAuth, false)
 }
 
 // siwcRequest builds the upstream request generate would send on a SIWC account.
@@ -224,6 +225,7 @@ func TestSIWCRequestRules(t *testing.T) {
 			t.Errorf("%s: %q, want %q", name, got, want)
 		}
 	}
+	//lint:ignore SA1008 the request carries the lowercase key session_id as the SIWC rules require, so the map is read without canonicalizing
 	if got := h["session_id"]; len(got) != 1 || got[0] != "cache-1" {
 		t.Errorf("session_id %v, want cache-1", got)
 	}
@@ -316,7 +318,7 @@ func TestSIWCCompaction(t *testing.T) {
 		`{"model":"gpt-6.1-sol","input":[{"role":"user","content":"hi"},{"type":"configuration_update","reasoning":{"effort":"high"}}],"store":true,"instructions":"","temperature":1}`,
 		map[string]string{"session-id": "s1"})
 	err := endpoint(context.Background(), call, nil)
-	wantError(t, err, llm.CodeInvalidRequest, false)
+	sdktest.WantError(t, err, llm.CodeInvalidRequest, false)
 	if c.count() != 1 {
 		t.Fatalf("%d upstream requests", c.count())
 	}
@@ -359,7 +361,7 @@ func TestSIWCRefusals(t *testing.T) {
 	unsupported("Codex client turn", sess.Turn(context.Background(), turn, nil))
 	// A quota call is not routed, so its refusal is not retryable (as for an API key).
 	_, err := quota(context.Background(), sdk.QuotaCall{Account: siwcCall(c, "", "{}", nil).Account})
-	wantError(t, err, llm.CodeUnsupported, false)
+	sdktest.WantError(t, err, llm.CodeUnsupported, false)
 	if c.count() != 0 {
 		t.Errorf("%d requests reached the upstream", c.count())
 	}
@@ -367,7 +369,7 @@ func TestSIWCRefusals(t *testing.T) {
 	// Other clients' requests are served.
 	err = generate(context.Background(), siwcCall(c, llm.FormatOpenAIResponses, `{"model":"gpt-6.1-sol","input":"hi"}`,
 		map[string]string{"user-agent": "OpenAI/Python 2.1.0"}), nil)
-	wantError(t, err, llm.CodeInvalidRequest, false)
+	sdktest.WantError(t, err, llm.CodeInvalidRequest, false)
 	if c.count() != 1 || c.reqs[0].URL.Path != "/v1/responses" || c.reqs[0].Header.Get("Authorization") != "Bearer siwc-access" {
 		t.Errorf("a non-Codex client's request was not sent as SIWC")
 	}

@@ -44,7 +44,7 @@ type ProtoSchema struct {
 func encodeConnect(frames []ConnectFrame) ([]byte, error) {
 	var out bytes.Buffer
 	for i, f := range frames {
-		flags, payload := byte(0), []byte{}
+		flags, payload := byte(0), []byte(nil)
 		switch {
 		case len(f.End) > 0:
 			flags = 2

@@ -38,7 +38,6 @@ import (
 	"net/url"
 	"os"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -740,19 +739,19 @@ func upstreamErrorFor(ctx context.Context, resp *http.Response, model string, re
 			// A quota is used up, not a request rate exceeded (RATE_LIMIT_EXCEEDED).
 			e.Code = llm.CodeQuota
 		}
-		e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"), now)
+		e.RetryAfterMS = sdk.RetryAfter(resp.Header.Get("Retry-After"), now)
 		if e.RetryAfterMS == 0 {
 			e.RetryAfterMS = parsed.retryDelay()
 		}
 	case s == http.StatusServiceUnavailable:
 		// Not retry-safe: Google answers 503 for an overloaded model, which may have started.
 		e.Code, e.Scope = llm.CodeUnavailable, llm.ScopeEndpoint
-		e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"), time.Now())
+		e.RetryAfterMS = sdk.RetryAfter(resp.Header.Get("Retry-After"), time.Now())
 	case s >= 500:
 		// The upstream may have run the request before failing, so retrying is not known safe.
 		e.Code, e.Scope = llm.CodeUpstream, llm.ScopeEndpoint
 		if s == 529 {
-			e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"), time.Now())
+			e.RetryAfterMS = sdk.RetryAfter(resp.Header.Get("Retry-After"), time.Now())
 		}
 		// Google's error table gives this as a cause of 500 INTERNAL: the request's, not the account's.
 		if s == http.StatusInternalServerError && strings.Contains(strings.ToLower(e.Message), "input context is too long") {
@@ -764,22 +763,6 @@ func upstreamErrorFor(ctx context.Context, resp *http.Response, model string, re
 		_ = llm.MarkContextOverflow(e)
 	}
 	return e
-}
-
-// retryAfter reads a Retry-After header: delay seconds or an HTTP date.
-func retryAfter(v string, now time.Time) int64 {
-	if v == "" {
-		return 0
-	}
-	if secs, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil && secs >= 0 {
-		return secs * 1000
-	}
-	if t, err := http.ParseTime(v); err == nil {
-		if d := t.Sub(now); d > 0 {
-			return d.Milliseconds()
-		}
-	}
-	return 0
 }
 
 // isAccountClosed reports whether a 401 or 403 reply says the account itself has been

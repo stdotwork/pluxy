@@ -39,6 +39,13 @@
 // window full until then; "generate_log" names a file each request on the account appends the
 // account's ID to, one line each.
 //
+// Four more settings are for the demo mode of e2e/panelcore, each off unless an account sets it:
+// "report_usage" makes each reply carry token counts (derived from the request, so the same
+// request always reports the same), "five_hour_percent" and "weekly_percent" move how much of the
+// two windows the quota shows used, and "no_limits" makes quota report the plan and no windows.
+// A browser login with code=revoked signs in an account whose renewal is then refused for good,
+// as a provider's is that revoked the sign-in: the account needs a new login.
+//
 // A file named crash-on-start in the package folder makes it exit before its handshake. Each
 // start appends the process ID to the file starts in the package folder.
 package main
@@ -76,6 +83,14 @@ type settings struct {
 	ExhaustedUntil int64 `json:"exhausted_until"`
 	// GenerateLog, when set, is a file each request appends the account's ID to.
 	GenerateLog string `json:"generate_log"`
+	// ReportUsage makes each reply report token counts.
+	ReportUsage bool `json:"report_usage"`
+	// FiveHourPercent and WeeklyPercent, when set, are the share of each window the quota shows
+	// used, in place of the fixed ones.
+	FiveHourPercent *float64 `json:"five_hour_percent"`
+	WeeklyPercent   *float64 `json:"weekly_percent"`
+	// NoLimits makes the quota show the plan and no windows.
+	NoLimits bool `json:"no_limits"`
 }
 
 // The models that fail on purpose.
@@ -103,6 +118,9 @@ const (
 	deviceDelay   = 3 * time.Second
 	refusedReason = "the test provider refused this sign-in"
 	refusedKey    = "bad"
+	// revokedRefreshToken is the refresh token of a sign-in the provider revoked (login code=revoked):
+	// its renewal is refused.
+	revokedRefreshToken = "demo-rt-9a41c07e"
 )
 
 var loginMethods = []protocol.LoginMethod{
@@ -254,7 +272,36 @@ func generate(ctx context.Context, call sdk.Call, out *sdk.Stream, reply string)
 	if err := out.EndItem(item); err != nil {
 		return err
 	}
-	return out.Finish(llm.Finish{Reason: llm.FinishStop, RawReason: "stop"}, nil)
+	var usage *llm.Usage
+	if s.ReportUsage {
+		usage = reportedUsage(call.Request)
+	}
+	return out.Finish(llm.Finish{Reason: llm.FinishStop, RawReason: "stop"}, usage)
+}
+
+// reportedUsage derives token counts from the request, so a request always reports the same: the
+// input is a quarter of the request's items in bytes, the output is the most it allows (16 when it
+// sets no limit), and some requests read part of their input from a cache. Models that sound like
+// larger ones spend a fifth of their output on reasoning.
+func reportedUsage(req llm.Request) *llm.Usage {
+	body, _ := json.Marshal(req.Items)
+	in, out := int64(len(body)/4+1), int64(16)
+	if m := req.Options.MaxOutputTokens; m != nil && *m > 0 {
+		out = int64(*m)
+	}
+	u := &llm.Usage{InputTokens: &in, OutputTokens: &out}
+	if (in+out)%3 == 0 {
+		cached := in / 3
+		u.CachedInputTokens = &cached
+	}
+	for _, big := range []string{"large", "pro", "sonnet"} {
+		if strings.Contains(req.Model, big) {
+			reasoning := out / 5
+			u.ReasoningTokens = &reasoning
+			break
+		}
+	}
+	return u
 }
 
 // login signs in with the method the call names.
@@ -277,6 +324,8 @@ func login(ctx context.Context, call sdk.LoginCall, s *sdk.LoginSession) (*proto
 			switch code {
 			case "ok":
 				return grant(call.Account.ID, oauthCredential("fake-refresh-token")), nil
+			case "revoked":
+				return grant(call.Account.ID, oauthCredential(revokedRefreshToken)), nil
 			case "bad":
 				return nil, &llm.Error{Code: llm.CodeAuth, Message: refusedReason}
 			}
@@ -333,6 +382,9 @@ func refresh(_ context.Context, call sdk.RefreshCall) (*protocol.Credential, err
 	if c == nil || c.Kind != protocol.CredentialOAuth {
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "only a signed-in account's credential is renewed", Scope: llm.ScopeCredential}
 	}
+	if c.RefreshToken == revokedRefreshToken {
+		return nil, &llm.Error{Code: llm.CodeAuth, Message: "the test provider revoked this sign-in", Status: http.StatusUnauthorized, Scope: llm.ScopeCredential}
+	}
 	return oauthCredential(c.RefreshToken), nil
 }
 
@@ -368,13 +420,22 @@ func quota(_ context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 		weeklyReset = s.WeeklyResetsAt
 	}
 	pct := func(v float64) *float64 { return &v }
-	fiveHourUsed := float64(fiveHourPercent)
+	if s.NoLimits {
+		return &protocol.Quota{Plan: quotaPlan, Limits: []protocol.QuotaLimit{}}, nil
+	}
+	fiveHourUsed, weeklyUsed := float64(fiveHourPercent), float64(weeklyPercent)
+	if s.FiveHourPercent != nil {
+		fiveHourUsed = *s.FiveHourPercent
+	}
+	if s.WeeklyPercent != nil {
+		weeklyUsed = *s.WeeklyPercent
+	}
 	if s.ExhaustedUntil > time.Now().Unix() {
 		fiveHourUsed, fiveHourReset = 100, s.ExhaustedUntil
 	}
 	limits := []protocol.QuotaLimit{
 		{ID: "five_hour", Label: "5-hour limit", UsedPercent: pct(fiveHourUsed), ResetsAt: fiveHourReset, WindowSeconds: fiveHourWindowSec},
-		{ID: "weekly", Label: "Weekly limit", UsedPercent: pct(weeklyPercent), ResetsAt: weeklyReset, WindowSeconds: weeklyWindowSec},
+		{ID: "weekly", Label: "Weekly limit", UsedPercent: pct(weeklyUsed), ResetsAt: weeklyReset, WindowSeconds: weeklyWindowSec},
 	}
 	if s.ManualResets != nil {
 		// The manual resets the Codex extension reports: a count, with no reset time.
