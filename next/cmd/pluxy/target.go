@@ -25,7 +25,7 @@ type target struct {
 // file at configPath says for the one missing: its listen address (on this machine when it
 // listens on every interface) and its management key. A core serving TLS with its own
 // certificate is called with that certificate trusted.
-func findCore(configPath, addr, key string) (target, error) {
+func findCore(configPath string, configFlagSet bool, addr, key string) (target, error) {
 	t := target{url: addr, key: key, http: &http.Client{Timeout: 2 * time.Minute}}
 	if addr != "" && key != "" {
 		return t, nil
@@ -33,7 +33,10 @@ func findCore(configPath, addr, key string) (target, error) {
 	cfg, err := server.LoadConfig(configPath)
 	if err != nil {
 		if addr == "" && errors.Is(err, os.ErrNotExist) {
-			return t, fmt.Errorf("no config file at %s: pass --config, or --url and --key (or set PLUXY_URL and PLUXY_MANAGEMENT_KEY)", configPath)
+			if configFlagSet {
+				return t, fmt.Errorf("no config file at %s. Check the --config path, run pluxy init -config %s, or pass --url and --key", configPath, configPath)
+			}
+			return t, fmt.Errorf("no config file at ./%s in this folder. Run pluxy init to write one, or pass --config <file>, or --url and --key", configPath)
 		}
 		if addr == "" {
 			return t, core.ScrubConfigError(configPath, err)

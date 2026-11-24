@@ -74,7 +74,7 @@ func (x *invocation) explainNoRequestLog(err error) error {
 		return err
 	}
 	named := *ae
-	named.Message += `; request logging is off, so only requests that failed are logged: turn on "Enable request logging" in the Config Panel, then send the request again`
+	named.Message += `; request logging is off, so only requests that failed are logged. Set "logs": {"request_log": true} in core's config file, run pluxy reload, then send the request again`
 	return &named
 }
 

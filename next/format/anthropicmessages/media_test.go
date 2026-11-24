@@ -1,6 +1,7 @@
 package anthropicmessages
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -169,6 +170,50 @@ func TestEncodeTranslatedFileDataForms(t *testing.T) {
 		}
 		if strings.Contains(string(body), "%%%") || len(losses) != 1 || losses[0].Kind != llm.LossDropped {
 			t.Errorf("%s: body %s, losses %+v; want the file dropped", c.name, body, losses)
+		}
+	}
+}
+
+// A native Messages document block with a base64 image source is promoted to an image block
+// regardless of the media type's case.
+func TestEncodeDocumentImageMediaTypeCase(t *testing.T) {
+	encodeType := func(mediaType string) string {
+		t.Helper()
+		req, err := ParseRequest([]byte(`{"model":"m","max_tokens":9,"messages":[{"role":"user","content":[
+			{"type":"text","text":"look"},
+			{"type":"document","source":{"type":"base64","media_type":"` + mediaType + `","data":"aGVsbG8="}}]}]}`))
+		if err != nil {
+			t.Fatalf("ParseRequest(%q): %v", mediaType, err)
+		}
+		body, losses, err := EncodeRequest(req)
+		if err != nil {
+			t.Fatalf("EncodeRequest(%q): %v", mediaType, err)
+		}
+		if len(losses) != 0 {
+			t.Fatalf("EncodeRequest(%q): losses = %+v, want none", mediaType, losses)
+		}
+		var out struct {
+			Messages []struct {
+				Content []struct {
+					Type string `json:"type"`
+				} `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.Unmarshal(body, &out); err != nil {
+			t.Fatalf("Unmarshal(%q): %v (body: %s)", mediaType, err, body)
+		}
+		if len(out.Messages) != 1 || len(out.Messages[0].Content) != 2 {
+			t.Fatalf("unexpected encoded structure for %q: %s", mediaType, body)
+		}
+		return out.Messages[0].Content[1].Type
+	}
+	want := encodeType("image/png")
+	if want != "image" {
+		t.Fatalf("lowercase media_type produced block type %q, want %q", want, "image")
+	}
+	for _, mt := range []string{"Image/PNG", "IMAGE/PNG", "Image/PNG;charset=utf-8"} {
+		if got := encodeType(mt); got != want {
+			t.Errorf("media_type %q produced block type %q, want %q", mt, got, want)
 		}
 	}
 }
