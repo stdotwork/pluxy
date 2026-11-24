@@ -36,7 +36,7 @@ use tauri::{AppHandle, Manager, Webview};
 const PACKAGE: &str = "pluxy/claude-code";
 /// How many manual backups the library keeps of a set.
 const KEEP: usize = 10;
-const NO_AUTOMATIC: &str = "without creating a backup first";
+const NO_AUTOMATIC: &str = "No automatic backup is created";
 
 /// What the step needs from the Claude Code check.
 pub(super) struct Ctx<'a> {
