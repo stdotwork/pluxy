@@ -281,7 +281,7 @@ test("the Themes page says what is still true, and what to do about a file it ca
   await page
     .getByLabel("Theme file", { exact: true })
     .setInputFiles(join(fixtures, "t3-docs-nightfall.json"));
-  const added = page.getByText("Nightfall was added and turned on.");
+  const added = page.getByText("Added and applied Nightfall.");
   await expect(added).toBeVisible();
   await expect(alerts).toHaveCount(0);
   await picker.getByRole("radio", { name: "Default" }).check();
@@ -293,12 +293,10 @@ test("the Themes page says what is still true, and what to do about a file it ca
   const changed = JSON.stringify({ ...nightfallFile, description: "A second file with this name" });
   const secondFile = { name: "nightfall.json", mimeType: "application/json", buffer: Buffer.from(changed) };
   await page.getByLabel("Theme file", { exact: true }).setInputFiles(secondFile);
-  await expect(
-    page.getByText("Nightfall was added and turned on. It replaced a theme with the same name."),
-  ).toBeVisible();
+  await expect(page.getByText("Added and applied Nightfall, replacing the existing theme.")).toBeVisible();
   // The very same file again takes no theme's place.
   await page.getByLabel("Theme file", { exact: true }).setInputFiles(secondFile);
-  await expect(page.getByText("Nightfall was added and turned on.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Added and applied Nightfall.", { exact: true })).toBeVisible();
 
   // A theme removed somewhere else since this page read the list: removing it here just works.
   await picker.getByRole("radio", { name: "Nightfall" }).check();
