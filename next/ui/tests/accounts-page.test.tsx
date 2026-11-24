@@ -62,6 +62,7 @@ test("while the first read is still running, the page says it is loading and cou
   const page = await mount(["pending"]);
   expect(page.text()).toContain("Loading");
   expect(page.text()).not.toContain("0 credentials");
+  expect(page.text()).not.toContain("0 accounts");
   expect(page.text()).not.toContain("No results");
   expect(page.text()).not.toContain("No accounts yet");
 });
@@ -71,6 +72,7 @@ test("when the first read fails, the page shows the error and no empty state", a
   expect(page.text()).toContain("core hiccup");
   expect(page.text()).not.toContain("Loading");
   expect(page.text()).not.toContain("0 credentials");
+  expect(page.text()).not.toContain("0 accounts");
   expect(page.text()).not.toContain("No results");
   expect(page.text()).not.toContain("No accounts yet");
 });

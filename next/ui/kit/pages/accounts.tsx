@@ -587,7 +587,7 @@ export function AccountsPage() {
           <Button disabled={current <= 1} onClick={() => setPage(current - 1)}>
             {t("previous")}
           </Button>
-          <span>{t("page", { current, total, count: filtered.length })}</span>
+          {accounts.data && <span>{t("page", { current, total, count: filtered.length })}</span>}
           <Button disabled={current >= total} onClick={() => setPage(current + 1)}>
             {t("next")}
           </Button>
