@@ -27,6 +27,10 @@ protocol only together with its README (`next/protocol/README.md`).
 If `.private/AGENTS.md` exists, read it too: it holds the owner's private instructions and notes.
 Start with [`docs/map.md`](docs/map.md) to find the entry files, tests, fakes and handbook sections
 for common changes before searching the tree.
+`TestDocs` (`next/cmd/pluxy/docs_test.go`) reads the docs and fails when one names a `pluxy`
+command or flag, a `PLUXY_` variable, a relative link, a repo path or a quick-start command that
+does not exist, or when shipped code reads a `PLUXY_` variable no doc names. Change the doc, or the
+code if the doc is right; the test's allowlists may only shrink.
 Confirmed plans, decisions and major tradeoffs are written up in `docs/`: the new core's design
 in `docs/design.md`, and how the corpus holds it to the old core in `docs/corpus.md`.
 
