@@ -40,7 +40,8 @@ Run each command from the folder named in its heading.
 
 The short way: `make` in `next/` lists targets that run these same commands (`make check`,
 `make test`, `make ui`, `make app`, `make app-rust`, `make tools`; `make all` runs `check`, `ui`
-and `app`). The commands below stay the reference CI mirrors. `make hooks` turns on an opt-in
+and `app`). `make dev` watches `next/ui`, rebuilds the panel on each edit, and serves it from a
+demo core (`PORT=8330`). The commands below stay the reference CI mirrors. `make hooks` turns on an opt-in
 pre-commit hook that checks the formatting of staged files.
 
 ### `next/`
@@ -67,7 +68,7 @@ git. Build it before building or testing core, or the panel's e2e tests skip
 ```bash
 go generate ./internal/panel     # bun install and bun run build in ui/, writing internal/panel/dist
 cd ui && bun run check && bun run lint && bun run test   # type check, Biome, unit tests
-cd ui && bun run test:browser    # the browser test, headless Chromium (bunx playwright install chromium once)
+cd ui && bun run test:browser    # the browser test, headless Chromium (bunx playwright install chromium once); PLUXY_ALL_BROWSERS=1 also runs Firefox and WebKit, as CI does
 ```
 
 The desktop app in `next/app` (see `next/app/README.md`) builds the kit from `next/ui`, so run

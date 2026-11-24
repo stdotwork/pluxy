@@ -324,7 +324,7 @@ function ReleaseNotes(props: {
           {l && (
             <p>
               <strong class="mono">v{l.version}</strong> Latest version
-              {when(l.published) ? ` · Published ${when(l.published)}` : ""}
+              {when(l.published) && <> · Published {when(l.published)}</>}
             </p>
           )}
           {l?.has_notes ? (
@@ -497,7 +497,7 @@ export function UpdatesPage() {
         <div data-part="release-problem" data-offline={String(v.problem.offline)}>
           <Notice tone={v.problem.offline ? "warn" : "danger"}>
             {v.problem.message}
-            {v.checked_at ? ` Showing the releases from the last check, ${when(v.checked_at)}.` : ""}
+            {v.checked_at && <> Showing the releases from the last check, {when(v.checked_at)}.</>}
           </Notice>
         </div>
       )}

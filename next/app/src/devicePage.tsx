@@ -289,7 +289,7 @@ function PackageDetail(props: { p: DevicePackage; onClose: () => void; onChanged
           [t("trust"), trustBadge(p)],
           [t("kind"), t(p.tier === "native" ? "native" : "web")],
           [t("source"), sourceText(p)],
-          [t("state"), <StateBadge state={p.enabled ? "active" : "disabled"} />],
+          [t("state"), <StateBadge state={p.enabled ? "enabled" : "disabled"} />],
           ...releaseFacts(p.active),
           [t("lastGood"), p.last_good && <span class="mono">{p.last_good.version}</span>],
           [
@@ -459,7 +459,7 @@ export function DevicePage(props: { onChanged: () => void }) {
                   { label: t("source"), value: sourceText },
                   {
                     label: t("state"),
-                    value: (p) => <StateBadge state={p.enabled ? "active" : "disabled"} />,
+                    value: (p) => <StateBadge state={p.enabled ? "enabled" : "disabled"} />,
                   },
                 ]}
               />

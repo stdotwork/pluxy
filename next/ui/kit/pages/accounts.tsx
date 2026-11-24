@@ -13,6 +13,7 @@ import {
   MasterDetail,
   Notice,
   PageHead,
+  shortDuration,
   type Tone,
   useKit,
   useLoad,
@@ -90,9 +91,6 @@ const t = strings("accounts", {
   notChecked: "Not checked",
   cooldown: "Cooldown",
   cooling: "Cooling down ({time})",
-  seconds: "{count}s",
-  minutes: "{count}m",
-  hours: "{count}h",
   lastError: "Last error",
   requests: "Requests now",
   credentials: { one: "{count} credential", other: "{count} credentials" },
@@ -184,13 +182,6 @@ export function filterAccounts(
   if (filters.sort === "name") result.sort((a, b) => a.id.localeCompare(b.id));
   if (filters.sort === "priority") result.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
   return result;
-}
-
-function coolingTime(until: number, now: number): string {
-  const seconds = Math.ceil((until - now) / 1000);
-  if (seconds < 60) return t("seconds", { count: seconds });
-  if (seconds < 3600) return t("minutes", { count: Math.ceil(seconds / 60) });
-  return t("hours", { count: Math.ceil(seconds / 3600) });
 }
 
 export type BatchAction = "enable" | "disable" | "delete" | "cooldown";
@@ -572,7 +563,9 @@ export function AccountsPage() {
                   {
                     label: t("cooldown"),
                     value: (a) =>
-                      coolingUntil(a) > now ? t("cooling", { time: coolingTime(coolingUntil(a), now) }) : "",
+                      coolingUntil(a) > now
+                        ? t("cooling", { time: shortDuration((coolingUntil(a) - now) / 1000) })
+                        : "",
                   },
                   {
                     label: t("lastError"),

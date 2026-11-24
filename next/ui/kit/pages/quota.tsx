@@ -38,7 +38,7 @@ const t = strings("quota", {
   remaining: "{amount} remaining",
   limit: "Limit: {amount}",
   reset: "Resets",
-  resetsIn: "resets in {hint}",
+  resetAvailable: "Reset available",
   window: "Window",
   days: { one: "{count} day", other: "{count} days" },
   hours: { one: "{count} hour", other: "{count} hours" },
@@ -46,6 +46,7 @@ const t = strings("quota", {
   seconds: { one: "{count} second", other: "{count} seconds" },
 });
 
+/** A window's length in words. */
 function duration(seconds: number): string {
   if (seconds >= 86400) return t("days", { count: Math.ceil(seconds / 86400) });
   if (seconds >= 3600) return t("hours", { count: Math.ceil(seconds / 3600) });
@@ -58,12 +59,6 @@ export function soonestRecovery(quota?: Quota): number {
     (soonest, limit) => (limit.resets_at ? Math.min(soonest, limit.resets_at) : soonest),
     Number.POSITIVE_INFINITY,
   );
-}
-
-function Timestamp({ value }: { value: string | number }) {
-  const date = new Date(typeof value === "number" ? value * 1000 : value);
-  if (!Number.isFinite(date.getTime())) return null;
-  return <time dateTime={date.toISOString()}>{when(value)}</time>;
 }
 
 function LimitAmounts({ limit }: { limit: QuotaLimit }) {
@@ -87,14 +82,10 @@ function LimitTiming({ limit }: { limit: QuotaLimit }) {
       rows={[
         [
           t("reset"),
-          limit.resets_at ? (
-            <>
-              <Timestamp value={limit.resets_at} />{" "}
-              <span class="muted">
-                {t("resetsIn", { hint: duration(limit.resets_at - Date.now() / 1000) })}
-              </span>
-            </>
-          ) : undefined,
+          // A reset time that has passed is a reset the provider has not reported yet.
+          limit.resets_at && limit.resets_at <= Date.now() / 1000
+            ? t("resetAvailable")
+            : when(limit.resets_at),
         ],
         [t("window"), limit.window_seconds ? duration(limit.window_seconds) : undefined],
       ]}
@@ -127,14 +118,12 @@ function QuotaSummary({ data }: { data: QuotaReply }) {
   const resets = data.quota.limits.find((limit) => limit.id === "reset_credits");
   return (
     <>
-      {end ? (
-        <p data-part="subscription-end">{rich(t("ends"), { time: <Timestamp value={end} /> })}</p>
-      ) : null}
+      {end ? <p data-part="subscription-end">{rich(t("ends"), { time: when(end) })}</p> : null}
       <Facts
         rows={[
           [t("plan"), data.quota.plan],
           [t("manualResets"), resets?.remaining?.toLocaleString()],
-          [t("fetched"), <Timestamp value={data.fetched_at} />],
+          [t("fetched"), when(data.fetched_at)],
         ]}
       />
     </>

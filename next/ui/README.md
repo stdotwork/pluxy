@@ -326,6 +326,14 @@ side touch shared files only by one line each:
 - **Tests:** a browser test for the page in `e2e/<page>.spec.ts`; unit tests in `tests/` only for
   pure code.
 
+Three checks in `bun run lint` and `bun run test` hold the kit's rules, and each failure says what
+to do. Imports (Biome's `noRestrictedImports`, in `biome.json` here and in `../app/biome.json`): the
+kit imports nothing from the panel, `e2e/`, `tests/` or `../app`, and the app imports only `kit` and
+`themes` from `ui`, so shared code belongs in `kit/`. Colours (`tests/colours.test.ts`): no raw
+colour value outside the theme tokens, except the baseline in that file, which may only shrink.
+Texts (`tests/terms.test.ts`): no `strings(...)` text uses a term that the "Do not use" column of
+[`docs/terms.md`](../../docs/terms.md) bans, except the baseline in that file, which may only shrink.
+
 ## Why Preact, built with Bun
 
 The priorities are a small, fast panel, and a kit the desktop app can build in unchanged.
@@ -358,12 +366,19 @@ bun run build          # writes the panel to ../internal/panel/dist
 bun run test:browser   # builds, then runs the browser tests
 ```
 
-`bun run test:browser` runs the panel's test in Chromium and the extension pages test
-(`e2e/extension-pages.spec.ts`: a hostile page, a benign page and the settings form) in Chromium,
-Firefox and WebKit. It needs Playwright's browsers once: `bunx playwright install chromium firefox
-webkit` (WebKit also needs its system libraries: `bunx playwright install-deps webkit`). Each test
-starts its own core through `go run ./e2e/panelcore` (from `next/`), with fake extensions, on a
-random port.
+Locally, `bun run test:browser` runs every browser test in Chromium only, so it needs only one
+install: `bunx playwright install chromium` (this also installs Chromium's headless shell). That
+includes the extension pages test (`e2e/extension-pages.spec.ts`: a hostile page, a benign page and
+the settings form).
+
+CI also runs the extension pages test in Firefox and WebKit, because extension pages are a security
+boundary. A run in CI or with `PLUXY_ALL_BROWSERS=1` adds those two projects, and a browser that
+cannot start fails the run. To run all three engines locally, install them once with
+`bunx playwright install firefox webkit` (WebKit also needs its system libraries:
+`bunx playwright install-deps webkit`), then run `PLUXY_ALL_BROWSERS=1 bun run test:browser`.
+
+Each test starts its own core through `go run ./e2e/panelcore` (from `next/`), with fake extensions,
+on a random port.
 
 ### A core with data to look at
 
@@ -394,6 +409,22 @@ so the days before today are written into core's usage folder as day files befor
 (`e2e/panelcore/demo.go` says how). A broken credential file is the one state it does not make.
 
 `e2e/panelcore_demo_test.go` starts it and checks all of this through the management API.
+
+### Edit loop
+
+To edit the panel and see changes on reload without rebuilding by hand, run `make dev` from `next/`
+(or `make dev PORT=8331` to pick another loopback port; the default is `8330`, never `8317`):
+
+```bash
+make dev
+```
+
+It builds the panel, starts `panelcore -demo` with a temporary `HOME`, and prints the URL to open
+and the management key to paste. On any edit under `kit/`, `panel/`, `themes/` or
+`extension-pages/`, it rebuilds the panel, restarts the demo core on the same port with the same
+management key (the key stays the same until `make dev` is stopped, so a browser reload stays
+signed in), and prints one line with the elapsed time. A build error is printed without stopping
+the loop, so the next save rebuilds again. Ctrl-C stops the core and its extensions.
 
 ### How core gets the panel
 

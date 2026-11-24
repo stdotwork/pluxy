@@ -33,7 +33,7 @@ test("Accounts and the Dashboard give the same accounts the same numbers", async
     "6 credentials · 3 available · 2 problems",
   );
   const ghost = page.locator('[data-part="item"]').filter({ hasText: "ghost-1" });
-  await expect(ghost).toContainText("no provider");
+  await expect(ghost).toContainText("No provider");
   await ghost.click();
   await expect(page.getByText("ghost/gone is not running, so this account gets no requests.")).toBeVisible();
   await goTo(page, "Dashboard");

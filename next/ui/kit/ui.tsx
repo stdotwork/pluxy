@@ -6,9 +6,13 @@ import { useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, use
 import { type Api, problem } from "./api";
 import type { Host, Reply } from "./host";
 import type { PrivacyState } from "./privacy";
+import { type StateOf, stateText, stateTone } from "./states";
 import { strings } from "./strings";
 import type { Layout } from "./theme/contract";
 import type { ThemeState } from "./theme/state";
+
+export { stateText } from "./states";
+export { shortDuration, Time, when, whenText } from "./time";
 
 const t = strings("kit", {
   confirm: "Yes, {action}",
@@ -368,21 +372,22 @@ export function Badge(props: { tone: Tone; children: ComponentChildren }) {
   );
 }
 
-const TONES: Record<string, Tone> = {
-  active: "ok",
-  idle: "muted",
-  starting: "warn",
-  draining: "warn",
-  stopped: "muted",
-  disabled: "muted",
-  crashed: "danger",
-  quarantined: "danger",
-  failed: "danger",
-  reauth_required: "warn",
-};
-
-export function StateBadge(props: { state: string }) {
-  return <Badge tone={TONES[props.state] ?? "muted"}>{props.state}</Badge>;
+/**
+ * A state from core as a badge, in plain words (states.ts). The value core sent stays on the
+ * badge, as its title and data-state, for support. `of` says what the state belongs to.
+ */
+export function StateBadge(props: { state: string; of?: StateOf }) {
+  return (
+    <span
+      class="badge"
+      data-part="badge"
+      data-tone={stateTone(props.state, props.of)}
+      data-state={props.state}
+      title={props.state}
+    >
+      {stateText(props.state, props.of)}
+    </span>
+  );
 }
 
 export function Card(props: { title?: string; actions?: ComponentChildren; children: ComponentChildren }) {
@@ -716,10 +721,4 @@ export function Switch(props: {
       </span>
     </label>
   );
-}
-
-export function when(t?: string | number): string | undefined {
-  if (t === undefined || t === 0 || t === "") return undefined;
-  const d = typeof t === "number" ? new Date(t * 1000) : new Date(t);
-  return Number.isNaN(d.getTime()) ? undefined : d.toLocaleString();
 }

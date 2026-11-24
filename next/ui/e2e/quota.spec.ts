@@ -90,7 +90,12 @@ test("quota is read on request and shows plan, limits and reset times", async ({
   );
   await expect(a.getByText("42% used", { exact: true })).toBeVisible();
   await expect(a.locator('time[datetime="2033-05-18T03:33:20.000Z"]')).toBeVisible();
-  await expect(a.getByText(/resets in/)).toHaveCount(2);
+  // Both windows reset years from now: too far to count down to, so each shows its date, with
+  // the exact time as its title.
+  const resets = a.locator('[data-part="quota-limit-timing"] time, .quota-limit time');
+  await expect(resets).toHaveCount(2);
+  await expect(resets.first()).toHaveText(/^[A-Z][a-z]{2} \d{1,2}, 2033$/);
+  await expect(resets.first()).toHaveAttribute("title", /2033.*:\d\d:\d\d/);
   expect(reads).toHaveLength(1);
   await page.getByRole("button", { name: "Refresh all", exact: true }).click();
   const b = items.filter({ hasText: "quota-b" });

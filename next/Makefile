@@ -2,13 +2,18 @@
 # Each target runs the same commands as AGENTS.md and CI; those stay the reference.
 
 .DEFAULT_GOAL := help
-.PHONY: help panel check test test-short ui ui-browser app app-rust tools all hooks
+.PHONY: help panel dev check test test-short ui ui-browser app app-rust tools all hooks
+
+PORT ?= 8330
 
 help: ## List the targets
 	@awk -F':.*## ' '/^[a-z-]+:.*## /{printf "  make %-11s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 panel: ## Build the web panel core embeds (go generate ./internal/panel)
 	go generate ./internal/panel
+
+dev: ## Watch next/ui, rebuild the panel and serve it from a demo core (PORT=8330)
+	@cd ui && bun install --frozen-lockfile --silent && exec bun dev.ts --port $(PORT)
 
 check: ## Go build, vet and gofmt (fails if gofmt lists a file)
 	go build ./...

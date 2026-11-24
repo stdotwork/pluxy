@@ -15,5 +15,5 @@
     "resolveJsonModule": true,
     "types": ["bun"]
   },
-  "include": ["kit", "panel", "tests", "e2e", "build.ts", "playwright.config.ts"]
+  "include": ["kit", "panel", "tests", "e2e", "build.ts", "dev.ts", "playwright.config.ts"]
 }

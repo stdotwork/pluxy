@@ -19,6 +19,7 @@ import {
   useKit,
   useLoad,
   when,
+  whenText,
 } from "../ui";
 
 const t = strings("usage", {
@@ -105,7 +106,10 @@ export function UsageDetail(props: {
 }) {
   const { event: e, mask } = props;
   return (
-    <Detail title={t("request", { time: when(e.timestamp) ?? e.timestamp })} onClose={props.onClose}>
+    <Detail
+      title={t("request", { time: whenText(e.timestamp, "exact") ?? e.timestamp })}
+      onClose={props.onClose}
+    >
       <Facts
         rows={[
           [t("model"), e.model],
@@ -338,7 +342,7 @@ export function UsagePage() {
                 selected={selected}
                 onSelect={setSelected}
                 columns={[
-                  { label: t("time"), value: (e) => <time dateTime={e.timestamp}>{when(e.timestamp)}</time> },
+                  { label: t("time"), value: (e) => when(e.timestamp, "exact") },
                   { label: t("model"), value: (e) => e.model },
                   { label: t("account"), value: (e) => mask(e.account) || t("missing") },
                   {
