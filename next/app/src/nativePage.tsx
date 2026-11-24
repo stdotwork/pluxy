@@ -203,17 +203,23 @@ export function NativeExtensionPage(props: ExtensionPageProps & { device?: boole
     <>
       <PageHead title={page.title} />
       {problem ? (
-        <Notice tone="warn">This extension page cannot be shown: {problem}.</Notice>
+        <Notice tone="warn">
+          Cannot show this extension page: {problem}. Check core's extension-pages settings and reload.
+        </Notice>
       ) : (
         <>
-          {phase === "failed" && <Notice tone="danger">The page could not be opened: {error}</Notice>}
+          {phase === "failed" && (
+            <Notice tone="danger">
+              Could not open this page: {error}. Reload or check Device extensions.
+            </Notice>
+          )}
           {phase === "closed" && (
             <div class="actions">
               <Notice tone="warn">
                 The page loaded another document, so the app closed its connection to it.
               </Notice>
               <Button variant="primary" onClick={() => setMount((n) => n + 1)}>
-                Load the page again
+                Reload
               </Button>
             </div>
           )}

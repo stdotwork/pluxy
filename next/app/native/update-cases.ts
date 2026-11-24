@@ -470,7 +470,7 @@ export async function launchChain(o: {
 }
 
 /** A launch the updater must refuse before any download (NO_ROOTS, REFUSALS): the page's reason,
- * Update Now not offered, and both commands refused for that reason; the installed copy unchanged
+ * Update now not offered, and both commands refused for that reason; the installed copy unchanged
  * and nothing downloaded. */
 export async function refusedLaunch(o: {
   refusal: Refusal;
@@ -500,7 +500,7 @@ export async function refusedLaunch(o: {
       reason.test(String(s.reason)),
       `${label}: the page's reason ${JSON.stringify(s.reason)} is not ${reason}`,
     );
-    o.check(s.offered === false, `${label}: Update Now was offered`);
+    o.check(s.offered === false, `${label}: Update now was offered`);
     o.check(
       call?.ok === false && reason.test(String(call.error)),
       `${label}: app_update_start: ${JSON.stringify(call)}`,

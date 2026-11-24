@@ -225,6 +225,6 @@ Promise.all([connectionGet(), privacyGet().catch(() => true)]).then(
       document.body,
     ),
   (e) => {
-    document.body.textContent = `The app could not read its connection: ${e}`;
+    document.body.textContent = `Could not read connection settings: ${e}. Restart the app and try again.`;
   },
 );

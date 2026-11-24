@@ -10,8 +10,8 @@ import { type CloseBehavior, type WindowPreferences, windowClose, windowGet, win
 
 const CHOICES = [
   { value: "ask" as const, label: "Ask every time" },
-  { value: "minimize-to-tray" as const, label: "Minimize to Tray" },
-  { value: "exit" as const, label: "Exit App" },
+  { value: "minimize-to-tray" as const, label: "Minimize to tray" },
+  { value: "exit" as const, label: "Exit app" },
 ];
 
 export function WindowSettings() {
@@ -81,7 +81,7 @@ export function WindowSettings() {
         </fieldset>
         {prefs && !prefs.tray && (
           <div data-part="no-tray">
-            <Notice tone="warn">No system tray was found, so closing the window quits pluxy.</Notice>
+            <Notice tone="warn">No system tray found, so closing the window quits pluxy.</Notice>
           </div>
         )}
         {error && <Notice tone="danger">{error}</Notice>}
@@ -170,8 +170,8 @@ export function ClosePrompt() {
         {error && <Notice tone="danger">{error}</Notice>}
         <Switch label="Remember this choice" checked={remember} onChange={setRemember} />
         <p class="actions">
-          {choice("minimize-to-tray", "primary", "Minimize to Tray", "Minimizing…")}{" "}
-          {choice("exit", "danger", "Exit App", "Exiting…")}{" "}
+          {choice("minimize-to-tray", "primary", "Minimize to tray", "Minimizing…")}{" "}
+          {choice("exit", "danger", "Exit app", "Exiting…")}{" "}
           <button
             type="button"
             class="btn"

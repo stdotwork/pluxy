@@ -233,7 +233,7 @@ pub(crate) fn run(
         .map_err(|e| e.to_string())?;
     evidence["confirmed"] = json!(kept["source"] == feed);
 
-    // Check for Updates: the stable channel's releases.
+    // Check for updates: the stable channel's releases.
     click(main, "[data-part=release-check]")?;
     let app_card = "[data-part=release-product][data-product=app]";
     let core_card = "[data-part=release-product][data-product=core]";
@@ -306,7 +306,10 @@ pub(crate) fn run(
             main,
             "document.querySelector('[data-part=release-error]')?.textContent ?? null",
         )
-        .filter(|t| t.as_str().is_some_and(|t| t.contains("was not changed")))
+        .filter(|t| {
+            t.as_str()
+                .is_some_and(|t| t.contains("Could not change the release feed"))
+        })
     })?;
     evidence["voided"] = json!({
         "channel_disabled": channel_disabled, "channel_set": channel_set, "error": voided,
