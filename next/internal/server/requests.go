@@ -124,8 +124,9 @@ func (e *running) describe(req llm.Request) {
 	}
 	e.mu.Lock()
 	e.model, e.stream = req.Model, req.Stream
-	if e.format == "" && req.Native != nil {
-		e.format = req.Native.Format // an endpoint beyond generation names its format here
+	if req.Native != nil && req.Native.Format != "" {
+		// The body's own format: the route's, or the endpoint's for an endpoint beyond generation.
+		e.format = req.Native.Format
 	}
 	e.mu.Unlock()
 }
