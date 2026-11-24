@@ -119,7 +119,13 @@ export function SystemPage() {
   const models = useLoad(api.servedModels);
   const mask = privacy.masker(useAccountLabels(models.data));
   const s = status.data;
-  const connection = status.loading && !s ? t("connecting") : s ? t("connected") : t("disconnected");
+  // Stale data after a failed read is still data: the connection is what the last read said.
+  const connection =
+    status.phase === "loading"
+      ? t("connecting")
+      : status.phase === "ready"
+        ? t("connected")
+        : t("disconnected");
   const list = models.data?.models;
   const groups = list ? groupModels(list) : [];
 

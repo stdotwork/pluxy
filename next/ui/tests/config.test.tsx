@@ -46,10 +46,8 @@ test("an unrelated edit leaves fractional durations out of PATCH", () => {
 });
 
 test("the proxy URL is sent only when edited, and cleared by an empty string", () => {
-  // Another setting's edit never sends the proxy as shown, so its hidden password is not touched.
-  expect(settingsChange(settings, changeSetting(settings, "routing.force-model-prefix", true))).toEqual({
-    routing: { "force-model-prefix": true },
-  });
+  // Another setting's edit never sends the proxy as shown, so its hidden password is not touched
+  // (the test above covers that edit).
   expect(settingsChange(settings, changeSetting(settings, "proxy-url", ""))).toEqual({ "proxy-url": "" });
   expect(settingsChange(settings, changeSetting(settings, "proxy-url", "http://proxy.example:3128"))).toEqual(
     { "proxy-url": "http://proxy.example:3128" },

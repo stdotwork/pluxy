@@ -11,6 +11,10 @@ on:
     paths:
       - 'next/**'
       - '.github/workflows/next-ci.yml'
+      # The docs TestDocs reads (next/cmd/pluxy/docs_test.go: docFiles and docs/*.md).
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'docs/*.md'
 
 concurrency:
   # A literal name: called from ci.yml, github.workflow is the caller's name, the same for every
@@ -83,6 +87,22 @@ jobs:
         run: go build ./...
       - name: Vet
         run: go vet ./...
+      # Both run as `go run pkg@version`, so neither is a dependency of the module and go.mod and
+      # go.sum stay as they are. To update one, change its version here and in AGENTS.md.
+      - name: Staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
+      # Needs vuln.go.dev; it reports a reachable vulnerability in the Go standard library this
+      # job installed or in a module pluxy requires. It does not fail the job: a newly published
+      # vulnerability would otherwise block every open PR until Go or the module is updated. With
+      # continue-on-error: true GitHub shows the step as passed; only the warning annotation on the
+      # run shows a finding. Fix it by updating.
+      - name: Govulncheck
+        continue-on-error: true
+        run: |
+          go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./... || {
+            echo "::warning title=govulncheck::a reachable vulnerability was found; update Go or the module named in this step's log"
+            exit 1
+          }
       - name: Test
         env:
           PLUXY_REQUIRE_PANEL: '1'

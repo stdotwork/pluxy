@@ -17,7 +17,7 @@ import (
 
 // embedAttempt runs one Gemini-format embedding call on an account with the wire and returns what
 // the extension sent, its error and the requests the fake upstream got.
-func embedAttempt(t *testing.T, wire, model, format, body string, handle func(w http.ResponseWriter, n int)) (*embedBodyRec, error, int) {
+func embedAttempt(t *testing.T, wire, model, format, body string, handle func(w http.ResponseWriter, n int)) (*embedBodyRec, int, error) {
 	t.Helper()
 	n := 0
 	srv, recorded := newCompactUpstream(t, func(w http.ResponseWriter, _ *http.Request, _ []byte) {
@@ -38,7 +38,7 @@ func embedAttempt(t *testing.T, wire, model, format, body string, handle func(w 
 		},
 		Request: llm.Request{Model: model, Native: &llm.Native{Format: format, Body: json.RawMessage(body)}},
 	}, rec, format)
-	return rec, err, len(recorded())
+	return rec, len(recorded()), err
 }
 
 // A 200 that is not a full answer becomes an error, and nothing of it reaches the client.
@@ -51,7 +51,7 @@ func TestGeminiWireEmbedRefusesShortReplies(t *testing.T) {
 		{"single without an embedding", llm.FormatGeminiEmbedContent, one, `{}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rec, err, _ := embedAttempt(t, "gemini", "gemini-embedding-001", tc.format, tc.body, func(w http.ResponseWriter, _ int) { io.WriteString(w, tc.reply) })
+			rec, _, err := embedAttempt(t, "gemini", "gemini-embedding-001", tc.format, tc.body, func(w http.ResponseWriter, _ int) { io.WriteString(w, tc.reply) })
 			var e *llm.Error
 			if !errors.As(err, &e) || e.Code != llm.CodeUpstream || e.Status != http.StatusBadGateway || e.Scope != llm.ScopeRequest {
 				t.Fatalf("err = %v, want a 502 upstream error on the request", err)
@@ -66,7 +66,7 @@ func TestGeminiWireEmbedRefusesShortReplies(t *testing.T) {
 // A field of embedContentConfig that /embeddings cannot carry is refused naming the field,
 // retryable on the account so routing tries another, and is not dropped.
 func TestChatWireEmbedRefusesUnknownConfig(t *testing.T) {
-	rec, err, calls := embedAttempt(t, "chat", "text-embedding-3-small", llm.FormatGeminiEmbedContent,
+	rec, calls, err := embedAttempt(t, "chat", "text-embedding-3-small", llm.FormatGeminiEmbedContent,
 		`{"content":{"parts":[{"text":"a"}]},"embedContentConfig":{"autoTruncate":false}}`,
 		func(w http.ResponseWriter, _ int) {
 			io.WriteString(w, `{"object":"list","data":[{"object":"embedding","index":0,"embedding":[1]}]}`)
@@ -88,7 +88,7 @@ func TestGeminiWireEmbedBatchWithNonObjectItem(t *testing.T) {
 		`{"requests":[{"model":"models/my-private-alias","content":{"parts":[{"text":"a"}]}},7]}`,
 		`{"requests":"models/my-private-alias"}`,
 	} {
-		_, err, calls := embedAttempt(t, "gemini", "gemini-embedding-001", llm.FormatGeminiBatchEmbedContents, body, func(w http.ResponseWriter, _ int) {
+		_, calls, err := embedAttempt(t, "gemini", "gemini-embedding-001", llm.FormatGeminiBatchEmbedContents, body, func(w http.ResponseWriter, _ int) {
 			io.WriteString(w, `{"embeddings":[{"values":[1]},{"values":[2]}]}`)
 		})
 		var e *llm.Error
@@ -107,7 +107,7 @@ func TestChatWireEmbedUsageNeedsEveryCall(t *testing.T) {
 	const batch = `{"requests":[` +
 		`{"content":{"parts":[{"text":"a"}]},"outputDimensionality":2},` +
 		`{"content":{"parts":[{"text":"b"}]},"outputDimensionality":3}]}`
-	rec, err, calls := embedAttempt(t, "chat", "text-embedding-3-small", llm.FormatGeminiBatchEmbedContents, batch, func(w http.ResponseWriter, n int) {
+	rec, calls, err := embedAttempt(t, "chat", "text-embedding-3-small", llm.FormatGeminiBatchEmbedContents, batch, func(w http.ResponseWriter, n int) {
 		if n == 1 {
 			io.WriteString(w, `{"object":"list","data":[{"object":"embedding","index":0,"embedding":[1,2]}],"usage":{"prompt_tokens":5}}`)
 			return
@@ -126,7 +126,7 @@ func TestChatWireEmbedUsageNeedsEveryCall(t *testing.T) {
 // account's project, which an ordinary error reply has masked.
 func TestGeminiWireEmbedErrorBodyDoesNotLeakProject(t *testing.T) {
 	const reply = `{"error":{"code":403,"message":"Permission denied on resource project projects/acme-prod-4821.","status":"PERMISSION_DENIED"}}`
-	rec, err, _ := embedAttempt(t, "gemini", "gemini-embedding-001", llm.FormatGeminiEmbedContent, `{"content":{"parts":[{"text":"a"}]}}`,
+	rec, _, err := embedAttempt(t, "gemini", "gemini-embedding-001", llm.FormatGeminiEmbedContent, `{"content":{"parts":[{"text":"a"}]}}`,
 		func(w http.ResponseWriter, _ int) { io.WriteString(w, reply) })
 	var e *llm.Error
 	if !errors.As(err, &e) || e.Code != llm.CodeUpstream {

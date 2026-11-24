@@ -270,7 +270,7 @@ func observeRateLimit(ctx context.Context, header http.Header, raw []byte, parse
 	}
 	delayMS := g.retryDelay()
 	if delayMS == 0 && header != nil {
-		delayMS = retryAfter(header.Get("Retry-After"), now)
+		delayMS = sdk.RetryAfter(header.Get("Retry-After"), now)
 	}
 	obs.RetryDelayMS = delayMS
 	if delayMS > 0 {

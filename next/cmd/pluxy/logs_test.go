@@ -612,7 +612,7 @@ func TestLogsRequestSaysLoggingIsOff(t *testing.T) {
 		_, errOut, code := runLogs(srv, false, "logs", "request", "t1")
 		_, jsonErr, _ := runLogs(srv, false, "logs", "request", "t1", "--json")
 		srv.Close()
-		says := strings.Contains(errOut, "request logging is off") && strings.Contains(errOut, "Enable request logging")
+		says := strings.Contains(errOut, "request logging is off") && strings.Contains(errOut, "pluxy reload")
 		if code != 5 || !strings.HasPrefix(errOut, "pluxy: no request log has this trace ID") || says == on {
 			t.Errorf("request-log=%v: code=%d err=%q", on, code, errOut)
 		}

@@ -169,8 +169,7 @@ func TestUsageRecordsRequests(t *testing.T) {
 		t.Fatalf("wrong key: status %d", code)
 	}
 
-	var keys []keyView
-	keys = c.keys(t)
+	keys := c.keys(t)
 	idOf := map[string]string{}
 	for _, k := range keys {
 		idOf[k.Masked] = k.ID

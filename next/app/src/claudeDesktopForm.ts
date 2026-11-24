@@ -1,6 +1,5 @@
 // The Claude Desktop page's form logic (claudeDesktop.tsx), apart from the page so its unit tests
-// need no webview: which vault keys the page offers, the model rows from what the files hold,
-// whether the rows can be applied, and when to offer creating Claude Desktop's library folder.
+// need no webview: the model rows from what the files hold, whether the rows can be applied, and when to offer creating Claude Desktop's library folder.
 
 export const PACKAGE = "pluxy/claude-desktop";
 export const PROFILE_ID = "00000000-0000-4000-8000-000000831700";
@@ -15,20 +14,6 @@ export const MODELS_MAX = 16;
 /** What the tool's default preview says when Claude Desktop's library folder is not there yet,
  * which its `folders` operation creates (next/app-tools/claude-desktop, MISSING_LIBRARY). */
 export const MISSING_LIBRARY = "Claude Desktop's configuration library does not exist yet";
-
-/** A vault secret as `vault_secrets` lists it: never its value. */
-export interface Secret {
-  id: string;
-  label: string;
-  /** Set for a captured client key: the package it may be given to. */
-  client_key?: { client: string };
-}
-
-/** The keys the page offers from `vault_secrets`'s answer (`{secrets: [...]}`): plain secrets, and
- * client keys bound to this package; a client key bound to another package would be refused. */
-export function keysOf(body: { secrets?: Secret[] } | undefined): Secret[] {
-  return (body?.secrets ?? []).filter((s) => !s.client_key || s.client_key.client === PACKAGE);
-}
 
 /** One model row: the model the core serves, the name Claude Desktop uses (empty: the model's
  * own) and whether its 1M-context variant is offered. */

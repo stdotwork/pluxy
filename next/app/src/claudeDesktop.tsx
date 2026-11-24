@@ -7,6 +7,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useId, useState } from "preact/hooks";
+import type { Reply } from "../../ui/kit/host";
 import { strings } from "../../ui/kit/strings";
 import {
   Button,
@@ -20,13 +21,12 @@ import {
   useAction,
   useLoad,
 } from "../../ui/kit/ui";
-import { Backups, type Reply, reply } from "./backups";
+import { Backups } from "./backups";
 import {
   aliasCancelled,
   aliasState,
   FILES,
   fresh,
-  keysOf,
   MODELS_MAX,
   missingLibrary,
   PACKAGE,
@@ -34,11 +34,11 @@ import {
   type Row,
   ready,
   rowsFrom,
-  type Secret,
 } from "./claudeDesktopForm";
 import { NeedsKey, NoKeys, toolMissing, withDeviceLink } from "./clientHelp";
+import { keysOf, type Secret, Text, usePreview } from "./clientPage";
 import type { AgentPage } from "./easyMode";
-import { connectionGet } from "./host";
+import { connectionGet, reply } from "./host";
 import { launcherProblem } from "./startCli";
 
 const t = strings("claudeDesktop", {
@@ -133,31 +133,6 @@ interface Preview {
   settings: ReadBack;
 }
 
-function Text(props: {
-  label: string;
-  hint?: string;
-  value: string;
-  onInput: (v: string) => void;
-  list?: string;
-}) {
-  const id = useId();
-  return (
-    <label class="field" data-part="field" for={id}>
-      <span class="label">{props.label}</span>
-      <input
-        id={id}
-        type="text"
-        autocomplete="off"
-        spellcheck={false}
-        list={props.list}
-        value={props.value}
-        onInput={(e) => props.onInput(e.currentTarget.value)}
-      />
-      {props.hint && <small class="hint">{props.hint}</small>}
-    </label>
-  );
-}
-
 function StartApp(props: { available: boolean }) {
   const [override, setOverride] = useState("");
   const action = useAction(() => {});
@@ -184,13 +159,12 @@ export function ClaudeDesktopPage() {
   const [where, setWhere] = useState<"default" | "root" | "files">("default");
   const [root, setRoot] = useState("");
   const [files, setFiles] = useState<string[]>(["", "", ""]);
-  const [preview, setPreview] = useState<Preview>();
   const [missing, setMissing] = useState(false);
   const [rows, setRows] = useState<Row[]>(fresh);
   const [secret, setSecret] = useState("");
   const [core, setCore] = useState<string>();
   const secrets = useLoad(() => reply<{ secrets: Secret[] }>("vault_secrets"));
-  const keys = keysOf(secrets.data);
+  const keys = keysOf(PACKAGE, secrets.data);
   const listId = useId();
   // The names core serves, which Claude Desktop's aliases must be among.
   const coreModels = useLoad(() =>
@@ -244,25 +218,27 @@ export function ClaudeDesktopPage() {
       : where === "files"
         ? { targets: files.map((f) => ({ file: f.trim() })) }
         : {};
+  // A write acts on the files the last preview pinned (the tool refuses it if one changed since);
+  // the preview belongs to the selection it was read for, so a write never pins files unread.
+  const selected = JSON.stringify(selection());
+  const { preview, readFor, isCurrent } = usePreview<Preview>(selected);
   const read = useAction(() => {});
   const load = () =>
     read.run(async () => {
-      const r = await tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) });
-      setMissing(missingLibrary(r.error?.message));
-      if (r.body) {
-        setPreview(r.body);
-        setRows(rowsFrom(r.body.settings));
-      }
+      const r = await readFor(selected, () =>
+        tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) }),
+      );
+      if (isCurrent(selected)) setMissing(missingLibrary(r.error?.message));
+      if (r.body) setRows(rowsFrom(r.body.settings));
       return r;
     });
   const write = useAction(load);
-  // A write acts on the files the last preview pinned (the tool refuses it if one changed since);
-  // choosing other files drops that preview, so a write never pins files unread.
+  // Choosing other files also drops the offer to create the library folder, which was for the
+  // files last read.
   const reselect =
     <T,>(f: (v: T) => void) =>
     (v: T) => {
       f(v);
-      setPreview(undefined);
       setMissing(false);
     };
   const apply = () =>
@@ -420,7 +396,7 @@ export function ClaudeDesktopPage() {
                 onChange={setSecret}
               />
             ) : (
-              <NoKeys />
+              <NoKeys secrets={secrets} />
             )}
             {addKey.error && <Notice tone="danger">{addKey.error}</Notice>}
             <Button

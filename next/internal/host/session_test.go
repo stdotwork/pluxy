@@ -227,6 +227,7 @@ func sessionBadFrame(minor int) {
 		os.Exit(1)
 	}
 	fmt.Print(protocol.HandshakeLine(protocol.Version, socket))
+	exitWhenStdinCloses()
 	leak := func(a *protocol.Account) protocol.Reply {
 		key := ""
 		if a.Credential != nil {

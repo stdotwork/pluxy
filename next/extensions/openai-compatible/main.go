@@ -809,16 +809,16 @@ func upstreamError(resp *http.Response, model string) *llm.Error {
 		if e.ProviderCode == "insufficient_quota" {
 			e.Code = llm.CodeQuota
 		}
-		e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"))
+		e.RetryAfterMS = sdk.RetryAfter(resp.Header.Get("Retry-After"), time.Now())
 	case s == http.StatusServiceUnavailable:
 		// Not retry-safe: a gateway may answer 503 after the model started on the request.
 		e.Code, e.Scope = llm.CodeUnavailable, llm.ScopeEndpoint
-		e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"))
+		e.RetryAfterMS = sdk.RetryAfter(resp.Header.Get("Retry-After"), time.Now())
 	case s >= 500:
 		// The upstream may have run the request before failing, so retrying is not known safe.
 		e.Code, e.Scope = llm.CodeUpstream, llm.ScopeEndpoint
 		if s == 529 {
-			e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"))
+			e.RetryAfterMS = sdk.RetryAfter(resp.Header.Get("Retry-After"), time.Now())
 		}
 	default:
 		e.Code, e.Scope = llm.CodeInvalidRequest, llm.ScopeRequest
@@ -832,20 +832,4 @@ func upstreamError(resp *http.Response, model string) *llm.Error {
 // model in the message, rather than a path or other resource it does not serve.
 func modelRefused(e *llm.Error, model string) bool {
 	return e.ProviderCode == "model_not_found" || (model != "" && strings.Contains(e.Message, model))
-}
-
-// retryAfter reads a Retry-After header: delay seconds or an HTTP date.
-func retryAfter(v string) int64 {
-	if v == "" {
-		return 0
-	}
-	if secs, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil && secs >= 0 {
-		return secs * 1000
-	}
-	if t, err := http.ParseTime(v); err == nil {
-		if d := time.Until(t); d > 0 {
-			return d.Milliseconds()
-		}
-	}
-	return 0
 }

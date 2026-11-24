@@ -180,9 +180,12 @@ func initConfig(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("pluxy init", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	configPath := fs.String("config", "config.json", "where to write the config file; an existing file is never replaced")
-	port := fs.Int("port", -1, "the port core listens on (default: 8317, or a free port when 8317 is taken; 0: a free port)")
+	port := fs.Int("port", 0, "the port core listens on (default: 8317, or a free port when 8317 is taken; 0: a free port)")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "usage: pluxy init [-config file] [-port n]   write a first config: listening on 127.0.0.1, with a new client key and management key")
+		out := fs.Output()
+		fmt.Fprintln(out, "usage: pluxy init [-config file] [-port n]")
+		fmt.Fprintln(out, "  write a first config: listening on 127.0.0.1, with a new client key and management key")
+		fmt.Fprintln(out)
 		fs.PrintDefaults()
 	}
 	if err := fs.Parse(args); err != nil {
@@ -191,18 +194,38 @@ func initConfig(args []string, stdout, stderr io.Writer) int {
 			fs.Usage()
 			return exitOK
 		}
-		fs.SetOutput(stderr)
-		fmt.Fprintln(stderr, err)
-		fs.Usage()
+		fmt.Fprintf(stderr, "pluxy: %v. See pluxy init -h.\n", err)
 		return exitUsage
 	}
-	if fs.NArg() > 0 || *port < -1 || *port > 65535 {
-		fs.SetOutput(stderr)
-		fs.Usage()
+	portSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "port" {
+			portSet = true
+		}
+	})
+	if fs.NArg() > 0 {
+		fmt.Fprintln(stderr, "pluxy: usage: pluxy init [-config file] [-port n]")
 		return exitUsage
 	}
-	fc, err := core.WriteFirstConfig(*configPath, *port)
+	portVal := -1
+	if portSet {
+		if *port < 0 || *port > 65535 {
+			fmt.Fprintf(stderr, "pluxy: -port must be between 0 and 65535, got %d. See pluxy init -h.\n", *port)
+			return exitUsage
+		}
+		portVal = *port
+	}
+	fc, err := core.WriteFirstConfig(*configPath, portVal)
 	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			path := *configPath
+			var pe *os.PathError
+			if errors.As(err, &pe) && pe.Path != "" {
+				path = pe.Path
+			}
+			fmt.Fprintf(stderr, "pluxy: %s already exists. Start core with: pluxy serve -config %s, or pick another file with -config.\n", path, path)
+			return exitFailed
+		}
 		fmt.Fprintf(stderr, "pluxy: %v\n", err)
 		return exitFailed
 	}
@@ -231,8 +254,9 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string, 
 	}
 	// Core's log goes to standard error and, while the config says so, to its logs folder.
 	logs := logfile.New(core.LogsDir(configPath))
-	log.SetOutput(io.MultiWriter(os.Stderr, logs))
-	log.Print(buildinfo.Line())
+	logOut := io.MultiWriter(os.Stderr, logs)
+	log.SetOutput(logOut)
+	fmt.Fprintln(logOut, buildinfo.Line())
 	// The inherited socket is taken before any extension starts: until then its descriptor does
 	// not close on exec, and every extension would hold the core's port.
 	var ln net.Listener

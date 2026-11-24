@@ -1536,7 +1536,7 @@ func (b *BodyRedactor) dropping(s string, from int, final bool) string {
 func (b *BodyRedactor) escapes(s string, sent, cut int, final bool) (hold, end, inside int) {
 	hold, base, inside := len(s), 0, cut
 	if sent == 0 {
-		if final || strings.IndexAny(s[max(0, len(s)-b.escapeWindow()):], `\%`) < 0 {
+		if final || !strings.ContainsAny(s[max(0, len(s)-b.escapeWindow()):], `\%`) {
 			// A spelling that more text could complete has an escape in its last escapeWindow
 			// bytes, or Write would replace it from its start anyway; and an escape that holds
 			// cut is in them too.

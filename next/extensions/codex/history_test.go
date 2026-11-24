@@ -19,6 +19,7 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 	"github.com/stdotwork/pluxy/next/sdk"
+	"github.com/stdotwork/pluxy/next/sdk/sdktest"
 )
 
 // inputOf returns the input items of a shaped request body, each as a map.
@@ -408,22 +409,22 @@ func TestForeignReasoningRetryLimits(t *testing.T) {
 		return generate(context.Background(), sdk.Call{Account: protocol.Account{ID: "codex", Settings: settingsJSON, Credential: subscription("tok", "")}, Request: req}, nil)
 	}
 	u := newReasoningUpstream(t, 2, foreignReasoningRefusal)
-	wantError(t, call(u, replayBody, ""), llm.CodeInvalidRequest, false)
+	sdktest.WantError(t, call(u, replayBody, ""), llm.CodeInvalidRequest, false)
 	if n := len(u.requests()); n != 2 {
 		t.Errorf("refused twice: %d requests, want 2", n)
 	}
 	u = newReasoningUpstream(t, 1, foreignReasoningRefusal)
-	wantError(t, call(u, `{"model":"gpt-6.1-sol","input":"hi"}`, ""), llm.CodeInvalidRequest, false)
+	sdktest.WantError(t, call(u, `{"model":"gpt-6.1-sol","input":"hi"}`, ""), llm.CodeInvalidRequest, false)
 	if n := len(u.requests()); n != 1 {
 		t.Errorf("no reasoning to leave out: %d requests, want 1", n)
 	}
 	u = newReasoningUpstream(t, 1, `{"error":{"message":"bad","type":"invalid_request_error","code":"invalid_value"}}`)
-	wantError(t, call(u, replayBody, ""), llm.CodeInvalidRequest, false)
+	sdktest.WantError(t, call(u, replayBody, ""), llm.CodeInvalidRequest, false)
 	if n := len(u.requests()); n != 1 {
 		t.Errorf("another refusal: %d requests, want 1", n)
 	}
 	u = newReasoningUpstream(t, 1, foreignReasoningRefusal)
-	wantError(t, call(u, replayBody, llm.DropReject), llm.CodeInvalidRequest, false)
+	sdktest.WantError(t, call(u, replayBody, llm.DropReject), llm.CodeInvalidRequest, false)
 	if n := len(u.requests()); n != 1 {
 		t.Errorf("drop_policy reject: %d requests, want 1", n)
 	}

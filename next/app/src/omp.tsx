@@ -20,12 +20,12 @@ import {
   useKit,
   useLoad,
 } from "../../ui/kit/ui";
-import { Backups, reply } from "./backups";
-import { folderWait, NeedsKey, NoKeys, toolMissing, withDeviceLink } from "./clientHelp";
+import { Backups } from "./backups";
+import { NeedsKey, NoKeys, toolMissing, withDeviceLink } from "./clientHelp";
+import { keysOf, type Secret, StartCli, Text, usePreview } from "./clientPage";
 import type { AgentPage } from "./easyMode";
-import { connectionGet } from "./host";
-import { CLIENT, keysOf, modelOf, PACKAGE, type ReadBack, type Secret, validModel } from "./ompForm";
-import { keptTerminal, launcherProblem, useDeviceChanged } from "./startCli";
+import { connectionGet, reply } from "./host";
+import { CLIENT, modelOf, PACKAGE, type ReadBack, validModel } from "./ompForm";
 
 const t = strings("omp", {
   title: "Oh My Pi",
@@ -99,98 +99,18 @@ interface Preview {
   config: ReadBack;
 }
 
-function Text(props: {
-  label: string;
-  hint?: string;
-  value: string;
-  onInput: (v: string) => void;
-  list?: string;
-}) {
-  const id = useId();
-  return (
-    <label class="field" data-part="field" for={id}>
-      <span class="label">{props.label}</span>
-      <input
-        id={id}
-        type="text"
-        autocomplete="off"
-        spellcheck={false}
-        list={props.list}
-        value={props.value}
-        onInput={(e) => props.onInput(e.currentTarget.value)}
-      />
-      {props.hint && <small class="hint">{props.hint}</small>}
-    </label>
-  );
-}
-
-function StartCli(props: { available: boolean }) {
-  const [cwd, setCwd] = useState("");
-  const [override, setOverride] = useState("");
-  const [terminal, setTerminal] = useState("automatic");
-  const state = useLoad(() => reply<{ history: Record<string, string[]> }>("launcher_state"));
-  const terminals = useLoad(() =>
-    reply<{ terminals: { id: string; label: string }[] }>("launcher_terminals"),
-  );
-  useDeviceChanged(terminals.reload);
-  const action = useAction(state.reload);
-  const recent = state.data?.history[CLIENT] ?? [];
-  const shownTerminal = keptTerminal(terminal, terminals.data?.terminals);
-  const start = () =>
-    action.run(async () => {
-      const recipe = await tool<Record<string, unknown>>("recipe", {});
-      if (!recipe.body) return recipe;
-      return reply("launcher_launch", {
-        launch: {
-          ...recipe.body,
-          cwd: cwd.trim(),
-          terminal: shownTerminal,
-          ...(override.trim() ? { override: override.trim() } : {}),
-        },
-      });
-    });
-  return (
-    <Card title={t("start")}>
-      <Text label={t("cwd")} hint={folderWait(cwd)} value={cwd} onInput={setCwd} />
-      {recent.length > 0 && (
-        <Choices
-          label={t("recent")}
-          value={recent.includes(cwd) ? cwd : undefined}
-          choices={recent.map((r) => ({ value: r, label: r }))}
-          onChange={setCwd}
-        />
-      )}
-      <Text label={t("override")} hint={t("overrideHint")} value={override} onInput={setOverride} />
-      {terminals.data && (
-        <Choices
-          label={t("terminal")}
-          value={shownTerminal}
-          choices={terminals.data.terminals.map((x) => ({ value: x.id, label: x.label }))}
-          onChange={setTerminal}
-        />
-      )}
-      {terminals.error && <Notice tone="warn">{launcherProblem(terminals.error)}</Notice>}
-      {action.error && <Notice tone="danger">{launcherProblem(action.error)}</Notice>}
-      <Button variant="primary" onClick={start} disabled={action.busy || !props.available || !cwd.trim()}>
-        {t("launch")}
-      </Button>
-    </Card>
-  );
-}
-
 export function OmpPage() {
   const { api } = useKit();
   const [where, setWhere] = useState<"default" | "folder" | "files">("default");
   const [folder, setFolder] = useState("");
   const [modelsFile, setModelsFile] = useState("");
   const [settingsFile, setSettingsFile] = useState("");
-  const [preview, setPreview] = useState<Preview>();
   const [model, setModel] = useState("");
   const [served, setServed] = useState<string[]>([]);
   const [secret, setSecret] = useState("");
   const [core, setCore] = useState<string>();
   const secrets = useLoad(() => reply<{ secrets: Secret[] }>("vault_secrets"));
-  const keys = keysOf(secrets.data);
+  const keys = keysOf(PACKAGE, secrets.data);
   const listId = useId();
   useEffect(() => {
     connectionGet().then(
@@ -204,25 +124,22 @@ export function OmpPage() {
       : where === "files"
         ? { targets: [{ file: modelsFile.trim() }, { file: settingsFile.trim() }] }
         : {};
+  // A write acts on the files the last preview pinned (the tool refuses them if one changed
+  // since); the preview belongs to the selection it was read for, so a write never pins files unread.
+  const selected = JSON.stringify(selection());
+  const { preview, readFor } = usePreview<Preview>(selected);
   const read = useAction(() => {});
   const load = () =>
     read.run(async () => {
-      const r = await tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) });
+      const r = await readFor(selected, () =>
+        tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) }),
+      );
       if (r.body) {
-        setPreview(r.body);
         setModel(modelOf(r.body.config));
       }
       return r;
     });
   const write = useAction(load);
-  // A write acts on the files the last preview pinned (the tool refuses them if a file changed
-  // since); choosing other files drops that preview, so a write never pins files unread.
-  const reselect =
-    <T,>(f: (v: T) => void) =>
-    (v: T) => {
-      f(v);
-      setPreview(undefined);
-    };
   const fetchModels = useAction(() => {});
   const refresh = () =>
     fetchModels.run(async () => {
@@ -261,24 +178,19 @@ export function OmpPage() {
             { value: "folder", label: t("fileFolder") },
             { value: "files", label: t("fileSelected") },
           ]}
-          onChange={reselect(setWhere)}
+          onChange={setWhere}
         />
         {where === "folder" && (
-          <Text label={t("folder")} hint={t("folderHint")} value={folder} onInput={reselect(setFolder)} />
+          <Text label={t("folder")} hint={t("folderHint")} value={folder} onInput={setFolder} />
         )}
         {where === "files" && (
           <>
-            <Text
-              label={t("modelsFile")}
-              hint={t("filesHint")}
-              value={modelsFile}
-              onInput={reselect(setModelsFile)}
-            />
+            <Text label={t("modelsFile")} hint={t("filesHint")} value={modelsFile} onInput={setModelsFile} />
             <Text
               label={t("settingsFile")}
               hint={t("filesHint")}
               value={settingsFile}
-              onInput={reselect(setSettingsFile)}
+              onInput={setSettingsFile}
             />
           </>
         )}
@@ -346,7 +258,7 @@ export function OmpPage() {
                 onChange={setSecret}
               />
             ) : (
-              <NoKeys />
+              <NoKeys secrets={secrets} />
             )}
             {addKey.error && <Notice tone="danger">{addKey.error}</Notice>}
             <Button
@@ -388,7 +300,12 @@ export function OmpPage() {
       {preview && (
         <Backups pkg={PACKAGE} pins={async () => preview.targets} disabled={busy} onChange={load} />
       )}
-      <StartCli available={!unavailable} />
+      <StartCli
+        available={!unavailable}
+        client={CLIENT}
+        recipe={() => tool<Record<string, unknown>>("recipe", {})}
+        t={t}
+      />
     </div>
   );
 }

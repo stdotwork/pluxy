@@ -9,7 +9,6 @@
 import { useEffect, useId, useRef, useState } from "preact/hooks";
 import { strings } from "../../ui/kit/strings";
 import { Button, Card, Choices, Notice, useAction, useKit, useLoad } from "../../ui/kit/ui";
-import { reply } from "./backups";
 import {
   type Distro,
   type EnvRecord,
@@ -26,6 +25,7 @@ import {
   WSL_PACKAGE,
   type WslUser,
 } from "./environment";
+import { reply } from "./host";
 
 const t = strings("environment", {
   title: "Environment / configuration directory",
@@ -116,6 +116,9 @@ function Wsl(props: { env: Environment }) {
   // The distribution whose users are wanted: a reply for any other (picked before it) is dropped.
   const wanted = useRef(distro);
   const readUsers = (d: string) => {
+    // Another distribution has no user picked yet: the page must not keep working in the old one
+    // while this one is shown.
+    if (sel && sel.distro !== d) env.choose(null);
     wanted.current = d;
     setDistro(d);
     setUsers(undefined);

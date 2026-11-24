@@ -530,7 +530,7 @@ func statusError(resp *http.Response, model string) *llm.Error {
 		// another account may take it, and only this model waits on this account. Whatever the
 		// upstream's status, the client sees a 429, as from today's core.
 		e.Code, e.Scope, e.Retryable, e.Status = llm.CodeRateLimit, llm.ScopeModel, true, http.StatusTooManyRequests
-		e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"))
+		e.RetryAfterMS = sdk.RetryAfter(resp.Header.Get("Retry-After"), time.Now())
 	case s >= 300 && s < 400:
 		e.Code, e.Scope, e.Status = llm.CodeUpstream, llm.ScopeEndpoint, http.StatusBadGateway
 		e.Message = fmt.Sprintf("upstream redirected (%s) to another host; not followed", resp.Status)
@@ -561,12 +561,12 @@ func statusError(resp *http.Response, model string) *llm.Error {
 	case s == http.StatusServiceUnavailable:
 		// Not retry-safe: a gateway may answer 503 after the model started on the request.
 		e.Code, e.Scope = llm.CodeUnavailable, llm.ScopeEndpoint
-		e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"))
+		e.RetryAfterMS = sdk.RetryAfter(resp.Header.Get("Retry-After"), time.Now())
 	case s >= 500:
 		// The upstream may have run the request before failing.
 		e.Code, e.Scope = llm.CodeUpstream, llm.ScopeEndpoint
 		if s == 529 {
-			e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"))
+			e.RetryAfterMS = sdk.RetryAfter(resp.Header.Get("Retry-After"), time.Now())
 		}
 	default:
 		e.Code, e.Scope = llm.CodeInvalidRequest, llm.ScopeRequest
@@ -681,7 +681,7 @@ func resetMS(ce codexError, retryAfterHeader string) int64 {
 	if ce.ResetsInSeconds > 0 {
 		return ce.ResetsInSeconds * 1000
 	}
-	return retryAfter(retryAfterHeader)
+	return sdk.RetryAfter(retryAfterHeader, time.Now())
 }
 
 // exhaustedWindow reads Codex's rate-limit headers (x-codex-primary-* and x-codex-secondary-*)
@@ -721,22 +721,6 @@ func exhaustedWindow(h http.Header, now time.Time) (minutes, resetMS int64) {
 		resetMS = int64((bestReset - at) * 1000)
 	}
 	return int64(best), resetMS
-}
-
-// retryAfter reads a Retry-After header: delay seconds or an HTTP date.
-func retryAfter(v string) int64 {
-	if v == "" {
-		return 0
-	}
-	if secs, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil && secs >= 0 {
-		return secs * 1000
-	}
-	if t, err := http.ParseTime(v); err == nil {
-		if d := time.Until(t); d > 0 {
-			return d.Milliseconds()
-		}
-	}
-	return 0
 }
 
 // isAccountClosed reports whether a Codex error says the account is deactivated, disabled or

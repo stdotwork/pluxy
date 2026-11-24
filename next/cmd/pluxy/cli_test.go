@@ -311,18 +311,21 @@ func TestFindCore(t *testing.T) {
 	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := findCore(path, "", "")
+	got, err := findCore(path, true, "", "")
 	if err != nil || got.url != "http://127.0.0.1:8499" || got.key != "from-config" {
 		t.Errorf("from the config: %+v %v", got, err)
 	}
-	if got, err := findCore(path, "", "given"); err != nil || got.key != "given" || got.url != "http://127.0.0.1:8499" {
+	if got, err := findCore(path, true, "", "given"); err != nil || got.key != "given" || got.url != "http://127.0.0.1:8499" {
 		t.Errorf("with a key: %+v %v", got, err)
 	}
-	if got, err := findCore(filepath.Join(t.TempDir(), "none.json"), "http://h:1", "k"); err != nil || got.url != "http://h:1" {
+	if got, err := findCore(filepath.Join(t.TempDir(), "none.json"), true, "http://h:1", "k"); err != nil || got.url != "http://h:1" {
 		t.Errorf("with both and no config: %+v %v", got, err)
 	}
-	if _, err := findCore(filepath.Join(t.TempDir(), "none.json"), "", ""); err == nil || !strings.Contains(err.Error(), "--url") {
-		t.Errorf("no config and no address: %v", err)
+	if _, err := findCore("config.json", false, "", ""); err == nil || !strings.Contains(err.Error(), "pluxy init") || !strings.Contains(err.Error(), "--url") {
+		t.Errorf("default missing config: %v", err)
+	}
+	if _, err := findCore(filepath.Join(t.TempDir(), "none.json"), true, "", ""); err == nil || !strings.Contains(err.Error(), "Check the --config path") || strings.Contains(err.Error(), "pass --config") {
+		t.Errorf("explicit missing config: %v", err)
 	}
 }
 
@@ -1199,6 +1202,105 @@ func TestNameMissingAccount(t *testing.T) {
 	other := &management.APIError{Status: http.StatusNotFound, Code: "not_found", Message: "no log file of that name"}
 	if got := nameMissingAccount(remove, []string{"nobody"}, other); got != error(other) {
 		t.Errorf("another 404 changed to %q", got)
+	}
+}
+
+func TestCLIMessages(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if auth == "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"error":{"code":"unauthorized","message":"missing management key"}}`))
+			return
+		}
+		if auth != "Bearer k" {
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"error":{"code":"unauthorized","message":"invalid management key"}}`))
+			return
+		}
+		switch r.Method + " " + r.URL.Path {
+		case "PATCH /v0/management/accounts/alpha-1":
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(`{"error":{"code":"conflict","message":"account \"alpha-1\" is set in core's config; change it there"}}`))
+		case "DELETE /v0/management/client-keys/nope":
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"error":{"code":"not_found","message":"no client key in the config file has this ID"}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"error":{"code":"not_found","message":"nothing here"}}`))
+		}
+	}))
+	defer srv.Close()
+
+	run := func(env map[string]string, args ...string) (string, string, int) {
+		var out, errOut bytes.Buffer
+		code := runCLI(args, &out, &errOut, func(k string) string { return env[k] })
+		return out.String(), errOut.String(), code
+	}
+
+	// Top-level help includes -version and examples.
+	out, errOut, code := run(nil, "help")
+	if code != exitOK || errOut != "" || !strings.Contains(out, "pluxy -version") || !strings.Contains(out, "examples:") {
+		t.Errorf("help: code=%d err=%q out=%q", code, errOut, out)
+	}
+
+	// Leaf help uses the same usage style as group help and includes the command summary.
+	out, errOut, code = run(nil, "status", "-h")
+	if code != exitOK || errOut != "" || !strings.HasPrefix(out, "usage: pluxy status [flags]\n  core's state:") || strings.Contains(out, "Usage of") {
+		t.Errorf("status -h: code=%d out=%q err=%q", code, out, errOut)
+	}
+
+	// Bad flag value prints one line pointing to pluxy help, not the full flag dump.
+	_, errOut, code = run(nil, "logs", "--limit", "abc")
+	if code != exitUsage || strings.Count(strings.TrimSpace(errOut), "\n") != 0 || !strings.Contains(errOut, "pluxy help logs") {
+		t.Errorf("logs --limit abc: code=%d err=%q", code, errOut)
+	}
+
+	// Flag before group subcommand says a command is missing, not unknown command "--url".
+	_, errOut, code = run(nil, "account", "--url", srv.URL, "--key", "k")
+	if code != exitUsage || !strings.Contains(errOut, "account needs a command before flags") || strings.Contains(errOut, `unknown account command "--url"`) {
+		t.Errorf("account --url: code=%d err=%q", code, errOut)
+	}
+
+	// Missing and wrong management keys explain where the key comes from, while --json stays unchanged.
+	_, errOut, code = run(nil, "status", "--url", srv.URL)
+	if code != exitRefused || !strings.Contains(errOut, "PLUXY_MANAGEMENT_KEY") || !strings.Contains(errOut, "--key") {
+		t.Errorf("missing key: code=%d err=%q", code, errOut)
+	}
+	_, errOut, code = run(nil, "status", "--url", srv.URL, "--key", "wrong")
+	if code != exitRefused || !strings.Contains(errOut, "wrong management key") || !strings.Contains(errOut, "PLUXY_MANAGEMENT_KEY") {
+		t.Errorf("wrong key: code=%d err=%q", code, errOut)
+	}
+	_, errOut, code = run(nil, "status", "--url", srv.URL, "--key", "wrong", "--json")
+	if code != exitRefused || strings.TrimSpace(errOut) != `{"error":{"code":"unauthorized","message":"invalid management key"}}` {
+		t.Errorf("wrong key --json: code=%d err=%q", code, errOut)
+	}
+
+	// Config-set account conflict names pluxy reload.
+	_, errOut, code = run(map[string]string{"PLUXY_URL": srv.URL, "PLUXY_MANAGEMENT_KEY": "k"}, "account", "disable", "alpha-1")
+	if code != exitChange || !strings.Contains(errOut, `"alpha-1"`) || !strings.Contains(errOut, "pluxy reload") {
+		t.Errorf("config-set account: code=%d err=%q", code, errOut)
+	}
+
+	// key remove of missing key names the key ID and pluxy key list.
+	_, errOut, code = run(map[string]string{"PLUXY_URL": srv.URL, "PLUXY_MANAGEMENT_KEY": "k"}, "key", "remove", "nope")
+	if code != exitNotFound || !strings.Contains(errOut, `"nope"`) || !strings.Contains(errOut, "pluxy key list") {
+		t.Errorf("key remove missing: code=%d err=%q", code, errOut)
+	}
+
+	// init -h hides Go's -1 sentinel; init on an existing file names pluxy serve -config.
+	var initOut, initErr bytes.Buffer
+	if code := initConfig([]string{"-h"}, &initOut, &initErr); code != exitOK || initErr.Len() != 0 || !strings.Contains(initOut.String(), "pluxy init") || strings.Contains(initOut.String(), "(default -1)") {
+		t.Errorf("init -h: code=%d out=%q err=%q", code, initOut.String(), initErr.String())
+	}
+	existing := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(existing, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	initOut.Reset()
+	initErr.Reset()
+	if code := initConfig([]string{"-config", existing, "-port", "0"}, &initOut, &initErr); code != exitFailed || !strings.Contains(initErr.String(), "pluxy serve -config "+existing) {
+		t.Errorf("init existing: code=%d err=%q", code, initErr.String())
 	}
 }
 

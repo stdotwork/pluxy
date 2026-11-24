@@ -1,26 +1,7 @@
-// The Claude Code page's form logic (src/claudeCodeForm.ts): the keys it offers from the vault, the
-// form it fills from the tool's read-back, and when Apply is allowed.
+// The Claude Code page's form logic (src/claudeCodeForm.ts): the form it fills from
+// the tool's read-back, and when Apply is allowed.
 import { describe, expect, test } from "bun:test";
-import { fresh, fromFile, keysOf, ready, settingsNote, toolUnavailable } from "../src/claudeCodeForm";
-
-describe("keys", () => {
-  test("lists plain secrets and this package's client keys from vault_secrets' answer", () => {
-    const body = {
-      secrets: [
-        { id: "a", label: "Plain" },
-        { id: "b", label: "Ours", client_key: { client: "pluxy/claude-code" } },
-        { id: "c", label: "Codex's", client_key: { client: "pluxy/codex" } },
-      ],
-    };
-    expect(keysOf(body).map((s) => s.id)).toEqual(["a", "b"]);
-  });
-
-  test("lists nothing while the answer is missing or empty", () => {
-    expect(keysOf(undefined)).toEqual([]);
-    expect(keysOf({ secrets: [] })).toEqual([]);
-    expect(keysOf({})).toEqual([]);
-  });
-});
+import { fresh, fromFile, ready, settingsNote, toolUnavailable } from "../src/claudeCodeForm";
 
 describe("form from the file", () => {
   test("a file set up with no startup model keeps it empty; a file never set up starts at opus", () => {

@@ -15,38 +15,8 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 	"github.com/stdotwork/pluxy/next/sdk"
+	"github.com/stdotwork/pluxy/next/sdk/sdktest"
 )
-
-func wantError(t *testing.T, err error, code string, retryable bool) {
-	t.Helper()
-	var e *llm.Error
-	if !errors.As(err, &e) {
-		t.Fatalf("got %v, want an *llm.Error", err)
-	}
-	if e.Code != code || e.Retryable != retryable {
-		t.Errorf("got code %s retryable %v, want code %s retryable %v (%s)", e.Code, e.Retryable, code, retryable, e.Message)
-	}
-}
-
-// closedURL returns the address of a port nothing listens on: port 1 on loopback, which no test
-// server can be given, unlike a just-closed ephemeral port that the next httptest server may reuse.
-func closedURL(t *testing.T) string {
-	t.Helper()
-	const addr = "127.0.0.1:1"
-	if c, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
-		c.Close()
-		t.Fatalf("something listens on %s; the connection-refused cases need it closed", addr)
-	}
-	return "http://" + addr
-}
-
-// hangUp closes the connection of the request being answered without a reply.
-func hangUp(w http.ResponseWriter) {
-	c, _, err := w.(http.Hijacker).Hijack()
-	if err == nil {
-		c.Close()
-	}
-}
 
 func refreshCall(srv *xaitest.Server, tokenEndpoint string) sdk.RefreshCall {
 	access, rt := srv.Grant()
@@ -61,9 +31,9 @@ func TestLoginRetryOnlyWhenNotSent(t *testing.T) {
 	t.Run("discovery refused", func(t *testing.T) {
 		srv := xaitest.New(t)
 		set, _ := readSettings(srv.Settings())
-		set.AuthIssuer = closedURL(t)
+		set.AuthIssuer = sdktest.ClosedURL(t)
 		_, err := deviceLogin(ctx, set, promptFunc(func(protocol.Prompt) {}))
-		wantError(t, err, llm.CodeUnavailable, true)
+		sdktest.WantError(t, err, llm.CodeUnavailable, true)
 	})
 	t.Run("device start hung up", func(t *testing.T) {
 		srv := xaitest.New(t)
@@ -71,20 +41,20 @@ func TestLoginRetryOnlyWhenNotSent(t *testing.T) {
 			if r.URL.Path == "/.well-known/openid-configuration" {
 				return false
 			}
-			hangUp(w)
+			sdktest.HangUp(w)
 			return true
 		}
 		set, _ := readSettings(srv.Settings())
 		_, err := deviceLogin(ctx, set, promptFunc(func(protocol.Prompt) {}))
-		wantError(t, err, llm.CodeUnavailable, false)
+		sdktest.WantError(t, err, llm.CodeUnavailable, false)
 	})
 	t.Run("renewal refused", func(t *testing.T) {
 		srv := xaitest.New(t)
-		closed := closedURL(t)
+		closed := sdktest.ClosedURL(t)
 		call := refreshCall(srv, closed+"/oauth2/token")
 		call.Account.Settings, _ = json.Marshal(map[string]string{"auth_issuer": closed})
 		_, err := refresh(ctx, call)
-		wantError(t, err, llm.CodeUnavailable, true)
+		sdktest.WantError(t, err, llm.CodeUnavailable, true)
 	})
 	t.Run("renewal hung up", func(t *testing.T) {
 		srv := xaitest.New(t)
@@ -92,17 +62,17 @@ func TestLoginRetryOnlyWhenNotSent(t *testing.T) {
 			if r.URL.Path != "/oauth2/token" {
 				return false
 			}
-			hangUp(w)
+			sdktest.HangUp(w)
 			return true
 		}
 		_, err := refresh(ctx, refreshCall(srv, srv.URL+"/oauth2/token"))
-		wantError(t, err, llm.CodeUnavailable, false)
+		sdktest.WantError(t, err, llm.CodeUnavailable, false)
 	})
 	t.Run("renewal 503", func(t *testing.T) {
 		srv := xaitest.New(t)
 		srv.TokenDown = true
 		_, err := refresh(ctx, refreshCall(srv, srv.URL+"/oauth2/token"))
-		wantError(t, err, llm.CodeUnavailable, false)
+		sdktest.WantError(t, err, llm.CodeUnavailable, false)
 	})
 	t.Run("renewal reply broke off", func(t *testing.T) {
 		srv := xaitest.New(t)
@@ -113,11 +83,11 @@ func TestLoginRetryOnlyWhenNotSent(t *testing.T) {
 			w.Header().Set("Content-Length", "100")
 			w.WriteHeader(http.StatusOK)
 			io.WriteString(w, `{"access_token":`)
-			hangUp(w)
+			sdktest.HangUp(w)
 			return true
 		}
 		_, err := refresh(ctx, refreshCall(srv, srv.URL+"/oauth2/token"))
-		wantError(t, err, llm.CodeUnavailable, false)
+		sdktest.WantError(t, err, llm.CodeUnavailable, false)
 	})
 	t.Run("renewal 429", func(t *testing.T) {
 		srv := xaitest.New(t)
@@ -129,7 +99,7 @@ func TestLoginRetryOnlyWhenNotSent(t *testing.T) {
 			return true
 		}
 		_, err := refresh(ctx, refreshCall(srv, srv.URL+"/oauth2/token"))
-		wantError(t, err, llm.CodeRateLimit, true)
+		sdktest.WantError(t, err, llm.CodeRateLimit, true)
 	})
 }
 
@@ -160,7 +130,7 @@ func TestDevicePollStopsWhenItMayHaveRun(t *testing.T) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			io.WriteString(w, `{"error":"authorization_pending"}`)
 		}},
-		{"hung up", hangUp},
+		{"hung up", sdktest.HangUp},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			srv := xaitest.New(t)
@@ -178,7 +148,7 @@ func TestDevicePollStopsWhenItMayHaveRun(t *testing.T) {
 			stubWait(t, cancel, 3)
 			set, _ := readSettings(srv.Settings())
 			_, err := deviceLogin(ctx, set, promptFunc(func(p protocol.Prompt) { srv.Approve(p.UserCode) }))
-			wantError(t, err, llm.CodeUnavailable, false)
+			sdktest.WantError(t, err, llm.CodeUnavailable, false)
 			if n := polls.Load(); n != 1 {
 				t.Errorf("%d polls reached xAI, want 1", n)
 			}

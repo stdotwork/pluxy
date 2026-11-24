@@ -36,7 +36,7 @@ ChatGPT, Gemini, Grok, Kimi Code, Meta Muse, Devin, and any OpenAI-compatible AP
 There is no release to download yet, so the quick start builds pluxy from source. It ends with
 one request sent through pluxy and counted in its usage record.
 
-You need [Git](https://git-scm.com/downloads), [Go](https://go.dev/dl/) 1.26.10 or newer and
+You need [Git](https://git-scm.com/downloads), [Go](https://go.dev/dl/) 1.26.11 or newer and
 [Bun](https://bun.sh) 1.4.3. The commands are the same on Linux and macOS. On Windows, run them
 in Git Bash, and write `pluxy.exe` wherever a command below says `pluxy`.
 

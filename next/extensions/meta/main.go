@@ -379,7 +379,7 @@ func upstreamError(status int, raw []byte, h http.Header, model string, now time
 		// answered; a used-up subscription quota is the account's.
 		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeModel, true
 		if h != nil {
-			e.RetryAfterMS = retryAfter(h.Get("Retry-After"), now)
+			e.RetryAfterMS = sdk.RetryAfter(h.Get("Retry-After"), now)
 		}
 		if resetMS > 0 {
 			e.RetryAfterMS = resetMS
@@ -390,7 +390,7 @@ func upstreamError(status int, raw []byte, h http.Header, model string, now time
 	case status == http.StatusServiceUnavailable || status == 529:
 		e.Code, e.Scope = llm.CodeUnavailable, llm.ScopeEndpoint
 		if h != nil {
-			e.RetryAfterMS = retryAfter(h.Get("Retry-After"), now)
+			e.RetryAfterMS = sdk.RetryAfter(h.Get("Retry-After"), now)
 		}
 	case status >= 500:
 		e.Code, e.Scope = llm.CodeUpstream, llm.ScopeEndpoint
@@ -408,20 +408,4 @@ func subscriptionQuota(p metaError, code string) bool {
 		return true
 	}
 	return (code == "rate_limit_exceeded" || strings.Contains(code, "quota")) && p.Error.ResetsAt > 0
-}
-
-// retryAfter reads a Retry-After header: delay seconds or an HTTP date.
-func retryAfter(v string, now time.Time) int64 {
-	if v == "" {
-		return 0
-	}
-	if secs, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil && secs >= 0 {
-		return secs * 1000
-	}
-	if t, err := http.ParseTime(v); err == nil {
-		if d := t.Sub(now); d > 0 {
-			return d.Milliseconds()
-		}
-	}
-	return 0
 }

@@ -1262,6 +1262,24 @@ func groupHelp(w io.Writer, prefix string) {
 	tw.Flush()
 }
 
+// groupExample returns one example command from prefix (preferring "<group> list").
+func groupExample(prefix string) string {
+	first := ""
+	for i := range commands {
+		c := &commands[i]
+		if !strings.HasPrefix(c.words+" ", prefix) {
+			continue
+		}
+		if c.words == prefix+"list" {
+			return c.words
+		}
+		if first == "" {
+			first = c.words
+		}
+	}
+	return first
+}
+
 // isHelpFlag reports whether arg is one of the spellings of help a command's own flags take.
 func isHelpFlag(arg string) bool {
 	return slices.Contains([]string{"-h", "--h", "-help", "--help"}, arg)
@@ -1272,6 +1290,14 @@ func help(w io.Writer, prefix string) {
 	fmt.Fprintln(w, "usage: pluxy serve [-config file] [flags]   run core (pluxy with no subcommand does too)")
 	fmt.Fprintln(w, "       pluxy init [-config file] [-port n]  write a first config (pluxy serve does when there is none)")
 	fmt.Fprintln(w, "       pluxy <command> [--json] [--config file | --url address --key key]")
+	fmt.Fprintln(w, "       pluxy -version                       print the build's version, commit and build date")
+	if prefix == "" {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "examples:")
+		fmt.Fprintln(w, "  pluxy status                        core's state and running extensions")
+		fmt.Fprintln(w, "  pluxy usage --since 24h --by model  request and token totals over the last 24 hours")
+		fmt.Fprintln(w, "  pluxy account set <id> priority=5   change an account's routing priority")
+	}
 	fmt.Fprintln(w)
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	for i := range commands {
@@ -1352,7 +1378,9 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 				groupHelp(stdout, prefix)
 				return exitOK
 			}
-			if len(args) > 1 {
+			if len(args) > 1 && strings.HasPrefix(args[1], "-") {
+				fmt.Fprintf(stderr, "pluxy: %s needs a command before flags, such as pluxy %s\n", args[0], groupExample(prefix))
+			} else if len(args) > 1 {
 				fmt.Fprintf(stderr, "pluxy: unknown %s command %q\n", args[0], args[1])
 			} else {
 				fmt.Fprintf(stderr, "pluxy: %s needs a command\n", args[0])
@@ -1377,6 +1405,15 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 	if cmd.flags != nil {
 		cmd.flags(fs, &o)
 	}
+	fs.Usage = func() {
+		out := fs.Output()
+		fmt.Fprintf(out, "usage: pluxy %s%s [flags]\n", cmd.words, argsUsage(cmd))
+		if cmd.summary != "" {
+			fmt.Fprintf(out, "  %s\n", cmd.summary)
+		}
+		fmt.Fprintln(out)
+		fs.PrintDefaults()
+	}
 	if cmd.words == "usage events" {
 		rest = normalizeOptionalFlagValue(rest, "before", "0")
 	}
@@ -1394,9 +1431,7 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 				printError(stderr, true, usageError{err.Error()})
 				return exitUsage
 			}
-			fs.SetOutput(stderr)
-			fmt.Fprintln(stderr, err)
-			fs.Usage()
+			fmt.Fprintf(stderr, "pluxy: %v. See pluxy help %s.\n", err, cmd.words)
 			return exitUsage
 		}
 		if fs.NArg() == 0 {
@@ -1426,7 +1461,15 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 		printError(stderr, *jsonOut, usageError{"--input: " + o.input.bad.Error()})
 		return exitUsage
 	}
-	t, err := findCore(*configPath, cmpOr(*addr, getenv("PLUXY_URL")), cmpOr(*key, getenv("PLUXY_MANAGEMENT_KEY")))
+	configSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "config" {
+			configSet = true
+		}
+	})
+	explicitURL := cmpOr(*addr, getenv("PLUXY_URL"))
+	explicitKey := cmpOr(*key, getenv("PLUXY_MANAGEMENT_KEY"))
+	t, err := findCore(*configPath, configSet, explicitURL, explicitKey)
 	if err != nil {
 		printError(stderr, *jsonOut, err)
 		return exitCode(err, true)
@@ -1439,7 +1482,8 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 		return exitOK
 	}
 	err = nameMissingAccount(cmd, pos, err)
-	printError(stderr, *jsonOut, err)
+	fromConfig := explicitURL == "" || explicitKey == ""
+	printCLIError(stderr, *jsonOut, cmd, pos, t.url, *configPath, fromConfig, err)
 	return exitCode(err, cmd.changesNothing())
 }
 
@@ -1463,6 +1507,55 @@ func nameMissingAccount(cmd *command, pos []string, err error) error {
 type notFoundError struct{ msg string }
 
 func (e notFoundError) Error() string { return e.msg }
+
+// printCLIError writes a command's error to stderr, adding actionable next steps for common
+// failures in human output while leaving --json output unchanged.
+func printCLIError(stderr io.Writer, asJSON bool, cmd *command, pos []string, targetURL, configPath string, fromConfig bool, err error) {
+	if asJSON {
+		printError(stderr, true, err)
+		return
+	}
+	msg := fmt.Sprintf("pluxy: %s\n", formatHumanError(cmd, pos, targetURL, configPath, fromConfig, err))
+	if stderrIsTerminal(stderr) {
+		_ = writeEscaped(stderr, []byte(msg))
+		return
+	}
+	io.WriteString(stderr, msg)
+}
+
+func formatHumanError(cmd *command, pos []string, targetURL, configPath string, fromConfig bool, err error) string {
+	var unreach *management.UnreachableError
+	if errors.As(err, &unreach) {
+		return fmt.Sprintf("no core is listening at %s. Start one with: pluxy serve -config %s, or check --url", unreach.URL, configPath)
+	}
+	var ae *management.APIError
+	if errors.As(err, &ae) {
+		switch {
+		case ae.Status == http.StatusUnauthorized && ae.Code == "unauthorized" && ae.Message == "missing management key":
+			return fmt.Sprintf("no management key for %s. Pass --key, set PLUXY_MANAGEMENT_KEY, or use --config <file>", targetURL)
+		case ae.Status == http.StatusUnauthorized && ae.Code == "unauthorized" && ae.Message == "invalid management key":
+			return fmt.Sprintf("wrong management key for %s. Check --key, PLUXY_MANAGEMENT_KEY, or --config <file>", targetURL)
+		case ae.Status == http.StatusConflict && ae.Code == "conflict" && strings.Contains(ae.Message, "is set in core's config"):
+			acct := ""
+			if cmd != nil && strings.HasPrefix(cmd.words, "account ") && len(pos) > 0 {
+				acct = pos[0]
+			}
+			if acct != "" {
+				if fromConfig {
+					return fmt.Sprintf("account %q is defined in %s. Edit its entry there, then run pluxy reload", acct, configPath)
+				}
+				return fmt.Sprintf("account %q is defined in core's config file. Edit its entry there, then run pluxy reload", acct)
+			}
+			if fromConfig {
+				return fmt.Sprintf("%s. Edit %s, then run pluxy reload", ae.Message, configPath)
+			}
+			return fmt.Sprintf("%s. Edit core's config file, then run pluxy reload", ae.Message)
+		case ae.Status == http.StatusNotFound && ae.Code == "not_found" && cmd != nil && cmd.words == "key remove" && len(pos) > 0 && ae.Message == "no client key in the config file has this ID":
+			return fmt.Sprintf("no client key has ID %q. Run pluxy key list to see the configured keys", pos[0])
+		}
+	}
+	return err.Error()
+}
 
 // printError writes a command's error to stderr: with --json, as the API's error object (the
 // reply's own body when core sent one), otherwise as a line of text.

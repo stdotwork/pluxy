@@ -18,6 +18,7 @@ import {
   hasProvider,
   isTicked,
   onThisMachine,
+  pickStatuses,
   type Results,
   scanState,
   start,
@@ -172,7 +173,6 @@ function view(
       remote={more.remote ?? false}
       choices={more.choices ?? {}}
       results={results}
-      provider={hasProvider(setup, results, more.packages)}
       packages={more.packages}
       accounts={more.accounts ?? 0}
       bring={
@@ -447,6 +447,62 @@ test("only a provider that is enabled and has not failed counts as running", () 
     picks: [{ ...pick("pluxy/claude-code", "Claude Code settings"), kind: "client" }],
   };
   expect(hasProvider(clientPick, {}, [pkg({ id: "pluxy/claude-code" })])).toBe(false);
+});
+
+test("a pick shown as not running is never the provider the page counts as running", () => {
+  const installed: Setup = {
+    ...nothingFound,
+    picks: [pick("pluxy/claude", "Claude", { installed: true })],
+  };
+  const claude = (more: Partial<Package> = {}) => pkg({ id: "pluxy/claude", ...more });
+  const start: Results = { "pluxy/claude": { status: "error", error: "the program exited at once" } };
+  const done: Results = { "pluxy/claude": { status: "done" } };
+  const cases: { name: string; results: Results; packages?: Package[]; runs: boolean }[] = [
+    // The Start failed, then the package came up: it runs, whatever the old result says.
+    { name: "a failed Start, then a healthy package", results: start, packages: [claude()], runs: true },
+    { name: "a failed Start, no package list yet", results: start, runs: false },
+    { name: "a failed Start, package not listed", results: start, packages: [], runs: false },
+    {
+      name: "a failed Start, package turned off",
+      results: start,
+      packages: [claude({ enabled: false, state: "disabled" })],
+      runs: false,
+    },
+    {
+      name: "a failed Start, package failed",
+      results: start,
+      packages: [claude({ state: "failed" })],
+      runs: false,
+    },
+    { name: "a done Start, healthy package", results: done, packages: [claude()], runs: true },
+    {
+      name: "a done Start, package turned off",
+      results: done,
+      packages: [claude({ enabled: false, state: "disabled" })],
+      runs: false,
+    },
+    { name: "a done Start, no package list yet", results: done, runs: true },
+    { name: "no Start, package crashed", results: {}, packages: [claude({ state: "crashed" })], runs: false },
+    { name: "no Start, healthy package", results: {}, packages: [claude()], runs: true },
+  ];
+  for (const c of cases) {
+    const page = view(installed, { results: c.results, packages: c.packages });
+    const row = page.split('<li data-part="setup-pick"')[1]?.split("</li>")[0] ?? "";
+    const tones = [...row.matchAll(/data-part="badge" data-tone="(\w+)"/g)].map((m) => m[1]);
+    // The row says not running (a warn badge) exactly when no provider runs, and the account
+    // part, which opens for a running provider, agrees.
+    expect([c.name, tones, hasProvider(installed, c.results, c.packages)]).toEqual([
+      c.name,
+      [c.runs ? "ok" : "warn"],
+      c.runs,
+    ]);
+    expect([c.name, page.includes('class="add-account stack"')]).toEqual([c.name, c.runs]);
+    // And both read the one status.
+    expect([c.name, pickStatuses(installed, c.results, c.packages)[0]?.status.state]).toEqual([
+      c.name,
+      c.runs ? "running" : "stopped",
+    ]);
+  }
 });
 
 test("with the only installed provider disabled, the page offers no sign-in and Finish is not primary", () => {
