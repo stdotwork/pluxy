@@ -269,6 +269,13 @@
     transform: translate(-50%, -50%);
   }
 
+  /* The checkbox stays on top of its label's hit area, so a click on the box itself lands on it. */
+  label.check > input,
+  label.hit > input {
+    position: relative;
+    z-index: 1;
+  }
+
   /* Lists: table or cards */
 
   .table-wrap {
