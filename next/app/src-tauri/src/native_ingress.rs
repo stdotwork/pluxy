@@ -222,7 +222,7 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
         "second frame document called before native closure",
     )?;
     wait_for("ingress window closed state", || {
-        eval(main,"document.querySelector('[data-part=extension-frame]')?.dataset.phase === 'closed' && document.body.innerText.includes('Reload')").filter(|v|v==true)
+        eval(main,"document.querySelector('[data-part=extension-frame]')?.dataset.phase === 'closed' && document.body.innerText.includes('Load the page again')").filter(|v|v==true)
     })?;
     log(
         "ingress_navigation",
