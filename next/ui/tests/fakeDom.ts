@@ -128,6 +128,11 @@ export class FakeDocument {
   nodeType = 9;
   visibilityState: DocumentVisibilityState = "visible";
   body = new FakeNode(this, "body");
+  private listeners = new Map<string, Set<() => void>>();
+
+  get hidden() {
+    return this.visibilityState !== "visible";
+  }
 
   createElement(tag: string) {
     return new FakeNode(this, tag);
@@ -141,9 +146,23 @@ export class FakeDocument {
     return new FakeText(this, data);
   }
 
-  addEventListener() {}
+  addEventListener(name: string, listener: () => void) {
+    const set = this.listeners.get(name) ?? new Set();
+    set.add(listener);
+    this.listeners.set(name, set);
+  }
 
-  removeEventListener() {}
+  removeEventListener(name: string, listener: () => void) {
+    this.listeners.get(name)?.delete(listener);
+  }
+
+  count(name: string) {
+    return this.listeners.get(name)?.size ?? 0;
+  }
+
+  dispatch(name: string) {
+    for (const listener of [...(this.listeners.get(name) ?? [])]) listener();
+  }
 }
 
 /** The window's listeners, so a test can say the window got focus. */
@@ -219,6 +238,7 @@ export async function mountIn(tree: ComponentChildren) {
   });
   await settle();
   return {
+    document,
     root,
     text: () => root.textContent,
     unmount: async () => {

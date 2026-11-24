@@ -321,6 +321,8 @@ side touch shared files only by one line each:
   visible part carries a `data-part` hook. A new hook, token or layout value goes into
   [the theme contract](themes/README.md) and `kit/theme/contract.ts` in the same change.
 - **Refreshing:** a page that refreshes on its own does so only while the document is visible.
+  Use `useLoad` to read and `usePoll` (`kit/ui.tsx`) to keep a live value fresh; do not write a
+  timer in a page.
 - **Tests:** a browser test for the page in `e2e/<page>.spec.ts`; unit tests in `tests/` only for
   pure code.
 
