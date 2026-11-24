@@ -24,11 +24,11 @@ const t = strings("accountDetail", {
   state: "State",
   extension: "Extension",
   label: "Label",
-  credential: "Credential",
+  credential: "Type",
   comesFrom: "Comes from",
-  fromConfig: "core's config",
-  fromLogin: "a login",
-  needsLogin: "Needs login because",
+  fromConfig: "AI providers",
+  fromLogin: "Auth files",
+  needsLogin: "Sign-in required because",
   expires: "Expires",
   renewalFailed: "Last renewal failed",
   added: "Added",
@@ -39,16 +39,16 @@ const t = strings("accountDetail", {
   remove: "Remove",
   banned: "banned",
   exhausted: "exhausted",
-  needs_login: "needs login",
+  needs_login: "needs sign-in",
   broken: "broken",
   noProvider: "no provider",
   noProviderHint:
-    "{extension} is not running, so no request reaches this account. Install or turn on its provider on Extensions.",
+    "{extension} is not running, so this account gets no requests. Install or enable it on Extensions.",
   leftOutBecause: "Left out because",
   leftOutUntil: "Left out until",
-  bannedHint: "No request is sent to this account until you enable it again.",
+  bannedHint: "pluxy skips this account until you enable it again.",
   brokenHint:
-    "pluxy cannot read this account's credential file, so it sends the account no request. Fix or replace the file and restart pluxy, or remove the account, which deletes the file.",
+    "pluxy cannot read this account's auth file, so it sends no requests. Fix or replace the file and restart pluxy, or remove the account.",
 });
 
 /**

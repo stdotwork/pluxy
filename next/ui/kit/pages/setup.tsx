@@ -66,11 +66,11 @@ const t = strings("setup", {
 
   found: "Found on this machine",
   foundRemote: "Found on the machine pluxy runs on",
-  lookAgain: "Look again",
-  looking: "Looking…",
+  lookAgain: "Refresh",
+  looking: "Refreshing…",
   lookingFirst: "pluxy is looking at this machine. This takes a few seconds.",
-  neverLooked: "pluxy has not looked at this machine yet.",
-  nothingFound: "No client, sign-in or CLIProxyAPI setup was found.",
+  neverLooked: "Not scanned yet. Press Refresh to scan this machine.",
+  nothingFound: "Found no clients, sign-ins, or CLIProxyAPI setups.",
   clientFound: "{name} {version}",
   signInHint: "pluxy read nothing from this sign-in. It only saw that it is there.",
   importFound: {
@@ -78,7 +78,7 @@ const t = strings("setup", {
     other: "A CLIProxyAPI setup with {count} accounts",
   },
   importWhere:
-    "It is at {config}. pluxy can bring its settings, client keys and accounts across. It first shows what would change, and writes nothing until you confirm.",
+    "Found at {config}. pluxy previews changes before importing settings, client keys, and accounts.",
   importOld: "It is at {config}. To bring it across, run this where pluxy is installed:",
   importCommand: "Or use the command",
   importCommandHow:
@@ -91,7 +91,7 @@ const t = strings("setup", {
   "importDone.not_brought": "{count} not brought across",
   importAgain: "Bring it across again",
   importAgainHow:
-    "Run this where pluxy is installed. It writes the file's settings over any you changed in pluxy since, and adds the client keys, accounts and chains pluxy does not have: the ones it has stay as they are. With --dry-run it only reports what it would do.",
+    "Run this where pluxy is installed to overwrite changed settings and add missing keys, accounts, and chains. Use --dry-run to preview.",
   bring: "Bring it across",
   bringChecking: "Checking…",
   bringNow: "Bring it across now",
@@ -115,30 +115,29 @@ const t = strings("setup", {
   needTicked: "It is ticked under Providers: press {button} to install it.",
   needElsewhere: "Install it on the Extensions page.",
   "refused.400":
-    "pluxy could not read the CLIProxyAPI setup: {message}. Check that the file is still there and that pluxy may read it, then press {look}. Nothing was changed.",
-  "refused.422":
-    "pluxy will not bring this setup across: {message}. Change that in the CLIProxyAPI setup, then try again. Nothing was changed.",
+    "Could not read the CLIProxyAPI setup: {message}. Check the file and permissions, then press {look}. Nothing changed.",
+  "refused.422": "Cannot import this setup: {message}. Fix it in CLIProxyAPI and try again. Nothing changed.",
   "refused.409":
-    "This pluxy runs on a config.yaml, which it already reads in CLIProxyAPI's own format, and an import writes pluxy's JSON config. To move over, make that config with the command below, start pluxy on it, then bring the setup across. Nothing was changed.",
+    "pluxy uses config.yaml, while import writes JSON config. Run the command below, start pluxy on it, and import again. Nothing changed.",
   "refused.404": "This pluxy is an older one that cannot bring a setup across from this page.",
   "refused.0.dry":
     "pluxy did not answer, so nothing was read or changed. Check that it is running, then try again.",
   "refused.0.real":
-    "pluxy did not answer, so this page cannot tell whether the import ran. Check that pluxy is running, then press {button} again: it shows what is left to bring.",
+    "pluxy did not reply, so the import status is unknown. Check that pluxy is running, then press {button} again.",
   refusedOther: "pluxy could not bring the setup across: {message}.",
   listens: "pluxy listens on {address}.",
   reachable: "Other machines on the network can reach pluxy at this address.",
   lookedAt: "Looked {when}.",
 
   providers: "Providers",
-  providersHint: "A provider lets pluxy use one kind of account, such as a Claude subscription.",
+  providersHint: "An extension lets pluxy use one kind of account, such as a Claude subscription.",
   tickHint: "Tick the ones you have an account for.",
-  noPicks: "pluxy has no provider to offer here. The Extensions page lists what can be installed.",
+  noPicks: "No extensions to offer here. Check the Extensions page to install one.",
   noRegistry:
-    "This build has no extension registry, so pluxy has no provider to offer. From next/ in the source tree, run go run ./cmd/pluxy-pack -out <dir>, then put the bundled folder beside pluxy or start core with -bundled <dir>/bundled/index.json.",
+    "This build has no extension registry. Run go run ./cmd/pluxy-pack -out <dir> from next/ and start core with -bundled <dir>/bundled/index.json.",
   installed: "Installed",
   installedNotRunning: "Installed, not running",
-  installedFailed: "{title} was installed but did not start: {error}",
+  installedFailed: "Installed {title}, but it failed to start: {error}",
   installedDisabled: "{title} is installed but turned off.",
   installedStopped: "{title} is installed but is not running.",
   installedFailedWhere: "Look at it on the Extensions page.",
@@ -156,7 +155,7 @@ const t = strings("setup", {
     "Nothing is ticked, so pluxy will run with no provider. You can add one later on the Extensions page.",
   nothingTickedNoRegistry: "This build has no extension registry, so pluxy will run with no provider.",
   noneRunning:
-    "{names} is installed but not running, so pluxy will run with no provider. You can turn it on or see what went wrong on the {extensions} page.",
+    "{names}: installed but not running, so pluxy has no active provider. Enable or inspect on {extensions}.",
   nothingMore: "Nothing more to install.",
   stillLooking: "pluxy is still looking at this machine. What it suggests shows here in a few seconds.",
   allInstalled: "Every provider on the list is installed.",
@@ -179,8 +178,8 @@ const t = strings("setup", {
 
   clients: "Point a client at pluxy",
   clientsHint:
-    "A client is a coding tool, such as Claude Code, that sends its requests through pluxy. pluxy changes no client's files from this page: it shows the text, and you paste it.",
-  noClients: "No client was found on this machine.",
+    "A client is a coding tool like Claude Code. This page only shows config text for you to paste.",
+  noClients: "Found no clients on this machine. Open Other clients below to set one up.",
   "state.configured": "Points at this pluxy",
   "state.not-configured": "Does not point at pluxy yet",
   "state.needs-update": "Its settings need an update to work with this pluxy",
@@ -194,13 +193,12 @@ const t = strings("setup", {
   pasteInto: "Put this in {path}:",
   pasteAddress: "The text uses {address}, the address of pluxy on its own machine.",
   pasteModel:
-    "Where the text says {placeholder}, a model's name goes: one your accounts serve. An account's Models button on Accounts lists them, and so does {command}.",
+    "Replace {placeholder} with a model your accounts serve. Check Show models on Accounts or run {command}.",
   copy: "Copy",
   copied: "Copied",
   copyFailed: "Could not copy. Select the text and copy it yourself.",
-  keyWhere:
-    "Where the text says {placeholder}, a client key goes: the password a client uses to reach pluxy. Make one here, or use one you already have.",
-  makeKey: "Make a client key",
+  keyWhere: "Replace {placeholder} with a client key. Create one here or use an existing key.",
+  makeKey: "Create client key",
   newKey: "New client key",
   keyInText:
     "The new key is in the text above, where {placeholder} stood. Copy the text while this notice is open.",

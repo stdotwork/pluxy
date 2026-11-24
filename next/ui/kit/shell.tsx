@@ -20,8 +20,7 @@ const t = strings("shell", {
   navigation: "Main",
   signOut: "Sign out",
   signOutShort: "Out",
-  safeAddress:
-    "If custom CSS hides the panel, add ?safe to the end of its address to open it without custom CSS.",
+  safeAddress: "If custom CSS hides the panel, add ?safe to the URL to disable it.",
   privacy: "Privacy mode",
   privacyShort: "Priv",
   privacyEnable: "Turn on privacy mode to hide account emails and identifiers",

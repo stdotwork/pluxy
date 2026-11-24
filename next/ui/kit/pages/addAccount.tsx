@@ -9,7 +9,7 @@ import { Button, Empty, List, Notice, PageHead, useKit, useLoad } from "../ui";
 const t = strings("addAccount", {
   title: "Add Account",
   short: "Add",
-  tip: "OAuth authorization",
+  tip: "Sign in or add an API key",
   methods: "Sign-in methods",
   method: "Method",
   browser: "Browser sign-in",
@@ -20,7 +20,7 @@ const t = strings("addAccount", {
     "Use 1–128 letters, digits, dots, underscores or hyphens, starting with a letter or digit. The ID must not end with a dot.",
   loading: "Loading sign-in methods…",
   empty: "No running extension offers a sign-in method.",
-  emptyNext: "A provider comes first: install one on {page}.",
+  emptyNext: "Install an extension first on {page}.",
   setupPage: "Set up pluxy",
   retry: "Retry",
 });

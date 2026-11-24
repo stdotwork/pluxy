@@ -230,7 +230,7 @@ describe("reading a theme", () => {
       const reason = why(raw);
       expect(reason).toStartWith("the file is not a theme file.");
       expect(reason).not.toContain("missing");
-      for (const field of ['"theme_version"', '"name"', '"appearance"', '"colors"', '"canvas"', '"accent"'])
+      for (const field of ["“theme_version”", "“name”", "“appearance”", "“colors”", "“canvas”", "“accent”"])
         expect(reason).toContain(field);
     }
   });

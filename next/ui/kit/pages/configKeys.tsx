@@ -4,26 +4,26 @@ import { strings } from "../strings";
 import { Button, Card, ConfirmButton, Empty, List, Notice, useCopy, useKit, useLoad } from "../ui";
 
 const t = strings("configKeys", {
-  clients: "Client API Keys (access.api-keys)",
-  management: "Management Key",
+  clients: "Client keys (access.api-keys)",
+  management: "Management key",
   add: "Add",
   remove: "Delete",
   rotate: "Rotate",
   copy: "Copy",
   copied: "Copied",
   close: "Close",
-  empty: "No API keys",
-  loading: "Loading client API keys...",
+  empty: "No client keys yet. Press Add to create one.",
+  loading: "Loading client keys…",
   number: "#",
   row: "#{number}",
-  key: "API Key",
+  key: "Client key",
   actions: "Actions",
-  newClient: "New client API key",
+  newClient: "New client key",
   newManagement: "New management key",
-  once: "Copy this key now. It will not be shown again after you close this notice or leave this tab.",
+  once: "Copy this key now. pluxy hides it once you close this notice or leave the tab.",
   rotationHint:
     "Rotating replaces the management key immediately. Other management clients must sign in with the new key.",
-  rotationUnavailable: "Management key rotation is unavailable in this host.",
+  rotationUnavailable: "You cannot rotate the management key here. Edit core's config file instead.",
   rotationUnknown:
     "The management key may have changed. Find the current key in core's config file and sign in with it before rotating again.",
   rotatedApart:

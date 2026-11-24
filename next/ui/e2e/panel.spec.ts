@@ -170,7 +170,7 @@ test("themes are kept by core: added from a file and from pasted JSON, followed,
 
   // A T3 Code theme file, chosen as a file: it applies at once and core keeps it.
   await page.getByLabel("Theme file", { exact: true }).setInputFiles(nightfall);
-  await expect(page.getByText("Nightfall was added and turned on.")).toBeVisible();
+  await expect(page.getByText("Added and applied Nightfall.")).toBeVisible();
   await expect(picker.getByRole("radio", { name: "Nightfall" })).toBeChecked();
   await expect.poll(() => variable("--px-color-bg")).not.toBe(defaultBg);
   const nightfallBg = await variable("--px-color-bg");
@@ -260,7 +260,7 @@ test("the Themes page says what is still true, and what to do about a file it ca
   await paste.fill('{"foo": 1}');
   await add.click();
   await expect(alerts).toHaveText(
-    /^Not added: the file is not a theme file\. A pluxy theme file has "theme_version"/,
+    /^Not added: the file is not a theme file\. A pluxy theme file has “theme_version”/,
   );
   // The notice goes when the box is edited, and when a theme is picked.
   await paste.pressSequentially(" ");
@@ -432,7 +432,7 @@ test("the sign-in page fills the window, says how to open the panel without cust
   if (!box) throw new Error("no sign-in card");
   expect(box.width).toBeGreaterThan(300);
   expect(Math.abs(box.x + box.width / 2 - 640)).toBeLessThan(2);
-  await expect(card).toContainText("add ?safe to the end of its address");
+  await expect(card).toContainText("add ?safe to the URL to disable it.");
 
   // The rail shows short labels: the sign-out control still has its whole name.
   await signIn(page, core);
@@ -471,7 +471,7 @@ test("what an add came to is brought into view, and a theme from a file leaves n
 
   // A theme then added from a file: the refused text does not stay in the box.
   await page.getByLabel("Theme file", { exact: true }).setInputFiles(nightfall);
-  await expect(page.getByText("Nightfall was added and turned on.")).toBeInViewport({ ratio: 0.95 });
+  await expect(page.getByText("Added and applied Nightfall.")).toBeInViewport({ ratio: 0.95 });
   await expect(paste).toHaveValue("");
   await page.getByRole("button", { name: "Remove Nightfall", exact: true }).click();
   await page.getByRole("button", { name: "Yes, remove Nightfall", exact: true }).click();

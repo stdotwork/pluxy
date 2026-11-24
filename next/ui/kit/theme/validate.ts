@@ -308,7 +308,7 @@ function parseT3Theme(raw: Record<string, unknown>): ThemeResult {
     return {
       ok: false,
       error:
-        'the file is not a theme file. A pluxy theme file has "theme_version"; a T3 Code theme file has "name", "appearance" ("light" or "dark"), and "colors" or both "canvas" and "accent"',
+        "the file is not a theme file. A pluxy theme file has “theme_version”; a T3 Code theme file has “name”, “appearance” (“light” or “dark”), and “colors” or both “canvas” and “accent”",
     };
   }
   if (name.length > 64) {

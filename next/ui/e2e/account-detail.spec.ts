@@ -78,7 +78,7 @@ test("account health, cooldown reset, models and a paid test", async ({ page }) 
   await openPanel(page, core);
   await signIn(page, core);
   let detail = await openAccount(page, "tools-key");
-  await expect(detail.getByText("Cooling", { exact: true })).toBeVisible();
+  await expect(detail.getByText("Cooling down", { exact: true })).toBeVisible();
   await expect(detail.locator('[data-part="account-cooldowns"]')).toContainText("rate-limited");
   await expect(detail.locator('[data-part="account-check"]')).toContainText("the test provider answered");
   await expect(detail.getByRole("button", { name: "Refresh OAuth credential", exact: true })).toHaveCount(0);
@@ -92,11 +92,11 @@ test("account health, cooldown reset, models and a paid test", async ({ page }) 
       .getByRole("radio", { name: theme, exact: false })
       .check();
     detail = await openAccount(page, "tools-key");
-    await expect(detail.getByText("Cooling", { exact: true })).toBeVisible();
+    await expect(detail.getByText("Cooling down", { exact: true })).toBeVisible();
     await noSplitWords(detail.locator('[data-part="account-cooldowns"]'));
     await noSplitWords(detail.locator("dt").filter({ hasText: "Last error at" }));
     if (shots) await settledShot(page, join(shots, `${theme}-cooldown.png`));
-    await detail.getByRole("button", { name: "Models", exact: true }).click();
+    await detail.getByRole("button", { name: "Show models", exact: true }).click();
     const models = detail.locator('[data-part="account-models"]');
     await expect(models).toContainText("Supported models");
     for (const id of ["fake-model", "rate-limited", "server-error"]) await expect(models).toContainText(id);
@@ -107,15 +107,15 @@ test("account health, cooldown reset, models and a paid test", async ({ page }) 
     await expect(result).toContainText("fake-model");
     await expect(result).toContainText(/[0-9]+ ms/);
     if (shots) await settledShot(page, join(shots, `${theme}-test.png`));
-    await expect(detail.getByText("Cooling", { exact: true })).toBeVisible();
+    await expect(detail.getByText("Cooling down", { exact: true })).toBeVisible();
   }
   await detail.getByRole("button", { name: "Clear cooldown", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Clear credential cooldown?", exact: true });
-  await expect(dialog).toContainText("It does not restore upstream quota.");
+  await expect(dialog).toContainText("though upstream quota does not reset.");
   await dialog.getByRole("button", { name: "Clear cooldown", exact: true }).click();
   await dialog.getByRole("button", { name: "Yes, clear cooldown", exact: true }).click();
   await expect(dialog).toHaveCount(0);
-  await expect(detail.getByText("Cooling", { exact: true })).toHaveCount(0);
+  await expect(detail.getByText("Cooling down", { exact: true })).toHaveCount(0);
   const r = await core.mgmt<{ accounts: { id: string; cooldowns?: unknown[] }[] }>("GET", "/accounts");
   expect(r.body.accounts.find((a) => a.id === "tools-key")?.cooldowns ?? []).toEqual([]);
   await detail.getByLabel("Test model").selectOption("server-error");
@@ -136,11 +136,11 @@ test("config models and credential tools follow core metadata", async ({ page })
   );
   await expect(detail.getByRole("button", { name: "Refresh OAuth credential" })).toHaveCount(0);
   await expect(detail.getByRole("button", { name: "Sign in again", exact: true })).toHaveCount(0);
-  await detail.getByRole("button", { name: "Models", exact: true }).click();
+  await detail.getByRole("button", { name: "Show models", exact: true }).click();
   await expect(detail.locator('[data-part="account-models"]')).toContainText("alpha-model");
   detail = await openAccount(page, "tools-oauth");
   await detail.getByRole("button", { name: "Refresh OAuth credential", exact: true }).click();
-  await expect(detail.getByRole("status")).toContainText("OAuth credential refreshed.");
+  await expect(detail.getByRole("status")).toContainText("Credential refreshed.");
   await expect(detail.getByRole("button", { name: "Sign in again", exact: true })).toHaveCount(0);
   // The fake has no auth-failure model. Supply core's reauth state at the HTTP edge;
   // sign-in still goes through the real core and provider.
@@ -157,8 +157,8 @@ test("config models and credential tools follow core metadata", async ({ page })
   await expect(detail.getByLabel("Address the browser ended on")).toBeVisible();
   await detail.getByLabel("Address the browser ended on").fill("http://localhost/callback?code=ok");
   await detail.getByRole("button", { name: "Submit" }).click();
-  await expect(detail.getByRole("status")).toContainText("Authentication successful!");
-  await expect(detail.getByRole("button", { name: "Log in another account" })).toHaveCount(0);
+  await expect(detail.getByRole("status")).toContainText("Signed in.");
+  await expect(detail.getByRole("button", { name: "Sign in to another account" })).toHaveCount(0);
 });
 
 test("Edit in Config Panel opens the Source tab with the account's ID selected", async ({ page }) => {
@@ -187,7 +187,7 @@ test("Edit in Config Panel opens the Source tab with the account's ID selected",
   await expect(editor).toBeFocused();
   // Core writes its config on one line, so the ID is far to the right: the editor shows it.
   expect((await cursor()).scrollLeft).toBeGreaterThan(0);
-  await expect(page.getByText(/has no entry with the ID/)).toHaveCount(0);
+  await expect(page.getByText(/No entry matches/)).toHaveCount(0);
   if (process.env.CONFIG_SOURCE_SHOTS) {
     await page.screenshot({ path: process.env.CONFIG_SOURCE_SHOTS, fullPage: true, animations: "disabled" });
   }
@@ -212,5 +212,5 @@ test("Edit in Config Panel still opens Source when the file does not hold the ac
     "true",
   );
   await expect(page.getByRole("textbox", { name: "Configuration source", exact: true })).not.toHaveValue("");
-  await expect(page.getByText(/has no entry with the ID alpha-2/)).toBeVisible();
+  await expect(page.getByText(/No entry matches alpha-2/)).toBeVisible();
 });

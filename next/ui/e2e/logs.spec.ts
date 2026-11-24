@@ -42,22 +42,22 @@ test("logs show failures, trace lookup, continuous reading and clearing", async 
   await goTo(page, "Logs Viewer");
   const coreLog = page.getByRole("region", { name: "Core logs", exact: true });
   await expect(coreLog.locator('[data-part="log-line"]').first()).toBeVisible();
-  const errors = page.getByRole("region", { name: "Error Request Logs", exact: true });
+  const errors = page.getByRole("region", { name: "Error request logs", exact: true });
   const row = errors.locator('[data-part="item"]').filter({ hasText: trace });
   await row.getByRole("button", { name: "Open", exact: true }).click();
-  const detail = page.getByRole("complementary", { name: "Details: Error Request Log Details" });
+  const detail = page.getByRole("complementary", { name: "Details: Error request log details" });
   await expect(detail).toContainText("=== REQUEST INFO ===");
   await expect(detail).toContainText("log test <b>plain text</b>");
   expect(await detail.locator("b").count()).toBe(0);
-  await page.getByLabel("Request ID", { exact: true }).fill(trace);
-  await page.getByRole("button", { name: "View log", exact: true }).click();
+  await page.getByLabel("Trace ID", { exact: true }).fill(trace);
+  await page.getByRole("button", { name: "View", exact: true }).click();
   const requestLog = page.getByRole("region", { name: `View log for request ${trace}`, exact: true });
   await expect(requestLog).toContainText("=== REQUEST INFO ===");
   await expect(requestLog).toContainText(`Trace ID: ${trace}`);
   await page.evaluate((id) => {
     location.hash = `#/logs/${id}`;
   }, trace);
-  await expect(page.getByLabel("Request ID", { exact: true })).toHaveValue(trace);
+  await expect(page.getByLabel("Trace ID", { exact: true })).toHaveValue(trace);
   await expect(requestLog).toContainText("=== REQUEST INFO ===");
   await goTo(page, "Quota Management");
   await page.evaluate((id) => {
@@ -86,11 +86,9 @@ test("logs show failures, trace lookup, continuous reading and clearing", async 
   await page.clock.fastForward(2000);
   await expect.poll(() => reads.length).toBeGreaterThan(0);
   await page.getByRole("switch", { name: "Continuous reading", exact: true }).uncheck();
-  await page.getByRole("button", { name: "Clear Logs", exact: true }).click();
-  await expect(
-    page.getByText("Are you sure you want to clear all logs? This action cannot be undone!", { exact: true }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Yes, clear logs", exact: true }).click();
+  await page.getByRole("button", { name: "Clear", exact: true }).click();
+  await expect(page.getByText("Clear all logs? You cannot undo this.", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Yes, clear", exact: true }).click();
   await expect(coreLog.locator('[data-part="log-line"]')).toHaveCount(0);
   expect((await core.mgmt<{ lines: string[] }>("GET", "/logs")).body.lines).toEqual([]);
 });
@@ -111,7 +109,10 @@ test("filters, downloads and logging-off guidance follow the selected theme", as
   await expect(log).toHaveAttribute("data-wrap", "");
   const expected = (await log.locator('[data-part="log-line"]').allTextContents()).join("\n");
   const downloaded = page.waitForEvent("download");
-  await page.getByRole("button", { name: "Download Logs", exact: true }).click();
+  await page
+    .getByRole("region", { name: "Log content", exact: true })
+    .getByRole("button", { name: "Download", exact: true })
+    .click();
   const download = await downloaded;
   expect(download.suggestedFilename()).toBe("logs.txt");
   const stream = await download.createReadStream();
@@ -132,9 +133,9 @@ test("filters, downloads and logging-off guidance follow the selected theme", as
     await expect(log.locator('[data-part="log-line"]').first()).toBeVisible();
     if (process.env.LOGS_SHOTS)
       await page.screenshot({ path: `${process.env.LOGS_SHOTS}/${theme}-lines.png`, fullPage: true });
-    const errors = page.getByRole("region", { name: "Error Request Logs", exact: true });
+    const errors = page.getByRole("region", { name: "Error request logs", exact: true });
     await errors.getByRole("button", { name: "Open", exact: true }).first().click();
-    const detail = page.getByRole("complementary", { name: "Details: Error Request Log Details" });
+    const detail = page.getByRole("complementary", { name: "Details: Error request log details" });
     await expect(detail).toContainText("=== REQUEST INFO ===");
     if (process.env.LOGS_SHOTS)
       await page.screenshot({ path: `${process.env.LOGS_SHOTS}/${theme}-detail.png`, fullPage: true });
@@ -150,8 +151,8 @@ test("filters, downloads and logging-off guidance follow the selected theme", as
       (await core.mgmt("PATCH", "/settings", { observability: { logs: { "logging-to-file": false } } }))
         .status,
     ).toBe(200);
-    await page.getByRole("button", { name: "Refresh Logs", exact: true }).click();
-    await expect(page.getByText(/Logging to file is off/)).toBeVisible();
+    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await expect(page.getByText(/File logging is off/)).toBeVisible();
     await expect(page.getByRole("link", { name: "Config Panel — Logging", exact: true })).toHaveAttribute(
       "href",
       "#/config",
@@ -160,7 +161,7 @@ test("filters, downloads and logging-off guidance follow the selected theme", as
       await page.screenshot({ path: `${process.env.LOGS_SHOTS}/${theme}-off.png`, fullPage: true });
     await page.getByRole("link", { name: "Config Panel — Logging", exact: true }).click();
     await page.getByRole("tab", { name: "Logging", exact: true }).click();
-    await expect(page.getByRole("switch", { name: "Log to File", exact: true })).not.toBeChecked();
+    await expect(page.getByRole("switch", { name: "File logging", exact: true })).not.toBeChecked();
   }
 });
 
@@ -183,7 +184,7 @@ test("a trace with no request log says that request logging was off and where to
   const requestLog = page.getByRole("region", { name: "Request log", exact: true });
   await expect(requestLog).toContainText("no request log has this trace ID");
   await expect(requestLog).toContainText(
-    "A request has a log of its own only when request logging was on while it ran.",
+    "Request logging was off during this request. Enable it in Config Panel's Logging tab to record future requests.",
   );
   await requestLog.getByRole("link", { name: "Config Panel — Logging", exact: true }).click();
   await expect(page.getByLabel("Enable request logging")).toBeVisible();

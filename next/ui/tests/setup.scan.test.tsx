@@ -407,7 +407,7 @@ test("leaving while core scans stops the re-reads", async () => {
   expect(setupCalls()).toBe(2);
 });
 
-test("Look again asks core to scan once and then reads its answer again", async () => {
+test("Refresh asks core to scan once and then reads its answer again", async () => {
   jest.useFakeTimers();
   const fake = await mount((call) => {
     if (call.method === "GET" && call.path === "/setup") {
@@ -421,7 +421,7 @@ test("Look again asks core to scan once and then reads its answer again", async 
     fake.calls.filter((call) => call.method === "POST" && call.path === "/setup/scan").length;
   expect(setupCalls()).toBe(1);
 
-  button(fake.root, "Look again").dispatchEvent(new Event("click"));
+  button(fake.root, "Refresh").dispatchEvent(new Event("click"));
   await settle();
   expect(scans()).toBe(1);
   expect(setupCalls()).toBe(2);
@@ -434,10 +434,9 @@ test("Look again asks core to scan once and then reads its answer again", async 
 for (const failure of [
   {
     status: 0,
-    shown:
-      "core could not be reached: pluxy is not running or the address is wrong, so start it, then try again",
+    shown: "cannot reach core; check that pluxy is running and the address is right, then try again",
   },
-  { status: 500, shown: "core answered 500" },
+  { status: 500, shown: "core returned HTTP 500; check Logs Viewer and try again" },
 ] as const) {
   test(`a ${failure.status} re-read keeps the page and shows ${failure.shown}`, async () => {
     jest.useFakeTimers();
@@ -453,7 +452,7 @@ for (const failure of [
     });
     expect(fake.text()).toContain("Claude Code 2.4.1");
 
-    button(fake.root, "Look again").dispatchEvent(new Event("click"));
+    button(fake.root, "Refresh").dispatchEvent(new Event("click"));
     await settle();
     expect(fake.text()).toContain(failure.shown);
     expect(fake.text()).toContain("Claude Code 2.4.1");
@@ -613,7 +612,7 @@ test("a refused import says why, drops the report, and can be tried again", asyn
   await press(fake.root, "Bring it across");
   await press(fake.root, "Bring it across now");
   expect(fake.text()).toContain(
-    "pluxy will not bring this setup across: tls: a certificate cannot change while core runs.",
+    "Cannot import this setup: tls: a certificate cannot change while core runs.",
   );
   expect(fake.text()).not.toContain("Comes across (1)");
   expect(fake.text()).not.toContain("Done.");
@@ -622,7 +621,7 @@ test("a refused import says why, drops the report, and can be tried again", asyn
 
   // The next dry run clears the refusal.
   await press(fake.root, "Bring it across");
-  expect(fake.text()).not.toContain("pluxy will not bring this setup across");
+  expect(fake.text()).not.toContain("Cannot import this setup");
   expect(fake.text()).toContain("Comes across (1)");
 
   // Core refusing the key is not an import's refusal: the shell goes back to signing in.

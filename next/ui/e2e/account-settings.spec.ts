@@ -76,7 +76,7 @@ test("Edit sets priority and an excluded model, and asks before discarding", asy
   expect(a?.excluded_models).toEqual(["rate-*"]);
   const settings = detail.locator('[data-part="account-settings"]');
   await expect(settings).toContainText("rate-*");
-  await detail.getByRole("button", { name: "Models", exact: true }).click();
+  await detail.getByRole("button", { name: "Show models", exact: true }).click();
   const models = detail.locator('[data-part="account-models"]');
   await expect(models.locator('[data-part="item"]').filter({ hasText: "rate-limited" })).toContainText(
     "Excluded",

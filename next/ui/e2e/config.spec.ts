@@ -28,7 +28,7 @@ test("config settings, exact source diff, revision and concurrent edit protectio
     )
     .toBe(true);
   await page.getByPlaceholder("Search settings (label or YAML key)").fill("error-logs-max-files");
-  await expect(page.getByLabel("Retained Error Log Files")).toBeVisible();
+  await expect(page.getByLabel("Retained error log files")).toBeVisible();
   await expect(page.getByRole("switch", { name: "Enable request logging" })).toHaveCount(0);
   await page.getByPlaceholder("Search settings (label or YAML key)").fill("");
   await page.getByRole("tab", { name: "Source", exact: true }).click();
@@ -43,12 +43,12 @@ test("config settings, exact source diff, revision and concurrent edit protectio
   await page.getByRole("button", { name: "Validate", exact: true }).click();
   await expect(page.getByText("Configuration is valid", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
-  await expect(page.getByRole("dialog", { name: "Review Changes" })).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Review changes" })).toBeVisible();
   await expect(page.locator('[data-part="diff-line"][data-change="remove"]')).toHaveText([`− ${oldLine}\n`]);
   await expect(page.locator('[data-part="diff-line"][data-change="add"]')).toHaveText([`+ ${newLine}\n`]);
   const revision = (await core.mgmt<{ active: { revision: number } }>("GET", "/status")).body.active.revision;
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByText("Configuration saved successfully", { exact: true })).toBeVisible();
+  await expect(page.getByText("Configuration saved.", { exact: true })).toBeVisible();
   await nav(page).getByRole("link", { name: "Dashboard" }).click();
   await expect(page.locator(".facts > div").filter({ hasText: "Active revision" }).locator("dd")).toHaveText(
     String(revision + 1),
@@ -69,7 +69,7 @@ test("config settings, exact source diff, revision and concurrent edit protectio
     ).status,
   ).toBe(200);
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("Saving was blocked");
+  await expect(page.getByRole("alert")).toContainText("pluxy did not save");
   await expect(editor).toHaveValue(draft);
   await nav(page).getByRole("link", { name: "Themes" }).click();
   await expect(page.getByRole("dialog", { name: "Unsaved changes" })).toBeVisible();
@@ -97,7 +97,7 @@ for (const theme of ["default", "terminal", "paper"]) {
       await expect(page.getByRole("tabpanel")).toBeVisible();
       if (tab === "Common") await expect(page.getByRole("switch")).toHaveCount(1);
       if (tab === "Network")
-        await expect(page.getByRole("combobox", { name: "Routing Strategy", exact: true })).toBeVisible();
+        await expect(page.getByRole("combobox", { name: "Routing strategy", exact: true })).toBeVisible();
       if (process.env.P7_SHOTS)
         await page.screenshot({
           path: `${process.env.P7_SHOTS}/${theme}-${tab.toLowerCase()}.png`,
@@ -107,7 +107,7 @@ for (const theme of ["default", "terminal", "paper"]) {
     const editor = page.getByRole("textbox", { name: "Configuration source", exact: true });
     await expect(editor).not.toHaveValue("");
     const original = await editor.inputValue();
-    await page.getByPlaceholder("Search config...").fill("error_logs_max_files");
+    await page.getByPlaceholder("Search config…").fill("error_logs_max_files");
     await page.getByRole("button", { name: "Next", exact: true }).click();
     await expect
       .poll(() =>
@@ -115,9 +115,9 @@ for (const theme of ["default", "terminal", "paper"]) {
       )
       .toBe("error_logs_max_files");
     await page.getByRole("button", { name: "Previous", exact: true }).click();
-    await page.getByPlaceholder("Search config...").fill("no-such-config-key");
+    await page.getByPlaceholder("Search config…").fill("no-such-config-key");
     await expect(page.getByText("No results", { exact: true })).toBeVisible();
-    await page.getByPlaceholder("Search config...").fill("");
+    await page.getByPlaceholder("Search config…").fill("");
     await editor.fill("{");
     await page.getByRole("button", { name: "Validate", exact: true }).click();
     await expect(page.getByRole("alert")).toBeVisible();
@@ -167,7 +167,7 @@ test("the Network tab sets, keeps and clears the global proxy URL", async ({ pag
   await page.getByRole("tab", { name: "Network", exact: true }).click();
   const proxy = page.getByRole("textbox", { name: "Proxy URL", exact: true });
   const save = page.getByRole("button", { name: "Save changes", exact: true });
-  const saved = page.getByText("Configuration saved successfully", { exact: true });
+  const saved = page.getByText("Configuration saved.", { exact: true });
   await expect(proxy).toHaveValue("");
   await expect(proxy).toHaveAttribute("placeholder", "socks5://user:pass@127.0.0.1:1080/");
   if (process.env.P7_SHOTS) await page.screenshot({ path: `${process.env.P7_SHOTS}/config-proxy-empty.png` });
@@ -184,9 +184,9 @@ test("the Network tab sets, keeps and clears the global proxy URL", async ({ pag
   if (process.env.P7_SHOTS) await page.screenshot({ path: `${process.env.P7_SHOTS}/config-proxy-set.png` });
 
   // Saving another setting sends no proxy, so the password stays: the stored URL is the same one.
-  await page.getByRole("switch", { name: "Force Model Prefix", exact: true }).check();
+  await page.getByRole("switch", { name: "Force model prefix", exact: true }).check();
   await save.click();
-  await expect(page.getByText("Configuration saved successfully", { exact: true })).toBeVisible();
+  await expect(page.getByText("Configuration saved.", { exact: true })).toBeVisible();
   expect(patches).toHaveLength(2);
   expect(patches[1]).toEqual({ routing: { "force-model-prefix": true } });
   expect((await settings())["proxy-url"]).toBe("socks5://redacted@127.0.0.1:1080");
@@ -237,21 +237,21 @@ test("review: fractional duration readbacks do not block unrelated saves or hide
   await signIn(page, core);
   await goTo(page, "Config Panel");
   await page.getByRole("tab", { name: "Network", exact: true }).click();
-  await page.getByRole("switch", { name: "Force Model Prefix", exact: true }).check();
+  await page.getByRole("switch", { name: "Force model prefix", exact: true }).check();
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
-  await expect(page.getByText("Configuration saved successfully", { exact: true })).toBeVisible();
+  await expect(page.getByText("Configuration saved.", { exact: true })).toBeVisible();
   expect((await core.mgmt<CoreSettings>("GET", "/settings")).body.routing["force-model-prefix"]).toBe(true);
-  const retry = page.getByRole("spinbutton", { name: "Request Retry Count", exact: true });
+  const retry = page.getByRole("spinbutton", { name: "Retry rounds", exact: true });
   await retry.fill("");
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await expect(retry).toHaveValue("");
-  await expect(page.getByText("Configuration saved successfully", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Configuration saved.", { exact: true })).toHaveCount(0);
   expect((await core.mgmt<CoreSettings>("GET", "/settings")).body.routing.retry["request-retry"]).toBe(2);
   await retry.fill("2");
-  await page.getByRole("spinbutton", { name: "Max Retry Interval (seconds)", exact: true }).fill("0.75");
+  await page.getByRole("spinbutton", { name: "Max retry interval (seconds)", exact: true }).fill("0.75");
   await page.getByRole("button", { name: "Save changes", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("cannot unmarshal number");
-  await expect(page.getByText("Configuration saved successfully", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Configuration saved.", { exact: true })).toHaveCount(0);
 });
 
 test("review: Source search starts at the first occurrence and repeated Enter keeps the draft", async ({
@@ -265,7 +265,7 @@ test("review: Source search starts at the first occurrence and repeated Enter ke
   await expect(editor).not.toHaveValue("");
   const draft = '{"first": "needle-one", "second": "needle-two"}';
   await editor.fill(draft);
-  const search = page.getByPlaceholder("Search config...");
+  const search = page.getByPlaceholder("Search config…");
   const selection = () => editor.evaluate((e: HTMLTextAreaElement) => e.selectionStart);
   await search.fill("needle");
   await page.getByRole("button", { name: "Next", exact: true }).click();
@@ -290,7 +290,7 @@ test("leaving with unsaved settings asks on Back and on a typed address, and Sta
   await openPanel(page, core, "/panel/#/status");
   await signIn(page, core);
   await goTo(page, "Config Panel");
-  const logToFile = page.getByRole("switch", { name: "Log to File", exact: true });
+  const logToFile = page.getByRole("switch", { name: "File logging", exact: true });
   const before = await logToFile.isChecked();
   await logToFile.setChecked(!before);
   const question = page.getByRole("dialog", { name: "Unsaved changes", exact: true });
@@ -347,13 +347,13 @@ test("review: unavailable config source leaves settings usable and shows its err
   await openPanel(page, core);
   await signIn(page, core);
   await goTo(page, "Config Panel");
-  await expect(page.getByRole("switch", { name: "Log to File", exact: true })).toBeVisible();
+  await expect(page.getByRole("switch", { name: "File logging", exact: true })).toBeVisible();
   await expect(page.getByRole("alert")).toHaveCount(0);
   await page.getByRole("tab", { name: "Network", exact: true }).click();
-  await expect(page.getByRole("combobox", { name: "Routing Strategy", exact: true })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "Routing strategy", exact: true })).toBeVisible();
   await page.getByRole("tab", { name: "Source", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("cannot be shown with its secrets hidden");
-  await expect(page.getByText("Loading configuration...", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Loading configuration…", { exact: true })).toHaveCount(0);
   await expect(page.getByRole("textbox", { name: "Configuration source", exact: true })).toHaveCount(0);
 });
 
@@ -400,7 +400,7 @@ test("moving between the page's tabs does not ask about unsaved settings, except
 }) => {
   await openPanel(page, core, "/panel/#/config");
   await signIn(page, core);
-  const logToFile = page.getByRole("switch", { name: "Log to File", exact: true });
+  const logToFile = page.getByRole("switch", { name: "File logging", exact: true });
   const before = await logToFile.isChecked();
   await logToFile.setChecked(!before);
   const question = page.getByRole("dialog", { name: "Unsaved changes", exact: true });

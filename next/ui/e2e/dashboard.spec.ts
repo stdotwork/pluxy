@@ -81,7 +81,7 @@ test("the Dashboard sums up the requests core recorded and the accounts it holds
   expect(accounts.length).toBeGreaterThan(0);
   const credentials = stat(page, "Credentials");
   await expect(credentials.locator("strong")).toHaveText(String(accounts.length));
-  await expect(credentials).toContainText(`${active} active · ${accounts.length - active} not serving`);
+  await expect(credentials).toContainText(`${active} available · ${accounts.length - active} not serving`);
 
   // Models: the count GET /v0/management/models reports for the models core serves.
   const served = (await core.mgmt<{ models: unknown[] }>("GET", "/models")).body.models;
@@ -94,7 +94,7 @@ test("the Dashboard sums up the requests core recorded and the accounts it holds
   await expect(
     page.getByRole("table", { name: "Every provider, side by side" }).locator("tbody tr"),
   ).not.toHaveCount(0);
-  await expect(page.getByRole("link", { name: "Open auth files" })).toHaveAttribute("href", "#/accounts");
+  await expect(page.getByRole("link", { name: "Open Accounts" })).toHaveAttribute("href", "#/accounts");
   await expect(page.getByRole("link", { name: "Edit configuration" })).toHaveAttribute("href", "#/config");
   await expect(page.getByText(/^Updated /)).toBeVisible();
 
@@ -143,7 +143,7 @@ test("the Dashboard says when core could not save requests to its usage files", 
   await openPanel(page, core);
   await signIn(page, core);
   await goTo(page, "Dashboard");
-  const notice = page.getByText("Requests core could not save to its usage files since it started");
+  const notice = page.getByText("Core could not save");
   // The test core writes every request, so its count is 0 and the page says nothing.
   await expect(stat(page, "Success rate")).toContainText("75%");
   await expect(notice).toHaveCount(0);
@@ -155,7 +155,7 @@ test("the Dashboard says when core could not save requests to its usage files", 
   });
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(notice).toContainText(
-    "since it started: 3. They are counted here until core restarts; core's log says why.",
+    "Core could not save 3 requests to its usage files. Check Logs Viewer for details.",
   );
 });
 

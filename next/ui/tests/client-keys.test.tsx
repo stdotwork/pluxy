@@ -25,7 +25,7 @@ test("Connectivity offers Rotate only when its host supports management-key rota
         <Connectivity />
       </KitContext.Provider>,
     );
-  expect(html()).toContain("Management Key");
+  expect(html()).toContain("Management key");
   expect(html()).not.toContain(">Rotate</button>");
   host.features = new Set<Feature>(["rotateManagementKey"]);
   expect(html()).toContain(">Rotate</button>");
