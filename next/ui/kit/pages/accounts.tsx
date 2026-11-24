@@ -17,6 +17,7 @@ import {
   type Tone,
   useKit,
   useLoad,
+  usePoll,
 } from "../ui";
 import { AccountDetail, AccountState } from "./accountDetail";
 import { ConfigDialog } from "./configDialog";
@@ -107,6 +108,7 @@ const t = strings("accounts", {
 
 /** The largest auth file core imports (legacy.MaxAuthFile in next/internal/legacy/auth.go). */
 const maxAuthFile = 1 << 20;
+const REFRESH_MS = 5_000;
 
 export interface AccountFilters {
   search?: string;
@@ -223,6 +225,13 @@ export function AccountsPage() {
   const selectedAccounts = list.filter((a) => checked.has(a.id));
   const extensions = [...new Set(list.map((a) => a.extension).filter((e): e is string => !!e))].sort();
 
+  usePoll(
+    () => {
+      if (!accounts.loading) accounts.reload();
+    },
+    REFRESH_MS,
+    !busy,
+  );
   useEffect(() => {
     const update = () => {
       if (!document.hidden) setNow(Date.now());
@@ -415,7 +424,7 @@ export function AccountsPage() {
             </select>
           </label>
           {toolbarActions.map((action) => (
-            <Button key={action.id} onClick={action.run} disabled={busy || accounts.loading}>
+            <Button key={action.id} onClick={action.run} disabled={busy || accounts.phase === "loading"}>
               {action.label}
             </Button>
           ))}
@@ -486,7 +495,7 @@ export function AccountsPage() {
           list={
             accounts.data && list.length === 0 ? (
               <Empty>{rich(t("empty"), { page: <a href="#/add-account">{t("addAccount")}</a> })}</Empty>
-            ) : accounts.data && filtered.length === 0 && !accounts.loading ? (
+            ) : accounts.data && filtered.length === 0 ? (
               <Empty>{t("noResults")}</Empty>
             ) : (
               <List<Account>
