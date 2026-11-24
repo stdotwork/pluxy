@@ -55,9 +55,9 @@ func TestForeignTextSitesTerminalEscaping(t *testing.T) {
 			},
 		},
 		{
-			name:    "requests: model, account, key, endpoint and trace",
-			args:    []string{"requests"},
-			routes:  map[string]string{"GET /requests": `{"requests":[{"id":` + q + `,"started_at":"2026-01-01T00:00:00Z","endpoint":` + q + `,"stream":true,"model":` + q + `,"key_id":` + q + `,"account":` + q + `}]}`},
+			name:   "requests: model, account, key, endpoint and trace",
+			args:   []string{"requests"},
+			routes: map[string]string{"GET /requests": `{"requests":[{"id":` + q + `,"started_at":"2026-01-01T00:00:00Z","endpoint":` + q + `,"stream":true,"model":` + q + `,"key_id":` + q + `,"account":` + q + `}]}`},
 			// A table: on a pipe its cells' own tabs and line ends move the columns, so only the
 			// terminal's output, which may hold no raw control byte, is checked beyond the header.
 			wantOut: []string{"AGE", "TRACE\n"},
