@@ -178,6 +178,9 @@ type Generation struct {
 	Usage *usage.Store
 	// KeyID returns the ID the management API lists a client key under.
 	KeyID func(key string) string
+	// Requests lists the requests being served; nil: none are listed. Every generation of one
+	// core has the same one.
+	Requests *Requests
 }
 
 // Source hands out the current generation. The request holds it until release is called.
@@ -199,7 +202,10 @@ func NewHandler(src Source) http.Handler {
 			}
 			// Every reply to a request that may use the API has the trace ID, also one sent before
 			// the request reaches routing (a body that does not parse, no account for the model).
-			r, t := requestTrace(r)
+			// From here until the handler returns, also by a panic, the request is listed as being
+			// served, and its context is one the management API can cancel.
+			r, t, e := g.Requests.begin(r, g, f)
+			defer g.Requests.end(e)
 			w.Header().Set(TraceHeader, t.id)
 			logged(w, r, g, func(w http.ResponseWriter, r *http.Request) { h(w, r, g) })
 		}))

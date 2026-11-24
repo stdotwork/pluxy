@@ -753,3 +753,41 @@ type ThemesReply struct {
 type ThemeSelection struct {
 	ID string `json:"id"`
 }
+
+// RunningRequest is a client request core is serving now, as GET /requests lists it. A Responses
+// WebSocket is listed while one of its turns runs, under the socket's trace ID.
+type RunningRequest struct {
+	// ID is the request's trace ID (the X-CPA-TRACE-ID reply header), which POST
+	// /requests/{trace}/cancel takes.
+	ID string `json:"id"`
+	// StartedAt is when the request arrived.
+	StartedAt time.Time `json:"started_at"`
+	// Endpoint is the client API path, such as /v1/chat/completions; Format the client's wire
+	// format, such as openai.chat.
+	Endpoint string `json:"endpoint"`
+	Format   string `json:"format,omitempty"`
+	Stream   bool   `json:"stream"`
+	// Model is the model as the client asked for it; absent until the request's body is read.
+	Model string `json:"model,omitempty"`
+	// KeyID identifies the client key the request came with, as GET /client-keys lists client keys.
+	KeyID string `json:"key_id,omitempty"`
+	// ClientIP is the address the request came from, as the access log and usage events give it.
+	ClientIP string `json:"client_ip,omitempty"`
+	// Account, Provider and UpstreamModel are the account the newest attempt went to (its ID, as
+	// GET /accounts lists it), its extension and the model sent upstream; Attempts counts the
+	// attempts so far. All four are absent until routing has chosen an account.
+	Account       string `json:"account,omitempty"`
+	Provider      string `json:"provider,omitempty"`
+	UpstreamModel string `json:"upstream_model,omitempty"`
+	Attempts      int    `json:"attempts,omitempty"`
+}
+
+// RequestsReply is GET /requests's reply: the requests being served, oldest first.
+type RequestsReply struct {
+	Requests []RunningRequest `json:"requests"`
+}
+
+// RequestReply is POST /requests/{trace}/cancel's reply: the request as it was when cancelled.
+type RequestReply struct {
+	Request RunningRequest `json:"request"`
+}

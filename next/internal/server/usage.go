@@ -22,6 +22,9 @@ type meter struct {
 	cur      llm.Tried   // the open attempt, its result not yet known
 	tried    []llm.Tried // the attempts that ended, up to maxTried
 	done     bool
+	// running is the request's entry in the registry of requests being served, which knows
+	// whether the management API cancelled it; nil for a request with none.
+	running *running
 }
 
 // newMeter returns the meter of a request r that arrived at start, or nil when the generation
@@ -31,6 +34,9 @@ func (g *Generation) newMeter(r *http.Request, start time.Time, req llm.Request,
 		return nil
 	}
 	m := &meter{store: g.Usage, start: start}
+	if t := traceOf(r); t != nil {
+		m.running = t.running
+	}
 	m.ev = usage.Event{Timestamp: start.UTC(), Endpoint: r.URL.Path, Stream: req.Stream, Model: req.Model}
 	if a := ClientIP(r); a.IsValid() {
 		m.ev.ClientIP = a.String()
@@ -100,8 +106,9 @@ func (m *meter) fail(e *llm.Error, status int) {
 	if m == nil || m.done {
 		return
 	}
-	if e.Code == llm.CodeCancelled {
-		// The client went away: nothing reached it but what was sent already.
+	if e.Code == llm.CodeCancelled && !m.running.byOperator() {
+		// The client went away: nothing reached it but what was sent already. A request the
+		// management API cancelled has a client that is still there and got the reply.
 		status = m.sent
 	}
 	ev := m.event(status, route.ResultCode(e))

@@ -68,6 +68,8 @@ const maxManagementBody = 1 << 20
 //	DELETE /v0/management/logs      empty main.log and delete its rotated files
 //	GET    /v0/management/request-error-logs  the error logs; .../{name} one of them
 //	GET    /v0/management/request-log-by-id/{id}  the request log of a trace ID
+//	GET    /v0/management/requests  the client requests being served now (handleRequests)
+//	POST   /v0/management/requests/{trace}/cancel  cancel one of them
 //	GET    /v0/management/themes  selected theme ID and stored themes
 //	GET    /v0/management/themes/{publisher}/{name}  one stored theme's JSON unchanged
 //	PUT    /v0/management/themes/{publisher}/{name}  store a theme JSON object
@@ -157,6 +159,7 @@ func (c *Core) Management() *server.Management {
 	c.handleUsage(m)
 	c.handleLogs(m)
 	c.handleThemes(m)
+	c.handleRequests(m)
 	return m
 }
 
