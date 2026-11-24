@@ -64,24 +64,49 @@ func TestCodeExecutionsEmptyListParsesToNil(t *testing.T) {
 	}
 }
 
-func TestAppendCodeExecutionLeavesOutALongRunAndKeepsTheRest(t *testing.T) {
+func TestCodeRunsLeaveOutALongRunAndKeepTheRest(t *testing.T) {
 	long := llm.CodeExecution{Code: strings.Repeat("x", llm.MaxCodeExecutionCodeBytes+1)}
-	runs := llm.AppendCodeExecution(nil, llm.CodeExecution{Code: "a"})
-	runs = llm.AppendCodeExecution(runs, long)
-	runs = llm.AppendCodeExecution(runs, llm.CodeExecution{Code: "b"})
+	var runs llm.CodeRuns
+	runs.Append(llm.CodeExecution{Code: "a"})
+	runs.Append(long)
+	runs.Append(llm.CodeExecution{Code: "b"})
 	want := []llm.CodeExecution{{Code: "a"}, {Code: "b"}, {FilesOmitted: true}}
-	if !slices.Equal(runs, want) {
-		t.Errorf("runs = %+v, want %+v", runs, want)
+	if got := runs.List(); !slices.Equal(got, want) {
+		t.Errorf("runs = %+v, want %+v", got, want)
 	}
-	if got := llm.AppendCodeExecution(nil, llm.CodeExecution{Code: strings.Repeat("x", llm.MaxCodeExecutionCodeBytes)}); len(got) != 1 || got[0].FilesOmitted {
+	var atLimit llm.CodeRuns
+	atLimit.Append(llm.CodeExecution{Code: strings.Repeat("x", llm.MaxCodeExecutionCodeBytes)})
+	if got := atLimit.List(); len(got) != 1 || got[0].FilesOmitted {
 		t.Errorf("code at the limit is left out: %d runs", len(got))
 	}
 }
 
-func TestLeaveOutCodeExecutionsEndsTheListOnce(t *testing.T) {
-	runs := llm.LeaveOutCodeExecutions([]llm.CodeExecution{{Code: "a"}})
-	runs = llm.LeaveOutCodeExecutions(runs)
-	if want := []llm.CodeExecution{{Code: "a"}, {FilesOmitted: true}}; !slices.Equal(runs, want) {
-		t.Errorf("runs = %+v, want %+v", runs, want)
+func TestCodeRunsLeaveOutEndsTheListOnce(t *testing.T) {
+	var runs llm.CodeRuns
+	runs.Append(llm.CodeExecution{Code: "a"})
+	runs.LeaveOut()
+	runs.LeaveOut()
+	if want := []llm.CodeExecution{{Code: "a"}, {FilesOmitted: true}}; !slices.Equal(runs.List(), want) {
+		t.Errorf("runs = %+v, want %+v", runs.List(), want)
+	}
+	var none llm.CodeRuns
+	if none.List() != nil {
+		t.Errorf("no runs = %+v, want nil", none.List())
+	}
+	none.LeaveOut()
+	if want := []llm.CodeExecution{{FilesOmitted: true}}; !slices.Equal(none.List(), want) {
+		t.Errorf("only the record = %+v, want %+v", none.List(), want)
+	}
+}
+
+func TestCodeRunsRemoveTakesBackARun(t *testing.T) {
+	var runs llm.CodeRuns
+	for _, c := range []string{"a", "b", "a"} {
+		runs.Append(llm.CodeExecution{Code: c})
+	}
+	runs.Remove(llm.CodeExecution{Code: "a"})
+	runs.Remove(llm.CodeExecution{Code: "zz"})
+	if want := []llm.CodeExecution{{Code: "a"}, {Code: "b"}}; !slices.Equal(runs.List(), want) {
+		t.Errorf("runs = %+v, want %+v", runs.List(), want)
 	}
 }

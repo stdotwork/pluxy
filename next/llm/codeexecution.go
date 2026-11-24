@@ -1,6 +1,10 @@
 package llm
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"slices"
+	"sync/atomic"
+)
 
 // ToolCodeExecutionUnsent is the detail of the loss for a code execution tool an encoder leaves
 // out because nothing says its upstream takes one.
@@ -9,7 +13,7 @@ const ToolCodeExecutionUnsent = "nothing says this upstream takes a code executi
 // CodeExecution is one server-side code execution run reported in a reply (protocol minor version
 // 32). It carries only what more than one format can express: the code or command that ran, its
 // language if given, its text output, whether it failed, and whether non-text outputs (files or
-// images) were omitted. A last record with only FilesOmitted set (see LeaveOutCodeExecutions)
+// images) were omitted. A last record with only FilesOmitted set (see CodeRuns)
 // stands for runs the reply had that are not in the list: runs past MaxCodeExecutionBytes, a run
 // whose code passes MaxCodeExecutionCodeBytes, and a run with no result a decoder could use.
 type CodeExecution struct {
@@ -32,36 +36,61 @@ const MaxCodeExecutionCodeBytes = 1 << 20
 // codeExecutionsLeftOut is the record that stands for runs left out of a list.
 var codeExecutionsLeftOut = CodeExecution{FilesOmitted: true}
 
-// LeaveOutCodeExecutions ends runs with the one record that says runs were left out, unless it
-// ends with it already. Decoders use it for a run they cannot carry, so a renderer reports the
-// loss.
-func LeaveOutCodeExecutions(runs []CodeExecution) []CodeExecution {
-	if n := len(runs); n > 0 && runs[n-1] == codeExecutionsLeftOut {
-		return runs
-	}
-	return append(runs, codeExecutionsLeftOut)
+// codeExecutionSize is what one run counts against MaxCodeExecutionBytes.
+func codeExecutionSize(r CodeExecution) int {
+	return len(r.Code) + len(r.Language) + len(r.Output) + 64
 }
 
-// AppendCodeExecution adds run to runs. A run whose code passes MaxCodeExecutionCodeBytes, or that
-// would take the list past MaxCodeExecutionBytes, is left out instead and the list ends with the
-// record that says runs were left out; a later run that fits is still added before that record.
-func AppendCodeExecution(runs []CodeExecution, run CodeExecution) []CodeExecution {
-	leftOut := false
-	if n := len(runs); n > 0 && runs[n-1] == codeExecutionsLeftOut {
-		runs, leftOut = runs[:n-1], true
+// codeRunSteps counts the runs the CodeRuns methods look at, so a test can bound their work
+// without timing it.
+var codeRunSteps atomic.Int64
+
+// CodeRuns collects a reply's runs for a decoder. It keeps the total size of the runs so each Append
+// costs the size of the run it adds, not of the whole list. The zero value is an empty list.
+type CodeRuns struct {
+	runs    []CodeExecution
+	size    int
+	leftOut bool
+}
+
+// Append adds run. A run whose code passes MaxCodeExecutionCodeBytes, or that would take the list
+// past MaxCodeExecutionBytes, is left out instead and the list ends with the record that says runs
+// were left out; a later run that fits is still added before that record.
+func (c *CodeRuns) Append(run CodeExecution) {
+	codeRunSteps.Add(1)
+	n := codeExecutionSize(run)
+	if len(run.Code) > MaxCodeExecutionCodeBytes || c.size+n > MaxCodeExecutionBytes {
+		c.leftOut = true
+		return
 	}
-	size := len(run.Code) + len(run.Language) + len(run.Output) + 64
-	for _, r := range runs {
-		size += len(r.Code) + len(r.Language) + len(r.Output) + 64
+	c.runs = append(c.runs, run)
+	c.size += n
+}
+
+// LeaveOut ends the list with the one record that says runs were left out.
+func (c *CodeRuns) LeaveOut() { c.leftOut = true }
+
+// Remove takes out the last run equal to run, if the list has one. It looks from the end because
+// the runs a decoder takes back are the latest ones; runs equal to each other are the same
+// whichever is taken out.
+func (c *CodeRuns) Remove(run CodeExecution) {
+	for i := len(c.runs) - 1; i >= 0; i-- {
+		codeRunSteps.Add(1)
+		if c.runs[i] == run {
+			c.runs = slices.Delete(c.runs, i, i+1)
+			c.size -= codeExecutionSize(run)
+			return
+		}
 	}
-	if len(run.Code) > MaxCodeExecutionCodeBytes || size > MaxCodeExecutionBytes {
-		return LeaveOutCodeExecutions(runs)
+}
+
+// List returns the runs, ended with the left-out record if runs were left out, or nil if there are
+// none. Appending to the CodeRuns afterwards does not change a returned list.
+func (c *CodeRuns) List() []CodeExecution {
+	if c.leftOut {
+		return append(c.runs[:len(c.runs):len(c.runs)], codeExecutionsLeftOut)
 	}
-	runs = append(runs, run)
-	if leftOut {
-		runs = LeaveOutCodeExecutions(runs)
-	}
-	return runs
+	return c.runs
 }
 
 // CodeExecutions is a list of code execution runs whose empty JSON array parses to nil.
