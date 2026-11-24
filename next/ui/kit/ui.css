@@ -225,20 +225,48 @@
     padding: 0 calc(var(--s) * 2);
     border-radius: 999px;
     line-height: 1.7;
-    color: var(--px-color-text-muted);
-    background: color-mix(in srgb, currentColor 14%, transparent);
+    --tone: var(--px-color-text-muted);
+    /* The tone alone is too faint to read on its own tint, so the text is mixed towards the text
+       colour: at least 4.5:1 on every surface, in each built-in theme. */
+    color: color-mix(in srgb, var(--tone) 75%, var(--px-color-text));
+    background: color-mix(in srgb, var(--tone) 14%, transparent);
   }
 
   .badge[data-tone="ok"] {
-    color: var(--px-color-ok);
+    --tone: var(--px-color-ok);
   }
 
   .badge[data-tone="warn"] {
-    color: var(--px-color-warn);
+    --tone: var(--px-color-warn);
   }
 
   .badge[data-tone="danger"] {
-    color: var(--px-color-danger);
+    --tone: var(--px-color-danger);
+  }
+
+  /* Hit areas: a control drawn smaller than 24 by 24 pixels keeps its drawn size, and an invisible
+     box centred on it takes the clicks around it, so rows stay as tall as they were. */
+
+  button.item-name,
+  a:not([class]),
+  label.check,
+  label.hit {
+    position: relative;
+  }
+
+  button.item-name::after,
+  a:not([class])::after,
+  label.check::after,
+  label.hit::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 100%;
+    height: 100%;
+    min-width: 24px;
+    min-height: 24px;
+    transform: translate(-50%, -50%);
   }
 
   /* Lists: table or cards */
@@ -465,7 +493,8 @@
 
   .segment small {
     color: inherit;
-    opacity: 0.7;
+    /* Faded, but still 4.5:1 on the selected segment's accent colour. */
+    opacity: 0.85;
   }
 
   .segment input:checked + span {
@@ -478,6 +507,13 @@
   .switch input:focus-visible + .track {
     outline: 2px solid var(--px-color-focus);
     outline-offset: 2px;
+  }
+
+  /* At least 24 pixels tall to hit, centred on the switch, whatever the height of its text. */
+  .switch input {
+    inset: 50% 0 auto;
+    min-height: 24px;
+    transform: translateY(-50%);
   }
 
   .switch {
