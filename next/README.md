@@ -3099,7 +3099,7 @@ Each file of the auth folder becomes an account added by login, with the file's 
 nor is a file larger than 1 MiB, nor anything but a `.json` file at the top of the folder.
 
 To add one file to a running core instead, send it to the management API's
-[`POST /accounts/import`](#accounts-added-by-login) (the panel's "Upload File" on Accounts): it
+[`POST /accounts/import`](#accounts-added-by-login) (the panel's "Upload file" on Accounts): it
 reads the file the same way and the account serves at once.
 
 Both cores renewing the same login signs one of them out: the provider replaces the refresh

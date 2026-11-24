@@ -411,17 +411,19 @@ func labelImages(text string, images []image) string {
 	return header + "\n\n" + text
 }
 
-// dataImage reads an image given as a data: URL.
+// dataImage reads an image given as a data: URL. RFC 3986 section 3.1 makes the scheme
+// case-insensitive, so DATA: and Data: are data URLs too, and ;base64 is matched the same way.
 func dataImage(u string) (image, bool) {
-	rest, ok := strings.CutPrefix(u, "data:")
-	if !ok {
+	const scheme = "data:"
+	if len(u) < len(scheme) || !strings.EqualFold(u[:len(scheme)], scheme) {
 		return image{}, false
 	}
-	meta, data, ok := strings.Cut(rest, ",")
-	mediaType, isBase64 := strings.CutSuffix(meta, ";base64")
-	if !ok || !isBase64 || strings.TrimSpace(data) == "" {
+	meta, data, ok := strings.Cut(u[len(scheme):], ",")
+	const marker = ";base64"
+	if !ok || len(meta) < len(marker) || !strings.EqualFold(meta[len(meta)-len(marker):], marker) || strings.TrimSpace(data) == "" {
 		return image{}, false
 	}
+	mediaType := meta[:len(meta)-len(marker)]
 	if mediaType == "" {
 		mediaType = "image/png"
 	}

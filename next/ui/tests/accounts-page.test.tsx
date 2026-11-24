@@ -63,7 +63,7 @@ test("while the first read is still running, the page says it is loading and cou
   expect(page.text()).toContain("Loading");
   expect(page.text()).not.toContain("0 credentials");
   expect(page.text()).not.toContain("0 accounts");
-  expect(page.text()).not.toContain("No results");
+  expect(page.text()).not.toContain("No matching accounts");
   expect(page.text()).not.toContain("No accounts yet");
 });
 
@@ -73,7 +73,7 @@ test("when the first read fails, the page shows the error and no empty state", a
   expect(page.text()).not.toContain("Loading");
   expect(page.text()).not.toContain("0 credentials");
   expect(page.text()).not.toContain("0 accounts");
-  expect(page.text()).not.toContain("No results");
+  expect(page.text()).not.toContain("No matching accounts");
   expect(page.text()).not.toContain("No accounts yet");
 });
 
@@ -87,7 +87,7 @@ test("one bad reload keeps the credentials on screen, with the error above them"
   expect(page.text()).toContain("work-01");
   expect(page.text()).toContain("work-02");
   expect(page.text()).not.toContain("0 credentials");
-  expect(page.text()).not.toContain("No results");
+  expect(page.text()).not.toContain("No matching accounts");
 });
 
 test("when core has no accounts, the page counts zero and offers the empty state", async () => {
@@ -107,6 +107,6 @@ test("a search that matches nothing says no results, and the credentials are sti
   await act(async () => {
     search.dispatchEvent(new Event("input"));
   });
-  expect(page.text()).toContain("No results");
+  expect(page.text()).toContain("No matching accounts");
   expect(page.text()).toContain("1 credential");
 });

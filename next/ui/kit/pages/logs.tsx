@@ -24,22 +24,22 @@ const t = strings("logs", {
   short: "Logs",
   tip: "Request tracing",
   core: "Core logs",
-  content: "Log Content",
+  content: "Log content",
   continuous: "Continuous reading",
-  refresh: "Refresh Logs",
+  refresh: "Refresh",
   search: "Search logs by content or keyword",
   level: "Log level",
   allLevels: "All levels",
   info: "info",
   warn: "warn",
   wrap: "Wrap long lines",
-  downloadLogs: "Download Logs",
-  clear: "Clear Logs",
-  confirmClear: "Yes, clear logs",
+  downloadLogs: "Download",
+  clear: "Clear",
+  confirmClear: "Yes, clear",
   cancel: "Cancel",
-  clearConfirm: "Are you sure you want to clear all logs? This action cannot be undone!",
-  errors: "Error Request Logs",
-  noErrors: "No error request log files found",
+  clearConfirm: "Clear all logs? You cannot undo this.",
+  errors: "Error request logs",
+  noErrors: "No error request logs yet. Failed requests appear here.",
   size: "Size",
   bytes: { one: "{count} byte", other: "{count} bytes" },
   modified: "Last modified",
@@ -49,17 +49,17 @@ const t = strings("logs", {
   download: "Download",
   downloadReal:
     "Privacy mode hides names on this page only. A downloaded log holds the text as core wrote it.",
-  errorDetail: "Error Request Log Details",
-  requestId: "Request ID",
+  errorDetail: "Error request log details",
+  requestId: "Trace ID",
   request: "Request log",
-  view: "View log",
+  view: "View",
   viewRequest: "View log for request {id}",
-  loading: "Loading logs...",
-  empty: "No Logs Available",
-  noMatch: "No matching logs found",
-  off: "Logging to file is off. Enable logging to file in the Config Panel's Logging tab, then refresh.",
+  loading: "Loading logs…",
+  empty: "No logs yet. Turn on file logging in Config Panel or wait for traffic.",
+  noMatch: "No matching logs. Clear or broaden your search and level filter.",
+  off: "File logging is off. Enable it in Config Panel's Logging tab, then refresh.",
   noRequestLog:
-    "A request has a log of its own only when request logging was on while it ran. Switch it on in the Config Panel's Logging tab; requests after that get one.",
+    "Request logging was off during this request. Enable it in Config Panel's Logging tab to record future requests.",
   config: "Config Panel — Logging",
   retained: "Showing the latest 10,000 loaded lines. Older lines are no longer searched or downloaded here.",
 });
@@ -68,11 +68,19 @@ function logLevel(line: string) {
   return line.match(/^\[[^\]]+\] \[(info|warn)\s*\]/)?.[1] ?? "";
 }
 
-function LogText({ content, wrap }: { content: string; wrap: boolean }) {
+/** A log's text. It scrolls, so the keyboard reaches it and it has a name. */
+function LogText({ content, wrap, label }: { content: string; wrap: boolean; label: string }) {
   return (
-    <pre class="logs-text" data-part="log" data-wrap={wrap ? "" : undefined}>
+    <section
+      class="logs-text"
+      data-part="log"
+      data-wrap={wrap ? "" : undefined}
+      aria-label={label}
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must take focus for the keyboard to scroll it
+      tabIndex={0}
+    >
       {content}
-    </pre>
+    </section>
   );
 }
 
@@ -287,6 +295,8 @@ export function LogsPage() {
           data-part="log"
           class="logs-text logs-core"
           data-wrap={wrap ? "" : undefined}
+          // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must take focus for the keyboard to scroll it
+          tabIndex={0}
         >
           {shown.length ? (
             shownAt.map((i) => (
@@ -371,7 +381,7 @@ export function LogsPage() {
                 {detail && (
                   <>
                     <Button onClick={() => saveLog(detail.name, detail.content)}>{t("download")}</Button>
-                    <LogText content={mask(detail.content) ?? ""} wrap={wrap} />
+                    <LogText content={mask(detail.content) ?? ""} wrap={wrap} label={t("errorDetail")} />
                   </>
                 )}
               </Detail>
@@ -411,7 +421,7 @@ export function LogsPage() {
             {request && (
               <>
                 <Button onClick={() => saveLog(request.name, request.content)}>{t("download")}</Button>
-                <LogText content={mask(request.content) ?? ""} wrap={wrap} />
+                <LogText content={mask(request.content) ?? ""} wrap={wrap} label={t("request")} />
               </>
             )}
           </section>

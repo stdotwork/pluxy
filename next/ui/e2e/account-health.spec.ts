@@ -51,7 +51,7 @@ test("an account its provider closed says so, and Enable brings it back", async 
   const detail = page.getByRole("complementary", { name: "Details: shut-out-1" });
   await expect(detail.locator('[data-part="badge"]').first()).toHaveText("banned");
   await expect(detail).toContainText("the test provider closed this account");
-  await expect(detail).toContainText("No request is sent to this account until you enable it again.");
+  await expect(detail).toContainText("pluxy skips this account until you enable it again.");
   await detail.getByRole("button", { name: "Enable", exact: true }).click();
   await expect(row.locator('[data-part="badge"]')).toHaveText("active");
   await expect(detail.getByRole("button", { name: "Disable", exact: true })).toBeVisible();
@@ -150,13 +150,13 @@ test("an account whose credential file cannot be read says so and offers only it
   await goTo(page, "Accounts");
   const row = page.locator('[data-part="item"]').filter({ hasText: "lost-1" });
   await expect(row.locator('[data-part="badge"]')).toHaveText("broken");
-  await page.getByLabel("Status Filter").selectOption({ label: "Problem" });
+  await page.getByLabel("Status filter").selectOption({ label: "Problem" });
   await expect(row).toBeVisible();
   await row.getByRole("button", { name: "lost-1", exact: true }).click();
   const detail = page.getByRole("complementary", { name: "Details: lost-1" });
   await expect(detail.locator('[data-part="badge"]').first()).toHaveText("broken");
   await expect(detail).toContainText(why);
-  await expect(detail).toContainText("pluxy cannot read this account's credential file");
+  await expect(detail).toContainText("pluxy cannot read this account's auth file");
   await expect(detail.getByRole("button", { name: "Remove", exact: true })).toBeVisible();
   await expect(detail.getByRole("button", { name: /^(Enable|Disable|Edit)$/ })).toHaveCount(0);
 });

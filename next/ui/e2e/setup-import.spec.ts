@@ -25,16 +25,16 @@ test("a setup core refuses or can no longer read says why, and changes nothing",
   // A file core refuses: its reason, and what to do.
   writeFileSync(file, "port: [8317\n");
   await row.getByRole("button", { name: "Bring it across", exact: true }).click();
-  await expect(row.getByRole("alert")).toContainText("pluxy will not bring this setup across:");
-  await expect(row.getByRole("alert")).toContainText("Change that in the CLIProxyAPI setup, then try again.");
+  await expect(row.getByRole("alert")).toContainText("Cannot import this setup:");
+  await expect(row.getByRole("alert")).toContainText("Fix it in CLIProxyAPI and try again.");
   await expect(row.locator('[data-part="setup-report"]')).toBeHidden();
 
-  // A file that is gone: the path core tried, and Look again.
+  // A file that is gone: the path core tried, and Refresh.
   rmSync(file);
   await row.getByRole("button", { name: "Bring it across", exact: true }).click();
-  await expect(row.getByRole("alert")).toContainText("pluxy could not read the CLIProxyAPI setup:");
+  await expect(row.getByRole("alert")).toContainText("Could not read the CLIProxyAPI setup:");
   await expect(row.getByRole("alert")).toContainText(`there is no file at ${file}`);
-  await expect(row.getByRole("alert")).toContainText("then press Look again");
+  await expect(row.getByRole("alert")).toContainText("then press Refresh");
   expect((await core.mgmt<Accounts>("GET", "/accounts")).body.accounts).toEqual(before);
   writeFileSync(file, text);
 });
@@ -110,6 +110,6 @@ test("a found CLIProxyAPI setup is shown as a dry run, brought across, and its p
   }
   // The command can still run it again, and says what that does.
   await row.getByText("Bring it across again").click();
-  await expect(row).toContainText("It writes the file's settings over any you changed in pluxy since");
+  await expect(row).toContainText("Run this where pluxy is installed to overwrite changed settings");
   await expect(row).toContainText("pluxy import cpa ~/.cli-proxy-api/config.yaml --auth-dir");
 });

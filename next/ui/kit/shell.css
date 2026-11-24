@@ -15,6 +15,42 @@
     grid-row: 1 / -1;
   }
 
+  /* Text for assistive technology only. */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  /* The first Tab stop: hidden until it has focus. */
+  .skip-link {
+    position: fixed;
+    top: calc(var(--s) * 2);
+    inset-inline-start: calc(var(--s) * 2);
+    z-index: 10;
+    padding: calc(var(--s) * 2) calc(var(--s) * 3);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--px-shape-radius);
+    color: var(--px-color-text);
+    background: var(--px-color-surface);
+  }
+  .skip-link:not(:focus) {
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  /* The skip link and a page change put focus on the main area, which is not a control. */
+  .main:focus {
+    outline: none;
+  }
+
   .nav {
     background: var(--px-color-nav);
     /* For the navigation laid out as a bar, which scrolls sideways when it is wider than the

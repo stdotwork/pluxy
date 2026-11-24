@@ -3,7 +3,7 @@
 //!
 //! - `first`: the default size; resizing and moving; a pending login polls while the window
 //!   shows, not while it is minimized (unmapped, as a window manager iconifies it), and again
-//!   once it is restored, and its "Open Link" opens the sign-in page in the browser, no window
+//!   once it is restored, and its "Open link" opens the sign-in page in the browser, no window
 //!   of the app's own; closing with Ask every time asks, Cancel keeps the window, Minimize to
 //!   Tray closes it and leaves no webview or web process; the real tray item reopens it at the
 //!   size and place it had; Remember this choice keeps Minimize to tray, which then closes
@@ -338,7 +338,7 @@ fn browser_log() -> Vec<String> {
         .collect()
 }
 
-/// A pending login polls while the window shows, not while it is minimized, and its "Open Link"
+/// A pending login polls while the window shows, not while it is minimized, and its "Open link"
 /// goes to the person's browser, never to a window of the app's own.
 fn polling(c: &mut Checks, app: &AppHandle) {
     // The page draws every method from one reply, so once one shows, test/alpha's shows too, if
@@ -355,13 +355,13 @@ fn polling(c: &mut Checks, app: &AppHandle) {
     } else if within(10, || {
         (main_eval(
             app,
-            "[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Open Link')",
+            "[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Open link')",
         ) == Some(json!(true)))
         .then_some(())
     })
     .is_none()
     {
-        Some("no Open Link button within 10 s of clicking Test browser")
+        Some("no Open link button within 10 s of clicking Test browser")
     } else {
         None
     };
@@ -372,7 +372,7 @@ fn polling(c: &mut Checks, app: &AppHandle) {
     ) {
         return;
     }
-    // Open Link: the sign-in page's own address reaches the browser, and the window opens
+    // Open link: the sign-in page's own address reaches the browser, and the window opens
     // nothing of its own.
     let link = main_eval(
         app,
@@ -383,7 +383,7 @@ fn polling(c: &mut Checks, app: &AppHandle) {
     let webviews = app.webviews().len();
     let clicked = main_eval(
         app,
-        "(() => { const b = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Open Link'); if (!b) return false; b.click(); return true; })()",
+        "(() => { const b = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Open link'); if (!b) return false; b.click(); return true; })()",
     );
     let opened = within(10, || {
         let l = browser_log();
@@ -395,13 +395,13 @@ fn polling(c: &mut Checks, app: &AppHandle) {
             && opened
                 .as_ref()
                 .is_some_and(|l| l.last().is_some_and(|last| Some(last) == link.as_ref())),
-        format!("Open Link opens the sign-in page in the browser: {link:?} as {opened:?}"),
+        format!("Open link opens the sign-in page in the browser: {link:?} as {opened:?}"),
     );
     sleep(1000);
     let own = app.webviews().len() - webviews;
     c.check(
         own == 0,
-        format!("Open Link opens no window of the app's own ({own} webviews more)"),
+        format!("Open link opens no window of the app's own ({own} webviews more)"),
     );
     let before = LOGIN_READS.load(SeqCst);
     sleep(5000);

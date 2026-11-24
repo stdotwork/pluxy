@@ -95,7 +95,7 @@ test("a sign-in that already finished is not cancelled when the page is left", a
     .locator('[data-extension="test/alpha"] [data-part="method"]')
     .getByRole("button", { name: "Test device", exact: true })
     .click();
-  await expect(page.getByRole("status")).toContainText("Authentication successful!", { timeout: 15_000 });
+  await expect(page.getByRole("status")).toContainText("Signed in.", { timeout: 15_000 });
   const cancels: string[] = [];
   page.on("request", (r) => {
     if (r.method() === "DELETE") cancels.push(r.url());
@@ -121,7 +121,7 @@ test("an Account ID whose sign-in still runs is said so in plain words", async (
       .getByRole("button", { name: "Test browser", exact: true })
       .click();
     await expect(page.getByRole("alert")).toContainText(
-      "A sign-in for this Account ID is already running. Use another Account ID, or start over once it has ended.",
+      "A sign-in for this account ID is already running. Use another ID, or wait and start over.",
     );
     await expect(page.getByRole("alert")).not.toContainText("conflict");
     await expect(page.getByRole("button", { name: "Start over" })).toBeVisible();
@@ -187,7 +187,7 @@ test("secret file selection clears the file control and refuses files over one M
     mimeType: "text/plain",
     buffer: Buffer.alloc(1024 * 1024 + 1, "x"),
   });
-  await expect(page.getByRole("alert")).toHaveText("The file could not be read. Choose it again.");
+  await expect(page.getByRole("alert")).toHaveText("Could not read the file. Choose it again.");
   await expect(secret).toHaveValue("file-key");
   await expect(file).toHaveValue("");
 });
@@ -247,7 +247,7 @@ async function captureSignInStates(page: Page) {
     await tile("Test device").getByRole("button", { name: "Test device" }).click();
     await expect(page.locator('[data-part="device-code"]')).toHaveText("TEST-1234");
     await shot("device-code");
-    await expect(page.getByRole("status")).toHaveText("Authentication successful!", { timeout: 15_000 });
+    await expect(page.getByRole("status")).toHaveText("Signed in.", { timeout: 15_000 });
     await shot("success");
   }
 }
@@ -269,8 +269,8 @@ test("device sign-in shows its code and adds the account", async ({ page }) => {
   await expect(page.locator('[data-part="device-code"]')).toHaveAttribute("aria-live", "polite");
   await expect(page.getByRole("button", { name: "Cancel", exact: true })).toBeFocused();
   await expect(page.getByText(/^Time left: \d+:\d{2}$/)).toBeVisible();
-  await expect(page.getByText("Waiting for authentication…", { exact: true })).toBeVisible();
-  await expect(page.getByRole("status")).toContainText("Authentication successful!", { timeout: 15_000 });
+  await expect(page.getByText("Waiting for sign-in…", { exact: true })).toBeVisible();
+  await expect(page.getByRole("status")).toContainText("Signed in.", { timeout: 15_000 });
   await expect(page.getByRole("button", { name: "View accounts" })).toBeFocused();
   await page.getByRole("button", { name: "View accounts" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Accounts" })).toBeVisible();
@@ -283,14 +283,14 @@ test("browser sign-in accepts a callback and reports provider failures", async (
     .locator('[data-extension="test/alpha"] [data-part="method"]')
     .filter({ hasText: "Test browser" });
   await tile.getByRole("button", { name: "Test browser" }).click();
-  await expect(page.getByRole("button", { name: "Open Link" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open link" })).toBeVisible();
   await page
     .getByLabel("Address the browser ended on")
     .fill("http://localhost:1455/auth/callback?code=ok&state=ok");
   await page.getByRole("button", { name: "Submit" }).click();
-  await expect(page.getByRole("status")).toContainText("Authentication successful!");
+  await expect(page.getByRole("status")).toContainText("Signed in.");
 
-  await page.getByRole("button", { name: "Log in another account" }).click();
+  await page.getByRole("button", { name: "Sign in to another account" }).click();
   await tile.getByRole("button", { name: "Test browser" }).click();
   await page
     .getByLabel("Address the browser ended on")
@@ -309,7 +309,7 @@ test("api key adds an account and rejects a bad key", async ({ page }) => {
   await tile.getByRole("button", { name: "Test API key" }).click();
   await expect(tile.getByLabel("API key", { exact: true })).toHaveAttribute("type", "password");
   const chosen = page.waitForEvent("filechooser");
-  await tile.getByRole("button", { name: "Choose File" }).click();
+  await tile.getByRole("button", { name: "Choose file" }).click();
   await (await chosen).setFiles({
     name: "key.txt",
     mimeType: "text/plain",
@@ -317,7 +317,7 @@ test("api key adds an account and rejects a bad key", async ({ page }) => {
   });
   await expect(tile.getByLabel("API key", { exact: true })).toHaveValue("test-good-key");
   await tile.getByRole("button", { name: "Add account" }).click();
-  await expect(page.getByRole("status")).toContainText("Authentication successful!");
+  await expect(page.getByRole("status")).toContainText("Signed in.");
   const accounts = await core.mgmt<{ accounts: { id: string; extension: string; kind: string }[] }>(
     "GET",
     "/accounts",
@@ -330,7 +330,7 @@ test("api key adds an account and rejects a bad key", async ({ page }) => {
   );
   expect(storage).not.toContain("test-good-key");
 
-  await page.getByRole("button", { name: "Log in another account" }).click();
+  await page.getByRole("button", { name: "Sign in to another account" }).click();
   await tile.getByRole("button", { name: "Test API key" }).click();
   await tile.getByLabel("API key", { exact: true }).fill("bad");
   await tile.getByRole("button", { name: "Add account" }).click();
@@ -388,7 +388,7 @@ test("method inputs follow metadata, including optional non-secret fields", asyn
     api_key: "test-metadata-key",
     region: "test-region",
   });
-  await expect(page.getByRole("status")).toHaveText("Authentication successful!");
+  await expect(page.getByRole("status")).toHaveText("Signed in.");
 });
 
 test("pending login polls every two seconds only while visible, and stops after cancel", async ({ page }) => {
@@ -403,7 +403,7 @@ test("pending login polls every two seconds only while visible, and stops after 
     .locator('[data-extension="test/alpha"] [data-part="method"]')
     .filter({ hasText: "Test browser" });
   await tile.getByRole("button", { name: "Test browser" }).click();
-  await expect(page.getByRole("button", { name: "Open Link" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open link" })).toBeVisible();
   await page.clock.pauseAt(await page.evaluate(() => Date.now() + 100));
   await page.clock.runFor(100); // Flush Preact's after-paint effects before checking the poll interval.
   expect(reads).toHaveLength(0);

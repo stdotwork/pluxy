@@ -220,7 +220,7 @@ fn add(c: &mut Checks, app: &AppHandle) {
         15,
         &format!(
             "document.body.innerText.includes({})",
-            json!(format!("{NAME} was added and turned on."))
+            json!(format!("Added and applied {NAME}."))
         ),
     );
     // What the page said instead, if anything.
@@ -231,7 +231,7 @@ fn add(c: &mut Checks, app: &AppHandle) {
     .unwrap_or(Value::Null);
     c.check(
         added,
-        format!("the page says {NAME} was added and turned on (notices: {notices})"),
+        format!("the page says {NAME} was added and applied (notices: {notices})"),
     );
     painted(c, app, "added");
     chosen(c, app, "added");
