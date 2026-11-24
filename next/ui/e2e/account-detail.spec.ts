@@ -152,12 +152,17 @@ test("config models and credential tools follow core metadata", async ({ page })
   });
   await goTo(page, "Add Account");
   detail = await openAccount(page, "tools-oauth");
-  await detail.getByRole("button", { name: "Sign in again", exact: true }).click();
+  await detail
+    .locator('[data-part="account-tool-actions"]')
+    .getByRole("button", { name: "Sign in again", exact: true })
+    .click();
   await detail.getByRole("button", { name: "Test browser", exact: true }).click();
   await expect(detail.getByLabel("Address the browser ended on")).toBeVisible();
   await detail.getByLabel("Address the browser ended on").fill("http://localhost/callback?code=ok");
   await detail.getByRole("button", { name: "Submit" }).click();
-  await expect(detail.getByRole("status")).toContainText("Signed in.");
+  await expect(detail.locator('[data-part="account-sign-in"]').getByRole("status")).toContainText(
+    "Signed in.",
+  );
   await expect(detail.getByRole("button", { name: "Sign in to another account" })).toHaveCount(0);
 });
 

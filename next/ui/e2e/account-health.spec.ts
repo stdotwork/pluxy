@@ -45,15 +45,15 @@ test("an account its provider closed says so, and Enable brings it back", async 
   await signIn(page, core);
   await goTo(page, "Accounts");
   const row = page.locator('[data-part="item"]').filter({ hasText: "shut-out-1" });
-  await expect(row.locator('[data-part="badge"]')).toHaveText("banned");
+  await expect(row.locator('[data-part="badge"]')).toHaveText("Banned");
   await expect(page.getByText(/· 1 problem$/)).toBeVisible();
   await row.getByRole("button", { name: "shut-out-1", exact: true }).click();
   const detail = page.getByRole("complementary", { name: "Details: shut-out-1" });
-  await expect(detail.locator('[data-part="badge"]').first()).toHaveText("banned");
+  await expect(detail.locator('[data-part="badge"]').first()).toHaveText("Banned");
   await expect(detail).toContainText("the test provider closed this account");
   await expect(detail).toContainText("pluxy skips this account until you enable it again.");
   await detail.getByRole("button", { name: "Enable", exact: true }).click();
-  await expect(row.locator('[data-part="badge"]')).toHaveText("active");
+  await expect(row.locator('[data-part="badge"]')).toHaveText("Available");
   await expect(detail.getByRole("button", { name: "Disable", exact: true })).toBeVisible();
   expect(await health("shut-out-1")).toBe("ok");
 
@@ -102,7 +102,7 @@ test("a banned account set in core's config can be enabled from its details and 
   await signIn(page, core);
   await goTo(page, "Accounts");
   const row = page.locator('[data-part="item"]').filter({ hasText: "local-1" });
-  await expect(row.locator('[data-part="badge"]')).toHaveText("banned");
+  await expect(row.locator('[data-part="badge"]')).toHaveText("Banned");
   await row.getByRole("button", { name: "local-1", exact: true }).click();
   const detail = page.getByRole("complementary", { name: "Details: local-1" });
   await expect(detail).toContainText("This account is set in core's config; change it there.");
@@ -110,20 +110,20 @@ test("a banned account set in core's config can be enabled from its details and 
   if (process.env.P7_SHOTS)
     await page.screenshot({ path: `${process.env.P7_SHOTS}/config-account-banned.png` });
   await detail.getByRole("button", { name: "Enable", exact: true }).click();
-  await expect(row.locator('[data-part="badge"]')).toHaveText("active");
+  await expect(row.locator('[data-part="badge"]')).toHaveText("Available");
   await expect(detail.getByRole("button", { name: "Enable", exact: true })).toHaveCount(0);
   expect(enabled).toEqual([{ disabled: false }]);
 
   banned = true;
   await page.reload();
-  await expect(row.locator('[data-part="badge"]')).toHaveText("banned");
+  await expect(row.locator('[data-part="badge"]')).toHaveText("Banned");
   await row.getByRole("checkbox").check();
   await page
     .getByRole("group", { name: "Batch actions" })
     .getByRole("button", { name: "Enable", exact: true })
     .click();
   await expect(page.getByRole("status")).toHaveText("1 account updated");
-  await expect(row.locator('[data-part="badge"]')).toHaveText("active");
+  await expect(row.locator('[data-part="badge"]')).toHaveText("Available");
   expect(enabled).toEqual([{ disabled: false }, { disabled: false }]);
 });
 
@@ -149,12 +149,12 @@ test("an account whose credential file cannot be read says so and offers only it
   await signIn(page, core);
   await goTo(page, "Accounts");
   const row = page.locator('[data-part="item"]').filter({ hasText: "lost-1" });
-  await expect(row.locator('[data-part="badge"]')).toHaveText("broken");
+  await expect(row.locator('[data-part="badge"]')).toHaveText("Broken");
   await page.getByLabel("Status filter").selectOption({ label: "Problem" });
   await expect(row).toBeVisible();
   await row.getByRole("button", { name: "lost-1", exact: true }).click();
   const detail = page.getByRole("complementary", { name: "Details: lost-1" });
-  await expect(detail.locator('[data-part="badge"]').first()).toHaveText("broken");
+  await expect(detail.locator('[data-part="badge"]').first()).toHaveText("Broken");
   await expect(detail).toContainText(why);
   await expect(detail).toContainText("pluxy cannot read this account's auth file");
   await expect(detail.getByRole("button", { name: "Remove", exact: true })).toBeVisible();

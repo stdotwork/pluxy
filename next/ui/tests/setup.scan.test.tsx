@@ -418,11 +418,11 @@ test("once the report of an import is closed, the row says it was brought across
   // The report stays, with its Close, though core's record has arrived.
   expect(reads(fake.calls, "/setup")).toBe(2);
   expect(fake.text()).toContain("Done. This is what was brought across:");
-  expect(fake.text()).not.toContain("was brought across on");
+  expect(fake.text()).not.toContain("and was brought across");
 
   await press(fake.root, "Close");
   expect(fake.text()).not.toContain("Done. This is what was brought across:");
-  expect(fake.text()).toContain("was brought across on");
+  expect(fake.text()).toContain("and was brought across");
   expect(fake.text()).toContain("Of its settings and auth files: 1 brought across, 1 not brought across.");
   expect(all(fake.root, "button").map((node) => node.textContent)).not.toContain("Bring it across");
   expect(imports(fake.calls)).toHaveLength(2);

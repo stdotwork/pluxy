@@ -1,9 +1,9 @@
-import { useRef, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
 import { type Account, type AccountTestResult, problem } from "../api";
 import { LoginFlow } from "../loginFlow";
 import { accountIdentities, usePrivacy } from "../privacy";
 import { strings } from "../strings";
-import { Badge, Button, ConfirmButton, Facts, List, Notice, useKit, useLoad, when } from "../ui";
+import { Badge, Button, ConfirmButton, Facts, List, Notice, stateText, useKit, useLoad, when } from "../ui";
 import { credentialTools } from "./accountTools.helpers";
 import { ConfigDialog } from "./configDialog";
 import { configAddress } from "./configSource.helpers";
@@ -70,14 +70,21 @@ const t = strings("accountTools", {
   edit: "Edit in Config Panel",
 });
 
-export function AccountTools(props: { account: Account; onChanged(): void }) {
+export function AccountTools(props: {
+  account: Account;
+  onChanged(): void;
+  /** The sign-in form, opened from outside (the account's next step) as well as from Sign in again. */
+  signIn?: { open: boolean; set(open: boolean): void };
+}) {
   const { api, unauthorized } = useKit();
   const p = usePrivacy();
   const a = props.account;
   const ids = accountIdentities(a);
   const tools = credentialTools(a);
   const [modelsOpen, setModelsOpen] = useState(false);
-  const [loginOpen, setLoginOpen] = useState(false);
+  const [ownLogin, setOwnLogin] = useState(false);
+  const loginOpen = props.signIn?.open ?? ownLogin;
+  const setLoginOpen = (open: boolean) => (props.signIn ? props.signIn.set(open) : setOwnLogin(open));
   const [confirm, setConfirm] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -111,7 +118,9 @@ export function AccountTools(props: { account: Account; onChanged(): void }) {
               <Badge tone={check?.state === "ok" ? "ok" : check?.state === "failed" ? "danger" : "muted"}>
                 {check && ["checking", "ok", "failed", "not_checked"].includes(check.state)
                   ? t(check.state as "checking" | "ok" | "failed" | "not_checked")
-                  : (check?.state ?? t("not_checked"))}
+                  : check
+                    ? stateText(check.state)
+                    : t("not_checked")}
               </Badge>,
             ],
             [t("detail"), p.text(check?.detail, ids)],
@@ -238,7 +247,7 @@ export function AccountTools(props: { account: Account; onChanged(): void }) {
           </Button>
         )}
         {tools.signIn && (
-          <Button disabled={busy} onClick={() => setLoginOpen((open) => !open)}>
+          <Button disabled={busy} onClick={() => setLoginOpen(!loginOpen)}>
             {t("signIn")}
           </Button>
         )}
@@ -357,10 +366,13 @@ function AccountSignIn(props: { account: Account; ids: readonly string[]; onChan
   const methods = useLoad(api.loginMethods);
   const [selected, setSelected] = useState<string>();
   const [attempt, setAttempt] = useState(0);
+  // The form opens below the fold when the account's next step asks for it: bring it into view.
+  const section = useRef<HTMLElement>(null);
+  useEffect(() => section.current?.scrollIntoView?.({ block: "nearest" }), []);
   const available =
     methods.data?.extensions.find((e) => e.extension === props.account.extension)?.methods ?? [];
   return (
-    <section class="stack" data-part="account-sign-in" aria-label={t("signIn")}>
+    <section class="stack" data-part="account-sign-in" aria-label={t("signIn")} ref={section}>
       <h3>{t("signIn")}</h3>
       {methods.loading && <Notice tone="muted">{t("loading")}</Notice>}
       {methods.error && (

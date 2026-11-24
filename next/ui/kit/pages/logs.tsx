@@ -69,6 +69,28 @@ function logLevel(line: string) {
   return line.match(/^\[[^\]]+\] \[(info|warn)\s*\]/)?.[1] ?? "";
 }
 
+/** The local day as core's log writes it: 2026-11-23. */
+const logDay = (d: Date) =>
+  [d.getFullYear(), d.getMonth() + 1, d.getDate()].map((n) => String(n).padStart(2, "0")).join("-");
+
+/**
+ * A line of core's log. Each starts with its full date and time; a line of today shows the time
+ * alone, so the times line up and read at a glance, and keeps the full one as its title.
+ */
+export function LogLine({ text, today }: { text: string; today: string }) {
+  const stamp = text.match(/^\[(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d(?:\.\d+)?)\]/);
+  if (!stamp || stamp[1] !== today) return <>{text}</>;
+  return (
+    <>
+      [
+      <time dateTime={`${stamp[1]}T${stamp[2]}`} title={`${stamp[1]} ${stamp[2]}`}>
+        {stamp[2]}
+      </time>
+      {text.slice(stamp[0].length - 1)}
+    </>
+  );
+}
+
 /** A log's text. It scrolls, so the keyboard reaches it and it has a name. */
 function LogText({ content, wrap, label }: { content: string; wrap: boolean; label: string }) {
   return (
@@ -223,6 +245,7 @@ export function LogsPage() {
     }
   };
   const query = search.toLocaleLowerCase();
+  const today = logDay(new Date());
   // Masked once per change of the lines or the labels, not on each render (a read every 2 seconds
   // while reading continuously, each keystroke in the search).
   const masked = useMemo(() => lines.map(mask), [lines, mask]);
@@ -296,7 +319,7 @@ export function LogsPage() {
           {shown.length ? (
             shownAt.map((i) => (
               <div key={i} data-part="log-line" data-level={logLevel(lines[i] as string)}>
-                {masked[i]}
+                <LogLine text={masked[i] as string} today={today} />
               </div>
             ))
           ) : (

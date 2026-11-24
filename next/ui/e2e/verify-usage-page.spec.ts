@@ -75,11 +75,13 @@ test("usage keeps object-like model names and nanosecond timestamps", async ({ p
   const toStringRow = rows.filter({ has: page.getByText("toString", { exact: true }) });
   const protoRow = rows.filter({ has: page.getByText("__proto__", { exact: true }) });
   await expect(constructorRow.locator("time")).toHaveAttribute("datetime", at(0));
-  await expect(constructorRow.locator("time")).toHaveText(/4\/15\/2026,\s10:05:38\sAM/);
+  await expect(constructorRow.locator("time")).toHaveText(/^Apr 15, 10:05:38\sAM$/);
   await expect(toStringRow.locator("time")).toHaveAttribute("datetime", at(1));
-  await expect(toStringRow.locator("time")).toHaveText(/4\/15\/2026,\s10:05:38\sAM/);
+  await expect(toStringRow.locator("time")).toHaveText(/^Apr 15, 10:05:38\sAM$/);
   await expect(protoRow.locator("time")).toHaveAttribute("datetime", at(2));
-  await expect(protoRow.locator("time")).toHaveText(/4\/16\/2026,\s12:00:00\sAM/);
+  // The exact local time, with its year, is the title.
+  await expect(constructorRow.locator("time")).toHaveAttribute("title", /4\/15\/2026,\s10:05:38\sAM/);
+  await expect(protoRow.locator("time")).toHaveText(/^Apr 16, 12:00:00\sAM$/);
 
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export", exact: true }).click();
