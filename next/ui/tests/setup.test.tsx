@@ -18,6 +18,7 @@ import {
   hasProvider,
   isTicked,
   onThisMachine,
+  pickStatuses,
   type Results,
   scanState,
   start,
@@ -172,7 +173,6 @@ function view(
       remote={more.remote ?? false}
       choices={more.choices ?? {}}
       results={results}
-      provider={hasProvider(setup, results, more.packages)}
       packages={more.packages}
       accounts={more.accounts ?? 0}
       bring={
@@ -468,7 +468,12 @@ test("a pick shown as not running is never the provider the page counts as runni
       packages: [claude({ enabled: false, state: "disabled" })],
       runs: false,
     },
-    { name: "a failed Start, package failed", results: start, packages: [claude({ state: "failed" })], runs: false },
+    {
+      name: "a failed Start, package failed",
+      results: start,
+      packages: [claude({ state: "failed" })],
+      runs: false,
+    },
     { name: "a done Start, healthy package", results: done, packages: [claude()], runs: true },
     {
       name: "a done Start, package turned off",
@@ -492,6 +497,11 @@ test("a pick shown as not running is never the provider the page counts as runni
       c.runs,
     ]);
     expect([c.name, page.includes('class="add-account stack"')]).toEqual([c.name, c.runs]);
+    // And both read the one status.
+    expect([c.name, pickStatuses(installed, c.results, c.packages)[0]?.status.state]).toEqual([
+      c.name,
+      c.runs ? "running" : "stopped",
+    ]);
   }
 });
 
