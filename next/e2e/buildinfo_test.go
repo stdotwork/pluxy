@@ -44,8 +44,8 @@ func TestBuildInfoFromLinker(t *testing.T) {
 	}
 
 	base, logged := startSafeCore(t, bin)
-	if !slices.Contains(logged, "pluxy: "+want) {
-		t.Errorf("core's log before it listened has no line %q:\n%s", "pluxy: "+want, strings.Join(logged, "\n"))
+	if !slices.Contains(logged, want) {
+		t.Errorf("core's log before it listened has no line %q:\n%s", want, strings.Join(logged, "\n"))
 	}
 	code, b := management(t, http.MethodGet, base, "/v0/management/status")
 	if code != http.StatusOK {
