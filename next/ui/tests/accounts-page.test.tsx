@@ -50,7 +50,9 @@ async function mount(replies: (Reply<unknown> | "pending")[]) {
   return {
     ...page,
     refresh: async () => {
-      await act(async () => button(page.root, "Refresh").dispatchEvent(new Event("click")));
+      await act(async () => {
+        button(page.root, "Refresh").dispatchEvent(new Event("click"));
+      });
       await settle();
     },
   };
@@ -100,7 +102,9 @@ test("a search that matches nothing says no results, and the credentials are sti
   );
   if (!search) throw new Error("no search box");
   search.value = "zzz";
-  await act(async () => search.dispatchEvent(new Event("input")));
+  await act(async () => {
+    search.dispatchEvent(new Event("input"));
+  });
   expect(page.text()).toContain("No results");
   expect(page.text()).toContain("1 credential");
 });

@@ -56,7 +56,9 @@ async function reload(hook: { last(): Loaded<Items> }) {
 test("before the first reply the hook says it has not loaded, and holds no data", async () => {
   const hook = mountHook(["pending"]);
   await hook.mount();
-  expect(hook.last()).toMatchObject({ phase: "loading", loading: true, data: undefined, error: undefined });
+  expect(hook.last()).toMatchObject({ phase: "loading", loading: true });
+  expect(hook.last().data).toBeUndefined();
+  expect(hook.last().error).toBeUndefined();
 });
 
 test("a good reply is loaded, and an empty answer is loaded too", async () => {
