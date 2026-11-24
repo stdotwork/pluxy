@@ -493,10 +493,17 @@ export function AccountsPage() {
         )}
         <MasterDetail
           list={
-            accounts.data && list.length === 0 ? (
+            accounts.error && list.length === 0 ? null : accounts.data && list.length === 0 ? (
               <Empty>{rich(t("empty"), { page: <a href="#/add-account">{t("addAccount")}</a> })}</Empty>
             ) : accounts.data && filtered.length === 0 ? (
-              <Empty>{t("noResults")}</Empty>
+              <Empty
+                onClear={() => {
+                  setFilters({});
+                  setPage(1);
+                }}
+              >
+                {t("noResults")}
+              </Empty>
             ) : (
               <List<Account>
                 label={t("list")}
@@ -564,7 +571,7 @@ export function AccountsPage() {
                     label: t("lastError"),
                     value: (a) => p.text(a.last_error?.message, accountIdentities(a)) ?? "",
                   },
-                  { label: t("requests"), value: (a) => a.active_requests ?? 0 },
+                  { label: t("requests"), value: (a) => a.active_requests ?? 0, numeric: true },
                 ]}
               />
             )

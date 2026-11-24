@@ -19,6 +19,11 @@ const t = strings("kit", {
   cancel: "Cancel",
   details: "Details: {title}",
   closeDetails: "Close details",
+  clearFilters: "Clear filters",
+  copy: "Copy",
+  copied: "Copied",
+  copyFailed: "Not copied",
+  copyTrace: "Copy trace ID {id}",
 });
 
 export interface Kit {
@@ -144,15 +149,23 @@ export function usePoll(tick: () => unknown, ms: number, active = true): void {
   }, [ms, active]);
 }
 
-/** Runs a management call from a button: busy while it runs, then its error or done(). */
+/**
+ * Runs a management call from a button: busy while it runs, then its error or done(). A second
+ * run while one is on its way does nothing. A Button whose onClick returns run()'s promise shows
+ * that it is working until the call ends.
+ */
 export function useAction(done: () => void) {
   const { unauthorized } = useKit();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const running = useRef(false);
   const run = async (call: () => Promise<Reply<unknown>>) => {
+    if (running.current) return;
+    running.current = true;
     setBusy(true);
     setError(undefined);
     const r = await call();
+    running.current = false;
     setBusy(false);
     if (r.status === 401) return unauthorized();
     const p = problem(r);
@@ -202,9 +215,21 @@ export function useCopy(value: string): { state?: "copied" | "failed"; copy: () 
   return { state, copy };
 }
 
+/** How long a button works before it shows so: a call that answers sooner changes nothing. */
+export const BUSY_SHOWS_AFTER_MS = 150;
+
+/**
+ * A button. While it works (busy, or until the promise its onClick returned ends) it keeps its
+ * label and its width, ignores presses, says so to assistive technology (aria-busy), and after
+ * a moment shows a quiet mark (data-busy). A page may disable it meanwhile as before; it is
+ * then not dimmed like the buttons that only wait for it.
+ */
 export function Button(props: {
   variant?: Variant;
-  onClick?: () => void;
+  /** A promise it returns keeps the button busy until it ends. */
+  onClick?: () => unknown;
+  /** The button's action is running. */
+  busy?: boolean;
   disabled?: boolean;
   type?: "button" | "submit";
   label?: string;
@@ -214,6 +239,32 @@ export function Button(props: {
   buttonRef?: Ref<HTMLButtonElement>;
   children: ComponentChildren;
 }) {
+  const [running, setRunning] = useState(false);
+  const [marked, setMarked] = useState(false);
+  const live = useRef(true);
+  useEffect(() => {
+    live.current = true;
+    return () => {
+      live.current = false;
+    };
+  }, []);
+  const busy = !!props.busy || running;
+  useEffect(() => {
+    if (!busy) return setMarked(false);
+    const timer = setTimeout(() => setMarked(true), BUSY_SHOWS_AFTER_MS);
+    return () => clearTimeout(timer);
+  }, [busy]);
+  const press = (e: Event) => {
+    // A busy submit button must not send its form again either.
+    if (busy) return e.preventDefault();
+    const result = props.onClick?.();
+    if (!(result instanceof Promise)) return;
+    setRunning(true);
+    const ended = () => {
+      if (live.current) setRunning(false);
+    };
+    result.then(ended, ended);
+  };
   return (
     <button
       ref={props.buttonRef}
@@ -223,8 +274,10 @@ export function Button(props: {
       data-slot="button"
       data-variant={props.variant ?? "quiet"}
       data-focus-key={props.focusKey}
-      onClick={props.onClick}
+      onClick={press}
       disabled={props.disabled}
+      aria-busy={busy ? "true" : undefined}
+      data-busy={busy && marked ? "" : undefined}
       aria-label={props.label}
     >
       {props.children}
@@ -240,8 +293,21 @@ export function confirmActionLabel(label: string): string {
 }
 
 /** A button that asks once more before it acts. */
-export function ConfirmButton(props: { onConfirm: () => void; disabled?: boolean; children: string }) {
+export function ConfirmButton(props: {
+  /** A promise it returns keeps the button busy until it ends. */
+  onConfirm: () => unknown;
+  disabled?: boolean;
+  children: string;
+}) {
   const [asking, setAsking] = useState(false);
+  const [working, setWorking] = useState(false);
+  const live = useRef(true);
+  useEffect(() => {
+    live.current = true;
+    return () => {
+      live.current = false;
+    };
+  }, []);
   const ask = useRef<HTMLButtonElement>(null);
   const cancel = useRef<HTMLButtonElement>(null);
   // The button in focus is replaced when the question opens or closes: focus goes to the button
@@ -256,6 +322,7 @@ export function ConfirmButton(props: { onConfirm: () => void; disabled?: boolean
       <Button
         variant="danger"
         disabled={props.disabled}
+        busy={working}
         buttonRef={ask}
         onClick={() => {
           moved.current = true;
@@ -273,8 +340,17 @@ export function ConfirmButton(props: { onConfirm: () => void; disabled?: boolean
         disabled={props.disabled}
         onClick={() => {
           setAsking(false);
-          moved.current = false;
-          props.onConfirm();
+          const result = props.onConfirm();
+          if (!(result instanceof Promise)) {
+            moved.current = false;
+            return;
+          }
+          // The asking button comes back, working: focus goes to it.
+          setWorking(true);
+          const ended = () => {
+            if (live.current) setWorking(false);
+          };
+          result.then(ended, ended);
         }}
       >
         {t("confirm", { action: confirmActionLabel(props.children) })}
@@ -345,8 +421,64 @@ export function Notice(props: { tone: Tone; children: ComponentChildren }) {
   );
 }
 
-export function Empty(props: { children: ComponentChildren }) {
-  return <p class="empty">{props.children}</p>;
+/**
+ * What a list shows when it has nothing: what would appear here, and the way to get it there.
+ * action is that way, a link or a button. onClear makes it the "nothing matches this filter"
+ * kind, with a button that clears the filters. A page shows it only for a list it has read: not
+ * while loading, and not beside the notice of a load that failed.
+ */
+export function Empty(props: {
+  children: ComponentChildren;
+  action?: ComponentChildren;
+  onClear?: () => void;
+  /** The clear button's label, when "Clear filters" does not fit. */
+  clearLabel?: string;
+}) {
+  return (
+    <div class="empty" data-part="empty" data-variant={props.onClear ? "filter" : "none"}>
+      <p>{props.children}</p>
+      {(props.action || props.onClear) && (
+        <div class="actions">
+          {props.action}
+          {props.onClear && <Button onClick={props.onClear}>{props.clearLabel ?? t("clearFilters")}</Button>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A small button that copies a trace ID. A press does not select the row it is in. */
+export function CopyTrace(props: { id: string }) {
+  const { state, copy } = useCopy(props.id);
+  return (
+    <button
+      type="button"
+      class="btn"
+      data-part="button"
+      data-slot="button"
+      data-variant="quiet"
+      data-size="small"
+      aria-label={t("copyTrace", { id: props.id })}
+      onClick={(e) => {
+        e.stopPropagation();
+        void copy();
+      }}
+    >
+      <span aria-live="polite">
+        {state === "copied" ? t("copied") : state === "failed" ? t("copyFailed") : t("copy")}
+      </span>
+    </button>
+  );
+}
+
+/** A request's trace ID with its copy button; with href, the ID links there. */
+export function TraceId(props: { id: string; href?: string }) {
+  return (
+    <span class="trace-id" data-part="trace-id">
+      {props.href ? <a href={props.href}>{props.id}</a> : <span class="mono">{props.id}</span>}
+      <CopyTrace id={props.id} />
+    </span>
+  );
 }
 
 /** Facts as a definition list. */
@@ -369,6 +501,8 @@ export interface Column<T> {
   label: string;
   value: (item: T) => ComponentChildren;
   mono?: boolean;
+  /** A column of numbers: a table sets them against the end edge, so their digits line up. */
+  numeric?: boolean;
 }
 
 /**
@@ -396,6 +530,8 @@ export function List<T>(props: {
     );
   const select = (item: T) => (props.onSelect ? () => props.onSelect?.(props.id(item)) : undefined);
   const current = (item: T) => (props.selected === props.id(item) ? "true" : undefined);
+  const cellClass = (c: Column<T>) =>
+    [c.mono && "mono", c.numeric && "num"].filter(Boolean).join(" ") || undefined;
 
   if (list === "cards") {
     return (
@@ -430,7 +566,7 @@ export function List<T>(props: {
         <thead>
           <tr>
             {props.columns.map((c) => (
-              <th key={c.label} scope="col">
+              <th key={c.label} scope="col" class={c.numeric ? "num" : undefined}>
                 {c.label}
               </th>
             ))}
@@ -450,7 +586,7 @@ export function List<T>(props: {
                 {name(item)}
               </th>
               {rest.map((c) => (
-                <td key={c.label} class={c.mono ? "mono" : undefined}>
+                <td key={c.label} class={cellClass(c)}>
                   {c.value(item)}
                 </td>
               ))}

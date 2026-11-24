@@ -4,6 +4,15 @@
     --s: calc(var(--px-space-unit, 4px) * var(--px-density, 1));
     --t: var(--px-motion-duration, 120ms) var(--px-motion-easing, ease-out);
     --rail: calc(var(--s) * 18);
+    /* The room the page's sticky top takes: what sticks below it starts here. */
+    --stick: calc(var(--s) * 4);
+    /* Digits of one width everywhere, so numbers in table cells, counters and meter labels line
+       up and do not shift as they change. */
+    font-variant-numeric: tabular-nums;
+  }
+
+  html[data-nav="top"] {
+    --stick: calc(var(--s) * 18);
   }
 
   *,
@@ -154,6 +163,13 @@
     color: var(--px-color-text-muted);
     margin: 0;
     padding: calc(var(--s) * 4) 0;
+    display: grid;
+    gap: calc(var(--s) * 2);
+    justify-items: start;
+  }
+
+  .empty > p {
+    margin: 0;
   }
 
   .facts {
@@ -192,6 +208,51 @@
       background var(--t),
       border-color var(--t);
     white-space: nowrap;
+  }
+
+  .btn[data-size="small"] {
+    font-size: var(--px-font-size-small);
+    padding: 0 calc(var(--s) * 1.5);
+    min-height: 24px;
+  }
+
+  /* A working button: its label and width stay, and a small ring shows in its end padding. The
+     ring turns for as long as motion lasts; with motion off (duration 0) it stands still. */
+  .btn[aria-busy="true"] {
+    position: relative;
+    cursor: progress;
+  }
+
+  .btn[aria-busy="true"]:disabled {
+    opacity: 1;
+    cursor: progress;
+  }
+
+  .btn[data-busy]::after {
+    content: "";
+    position: absolute;
+    inset-block-start: calc(50% - 0.3em);
+    inset-inline-end: calc(var(--s) * 0.5);
+    width: 0.6em;
+    height: 0.6em;
+    border-radius: 50%;
+    border: 1.5px solid currentColor;
+    border-inline-end-color: transparent;
+    opacity: 0.75;
+    animation: px-spin calc(var(--px-motion-duration, 120ms) * 6) linear infinite;
+  }
+
+  @keyframes px-spin {
+    to {
+      transform: rotate(1turn);
+    }
+  }
+
+  .trace-id {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+    max-width: 100%;
   }
 
   .btn:hover:not(:disabled) {
@@ -280,8 +341,12 @@
 
   /* Lists: table or cards */
 
+  /* A table scrolls in its own frame, sideways when it is wide and down when it is long, and
+     its header row stays at the frame's top. The frame is never taller than the window below
+     the page's sticky top, so the header and the last row fit in view together. */
   .table-wrap {
-    overflow-x: auto;
+    overflow: auto;
+    max-height: max(calc(100vh - var(--stick) - var(--s) * 4), calc(var(--s) * 60));
     border: var(--px-shape-border) solid var(--px-color-border);
     border-radius: var(--px-shape-radius);
     background: var(--px-color-surface);
@@ -304,7 +369,19 @@
     vertical-align: middle;
   }
 
+  .table .num {
+    text-align: end;
+  }
+
   .table thead th {
+    position: sticky;
+    top: 0;
+    /* Above the rows' controls, which are raised over their hit areas. */
+    z-index: 2;
+    background: var(--px-color-surface);
+    /* A collapsed border does not travel with a sticky cell: the line is drawn inside it. */
+    border-bottom: 0;
+    box-shadow: inset 0 calc(var(--px-shape-border) * -1) 0 var(--px-color-border);
     font-size: var(--px-font-size-small);
     font-weight: var(--px-font-weight-strong);
     color: var(--px-color-text-muted);
@@ -570,6 +647,11 @@
 
   /* Narrow windows: details go below the list. */
   @media (max-width: 720px) {
+    /* The side navigation is a bar across the top here. */
+    html {
+      --stick: calc(var(--s) * 18);
+    }
+
     html[data-detail="side"] .master[data-open] {
       grid-template-columns: minmax(0, 1fr);
     }
