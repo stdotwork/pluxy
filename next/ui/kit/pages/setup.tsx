@@ -86,7 +86,7 @@ const t = strings("setup", {
   importCommandHow:
     "Run this where pluxy is installed. It does the same, and with --dry-run only reports what it would do.",
   importDone: "Brought across",
-  importDoneWhere: "It is at {config}, and was brought across on {when}.",
+  importDoneWhere: "It is at {config}, and was brought across {when}.",
   importDoneCounts: "Of its settings and auth files: {counts}.",
   "importDone.brought": "{count} brought across",
   "importDone.changed": "{count} different in pluxy",
@@ -499,7 +499,9 @@ export function Found(props: {
         </ul>
       )}
       {setup.scanned_at && state !== "first" && (
-        <small class="hint">{t("lookedAt", { when: when(setup.scanned_at) ?? setup.scanned_at })}</small>
+        <small class="hint">
+          {rich(t("lookedAt"), { when: when(setup.scanned_at) ?? setup.scanned_at })}
+        </small>
       )}
     </Card>
   );

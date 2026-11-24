@@ -1,9 +1,10 @@
 // One account's details, opened from the Accounts list (accounts.tsx). The list passes
 // AccountDetailProps and nothing else; it uses AccountState for its own state column.
 
+import { useState } from "preact/hooks";
 import { type Account, leftOut, providerMissing } from "../api";
 import { accountIdentities, usePrivacy } from "../privacy";
-import { strings } from "../strings";
+import { rich, strings } from "../strings";
 import {
   Badge,
   Button,
@@ -18,9 +19,9 @@ import {
 } from "../ui";
 import { AccountEdit, AccountSettings } from "./accountSettings";
 import { AccountTools } from "./accountTools";
+import { credentialTools } from "./accountTools.helpers";
 
 const t = strings("accountDetail", {
-  disabled: "disabled",
   state: "State",
   extension: "Extension",
   label: "Label",
@@ -37,11 +38,7 @@ const t = strings("accountDetail", {
   enable: "Enable",
   disable: "Disable",
   remove: "Remove",
-  banned: "banned",
-  exhausted: "exhausted",
-  needs_login: "needs sign-in",
-  broken: "broken",
-  noProvider: "no provider",
+  noProvider: "No provider",
   noProviderHint:
     "{extension} is not running, so this account gets no requests. Install or enable it on Extensions.",
   leftOutBecause: "Left out because",
@@ -49,18 +46,26 @@ const t = strings("accountDetail", {
   bannedHint: "pluxy skips this account until you enable it again.",
   brokenHint:
     "pluxy cannot read this account's auth file, so it sends no requests. Fix or replace the file and restart pluxy, or remove the account (which deletes the file).",
+  disabledHint: "This account is disabled, so it gets no requests. Enable it to use it again.",
+  exhaustedHint: "This account's limit is used up, so it gets no requests until the limit resets.",
+  exhaustedUntilHint:
+    "This account's limit is used up, so it gets no requests until the limit resets ({time}).",
+  signInHint: "The provider refused this account's sign-in, so it gets no requests. Sign in again to use it.",
+  signInConfigHint:
+    "The provider refused this account's credential, so it gets no requests. Replace it in core's config.",
+  signIn: "Sign in again",
 });
 
 /**
- * An account's state as a badge: "disabled" when it is turned off, the health state that keeps
+ * An account's state as a badge: Disabled when it is turned off, the health state that keeps
  * requests away from it when there is one, else its state.
  */
 export function AccountState(props: { a: Account; running?: ReadonlySet<string> }) {
-  if (props.a.disabled) return <Badge tone="muted">{t("disabled")}</Badge>;
+  if (props.a.disabled) return <StateBadge state="disabled" of="account" />;
   const out = leftOut(props.a);
-  if (out) return <Badge tone={out === "exhausted" ? "warn" : "danger"}>{t(out)}</Badge>;
+  if (out) return <StateBadge state={out} of="account" />;
   if (providerMissing(props.a, props.running)) return <Badge tone="warn">{t("noProvider")}</Badge>;
-  return <StateBadge state={props.a.state} />;
+  return <StateBadge state={props.a.state} of="account" />;
 }
 
 export interface AccountDetailProps {
@@ -86,6 +91,10 @@ export function AccountDetail(props: AccountDetailProps) {
   const out = leftOut(a);
   // Enabling is what lifts a provider's ban, so a banned account offers Enable, not Disable.
   const off = a.disabled || out === "banned";
+  // The sign-in form is in the tools below; the next step above opens it too.
+  const [signInFor, setSignInFor] = useState<string>();
+  const needsSignIn = !a.disabled && (a.state === "reauth_required" || out === "needs_login");
+  const canSignIn = credentialTools(a).signIn;
   return (
     <Detail title={p.text(a.id, ids)} onClose={props.onClose}>
       <Facts
@@ -108,6 +117,20 @@ export function AccountDetail(props: AccountDetailProps) {
         <Notice tone="warn">{t("noProviderHint", { extension: a.extension ?? "" })}</Notice>
       )}
       {out === "banned" && <Notice tone="warn">{t("bannedHint")}</Notice>}
+      {a.disabled && out !== "broken" && <Notice tone="muted">{t("disabledHint")}</Notice>}
+      {out === "exhausted" && (
+        <Notice tone="warn">
+          {a.health?.until
+            ? rich(t("exhaustedUntilHint"), { time: when(a.health.until) })
+            : t("exhaustedHint")}
+        </Notice>
+      )}
+      {needsSignIn && (
+        <Notice tone="warn">
+          {t(a.source === "config" ? "signInConfigHint" : "signInHint")}{" "}
+          {canSignIn && <Button onClick={() => setSignInFor(a.id)}>{t("signIn")}</Button>}
+        </Notice>
+      )}
       {out === "broken" && <Notice tone="warn">{t("brokenHint")}</Notice>}
       {(act.error ?? remove.error) && <Notice tone="danger">{p.text(act.error ?? remove.error, ids)}</Notice>}
       {a.source === "config" ? (
@@ -144,7 +167,12 @@ export function AccountDetail(props: AccountDetailProps) {
       {out !== "broken" && (
         <>
           <AccountSettings account={a} />
-          <AccountTools key={a.id} account={a} onChanged={props.onChanged} />
+          <AccountTools
+            key={a.id}
+            account={a}
+            onChanged={props.onChanged}
+            signIn={{ open: signInFor === a.id, set: (open) => setSignInFor(open ? a.id : undefined) }}
+          />
         </>
       )}
     </Detail>

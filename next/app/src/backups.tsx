@@ -19,6 +19,7 @@ import {
   Notice,
   useAction,
   useLoad,
+  whenText,
 } from "../../ui/kit/ui";
 import type { Selection } from "./environment";
 import { reply } from "./host";
@@ -133,7 +134,9 @@ export function Backups(props: {
   const versions = list.data?.backups ?? [];
   const version = versions.find((v) => v.id === selected);
   const busy = create.busy || write.busy || remove.busy || props.disabled;
-  const when = (v: Version) => new Date(v.created).toLocaleString();
+  // The exact time: versions are told apart by it.
+  const when = (v: Version) =>
+    (Number.isFinite(v.created) && whenText(new Date(v.created).toISOString(), "exact")) || String(v.created);
 
   return (
     <Card title={t("title")}>

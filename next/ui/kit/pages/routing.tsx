@@ -5,7 +5,7 @@ import type { Reply } from "../host";
 import { accountIdentities, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { strings } from "../strings";
-import { Badge, Button, Card, Empty, List, Notice, PageHead, useKit } from "../ui";
+import { Badge, Button, Card, Empty, List, Notice, PageHead, shortDuration, useKit } from "../ui";
 import {
   changeSetting,
   type Field,
@@ -31,9 +31,6 @@ const t = strings("routing", {
   config: "Set in config",
   weight: "Weight {weight}",
   cooling: "Cooling down ({time})",
-  seconds: { one: "{count}s", other: "{count}s" },
-  minutes: { one: "{count}m", other: "{count}m" },
-  hours: { one: "{count}h", other: "{count}h" },
   unavailable: "Unavailable",
   up: "Move up a tier",
   down: "Move down a tier",
@@ -135,12 +132,7 @@ function coolingTime(account: Account): string | undefined {
       .filter(Number.isFinite),
   );
   const seconds = Math.ceil((until - Date.now()) / 1000);
-  if (seconds <= 0) return undefined;
-  return seconds >= 3600
-    ? t("hours", { count: Math.ceil(seconds / 3600) })
-    : seconds >= 60
-      ? t("minutes", { count: Math.ceil(seconds / 60) })
-      : t("seconds", { count: seconds });
+  return seconds <= 0 ? undefined : shortDuration(seconds);
 }
 function WeightEditor({ account, save }: { account: Account; save: (weight: number | null) => void }) {
   const p = usePrivacy();

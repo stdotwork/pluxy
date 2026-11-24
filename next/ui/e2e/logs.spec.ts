@@ -107,7 +107,18 @@ test("filters, downloads and logging-off guidance follow the selected theme", as
   await expect(log.locator('[data-part="log-line"]').first()).toHaveAttribute("data-level", "info");
   await page.getByRole("switch", { name: "Wrap long lines", exact: true }).check();
   await expect(log).toHaveAttribute("data-wrap", "");
-  const expected = (await log.locator('[data-part="log-line"]').allTextContents()).join("\n");
+  // A line of today shows its time alone and keeps the full date and time as the title: the
+  // download has every line in full.
+  const expected = (
+    await log.locator('[data-part="log-line"]').evaluateAll((lines) =>
+      lines.map((line) => {
+        const text = line.textContent ?? "";
+        const stamp = line.querySelector("time");
+        return stamp ? `[${stamp.title}${text.slice(text.indexOf("]"))}` : text;
+      }),
+    )
+  ).join("\n");
+  expect(expected).toMatch(/^\[\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d+\] /);
   const downloaded = page.waitForEvent("download");
   await page
     .getByRole("region", { name: "Log content", exact: true })

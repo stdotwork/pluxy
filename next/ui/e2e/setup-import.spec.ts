@@ -102,7 +102,7 @@ test("a found CLIProxyAPI setup is shown as a dry run, brought across, and its p
     if (reload) await page.reload();
     await expect(row).toHaveAttribute("data-state", "brought");
     await expect(row.locator('[data-part="badge"]')).toHaveText("Brought across");
-    await expect(row).toContainText("and was brought across on");
+    await expect(row).toContainText("and was brought across");
     await expect(row).toContainText(
       "Of its settings and auth files: 4 brought across, 2 different in pluxy, 2 not brought across.",
     );

@@ -807,7 +807,8 @@ test("a setup core has brought across says so, when and with what counts, and of
     expect(page).toContain('data-part="setup-import" data-state="brought"');
     expect(page).toContain("<strong>A CLIProxyAPI setup with 7 accounts</strong>");
     expect(page).toContain(
-      `<span class="mono">~/.cli-proxy-api/config.yaml</span>, and was brought across on ${at}.`,
+      '<span class="mono">~/.cli-proxy-api/config.yaml</span>, and was brought across ' +
+        `<time datetime="2026-11-20T08:30:05.000Z" title="${at}" data-part="time">`,
     );
     // The numbers count rows of the report, settings and auth files alike: never accounts.
     expect(page).toContain(
@@ -839,7 +840,7 @@ test("the report of an import just made stays until it is closed, whatever core 
   expect(page).toContain('data-part="setup-import" data-state="done"');
   expect(page).toContain("Done. This is what was brought across:");
   expect(page).toContain(">Close</button>");
-  expect(page).not.toContain("was brought across on");
+  expect(page).not.toContain("and was brought across");
   expect(page).not.toContain("Bring it across again");
 });
 
