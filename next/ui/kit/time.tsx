@@ -116,6 +116,10 @@ export function compactTime(d: Date, now: number, locale?: string): string {
   });
 }
 
+/** The time for programs: a date string as core wrote it (it may be finer than a Date holds). */
+const machineTime = (value: string | number, d: Date) =>
+  typeof value === "string" ? value : d.toISOString();
+
 export type TimeMode = "relative" | "exact";
 
 const text = (d: Date, mode: TimeMode, now: number) =>
@@ -166,7 +170,7 @@ export function Time(props: { value: string | number; mode?: TimeMode }) {
   }, [at, mode]);
   if (!d) return null;
   return (
-    <time dateTime={d.toISOString()} title={fullTime(d)} data-part="time">
+    <time dateTime={machineTime(props.value, d)} title={fullTime(d)} data-part="time">
       {read()}
     </time>
   );

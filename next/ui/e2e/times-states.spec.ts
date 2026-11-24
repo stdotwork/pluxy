@@ -54,7 +54,7 @@ test("a time reads by its distance, keeps the exact time as its title and stays 
 }) => {
   await row(page, "relogin-1").getByRole("button", { name: "relogin-1", exact: true }).click();
   const detail = page.getByRole("complementary", { name: "Details: relogin-1" });
-  const added = detail.locator('time[datetime="2026-11-24T15:24:30.000Z"]');
+  const added = detail.locator('time[datetime="2026-11-24T15:24:30Z"]');
   await expect(added).toHaveText("5m ago");
   await expect(added).toHaveAttribute("title", /\d{4}.*\d:24:30/);
   // An hour on, the same element says so: nothing was loaded again and the detail stayed open.

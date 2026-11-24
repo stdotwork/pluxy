@@ -808,7 +808,7 @@ test("a setup core has brought across says so, when and with what counts, and of
     expect(page).toContain("<strong>A CLIProxyAPI setup with 7 accounts</strong>");
     expect(page).toContain(
       '<span class="mono">~/.cli-proxy-api/config.yaml</span>, and was brought across ' +
-        `<time datetime="2026-11-20T08:30:05.000Z" title="${at}" data-part="time">`,
+        `<time datetime="2026-11-20T08:30:05Z" title="${at}" data-part="time">`,
     );
     // The numbers count rows of the report, settings and auth files alike: never accounts.
     expect(page).toContain(

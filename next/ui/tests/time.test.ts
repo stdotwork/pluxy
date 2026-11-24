@@ -96,7 +96,7 @@ test("the compact exact time leaves the date out today and the year out this yea
 test("a page's time is a <time> with the machine's time and the exact local time as its title", () => {
   const d = new Date("2020-02-03T04:05:06Z");
   expect(renderToString(when("2020-02-03T04:05:06Z") as VNode)).toBe(
-    `<time datetime="2020-02-03T04:05:06.000Z" title="${fullTime(d)}" data-part="time">` +
+    `<time datetime="2020-02-03T04:05:06Z" title="${fullTime(d)}" data-part="time">` +
       `${relativeTime(d, Date.now())}</time>`,
   );
   expect(fullTime(d, "en-GB")).toBe("03/02/2020, 04:05:06");
