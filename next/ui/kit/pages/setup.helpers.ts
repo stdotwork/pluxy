@@ -71,41 +71,76 @@ export function scanState(setup: Setup): "first" | "again" | "never" | "done" {
 /** Package states where the package is installed but its program did not run. */
 const failedStates = new Set(["failed", "crashed", "quarantined"]);
 
-/** Why an installed provider pick does not run: its Start failed, or its package is off or failed. */
-export interface Stopped {
-  why: "start" | "disabled" | "failed";
-  error?: string;
+/** Whether a package runs: it is enabled and has not failed. */
+const packageRuns = (p: Package) => p.enabled && !failedStates.has(p.state);
+
+/**
+ * What a provider pick is, in the one answer the page gives to "does this provider run?". Not
+ * installed: offered, or its Start failed. Installed: running, or stopped, because its Start
+ * failed, its package is turned off, or its package failed.
+ */
+export type PickStatus =
+  | { state: "offered" }
+  | { state: "install-failed"; error?: string }
+  | { state: "running" }
+  | { state: "stopped"; why: "disabled" }
+  | { state: "stopped"; why: "start" | "failed"; error?: string };
+
+/** A provider pick with its status. */
+export interface PickWithStatus {
+  pick: SetupPick;
+  status: PickStatus;
 }
 
-/** The installed provider picks that do not run, by pick ID. */
-export function stoppedPicks(
-  setup: Setup,
-  results: Results,
-  packages: Package[] = [],
-): Record<string, Stopped> {
-  const out: Record<string, Stopped> = {};
-  for (const pick of providerPicks(setup)) {
-    if (!isInstalled(pick, results)) continue;
-    const result = results[pick.id];
-    const p = packages.find((p) => p.id === pick.id);
-    if (result?.status === "error") out[pick.id] = { why: "start", error: result.error };
-    else if (p && failedStates.has(p.state)) out[pick.id] = { why: "failed", error: p.error };
-    else if (p && !p.enabled) out[pick.id] = { why: "disabled" };
-  }
-  return out;
+/** Whether the pick is installed, running or not. */
+export function installedStatus(status: PickStatus): boolean {
+  return status.state === "running" || status.state === "stopped";
 }
 
 /**
- * Whether core runs a provider: a provider pick it installed whose last Start did not fail and
- * whose package, when the list has it, is enabled and has not failed; or a package that is not a
- * client pick, is enabled and has not failed.
+ * What a provider pick is. Installed is core's word or a Start that worked (see isInstalled). Once
+ * the package is listed, its state decides whether an installed pick runs, over an older Start
+ * result; a Start's error text still says why, as the first thing seen. Without the package, a
+ * failed Start decides.
+ */
+export function pickStatus(pick: SetupPick, results: Results, pkg?: Package): PickStatus {
+  const result = results[pick.id];
+  const startError = result?.status === "error" ? result.error : undefined;
+  if (!isInstalled(pick, results)) {
+    return result?.status === "error" ? { state: "install-failed", error: startError } : { state: "offered" };
+  }
+  if (!pkg) {
+    return result?.status === "error"
+      ? { state: "stopped", why: "start", error: startError }
+      : { state: "running" };
+  }
+  if (failedStates.has(pkg.state)) return { state: "stopped", why: "failed", error: startError ?? pkg.error };
+  if (!pkg.enabled) return { state: "stopped", why: "disabled" };
+  return { state: "running" };
+}
+
+/** The provider picks, each with its status, in the order core offers them. */
+export function pickStatuses(setup: Setup, results: Results, packages: Package[] = []): PickWithStatus[] {
+  return providerPicks(setup).map((pick) => ({
+    pick,
+    status: pickStatus(
+      pick,
+      results,
+      packages.find((p) => p.id === pick.id),
+    ),
+  }));
+}
+
+/**
+ * Whether core runs a provider: a provider pick's status says running, or a package that is none
+ * of the picks, is enabled and has not failed. A pick's package is judged by the pick's status,
+ * never again by itself.
  */
 export function hasProvider(setup: Setup, results: Results, packages: Package[] = []): boolean {
-  const clients = new Set(setup.picks.filter((pick) => pick.kind === "client").map((pick) => pick.id));
-  const stopped = stoppedPicks(setup, results, packages);
+  const picked = new Set(setup.picks.map((pick) => pick.id));
   return (
-    providerPicks(setup).some((pick) => isInstalled(pick, results) && !stopped[pick.id]) ||
-    packages.some((p) => !clients.has(p.id) && p.enabled && !failedStates.has(p.state))
+    pickStatuses(setup, results, packages).some(({ status }) => status.state === "running") ||
+    packages.some((p) => !picked.has(p.id) && packageRuns(p))
   );
 }
 

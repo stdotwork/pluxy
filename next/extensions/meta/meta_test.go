@@ -15,6 +15,7 @@ import (
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 	"github.com/stdotwork/pluxy/next/sdk"
+	"github.com/stdotwork/pluxy/next/sdk/sdktest"
 )
 
 // A renewal makes a new API key from the login's device token, keeps the device token, and keeps
@@ -210,7 +211,7 @@ func TestPollStopsOnServerFailure(t *testing.T) {
 		}
 		set, _ := readSettings(srv.Settings())
 		_, err := deviceLogin(context.Background(), set, promptFunc(func(p protocol.Prompt) { srv.Approve(p.UserCode) }))
-		wantError(t, err, llm.CodeUnavailable, false)
+		sdktest.WantError(t, err, llm.CodeUnavailable, false)
 		if polls.Load() != 1 {
 			t.Errorf("503 %q: %d polls reached Meta, want 1", body, polls.Load())
 		}

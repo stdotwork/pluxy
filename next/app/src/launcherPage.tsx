@@ -67,6 +67,7 @@ const t = strings("launcher", {
   launch: "Start…",
   runtimes: "Managed runtimes",
   noRuntimes: "No managed runtimes. Start a direct launch with Lifetime set to Managed.",
+  loading: "Loading…",
   stop: "Stop",
   restart: "Restart",
   notice: "Show a notice after a one-click start",
@@ -234,9 +235,11 @@ function Runtimes() {
   const live = (list.data ?? []).filter((r) => r.state === "running" || r.state === "stopping");
   return (
     <Card title={t("runtimes")}>
+      {list.phase === "loading" && <Notice tone="muted">{t("loading")}</Notice>}
+      {list.error && <Notice tone="danger">{list.error}</Notice>}
       {action.error && <Notice tone="danger">{action.error}</Notice>}
       {live.length === 0 ? (
-        <Empty>{t("noRuntimes")}</Empty>
+        list.data && <Empty>{t("noRuntimes")}</Empty>
       ) : (
         <List
           label={t("runtimes")}
@@ -279,6 +282,7 @@ export function LauncherPage() {
     <div class="stack">
       <PageHead title={t("title")} />
       <p class="muted">{t("intro")}</p>
+      {state.phase === "loading" && <Notice tone="muted">{t("loading")}</Notice>}
       {state.error && <Notice tone="danger">{state.error}</Notice>}
       {action.error && <Notice tone="danger">{action.error}</Notice>}
       {s && !s.available && <Notice tone="warn">{t("unavailable")}</Notice>}
