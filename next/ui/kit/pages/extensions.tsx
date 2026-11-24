@@ -49,6 +49,7 @@ const t = strings("extensions", {
   extension: "Extension",
   install: "Install",
   noInstalled: "No extensions installed. Install one from Not installed below.",
+  loading: "Loading…",
   installedExtensions: "Installed extensions",
 });
 
@@ -140,6 +141,7 @@ function Available(props: { installed: Set<string>; onInstalled: () => void }) {
         </Button>
       }
     >
+      {registries.phase === "loading" && <Notice tone="muted">{t("loading")}</Notice>}
       {registries.error && <Notice tone="danger">{registries.error}</Notice>}
       {broken.map((r) => (
         <Notice key={r.name} tone="warn">
@@ -201,6 +203,7 @@ export function ExtensionsPage() {
           </Button>
         }
       />
+      {packages.phase === "loading" && <Notice tone="muted">{t("loading")}</Notice>}
       {packages.error && <Notice tone="danger">{packages.error}</Notice>}
       <div class="stack">
         <MasterDetail

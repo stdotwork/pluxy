@@ -18,6 +18,7 @@ const t = strings("accounts", {
   empty: "No accounts yet. Sign in to one on {page}, or set them in core's config.",
   addAccount: "Add Account",
   noResults: "No matching accounts. Clear or change your filters.",
+  loading: "Loading accounts…",
   list: "Accounts",
   account: "Account",
   extension: "Extension",
@@ -337,13 +338,13 @@ export function AccountsPage() {
     <>
       <PageHead title={t("title")} />
       <p class="muted accounts-meta" data-part="account-meta">
-        {t("meta", {
-          credentials: t("credentials", { count: list.length }),
-          active: t("active", {
-            count: counts.active,
-          }),
-          problem: t("problems", { count: counts.unavailable }),
-        })}
+        {accounts.data
+          ? t("meta", {
+              credentials: t("credentials", { count: list.length }),
+              active: t("active", { count: counts.active }),
+              problem: t("problems", { count: counts.unavailable }),
+            })
+          : accounts.phase === "loading" && t("loading")}
       </p>
       {accounts.error && <Notice tone="danger">{p.text(accounts.error, labels)}</Notice>}
       <Tabs
@@ -351,7 +352,10 @@ export function AccountsPage() {
         active={filters.extension || "all"}
         onChange={(id) => change("extension", id === "all" ? "" : id)}
         tabs={[
-          { id: "all", label: t("tabCount", { name: t("all"), count: list.length }) },
+          {
+            id: "all",
+            label: accounts.data ? t("tabCount", { name: t("all"), count: list.length }) : t("all"),
+          },
           ...extensions.map((id) => ({
             id,
             label: t("tabCount", { name: id, count: list.filter((a) => a.extension === id).length }),
@@ -481,7 +485,7 @@ export function AccountsPage() {
           list={
             accounts.data && list.length === 0 ? (
               <Empty>{rich(t("empty"), { page: <a href="#/add-account">{t("addAccount")}</a> })}</Empty>
-            ) : filtered.length === 0 && !accounts.loading ? (
+            ) : accounts.data && filtered.length === 0 && !accounts.loading ? (
               <Empty>{t("noResults")}</Empty>
             ) : (
               <List<Account>
@@ -583,7 +587,7 @@ export function AccountsPage() {
           <Button disabled={current <= 1} onClick={() => setPage(current - 1)}>
             {t("previous")}
           </Button>
-          <span>{t("page", { current, total, count: filtered.length })}</span>
+          {accounts.data && <span>{t("page", { current, total, count: filtered.length })}</span>}
           <Button disabled={current >= total} onClick={() => setPage(current + 1)}>
             {t("next")}
           </Button>

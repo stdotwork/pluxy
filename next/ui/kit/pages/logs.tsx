@@ -324,7 +324,7 @@ export function LogsPage() {
           list={
             files.loading ? (
               <Notice tone="muted">{t("loading")}</Notice>
-            ) : !files.data?.files.length ? (
+            ) : !files.data ? null : files.data.files.length === 0 ? (
               <Empty>{t("noErrors")}</Empty>
             ) : (
               <List<ErrorLogFile>

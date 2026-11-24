@@ -9,6 +9,7 @@ import { api, type ImportReport, type Setup } from "../kit/api";
 import type { Feature, Host, Method, Reply } from "../kit/host";
 import { SetupPage } from "../kit/pages/setup";
 import { type Kit, KitContext, useCopy } from "../kit/ui";
+import { all, button, type FakeNode, fakeWindow, installDocument, restoreDom, settle } from "./fakeDom";
 
 interface Call {
   method: Method;
@@ -59,197 +60,14 @@ function setup(scanning: boolean, scanned_at?: string, client = false): Setup {
   };
 }
 
-class FakeNode {
-  nodeType = 1;
-  nodeName: string;
-  localName: string;
-  namespaceURI: string;
-  ownerDocument: FakeDocument;
-  parentNode: FakeNode | null = null;
-  childNodes: FakeNode[] = [];
-  attributes: { name: string; value: string }[] = [];
-  style: Record<string, string> = {};
-  checked = false;
-  disabled = false;
-  value = "";
-  private listeners = new Map<string, ((event: Event) => void)[]>();
-  private ownText = "";
-
-  constructor(document: FakeDocument, tag: string, namespaceURI = "http://www.w3.org/1999/xhtml") {
-    this.ownerDocument = document;
-    this.nodeName = tag.toUpperCase();
-    this.localName = tag;
-    this.namespaceURI = namespaceURI;
-  }
-
-  get firstChild(): FakeNode | null {
-    return this.childNodes[0] ?? null;
-  }
-
-  get nextSibling(): FakeNode | null {
-    if (!this.parentNode) return null;
-    const at = this.parentNode.childNodes.indexOf(this);
-    return this.parentNode.childNodes[at + 1] ?? null;
-  }
-
-  get textContent(): string {
-    return this.ownText + this.childNodes.map((child) => child.textContent).join("");
-  }
-
-  set textContent(value: string) {
-    this.ownText = value;
-    this.childNodes = [];
-  }
-
-  set innerHTML(value: string) {
-    this.textContent = value;
-  }
-
-  appendChild(node: FakeNode) {
-    return this.insertBefore(node, null);
-  }
-
-  insertBefore(node: FakeNode, before: FakeNode | null) {
-    if (node.parentNode) node.parentNode.removeChild(node);
-    const at = before ? this.childNodes.indexOf(before) : -1;
-    if (at === -1) this.childNodes.push(node);
-    else this.childNodes.splice(at, 0, node);
-    node.parentNode = this;
-    return node;
-  }
-
-  removeChild(node: FakeNode) {
-    const at = this.childNodes.indexOf(node);
-    if (at === -1) throw new Error("node is not a child");
-    this.childNodes.splice(at, 1);
-    node.parentNode = null;
-    return node;
-  }
-
-  remove() {
-    this.parentNode?.removeChild(this);
-  }
-
-  setAttribute(name: string, value: string) {
-    const found = this.attributes.find((attribute) => attribute.name === name);
-    if (found) found.value = String(value);
-    else this.attributes.push({ name, value: String(value) });
-  }
-
-  removeAttribute(name: string) {
-    this.attributes = this.attributes.filter((attribute) => attribute.name !== name);
-  }
-
-  addEventListener(name: string, listener: (event: Event) => void) {
-    const listeners = this.listeners.get(name) ?? [];
-    listeners.push(listener);
-    this.listeners.set(name, listeners);
-  }
-
-  removeEventListener(name: string, listener: (event: Event) => void) {
-    this.listeners.set(
-      name,
-      (this.listeners.get(name) ?? []).filter((current) => current !== listener),
-    );
-  }
-
-  dispatchEvent(event: Event) {
-    Object.defineProperty(event, "target", { configurable: true, value: this });
-    Object.defineProperty(event, "currentTarget", { configurable: true, value: this });
-    for (const listener of this.listeners.get(event.type) ?? []) listener.call(this, event);
-    return true;
-  }
-}
-
-class FakeText extends FakeNode {
-  private data: string;
-
-  constructor(document: FakeDocument, data: string) {
-    super(document, "#text", "http://www.w3.org/1999/xhtml");
-    this.nodeType = 3;
-    this.nodeName = "#text";
-    this.data = String(data);
-  }
-
-  override get textContent() {
-    return this.data;
-  }
-
-  override set textContent(value: string) {
-    this.data = value;
-  }
-}
-
-class FakeDocument {
-  nodeType = 9;
-  visibilityState: DocumentVisibilityState = "visible";
-  body = new FakeNode(this, "body");
-
-  createElement(tag: string) {
-    return new FakeNode(this, tag);
-  }
-
-  createElementNS(namespaceURI: string, tag: string) {
-    return new FakeNode(this, tag, namespaceURI);
-  }
-
-  createTextNode(data: string) {
-    return new FakeText(this, data);
-  }
-
-  addEventListener() {}
-
-  removeEventListener() {}
-}
-
-/** The window's listeners, so a test can say the window got focus. */
-class FakeWindow {
-  private listeners = new Map<string, Set<() => void>>();
-
-  addEventListener(name: string, listener: () => void) {
-    const set = this.listeners.get(name) ?? new Set();
-    set.add(listener);
-    this.listeners.set(name, set);
-  }
-
-  removeEventListener(name: string, listener: () => void) {
-    this.listeners.get(name)?.delete(listener);
-  }
-
-  count(name: string) {
-    return this.listeners.get(name)?.size ?? 0;
-  }
-
-  dispatch(name: string) {
-    for (const listener of [...(this.listeners.get(name) ?? [])]) listener();
-  }
-}
-
-const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
-const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
-const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
 afterEach(() => {
-  if (originalWindow) Object.defineProperty(globalThis, "window", originalWindow);
-  else Reflect.deleteProperty(globalThis, "window");
-  if (originalNavigator) Object.defineProperty(globalThis, "navigator", originalNavigator);
-  else Reflect.deleteProperty(globalThis, "navigator");
+  restoreDom();
   clock = 0;
   if (jest.isFakeTimers()) {
     jest.clearAllTimers();
     jest.useRealTimers();
   }
-  if (originalDocument) Object.defineProperty(globalThis, "document", originalDocument);
-  else Reflect.deleteProperty(globalThis, "document");
 });
-
-function installDocument() {
-  const document = new FakeDocument();
-  Object.defineProperty(globalThis, "document", { configurable: true, value: document });
-  Object.defineProperty(globalThis, "window", { configurable: true, value: new FakeWindow() });
-  return document;
-}
-
-const fakeWindow = () => (globalThis as unknown as { window: FakeWindow }).window;
 
 function fakeHost(answer: (call: Call) => Reply<unknown>, features: Feature[] = ["signOut"]) {
   const calls: Call[] = [];
@@ -277,13 +95,6 @@ const quiet = (call: Call): Reply<unknown> => {
   }
   return { status: 200, body: {} };
 };
-
-/** Let the host promises settle and Preact run the renders they cause. */
-async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 20; i++) await Promise.resolve();
-  });
-}
 
 async function mount(answer: (call: Call) => Reply<unknown>, features?: Feature[]) {
   const document = installDocument();
@@ -317,16 +128,6 @@ async function mount(answer: (call: Call) => Reply<unknown>, features?: Feature[
       await act(async () => render(null, root));
     },
   };
-}
-
-function all(root: FakeNode, tag: string): FakeNode[] {
-  return [...(root.localName === tag ? [root] : []), ...root.childNodes.flatMap((child) => all(child, tag))];
-}
-
-function button(root: FakeNode, label: string) {
-  const found = all(root, "button").find((node) => node.textContent === label);
-  if (!found) throw new Error(`no button labelled ${label}`);
-  return found;
 }
 
 function at<T>(items: T[], index: number): T {
@@ -429,6 +230,54 @@ test("Refresh asks core to scan once and then reads its answer again", async () 
   await tick(5000);
   expect(scans()).toBe(1);
   expect(setupCalls()).toBe(2);
+});
+
+const attribute = (node: FakeNode, name: string) => node.attributes.find((a) => a.name === name)?.value;
+
+/** The nodes below root carrying data-part, in page order. */
+function parts(root: FakeNode, part: string): FakeNode[] {
+  return [
+    ...(attribute(root, "data-part") === part ? [root] : []),
+    ...root.childNodes.flatMap((child) => parts(child, part)),
+  ];
+}
+
+test("Refresh reads the packages again, so a provider started since shows as running", async () => {
+  jest.useFakeTimers();
+  const installed: Setup = {
+    ...setup(false, "2026-11-20T00:00:00Z"),
+    picks: [pick("pluxy/claude", "Claude", { installed: true })],
+  };
+  const claude = (enabled: boolean) => ({
+    id: "pluxy/claude",
+    version: "1.0.0",
+    registry: "bundled",
+    url: "https://packages.example.test/claude",
+    sha256: "0".repeat(64),
+    enabled,
+    installed_at: "2026-11-20T10:00:00Z",
+    state: enabled ? "active" : "disabled",
+  });
+  let turnedOn = false;
+  const fake = await mount((call) => {
+    if (call.method === "GET" && call.path === "/setup") return { status: 200, body: installed };
+    if (call.method === "GET" && call.path === "/packages") {
+      return { status: 200, body: { packages: [claude(turnedOn)] } };
+    }
+    return quiet(call);
+  });
+  const badge = () => {
+    const row = at(parts(fake.root, "setup-pick"), 0);
+    return attribute(at(parts(row, "badge"), 0), "data-tone");
+  };
+  expect(reads(fake.calls, "/packages")).toBe(1);
+  expect(badge()).toBe("warn");
+
+  // The provider is turned on somewhere else; the page says so once it is looked at again.
+  turnedOn = true;
+  await press(fake.root, "Refresh");
+  expect(reads(fake.calls, "/packages")).toBe(2);
+  expect(badge()).toBe("ok");
 });
 
 for (const failure of [

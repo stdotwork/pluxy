@@ -206,8 +206,8 @@ type StreamDecoder struct {
 	// Pending executableCode parts waiting for their codeExecutionResult, and completed runs.
 	// codeLost is set by a code part that never became a run, so the reply's runs end with the
 	// record that says runs were left out.
-	pendingCode []pendingExecCode
-	codeExecs   []llm.CodeExecution
+	pendingCode pendingCodes
+	codeExecs   llm.CodeRuns
 	codeLost    bool
 	// codeGuessed holds the runs paired by that guess, and codeDropped says a code was left out
 	// that way; a result with nothing to pair with after that shows the guess was wrong.
@@ -238,6 +238,7 @@ type pendingExecCode struct {
 	// afterDrop is set on a code with no ID that came while an older one with no ID still had no
 	// result, which was left out: which of the two a later result answers is a guess.
 	afterDrop bool
+	gone      bool // taken from pendingCodes
 }
 
 // NewStreamDecoder returns a decoder for one stream.
@@ -779,17 +780,11 @@ func (d *StreamDecoder) part(partIdx int, raw json.RawMessage, out []llm.Event) 
 			if ec.ID == "" {
 				// A code with no ID is answered by the result that follows it. If an older one with
 				// no ID has no result yet, that one never got one: it is left out.
-				kept := d.pendingCode[:0]
-				for _, old := range d.pendingCode {
-					if old.id != "" {
-						kept = append(kept, old)
-						continue
-					}
+				if d.pendingCode.dropNoID() {
 					d.codeLost, d.codeDropped, pc.afterDrop = true, true, true
 				}
-				d.pendingCode = kept
 			}
-			d.pendingCode = append(d.pendingCode, pc)
+			d.pendingCode.add(pc)
 		} else {
 			d.codeLost = true
 		}
@@ -809,32 +804,24 @@ func (d *StreamDecoder) part(partIdx int, raw json.RawMessage, out []llm.Event) 
 		// cannot read never leaves its code to pair with the next result. A result with no ID
 		// answers the one code that waits; with none or several waiting it answers nothing it
 		// can be shown to.
-		matchIdx := -1
+		var pc pendingExecCode
+		var matched bool
 		if res.ID != "" {
-			for i, pc := range d.pendingCode {
-				if pc.id == res.ID {
-					matchIdx = i
-					break
-				}
-			}
-		} else if len(d.pendingCode) == 1 {
-			matchIdx = 0
+			pc, matched = d.pendingCode.takeByID(res.ID)
+		} else {
+			pc, matched = d.pendingCode.takeOnly()
 		}
-		if matchIdx < 0 {
+		if !matched {
 			d.codeLost = true
 			if res.ID == "" && d.codeDropped {
 				// The runs paired after a code was left out may have taken the wrong result.
 				for _, g := range d.codeGuessed {
-					if i := slices.Index(d.codeExecs, g); i >= 0 {
-						d.codeExecs = slices.Delete(d.codeExecs, i, i+1)
-					}
+					d.codeExecs.Remove(g)
 				}
 				d.codeGuessed = nil
 			}
 			return out
 		}
-		pc := d.pendingCode[matchIdx]
-		d.pendingCode = append(d.pendingCode[:matchIdx], d.pendingCode[matchIdx+1:]...)
 		var failed bool
 		switch res.Outcome {
 		case "OUTCOME_OK":
@@ -856,7 +843,7 @@ func (d *StreamDecoder) part(partIdx int, raw json.RawMessage, out []llm.Event) 
 		} else if !pc.afterDrop {
 			d.codeGuessed, d.codeDropped = nil, false
 		}
-		d.codeExecs = llm.AppendCodeExecution(d.codeExecs, run)
+		d.codeExecs.Append(run)
 		return out
 	}
 	idRaw := pm["inlineData"]
@@ -1004,12 +991,11 @@ func (d *StreamDecoder) Close() ([]llm.Event, error) {
 	out = d.closeItem(&d.think, out)
 	out = d.closeItem(&d.text, out)
 	out = d.finishUnfinishedCands(out)
-	runs := d.codeExecs
-	if d.codeLost || len(d.pendingCode) > 0 {
+	if d.codeLost || d.pendingCode.len() > 0 {
 		// Code that never got a result, or a result that could not be read, is a run left out.
-		runs = llm.LeaveOutCodeExecutions(runs)
+		d.codeExecs.LeaveOut()
 	}
-	return append(out, llm.Event{Type: llm.EventFinish, Finish: d.finish, Usage: d.usage, Sources: d.sources, CodeExecutions: runs}), nil
+	return append(out, llm.Event{Type: llm.EventFinish, Finish: d.finish, Usage: d.usage, Sources: d.sources, CodeExecutions: d.codeExecs.List()}), nil
 }
 
 // finishUnfinishedCands ends each candidate after the first that the reply never finished. Gemini

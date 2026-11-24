@@ -167,7 +167,8 @@ export interface LoginFlowProps {
   /** Names of the inputs the account keeps in its settings; a sign-in again may leave them empty. */
   keptInputs?: string[];
   onSuccess(accountId: string): void;
-  onReset?(completed: boolean): void;
+  /** Called to leave this flow (Cancel, Add another): the caller remounts it by key. */
+  onReset(completed: boolean): void;
 }
 
 export function suggestedAccountId(): string {
@@ -221,7 +222,6 @@ export function LoginFlow(props: LoginFlowProps) {
   const cancelApi = useRef(api);
   cancelApi.current = api;
   const root = useRef<HTMLElement>(null);
-  const typedId = useRef(false);
   const idHint = useId();
   success.current = props.onSuccess;
   const id = props.existingAccountId ?? props.newAccountId ?? accountId;
@@ -417,24 +417,7 @@ export function LoginFlow(props: LoginFlowProps) {
       }
     }
   };
-  const reset = () => {
-    if (props.onReset) return props.onReset(login?.state === "done");
-    operation.current++;
-    setLogin(undefined);
-    if (!typedId.current || login?.state === "done") {
-      setAccountId(suggestedAccountId());
-      typedId.current = false;
-    }
-    setStartError(undefined);
-    setError(undefined);
-    setPollError(undefined);
-    setPollStopped(undefined);
-    setAnswer({});
-    setValues({});
-    setCancelling(false);
-    setDeadline(undefined);
-    promptKey.current = "";
-  };
+  const reset = () => props.onReset(login?.state === "done");
 
   const prompt = login?.state === "pending" && !pollStopped ? login.prompt : undefined;
   const url =
@@ -495,10 +478,7 @@ export function LoginFlow(props: LoginFlowProps) {
                   value={accountId}
                   aria-invalid={!validId}
                   aria-describedby={!validId ? idHint : undefined}
-                  onInput={(e) => {
-                    typedId.current = true;
-                    setAccountId(e.currentTarget.value);
-                  }}
+                  onInput={(e) => setAccountId(e.currentTarget.value)}
                 />
               </label>
               {!validId && (
@@ -519,7 +499,7 @@ export function LoginFlow(props: LoginFlowProps) {
             <Button type="submit" variant="primary" disabled={readingFile || !validId}>
               {t(props.existingAccountId ? "signInAgain" : "add")}
             </Button>
-            {props.onReset && <Button onClick={reset}>{t("cancel")}</Button>}
+            <Button onClick={reset}>{t("cancel")}</Button>
           </div>
         </form>
       )}
