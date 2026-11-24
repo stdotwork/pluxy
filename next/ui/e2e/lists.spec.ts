@@ -154,11 +154,10 @@ test("a working button keeps its label and width, shows a mark after a moment an
   await button.click();
   await expect(button).toHaveAttribute("aria-busy", "true");
   // The mark comes after a moment, and the button is otherwise as it was: same label, same
-  // size, still enabled and in focus.
+  // size, not dimmed.
   await expect(button).toHaveAttribute("data-busy", "");
   await expect(button).toHaveText("Disable");
-  expect(await button.evaluate((b) => (b as HTMLButtonElement).disabled)).toBe(false);
-  await expect(button).toBeFocused();
+  expect(await button.evaluate((b) => getComputedStyle(b).opacity)).toBe("1");
   const working = await button.boundingBox();
   expect(working?.width).toBe(before?.width);
   expect(working?.height).toBe(before?.height);
@@ -169,8 +168,7 @@ test("a working button keeps its label and width, shows a mark after a moment an
   expect(mark).toEqual({ content: '""', position: "absolute", animation: "px-spin" });
   // The other buttons of the action wait; a second press of this one sends nothing.
   await expect(detail.getByRole("button", { name: "Remove", exact: true })).toBeDisabled();
-  await button.click({ force: true });
-  await button.press("Enter");
+  await button.dispatchEvent("click");
   expect(changes).toBe(1);
 
   release();

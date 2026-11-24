@@ -223,6 +223,11 @@
     cursor: progress;
   }
 
+  .btn[aria-busy="true"]:disabled {
+    opacity: 1;
+    cursor: progress;
+  }
+
   .btn[data-busy]::after {
     content: "";
     position: absolute;

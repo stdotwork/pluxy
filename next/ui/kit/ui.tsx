@@ -168,7 +168,8 @@ export const BUSY_SHOWS_AFTER_MS = 150;
 /**
  * A button. While it works (busy, or until the promise its onClick returned ends) it keeps its
  * label and its width, ignores presses, says so to assistive technology (aria-busy), and after
- * a moment shows a quiet mark (data-busy). It stays focusable: it is not disabled meanwhile.
+ * a moment shows a quiet mark (data-busy). A page may disable it meanwhile as before; it is
+ * then not dimmed like the buttons that only wait for it.
  */
 export function Button(props: {
   variant?: Variant;
@@ -221,10 +222,7 @@ export function Button(props: {
       data-variant={props.variant ?? "quiet"}
       data-focus-key={props.focusKey}
       onClick={press}
-      // The page often disables every button of an action while it runs; the one working stays
-      // enabled, so it keeps focus and its look, and ignores presses itself.
-      disabled={props.disabled && !busy}
-      aria-disabled={busy ? "true" : undefined}
+      disabled={props.disabled}
       aria-busy={busy ? "true" : undefined}
       data-busy={busy && marked ? "" : undefined}
       aria-label={props.label}
