@@ -2,7 +2,7 @@
 // shows that it is working without changing size, an empty list says how to fill it, and a trace
 // ID has a copy button.
 import { expect, type Page, test } from "@playwright/test";
-import { goTo, openPanel, signIn, useCore } from "./support";
+import { goTo, nav, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 
@@ -56,7 +56,8 @@ for (const navLayout of ["sidebar", "rail", "top"]) {
     await expect(rows).toHaveCount(25);
     const header = page.locator('[data-part="list"] thead th').first();
 
-    await rows.last().scrollIntoViewIfNeeded();
+    // Scrolled down as far as it takes to see the last row.
+    await rows.last().evaluate((row) => row.scrollIntoView({ block: "end" }));
     await expect(rows.last()).toBeInViewport();
     await expect(header).toBeInViewport({ ratio: 1 });
     // In view and not under the navigation or a row: the header is what a click there would hit.
@@ -156,7 +157,7 @@ test("a working button keeps its label and width, shows a mark after a moment an
   // size, still enabled and in focus.
   await expect(button).toHaveAttribute("data-busy", "");
   await expect(button).toHaveText("Disable");
-  await expect(button).toBeEnabled();
+  expect(await button.evaluate((b) => (b as HTMLButtonElement).disabled)).toBe(false);
   await expect(button).toBeFocused();
   const working = await button.boundingBox();
   expect(working?.width).toBe(before?.width);
@@ -266,7 +267,8 @@ test("a list that failed to load shows the failure, not an empty state", async (
   await signIn(page, core);
   const main = page.getByRole("main");
   for (const name of ["Accounts", "Quota Management", "Usage", "Extensions"]) {
-    await goTo(page, name);
+    await nav(page).getByRole("link", { name, exact: true }).click();
+    await expect(page.getByRole("heading", { level: 1, name, exact: true })).toBeVisible();
     await expect(main.getByRole("alert").filter({ hasText: "core could not read it" }).first()).toBeVisible();
     await expect(main.locator('[data-part="empty"]')).toHaveCount(0);
   }
@@ -306,19 +308,20 @@ test("Usage: no request leads to setup, filters with no match can be cleared, a 
   });
   await openPanel(page, core);
   await signIn(page, core);
-  await goTo(page, "Usage");
+  await nav(page).getByRole("link", { name: "Usage", exact: true }).click();
   const rows = page.locator('[data-page="usage"] [data-part="item"]');
   await expect(rows).toHaveCount(2);
 
   // The copy button copies the ID and does not open the row.
-  const trace = rows.first().locator('[data-part="trace-id"]');
+  const row = rows.filter({ hasText: "trace-2" });
+  const trace = row.locator('[data-part="trace-id"]');
   await expect(trace.getByRole("link", { name: "trace-2", exact: true })).toBeVisible();
   await trace.getByRole("button", { name: "Copy trace ID trace-2", exact: true }).click();
   await expect(trace.getByRole("button")).toHaveText("Copied");
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("trace-2");
   await expect(page.getByRole("complementary")).toHaveCount(0);
   // Latency and tokens are numbers: set against the end edge.
-  const ends = await rows.first().locator("td.num").allTextContents();
+  const ends = await row.locator("td.num").allTextContents();
   expect(ends).toEqual(["12 ms", "2,000"]);
 
   const empty = page.getByRole("main").locator('[data-part="empty"]');

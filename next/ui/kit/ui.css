@@ -338,7 +338,7 @@
 
   /* A table scrolls in its own frame, sideways when it is wide and down when it is long, and
      its header row stays at the frame's top. The frame is never taller than the window below
-     the page's sticky top, so the header is in view whenever the rows are. */
+     the page's sticky top, so the header and the last row fit in view together. */
   .table-wrap {
     overflow: auto;
     max-height: max(calc(100vh - var(--stick) - var(--s) * 4), calc(var(--s) * 60));
