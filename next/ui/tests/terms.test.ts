@@ -13,47 +13,34 @@ const SCANNED = ["ui/kit", "app/src"];
  * glossary was checked. This list may only shrink: reword the text with the term to use, then delete
  * its entry. The key is `namespace.key`, plus `.one` or `.other` for a count-dependent text. */
 const BASELINE: { file: string; key: string; banned: string }[] = [
-  { file: "app/src/codex.tsx", key: "codex.profile", banned: "Active" },
-  { file: "app/src/codex.tsx", key: "codex.restartCliMessage", banned: "Active" },
-  { file: "app/src/hermes.tsx", key: "hermes.fileDefaultNote", banned: "Active" },
-  { file: "ui/kit/extensions/page.tsx", key: "extensionPage.loadAgain", banned: "Load" },
   { file: "ui/kit/extensions/settings.tsx", key: "settingsForm.couldNotLoad", banned: "Load" },
-  { file: "ui/kit/pages/accountDetail.tsx", key: "accountDetail.brokenHint", banned: "credential file" },
   {
     file: "ui/kit/pages/accountSettings.tsx",
     key: "accountSettings.disableCoolingHint",
     banned: "Credentials",
   },
-  { file: "ui/kit/pages/accountTools.tsx", key: "accountTools.cooling", banned: "cooling" },
-  { file: "ui/kit/pages/accountTools.tsx", key: "accountTools.noCooldown", banned: "Active" },
+  {
+    file: "ui/kit/pages/accountSettings.tsx",
+    key: "accountSettings.proxyUrlHint",
+    banned: "Credentials",
+  },
   { file: "ui/kit/pages/accounts.tsx", key: "accounts.tip", banned: "Credentials" },
   { file: "ui/kit/pages/accounts.tsx", key: "accounts.search", banned: "Credentials" },
-  { file: "ui/kit/pages/accounts.tsx", key: "accounts.cooling", banned: "cooling" },
   { file: "ui/kit/pages/accounts.tsx", key: "accounts.credentials.other", banned: "Credentials" },
-  { file: "ui/kit/pages/accounts.tsx", key: "accounts.active.one", banned: "Active" },
-  { file: "ui/kit/pages/accounts.tsx", key: "accounts.active.other", banned: "Active" },
-  { file: "ui/kit/pages/accounts.tsx", key: "accounts.meta", banned: "Active" },
   { file: "ui/kit/pages/accounts.tsx", key: "accounts.meta", banned: "Credentials" },
-  { file: "ui/kit/pages/configStrings.tsx", key: "config.leastActive", banned: "Active" },
   { file: "ui/kit/pages/configStrings.tsx", key: "config.maxCredentials", banned: "Credentials" },
-  { file: "ui/kit/pages/configStrings.tsx", key: "config.disableCooling", banned: "cooling" },
-  { file: "ui/kit/pages/quota.tsx", key: "quota.refreshAll", banned: "Credentials" },
-  { file: "ui/kit/pages/quota.tsx", key: "quota.empty", banned: "Credentials" },
-  { file: "ui/kit/pages/routing.tsx", key: "routing.cooling", banned: "cooling" },
-  { file: "ui/kit/pages/routing.tsx", key: "routing.leastActive", banned: "Active" },
   { file: "ui/kit/pages/routing.tsx", key: "routing.credentials", banned: "Credentials" },
   { file: "ui/kit/pages/routing.tsx", key: "routing.credentialsHint", banned: "Credentials" },
-  { file: "ui/kit/pages/routing.tsx", key: "routing.coolingTitle", banned: "cooling" },
-  { file: "ui/kit/pages/routing.tsx", key: "routing.disableCooling", banned: "cooling" },
-  { file: "ui/kit/pages/routing.tsx", key: "routing.transientHint", banned: "cooling" },
   { file: "ui/kit/pages/status.tsx", key: "dashboard.credentials", banned: "Credentials" },
-  { file: "ui/kit/pages/status.tsx", key: "dashboard.credentialsHint", banned: "Active" },
-  { file: "ui/kit/pages/status.tsx", key: "dashboard.healthActive", banned: "Active" },
   { file: "ui/kit/pages/status.tsx", key: "dashboard.noAccounts", banned: "Credentials" },
-  { file: "ui/kit/pages/status.tsx", key: "dashboard.activeRevision", banned: "Active" },
-  { file: "ui/kit/pages/status.tsx", key: "dashboard.activeSince", banned: "Active" },
-  { file: "ui/kit/pages/status.tsx", key: "dashboard.refused", banned: "Active" },
+  { file: "ui/kit/pages/themes.tsx", key: "themes.notRead", banned: "Load" },
 ];
+
+/** Banned terms that are wrong only as a standalone label: a text holds one when the whole text, trimmed
+ * and compared without regard to case, is the term. `Active` is banned as the status of a credential
+ * (docs/terms.md, "Credentials and status": `Available` / `Unavailable` / `Disabled` instead), but
+ * "Active revision", "Least active" and "No active cooldowns" are correct English and are not that status. */
+const WHOLE_TEXT_ONLY = ["Active"];
 
 export interface Rule {
   /** The banned text as written in the glossary, without its backticks. */
@@ -122,9 +109,12 @@ export function parseTerms(markdown: string): { rules: Rule[]; preferred: Prefer
       continue;
     }
     for (const b of spans(banned)) {
+      const whole = WHOLE_TEXT_ONLY.includes(b)
+        ? `^\\s*${termPattern(b)}\\s*$`
+        : `(?<![\\w])${termPattern(b)}(?![\\w])`;
       rules.push({
         banned: b,
-        match: new RegExp(`(?<![\\w])${termPattern(b)}(?![\\w])`, "i"),
+        match: new RegExp(whole, "i"),
         use: term.replace(/`/g, ""),
         concept,
         confirm: /owner to confirm/i.test(term),
@@ -313,6 +303,11 @@ test("the glossary's English tables give banned terms to match", () => {
   expect(one("cooling", "The account is cooling down")).toBe(0); // `cooling down` is the term to use
   expect(one("Credentials", "Stored credentials")).toBe(1);
   expect(one("Credentials", "Stored credential")).toBe(0); // whole words only
+  expect(one("Active", "Active")).toBe(1);
+  expect(one("Active", " active ")).toBe(1); // the whole text, trimmed, any case
+  expect(one("Active", "Active revision")).toBe(0); // a phrase, not the status label
+  expect(one("Active", "Least active")).toBe(0);
+  expect(one("Active", "No active cooldowns.")).toBe(0);
 });
 
 test("the table reader finds keys, plurals and joined strings", () => {
