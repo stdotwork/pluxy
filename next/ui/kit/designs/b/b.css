@@ -537,7 +537,7 @@
 
 :root[data-design="b"] .db-confirm-ask {
   flex-basis: 100%;
-  max-width: 22rem;
+  max-width: 17rem;
   margin-left: auto;
   color: var(--db-ink-2);
   font-size: 13.5px;
@@ -607,7 +607,8 @@
   color: var(--db-danger);
 }
 
-:root[data-design="b"] .db-mark-state[data-group="waiting"] {
+:root[data-design="b"] .db-mark-state[data-group="waiting"],
+:root[data-design="b"] .db-mark-state[data-group="low"] {
   color: var(--db-warn-mark);
 }
 
@@ -621,7 +622,7 @@
 
 :root[data-design="b"] .db-trouble {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: start;
   gap: 4px 10px;
   max-width: var(--db-measure);
@@ -636,6 +637,7 @@
   p {
     color: var(--db-ink);
     overflow-wrap: anywhere;
+    text-wrap: pretty;
   }
 }
 
@@ -824,12 +826,18 @@
 /* One line for an account's tightest window: a gauge, what is left, when it resets. */
 :root[data-design="b"] .db-brief {
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr) auto;
+  grid-template-columns: 64px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
   min-width: 0;
   font-size: 14px;
   font-variant-numeric: lining-nums tabular-nums;
+}
+
+:root[data-design="b"] .db-brief-left {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 :root[data-design="b"] .db-brief-none {

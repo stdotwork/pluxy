@@ -35,6 +35,13 @@ export function plural(count: number, one: string, other = `${one}s`): string {
   return `${num(count)} ${count === 1 ? one : other}`;
 }
 
+/** A text as a sentence of its own: a capital first, a full stop last. */
+export function sentence(text: string): string {
+  const t = text.trim();
+  if (!t) return t;
+  return t.charAt(0).toUpperCase() + t.slice(1) + (/[.!?…]$/.test(t) ? "" : ".");
+}
+
 /** A share as a whole percentage that never rounds a part to all or to nothing. */
 export function percent(part: number, whole: number): string {
   if (whole <= 0) return "0%";
@@ -432,6 +439,14 @@ export function whyOf(e: UsageEvent, name: (account: string) => string): Why {
   const step = e.chain_step ?? 0;
   const parts: string[] = [];
   let note: string | undefined;
+  // A model's name upstream is the same name with its provider's prefix or alias: only another model is news.
+  const asks = e.upstream_model && e.upstream_model !== e.model ? `, which asks for ${e.upstream_model}` : "";
+  if (step > 1) {
+    parts.push(
+      `${step === 2 ? "The first step" : `The first ${step - 1} steps`} of this model's fallback chain had no account that could take the request, so it went to step ${step}${asks}.`,
+    );
+    note = `fallback step ${step}`;
+  }
   if (e.failed) {
     parts.push(FAILED[e.error_code ?? ""] ?? `It failed${e.error_code ? ` (${e.error_code})` : ""}.`);
     if (tried.length > 0) {
@@ -444,24 +459,18 @@ export function whyOf(e: UsageEvent, name: (account: string) => string): Why {
     const last = tried[tried.length - 1];
     const served = e.account ? name(e.account) : last ? name(last.account) : "an account";
     if (before.length === 0) {
-      parts.push(`${served} was first in line and answered.`);
+      parts.push(
+        step > 1
+          ? `There, ${served} was first in line and answered.`
+          : `It went straight to ${served}, the first account in line.`,
+      );
     } else {
       parts.push(
-        `${before.map((t) => `${name(t.account)} ${triedResult(t)}`).join(", and ")}, so ${served} answered.`,
+        `pluxy tried ${before.map((t) => `${name(t.account)}, which ${triedResult(t)}`).join("; then ")}. Then ${served} answered.`,
       );
-      note = `after ${plural(before.length, "other")}`;
+      const said = `after ${plural(before.length, "other")}`;
+      note = note ? `${said}, ${note}` : said;
     }
   }
-  if (step > 1) {
-    parts.push(
-      `That was step ${step} of the model's fallback chain${e.upstream_model && e.upstream_model !== e.model ? `, which asks for ${e.upstream_model}` : ""}.`,
-    );
-    note = note ? `${note}, fallback step ${step}` : `fallback step ${step}`;
-  }
-  const sentence = parts.join(" ");
-  return {
-    note,
-    story: sentence.charAt(0).toUpperCase() + sentence.slice(1),
-    detour: before.length > 0 || step > 1,
-  };
+  return { note, story: parts.join(" "), detour: before.length > 0 || step > 1 };
 }

@@ -66,7 +66,7 @@ export function Settings(props: { session: Session; themes: ThemeState }) {
             <div class="db-setting">
               <div>
                 <b>Appearance</b>
-                <p>Light is this design's first language; dark is its own drawing, not an inversion.</p>
+                <p>A light page, a dark one, or whichever your system uses.</p>
               </div>
               <Words
                 label="Appearance"

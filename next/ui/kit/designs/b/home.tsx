@@ -8,6 +8,7 @@ import { useKit } from "../../ui";
 import { accountHref, useCore } from "./core";
 import { useRead, useWindows, WINDOWS_AT_ONCE } from "./data";
 import { FixButton } from "./fix";
+import { Icon } from "./icons";
 import {
   clock,
   conditionSentence,
@@ -18,8 +19,10 @@ import {
   percent,
   plural,
   providerName,
+  sentence,
   short,
   usedPercent,
+  windowName,
 } from "./lib";
 import {
   Asking,
@@ -28,6 +31,7 @@ import {
   Btn,
   Note,
   Onward,
+  resets,
   Section,
   StateMark,
   TimeBars,
@@ -87,7 +91,9 @@ export function Home() {
   const { now, naming } = core;
 
   // The accounts' windows: those that serve or wait, the first few of a large fleet.
-  const asked = (list ?? []).filter((a) => core.conditionOf(a).group !== "off").slice(0, WINDOWS_AT_ONCE);
+  const on = (list ?? []).filter((a) => core.conditionOf(a).group !== "off");
+  const eligible = on.length;
+  const asked = on.slice(0, WINDOWS_AT_ONCE);
   const { windows } = useWindows(list ? asked : undefined);
 
   if (!list) {
@@ -99,7 +105,7 @@ export function Home() {
             <h1 class="db-verdict" data-tone="needs">
               pluxy is not answering.
             </h1>
-            <p class="db-lead">{naming.mask(core.accounts.error)}</p>
+            <p class="db-lead">{sentence(naming.mask(core.accounts.error))}</p>
             <div class="db-opening-actions">
               <Btn kind="primary" icon="refresh" onClick={core.reload} disabled={core.accounts.busy}>
                 Ask again
@@ -131,6 +137,23 @@ export function Home() {
     const c = core.conditionOf(a);
     return c.group === "waiting" || (c.group === "serving" && c.resting.length > 0);
   });
+  // One provider that is not running stops every account of it: that is one thing to fix, said once.
+  const missingBy = new Map<string, Account[]>();
+  for (const a of needs) {
+    if (core.conditionOf(a).kind !== "no_provider") continue;
+    const key = a.extension ?? "";
+    missingBy.set(key, [...(missingBy.get(key) ?? []), a]);
+  }
+  const missing = [...missingBy];
+  const single = needs.filter((a) => core.conditionOf(a).kind !== "no_provider");
+  // Serving accounts with a tenth or less of a window left: nothing to do, but worth knowing.
+  const low = list.flatMap((a) => {
+    if (core.conditionOf(a).group !== "serving") return [];
+    const limit = tightest(windows.get(a.id));
+    const used = limit ? usedPercent(limit) : undefined;
+    return limit && used !== undefined && used >= 90 && used < 100 ? [{ a, limit, used }] : [];
+  });
+  const MOST = 5;
   const s = core.status.data;
   const refused = s && s.desired.revision !== s.active.revision ? s.desired : undefined;
   const u = week.data;
@@ -184,7 +207,26 @@ export function Home() {
         {needs.length > 0 && (
           <Section title="Needs you" class="db-needs">
             <ul class="db-people">
-              {needs.map((a, i) => {
+              {missing.map(([extension, accounts], i) => (
+                <li key={`provider ${extension}`} class="db-need">
+                  <span class="db-mark-state" data-group="needs">
+                    <Icon name="needsYou" />
+                  </span>
+                  <div class="db-need-text">
+                    <span class="db-name">{providerName(extension)} is not running</span>
+                    <p>
+                      {accounts.length === 1
+                        ? `No request reaches ${naming.name(accounts[0]?.id ?? "")}, its one account.`
+                        : `No request reaches its ${num(accounts.length)} accounts.`}{" "}
+                      Turn the provider on, or install it, on Extensions.
+                    </p>
+                  </div>
+                  <Btn kind={i === 0 ? "primary" : "plain"} href="#/extensions">
+                    Open Extensions
+                  </Btn>
+                </li>
+              ))}
+              {single.slice(0, MOST).map((a, i) => {
                 const c = core.conditionOf(a);
                 return (
                   <li key={a.id} class="db-need">
@@ -195,18 +237,24 @@ export function Home() {
                       </a>
                       <p>{conditionSentence(a, c, now)}</p>
                     </div>
-                    <FixButton account={a} c={c} primary={i === 0} />
+                    <FixButton account={a} c={c} primary={i === 0 && missing.length === 0} />
                   </li>
                 );
               })}
             </ul>
+            {single.length > MOST && (
+              <p class="db-more">
+                And {plural(single.length - MOST, "more account")} like these.{" "}
+                <Onward href="#/accounts">See them all</Onward>
+              </p>
+            )}
           </Section>
         )}
 
         {waiting.length > 0 && (
           <Section title="Waiting, nothing to do" class="db-waits">
             <ul class="db-people">
-              {waiting.map((a) => {
+              {waiting.slice(0, MOST).map((a) => {
                 const c = core.conditionOf(a);
                 const resting = c.resting[0];
                 return (
@@ -226,10 +274,38 @@ export function Home() {
                 );
               })}
             </ul>
+            {waiting.length > MOST && (
+              <p class="db-more">
+                And {plural(waiting.length - MOST, "more")}. <Onward href="#/accounts">See them all</Onward>
+              </p>
+            )}
           </Section>
         )}
 
-        {needs.length === 0 && waiting.length === 0 && list.length > 0 && (
+        {low.length > 0 && (
+          <Section title="Running low" class="db-waits">
+            <ul class="db-people">
+              {low.slice(0, MOST).map(({ a, limit, used }) => (
+                <li key={a.id} class="db-wait">
+                  <span class="db-mark-state" data-group="low">
+                    <Icon name="low" />
+                  </span>
+                  <p>
+                    <a class="db-name" href={accountHref(a.id)}>
+                      {naming.name(a.id)}
+                    </a>{" "}
+                    has {Math.round(100 - used)}% of its {windowName(limit).toLowerCase()} left
+                    {resets(limit, now)
+                      ? `. ${resets(limit, now)}, and until then requests move to your other accounts when it runs out.`
+                      : "."}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </Section>
+        )}
+
+        {needs.length === 0 && waiting.length === 0 && low.length === 0 && list.length > 0 && (
           <p class="db-allclear">
             Nothing here needs you. <Onward href="#/accounts">See the accounts</Onward>
           </p>
@@ -239,7 +315,9 @@ export function Home() {
       <div class="db-figures">
         <Section title="This week" aside={<Onward href="#/usage">All usage</Onward>}>
           {!u && week.loading && <Asking lines={4}>Adding up the week…</Asking>}
-          {!u && week.error && <Trouble retry={week.reload}>{naming.mask(week.error)}</Trouble>}
+          {!u && week.error && (
+            <Trouble retry={week.reload}>pluxy could not add up the week: {naming.mask(week.error)}</Trouble>
+          )}
           {u && !u.enabled && (
             <Note tone="warn">
               pluxy is not recording requests, so there is nothing to add up.{" "}
@@ -270,18 +348,20 @@ export function Home() {
                       <h3>By provider</h3>
                       <BarList
                         label="Requests by provider"
+                        bare
                         max={4}
                         items={bars(u.providers, (g) => providerName(g.name))}
                       />
                     </div>
                     <div>
                       <h3>By model</h3>
-                      <BarList label="Requests by model" max={4} items={bars(u.models, (g) => g.name)} />
+                      <BarList label="Requests by model" bare max={4} items={bars(u.models, (g) => g.name)} />
                     </div>
                     <div>
                       <h3>By client key</h3>
                       <BarList
                         label="Requests by client key"
+                        bare
                         max={4}
                         items={bars(u.keys, (g) => keyName(g.name, keys.data?.keys))}
                       />
@@ -325,7 +405,7 @@ export function Home() {
                 </div>
               );
             })}
-            {list.length > asked.length && (
+            {eligible > asked.length && (
               <p class="db-small">
                 The first {asked.length} accounts are read here; each account's page reads its own.
               </p>

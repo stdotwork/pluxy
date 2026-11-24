@@ -58,6 +58,11 @@
   }
 }
 
+/* The field's frame takes the focus ring, not the bare input inside it. */
+:root[data-design="b"] .db-shell .db-search input:focus-visible {
+  outline: none;
+}
+
 :root[data-design="b"] .db-search:focus-within {
   outline: 2px solid var(--db-ink);
   outline-offset: 3px;
@@ -135,7 +140,7 @@
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 28px 32px;
-  margin-top: 30px;
+  margin-top: 44px;
 
   h3 {
     margin-bottom: 12px;
@@ -162,9 +167,9 @@
 
 :root[data-design="b"] .db-provider-account {
   display: grid;
-  grid-template-columns: 9.5rem minmax(0, 1fr);
+  grid-template-columns: 8.5rem minmax(0, 1fr);
   align-items: center;
-  gap: 16px;
+  gap: 14px;
 
   .db-name {
     overflow: hidden;
@@ -187,7 +192,7 @@
 
 :root[data-design="b"] .db-account {
   display: grid;
-  grid-template-columns: 22px minmax(0, 15rem) minmax(0, 1fr) 7.5rem auto;
+  grid-template-columns: 22px minmax(0, 15rem) minmax(12rem, 1fr) 7.5rem auto;
   align-items: center;
   gap: 4px 20px;
   min-height: 38px;
@@ -246,6 +251,7 @@
 
 :root[data-design="b"] .db-account-fix {
   min-width: 9.5rem;
+  max-width: 17rem;
   text-align: right;
 }
 
@@ -266,6 +272,7 @@
   margin-top: 18px;
   font-size: 18px;
   line-height: 1.5;
+  text-wrap: pretty;
 
   .db-mark-state {
     margin-top: 4px;
@@ -810,4 +817,17 @@
   :root[data-design="b"] .db-account-page .db-opening-actions {
     padding-left: 0;
   }
+}
+
+:root[data-design="b"] .db-said + .db-bars {
+  margin-top: 16px;
+}
+
+:root[data-design="b"] .db-windows + .db-small,
+:root[data-design="b"] .db-window-none + .db-small {
+  margin-top: 10px;
+}
+
+:root[data-design="b"] .db-provider + .db-small {
+  margin-top: 18px;
 }

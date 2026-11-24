@@ -114,12 +114,17 @@ export function Trouble(props: { children: ComponentChildren; retry?: () => void
   return (
     <div class="db-trouble" data-quiet={props.quiet ? "" : undefined} role="alert">
       <Icon name="needsYou" />
-      <p>{props.children}</p>
-      {props.retry && (
-        <Btn kind="quiet" onClick={props.retry}>
-          Try again
-        </Btn>
-      )}
+      <p>
+        {props.children}
+        {props.retry && (
+          <>
+            {" "}
+            <button type="button" class="db-linkish" onClick={props.retry}>
+              Try again
+            </button>
+          </>
+        )}
+      </p>
     </div>
   );
 }
@@ -358,7 +363,14 @@ export interface BarItem {
  * A ranked list with a thin bar under each name: the bar's length is the share of the largest.
  * The part of a bar that failed is drawn apart, in the failure colour, and said in words.
  */
-export function BarList(props: { label: string; items: BarItem[]; max?: number; more?: string }) {
+export function BarList(props: {
+  label: string;
+  items: BarItem[];
+  max?: number;
+  more?: string;
+  /** Leaves the words about failures out where the names need the room: the bar still shows them. */
+  bare?: boolean;
+}) {
   const shown = props.max ? props.items.slice(0, props.max) : props.items;
   const rest = props.items.length - shown.length;
   const top = Math.max(1, ...props.items.map((i) => i.value));
@@ -373,7 +385,7 @@ export function BarList(props: { label: string; items: BarItem[]; max?: number; 
               {i.href ? <a href={i.href}>{i.name}</a> : i.name}
             </span>
             <span class="db-bars-figure">
-              {(i.note || i.failed > 0) && (
+              {!props.bare && (i.note || i.failed > 0) && (
                 <small>
                   {i.note}
                   {i.note && i.failed > 0 ? ", " : ""}

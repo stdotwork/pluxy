@@ -184,7 +184,9 @@ export function Usage(props: { query: string }) {
         </p>
       )}
 
-      {summary.error && !u && <Trouble retry={summary.reload}>{naming.mask(summary.error)}</Trouble>}
+      {summary.error && !u && (
+        <Trouble retry={summary.reload}>pluxy could not add this up: {naming.mask(summary.error)}.</Trouble>
+      )}
       {summary.error && u && (
         <Trouble retry={summary.reload} quiet>
           These are the last figures pluxy gave. It is not answering now: {naming.mask(summary.error)}
@@ -202,7 +204,13 @@ export function Usage(props: { query: string }) {
           They are counted here until it restarts; its log says why.
         </Note>
       )}
-      {!u && summary.loading && <Asking lines={5}>Asking pluxy for the figures…</Asking>}
+      {!u && summary.loading && (
+        <div class="db-ghost" aria-hidden="true">
+          <i />
+          <i />
+          <i />
+        </div>
+      )}
 
       {u?.enabled && u.total_requests > 0 && (
         <>
@@ -333,7 +341,11 @@ export function Usage(props: { query: string }) {
             />
           }
         >
-          {eventsError && <Trouble retry={() => load(0, [])}>{naming.mask(eventsError)}</Trouble>}
+          {eventsError && (
+            <Trouble retry={() => load(0, [])}>
+              pluxy did not give the requests: {naming.mask(eventsError)}.
+            </Trouble>
+          )}
           {!shownEvents && !eventsError && <Asking lines={6}>Asking pluxy for the requests…</Asking>}
           {shownEvents &&
             (shownEvents.list.length === 0 ? (

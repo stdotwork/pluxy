@@ -139,7 +139,7 @@ function AccountList() {
         </header>
         {core.accounts.error ? (
           <Trouble retry={core.reload}>
-            pluxy did not answer, so there is no list to show: {core.naming.mask(core.accounts.error)}
+            pluxy did not answer, so there is no list to show: {core.naming.mask(core.accounts.error)}.
           </Trouble>
         ) : (
           <Asking lines={6}>Asking pluxy for its accounts…</Asking>
