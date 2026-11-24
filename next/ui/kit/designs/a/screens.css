@@ -273,6 +273,12 @@
   }
 }
 
+:root[data-design="a"] .da-windows-cell {
+  display: block;
+  min-width: 0;
+  min-height: 8px;
+}
+
 :root[data-design="a"] .da-note {
   flex: none;
   font-size: 12px;
@@ -280,6 +286,10 @@
 
 :root[data-design="a"] .da-cell-now[data-zero] {
   color: var(--da-ink-3);
+}
+
+:root[data-design="a"] .da-cell-error[data-wide] {
+  grid-column: 3 / -1;
 }
 
 :root[data-design="a"] .da-cell-error {
@@ -362,6 +372,7 @@
 :root[data-design="a"] .da-tail-path {
   display: flex;
   flex-wrap: wrap;
+  min-width: 0;
   align-items: center;
   gap: 2px 6px;
   padding: 0 var(--da-gap) 5px calc(var(--da-gap) + 11ch + 20px);
@@ -375,9 +386,12 @@
 }
 
 :root[data-design="a"] .da-hop {
-  display: inline-flex;
-  gap: 6px;
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+  vertical-align: bottom;
 }
 
 :root[data-design="a"] .da-hop-chain {
@@ -391,10 +405,12 @@
 }
 
 :root[data-design="a"] .da-hop-then {
+  margin-right: 6px;
   color: var(--da-ink-3);
 }
 
 :root[data-design="a"] .da-hop-result {
+  margin-left: 6px;
   color: var(--da-warn);
 }
 
@@ -431,15 +447,15 @@
   }
 
   th:nth-child(2) {
-    width: 19%;
+    width: 16%;
   }
 
   .da-col-provider {
-    width: 104px;
+    width: 92px;
   }
 
   .da-col-windows {
-    width: 352px;
+    width: 340px;
   }
 
   .da-col-order {
@@ -451,7 +467,7 @@
   }
 
   .da-col-fix {
-    width: 156px;
+    width: 148px;
     text-align: right;
   }
 
@@ -751,8 +767,13 @@
     cursor: pointer;
   }
 
+  /* A request's left edge says how it went, as an account's does: red failed, amber went past its first account. */
   tbody tr[data-failed] {
     box-shadow: inset 2px 0 0 var(--da-danger);
+  }
+
+  tbody tr[data-back] {
+    box-shadow: inset 2px 0 0 var(--da-warn);
   }
 }
 
@@ -891,8 +912,9 @@
       padding: 0;
     }
 
-    tbody th {
+    tbody th:nth-child(2) {
       grid-area: name;
+      width: auto;
     }
 
     tbody .da-col-windows {
@@ -969,7 +991,8 @@
     display: none;
   }
 
-  :root[data-design="a"] .da-board-row .da-cell-error {
+  :root[data-design="a"] .da-board-row .da-cell-error,
+  :root[data-design="a"] .da-board-row .da-cell-error[data-wide] {
     grid-column: 2 / -1;
     padding-bottom: 6px;
   }
@@ -1029,6 +1052,21 @@
 
   :root[data-design="a"] .da-strip-keys {
     display: none;
+  }
+
+  :root[data-design="a"] .da-figure-note {
+    white-space: normal;
+  }
+
+  :root[data-design="a"] .da-overview .da-pane-head {
+    flex-wrap: wrap;
+    gap: 2px 10px;
+    padding-block: 5px;
+  }
+
+  :root[data-design="a"] .da-counts {
+    flex-wrap: wrap;
+    gap: 0 10px;
   }
 
   /* An account on the board is two lines: who and how it stands, then its windows. */

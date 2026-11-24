@@ -100,12 +100,14 @@ const AT_ONCE = 3;
 
 /**
  * The usage windows of the accounts that can have them (not off, not unreadable), by account ID.
- * Core asks the provider for each, so they are read three at a time and kept five minutes;
- * refresh() reads them all again, or only the IDs given.
+ * Core asks the provider for each, so only the accounts a screen has shown are read (see(id),
+ * called when an account's row comes into view), three at a time, and kept five minutes.
+ * refresh() reads the shown ones again, or only the IDs given.
  */
 export function useWindows(accounts: Account[] | undefined): {
   windows: ReadonlyMap<string, Windows>;
   pending: ReadonlySet<string>;
+  see(id: string): void;
   refresh(ids?: string[]): void;
 } {
   const { api } = useKit();
@@ -115,8 +117,9 @@ export function useWindows(accounts: Account[] | undefined): {
   const [asked, setAsked] = useState(0);
   const askedIds = useRef<string[] | undefined>(undefined);
   const taken = useRef(0);
+  const [seen, setSeen] = useState<ReadonlySet<string>>(new Set());
   const wanted = (accounts ?? [])
-    .filter((a) => !a.disabled && a.health?.state !== "broken" && a.extension)
+    .filter((a) => seen.has(a.id) && !a.disabled && a.health?.state !== "broken" && a.extension)
     .map((a) => a.id);
   const wantedKey = wanted.join("\n");
   useEffect(() => {
@@ -159,6 +162,7 @@ export function useWindows(accounts: Account[] | undefined): {
   return {
     windows: kept,
     pending,
+    see: useCallback((id: string) => setSeen((old) => (old.has(id) ? old : new Set(old).add(id))), []),
     refresh: useCallback((ids?: string[]) => {
       askedIds.current = ids;
       setAsked((n) => n + 1);

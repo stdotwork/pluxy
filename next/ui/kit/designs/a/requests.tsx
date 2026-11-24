@@ -199,7 +199,9 @@ function Totals(props: {
   const filtered = Object.keys(place.filters).length > 0;
   return (
     <div class="da-totals">
-      {usage.error && <Fault what="Usage is not updating." error={usage.error} retry={usage.reload} stale />}
+      {usage.error && (
+        <Fault what="Usage is not updating." error={usage.error} retry={usage.reload} stale at={usage.at} />
+      )}
       <section class="da-strip da-strip-tall" aria-label={`The last ${range.label}`}>
         <Figures usage={u} range={range} />
         <Bars
@@ -522,7 +524,13 @@ function List(props: {
           )}
         </header>
         {first.error && (
-          <Fault what="Requests could not be read." error={first.error} retry={first.reload} stale={!!data} />
+          <Fault
+            what={data ? "Requests are not updating." : "Requests could not be read."}
+            error={first.error}
+            retry={first.reload}
+            stale={!!data}
+            at={first.at}
+          />
         )}
         {data?.lost && (
           <p class="da-strip-note">
@@ -664,6 +672,7 @@ function RequestRow(props: {
     <tr
       aria-current={props.selected ? "true" : undefined}
       data-failed={e.failed ? "" : undefined}
+      data-back={!e.failed && fellBack(e) ? "" : undefined}
       onClick={(ev) => {
         if ((ev.target as HTMLElement).closest("a,button")) return;
         props.open(e.seq);

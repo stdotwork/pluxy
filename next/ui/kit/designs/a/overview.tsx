@@ -2,6 +2,7 @@
 // one row per account (state, usage windows with the time to reset, requests in flight, the last
 // error and the one action that fixes it) beside a live tail of requests with the path each took.
 
+import type { ComponentChildren } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { UsageEvent, UsageEventsReply, UsageSummary } from "../../api";
 import { useKit } from "../../ui";
@@ -128,39 +129,58 @@ export function Figures(props: { usage: UsageSummary; range: Range; inFlight?: n
   );
 }
 
-/** The windows cell: two thin bars, or why there are none. */
+/** The windows cell: two thin bars, or why there are none. An account's windows are read once its row is on screen. */
 export function WindowsCell(props: { row: Row; fleet: Fleet; wide?: boolean }) {
   const { row, fleet } = props;
-  const w = fleet.windows.get(row.account.id);
-  if (row.account.disabled || row.standing.state === "broken") return <span class="da-quiet">–</span>;
-  if (!w) {
-    if (fleet.pendingWindows.has(row.account.id))
-      return <span class="da-window-wait" role="status" aria-label="Reading usage windows" />;
-    return <span class="da-quiet">not read</span>;
-  }
-  if (w.unsupported)
-    return (
+  const id = row.account.id;
+  const w = fleet.windows.get(id);
+  const none = row.account.disabled || row.standing.state === "broken";
+  const cell = useRef<HTMLSpanElement>(null);
+  const see = fleet.seeWindows;
+  useEffect(() => {
+    const el = cell.current;
+    if (none || !el) return;
+    if (typeof IntersectionObserver === "undefined") return see(id);
+    const watch = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) {
+        see(id);
+        watch.disconnect();
+      }
+    });
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, [id, none, see]);
+  let body: ComponentChildren;
+  if (none) body = <span class="da-quiet">–</span>;
+  else if (!w) body = <span class="da-window-wait" role="status" aria-label="Reading usage windows" />;
+  else if (w.unsupported)
+    body = (
       <span class="da-quiet" title="This provider reports no usage windows for the account.">
         no windows
       </span>
     );
-  const limits = meteredWindows(w.reply?.quota.limits, fleet.now);
-  if (limits.length === 0) {
-    return (
-      <span class="da-quiet" title={w.error}>
-        {w.error ? "unread" : "no windows"}
-      </span>
-    );
+  else {
+    const limits = meteredWindows(w.reply?.quota.limits, fleet.now);
+    body =
+      limits.length === 0 ? (
+        <span class="da-quiet" title={w.error}>
+          {w.error ? "could not be read" : "no windows"}
+        </span>
+      ) : (
+        <span
+          class="da-windows"
+          data-stale={w.error ? "" : undefined}
+          title={w.error ? `Could not be read again: ${w.error}` : undefined}
+        >
+          {limits.slice(0, props.wide ? 4 : 2).map((l) => (
+            <WindowBar key={l.id} limit={l} now={fleet.now} wide={props.wide} />
+          ))}
+        </span>
+      );
   }
   return (
-    <span
-      class="da-windows"
-      data-stale={w.error ? "" : undefined}
-      title={w.error ? `Could not be read again: ${w.error}` : undefined}
-    >
-      {limits.slice(0, props.wide ? 4 : 2).map((l) => (
-        <WindowBar key={l.id} limit={l} now={fleet.now} wide={props.wide} />
-      ))}
+    <span class="da-windows-cell" ref={cell}>
+      {body}
     </span>
   );
 }
@@ -217,6 +237,9 @@ function Board(props: { fleet: Fleet; fix: ReturnType<typeof useFix>; cursor: nu
               index++;
               const a = row.account;
               const s = row.standing;
+              // An account with no sign-in, no provider or no readable file has no windows and
+              // serves nothing: its reason takes the room of those columns.
+              const wide = s.state === "sign-in" || s.state === "broken" || s.state === "no-provider";
               return (
                 <tr
                   key={a.id}
@@ -232,14 +255,18 @@ function Board(props: { fleet: Fleet; fix: ReturnType<typeof useFix>; cursor: nu
                       {row.name}
                     </a>
                   </th>
-                  <td class="da-cell-windows">
-                    <WindowsCell row={row} fleet={fleet} />
-                  </td>
-                  <td class="da-cell-now da-num da-right" data-zero={a.active_requests ? undefined : ""}>
-                    {a.active_requests ?? 0}
-                    {a.max_concurrency ? <span class="da-quiet">/{a.max_concurrency}</span> : null}
-                  </td>
-                  <td class="da-cell-error">
+                  {wide ? null : (
+                    <>
+                      <td class="da-cell-windows">
+                        <WindowsCell row={row} fleet={fleet} />
+                      </td>
+                      <td class="da-cell-now da-num da-right" data-zero={a.active_requests ? undefined : ""}>
+                        {a.active_requests ?? 0}
+                        {a.max_concurrency ? <span class="da-quiet">/{a.max_concurrency}</span> : null}
+                      </td>
+                    </>
+                  )}
+                  <td class="da-cell-error" data-wide={wide ? "" : undefined} colSpan={wide ? 3 : undefined}>
                     <Why row={row} now={fleet.now} when />
                     {/* A button only for an account that is out: one that still serves is not stuck. */}
                     {s.state !== "serving" && <FixButton row={row} fix={props.fix} small />}
@@ -314,11 +341,12 @@ function Tail(props: {
         <h2>tail</h2>
         <span
           class="da-live"
-          data-paused={props.paused ? "" : undefined}
+          data-paused={props.paused || tail.error ? "" : undefined}
+          data-tone={tail.error ? "warn" : undefined}
           title={`Of the last ${events.length} requests, ${failed} failed and ${back} went past their first account`}
         >
           <span class="da-live-dot" />
-          {props.paused ? "paused" : "live"}
+          {tail.error ? "stalled" : props.paused ? "paused" : "live"}
         </span>
         <span class="da-grow" />
         <Btn small variant="ghost" keys="space" onClick={props.onPause}>
@@ -329,7 +357,13 @@ function Tail(props: {
         </Btn>
       </header>
       {tail.error && (
-        <Fault what="The tail stopped." error={tail.error} retry={tail.reload} stale={events.length > 0} />
+        <Fault
+          what="The tail stopped."
+          error={tail.error}
+          retry={tail.reload}
+          stale={events.length > 0}
+          at={tail.at}
+        />
       )}
       {tail.loading ? (
         <Skeleton rows={14} label="Reading recent requests" />
@@ -341,7 +375,7 @@ function Tail(props: {
           Core is not keeping a record of requests, so there is nothing to tail.
         </Blank>
       ) : events.length === 0 && !tail.error ? (
-        <Blank title="No requests yet">
+        <Blank title="No requests yet" action={<Btn href="#/config">Client keys</Btn>}>
           Point a coding tool at this address with a client key and its requests show here as they arrive.
         </Blank>
       ) : (
@@ -436,7 +470,7 @@ export function Overview() {
           </>
         )}
         {usage.error && u && (
-          <Fault what="Usage is not updating." error={usage.error} retry={usage.reload} stale />
+          <Fault what="Usage is not updating." error={usage.error} retry={usage.reload} stale at={usage.at} />
         )}
       </section>
 
@@ -474,10 +508,11 @@ export function Overview() {
         {fix.error && <Fault what="" error={fix.error} retry={fix.clearError} />}
         {fleet.accounts.error && (
           <Fault
-            what="Accounts could not be read."
+            what={fleet.accounts.data ? "Accounts are not updating." : "Accounts could not be read."}
             error={fleet.accounts.error}
             retry={fleet.reload}
             stale={!!fleet.accounts.data}
+            at={fleet.accounts.at}
           />
         )}
         {fleet.accounts.loading ? (

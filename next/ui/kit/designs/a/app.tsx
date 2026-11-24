@@ -359,7 +359,7 @@ function Shell(props: { session: Session; themes: ThemeState }) {
   const registry = useMemo(() => new KeyRegistry(), []);
   const place = useMemo(() => placeOf(session.path, session.pages), [session.path, session.pages]);
   const appearance = useAppearance(themes);
-  const status = usePoll(kit.api.status, 30_000);
+  const status = usePoll(kit.api.status, 15_000);
   const [menu, setMenu] = useState(false);
   const [sheet, setSheet] = useState(false);
   const [accounts, setAccounts] = useState<Account[]>();

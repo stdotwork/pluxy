@@ -8,6 +8,7 @@ import { Icon, type IconName } from "./icons";
 import { keyCap } from "./keys";
 import {
   type BoardState,
+  clock,
   compact,
   paceOf,
   percent,
@@ -207,13 +208,32 @@ export function Skeleton(props: { rows: number; label: string }) {
 }
 
 /** A load that failed: what, why, and the way to try again. With stale data it is one line above it. */
-export function Fault(props: { what: string; error: string; retry?: () => void; stale?: boolean }) {
+export function Fault(props: {
+  what: string;
+  error: string;
+  retry?: () => void;
+  /** The last good reading is still on screen. */
+  stale?: boolean;
+  /** When that reading was taken (Unix ms). */
+  at?: number;
+}) {
+  // Over a reading that still shows, one short line: the cause in a few words, the whole error as its tooltip.
+  const cause = props.error.split(":")[0]?.trim() ?? "";
+  const text = props.stale ? cause : props.error;
   return (
-    <div class="da-fault" role="alert" data-stale={props.stale ? "" : undefined}>
+    <div
+      class="da-fault"
+      role="alert"
+      data-stale={props.stale ? "" : undefined}
+      title={props.stale ? props.error : undefined}
+    >
       <Icon name="warning" size={14} />
       <span class="da-fault-text">
-        <strong>{props.what}</strong> {props.error}
-        {props.stale && " Showing the last reading."}
+        {props.what && <strong>{props.what} </strong>}
+        {text}
+        {text && !/[.!?]$/.test(text) ? "." : ""}
+        {props.stale &&
+          (props.at ? ` Showing the reading from ${clock(props.at)}.` : " Showing the last reading.")}
       </span>
       {props.retry && (
         <Btn small onClick={props.retry} icon="refresh">
@@ -285,7 +305,7 @@ export function Bars(props: {
         <span class="da-bars-reading da-num" aria-live="off">
           {reading}
         </span>
-        <span class="da-bars-peak da-num">peak {compact(peak)}</span>
+        {series.some((b) => b.requests > 0) && <span class="da-bars-peak da-num">peak {compact(peak)}</span>}
       </div>
       <div
         class="da-bars-plot"

@@ -188,17 +188,19 @@ export function Accounts(props: { rest: string }) {
           >
             Bulk edit
           </Btn>
-          <Btn small variant="primary" icon="plus" href="#/add-account" keys="a">
+          {/* One primary action a view: with an account open, that is its fix. */}
+          <Btn small variant={selectedId ? "plain" : "primary"} icon="plus" href="#/add-account" keys="a">
             Add account
           </Btn>
         </header>
         {fix.error && <Fault what="" error={fix.error} retry={fix.clearError} />}
         {fleet.accounts.error && (
           <Fault
-            what="Accounts could not be read."
+            what={data ? "Accounts are not updating." : "Accounts could not be read."}
             error={fleet.accounts.error}
             retry={fleet.reload}
             stale={!!data}
+            at={fleet.accounts.at}
           />
         )}
         {fleet.accounts.loading ? (

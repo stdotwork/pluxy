@@ -24,6 +24,8 @@ export interface Fleet {
   now: number;
   windows: ReadonlyMap<string, Windows>;
   pendingWindows: ReadonlySet<string>;
+  /** Says an account's row is on screen, so its windows are worth reading. */
+  seeWindows(id: string): void;
   refreshWindows(ids?: string[]): void;
   /**
    * The name to show for an account as a request names it: by its ID (the request's own account
@@ -32,9 +34,6 @@ export interface Fleet {
   nameOf(account: string | undefined): string;
   reload(): void;
 }
-
-/** How many accounts' windows a screen reads by itself; past that the person asks (r). */
-const AUTO_WINDOWS = 48;
 
 /** The accounts, read again every 15 s, with the clock that drives their countdowns. */
 export function useFleet(): Fleet {
@@ -45,8 +44,7 @@ export function useFleet(): Fleet {
   const now = useNow(1000);
   const list = accounts.data?.accounts;
   const running = useMemo(() => runningExtensions(status.data), [status.data]);
-  const auto = useMemo(() => list?.slice(0, AUTO_WINDOWS), [list]);
-  const { windows, pending, refresh } = useWindows(auto);
+  const { windows, pending, see, refresh } = useWindows(list);
   const rows = useMemo(
     () =>
       (list ?? []).map((account) => {
@@ -74,6 +72,7 @@ export function useFleet(): Fleet {
     now,
     windows,
     pendingWindows: pending,
+    seeWindows: see,
     refreshWindows: refresh,
     nameOf: (id) => (id ? (known.get(id)?.name ?? p.id(id)) : "–"),
     reload: accounts.reload,
