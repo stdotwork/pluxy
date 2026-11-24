@@ -499,23 +499,26 @@ export function AccountsPage() {
                   {
                     label: t("selectColumn"),
                     value: (a) => (
-                      <input
-                        type="checkbox"
-                        data-part="select"
-                        aria-label={t("select", { id: p.text(a.id, accountIdentities(a)) })}
-                        checked={checked.has(a.id)}
-                        disabled={busy}
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={(e) => {
-                          const on = e.currentTarget.checked;
-                          setChecked((old) => {
-                            const next = new Set(old);
-                            if (on) next.add(a.id);
-                            else next.delete(a.id);
-                            return next;
-                          });
-                        }}
-                      />
+                      // biome-ignore lint/a11y/useKeyWithClickEvents: only keeps a click beside the box from opening the row
+                      <label class="hit" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          data-part="select"
+                          aria-label={t("select", { id: p.text(a.id, accountIdentities(a)) })}
+                          checked={checked.has(a.id)}
+                          disabled={busy}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => {
+                            const on = e.currentTarget.checked;
+                            setChecked((old) => {
+                              const next = new Set(old);
+                              if (on) next.add(a.id);
+                              else next.delete(a.id);
+                              return next;
+                            });
+                          }}
+                        />
+                      </label>
                     ),
                   },
                   { label: t("extension"), value: (a) => a.extension ?? "", mono: true },
