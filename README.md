@@ -145,6 +145,7 @@ the same record. `./pluxy help` lists every command.
 | --- | --- |
 | Set up a coding tool or another client | [docs/clients.md](docs/clients.md) |
 | Move from CLIProxyAPI | [docs/moving-from-cpa.md](docs/moving-from-cpa.md) |
+| Fix a problem or find out why a request failed | [docs/troubleshooting.md](docs/troubleshooting.md) |
 | Run pluxy in a container | [next/README.md, "Run it in a container"](next/README.md#run-it-in-a-container) |
 | Look up a config setting, a provider's options, routing, logs or the management API | [next/README.md](next/README.md) |
 | Use the desktop app | [next/app/README.md](next/app/README.md) |

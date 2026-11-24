@@ -14,7 +14,8 @@ formats are translated to the upstream's format, and what the translation could 
 
 This file is the reference for core. To build pluxy and send a first request, follow the
 [quick start](../README.md#quick-start); to point a coding tool at it, see
-[docs/clients.md](../docs/clients.md).
+[docs/clients.md](../docs/clients.md); when something does not work, see
+[docs/troubleshooting.md](../docs/troubleshooting.md).
 
 ## Layout
 
