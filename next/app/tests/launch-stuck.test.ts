@@ -16,6 +16,7 @@ test("a silent app is reported alive, with its counters and its process", async 
   try {
     expect(await l.next("bundled", 300)).toBeUndefined();
     const text = await l.stuck();
+    console.log(text);
     expect(text).toContain(`app pid ${l.pid}: still running`);
     expect(text).toContain("printed 0 lines, 0 bytes");
     if (!win) {

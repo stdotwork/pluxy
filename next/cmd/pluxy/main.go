@@ -49,7 +49,8 @@ func main() {
 
 // serve runs core: pluxy serve, or pluxy with no subcommand.
 func serve(args []string) {
-	fs := flag.NewFlagSet("pluxy serve", flag.ExitOnError)
+	fs := flag.NewFlagSet("pluxy serve", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
 	configPath := fs.String("config", "config.json", "path to the config file")
 	safeMode := fs.Bool("safe-mode", false, "start no extensions: client requests fail, the management API works")
 	watch := fs.Duration("watch-interval", time.Second, "how often to look for config file changes (0: do not watch)")
@@ -60,7 +61,17 @@ func serve(args []string) {
 		fmt.Fprintln(fs.Output(), "usage: pluxy [serve] [flags]   run core; pluxy help lists the client commands")
 		fs.PrintDefaults()
 	}
-	_ = fs.Parse(args) // ExitOnError
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fs.SetOutput(os.Stdout)
+			fs.Usage()
+			return
+		}
+		fs.SetOutput(os.Stderr)
+		fmt.Fprintln(os.Stderr, err)
+		fs.Usage()
+		os.Exit(exitUsage)
+	}
 	if fs.NArg() > 0 {
 		fmt.Fprintf(os.Stderr, "pluxy: unexpected argument %q (pluxy help lists the commands)\n", fs.Arg(0))
 		os.Exit(exitUsage)
@@ -179,7 +190,7 @@ func initConfig(args []string, stdout, stderr io.Writer) int {
 	}
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			fs.SetOutput(stderr)
+			fs.SetOutput(stdout)
 			fs.Usage()
 			return exitOK
 		}

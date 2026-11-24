@@ -90,14 +90,13 @@ func TestCLIExitCodes(t *testing.T) {
 		t.Errorf("status with PLUXY_URL and PLUXY_MANAGEMENT_KEY: %s", r)
 	}
 
-	// 1: a call that fails for another reason: core's log is not written to files here, so
-	// GET /logs answers 400.
-	if r := runCLI(t, env, "logs"); r.code != 1 || r.stdout != "" || r.stderr == "" {
-		t.Errorf("logs with file logging off: %s; want exit 1 and the error on standard error", r)
+	// 1: a call that fails for another reason (missing config file).
+	if r := runCLI(t, nil, "status", "--config", filepath.Join(t.TempDir(), "missing.json")); r.code != 1 || r.stdout != "" || r.stderr == "" {
+		t.Errorf("status with missing config: %s; want exit 1 and the error on standard error", r)
 	}
 
-	// 2: a command line that is wrong.
-	for _, args := range [][]string{{"no-such-command"}, {"status", "--no-such-flag"}, {"key", "remove"}} {
+	// 2: a command line or request that is invalid (including 400 invalid_request from core).
+	for _, args := range [][]string{{"no-such-command"}, {"status", "--no-such-flag"}, {"key", "remove"}, {"logs"}} {
 		if r := runCLI(t, env, args...); r.code != 2 {
 			t.Errorf("%q: %s; want exit 2", args, r)
 		}
