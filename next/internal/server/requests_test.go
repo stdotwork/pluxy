@@ -117,7 +117,9 @@ func newRequestsCore(t *testing.T) *requestsCore {
 // holding makes every attempt reply pre, wait at the hold it returns, then reply post.
 func (c *requestsCore) holding(pre, post []llm.Event) *hold {
 	h := newHold()
-	f := func(ctx context.Context, _ llm.Request) route.Stream { return &held{ctx: ctx, h: h, pre: pre, post: post} }
+	f := func(ctx context.Context, _ llm.Request) route.Stream {
+		return &held{ctx: ctx, h: h, pre: pre, post: post}
+	}
 	c.reply.Store(&f)
 	return h
 }
