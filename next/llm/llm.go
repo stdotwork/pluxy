@@ -640,6 +640,9 @@ type Explain struct {
 // Tried is one attempt: the account (its public ID), its provider, the model sent upstream and
 // how it ended, by the code of the error (for example rate_limit or quota).
 type Tried struct {
+	// ID is the account's ID as the config and core's log name it, set only in the log's copy
+	// of the explanation (Error.Routed); never sent to a client.
+	ID       string `json:"-"`
 	Account  string `json:"account"`
 	Provider string `json:"provider"`
 	Model    string `json:"model,omitempty"`
@@ -651,6 +654,9 @@ type Tried struct {
 // account was at its concurrency limit, or skipped when the request's limits ended it before the
 // account's turn. Until is when the block that holds it ends, when known.
 type LeftOut struct {
+	// ID is the account's ID as the config and core's log name it, set only in the log's copy
+	// of the explanation (Error.Routed); never sent to a client.
+	ID       string     `json:"-"`
 	Account  string     `json:"account"`
 	Provider string     `json:"provider,omitempty"`
 	Model    string     `json:"model,omitempty"`

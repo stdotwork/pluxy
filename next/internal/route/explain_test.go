@@ -64,6 +64,15 @@ func TestErrorExplainsTheRequest(t *testing.T) {
 	if b, _ := jsonOf(x); strings.Contains(b, "SECRET") || strings.Contains(b, "example.com") {
 		t.Errorf("the explanation holds upstream words or an account ID: %s", b)
 	}
+	// The log's copy names the accounts by their config IDs; the client's holds none of them.
+	if e.Routed == nil || len(e.Routed.Tried) < 2 || e.Routed.Tried[0].ID != "a@example.com" || e.Routed.Tried[1].ID != "b" || e.Routed.Tried[0].Account != pub("a@example.com") {
+		t.Errorf("explanation for the log = %+v, want config IDs beside the public ones", e.Routed)
+	}
+	for _, tr := range x.Tried {
+		if tr.ID != "" {
+			t.Errorf("the client's explanation carries the config ID of %+v", tr)
+		}
+	}
 
 	// Next request: every account is blocked until its reset.
 	e = lastError(t, h.run(h.req("m")))
@@ -74,6 +83,16 @@ func TestErrorExplainsTheRequest(t *testing.T) {
 		if l.State != HealthCooling && l.State != HealthExhausted || l.Until == nil || !l.Until.After(h.now) {
 			t.Errorf("left out %+v, want a block that ends later", l)
 		}
+		if l.ID != "" {
+			t.Errorf("the client's explanation carries the config ID of %+v", l)
+		}
+	}
+	var ids []string
+	for _, l := range e.Routed.LeftOut {
+		ids = append(ids, l.ID)
+	}
+	if slices.Sort(ids); !slices.Equal(ids, []string{"a@example.com", "b", "c"}) {
+		t.Errorf("the log's left_out names accounts %v, want their config IDs", ids)
 	}
 }
 

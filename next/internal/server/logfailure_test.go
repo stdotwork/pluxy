@@ -53,7 +53,7 @@ func failureLines(out string) []string {
 }
 
 var failureAccounts = func() []route.Account {
-	return []route.Account{{ID: "a", Extension: "openai"}, {ID: "b", Extension: "openai"}, {ID: "c", Extension: "openai"}}
+	return []route.Account{{ID: "alpha", Extension: "openai"}, {ID: "beta", Extension: "openai"}, {ID: "work laptop", Extension: "openai"}}
 }
 
 // A failed request logs one line that, after the message it always had, says the model asked for,
@@ -65,8 +65,8 @@ func TestFailureLineSaysWhatRoutingDid(t *testing.T) {
 			out := captureLog(t)
 			cfg := route.Config{Strategy: route.StrategyFillFirst, MaxAttempts: 2, Explain: &explain}
 			reply := map[string]llm.Error{
-				"a": {Code: llm.CodeRateLimit, Status: 429, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: 600000, Message: "SECRET-UPSTREAM rate words"},
-				"b": {Code: llm.CodeAuth, Status: 401, Scope: llm.ScopeCredential, Message: "SECRET-UPSTREAM auth words", Raw: []byte(`{"error":"SECRET-RAW"}`)},
+				"alpha": {Code: llm.CodeRateLimit, Status: 429, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: 600000, Message: "SECRET-UPSTREAM rate words"},
+				"beta":  {Code: llm.CodeAuth, Status: 401, Scope: llm.ScopeCredential, Message: "SECRET-UPSTREAM auth words", Raw: []byte(`{"error":"SECRET-RAW"}`)},
 			}
 			h, pub := failingHandler(t, cfg, failureAccounts(), reply)
 			code, body := postChat(h, "gpt-x")
@@ -76,6 +76,19 @@ func TestFailureLineSaysWhatRoutingDid(t *testing.T) {
 			if got := strings.Contains(body, `"pluxy"`); got != explain {
 				t.Errorf("client body has the pluxy member = %v with routing.explain %v: %s", got, explain, body)
 			}
+			// The client sees public IDs, never the IDs the config and the log name accounts by.
+			if explain {
+				for _, id := range []string{"alpha", "beta"} {
+					if !strings.Contains(body, `"account":"`+pub(id)+`"`) {
+						t.Errorf("client body does not name account %s by its public ID %s: %s", id, pub(id), body)
+					}
+				}
+			}
+			for _, id := range []string{"alpha", "beta", "laptop"} {
+				if strings.Contains(body, id) {
+					t.Errorf("client body holds the config ID %q: %s", id, body)
+				}
+			}
 			lines := failureLines(out.String())
 			if len(lines) != 1 {
 				t.Fatalf("log has %d failure lines, want 1:\n%s", len(lines), out)
@@ -83,8 +96,8 @@ func TestFailureLineSaysWhatRoutingDid(t *testing.T) {
 			line := lines[0]
 			for _, want := range []string{
 				" model=gpt-x",
-				" tried=[" + pub("a") + "(openai): rate_limit; " + pub("b") + "(openai): auth]",
-				" left_out=[" + pub("c") + ": skipped]",
+				" tried=[alpha(openai): rate_limit; beta(openai): auth]",
+				` left_out=["work laptop": skipped]`,
 			} {
 				if !strings.Contains(line, want) {
 					t.Errorf("log line does not contain %q:\n%s", want, line)
@@ -107,13 +120,13 @@ func TestFailureLineSaysWhatRoutingDid(t *testing.T) {
 func TestFailureLineSaysUntilWhen(t *testing.T) {
 	out := captureLog(t)
 	cfg := route.Config{Strategy: route.StrategyFillFirst}
-	reply := map[string]llm.Error{"a": {Code: llm.CodeRateLimit, Status: 429, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: 600000}}
-	h, pub := failingHandler(t, cfg, []route.Account{{ID: "a", Extension: "openai"}}, reply)
+	reply := map[string]llm.Error{"alpha": {Code: llm.CodeRateLimit, Status: 429, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: 600000}}
+	h, _ := failingHandler(t, cfg, []route.Account{{ID: "alpha", Extension: "openai"}}, reply)
 	postChat(h, "gpt-x")
 	out.Reset()
 	postChat(h, "gpt-x") // a is cooling now: nothing is tried
 	line := strings.Join(failureLines(out.String()), "\n")
-	re := regexp.MustCompile(` model=gpt-x tried=\[\] left_out=\[` + pub("a") + `: cooling until (\S+)\]`)
+	re := regexp.MustCompile(` model=gpt-x tried=\[\] left_out=\[alpha: cooling until (\S+)\]`)
 	m := re.FindStringSubmatch(line)
 	if m == nil {
 		t.Fatalf("log line does not say the account is cooling and until when:\n%s", line)
@@ -135,17 +148,17 @@ func TestFailureLineCapsTheLists(t *testing.T) {
 		reply[id] = llm.Error{Code: llm.CodeUpstream, Status: 502, Retryable: true, Scope: llm.ScopeEndpoint}
 	}
 	cfg := route.Config{Strategy: route.StrategyFillFirst, MaxAttempts: 10, TransientErrorCooldownMS: -1}
-	h, pub := failingHandler(t, cfg, accounts, reply)
+	h, _ := failingHandler(t, cfg, accounts, reply)
 	postChat(h, "gpt-x")
 	lines := failureLines(out.String())
 	if len(lines) != 1 {
 		t.Fatalf("log has %d failure lines, want 1:\n%s", len(lines), out)
 	}
 	line := lines[0]
-	if !strings.Contains(line, pub("acct07")+"(openai): upstream; +2 more]") || strings.Contains(line, pub("acct08")+"(openai): upstream") {
+	if !strings.Contains(line, "acct07(openai): upstream; +2 more]") || strings.Contains(line, "acct08(openai): upstream") {
 		t.Errorf("tried list is not cut to 8 and counted:\n%s", line)
 	}
-	if !strings.Contains(line, " left_out=["+pub("acct10")+": skipped; "+pub("acct11")+": skipped]") {
+	if !strings.Contains(line, " left_out=[acct10: skipped; acct11: skipped]") {
 		t.Errorf("left_out list is wrong:\n%s", line)
 	}
 }

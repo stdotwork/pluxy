@@ -485,10 +485,11 @@ never the words of an upstream's reply. `routing.explain` `false` leaves out the
 and the member, and keeps the trace ID.
 
 Core's log line for such an error says the same to the operator, after the error's own message:
-`model=gpt-5 tried=[acc_4e26e0c2(pluxy/codex): quota] left_out=[acc_306dcbdb: exhausted until
-2026-11-09T17:00:00Z; acc_0702c008: banned]`. It names the first 8 accounts of each list and counts
-the rest (`+3 more`), and it is written when `routing.explain` is `false` too, since the log is
-the operator's, not the client's.
+`model=gpt-5 tried=[work-codex(pluxy/codex): quota] left_out=[spare: exhausted until
+2026-11-09T17:00:00Z; old-key: banned]`. It names each account by its ID in the config, as the line's
+`account` and core's other log lines do (the client's member has the public ID), and the first 8
+accounts of each list, counting the rest (`+3 more`). It is written when `routing.explain` is
+`false` too, since the log is the operator's, not the client's.
 
 An upstream's error keeps the fields the client's format shares with the upstream's. A Messages
 client keeps `request_id` and the text `error_code` of `error.details` from a Messages upstream

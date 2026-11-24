@@ -637,9 +637,10 @@ const logRoutedLimit = 8
 // the request: the model asked for, each account tried with how it ended, and each account left
 // out with why, as " model=m tried=[acc_1(p): rate_limit; ...] left_out=[acc_2: cooling until
 // 2026-11-09T12:03:10Z; ...]". It is empty for an error routing did not end. It holds what the
-// client's `pluxy` member holds (public account IDs, providers, models, result codes, health
-// states and times) and never an upstream's words, so it is logged whether or not
-// routing.explain shows it to the client.
+// client's `pluxy` member holds (providers, models, result codes, health states and times) and
+// never an upstream's words, so it is logged whether or not routing.explain shows it to the
+// client. It names each account by its config ID, as the line's prefix and the other log lines do,
+// where the client's member has the public ID.
 func routedSummary(x *llm.Explain) string {
 	if x == nil {
 		return ""
@@ -650,12 +651,12 @@ func routedSummary(x *llm.Explain) string {
 	}
 	var tried []string
 	for _, t := range x.Tried {
-		tried = append(tried, logToken(t.Account)+routedTarget(t.Provider, t.Model, x.Model)+": "+logToken(t.Result))
+		tried = append(tried, logToken(t.ID)+routedTarget(t.Provider, t.Model, x.Model)+": "+logToken(t.Result))
 	}
 	b.WriteString(" tried=" + routedList(tried))
 	var left []string
 	for _, l := range x.LeftOut {
-		s := logToken(l.Account) + routedTarget(l.Provider, l.Model, x.Model) + ": " + logToken(l.State)
+		s := logToken(l.ID) + routedTarget(l.Provider, l.Model, x.Model) + ": " + logToken(l.State)
 		if l.Until != nil {
 			s += " until " + l.Until.UTC().Format(time.RFC3339)
 		}
