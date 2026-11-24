@@ -520,8 +520,27 @@ func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat
 func readRequestBody(w http.ResponseWriter, r *http.Request) ([]byte, *llm.Error, bool) {
 	// The read ends when the request's context does (the management API cancelled the request):
 	// the read deadline moves to now, which fails a read that waits for the client.
-	stop := context.AfterFunc(r.Context(), func() { _ = http.NewResponseController(w).SetReadDeadline(time.Now()) })
-	defer stop()
+	//
+	// That deadline must not outlive the request. On HTTP/1 it is the connection's, and net/http
+	// reads the connection in the background once the body has ended: a deadline set as the body
+	// ends would fail that read, end the connection's context, and so cancel every later request
+	// on the connection. So when the deadline was set, the reply closes the connection. The
+	// request is ending as cancelled anyway; its client reconnects once. An HTTP/2 deadline is the
+	// stream's alone.
+	set := make(chan struct{})
+	stop := context.AfterFunc(r.Context(), func() {
+		defer close(set)
+		_ = http.NewResponseController(w).SetReadDeadline(time.Now())
+	})
+	defer func() {
+		if stop() {
+			return // the context is live: no deadline was set, and none will be
+		}
+		<-set
+		if r.ProtoMajor == 1 {
+			w.Header().Set("Connection", "close")
+		}
+	}()
 	encoding, supported := requestContentEncoding(r.Header)
 	if !supported {
 		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusUnsupportedMediaType, Scope: llm.ScopeRequest,
@@ -531,6 +550,9 @@ func readRequestBody(w http.ResponseWriter, r *http.Request) ([]byte, *llm.Error
 	var reader io.Reader = r.Body
 	if strings.EqualFold(encoding, "gzip") {
 		zr, err := gzip.NewReader(r.Body)
+		if err != nil && r.Context().Err() != nil {
+			return nil, nil, false // the read was cut short before the gzip header arrived
+		}
 		if err != nil {
 			return nil, &llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusBadRequest, Scope: llm.ScopeRequest,
 				Message: "request body is not valid gzip"}, true

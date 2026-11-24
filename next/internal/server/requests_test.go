@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -94,6 +96,8 @@ type requestsCore struct {
 	attempts atomic.Int64
 	g        *Generation
 	client   *http.Client
+	// encoding, when set, is the Content-Encoding of the requests postBody sends.
+	encoding string
 }
 
 func newRequestsCore(t *testing.T) *requestsCore { return newRequestsCoreWith(t, "k", false, nil) }
@@ -156,6 +160,9 @@ func (c *requestsCore) postBody(ctx context.Context, path string, body io.Reader
 	}
 	req.Header.Set("Authorization", "Bearer "+c.key)
 	req.Header.Set("Content-Type", "application/json")
+	if c.encoding != "" {
+		req.Header.Set("Content-Encoding", c.encoding)
+	}
 	return c.client.Do(req)
 }
 
@@ -576,8 +583,12 @@ func TestRequestsWebSocketTurn(t *testing.T) {
 		if _, ok := c.q.Cancel(trace); !ok {
 			t.Fatal("the running turn could not be cancelled")
 		}
+		// The cancel must be what closes the socket, not readUntil's own 5s limit.
+		cancelledAt := time.Now()
 		if err := readUntil(conn, "response.completed"); err == nil {
 			t.Fatal("the cancelled turn completed")
+		} else if took := time.Since(cancelledAt); errors.Is(err, context.DeadlineExceeded) || took > time.Second {
+			t.Fatalf("the socket did not close because of the cancel: the read ended after %s with %v", took, err)
 		}
 		c.waitEmpty(t)
 		if e := c.lastEvent(t); e.ErrorCode != llm.CodeCancelled || !e.Failed {
@@ -782,13 +793,17 @@ func TestRequestsKeepNoClientKey(t *testing.T) {
 // cancelled error, the request leaves the list at once, no attempt is made, and the usage record
 // has one cancelled event with no attempt. Over HTTP/1 and HTTP/2.
 func TestRequestsCancelDuringBodyRead(t *testing.T) {
-	for _, h2 := range []bool{false, true} {
-		name := "HTTP/1"
-		if h2 {
-			name = "HTTP/2"
-		}
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		h2   bool
+		gzip bool // the body is gzip, and the cancel comes before its header does
+	}{{"HTTP/1", false, false}, {"HTTP/2", true, false}, {"HTTP/1 before the gzip header", false, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			h2 := tc.h2
 			c := newRequestsCoreWith(t, "k", h2, nil)
+			if tc.gzip {
+				c.encoding = "gzip"
+			}
 			c.holding(replyStart, replyEnd)
 			body, send := io.Pipe()
 			defer send.Close()
@@ -809,8 +824,10 @@ func TestRequestsCancelDuringBodyRead(t *testing.T) {
 				b, _ := io.ReadAll(resp.Body)
 				done <- result{status: resp.StatusCode, proto: resp.Proto, body: string(b)}
 			}()
-			if _, err := send.Write([]byte(`{"model":"m1","messages":[`)); err != nil {
-				t.Fatal(err)
+			if !tc.gzip {
+				if _, err := send.Write([]byte(`{"model":"m1","messages":[`)); err != nil {
+					t.Fatal(err)
+				}
 			}
 			deadline := time.Now().Add(5 * time.Second)
 			for len(c.q.List()) != 1 {
@@ -978,11 +995,17 @@ func TestRequestsCancelWebSocketSessionTurn(t *testing.T) {
 	if _, ok := c.q.Cancel(got.ID); !ok {
 		t.Fatal("the session turn could not be cancelled")
 	}
+	// The cancel must be what closes the socket: it closes within a second, long before this
+	// read's own limit would end it.
+	cancelledAt := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
+			if took := time.Since(cancelledAt); ctx.Err() != nil || took > time.Second {
+				t.Fatalf("the socket did not close because of the cancel: the read ended after %s with %v", took, err)
+			}
 			break // the socket closed, as it does for a turn whose context ended
 		}
 		if strings.Contains(string(data), "response.completed") {
@@ -1003,4 +1026,79 @@ func TestRequestsCancelWebSocketSessionTurn(t *testing.T) {
 	if e := c.lastEvent(t); e.ErrorCode != llm.CodeCancelled || !e.Failed || e.Account != "work" {
 		t.Errorf("usage has %+v, want the turn failed as cancelled", e)
 	}
+}
+
+// A cancel that lands just as a request's body ends must not harm the requests that follow it on
+// the same HTTP/1 connection: the read deadline that ends a body read would otherwise outlive the
+// request and end the connection's context, and each later request on it would be answered as
+// cancelled though nobody cancelled it. The request after a cancelled one always gets its reply.
+func TestRequestsCancelAtBodyEndLeavesConnectionUsable(t *testing.T) {
+	const workers, rounds = 8, 60
+	var wg sync.WaitGroup
+	var cancelled, poisoned atomic.Int64
+	for range workers {
+		// A core for each worker, so a worker cancels only its own first request.
+		c := newRequestsCore(t)
+		h := c.holding(replyStart, replyEnd)
+		close(h.release)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer c.waitEmpty(t)
+			// One connection for this worker, kept between requests.
+			client := &http.Client{Transport: &http.Transport{MaxConnsPerHost: 1, MaxIdleConnsPerHost: 1}}
+			defer client.CloseIdleConnections()
+			do := func(body io.Reader, marker string) (int, string, error) {
+				req, err := http.NewRequest(http.MethodPost, c.URL+"/v1/chat/completions", body)
+				if err != nil {
+					return 0, "", err
+				}
+				req.Header.Set("Authorization", "Bearer k")
+				req.Header.Set("X-Test-Marker", marker)
+				resp, err := client.Do(req)
+				if err != nil {
+					return 0, "", err
+				}
+				defer resp.Body.Close()
+				b, _ := io.ReadAll(resp.Body)
+				return resp.StatusCode, string(b), nil
+			}
+			for range rounds {
+				body, send := io.Pipe()
+				first := make(chan int, 1)
+				go func() {
+					status, _, _ := do(body, "first")
+					first <- status
+				}()
+				_, _ = send.Write([]byte(`{"model":"m1","messages":[{"role":"user",`))
+				// Once core lists the request, the rest of the body and the cancel go out together,
+				// the cancel up to 300 microseconds behind: often it lands as the read ends.
+				var id string
+				for deadline := time.Now().Add(5 * time.Second); id == "" && time.Now().Before(deadline); {
+					if l := c.q.List(); len(l) == 1 {
+						id = l[0].ID
+					}
+				}
+				go func() {
+					_, _ = send.Write([]byte(`"content":"hi"}]}`))
+					send.Close()
+				}()
+				time.Sleep(time.Duration(rand.IntN(300)) * time.Microsecond)
+				if _, ok := c.q.Cancel(id); ok {
+					cancelled.Add(1)
+				}
+				<-first
+				// Nobody cancels this one: it must be answered, on the old connection or a new one.
+				if status, b, err := do(strings.NewReader(heldChatBody), "second"); err != nil || status != http.StatusOK {
+					poisoned.Add(1)
+					t.Errorf("the request after a cancelled one got status %d, error %v: %s", status, err, b)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if cancelled.Load() == 0 {
+		t.Error("no request was cancelled while its body arrived: the test did not exercise the race")
+	}
+	t.Logf("%d cancels raced the end of a body; %d later requests failed", cancelled.Load(), poisoned.Load())
 }
