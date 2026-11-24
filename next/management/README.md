@@ -73,8 +73,10 @@ management API of a core that is already running. `pluxy -config ...` with no su
 - **Which core.** `--config <path>` (default `config.json`) is read for the address and the management
   key; or `--url` and `--key` (or `PLUXY_URL`, `PLUXY_MANAGEMENT_KEY`) name a core on another machine.
 - **Output.** For people by default: aligned columns, one thing per line, no colour when not a terminal.
-  With `--json`: the API's reply body, unchanged, on standard output and nothing else. Errors go to
-  standard error: a sentence, or with `--json` the API's error object.
+  Help asked for (`help`, `-h`, `--help`) goes to standard output and exits 0. With `--json`: the API's
+  reply body, unchanged, on standard output and nothing else (`{}` when core replied with an empty body).
+  Errors go to standard error: a sentence, or with `--json` the API's error object (including flag and
+  usage errors).
 - **Nothing asks a question** unless standard input is a terminal; `--yes` answers yes.
 - **Signing in.** `pluxy account add` and `pluxy account login` start a sign-in and follow it: the
   address to open or the code to type is printed (on standard error), each value the sign-in asks
@@ -110,10 +112,10 @@ management API of a core that is already running. `pluxy -config ...` with no su
   | --- | --- |
   | 0 | Done |
   | 1 | The call failed (any error not listed below) |
-  | 2 | The command line is wrong (unknown subcommand or flag, missing argument) |
+  | 2 | The command line or request is invalid (unknown subcommand or flag, missing argument, malformed `--url`, or 400 from core) |
   | 3 | No core answered at the address |
   | 4 | Refused: no key, wrong key, another machine, or blocked (401, 403) |
-  | 5 | Not found (404) |
+  | 5 | Not found (404, or `route` for a model no account serves) |
   | 6 | Core refused the change (409 or 422 from a command that changes something); nothing was changed |
   | 7 | Waiting for a person: a sign-in needs a browser or a code, and `--no-wait` was given |
 

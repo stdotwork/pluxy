@@ -402,8 +402,8 @@ func TestLogsClear(t *testing.T) {
 		w.Write([]byte(`{"error":{"code":"invalid_request","message":"logging to file is off"}}`))
 	}))
 	defer off.Close()
-	if out, errOut, code := runLogs(off, false, "logs", "clear"); code != 1 || out != "" || !strings.Contains(errOut, "logging to file is off") {
-		t.Errorf("logs clear while logging is off: %d %q %q, want 1 and core's reason", code, out, errOut)
+	if out, errOut, code := runLogs(off, false, "logs", "clear"); code != exitUsage || out != "" || !strings.Contains(errOut, "logging to file is off") {
+		t.Errorf("logs clear while logging is off: %d %q %q, want 2 and core's reason", code, out, errOut)
 	}
 }
 
