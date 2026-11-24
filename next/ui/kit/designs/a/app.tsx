@@ -412,7 +412,7 @@ function Shell(props: { session: Session; themes: ThemeState }) {
     },
     {
       keys: "t l",
-      label: `Appearance: ${appearance.choice} (change)`,
+      label: `Change appearance (now ${appearance.choice})`,
       run: cycleAppearance,
       quiet: true,
       group: "Everywhere",

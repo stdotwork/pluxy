@@ -323,6 +323,8 @@ function Tail(props: {
   fleet: Fleet;
   paused: boolean;
   onPause: () => void;
+  /** The strip above already says the whole error. */
+  brief?: boolean;
 }) {
   const { tail } = props;
   const events = tail.data?.events ?? [];
@@ -363,6 +365,7 @@ function Tail(props: {
           retry={tail.reload}
           stale={events.length > 0}
           at={tail.at}
+          brief={props.brief}
         />
       )}
       {tail.loading ? (
@@ -513,6 +516,7 @@ export function Overview() {
             retry={fleet.reload}
             stale={!!fleet.accounts.data}
             at={fleet.accounts.at}
+            brief={!!usage.error}
           />
         )}
         {fleet.accounts.loading ? (
@@ -529,12 +533,18 @@ export function Overview() {
             pluxy sends requests through the subscriptions and API keys you add. Add the first one and it
             shows here with its state and usage windows.
           </Blank>
-        ) : (
+        ) : fleet.accounts.data ? (
           <Board fleet={fleet} fix={fix} cursor={cursor} />
-        )}
+        ) : null}
       </section>
 
-      <Tail tail={tail} fleet={fleet} paused={paused} onPause={() => setPaused((v) => !v)} />
+      <Tail
+        tail={tail}
+        fleet={fleet}
+        paused={paused}
+        onPause={() => setPaused((v) => !v)}
+        brief={!!usage.error}
+      />
     </div>
   );
 }

@@ -216,16 +216,19 @@ export function Fault(props: {
   stale?: boolean;
   /** When that reading was taken (Unix ms). */
   at?: number;
+  /** Another notice on the screen already says the whole error: this one keeps to the cause. */
+  brief?: boolean;
 }) {
   // Over a reading that still shows, one short line: the cause in a few words, the whole error as its tooltip.
   const cause = props.error.split(":")[0]?.trim() ?? "";
-  const text = props.stale ? cause : props.error;
+  const short = props.stale || props.brief;
+  const text = short ? cause : props.error;
   return (
     <div
       class="da-fault"
       role="alert"
       data-stale={props.stale ? "" : undefined}
-      title={props.stale ? props.error : undefined}
+      title={short ? props.error : undefined}
     >
       <Icon name="warning" size={14} />
       <span class="da-fault-text">

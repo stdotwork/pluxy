@@ -265,8 +265,14 @@ export function paceOf(limit: QuotaLimit, now: number): Pace | undefined {
   used = Math.max(0, Math.min(1, used));
   const resetsIn = limit.resets_at ? limit.resets_at * 1000 - now : undefined;
   let elapsed: number | undefined;
-  if (resetsIn !== undefined && limit.window_seconds && resetsIn >= 0) {
-    elapsed = Math.max(0, Math.min(1, 1 - resetsIn / (limit.window_seconds * 1000)));
+  // A reset further away than the window is long says nothing about where the clock is in it.
+  if (
+    resetsIn !== undefined &&
+    limit.window_seconds &&
+    resetsIn >= 0 &&
+    resetsIn <= limit.window_seconds * 1000
+  ) {
+    elapsed = 1 - resetsIn / (limit.window_seconds * 1000);
   }
   let course: Pace["course"] = "steady";
   if (used >= 1) course = "full";

@@ -1259,6 +1259,10 @@
   margin-left: auto;
 }
 
+:root[data-design="a"] .da-keys:focus {
+  outline: none;
+}
+
 :root[data-design="a"] .da-keys-body {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));

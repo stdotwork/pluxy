@@ -1102,7 +1102,8 @@
     content: " now";
   }
 
-  :root[data-design="a"] .da-board-row .da-cell-error {
+  :root[data-design="a"] .da-board-row .da-cell-error,
+  :root[data-design="a"] .da-board-row .da-cell-error[data-wide] {
     grid-area: error;
     padding-bottom: 0;
   }

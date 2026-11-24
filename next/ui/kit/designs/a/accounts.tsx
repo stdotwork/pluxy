@@ -627,7 +627,7 @@ function sentence(row: Row, now: number, why?: string): string {
   const s = row.standing;
   const until =
     s.until && s.until > now ? ` It comes back at ${stamp(s.until, now)}, in ${wait(s.until - now)}.` : "";
-  const because = why ? ` ${why.replace(/\.?$/, ".")}` : "";
+  const because = why ? ` ${why.charAt(0).toUpperCase()}${why.slice(1).replace(/\.?$/, ".")}` : "";
   switch (s.state) {
     case "serving":
       return s.coolingModels
