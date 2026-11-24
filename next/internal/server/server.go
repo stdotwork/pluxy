@@ -369,6 +369,7 @@ func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat
 	arrived := time.Now()
 	body, e, ok := readRequestBody(w, r)
 	if !ok {
+		g.cancelledUnread(w, r, f, arrived, true)
 		return
 	}
 	if e != nil {
@@ -387,6 +388,9 @@ func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat
 	f.nativeHeaders(r, &req)
 	r, t := requestTrace(r)
 	m := g.newMeter(r, arrived, req, clientToken(r, f.googleKeys))
+	if cancelledBeforeRouting(w, r, f, m) {
+		return
+	}
 	rr := routeRequest(r, req, body)
 	rr.Attempting = func(a route.Attempt) {
 		t.attempt(a)
@@ -511,7 +515,13 @@ func serve(w http.ResponseWriter, r *http.Request, g *Generation, f clientFormat
 
 // readRequestBody reads a client request body within MaxRequestBody after undoing gzip content
 // encoding. A gzip body that expands past the limit is refused before it can reach the parser.
+// It returns false when the read ended before the body did: the client went away, or the
+// request's context ended.
 func readRequestBody(w http.ResponseWriter, r *http.Request) ([]byte, *llm.Error, bool) {
+	// The read ends when the request's context does (the management API cancelled the request):
+	// the read deadline moves to now, which fails a read that waits for the client.
+	stop := context.AfterFunc(r.Context(), func() { _ = http.NewResponseController(w).SetReadDeadline(time.Now()) })
+	defer stop()
 	encoding, supported := requestContentEncoding(r.Header)
 	if !supported {
 		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Status: http.StatusUnsupportedMediaType, Scope: llm.ScopeRequest,

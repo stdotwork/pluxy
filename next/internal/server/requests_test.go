@@ -3,9 +3,11 @@ package server
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -85,11 +87,22 @@ type requestsCore struct {
 	q     *Requests
 	usage *usage.Store
 	reply atomic.Pointer[func(ctx context.Context, req llm.Request) route.Stream]
+	// key is the client key, state the routing state, attempts how many attempts began, and g
+	// the generation every request runs on.
+	key      string
+	state    *route.State
+	attempts atomic.Int64
+	g        *Generation
+	client   *http.Client
 }
 
-func newRequestsCore(t *testing.T) *requestsCore {
+func newRequestsCore(t *testing.T) *requestsCore { return newRequestsCoreWith(t, "k", false, nil) }
+
+// newRequestsCoreWith is newRequestsCore with the client key key, over HTTP/2 when h2, and with
+// accounts that take sessions when openSession is not nil.
+func newRequestsCoreWith(t *testing.T, key string, h2 bool, openSession OpenSessionFunc) *requestsCore {
 	t.Helper()
-	c := &requestsCore{q: NewRequests()}
+	c := &requestsCore{q: NewRequests(), key: key, state: route.NewState(), client: http.DefaultClient}
 	store, err := usage.Open(usage.Options{Dir: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -97,19 +110,27 @@ func newRequestsCore(t *testing.T) *requestsCore {
 	t.Cleanup(func() { store.Close() })
 	c.usage = store
 	attempt := func(ctx context.Context, _ string, _ protocol.Account, req llm.Request) route.Stream {
+		c.attempts.Add(1)
 		return (*c.reply.Load())(ctx, req)
 	}
-	router, err := route.New(route.Config{}, []route.Account{{ID: "work", Extension: "test-ext"}}, attempt, nil)
+	router, err := route.New(route.Config{}, []route.Account{{ID: "work", Extension: "test-ext"}}, attempt, c.state)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := &Config{ClientKeys: []string{"k"}}
+	cfg := &Config{ClientKeys: []string{key}}
 	if err := cfg.CORS.prepare(); err != nil {
 		t.Fatal(err)
 	}
-	g := &Generation{Config: cfg, Router: router, Attempt: attempt, Count: attempt, Endpoint: attempt, Usage: store, Requests: c.q,
-		KeyID: func(key string) string { return "id-of-" + key }}
-	c.Server = httptest.NewServer(NewHandler(fixedSource{g}))
+	c.g = &Generation{Config: cfg, Router: router, Attempt: attempt, Count: attempt, Endpoint: attempt, OpenSession: openSession, Usage: store, Requests: c.q,
+		KeyID: func(string) string { return "id-of-k" }}
+	c.Server = httptest.NewUnstartedServer(NewHandler(fixedSource{c.g}))
+	if h2 {
+		c.EnableHTTP2 = true
+		c.StartTLS()
+		c.client = c.Client()
+	} else {
+		c.Start()
+	}
 	t.Cleanup(c.Close)
 	return c
 }
@@ -125,13 +146,17 @@ func (c *requestsCore) holding(pre, post []llm.Event) *hold {
 }
 
 func (c *requestsCore) post(ctx context.Context, path, body string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL+path, strings.NewReader(body))
+	return c.postBody(ctx, path, strings.NewReader(body))
+}
+
+func (c *requestsCore) postBody(ctx context.Context, path string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.URL+path, body)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer k")
+	req.Header.Set("Authorization", "Bearer "+c.key)
 	req.Header.Set("Content-Type", "application/json")
-	return http.DefaultClient.Do(req)
+	return c.client.Do(req)
 }
 
 // waitEmpty fails unless the registry is empty within a few seconds: a handler returns a moment
@@ -689,5 +714,293 @@ func TestRequestsConcurrentStartEndCancel(t *testing.T) {
 	c.waitEmpty(t)
 	if cancelled.Load() == 0 {
 		t.Error("no request was cancelled while it ran: the test did not exercise a cancel")
+	}
+}
+
+// The registry keeps the ID of a request's client key and never the key: no text an entry holds
+// contains it, for an HTTP request or a WebSocket turn.
+func TestRequestsKeepNoClientKey(t *testing.T) {
+	const key = "client-key-the-registry-must-not-keep-7Qm2"
+	c := newRequestsCoreWith(t, key, false, nil)
+	h := c.holding(nil, replyRefused)
+	go func() {
+		if resp, err := c.post(context.Background(), "/v1/chat/completions", heldChatBody); err == nil {
+			resp.Body.Close()
+		}
+	}()
+	waitEntered(t, h, 1)
+	conn, _, err := websocket.Dial(context.Background(), "ws"+strings.TrimPrefix(c.URL, "http")+"/v1/responses",
+		&websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer " + key}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+	if err := conn.Write(context.Background(), websocket.MessageText, []byte(`{"type":"response.create","model":"m1","input":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	waitEntered(t, h, 1)
+
+	c.q.mu.Lock()
+	entries := 0
+	for _, e := range c.q.open {
+		entries++
+		v := reflect.ValueOf(e).Elem()
+		for i := range v.NumField() {
+			if f := v.Field(i); f.Kind() == reflect.String && strings.Contains(f.String(), key) {
+				t.Errorf("the entry's field %s holds the client key", v.Type().Field(i).Name)
+			}
+		}
+		if e.keyID != "id-of-k" {
+			t.Errorf("the entry's key ID is %q, want the key's ID", e.keyID)
+		}
+	}
+	c.q.mu.Unlock()
+	if entries != 2 {
+		t.Fatalf("%d entries, want the HTTP request and the WebSocket turn", entries)
+	}
+	// Every string field is checked above; a field of another kind that could hold text fails here.
+	for i := range reflect.TypeFor[running]().NumField() {
+		switch f := reflect.TypeFor[running]().Field(i); f.Type.Kind() {
+		case reflect.String, reflect.Bool, reflect.Int:
+		default:
+			switch f.Name {
+			case "start", "client", "cancel", "stopped", "mu": // a time, an address, a function, a flag, a lock
+			default:
+				t.Errorf("the entry's field %s is a %s: say here why it cannot hold the client key", f.Name, f.Type)
+			}
+		}
+	}
+	if b, _ := json.Marshal(c.q.List()); strings.Contains(string(b), key) {
+		t.Errorf("the list holds the client key: %s", b)
+	}
+	close(h.release)
+	_ = conn.CloseNow()
+	c.waitEmpty(t)
+}
+
+// A cancel while the request's body is still arriving ends the read: the client gets the
+// cancelled error, the request leaves the list at once, no attempt is made, and the usage record
+// has one cancelled event with no attempt. Over HTTP/1 and HTTP/2.
+func TestRequestsCancelDuringBodyRead(t *testing.T) {
+	for _, h2 := range []bool{false, true} {
+		name := "HTTP/1"
+		if h2 {
+			name = "HTTP/2"
+		}
+		t.Run(name, func(t *testing.T) {
+			c := newRequestsCoreWith(t, "k", h2, nil)
+			c.holding(replyStart, replyEnd)
+			body, send := io.Pipe()
+			defer send.Close()
+			type result struct {
+				status int
+				proto  string
+				body   string
+				err    error
+			}
+			done := make(chan result, 1)
+			go func() {
+				resp, err := c.postBody(context.Background(), "/v1/chat/completions", body)
+				if err != nil {
+					done <- result{err: err}
+					return
+				}
+				defer resp.Body.Close()
+				b, _ := io.ReadAll(resp.Body)
+				done <- result{status: resp.StatusCode, proto: resp.Proto, body: string(b)}
+			}()
+			if _, err := send.Write([]byte(`{"model":"m1","messages":[`)); err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for len(c.q.List()) != 1 {
+				if time.Now().After(deadline) {
+					t.Fatal("the request whose body is arriving is not listed")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			got := c.onlyRequest(t)
+			if got.Model != "" || got.Account != "" || got.KeyID != "id-of-k" {
+				t.Errorf("listed as %+v, want no model and no account yet", got)
+			}
+			cancelledAt := time.Now()
+			if _, ok := c.q.Cancel(got.ID); !ok {
+				t.Fatal("the request could not be cancelled")
+			}
+			select {
+			case r := <-done:
+				if r.err != nil {
+					t.Fatal(r.err)
+				}
+				if wantProto := map[bool]string{false: "HTTP/1.1", true: "HTTP/2.0"}[h2]; r.proto != wantProto {
+					t.Errorf("the reply came over %s, want %s", r.proto, wantProto)
+				}
+				if r.status != http.StatusBadGateway || !strings.Contains(r.body, "the request was cancelled") {
+					t.Errorf("the client got status %d and %q, want the cancelled error", r.status, r.body)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("3s after the cancel the client has no reply: the body read did not end")
+			}
+			c.waitEmpty(t)
+			if took := time.Since(cancelledAt); took > 2*time.Second {
+				t.Errorf("the request left the list %s after the cancel", took)
+			}
+			if n := c.attempts.Load(); n != 0 {
+				t.Errorf("%d attempts were made for a request cancelled before its body arrived", n)
+			}
+			evs := c.usage.Events(usage.Filter{}, 0, 100).Events
+			if len(evs) != 1 || evs[0].ErrorCode != llm.CodeCancelled || !evs[0].Failed || evs[0].Attempts != 0 || evs[0].Account != "" ||
+				evs[0].Status != http.StatusBadGateway || evs[0].KeyID != "id-of-k" {
+				t.Errorf("usage has %+v, want one cancelled event with no attempt and the reply's status", evs)
+			}
+		})
+	}
+}
+
+// cancelOnRead is a request body that cancels the one listed request when it is first read, then
+// gives the whole body: the cancel lands after the request is listed and before it is routed.
+type cancelOnRead struct {
+	q    *Requests
+	rest io.Reader
+	done bool
+}
+
+func (b *cancelOnRead) Read(p []byte) (int, error) {
+	if !b.done {
+		b.done = true
+		for _, r := range b.q.List() {
+			b.q.Cancel(r.ID)
+		}
+	}
+	return b.rest.Read(p)
+}
+
+func (b *cancelOnRead) Close() error { return nil }
+
+// A request cancelled before routing never starts an attempt, though its whole body was read: the
+// generate routes and an endpoint record it as cancelled with its model, a count just answers.
+func TestRequestsCancelledBeforeRoutingMakesNoAttempt(t *testing.T) {
+	for _, tc := range []struct {
+		path, body string
+		events     int
+	}{
+		{"/v1/chat/completions", heldChatBody, 1},
+		{"/v1beta/models/m1:generateContent", `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`, 1},
+		{"/v1/embeddings", `{"model":"m1","input":"hi"}`, 1},
+		{"/v1beta/models/m1:embedContent", `{"content":{"parts":[{"text":"hi"}]}}`, 1},
+		{"/v1/messages/count_tokens", `{"model":"m1","messages":[{"role":"user","content":"hi"}]}`, 0},
+		{"/v1beta/models/m1:countTokens", `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`, 0},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			c := newRequestsCore(t)
+			c.holding(replyStart, replyEnd)
+			r := httptest.NewRequest(http.MethodPost, tc.path, nil)
+			r.Body = &cancelOnRead{q: c.q, rest: strings.NewReader(tc.body)}
+			r.Header.Set("Authorization", "Bearer k")
+			r.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			NewHandler(fixedSource{c.g}).ServeHTTP(w, r)
+			if w.Code < 400 || !strings.Contains(w.Body.String(), "cancelled") {
+				t.Errorf("status %d, body %s; want the cancelled error", w.Code, w.Body)
+			}
+			if n := c.attempts.Load(); n != 0 {
+				t.Errorf("%d attempts were made for a request cancelled before routing", n)
+			}
+			evs := c.usage.Events(usage.Filter{}, 0, 100).Events
+			if len(evs) != tc.events {
+				t.Fatalf("usage has %d events, want %d: %+v", len(evs), tc.events, evs)
+			}
+			for _, e := range evs {
+				if e.ErrorCode != llm.CodeCancelled || e.Attempts != 0 || e.Model != "m1" || e.Status != w.Code {
+					t.Errorf("usage has %+v, want cancelled, no attempt, model m1 and status %d", e, w.Code)
+				}
+			}
+			c.waitEmpty(t)
+		})
+	}
+}
+
+// testSession is an upstream session whose turns are what reply returns.
+type testSession struct {
+	reply  func(ctx context.Context) Stream
+	turns  atomic.Int64
+	closed atomic.Bool
+}
+
+func (s *testSession) AccountID() string { return "work" }
+func (s *testSession) Ended() bool       { return s.closed.Load() }
+func (s *testSession) Interrupt([]byte)  {}
+func (s *testSession) Close()            { s.closed.Store(true) }
+func (s *testSession) Turn(ctx context.Context, _ protocol.Account, _ llm.Request) Stream {
+	s.turns.Add(1)
+	return s.reply(ctx)
+}
+
+// A WebSocket turn that runs on an upstream session is listed like any other, and a cancel ends
+// it: the turn's context ends, the socket closes, the session is closed, the account counts no
+// request, and the registry is empty.
+func TestRequestsCancelWebSocketSessionTurn(t *testing.T) {
+	h := newHold()
+	sess := &testSession{}
+	var turnCtx atomic.Pointer[context.Context]
+	sess.reply = func(ctx context.Context) Stream {
+		turnCtx.Store(&ctx)
+		return &held{ctx: ctx, h: h, pre: replyStart, post: replyEnd}
+	}
+	var opened atomic.Int64
+	c := newRequestsCoreWith(t, "k", false, func(context.Context, string, protocol.Account, protocol.SessionInfo) (Session, *llm.Error) {
+		opened.Add(1)
+		return sess, nil
+	})
+	active := func() int {
+		return c.state.Runtime(route.Account{ID: "work", Extension: "test-ext"}, time.Now()).Active
+	}
+	conn, resp, err := websocket.Dial(context.Background(), "ws"+strings.TrimPrefix(c.URL, "http")+"/v1/responses",
+		&websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer k"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+	if err := conn.Write(context.Background(), websocket.MessageText, []byte(`{"type":"response.create","model":"m1","input":[]}`)); err != nil {
+		t.Fatal(err)
+	}
+	waitEntered(t, h, 1)
+	if opened.Load() != 1 || sess.turns.Load() != 1 || c.attempts.Load() != 0 {
+		t.Fatalf("the turn did not run on the session: %d sessions opened, %d session turns, %d HTTP attempts", opened.Load(), sess.turns.Load(), c.attempts.Load())
+	}
+	got := c.onlyRequest(t)
+	if got.ID != resp.Header.Get(TraceHeader) || got.Account != "work" || got.Model != "m1" || got.Attempts != 1 {
+		t.Errorf("listed as %+v, want the socket's trace %s on account work", got, resp.Header.Get(TraceHeader))
+	}
+	if n := active(); n != 1 {
+		t.Errorf("the account counts %d requests during the turn, want 1", n)
+	}
+	if _, ok := c.q.Cancel(got.ID); !ok {
+		t.Fatal("the session turn could not be cancelled")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for {
+		_, data, err := conn.Read(ctx)
+		if err != nil {
+			break // the socket closed, as it does for a turn whose context ended
+		}
+		if strings.Contains(string(data), "response.completed") {
+			t.Fatal("the cancelled session turn completed")
+		}
+	}
+	c.waitEmpty(t)
+	if (*turnCtx.Load()).Err() == nil {
+		t.Error("the session turn's context is still live after the cancel")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for !sess.closed.Load() || active() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("after the cancel: session closed %v, the account counts %d requests; want closed and 0", sess.closed.Load(), active())
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if e := c.lastEvent(t); e.ErrorCode != llm.CodeCancelled || !e.Failed || e.Account != "work" {
+		t.Errorf("usage has %+v, want the turn failed as cancelled", e)
 	}
 }

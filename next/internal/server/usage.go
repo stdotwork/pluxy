@@ -38,13 +38,24 @@ func (g *Generation) newMeter(r *http.Request, start time.Time, req llm.Request,
 		m.running = t.running
 	}
 	m.ev = usage.Event{Timestamp: start.UTC(), Endpoint: r.URL.Path, Stream: req.Stream, Model: req.Model}
+	if m.running != nil {
+		m.ev.KeyID = m.running.keyID // worked out once, when the request was listed
+	} else {
+		m.ev.KeyID = g.keyIDOf(key)
+	}
 	if a := ClientIP(r); a.IsValid() {
 		m.ev.ClientIP = a.String()
 	}
-	if len(g.Config.ClientKeys) > 0 && key != "" && g.KeyID != nil {
-		m.ev.KeyID = g.KeyID(key)
-	}
 	return m
+}
+
+// keyIDOf returns the ID the management API lists the client key under, or "" with no client
+// keys set, no key or no Generation.KeyID.
+func (g *Generation) keyIDOf(key string) string {
+	if len(g.Config.ClientKeys) > 0 && key != "" && g.KeyID != nil {
+		return g.KeyID(key)
+	}
+	return ""
 }
 
 // response notes the model the upstream reply says served the request.

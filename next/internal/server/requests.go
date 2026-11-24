@@ -39,10 +39,9 @@ type running struct {
 	start    time.Time
 	endpoint string
 	client   netip.Addr
-	// key is the client key the request came with and keyID the generation's Generation.KeyID.
-	// The list shows keyID(key), worked out when it is read, and never key.
-	key    string
-	keyID  func(string) string
+	// keyID is the ID of the client key the request came with, as the management API lists
+	// client keys. The key itself is never kept.
+	keyID  string
 	cancel context.CancelFunc
 
 	// stopped is set when the management API cancelled the request.
@@ -78,8 +77,8 @@ func (q *Requests) begin(r *http.Request, g *Generation, f clientFormat) (*http.
 		ctx = context.WithValue(ctx, traceKey{}, t)
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	e := &running{id: t.id, start: time.Now(), endpoint: r.URL.Path, client: ClientIP(r), key: clientToken(r, f.googleKeys),
-		keyID: g.KeyID, cancel: cancel, format: f.format}
+	e := &running{id: t.id, start: time.Now(), endpoint: r.URL.Path, client: ClientIP(r), keyID: g.keyIDOf(clientToken(r, f.googleKeys)),
+		cancel: cancel, format: f.format}
 	t.running = e
 	q.add(e)
 	return r.WithContext(ctx), t, e
@@ -92,12 +91,13 @@ func (q *Requests) beginTurn(r *http.Request, g *Generation, id string, start ti
 	if q == nil {
 		return nil
 	}
-	e := &running{id: id, start: start, endpoint: r.URL.Path, client: ClientIP(r), key: clientToken(r, false), keyID: g.KeyID,
+	e := &running{id: id, start: start, endpoint: r.URL.Path, client: ClientIP(r), keyID: g.keyIDOf(clientToken(r, false)),
 		cancel: cancel, format: llm.FormatOpenAIResponses, model: model, stream: true}
 	q.add(e)
 	return e
 }
 
+// add lists e. Trace IDs are made by core (newTrace) and unique, so e never replaces an entry.
 func (q *Requests) add(e *running) {
 	q.mu.Lock()
 	q.open[e.id] = e
@@ -147,12 +147,9 @@ func (e *running) byOperator() bool { return e != nil && e.stopped.Load() }
 
 // view returns e as the management API shows it.
 func (e *running) view() management.RunningRequest {
-	v := management.RunningRequest{ID: e.id, StartedAt: e.start.UTC(), Endpoint: e.endpoint}
+	v := management.RunningRequest{ID: e.id, StartedAt: e.start.UTC(), Endpoint: e.endpoint, KeyID: e.keyID}
 	if e.client.IsValid() {
 		v.ClientIP = e.client.String()
-	}
-	if e.key != "" && e.keyID != nil {
-		v.KeyID = e.keyID(e.key)
 	}
 	e.mu.Lock()
 	v.Format, v.Model, v.Stream = e.format, e.model, e.stream
@@ -201,4 +198,38 @@ func (q *Requests) Cancel(id string) (management.RunningRequest, bool) {
 	e.stopped.Store(true)
 	e.cancel()
 	return v, true
+}
+
+// cancelledError is the error of a request whose context ended, as the extension host words it.
+func cancelledError() *llm.Error {
+	return &llm.Error{Code: llm.CodeCancelled, Message: "the request was cancelled"}
+}
+
+// cancelledUnread ends a request whose body read was cut short. When the management API cancelled
+// it, its client is still there: the client gets the cancelled error and, with metered, the usage
+// record gets the request as cancelled, with no model and no attempt. A client that went away
+// gets nothing and leaves no event, as before.
+func (g *Generation) cancelledUnread(w http.ResponseWriter, r *http.Request, f clientFormat, arrived time.Time, metered bool) {
+	t := traceOf(r)
+	if t == nil || !t.running.byOperator() {
+		return
+	}
+	var m *meter
+	if metered {
+		m = g.newMeter(r, arrived, llm.Request{}, clientToken(r, f.googleKeys))
+	}
+	e := cancelledError()
+	m.fail(e, f.writeError(w, e))
+}
+
+// cancelledBeforeRouting reports whether r's context ended before routing began: the management
+// API cancelled the request, or its client went away. The request then ends here with the
+// cancelled error, recorded in m, and no attempt is made.
+func cancelledBeforeRouting(w http.ResponseWriter, r *http.Request, f clientFormat, m *meter) bool {
+	if r.Context().Err() == nil {
+		return false
+	}
+	e := cancelledError()
+	m.fail(e, f.writeError(w, e))
+	return true
 }

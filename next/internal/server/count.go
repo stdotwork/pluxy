@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/stdotwork/pluxy/next/format/anthropicmessages"
 	"github.com/stdotwork/pluxy/next/format/geminigenerate"
@@ -80,6 +81,7 @@ func serveCount(w http.ResponseWriter, r *http.Request, g *Generation, f countFo
 	}
 	body, e, ok := readRequestBody(w, r)
 	if !ok {
+		g.cancelledUnread(w, r, f.clientFormat, time.Time{}, false) // a count has no usage event
 		return
 	}
 	if e != nil {
@@ -98,6 +100,9 @@ func serveCount(w http.ResponseWriter, r *http.Request, g *Generation, f countFo
 	f.nativeHeaders(r, &req)
 
 	r, t := requestTrace(r)
+	if cancelledBeforeRouting(w, r, f.clientFormat, nil) {
+		return
+	}
 	rr := routeRequest(r, req, body)
 	// Whether an attempt reached an account that cannot count: today's core counts such an
 	// account itself, so the request then gets an estimate whatever the other accounts answered.
