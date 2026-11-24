@@ -1,0 +1,833 @@
+/* Direction B: the screens. Each is a page of a letter: a head (a date or a name, then a title or
+   a verdict, then a sentence), and sections under it. On a wide window a screen opens like a
+   spread, text on the left page and figures on the right; on a narrow one it is a single column. */
+
+/* ---- pages in general ------------------------------------------------------------------------ */
+
+:root[data-design="b"] .db-page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px 40px;
+}
+
+:root[data-design="b"] .db-page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+:root[data-design="b"] .db-spread {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+  column-gap: 88px;
+}
+
+:root[data-design="b"] .db-opening-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+:root[data-design="b"] .db-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 12px;
+  color: var(--db-ink-2);
+  border: 1px solid var(--db-edge);
+  border-radius: var(--db-radius);
+
+  input {
+    width: 13rem;
+    min-width: 0;
+    padding: 6px 0;
+    color: var(--db-ink);
+    font: inherit;
+    background: none;
+    border: 0;
+    outline: none;
+  }
+
+  input::placeholder {
+    color: var(--db-ink-3);
+  }
+}
+
+/* The field's frame takes the focus ring, not the bare input inside it. */
+:root[data-design="b"] .db-shell .db-search input:focus-visible {
+  outline: none;
+}
+
+:root[data-design="b"] .db-search:focus-within {
+  outline: 2px solid var(--db-ink);
+  outline-offset: 3px;
+}
+
+/* ---- home ------------------------------------------------------------------------------------ */
+
+:root[data-design="b"] .db-home {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+  column-gap: 88px;
+  align-items: start;
+}
+
+:root[data-design="b"] .db-figures > .db-section:first-child {
+  /* The right page starts level with the verdict, under the date line. */
+  margin-top: 30px;
+}
+
+:root[data-design="b"] .db-colophon {
+  grid-column: 1 / -1;
+  margin-top: 88px;
+  color: var(--db-ink-2);
+  font-size: 13.5px;
+}
+
+:root[data-design="b"] .db-allclear {
+  margin-top: 40px;
+  color: var(--db-ink-2);
+}
+
+/* What needs the person: a name, a sentence, one button. */
+:root[data-design="b"] .db-people {
+  display: grid;
+  gap: 22px;
+}
+
+:root[data-design="b"] .db-need {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 4px 12px;
+
+  .db-mark-state {
+    margin-top: 3px;
+  }
+
+  p {
+    margin-top: 2px;
+    color: var(--db-ink-2);
+    text-wrap: pretty;
+  }
+
+  .db-fix {
+    margin-top: 2px;
+  }
+}
+
+:root[data-design="b"] .db-waits .db-people {
+  gap: 12px;
+}
+
+:root[data-design="b"] .db-wait {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 12px;
+  color: var(--db-ink-2);
+
+  .db-mark-state {
+    margin-top: 3px;
+  }
+}
+
+:root[data-design="b"] .db-three {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 28px 32px;
+  margin-top: 44px;
+
+  h3 {
+    margin-bottom: 12px;
+  }
+}
+
+:root[data-design="b"] .db-three + .db-small {
+  margin-top: 22px;
+}
+
+:root[data-design="b"] .db-provider {
+  display: grid;
+  gap: 12px;
+  margin-top: 22px;
+
+  h3 {
+    margin-bottom: -2px;
+  }
+}
+
+:root[data-design="b"] .db-section-head + .db-provider {
+  margin-top: 0;
+}
+
+:root[data-design="b"] .db-provider-account {
+  display: grid;
+  grid-template-columns: 8.5rem minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+
+  .db-name {
+    overflow: hidden;
+    font-size: 14px;
+    font-weight: var(--db-w-mid);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .db-brief {
+    font-size: 13.5px;
+  }
+}
+
+/* ---- accounts -------------------------------------------------------------------------------- */
+
+:root[data-design="b"] .db-accounts {
+  display: grid;
+}
+
+:root[data-design="b"] .db-account {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 15rem) minmax(12rem, 1fr) 7.5rem auto;
+  align-items: center;
+  gap: 4px 20px;
+  min-height: 38px;
+  padding: 10px 12px;
+  margin: 0 -12px;
+  border-radius: 8px;
+}
+
+:root[data-design="b"] .db-account:hover {
+  background: color-mix(in srgb, var(--db-wash) 60%, var(--db-paper));
+}
+
+:root[data-design="b"] .db-account-who {
+  display: grid;
+  min-width: 0;
+
+  .db-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+:root[data-design="b"] .db-account-provider {
+  overflow: hidden;
+  color: var(--db-ink-2);
+  font-size: 13.5px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:root[data-design="b"] .db-account-what {
+  min-width: 0;
+  color: var(--db-ink-2);
+  font-size: 14.5px;
+  text-wrap: pretty;
+}
+
+:root[data-design="b"] .db-account[data-group="needs"] .db-account-what {
+  color: var(--db-ink);
+}
+
+:root[data-design="b"] .db-account .db-brief {
+  grid-template-columns: 96px minmax(0, 1fr) 7.5rem;
+  font-size: 14.5px;
+}
+
+:root[data-design="b"] .db-account-week {
+  color: var(--db-ink-2);
+  font-size: 13.5px;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+:root[data-design="b"] .db-account-fix {
+  min-width: 9.5rem;
+  max-width: 17rem;
+  text-align: right;
+}
+
+:root[data-design="b"] .db-group {
+  margin-top: 44px;
+}
+
+:root[data-design="b"] .db-group .db-section-head {
+  margin-bottom: 6px;
+}
+
+/* One account's page. */
+:root[data-design="b"] .db-state-line {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  max-width: var(--db-measure);
+  margin-top: 18px;
+  font-size: 18px;
+  line-height: 1.5;
+  text-wrap: pretty;
+
+  .db-mark-state {
+    margin-top: 4px;
+    font-size: 21px;
+  }
+}
+
+:root[data-design="b"] .db-quote {
+  max-width: var(--db-measure);
+  margin-top: 10px;
+  padding-left: 31px;
+  color: var(--db-ink-2);
+  overflow-wrap: anywhere;
+}
+
+:root[data-design="b"] .db-account-page .db-opening-actions {
+  padding-left: 31px;
+}
+
+:root[data-design="b"] .db-change-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+:root[data-design="b"] .db-disclose {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 20px;
+  color: var(--db-ink-2);
+}
+
+:root[data-design="b"] .db-choices {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+
+  p {
+    flex-basis: 100%;
+  }
+}
+
+/* ---- usage ----------------------------------------------------------------------------------- */
+
+:root[data-design="b"] .db-filters {
+  margin-top: 22px;
+  padding-left: 14px;
+  border-left: 2px solid var(--db-ink);
+
+  b {
+    font-weight: var(--db-w-strong);
+    overflow-wrap: anywhere;
+  }
+
+  .db-linkish {
+    margin-left: 4px;
+    color: var(--db-ink-2);
+    font-size: 14px;
+  }
+}
+
+:root[data-design="b"] .db-breakdown {
+  th[scope="row"] {
+    max-width: 24rem;
+  }
+
+  small {
+    white-space: nowrap;
+  }
+}
+
+:root[data-design="b"] .db-breakdown-name {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  font-weight: var(--db-w-mid);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  text-decoration-color: transparent;
+}
+
+:root[data-design="b"] .db-breakdown-bar {
+  width: 26%;
+  min-width: 80px;
+  vertical-align: middle;
+
+  .db-bars-track {
+    height: 6px;
+  }
+
+  .db-bars-track i {
+    border-radius: 3px;
+  }
+}
+
+/* The request list. */
+:root[data-design="b"] .db-day {
+  margin: 26px 0 6px;
+  color: var(--db-ink-2);
+}
+
+:root[data-design="b"] .db-requests > section:first-child .db-day {
+  margin-top: 4px;
+}
+
+:root[data-design="b"] .db-request {
+  margin: 0 -12px;
+  border-radius: 8px;
+}
+
+:root[data-design="b"] .db-request[data-open] {
+  background: color-mix(in srgb, var(--db-wash) 60%, var(--db-paper));
+}
+
+:root[data-design="b"] .db-request-line {
+  display: grid;
+  grid-template-columns: 3.2rem minmax(0, 1.1fr) minmax(0, 1.5fr) 5rem 7.5rem 16px;
+  align-items: baseline;
+  gap: 16px;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 12px;
+  color: var(--db-ink);
+  font: inherit;
+  font-size: 14.5px;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+
+  time {
+    color: var(--db-ink-2);
+    font-variant-numeric: lining-nums tabular-nums;
+  }
+
+  > .db-icon {
+    align-self: center;
+    color: var(--db-ink-3);
+    transition: transform var(--db-ease);
+  }
+
+  small {
+    color: var(--db-ink-2);
+    font-size: 13px;
+  }
+}
+
+:root[data-design="b"] .db-request-line:hover {
+  background: color-mix(in srgb, var(--db-wash) 60%, var(--db-paper));
+}
+
+:root[data-design="b"] .db-request[data-open] .db-request-line > .db-icon {
+  transform: rotate(180deg);
+}
+
+:root[data-design="b"] .db-request-model {
+  overflow: hidden;
+  font-weight: var(--db-w-mid);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:root[data-design="b"] .db-request-to {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:root[data-design="b"] .db-request-n {
+  color: var(--db-ink-2);
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: lining-nums tabular-nums;
+}
+
+:root[data-design="b"] .db-request-more {
+  padding: 4px 12px 20px calc(3.2rem + 28px);
+}
+
+:root[data-design="b"] .db-request-story {
+  max-width: var(--db-measure);
+  text-wrap: pretty;
+}
+
+:root[data-design="b"] .db-tried {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+  counter-reset: tried;
+
+  li {
+    counter-increment: tried;
+    color: var(--db-ink-2);
+    overflow-wrap: anywhere;
+  }
+
+  li::before {
+    content: counter(tried) ". ";
+    font-variant-numeric: lining-nums tabular-nums;
+  }
+
+  li[data-ok] {
+    color: var(--db-ink);
+  }
+
+  b {
+    font-weight: var(--db-w-mid);
+  }
+
+  small {
+    font-size: 13px;
+  }
+}
+
+:root[data-design="b"] .db-facts-inline {
+  max-width: 44rem;
+  margin-top: 16px;
+  font-size: 14px;
+
+  > div {
+    grid-template-columns: 7rem minmax(0, 1fr);
+  }
+}
+
+:root[data-design="b"] .db-requests[data-own] .db-request-line {
+  grid-template-columns: 3.2rem minmax(0, 1.6fr) minmax(0, 1fr) 4.5rem 6.8rem 16px;
+  gap: 12px;
+}
+
+:root[data-design="b"] .db-requests[data-own] .db-request-more {
+  padding-left: 12px;
+}
+
+/* ---- clients and settings -------------------------------------------------------------------- */
+
+:root[data-design="b"] .db-address {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+
+  .db-code {
+    font-size: 15px;
+  }
+}
+
+:root[data-design="b"] .db-address + .db-small {
+  margin-top: 4px;
+}
+
+:root[data-design="b"] .db-fresh {
+  margin-bottom: 20px;
+  padding-left: 14px;
+  border-left: 2px solid var(--db-ok);
+
+  b {
+    font-weight: var(--db-w-strong);
+  }
+}
+
+:root[data-design="b"] .db-keys {
+  display: grid;
+  gap: 4px;
+
+  li {
+    display: grid;
+    grid-template-columns: 8rem minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 16px;
+    min-height: 38px;
+  }
+}
+
+:root[data-design="b"] .db-keys + .db-small {
+  margin-top: 12px;
+}
+
+:root[data-design="b"] .db-keys-used {
+  color: var(--db-ink-2);
+  font-size: 14px;
+}
+
+:root[data-design="b"] .db-tools {
+  display: grid;
+  gap: 20px;
+
+  p {
+    color: var(--db-ink-2);
+    font-size: 14.5px;
+  }
+
+  small {
+    color: var(--db-ink-2);
+  }
+}
+
+:root[data-design="b"] .db-tools + .db-small {
+  margin-top: 22px;
+  max-width: var(--db-measure);
+}
+
+:root[data-design="b"] .db-tool-line {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+:root[data-design="b"] .db-paste {
+  margin-top: 14px;
+
+  figure {
+    margin-bottom: 14px;
+  }
+
+  figcaption {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px 16px;
+    font-size: 14px;
+  }
+}
+
+:root[data-design="b"] .db-pre {
+  margin: 6px 0 0;
+  padding: 14px 16px;
+  overflow-x: auto;
+  font: 13px / 1.55 var(--db-mono);
+  background: var(--db-wash);
+  border-radius: var(--db-radius);
+}
+
+:root[data-design="b"] .db-index {
+  display: grid;
+  gap: 20px;
+
+  .db-name {
+    font-size: 17px;
+    font-weight: var(--db-w-mid);
+  }
+
+  p {
+    color: var(--db-ink-2);
+  }
+}
+
+:root[data-design="b"] .db-settings .db-spread > div:last-child > .db-section:first-child {
+  margin-top: 0;
+}
+
+:root[data-design="b"] .db-settings .db-spread,
+:root[data-design="b"] .db-clients .db-spread {
+  margin-top: 40px;
+}
+
+:root[data-design="b"] .db-clients .db-spread > div > .db-section:first-child {
+  margin-top: 0;
+}
+
+:root[data-design="b"] .db-setting {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 24px;
+  margin-top: 22px;
+
+  b {
+    font-weight: var(--db-w-strong);
+  }
+
+  p {
+    max-width: 22rem;
+    color: var(--db-ink-2);
+    font-size: 14px;
+  }
+}
+
+/* ---- a spread closes into one column --------------------------------------------------------- */
+
+@media (max-width: 1080px) {
+  :root[data-design="b"] .db-home,
+  :root[data-design="b"] .db-spread {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  :root[data-design="b"] .db-home > *,
+  :root[data-design="b"] .db-spread > * {
+    max-width: 44rem;
+  }
+
+  :root[data-design="b"] .db-figures > .db-section:first-child,
+  :root[data-design="b"] .db-clients .db-spread > div + div > .db-section:first-child,
+  :root[data-design="b"] .db-settings .db-spread > div:last-child > .db-section:first-child {
+    margin-top: 56px;
+  }
+
+  :root[data-design="b"] .db-account {
+    grid-template-columns: 22px minmax(0, 12rem) minmax(0, 1fr) auto;
+  }
+
+  :root[data-design="b"] .db-account-week {
+    display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  :root[data-design="b"] .db-need {
+    grid-template-columns: 22px minmax(0, 1fr);
+
+    .db-fix {
+      grid-column: 2;
+      margin-top: 8px;
+    }
+  }
+
+  :root[data-design="b"] .db-three {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  :root[data-design="b"] .db-provider-account {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  :root[data-design="b"] .db-page-actions {
+    width: 100%;
+  }
+
+  :root[data-design="b"] .db-search {
+    flex: 1;
+
+    input {
+      width: 100%;
+    }
+  }
+
+  :root[data-design="b"] .db-account {
+    grid-template-columns: 22px minmax(0, 1fr);
+    align-items: start;
+    padding: 12px;
+
+    .db-mark-state {
+      margin-top: 3px;
+    }
+
+    .db-account-what,
+    .db-account-fix {
+      grid-column: 2;
+    }
+
+    .db-account-fix {
+      min-width: 0;
+      text-align: left;
+    }
+
+    .db-account-fix:empty {
+      display: none;
+    }
+  }
+
+  :root[data-design="b"] .db-brief,
+  :root[data-design="b"] .db-account .db-brief {
+    grid-template-columns: 72px minmax(0, 1fr);
+    gap: 4px 12px;
+
+    .db-brief-resets {
+      grid-column: 2;
+    }
+
+    .db-brief-resets:empty {
+      display: none;
+    }
+  }
+
+  :root[data-design="b"] .db-request-line {
+    grid-template-columns: 3rem minmax(0, 1fr) 16px;
+    gap: 2px 12px;
+
+    .db-request-to {
+      grid-column: 2;
+      grid-row: 2;
+      white-space: normal;
+    }
+
+    .db-request-n {
+      grid-column: 2;
+      text-align: left;
+      font-size: 13px;
+    }
+
+    .db-request-n:empty {
+      display: none;
+    }
+
+    > .db-icon {
+      grid-column: 3;
+      grid-row: 1;
+    }
+  }
+
+  :root[data-design="b"] .db-request-more {
+    padding-left: 12px;
+  }
+
+  :root[data-design="b"] .db-breakdown {
+    th:nth-child(3),
+    td:nth-child(3) {
+      display: none;
+    }
+  }
+
+  :root[data-design="b"] .db-keys li {
+    grid-template-columns: minmax(0, 1fr) auto;
+
+    .db-keys-used {
+      grid-column: 1;
+      grid-row: 2;
+      margin-top: -8px;
+    }
+  }
+
+  :root[data-design="b"] .db-tool-line {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  :root[data-design="b"] .db-state-line {
+    font-size: 17px;
+  }
+
+  :root[data-design="b"] .db-quote,
+  :root[data-design="b"] .db-account-page .db-opening-actions {
+    padding-left: 0;
+  }
+}
+
+:root[data-design="b"] .db-said + .db-bars {
+  margin-top: 16px;
+}
+
+:root[data-design="b"] .db-windows + .db-small,
+:root[data-design="b"] .db-window-none + .db-small {
+  margin-top: 10px;
+}
+
+:root[data-design="b"] .db-provider + .db-small {
+  margin-top: 18px;
+}
