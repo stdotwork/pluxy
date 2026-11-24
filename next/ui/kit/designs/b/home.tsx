@@ -276,7 +276,7 @@ export function Home() {
             </ul>
             {waiting.length > MOST && (
               <p class="db-more">
-                And {plural(waiting.length - MOST, "more")}. <Onward href="#/accounts">See them all</Onward>
+                And {num(waiting.length - MOST)} more. <Onward href="#/accounts">See them all</Onward>
               </p>
             )}
           </Section>
@@ -295,9 +295,7 @@ export function Home() {
                       {naming.name(a.id)}
                     </a>{" "}
                     has {Math.round(100 - used)}% of its {windowName(limit).toLowerCase()} left
-                    {resets(limit, now)
-                      ? `. ${resets(limit, now)}, and until then requests move to your other accounts when it runs out.`
-                      : "."}
+                    {resets(limit, now) ? `. ${resets(limit, now)}.` : "."}
                   </p>
                 </li>
               ))}
