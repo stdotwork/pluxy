@@ -116,6 +116,9 @@ function Wsl(props: { env: Environment }) {
   // The distribution whose users are wanted: a reply for any other (picked before it) is dropped.
   const wanted = useRef(distro);
   const readUsers = (d: string) => {
+    // Another distribution has no user picked yet: the page must not keep working in the old one
+    // while this one is shown.
+    if (sel && sel.distro !== d) env.choose(null);
     wanted.current = d;
     setDistro(d);
     setUsers(undefined);

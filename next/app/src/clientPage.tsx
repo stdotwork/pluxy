@@ -129,11 +129,14 @@ export function StartCli(props: {
 /**
  * The file preview of a client page, tied to the files its fields select. `key` names that selection
  * (the request the page sends to read it, with anything else that makes another file: the
- * environment); the page passes it on every render. The preview is the last one `accept`ed for the
- * current key, and is gone as soon as the key changes, so the page never offers a write for files
- * its fields no longer show. `accept(readKey, body)` is for a read's answer: `readKey` is the key
- * the read was started with, and an answer for a selection the person has since left is refused
- * (false), so the page drops it too.
+ * environment); the page passes it on every render. The preview is the last one `readFor` took for
+ * the current key, and is gone as soon as the key changes, so the page never offers a write for
+ * files its fields no longer show.
+ *
+ * `readFor(readKey, call)` runs a read: `readKey` is the key the read was started with, and `call`
+ * makes the request. An answer, successful or failed, for a selection the person has since left is
+ * no result (an empty success), so the page shows neither its preview nor its error. `isCurrent`
+ * says the same for a page that acts on the answer itself.
  */
 export function usePreview<P>(key: string) {
   const [held, setHeld] = useState<{ key: string; preview: P }>();
@@ -143,10 +146,11 @@ export function usePreview<P>(key: string) {
   // returning to the old selection does not bring the old preview back.
   useEffect(() => setHeld((h) => (h && h.key !== key ? undefined : h)), [key]);
   const isCurrent = (readKey: string) => readKey === latest.current;
-  const accept = (readKey: string, body: P): boolean => {
-    if (!isCurrent(readKey)) return false;
-    setHeld({ key: readKey, preview: body });
-    return true;
+  const readFor = async (readKey: string, call: () => Promise<Reply<P>>): Promise<Reply<P>> => {
+    const r = await call();
+    if (!isCurrent(readKey)) return { status: 200 };
+    if (r.body) setHeld({ key: readKey, preview: r.body });
+    return r;
   };
-  return { preview: held?.key === key ? held.preview : undefined, accept, isCurrent };
+  return { preview: held?.key === key ? held.preview : undefined, readFor, isCurrent };
 }

@@ -288,14 +288,16 @@ export function ClaudeCodePage() {
         : {};
   // A write acts on the file the last preview pinned (the tool refuses it if the file changed
   // since); the preview belongs to the file and environment it was read for, so a write never pins
-  // a file unread.
-  const selected = JSON.stringify([env.selection, selection()]);
-  const { preview, accept } = usePreview<Preview>(selected);
+  // a file unread. WSL with no user picked yet is an environment of its own: it is not this computer.
+  const selected = JSON.stringify([env.mode, env.selection, selection()]);
+  const { preview, readFor } = usePreview<Preview>(selected);
   const read = useAction(() => {});
   const load = () =>
     read.run(async () => {
-      const r = await tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) });
-      if (r.body && accept(selected, r.body)) setForm(fromFile(r.body.settings));
+      const r = await readFor(selected, () =>
+        tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) }),
+      );
+      if (r.body) setForm(fromFile(r.body.settings));
       return r;
     });
   const write = useAction(load);
@@ -510,15 +512,22 @@ export function ClaudeCodePage() {
         <Card>
           {!refused && !valid && <Notice tone="warn">{t("ranges")}</Notice>}
           {write.error && <Notice tone="danger">{write.error}</Notice>}
-          <Button variant="primary" onClick={apply} disabled={busy || refused || !valid || !secret || !core}>
+          <Button
+            variant="primary"
+            onClick={apply}
+            disabled={busy || env.pending || refused || !valid || !secret || !core}
+          >
             {applyLabel}
           </Button>
           <NeedsKey missing={!secret} />
-          <ConfirmButton disabled={busy || refused || !preview.applied} onConfirm={() => undo("clear")}>
+          <ConfirmButton
+            disabled={busy || env.pending || refused || !preview.applied}
+            onConfirm={() => undo("clear")}
+          >
             {t("clear")}
           </ConfirmButton>
           <small class="hint">{t("clearHint")}</small>
-          <ConfirmButton disabled={busy} onConfirm={() => undo("restore")}>
+          <ConfirmButton disabled={busy || env.pending} onConfirm={() => undo("restore")}>
             {t("restore")}
           </ConfirmButton>
           <small class="hint">{t("restoreHint")}</small>
@@ -528,7 +537,7 @@ export function ClaudeCodePage() {
         <Backups
           pkg={PACKAGE}
           pins={async () => preview.targets}
-          disabled={busy}
+          disabled={busy || env.pending}
           onChange={load}
           environment={env.selection}
         />

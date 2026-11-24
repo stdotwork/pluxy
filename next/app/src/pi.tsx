@@ -173,12 +173,14 @@ export function PiPage() {
   }, []);
   const selection = () => selectionFor(where, folder);
   const selected = JSON.stringify(selection());
-  const { preview, accept } = usePreview<Preview>(selected);
+  const { preview, readFor } = usePreview<Preview>(selected);
   const read = useAction(() => {});
   const load = () =>
     read.run(async () => {
-      const r = await tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) });
-      if (r.body && accept(selected, r.body)) {
+      const r = await readFor(selected, () =>
+        tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) }),
+      );
+      if (r.body) {
         setModel(r.body.pi.model ?? "");
       }
       return r;
