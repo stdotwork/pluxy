@@ -890,8 +890,11 @@
   }
 
   .dc-win-name {
+    overflow: hidden;
     font: 500 13px / 1.2 var(--dc-font-label);
     color: var(--dc-ink-2);
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .dc-win-left {
@@ -1057,9 +1060,16 @@
       background: var(--dc-bg);
     }
 
-    .dc-stop:not([aria-current]) .dc-stop-name,
     .dc-stop .dc-nav-count {
       display: none;
+    }
+
+    .dc-stop:not([aria-current]) .dc-stop-name {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
     }
 
     .dc-substops {
@@ -1090,8 +1100,36 @@
       font-size: 21px;
     }
 
+    .dc-head-sub {
+      flex-basis: 100%;
+    }
+
+    .dc-head-tools {
+      margin-left: 0;
+    }
+
     .dc-subnav {
       display: flex;
+    }
+  }
+
+  /* A phone: every stop is its icon, so all six fit without scrolling. */
+  @media (max-width: 480px) {
+    .dc-stop {
+      gap: 0;
+      padding: 0 3px;
+    }
+
+    .dc-stop .dc-stop-name {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+    }
+
+    .dc-nav {
+      gap: 2px;
     }
   }
 

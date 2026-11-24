@@ -1351,11 +1351,15 @@
   }
 
   .dc-by .dc-table tbody th {
+    max-width: none;
+    overflow: visible;
+  }
+
+  .dc-by-cell {
     display: flex;
     flex-direction: column;
     gap: 5px;
-    max-width: none;
-    overflow: visible;
+    min-width: 0;
   }
 
   .dc-by-name {
@@ -1726,11 +1730,18 @@
   }
 
   @media (max-width: 1180px) {
-    .dc-row {
-      grid-template-columns: minmax(140px, 1.2fr) minmax(140px, 1fr) minmax(220px, 1.4fr) auto;
+    .dc-rows:not(.dc-keys) > .dc-row {
+      grid-template-columns: minmax(0, 1.2fr) minmax(0, 1.1fr) minmax(84px, 0.5fr) auto;
+      gap: 10px 16px;
     }
 
-    .dc-row-use {
+    .dc-rows:not(.dc-keys) > .dc-row > .dc-row-wins {
+      grid-column: 1 / -1;
+      grid-row: 2;
+      max-width: 520px;
+    }
+
+    .dc-rows:not(.dc-keys) > .dc-row > .dc-row-wins:empty {
       display: none;
     }
 
@@ -1824,11 +1835,15 @@
       padding: 4px 14px 14px;
     }
 
-    .dc-row,
-    .dc-keys .dc-row {
+    .dc-rows > .dc-row,
+    .dc-rows:not(.dc-keys) > .dc-row {
       grid-template-columns: minmax(0, 1fr);
       gap: 8px;
       padding: 12px 14px 12px 18px;
+    }
+
+    .dc-rows:not(.dc-keys) > .dc-row > .dc-row-wins {
+      grid-row: auto;
     }
 
     .dc-row-act {

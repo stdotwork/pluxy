@@ -163,9 +163,11 @@ function AccountList(props: { address: Address }) {
             usage.reload();
           }}
         />
-        <Btn kind="primary" icon="plus" href="#/add-account">
-          Add account
-        </Btn>
+        {all.length > 0 && (
+          <Btn kind="primary" icon="plus" href="#/add-account">
+            Add account
+          </Btn>
+        )}
       </PageHead>
 
       {fleet.error && (

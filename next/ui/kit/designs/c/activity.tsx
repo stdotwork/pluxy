@@ -335,35 +335,37 @@ export function Activity(props: { address: Address }) {
                       return (
                         <tr key={g.name} data-slot-p={p?.slot}>
                           <th scope="row">
-                            <span class="dc-by-name">
-                              {p && <ProviderTile p={p} />}
-                              {g.name ? (
-                                <button
-                                  type="button"
-                                  class="dc-rowpick"
-                                  aria-pressed={on}
-                                  title={nameOf(g)}
-                                  onClick={() =>
-                                    go({ filters: { ...filters, [by.id]: on ? undefined : g.name } })
-                                  }
-                                >
-                                  {nameOf(g)}
-                                </button>
-                              ) : (
-                                nameOf(g)
-                              )}
-                            </span>
-                            <span
-                              class="dc-bar"
-                              title={`${share(g.total_requests, s.total_requests)} of the requests`}
-                            >
-                              <i
-                                style={{ width: `${((g.total_requests - g.failure_count) / top) * 100}%` }}
-                              />
-                              {g.failure_count > 0 && (
-                                <i data-failed="" style={{ width: `${(g.failure_count / top) * 100}%` }} />
-                              )}
-                            </span>
+                            <div class="dc-by-cell">
+                              <span class="dc-by-name">
+                                {p && <ProviderTile p={p} />}
+                                {g.name ? (
+                                  <button
+                                    type="button"
+                                    class="dc-rowpick"
+                                    aria-pressed={on}
+                                    title={nameOf(g)}
+                                    onClick={() =>
+                                      go({ filters: { ...filters, [by.id]: on ? undefined : g.name } })
+                                    }
+                                  >
+                                    {nameOf(g)}
+                                  </button>
+                                ) : (
+                                  nameOf(g)
+                                )}
+                              </span>
+                              <span
+                                class="dc-bar"
+                                title={`${share(g.total_requests, s.total_requests)} of the requests`}
+                              >
+                                <i
+                                  style={{ width: `${((g.total_requests - g.failure_count) / top) * 100}%` }}
+                                />
+                                {g.failure_count > 0 && (
+                                  <i data-failed="" style={{ width: `${(g.failure_count / top) * 100}%` }} />
+                                )}
+                              </span>
+                            </div>
                           </th>
                           <td class="dc-r dc-num">{count(g.total_requests)}</td>
                           <td
