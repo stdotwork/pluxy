@@ -1074,7 +1074,7 @@ fn run(app: &AppHandle) -> Result<(), String> {
             return Err("HTTP frame navigation left native calls open".into());
         }
         wait_for("window closed state", || {
-            eval(&main,"document.querySelector('[data-part=extension-frame]')?.dataset.phase === 'closed' && document.body.innerText.includes('Load the page again')").filter(|v|v==true)
+            eval(&main,"document.querySelector('[data-part=extension-frame]')?.dataset.phase === 'closed' && document.body.innerText.includes('Reload')").filter(|v|v==true)
         })?;
         log(
             "http_navigation",
@@ -1319,7 +1319,7 @@ fn startup(app: &AppHandle, stage: &str) -> Result<(), String> {
         let ready = if cfg!(target_os = "linux") {
             "document.querySelector('[data-part=nav]') !== null"
         } else {
-            "document.querySelector('[data-part=nav]') !== null || document.body.innerText.includes('Save startup preferences')"
+            "document.querySelector('[data-part=nav]') !== null || document.body.innerText.includes('Save')"
         };
         wait_for("startup window shell", || {
             eval(&main, ready).filter(|v| v == true)

@@ -30,16 +30,16 @@ builds and runs only the amd64 programs; no CI job runs the Linux arm64 ones.
 The app sets up eight agent clients, each from a page in the window and a curated native tool,
 which has full access to your user account. Every client page works the same way:
 
-- **Read** previews the client's files: its default place in your home folder, a file you select
+- **Refresh** previews the client's files: its default place in your home folder, a file you select
   or a folder you select. A link to the file or folder, as stow and chezmoi make, is followed and
   kept as a link.
-- **Connect in One Click** (Apply), **Clear** and **Restore Backup** write only the files that
+- **Apply**, **Clear** and **Restore backup** write only the files that
   preview pinned, after a native confirmation that names them and the key's label. Clear keeps the
-  edits you made since Apply; Restore Backup puts the original bytes back.
+  edits you made since Apply; Restore backup puts the original bytes back.
 - **Backup and restore** keeps up to 10 manual backups of the client's files in the app's vault.
 - The key comes from the vault and goes to the tool on its private pipe. It is written into the
   client's own config file, and never into a launch's arguments or environment.
-- **Start CLI** (and Start App, where the client has one) starts the client through the launcher
+- **Start CLI** (and Start app, where the client has one) starts the client through the launcher
   (`pluxy/execution`), after the launcher's native confirmation.
 
 ### Files each client's tool writes
@@ -59,7 +59,7 @@ select the file or folder they name instead.
 | Hermes Agent | `pluxy/hermes-setup` | `~/.hermes/config.yaml`, or the active profile's (`~/.hermes/profiles/<name>/config.yaml`) | YAML edited in place | `_config_version` is not checked |
 | Pi | `pluxy/pi-setup` | In `~/.pi/agent`: `cliproxyapi.json` and `settings.json`; it removes `cliproxyapi-models.json`, and installs the provider plugin as the folder `pluxy-cliproxyapi-provider/` | JSON, like Claude Code's file | None. The plugin declares Pi 0.82.0 or later; the tool does not check it |
 
-Each tool refuses to write a file its client would not read, and still lets Restore Backup put the
+Each tool refuses to write a file its client would not read, and still lets Restore backup put the
 original back. The exact keys each tool writes are in the [app tools README](../app-tools/README.md).
 
 ### Starting each client, platforms and checks

@@ -43,7 +43,7 @@ fn every_login_account_serving_the_model_gets_the_alias_and_config_accounts_are_
         }
     );
     let text = summary("http://127.0.0.1:1", MODEL, ALIAS, &p);
-    for needle in ["a, b", "cfg", "Restore Backup", "keeps its own name", ALIAS] {
+    for needle in ["a, b", "cfg", "Restore backup", "keeps its own name", ALIAS] {
         assert!(text.contains(needle), "{needle}: {text}");
     }
 }

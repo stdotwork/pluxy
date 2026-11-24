@@ -168,7 +168,7 @@ fn summary(origin: &str, model: &str, alias: &str, p: &Plan) -> String {
             shown(&p.config)
         ));
     }
-    s.push_str(" Clear integration and Restore Backup leave this alias in core; remove it on the account's settings in core's panel.");
+    s.push_str(" Clear and Restore backup leave this alias in core; remove it on the account's settings in core's panel.");
     s
 }
 

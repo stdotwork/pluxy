@@ -61,7 +61,7 @@ function describe(c: Connection): [string, string][] {
     };
     rows.push(["Process", process[c.core.state]]);
     if (c.core.version) rows.push(["Current version", c.core.version]);
-    if (c.core.detail) rows.push(["Last words", c.core.detail]);
+    if (c.core.detail) rows.push(["Last error", c.core.detail]);
   }
   if (c.mode === "local" || c.mode === "remote")
     rows.push(["Key", c.remembered ? "kept on this device" : "this session only"]);
@@ -124,11 +124,11 @@ function CoreVersions(props: { connection: Connection }) {
       {c.core?.adopt && (
         <>
           <Notice tone="warn">
-            The app runs {c.core.adopt} only once it is copied into the app's own cores, and runs that copy.
+            The app copies {c.core.adopt} into its own cores folder before running it.
           </Notice>
           <div class="actions">
             <Button disabled={asked} onClick={() => ask(coreAdopt)}>
-              Adopt this core program
+              Adopt core
             </Button>
           </div>
         </>
@@ -140,7 +140,7 @@ function CoreVersions(props: { connection: Connection }) {
         </Notice>
       )}
       {v.installed.length === 0 ? (
-        <Empty>No core installed yet.</Empty>
+        <Empty>No core installed yet. Set a core source below to install one.</Empty>
       ) : (
         <Facts
           rows={v.installed.map((i) => [
@@ -275,7 +275,7 @@ export function ConnectionPage(props: { connection: Connection; onChange: (c: Co
                 />
                 <Field
                   label="Core program (optional)"
-                  hint="A core program of your own, by full path, to adopt: the app copies it into its own cores and runs the copy. Empty: the pluxy program beside the app."
+                  hint="Full path to your own core binary to copy and run. Leave empty to use the bundled pluxy."
                   value={corePath}
                   onInput={setCorePath}
                 />

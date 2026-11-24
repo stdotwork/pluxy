@@ -28,7 +28,7 @@ import {
 import { reply } from "./host";
 
 const t = strings("environment", {
-  title: "Environment / configuration directory",
+  title: "Environment and configuration folder",
   description: "Choose where this client is set up and started.",
   where: "Environment",
   windows: "Windows local",

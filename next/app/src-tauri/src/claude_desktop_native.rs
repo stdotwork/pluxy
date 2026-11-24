@@ -943,7 +943,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                 "the login account starts with an alias",
             )?;
             let input = json!({"model": MODEL, "alias": ALIAS});
-            let needles = [ALIAS, MODEL, ACCOUNT, "Restore Backup"];
+            let needles = [ALIAS, MODEL, ACCOUNT, "Restore backup"];
             let ask = |cancel: bool| -> Result<Value, String> {
                 let slot = start(main, "core_alias_create", input.clone())?;
                 let text = dialog_with(app, &needles)?;

@@ -91,6 +91,55 @@ export function useLoad<T>(load: () => Promise<Reply<T>>): Loaded<T> {
   return { ...state, reload: useCallback(() => setN((x) => x + 1), []) };
 }
 
+/**
+ * Calls tick every ms while active and the document is visible. Never overlaps a call whose
+ * promise is still running, and calls once straight away when the document becomes visible after
+ * longer than ms.
+ */
+export function usePoll(tick: () => unknown, ms: number, active = true): void {
+  const tickRef = useRef(tick);
+  tickRef.current = tick;
+  useEffect(() => {
+    if (!active || ms <= 0) return;
+    let live = true;
+    let running = false;
+    let last = Date.now();
+    const run = () => {
+      if (!live || running || document.visibilityState !== "visible") return;
+      last = Date.now();
+      running = true;
+      const done = () => {
+        running = false;
+      };
+      try {
+        const result = tickRef.current();
+        if (result && typeof (result as PromiseLike<unknown>).then === "function") {
+          (result as PromiseLike<unknown>).then(done, done);
+        } else {
+          running = false;
+        }
+      } catch (err) {
+        running = false;
+        throw err;
+      }
+    };
+    let timer = setInterval(run, ms);
+    const shown = () => {
+      if (document.visibilityState === "visible" && !running && Date.now() - last >= ms) {
+        clearInterval(timer);
+        timer = setInterval(run, ms);
+        run();
+      }
+    };
+    document.addEventListener("visibilitychange", shown);
+    return () => {
+      live = false;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", shown);
+    };
+  }, [ms, active]);
+}
+
 /** Runs a management call from a button: busy while it runs, then its error or done(). */
 export function useAction(done: () => void) {
   const { unauthorized } = useKit();
@@ -179,6 +228,13 @@ export function Button(props: {
   );
 }
 
+/** Lower-cases a button label for confirmation text while keeping all-capital words (such as CLI). */
+export function confirmActionLabel(label: string): string {
+  return label.replace(/\b[A-Za-z]+\b/g, (word) =>
+    word.length > 1 && word === word.toUpperCase() ? word : word.toLowerCase(),
+  );
+}
+
 /** A button that asks once more before it acts. */
 export function ConfirmButton(props: { onConfirm: () => void; disabled?: boolean; children: string }) {
   const [asking, setAsking] = useState(false);
@@ -217,7 +273,7 @@ export function ConfirmButton(props: { onConfirm: () => void; disabled?: boolean
           props.onConfirm();
         }}
       >
-        {t("confirm", { action: props.children.toLowerCase() })}
+        {t("confirm", { action: confirmActionLabel(props.children) })}
       </Button>
       <Button buttonRef={cancel} onClick={() => setAsking(false)}>
         {t("cancel")}
