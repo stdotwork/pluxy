@@ -138,7 +138,8 @@ func (r *Router) heldLeftOut(t target, named bool) llm.LeftOut {
 	return l
 }
 
-// explain says what the call did and left out, for the error that ends it.
+// explain says what the call did and left out, for the error that ends it. Its entries carry the
+// accounts' config IDs too, for the log; the client's copy is made by public.
 func (c *call) explain() *llm.Explain {
 	r := c.r
 	now := r.now()
@@ -149,12 +150,16 @@ func (c *call) explain() *llm.Explain {
 	e := &llm.Explain{Tried: []llm.Tried{}, LeftOut: []llm.LeftOut{}}
 	for _, t := range c.tried {
 		e.Tried = append(e.Tried, t.Tried)
+		e.Tried[len(e.Tried)-1].ID = t.key.id
 	}
 	for _, l := range r.leftOut(c.capable, func(t target) bool { return tried[t.key()] }, c.chain, now) {
+		l.LeftOut.ID = l.t.a.ID
 		e.LeftOut = append(e.LeftOut, l.LeftOut)
 	}
 	for _, t := range c.held {
-		e.LeftOut = append(e.LeftOut, r.heldLeftOut(t, c.chain))
+		l := r.heldLeftOut(t, c.chain)
+		l.ID = t.a.ID
+		e.LeftOut = append(e.LeftOut, l)
 	}
 	return e
 }
@@ -166,15 +171,32 @@ type triedAttempt struct {
 	llm.Tried
 }
 
-// explained returns a copy of e that carries the call's explanation; e itself may be held by
-// routing state.
+// explained returns a copy of e that carries the call's explanation for core's log (Routed), and
+// for the client (Explain) when routing.explain is on; e itself may be held by routing state.
 func (c *call) explained(e *llm.Error) *llm.Error {
-	if e == nil || e.Explain != nil {
+	if e == nil || e.Routed != nil {
 		return e
 	}
 	x := *e
-	x.Explain = c.explain()
+	x.Routed = c.explain()
+	x.Routed.Model = c.req.LLM.Model
+	if c.r.cfg.ExplainOn() {
+		x.Explain = public(x.Routed)
+	}
 	return &x
+}
+
+// public returns a copy of x without the config IDs of the accounts: a client sees public IDs
+// only.
+func public(x *llm.Explain) *llm.Explain {
+	p := &llm.Explain{Trace: x.Trace, Tried: slices.Clone(x.Tried), LeftOut: slices.Clone(x.LeftOut)}
+	for i := range p.Tried {
+		p.Tried[i].ID = ""
+	}
+	for i := range p.LeftOut {
+		p.LeftOut[i].ID = ""
+	}
+	return p
 }
 
 // Plan is what a request for a model would do now, as GET /route shows it. It sends nothing.
