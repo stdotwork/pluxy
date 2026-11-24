@@ -309,11 +309,54 @@
   }
 
   .dc-first {
+    padding: 26px 24px 24px;
+  }
+
+  /* The line with nothing at its end: the three stops, the last one waiting. */
+  .dc-first-line {
+    position: relative;
     display: grid;
-    grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
-    gap: 12px;
-    align-items: center;
-    padding: 18px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 28px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .dc-first-line::before {
+    content: "";
+    position: absolute;
+    left: 13px;
+    right: 33%;
+    top: 12px;
+    height: 2px;
+    background: var(--dc-line-strong);
+  }
+
+  .dc-first-line li {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .dc-first-line .dc-stop-dot {
+    margin-bottom: 6px;
+    background: var(--dc-surface);
+  }
+
+  .dc-first-line strong {
+    font-size: 18px;
+  }
+
+  .dc-first-line li[data-missing] .dc-stop-dot {
+    border-style: dashed;
+    border-color: var(--dc-ink-2);
+  }
+
+  .dc-first-line .dc-btn {
+    margin-top: 8px;
   }
 
   .dc-picked {
@@ -481,7 +524,7 @@
     width: 20px;
     height: 20px;
     font-size: 12px;
-    color: #ffffff;
+    color: var(--dc-pt, var(--dc-on-p-dark));
     background: var(--dc-pc, var(--dc-p5));
     border-radius: 50%;
   }
@@ -618,7 +661,7 @@
   }
 
   .dc-path-stop[data-ok] .dc-path-dot {
-    color: #ffffff;
+    color: var(--dc-pt, var(--dc-on-p-dark));
     background: var(--dc-pc, var(--dc-p5));
     border-color: var(--dc-pc, var(--dc-p5));
   }
@@ -1607,7 +1650,7 @@
     font: inherit;
     color: var(--dc-ink);
     background: var(--dc-surface);
-    border: 1px solid var(--dc-line-strong);
+    border: 1px solid var(--dc-field-line);
     border-radius: var(--dc-radius-control);
   }
 
@@ -1701,8 +1744,28 @@
       padding: 12px 12px 10px;
     }
 
-    .dc-first {
+    .dc-first-line {
       grid-template-columns: minmax(0, 1fr);
+      gap: 20px;
+    }
+
+    .dc-first-line::before {
+      left: 12px;
+      right: auto;
+      top: 13px;
+      bottom: 150px;
+      width: 2px;
+      height: auto;
+    }
+
+    .dc-first-line li {
+      padding-left: 40px;
+    }
+
+    .dc-first-line .dc-stop-dot {
+      position: absolute;
+      left: 0;
+      top: 0;
     }
 
     .dc-maptable {

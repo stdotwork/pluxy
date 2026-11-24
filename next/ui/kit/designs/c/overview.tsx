@@ -300,17 +300,36 @@ function MapFoot(props: { flow: Flow | undefined; rangeWords: string; loading: b
 function FirstAccount() {
   return (
     <section class="dc-card dc-first" aria-label="Add the first account">
-      <MapSkeleton words="" />
-      <div class="dc-empty">
-        <h2>Nothing to route to yet</h2>
-        <p>
-          pluxy sends each request to an account of yours: a subscription you sign in to, or an API key. Add
-          one and it appears here, at the end of the line.
-        </p>
-        <Btn kind="primary" icon="plus" href="#/add-account">
-          Add account
-        </Btn>
-      </div>
+      <ol class="dc-first-line">
+        <li>
+          <span class="dc-stop-dot">
+            <Icon name="clients" size={15} />
+          </span>
+          <strong>A coding tool asks</strong>
+          <span class="dc-muted">It sends pluxy a request for a model, with a client key.</span>
+        </li>
+        <li>
+          <span class="dc-stop-dot">
+            <Icon name="routing" size={15} />
+          </span>
+          <strong>pluxy routes it</strong>
+          <span class="dc-muted">
+            To an account that serves the model, and on to the next one if that fails.
+          </span>
+        </li>
+        <li data-missing="">
+          <span class="dc-stop-dot">
+            <Icon name="accounts" size={15} />
+          </span>
+          <strong>An account answers</strong>
+          <span class="dc-muted">
+            A subscription you sign in to, or an API key. There is none yet, so nothing can be answered.
+          </span>
+          <Btn kind="primary" icon="plus" href="#/add-account">
+            Add account
+          </Btn>
+        </li>
+      </ol>
     </section>
   );
 }

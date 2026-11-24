@@ -267,7 +267,9 @@ export function layoutMap(input: MapInput): MapLayout {
     accountNodes.reduce((n, a) => n + a.requests, 0),
   );
   const band = clamp(width * 0.25, 130, 280);
-  const scale = band / total;
+  // A node is never taller than a few rows, however few nodes share the requests.
+  const busiest = Math.max(1, ...[...keyOrder, ...modelOrder, ...accountNodes].map((n) => n.requests));
+  const scale = Math.min(band / total, 84 / busiest);
   const rowH = compact ? 30 : 32;
   const flaggedH = compact ? 44 : 46;
   const gap = compact ? 5 : 6;

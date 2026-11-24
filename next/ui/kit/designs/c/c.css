@@ -37,7 +37,11 @@
   --dc-p2: #9884f3;
   --dc-p3: #dd6b20;
   --dc-p4: #8c2f73;
-  --dc-p5: #707789;
+  --dc-p5: #687083;
+  /* The letters on a provider's tile: white on the dark colours, ink on the light ones. */
+  --dc-on-p-dark: #ffffff;
+  --dc-on-p-light: #161922;
+  --dc-field-line: #838a9c;
   --dc-ribbon: #8a91a3;
   --dc-ribbon-alpha: 0.3;
 
@@ -100,6 +104,7 @@
   --dc-p3: #975f15;
   --dc-p4: #925388;
   --dc-p5: #7d8496;
+  --dc-field-line: #6f778c;
   --dc-ribbon: #7d8496;
   --dc-ribbon-alpha: 0.38;
 
@@ -591,9 +596,12 @@
   }
 
   .dc-seg input:checked + span {
+    font-weight: 600;
     color: var(--dc-ink);
     background: var(--dc-surface);
-    box-shadow: 0 1px 2px rgb(22 25 34 / 0.14);
+    box-shadow:
+      0 0 0 1px var(--dc-field-line),
+      0 1px 2px rgb(22 25 34 / 0.14);
   }
 
   .dc-seg input:focus-visible + span {
@@ -609,7 +617,7 @@
     padding: 0 10px;
     color: var(--dc-ink-3);
     background: var(--dc-surface);
-    border: 1px solid var(--dc-line-strong);
+    border: 1px solid var(--dc-field-line);
     border-radius: var(--dc-radius-control);
     box-sizing: border-box;
   }
@@ -804,7 +812,7 @@
     height: 22px;
     font: 600 11px / 1 var(--dc-font-label);
     letter-spacing: 0.01em;
-    color: #ffffff;
+    color: var(--dc-pt, var(--dc-on-p-dark));
     background: var(--dc-pc, var(--dc-p5));
     border-radius: 6px;
   }
@@ -815,14 +823,17 @@
 
   [data-slot-p="1"] {
     --dc-pc: var(--dc-p1);
+    --dc-pt: var(--dc-on-p-light);
   }
 
   [data-slot-p="2"] {
     --dc-pc: var(--dc-p2);
+    --dc-pt: var(--dc-on-p-light);
   }
 
   [data-slot-p="3"] {
     --dc-pc: var(--dc-p3);
+    --dc-pt: var(--dc-on-p-light);
   }
 
   [data-slot-p="4"] {
@@ -831,6 +842,18 @@
 
   [data-slot-p="5"] {
     --dc-pc: var(--dc-p5);
+  }
+
+  /* On the dark ground the first, second and shared colours are the light ones. */
+  &[data-appearance="dark"] [data-slot-p="0"],
+  &[data-appearance="dark"] [data-slot-p="1"],
+  &[data-appearance="dark"] [data-slot-p="5"] {
+    --dc-pt: var(--dc-on-p-light);
+  }
+
+  &[data-appearance="dark"] [data-slot-p="2"],
+  &[data-appearance="dark"] [data-slot-p="3"] {
+    --dc-pt: var(--dc-on-p-dark);
   }
 
   /* A share of something, as a thin bar; the failed part is hatched as well as coloured. */

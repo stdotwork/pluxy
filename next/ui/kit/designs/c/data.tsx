@@ -331,7 +331,7 @@ export function forgetWindows(id?: string) {
  * page shows, and only for accounts requests can reach.
  */
 export function useWindows(ids: string[]): Map<string, Windows> {
-  const { api } = useKit();
+  const { api, unauthorized } = useKit();
   const [, bump] = useState(0);
   useEffect(() => {
     const fn = () => bump((n) => n + 1);
@@ -348,6 +348,7 @@ export function useWindows(ids: string[]): Map<string, Windows> {
         quotaRunning++;
         api.quota(id).then((r) => {
           quotaRunning--;
+          if (r.status === 401) return unauthorized();
           const value: Windows =
             r.status >= 200 && r.status < 300 && r.body?.quota
               ? { state: "ok", reply: r.body }
@@ -366,7 +367,7 @@ export function useWindows(ids: string[]): Map<string, Windows> {
       quotaQueue.push(id);
     }
     pump();
-  }, [wanted, api]);
+  }, [wanted, api, unauthorized]);
   const out = new Map<string, Windows>();
   for (const id of ids) out.set(id, quotaCache.get(id)?.value ?? { state: "loading" });
   return out;

@@ -230,8 +230,10 @@ export function FlowMap(props: {
                   to.col === 2 && shown && shown.requests > 0 ? shown.failed / shown.requests : 0;
                 const t0 = Math.max(over && part ? 1.5 : 0, l.t0 * ratio);
                 const t1 = Math.max(over && part ? 1.5 : 0, l.t1 * ratio);
-                const f0 = failRatio > 0 ? Math.max(1.5, t0 * failRatio) : 0;
-                const f1 = failRatio > 0 ? Math.max(1.5, t1 * failRatio) : 0;
+                // A failed share too thin to draw is left to the numbers, unless it is a tenth of the link.
+                const drawn = t0 * failRatio >= 1 || failRatio >= 0.1;
+                const f0 = drawn ? Math.max(1.5, t0 * failRatio) : 0;
+                const f1 = drawn ? Math.max(1.5, t1 * failRatio) : 0;
                 const touches = lit !== undefined && (l.from === lit || l.to === lit);
                 return (
                   <g
