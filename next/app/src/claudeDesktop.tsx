@@ -221,13 +221,15 @@ export function ClaudeDesktopPage() {
   // A write acts on the files the last preview pinned (the tool refuses it if one changed since);
   // the preview belongs to the selection it was read for, so a write never pins files unread.
   const selected = JSON.stringify(selection());
-  const { preview, accept, isCurrent } = usePreview<Preview>(selected);
+  const { preview, readFor, isCurrent } = usePreview<Preview>(selected);
   const read = useAction(() => {});
   const load = () =>
     read.run(async () => {
-      const r = await tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) });
+      const r = await readFor(selected, () =>
+        tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) }),
+      );
       if (isCurrent(selected)) setMissing(missingLibrary(r.error?.message));
-      if (r.body && accept(selected, r.body)) setRows(rowsFrom(r.body.settings));
+      if (r.body) setRows(rowsFrom(r.body.settings));
       return r;
     });
   const write = useAction(load);
