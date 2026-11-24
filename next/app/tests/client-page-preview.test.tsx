@@ -475,7 +475,7 @@ const pages: PageCase[] = [
     page: () => <ClaudeCodePage />,
     pick: "A selected file",
     field: "File",
-    read: "Read settings",
+    read: "Refresh",
     body: (path) => ({
       targets: pinned(path),
       applied: false,
@@ -487,7 +487,7 @@ const pages: PageCase[] = [
     page: () => <ClaudeDesktopPage />,
     pick: "A selected folder",
     field: "Folder",
-    read: "Read configuration",
+    read: "Refresh",
     body: (path) => ({ targets: pinned(path), applied: false, settings: unconfigured }),
   },
   {
@@ -495,7 +495,7 @@ const pages: PageCase[] = [
     page: () => <CodexPage />,
     pick: "Files in a selected folder",
     field: "Folder",
-    read: "Read configuration",
+    read: "Refresh",
     body: (path) => ({ targets: pinned(path), applied: false, settings: codexRead }),
   },
   {
@@ -503,7 +503,7 @@ const pages: PageCase[] = [
     page: () => <GrokPage />,
     pick: "A selected file",
     field: "File",
-    read: "Read configuration",
+    read: "Refresh",
     body: (path) => ({ targets: pinned(path), applied: false, settings: unconfigured }),
   },
   {
@@ -511,7 +511,7 @@ const pages: PageCase[] = [
     page: () => <HermesPage />,
     pick: "A selected config file",
     field: "Config file",
-    read: "Read settings",
+    read: "Refresh",
     body: (path) => ({ targets: pinned(path), applied: false, config: unconfigured }),
   },
   {
@@ -519,7 +519,7 @@ const pages: PageCase[] = [
     page: () => <OmpPage />,
     pick: "A selected agent folder",
     field: "Folder",
-    read: "Read settings",
+    read: "Refresh",
     body: (path) => ({ targets: pinned(path), applied: false, config: unconfigured }),
   },
   {
@@ -527,7 +527,7 @@ const pages: PageCase[] = [
     page: () => <OpenCodePage />,
     pick: "A selected file",
     field: "File",
-    read: "Read configuration",
+    read: "Refresh",
     body: (path) => ({ targets: pinned(path), applied: false, config: unconfigured }),
   },
   {
@@ -535,7 +535,7 @@ const pages: PageCase[] = [
     page: () => <PiPage />,
     pick: "A selected agent folder",
     field: "Folder",
-    read: "Read settings",
+    read: "Refresh",
     body: (path) => ({
       targets: pinned(path),
       applied: false,
@@ -618,15 +618,15 @@ async function wslPage() {
   const ch = channel({ distros: [UBUNTU, DEBIAN] });
   const page = await mount(() => <ClaudeCodePage />, ch.invoke);
   const read = async () => {
-    await page.click("Read settings");
+    await page.click("Refresh");
     ch.reads[ch.reads.length - 1]?.answer(claudeCodeRead(SETTINGS));
     await settle();
   };
   /** Presses Apply if the page offers it, with the vault's key. */
   const apply = async () => {
-    if (!page.hasButton("Connect in One Click")) return;
+    if (!page.hasButton("Apply")) return;
     await page.pick("My key");
-    await page.click("Connect in One Click");
+    await page.click("Apply");
   };
   return { ch, page, read, apply };
 }
