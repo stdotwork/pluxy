@@ -431,6 +431,54 @@ test("Look again asks core to scan once and then reads its answer again", async 
   expect(setupCalls()).toBe(2);
 });
 
+const attribute = (node: FakeNode, name: string) => node.attributes.find((a) => a.name === name)?.value;
+
+/** The nodes below root carrying data-part, in page order. */
+function parts(root: FakeNode, part: string): FakeNode[] {
+  return [
+    ...(attribute(root, "data-part") === part ? [root] : []),
+    ...root.childNodes.flatMap((child) => parts(child, part)),
+  ];
+}
+
+test("Look again reads the packages again, so a provider started since shows as running", async () => {
+  jest.useFakeTimers();
+  const installed: Setup = {
+    ...setup(false, "2026-11-20T00:00:00Z"),
+    picks: [pick("pluxy/claude", "Claude", { installed: true })],
+  };
+  const claude = (enabled: boolean) => ({
+    id: "pluxy/claude",
+    version: "1.0.0",
+    registry: "bundled",
+    url: "https://packages.example.test/claude",
+    sha256: "0".repeat(64),
+    enabled,
+    installed_at: "2026-11-20T10:00:00Z",
+    state: enabled ? "active" : "disabled",
+  });
+  let turnedOn = false;
+  const fake = await mount((call) => {
+    if (call.method === "GET" && call.path === "/setup") return { status: 200, body: installed };
+    if (call.method === "GET" && call.path === "/packages") {
+      return { status: 200, body: { packages: [claude(turnedOn)] } };
+    }
+    return quiet(call);
+  });
+  const badge = () => {
+    const row = at(parts(fake.root, "setup-pick"), 0);
+    return attribute(at(parts(row, "badge"), 0), "data-tone");
+  };
+  expect(reads(fake.calls, "/packages")).toBe(1);
+  expect(badge()).toBe("warn");
+
+  // The provider is turned on somewhere else; the page says so once it is looked at again.
+  turnedOn = true;
+  await press(fake.root, "Look again");
+  expect(reads(fake.calls, "/packages")).toBe(2);
+  expect(badge()).toBe("ok");
+});
+
 for (const failure of [
   {
     status: 0,
