@@ -25,10 +25,11 @@ export interface Fleet {
   windows: ReadonlyMap<string, Windows>;
   pendingWindows: ReadonlySet<string>;
   refreshWindows(ids?: string[]): void;
-  /** The name to show for an account a request names by its public ID. */
-  nameOf(publicId: string | undefined): string;
-  /** The account a request names by its public ID, when core still has it. */
-  byPublicId(publicId: string | undefined): Account | undefined;
+  /**
+   * The name to show for an account as a request names it: by its ID (the request's own account
+   * and the usage totals) or its public ID (each try of the request).
+   */
+  nameOf(account: string | undefined): string;
   reload(): void;
 }
 
@@ -59,9 +60,12 @@ export function useFleet(): Fleet {
       }),
     [list, now, running, p],
   );
-  const byPublic = useMemo(() => {
+  const known = useMemo(() => {
     const map = new Map<string, Row>();
-    for (const r of rows) if (r.account.public_id) map.set(r.account.public_id, r);
+    for (const r of rows) {
+      if (r.account.public_id) map.set(r.account.public_id, r);
+      map.set(r.account.id, r);
+    }
     return map;
   }, [rows]);
   return {
@@ -71,8 +75,7 @@ export function useFleet(): Fleet {
     windows,
     pendingWindows: pending,
     refreshWindows: refresh,
-    nameOf: (id) => (id ? (byPublic.get(id)?.name ?? p.id(id)) : "–"),
-    byPublicId: (id) => (id ? byPublic.get(id)?.account : undefined),
+    nameOf: (id) => (id ? (known.get(id)?.name ?? p.id(id)) : "–"),
     reload: accounts.reload,
   };
 }
@@ -168,25 +171,31 @@ export function FixButton(props: {
   );
 }
 
-/** Only the names: what a screen that lists requests needs of the accounts, without their windows. */
+/**
+ * Only the names: what a screen that lists requests needs of the accounts, without their windows.
+ * A request names its own account by ID and each try by public ID; both are looked up.
+ */
 export function useAccountNames(): {
-  nameOf(publicId: string | undefined): string;
-  idOf(publicId: string | undefined): string | undefined;
+  nameOf(account: string | undefined): string;
+  idOf(account: string | undefined): string | undefined;
 } {
   const { api } = useKit();
   const p = usePrivacy();
   const accounts = usePoll(api.accounts, 60_000);
-  const byPublic = useMemo(() => {
+  const known = useMemo(() => {
     const map = new Map<string, Account>();
-    for (const a of accounts.data?.accounts ?? []) if (a.public_id) map.set(a.public_id, a);
+    for (const a of accounts.data?.accounts ?? []) {
+      if (a.public_id) map.set(a.public_id, a);
+      map.set(a.id, a);
+    }
     return map;
   }, [accounts.data]);
   return {
     nameOf: (id) => {
       if (!id) return "–";
-      const a = byPublic.get(id);
+      const a = known.get(id);
       return a ? p.text(a.id, accountIdentities(a)) : p.id(id);
     },
-    idOf: (id) => (id ? byPublic.get(id)?.id : undefined),
+    idOf: (id) => (id ? known.get(id)?.id : undefined),
   };
 }

@@ -373,14 +373,13 @@ function Fact(props: { k: string; children: preact.ComponentChildren; title?: st
 /** What the account did in the last 24 hours, from the usage record. */
 function Activity(props: { account: Account; fleet: Fleet }) {
   const { api } = useKit();
-  const id = props.account.public_id;
+  const id = props.account.id;
   const usage = usePoll<UsageSummary>(
-    () => api.usage(`since=24h&bucket=20m&buckets=72&account=${encodeURIComponent(id ?? "")}`),
+    () => api.usage(`since=24h&bucket=20m&buckets=72&account=${encodeURIComponent(id)}`),
     30_000,
     id,
   );
   const u = usage.data;
-  if (!id) return <p class="da-quiet">Core has no usage record for an account without a public ID.</p>;
   if (usage.loading) return <Skeleton rows={3} label="Reading the account's usage" />;
   if (!u) return <Fault what="Its usage could not be read." error={usage.error ?? ""} retry={usage.reload} />;
   if (u.enabled === false) return <p class="da-quiet">Usage recording is off.</p>;

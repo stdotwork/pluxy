@@ -273,7 +273,7 @@ export function meteredWindows(limits: QuotaLimit[] | undefined, now: number): Q
 // ---- a request's path -----------------------------------------------------------------------
 
 export interface Hop {
-  /** The account's public ID as core recorded it. */
+  /** The account as core recorded it: its public ID for a recorded try, its ID otherwise. */
   account: string;
   provider: string;
   model?: string;

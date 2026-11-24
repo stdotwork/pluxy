@@ -366,7 +366,11 @@ function Shell(props: { session: Session; themes: ThemeState }) {
   const [bindings, setBindings] = useState<KeyBinding[]>([]);
   const main = useRef<HTMLElement>(null);
 
-  useEffect(() => registry.subscribe(() => setBindings(registry.all())), [registry]);
+  // The screen's keys are registered before this runs (a child's effects come first), so read them once too.
+  useEffect(() => {
+    setBindings(registry.all());
+    return registry.subscribe(() => setBindings(registry.all()));
+  }, [registry]);
   useEffect(() => {
     document.documentElement.dataset.page = place.pageId;
     document.title = `${place.title} · pluxy`;
@@ -391,7 +395,14 @@ function Shell(props: { session: Session; themes: ThemeState }) {
       quiet: true,
       group: "Go to",
     })),
-    { keys: "?", label: "Show the keys", run: () => setSheet(true), group: "Everywhere", keyOnly: true },
+    {
+      keys: "?",
+      label: "Show the keys",
+      run: () => setSheet(true),
+      group: "Everywhere",
+      keyOnly: true,
+      quiet: true,
+    },
     {
       keys: "t p",
       label: session.privacyOn ? "Turn privacy mode off" : "Turn privacy mode on",
@@ -410,7 +421,7 @@ function Shell(props: { session: Session; themes: ThemeState }) {
   // The shell's keys are registered once and replaced as their state changes; a screen's come after and win.
   const globalScope = useRef(Symbol("shell"));
   useEffect(() => {
-    registry.set(globalScope.current, globals);
+    registry.set(globalScope.current, globals, true);
   });
 
   useEffect(() => {
@@ -544,7 +555,7 @@ function Shell(props: { session: Session; themes: ThemeState }) {
       };
     });
     const actions: Command[] = [
-      ...bindingCommands(bindings),
+      ...bindingCommands(bindings).map((c) => ({ ...c, run: () => registry.run(c.keys ?? "") })),
       {
         id: "do:reload",
         group: "Actions",
@@ -707,7 +718,13 @@ function Shell(props: { session: Session; themes: ThemeState }) {
 
         <footer class="da-hints">
           {hints.map((b) => (
-            <button key={b.keys} type="button" class="da-hint" onClick={b.run} title={b.label}>
+            <button
+              key={b.keys}
+              type="button"
+              class="da-hint"
+              onClick={() => registry.run(b.keys)}
+              title={b.label}
+            >
               <Kbd keys={b.keys} />
               <span>{b.label.toLowerCase()}</span>
             </button>

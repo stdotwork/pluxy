@@ -26,23 +26,37 @@ type Listener = () => void;
 
 /** The keys that work now: the shell's own and those of the screen that shows. */
 export class KeyRegistry {
-  private scopes = new Map<symbol, KeyBinding[]>();
+  private scopes = new Map<symbol, { bindings: KeyBinding[]; shape: string; base: boolean }>();
   private listeners = new Set<Listener>();
   private prefix: { key: string; at: number } | undefined;
 
-  set(scope: symbol, bindings: KeyBinding[]) {
-    this.scopes.set(scope, bindings);
-    this.notify();
+  /**
+   * Sets a scope's bindings. Screens set theirs on every render, so what each key does is always
+   * current; listeners hear of it only when the keys or their labels changed. base marks the
+   * shell's own scope, which every screen's keys come before.
+   */
+  set(scope: symbol, bindings: KeyBinding[], base = false) {
+    const shape = bindings.map((b) => `${b.keys}\u0000${b.label}\u0000${b.quiet ? 1 : 0}`).join("\u0001");
+    const changed = this.scopes.get(scope)?.shape !== shape;
+    this.scopes.set(scope, { bindings, shape, base });
+    if (changed) this.notify();
   }
 
   remove(scope: symbol) {
-    this.scopes.delete(scope);
-    this.notify();
+    if (this.scopes.delete(scope)) this.notify();
   }
 
-  /** Every binding, the most recently registered scope first: a screen's keys win over the shell's. */
+  /** Every binding: the screen's first, the shell's own last. */
   all(): KeyBinding[] {
-    return [...this.scopes.values()].reverse().flat();
+    const scopes = [...this.scopes.values()];
+    return [...scopes.filter((s) => !s.base), ...scopes.filter((s) => s.base)].flatMap((s) => s.bindings);
+  }
+
+  /** Runs what a key does now. A hint or a menu entry made earlier calls this, never an old binding. */
+  run(keys: string) {
+    this.all()
+      .find((b) => b.keys === keys)
+      ?.run();
   }
 
   subscribe(fn: Listener): () => void {

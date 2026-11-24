@@ -111,7 +111,10 @@ export function useWindows(accounts: Account[] | undefined): {
   const { api } = useKit();
   const [, bump] = useState(0);
   const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
-  const [force, setForce] = useState<{ n: number; ids?: string[] }>({ n: 0 });
+  // A refresh asked for: its count starts the read, and the ref says which accounts (all when unset).
+  const [asked, setAsked] = useState(0);
+  const askedIds = useRef<string[] | undefined>(undefined);
+  const taken = useRef(0);
   const wanted = (accounts ?? [])
     .filter((a) => !a.disabled && a.health?.state !== "broken" && a.extension)
     .map((a) => a.id);
@@ -119,10 +122,12 @@ export function useWindows(accounts: Account[] | undefined): {
   useEffect(() => {
     let live = true;
     const now = Date.now();
-    const forced = force.ids ? new Set(force.ids) : undefined;
+    const forcing = asked !== taken.current;
+    taken.current = asked;
+    const forced = askedIds.current ? new Set(askedIds.current) : undefined;
     const queue = wanted.filter((id) => {
       const have = kept.get(id);
-      if (force.n > 0 && (!forced || forced.has(id))) return true;
+      if (forcing && (!forced || forced.has(id))) return true;
       return !have || now - have.at > KEEP_MS;
     });
     if (queue.length === 0) return;
@@ -150,15 +155,14 @@ export function useWindows(accounts: Account[] | undefined): {
     return () => {
       live = false;
     };
-  }, [wantedKey, force, api]);
-  // Once a forced read has been taken up, later runs go back to the keep time.
-  useEffect(() => {
-    if (force.n > 0) setForce((f) => (f.n > 0 ? { n: 0 } : f));
-  }, [force]);
+  }, [wantedKey, asked, api]);
   return {
     windows: kept,
     pending,
-    refresh: useCallback((ids?: string[]) => setForce((f) => ({ n: f.n + 1, ids })), []),
+    refresh: useCallback((ids?: string[]) => {
+      askedIds.current = ids;
+      setAsked((n) => n + 1);
+    }, []),
   };
 }
 
