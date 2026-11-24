@@ -1,7 +1,7 @@
 // The command menu (Ctrl or Cmd+K): go to a page, find an account, run an action, all by typing
 // a few letters. It is the way around direction A; the rail and the keys are shortcuts to it.
 
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import { Icon, type IconName } from "./icons";
 import { type KeyBinding, keyCap } from "./keys";
 import { matchScore } from "./lib";
@@ -66,8 +66,9 @@ export function CommandMenu(props: { commands: Command[]; onClose: () => void; l
   const shown = useMemo(() => rankCommands(props.commands, typed), [props.commands, typed]);
   const current = Math.min(at, Math.max(0, shown.length - 1));
 
-  // Focus goes to the field and comes back to where it was when the menu closes.
-  useEffect(() => {
+  // Focus goes to the field as the menu appears, in the same frame (a layout effect): what is
+  // typed straight after Ctrl+K lands in it. It comes back to where it was when the menu closes.
+  useLayoutEffect(() => {
     const before = document.activeElement as HTMLElement | null;
     input.current?.focus();
     return () => before?.focus?.();

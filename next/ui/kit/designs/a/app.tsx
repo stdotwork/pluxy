@@ -5,7 +5,7 @@
 // shown inside this shell.
 
 import type { VNode } from "preact";
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { Account, Status } from "../../api";
 import { accountIdentities, usePrivacy } from "../../privacy";
 import type { PageDef } from "../../shell";
@@ -274,7 +274,7 @@ function CoreState(props: { status: ReturnType<typeof usePoll<Status>> }) {
 
 function KeysSheet(props: { bindings: KeyBinding[]; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const before = document.activeElement as HTMLElement | null;
     ref.current?.focus();
     return () => before?.focus?.();
