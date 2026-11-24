@@ -1,5 +1,6 @@
 // A small DOM that carries only the nodes and events Preact needs, so a test can mount a real page
 // or hook through Preact's DOM renderer and read its text back. Call restoreDom in afterEach.
+import { type ComponentChildren, render } from "preact";
 import { act } from "preact/test-utils";
 
 export class FakeNode {
@@ -206,4 +207,22 @@ export function button(root: FakeNode, label: string) {
   const found = all(root, "button").find((node) => node.textContent === label);
   if (!found) throw new Error(`no button labelled ${label}`);
   return found;
+}
+
+/** Mounts a tree in a fresh fake document and lets its first reads settle. */
+export async function mountIn(tree: ComponentChildren) {
+  const document = installDocument();
+  const root = document.createElement("main");
+  document.body.appendChild(root);
+  await act(async () => {
+    render(tree, root as unknown as Element);
+  });
+  await settle();
+  return {
+    root,
+    text: () => root.textContent,
+    unmount: async () => {
+      await act(async () => render(null, root as unknown as Element));
+    },
+  };
 }
