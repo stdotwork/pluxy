@@ -160,7 +160,9 @@ test("config models and credential tools follow core metadata", async ({ page })
   await expect(detail.getByLabel("Address the browser ended on")).toBeVisible();
   await detail.getByLabel("Address the browser ended on").fill("http://localhost/callback?code=ok");
   await detail.getByRole("button", { name: "Submit" }).click();
-  await expect(detail.getByRole("status")).toContainText("Signed in.");
+  await expect(detail.locator('[data-part="account-sign-in"]').getByRole("status")).toContainText(
+    "Signed in.",
+  );
   await expect(detail.getByRole("button", { name: "Sign in to another account" })).toHaveCount(0);
 });
 
