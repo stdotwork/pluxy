@@ -6,7 +6,18 @@ import { accountIdentities, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { rich, strings } from "../strings";
 import { Tabs } from "../tabs";
-import { Button, Empty, List, MasterDetail, Notice, PageHead, type Tone, useKit, useLoad } from "../ui";
+import {
+  Button,
+  Empty,
+  List,
+  MasterDetail,
+  Notice,
+  PageHead,
+  type Tone,
+  useKit,
+  useLoad,
+  usePoll,
+} from "../ui";
 import { AccountDetail, AccountState } from "./accountDetail";
 import { ConfigDialog } from "./configDialog";
 
@@ -17,30 +28,31 @@ const t = strings("accounts", {
   refresh: "Refresh",
   empty: "No accounts yet. Sign in to one on {page}, or set them in core's config.",
   addAccount: "Add Account",
-  noResults: "No results",
+  noResults: "No matching accounts. Clear or change your filters.",
+  loading: "Loading accounts…",
   list: "Accounts",
   account: "Account",
   extension: "Extension",
   state: "State",
   label: "Label",
-  credential: "Credential",
+  credential: "Type",
   from: "From",
   fromConfig: "AI providers",
   fromLogin: "Auth files",
   search: "Search credentials by name, account, type, provider, or error message",
   searchPlaceholder:
     "Search name, account, type, provider, or error (403, 429, invalid). Use * as a wildcard",
-  providers: "Providers",
+  providers: "Extensions",
   tabCount: "{name} ({count})",
   all: "All",
-  status: "Status Filter",
+  status: "Status filter",
   enabled: "Enabled",
   disabled: "Disabled",
   problem: "Problem",
   source: "Source",
   sort: "Sort",
   default: "Default",
-  name: "A-Z Name",
+  name: "Name (A–Z)",
   priority: "Priority",
   perPage: "Per page",
   previous: "Previous",
@@ -58,10 +70,10 @@ const t = strings("accounts", {
   batch: "Batch actions",
   enable: "Enable",
   disable: "Disable",
-  delete: "Delete",
+  delete: "Remove",
   confirmDelete: {
-    one: "Are you sure you want to delete {count} account?",
-    other: "Are you sure you want to delete {count} accounts?",
+    one: "Are you sure you want to remove {count} account?",
+    other: "Are you sure you want to remove {count} accounts?",
   },
   cancel: "Cancel",
   clearCooldown: "Clear cooldown",
@@ -73,31 +85,32 @@ const t = strings("accounts", {
   failure: "{id}: {error}",
   check: "Check",
   checking: "Checking",
-  ok: "OK",
+  ok: "Passed",
   failed: "Failed",
   notChecked: "Not checked",
   cooldown: "Cooldown",
-  cooling: "Cooling {time}",
+  cooling: "Cooling down ({time})",
   seconds: "{count}s",
   minutes: "{count}m",
   hours: "{count}h",
   lastError: "Last error",
   requests: "Requests now",
   credentials: { one: "{count} credential", other: "{count} credentials" },
-  active: { one: "{count} active", other: "{count} active" },
-  problems: { one: "{count} problem", other: "{count} problem" },
+  active: { one: "{count} available", other: "{count} available" },
+  problems: { one: "{count} problem", other: "{count} problems" },
   meta: "{credentials} · {active} · {problem}",
-  upload: "Upload File",
-  uploadJson: "Only JSON files are allowed",
-  uploadSize: "File size cannot exceed {maxSize}",
+  upload: "Upload file",
+  uploadJson: "Choose a JSON file (.json).",
+  uploadSize: "File exceeds {maxSize}. Choose a smaller file.",
   maxSize: "1 MB",
-  uploaded: "File uploaded successfully",
-  uploadedAs: "{file}: {uploaded}: account {id} ({extension})",
+  uploaded: "Uploaded",
+  uploadedAs: "{file}: {uploaded} as {id} ({extension})",
   ignored: "not supported yet, not imported: {names}",
 });
 
 /** The largest auth file core imports (legacy.MaxAuthFile in next/internal/legacy/auth.go). */
 const maxAuthFile = 1 << 20;
+const REFRESH_MS = 5_000;
 
 export interface AccountFilters {
   search?: string;
@@ -221,6 +234,13 @@ export function AccountsPage() {
   const selectedAccounts = list.filter((a) => checked.has(a.id));
   const extensions = [...new Set(list.map((a) => a.extension).filter((e): e is string => !!e))].sort();
 
+  usePoll(
+    () => {
+      if (!accounts.loading) accounts.reload();
+    },
+    REFRESH_MS,
+    !busy,
+  );
   useEffect(() => {
     const update = () => {
       if (!document.hidden) setNow(Date.now());
@@ -337,13 +357,13 @@ export function AccountsPage() {
     <>
       <PageHead title={t("title")} />
       <p class="muted accounts-meta" data-part="account-meta">
-        {t("meta", {
-          credentials: t("credentials", { count: list.length }),
-          active: t("active", {
-            count: counts.active,
-          }),
-          problem: t("problems", { count: counts.unavailable }),
-        })}
+        {accounts.data
+          ? t("meta", {
+              credentials: t("credentials", { count: list.length }),
+              active: t("active", { count: counts.active }),
+              problem: t("problems", { count: counts.unavailable }),
+            })
+          : accounts.phase === "loading" && t("loading")}
       </p>
       {accounts.error && <Notice tone="danger">{p.text(accounts.error, labels)}</Notice>}
       <Tabs
@@ -351,7 +371,10 @@ export function AccountsPage() {
         active={filters.extension || "all"}
         onChange={(id) => change("extension", id === "all" ? "" : id)}
         tabs={[
-          { id: "all", label: t("tabCount", { name: t("all"), count: list.length }) },
+          {
+            id: "all",
+            label: accounts.data ? t("tabCount", { name: t("all"), count: list.length }) : t("all"),
+          },
           ...extensions.map((id) => ({
             id,
             label: t("tabCount", { name: id, count: list.filter((a) => a.extension === id).length }),
@@ -410,7 +433,7 @@ export function AccountsPage() {
             </select>
           </label>
           {toolbarActions.map((action) => (
-            <Button key={action.id} onClick={action.run} disabled={busy || accounts.loading}>
+            <Button key={action.id} onClick={action.run} disabled={busy || accounts.phase === "loading"}>
               {action.label}
             </Button>
           ))}
@@ -481,7 +504,7 @@ export function AccountsPage() {
           list={
             accounts.data && list.length === 0 ? (
               <Empty>{rich(t("empty"), { page: <a href="#/add-account">{t("addAccount")}</a> })}</Empty>
-            ) : filtered.length === 0 && !accounts.loading ? (
+            ) : accounts.data && filtered.length === 0 ? (
               <Empty>{t("noResults")}</Empty>
             ) : (
               <List<Account>
@@ -495,23 +518,26 @@ export function AccountsPage() {
                   {
                     label: t("selectColumn"),
                     value: (a) => (
-                      <input
-                        type="checkbox"
-                        data-part="select"
-                        aria-label={t("select", { id: p.text(a.id, accountIdentities(a)) })}
-                        checked={checked.has(a.id)}
-                        disabled={busy}
-                        onClick={(e) => e.stopPropagation()}
-                        onChange={(e) => {
-                          const on = e.currentTarget.checked;
-                          setChecked((old) => {
-                            const next = new Set(old);
-                            if (on) next.add(a.id);
-                            else next.delete(a.id);
-                            return next;
-                          });
-                        }}
-                      />
+                      // biome-ignore lint/a11y/useKeyWithClickEvents: only keeps a click beside the box from opening the row
+                      <label class="hit" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          data-part="select"
+                          aria-label={t("select", { id: p.text(a.id, accountIdentities(a)) })}
+                          checked={checked.has(a.id)}
+                          disabled={busy}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => {
+                            const on = e.currentTarget.checked;
+                            setChecked((old) => {
+                              const next = new Set(old);
+                              if (on) next.add(a.id);
+                              else next.delete(a.id);
+                              return next;
+                            });
+                          }}
+                        />
+                      </label>
                     ),
                   },
                   { label: t("extension"), value: (a) => a.extension ?? "", mono: true },
@@ -583,7 +609,7 @@ export function AccountsPage() {
           <Button disabled={current <= 1} onClick={() => setPage(current - 1)}>
             {t("previous")}
           </Button>
-          <span>{t("page", { current, total, count: filtered.length })}</span>
+          {accounts.data && <span>{t("page", { current, total, count: filtered.length })}</span>}
           <Button disabled={current >= total} onClick={() => setPage(current + 1)}>
             {t("next")}
           </Button>

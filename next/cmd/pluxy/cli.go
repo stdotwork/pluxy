@@ -112,6 +112,10 @@ func (x *invocation) call(method, path string, q url.Values, in, out any, show f
 		if out != nil {
 			_ = json.Unmarshal(body, out)
 		}
+		if len(bytes.TrimSpace(body)) == 0 {
+			_, err = io.WriteString(x.stdout, "{}\n")
+			return err
+		}
 		_, err = x.stdout.Write(body)
 		return err
 	}
@@ -418,7 +422,13 @@ var commands = []command{
 	{words: "route", args: []string{"model"}, routes: []string{"GET /route"}, summary: "the accounts a request for a model would try now, in order, and those it would leave out",
 		run: func(x *invocation) error {
 			var r management.RouteReply
-			return x.call(http.MethodGet, "/route", url.Values{"model": {x.args[0]}}, nil, &r, func() {
+			// The exit code is the same with and without --json: a script that reads the body
+			// still learns from the code that nothing serves the model.
+			noAccount := func() bool { return len(r.Order) == 0 && len(r.LeftOut) == 0 && len(r.Chain) == 0 }
+			err := x.call(http.MethodGet, "/route", url.Values{"model": {x.args[0]}}, nil, &r, func() {
+				if noAccount() {
+					return
+				}
 				chain := len(r.Chain) > 0
 				if chain {
 					x.printf("chain %s: %s\n\n", x.cell(r.Model), x.cell(chainText(r.Chain)))
@@ -477,6 +487,13 @@ var commands = []command{
 				}
 				x.table(rows)
 			})
+			if err != nil {
+				return err
+			}
+			if noAccount() {
+				return notFoundError{fmt.Sprintf("no account serves %s. See pluxy model list.", r.Model)}
+			}
+			return nil
 		}},
 	{words: "chain list", routes: []string{"GET /chains"}, summary: "the fallback chains",
 		run: func(x *invocation) error {
@@ -1245,6 +1262,24 @@ func groupHelp(w io.Writer, prefix string) {
 	tw.Flush()
 }
 
+// groupExample returns one example command from prefix (preferring "<group> list").
+func groupExample(prefix string) string {
+	first := ""
+	for i := range commands {
+		c := &commands[i]
+		if !strings.HasPrefix(c.words+" ", prefix) {
+			continue
+		}
+		if c.words == prefix+"list" {
+			return c.words
+		}
+		if first == "" {
+			first = c.words
+		}
+	}
+	return first
+}
+
 // isHelpFlag reports whether arg is one of the spellings of help a command's own flags take.
 func isHelpFlag(arg string) bool {
 	return slices.Contains([]string{"-h", "--h", "-help", "--help"}, arg)
@@ -1255,6 +1290,14 @@ func help(w io.Writer, prefix string) {
 	fmt.Fprintln(w, "usage: pluxy serve [-config file] [flags]   run core (pluxy with no subcommand does too)")
 	fmt.Fprintln(w, "       pluxy init [-config file] [-port n]  write a first config (pluxy serve does when there is none)")
 	fmt.Fprintln(w, "       pluxy <command> [--json] [--config file | --url address --key key]")
+	fmt.Fprintln(w, "       pluxy -version                       print the build's version, commit and build date")
+	if prefix == "" {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "examples:")
+		fmt.Fprintln(w, "  pluxy status                        core's state and running extensions")
+		fmt.Fprintln(w, "  pluxy usage --since 24h --by model  request and token totals over the last 24 hours")
+		fmt.Fprintln(w, "  pluxy account set <id> priority=5   change an account's routing priority")
+	}
 	fmt.Fprintln(w)
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	for i := range commands {
@@ -1268,6 +1311,52 @@ func help(w io.Writer, prefix string) {
 	tw.Flush()
 }
 
+// runHelp implements `pluxy help [command...]`. Unknown names exit 2 with one line on stderr.
+func runHelp(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		help(stdout, "")
+		return exitOK
+	}
+	if len(args) == 1 && args[0] == "serve" {
+		fmt.Fprintln(stdout, "usage: pluxy serve [-config file] [flags]   run core (pluxy with no subcommand does too)")
+		fmt.Fprintln(stdout, "  run pluxy serve -h for flags")
+		return exitOK
+	}
+	if len(args) == 1 && args[0] == "init" {
+		fmt.Fprintln(stdout, "usage: pluxy init [-config file] [-port n]  write a first config (pluxy serve does when there is none)")
+		fmt.Fprintln(stdout, "  run pluxy init -h for flags")
+		return exitOK
+	}
+	prefix := strings.Join(args, " ")
+	matched := false
+	for i := range commands {
+		if strings.HasPrefix(commands[i].words+" ", prefix) {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		fmt.Fprintf(stderr, "pluxy: no command %q. See pluxy help.\n", prefix)
+		return exitUsage
+	}
+	help(stdout, prefix)
+	return exitOK
+}
+
+// wantsJSON reports whether args contain --json or -json before "--", so flag parse errors can
+// still emit JSON on stderr even when an invalid flag appeared before --json.
+func wantsJSON(args []string) bool {
+	for _, a := range args {
+		if a == "--" {
+			return false
+		}
+		if a == "--json" || a == "-json" || a == "--json=true" || a == "-json=true" {
+			return true
+		}
+	}
+	return false
+}
+
 // runCLI runs one client subcommand and returns its exit code.
 func runCLI(args []string, stdout, stderr io.Writer, getenv func(string) string) int {
 	return runCLIWithInput(args, os.Stdin, stdout, stderr, getenv, isInteractive(os.Stdin))
@@ -1275,8 +1364,7 @@ func runCLI(args []string, stdout, stderr io.Writer, getenv func(string) string)
 
 func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv func(string) string, tty bool) int {
 	if args[0] == "help" {
-		help(stdout, strings.Join(args[1:], " "))
-		return exitOK
+		return runHelp(args[1:], stdout, stderr)
 	}
 	cmd, rest := find(args)
 	if cmd == nil {
@@ -1290,7 +1378,9 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 				groupHelp(stdout, prefix)
 				return exitOK
 			}
-			if len(args) > 1 {
+			if len(args) > 1 && strings.HasPrefix(args[1], "-") {
+				fmt.Fprintf(stderr, "pluxy: %s needs a command before flags, such as pluxy %s\n", args[0], groupExample(prefix))
+			} else if len(args) > 1 {
 				fmt.Fprintf(stderr, "pluxy: unknown %s command %q\n", args[0], args[1])
 			} else {
 				fmt.Fprintf(stderr, "pluxy: %s needs a command\n", args[0])
@@ -1306,7 +1396,7 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 		return exitUsage
 	}
 	fs := flag.NewFlagSet("pluxy "+cmd.words, flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	fs.SetOutput(io.Discard)
 	var o opts
 	jsonOut := fs.Bool("json", false, "print the API's reply body unchanged")
 	configPath := fs.String("config", "config.json", "the config file to read core's address and management key from")
@@ -1315,16 +1405,33 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 	if cmd.flags != nil {
 		cmd.flags(fs, &o)
 	}
+	fs.Usage = func() {
+		out := fs.Output()
+		fmt.Fprintf(out, "usage: pluxy %s%s [flags]\n", cmd.words, argsUsage(cmd))
+		if cmd.summary != "" {
+			fmt.Fprintf(out, "  %s\n", cmd.summary)
+		}
+		fmt.Fprintln(out)
+		fs.PrintDefaults()
+	}
 	if cmd.words == "usage events" {
 		rest = normalizeOptionalFlagValue(rest, "before", "0")
 	}
+	origRest := rest
 	// Flags may come before, between and after the arguments.
 	var pos []string
 	for {
 		if err := fs.Parse(rest); err != nil {
 			if errors.Is(err, flag.ErrHelp) {
+				fs.SetOutput(stdout)
+				fs.Usage()
 				return exitOK
 			}
+			if *jsonOut || wantsJSON(origRest) {
+				printError(stderr, true, usageError{err.Error()})
+				return exitUsage
+			}
+			fmt.Fprintf(stderr, "pluxy: %v. See pluxy help %s.\n", err, cmd.words)
 			return exitUsage
 		}
 		if fs.NArg() == 0 {
@@ -1334,6 +1441,10 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 		rest = fs.Args()[1:]
 	}
 	if len(pos) != len(cmd.args) && !(cmd.more && len(pos) > len(cmd.args)) && !(cmd.optional && len(pos) == len(cmd.args)-1) {
+		if *jsonOut {
+			printError(stderr, true, usageError{fmt.Sprintf("usage: pluxy %s%s [flags]", cmd.words, argsUsage(cmd))})
+			return exitUsage
+		}
 		fmt.Fprintf(stderr, "pluxy: usage: pluxy %s%s [flags]\n", cmd.words, argsUsage(cmd))
 		if cmd.words == "client show" && len(pos) == 0 {
 			fmt.Fprintln(stderr, "tools:")
@@ -1350,10 +1461,18 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 		printError(stderr, *jsonOut, usageError{"--input: " + o.input.bad.Error()})
 		return exitUsage
 	}
-	t, err := findCore(*configPath, cmpOr(*addr, getenv("PLUXY_URL")), cmpOr(*key, getenv("PLUXY_MANAGEMENT_KEY")))
+	configSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "config" {
+			configSet = true
+		}
+	})
+	explicitURL := cmpOr(*addr, getenv("PLUXY_URL"))
+	explicitKey := cmpOr(*key, getenv("PLUXY_MANAGEMENT_KEY"))
+	t, err := findCore(*configPath, configSet, explicitURL, explicitKey)
 	if err != nil {
 		printError(stderr, *jsonOut, err)
-		return exitFailed
+		return exitCode(err, true)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
@@ -1363,7 +1482,8 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 		return exitOK
 	}
 	err = nameMissingAccount(cmd, pos, err)
-	printError(stderr, *jsonOut, err)
+	fromConfig := explicitURL == "" || explicitKey == ""
+	printCLIError(stderr, *jsonOut, cmd, pos, t.url, *configPath, fromConfig, err)
 	return exitCode(err, cmd.changesNothing())
 }
 
@@ -1382,6 +1502,59 @@ func nameMissingAccount(cmd *command, pos []string, err error) error {
 	named := *ae
 	named.Message = fmt.Sprintf("no such account %q", pos[0])
 	return &named
+}
+
+type notFoundError struct{ msg string }
+
+func (e notFoundError) Error() string { return e.msg }
+
+// printCLIError writes a command's error to stderr, adding actionable next steps for common
+// failures in human output while leaving --json output unchanged.
+func printCLIError(stderr io.Writer, asJSON bool, cmd *command, pos []string, targetURL, configPath string, fromConfig bool, err error) {
+	if asJSON {
+		printError(stderr, true, err)
+		return
+	}
+	msg := fmt.Sprintf("pluxy: %s\n", formatHumanError(cmd, pos, targetURL, configPath, fromConfig, err))
+	if stderrIsTerminal(stderr) {
+		_ = writeEscaped(stderr, []byte(msg))
+		return
+	}
+	io.WriteString(stderr, msg)
+}
+
+func formatHumanError(cmd *command, pos []string, targetURL, configPath string, fromConfig bool, err error) string {
+	var unreach *management.UnreachableError
+	if errors.As(err, &unreach) {
+		return fmt.Sprintf("no core is listening at %s. Start one with: pluxy serve -config %s, or check --url", unreach.URL, configPath)
+	}
+	var ae *management.APIError
+	if errors.As(err, &ae) {
+		switch {
+		case ae.Status == http.StatusUnauthorized && ae.Code == "unauthorized" && ae.Message == "missing management key":
+			return fmt.Sprintf("no management key for %s. Pass --key, set PLUXY_MANAGEMENT_KEY, or use --config <file>", targetURL)
+		case ae.Status == http.StatusUnauthorized && ae.Code == "unauthorized" && ae.Message == "invalid management key":
+			return fmt.Sprintf("wrong management key for %s. Check --key, PLUXY_MANAGEMENT_KEY, or --config <file>", targetURL)
+		case ae.Status == http.StatusConflict && ae.Code == "conflict" && strings.Contains(ae.Message, "is set in core's config"):
+			acct := ""
+			if cmd != nil && strings.HasPrefix(cmd.words, "account ") && len(pos) > 0 {
+				acct = pos[0]
+			}
+			if acct != "" {
+				if fromConfig {
+					return fmt.Sprintf("account %q is defined in %s. Edit its entry there, then run pluxy reload", acct, configPath)
+				}
+				return fmt.Sprintf("account %q is defined in core's config file. Edit its entry there, then run pluxy reload", acct)
+			}
+			if fromConfig {
+				return fmt.Sprintf("%s. Edit %s, then run pluxy reload", ae.Message, configPath)
+			}
+			return fmt.Sprintf("%s. Edit core's config file, then run pluxy reload", ae.Message)
+		case ae.Status == http.StatusNotFound && ae.Code == "not_found" && cmd != nil && cmd.words == "key remove" && len(pos) > 0 && ae.Message == "no client key in the config file has this ID":
+			return fmt.Sprintf("no client key has ID %q. Run pluxy key list to see the configured keys", pos[0])
+		}
+	}
+	return err.Error()
 }
 
 // printError writes a command's error to stderr: with --json, as the API's error object (the
@@ -1406,12 +1579,15 @@ func printError(stderr io.Writer, asJSON bool, err error) {
 	}
 	code, msg := "failed", err.Error()
 	var ue usageError
+	var nfe notFoundError
 	var we waitingError
 	switch {
 	case errors.As(err, &ae):
 		code, msg = ae.Code, ae.Message
 	case errors.As(err, &ue):
 		code = "invalid_request"
+	case errors.As(err, &nfe):
+		code = "not_found"
 	case errors.As(err, &we):
 		code = "waiting"
 	case management.IsUnreachable(err):
@@ -1439,17 +1615,22 @@ func (c command) changesNothing() bool {
 // so its 409 or 422 failed a call rather than refusing a change.
 func exitCode(err error, readOnly bool) int {
 	var ue usageError
+	var nfe notFoundError
 	var we waitingError
 	var ae *management.APIError
 	switch {
 	case errors.As(err, &ue):
 		return exitUsage
+	case errors.As(err, &nfe):
+		return exitNotFound
 	case errors.As(err, &we):
 		return exitWaiting
 	case management.IsUnreachable(err):
 		return exitUnreachable
 	case errors.As(err, &ae):
 		switch ae.Status {
+		case http.StatusBadRequest:
+			return exitUsage
 		case http.StatusUnauthorized, http.StatusForbidden:
 			return exitRefused
 		case http.StatusNotFound:

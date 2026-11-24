@@ -145,7 +145,12 @@ export function TrafficChart(props: { rows: BucketRow[] }) {
           </span>
         </p>
       </div>
-      <div class="table-wrap traffic-table">
+      <section
+        class="table-wrap traffic-table"
+        aria-label={t("tableLabel")}
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must take focus for the keyboard to scroll it
+        tabIndex={0}
+      >
         <table class="table" aria-label={t("tableLabel")}>
           <thead>
             <tr>
@@ -166,7 +171,7 @@ export function TrafficChart(props: { rows: BucketRow[] }) {
             ))}
           </tbody>
         </table>
-      </div>
+      </section>
     </div>
   );
 }

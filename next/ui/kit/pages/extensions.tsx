@@ -37,18 +37,19 @@ const t = strings("extensions", {
   restarts: "Restarts",
   lastError: "Last error",
   isolation:
-    "Extensions run as separate programs, so a crash cannot take core down. That is not a sandbox: an extension can reach what its program can reach.",
+    "Extensions run in separate processes, so a crash will not stop core. They are not sandboxed and can access whatever the process can.",
   disable: "Disable",
   enable: "Enable",
   remove: "Remove",
-  available: "Available",
+  available: "Not installed",
   refresh: "Refresh",
   registryError: "Registry {name}: {error}",
   nothingMore: "Nothing more to install from the registries in core's config.",
-  availableExtensions: "Available extensions",
+  availableExtensions: "Extensions not installed",
   extension: "Extension",
   install: "Install",
-  noInstalled: "No extensions installed.",
+  noInstalled: "No extensions installed. Install one from Not installed below.",
+  loading: "Loading…",
   installedExtensions: "Installed extensions",
 });
 
@@ -140,6 +141,7 @@ function Available(props: { installed: Set<string>; onInstalled: () => void }) {
         </Button>
       }
     >
+      {registries.phase === "loading" && <Notice tone="muted">{t("loading")}</Notice>}
       {registries.error && <Notice tone="danger">{registries.error}</Notice>}
       {broken.map((r) => (
         <Notice key={r.name} tone="warn">
@@ -201,6 +203,7 @@ export function ExtensionsPage() {
           </Button>
         }
       />
+      {packages.phase === "loading" && <Notice tone="muted">{t("loading")}</Notice>}
       {packages.error && <Notice tone="danger">{packages.error}</Notice>}
       <div class="stack">
         <MasterDetail

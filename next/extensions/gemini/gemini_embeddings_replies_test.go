@@ -19,7 +19,7 @@ import (
 
 // embedAttempt runs one Gemini-format embedding call on a fake upstream and returns what the
 // extension sent, its error and how many calls the upstream got.
-func embedAttempt(t *testing.T, vertex bool, model, format, body string, handle func(w http.ResponseWriter, n int)) (*recorder, error, int) {
+func embedAttempt(t *testing.T, vertex bool, model, format, body string, handle func(w http.ResponseWriter, n int)) (*recorder, int, error) {
 	t.Helper()
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -41,7 +41,7 @@ func embedAttempt(t *testing.T, vertex bool, model, format, body string, handle 
 		Model:  model,
 		Native: &llm.Native{Format: format, Body: json.RawMessage(body)},
 	}}, rec, format)
-	return rec, err, int(calls.Load())
+	return rec, int(calls.Load()), err
 }
 
 // A 200 that is not a full answer becomes an error, and nothing of it reaches the client.
@@ -59,7 +59,7 @@ func TestGeminiEmbedRefusesShortReplies(t *testing.T) {
 		{"vertex single with an error object", "gemini-embedding-2", llm.FormatGeminiEmbedContent, one, `{"error":{"code":500,"message":"backend failed"}}`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rec, err, _ := embedAttempt(t, tc.vertex, tc.model, tc.format, tc.body, func(w http.ResponseWriter, _ int) { io.WriteString(w, tc.reply) })
+			rec, _, err := embedAttempt(t, tc.vertex, tc.model, tc.format, tc.body, func(w http.ResponseWriter, _ int) { io.WriteString(w, tc.reply) })
 			var e *llm.Error
 			if !errors.As(err, &e) || e.Code != llm.CodeUpstream || e.Status != http.StatusBadGateway || e.Scope != llm.ScopeRequest {
 				t.Fatalf("err = %v, want a 502 upstream error on the request", err)
@@ -71,7 +71,7 @@ func TestGeminiEmbedRefusesShortReplies(t *testing.T) {
 	}
 	t.Run("a full reply passes through unchanged", func(t *testing.T) {
 		const reply = `{"embeddings":[{"values":[1,2]},{"values":[3,4]}]}`
-		rec, err, _ := embedAttempt(t, false, "gemini-embedding-001", llm.FormatGeminiBatchEmbedContents, two, func(w http.ResponseWriter, _ int) { io.WriteString(w, reply) })
+		rec, _, err := embedAttempt(t, false, "gemini-embedding-001", llm.FormatGeminiBatchEmbedContents, two, func(w http.ResponseWriter, _ int) { io.WriteString(w, reply) })
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -89,7 +89,7 @@ func TestGeminiEmbedPredictRefusesUnknownConfig(t *testing.T) {
 		{"batch", llm.FormatGeminiBatchEmbedContents, `{"requests":[{"content":{"parts":[{"text":"a"}]},"embedContentConfig":{"taskType":"RETRIEVAL_QUERY","autoTruncate":false}}]}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rec, err, calls := embedAttempt(t, true, "gemini-embedding-001", tc.format, tc.body, func(w http.ResponseWriter, _ int) {
+			rec, calls, err := embedAttempt(t, true, "gemini-embedding-001", tc.format, tc.body, func(w http.ResponseWriter, _ int) {
 				io.WriteString(w, `{"predictions":[{"embeddings":{"values":[1]}}]}`)
 			})
 			var e *llm.Error
@@ -103,7 +103,7 @@ func TestGeminiEmbedPredictRefusesUnknownConfig(t *testing.T) {
 		})
 	}
 	t.Run("the fields it carries are still sent", func(t *testing.T) {
-		_, err, calls := embedAttempt(t, true, "gemini-embedding-001", llm.FormatGeminiEmbedContent,
+		_, calls, err := embedAttempt(t, true, "gemini-embedding-001", llm.FormatGeminiEmbedContent,
 			`{"content":{"parts":[{"text":"a"}]},"embedContentConfig":{"taskType":"RETRIEVAL_QUERY","title":"t","outputDimensionality":1,"autoTruncate":null}}`,
 			func(w http.ResponseWriter, _ int) {
 				io.WriteString(w, `{"predictions":[{"embeddings":{"values":[1]}}]}`)
@@ -121,7 +121,7 @@ func TestGeminiEmbedBatchWithNonObjectItem(t *testing.T) {
 		`{"requests":[{"model":"models/my-private-alias","content":{"parts":[{"text":"a"}]}},7]}`,
 		`{"requests":"models/my-private-alias"}`,
 	} {
-		rec, err, calls := embedAttempt(t, false, "gemini-embedding-001", llm.FormatGeminiBatchEmbedContents, body, func(w http.ResponseWriter, _ int) {
+		rec, calls, err := embedAttempt(t, false, "gemini-embedding-001", llm.FormatGeminiBatchEmbedContents, body, func(w http.ResponseWriter, _ int) {
 			io.WriteString(w, `{"embeddings":[{"values":[1]},{"values":[2]}]}`)
 		})
 		var e *llm.Error
@@ -160,7 +160,7 @@ func TestGeminiEmbedUsageNeedsEveryCall(t *testing.T) {
 		{"embedContent, one call per input", "gemini-embedding-2", embedContent},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			rec, err, calls := embedAttempt(t, true, tc.model, llm.FormatGeminiBatchEmbedContents, two, tc.handle)
+			rec, calls, err := embedAttempt(t, true, tc.model, llm.FormatGeminiBatchEmbedContents, two, tc.handle)
 			if err != nil || calls != 2 {
 				t.Fatalf("err = %v, calls = %d, want two successful calls", err, calls)
 			}
@@ -171,7 +171,7 @@ func TestGeminiEmbedUsageNeedsEveryCall(t *testing.T) {
 		})
 	}
 	t.Run("every call reporting still sums", func(t *testing.T) {
-		rec, err, _ := embedAttempt(t, true, "gemini-embedding-2", llm.FormatGeminiBatchEmbedContents, two, func(w http.ResponseWriter, n int) {
+		rec, _, err := embedAttempt(t, true, "gemini-embedding-2", llm.FormatGeminiBatchEmbedContents, two, func(w http.ResponseWriter, n int) {
 			io.WriteString(w, `{"embedding":{"values":[1]},"usageMetadata":{"promptTokenCount":3}}`)
 		})
 		if err != nil {
@@ -227,7 +227,7 @@ func TestGeminiEmbedErrorBodyDoesNotLeakProject(t *testing.T) {
 		vertex      bool
 	}{{"gemini api", "gemini-embedding-001", false}, {"vertex embedContent", "gemini-embedding-2", true}} {
 		t.Run(tc.name, func(t *testing.T) {
-			rec, err, _ := embedAttempt(t, tc.vertex, tc.model, llm.FormatGeminiEmbedContent, one, func(w http.ResponseWriter, _ int) { io.WriteString(w, reply) })
+			rec, _, err := embedAttempt(t, tc.vertex, tc.model, llm.FormatGeminiEmbedContent, one, func(w http.ResponseWriter, _ int) { io.WriteString(w, reply) })
 			var e *llm.Error
 			if !errors.As(err, &e) || e.Code != llm.CodeUpstream {
 				t.Fatalf("err = %v, want an upstream error", err)

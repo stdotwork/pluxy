@@ -21,20 +21,12 @@ import {
   useKit,
   useLoad,
 } from "../../ui/kit/ui";
-import { Backups, reply } from "./backups";
+import { Backups } from "./backups";
 import { folderWait, NeedsKey, NoKeys, toolMissing, withDeviceLink } from "./clientHelp";
-import {
-  type Agents,
-  fresh,
-  fromFile,
-  keysOf,
-  type Model,
-  PACKAGE,
-  type ReadBack,
-  type Secret,
-} from "./codexForm";
+import { keysOf, type Secret, Text, usePreview } from "./clientPage";
+import { type Agents, fresh, fromFile, type Model, PACKAGE, type ReadBack } from "./codexForm";
 import type { AgentPage } from "./easyMode";
-import { connectionGet } from "./host";
+import { connectionGet, reply } from "./host";
 import { keptTerminal, launcherProblem, useDeviceChanged } from "./startCli";
 
 const t = strings("codex", {
@@ -42,7 +34,7 @@ const t = strings("codex", {
   short: "Codex",
   tip: "Set up and start Codex with this core",
   intro:
-    "Points Codex's config.toml at this core through the Responses API, with a client key, and writes the model catalog Codex lists. Apply, Clear and Restore Backup each ask in a native confirmation; comments and everything else in the files stay. Restart Codex afterward.",
+    "Points Codex's config.toml at this core with a client key and model catalog. Apply, Clear, and Restore backup ask for confirmation and keep other settings. Restart Codex afterward.",
   unavailable:
     "Install and enable the curated Codex tool (pluxy/codex-setup) on the {device} page to set up Codex from here.",
   files: "Configuration files",
@@ -54,7 +46,7 @@ const t = strings("codex", {
   pathHint: "A full path; a link (as stow makes) is followed and kept",
   root: "Folder",
   rootHint: "A full path, such as your CODEX_HOME; the folder may be a link (as chezmoi can make)",
-  read: "Read configuration",
+  read: "Refresh",
   status: "Status",
   target: "Writes to",
   keySet: "Key in the file",
@@ -62,9 +54,9 @@ const t = strings("codex", {
   yes: "Yes",
   no: "No",
   applied: "Applied",
-  notConfigured: "Not Configured",
+  notConfigured: "Not configured",
   configured: "Configured",
-  needsUpdate: "Configuration Modified",
+  needsUpdate: "Configuration modified",
   providerChange:
     "Codex lists past conversations by provider. After Apply, conversations started with {provider} stay hidden from resume. The app does not sync or change past conversations.",
   profile: "The active Codex profile {profile} may override these settings.",
@@ -75,7 +67,7 @@ const t = strings("codex", {
     "Used for Codex automatic approval requests. Codex default restores built-in selection; a selected model must be callable through the current proxy.",
   approvalDefault: "Codex default",
   approvalMissing:
-    "This model is no longer listed. The setting is preserved; verify that the proxy supports it.",
+    "This model is no longer listed. pluxy keeps the setting; check that the proxy still supports it.",
   compaction: "Remote compaction (experimental)",
   compactionHint:
     "Off by default. Compact context on the server; requires a compatible upstream route. Turn off if compaction fails. Restart Codex after saving.",
@@ -117,37 +109,37 @@ const t = strings("codex", {
   systemPromptHint:
     "Replaces this model's system prompt when you enter one ({chars} characters now); leave empty to keep it.",
   removeModel: "Remove model",
-  key: "Authentication Key",
-  keyHint: "The client API key Codex uses to connect to this core, kept by native key entry.",
+  key: "Client key",
+  keyHint: "The client key Codex uses to reach this core.",
   addKey: "Add key…",
   keyLabel: "Codex client key",
-  apply: "Apply Configuration",
-  update: "Update Configuration",
-  repair: "Repair Connection",
-  clear: "Close configuration",
+  apply: "Apply",
+  update: "Update",
+  repair: "Repair",
+  clear: "Clear",
   clearHint: "Remove pluxy's integration settings and keep other settings. Restart the agent afterward.",
-  restore: "Restore Backup",
+  restore: "Restore backup",
   restoreHint: "Put both files back as they were before the first apply.",
   refused: "Codex would not take these files",
   refusedHint:
-    "Apply and Close configuration leave them alone until they are fixed; Restore Backup puts back both files as they were before the first apply.",
+    "Apply and Clear leave these files unchanged until you fix them; Restore backup reverts both files.",
   noCore: "Connect to a core first: its address goes into the configuration.",
   modelMissing: "Choose a model from the catalog.",
   start: "Start CLI",
-  cwd: "Working directory",
-  recent: "Recently Used",
+  cwd: "Working folder",
+  recent: "Recently used",
   override: "Agent program path",
   overrideHint: "A full path used instead of codex found on the PATH (optional)",
   terminal: "Terminal",
   launch: "Start Codex CLI",
-  app: "Start App",
+  app: "Start app",
   appPath: "Codex App program",
   appHint: "Codex has no Linux app of its own: the full path of the program to start",
   launchApp: "Start Codex App",
-  appCwd: "Enter a working directory under Start CLI first: the app starts there.",
-  restartCli: "Restart CLI Service",
+  appCwd: "Enter a working folder under Start CLI first: the app starts there.",
+  restartCli: "Restart CLI service",
   restartCliMessage:
-    "Restarting loads the latest configuration and model list. All active CLI sessions, including those in other terminals, will be interrupted. Wait for tasks to finish before restarting.",
+    "Restarting loads the latest config and models and interrupts all active CLI sessions, including those in other terminals. Wait for tasks to finish first.",
 });
 
 const EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"] as const;
@@ -159,37 +151,6 @@ interface Preview {
   targets: { selected: string; target: string; link: string | null; [k: string]: unknown }[];
   applied: boolean;
   settings: ReadBack;
-}
-
-function Text(props: {
-  label: string;
-  hint?: string;
-  value: string;
-  onInput: (v: string) => void;
-  list?: string;
-  area?: boolean;
-}) {
-  const id = useId();
-  const input = (e: { currentTarget: { value: string } }) => props.onInput(e.currentTarget.value);
-  return (
-    <label class="field" data-part="field" for={id}>
-      <span class="label">{props.label}</span>
-      {props.area ? (
-        <textarea id={id} rows={4} spellcheck={false} value={props.value} onInput={input} />
-      ) : (
-        <input
-          id={id}
-          type="text"
-          autocomplete="off"
-          spellcheck={false}
-          list={props.list}
-          value={props.value}
-          onInput={input}
-        />
-      )}
-      {props.hint && <small class="hint">{props.hint}</small>}
-    </label>
-  );
 }
 
 /** A whole number, or blank (null). */
@@ -390,7 +351,6 @@ export function CodexPage() {
   const [configPath, setConfigPath] = useState("");
   const [catalogPath, setCatalogPath] = useState("");
   const [root, setRoot] = useState("");
-  const [preview, setPreview] = useState<Preview>();
   const [model, setModel] = useState("");
   const [approval, setApproval] = useState("");
   const [compaction, setCompaction] = useState(false);
@@ -400,7 +360,7 @@ export function CodexPage() {
   const [secret, setSecret] = useState("");
   const [core, setCore] = useState<string>();
   const secrets = useLoad(() => reply<{ secrets?: Secret[] }>("vault_secrets"));
-  const keys = keysOf(secrets.data);
+  const keys = keysOf(PACKAGE, secrets.data);
   const listId = useId();
   useEffect(() => {
     connectionGet().then(
@@ -419,13 +379,18 @@ export function CodexPage() {
             ],
           }
         : {};
+  // A write acts on the files the last preview pinned (the tool refuses them if one changed
+  // since); the preview belongs to the selection it was read for, so a write never pins files unread.
+  const selected = JSON.stringify(selection());
+  const { preview, readFor } = usePreview<Preview>(selected);
   const read = useAction(() => {});
   const load = () =>
     read.run(async () => {
-      const r = await tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) });
+      const r = await readFor(selected, () =>
+        tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) }),
+      );
       if (r.body) {
         const f = fromFile(r.body.settings);
-        setPreview(r.body);
         setModel(f.model);
         setApproval(f.approval);
         setCompaction(f.compaction);
@@ -435,14 +400,6 @@ export function CodexPage() {
       return r;
     });
   const write = useAction(load);
-  // A write acts on the files the last preview pinned (the tool refuses it if a file changed
-  // since); choosing other files drops that preview, so a write never pins files unread.
-  const reselect =
-    <T,>(f: (v: T) => void) =>
-    (v: T) => {
-      f(v);
-      setPreview(undefined);
-    };
   const importModels = useAction(() => {});
   const doImport = () =>
     importModels.run(async () => {
@@ -510,27 +467,20 @@ export function CodexPage() {
             { value: "files", label: t("filesSelected") },
             { value: "root", label: t("filesInRoot") },
           ]}
-          onChange={reselect(setWhere)}
+          onChange={setWhere}
         />
         {where === "files" && (
           <>
-            <Text
-              label={t("configPath")}
-              hint={t("pathHint")}
-              value={configPath}
-              onInput={reselect(setConfigPath)}
-            />
+            <Text label={t("configPath")} hint={t("pathHint")} value={configPath} onInput={setConfigPath} />
             <Text
               label={t("catalogPath")}
               hint={t("pathHint")}
               value={catalogPath}
-              onInput={reselect(setCatalogPath)}
+              onInput={setCatalogPath}
             />
           </>
         )}
-        {where === "root" && (
-          <Text label={t("root")} hint={t("rootHint")} value={root} onInput={reselect(setRoot)} />
-        )}
+        {where === "root" && <Text label={t("root")} hint={t("rootHint")} value={root} onInput={setRoot} />}
         {read.error && !toolMissing(read.error, PACKAGE) && <Notice tone="danger">{read.error}</Notice>}
         <Button onClick={load} disabled={busy}>
           {t("read")}
@@ -662,7 +612,7 @@ export function CodexPage() {
                 onChange={setSecret}
               />
             ) : (
-              <NoKeys />
+              <NoKeys secrets={secrets} />
             )}
             {secrets.error && <Notice tone="danger">{secrets.error}</Notice>}
             {addKey.error && <Notice tone="danger">{addKey.error}</Notice>}

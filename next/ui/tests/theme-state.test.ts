@@ -230,7 +230,7 @@ test("a theme core cannot turn on goes back to the one before, and so does a fai
   await until(() => themes.listed.length === 3);
   s.core.instead = (method, path) => (method === "PUT" && path === "/theme" ? { status: 0 } : undefined);
   expect(await themes.select("t3/nightfall")).toBe(
-    "core could not be reached: pluxy is not running or the address is wrong, so start it, then try again",
+    "cannot reach core; check that pluxy is running and the address is right, then try again",
   );
   expect(themes.current.theme.id).toBe("pluxy/default");
   expect(applied(s.kept).id).toBe("pluxy/default");
@@ -238,7 +238,9 @@ test("a theme core cannot turn on goes back to the one before, and so does a fai
   s.core.instead = () => undefined;
   expect(await themes.select("t3/nightfall")).toBeUndefined();
   s.core.instead = (method) => (method === "DELETE" ? { status: 500 } : undefined);
-  expect(await themes.removeTheme("t3/nightfall")).toBe("core answered 500");
+  expect(await themes.removeTheme("t3/nightfall")).toBe(
+    "core returned HTTP 500; check Logs Viewer and try again",
+  );
   expect(themes.current.theme.id).toBe("t3/nightfall");
 });
 
@@ -308,7 +310,7 @@ test("old prefs stay when core cannot be reached, for the next time", async () =
   themes.connect();
   await until(() => themes.problem !== undefined);
   expect(themes.problem).toBe(
-    "core could not be reached: pluxy is not running or the address is wrong, so start it, then try again",
+    "cannot reach core; check that pluxy is running and the address is right, then try again",
   );
   expect(s.kept.has("themes")).toBe(true);
   expect(themes.current.theme.id).toBe("pluxy/terminal");

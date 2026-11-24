@@ -69,7 +69,6 @@ import (
 	"net/url"
 	"os"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -780,7 +779,7 @@ func upstreamError(resp *http.Response, model string, modelLevelCooling bool) *l
 	case s == http.StatusServiceUnavailable || s == 529:
 		// 529 is Anthropic's overloaded_error: the request was refused, not run.
 		e.Code, e.Scope, e.Retryable = llm.CodeUnavailable, llm.ScopeEndpoint, true
-		e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"), time.Now())
+		e.RetryAfterMS = sdk.RetryAfter(resp.Header.Get("Retry-After"), time.Now())
 	case s >= 500:
 		// The upstream may have run the request before failing, so retrying is not known safe.
 		e.Code, e.Scope = llm.CodeUpstream, llm.ScopeEndpoint
@@ -789,22 +788,6 @@ func upstreamError(resp *http.Response, model string, modelLevelCooling bool) *l
 		_ = llm.MarkContextOverflow(e)
 	}
 	return e
-}
-
-// retryAfter reads a Retry-After header: delay seconds or an HTTP date.
-func retryAfter(v string, now time.Time) int64 {
-	if v == "" {
-		return 0
-	}
-	if secs, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil && secs >= 0 {
-		return secs * 1000
-	}
-	if t, err := http.ParseTime(v); err == nil {
-		if d := t.Sub(now); d > 0 {
-			return d.Milliseconds()
-		}
-	}
-	return 0
 }
 
 // isAccountClosed reports whether a 400, 401 or 403 reply says the organization or account has

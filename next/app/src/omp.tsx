@@ -20,19 +20,19 @@ import {
   useKit,
   useLoad,
 } from "../../ui/kit/ui";
-import { Backups, reply } from "./backups";
-import { folderWait, NeedsKey, NoKeys, toolMissing, withDeviceLink } from "./clientHelp";
+import { Backups } from "./backups";
+import { NeedsKey, NoKeys, toolMissing, withDeviceLink } from "./clientHelp";
+import { keysOf, type Secret, StartCli, Text, usePreview } from "./clientPage";
 import type { AgentPage } from "./easyMode";
-import { connectionGet } from "./host";
-import { CLIENT, keysOf, modelOf, PACKAGE, type ReadBack, type Secret, validModel } from "./ompForm";
-import { keptTerminal, launcherProblem, useDeviceChanged } from "./startCli";
+import { connectionGet, reply } from "./host";
+import { CLIENT, modelOf, PACKAGE, type ReadBack, validModel } from "./ompForm";
 
 const t = strings("omp", {
   title: "Oh My Pi",
   short: "Oh My Pi",
   tip: "Set up and start Oh My Pi with this core",
   intro:
-    "Adds this core to Oh My Pi's models.yml as the pluxy provider, with a client key, and makes a model through it Oh My Pi's default model. Oh My Pi discovers the core's models from its model list. Apply, Clear and Restore Backup each ask in a native confirmation; comments and everything else in the files stay. Restart Oh My Pi afterward.",
+    "Adds this core to Oh My Pi's models.yml with a client key and default model. Apply, Clear, and Restore backup ask for confirmation and keep other settings. Restart Oh My Pi afterward.",
   unavailable:
     "Install and enable the curated Oh My Pi tool (pluxy/omp-setup) on the {device} page to set up Oh My Pi from here.",
   files: "Configuration files",
@@ -46,12 +46,12 @@ const t = strings("omp", {
   modelsFile: "Models file",
   settingsFile: "Settings file",
   filesHint: "A full path; a link (as stow makes) is followed and kept",
-  read: "Read settings",
+  read: "Refresh",
   status: "Status",
   applied: "Applied",
-  notConfigured: "Not Configured",
+  notConfigured: "Not configured",
   configured: "Configured",
-  needsUpdate: "Configuration Modified",
+  needsUpdate: "Configuration modified",
   keySet: "Key in the file",
   yes: "Yes",
   no: "No",
@@ -66,23 +66,22 @@ const t = strings("omp", {
   refresh: "Refresh models",
   invalidModel: "Enter one model ID, without spaces or commas.",
   refused: "Oh My Pi would not take these files",
-  refusedHint:
-    "Apply and Clear integration leave them alone until they are fixed; Restore Backup puts back the files as they were before the first apply.",
-  key: "Authentication Key",
-  keyHint: "The client API key Oh My Pi uses to connect to this core, kept by native key entry.",
+  refusedHint: "Apply and Clear leave these files unchanged until you fix them; Restore backup reverts them.",
+  key: "Client key",
+  keyHint: "The client key Oh My Pi uses to reach this core.",
   addKey: "Add key…",
   keyLabel: "Oh My Pi client key",
-  connect: "Connect in One Click",
-  repair: "Repair Connection",
-  update: "Update Configuration",
-  clear: "Clear integration",
+  connect: "Apply",
+  repair: "Repair",
+  update: "Update",
+  clear: "Clear",
   clearHint: "Remove pluxy's integration settings and keep other settings. Restart Oh My Pi afterward.",
-  restore: "Restore Backup",
+  restore: "Restore backup",
   restoreHint: "Put both files back as they were before the first apply.",
   noCore: "Connect to a core first: its address goes into the settings.",
   start: "Start CLI",
-  cwd: "Working directory",
-  recent: "Recently Used",
+  cwd: "Working folder",
+  recent: "Recently used",
   override: "Agent program path",
   overrideHint: "A full path used instead of omp (optional)",
   terminal: "Terminal",
@@ -99,98 +98,18 @@ interface Preview {
   config: ReadBack;
 }
 
-function Text(props: {
-  label: string;
-  hint?: string;
-  value: string;
-  onInput: (v: string) => void;
-  list?: string;
-}) {
-  const id = useId();
-  return (
-    <label class="field" data-part="field" for={id}>
-      <span class="label">{props.label}</span>
-      <input
-        id={id}
-        type="text"
-        autocomplete="off"
-        spellcheck={false}
-        list={props.list}
-        value={props.value}
-        onInput={(e) => props.onInput(e.currentTarget.value)}
-      />
-      {props.hint && <small class="hint">{props.hint}</small>}
-    </label>
-  );
-}
-
-function StartCli(props: { available: boolean }) {
-  const [cwd, setCwd] = useState("");
-  const [override, setOverride] = useState("");
-  const [terminal, setTerminal] = useState("automatic");
-  const state = useLoad(() => reply<{ history: Record<string, string[]> }>("launcher_state"));
-  const terminals = useLoad(() =>
-    reply<{ terminals: { id: string; label: string }[] }>("launcher_terminals"),
-  );
-  useDeviceChanged(terminals.reload);
-  const action = useAction(state.reload);
-  const recent = state.data?.history[CLIENT] ?? [];
-  const shownTerminal = keptTerminal(terminal, terminals.data?.terminals);
-  const start = () =>
-    action.run(async () => {
-      const recipe = await tool<Record<string, unknown>>("recipe", {});
-      if (!recipe.body) return recipe;
-      return reply("launcher_launch", {
-        launch: {
-          ...recipe.body,
-          cwd: cwd.trim(),
-          terminal: shownTerminal,
-          ...(override.trim() ? { override: override.trim() } : {}),
-        },
-      });
-    });
-  return (
-    <Card title={t("start")}>
-      <Text label={t("cwd")} hint={folderWait(cwd)} value={cwd} onInput={setCwd} />
-      {recent.length > 0 && (
-        <Choices
-          label={t("recent")}
-          value={recent.includes(cwd) ? cwd : undefined}
-          choices={recent.map((r) => ({ value: r, label: r }))}
-          onChange={setCwd}
-        />
-      )}
-      <Text label={t("override")} hint={t("overrideHint")} value={override} onInput={setOverride} />
-      {terminals.data && (
-        <Choices
-          label={t("terminal")}
-          value={shownTerminal}
-          choices={terminals.data.terminals.map((x) => ({ value: x.id, label: x.label }))}
-          onChange={setTerminal}
-        />
-      )}
-      {terminals.error && <Notice tone="warn">{launcherProblem(terminals.error)}</Notice>}
-      {action.error && <Notice tone="danger">{launcherProblem(action.error)}</Notice>}
-      <Button variant="primary" onClick={start} disabled={action.busy || !props.available || !cwd.trim()}>
-        {t("launch")}
-      </Button>
-    </Card>
-  );
-}
-
 export function OmpPage() {
   const { api } = useKit();
   const [where, setWhere] = useState<"default" | "folder" | "files">("default");
   const [folder, setFolder] = useState("");
   const [modelsFile, setModelsFile] = useState("");
   const [settingsFile, setSettingsFile] = useState("");
-  const [preview, setPreview] = useState<Preview>();
   const [model, setModel] = useState("");
   const [served, setServed] = useState<string[]>([]);
   const [secret, setSecret] = useState("");
   const [core, setCore] = useState<string>();
   const secrets = useLoad(() => reply<{ secrets: Secret[] }>("vault_secrets"));
-  const keys = keysOf(secrets.data);
+  const keys = keysOf(PACKAGE, secrets.data);
   const listId = useId();
   useEffect(() => {
     connectionGet().then(
@@ -204,25 +123,22 @@ export function OmpPage() {
       : where === "files"
         ? { targets: [{ file: modelsFile.trim() }, { file: settingsFile.trim() }] }
         : {};
+  // A write acts on the files the last preview pinned (the tool refuses them if one changed
+  // since); the preview belongs to the selection it was read for, so a write never pins files unread.
+  const selected = JSON.stringify(selection());
+  const { preview, readFor } = usePreview<Preview>(selected);
   const read = useAction(() => {});
   const load = () =>
     read.run(async () => {
-      const r = await tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) });
+      const r = await readFor(selected, () =>
+        tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) }),
+      );
       if (r.body) {
-        setPreview(r.body);
         setModel(modelOf(r.body.config));
       }
       return r;
     });
   const write = useAction(load);
-  // A write acts on the files the last preview pinned (the tool refuses them if a file changed
-  // since); choosing other files drops that preview, so a write never pins files unread.
-  const reselect =
-    <T,>(f: (v: T) => void) =>
-    (v: T) => {
-      f(v);
-      setPreview(undefined);
-    };
   const fetchModels = useAction(() => {});
   const refresh = () =>
     fetchModels.run(async () => {
@@ -261,24 +177,19 @@ export function OmpPage() {
             { value: "folder", label: t("fileFolder") },
             { value: "files", label: t("fileSelected") },
           ]}
-          onChange={reselect(setWhere)}
+          onChange={setWhere}
         />
         {where === "folder" && (
-          <Text label={t("folder")} hint={t("folderHint")} value={folder} onInput={reselect(setFolder)} />
+          <Text label={t("folder")} hint={t("folderHint")} value={folder} onInput={setFolder} />
         )}
         {where === "files" && (
           <>
-            <Text
-              label={t("modelsFile")}
-              hint={t("filesHint")}
-              value={modelsFile}
-              onInput={reselect(setModelsFile)}
-            />
+            <Text label={t("modelsFile")} hint={t("filesHint")} value={modelsFile} onInput={setModelsFile} />
             <Text
               label={t("settingsFile")}
               hint={t("filesHint")}
               value={settingsFile}
-              onInput={reselect(setSettingsFile)}
+              onInput={setSettingsFile}
             />
           </>
         )}
@@ -346,7 +257,7 @@ export function OmpPage() {
                 onChange={setSecret}
               />
             ) : (
-              <NoKeys />
+              <NoKeys secrets={secrets} />
             )}
             {addKey.error && <Notice tone="danger">{addKey.error}</Notice>}
             <Button
@@ -388,7 +299,12 @@ export function OmpPage() {
       {preview && (
         <Backups pkg={PACKAGE} pins={async () => preview.targets} disabled={busy} onChange={load} />
       )}
-      <StartCli available={!unavailable} />
+      <StartCli
+        available={!unavailable}
+        client={CLIENT}
+        recipe={() => tool<Record<string, unknown>>("recipe", {})}
+        t={t}
+      />
     </div>
   );
 }

@@ -76,7 +76,7 @@ test("Edit sets priority and an excluded model, and asks before discarding", asy
   expect(a?.excluded_models).toEqual(["rate-*"]);
   const settings = detail.locator('[data-part="account-settings"]');
   await expect(settings).toContainText("rate-*");
-  await detail.getByRole("button", { name: "Models", exact: true }).click();
+  await detail.getByRole("button", { name: "Show models", exact: true }).click();
   const models = detail.locator('[data-part="account-models"]');
   await expect(models.locator('[data-part="item"]').filter({ hasText: "rate-limited" })).toContainText(
     "Excluded",
@@ -277,7 +277,7 @@ test("Custom Headers show secrets as placeholders, and saving another header kee
   await detail.getByRole("button", { name: "Edit", exact: true }).click();
   const form = page.getByRole("dialog", { name: "Edit settings-headers", exact: true });
   const save = form.getByRole("button", { name: "Save", exact: true });
-  const headers = form.getByLabel("Custom Headers (headers)");
+  const headers = form.getByLabel("Custom headers (headers)");
   await expect(headers).toHaveValue("");
 
   // Text that is not a JSON object of text values is refused in the form, and nothing is sent.

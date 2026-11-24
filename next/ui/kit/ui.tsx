@@ -1,8 +1,8 @@
 // The kit's components. Each carries the data-part hook themes/README.md promises; class names
 // are internal.
 
-import { type ComponentChildren, createContext } from "preact";
-import { useCallback, useContext, useEffect, useId, useRef, useState } from "preact/hooks";
+import { type ComponentChildren, createContext, type Ref } from "preact";
+import { useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState } from "preact/hooks";
 import { type Api, problem } from "./api";
 import type { Host, Reply } from "./host";
 import type { PrivacyState } from "./privacy";
@@ -49,17 +49,25 @@ export function useLayout(): Layout {
   return useThemeState().resolved.layout;
 }
 
-export interface Loaded<T> {
-  data?: T;
-  error?: string;
-  loading: boolean;
-  reload(): void;
-}
+/**
+ * What useLoad knows. phase tells the cases apart: "loading" is no reply yet (never loaded);
+ * "ready" is the last reply worked, and data is what it carried, which may be empty; "failed" is
+ * the last reply did not work, with its error, and data is whatever the last good reply carried
+ * (none when the first reply failed). loading is true while a request is on its way, also on a
+ * reload, when data and error are still the last reply's.
+ */
+export type Loaded<T> = LoadState<T> & { reload(): void };
 
-/** Loads one management API reply, again on reload(). */
+type LoadState<T> = { loading: boolean } & (
+  | { phase: "loading"; data?: undefined; error?: undefined }
+  | { phase: "ready"; data?: T; error?: undefined }
+  | { phase: "failed"; data?: T; error: string }
+);
+
+/** Loads one management API reply, again on reload(). A failed reload keeps the last good data. */
 export function useLoad<T>(load: () => Promise<Reply<T>>): Loaded<T> {
   const { unauthorized } = useKit();
-  const [state, setState] = useState<{ data?: T; error?: string; loading: boolean }>({ loading: true });
+  const [state, setState] = useState<LoadState<T>>({ phase: "loading", loading: true });
   const [n, setN] = useState(0);
   const loadRef = useRef(load);
   loadRef.current = load;
@@ -69,13 +77,67 @@ export function useLoad<T>(load: () => Promise<Reply<T>>): Loaded<T> {
     loadRef.current().then((r) => {
       if (!live) return;
       if (r.status === 401) return unauthorized();
-      setState({ data: r.body, error: problem(r), loading: false });
+      const error = problem(r);
+      setState((s) =>
+        error === undefined
+          ? { phase: "ready", data: r.body, loading: false }
+          : { phase: "failed", data: s.data, error, loading: false },
+      );
     });
     return () => {
       live = false;
     };
   }, [n, unauthorized]);
   return { ...state, reload: useCallback(() => setN((x) => x + 1), []) };
+}
+
+/**
+ * Calls tick every ms while active and the document is visible. Never overlaps a call whose
+ * promise is still running, and calls once straight away when the document becomes visible after
+ * longer than ms.
+ */
+export function usePoll(tick: () => unknown, ms: number, active = true): void {
+  const tickRef = useRef(tick);
+  tickRef.current = tick;
+  useEffect(() => {
+    if (!active || ms <= 0) return;
+    let live = true;
+    let running = false;
+    let last = Date.now();
+    const run = () => {
+      if (!live || running || document.visibilityState !== "visible") return;
+      last = Date.now();
+      running = true;
+      const done = () => {
+        running = false;
+      };
+      try {
+        const result = tickRef.current();
+        if (result && typeof (result as PromiseLike<unknown>).then === "function") {
+          (result as PromiseLike<unknown>).then(done, done);
+        } else {
+          running = false;
+        }
+      } catch (err) {
+        running = false;
+        throw err;
+      }
+    };
+    let timer = setInterval(run, ms);
+    const shown = () => {
+      if (document.visibilityState === "visible" && !running && Date.now() - last >= ms) {
+        clearInterval(timer);
+        timer = setInterval(run, ms);
+        run();
+      }
+    };
+    document.addEventListener("visibilitychange", shown);
+    return () => {
+      live = false;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", shown);
+    };
+  }, [ms, active]);
 }
 
 /** Runs a management call from a button: busy while it runs, then its error or done(). */
@@ -144,10 +206,13 @@ export function Button(props: {
   label?: string;
   /** Names the control for restoring focus after a re-render, when its label may not be unique. */
   focusKey?: string;
+  /** For a component that moves focus to this button. */
+  buttonRef?: Ref<HTMLButtonElement>;
   children: ComponentChildren;
 }) {
   return (
     <button
+      ref={props.buttonRef}
       type={props.type ?? "button"}
       class="btn"
       data-part="button"
@@ -163,12 +228,36 @@ export function Button(props: {
   );
 }
 
+/** Lower-cases a button label for confirmation text while keeping all-capital words (such as CLI). */
+export function confirmActionLabel(label: string): string {
+  return label.replace(/\b[A-Za-z]+\b/g, (word) =>
+    word.length > 1 && word === word.toUpperCase() ? word : word.toLowerCase(),
+  );
+}
+
 /** A button that asks once more before it acts. */
 export function ConfirmButton(props: { onConfirm: () => void; disabled?: boolean; children: string }) {
   const [asking, setAsking] = useState(false);
+  const ask = useRef<HTMLButtonElement>(null);
+  const cancel = useRef<HTMLButtonElement>(null);
+  // The button in focus is replaced when the question opens or closes: focus goes to the button
+  // that takes its place (Cancel, the safe answer, or the button that asked), not to the page.
+  const moved = useRef(false);
+  useEffect(() => {
+    if (!moved.current) return;
+    (asking ? cancel : ask).current?.focus();
+  }, [asking]);
   if (!asking) {
     return (
-      <Button variant="danger" disabled={props.disabled} onClick={() => setAsking(true)}>
+      <Button
+        variant="danger"
+        disabled={props.disabled}
+        buttonRef={ask}
+        onClick={() => {
+          moved.current = true;
+          setAsking(true);
+        }}
+      >
         {props.children}
       </Button>
     );
@@ -180,12 +269,15 @@ export function ConfirmButton(props: { onConfirm: () => void; disabled?: boolean
         disabled={props.disabled}
         onClick={() => {
           setAsking(false);
+          moved.current = false;
           props.onConfirm();
         }}
       >
-        {t("confirm", { action: props.children.toLowerCase() })}
+        {t("confirm", { action: confirmActionLabel(props.children) })}
       </Button>
-      <Button onClick={() => setAsking(false)}>{t("cancel")}</Button>
+      <Button buttonRef={cancel} onClick={() => setAsking(false)}>
+        {t("cancel")}
+      </Button>
     </span>
   );
 }
@@ -377,9 +469,30 @@ export function MasterDetail(props: { list: ComponentChildren; detail?: Componen
 
 export function Detail(props: { title: string; onClose: () => void; children: ComponentChildren }) {
   const ref = useRef<HTMLElement>(null);
-  useEffect(() => {
+  // The control that opened the detail (or switched it to another item), for focus to return to
+  // when the detail closes.
+  const opener = useRef<HTMLElement | null>(null);
+  // A layout effect: it runs in the same task as the click that opened the detail, before the
+  // person can move focus on.
+  useLayoutEffect(() => {
+    const from = document.activeElement;
+    if (from instanceof HTMLElement && from !== document.body && !ref.current?.contains(from)) {
+      opener.current = from;
+    }
     ref.current?.focus();
   }, [props.title]);
+  // A layout effect too: a passive one has not run yet when the detail closes straight away, and
+  // then its cleanup is never set.
+  useLayoutEffect(
+    () => () => {
+      // Closing with focus inside the detail (or lost) puts it back on the opener, when that
+      // is still on the page; focus the person moved elsewhere stays there.
+      const at = document.activeElement;
+      const here = at === document.body || at === null || ref.current?.contains(at);
+      if (here && opener.current?.isConnected) opener.current.focus();
+    },
+    [],
+  );
   return (
     <aside
       class="detail"
@@ -387,6 +500,12 @@ export function Detail(props: { title: string; onClose: () => void; children: Co
       aria-label={t("details", { title: props.title })}
       tabIndex={-1}
       ref={ref}
+      onKeyDown={(e) => {
+        // Escape closes the detail, unless it belongs to a dialog or a field inside it.
+        if (e.key !== "Escape" || e.defaultPrevented) return;
+        if (e.target instanceof Element && e.target.closest("dialog")) return;
+        props.onClose();
+      }}
     >
       <header class="card-head">
         <h2 class="mono">{props.title}</h2>

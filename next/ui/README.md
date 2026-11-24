@@ -143,7 +143,7 @@ feature, it keeps the old label, unless the label named something this core does
 - "Management keys", a count of client keys: the Config Panel lists the client keys.
 - "Debug" and "WebSocket auth": core has neither setting (see the config.yaml table in
   [`next/README.md`](../README.md#what-each-setting-does-here)).
-- "Server version" and "Build date": on the System page, as "Core version" and "Build Time".
+- "Server version" and "Build date": on the System page, as "Core version" and "Build time".
 - "Provider keys", a count of the keys in the config's provider sections: "Credentials" counts
   every account, from the config or from a sign-in.
 - The six "Where to go from here" cards, and the "Manage providers" and "Inspect logs" links: the
@@ -154,7 +154,7 @@ feature, it keeps the old label, unless the label named something this core does
 - "Download", "Download selected" and "Auth file JSON (preview)": core never hands a credential
   back out. Only the extension that created an account receives its credential.
 - "Delete All", "Delete filtered results" and "Delete Problem Files": "Select filtered" and then
-  "Delete" do the same, with the status filter set to "Problem" for problem accounts.
+  "Remove" do the same, with the status filter set to "Problem" for problem accounts.
 - Provider tabs for providers this core has no extension for (Qwen, iFlow, AIStudio, "Empty"): the
   tabs are the running extensions.
 - "Card layout": a theme's `list` layout option (`table` or `cards`) sets it.
@@ -173,7 +173,7 @@ feature, it keeps the old label, unless the label named something this core does
 - The OAuth excluded models and OAuth model alias pages: these rules are now an extension's
   `excluded_models` and `model_alias` settings, written in the Config Panel's Source tab.
 - The OAuth model alias page's "Diagram", which drew each provider's models and their aliases
-  joined by lines: the System page's "Available Models" lists each extension's models with their
+  joined by lines: the System page's "Available models" lists each extension's models with their
   aliases and the accounts that serve them. A sign-in's own aliases are changed in "Account model
   aliases" on its Edit form.
 - "Invert page", which flipped the selection on the current page: "Select page", "Select
@@ -321,6 +321,8 @@ side touch shared files only by one line each:
   visible part carries a `data-part` hook. A new hook, token or layout value goes into
   [the theme contract](themes/README.md) and `kit/theme/contract.ts` in the same change.
 - **Refreshing:** a page that refreshes on its own does so only while the document is visible.
+  Use `useLoad` to read and `usePoll` (`kit/ui.tsx`) to keep a live value fresh; do not write a
+  timer in a page.
 - **Tests:** a browser test for the page in `e2e/<page>.spec.ts`; unit tests in `tests/` only for
   pure code.
 
@@ -364,12 +366,19 @@ bun run build          # writes the panel to ../internal/panel/dist
 bun run test:browser   # builds, then runs the browser tests
 ```
 
-`bun run test:browser` runs the panel's test in Chromium and the extension pages test
-(`e2e/extension-pages.spec.ts`: a hostile page, a benign page and the settings form) in Chromium,
-Firefox and WebKit. It needs Playwright's browsers once: `bunx playwright install chromium firefox
-webkit` (WebKit also needs its system libraries: `bunx playwright install-deps webkit`). Each test
-starts its own core through `go run ./e2e/panelcore` (from `next/`), with fake extensions, on a
-random port.
+Locally, `bun run test:browser` runs every browser test in Chromium only, so it needs only one
+install: `bunx playwright install chromium` (this also installs Chromium's headless shell). That
+includes the extension pages test (`e2e/extension-pages.spec.ts`: a hostile page, a benign page and
+the settings form).
+
+CI also runs the extension pages test in Firefox and WebKit, because extension pages are a security
+boundary. A run in CI or with `PLUXY_ALL_BROWSERS=1` adds those two projects, and a browser that
+cannot start fails the run. To run all three engines locally, install them once with
+`bunx playwright install firefox webkit` (WebKit also needs its system libraries:
+`bunx playwright install-deps webkit`), then run `PLUXY_ALL_BROWSERS=1 bun run test:browser`.
+
+Each test starts its own core through `go run ./e2e/panelcore` (from `next/`), with fake extensions,
+on a random port.
 
 ### A core with data to look at
 

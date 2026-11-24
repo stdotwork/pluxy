@@ -18,6 +18,7 @@ import {
   hasProvider,
   isTicked,
   onThisMachine,
+  pickStatuses,
   type Results,
   scanState,
   start,
@@ -172,7 +173,6 @@ function view(
       remote={more.remote ?? false}
       choices={more.choices ?? {}}
       results={results}
-      provider={hasProvider(setup, results, more.packages)}
       packages={more.packages}
       accounts={more.accounts ?? 0}
       bring={
@@ -200,7 +200,7 @@ const ticked = (page: string) => page.match(/<input type="checkbox" checked/g)?.
 
 test("a first run with nothing found offers every provider unticked, and may start without one", () => {
   const page = view(nothingFound);
-  expect(page).toContain("No client, sign-in or CLIProxyAPI setup was found.");
+  expect(page).toContain("Found no clients, sign-ins, or CLIProxyAPI setups.");
   expect(page).toContain("pluxy listens on ");
   expect(page).not.toContain("Other machines on the network");
   expect(page).toContain("<strong>Codex</strong>");
@@ -211,7 +211,7 @@ test("a first run with nothing found offers every provider unticked, and may sta
   // An account comes after a provider; a client's text can be shown at once.
   expect(page).toContain("tick one above and press Start");
   expect(page).not.toContain("Sign-in methods");
-  expect(page).toContain("No client was found on this machine.");
+  expect(page).toContain("Found no clients on this machine. Open Other clients below to set one up.");
   expect(page).toContain("Other clients (5)");
   expect(page).toContain(">Finish</button>");
 });
@@ -302,9 +302,9 @@ test("the first scan says pluxy is looking, and the person's ticks survive the r
   expect(scanState(scanningFirst)).toBe("first");
   const page = view(scanningFirst);
   expect(page).toContain("pluxy is looking at this machine.");
-  expect(page).not.toContain("was found");
-  expect(page).not.toContain("No client was found on this machine.");
-  expect(page).toContain(">Looking…</button>");
+  expect(page).not.toContain("Found no clients");
+  expect(page).not.toContain("Found no clients on this machine.");
+  expect(page).toContain(">Refreshing…</button>");
 
   // While it runs, the person ticks Gemini and, once Codex is suggested, unticks it.
   const choices: Choices = { "pluxy/gemini": true, "pluxy/codex": false };
@@ -388,7 +388,7 @@ test("a pick core kept after a failed start says it is installed and not running
   expect(page).toContain('data-tone="warn">Installed, not running<');
   expect(page).not.toContain('data-tone="ok">Installed<');
   expect(page).toContain(
-    "Claude was installed but did not start: the program exited at once<br/>Look at it on the Extensions page.",
+    "Installed Claude, but it failed to start: the program exited at once<br/>Look at it on the Extensions page.",
   );
   // It is not the notice for a pick that was never installed, and Start does not send it again.
   expect(page).not.toContain("Could not install");
@@ -406,7 +406,7 @@ test("a pick core kept after a failed start says it is installed and not running
     picks: [pick("pluxy/claude", "Claude", { installed: true })],
   };
   const noProvider = view(onlyFailed, { results });
-  expect(noProvider).toContain("pluxy will run with no provider");
+  expect(noProvider).toContain("pluxy has no active provider");
   expect(primary(noProvider)).toEqual(["Start without a provider"]);
   expect(noProvider).toContain('data-variant="quiet">Finish</button>');
 });
@@ -449,6 +449,62 @@ test("only a provider that is enabled and has not failed counts as running", () 
   expect(hasProvider(clientPick, {}, [pkg({ id: "pluxy/claude-code" })])).toBe(false);
 });
 
+test("a pick shown as not running is never the provider the page counts as running", () => {
+  const installed: Setup = {
+    ...nothingFound,
+    picks: [pick("pluxy/claude", "Claude", { installed: true })],
+  };
+  const claude = (more: Partial<Package> = {}) => pkg({ id: "pluxy/claude", ...more });
+  const start: Results = { "pluxy/claude": { status: "error", error: "the program exited at once" } };
+  const done: Results = { "pluxy/claude": { status: "done" } };
+  const cases: { name: string; results: Results; packages?: Package[]; runs: boolean }[] = [
+    // The Start failed, then the package came up: it runs, whatever the old result says.
+    { name: "a failed Start, then a healthy package", results: start, packages: [claude()], runs: true },
+    { name: "a failed Start, no package list yet", results: start, runs: false },
+    { name: "a failed Start, package not listed", results: start, packages: [], runs: false },
+    {
+      name: "a failed Start, package turned off",
+      results: start,
+      packages: [claude({ enabled: false, state: "disabled" })],
+      runs: false,
+    },
+    {
+      name: "a failed Start, package failed",
+      results: start,
+      packages: [claude({ state: "failed" })],
+      runs: false,
+    },
+    { name: "a done Start, healthy package", results: done, packages: [claude()], runs: true },
+    {
+      name: "a done Start, package turned off",
+      results: done,
+      packages: [claude({ enabled: false, state: "disabled" })],
+      runs: false,
+    },
+    { name: "a done Start, no package list yet", results: done, runs: true },
+    { name: "no Start, package crashed", results: {}, packages: [claude({ state: "crashed" })], runs: false },
+    { name: "no Start, healthy package", results: {}, packages: [claude()], runs: true },
+  ];
+  for (const c of cases) {
+    const page = view(installed, { results: c.results, packages: c.packages });
+    const row = page.split('<li data-part="setup-pick"')[1]?.split("</li>")[0] ?? "";
+    const tones = [...row.matchAll(/data-part="badge" data-tone="(\w+)"/g)].map((m) => m[1]);
+    // The row says not running (a warn badge) exactly when no provider runs, and the account
+    // part, which opens for a running provider, agrees.
+    expect([c.name, tones, hasProvider(installed, c.results, c.packages)]).toEqual([
+      c.name,
+      [c.runs ? "ok" : "warn"],
+      c.runs,
+    ]);
+    expect([c.name, page.includes('class="add-account stack"')]).toEqual([c.name, c.runs]);
+    // And both read the one status.
+    expect([c.name, pickStatuses(installed, c.results, c.packages)[0]?.status.state]).toEqual([
+      c.name,
+      c.runs ? "running" : "stopped",
+    ]);
+  }
+});
+
 test("with the only installed provider disabled, the page offers no sign-in and Finish is not primary", () => {
   const installed: Setup = {
     ...nothingFound,
@@ -468,7 +524,7 @@ test("with the only installed provider disabled, the page offers no sign-in and 
   expect(disabled).toContain("Claude is installed but turned off.<br/>Look at it on the Extensions page.");
   // With nothing left to tick, Start and the account part point at Extensions, not at ticking.
   expect(disabled).toContain(
-    'Claude is installed but not running, so pluxy will run with no provider. You can turn it on or see what went wrong on the <a href="#/extensions">Extensions</a> page.',
+    'Claude: installed but not running, so pluxy has no active provider. Enable or inspect on <a href="#/extensions">Extensions</a>.',
   );
   expect(disabled).toContain(
     'This comes after a provider, and the one installed is not running. Look at it on the <a href="#/extensions">Extensions</a> page.',
@@ -480,7 +536,7 @@ test("with the only installed provider disabled, the page offers no sign-in and 
   const crashed = view(installed, {
     packages: [pkg({ id: "pluxy/claude", state: "crashed", error: "exit status 2" })],
   });
-  expect(crashed).toContain("Claude was installed but did not start: exit status 2<br/>");
+  expect(crashed).toContain("Installed Claude, but it failed to start: exit status 2<br/>");
   const failed = view(installed, { packages: [pkg({ id: "pluxy/claude", state: "failed" })] });
   expect(failed).toContain("Claude is installed but is not running.<br/>");
 
@@ -763,7 +819,7 @@ test("a setup core has brought across says so, when and with what counts, and of
     expect(page).not.toContain("writes nothing until you confirm");
     expect(page).not.toContain("Or use the command");
     expect(page).toContain("<summary>Bring it across again</summary>");
-    expect(page).toContain("It writes the file's settings over any you changed in pluxy since");
+    expect(page).toContain("Run this where pluxy is installed to overwrite changed settings");
     expect(page).toContain(
       "<pre>pluxy import cpa ~/.cli-proxy-api/config.yaml --auth-dir ~/.cli-proxy-api</pre>",
     );
@@ -792,20 +848,20 @@ test("each refusal is said in words a person can act on", () => {
     importProblem({ status, error: { code: "x", message } }, dryRun);
   expect(importProblem({ status: 200, body: dryReport }, true)).toEqual({});
   expect(refused(400, "there is no file at /home/a/.cli-proxy-api/config.yaml").problem).toBe(
-    "pluxy could not read the CLIProxyAPI setup: there is no file at /home/a/.cli-proxy-api/config.yaml. Check that the file is still there and that pluxy may read it, then press Look again. Nothing was changed.",
+    "Could not read the CLIProxyAPI setup: there is no file at /home/a/.cli-proxy-api/config.yaml. Check the file and permissions, then press Refresh. Nothing changed.",
   );
   expect(refused(422, "config.yaml: port must be a number").problem).toBe(
-    "pluxy will not bring this setup across: config.yaml: port must be a number. Change that in the CLIProxyAPI setup, then try again. Nothing was changed.",
+    "Cannot import this setup: config.yaml: port must be a number. Fix it in CLIProxyAPI and try again. Nothing changed.",
   );
   expect(refused(500, "disk full.").problem).toBe("pluxy could not bring the setup across: disk full.");
   expect(importProblem({ status: 0 }, true).problem).toContain("nothing was read or changed");
-  expect(importProblem({ status: 0 }, false).problem).toContain("cannot tell whether the import ran");
+  expect(importProblem({ status: 0 }, false).problem).toContain("the import status is unknown");
 
   // A core on a config.yaml takes no import: the page says how to get to one that does.
   const yaml = refused(409, "core runs on a config.yaml", false);
   expect(yaml.show).toBe("init");
   const onYaml = view(found, { bringing: { config, ...yaml } });
-  expect(onYaml).toContain("This pluxy runs on a config.yaml");
+  expect(onYaml).toContain("pluxy uses config.yaml");
   expect(onYaml).toContain("<pre>pluxy init</pre>");
   expect(onYaml).toContain(">Bring it across</button>");
 
@@ -827,13 +883,13 @@ test("when core has no extension registry, Setup says so and names what to do ne
   expect(noReg).toContain("This build has no extension registry");
   expect(noReg).toContain("go run ./cmd/pluxy-pack -out");
   expect(noReg).toContain("-bundled");
-  expect(noReg).not.toContain("The Extensions page lists what can be installed.");
+  expect(noReg).not.toContain("Check the Extensions page to install one.");
   expect(noReg).not.toContain("#/extensions");
 
   // With a registry configured (even if no setup picks match), the no-registry message does not appear.
   const hasReg = view({ ...nothingFound, picks: [], registries: 1 });
   expect(hasReg).not.toContain("This build has no extension registry");
-  expect(hasReg).toContain("The Extensions page lists what can be installed.");
+  expect(hasReg).toContain("Check the Extensions page to install one.");
 });
 
 test("sign-in ways are grouped by provider, named by its title or else its package ID", () => {

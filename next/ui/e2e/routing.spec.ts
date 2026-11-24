@@ -122,7 +122,7 @@ test("failed settings and account saves show core errors and reload current valu
   await openPanel(page, core);
   await signIn(page, core);
   await goTo(page, "Routing");
-  const interval = page.getByRole("spinbutton", { name: "Max Retry Interval (seconds)", exact: true });
+  const interval = page.getByRole("spinbutton", { name: "Max retry interval (seconds)", exact: true });
   const original = (await core.mgmt<CoreSettings>("GET", "/settings")).body.routing.retry[
     "max-retry-interval"
   ];

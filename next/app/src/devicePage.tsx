@@ -36,9 +36,9 @@ const t = strings("device", {
   short: "Device",
   tip: "Extension pages installed on this computer",
   intro:
-    "Extensions installed on this computer, apart from the extensions of the core the app is connected to. Their pages run in a webview with no app commands and get no settings, and only the files you grant them. Native tools come only from a curated source and stay disabled until you enable them in a native confirmation.",
+    "Local extensions on this computer, separate from core's. Pages get no app commands, settings, or files unless granted. Native tools come from curated sources and need native confirmation.",
   safeMode:
-    "Safe mode: pages from this device are not loaded and no native tool is enabled. Disable or remove a package here, then start the app without --safe-mode.",
+    "Safe mode: local pages and native tools are off. Disable or remove packages here, then restart without --safe-mode.",
   installFile: "Install from file…",
   refresh: "Refresh",
   extension: "Extension",
@@ -48,7 +48,7 @@ const t = strings("device", {
   state: "State",
   unverified: "Unverified",
   unverifiedWhy:
-    "It does not come from a curated source, so the app cannot tell who published it. Its pages still get no app commands or settings, and no files unless you approve its signer and grant them.",
+    "Not from a curated source, so the publisher is unverified. Pages get no app commands, settings, or files unless you approve its signer.",
   curated: "Curated",
   curatedWhy:
     "Signed by a curated first-party key and installed from the curated source that key belongs to.",
@@ -68,8 +68,8 @@ const t = strings("device", {
   importsAllowed: "allowed for this release",
   importsNotAllowed: "not allowed",
   importsWhy:
-    "This package's pages call native tools' operations. They are refused until you allow them in a native confirmation that lists each operation; a write, a launch or a call that shows content still asks each time.",
-  importsUnverified: "Only a curated package may call native tools, so its calls are refused.",
+    "This package calls native tools. pluxy blocks calls until you allow them in a native confirmation; writes, launches, and content views still ask each time.",
+  importsUnverified: "Only curated packages can call native tools, so pluxy blocks these calls.",
   allowImports: "Allow native imports…",
   revokeImports: "Revoke native imports",
   local: "File {name}",
@@ -89,7 +89,7 @@ const t = strings("device", {
   signerKey: "Public key",
   approved: "approved",
   notApproved: "not approved",
-  unsigned: "Not signed: this package cannot be granted files.",
+  unsigned: "Unsigned: you cannot grant files to this package.",
   approveSigner: "Approve signer…",
   signerWhy:
     "Approving a signer lets packages it signs from this source ask you for files and folders. A signature says who signed a package, not that it is safe.",
@@ -114,13 +114,14 @@ const t = strings("device", {
   disable: "Disable",
   rollBack: "Roll back to {version}",
   remove: "Remove",
-  noInstalled: "No extensions installed on this device.",
+  noInstalled: "No extensions installed on this device. Install one below or use Install from file….",
+  loading: "Loading…",
   installedList: "Extensions on this device",
-  available: "Available",
-  noRegistries: "No registries are named in device-registries.json in the app's config folder.",
+  available: "Not installed",
+  noRegistries: "No registries configured. Add one to device-registries.json in the app's config folder.",
   registryError: "Registry {name}: {error}",
   nothingMore: "Nothing more to install from these registries.",
-  availableList: "Available extensions",
+  availableList: "Extensions not installed",
   install: "Install",
   update: "Update to {version}",
   refused: "Refused",
@@ -230,7 +231,13 @@ function AccessDetail(props: { p: DevicePackage }) {
             return [
               `${r.id} (${t("resourceKind", { kind: r.kind === "file" ? t("file") : t("folder"), ops: r.operations.join(", ") })})`,
               <>
-                {g ? <span class="mono">{grantText(g)}</span> : <span class="muted">{t("notGranted")}</span>}{" "}
+                {g ? (
+                  <span class="mono">{grantText(g)}</span>
+                ) : grants.data ? (
+                  <span class="muted">{t("notGranted")}</span>
+                ) : (
+                  grants.phase === "loading" && <span class="muted">{t("loading")}</span>
+                )}{" "}
                 {g?.session_only && <Badge tone="warn">{t("sessionOnly")}</Badge>}{" "}
                 {g?.changed && <Badge tone="danger">{t("changedBadge")}</Badge>}{" "}
                 {g && !current && <Badge tone="warn">{t("otherRelease")}</Badge>}{" "}
@@ -359,6 +366,7 @@ function Available(props: { installed: DevicePackage[]; onInstalled: () => void 
         </Button>
       }
     >
+      {registries.phase === "loading" && <Notice tone="muted">{t("loading")}</Notice>}
       {registries.error && <Notice tone="danger">{registries.error}</Notice>}
       {broken.map((r) => (
         <Notice key={r.name} tone="warn">
@@ -430,6 +438,7 @@ export function DevicePage(props: { onChanged: () => void }) {
       <p class="muted">{t("intro")}</p>
       {catalog.data?.safe_mode && <Notice tone="warn">{t("safeMode")}</Notice>}
       {catalog.data?.warning && <Notice tone="warn">{catalog.data.warning}</Notice>}
+      {catalog.phase === "loading" && <Notice tone="muted">{t("loading")}</Notice>}
       {(catalog.error ?? file.error) && <Notice tone="danger">{catalog.error ?? file.error}</Notice>}
       <div class="stack">
         <MasterDetail

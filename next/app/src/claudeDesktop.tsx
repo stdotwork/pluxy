@@ -7,6 +7,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useId, useState } from "preact/hooks";
+import type { Reply } from "../../ui/kit/host";
 import { strings } from "../../ui/kit/strings";
 import {
   Button,
@@ -20,13 +21,12 @@ import {
   useAction,
   useLoad,
 } from "../../ui/kit/ui";
-import { Backups, type Reply, reply } from "./backups";
+import { Backups } from "./backups";
 import {
   aliasCancelled,
   aliasState,
   FILES,
   fresh,
-  keysOf,
   MODELS_MAX,
   missingLibrary,
   PACKAGE,
@@ -34,11 +34,11 @@ import {
   type Row,
   ready,
   rowsFrom,
-  type Secret,
 } from "./claudeDesktopForm";
 import { NeedsKey, NoKeys, toolMissing, withDeviceLink } from "./clientHelp";
+import { keysOf, type Secret, Text, usePreview } from "./clientPage";
 import type { AgentPage } from "./easyMode";
-import { connectionGet } from "./host";
+import { connectionGet, reply } from "./host";
 import { launcherProblem } from "./startCli";
 
 const t = strings("claudeDesktop", {
@@ -46,7 +46,7 @@ const t = strings("claudeDesktop", {
   short: "Desk",
   tip: "Set up and start Claude Desktop with this core",
   intro:
-    "Uses this core as Claude Desktop's third-party inference gateway (Linux beta): its sign-in choice, a gateway profile with a client key and the models Claude Desktop lists, and that profile applied. Apply, Clear and Restore Backup each ask in a native confirmation; everything else in the files stays. Quit and reopen Claude Desktop afterward: it reads its configuration at launch.",
+    "Configures Claude Desktop's third-party gateway (Linux beta) with a client key and model list. Apply, Clear, and Restore backup ask for confirmation and keep other settings. Quit and reopen Claude Desktop afterward.",
   unavailable:
     "Install and enable the curated Claude Desktop tool (pluxy/claude-desktop) on the {device} page to set up Claude Desktop from here.",
   files: "Configuration files",
@@ -60,7 +60,7 @@ const t = strings("claudeDesktop", {
   profile: "Gateway profile",
   meta: "configLibrary/_meta.json",
   fileHint: "A full path; a link (as stow makes) is followed and kept",
-  read: "Read configuration",
+  read: "Refresh",
   missing:
     "Claude Desktop's configuration library does not exist yet. Create it here, or save a configuration in Claude Desktop (Developer → Configure Third-Party Inference…).",
   createFolders: "Create configuration folder",
@@ -72,11 +72,11 @@ const t = strings("claudeDesktop", {
   applied: "Current integration: pluxy",
   notConfigured: "Current integration: pluxy not configured",
   needsUpdate: "Current integration: pluxy configuration needs repair",
-  mapping: "Claude Desktop Models and Aliases",
+  mapping: "Claude Desktop models and aliases",
   mappingHint:
     "Claude Desktop only allows Claude models, so non-Claude models need aliases that follow Claude model naming. If the original model name already belongs to the Claude family, no alias mapping is needed; leave the alias blank. The first model is Claude Desktop's default.",
   aliasCore:
-    "Claude Desktop sends the alias to this core, so the core must serve the original model under that name too. Create alias in core adds it, after a native confirmation, to the accounts added by login that serve the original model; an account set in core's config gets it only in core's config. Clear integration and Restore Backup leave an alias made in core.",
+    "Core must also serve the alias. Create alias in core adds it to login accounts after confirmation; add it manually for config accounts. Clear and Restore backup keep core aliases.",
   createAlias: "Create alias in core",
   aliasServed: "Core serves this alias.",
   aliasMade: "Core now serves {alias} on {accounts}.",
@@ -86,28 +86,27 @@ const t = strings("claudeDesktop", {
     "Aliases can follow patterns such as claude-opus-*, claude-sonnet-*, or claude-haiku-*, but must not contain names of other model families such as gpt, grok, gemini, or deepseek.",
   addModel: "Add model",
   removeModel: "Remove model",
-  empty: "Click “Add model” and enter the original model. The alias is optional.",
+  empty: "Press “Add model” and enter a model name. The alias is optional.",
   model: "Original model",
   alias: "Alias (optional for Claude models)",
   context1m: "1M",
   context1mHint: "Configures a 1M context window. Make sure the selected upstream model supports it.",
-  key: "Authentication Key",
-  keyHint: "The client API key Claude Desktop uses to connect to this core, kept by native key entry.",
+  key: "Client key",
+  keyHint: "The client key Claude Desktop uses to reach this core.",
   addKey: "Add key…",
   keyLabel: "Claude Desktop client key",
-  connect: "Connect in One Click",
-  repair: "Repair Connection",
-  update: "Update Configuration",
-  clear: "Clear integration",
+  connect: "Apply",
+  repair: "Repair",
+  update: "Update",
+  clear: "Clear",
   clearHint: "Remove pluxy integration settings and keep other settings. Restart the agent afterward.",
-  restore: "Restore Backup",
+  restore: "Restore backup",
   restoreHint: "Put the files back as they were before the first apply.",
   refused: "Claude Desktop would not take these files",
-  refusedHint:
-    "Apply and Clear integration leave them alone until they are fixed; Restore Backup puts back the files as they were before the first apply.",
+  refusedHint: "Apply and Clear leave these files unchanged until you fix them; Restore backup reverts them.",
   rows: "Each row needs an original model, and models and aliases are IDs with no spaces (1 to 16 rows).",
   noCore: "Connect to a core first: its address goes into the gateway profile.",
-  start: "Run controls",
+  start: "Start app",
   override: "Agent program path",
   overrideHint: "A full path used instead of claude-desktop found on the PATH (optional)",
   launch: "Start Claude Desktop",
@@ -131,31 +130,6 @@ interface Preview {
   targets: { selected: string; target: string; link: string | null }[];
   applied: boolean;
   settings: ReadBack;
-}
-
-function Text(props: {
-  label: string;
-  hint?: string;
-  value: string;
-  onInput: (v: string) => void;
-  list?: string;
-}) {
-  const id = useId();
-  return (
-    <label class="field" data-part="field" for={id}>
-      <span class="label">{props.label}</span>
-      <input
-        id={id}
-        type="text"
-        autocomplete="off"
-        spellcheck={false}
-        list={props.list}
-        value={props.value}
-        onInput={(e) => props.onInput(e.currentTarget.value)}
-      />
-      {props.hint && <small class="hint">{props.hint}</small>}
-    </label>
-  );
 }
 
 function StartApp(props: { available: boolean }) {
@@ -184,13 +158,12 @@ export function ClaudeDesktopPage() {
   const [where, setWhere] = useState<"default" | "root" | "files">("default");
   const [root, setRoot] = useState("");
   const [files, setFiles] = useState<string[]>(["", "", ""]);
-  const [preview, setPreview] = useState<Preview>();
   const [missing, setMissing] = useState(false);
   const [rows, setRows] = useState<Row[]>(fresh);
   const [secret, setSecret] = useState("");
   const [core, setCore] = useState<string>();
   const secrets = useLoad(() => reply<{ secrets: Secret[] }>("vault_secrets"));
-  const keys = keysOf(secrets.data);
+  const keys = keysOf(PACKAGE, secrets.data);
   const listId = useId();
   // The names core serves, which Claude Desktop's aliases must be among.
   const coreModels = useLoad(() =>
@@ -244,25 +217,27 @@ export function ClaudeDesktopPage() {
       : where === "files"
         ? { targets: files.map((f) => ({ file: f.trim() })) }
         : {};
+  // A write acts on the files the last preview pinned (the tool refuses it if one changed since);
+  // the preview belongs to the selection it was read for, so a write never pins files unread.
+  const selected = JSON.stringify(selection());
+  const { preview, readFor, isCurrent } = usePreview<Preview>(selected);
   const read = useAction(() => {});
   const load = () =>
     read.run(async () => {
-      const r = await tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) });
-      setMissing(missingLibrary(r.error?.message));
-      if (r.body) {
-        setPreview(r.body);
-        setRows(rowsFrom(r.body.settings));
-      }
+      const r = await readFor(selected, () =>
+        tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) }),
+      );
+      if (isCurrent(selected)) setMissing(missingLibrary(r.error?.message));
+      if (r.body) setRows(rowsFrom(r.body.settings));
       return r;
     });
   const write = useAction(load);
-  // A write acts on the files the last preview pinned (the tool refuses it if one changed since);
-  // choosing other files drops that preview, so a write never pins files unread.
+  // Choosing other files also drops the offer to create the library folder, which was for the
+  // files last read.
   const reselect =
     <T,>(f: (v: T) => void) =>
     (v: T) => {
       f(v);
-      setPreview(undefined);
       setMissing(false);
     };
   const apply = () =>
@@ -420,7 +395,7 @@ export function ClaudeDesktopPage() {
                 onChange={setSecret}
               />
             ) : (
-              <NoKeys />
+              <NoKeys secrets={secrets} />
             )}
             {addKey.error && <Notice tone="danger">{addKey.error}</Notice>}
             <Button

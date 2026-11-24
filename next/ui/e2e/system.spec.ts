@@ -22,8 +22,8 @@ for (const theme of ["default", "terminal"]) {
     await expect(about.locator('[data-part="tile"]').filter({ hasText: "Core version" })).toContainText(
       status.body.version,
     );
-    await expect(about.getByText("Build Time")).toBeVisible();
-    await expect(about.locator('[data-part="tile"]').filter({ hasText: "Connection Status:" })).toContainText(
+    await expect(about.getByText("Build time")).toBeVisible();
+    await expect(about.locator('[data-part="tile"]').filter({ hasText: "Connection status" })).toContainText(
       "Connected",
     );
     await expect(about.locator('[data-part="tile"]').filter({ hasText: "Config revision" })).toContainText(
@@ -31,7 +31,7 @@ for (const theme of ["default", "terminal"]) {
     );
     await expect(about.locator('[data-part="tile"]').filter({ hasText: "Safe mode" })).toContainText("Off");
 
-    const models = page.getByRole("region", { name: "Available Models" });
+    const models = page.getByRole("region", { name: "Available models" });
     const alpha = models.locator('[data-part="model-group"]').filter({ hasText: "test/alpha" });
     await expect(alpha.getByText("alpha-model", { exact: true })).toBeVisible();
     await expect(alpha).toContainText("alpha-1, alpha-2");

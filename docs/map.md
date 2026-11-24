@@ -40,7 +40,10 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
 - **Tests**: `go test -count=1 -run TestBuildBodyTranslatesEveryWire ./extensions/openai-compatible`
   and `go test -count=1 -run TestExtensionUpstreamClients ./sdk`; full extension contract in
   `next/conformance/conformance.go` (`Run`, `BuildExtension`).
-- **Fakes and helpers**: `next/sdk/testhost.go` and the per-provider `*test` packages in the table below.
+- **Fakes and helpers**: `next/sdk/testhost.go`, the shared test helpers in `next/sdk/sdktest`
+  (`ClosedURL`, `HangUp`, `WantError`, `LoginServer`, `CheckLoginError`) and the per-provider `*test`
+  packages in the table below. Read an upstream's `Retry-After` with `sdk.RetryAfter`
+  (`next/sdk/retryafter.go`).
 - **Handbook**: `next/protocol/README.md` ("Overview", "Package manifest", "Calls") and
   `next/protocol/TUTORIAL.md`.
 
@@ -202,6 +205,7 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
 | `next/extensions/xai/xaitest` | Fake xAI Responses, models, billing/profile, and Grok CLI sign-in |
 | `next/examples/oauth/oauthtest` | Fake OAuth 2.0 (device, PKCE, refresh rotation) and chat/quota API |
 | `next/format/formattest` | Loader for corpus and literal JSON client requests used by format tests |
+| `next/sdk/sdktest` | Helpers extension tests share: a refused connection, a server that hangs up, login error checks |
 | `next/e2e/panelcore` | Runs a real core with fake extensions for panel Playwright and app tests |
 | `next/e2e/testext` | No-upstream extension that reports version/PID and supports gated/silent streams |
 | `next/conformance` | Extension contract suite (`Run`) exercising handshake, streaming, media, and errors |

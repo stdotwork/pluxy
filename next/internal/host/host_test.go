@@ -34,9 +34,20 @@ import (
 func TestMain(m *testing.M) {
 	if mode, ok := strings.CutPrefix(os.Getenv(protocol.EnvExtensionID), "hosttest/"); ok {
 		fakeExtension(mode)
-		os.Exit(0)
+		syscall.Exit(0) // not os.Exit: under -race that sleeps a second first, which each test would wait out
 	}
 	os.Exit(m.Run())
+}
+
+// exitWhenStdinCloses makes a fake extension that does not use the SDK follow the protocol's
+// shutdown rule: core closes its stdin to ask it to stop, and it exits. Without it, Stop waits out
+// the whole StopTimeout and kills the fake. It exits with syscall.Exit: under -race, os.Exit(0)
+// sleeps a second first (the race runtime's atexit_sleep_ms), which each test would wait out.
+func exitWhenStdinCloses() {
+	go func() {
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		syscall.Exit(0)
+	}()
 }
 
 // fakeExtension misbehaves during startup. It writes its process ID to the file "pid" in its
@@ -201,7 +212,7 @@ func fakeExtension(mode string) {
 		if err != nil {
 			os.Exit(1)
 		}
-		os.Exit(0)
+		syscall.Exit(0) // see TestMain
 	case "child-holds-stderr":
 		// Start a child that keeps our stderr open after we are killed, then stay silent.
 		self, _ := os.Executable()
@@ -217,6 +228,7 @@ func fakeExtension(mode string) {
 }
 
 func TestStartFailuresStayUnderTheDeadline(t *testing.T) {
+	t.Parallel() // each case has its own package folder and process
 	const startTimeout = 2 * time.Second
 	// Killing a failed start and collecting its exit takes milliseconds, or up to waitDelay when
 	// a child of the extension holds its output open. The rest is slack for a loaded machine.
@@ -231,6 +243,7 @@ func TestStartFailuresStayUnderTheDeadline(t *testing.T) {
 		{"child-holds-stderr", "no handshake"},
 	} {
 		t.Run(tc.mode, func(t *testing.T) {
+			t.Parallel()
 			dir := fakePackage(t, tc.mode)
 			if tc.mode == "child-holds-stderr" {
 				t.Cleanup(func() { killFromFile(filepath.Join(dir, "child.pid")) })
@@ -316,6 +329,7 @@ func TestStartLimitErrorSaysWhereTheStartWas(t *testing.T) {
 // and waiting for the handshake until both are ready, as a stalled start in CI was, so each run
 // is a coin toss between the two; a dozen runs see both.
 func TestLateHandshakeFailsWithTheStartLimitError(t *testing.T) {
+	t.Parallel()
 	const startTimeout = 300 * time.Millisecond
 	for i := range 12 {
 		dir := fakePackage(t, "no-describe")
@@ -348,6 +362,7 @@ func TestLateHandshakeFailsWithTheStartLimitError(t *testing.T) {
 // in CI) still gets the whole limit for its handshake and describe: the limit counts from the
 // program running.
 func TestStartLimitCountsFromTheProgramRunning(t *testing.T) {
+	t.Parallel()
 	const startTimeout = 2 * time.Second
 	dir := fakePackage(t, "serve")
 	slow := func() { time.Sleep(startTimeout + 500*time.Millisecond) }
@@ -738,6 +753,7 @@ func accountClosedExtension(minor int) {
 		os.Exit(1)
 	}
 	fmt.Print(protocol.HandshakeLine(protocol.Version, socket))
+	exitWhenStdinCloses()
 	closedReply := protocol.Reply{Event: llm.Event{
 		Type:  llm.EventError,
 		Error: &llm.Error{Code: llm.CodeAccountClosed, Status: 403, Retryable: true, Scope: llm.ScopeCredential, Message: "Account suspended."},
@@ -846,6 +862,7 @@ func modelsFrom(minor int) {
 		os.Exit(1)
 	}
 	fmt.Print(protocol.HandshakeLine(protocol.Version, socket))
+	exitWhenStdinCloses()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {

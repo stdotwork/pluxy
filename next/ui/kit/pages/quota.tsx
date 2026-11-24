@@ -9,33 +9,33 @@ import { Button, Empty, Facts, List, Notice, PageHead, useKit, useLoad, when } f
 const t = strings("quota", {
   title: "Quota Management",
   short: "Quota",
-  tip: "API keys & limits",
+  tip: "Account quotas and limits",
   account: "Account",
   quota: "Quota",
-  refresh: "Refresh Quota",
-  refreshAll: "Refresh all credentials",
+  refresh: "Refresh",
+  refreshAll: "Refresh all",
   search: "Search accounts",
   sort: "Sort",
   default: "Default",
-  soonest: "Soonest recovery",
-  empty: "No quota-capable credentials",
-  noMatch: "No matching accounts",
-  idle: "Not read yet. Press Refresh Quota.",
+  soonest: "Soonest reset",
+  empty: "No accounts report quota yet. Add one on Add Account.",
+  noMatch: "No matching accounts. Clear or change your search.",
+  idle: "Not read yet. Press Refresh.",
   unsupported: "This provider reports no quota for this account.",
-  loading: "Loading quota...",
+  loading: "Loading quota…",
   plan: "Plan",
   ends: "Subscription ends {time}",
   manualResets: "Manual resets",
   fetched: "Last updated",
-  noLimits: "No quota data available",
+  noLimits: "No quota limits reported. Press Refresh to check again.",
   unlimited: "Unlimited",
-  percent: "{percent}%",
+  percent: "{percent}% used",
   amount: "{value} {unit}",
-  usedLimit: "{used} / {limit}",
+  usedLimit: "Used {used} / {limit}",
   used: "{amount} used",
   remaining: "{amount} remaining",
   limit: "Limit: {amount}",
-  reset: "Reset time",
+  reset: "Resets",
   resetsIn: "resets in {hint}",
   window: "Window",
   days: { one: "{count} day", other: "{count} days" },
@@ -264,6 +264,7 @@ export function QuotaPage() {
           </Button>
         }
       />
+      {accounts.phase === "loading" && <Notice tone="muted">{t("loading")}</Notice>}
       {accounts.error && <Notice tone="danger">{p.text(accounts.error)}</Notice>}
       <div class="quota-controls">
         <label class="field" data-part="field">
@@ -289,7 +290,7 @@ export function QuotaPage() {
           </select>
         </label>
       </div>
-      {shown.length === 0 && !accounts.loading ? (
+      {accounts.data && shown.length === 0 && !accounts.loading ? (
         <Empty>{t(query ? "noMatch" : "empty")}</Empty>
       ) : (
         <List<Account>

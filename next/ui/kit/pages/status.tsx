@@ -3,7 +3,7 @@
 // the theme hook `data-page`.
 
 import type { ComponentChildren } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { countAccounts, type ExtensionStatus, runningExtensions, type UsageGroup } from "../api";
 import { accountIdentities, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
@@ -22,6 +22,7 @@ import {
   useAction,
   useKit,
   useLoad,
+  usePoll,
   when,
 } from "../ui";
 
@@ -32,12 +33,12 @@ const t = strings("dashboard", {
   refresh: "Refresh",
   updated: "Updated {time}",
   reloadConfig: "Reload config",
-  reloadRefused: "Reload refused: {error}",
+  reloadRefused: "Reload refused: {error}. Check Config Panel and try again.",
   safeMode: "Core runs in safe mode: no extension runs, so client requests fail.",
   usageOff:
     "Core is not recording requests, so the figures below stay empty. Turn on usage statistics in the Config Panel.",
   usageNotSaved:
-    "Requests core could not save to its usage files since it started: {count}. They are counted here until core restarts; core's log says why.",
+    "Core could not save {count} requests to its usage files since it last started. Check Logs Viewer for details.",
   verdictGood: "All systems steady",
   verdictWarning: "Minor turbulence",
   verdictCritical: "Needs attention",
@@ -51,7 +52,7 @@ const t = strings("dashboard", {
   successRate: "Success rate",
   successHint: "Across {total} requests in the window",
   credentials: "Credentials",
-  credentialsHint: "{active} active · {notServing}",
+  credentialsHint: "{active} available · {notServing}",
   notServing: "{count} not serving",
   models: "Models",
   modelsHint: "Served through the proxy endpoint",
@@ -60,22 +61,22 @@ const t = strings("dashboard", {
   trafficText: "Success and failure counts per 10-minute bucket across the last {window}.",
   fleetEyebrow: "Fleet",
   fleetTitle: "Every provider, side by side",
-  fleetEmpty: "No provider traffic recorded yet.",
+  fleetEmpty: "No provider traffic yet. Traffic appears after pluxy serves a request.",
   healthEyebrow: "Health",
   healthTitle: "Credential status",
-  healthActive: "Active",
+  healthActive: "Available",
   healthUnavailable: "Unavailable",
   healthDisabled: "Disabled",
-  byProvider: "By provider",
+  byProvider: "By extension",
   accounts: "Accounts",
   noAccounts: "No credentials yet.",
   addAccount: "Add Account",
   unattributed: "Unattributed",
-  openAccounts: "Open auth files",
+  openAccounts: "Open Accounts",
   runtimeEyebrow: "Runtime",
   runtimeTitle: "Configuration at a glance",
   routing: "Routing strategy",
-  retry: "Request retry",
+  retry: "Retry rounds",
   automatic: "Automatic",
   fileLogging: "File logging",
   requestLog: "Request log",
@@ -91,10 +92,10 @@ const t = strings("dashboard", {
   activeRevision: "Active revision",
   activeSince: "Active since",
   hash: "Hash",
-  refused: "Revision {revision} was refused: {why}. Revision {active} still serves.",
+  refused: "Core refused revision {revision}: {why}. Revision {active} still serves.",
   noReason: "no reason given",
   runningExtensions: "Running extensions",
-  noExtensionRuns: "No extension runs.",
+  noExtensionRuns: "No extensions running. Install or enable one on Extensions.",
   extension: "Extension",
   version: "Version",
   state: "State",
@@ -196,28 +197,13 @@ export function StatusPage() {
   const reload = useAction(status.reload);
   const [updatedAt, setUpdatedAt] = useState<Date>();
 
-  const last = useRef(Date.now());
   const refresh = () => {
-    last.current = Date.now();
     for (const reloadOne of [status.reload, usage.reload, accounts.reload, settings.reload, served.reload])
       reloadOne();
   };
-  const refreshRef = useRef(refresh);
-  refreshRef.current = refresh;
 
   // Reads again every minute and when the page is shown after a longer time, never while hidden.
-  useEffect(() => {
-    const visible = () => document.visibilityState === "visible";
-    const timer = setInterval(() => visible() && refreshRef.current(), REFRESH_MS);
-    const shown = () => {
-      if (visible() && Date.now() - last.current >= REFRESH_MS) refreshRef.current();
-    };
-    document.addEventListener("visibilitychange", shown);
-    return () => {
-      clearInterval(timer);
-      document.removeEventListener("visibilitychange", shown);
-    };
-  }, []);
+  usePoll(refresh, REFRESH_MS);
 
   const loading = usage.loading;
   useEffect(() => {
@@ -266,6 +252,8 @@ export function StatusPage() {
       />
       {status.error && <Notice tone="danger">{p.text(status.error, ids)}</Notice>}
       {usage.error && <Notice tone="danger">{p.text(usage.error, ids)}</Notice>}
+      {accounts.error && <Notice tone="danger">{p.text(accounts.error, ids)}</Notice>}
+      {settings.error && <Notice tone="danger">{p.text(settings.error, ids)}</Notice>}
       {served.error && <Notice tone="danger">{p.text(served.error, ids)}</Notice>}
       {reload.error && (
         <Notice tone="danger">{t("reloadRefused", { error: p.text(reload.error, ids) })}</Notice>
@@ -301,7 +289,7 @@ export function StatusPage() {
           <Stat
             label={t("successRate")}
             value={percent ?? dash}
-            hint={t("successHint", { total: (u?.total_requests ?? 0).toLocaleString() })}
+            hint={u && t("successHint", { total: u.total_requests.toLocaleString() })}
             tone={percent ? VERDICT_TONE[verdict] : undefined}
           />
           <Stat

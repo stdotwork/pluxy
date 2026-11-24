@@ -37,18 +37,20 @@ import { KeyNotice } from "./configKeys";
 import {
   type Choices,
   hasProvider,
+  installedStatus,
   isInstalled,
   isTicked,
   onThisMachine,
+  type PickStatus,
+  type PickWithStatus,
+  pickStatuses,
   providerPicks,
   type Results,
-  type Stopped,
   scanState,
   signInsToName,
   splitClients,
   start,
   startInstalls,
-  stoppedPicks,
   toInstall,
   withKey,
 } from "./setup.helpers";
@@ -66,11 +68,11 @@ const t = strings("setup", {
 
   found: "Found on this machine",
   foundRemote: "Found on the machine pluxy runs on",
-  lookAgain: "Look again",
-  looking: "Looking…",
+  lookAgain: "Refresh",
+  looking: "Refreshing…",
   lookingFirst: "pluxy is looking at this machine. This takes a few seconds.",
-  neverLooked: "pluxy has not looked at this machine yet.",
-  nothingFound: "No client, sign-in or CLIProxyAPI setup was found.",
+  neverLooked: "Not scanned yet. Press Refresh to scan this machine.",
+  nothingFound: "Found no clients, sign-ins, or CLIProxyAPI setups.",
   clientFound: "{name} {version}",
   signInHint: "pluxy read nothing from this sign-in. It only saw that it is there.",
   importFound: {
@@ -78,7 +80,7 @@ const t = strings("setup", {
     other: "A CLIProxyAPI setup with {count} accounts",
   },
   importWhere:
-    "It is at {config}. pluxy can bring its settings, client keys and accounts across. It first shows what would change, and writes nothing until you confirm.",
+    "Found at {config}. pluxy previews settings, client keys, and accounts and writes nothing until you confirm.",
   importOld: "It is at {config}. To bring it across, run this where pluxy is installed:",
   importCommand: "Or use the command",
   importCommandHow:
@@ -91,7 +93,7 @@ const t = strings("setup", {
   "importDone.not_brought": "{count} not brought across",
   importAgain: "Bring it across again",
   importAgainHow:
-    "Run this where pluxy is installed. It writes the file's settings over any you changed in pluxy since, and adds the client keys, accounts and chains pluxy does not have: the ones it has stay as they are. With --dry-run it only reports what it would do.",
+    "Run this where pluxy is installed to overwrite changed settings and add missing keys, accounts, and chains. Use --dry-run to preview.",
   bring: "Bring it across",
   bringChecking: "Checking…",
   bringNow: "Bring it across now",
@@ -115,30 +117,29 @@ const t = strings("setup", {
   needTicked: "It is ticked under Providers: press {button} to install it.",
   needElsewhere: "Install it on the Extensions page.",
   "refused.400":
-    "pluxy could not read the CLIProxyAPI setup: {message}. Check that the file is still there and that pluxy may read it, then press {look}. Nothing was changed.",
-  "refused.422":
-    "pluxy will not bring this setup across: {message}. Change that in the CLIProxyAPI setup, then try again. Nothing was changed.",
+    "Could not read the CLIProxyAPI setup: {message}. Check the file and permissions, then press {look}. Nothing changed.",
+  "refused.422": "Cannot import this setup: {message}. Fix it in CLIProxyAPI and try again. Nothing changed.",
   "refused.409":
-    "This pluxy runs on a config.yaml, which it already reads in CLIProxyAPI's own format, and an import writes pluxy's JSON config. To move over, make that config with the command below, start pluxy on it, then bring the setup across. Nothing was changed.",
+    "pluxy uses config.yaml, while import writes JSON config. Run the command below, start pluxy on it, and import again. Nothing changed.",
   "refused.404": "This pluxy is an older one that cannot bring a setup across from this page.",
   "refused.0.dry":
     "pluxy did not answer, so nothing was read or changed. Check that it is running, then try again.",
   "refused.0.real":
-    "pluxy did not answer, so this page cannot tell whether the import ran. Check that pluxy is running, then press {button} again: it shows what is left to bring.",
+    "pluxy did not reply, so the import status is unknown. Check that pluxy is running, then press {button} again.",
   refusedOther: "pluxy could not bring the setup across: {message}.",
   listens: "pluxy listens on {address}.",
   reachable: "Other machines on the network can reach pluxy at this address.",
   lookedAt: "Looked {when}.",
 
   providers: "Providers",
-  providersHint: "A provider lets pluxy use one kind of account, such as a Claude subscription.",
+  providersHint: "An extension lets pluxy use one kind of account, such as a Claude subscription.",
   tickHint: "Tick the ones you have an account for.",
-  noPicks: "pluxy has no provider to offer here. The Extensions page lists what can be installed.",
+  noPicks: "No extensions to offer here. Check the Extensions page to install one.",
   noRegistry:
-    "This build has no extension registry, so pluxy has no provider to offer. From next/ in the source tree, run go run ./cmd/pluxy-pack -out <dir>, then put the bundled folder beside pluxy or start core with -bundled <dir>/bundled/index.json.",
+    "This build has no extension registry. Run go run ./cmd/pluxy-pack -out <dir> from next/, then put bundled beside pluxy or start core with -bundled <dir>/bundled/index.json.",
   installed: "Installed",
   installedNotRunning: "Installed, not running",
-  installedFailed: "{title} was installed but did not start: {error}",
+  installedFailed: "Installed {title}, but it failed to start: {error}",
   installedDisabled: "{title} is installed but turned off.",
   installedStopped: "{title} is installed but is not running.",
   installedFailedWhere: "Look at it on the Extensions page.",
@@ -156,7 +157,7 @@ const t = strings("setup", {
     "Nothing is ticked, so pluxy will run with no provider. You can add one later on the Extensions page.",
   nothingTickedNoRegistry: "This build has no extension registry, so pluxy will run with no provider.",
   noneRunning:
-    "{names} is installed but not running, so pluxy will run with no provider. You can turn it on or see what went wrong on the {extensions} page.",
+    "{names}: installed but not running, so pluxy has no active provider. Enable or inspect on {extensions}.",
   nothingMore: "Nothing more to install.",
   stillLooking: "pluxy is still looking at this machine. What it suggests shows here in a few seconds.",
   allInstalled: "Every provider on the list is installed.",
@@ -179,8 +180,8 @@ const t = strings("setup", {
 
   clients: "Point a client at pluxy",
   clientsHint:
-    "A client is a coding tool, such as Claude Code, that sends its requests through pluxy. pluxy changes no client's files from this page: it shows the text, and you paste it.",
-  noClients: "No client was found on this machine.",
+    "A client is a coding tool like Claude Code. This page only shows config text for you to paste.",
+  noClients: "Found no clients on this machine. Open Other clients below to set one up.",
   "state.configured": "Points at this pluxy",
   "state.not-configured": "Does not point at pluxy yet",
   "state.needs-update": "Its settings need an update to work with this pluxy",
@@ -194,13 +195,12 @@ const t = strings("setup", {
   pasteInto: "Put this in {path}:",
   pasteAddress: "The text uses {address}, the address of pluxy on its own machine.",
   pasteModel:
-    "Where the text says {placeholder}, a model's name goes: one your accounts serve. An account's Models button on Accounts lists them, and so does {command}.",
+    "Replace {placeholder} with a model your accounts serve. Check Show models on Accounts or run {command}.",
   copy: "Copy",
   copied: "Copied",
   copyFailed: "Could not copy. Select the text and copy it yourself.",
-  keyWhere:
-    "Where the text says {placeholder}, a client key goes: the password a client uses to reach pluxy. Make one here, or use one you already have.",
-  makeKey: "Make a client key",
+  keyWhere: "Replace {placeholder} with a client key. Create one here or use an existing key.",
+  makeKey: "Create client key",
   newKey: "New client key",
   keyInText:
     "The new key is in the text above, where {placeholder} stood. Copy the text while this notice is open.",
@@ -516,16 +516,16 @@ export function Providers(props: {
   setup: Setup;
   choices: Choices;
   results: Results;
-  /** The installed picks that do not run, by pick ID. */
-  stopped?: Record<string, Stopped>;
+  /** The provider picks with what each is: the page's one answer to whether it runs. */
+  statuses: PickWithStatus[];
   busy?: boolean;
   onTick: (id: string, ticked: boolean) => void;
 }) {
-  const picks = providerPicks(props.setup);
+  const { statuses } = props;
   const button = props.setup.first_run ? t("start") : t("install");
   return (
     <Card title={t("providers")}>
-      {picks.length === 0 ? (
+      {statuses.length === 0 ? (
         props.setup.registries === 0 ? (
           <Notice tone="warn">{t("noRegistry")}</Notice>
         ) : (
@@ -535,11 +535,20 @@ export function Providers(props: {
         <>
           <p class="muted setup-hint">
             {t("providersHint")}{" "}
-            {picks.every((pick) => isInstalled(pick, props.results)) ? t("allInstalled") : t("tickHint")}
+            {statuses.every(({ status }) => installedStatus(status)) ? t("allInstalled") : t("tickHint")}
           </p>
           <ul class="setup-rows">
-            {picks.map((pick) => (
-              <PickRow key={pick.id} pick={pick} button={button} {...props} />
+            {statuses.map(({ pick, status }) => (
+              <PickRow
+                key={pick.id}
+                pick={pick}
+                status={status}
+                button={button}
+                choices={props.choices}
+                results={props.results}
+                busy={props.busy}
+                onTick={props.onTick}
+              />
             ))}
           </ul>
         </>
@@ -550,29 +559,22 @@ export function Providers(props: {
 
 function PickRow(props: {
   pick: SetupPick;
+  status: PickStatus;
   button: string;
   choices: Choices;
   results: Results;
-  stopped?: Record<string, Stopped>;
   busy?: boolean;
   onTick: (id: string, ticked: boolean) => void;
 }) {
-  const { pick } = props;
-  const installed = isInstalled(pick, props.results);
-  const result = props.results[pick.id];
+  const { pick, status } = props;
   // Core keeps a package whose program did not start, and one that was turned off or has failed
   // since: an installed pick can be one that does not run.
-  const stopped =
-    props.stopped?.[pick.id] ??
-    (installed && result?.status === "error"
-      ? ({ why: "start", error: result.error } as Stopped)
-      : undefined);
-  const notRunning = stopped !== undefined;
+  const installed = installedStatus(status);
   const title = pick.title || pick.id;
   return (
     <li
       data-part="setup-pick"
-      data-state={installed ? "installed" : result?.status === "error" ? "failed" : "offered"}
+      data-state={installed ? "installed" : status.state === "install-failed" ? "failed" : "offered"}
     >
       <div class="setup-row-head">
         <label class="check">
@@ -588,28 +590,26 @@ function PickRow(props: {
             {pick.because && !installed && <small class="hint">{pick.because}</small>}
           </span>
         </label>
-        {installed && !notRunning && <Badge tone="ok">{t("installed")}</Badge>}
-        {notRunning && <Badge tone="warn">{t("installedNotRunning")}</Badge>}
+        {status.state === "running" && <Badge tone="ok">{t("installed")}</Badge>}
+        {status.state === "stopped" && <Badge tone="warn">{t("installedNotRunning")}</Badge>}
       </div>
-      {notRunning ? (
+      {status.state === "stopped" && (
         <Notice tone="danger">
-          {stopped.why === "disabled"
+          {status.why === "disabled"
             ? t("installedDisabled", { title })
-            : stopped.why === "failed" && !stopped.error
+            : status.why === "failed" && !status.error
               ? t("installedStopped", { title })
-              : t("installedFailed", { title, error: stopped.error ?? "" })}
+              : t("installedFailed", { title, error: status.error ?? "" })}
           <br />
           {t("installedFailedWhere")}
         </Notice>
-      ) : (
-        !installed &&
-        result?.status === "error" && (
-          <Notice tone="danger">
-            {t("failed", { title: pick.title || pick.id, error: result.error ?? "" })}
-            <br />
-            {t("failedRetry", { button: props.button })}
-          </Notice>
-        )
+      )}
+      {status.state === "install-failed" && (
+        <Notice tone="danger">
+          {t("failed", { title, error: status.error ?? "" })}
+          <br />
+          {t("failedRetry", { button: props.button })}
+        </Notice>
       )}
     </li>
   );
@@ -623,7 +623,8 @@ export function Start(props: {
   busy?: boolean;
   error?: string;
   provider: boolean;
-  stopped?: Record<string, Stopped>;
+  /** The provider picks with what each is: the page's one answer to whether it runs. */
+  statuses: PickWithStatus[];
   onStart: () => void;
   onFinish: () => void;
 }) {
@@ -651,11 +652,13 @@ export function Start(props: {
     line = t("stillLooking");
   } else if (!props.provider && setup.first_run) {
     // With every pick installed there is nothing to tick: what holds pluxy back is on Extensions.
-    const down = picks.filter((pick) => props.stopped?.[pick.id]).map((pick) => pick.title || pick.id);
+    const down = props.statuses
+      .filter(({ status }) => status.state === "stopped")
+      .map(({ pick }) => pick.title || pick.id);
     line =
       setup.registries === 0
         ? t("nothingTickedNoRegistry")
-        : down.length > 0 && picks.every((pick) => isInstalled(pick, props.results))
+        : down.length > 0 && props.statuses.every(({ status }) => installedStatus(status))
           ? rich(t("noneRunning"), {
               names: down.join(", "),
               extensions: <a href="#/extensions">{t("extensions")}</a>,
@@ -918,10 +921,7 @@ export function SetupPage(props: { options?: SetupOptions }) {
   const loaded = useLoad(api.setup);
   const accounts = useLoad(api.accounts);
   const packages = useLoad(api.packages);
-  // The last good reply stays on screen while the next one loads, and when one fails.
-  const kept = useRef<Setup | undefined>(undefined);
-  if (loaded.data) kept.current = loaded.data;
-  const setup = kept.current;
+  const setup = loaded.data;
   const [choices, setChoices] = useState<Choices>({});
   const [results, setResults] = useState<Results>({});
   const [applying, setApplying] = useState(false);
@@ -929,9 +929,12 @@ export function SetupPage(props: { options?: SetupOptions }) {
   const [bringing, setBringing] = useState<ImportState>();
   // Look again also reads the accounts again: a sign-in left running (a device code, a browser
   // tab) can finish while this page stays in view, with no focus change to say so.
+  // It reads the packages again too: a provider turned on or off elsewhere changes whether an
+  // installed pick runs.
   const look = useAction(() => {
     accounts.reload();
     loaded.reload();
+    packages.reload();
   });
   const finish = useAction(() => {
     loaded.reload();
@@ -1039,7 +1042,6 @@ export function SetupPage(props: { options?: SetupOptions }) {
       remote={!onThisMachine(host.address)}
       choices={choices}
       results={results}
-      provider={hasProvider(setup, results, packages.data?.packages)}
       packages={packages.data?.packages}
       accounts={accounts.data?.accounts.length}
       applying={applying}
@@ -1074,8 +1076,6 @@ export function SetupView(props: {
   remote: boolean;
   choices: Choices;
   results: Results;
-  /** Core runs a provider. */
-  provider: boolean;
   /** Core's installed packages, once it has listed them: they say which installed pick does not run. */
   packages?: Package[];
   /** How many accounts core has; undefined until it has said. */
@@ -1094,8 +1094,9 @@ export function SetupView(props: {
 }) {
   const { setup, choices, results, errors } = props;
   // One primary button at a time: Finish takes it once Start has nothing left to do.
-  const finishNext = toInstall(setup, choices, results).length === 0 && props.provider;
-  const stopped = stoppedPicks(setup, results, props.packages);
+  const provider = hasProvider(setup, results, props.packages);
+  const statuses = pickStatuses(setup, results, props.packages);
+  const finishNext = toInstall(setup, choices, results).length === 0 && provider;
   return (
     <>
       <PageHead title={t("title")} />
@@ -1117,7 +1118,7 @@ export function SetupView(props: {
           setup={setup}
           choices={choices}
           results={results}
-          stopped={stopped}
+          statuses={statuses}
           busy={props.applying}
           onTick={props.onTick}
         />
@@ -1127,8 +1128,8 @@ export function SetupView(props: {
           results={results}
           busy={props.applying || props.finishing}
           error={errors?.apply}
-          provider={props.provider}
-          stopped={stopped}
+          provider={provider}
+          statuses={statuses}
           onStart={props.onStart}
           onFinish={props.onFinish}
         />
@@ -1137,7 +1138,7 @@ export function SetupView(props: {
           choices={choices}
           results={results}
           count={props.accounts}
-          provider={props.provider}
+          provider={provider}
           error={errors?.accounts}
           onAdded={props.onAdded}
         />

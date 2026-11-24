@@ -3,14 +3,14 @@
 //!
 //! - `first`: the default size; resizing and moving; a pending login polls while the window
 //!   shows, not while it is minimized (unmapped, as a window manager iconifies it), and again
-//!   once it is restored, and its "Open Link" opens the sign-in page in the browser, no window
+//!   once it is restored, and its "Open link" opens the sign-in page in the browser, no window
 //!   of the app's own; closing with Ask every time asks, Cancel keeps the window, Minimize to
 //!   Tray closes it and leaves no webview or web process; the real tray item reopens it at the
-//!   size and place it had; Remember this choice keeps Minimize to Tray, which then closes
-//!   without asking; Exit App, chosen in the settings, quits.
+//!   size and place it had; Remember this choice keeps Minimize to tray, which then closes
+//!   without asking; Exit app, chosen in the settings, quits.
 //! - `second`: the next launch opens at the size and place the window last had and shows the
-//!   remembered choice; Ask every time, saved, asks again; Exit App with Remember quits.
-//! - `third`: the remembered Exit App quits without asking.
+//!   remembered choice; Ask every time, saved, asks again; Exit app with Remember quits.
+//! - `third`: the remembered Exit app quits without asking.
 //! - `no-tray`: in a session with no tray watcher, closing quits, whatever the saved choice.
 //!
 //! Every check prints `native-test: window_check {"ok":...,"what":...}`. Before its last close,
@@ -338,7 +338,7 @@ fn browser_log() -> Vec<String> {
         .collect()
 }
 
-/// A pending login polls while the window shows, not while it is minimized, and its "Open Link"
+/// A pending login polls while the window shows, not while it is minimized, and its "Open link"
 /// goes to the person's browser, never to a window of the app's own.
 fn polling(c: &mut Checks, app: &AppHandle) {
     // The page draws every method from one reply, so once one shows, test/alpha's shows too, if
@@ -355,13 +355,13 @@ fn polling(c: &mut Checks, app: &AppHandle) {
     } else if within(10, || {
         (main_eval(
             app,
-            "[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Open Link')",
+            "[...document.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Open link')",
         ) == Some(json!(true)))
         .then_some(())
     })
     .is_none()
     {
-        Some("no Open Link button within 10 s of clicking Test browser")
+        Some("no Open link button within 10 s of clicking Test browser")
     } else {
         None
     };
@@ -372,7 +372,7 @@ fn polling(c: &mut Checks, app: &AppHandle) {
     ) {
         return;
     }
-    // Open Link: the sign-in page's own address reaches the browser, and the window opens
+    // Open link: the sign-in page's own address reaches the browser, and the window opens
     // nothing of its own.
     let link = main_eval(
         app,
@@ -383,7 +383,7 @@ fn polling(c: &mut Checks, app: &AppHandle) {
     let webviews = app.webviews().len();
     let clicked = main_eval(
         app,
-        "(() => { const b = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Open Link'); if (!b) return false; b.click(); return true; })()",
+        "(() => { const b = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Open link'); if (!b) return false; b.click(); return true; })()",
     );
     let opened = within(10, || {
         let l = browser_log();
@@ -395,13 +395,13 @@ fn polling(c: &mut Checks, app: &AppHandle) {
             && opened
                 .as_ref()
                 .is_some_and(|l| l.last().is_some_and(|last| Some(last) == link.as_ref())),
-        format!("Open Link opens the sign-in page in the browser: {link:?} as {opened:?}"),
+        format!("Open link opens the sign-in page in the browser: {link:?} as {opened:?}"),
     );
     sleep(1000);
     let own = app.webviews().len() - webviews;
     c.check(
         own == 0,
-        format!("Open Link opens no window of the app's own ({own} webviews more)"),
+        format!("Open link opens no window of the app's own ({own} webviews more)"),
     );
     let before = LOGIN_READS.load(SeqCst);
     sleep(5000);
@@ -513,11 +513,11 @@ fn first(c: &mut Checks, app: &AppHandle) {
         );
     }
 
-    // Minimize to Tray, not remembered.
+    // Minimize to tray, not remembered.
     ensure_open(c, app);
     let asked = answer(app, "minimize-to-tray", false);
-    c.check(asked, "closing asks again, and Minimize to Tray is chosen");
-    c.check(closed(app), "Minimize to Tray closes the window");
+    c.check(asked, "closing asks again, and Minimize to tray is chosen");
+    c.check(closed(app), "Minimize to tray closes the window");
     c.check(
         app.webviews().is_empty(),
         format!(
@@ -525,7 +525,7 @@ fn first(c: &mut Checks, app: &AppHandle) {
             app.webviews().keys().collect::<Vec<_>>()
         ),
     );
-    no_web_processes(c, "Minimize to Tray");
+    no_web_processes(c, "Minimize to tray");
     c.check(
         saved_choice(app).as_deref() == Some("ask"),
         format!(
@@ -554,21 +554,21 @@ fn first(c: &mut Checks, app: &AppHandle) {
         );
     }
 
-    // Minimize to Tray, remembered: the next close does not ask.
+    // Minimize to tray, remembered: the next close does not ask.
     ensure_open(c, app);
     c.check(
         answer(app, "minimize-to-tray", true),
-        "closing asks, and Minimize to Tray is chosen with Remember this choice",
+        "closing asks, and Minimize to tray is chosen with Remember this choice",
     );
-    c.check(closed(app), "Minimize to Tray closes the window");
-    no_web_processes(c, "Minimize to Tray");
+    c.check(closed(app), "Minimize to tray closes the window");
+    no_web_processes(c, "Minimize to tray");
     c.check(
         within(5, || {
             (saved_choice(app).as_deref() == Some("minimize-to-tray")).then_some(())
         })
         .is_some(),
         format!(
-            "Remember this choice keeps Minimize to Tray: {:?}",
+            "Remember this choice keeps Minimize to tray: {:?}",
             saved_choice(app)
         ),
     );
@@ -577,11 +577,11 @@ fn first(c: &mut Checks, app: &AppHandle) {
     request_close(app);
     c.check(
         closed(app),
-        "the remembered Minimize to Tray closes the window",
+        "the remembered Minimize to tray closes the window",
     );
     c.check(
         PROMPTS.load(SeqCst) == prompts,
-        "the remembered Minimize to Tray does not ask",
+        "the remembered Minimize to tray does not ask",
     );
     c.check(
         app.state::<App>()
@@ -589,13 +589,13 @@ fn first(c: &mut Checks, app: &AppHandle) {
             .load(std::sync::atomic::Ordering::SeqCst),
         "the app is still in the tray",
     );
-    no_web_processes(c, "the remembered Minimize to Tray");
+    no_web_processes(c, "the remembered Minimize to tray");
 
-    // Exit App, chosen in the settings, quits; the window's size and place are kept.
+    // Exit app, chosen in the settings, quits; the window's size and place are kept.
     ensure_open(c, app);
     c.check(
         save_choice(app, "exit"),
-        format!("Exit App is saved in the settings: {:?}", saved_choice(app)),
+        format!("Exit app is saved in the settings: {:?}", saved_choice(app)),
     );
     c.check(
         place(app, MOVED_AGAIN),
@@ -617,7 +617,7 @@ fn second(c: &mut Checks, app: &AppHandle) {
         goto(app, "connection", "[data-part=window-preferences]")
             && within(5, || shown_choice(app)).as_deref() == Some("exit"),
         format!(
-            "the settings show the remembered Exit App: {:?}",
+            "the settings show the remembered Exit app: {:?}",
             shown_choice(app)
         ),
     );

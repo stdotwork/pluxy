@@ -22,26 +22,25 @@ import {
   useAction,
   useLoad,
 } from "../../ui/kit/ui";
-import { Backups, reply } from "./backups";
+import { Backups } from "./backups";
 import {
   CLIENT,
   type Form,
   fresh,
   fromFile,
-  keysOf,
   MODELS,
   PACKAGE,
   type ReadBack,
   ROLES,
   type Role,
   ready,
-  type Secret,
   settingsNote,
   toolUnavailable,
   WINDOW_1M,
   WINDOW_DEFAULT,
 } from "./claudeCodeForm";
 import { folderWait, NeedsKey, NoKeys, toolMissing, withDeviceLink } from "./clientHelp";
+import { keysOf, type Secret, Text, usePreview } from "./clientPage";
 import type { AgentPage } from "./easyMode";
 import { historyKey, inHome } from "./environment";
 import {
@@ -52,7 +51,7 @@ import {
   plainPath,
   useEnvironment,
 } from "./environmentBlock";
-import { connectionGet } from "./host";
+import { connectionGet, reply } from "./host";
 import { keptTerminal, launcherProblem, useDeviceChanged } from "./startCli";
 
 const t = strings("claudeCode", {
@@ -60,7 +59,7 @@ const t = strings("claudeCode", {
   short: "Claude",
   tip: "Set up and start Claude Code with this core",
   intro:
-    "Points Claude Code's settings at this core, with a client key and the models each role uses. Apply, Clear and Restore Backup each ask in a native confirmation; everything else in the file stays. Restart Claude Code afterward.",
+    "Points Claude Code at this core with a client key and role models. Apply, Clear, and Restore backup ask for confirmation and keep other settings. Restart Claude Code afterward.",
   unavailable:
     "Install and enable the curated Claude Code tool (pluxy/claude-code) on the {device} page to set up Claude Code from here.",
   file: "Settings file",
@@ -72,17 +71,17 @@ const t = strings("claudeCode", {
   root: "Folder",
   rootHint: "A full path; the folder may be a link (as chezmoi can make)",
   inRoot: "File in the folder",
-  read: "Read settings",
+  read: "Refresh",
   status: "Status",
   target: "Writes to",
   keySet: "Key in the file",
   yes: "Yes",
   no: "No",
   applied: "Applied",
-  notConfigured: "Not Configured",
+  notConfigured: "Not configured",
   configured: "Configured",
-  needsUpdate: "Configuration Modified",
-  mapping: "Claude Code Model → Upstream Model",
+  needsUpdate: "Configuration modified",
+  mapping: "Claude Code model → upstream model",
   mappingHint: "The model each Claude Code role uses through this core. Fable follows Sonnet when empty.",
   context1m: "1M",
   startupModel: "Default model",
@@ -97,26 +96,25 @@ const t = strings("claudeCode", {
   pctHint: "Defaults to 90%. Lower values compact earlier.",
   disable: "Disable auto-compaction",
   disableHint: "Only manual /compact remains available when enabled.",
-  key: "Authentication Key",
-  keyHint: "The client API key Claude Code uses to connect to this core, kept by native key entry.",
+  key: "Client key",
+  keyHint: "The client key Claude Code uses to reach this core.",
   addKey: "Add key…",
   keyLabel: "Claude Code client key",
-  connect: "Connect in One Click",
-  repair: "Repair Connection",
-  update: "Update Configuration",
-  clear: "Close configuration",
+  connect: "Apply",
+  repair: "Repair",
+  update: "Update",
+  clear: "Clear",
   clearHint: "Remove pluxy's integration settings and keep other settings. Restart the agent afterward.",
-  restore: "Restore Backup",
+  restore: "Restore backup",
   restoreHint: "Put the file back as it was before the first apply.",
   ranges:
     "Opus, Sonnet and Haiku each need a model (not only [1m]); the auto-compact window must be a whole number from 100000 to 1000000 and the percentage a whole number from 1 to 100.",
   refused: "Claude Code would not take this file",
-  refusedHint:
-    "Apply and Close configuration leave it alone until it is fixed; Restore Backup puts back the file as it was before the first apply.",
+  refusedHint: "Apply and Clear leave this file unchanged until you fix it; Restore backup reverts it.",
   noCore: "Connect to a core first: its address goes into the settings.",
   start: "Start CLI",
-  cwd: "Working directory",
-  recent: "Recently Used",
+  cwd: "Working folder",
+  recent: "Recently used",
   override: "Agent program path",
   overrideHint: "A full path used instead of claude found on the PATH (optional)",
   terminal: "Terminal",
@@ -138,31 +136,6 @@ interface Preview {
   targets: { selected: string; target: string; link: string | null; [k: string]: unknown }[];
   applied: boolean;
   settings: ReadBack;
-}
-
-function Text(props: {
-  label: string;
-  hint?: string;
-  value: string;
-  onInput: (v: string) => void;
-  list?: string;
-}) {
-  const id = useId();
-  return (
-    <label class="field" data-part="field" for={id}>
-      <span class="label">{props.label}</span>
-      <input
-        id={id}
-        type="text"
-        autocomplete="off"
-        spellcheck={false}
-        list={props.list}
-        value={props.value}
-        onInput={(e) => props.onInput(e.currentTarget.value)}
-      />
-      {props.hint && <small class="hint">{props.hint}</small>}
-    </label>
-  );
 }
 
 function Num(props: {
@@ -291,19 +264,15 @@ export function ClaudeCodePage() {
   const [file, setFile] = useState("");
   const [root, setRoot] = useState("");
   const [inRoot, setInRoot] = useState("settings.json");
-  const [preview, setPreview] = useState<Preview>();
   const [form, setForm] = useState<Form>(fresh);
   const [secret, setSecret] = useState("");
   const [core, setCore] = useState<string>();
   // Another environment is another file: its preview and form start over.
-  const env = useEnvironment(PACKAGE, () => {
-    setPreview(undefined);
-    setForm(fresh());
-  });
+  const env = useEnvironment(PACKAGE, () => setForm(fresh()));
   const tool = toolIn(env);
   const distro = env.selection?.wsl.distro;
   const secrets = useLoad(() => reply<{ secrets: Secret[] }>("vault_secrets"));
-  const keys = keysOf(secrets.data);
+  const keys = keysOf(PACKAGE, secrets.data);
   const listId = useId();
   useEffect(() => {
     connectionGet().then(
@@ -317,25 +286,21 @@ export function ClaudeCodePage() {
       : where === "root"
         ? { targets: [{ root: root.trim(), path: inRoot.trim() }] }
         : {};
+  // A write acts on the file the last preview pinned (the tool refuses it if the file changed
+  // since); the preview belongs to the file and environment it was read for, so a write never pins
+  // a file unread. WSL with no user picked yet is an environment of its own: it is not this computer.
+  const selected = JSON.stringify([env.mode, env.selection, selection()]);
+  const { preview, readFor } = usePreview<Preview>(selected);
   const read = useAction(() => {});
   const load = () =>
     read.run(async () => {
-      const r = await tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) });
-      if (r.body) {
-        setPreview(r.body);
-        setForm(fromFile(r.body.settings));
-      }
+      const r = await readFor(selected, () =>
+        tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) }),
+      );
+      if (r.body) setForm(fromFile(r.body.settings));
       return r;
     });
   const write = useAction(load);
-  // A write acts on the file the last preview pinned (the tool refuses it if the file changed
-  // since); choosing another file drops that preview, so a write never pins a file unread.
-  const reselect =
-    <T,>(f: (v: T) => void) =>
-    (v: T) => {
-      f(v);
-      setPreview(undefined);
-    };
   const set = (patch: Partial<Form>) => setForm((f) => ({ ...f, ...patch }));
   const setOneM = (role: Role, on: boolean) =>
     setForm((f) => {
@@ -404,27 +369,21 @@ export function ClaudeCodePage() {
             { value: "file", label: t("fileSelected") },
             { value: "root", label: t("fileInRoot") },
           ]}
-          onChange={reselect(setWhere)}
+          onChange={setWhere}
         />
         {where === "file" && (
           <PathText
             label={t("filePath")}
             hint={t("filePathHint")}
             value={file}
-            onInput={reselect(setFile)}
+            onInput={setFile}
             distro={distro}
           />
         )}
         {where === "root" && (
           <>
-            <PathText
-              label={t("root")}
-              hint={t("rootHint")}
-              value={root}
-              onInput={reselect(setRoot)}
-              distro={distro}
-            />
-            <Text label={t("inRoot")} value={inRoot} onInput={reselect(setInRoot)} />
+            <PathText label={t("root")} hint={t("rootHint")} value={root} onInput={setRoot} distro={distro} />
+            <Text label={t("inRoot")} value={inRoot} onInput={setInRoot} />
           </>
         )}
         {read.error && !toolMissing(read.error, PACKAGE) && <Notice tone="danger">{read.error}</Notice>}
@@ -531,7 +490,7 @@ export function ClaudeCodePage() {
                 onChange={setSecret}
               />
             ) : (
-              <NoKeys />
+              <NoKeys secrets={secrets} />
             )}
             {addKey.error && <Notice tone="danger">{addKey.error}</Notice>}
             <Button
@@ -553,15 +512,22 @@ export function ClaudeCodePage() {
         <Card>
           {!refused && !valid && <Notice tone="warn">{t("ranges")}</Notice>}
           {write.error && <Notice tone="danger">{write.error}</Notice>}
-          <Button variant="primary" onClick={apply} disabled={busy || refused || !valid || !secret || !core}>
+          <Button
+            variant="primary"
+            onClick={apply}
+            disabled={busy || env.pending || refused || !valid || !secret || !core}
+          >
             {applyLabel}
           </Button>
           <NeedsKey missing={!secret} />
-          <ConfirmButton disabled={busy || refused || !preview.applied} onConfirm={() => undo("clear")}>
+          <ConfirmButton
+            disabled={busy || env.pending || refused || !preview.applied}
+            onConfirm={() => undo("clear")}
+          >
             {t("clear")}
           </ConfirmButton>
           <small class="hint">{t("clearHint")}</small>
-          <ConfirmButton disabled={busy} onConfirm={() => undo("restore")}>
+          <ConfirmButton disabled={busy || env.pending} onConfirm={() => undo("restore")}>
             {t("restore")}
           </ConfirmButton>
           <small class="hint">{t("restoreHint")}</small>
@@ -571,7 +537,7 @@ export function ClaudeCodePage() {
         <Backups
           pkg={PACKAGE}
           pins={async () => preview.targets}
-          disabled={busy}
+          disabled={busy || env.pending}
           onChange={load}
           environment={env.selection}
         />

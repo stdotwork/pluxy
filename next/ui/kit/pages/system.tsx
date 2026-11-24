@@ -12,9 +12,9 @@ const t = strings("system", {
   about: "About",
   version: "Core version",
   commit: "Commit {commit}",
-  buildTime: "Build Time",
+  buildTime: "Build time",
   unknown: "Unknown",
-  connection: "Connection Status:",
+  connection: "Connection status",
   connecting: "Connecting",
   connected: "Connected",
   disconnected: "Disconnected",
@@ -23,18 +23,17 @@ const t = strings("system", {
   on: "On",
   off: "Off",
   safeModeNotice: "Core runs in safe mode: no extension runs, so client requests fail.",
-  models: "Available Models",
+  models: "Available models",
   refresh: "Refresh",
-  loadingModels: "Loading available models...",
-  modelsEmpty: "No models are served.",
+  loadingModels: "Loading available models…",
+  modelsEmpty: "No models served. Add an account or enable an extension.",
   modelsCount: { one: "{count} available model", other: "{count} available models" },
   groupCount: { one: "{count} model", other: "{count} models" },
   model: "Model",
   aliases: "Aliases",
   accounts: "Accounts",
   connect: "Connect a client",
-  connectHint:
-    "Point a client at one of these addresses and sign in with a client API key. Create keys in the {config}.",
+  connectHint: "Point a client at one of these addresses with a client key. Create keys in {config}.",
   configLink: "Config Panel",
   noAddress: "This page cannot tell which address clients reach core at; use the address core listens on.",
   client: "Client",
@@ -119,7 +118,13 @@ export function SystemPage() {
   const models = useLoad(api.servedModels);
   const mask = privacy.masker(useAccountLabels(models.data));
   const s = status.data;
-  const connection = status.loading && !s ? t("connecting") : s ? t("connected") : t("disconnected");
+  // Stale data after a failed read is still data: the connection is what the last read said.
+  const connection =
+    status.phase === "loading"
+      ? t("connecting")
+      : status.phase === "ready"
+        ? t("connected")
+        : t("disconnected");
   const list = models.data?.models;
   const groups = list ? groupModels(list) : [];
 

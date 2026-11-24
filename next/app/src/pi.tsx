@@ -21,19 +21,19 @@ import {
   useKit,
   useLoad,
 } from "../../ui/kit/ui";
-import { Backups, reply } from "./backups";
-import { folderWait, NeedsKey, NoKeys, toolMissing, withDeviceLink } from "./clientHelp";
+import { Backups } from "./backups";
+import { NeedsKey, NoKeys, toolMissing, withDeviceLink } from "./clientHelp";
+import { keysOf, type Secret, StartCli, Text, usePreview } from "./clientPage";
 import type { AgentPage } from "./easyMode";
-import { connectionGet } from "./host";
+import { connectionGet, reply } from "./host";
 import { selectionFor, type Where } from "./piForm";
-import { keptTerminal, launcherProblem, useDeviceChanged } from "./startCli";
 
 const t = strings("pi", {
   title: "Pi",
   short: "Pi",
   tip: "Set up and start Pi with this core",
   intro:
-    "Loads models dynamically in Pi through the CLIProxyAPI provider. pluxy installs its reviewed copy of the provider plugin in Pi's agent folder, writes the core's address and a client key into cliproxyapi.json, and makes a model through it Pi's default. Install, Update, Uninstall, Clear and Restore Backup each ask in a native confirmation; everything else in the files stays. Restart Pi afterward.",
+    "Installs pluxy's Pi plugin, writes core's address and a client key to cliproxyapi.json, and sets Pi's default model. All write actions ask for confirmation and keep other settings. Restart Pi afterward.",
   unavailable:
     "Install and enable the curated Pi tool (pluxy/pi-setup) on the {device} page to set up Pi from here.",
   files: "Configuration files",
@@ -46,16 +46,16 @@ const t = strings("pi", {
   folder: "Folder",
   folderHint:
     "A full path, such as the folder PI_CODING_AGENT_DIR names; the folder may be a link (as chezmoi can make)",
-  read: "Read settings",
+  read: "Refresh",
   status: "Status",
   applied: "Applied",
-  notConfigured: "Not Configured",
+  notConfigured: "Not configured",
   configured: "Configured",
-  needsUpdate: "Configuration Modified",
-  installation: "Installation Status",
+  needsUpdate: "Configuration modified",
+  installation: "Installation status",
   pluginInstalled: "Pi plugin installed",
-  providerNotInstalled: "Pi provider not installed",
-  pluginVersion: "Plugin Version",
+  providerNotInstalled: "Pi plugin not installed",
+  pluginVersion: "Plugin version",
   notAvailable: "Not available",
   updateAvailable: "Update available",
   updateTitle: "Version {bundled} is available",
@@ -69,7 +69,7 @@ const t = strings("pi", {
   defaultModel: "Default model",
   none: "None",
   legacy:
-    "settings.json lists the CLIProxyAPI provider an older app installed from npm. Apply replaces it with pluxy's reviewed copy; Clear and Restore Backup put it back.",
+    "settings.json lists the CLIProxyAPI provider an older app installed from npm. Apply replaces it with pluxy's reviewed copy; Clear and Restore backup put it back.",
   foreign:
     "The agent folder has a pluxy-cliproxyapi-provider folder pluxy did not install: move it away to install pluxy's Pi plugin.",
   model: "Model",
@@ -78,33 +78,33 @@ const t = strings("pi", {
   modelLabel: "Model",
   refresh: "Refresh models",
   invalidModel: "Enter one model ID, without spaces, of at most 240 characters.",
-  key: "Authentication Key",
-  keyHint: "The client API key Pi uses to connect to this core, kept by native key entry.",
+  key: "Client key",
+  keyHint: "The client key Pi uses to reach this core.",
   addKey: "Add key…",
   keyLabel: "Pi client key",
-  install: "Install Pi Plugin",
-  connect: "Connect in One Click",
-  repair: "Repair Connection",
-  update: "Update Configuration",
-  clear: "Clear integration",
+  install: "Install plugin",
+  connect: "Apply",
+  repair: "Repair",
+  update: "Update",
+  clear: "Clear",
   clearHint:
     "Remove pluxy's integration settings and the plugin, and keep other settings. Restart Pi afterward.",
-  restore: "Restore Backup",
+  restore: "Restore backup",
   refused: "Pi would not take these files",
   refusedHint:
-    "Apply, Clear and Uninstall leave them alone until they are fixed; Restore Backup puts back the files as they were before the first apply.",
+    "Apply, Clear, and Uninstall plugin leave these files unchanged until you fix them; Restore backup reverts them.",
   restoreHint: "Put the three files back as they were before the first apply.",
   plugin: "Plugin management",
   installedVersion: "Installed plugin version: {version}",
-  pluginNotInstalled: "The Pi plugin is not installed. Select a model and install it in Basic configuration.",
-  updatePlugin: "Update Pi Plugin",
+  pluginNotInstalled: "The Pi plugin is not installed. Choose a model above and press Install plugin.",
+  updatePlugin: "Update plugin",
   updated: "The Pi plugin is updated.",
-  uninstallPlugin: "Uninstall Pi Plugin",
+  uninstallPlugin: "Uninstall plugin",
   uninstalled: "The Pi plugin is uninstalled.",
   noCore: "Connect to a core first: its address goes into the settings.",
   start: "Start CLI",
-  cwd: "Working directory",
-  recent: "Recently Used",
+  cwd: "Working folder",
+  recent: "Recently used",
   override: "Agent program path",
   overrideHint: "A full path used instead of pi (optional)",
   terminal: "Terminal",
@@ -152,100 +152,18 @@ const refused = {
   error: { code: "refused", message: "the configuration files could not be read" },
 };
 
-function Text(props: {
-  label: string;
-  hint?: string;
-  value: string;
-  onInput: (v: string) => void;
-  list?: string;
-}) {
-  const id = useId();
-  return (
-    <label class="field" data-part="field" for={id}>
-      <span class="label">{props.label}</span>
-      <input
-        id={id}
-        type="text"
-        autocomplete="off"
-        spellcheck={false}
-        list={props.list}
-        value={props.value}
-        onInput={(e) => props.onInput(e.currentTarget.value)}
-      />
-      {props.hint && <small class="hint">{props.hint}</small>}
-    </label>
-  );
-}
-
-function StartCli(props: { available: boolean }) {
-  const [cwd, setCwd] = useState("");
-  const [override, setOverride] = useState("");
-  const [terminal, setTerminal] = useState("automatic");
-  const state = useLoad(() => reply<{ history: Record<string, string[]> }>("launcher_state"));
-  const terminals = useLoad(() =>
-    reply<{ terminals: { id: string; label: string }[] }>("launcher_terminals"),
-  );
-  useDeviceChanged(terminals.reload);
-  const action = useAction(state.reload);
-  const recent = state.data?.history[t("title")] ?? [];
-  const shownTerminal = keptTerminal(terminal, terminals.data?.terminals);
-  const start = () =>
-    action.run(async () => {
-      const recipe = await tool<Record<string, unknown>>("recipe", {});
-      if (!recipe.body) return recipe;
-      return reply("launcher_launch", {
-        launch: {
-          ...recipe.body,
-          cwd: cwd.trim(),
-          terminal: shownTerminal,
-          ...(override.trim() ? { override: override.trim() } : {}),
-        },
-      });
-    });
-  return (
-    <Card title={t("start")}>
-      <Text label={t("cwd")} hint={folderWait(cwd)} value={cwd} onInput={setCwd} />
-      {recent.length > 0 && (
-        <Choices
-          label={t("recent")}
-          value={recent.includes(cwd) ? cwd : undefined}
-          choices={recent.map((r) => ({ value: r, label: r }))}
-          onChange={setCwd}
-        />
-      )}
-      <Text label={t("override")} hint={t("overrideHint")} value={override} onInput={setOverride} />
-      {terminals.data && (
-        <Choices
-          label={t("terminal")}
-          value={shownTerminal}
-          choices={terminals.data.terminals.map((x) => ({ value: x.id, label: x.label }))}
-          onChange={setTerminal}
-        />
-      )}
-      {terminals.error && <Notice tone="warn">{launcherProblem(terminals.error)}</Notice>}
-      {action.error && <Notice tone="danger">{launcherProblem(action.error)}</Notice>}
-      <Button variant="primary" onClick={start} disabled={action.busy || !props.available || !cwd.trim()}>
-        {t("launch")}
-      </Button>
-    </Card>
-  );
-}
-
 export function PiPage() {
   const { api } = useKit();
   const [where, setWhere] = useState<Where>("default");
   const [folder, setFolder] = useState("");
-  const [preview, setPreview] = useState<Preview>();
   const [model, setModel] = useState("");
   const [served, setServed] = useState<string[]>([]);
   const [secret, setSecret] = useState("");
   const [core, setCore] = useState<string>();
   const [notice, setNotice] = useState<string>();
-  const secrets = useLoad(() =>
-    reply<{ secrets: { id: string; label: string; client_key?: { client: string } }[] }>("vault_secrets"),
-  );
+  const secrets = useLoad(() => reply<{ secrets: Secret[] }>("vault_secrets"));
   // Keys the person entered, and client keys made for this tool; never another tool's client key.
-  const keys = (secrets.data?.secrets ?? []).filter((s) => !s.client_key || s.client_key.client === PACKAGE);
+  const keys = keysOf(PACKAGE, secrets.data);
   const listId = useId();
   useEffect(() => {
     connectionGet().then(
@@ -254,12 +172,15 @@ export function PiPage() {
     );
   }, []);
   const selection = () => selectionFor(where, folder);
+  const selected = JSON.stringify(selection());
+  const { preview, readFor } = usePreview<Preview>(selected);
   const read = useAction(() => {});
   const load = () =>
     read.run(async () => {
-      const r = await tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) });
+      const r = await readFor(selected, () =>
+        tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) }),
+      );
       if (r.body) {
-        setPreview(r.body);
         setModel(r.body.pi.model ?? "");
       }
       return r;
@@ -345,20 +266,14 @@ export function PiPage() {
             { value: "folder", label: t("fileFolder") },
             { value: "links", label: t("fileLinks") },
           ]}
-          onChange={(v: Where) => {
-            setWhere(v);
-            setPreview(undefined);
-          }}
+          onChange={setWhere}
         />
         {where !== "default" && (
           <Text
             label={t("folder")}
             hint={where === "links" ? t("linksHint") : t("folderHint")}
             value={folder}
-            onInput={(v) => {
-              setFolder(v);
-              setPreview(undefined);
-            }}
+            onInput={setFolder}
           />
         )}
         {read.error && !toolMissing(read.error, PACKAGE) && <Notice tone="danger">{read.error}</Notice>}
@@ -444,7 +359,7 @@ export function PiPage() {
                     onChange={setSecret}
                   />
                 ) : (
-                  <NoKeys />
+                  <NoKeys secrets={secrets} />
                 )}
                 {addKey.error && <Notice tone="danger">{addKey.error}</Notice>}
                 <Button
@@ -506,7 +421,12 @@ export function PiPage() {
           <Backups pkg={PACKAGE} pins={async () => preview.targets} disabled={busy} onChange={load} />
         </>
       )}
-      <StartCli available={!unavailable} />
+      <StartCli
+        available={!unavailable}
+        client={t("title")}
+        recipe={() => tool<Record<string, unknown>>("recipe", {})}
+        t={t}
+      />
     </div>
   );
 }

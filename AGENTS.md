@@ -27,6 +27,10 @@ protocol only together with its README (`next/protocol/README.md`).
 If `.private/AGENTS.md` exists, read it too: it holds the owner's private instructions and notes.
 Start with [`docs/map.md`](docs/map.md) to find the entry files, tests, fakes and handbook sections
 for common changes before searching the tree.
+`TestDocs` (`next/cmd/pluxy/docs_test.go`) reads the docs and fails when one names a `pluxy`
+command or flag, a `PLUXY_` variable, a relative link, a repo path or a quick-start command that
+does not exist, or when shipped code reads a `PLUXY_` variable no doc names. Change the doc, or the
+code if the doc is right; the test's allowlists may only shrink.
 Confirmed plans, decisions and major tradeoffs are written up in `docs/`: the new core's design
 in `docs/design.md`, and how the corpus holds it to the old core in `docs/corpus.md`.
 
@@ -41,7 +45,7 @@ pre-commit hook that checks the formatting of staged files.
 
 ### `next/`
 
-Go version comes from `next/go.mod` (currently `go 1.26.10`). Besides the standard library, the
+Go version comes from `next/go.mod` (currently `go 1.26.11`). Besides the standard library, the
 module depends on `github.com/coder/websocket` and `gopkg.in/yaml.v3`.
 
 ```bash
@@ -49,6 +53,8 @@ go build ./...
 go vet ./...
 CGO_ENABLED=1 go test -race -count=1 ./...   # -race needs cgo; includes e2e/ and the conformance kit
 gofmt -l .                                   # must print nothing
+go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...         # must print nothing; not a module dependency
+go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...         # needs network (vuln.go.dev)
 ```
 
 The `e2e` and conformance tests build `cmd/pluxy` and the extensions with `go build`, run them on
@@ -61,7 +67,7 @@ git. Build it before building or testing core, or the panel's e2e tests skip
 ```bash
 go generate ./internal/panel     # bun install and bun run build in ui/, writing internal/panel/dist
 cd ui && bun run check && bun run lint && bun run test   # type check, Biome, unit tests
-cd ui && bun run test:browser    # the browser test, headless Chromium (bunx playwright install chromium once)
+cd ui && bun run test:browser    # the browser test, headless Chromium (bunx playwright install chromium once); PLUXY_ALL_BROWSERS=1 also runs Firefox and WebKit, as CI does
 ```
 
 The desktop app in `next/app` (see `next/app/README.md`) builds the kit from `next/ui`, so run

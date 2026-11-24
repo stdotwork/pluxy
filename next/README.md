@@ -114,6 +114,19 @@ the providers you use from the bundled registry ([Packages](#packages)) or the p
 - `-bundled`: the index of the bundled packages (default `bundled/index.json` beside the program, when it exists); see [Packages](#packages).
 - `-listen-fd`: serve on the listening TCP socket inherited at this file descriptor instead of binding `listen` (which must still be set). A program that starts core, such as the desktop app in managed mode, binds the socket, hands it over and keeps its own copy, so no other program can take the port while core stops or after it exits.
 
+### Environment variables
+
+Core itself takes no runtime configuration from its environment: everything is set in `config.json`. The `pluxy` program reads these variables:
+
+| Variable | What it does | Default | Example |
+| --- | --- | --- | --- |
+| `PLUXY_URL` | Core's base URL for `pluxy` client subcommands; `--url` overrides it. | Read from `--config` (`config.json`) | `http://127.0.0.1:8400` |
+| `PLUXY_MANAGEMENT_KEY` | Management API key for `pluxy` client subcommands; `--key` overrides it. | Read from `--config` (`config.json`) | `<management-key>` |
+| `PLUXY_INIT_PORT` | Tests only: port written into the auto-generated config on a first start (`0` picks a free port); a non-port value stops core. | Unset (`8317`, or a free port if taken) | `0` |
+| `PLUXY_TEST_LOGIN_HOSTS` | Tests only: when set to `1`, core forwards it to extensions so account settings may point login, token and quota endpoints at a test server. | Unset | `1` |
+
+When core starts a provider extension, it passes `PLUXY_PROTOCOL_VERSIONS`, `PLUXY_SOCKET` and `PLUXY_EXTENSION_ID` to the extension process; see [next/protocol/README.md](protocol/README.md).
+
 A running core answers `curl http://127.0.0.1:8400/healthz` with `ok`.
 
 The web panel is at `http://127.0.0.1:8400/panel/`: core's status,
@@ -483,6 +496,13 @@ An account that is turned off or waits for a login is named when its own `models
 when it shares its extension with an account that serves it. The member holds codes and times,
 never the words of an upstream's reply. `routing.explain` `false` leaves out the `X-Pluxy-*` headers
 and the member, and keeps the trace ID.
+
+Core's log line for such an error says the same to the operator, after the error's own message:
+`model=gpt-5 tried=[work-codex(pluxy/codex): quota] left_out=[spare: exhausted until
+2026-11-09T17:00:00Z; old-key: banned]`. It names each account by its ID in the config, as the line's
+`account` and core's other log lines do (the client's member has the public ID), and the first 8
+accounts of each list, counting the rest (`+3 more`). It is written when `routing.explain` is
+`false` too, since the log is the operator's, not the client's.
 
 An upstream's error keeps the fields the client's format shares with the upstream's. A Messages
 client keeps `request_id` and the text `error_code` of `error.details` from a Messages upstream
@@ -3092,7 +3112,7 @@ Each file of the auth folder becomes an account added by login, with the file's 
 nor is a file larger than 1 MiB, nor anything but a `.json` file at the top of the folder.
 
 To add one file to a running core instead, send it to the management API's
-[`POST /accounts/import`](#accounts-added-by-login) (the panel's "Upload File" on Accounts): it
+[`POST /accounts/import`](#accounts-added-by-login) (the panel's "Upload file" on Accounts): it
 reads the file the same way and the account serves at once.
 
 Both cores renewing the same login signs one of them out: the provider replaces the refresh

@@ -20,10 +20,9 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "frametap:", err)
-		os.Exit(1)
-	}
+	// run returns only when it fails.
+	fmt.Fprintln(os.Stderr, "frametap:", run())
+	os.Exit(1)
 }
 
 func run() error {

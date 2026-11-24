@@ -32,7 +32,6 @@ import (
 	"os"
 	"runtime"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -455,30 +454,14 @@ func upstreamError(resp *http.Response, model string) *llm.Error {
 		if strings.Contains(e.ProviderCode, "quota") || strings.Contains(strings.ToLower(e.Message), "quota") {
 			e.Code = llm.CodeQuota
 		}
-		e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"), time.Now())
+		e.RetryAfterMS = sdk.RetryAfter(resp.Header.Get("Retry-After"), time.Now())
 	case s == http.StatusServiceUnavailable || s == 529:
 		e.Code, e.Scope = llm.CodeUnavailable, llm.ScopeEndpoint
-		e.RetryAfterMS = retryAfter(resp.Header.Get("Retry-After"), time.Now())
+		e.RetryAfterMS = sdk.RetryAfter(resp.Header.Get("Retry-After"), time.Now())
 	case s >= 500:
 		e.Code, e.Scope = llm.CodeUpstream, llm.ScopeEndpoint
 	default:
 		e.Code, e.Scope = llm.CodeInvalidRequest, llm.ScopeRequest
 	}
 	return e
-}
-
-// retryAfter reads a Retry-After header: delay seconds or an HTTP date.
-func retryAfter(v string, now time.Time) int64 {
-	if v == "" {
-		return 0
-	}
-	if secs, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil && secs >= 0 {
-		return secs * 1000
-	}
-	if t, err := http.ParseTime(v); err == nil {
-		if d := t.Sub(now); d > 0 {
-			return d.Milliseconds()
-		}
-	}
-	return 0
 }

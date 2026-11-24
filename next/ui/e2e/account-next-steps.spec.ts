@@ -11,7 +11,7 @@ test("Add Account with no provider says a provider comes first and links to Set 
   await signIn(page, core);
   await goTo(page, "Add Account");
   await expect(page.getByText("No running extension offers a sign-in method.")).toBeVisible();
-  await expect(page.getByText("A provider comes first")).toBeVisible();
+  await expect(page.getByText("Install an extension first")).toBeVisible();
   await page.getByRole("main").getByRole("link", { name: "Set up pluxy", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Set up pluxy" })).toBeVisible();
 });

@@ -36,10 +36,10 @@ for (const theme of ["default", "terminal"]) {
       await signIn(page, core);
       await goTo(page, "config", "Config Panel");
       await expect(
-        page.getByRole("region", { name: "Client API Keys (access.api-keys)", exact: true }),
+        page.getByRole("region", { name: "Client keys (access.api-keys)", exact: true }),
       ).toBeVisible();
       await page.getByRole("tab", { name: "Connectivity", exact: true }).click();
-      const clients = page.getByRole("region", { name: "Client API Keys (access.api-keys)", exact: true });
+      const clients = page.getByRole("region", { name: "Client keys (access.api-keys)", exact: true });
       await expect(clients.locator('[data-part="item"]')).toHaveCount(1);
       await expect(clients.getByRole("button", { name: "Copy", exact: true })).toHaveCount(0);
       await expect(clients.getByRole("button", { name: "Add", exact: true })).toHaveAttribute(
@@ -105,7 +105,7 @@ for (const theme of ["default", "terminal"]) {
       await signIn(page, core);
       await goTo(page, "config", "Config Panel");
       await page.getByRole("tab", { name: "Connectivity", exact: true }).click();
-      const management = page.getByRole("region", { name: "Management Key", exact: true });
+      const management = page.getByRole("region", { name: "Management key", exact: true });
       await management.getByRole("button", { name: "Rotate", exact: true }).click();
       const value = management.locator('[data-part="key-value"]');
       await expect(value).toBeVisible();
@@ -150,7 +150,7 @@ test.describe("review regressions", () => {
   test("search preserves notices, filters cards without false empty results, and avoids unrelated key reads", async ({
     page,
   }) => {
-    const clients = page.getByRole("region", { name: "Client API Keys (access.api-keys)", exact: true });
+    const clients = page.getByRole("region", { name: "Client keys (access.api-keys)", exact: true });
     await clients.getByRole("button", { name: "Add", exact: true }).click();
     const notice = clients.locator('[data-part="key-notice"]');
     const key = await notice.locator('[data-part="key-value"]').textContent();
@@ -191,12 +191,12 @@ test.describe("review regressions", () => {
       if (request.method() === "GET" && request.url().endsWith("/client-keys")) reads++;
     });
     await search.fill("retry");
-    await expect(page.getByRole("spinbutton", { name: "Request Retry Count", exact: true })).toBeVisible();
+    await expect(page.getByRole("spinbutton", { name: "Retry rounds", exact: true })).toBeVisible();
     expect(reads).toBe(0);
   });
 
   test("a second Add preserves both client-key notices", async ({ page }) => {
-    const clients = page.getByRole("region", { name: "Client API Keys (access.api-keys)", exact: true });
+    const clients = page.getByRole("region", { name: "Client keys (access.api-keys)", exact: true });
     const notices = clients.locator('[data-part="key-notice"]');
     await clients.getByRole("button", { name: "Add", exact: true }).click();
     await expect(notices).toHaveCount(1);
@@ -209,7 +209,7 @@ test.describe("review regressions", () => {
   });
 
   test("search alone preserves the Common notice", async ({ page }) => {
-    const clients = page.getByRole("region", { name: "Client API Keys (access.api-keys)", exact: true });
+    const clients = page.getByRole("region", { name: "Client keys (access.api-keys)", exact: true });
     await clients.getByRole("button", { name: "Add", exact: true }).click();
     const value = clients.locator('[data-part="key-value"]');
     await expect(value).toBeVisible();
@@ -235,7 +235,7 @@ test.describe("review regressions", () => {
       if (request.method() === "GET" && request.url().endsWith("/client-keys")) reads++;
     });
     await page.getByRole("searchbox").fill("retry");
-    await expect(page.getByRole("spinbutton", { name: "Request Retry Count", exact: true })).toBeVisible();
+    await expect(page.getByRole("spinbutton", { name: "Retry rounds", exact: true })).toBeVisible();
     expect(reads).toBe(0);
   });
 
@@ -282,7 +282,7 @@ test.describe("review regressions", () => {
     release();
     await page.getByRole("tab", { name: "Connectivity", exact: true }).click();
     const notice = page
-      .getByRole("region", { name: "Management Key", exact: true })
+      .getByRole("region", { name: "Management key", exact: true })
       .locator('[data-part="key-notice"]');
     await expect(notice).toBeVisible();
     expect((await notice.locator('[data-part="key-value"]').textContent()) === core.key).toBe(true);
@@ -303,7 +303,7 @@ test.describe("review regressions", () => {
   });
 
   test("a failed Delete reloads stale IDs", async ({ page }) => {
-    const clients = page.getByRole("region", { name: "Client API Keys (access.api-keys)", exact: true });
+    const clients = page.getByRole("region", { name: "Client keys (access.api-keys)", exact: true });
     await expect(clients.locator('[data-part="item"]')).toHaveCount(1);
     let reloads = 0;
     page.on("request", (request) => {

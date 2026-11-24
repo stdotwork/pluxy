@@ -8,7 +8,7 @@ test("quota shows when the subscription ends", async ({ page }) => {
   await signIn(page, core);
   await goTo(page, "Quota Management");
   const card = page.locator('[data-part="item"]').filter({ hasText: "quota-a" });
-  await card.getByRole("button", { name: "Refresh Quota", exact: true }).click();
+  await card.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(card.getByText(/^Subscription ends /)).toBeVisible();
   if (process.env.RENEWAL_SHOTS) {
     await card.screenshot({ path: `${process.env.RENEWAL_SHOTS}/default.png` });
@@ -60,11 +60,11 @@ test("provider errors stay on the card and an account whose provider reports no 
       }),
     });
   });
-  await a.getByRole("button", { name: "Refresh Quota", exact: true }).click();
+  await a.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(a.getByRole("alert")).toHaveText("The provider could not read this plan");
-  await expect(a.getByRole("button", { name: "Refresh Quota", exact: true })).toBeEnabled();
+  await expect(a.getByRole("button", { name: "Refresh", exact: true })).toBeEnabled();
   unsupported = true;
-  await a.getByRole("button", { name: "Refresh Quota", exact: true }).click();
+  await a.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(a).toHaveCount(1);
   await expect(a.getByText("This provider reports no quota for this account.")).toBeVisible();
   await expect(a.getByRole("alert")).toHaveCount(0);
@@ -80,29 +80,29 @@ test("quota is read on request and shows plan, limits and reset times", async ({
   await goTo(page, "Quota Management");
   const items = page.locator('[data-part="item"]');
   const a = items.filter({ hasText: "quota-a" });
-  await expect(a.getByRole("button", { name: "Refresh Quota", exact: true })).toBeVisible();
+  await expect(a.getByRole("button", { name: "Refresh", exact: true })).toBeVisible();
   expect(reads).toEqual([]);
-  await a.getByRole("button", { name: "Refresh Quota", exact: true }).click();
+  await a.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(a.getByText("Test plan", { exact: true })).toBeVisible();
   await expect(a.getByRole("meter", { name: "5-hour limit", exact: true })).toHaveAttribute(
     "aria-valuenow",
     "42",
   );
-  await expect(a.getByText("42%", { exact: true })).toBeVisible();
+  await expect(a.getByText("42% used", { exact: true })).toBeVisible();
   await expect(a.locator('time[datetime="2033-05-18T03:33:20.000Z"]')).toBeVisible();
   await expect(a.getByText(/resets in/)).toHaveCount(2);
   expect(reads).toHaveLength(1);
-  await page.getByRole("button", { name: "Refresh all credentials", exact: true }).click();
+  await page.getByRole("button", { name: "Refresh all", exact: true }).click();
   const b = items.filter({ hasText: "quota-b" });
   await expect(b.getByText("Test plan", { exact: true })).toBeVisible();
   await expect(b.locator('time[datetime="2033-01-22T09:46:40.000Z"]')).toBeVisible();
-  await expect(page.getByRole("button", { name: "Refresh all credentials" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Refresh all" })).toBeEnabled();
   const ids = await items.allTextContents();
   expect(ids.findIndex((text) => text.includes("quota-a"))).toBeLessThan(
     ids.findIndex((text) => text.includes("quota-b")),
   );
   await page.getByLabel("Sort", { exact: true }).selectOption("soonest");
-  // quota-b's five-hour window ends first, so Soonest recovery moves it ahead of quota-a.
+  // quota-b's five-hour window ends first, so Soonest reset moves it ahead of quota-a.
   await expect
     .poll(async () => {
       const shown = await items.allTextContents();
@@ -122,8 +122,8 @@ test("quota is read on request and shows plan, limits and reset times", async ({
       await page.locator('nav a[href="#/themes"]').click();
       await page.getByRole("radio", { name: new RegExp(`^${theme}`, "i") }).check();
       await page.locator('nav a[href="#/quota"]').click();
-      await page.getByRole("button", { name: "Refresh all credentials", exact: true }).click();
-      await expect(page.getByRole("button", { name: "Refresh all credentials" })).toBeEnabled();
+      await page.getByRole("button", { name: "Refresh all", exact: true }).click();
+      await expect(page.getByRole("button", { name: "Refresh all" })).toBeEnabled();
       await page.getByLabel("Search accounts", { exact: true }).fill("quota-");
       await expect(page.getByText("Test plan", { exact: true })).toHaveCount(2);
       await page.screenshot({ path: `${process.env.QUOTA_SHOTS}/${theme}.png`, fullPage: true });
@@ -138,12 +138,12 @@ test("manual resets show their count only for the account that reports them", as
   const items = page.locator('[data-part="item"]');
   const a = items.filter({ hasText: "quota-a" });
   const b = items.filter({ hasText: "quota-b" });
-  await a.getByRole("button", { name: "Refresh Quota", exact: true }).click();
+  await a.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(a.getByText("Test plan", { exact: true })).toBeVisible();
   const manual = a.getByText("Manual resets", { exact: true });
   await expect(manual).toBeVisible();
   await expect(manual.locator("xpath=following-sibling::dd")).toHaveText("3");
-  await b.getByRole("button", { name: "Refresh Quota", exact: true }).click();
+  await b.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(b.getByText("Test plan", { exact: true })).toBeVisible();
   await expect(b.getByText("Manual resets", { exact: true })).toHaveCount(0);
 });

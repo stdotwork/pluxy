@@ -234,3 +234,39 @@ func TestEncodeAudioDataURLCase(t *testing.T) {
 		t.Errorf("losses = %+v, want none", losses)
 	}
 }
+
+// An inline audio file part's media type is matched without regard to case, so mixed-case media
+// types produce the same input_audio format token as their lowercase forms.
+func TestEncodeAudioMediaTypeCase(t *testing.T) {
+	encode := func(fileData string) string {
+		t.Helper()
+		req, err := ParseRequest([]byte(`{"model":"m","input":[{"type":"message","role":"user","content":[
+			{"type":"input_text","text":"transcribe"},
+			{"type":"input_file","file_data":"` + fileData + `"}]}]}`))
+		if err != nil {
+			t.Fatalf("ParseRequest(%q): %v", fileData, err)
+		}
+		body, losses, err := EncodeRequest(req)
+		if err != nil {
+			t.Fatalf("EncodeRequest(%q): %v", fileData, err)
+		}
+		if len(losses) != 0 {
+			t.Fatalf("EncodeRequest(%q): losses = %+v, want none", fileData, losses)
+		}
+		return string(body)
+	}
+	for _, c := range []struct {
+		lower string
+		mixed string
+	}{
+		{"data:audio/wav;base64,SUQzBA==", "data:AUDIO/WAV;base64,SUQzBA=="},
+		{"data:audio/mpeg;base64,SUQzBA==", "data:Audio/MPEG;base64,SUQzBA=="},
+		{"data:audio/ogg;base64,SUQzBA==", "DATA:AUDIO/OGG;BASE64,SUQzBA=="},
+	} {
+		want := encode(c.lower)
+		got := encode(c.mixed)
+		if got != want {
+			t.Errorf("file_data %q:\n got  %s\n want %s", c.mixed, got, want)
+		}
+	}
+}

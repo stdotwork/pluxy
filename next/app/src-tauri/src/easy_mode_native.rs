@@ -276,7 +276,7 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
                 js(
                     main,
                     &format!(
-                        "const b = [...({}?.querySelectorAll('button') ?? [])].find((b) => b.textContent.trim() === 'Next: Configure Agent'); return b ? !b.disabled : null;",
+                        "const b = [...({}?.querySelectorAll('button') ?? [])].find((b) => b.textContent.trim() === 'Next: connect an agent'); return b ? !b.disabled : null;",
                         within(sources)
                     ),
                 )
@@ -299,7 +299,7 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
             fill(main, step1, "API key", &s(&e["api_key"]))?;
             click(main, step1, "Add account")?;
             wait_for("the sign-in to succeed", || {
-                text(main, step1).filter(|t| t.contains("Authentication successful!"))
+                text(main, step1).filter(|t| t.contains("Signed in."))
             })?;
             let listed = accounts(main)?;
             require(
@@ -314,7 +314,7 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
                 next_enabled() == Some(json!(true)),
                 "Next stays disabled after the sign-in",
             )?;
-            click(main, sources, "Next: Configure Agent")?;
+            click(main, sources, "Next: connect an agent")?;
             until(
                 main,
                 "Connect an agent",
@@ -430,15 +430,15 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
             )?;
             choose(main, page, "file")?;
             fill(main, page, "File", &txt(&settings))?;
-            click(main, page, "Read settings")?;
+            click(main, page, "Refresh")?;
             wait_for("the page to read the file", || {
-                text(main, &format!("{page} dl.facts dd")).filter(|t| t == "Not Configured")
+                text(main, &format!("{page} dl.facts dd")).filter(|t| t == "Not configured")
             })
             .map_err(|e| format!("{e}: {:?}", text(main, page)))?;
             choose(main, page, c.secret)?;
             let needles = [PACKAGE, "apply", &txt(&settings), LABEL];
             // Cancelled: the file stays as it was.
-            click(main, page, "Connect in One Click")?;
+            click(main, page, "Apply")?;
             confirmation(c, &needles)?;
             std::thread::sleep(SETTLE);
             press("alt+c")?;
@@ -446,7 +446,7 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
                 js(
                     main,
                     &format!(
-                        "return [...({}?.querySelectorAll('button') ?? [])].some((b) => b.textContent.trim() === 'Connect in One Click' && !b.disabled);",
+                        "return [...({}?.querySelectorAll('button') ?? [])].some((b) => b.textContent.trim() === 'Apply' && !b.disabled);",
                         within(page)
                     ),
                 )
@@ -459,7 +459,7 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
             )?;
             // Confirmed: core's address, the key and the default mapping; the person's own value
             // stays.
-            click(main, page, "Connect in One Click")?;
+            click(main, page, "Apply")?;
             confirmation(c, &needles)?;
             std::thread::sleep(SETTLE);
             press("alt+o")?;
@@ -498,7 +498,7 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
                     let _ = std::fs::remove_file(records.join(format!("{name}.{x}")));
                 }
             }
-            fill(main, page, "Working directory", &txt(&work))?;
+            fill(main, page, "Working folder", &txt(&work))?;
             click(main, page, "Start Claude Code")?;
             confirmation(
                 c,

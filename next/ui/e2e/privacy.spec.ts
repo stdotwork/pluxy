@@ -157,13 +157,13 @@ test("privacy mode masks identities, survives a reload, reaches extension pages 
   await page.goto(`${core.base}/panel/#/logs`);
   const coreLog = page.getByRole("region", { name: "Core logs", exact: true });
   await expect(coreLog).toContainText(`account "${EMAIL_MASKED}" added`);
-  const errors = page.getByRole("region", { name: "Error Request Logs", exact: true });
+  const errors = page.getByRole("region", { name: "Error request logs", exact: true });
   await errors
     .locator('[data-part="item"]')
     .filter({ hasText: trace })
     .getByRole("button", { name: "Open", exact: true })
     .click();
-  const detail = page.getByRole("complementary", { name: "Details: Error Request Log Details" });
+  const detail = page.getByRole("complementary", { name: "Details: Error request log details" });
   await expect(detail).toContainText(`ask ${EMAIL_MASKED} about ${AMP_MASKED}`);
   await expectMasked(page);
 
@@ -203,7 +203,7 @@ test("privacy mode masks identities, survives a reload, reaches extension pages 
   const keys = (await core.mgmt<{ keys: ClientKey[] }>("GET", "/client-keys")).body.keys;
   await goTo(page, "Config Panel");
   await page.getByRole("tab", { name: "Connectivity", exact: true }).click();
-  const clients = page.getByRole("region", { name: "Client API Keys (access.api-keys)", exact: true });
+  const clients = page.getByRole("region", { name: "Client keys (access.api-keys)", exact: true });
   for (const k of keys) await expect(clients.getByText(k.masked, { exact: true })).toBeVisible();
 
   // An extension page is told, through the theme event, and its page library marks its root.

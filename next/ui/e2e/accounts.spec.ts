@@ -67,29 +67,33 @@ for (const theme of ["default", "terminal"]) {
           ).length,
       )
       .toBe(30);
-    await page.getByLabel("Status Filter", { exact: true }).selectOption("disabled");
+    await page.getByLabel("Status filter", { exact: true }).selectOption("disabled");
     await expect(page.getByText("Page 1 / 3 · 30 accounts", { exact: true })).toBeVisible();
     await expect(page.locator('[data-part="item"]')).toHaveCount(10);
     await page.getByRole("button", { name: "Enable", exact: true }).click();
-    await expect(page.getByText("No results", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("No matching accounts. Clear or change your filters.", { exact: true }),
+    ).toBeVisible();
     expect(
       (await core.mgmt<{ accounts: Account[] }>("GET", "/accounts")).body.accounts
         .filter((a) => a.id.startsWith("bulk-"))
         .every((a) => !a.disabled),
     ).toBe(true);
-    await page.getByLabel("Status Filter", { exact: true }).selectOption("all");
-    await page.getByRole("button", { name: "Delete", exact: true }).click();
+    await page.getByLabel("Status filter", { exact: true }).selectOption("all");
+    await page.getByRole("button", { name: "Remove", exact: true }).click();
     const dialog = page.getByRole("dialog");
-    await expect(dialog).toContainText("Are you sure you want to delete 30 accounts?");
-    await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(dialog).toContainText("Are you sure you want to remove 30 accounts?");
+    await dialog.getByRole("button", { name: "Remove", exact: true }).click();
     await expect
       .poll(async () =>
         (await core.mgmt<{ accounts: Account[] }>("GET", "/accounts")).body.accounts.map((a) => a.id).sort(),
       )
       .toEqual(["alpha-1", "alpha-2", "local-1"]);
-    await expect(page.getByText("No results", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("No matching accounts. Clear or change your filters.", { exact: true }),
+    ).toBeVisible();
     await page.getByPlaceholder(searchText).fill("");
-    await page.getByLabel("Status Filter", { exact: true }).selectOption("all");
+    await page.getByLabel("Status filter", { exact: true }).selectOption("all");
     await page.getByRole("button", { name: "Select filtered", exact: true }).click();
     await page.getByRole("button", { name: "Disable", exact: true }).click();
     await expect(page.getByRole("status")).toContainText("Skipped 3 config accounts");

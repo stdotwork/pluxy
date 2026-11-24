@@ -260,11 +260,11 @@ func writeImageFile(writer *multipart.Writer, field, filename, mediaType string,
 }
 
 func parseDataURL(s string) (mediaType string, data []byte, ok bool) {
-	rest, found := strings.CutPrefix(s, "data:")
-	if !found {
+	const scheme = "data:"
+	if len(s) < len(scheme) || !strings.EqualFold(s[:len(scheme)], scheme) {
 		return "", nil, false
 	}
-	meta, payload, found := strings.Cut(rest, ",")
+	meta, payload, found := strings.Cut(s[len(scheme):], ",")
 	if !found {
 		return "", nil, false
 	}

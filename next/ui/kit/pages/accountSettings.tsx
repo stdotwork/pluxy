@@ -27,13 +27,13 @@ const t = strings("accountSettings", {
   proxyUrl: "Proxy URL (proxy_url)",
   proxyUrlPlaceholder: "socks5://username:password@proxy_ip:port/",
   proxyUrlHint:
-    "Empty uses the proxy set for all accounts; direct or none goes without a proxy. A user name and password show as redacted: leave the value as it is to keep them, or type the whole URL to change them.",
+    "Leave empty to use the global proxy, or enter direct or none. Redacted credentials stay unchanged unless you enter a new URL.",
   priority: "Priority (priority)",
   priorityPlaceholder: "e.g. 10 or -1",
   priorityHint: "Integers only. Larger value means higher priority.",
   weight: "Scheduling weight (weight)",
   weightHint:
-    "Defaults to 1. Values at or below 0 exclude this credential from weighted scheduling. It takes effect only with weighted round robin.",
+    "Defaults to 1. Takes effect only with weighted round-robin; 0 or less excludes this credential.",
   disableCooling: "Disable exponential cooldown (disable_cooling)",
   disableCoolingHint:
     "Skip failure cooldown and exponential backoff only for this credential; other credentials are unaffected.",
@@ -56,10 +56,10 @@ const t = strings("accountSettings", {
   removeModel: "Remove model",
   excluded: "Excluded models (excluded_models)",
   excludedHint: "One rule per line. * matches any text, as in gpt-* or *-preview; case does not count.",
-  headers: "Custom Headers (headers)",
+  headers: "Custom headers (headers)",
   headersPlaceholder: '{\n  "Header-Name": "value"\n}',
   headersHint:
-    'Enter custom HTTP headers as a JSON object, e.g., {"X-My-Header": "value"}. A secret value, such as an Authorization header\'s, shows as a pluxy-redacted- placeholder that keeps it; type a new value to replace it. Empty removes all headers.',
+    "JSON object of HTTP headers. Secrets show as redacted placeholders; type a new value to replace them, or leave empty to clear.",
   aliases: "Account model aliases",
   aliasName: "Alias",
   aliasDisplay: "Display name",
@@ -68,7 +68,7 @@ const t = strings("accountSettings", {
   removeAlias: "Remove alias",
   settings: "Settings (settings)",
   settingsHint:
-    "The extension's settings for this account, as JSON. A secret shows as a pluxy-redacted- placeholder that keeps it; type a new value to replace it.",
+    "Extension settings as JSON. Secrets show as redacted placeholders; type a new value to replace them.",
   on: "On",
   off: "Off",
   cancel: "Cancel",
@@ -81,7 +81,7 @@ const t = strings("accountSettings", {
   invalid_priority: "Priority must be an integer.",
   invalid_weight: "Weight must be an integer.",
   invalid_maxConcurrency: "Max concurrency must be a non-negative integer.",
-  invalid_retryCount: "Enter a non-negative safe integer, or select Inherit.",
+  invalid_retryCount: "Enter 0 or a positive whole number, or select Inherit.",
   invalid_models: "Enter a model name for each model with an alias.",
   invalid_aliases: "Enter a non-empty model name and alias for each new or edited row.",
   invalid_headersJson: "Custom headers must be valid JSON.",
@@ -89,7 +89,7 @@ const t = strings("accountSettings", {
   invalid_headersValue: "Each custom header value must be a string.",
   invalid_settings: "Settings must be a JSON object.",
   invalid_settingsNumber:
-    "The settings hold a number the browser cannot keep exactly, so they cannot be changed here; change them through the management API.",
+    "These settings contain a number the browser cannot edit accurately. Change them through the management API.",
 });
 
 const pairs = (rows: { name: string; alias?: string }[] | undefined) =>

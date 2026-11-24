@@ -3,55 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"net"
 	"net/http"
-	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/stdotwork/pluxy/next/extensions/gemini/geminitest"
 	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/sdk/sdktest"
 )
-
-func wantError(t *testing.T, err error, code string, retryable bool) {
-	t.Helper()
-	var e *llm.Error
-	if !errors.As(err, &e) {
-		t.Fatalf("got %v, want an *llm.Error", err)
-	}
-	if e.Code != code || e.Retryable != retryable {
-		t.Errorf("got code %s retryable %v, want code %s retryable %v (%s)", e.Code, e.Retryable, code, retryable, e.Message)
-	}
-}
-
-// closedURL returns the address of a port nothing listens on: port 1 on loopback, which no test
-// server can be given, unlike a just-closed ephemeral port that the next httptest server may reuse.
-func closedURL(t *testing.T) string {
-	t.Helper()
-	const addr = "127.0.0.1:1"
-	if c, err := net.DialTimeout("tcp", addr, time.Second); err == nil {
-		c.Close()
-		t.Fatalf("something listens on %s; the connection-refused cases need it closed", addr)
-	}
-	return "http://" + addr
-}
-
-// hangUp closes the connection of the request being answered without a reply.
-func hangUp(w http.ResponseWriter) {
-	c, _, err := w.(http.Hijacker).Hijack()
-	if err == nil {
-		c.Close()
-	}
-}
-
-// loginServer is a server whose every reply is answer.
-func loginServer(t *testing.T, answer func(w http.ResponseWriter)) string {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { answer(w) }))
-	t.Cleanup(srv.Close)
-	return srv.URL
-}
 
 func status(code int, body string) func(w http.ResponseWriter) {
 	return func(w http.ResponseWriter) {
@@ -70,16 +28,16 @@ func TestAPIKeyLoginRetryOnlyWhenNotSent(t *testing.T) {
 		code      string
 		retryable bool
 	}{
-		{"connection refused", closedURL(t), llm.CodeUnavailable, true},
-		{"hung up after the request", loginServer(t, hangUp), llm.CodeUnavailable, false},
-		{"500", loginServer(t, status(500, `{}`)), llm.CodeUpstream, false},
-		{"503", loginServer(t, status(503, `{}`)), llm.CodeUnavailable, false},
-		{"429", loginServer(t, status(429, `{}`)), llm.CodeRateLimit, true},
-		{"key refused", loginServer(t, status(400, `{"error":{"status":"INVALID_ARGUMENT","message":"API key not valid"}}`)), llm.CodeAuth, false},
+		{"connection refused", sdktest.ClosedURL(t), llm.CodeUnavailable, true},
+		{"hung up after the request", sdktest.LoginServer(t, sdktest.HangUp), llm.CodeUnavailable, false},
+		{"500", sdktest.LoginServer(t, status(500, `{}`)), llm.CodeUpstream, false},
+		{"503", sdktest.LoginServer(t, status(503, `{}`)), llm.CodeUnavailable, false},
+		{"429", sdktest.LoginServer(t, status(429, `{}`)), llm.CodeRateLimit, true},
+		{"key refused", sdktest.LoginServer(t, status(400, `{"error":{"status":"INVALID_ARGUMENT","message":"API key not valid"}}`)), llm.CodeAuth, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := apiKeyLogin(context.Background(), settings{BaseURL: c.url}, "key")
-			wantError(t, err, c.code, c.retryable)
+			sdktest.WantError(t, err, c.code, c.retryable)
 		})
 	}
 }
@@ -93,11 +51,11 @@ func TestServiceAccountLoginRetryOnlyWhenNotSent(t *testing.T) {
 		code      string
 		retryable bool
 	}{
-		{"connection refused", closedURL(t), llm.CodeUnavailable, true},
-		{"hung up after the request", loginServer(t, hangUp), llm.CodeUnavailable, false},
-		{"503", loginServer(t, status(503, `{}`)), llm.CodeUnavailable, false},
-		{"429", loginServer(t, status(429, `{}`)), llm.CodeUnavailable, true},
-		{"key refused", loginServer(t, status(400, `{"error":"invalid_grant"}`)), llm.CodeAuth, false},
+		{"connection refused", sdktest.ClosedURL(t), llm.CodeUnavailable, true},
+		{"hung up after the request", sdktest.LoginServer(t, sdktest.HangUp), llm.CodeUnavailable, false},
+		{"503", sdktest.LoginServer(t, status(503, `{}`)), llm.CodeUnavailable, false},
+		{"429", sdktest.LoginServer(t, status(429, `{}`)), llm.CodeUnavailable, true},
+		{"key refused", sdktest.LoginServer(t, status(400, `{"error":"invalid_grant"}`)), llm.CodeAuth, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			tokens = &tokenCache{entries: map[string]*tokenEntry{}}
@@ -107,7 +65,7 @@ func TestServiceAccountLoginRetryOnlyWhenNotSent(t *testing.T) {
 			key, _ := json.Marshal(raw)
 			set := settings{Vertex: &vertexSettings{Project: "p"}}
 			_, err := serviceAccountLogin(context.Background(), set, string(key))
-			wantError(t, err, c.code, c.retryable)
+			sdktest.WantError(t, err, c.code, c.retryable)
 		})
 	}
 }
@@ -116,8 +74,8 @@ func TestServiceAccountLoginRetryOnlyWhenNotSent(t *testing.T) {
 // fetch the token is retryable on another account whether or not the token request was sent.
 func TestModelRequestTokenFetchStaysRetryable(t *testing.T) {
 	for name, url := range map[string]string{
-		"hung up": loginServer(t, hangUp),
-		"503":     loginServer(t, status(503, `{}`)),
+		"hung up": sdktest.LoginServer(t, sdktest.HangUp),
+		"503":     sdktest.LoginServer(t, status(503, `{}`)),
 	} {
 		t.Run(name, func(t *testing.T) {
 			var raw map[string]any
@@ -129,7 +87,7 @@ func TestModelRequestTokenFetchStaysRetryable(t *testing.T) {
 				t.Fatal(err)
 			}
 			_, _, err = fetchToken(context.Background(), sa)
-			wantError(t, err, llm.CodeUnavailable, true)
+			sdktest.WantError(t, err, llm.CodeUnavailable, true)
 		})
 	}
 }

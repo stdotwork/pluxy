@@ -402,7 +402,7 @@ func loginFailure(status int, body []byte, h http.Header) *llm.Error {
 			terminal = true
 		}
 	}
-	wait := retryAfter(h.Get("Retry-After"), time.Now())
+	wait := sdk.RetryAfter(h.Get("Retry-After"), time.Now())
 	switch {
 	case terminal || status == http.StatusUnauthorized || status == http.StatusForbidden:
 		return &llm.Error{Code: llm.CodeAuth, Message: msg + "; log in again", Status: status, ProviderCode: code, Scope: llm.ScopeCredential}

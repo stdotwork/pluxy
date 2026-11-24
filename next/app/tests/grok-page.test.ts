@@ -1,26 +1,7 @@
-// The Grok Build page's form logic (src/grokForm.ts): the keys it offers from the vault, the
-// catalog it starts from, and when Apply is held back.
+// The Grok Build page's form logic (src/grokForm.ts): the catalog it starts
+// from, and when Apply is held back.
 import { describe, expect, test } from "bun:test";
-import { blocked, keysOf, MODELS_MAX, modelOf, type Row, rowsOf, withServed } from "../src/grokForm";
-
-describe("keys", () => {
-  test("lists plain secrets and this package's client keys from vault_secrets' answer", () => {
-    const body = {
-      secrets: [
-        { id: "a", label: "Plain" },
-        { id: "b", label: "Ours", client_key: { client: "pluxy/grok-setup" } },
-        { id: "c", label: "Claude Code's", client_key: { client: "pluxy/claude-code" } },
-      ],
-    };
-    expect(keysOf(body).map((s) => s.id)).toEqual(["a", "b"]);
-  });
-
-  test("lists nothing while the answer is missing or empty", () => {
-    expect(keysOf(undefined)).toEqual([]);
-    expect(keysOf({ secrets: [] })).toEqual([]);
-    expect(keysOf({})).toEqual([]);
-  });
-});
+import { blocked, MODELS_MAX, modelOf, type Row, rowsOf, withServed } from "../src/grokForm";
 
 describe("catalog", () => {
   test("starts from pluxy's entries, and from none for a refused file", () => {

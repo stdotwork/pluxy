@@ -19,7 +19,7 @@ const t = strings("clients", {
   listed: { one: "{count} client in the navigation", other: "{count} clients in the navigation" },
   search: "Search clients",
   detected: "Client detected",
-  noResults: "No matching clients found",
+  noResults: "No matching clients. Clear or change your search.",
   selected: { one: "{count} client selected", other: "{count} clients selected" },
   minimum: "Keep at least one client visible.",
   automatic: "Restore automatic display",
