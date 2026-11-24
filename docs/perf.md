@@ -17,13 +17,13 @@ go run ./cmd/pluxy-bench -profile DIR    # CPU and heap profiles of the selected
 go run ./cmd/pluxy-bench -requests 500 -profile DIR -scenarios stream-translate  # more samples to read
 ```
 
-`go run ./cmd/pluxy-bench -h` lists the other flags: the mock's timings, the request body size,
-a subset of scenarios, `-requests` (the request count of the scenarios that send a fixed number:
-all but `agents` and `throughput`; refused with `-check`), and `-proxy-url` to measure another proxy that is already running against
-the same mock. The memory and CPU figures read `/proc`, so they are Linux only; elsewhere the
-report says they were not measured. On Linux, `-check` fails its memory gates when the footprint
-was not sampled (`-proxy-url` without `-proxy-pid`, say), and its chunk delay gates when no chunk
-was read, rather than passing on nothing.
+`go run ./cmd/pluxy-bench -h` lists the other flags: the mock's timings, the request body size, a
+subset of scenarios, `-requests` (the request count of the scenarios that send a fixed number: all
+but `agents` and `throughput`; refused with `-check`), and `-proxy-url` to measure another proxy
+that is already running against the same mock. The memory and CPU figures read `/proc`, so they are
+Linux only; elsewhere the report says they were not measured. On Linux, `-check` fails its memory
+gates when the footprint was not sampled (`-proxy-url` without `-proxy-pid`, say), and its chunk
+delay gates when no chunk was read, rather than passing on nothing.
 
 Run it on a machine with nothing else busy. The report's header gives the commit, the CPU, and
 the load average before and after, so a reader can tell when a machine was not idle.
@@ -109,14 +109,14 @@ medians are 0.44 to 0.52 ms.
 | Start, to the first request answered | 43 ms (33 to 72) |
 | Binary sizes as released (`-trimpath -ldflags=-s -w`) | `pluxy` 12.3 MiB, `openai-compatible` 8.2 MiB |
 
-Memory after a load is somewhat higher than it was before the latest fixes: idle 10 s after the
-load was 70.8 MB (66.9 to 71.8) on `main` at `9cde69a21`, measured with the same flags on the same machine,
-and 75.1 MB (73.0 to 81.4) at `1babf6deb`. The two ranges do not overlap, and the cause has not
-been separated. CLIProxyAPI's is 93.5 MB (92.2 to 97.4). Memory before any request did not change over
-that span (50.3 and 50.8 MB), and neither did the peak under `agents` (119 MB, 115 to 122, at
-`9cde69a21`). The earlier baseline, at `35ad0d646`, had 42.3 MB before any request and 64.4 MB after
-the load, with release binaries of 10.5 and 6.8 MiB. Why memory and binaries are larger than that
-has not been looked into.
+Memory after a load is somewhat higher than it was before the latest fixes: idle 10 s after the load
+was 70.8 MB (66.9 to 71.8) on `main` at `9cde69a21`, measured with the same flags on the same
+machine, and 75.1 MB (73.0 to 81.4) at `1babf6deb`. The two ranges do not overlap, and the cause has
+not been separated. CLIProxyAPI's is 93.5 MB (92.2 to 97.4). Memory before any request did not
+change over that span (50.3 and 50.8 MB), and neither did the peak under `agents` (119 MB, 115 to
+122, at `9cde69a21`). The earlier baseline, at `35ad0d646`, had 42.3 MB before any request and 64.4
+MB after the load, with release binaries of 10.5 and 6.8 MiB. Why memory and binaries are larger
+than that has not been looked into.
 
 On GitHub's ubuntu-latest runners (4 vCPU), `-check` measured an added TTFT of about 1.2 ms in
 `stream-pass` and 1.8 ms in `stream-translate`, 50 MB idle and about 0.8 MB per open stream
@@ -149,10 +149,11 @@ with the side that goes first alternating; ranges in brackets, lowest to highest
 | Peak resident memory, `agents` | 117 MB (117 to 121) | 213 MB (195 to 215) | pluxy lower |
 | Binary size as released | 12.3 MiB core and 8.2 MiB extension | 74.9 MiB | |
 
-CLIProxyAPI is one process; pluxy's requests also cross from core to the extension and back. In
-no scenario is pluxy's added time measurably above CLIProxyAPI's. Where the ranges of the five
-rounds overlap, the table reports no measurable difference rather than reading the medians. Where they do not overlap, pluxy adds less time: first token in
-`stream-pass`, `agents` and `large-body` (800 KB: about a fifth of CLIProxyAPI's added time).
+CLIProxyAPI is one process; pluxy's requests also cross from core to the extension and back. In no
+scenario is pluxy's added time measurably above CLIProxyAPI's. Where the ranges of the five rounds
+overlap, the table reports no measurable difference rather than reading the medians. Where they do
+not overlap, pluxy adds less time: first token in `stream-pass`, `agents` and `large-body` (800 KB:
+about a fifth of CLIProxyAPI's added time).
 
 The two translated scenarios were also run as 12 paired rounds, pluxy and CLIProxyAPI one after
 the other in each round (the machine was 2 to 29% busy), which separates a difference of a
@@ -175,15 +176,13 @@ and 0 fidelity failures, as did the 5 above.
 
 What is not better, or not clear:
 
-- **`agents` total p99.** pluxy's median is higher (33 ms against 27 ms) and the ranges overlap
-  (24 to 55 against 12 to 48), so the five rounds do not show which is higher. The CLIProxyAPI
-  round that ran at 90% busy holds its highest value (48 ms); without it CLIProxyAPI's range is 12
-  to 30 ms (median 23 ms), which still overlaps pluxy's. This is the one row of the table above where
-  pluxy's median is the higher one.
-- **Translated TTFT** is level, not lower: 3.0 against 3.1 ms in the five rounds, +0.09 ms in the
-  paired rounds.
-- **Memory after a load** is higher than before the latest fixes (see the Baseline), though still
-  below CLIProxyAPI's.
+- **`agents` total p99.** pluxy's median is higher (33 ms against 27 ms) and the ranges overlap (24
+  to 55 against 12 to 48), so the five rounds do not show which is higher. The CLIProxyAPI round
+  that ran at 90% busy holds its highest value (48 ms); without it CLIProxyAPI's range is 12 to 30
+  ms (median 23 ms), which still overlaps pluxy's. This is the one row of the table above where
+  pluxy's median is the higher one. - **Translated TTFT** is level, not lower: 3.0 against 3.1 ms in
+  the five rounds, +0.09 ms in the paired rounds. - **Memory after a load** is higher than before
+  the latest fixes (see the Baseline), though still below CLIProxyAPI's.
 
 pluxy uses less memory: 13% less idle before any request, 20% less 10 s after the load and 45%
 less at the peak under `agents` (medians).
@@ -218,10 +217,9 @@ The figures in that list are from each change's own before-and-after runs, not f
 above.
 
 CPU profiles of core and the extension at `1babf6deb` show what limits it now (`-profile`, one
-profile of each, taken on the same machine under the lock the other benchmarks use). Under
-`stream-translate` (2,000 requests of 10 chunks, the mock answering within 1 ms, so the mock's own
-delays are out of the way) core used about 1.7 ms of CPU a request and the extension 2.1 ms. Shares of
-each process's CPU time:
+profile of each, on the same machine). Under `stream-translate` (2,000 requests of 10 chunks, the
+mock answering within 1 ms, so the mock's own delays are out of the way) core used about 1.7 ms of
+CPU a request and the extension 2.1 ms. Shares of each process's CPU time:
 
 | | Core | Extension |
 | --- | --- | --- |
@@ -235,11 +233,11 @@ each process's CPU time:
 | Building the Chat body | | 9% |
 
 Shares overlap: a system call made while sending a chunk is counted in both rows. Core and the
-extension each parse the body once, and no frame step costs more than that parse. Under `agents` (80 streams, 23 s) each
-process used about 0.11 of a core, and most of it is per chunk: system calls 24% of core and 25%
-of the extension, thread wake-ups 12% and 15%, and in core reading each reply frame (32%) and
-sending each chunk to the client (15%). The parse is 6% of core and 4% of the extension there.
-What is left is the work of forwarding every chunk as it arrives, in two processes.
+extension each parse the body once, and no frame step costs more than that parse. Under `agents` (80
+streams, 23 s) each process used about 0.11 of a core, and most of it is per chunk: system calls 24%
+of core and 25% of the extension, thread wake-ups 12% and 15%, and in core reading each reply frame
+(32%) and sending each chunk to the client (15%). The parse is 6% of core and 4% of the extension
+there. What is left is the work of forwarding every chunk as it arrives, in two processes.
 
 ### The request goes to the extension once
 
