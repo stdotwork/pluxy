@@ -47,6 +47,8 @@ async function measure(page: Page): Promise<{ controls: number; small: string[] 
       if (el.closest(".skip-link") || (el as HTMLButtonElement).disabled) continue;
       const style = getComputedStyle(el);
       if (style.visibility === "hidden" || style.display === "none") continue;
+      // What a closed <details> holds is not shown, though it still has a box.
+      if (el.tagName !== "SUMMARY" && el.closest("details:not([open])")) continue;
       let rect = el.getBoundingClientRect();
       if (rect.width === 0 || rect.height === 0) continue;
       // A link inside a sentence is exempt (WCAG 2.5.8, inline): its parent holds other text.

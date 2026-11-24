@@ -250,14 +250,16 @@
   button.item-name,
   a:not([class]),
   label.check,
-  label.hit {
+  label.hit,
+  summary {
     position: relative;
   }
 
   button.item-name::after,
   a:not([class])::after,
   label.check::after,
-  label.hit::after {
+  label.hit::after,
+  summary::after {
     content: "";
     position: absolute;
     top: 50%;
