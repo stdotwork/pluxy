@@ -9,7 +9,7 @@
 # "Run it in a container" in README.md.
 
 ARG BUN_VERSION=1.4.3
-ARG GO_VERSION=1.26.10
+ARG GO_VERSION=1.26.11
 ARG ALPINE_VERSION=3.23
 
 # The web panel core embeds. It does not depend on the platform, so it is built once, on the

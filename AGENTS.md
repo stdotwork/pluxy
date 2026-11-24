@@ -41,7 +41,7 @@ pre-commit hook that checks the formatting of staged files.
 
 ### `next/`
 
-Go version comes from `next/go.mod` (currently `go 1.26.10`). Besides the standard library, the
+Go version comes from `next/go.mod` (currently `go 1.26.11`). Besides the standard library, the
 module depends on `github.com/coder/websocket` and `gopkg.in/yaml.v3`.
 
 ```bash
