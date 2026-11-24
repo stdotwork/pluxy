@@ -347,9 +347,9 @@ func loginFailure(status int, body []byte, h http.Header) *llm.Error {
 	case code == "invalid_grant" || code == "invalid_client" || status == http.StatusUnauthorized || status == http.StatusForbidden:
 		return &llm.Error{Code: llm.CodeAuth, Message: msg + "; log in again", Status: status, ProviderCode: code, Scope: llm.ScopeCredential}
 	case status == http.StatusTooManyRequests:
-		return &llm.Error{Code: llm.CodeRateLimit, Message: msg, Status: status, ProviderCode: code, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: retryAfter(h.Get("Retry-After"), time.Now())}
+		return &llm.Error{Code: llm.CodeRateLimit, Message: msg, Status: status, ProviderCode: code, Retryable: true, Scope: llm.ScopeCredential, RetryAfterMS: sdk.RetryAfter(h.Get("Retry-After"), time.Now())}
 	case status >= 500:
-		return &llm.Error{Code: llm.CodeUnavailable, Message: msg, Status: status, Scope: llm.ScopeEndpoint, RetryAfterMS: retryAfter(h.Get("Retry-After"), time.Now())}
+		return &llm.Error{Code: llm.CodeUnavailable, Message: msg, Status: status, Scope: llm.ScopeEndpoint, RetryAfterMS: sdk.RetryAfter(h.Get("Retry-After"), time.Now())}
 	}
 	return &llm.Error{Code: llm.CodeUpstream, Message: msg, Status: status, ProviderCode: code, Scope: llm.ScopeEndpoint}
 }
