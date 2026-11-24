@@ -159,8 +159,9 @@ test("a working button keeps its label and width, shows a mark after a moment an
   await expect(button).toHaveText("Disable");
   expect(await button.evaluate((b) => getComputedStyle(b).opacity)).toBe("1");
   const working = await button.boundingBox();
-  expect(working?.width).toBe(before?.width);
-  expect(working?.height).toBe(before?.height);
+  // Within a hundredth of a pixel: the same box can differ in the last digits between two reads.
+  expect(working?.width).toBeCloseTo(before?.width ?? -1, 2);
+  expect(working?.height).toBeCloseTo(before?.height ?? -1, 2);
   const mark = await button.evaluate((b) => {
     const s = getComputedStyle(b, "::after");
     return { content: s.content, position: s.position, animation: s.animationName };
