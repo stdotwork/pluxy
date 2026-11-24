@@ -40,6 +40,7 @@ const t = strings("easyMode", {
     other: "{count} connected sources detected",
   },
   none: "No source connected yet. Sign in or add an API key first.",
+  loading: "Loading…",
   next: "Next: Configure Agent",
   back: "Previous",
   agentDescription:
@@ -153,7 +154,11 @@ function ConnectAgent(props: { agents: AgentPage[]; catalog?: DeviceCatalog; onC
       <Notice tone="warn">{t("fullAccess")}</Notice>
       <Card title={t("clients")}>
         {clients.length === 0 ? (
-          <Empty>{registries.loading ? "…" : t("noClients")}</Empty>
+          registries.loading ? (
+            <Empty>…</Empty>
+          ) : (
+            registries.data && <Empty>{t("noClients")}</Empty>
+          )
         ) : (
           <ul class="stack" data-part="easy-clients">
             {clients.map((c) => {
@@ -229,7 +234,13 @@ export function EasyModePage(props: { agents: AgentPage[]; catalog?: DeviceCatal
           <Card>
             <div class="actions" data-part="easy-sources">
               {accounts.error && <Notice tone="danger">{accounts.error}</Notice>}
-              <span>{count > 0 ? t("connected", { count }) : t("none")}</span>
+              <span>
+                {count > 0
+                  ? t("connected", { count })
+                  : accounts.data
+                    ? t("none")
+                    : accounts.phase === "loading" && t("loading")}
+              </span>
               <Button variant="primary" disabled={count === 0} onClick={() => setStep(2)}>
                 {t("next")}
               </Button>

@@ -336,7 +336,7 @@ export function HermesPage() {
                 onChange={setSecret}
               />
             ) : (
-              <NoKeys />
+              <NoKeys secrets={secrets} />
             )}
             {addKey.error && <Notice tone="danger">{addKey.error}</Notice>}
             <Button

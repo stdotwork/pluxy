@@ -662,7 +662,7 @@ export function CodexPage() {
                 onChange={setSecret}
               />
             ) : (
-              <NoKeys />
+              <NoKeys secrets={secrets} />
             )}
             {secrets.error && <Notice tone="danger">{secrets.error}</Notice>}
             {addKey.error && <Notice tone="danger">{addKey.error}</Notice>}

@@ -422,7 +422,7 @@ export function OpenCodePage() {
                 onChange={setSecret}
               />
             ) : (
-              <NoKeys />
+              <NoKeys secrets={secrets} />
             )}
             {addKey.error && <Notice tone="danger">{addKey.error}</Notice>}
             <Button

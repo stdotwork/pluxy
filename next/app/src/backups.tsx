@@ -30,6 +30,7 @@ const t = strings("backups", {
   versions: "Backup versions",
   empty: "No manual backups yet. Use Manual Backup to save the current files on disk.",
   select: "Select a backup to inspect its files.",
+  loading: "Loading…",
   files: "{count} files",
   present: "Present in backup · {size} B",
   absent: "Absent in backup; removed on restore",
@@ -147,6 +148,7 @@ export function Backups(props: {
   return (
     <Card title={t("title")}>
       <p class="muted">{fill(t("intro"), { keep: list.data?.keep ?? 10 })}</p>
+      {list.phase === "loading" && <Notice tone="muted">{t("loading")}</Notice>}
       {list.error && <Notice tone="danger">{list.error}</Notice>}
       {create.error && <Notice tone="danger">{create.error}</Notice>}
       {write.error && <Notice tone="danger">{write.error}</Notice>}
@@ -164,7 +166,7 @@ export function Backups(props: {
         {t("create")}
       </Button>
       {versions.length === 0 ? (
-        !list.loading && <Empty>{t("empty")}</Empty>
+        list.data && !list.loading && <Empty>{t("empty")}</Empty>
       ) : (
         <Choices
           label={t("versions")}
