@@ -149,3 +149,38 @@ func TestEmptiedUserTurn(t *testing.T) {
 		t.Errorf("turns %+v, want only the text", c.turns)
 	}
 }
+
+// A data: URL's scheme and ;base64 marker are case-insensitive: uppercase and mixed-case forms
+// produce the same image turn as the lowercase form.
+func TestDataImageURLSchemeCase(t *testing.T) {
+	reqFor := func(u string) *llm.Request {
+		return &llm.Request{Model: "swe-2", Items: []llm.Item{
+			{Type: llm.ItemTypeMessage, Role: llm.RoleUser, Content: []llm.Part{
+				{Type: llm.PartImage, URL: u},
+				{Type: llm.PartText, Text: "Describe this"},
+			}},
+		}}
+	}
+	want, err := buildRequest(reqFor("data:image/png;base64,QUJD"))
+	if err != nil {
+		t.Fatalf("lowercase data URL: %v", err)
+	}
+	for _, u := range []string{
+		"DATA:image/png;base64,QUJD",
+		"Data:image/png;base64,QUJD",
+		"Data:image/png;BASE64,QUJD",
+	} {
+		t.Run(u, func(t *testing.T) {
+			got, err := buildRequest(reqFor(u))
+			if err != nil {
+				t.Fatalf("buildRequest(%q): %v", u, err)
+			}
+			if losses := lossPaths(got); len(losses) != 0 {
+				t.Errorf("dropped %v, want none", losses)
+			}
+			if len(got.turns) != len(want.turns) || got.turns[0].content != want.turns[0].content || !slices.Equal(got.turns[0].images, want.turns[0].images) {
+				t.Errorf("got turns %+v, want %+v", got.turns, want.turns)
+			}
+		})
+	}
+}
