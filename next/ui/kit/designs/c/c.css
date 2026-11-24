@@ -1033,8 +1033,9 @@
     }
 
     .dc-line-nav {
-      flex: 1;
+      flex: 0 1 auto;
       flex-direction: row;
+      margin-right: auto;
       gap: 2px;
       min-width: 0;
       overflow-x: auto;
