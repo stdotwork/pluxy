@@ -37,6 +37,7 @@ func MIME(format string) string {
 // Format returns the token for an audio media type: the reverse of MIME, for a media type MIME
 // did not produce.
 func Format(mediaType string) string {
+	mediaType = media.Type(mediaType)
 	switch mediaType {
 	case "audio/wav":
 		return "wav"
@@ -63,7 +64,11 @@ func Inline(p llm.Part) (mediaType, data string, ok bool) {
 		return "", "", false
 	}
 	mediaType, data, ok = media.DataURL(p.FileData)
-	if !ok || data == "" || !strings.HasPrefix(strings.ToLower(mediaType), "audio/") {
+	if !ok || data == "" {
+		return "", "", false
+	}
+	mediaType = media.Type(mediaType)
+	if !strings.HasPrefix(mediaType, "audio/") {
 		return "", "", false
 	}
 	return mediaType, data, true

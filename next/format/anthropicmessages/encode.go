@@ -689,7 +689,7 @@ func (e *encoder) content(it llm.Item, msgPath string) (blocks []json.RawMessage
 			typ := "image"
 			if p.Type == llm.PartFile {
 				typ = "document"
-				if mt, _ := src["media_type"].(string); src["type"] == "base64" && strings.HasPrefix(mt, "image/") {
+				if mt, _ := src["media_type"].(string); src["type"] == "base64" && strings.HasPrefix(mediainput.Type(mt), "image/") {
 					typ = "image"
 				}
 			}
