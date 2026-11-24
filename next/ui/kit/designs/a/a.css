@@ -92,64 +92,56 @@
   *::after {
     box-sizing: border-box;
   }
+}
 
-  a {
-    color: inherit;
-    text-decoration: underline;
-    text-decoration-color: var(--da-line-strong);
-    text-underline-offset: 3px;
-  }
+/* The resets below leave today's pages alone (.da-legacy holds them): those keep the kit's own
+   styles, which sit in a layer and would lose to any rule here. */
+:root[data-design="a"] .da a:not(.da-legacy *) {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--da-line-strong);
+  text-underline-offset: 3px;
+}
 
-  a:hover {
-    text-decoration-color: currentcolor;
-  }
+:root[data-design="a"] .da a:not(.da-legacy *):hover {
+  text-decoration-color: currentcolor;
+}
 
-  :focus-visible {
-    outline: 2px solid var(--da-accent);
-    outline-offset: 1px;
-  }
+:root[data-design="a"] .da :focus-visible:not(.da-legacy *) {
+  outline: 2px solid var(--da-accent);
+  outline-offset: 1px;
+}
 
-  h1,
-  h2,
-  h3,
-  p,
-  ul,
-  ol,
-  dl,
-  dd,
-  fieldset {
-    margin: 0;
-    padding: 0;
-    border: 0;
-    font: inherit;
-  }
+:root[data-design="a"] .da :is(h1, h2, h3, p, ul, ol, dl, dd, fieldset):not(.da-legacy *) {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  font: inherit;
+}
 
-  ul,
-  ol {
-    list-style: none;
-  }
+:root[data-design="a"] .da :is(ul, ol):not(.da-legacy *) {
+  list-style: none;
+}
 
-  button,
-  input {
-    font: inherit;
-    color: inherit;
-  }
+:root[data-design="a"] .da :is(button, input):not(.da-legacy *) {
+  font: inherit;
+  color: inherit;
+}
 
-  [data-tone="ok"] {
-    color: var(--da-ok);
-  }
+:root[data-design="a"] .da [data-tone="ok"]:not(.da-legacy *) {
+  color: var(--da-ok);
+}
 
-  [data-tone="warn"] {
-    color: var(--da-warn);
-  }
+:root[data-design="a"] .da [data-tone="warn"]:not(.da-legacy *) {
+  color: var(--da-warn);
+}
 
-  [data-tone="danger"] {
-    color: var(--da-danger);
-  }
+:root[data-design="a"] .da [data-tone="danger"]:not(.da-legacy *) {
+  color: var(--da-danger);
+}
 
-  [data-tone="muted"] {
-    color: var(--da-ink-3);
-  }
+:root[data-design="a"] .da [data-tone="muted"]:not(.da-legacy *) {
+  color: var(--da-ink-3);
 }
 
 :root[data-design="a"] .da-sr {
@@ -1449,7 +1441,9 @@
   :root[data-design="a"] .da *,
   :root[data-design="a"] .da *::before,
   :root[data-design="a"] .da *::after {
+    /* biome-ignore lint/complexity/noImportantStyles: reduced motion wins over every rule here */
     animation: none !important;
+    /* biome-ignore lint/complexity/noImportantStyles: reduced motion wins over every rule here */
     transition: none !important;
   }
 }

@@ -32,7 +32,6 @@ export function usePoll<T>(load: () => Promise<Reply<T>>, every: number, key = "
   const loadRef = useRef(load);
   loadRef.current = load;
   const shownKey = useRef(key);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: n asks for another load
   useEffect(() => {
     let live = true;
     if (shownKey.current !== key) {
@@ -117,7 +116,6 @@ export function useWindows(accounts: Account[] | undefined): {
     .filter((a) => !a.disabled && a.health?.state !== "broken" && a.extension)
     .map((a) => a.id);
   const wantedKey = wanted.join("\n");
-  // biome-ignore lint/correctness/useExhaustiveDependencies: wantedKey stands for wanted
   useEffect(() => {
     let live = true;
     const now = Date.now();
@@ -137,7 +135,8 @@ export function useWindows(accounts: Account[] | undefined): {
         if (!live) return;
         const at = Date.now();
         if (r.status === 200 && r.body?.quota) kept.set(id, { reply: r.body, at });
-        else if (r.status === 422 || (r.status === 200 && !r.body?.quota)) kept.set(id, { unsupported: true, at });
+        else if (r.status === 422 || (r.status === 200 && !r.body?.quota))
+          kept.set(id, { unsupported: true, at });
         else kept.set(id, { error: problem(r) ?? "no reply", at, reply: kept.get(id)?.reply });
         setPending((old) => {
           const next = new Set(old);

@@ -126,7 +126,12 @@ export function FixButton(props: {
         </Btn>
       );
     return (
-      <Btn variant={variant} small={props.small} icon="signIn" href={`#/accounts/${encodeURIComponent(account.id)}/sign-in`}>
+      <Btn
+        variant={variant}
+        small={props.small}
+        icon="signIn"
+        href={`#/accounts/${encodeURIComponent(account.id)}/sign-in`}
+      >
         {FIX_LABEL[fix]}
       </Btn>
     );
@@ -139,7 +144,13 @@ export function FixButton(props: {
     );
   if (fix === "enable")
     return (
-      <Btn variant={variant} small={props.small} icon="power" disabled={busy} onClick={() => props.fix.run(account, fix)}>
+      <Btn
+        variant={variant}
+        small={props.small}
+        icon="power"
+        disabled={busy}
+        onClick={() => props.fix.run(account, fix)}
+      >
         {FIX_LABEL[fix]}
       </Btn>
     );
@@ -158,7 +169,10 @@ export function FixButton(props: {
 }
 
 /** Only the names: what a screen that lists requests needs of the accounts, without their windows. */
-export function useAccountNames(): { nameOf(publicId: string | undefined): string; idOf(publicId: string | undefined): string | undefined } {
+export function useAccountNames(): {
+  nameOf(publicId: string | undefined): string;
+  idOf(publicId: string | undefined): string | undefined;
+} {
   const { api } = useKit();
   const p = usePrivacy();
   const accounts = usePoll(api.accounts, 60_000);

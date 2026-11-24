@@ -53,7 +53,16 @@ export function filterRows(rows: Row[], typed: string, show: Show): Row[] {
     const a = r.account;
     return (
       matchScore(
-        [a.id, a.label, a.extension, a.kind, r.standing.label, a.last_error?.code, a.last_error?.message, a.last_error?.status]
+        [
+          a.id,
+          a.label,
+          a.extension,
+          a.kind,
+          r.standing.label,
+          a.last_error?.code,
+          a.last_error?.message,
+          a.last_error?.status,
+        ]
           .filter(Boolean)
           .join(" "),
         typed,
@@ -79,11 +88,11 @@ export function Accounts(props: { rest: string }) {
   const move = (by: number) => {
     if (rows.length === 0) return;
     const at = rows.findIndex((r) => r.account.id === selectedId);
-    const next = rows[Math.max(0, Math.min(rows.length - 1, at < 0 ? (by > 0 ? 0 : rows.length - 1) : at + by))];
+    const next =
+      rows[Math.max(0, Math.min(rows.length - 1, at < 0 ? (by > 0 ? 0 : rows.length - 1) : at + by))];
     if (next) open(next.account.id);
   };
   // The selected row stays in view as j and k move through the list.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: selectedId is what moved
   useEffect(() => {
     table.current?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: "nearest" });
   }, [selectedId]);
@@ -141,7 +150,13 @@ export function Accounts(props: { rest: string }) {
                         ? counts.serving
                         : counts.off;
               return (
-                <button key={s.id} type="button" aria-pressed={show === s.id} onClick={() => setShow(s.id)} disabled={!data}>
+                <button
+                  key={s.id}
+                  type="button"
+                  aria-pressed={show === s.id}
+                  onClick={() => setShow(s.id)}
+                  disabled={!data}
+                >
                   {s.label}
                   {data && <span class="da-num da-seg-count">{n}</span>}
                 </button>
@@ -149,7 +164,12 @@ export function Accounts(props: { rest: string }) {
             })}
           </fieldset>
           <span class="da-grow" />
-          <Btn small variant="ghost" href="#/classic/accounts" title="Today's Accounts page: select many, import auth files">
+          <Btn
+            small
+            variant="ghost"
+            href="#/classic/accounts"
+            title="Today's Accounts page: select many, import auth files"
+          >
             Bulk edit
           </Btn>
           <Btn small variant="primary" icon="plus" href="#/add-account" keys="a">
@@ -158,7 +178,12 @@ export function Accounts(props: { rest: string }) {
         </header>
         {fix.error && <Fault what="" error={fix.error} retry={fix.clearError} />}
         {fleet.accounts.error && (
-          <Fault what="Accounts could not be read." error={fleet.accounts.error} retry={fleet.reload} stale={!!data} />
+          <Fault
+            what="Accounts could not be read."
+            error={fleet.accounts.error}
+            retry={fleet.reload}
+            stale={!!data}
+          />
         )}
         {fleet.accounts.loading ? (
           <Skeleton rows={12} label="Reading accounts" />
@@ -171,8 +196,8 @@ export function Accounts(props: { rest: string }) {
               </Btn>
             }
           >
-            Add a subscription sign-in or an API key. Each account gets a row here with its state, usage windows and
-            last error.
+            Add a subscription sign-in or an API key. Each account gets a row here with its state, usage
+            windows and last error.
           </Blank>
         ) : data && rows.length === 0 ? (
           <Blank
@@ -204,7 +229,11 @@ export function Accounts(props: { rest: string }) {
                   <th scope="col" class="da-col-windows">
                     windows <span class="da-quiet">used · resets in</span>
                   </th>
-                  <th scope="col" class="da-right da-col-order" title="Priority (higher is tried first) and weight">
+                  <th
+                    scope="col"
+                    class="da-right da-col-order"
+                    title="Priority (higher is tried first) and weight"
+                  >
                     order
                   </th>
                   <th scope="col" class="da-right da-col-now" title="Requests in flight">
@@ -220,12 +249,20 @@ export function Accounts(props: { rest: string }) {
               </thead>
               <tbody>
                 {rows.map((row) => (
-                  <AccountRow key={row.account.id} row={row} fleet={fleet} fix={fix} selected={row.account.id === selectedId} />
+                  <AccountRow
+                    key={row.account.id}
+                    row={row}
+                    fleet={fleet}
+                    fix={fix}
+                    selected={row.account.id === selectedId}
+                  />
                 ))}
               </tbody>
             </table>
             <p class="da-table-foot da-quiet da-num">
-              {rows.length === fleet.rows.length ? `${rows.length} accounts` : `${rows.length} of ${fleet.rows.length} accounts`}
+              {rows.length === fleet.rows.length
+                ? `${rows.length} accounts`
+                : `${rows.length} of ${fleet.rows.length} accounts`}
               {fleet.accounts.at ? ` · read ${clock(fleet.accounts.at)}` : ""}
             </p>
           </div>
@@ -233,7 +270,14 @@ export function Accounts(props: { rest: string }) {
       </section>
       {selectedId &&
         (selected ? (
-          <AccountPane key={selected.account.id} row={selected} fleet={fleet} fix={fix} signIn={action === "sign-in"} onClose={() => open()} />
+          <AccountPane
+            key={selected.account.id}
+            row={selected}
+            fleet={fleet}
+            fix={fix}
+            signIn={action === "sign-in"}
+            onClose={() => open()}
+          />
         ) : (
           <aside class="da-pane da-detail" aria-label="Account">
             <header class="da-pane-head">
@@ -340,7 +384,8 @@ function Activity(props: { account: Account; fleet: Fleet }) {
   if (usage.loading) return <Skeleton rows={3} label="Reading the account's usage" />;
   if (!u) return <Fault what="Its usage could not be read." error={usage.error ?? ""} retry={usage.reload} />;
   if (u.enabled === false) return <p class="da-quiet">Usage recording is off.</p>;
-  if (u.total_requests === 0) return <p class="da-quiet">No requests went to this account in the last 24 hours.</p>;
+  if (u.total_requests === 0)
+    return <p class="da-quiet">No requests went to this account in the last 24 hours.</p>;
   return (
     <>
       <dl class="da-facts da-facts-row">
@@ -357,7 +402,9 @@ function Activity(props: { account: Account; fleet: Fleet }) {
           <span class="da-num">{u.tokens ? compact(u.tokens.total_tokens) : "–"}</span>
         </Fact>
         <Fact k="latency">
-          <span class="da-num">{u.average_latency_ms !== undefined ? latency(u.average_latency_ms) : "–"}</span>
+          <span class="da-num">
+            {u.average_latency_ms !== undefined ? latency(u.average_latency_ms) : "–"}
+          </span>
         </Fact>
       </dl>
       <Bars
@@ -403,7 +450,6 @@ function AccountPane(props: {
     button?.focus();
     button?.click();
   };
-  // biome-ignore lint/correctness/useExhaustiveDependencies: run once when the address asks for it
   useEffect(() => {
     pane.current?.focus();
     if (props.signIn) signIn();
@@ -414,7 +460,8 @@ function AccountPane(props: {
     const r = await call();
     setBusy(false);
     if (r.status === 401) return unauthorized();
-    if (r.status < 200 || r.status >= 300) setError((r as { error?: { message: string } }).error?.message ?? `core answered ${r.status}`);
+    if (r.status < 200 || r.status >= 300)
+      setError((r as { error?: { message: string } }).error?.message ?? `core answered ${r.status}`);
     fleet.reload();
   };
   const canChange = a.source !== "config" && s.state !== "broken";
@@ -429,7 +476,9 @@ function AccountPane(props: {
             {row.name}
           </h2>
           <span class="da-sub da-clip">
-            {[row.label, a.extension, a.kind, a.source === "config" ? "set in the config" : undefined].filter(Boolean).join(" · ")}
+            {[row.label, a.extension, a.kind, a.source === "config" ? "set in the config" : undefined]
+              .filter(Boolean)
+              .join(" · ")}
           </span>
         </div>
         <Btn small variant="ghost" icon="close" label="Close" keys="Escape" onClick={props.onClose} />
@@ -443,7 +492,9 @@ function AccountPane(props: {
             <FixButton row={row} fix={props.fix} primary onSignIn={signIn} />
           </div>
           <p class="da-verdict-why">{sentence(row, fleet.now, p.text(s.why, ids))}</p>
-          {(error ?? props.fix.error) && <Fault what="" error={p.text(error ?? props.fix.error ?? "", ids)} />}
+          {(error ?? props.fix.error) && (
+            <Fault what="" error={p.text(error ?? props.fix.error ?? "", ids)} />
+          )}
           {cooldowns.length > 0 && (
             <ul class="da-cooldowns">
               {cooldowns.map((c) => (
@@ -452,7 +503,11 @@ function AccountPane(props: {
                     {wait(Date.parse(c.until) - fleet.now)}
                   </span>
                   <span>
-                    {c.scope === "model" ? (c.model ?? "one model") : c.scope === "endpoint" ? "one endpoint" : "whole account"}
+                    {c.scope === "model"
+                      ? (c.model ?? "one model")
+                      : c.scope === "endpoint"
+                        ? "one endpoint"
+                        : "whole account"}
                   </span>
                   <span class="da-quiet da-clip">
                     {c.kind.replace(/_/g, " ")}
@@ -471,7 +526,13 @@ function AccountPane(props: {
             {w?.reply?.quota.plan && <span class="da-quiet"> · {w.reply.quota.plan}</span>}
             <span class="da-grow" />
             {w && <span class="da-quiet da-num">read {ago(fleet.now - w.at)} ago</span>}
-            <Btn small variant="ghost" icon="refresh" label="Read the windows again" onClick={() => fleet.refreshWindows([a.id])} />
+            <Btn
+              small
+              variant="ghost"
+              icon="refresh"
+              label="Read the windows again"
+              onClick={() => fleet.refreshWindows([a.id])}
+            />
           </h3>
           <WindowsCell row={row} fleet={fleet} wide />
           {w?.reply?.quota.limits
@@ -510,7 +571,9 @@ function AccountPane(props: {
               <Fact k="last error">
                 <span class="da-num">{a.last_error.status ?? a.last_error.code}</span>{" "}
                 {p.text(a.last_error.message, ids)}
-                {a.last_error_at && <span class="da-quiet da-num"> · {stamp(a.last_error_at, fleet.now)}</span>}
+                {a.last_error_at && (
+                  <span class="da-quiet da-num"> · {stamp(a.last_error_at, fleet.now)}</span>
+                )}
               </Fact>
             )}
             {a.check && (
@@ -543,10 +606,12 @@ function AccountPane(props: {
         </section>
 
         {s.state !== "broken" && (
-          <section class="da-legacy da-legacy-inline" aria-label="Settings and tools" ref={tools}>
+          <section aria-label="Settings and tools">
             <h3>settings and tools</h3>
-            <AccountSettings account={a} />
-            <AccountTools key={a.id} account={a} onChanged={fleet.reload} />
+            <div class="da-legacy da-legacy-inline" ref={tools}>
+              <AccountSettings account={a} />
+              <AccountTools key={a.id} account={a} onChanged={fleet.reload} />
+            </div>
           </section>
         )}
       </div>
@@ -557,7 +622,8 @@ function AccountPane(props: {
 /** The state as a sentence: what is so, until when, and what to do. */
 function sentence(row: Row, now: number, why?: string): string {
   const s = row.standing;
-  const until = s.until && s.until > now ? ` It comes back at ${stamp(s.until, now)}, in ${wait(s.until - now)}.` : "";
+  const until =
+    s.until && s.until > now ? ` It comes back at ${stamp(s.until, now)}, in ${wait(s.until - now)}.` : "";
   const because = why ? ` ${why.replace(/\.?$/, ".")}` : "";
   switch (s.state) {
     case "serving":

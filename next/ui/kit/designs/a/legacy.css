@@ -1,0 +1,40 @@
+/* Direction A: today's pages shown inside the Console shell (the ones it has not redesigned), and
+   today's account settings and tools inside an account's detail. They keep the kit's own layout
+   and take the Console's type and colour through the theme tokens set in a.css; the rules here
+   only fit them to the page area. */
+
+:root[data-design="a"] .da-legacy {
+  color: var(--px-color-text);
+  font-size: var(--px-font-size);
+  line-height: var(--px-font-line-height);
+}
+
+:root[data-design="a"] .da-legacy > .content {
+  max-width: 1280px;
+  margin-inline: 0;
+  padding: 14px 20px 48px;
+}
+
+:root[data-design="a"] .da-legacy [data-part="card"],
+:root[data-design="a"] .da-legacy [data-part="detail"] {
+  box-shadow: none;
+}
+
+:root[data-design="a"] .da-legacy-inline {
+  h3 {
+    margin: 14px 0 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--px-color-text-muted);
+  }
+
+  .facts {
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 720px) {
+  :root[data-design="a"] .da-legacy > .content {
+    padding: 12px 12px 40px;
+  }
+}

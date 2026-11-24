@@ -63,7 +63,13 @@ export function useRange(): [Range, (r: Range) => void, (step: number) => void] 
   return [range, pick, step];
 }
 
-function Figure(props: { label: string; value: string; note?: string; tone?: "danger" | "warn"; title?: string }) {
+function Figure(props: {
+  label: string;
+  value: string;
+  note?: string;
+  tone?: "danger" | "warn";
+  title?: string;
+}) {
   return (
     <div class="da-figure" title={props.title}>
       <dt>{props.label}</dt>
@@ -114,7 +120,11 @@ export function Figures(props: { usage: UsageSummary; range: Range; inFlight?: n
         note="mean"
       />
       {props.inFlight !== undefined && (
-        <Figure label="in flight" value={String(props.inFlight)} note={props.inFlight === 1 ? "request" : "requests"} />
+        <Figure
+          label="in flight"
+          value={String(props.inFlight)}
+          note={props.inFlight === 1 ? "request" : "requests"}
+        />
       )}
     </dl>
   );
@@ -126,10 +136,16 @@ export function WindowsCell(props: { row: Row; fleet: Fleet; wide?: boolean }) {
   const w = fleet.windows.get(row.account.id);
   if (row.account.disabled || row.standing.state === "broken") return <span class="da-quiet">–</span>;
   if (!w) {
-    if (fleet.pendingWindows.has(row.account.id)) return <span class="da-window-wait" role="status" aria-label="Reading usage windows" />;
+    if (fleet.pendingWindows.has(row.account.id))
+      return <span class="da-window-wait" role="status" aria-label="Reading usage windows" />;
     return <span class="da-quiet">not read</span>;
   }
-  if (w.unsupported) return <span class="da-quiet" title="This provider reports no usage windows for the account.">no windows</span>;
+  if (w.unsupported)
+    return (
+      <span class="da-quiet" title="This provider reports no usage windows for the account.">
+        no windows
+      </span>
+    );
   const limits = meteredWindows(w.reply?.quota.limits, fleet.now);
   if (limits.length === 0) {
     return (
@@ -139,7 +155,11 @@ export function WindowsCell(props: { row: Row; fleet: Fleet; wide?: boolean }) {
     );
   }
   return (
-    <span class="da-windows" data-stale={w.error ? "" : undefined} title={w.error ? `Could not be read again: ${w.error}` : undefined}>
+    <span
+      class="da-windows"
+      data-stale={w.error ? "" : undefined}
+      title={w.error ? `Could not be read again: ${w.error}` : undefined}
+    >
       {limits.slice(0, props.wide ? 4 : 2).map((l) => (
         <WindowBar key={l.id} limit={l} now={fleet.now} wide={props.wide} />
       ))}
@@ -157,42 +177,45 @@ function Board(props: { fleet: Fleet; fix: ReturnType<typeof useFix>; cursor: nu
       by.set(key, [...(by.get(key) ?? []), r]);
     }
     for (const rows of by.values()) {
-      rows.sort((a, b) => (b.account.priority ?? 0) - (a.account.priority ?? 0) || a.account.id.localeCompare(b.account.id));
+      rows.sort(
+        (a, b) =>
+          (b.account.priority ?? 0) - (a.account.priority ?? 0) || a.account.id.localeCompare(b.account.id),
+      );
     }
     return [...by.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [fleet.rows]);
   let index = -1;
+  // A table for what it says; its rows are laid out as grids so they can fold to two lines on a phone.
   return (
-    // biome-ignore lint/a11y/useSemanticElements: the rows fold to two lines on a phone, which a <table> cannot
-    <div class="da-board" role="table" aria-label="Accounts">
-      {/* biome-ignore lint/a11y/useSemanticElements: see the table above */}
-      <div class="da-board-head" role="row">
-        {/* biome-ignore lint/a11y/useSemanticElements: see the table above */}
-        <span role="columnheader">state</span>
-        {/* biome-ignore lint/a11y/useSemanticElements: see the table above */}
-        <span role="columnheader">account</span>
-        {/* biome-ignore lint/a11y/useSemanticElements: see the table above */}
-        <span role="columnheader" title="What is used of each usage window, with a tick where the clock is, and the time to its reset">
-          windows <span class="da-quiet">used · resets in</span>
-        </span>
-        {/* biome-ignore lint/a11y/useSemanticElements: see the table above */}
-        <span role="columnheader" class="da-right" title="Requests in flight on the account">
-          now
-        </span>
-        {/* biome-ignore lint/a11y/useSemanticElements: see the table above */}
-        <span role="columnheader">last error</span>
-      </div>
+    <table class="da-board" aria-label="Accounts">
+      <thead>
+        <tr class="da-board-head">
+          <th scope="col">state</th>
+          <th scope="col">account</th>
+          <th
+            scope="col"
+            title="What is used of each usage window, with a tick where the clock is, and the time to its reset"
+          >
+            windows <span class="da-quiet">used · resets in</span>
+          </th>
+          <th scope="col" class="da-right" title="Requests in flight on the account">
+            now
+          </th>
+          <th scope="col">last error</th>
+        </tr>
+      </thead>
       {groups.map(([provider, rows]) => {
         const counts = countBoard(rows.map((r) => r.standing));
         return (
-          // biome-ignore lint/a11y/useSemanticElements: see the table above
-          <div key={provider} class="da-board-group" role="rowgroup">
-            <div class="da-board-provider" role="presentation">
-              <span class="da-board-provider-name">{provider}</span>
-              <span class="da-quiet da-num">
-                {counts.serving}/{counts.total} serving
-              </span>
-            </div>
+          <tbody key={provider} class="da-board-group">
+            <tr class="da-board-provider">
+              <th scope="rowgroup" colSpan={5}>
+                <span class="da-board-provider-name">{provider}</span>
+                <span class="da-quiet da-num">
+                  {counts.serving}/{counts.total} serving
+                </span>
+              </th>
+            </tr>
             {rows.map((row) => {
               index++;
               const a = row.account;
@@ -201,34 +224,37 @@ function Board(props: { fleet: Fleet; fix: ReturnType<typeof useFix>; cursor: nu
               const err = a.last_error;
               const why = s.state !== "serving" && s.state !== "off" ? s.why : undefined;
               return (
-                // biome-ignore lint/a11y/useSemanticElements: see the table above
-                <div key={a.id} class="da-board-row" role="row" data-tone={s.tone} data-cursor={index === props.cursor ? "" : undefined}>
-                  {/* biome-ignore lint/a11y/useSemanticElements: see the table above */}
-                  <span role="cell" class="da-cell-state">
+                <tr
+                  key={a.id}
+                  class="da-board-row"
+                  data-tone={s.tone}
+                  data-cursor={index === props.cursor ? "" : undefined}
+                >
+                  <td class="da-cell-state">
                     <StateTag standing={s} now={fleet.now} />
-                  </span>
-                  {/* biome-ignore lint/a11y/useSemanticElements: see the table above */}
-                  <span role="cell" class="da-cell-account">
+                  </td>
+                  <th scope="row" class="da-cell-account">
                     <a href={`#/accounts/${encodeURIComponent(a.id)}`} class="da-rowlink" title={row.name}>
                       {row.name}
                     </a>
                     {s.coolingModels > 0 && s.state === "serving" && (
-                      <span class="da-note" data-tone="warn" title="Models held back while the account serves the others">
-                        {s.coolingModels} model{s.coolingModels === 1 ? "" : "s"} cooling
+                      <span
+                        class="da-note"
+                        data-tone="warn"
+                        title="Models held back while the account serves the others"
+                      >
+                        {s.coolingModels} model{s.coolingModels === 1 ? "" : "s"} cooling down
                       </span>
                     )}
-                  </span>
-                  {/* biome-ignore lint/a11y/useSemanticElements: see the table above */}
-                  <span role="cell" class="da-cell-windows">
+                  </th>
+                  <td class="da-cell-windows">
                     <WindowsCell row={row} fleet={fleet} />
-                  </span>
-                  {/* biome-ignore lint/a11y/useSemanticElements: see the table above */}
-                  <span role="cell" class="da-cell-now da-num da-right" data-zero={a.active_requests ? undefined : ""}>
+                  </td>
+                  <td class="da-cell-now da-num da-right" data-zero={a.active_requests ? undefined : ""}>
                     {a.active_requests ?? 0}
                     {a.max_concurrency ? <span class="da-quiet">/{a.max_concurrency}</span> : null}
-                  </span>
-                  {/* biome-ignore lint/a11y/useSemanticElements: see the table above */}
-                  <span role="cell" class="da-cell-error">
+                  </td>
+                  <td class="da-cell-error">
                     {why ? (
                       <span class="da-clip" title={p.text(why, ids)}>
                         {p.text(why, ids)}
@@ -236,20 +262,22 @@ function Board(props: { fleet: Fleet; fix: ReturnType<typeof useFix>; cursor: nu
                     ) : err ? (
                       <span class="da-clip da-quiet" title={p.text(err.message, ids)}>
                         <span class="da-num">{err.status ?? err.code}</span> {p.text(err.message, ids)}
-                        {a.last_error_at && <span class="da-num"> · {ago(fleet.now - Date.parse(a.last_error_at))} ago</span>}
+                        {a.last_error_at && (
+                          <span class="da-num"> · {ago(fleet.now - Date.parse(a.last_error_at))} ago</span>
+                        )}
                       </span>
                     ) : (
                       <span class="da-quiet">–</span>
                     )}
                     <FixButton row={row} fix={props.fix} small />
-                  </span>
-                </div>
+                  </td>
+                </tr>
               );
             })}
-          </div>
+          </tbody>
         );
       })}
-    </div>
+    </table>
   );
 }
 
@@ -269,14 +297,15 @@ function TailRow(props: { e: UsageEvent; fleet: Fleet; fresh: boolean }) {
           {e.status ?? (e.failed ? "err" : "ok")}
         </span>
         <span class="da-clip da-tail-model">{e.model}</span>
-        <span class="da-clip da-tail-account">{e.failed && hops.length === 0 ? "no account" : fleet.nameOf(e.account)}</span>
+        <span class="da-clip da-tail-account">
+          {e.failed && hops.length === 0 ? "no account" : fleet.nameOf(e.account)}
+        </span>
         <span class="da-num da-right da-quiet">{latency(e.latency_ms)}</span>
       </a>
       {(back || (e.failed && hops.length > 0)) && (
         <span class="da-tail-path" title="The accounts tried, in order">
           <Icon name="fallback" size={12} />
           {hops.map((h, i) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: a request can try one account twice
             <span key={i} class="da-hop" data-ok={h.ok ? "" : undefined}>
               {i > 0 && <span class="da-hop-then">→</span>}
               {fleet.nameOf(h.account)}
@@ -289,11 +318,16 @@ function TailRow(props: { e: UsageEvent; fleet: Fleet; fresh: boolean }) {
   );
 }
 
-function Tail(props: { tail: ReturnType<typeof usePoll<UsageEventsReply>>; fleet: Fleet; paused: boolean; onPause: () => void }) {
+function Tail(props: {
+  tail: ReturnType<typeof usePoll<UsageEventsReply>>;
+  fleet: Fleet;
+  paused: boolean;
+  onPause: () => void;
+}) {
   const { tail } = props;
   const events = tail.data?.events ?? [];
   // Rows that arrived since the last reading come in marked, so the eye catches them once.
-  const seen = useRef<number>();
+  const seen = useRef<number | undefined>(undefined);
   const newest = events[0]?.seq;
   const before = seen.current;
   useEffect(() => {
@@ -322,11 +356,16 @@ function Tail(props: { tail: ReturnType<typeof usePoll<UsageEventsReply>>; fleet
           All
         </Btn>
       </header>
-      {tail.error && <Fault what="The tail stopped." error={tail.error} retry={tail.reload} stale={events.length > 0} />}
+      {tail.error && (
+        <Fault what="The tail stopped." error={tail.error} retry={tail.reload} stale={events.length > 0} />
+      )}
       {tail.loading ? (
         <Skeleton rows={14} label="Reading recent requests" />
       ) : tail.data?.enabled === false ? (
-        <Blank title="Usage recording is off" action={<Btn href="#/config/logging">Open logging settings</Btn>}>
+        <Blank
+          title="Usage recording is off"
+          action={<Btn href="#/config/logging">Open logging settings</Btn>}
+        >
           Core is not keeping a record of requests, so there is nothing to tail.
         </Blank>
       ) : events.length === 0 && !tail.error ? (
@@ -372,11 +411,23 @@ export function Overview() {
   };
   useKeys([
     { keys: "j", label: "Next account", run: () => move(1), keyOnly: true, quiet: true, group: "Overview" },
-    { keys: "k", label: "Previous account", run: () => move(-1), keyOnly: true, quiet: true, group: "Overview" },
+    {
+      keys: "k",
+      label: "Previous account",
+      run: () => move(-1),
+      keyOnly: true,
+      quiet: true,
+      group: "Overview",
+    },
     { keys: "r", label: "Refresh", run: refresh, group: "Overview" },
     { keys: "[", label: "Shorter range", run: () => stepRange(-1), quiet: true, group: "Overview" },
     { keys: "]", label: "Longer range", run: () => stepRange(1), quiet: true, group: "Overview" },
-    { keys: " ", label: paused ? "Resume the tail" : "Pause the tail", run: () => setPaused((v) => !v), group: "Overview" },
+    {
+      keys: " ",
+      label: paused ? "Resume the tail" : "Pause the tail",
+      run: () => setPaused((v) => !v),
+      group: "Overview",
+    },
   ]);
   const u = usage.data;
   return (
@@ -405,11 +456,15 @@ export function Overview() {
               bucketSeconds={u.bucket_seconds}
               now={fleet.now}
               label={`Requests over the last ${range.label}: ${u.total_requests} in all, ${u.failure_count} failed`}
-              summary={u.total_requests ? `requests per ${stepLabel(u.bucket_seconds)}` : "no requests in this range"}
+              summary={
+                u.total_requests ? `requests per ${stepLabel(u.bucket_seconds)}` : "no requests in this range"
+              }
             />
           </>
         )}
-        {usage.error && u && <Fault what="Usage is not updating." error={usage.error} retry={usage.reload} stale />}
+        {usage.error && u && (
+          <Fault what="Usage is not updating." error={usage.error} retry={usage.reload} stale />
+        )}
       </section>
 
       <section class="da-pane da-accounts-pane" aria-label="Accounts" ref={boardRef}>
@@ -463,8 +518,8 @@ export function Overview() {
               </Btn>
             }
           >
-            pluxy sends requests through the subscriptions and API keys you add. Add the first one and it shows here
-            with its state and usage windows.
+            pluxy sends requests through the subscriptions and API keys you add. Add the first one and it
+            shows here with its state and usage windows.
           </Blank>
         ) : (
           <Board fleet={fleet} fix={fix} cursor={cursor} />

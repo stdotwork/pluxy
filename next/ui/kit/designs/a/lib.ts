@@ -128,14 +128,15 @@ export function standingOf(a: Account, now: number, running?: ReadonlySet<string
   const cooldowns = (a.cooldowns ?? []).filter((c) => time(c.until) > now);
   const coolingModels = cooldowns.filter((c) => c.scope === "model").length;
   const base = { coolingModels };
-  if (a.disabled) return { ...base, coolingModels: 0, state: "off", tone: "muted", label: "off", fix: "enable" };
+  if (a.disabled)
+    return { ...base, coolingModels: 0, state: "off", tone: "muted", label: "disabled", fix: "enable" };
   const out = leftOut(a);
   const why = a.health?.why ?? a.reason ?? a.last_error?.message;
   const until = time(a.health?.until) || undefined;
   if (out === "broken")
     return { ...base, state: "broken", tone: "danger", label: "unreadable", why, fix: "remove" };
   if (out === "banned")
-    return { ...base, state: "banned", tone: "danger", label: "closed by provider", why, fix: "enable" };
+    return { ...base, state: "banned", tone: "danger", label: "banned", why, fix: "enable" };
   if (out === "needs_login" || a.state === "reauth_required")
     return {
       ...base,
@@ -154,8 +155,7 @@ export function standingOf(a: Account, now: number, running?: ReadonlySet<string
       why: `Its extension ${a.extension} is not running.`,
       fix: "extensions",
     };
-  if (out === "exhausted")
-    return { ...base, state: "exhausted", tone: "warn", label: "window used up", until, why };
+  if (out === "exhausted") return { ...base, state: "exhausted", tone: "warn", label: "used up", until, why };
   // A block on the whole account, by core's own word or by a cooldown that is not one model's.
   const whole = Math.max(
     a.health?.state === "cooling" ? time(a.health.until) || now + 1 : 0,
@@ -167,9 +167,10 @@ export function standingOf(a: Account, now: number, running?: ReadonlySet<string
       ...base,
       state: "cooling",
       tone: "warn",
-      label: "cooling",
+      label: "cooling down",
       until: whole,
-      why: a.health?.why ?? cooldowns.find((c) => c.scope !== "model")?.error?.message ?? a.last_error?.message,
+      why:
+        a.health?.why ?? cooldowns.find((c) => c.scope !== "model")?.error?.message ?? a.last_error?.message,
       fix: "clear-cooldown",
     };
   return { ...base, state: "serving", tone: "ok", label: "serving" };
@@ -264,7 +265,9 @@ export function windowName(limit: QuotaLimit): string {
 export function meteredWindows(limits: QuotaLimit[] | undefined, now: number): QuotaLimit[] {
   return (limits ?? [])
     .filter((l) => !l.feature && paceOf(l, now) !== undefined)
-    .sort((a, b) => (a.window_seconds ?? Number.MAX_SAFE_INTEGER) - (b.window_seconds ?? Number.MAX_SAFE_INTEGER));
+    .sort(
+      (a, b) => (a.window_seconds ?? Number.MAX_SAFE_INTEGER) - (b.window_seconds ?? Number.MAX_SAFE_INTEGER),
+    );
 }
 
 // ---- a request's path -----------------------------------------------------------------------
@@ -313,7 +316,8 @@ export function verdict(e: UsageEvent, name: (account: string) => string = (a) =
       : `Served by ${name(last.account)} at the first try.`;
   }
   const reasons = failed.map((h) => `${name(h.account)} (${h.result.replace(/_/g, " ")})`).join(", then ");
-  if (!e.failed) return `Fell back ${failed.length === 1 ? "once" : `${failed.length} times`}: ${reasons}. Served by ${name(last.account)}.`;
+  if (!e.failed)
+    return `Fell back ${failed.length === 1 ? "once" : `${failed.length} times`}: ${reasons}. Served by ${name(last.account)}.`;
   return `Failed after ${hops.length === 1 ? "one try" : `${hops.length} tries`}: ${reasons}.`;
 }
 

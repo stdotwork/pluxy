@@ -1,0 +1,1124 @@
+/* Direction A: the three designed screens. Each fills the window and scrolls inside its panes on
+   a wide window; on a narrow one (the container query on the page area) it becomes one column
+   that scrolls as a whole. */
+
+/* ---- the strip: a range's figures and its chart ---- */
+
+:root[data-design="a"] .da-strip {
+  display: grid;
+  grid-template-columns: auto minmax(260px, 1fr);
+  gap: 4px 32px;
+  align-items: end;
+  padding: 6px var(--da-gap) 8px;
+  border-bottom: 1px solid var(--da-line);
+}
+
+:root[data-design="a"] .da-strip-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  grid-column: 1;
+}
+
+:root[data-design="a"] .da-strip-keys {
+  display: flex;
+  gap: 2px;
+}
+
+:root[data-design="a"] .da-strip > .da-bars {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+:root[data-design="a"] .da-strip > .da-skeleton,
+:root[data-design="a"] .da-strip > .da-fault,
+:root[data-design="a"] .da-strip-off,
+:root[data-design="a"] .da-strip-note {
+  grid-column: 1 / -1;
+}
+
+:root[data-design="a"] .da-strip > .da-skeleton {
+  padding: 0;
+}
+
+:root[data-design="a"] .da-strip > .da-fault {
+  padding-inline: 0;
+  border: 0;
+}
+
+:root[data-design="a"] .da-strip-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 4px;
+  font-size: 12px;
+  color: var(--da-warn);
+}
+
+:root[data-design="a"] .da-list-pane > .da-strip-note {
+  padding: 6px var(--da-gap);
+  border-bottom: 1px solid var(--da-line);
+}
+
+:root[data-design="a"] .da-strip-tall {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  padding-block: 10px 12px;
+}
+
+:root[data-design="a"] .da-strip-tall > .da-bars {
+  grid-column: 1;
+  grid-row: auto;
+}
+
+:root[data-design="a"] .da-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 28px;
+  grid-column: 1;
+}
+
+:root[data-design="a"] .da-figure {
+  min-width: 0;
+
+  dt {
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--da-ink-2);
+  }
+
+  dd {
+    display: flex;
+    flex-direction: column;
+    white-space: nowrap;
+  }
+}
+
+:root[data-design="a"] .da-figure-value {
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 26px;
+  letter-spacing: -0.02em;
+}
+
+:root[data-design="a"] .da-figure-note {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--da-ink-2);
+  white-space: pre;
+}
+
+/* ---- overview ---- */
+
+:root[data-design="a"] .da-overview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(340px, 30%, 520px);
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+}
+
+:root[data-design="a"] .da-overview > .da-strip {
+  grid-column: 1 / -1;
+}
+
+:root[data-design="a"] .da-accounts-pane {
+  overflow-y: auto;
+}
+
+:root[data-design="a"] .da-tail {
+  overflow-y: auto;
+  border-left: 1px solid var(--da-line);
+}
+
+:root[data-design="a"] .da-overview .da-pane-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--da-bg);
+}
+
+:root[data-design="a"] .da-counts {
+  display: flex;
+  gap: 12px;
+  min-width: 0;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+:root[data-design="a"] .da-needy {
+  display: flex;
+  gap: 8px;
+  padding: 6px var(--da-gap);
+  color: var(--da-danger);
+  border-bottom: 1px solid var(--da-line);
+
+  > span {
+    color: var(--da-ink);
+  }
+
+  .da-icon {
+    margin-top: 3px;
+  }
+}
+
+:root[data-design="a"] .da-board {
+  --cols: 172px minmax(110px, 1fr) 336px 44px minmax(150px, 1.5fr);
+
+  display: block;
+  width: 100%;
+
+  thead,
+  tbody {
+    display: block;
+  }
+
+  th,
+  td {
+    min-width: 0;
+    padding: 0;
+    font-weight: inherit;
+    text-align: left;
+  }
+
+  .da-right {
+    text-align: right;
+  }
+}
+
+:root[data-design="a"] .da-board-head,
+:root[data-design="a"] .da-board-row {
+  display: grid;
+  grid-template-columns: var(--cols);
+  align-items: center;
+  gap: 0 10px;
+  padding: 0 var(--da-gap);
+}
+
+:root[data-design="a"] .da-board-head {
+  height: 26px;
+  font-size: 12px;
+  color: var(--da-ink-2);
+  border-bottom: 1px solid var(--da-line-strong);
+}
+
+:root[data-design="a"] .da-board-provider {
+  display: block;
+  border-bottom: 1px solid var(--da-line);
+
+  th {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    height: 26px;
+    padding: 6px var(--da-gap) 0;
+    font-size: 12px;
+  }
+}
+
+:root[data-design="a"] .da-board-provider-name {
+  font-weight: 600;
+}
+
+:root[data-design="a"] .da-board-row {
+  min-height: var(--da-row);
+  color: var(--da-ink);
+  border-bottom: 1px solid var(--da-line);
+}
+
+:root[data-design="a"] .da-board-row:nth-child(even) {
+  background: var(--da-band);
+}
+
+:root[data-design="a"] .da-board-row:hover,
+:root[data-design="a"] .da-board-row:focus-within {
+  background: var(--da-raise);
+}
+
+/* A row that waits or needs the person carries its state colour down its left edge. */
+:root[data-design="a"] .da-board-row[data-tone="warn"],
+:root[data-design="a"] .da-table tbody tr[data-tone="warn"] {
+  color: var(--da-ink);
+  box-shadow: inset 2px 0 0 var(--da-warn);
+}
+
+:root[data-design="a"] .da-board-row[data-tone="danger"],
+:root[data-design="a"] .da-table tbody tr[data-tone="danger"] {
+  color: var(--da-ink);
+  box-shadow: inset 2px 0 0 var(--da-danger);
+}
+
+:root[data-design="a"] .da-board-row[data-tone="muted"],
+:root[data-design="a"] .da-table tbody tr[data-tone="muted"] {
+  color: var(--da-ink-2);
+
+  .da-rowlink {
+    color: var(--da-ink-2);
+  }
+}
+
+:root[data-design="a"] .da-board-row[data-tone="ok"],
+:root[data-design="a"] .da-table tbody tr[data-tone="ok"] {
+  color: var(--da-ink);
+}
+
+:root[data-design="a"] .da-cell-account {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+
+  .da-rowlink {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+:root[data-design="a"] .da-note {
+  flex: none;
+  font-size: 12px;
+}
+
+:root[data-design="a"] .da-cell-now[data-zero] {
+  color: var(--da-ink-3);
+}
+
+:root[data-design="a"] .da-cell-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+
+  .da-clip {
+    flex: 1 1 0;
+  }
+}
+
+/* ---- the tail ---- */
+
+:root[data-design="a"] .da-live {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  font-size: 12px;
+  color: var(--da-ink-2);
+}
+
+:root[data-design="a"] .da-live-dot {
+  width: 6px;
+  height: 6px;
+  background: var(--da-ok);
+  border-radius: 50%;
+  animation: da-pulse 1s ease-in-out infinite alternate;
+}
+
+:root[data-design="a"] .da-live[data-paused] .da-live-dot {
+  background: var(--da-ink-3);
+  animation: none;
+}
+
+:root[data-design="a"] .da-tail-row {
+  border-bottom: 1px solid var(--da-line);
+}
+
+:root[data-design="a"] .da-tail-row[data-fresh] {
+  animation: da-arrive 1.6s ease-out;
+}
+
+@keyframes da-arrive {
+  from {
+    background: color-mix(in srgb, var(--da-accent) 22%, transparent);
+  }
+}
+
+:root[data-design="a"] .da .da-tail-main {
+  display: grid;
+  grid-template-columns: 8ch 4ch minmax(0, 1.15fr) minmax(0, 1fr) 6ch;
+  align-items: center;
+  gap: 0 10px;
+  height: 26px;
+  padding: 0 var(--da-gap);
+  text-decoration: none;
+}
+
+:root[data-design="a"] .da-tail-main:hover {
+  background: var(--da-raise);
+}
+
+:root[data-design="a"] .da-tail-main:focus-visible {
+  outline-offset: -2px;
+}
+
+:root[data-design="a"] .da-tail-status {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--da-ink-2);
+}
+
+:root[data-design="a"] .da-tail-row[data-failed] .da-tail-status {
+  margin-left: -15px;
+}
+
+:root[data-design="a"] .da-tail-account {
+  color: var(--da-ink-2);
+}
+
+:root[data-design="a"] .da-tail-path {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  padding: 0 var(--da-gap) 5px calc(var(--da-gap) + 12ch + 20px);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--da-ink-2);
+}
+
+:root[data-design="a"] .da-tail-path > .da-icon {
+  margin-left: -18px;
+}
+
+:root[data-design="a"] .da-hop {
+  display: inline-flex;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+:root[data-design="a"] .da-hop-then {
+  color: var(--da-ink-3);
+}
+
+:root[data-design="a"] .da-hop-result {
+  color: var(--da-warn);
+}
+
+:root[data-design="a"] .da-hop[data-ok] {
+  color: var(--da-ink);
+}
+
+:root[data-design="a"] .da-hop[data-ok] .da-hop-result {
+  color: var(--da-ok);
+}
+
+/* ---- accounts ---- */
+
+:root[data-design="a"] .da-accounts,
+:root[data-design="a"] .da-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  height: 100%;
+}
+
+:root[data-design="a"] .da-accounts[data-open],
+:root[data-design="a"] .da-list[data-open] {
+  grid-template-columns: minmax(0, 1fr) clamp(380px, 32%, 520px);
+}
+
+:root[data-design="a"] .da-list-pane {
+  container: list / inline-size;
+}
+
+:root[data-design="a"] .da-accounts-table {
+  th:nth-child(1) {
+    width: 184px;
+  }
+
+  .da-col-provider {
+    width: 120px;
+  }
+
+  .da-col-windows {
+    width: 352px;
+  }
+
+  .da-col-order {
+    width: 72px;
+  }
+
+  .da-col-now {
+    width: 52px;
+  }
+
+  .da-col-fix {
+    width: 156px;
+    text-align: right;
+  }
+
+  tbody tr {
+    cursor: pointer;
+  }
+
+  tbody th,
+  tbody td {
+    height: 38px;
+  }
+
+  tbody th .da-rowlink {
+    display: block;
+    line-height: 18px;
+  }
+}
+
+:root[data-design="a"] .da-detail {
+  overflow: hidden;
+  border-left: 1px solid var(--da-line);
+}
+
+:root[data-design="a"] .da-detail:focus {
+  outline: none;
+}
+
+:root[data-design="a"] .da-detail-head {
+  min-height: 48px;
+}
+
+:root[data-design="a"] .da .da-back {
+  display: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin-left: -8px;
+  text-decoration: none;
+
+  .da-icon {
+    transform: rotate(180deg);
+  }
+}
+
+:root[data-design="a"] .da-detail-title {
+  flex: 1 1 0;
+  min-width: 0;
+
+  h2 {
+    font-size: 14px;
+    font-weight: 600;
+  }
+}
+
+:root[data-design="a"] .da-detail-body {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+
+  > section {
+    padding: 10px var(--da-gap) 14px;
+    border-bottom: 1px solid var(--da-line);
+  }
+
+  > section > h3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 24px;
+    margin-bottom: 4px;
+    font-size: 12px;
+    color: var(--da-ink-2);
+  }
+}
+
+:root[data-design="a"] .da-detail-body > .da-verdict {
+  margin: 0;
+  padding-left: calc(var(--da-gap) + 2px);
+  color: var(--da-ink);
+  box-shadow: inset 3px 0 0 var(--da-ok);
+}
+
+:root[data-design="a"] .da-detail-body > .da-verdict[data-tone="warn"] {
+  box-shadow: inset 3px 0 0 var(--da-warn);
+}
+
+:root[data-design="a"] .da-detail-body > .da-verdict[data-tone="danger"] {
+  box-shadow: inset 3px 0 0 var(--da-danger);
+}
+
+:root[data-design="a"] .da-detail-body > .da-verdict[data-tone="muted"] {
+  box-shadow: inset 3px 0 0 var(--da-ink-3);
+}
+
+:root[data-design="a"] .da-verdict-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 28px;
+
+  .da-state {
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .da-state .da-state-label {
+    color: inherit;
+  }
+}
+
+:root[data-design="a"] .da-verdict-why {
+  max-width: 62ch;
+  margin-top: 6px;
+  color: var(--da-ink);
+  text-wrap: pretty;
+}
+
+:root[data-design="a"] .da-verdict .da-fault {
+  margin-top: 8px;
+  padding-inline: 0;
+  border: 0;
+}
+
+:root[data-design="a"] .da-cooldowns {
+  margin-top: 8px;
+  border-top: 1px solid var(--da-line);
+
+  li {
+    display: grid;
+    grid-template-columns: 7ch minmax(0, auto) minmax(0, 1fr);
+    gap: 0 10px;
+    align-items: center;
+    min-height: 26px;
+    border-bottom: 1px solid var(--da-line);
+  }
+
+  li > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+:root[data-design="a"] .da-facts {
+  display: grid;
+  grid-template-columns: 10ch minmax(0, 1fr);
+  gap: 3px 12px;
+}
+
+:root[data-design="a"] .da-fact {
+  display: contents;
+
+  dt {
+    color: var(--da-ink-2);
+  }
+
+  dd {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}
+
+:root[data-design="a"] .da-facts-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 24px;
+  margin-bottom: 8px;
+
+  .da-fact {
+    display: block;
+  }
+
+  dt {
+    font-size: 12px;
+    line-height: 16px;
+  }
+
+  dd {
+    font-size: 15px;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  dd .da-quiet {
+    font-size: 12px;
+    font-weight: 400;
+  }
+}
+
+:root[data-design="a"] .da-more {
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+:root[data-design="a"] .da-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* ---- requests ---- */
+
+:root[data-design="a"] .da-requests {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+:root[data-design="a"] .da-requests-bar {
+  flex: none;
+}
+
+:root[data-design="a"] .da-totals {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+:root[data-design="a"] .da-breakdowns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+:root[data-design="a"] .da-breakdown {
+  padding-bottom: 14px;
+}
+
+:root[data-design="a"] .da-breakdown:nth-child(odd) {
+  border-right: 1px solid var(--da-line);
+}
+
+:root[data-design="a"] .da-breakdown .da-table {
+  thead th {
+    position: static;
+  }
+
+  thead th:first-child {
+    font-weight: 600;
+    color: var(--da-ink);
+  }
+
+  th:nth-child(2) {
+    width: 84px;
+  }
+
+  .da-col-share {
+    width: 22%;
+  }
+
+  th:nth-child(4) {
+    width: 68px;
+  }
+
+  .da-col-latency {
+    width: 72px;
+  }
+
+  .da-col-tokens {
+    width: 76px;
+  }
+}
+
+:root[data-design="a"] .da-list {
+  flex: 1 1 0;
+  min-height: 0;
+  height: auto;
+}
+
+:root[data-design="a"] .da-requests-table {
+  th:nth-child(1) {
+    width: 96px;
+  }
+
+  th:nth-child(2) {
+    width: 148px;
+  }
+
+  .da-col-path {
+    width: 24%;
+  }
+
+  th:nth-child(6) {
+    width: 76px;
+  }
+
+  .da-col-tokens {
+    width: 76px;
+  }
+
+  tbody tr {
+    cursor: pointer;
+  }
+
+  tbody tr[data-failed] {
+    box-shadow: inset 2px 0 0 var(--da-danger);
+  }
+}
+
+:root[data-design="a"] .da-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+:root[data-design="a"] .da-status-code {
+  color: var(--da-ink-2);
+}
+
+:root[data-design="a"] .da-marks {
+  display: block;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:root[data-design="a"] .da-mark-hop {
+  color: var(--da-warn);
+}
+
+:root[data-design="a"] .da-mark-hop[data-ok] {
+  color: var(--da-ink-2);
+}
+
+:root[data-design="a"] .da-mark-hop + .da-mark-hop::before {
+  margin: 0 6px;
+  color: var(--da-ink-3);
+  content: "→";
+}
+
+:root[data-design="a"] .da-path {
+  border-top: 1px solid var(--da-line);
+
+  li {
+    display: grid;
+    grid-template-columns: 2ch minmax(0, 1fr) auto;
+    gap: 0 10px;
+    align-items: center;
+    min-height: 40px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--da-line);
+  }
+
+  li:not([data-ok]) .da-path-who > a,
+  li:not([data-ok]) .da-path-who {
+    color: var(--da-ink-2);
+  }
+}
+
+:root[data-design="a"] .da-path + .da-quiet {
+  margin-top: 8px;
+}
+
+:root[data-design="a"] .da-path-n {
+  color: var(--da-ink-3);
+}
+
+:root[data-design="a"] .da-path-who {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+:root[data-design="a"] .da-path-result {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+/* ---- columns give way as a list narrows (a detail pane opened, or a small window) ---- */
+
+@container list (max-width: 1120px) {
+  :root[data-design="a"] .da-accounts-table .da-col-order,
+  :root[data-design="a"] .da-accounts-table .da-col-provider {
+    display: none;
+  }
+}
+
+@container list (max-width: 1000px) {
+  :root[data-design="a"] .da-accounts-table .da-col-error,
+  :root[data-design="a"] .da-requests-table .da-col-path {
+    display: none;
+  }
+}
+
+@container list (max-width: 780px) {
+  :root[data-design="a"] .da-accounts-table .da-col-now,
+  :root[data-design="a"] .da-requests-table .da-col-tokens {
+    display: none;
+  }
+
+  :root[data-design="a"] .da-accounts-table .da-col-fix {
+    width: 136px;
+  }
+}
+
+/* A phone: an account is two lines (who and how it stands, then its windows), not a table row. */
+@container list (max-width: 620px) {
+  :root[data-design="a"] .da-accounts-table {
+    display: block;
+
+    thead {
+      display: none;
+    }
+
+    tbody {
+      display: block;
+    }
+
+    tbody tr {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-areas: "name state" "windows windows" "fix fix";
+      gap: 2px 10px;
+      align-items: center;
+      padding: 7px var(--da-gap) 8px;
+      border-bottom: 1px solid var(--da-line);
+    }
+
+    tbody th,
+    tbody td {
+      height: auto;
+      padding: 0;
+      border: 0;
+    }
+
+    tbody td:first-child {
+      grid-area: state;
+      padding: 0;
+    }
+
+    tbody th {
+      grid-area: name;
+    }
+
+    tbody .da-col-windows {
+      display: block;
+      grid-area: windows;
+      width: auto;
+    }
+
+    tbody .da-col-fix {
+      display: block;
+      grid-area: fix;
+      width: auto;
+      text-align: left;
+    }
+
+    tbody .da-col-fix:empty {
+      display: none;
+    }
+  }
+
+  :root[data-design="a"] .da-requests-table {
+    th:nth-child(1) {
+      width: 76px;
+    }
+
+    th:nth-child(2) {
+      width: 58px;
+    }
+
+    th:nth-child(4),
+    td:nth-child(4),
+    .da-status-code {
+      display: none;
+    }
+
+    th:nth-child(6) {
+      width: 64px;
+    }
+  }
+
+  :root[data-design="a"] .da-filter {
+    flex: 1 1 100%;
+  }
+}
+
+/* ---- a narrow page area: one column that scrolls as a whole ---- */
+
+@container main (max-width: 1040px) {
+  :root[data-design="a"] .da-overview {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto;
+    height: auto;
+  }
+
+  :root[data-design="a"] .da-accounts-pane,
+  :root[data-design="a"] .da-tail {
+    overflow: visible;
+    border-left: 0;
+  }
+
+  :root[data-design="a"] .da-tail {
+    border-top: 1px solid var(--da-line-strong);
+  }
+
+  :root[data-design="a"] .da-overview .da-pane-head {
+    top: 0;
+  }
+
+  :root[data-design="a"] .da-board {
+    --cols: 172px minmax(100px, 1fr) 336px 44px;
+  }
+
+  :root[data-design="a"] .da-board-head > :nth-child(5) {
+    display: none;
+  }
+
+  :root[data-design="a"] .da-board-row .da-cell-error {
+    grid-column: 2 / -1;
+    padding-bottom: 6px;
+  }
+
+  :root[data-design="a"] .da-board-row .da-cell-error:not(:has(.da-clip:not(.da-quiet), .da-btn)) {
+    display: none;
+  }
+
+  :root[data-design="a"] .da-breakdowns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  :root[data-design="a"] .da-breakdown:nth-child(odd) {
+    border-right: 0;
+  }
+
+  /* A detail takes the whole page area, with a way back. */
+  :root[data-design="a"] .da-accounts[data-open],
+  :root[data-design="a"] .da-list[data-open] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  :root[data-design="a"] .da-accounts[data-open] > .da-list-pane,
+  :root[data-design="a"] .da-list[data-open] > .da-list-pane {
+    display: none;
+  }
+
+  :root[data-design="a"] .da-detail {
+    border-left: 0;
+  }
+
+  :root[data-design="a"] .da .da-back {
+    display: grid;
+  }
+}
+
+@container main (max-width: 700px) {
+  :root[data-design="a"] .da-strip {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  :root[data-design="a"] .da-strip > .da-bars {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  :root[data-design="a"] .da-figures {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px 12px;
+  }
+
+  :root[data-design="a"] .da-figure-value {
+    font-size: 18px;
+  }
+
+  :root[data-design="a"] .da-strip-keys {
+    display: none;
+  }
+
+  /* An account on the board is two lines: who and how it stands, then its windows. */
+  :root[data-design="a"] .da-board-head {
+    display: none;
+  }
+
+  :root[data-design="a"] .da-board-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "account state" "windows now" "error error";
+    gap: 2px 10px;
+    padding-block: 7px 8px;
+  }
+
+  :root[data-design="a"] .da-board-row .da-cell-state {
+    grid-area: state;
+  }
+
+  :root[data-design="a"] .da-board-row .da-cell-account {
+    grid-area: account;
+  }
+
+  :root[data-design="a"] .da-board-row .da-cell-windows {
+    grid-area: windows;
+  }
+
+  :root[data-design="a"] .da-board-row .da-cell-now {
+    grid-area: now;
+  }
+
+  :root[data-design="a"] .da-board-row .da-cell-now::after {
+    color: var(--da-ink-3);
+    content: " now";
+  }
+
+  :root[data-design="a"] .da-board-row .da-cell-error {
+    grid-area: error;
+    padding-bottom: 0;
+  }
+
+  :root[data-design="a"] .da-windows {
+    gap: 10px;
+  }
+
+  :root[data-design="a"] .da-window:not(.da-window-wide) {
+    grid-template-columns: 2ch 44px 4ch 6ch;
+    gap: 5px;
+  }
+
+  :root[data-design="a"] .da .da-tail-main {
+    grid-template-columns: 8ch 4ch minmax(0, 1fr) 6ch;
+    height: 32px;
+  }
+
+  :root[data-design="a"] .da-tail-account {
+    display: none;
+  }
+
+  :root[data-design="a"] .da-tail-path {
+    padding-left: calc(var(--da-gap) + 18px);
+  }
+
+  :root[data-design="a"] .da-breakdown .da-table .da-col-share,
+  :root[data-design="a"] .da-breakdown .da-table .da-col-latency {
+    display: none;
+  }
+
+  :root[data-design="a"] .da-table tbody th,
+  :root[data-design="a"] .da-table tbody td {
+    height: 36px;
+  }
+
+  :root[data-design="a"] .da-btn-small {
+    height: 28px;
+  }
+
+  :root[data-design="a"] .da-seg button {
+    height: 26px;
+  }
+
+  :root[data-design="a"] .da-filter {
+    height: 30px;
+  }
+}
+
+/* A very wide window: the screens keep their density and let the columns breathe. */
+@container main (min-width: 1900px) {
+  :root[data-design="a"] .da-board {
+    --cols: 200px minmax(160px, 1fr) 380px 56px minmax(220px, 2fr);
+  }
+
+  :root[data-design="a"] .da-window:not(.da-window-wide) {
+    grid-template-columns: 2ch 76px 4ch 6ch;
+  }
+
+  :root[data-design="a"] .da-breakdowns {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  :root[data-design="a"] .da-breakdown {
+    border-right: 1px solid var(--da-line);
+  }
+
+  :root[data-design="a"] .da-breakdown .da-table .da-col-latency {
+    display: none;
+  }
+}

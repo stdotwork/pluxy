@@ -43,7 +43,13 @@ export function Btn(props: {
   );
   if (props.href && !props.disabled) {
     return (
-      <a class={cls} data-variant={props.variant ?? "plain"} href={props.href} aria-label={props.label} title={props.title}>
+      <a
+        class={cls}
+        data-variant={props.variant ?? "plain"}
+        href={props.href}
+        aria-label={props.label}
+        title={props.title}
+      >
         {body}
       </a>
     );
@@ -84,6 +90,7 @@ export function ConfirmBtn(props: {
     return () => clearTimeout(timer);
   }, [armed]);
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: the span only watches the button inside it, to disarm it
     <span
       class="da-confirm"
       onKeyDown={(e) => {
@@ -168,7 +175,9 @@ export function WindowBar(props: { limit: QuotaLimit; now: number; wide?: boolea
         aria-valuenow={Math.round(pace.used * 100)}
       >
         <span class="da-window-fill" style={{ width: `${pace.used * 100}%` }} />
-        {pace.elapsed !== undefined && <span class="da-window-tick" style={{ left: `${pace.elapsed * 100}%` }} />}
+        {pace.elapsed !== undefined && (
+          <span class="da-window-tick" style={{ left: `${pace.elapsed * 100}%` }} />
+        )}
       </span>
       <span class="da-window-used da-num">{used}</span>
       <span class="da-window-reset da-num">{reset ?? "–"}</span>
@@ -181,7 +190,6 @@ export function Skeleton(props: { rows: number; label: string }) {
   return (
     <div class="da-skeleton" role="status" aria-label={props.label}>
       {Array.from({ length: props.rows }, (_, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: identical placeholders
         <span key={i} class="da-skeleton-row" style={{ width: `${92 - ((i * 17) % 40)}%` }} />
       ))}
     </div>
@@ -269,11 +277,11 @@ export function Bars(props: {
         </span>
         <span class="da-bars-peak da-num">peak {compact(peak)}</span>
       </div>
-      {/* biome-ignore lint/a11y/noNoninteractiveTabindex: the arrow keys read the chart step by step */}
       <div
         class="da-bars-plot"
         ref={ref}
         role="img"
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: the arrow keys read the chart step by step
         tabIndex={0}
         aria-label={`${props.label}. Left and right arrows read one step.`}
         style={{ height: `${props.height ?? 56}px` }}
@@ -290,9 +298,17 @@ export function Bars(props: {
         {series.map((b, i) => {
           const ok = b.requests - b.failure_count;
           return (
-            <span key={b.start} class="da-bar" data-on={i === at ? "" : undefined} data-empty={b.requests ? undefined : ""}>
+            <span
+              key={b.start}
+              class="da-bar"
+              data-on={i === at ? "" : undefined}
+              data-empty={b.requests ? undefined : ""}
+            >
               {b.failure_count > 0 && (
-                <span class="da-bar-failed" style={{ height: `${Math.max(2, (b.failure_count / peak) * 100)}%` }} />
+                <span
+                  class="da-bar-failed"
+                  style={{ height: `${Math.max(2, (b.failure_count / peak) * 100)}%` }}
+                />
               )}
               {ok > 0 && <span class="da-bar-ok" style={{ height: `${Math.max(2, (ok / peak) * 100)}%` }} />}
             </span>

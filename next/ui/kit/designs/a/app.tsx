@@ -39,7 +39,9 @@ if (typeof FontFace !== "undefined" && typeof document !== "undefined") {
     ["500", plex500],
     ["600", plex600],
   ] as const) {
-    document.fonts.add(new FontFace("IBM Plex Mono", `url("${href}") format("woff2")`, { weight, display: "swap" }));
+    document.fonts.add(
+      new FontFace("IBM Plex Mono", `url("${href}") format("woff2")`, { weight, display: "swap" }),
+    );
   }
 }
 
@@ -92,11 +94,22 @@ export function placeOf(path: string, pages: PageDef[]): Place {
   const viewsOf = (dest: Dest, current: string): View[] => {
     const v = (label: string, href: string, id: string): View => ({ label, href, current: current === id });
     if (dest === "accounts")
-      return [v("Accounts", "#/accounts", "accounts"), v("Add account", "#/add-account", "add-account"), v("Quota", "#/quota", "quota")];
-    if (dest === "requests") return [v("Totals", "#/usage", "totals"), v("List", "#/usage/list", "list"), v("Log", "#/logs", "logs")];
+      return [
+        v("Accounts", "#/accounts", "accounts"),
+        v("Add account", "#/add-account", "add-account"),
+        v("Quota", "#/quota", "quota"),
+      ];
+    if (dest === "requests")
+      return [
+        v("Totals", "#/usage", "totals"),
+        v("List", "#/usage/list", "list"),
+        v("Log", "#/logs", "logs"),
+      ];
     if (dest === "settings")
       return [
-        ...["config", "extensions", "themes", "system", "setup"].filter(has).map((id) => v(LEGACY[id]?.label ?? id, `#/${id}`, id)),
+        ...["config", "extensions", "themes", "system", "setup"]
+          .filter(has)
+          .map((id) => v(LEGACY[id]?.label ?? id, `#/${id}`, id)),
         ...pages.filter((p) => p.group === "extensions").map((p) => v(p.title, `#/${p.id}`, p.id)),
       ];
     return [];
@@ -125,7 +138,13 @@ export function placeOf(path: string, pages: PageDef[]): Place {
     };
   }
   if (first === "accounts")
-    return { dest: "accounts", title: "Accounts", views: viewsOf("accounts", "accounts"), pageId: "accounts", render: () => <Accounts rest={rest} /> };
+    return {
+      dest: "accounts",
+      title: "Accounts",
+      views: viewsOf("accounts", "accounts"),
+      pageId: "accounts",
+      render: () => <Accounts rest={rest} />,
+    };
   if (first === "usage") {
     const list = rest.startsWith("list");
     return {
@@ -182,7 +201,6 @@ function SignIn(props: { session: Session }) {
             type="password"
             autocomplete="current-password"
             required
-            // biome-ignore lint/a11y/noAutofocus: the key is the only thing to do on this page
             autofocus
             value={key}
             onInput={(e) => setKey(e.currentTarget.value)}
@@ -231,11 +249,16 @@ function CoreState(props: { status: ReturnType<typeof usePoll<Status>> }) {
   const current = s.extensions.filter((e) => e.current).length;
   const pending = s.desired.revision !== s.active.revision || !!s.desired.error;
   return (
-    <span class="da-core" title={`pluxy ${s.version} (${s.commit}), config revision ${s.active.revision}, ${current} extensions`}>
+    <span
+      class="da-core"
+      title={`pluxy ${s.version} (${s.commit}), config revision ${s.active.revision}, ${current} extensions`}
+    >
       <span class="da-core-dot" data-tone={down.length || pending ? "warn" : "ok"} />
       <span class="da-core-part">core {s.version}</span>
       <span class="da-core-part da-quiet da-num" data-tone={pending ? "warn" : undefined}>
-        {pending ? `rev ${s.active.revision} (${s.desired.revision} not applied)` : `rev ${s.active.revision}`}
+        {pending
+          ? `rev ${s.active.revision} (${s.desired.revision} not applied)`
+          : `rev ${s.active.revision}`}
       </span>
       <a class="da-core-part da-num" href="#/extensions" data-tone={down.length ? "danger" : undefined}>
         {down.length ? `${down.length} of ${current} ext down` : `${current} ext`}
@@ -349,7 +372,6 @@ function Shell(props: { session: Session; themes: ThemeState }) {
     document.title = `${place.title} · pluxy`;
   }, [place.pageId, place.title]);
   // A change of destination opens at its top; a change inside one (a row, a filter) keeps the place.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the destination and view are what changed
   useEffect(() => {
     main.current?.scrollTo(0, 0);
   }, [place.dest, place.title]);
@@ -362,10 +384,28 @@ function Shell(props: { session: Session; themes: ThemeState }) {
     themes.set({ appearance: next });
   };
   const globals: KeyBinding[] = [
-    ...DESTS.map((d) => ({ keys: d.keys, label: `Go to ${d.label}`, run: () => go(d.href), quiet: true, group: "Go to" })),
+    ...DESTS.map((d) => ({
+      keys: d.keys,
+      label: `Go to ${d.label}`,
+      run: () => go(d.href),
+      quiet: true,
+      group: "Go to",
+    })),
     { keys: "?", label: "Show the keys", run: () => setSheet(true), group: "Everywhere", keyOnly: true },
-    { keys: "t p", label: session.privacyOn ? "Turn privacy mode off" : "Turn privacy mode on", run: () => session.setPrivacy(!session.privacyOn), quiet: true, group: "Everywhere" },
-    { keys: "t l", label: `Appearance: ${appearance.choice} (change)`, run: cycleAppearance, quiet: true, group: "Everywhere" },
+    {
+      keys: "t p",
+      label: session.privacyOn ? "Turn privacy mode off" : "Turn privacy mode on",
+      run: () => session.setPrivacy(!session.privacyOn),
+      quiet: true,
+      group: "Everywhere",
+    },
+    {
+      keys: "t l",
+      label: `Appearance: ${appearance.choice} (change)`,
+      run: cycleAppearance,
+      quiet: true,
+      group: "Everywhere",
+    },
   ];
   // The shell's keys are registered once and replaced as their state changes; a screen's come after and win.
   const globalScope = useRef(Symbol("shell"));
@@ -405,19 +445,91 @@ function Shell(props: { session: Session; themes: ThemeState }) {
     if (!menu) return [];
     const now = Date.now();
     const pages: Command[] = [
-      ...DESTS.map((d) => ({ id: `go:${d.id}`, group: "Go to" as const, label: d.label, icon: d.icon, keys: d.keys, run: () => go(d.href) })),
-      { id: "go:add", group: "Go to", label: "Add account", detail: "Accounts", icon: "plus", words: "new sign in api key login", run: () => go("#/add-account") },
-      { id: "go:list", group: "Go to", label: "Request list", detail: "Requests", icon: "list", words: "usage events history", run: () => go("#/usage/list") },
-      { id: "go:failed", group: "Go to", label: "Failed requests", detail: "Requests", icon: "failed", words: "errors", run: () => go("#/usage/list?failed=true") },
-      { id: "go:log", group: "Go to", label: "Log", detail: "Requests", icon: "log", words: "logs viewer", run: () => go("#/logs") },
-      { id: "go:quota", group: "Go to", label: "Quota", detail: "Accounts", icon: "exhausted", words: "usage windows limits", run: () => go("#/quota") },
+      ...DESTS.map((d) => ({
+        id: `go:${d.id}`,
+        group: "Go to" as const,
+        label: d.label,
+        icon: d.icon,
+        keys: d.keys,
+        run: () => go(d.href),
+      })),
+      {
+        id: "go:add",
+        group: "Go to",
+        label: "Add account",
+        detail: "Accounts",
+        icon: "plus",
+        words: "new sign in api key login",
+        run: () => go("#/add-account"),
+      },
+      {
+        id: "go:list",
+        group: "Go to",
+        label: "Request list",
+        detail: "Requests",
+        icon: "list",
+        words: "usage events history",
+        run: () => go("#/usage/list"),
+      },
+      {
+        id: "go:failed",
+        group: "Go to",
+        label: "Failed requests",
+        detail: "Requests",
+        icon: "failed",
+        words: "errors",
+        run: () => go("#/usage/list?failed=true"),
+      },
+      {
+        id: "go:log",
+        group: "Go to",
+        label: "Log",
+        detail: "Requests",
+        icon: "log",
+        words: "logs viewer",
+        run: () => go("#/logs"),
+      },
+      {
+        id: "go:quota",
+        group: "Go to",
+        label: "Quota",
+        detail: "Accounts",
+        icon: "exhausted",
+        words: "usage windows limits",
+        run: () => go("#/quota"),
+      },
       ...session.pages
-        .filter((pg) => (LEGACY[pg.id]?.dest === "settings" || pg.group === "extensions") && pg.id !== "config")
-        .map((pg) => ({ id: `go:${pg.id}`, group: "Go to" as const, label: LEGACY[pg.id]?.label ?? pg.title, detail: pg.group === "extensions" ? "Extension page" : "Settings", icon: "settings" as const, run: () => go(`#/${pg.id}`) })),
-      { id: "go:keys", group: "Go to", label: "Client keys", detail: "Settings", icon: "key", words: "api key token", run: () => go("#/config/common") },
+        .filter(
+          (pg) => (LEGACY[pg.id]?.dest === "settings" || pg.group === "extensions") && pg.id !== "config",
+        )
+        .map((pg) => ({
+          id: `go:${pg.id}`,
+          group: "Go to" as const,
+          label: LEGACY[pg.id]?.label ?? pg.title,
+          detail: pg.group === "extensions" ? "Extension page" : "Settings",
+          icon: "settings" as const,
+          run: () => go(`#/${pg.id}`),
+        })),
+      {
+        id: "go:keys",
+        group: "Go to",
+        label: "Client keys",
+        detail: "Settings",
+        icon: "key",
+        words: "api key token",
+        run: () => go("#/config/common"),
+      },
       ...["status", "accounts", "usage"]
         .filter((id) => session.pages.some((pg) => pg.id === id))
-        .map((id) => ({ id: `classic:${id}`, group: "Go to" as const, label: `Today's ${session.pages.find((pg) => pg.id === id)?.title} page`, detail: "before this design", icon: "open" as const, words: "classic old legacy bulk import upload", run: () => go(`#/classic/${id}`) })),
+        .map((id) => ({
+          id: `classic:${id}`,
+          group: "Go to" as const,
+          label: `Today's ${session.pages.find((pg) => pg.id === id)?.title} page`,
+          detail: "before this design",
+          icon: "open" as const,
+          words: "classic old legacy bulk import upload",
+          run: () => go(`#/classic/${id}`),
+        })),
     ];
     const found: Command[] = (accounts ?? []).map((a) => {
       const s = standingOf(a, now);
@@ -433,12 +545,35 @@ function Shell(props: { session: Session; themes: ThemeState }) {
     });
     const actions: Command[] = [
       ...bindingCommands(bindings),
-      { id: "do:reload", group: "Actions", label: "Reload config", detail: "core reads its config file again", icon: "refresh", run: () => void kit.api.reload().then(() => status.reload()) },
-      { id: "do:sheet", group: "Actions", label: "Show the keys", icon: "keyboard", keys: "?", run: () => setSheet(true) },
-      ...(session.canSignOut ? [{ id: "do:out", group: "Actions" as const, label: "Sign out", icon: "signOut" as const, run: () => session.signOut() }] : []),
+      {
+        id: "do:reload",
+        group: "Actions",
+        label: "Reload config",
+        detail: "core reads its config file again",
+        icon: "refresh",
+        run: () => void kit.api.reload().then(() => status.reload()),
+      },
+      {
+        id: "do:sheet",
+        group: "Actions",
+        label: "Show the keys",
+        icon: "keyboard",
+        keys: "?",
+        run: () => setSheet(true),
+      },
+      ...(session.canSignOut
+        ? [
+            {
+              id: "do:out",
+              group: "Actions" as const,
+              label: "Sign out",
+              icon: "signOut" as const,
+              run: () => session.signOut(),
+            },
+          ]
+        : []),
     ];
     return [...pages, ...found, ...actions];
-    // biome-ignore lint/correctness/useExhaustiveDependencies: built when the menu opens, from what is on screen then
   }, [menu, accounts, bindings, session.pages, p]);
 
   const hints = bindings.filter((b) => !b.quiet).slice(0, 7);
@@ -455,7 +590,12 @@ function Shell(props: { session: Session; themes: ThemeState }) {
           <ul>
             {DESTS.map((d) => (
               <li key={d.id}>
-                <a href={d.href} class="da-rail-item" aria-current={place.dest === d.id ? "page" : undefined} aria-label={d.label}>
+                <a
+                  href={d.href}
+                  class="da-rail-item"
+                  aria-current={place.dest === d.id ? "page" : undefined}
+                  aria-label={d.label}
+                >
                   <Icon name={d.icon} size={18} />
                   <span class="da-rail-label">{d.label}</span>
                   <span class="da-tip" aria-hidden="true">
@@ -468,16 +608,35 @@ function Shell(props: { session: Session; themes: ThemeState }) {
           <span class="da-grow" />
           <ul class="da-rail-tools">
             <li>
-              <button type="button" class="da-rail-item" aria-pressed={session.privacyOn} aria-label="Privacy mode" onClick={() => session.setPrivacy(!session.privacyOn)}>
+              <button
+                type="button"
+                class="da-rail-item"
+                aria-pressed={session.privacyOn}
+                aria-label="Privacy mode"
+                onClick={() => session.setPrivacy(!session.privacyOn)}
+              >
                 <Icon name={session.privacyOn ? "eyeOff" : "eye"} size={18} />
                 <span class="da-tip" aria-hidden="true">
-                  {session.privacyOn ? "Privacy mode is on: names are masked" : "Privacy mode: mask account names"} <Kbd keys="t p" />
+                  {session.privacyOn
+                    ? "Privacy mode is on: names are masked"
+                    : "Privacy mode: mask account names"}{" "}
+                  <Kbd keys="t p" />
                 </span>
               </button>
             </li>
             <li>
-              <button type="button" class="da-rail-item" aria-label={`Appearance: ${appearance.choice}`} onClick={cycleAppearance}>
-                <Icon name={appearance.choice === "system" ? "monitor" : appearance.choice === "dark" ? "moon" : "sun"} size={18} />
+              <button
+                type="button"
+                class="da-rail-item"
+                aria-label={`Appearance: ${appearance.choice}`}
+                onClick={cycleAppearance}
+              >
+                <Icon
+                  name={
+                    appearance.choice === "system" ? "monitor" : appearance.choice === "dark" ? "moon" : "sun"
+                  }
+                  size={18}
+                />
                 <span class="da-tip" aria-hidden="true">
                   Appearance: {appearance.choice} <Kbd keys="t l" />
                 </span>
@@ -485,7 +644,12 @@ function Shell(props: { session: Session; themes: ThemeState }) {
             </li>
             {session.canSignOut && (
               <li>
-                <button type="button" class="da-rail-item" aria-label="Sign out" onClick={() => session.signOut()}>
+                <button
+                  type="button"
+                  class="da-rail-item"
+                  aria-label="Sign out"
+                  onClick={() => session.signOut()}
+                >
                   <Icon name="signOut" size={18} />
                   <span class="da-tip" aria-hidden="true">
                     Sign out
@@ -508,7 +672,11 @@ function Shell(props: { session: Session; themes: ThemeState }) {
             <nav class="da-views" aria-label="Views">
               {place.views.map((v, i) => (
                 <a key={v.href} href={v.href} aria-current={v.current ? "page" : undefined}>
-                  {i < 9 && <span class="da-views-n da-num" aria-hidden="true">{i + 1}</span>}
+                  {i < 9 && (
+                    <span class="da-views-n da-num" aria-hidden="true">
+                      {i + 1}
+                    </span>
+                  )}
                   {v.label.toLowerCase()}
                 </a>
               ))}
@@ -516,7 +684,13 @@ function Shell(props: { session: Session; themes: ThemeState }) {
           )}
           <span class="da-grow" />
           <CoreState status={status} />
-          <button type="button" class="da-cmd-open" onClick={() => setMenu(true)} aria-label="Open the command menu" aria-keyshortcuts="Control+K Meta+K">
+          <button
+            type="button"
+            class="da-cmd-open"
+            onClick={() => setMenu(true)}
+            aria-label="Open the command menu"
+            aria-keyshortcuts="Control+K Meta+K"
+          >
             <Icon name="search" size={14} />
             <span class="da-cmd-open-text">Go to, find, run</span>
             <span class="da-kbd" aria-hidden="true">
@@ -531,7 +705,7 @@ function Shell(props: { session: Session; themes: ThemeState }) {
           {place.render()}
         </main>
 
-        <footer class="da-hints" aria-label="Keys for this screen">
+        <footer class="da-hints">
           {hints.map((b) => (
             <button key={b.keys} type="button" class="da-hint" onClick={b.run} title={b.label}>
               <Kbd keys={b.keys} />
@@ -549,7 +723,9 @@ function Shell(props: { session: Session; themes: ThemeState }) {
           </span>
         </footer>
 
-        {menu && <CommandMenu commands={commands} loadingAccounts={!accounts} onClose={() => setMenu(false)} />}
+        {menu && (
+          <CommandMenu commands={commands} loadingAccounts={!accounts} onClose={() => setMenu(false)} />
+        )}
         {sheet && <KeysSheet bindings={bindings} onClose={() => setSheet(false)} />}
       </div>
     </KeysContext.Provider>

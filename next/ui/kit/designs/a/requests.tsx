@@ -11,7 +11,19 @@ import { useNow, usePoll } from "./data";
 import { useAccountNames } from "./fleet";
 import { Icon } from "./icons";
 import { useKeys } from "./keys";
-import { clock, compact, fellBack, latency, matchScore, pathOf, percent, type Range, stamp, usageQuery, verdict } from "./lib";
+import {
+  clock,
+  compact,
+  fellBack,
+  latency,
+  matchScore,
+  pathOf,
+  percent,
+  type Range,
+  stamp,
+  usageQuery,
+  verdict,
+} from "./lib";
 import { Figures, RangePicker, stepLabel, useRange } from "./overview";
 import { Bars, Blank, Btn, Fault, Kbd, ShareBar, Skeleton } from "./parts";
 
@@ -56,7 +68,9 @@ export function placeAddress(place: Place): string {
 }
 
 const filterQuery = (f: Filters) =>
-  FILTERS.map((k) => (f[k] ? `&${k === "key" ? "key_id" : k}=${encodeURIComponent(f[k] as string)}` : "")).join("");
+  FILTERS.map((k) =>
+    f[k] ? `&${k === "key" ? "key_id" : k}=${encodeURIComponent(f[k] as string)}` : "",
+  ).join("");
 
 export function Requests(props: { rest: string }) {
   const place = useMemo(() => parsePlace(props.rest), [props.rest]);
@@ -66,9 +80,14 @@ export function Requests(props: { rest: string }) {
     location.hash = placeAddress(next);
   };
   const setFilter = (key: FilterKey, value?: string) =>
-    go({ ...place, seq: undefined, filters: { ...place.filters, [key]: place.filters[key] === value ? undefined : value } });
+    go({
+      ...place,
+      seq: undefined,
+      filters: { ...place.filters, [key]: place.filters[key] === value ? undefined : value },
+    });
   const active = FILTERS.filter((k) => place.filters[k]);
-  const shown = (k: FilterKey, v: string) => (k === "account" ? names.nameOf(v) : k === "failed" ? (v === "true" ? "failed only" : "served only") : v);
+  const shown = (k: FilterKey, v: string) =>
+    k === "account" ? names.nameOf(v) : k === "failed" ? (v === "true" ? "failed only" : "served only") : v;
   return (
     <div class="da-requests" data-view={place.view}>
       <header class="da-pane-head da-toolbar da-requests-bar">
@@ -81,7 +100,12 @@ export function Requests(props: { rest: string }) {
           <ul class="da-chips" aria-label="Filters">
             {active.map((k) => (
               <li key={k}>
-                <button type="button" class="da-chip" onClick={() => setFilter(k, place.filters[k])} title="Remove this filter">
+                <button
+                  type="button"
+                  class="da-chip"
+                  onClick={() => setFilter(k, place.filters[k])}
+                  title="Remove this filter"
+                >
                   <span class="da-quiet">{k === "failed" ? "" : `${k} `}</span>
                   <span class="da-clip">{shown(k, place.filters[k] as string)}</span>
                   <Icon name="close" size={12} />
@@ -91,7 +115,11 @@ export function Requests(props: { rest: string }) {
             ))}
             {active.length > 1 && (
               <li>
-                <button type="button" class="da-chip da-chip-clear" onClick={() => go({ ...place, seq: undefined, filters: {} })}>
+                <button
+                  type="button"
+                  class="da-chip da-chip-clear"
+                  onClick={() => go({ ...place, seq: undefined, filters: {} })}
+                >
                   clear all
                 </button>
               </li>
@@ -126,7 +154,12 @@ function Totals(props: {
     { keys: "r", label: "Refresh", run: usage.reload, group: "Requests" },
     { keys: "[", label: "Shorter range", run: () => props.stepRange(-1), quiet: true, group: "Requests" },
     { keys: "]", label: "Longer range", run: () => props.stepRange(1), quiet: true, group: "Requests" },
-    { keys: "l", label: "Show these as a list", run: () => (location.hash = placeAddress({ ...place, view: "list" })), group: "Requests" },
+    {
+      keys: "l",
+      label: "Show these as a list",
+      run: () => (location.hash = placeAddress({ ...place, view: "list" })),
+      group: "Requests",
+    },
   ]);
   const u = usage.data;
   if (usage.loading) {
@@ -168,20 +201,33 @@ function Totals(props: {
           now={now}
           height={96}
           label={`Requests over the last ${range.label}: ${u.total_requests} in all, ${u.failure_count} failed`}
-          summary={u.total_requests ? `requests per ${stepLabel(u.bucket_seconds)}, failed in red` : "no requests in this range"}
+          summary={
+            u.total_requests
+              ? `requests per ${stepLabel(u.bucket_seconds)}, failed in red`
+              : "no requests in this range"
+          }
         />
         {(!whole || (u.write_errors ?? 0) > 0) && (
           <p class="da-strip-note">
             <Icon name="alert" size={14} />
-            {!whole && u.oldest && `Core's record starts ${stamp(u.oldest, now)}, so this range is not whole. `}
-            {(u.write_errors ?? 0) > 0 && `${u.write_errors} requests could not be written to the usage files and will be lost on restart.`}
+            {!whole &&
+              u.oldest &&
+              `Core's record starts ${stamp(u.oldest, now)}, so this range is not whole. `}
+            {(u.write_errors ?? 0) > 0 &&
+              `${u.write_errors} requests could not be written to the usage files and will be lost on restart.`}
           </p>
         )}
       </section>
       {u.total_requests === 0 ? (
         <Blank
           title={filtered ? "No requests match" : `No requests in the last ${range.label}`}
-          action={filtered ? <Btn href="#/usage">Clear the filters</Btn> : <Btn onClick={() => props.stepRange(1)}>Longer range</Btn>}
+          action={
+            filtered ? (
+              <Btn href="#/usage">Clear the filters</Btn>
+            ) : (
+              <Btn onClick={() => props.stepRange(1)}>Longer range</Btn>
+            )
+          }
         >
           {filtered
             ? "Nothing in this range has all of the filters above."
@@ -189,8 +235,22 @@ function Totals(props: {
         </Blank>
       ) : (
         <div class="da-breakdowns">
-          <Breakdown title="provider" k="provider" groups={u.providers} total={u.total_requests} place={place} setFilter={props.setFilter} />
-          <Breakdown title="model" k="model" groups={u.models} total={u.total_requests} place={place} setFilter={props.setFilter} />
+          <Breakdown
+            title="provider"
+            k="provider"
+            groups={u.providers}
+            total={u.total_requests}
+            place={place}
+            setFilter={props.setFilter}
+          />
+          <Breakdown
+            title="model"
+            k="model"
+            groups={u.models}
+            total={u.total_requests}
+            place={place}
+            setFilter={props.setFilter}
+          />
           <Breakdown
             title="account"
             k="account"
@@ -229,7 +289,8 @@ function Breakdown(props: {
 }) {
   const [all, setAll] = useState(false);
   const groups = useMemo(
-    () => [...props.groups].sort((a, b) => b.total_requests - a.total_requests || a.name.localeCompare(b.name)),
+    () =>
+      [...props.groups].sort((a, b) => b.total_requests - a.total_requests || a.name.localeCompare(b.name)),
     [props.groups],
   );
   const shown = all ? groups : groups.slice(0, TOP);
@@ -282,13 +343,18 @@ function Breakdown(props: {
                     failed={g.total_requests ? g.failure_count / g.total_requests : 0}
                   />
                 </td>
-                <td class="da-num da-right" data-tone={g.failure_count ? (g.success_rate < 0.8 ? "danger" : "warn") : undefined}>
+                <td
+                  class="da-num da-right"
+                  data-tone={g.failure_count ? (g.success_rate < 0.8 ? "danger" : "warn") : undefined}
+                >
                   {percent(g.success_rate)}
                 </td>
                 <td class="da-num da-right da-col-latency da-quiet">
                   {g.average_latency_ms !== undefined ? latency(g.average_latency_ms) : "–"}
                 </td>
-                <td class="da-num da-right da-col-tokens">{g.tokens ? compact(g.tokens.total_tokens) : "–"}</td>
+                <td class="da-num da-right da-col-tokens">
+                  {g.tokens ? compact(g.tokens.total_tokens) : "–"}
+                </td>
               </tr>
             );
           })}
@@ -317,12 +383,15 @@ function List(props: {
   const { range, place, names } = props;
   const now = useNow(30_000);
   const query = `since=${range.since}${filterQuery(place.filters)}`;
-  const first = usePoll<UsageEventsReply>(() => api.usageEventsPage(`before=0&limit=${PAGE}&${query}`), 0, query);
+  const first = usePoll<UsageEventsReply>(
+    () => api.usageEventsPage(`before=0&limit=${PAGE}&${query}`),
+    0,
+    query,
+  );
   // Older pages, loaded on request, belong to one query and one first page.
   const [older, setOlder] = useState<{ query: string; events: UsageEvent[]; next: number; more: boolean }>();
   const [olderBusy, setOlderBusy] = useState(false);
   const [olderError, setOlderError] = useState<string>();
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a new first page starts the older ones over
   useEffect(() => setOlder(undefined), [query, first.at]);
   const [typed, setTyped] = useState("");
   const [onlyBack, setOnlyBack] = useState(false);
@@ -339,7 +408,10 @@ function List(props: {
       loaded.filter(
         (e) =>
           (!onlyBack || fellBack(e)) &&
-          matchScore(`${e.model} ${names.nameOf(e.account)} ${e.provider ?? ""} ${e.status ?? ""} ${e.error_code ?? ""} ${e.id ?? ""} ${e.key_id ?? ""}`, typed) > 0,
+          matchScore(
+            `${e.model} ${names.nameOf(e.account)} ${e.provider ?? ""} ${e.status ?? ""} ${e.error_code ?? ""} ${e.id ?? ""} ${e.key_id ?? ""}`,
+            typed,
+          ) > 0,
       ),
     [loaded, onlyBack, typed, names],
   );
@@ -367,7 +439,6 @@ function List(props: {
     const to = rows[Math.max(0, Math.min(rows.length - 1, at < 0 ? 0 : at + by))];
     if (to) open(to.seq);
   };
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the open request is what moved
   useEffect(() => {
     table.current?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: "nearest" });
   }, [place.seq]);
@@ -376,8 +447,18 @@ function List(props: {
     { keys: "k", label: "Previous request", run: () => move(-1), keyOnly: true, group: "Requests" },
     { keys: "/", label: "Filter requests", run: () => filter.current?.focus(), group: "Requests" },
     { keys: "r", label: "Refresh", run: first.reload, group: "Requests" },
-    { keys: "f", label: place.filters.failed === "true" ? "Show served too" : "Failed only", run: () => props.setFilter("failed", "true"), group: "Requests" },
-    { keys: "b", label: onlyBack ? "Show all paths" : "Fell back only", run: () => setOnlyBack((v) => !v), group: "Requests" },
+    {
+      keys: "f",
+      label: place.filters.failed === "true" ? "Show served too" : "Failed only",
+      run: () => props.setFilter("failed", "true"),
+      group: "Requests",
+    },
+    {
+      keys: "b",
+      label: onlyBack ? "Show all paths" : "Fell back only",
+      run: () => setOnlyBack((v) => !v),
+      group: "Requests",
+    },
     { keys: "[", label: "Shorter range", run: () => props.stepRange(-1), quiet: true, group: "Requests" },
     { keys: "]", label: "Longer range", run: () => props.stepRange(1), quiet: true, group: "Requests" },
     ...(place.seq !== undefined
@@ -408,7 +489,11 @@ function List(props: {
             <Kbd keys="/" />
           </label>
           <fieldset class="da-seg" aria-label="Show">
-            <button type="button" aria-pressed={place.filters.failed === "true"} onClick={() => props.setFilter("failed", "true")}>
+            <button
+              type="button"
+              aria-pressed={place.filters.failed === "true"}
+              onClick={() => props.setFilter("failed", "true")}
+            >
               failed <Kbd keys="f" />
             </button>
             <button type="button" aria-pressed={onlyBack} onClick={() => setOnlyBack((v) => !v)}>
@@ -418,27 +503,39 @@ function List(props: {
           <span class="da-grow" />
           {data && (
             <span class="da-quiet da-num">
-              {rows.length === loaded.length ? compact(loaded.length) : `${compact(rows.length)} of ${compact(loaded.length)}`}
+              {rows.length === loaded.length
+                ? compact(loaded.length)
+                : `${compact(rows.length)} of ${compact(loaded.length)}`}
               {more ? "+" : ""} requests
             </span>
           )}
         </header>
-        {first.error && <Fault what="Requests could not be read." error={first.error} retry={first.reload} stale={!!data} />}
+        {first.error && (
+          <Fault what="Requests could not be read." error={first.error} retry={first.reload} stale={!!data} />
+        )}
         {data?.lost && (
           <p class="da-strip-note">
             <Icon name="alert" size={14} />
-            Core let go of older requests in this range to stay within its limit, so the list starts later than the range.
+            Core let go of older requests in this range to stay within its limit, so the list starts later
+            than the range.
           </p>
         )}
         {first.loading ? (
           <Skeleton rows={16} label="Reading requests" />
         ) : data?.enabled === false ? (
-          <Blank title="Usage recording is off" action={<Btn href="#/config/logging">Open logging settings</Btn>}>
+          <Blank
+            title="Usage recording is off"
+            action={<Btn href="#/config/logging">Open logging settings</Btn>}
+          >
             Core keeps no record of requests while it is off.
           </Blank>
         ) : data && loaded.length === 0 ? (
           <Blank
-            title={Object.keys(place.filters).length ? "No requests match" : `No requests in the last ${range.label}`}
+            title={
+              Object.keys(place.filters).length
+                ? "No requests match"
+                : `No requests in the last ${range.label}`
+            }
             action={
               Object.keys(place.filters).length ? (
                 <Btn href="#/usage/list">Clear the filters</Btn>
@@ -488,7 +585,14 @@ function List(props: {
               </thead>
               <tbody>
                 {rows.map((e) => (
-                  <RequestRow key={e.seq} e={e} names={names} now={now} selected={e.seq === place.seq} open={open} />
+                  <RequestRow
+                    key={e.seq}
+                    e={e}
+                    names={names}
+                    now={now}
+                    selected={e.seq === place.seq}
+                    open={open}
+                  />
                 ))}
               </tbody>
             </table>
@@ -506,7 +610,14 @@ function List(props: {
         )}
       </section>
       {place.seq !== undefined && (
-        <RequestPane e={selected} seq={place.seq} loading={first.loading} names={names} now={now} onClose={() => open()} />
+        <RequestPane
+          e={selected}
+          seq={place.seq}
+          loading={first.loading}
+          names={names}
+          now={now}
+          onClose={() => open()}
+        />
       )}
     </div>
   );
@@ -520,7 +631,6 @@ function PathMarks(props: { e: UsageEvent }) {
   return (
     <span class="da-marks" title={hops.map((h) => h.result).join(" → ")}>
       {hops.map((h, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: a request can try one account twice
         <span key={i} class="da-mark-hop" data-ok={h.ok ? "" : undefined}>
           {h.ok ? "ok" : h.result.replace(/_/g, " ")}
         </span>
@@ -529,7 +639,13 @@ function PathMarks(props: { e: UsageEvent }) {
   );
 }
 
-function RequestRow(props: { e: UsageEvent; names: Names; now: number; selected: boolean; open: (seq: number) => void }) {
+function RequestRow(props: {
+  e: UsageEvent;
+  names: Names;
+  now: number;
+  selected: boolean;
+  open: (seq: number) => void;
+}) {
   const { e } = props;
   return (
     <tr
@@ -541,8 +657,15 @@ function RequestRow(props: { e: UsageEvent; names: Names; now: number; selected:
       }}
     >
       <th scope="row">
-        <button type="button" class="da-rowlink da-num" onClick={() => props.open(e.seq)} title={new Date(e.timestamp).toLocaleString()}>
-          {new Date(e.timestamp).toDateString() === new Date(props.now).toDateString() ? clock(e.timestamp) : stamp(e.timestamp, props.now)}
+        <button
+          type="button"
+          class="da-rowlink da-num"
+          onClick={() => props.open(e.seq)}
+          title={new Date(e.timestamp).toLocaleString()}
+        >
+          {new Date(e.timestamp).toDateString() === new Date(props.now).toDateString()
+            ? clock(e.timestamp)
+            : stamp(e.timestamp, props.now)}
         </button>
       </th>
       <td class="da-num">
@@ -558,14 +681,20 @@ function RequestRow(props: { e: UsageEvent; names: Names; now: number; selected:
         </span>
       </td>
       <td>
-        <span class="da-clip">{e.account ? props.names.nameOf(e.account) : <span class="da-quiet">–</span>}</span>
+        <span class="da-clip">
+          {e.account ? props.names.nameOf(e.account) : <span class="da-quiet">–</span>}
+        </span>
       </td>
       <td class="da-col-path">
         <PathMarks e={e} />
       </td>
       <td class="da-num da-right">{latency(e.latency_ms)}</td>
       <td class="da-num da-right da-col-tokens">
-        {e.tokens.total_tokens !== undefined ? compact(e.tokens.total_tokens) : <span class="da-quiet">–</span>}
+        {e.tokens.total_tokens !== undefined ? (
+          compact(e.tokens.total_tokens)
+        ) : (
+          <span class="da-quiet">–</span>
+        )}
       </td>
     </tr>
   );
@@ -582,7 +711,6 @@ function RequestPane(props: {
   const { e, names } = props;
   const p = usePrivacy();
   const pane = useRef<HTMLElement>(null);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: focus moves when another request opens
   useEffect(() => {
     pane.current?.focus();
   }, [props.seq]);
@@ -617,7 +745,11 @@ function RequestPane(props: {
         )
       ) : (
         <div class="da-detail-body">
-          <section class="da-verdict" data-tone={e.failed ? "danger" : fellBack(e) ? "warn" : "ok"} aria-label="What happened">
+          <section
+            class="da-verdict"
+            data-tone={e.failed ? "danger" : fellBack(e) ? "warn" : "ok"}
+            aria-label="What happened"
+          >
             <div class="da-verdict-line">
               <span class="da-state" data-tone={e.failed ? "danger" : "ok"}>
                 <Icon name={e.failed ? "failed" : "serving"} size={14} />
@@ -633,7 +765,10 @@ function RequestPane(props: {
 
           <section aria-label="Path">
             <h3>
-              path <span class="da-quiet da-num">{hops.length} {hops.length === 1 ? "try" : "tries"}</span>
+              path{" "}
+              <span class="da-quiet da-num">
+                {hops.length} {hops.length === 1 ? "try" : "tries"}
+              </span>
             </h3>
             {hops.length === 0 ? (
               <p class="da-quiet">No account was tried: none serves this model, or all were left out.</p>
@@ -642,17 +777,23 @@ function RequestPane(props: {
                 {hops.map((h, i) => {
                   const id = names.idOf(h.account);
                   return (
-                    // biome-ignore lint/suspicious/noArrayIndexKey: a request can try one account twice
                     <li key={i} data-ok={h.ok ? "" : undefined}>
                       <span class="da-path-n da-num">{i + 1}</span>
                       <span class="da-path-who">
-                        {id ? <a href={`#/accounts/${encodeURIComponent(id)}`}>{names.nameOf(h.account)}</a> : names.nameOf(h.account)}
+                        {id ? (
+                          <a href={`#/accounts/${encodeURIComponent(id)}`}>{names.nameOf(h.account)}</a>
+                        ) : (
+                          names.nameOf(h.account)
+                        )}
                         <span class="da-sub">
                           {h.provider}
                           {h.model && h.model !== e.model ? ` · ${h.model}` : ""}
                         </span>
                       </span>
-                      <span class="da-path-result" data-tone={h.ok ? "ok" : e.failed && i === hops.length - 1 ? "danger" : "warn"}>
+                      <span
+                        class="da-path-result"
+                        data-tone={h.ok ? "ok" : e.failed && i === hops.length - 1 ? "danger" : "warn"}
+                      >
                         <Icon name={h.ok ? "check" : "close"} size={12} />
                         {h.ok ? "ok" : h.result.replace(/_/g, " ")}
                       </span>
@@ -663,7 +804,8 @@ function RequestPane(props: {
             )}
             {e.chain_step !== undefined && (
               <p class="da-quiet">
-                The last try was step {e.chain_step} of this model's fallback chain. <a href="#/routing">Routing</a>
+                The last try was step {e.chain_step} of this model's fallback chain.{" "}
+                <a href="#/routing">Routing</a>
               </p>
             )}
           </section>
@@ -688,7 +830,9 @@ function RequestPane(props: {
                 <dd class="da-num">{num(t?.reasoning_tokens)}</dd>
               </div>
             </dl>
-            {t?.total_tokens === undefined && <p class="da-quiet">The provider reported no token counts for this request.</p>}
+            {t?.total_tokens === undefined && (
+              <p class="da-quiet">The provider reported no token counts for this request.</p>
+            )}
           </section>
 
           <section aria-label="Request">
@@ -698,7 +842,9 @@ function RequestPane(props: {
                 <dt>model</dt>
                 <dd>
                   {e.model}
-                  {e.upstream_model && e.upstream_model !== e.model && <span class="da-quiet"> → {e.upstream_model}</span>}
+                  {e.upstream_model && e.upstream_model !== e.model && (
+                    <span class="da-quiet"> → {e.upstream_model}</span>
+                  )}
                   {e.served_model && e.served_model !== (e.upstream_model ?? e.model) && (
                     <span class="da-quiet"> (answered as {e.served_model})</span>
                   )}

@@ -49,7 +49,13 @@ export function bindingCommands(bindings: KeyBinding[]): Command[] {
   const seen = new Set<string>();
   return bindings
     .filter((b) => !b.keyOnly && !seen.has(b.label) && seen.add(b.label))
-    .map((b) => ({ id: `key:${b.keys}`, group: "Actions" as const, label: b.label, keys: b.keys, run: b.run }));
+    .map((b) => ({
+      id: `key:${b.keys}`,
+      group: "Actions" as const,
+      label: b.label,
+      keys: b.keys,
+      run: b.run,
+    }));
 }
 
 export function CommandMenu(props: { commands: Command[]; onClose: () => void; loadingAccounts?: boolean }) {
@@ -66,7 +72,6 @@ export function CommandMenu(props: { commands: Command[]; onClose: () => void; l
     input.current?.focus();
     return () => before?.focus?.();
   }, []);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: current is what moved
   useEffect(() => {
     list.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
   }, [current, shown]);
