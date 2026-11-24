@@ -358,12 +358,19 @@ bun run build          # writes the panel to ../internal/panel/dist
 bun run test:browser   # builds, then runs the browser tests
 ```
 
-`bun run test:browser` runs the panel's test in Chromium and the extension pages test
-(`e2e/extension-pages.spec.ts`: a hostile page, a benign page and the settings form) in Chromium,
-Firefox and WebKit. It needs Playwright's browsers once: `bunx playwright install chromium firefox
-webkit` (WebKit also needs its system libraries: `bunx playwright install-deps webkit`). Each test
-starts its own core through `go run ./e2e/panelcore` (from `next/`), with fake extensions, on a
-random port.
+Locally, `bun run test:browser` runs every browser test in Chromium only, so it needs only one
+install: `bunx playwright install chromium` (this also installs Chromium's headless shell). That
+includes the extension pages test (`e2e/extension-pages.spec.ts`: a hostile page, a benign page and
+the settings form).
+
+CI also runs the extension pages test in Firefox and WebKit, because extension pages are a security
+boundary. A run in CI or with `PLUXY_ALL_BROWSERS=1` adds those two projects, and a browser that
+cannot start fails the run. To run all three engines locally, install them once with
+`bunx playwright install firefox webkit` (WebKit also needs its system libraries:
+`bunx playwright install-deps webkit`), then run `PLUXY_ALL_BROWSERS=1 bun run test:browser`.
+
+Each test starts its own core through `go run ./e2e/panelcore` (from `next/`), with fake extensions,
+on a random port.
 
 ### A core with data to look at
 

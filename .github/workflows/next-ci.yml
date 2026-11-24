@@ -163,7 +163,7 @@ jobs:
           mkdir -p "$output"
           docker run --rm --init --ipc=host --entrypoint "" \
             --user "$(id -u):$(id -g)" \
-            -e CI -e HOME=/tmp -e CGO_ENABLED=0 \
+            -e CI -e PLUXY_ALL_BROWSERS=1 -e HOME=/tmp -e CGO_ENABLED=0 \
             -e PATH="$goroot/bin:$bun_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
             -e GOMODCACHE="$gomodcache" -e GOCACHE=/tmp/go-build \
             -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro" \
