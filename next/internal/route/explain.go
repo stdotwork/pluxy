@@ -166,14 +166,18 @@ type triedAttempt struct {
 	llm.Tried
 }
 
-// explained returns a copy of e that carries the call's explanation; e itself may be held by
-// routing state.
+// explained returns a copy of e that carries the call's explanation for core's log (Routed), and
+// for the client (Explain) when routing.explain is on; e itself may be held by routing state.
 func (c *call) explained(e *llm.Error) *llm.Error {
-	if e == nil || e.Explain != nil {
+	if e == nil || e.Routed != nil {
 		return e
 	}
 	x := *e
-	x.Explain = c.explain()
+	x.Routed = c.explain()
+	x.Routed.Model = c.req.LLM.Model
+	if c.r.cfg.ExplainOn() {
+		x.Explain = x.Routed
+	}
 	return &x
 }
 

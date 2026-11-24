@@ -120,13 +120,22 @@ func TestBusyAndSkippedAccounts(t *testing.T) {
 	}
 }
 
-// routing.explain false gives errors no explanation.
+// routing.explain false gives errors no explanation for the client; core's log still has it.
 func TestExplainOff(t *testing.T) {
 	off := false
 	h := newHarness(t, Config{Explain: &off}, accts("a")...)
 	h.on("a", rateLimited(time.Minute))
-	if e := lastError(t, h.run(h.req("m"))); e.Explain != nil {
+	e := lastError(t, h.run(h.req("m")))
+	if e.Explain != nil {
 		t.Errorf("explanation = %+v with routing.explain false", e.Explain)
+	}
+	if e.Routed == nil || e.Routed.Model != "m" || len(e.Routed.Tried) != 1 || e.Routed.Tried[0].Result != llm.CodeRateLimit {
+		t.Errorf("explanation for the log = %+v, want the model and one rate_limit attempt", e.Routed)
+	}
+	// The model asked for is for the log: the client's `pluxy` member is as it was.
+	var m map[string]json.RawMessage
+	if b, _ := json.Marshal(e.Routed); json.Unmarshal(b, &m) != nil || len(m) != 2 || m["tried"] == nil || m["left_out"] == nil {
+		t.Errorf("explanation as JSON has members %v, want tried and left_out only", m)
 	}
 }
 

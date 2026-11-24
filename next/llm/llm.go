@@ -617,11 +617,18 @@ type Error struct {
 	// left out, for the `pluxy` member of the error a client gets. It never travels over the
 	// protocol.
 	Explain *Explain `json:"-"`
+	// Routed, set only by core, is the same explanation for core's own log: routing sets it on
+	// every error that ends a request, also when routing.explain keeps Explain from the client.
+	// It never travels over the protocol or reaches a client.
+	Routed *Explain `json:"-"`
 }
 
 // Explain is the `pluxy` member of a client's error: what routing did for the request. It holds
 // codes and times, never the words of an upstream's reply.
 type Explain struct {
+	// Model is the model the request asked for, for the log line; it is not in the client's
+	// `pluxy` member.
+	Model string `json:"-"`
 	// Trace is the request's trace ID, as the X-CPA-TRACE-ID header has it.
 	Trace string `json:"trace,omitempty"`
 	// Tried are the attempts the request made, in order.

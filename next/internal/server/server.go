@@ -626,5 +626,75 @@ func logFailure(r *http.Request, e *llm.Error) {
 	if t := traceOf(r); t != nil {
 		t.failed = true
 	}
-	log.Printf("%s: %s", logPrefix(r), e.Error())
+	log.Printf("%s: %s%s", logPrefix(r), e.Error(), routedSummary(e.Routed))
+}
+
+// logRoutedLimit is how many accounts a failure line names under tried, and under left_out; the
+// rest are counted.
+const logRoutedLimit = 8
+
+// routedSummary returns what a failure line adds to the error's own message when routing ended
+// the request: the model asked for, each account tried with how it ended, and each account left
+// out with why, as " model=m tried=[acc_1(p): rate_limit; ...] left_out=[acc_2: cooling until
+// 2026-11-09T12:03:10Z; ...]". It is empty for an error routing did not end. It holds what the
+// client's `pluxy` member holds (public account IDs, providers, models, result codes, health
+// states and times) and never an upstream's words, so it is logged whether or not
+// routing.explain shows it to the client.
+func routedSummary(x *llm.Explain) string {
+	if x == nil {
+		return ""
+	}
+	var b strings.Builder
+	if x.Model != "" {
+		b.WriteString(" model=" + logToken(x.Model))
+	}
+	var tried []string
+	for _, t := range x.Tried {
+		tried = append(tried, logToken(t.Account)+routedTarget(t.Provider, t.Model, x.Model)+": "+logToken(t.Result))
+	}
+	b.WriteString(" tried=" + routedList(tried))
+	var left []string
+	for _, l := range x.LeftOut {
+		s := logToken(l.Account) + routedTarget(l.Provider, l.Model, x.Model) + ": " + logToken(l.State)
+		if l.Until != nil {
+			s += " until " + l.Until.UTC().Format(time.RFC3339)
+		}
+		left = append(left, s)
+	}
+	b.WriteString(" left_out=" + routedList(left))
+	return b.String()
+}
+
+// routedTarget is "(provider)", or "(provider model)" when the model sent upstream is not the one
+// asked for; it is empty when the entry names no provider.
+func routedTarget(provider, model, asked string) string {
+	if provider == "" {
+		return ""
+	}
+	if model != "" && model != asked {
+		return "(" + logToken(provider) + " " + logToken(model) + ")"
+	}
+	return "(" + logToken(provider) + ")"
+}
+
+// routedList joins entries as "[a; b]", naming the first logRoutedLimit and counting the rest.
+func routedList(entries []string) string {
+	more := ""
+	if len(entries) > logRoutedLimit {
+		more = fmt.Sprintf("; +%d more", len(entries)-logRoutedLimit)
+		entries = entries[:logRoutedLimit]
+	}
+	return "[" + strings.Join(entries, "; ") + more + "]"
+}
+
+// logToken is logField(s), quoted when it holds a space, a quote, a bracket, a semicolon or a
+// control character, so one field cannot pass for two or end the line.
+func logToken(s string) string {
+	s = logField(s)
+	if strings.ContainsFunc(s, func(r rune) bool {
+		return r <= ' ' || r == 0x7f || strings.ContainsRune(`"[];()`, r)
+	}) {
+		return strconv.Quote(s)
+	}
+	return s
 }
