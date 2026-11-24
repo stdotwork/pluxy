@@ -1282,8 +1282,8 @@ discarded. A refresh call is never cancelled because a client stopped waiting, s
 that rotates refresh tokens ([RFC 9700 section 4.14](https://www.rfc-editor.org/rfc/rfc9700#section-4.14))
 may already have retired the old one: only core shutting down cancels it. Core renews a credential
 at its `refresh_at` (on the first request after it), before first use when it is an `oauth`
-credential with no `access_token` (core never presents one; a renewal that returns one counts as
-giving a credential already due), and when the upstream refuses it with an
+credential with no `access_token` (core does not send one on a request while the extension can
+renew it; a renewal that returns one counts as giving a credential already due), and when the upstream refuses it with an
 `auth` error (once per request). After a renewal that failed in a way that may pass, core waits 5
 minutes (or the `retry_after_ms` given) before renewing automatically again; after one that gave a
 credential already due for renewal, 30 seconds. An extension never refreshes on its own.
