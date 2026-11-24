@@ -87,10 +87,17 @@ jobs:
       # go.sum stay as they are. To update one, change its version here and in AGENTS.md.
       - name: Staticcheck
         run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
-      # Needs vuln.go.dev; it fails when a reachable vulnerability is found in the Go standard
-      # library this job installed or in a module pluxy requires.
+      # Needs vuln.go.dev; it reports a reachable vulnerability in the Go standard library this
+      # job installed or in a module pluxy requires. It does not fail the job: a newly published
+      # vulnerability would otherwise block every open PR until Go or the module is updated. The
+      # step shows as failed in the job's list and writes a warning on the run; fix it by updating.
       - name: Govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
+        continue-on-error: true
+        run: |
+          go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./... || {
+            echo "::warning title=govulncheck::a reachable vulnerability was found; update Go or the module named in this step's log"
+            exit 1
+          }
       - name: Test
         env:
           PLUXY_REQUIRE_PANEL: '1'
