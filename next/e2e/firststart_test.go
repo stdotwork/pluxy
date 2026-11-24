@@ -194,7 +194,7 @@ func TestInitWritesFirstConfigOnce(t *testing.T) {
 		t.Errorf("config mode %v, want 0600", info.Mode().Perm())
 	}
 	out, err = exec.Command(bin, "init", "-config", path, "-port", "0").CombinedOutput()
-	if err == nil || !strings.Contains(string(out), "file already exists") {
+	if err == nil || !strings.Contains(string(out), "already exists. Start core with: pluxy serve -config "+path) {
 		t.Errorf("init over a config: %v: %s", err, out)
 	}
 	if again, _ := os.ReadFile(path); string(again) != string(first) {
