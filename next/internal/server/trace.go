@@ -39,6 +39,9 @@ type trace struct {
 	// upstream holds what the request's extensions sent upstream and got back, while every
 	// request is logged; nil otherwise.
 	upstream *upstreamLog
+	// running is the request's entry in the registry of requests being served (Requests); nil
+	// when it has none.
+	running *running
 }
 
 type traceKey struct{}
@@ -66,6 +69,7 @@ func traceOf(r *http.Request) *trace {
 func (t *trace) attempt(a route.Attempt) {
 	t.account, t.public, t.provider, t.model = a.Account, a.Public, a.Extension, a.Model
 	t.attempts++
+	t.running.attempt(a)
 }
 
 // setHeaders sets the reply's headers once the request has gone to its account, if it did: the

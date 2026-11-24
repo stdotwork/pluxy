@@ -245,6 +245,26 @@ func (c *Client) ClientKeys(ctx context.Context) ([]ClientKey, error) {
 	return v.Keys, err
 }
 
+// Requests is GET /requests: the client requests core is serving now, oldest first.
+func (c *Client) Requests(ctx context.Context) ([]RunningRequest, error) {
+	var v RequestsReply
+	err := c.get(ctx, "/requests", nil, &v)
+	return v.Requests, err
+}
+
+// RequestCancelPath is the path that cancels the request with a trace ID, the ID escaped as one
+// path segment.
+func RequestCancelPath(trace string) string { return "/requests/" + url.PathEscape(trace) + "/cancel" }
+
+// CancelRequest is POST /requests/{trace}/cancel: it cancels a request core is serving and
+// returns the request as it was then. A trace ID no running request has is an *APIError with
+// status 404.
+func (c *Client) CancelRequest(ctx context.Context, trace string) (RunningRequest, error) {
+	var v RequestReply
+	_, err := c.Call(ctx, http.MethodPost, RequestCancelPath(trace), nil, nil, &v)
+	return v.Request, err
+}
+
 // MultipartBody is a ready multipart/form-data body, made by NewMultipartBody.
 type MultipartBody struct {
 	bytes       []byte

@@ -208,6 +208,11 @@ func (x *invocation) terminal() *os.File {
 	return nil
 }
 
+// requestAge is how long a request has run, in whole seconds, such as 4s or 1m12s.
+func requestAge(d time.Duration) string {
+	return max(d, 0).Truncate(time.Second).String()
+}
+
 func dash(s string) string {
 	if s == "" {
 		return "-"
@@ -244,6 +249,25 @@ var commands = []command{
 				ae.Message = "core refused the config: " + s.Desired.Error
 			}
 			return err
+		}},
+	{words: "requests", routes: []string{"GET /requests"}, summary: "the requests core is serving now, oldest first",
+		run: func(x *invocation) error {
+			var r management.RequestsReply
+			return x.call(http.MethodGet, "/requests", nil, nil, &r, func() {
+				now := time.Now()
+				rows := [][]string{{"AGE", "MODEL", "ACCOUNT", "KEY", "ENDPOINT", "TRACE"}}
+				for _, q := range r.Requests {
+					rows = append(rows, []string{requestAge(now.Sub(q.StartedAt)), dash(q.Model), dash(q.Account), dash(q.KeyID), q.Endpoint, q.ID})
+				}
+				x.table(rows)
+			})
+		}},
+	{words: "request cancel", args: []string{"trace"}, routes: []string{"POST /requests/{trace}/cancel"}, summary: "cancel a request core is serving, by its trace ID",
+		run: func(x *invocation) error {
+			var r management.RequestReply
+			return x.call(http.MethodPost, management.RequestCancelPath(x.args[0]), nil, nil, &r, func() {
+				x.printf("request %s cancelled\n", x.cell(r.Request.ID))
+			})
 		}},
 	{words: "config show", routes: []string{"GET /config"}, summary: "the config file, with its secrets replaced by placeholders",
 		run: func(x *invocation) error {

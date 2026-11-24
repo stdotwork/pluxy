@@ -199,6 +199,7 @@ func serveEndpointWithModel(w http.ResponseWriter, r *http.Request, g *Generatio
 	}
 	body, e, ok := readRequestBody(w, r)
 	if !ok {
+		g.cancelledUnread(w, r, f, arrived, true)
 		return
 	}
 	if e != nil {
@@ -251,6 +252,9 @@ func serveEndpointWithModel(w http.ResponseWriter, r *http.Request, g *Generatio
 
 	r, t := requestTrace(r)
 	m := g.newMeter(r, arrived, req, clientToken(r, ep.googleKeys))
+	if cancelledBeforeRouting(w, r, f, m) {
+		return
+	}
 	rr := routeRequest(r, req, body)
 	var cannot atomic.Bool
 	rr.Attempt = func(ctx context.Context, ext string, a protocol.Account, req llm.Request) route.Stream {

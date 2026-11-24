@@ -105,6 +105,7 @@ type Core struct {
 
 	redactor *configdoc.Redactor // hides the config file's secrets from the management API
 	keyIDs   *configdoc.Redactor // derives stable client key IDs from state/key-id.key
+	requests *server.Requests    // the client requests being served, for the management API
 
 	checks *checks // each account's last check
 
@@ -149,7 +150,7 @@ func Start(opts Options) (*Core, error) {
 	// the account's settings: the values the management API shows as placeholders.
 	opts.Host.SettingsSecrets = configdoc.SettingsSecrets
 	bgCtx, bgCancel := context.WithCancel(context.Background())
-	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), checks: newChecks(),
+	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), requests: server.NewRequests(), checks: newChecks(),
 		bgCtx: bgCtx, bgCancel: bgCancel, catalogueNow: time.Now}
 	c.loadPublicKey()
 	// Every extension call carries the proxy of the config active when it is sent.
@@ -593,7 +594,7 @@ func (c *Core) prepare(rev uint64, b []byte, prev *snapshot, pkgs packages.State
 		}
 		return hostSession{s}, nil
 	}
-	next.Generation = server.Generation{Config: cfg, Attempt: attempt, Count: count, Endpoint: endpoint, OpenSession: openSession, KeyID: c.keyID}
+	next.Generation = server.Generation{Config: cfg, Attempt: attempt, Count: count, Endpoint: endpoint, OpenSession: openSession, KeyID: c.keyID, Requests: c.requests}
 	if cfg.Usage.On() {
 		next.Usage = c.usage
 	}

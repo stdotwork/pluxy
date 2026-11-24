@@ -20,8 +20,12 @@ const PinHeader = "X-Pluxy-Account"
 // sessionHeaders are the headers clients use to name their session, most specific first.
 var sessionHeaders = []string{"X-Claude-Code-Session-Id", "Session-Id", "X-Session-Id", "X-Session-Affinity"}
 
-// routeRequest gathers what routing needs from a client request.
+// routeRequest gathers what routing needs from a client request, and notes what the request asks
+// for in the registry of requests being served.
 func routeRequest(r *http.Request, req llm.Request, body []byte) route.Request {
+	if t := traceOf(r); t != nil {
+		t.running.describe(req) // every HTTP handler routes through here once its request is parsed
+	}
 	return route.Request{
 		LLM:     req,
 		Tenant:  tenant(r),

@@ -22,7 +22,7 @@ func expandForeign(s string, terminal bool) string {
 
 // TestForeignTextSitesTerminalEscaping covers the places a command shows text a client, an upstream
 // or a stored file gave outside the table commands: the lines and prompts of setup, client show,
-// ext, route and account import. Each shows the text escaped on a terminal and as it came on a pipe.
+// ext, route and account import, and of requests and request cancel. Each shows the text escaped on a terminal and as it came on a pipe.
 // Not covered here: the Vertex import line, the "could not read the sign-in" retry line and the
 // route chain's own line, which write through the same helpers (x.cell, writeEscaped).
 func TestForeignTextSitesTerminalEscaping(t *testing.T) {
@@ -53,6 +53,20 @@ func TestForeignTextSitesTerminalEscaping(t *testing.T) {
 				"Apply suggested picks ({cell})? [y/N]: ",
 				"Next: pluxy setup apply --yes installs what core suggests ({multi}).\n",
 			},
+		},
+		{
+			name:   "requests: model, account, key, endpoint and trace",
+			args:   []string{"requests"},
+			routes: map[string]string{"GET /requests": `{"requests":[{"id":` + q + `,"started_at":"2026-01-01T00:00:00Z","endpoint":` + q + `,"stream":true,"model":` + q + `,"key_id":` + q + `,"account":` + q + `}]}`},
+			// A table: on a pipe its cells' own tabs and line ends move the columns, so only the
+			// terminal's output, which may hold no raw control byte, is checked beyond the header.
+			wantOut: []string{"AGE", "TRACE\n"},
+		},
+		{
+			name:    "request cancel: the trace core answered with",
+			args:    []string{"request", "cancel", "t1"},
+			routes:  map[string]string{"POST /requests/t1/cancel": `{"request":{"id":` + q + `,"started_at":"2026-01-01T00:00:00Z","endpoint":"/v1/messages","stream":true}}`},
+			wantOut: []string{"request {cell} cancelled\n"},
 		},
 		{
 			name:   "setup apply: confirm prompt and next step",

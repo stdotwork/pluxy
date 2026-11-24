@@ -426,6 +426,9 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 	if g.RequestLog != nil && g.RequestLog.All {
 		ctx = turnTrace.captureUpstream(ctx, g.RequestLog.Redact)
 	}
+	// The turn is listed as being served until runTurn returns, also by a panic.
+	entry := g.Requests.beginTurn(s.r, g, s.trace.id, arrived, sessReq.Model, cancel)
+	defer g.Requests.end(entry)
 	turn := &wsTurn{cancel: cancel}
 	var opened []Session // sessions this turn opened
 	var sess Session     // the session the last attempt ran on; nil for an HTTP attempt
@@ -517,6 +520,7 @@ func (s *wsSocket) runTurn(g *Generation, msg map[string]json.RawMessage, model,
 	rr.Attempting = func(a route.Attempt) {
 		attemptExt = a.Extension
 		m.attempt(a, "")
+		entry.attempt(a)
 		if turnTrace != nil {
 			turnTrace.account = a.Account
 		}
