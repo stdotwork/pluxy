@@ -134,7 +134,10 @@ function AccountList(props: { address: Address }) {
   );
   const windows = useWindows(
     shownRows
-      .filter((a) => !["needs_login", "broken", "no_provider"].includes(conditions.get(a.id)?.key ?? ""))
+      .filter(
+        (a) =>
+          !["needs_login", "broken", "no_provider", "disabled"].includes(conditions.get(a.id)?.key ?? ""),
+      )
       .map((a) => a.id),
   );
 
@@ -653,7 +656,7 @@ function AccountPage(props: { id: string; address: Address }) {
 
 function WindowsCard(props: { account: Account; c: Condition; now: number }) {
   const { account: a, c } = props;
-  const readable = !["needs_login", "broken", "no_provider"].includes(c.key);
+  const readable = !["needs_login", "broken", "no_provider", "disabled"].includes(c.key);
   const w = useWindows(readable ? [a.id] : []).get(a.id);
   const limits = w?.state === "ok" ? w.reply.quota.limits : [];
   return (
@@ -676,7 +679,11 @@ function WindowsCard(props: { account: Account; c: Condition; now: number }) {
       </div>
       <div class="dc-card-pad dc-stack">
         {!readable ? (
-          <p class="dc-muted">The windows cannot be read while the account is not signed in.</p>
+          <p class="dc-muted">
+            {c.key === "disabled"
+              ? "The windows are not read while the account is disabled."
+              : "The windows cannot be read while the account is not signed in."}
+          </p>
         ) : !w || w.state === "loading" ? (
           <div class="dc-wins" role="status">
             <span class="dc-sr">Reading usage windows</span>

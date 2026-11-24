@@ -213,7 +213,7 @@ export function Refresh(props: { at?: number; now: number; busy: boolean; onRefr
     <>
       {props.at && (
         <span class="dc-updated" title={new Date(props.at).toLocaleString()}>
-          {props.busy ? "Reading…" : `Read ${ago(new Date(props.at).toISOString(), props.now)}`}
+          {props.busy ? "Reading…" : `Updated ${ago(new Date(props.at).toISOString(), props.now)}`}
         </span>
       )}
       <Btn icon="refresh" label="Refresh" kind="plain" onClick={props.onRefresh} disabled={props.busy} />
