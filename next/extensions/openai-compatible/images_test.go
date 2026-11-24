@@ -91,6 +91,66 @@ func TestImageBodyRebuildsMultipartEdit(t *testing.T) {
 	}
 }
 
+// A data: URL's scheme is case-insensitive: uppercase and mixed-case data URLs in an Images API
+// edit rebuild the same multipart form as lowercase data: URLs.
+func TestImageBodyRebuildsMultipartEditDataURLCase(t *testing.T) {
+	call := imageCall(llm.FormatOpenAIImagesEdits, "upstream-image", `{
+		"model":"client-alias",
+		"prompt":"add a hat",
+		"images":[
+			{"image_url":"DATA:image/png;base64,UE5HMQ=="},
+			{"image_url":"Data:image/webp;base64,V0VCUDI="}
+		],
+		"mask":{"image_url":"DaTa:image/png;base64,TUFTSw=="}
+	}`)
+	body, contentType, err := imageBody(call)
+	if err != nil {
+		t.Fatalf("imageBody: %v", err)
+	}
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil || mediaType != "multipart/form-data" || params["boundary"] == "" {
+		t.Fatalf("Content-Type = %q, want multipart/form-data: %v", contentType, err)
+	}
+	form, err := multipart.NewReader(bytes.NewReader(body), params["boundary"]).ReadForm(1 << 20)
+	if err != nil {
+		t.Fatalf("reading rebuilt form: %v", err)
+	}
+	defer form.RemoveAll()
+	for field, want := range map[string]string{"model": "upstream-image", "prompt": "add a hat"} {
+		if got := form.Value[field]; len(got) != 1 || got[0] != want {
+			t.Errorf("field %s = %v, want [%s]", field, got, want)
+		}
+	}
+	images := form.File["image[]"]
+	if len(images) != 2 {
+		t.Fatalf("image files = %d, want 2", len(images))
+	}
+	for i, want := range []string{"PNG1", "WEBP2"} {
+		f, err := images[i].Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, _ := io.ReadAll(f)
+		f.Close()
+		if string(data) != want {
+			t.Errorf("image %d = %q, want %q", i, data, want)
+		}
+	}
+	masks := form.File["mask"]
+	if len(masks) != 1 {
+		t.Fatalf("mask files = %d, want 1", len(masks))
+	}
+	mask, err := masks[0].Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	maskData, _ := io.ReadAll(mask)
+	mask.Close()
+	if string(maskData) != "MASK" {
+		t.Errorf("mask = %q, want MASK", maskData)
+	}
+}
+
 // A JSON edit that names an image by URL stays JSON, with the model renamed for the account.
 func TestImageBodyJSONEditKeepsURL(t *testing.T) {
 	call := imageCall(llm.FormatOpenAIImagesEdits, "upstream-image", `{"model":"client-alias","prompt":"p","images":[{"image_url":"https://example.com/a.png"}]}`)
