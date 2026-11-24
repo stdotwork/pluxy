@@ -258,6 +258,8 @@ func serve(withTLS, firstRun, cpa, demo bool, listen, keyFile string) error {
 		if err := seedDemo(base, mgmtKey, setup); err != nil {
 			return err
 		}
+		stopRunning := startDemoRunning(ctx, base, setup.keys)
+		defer stopRunning()
 	}
 	ready := map[string]string{"base": base, "key": mgmtKey, "client_key": clientKey, "config": cfgPath}
 	if withTLS {
