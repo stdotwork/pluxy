@@ -13,9 +13,9 @@ import { type Channel, isHello, type Outcome, pickVersion, serve } from "./chann
 import { pageProblem } from "./site";
 
 const t = strings("extensionPage", {
-  cannotShow: "This extension page cannot be shown: {problem}.",
+  cannotShow: "Cannot show this extension page: {problem}. Check core's extension-pages settings and reload.",
   closedNotice: "The page loaded another document, so the panel closed its connection to it.",
-  loadAgain: "Load the page again",
+  loadAgain: "Reload",
 });
 
 /**

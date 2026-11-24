@@ -55,9 +55,8 @@ export type Api = ReturnType<typeof api>;
 
 const t = strings("api", {
   // One sentence with no full stop: pages put it after their own words ("Not saved: ...").
-  unreachable:
-    "core could not be reached: pluxy is not running or the address is wrong, so start it, then try again",
-  answered: "core answered {status}",
+  unreachable: "cannot reach core; check that pluxy is running and the address is right, then try again",
+  answered: "core returned HTTP {status}; check Logs Viewer and try again",
 });
 
 /** A reply's error as one line for people. */

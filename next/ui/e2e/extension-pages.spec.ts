@@ -296,7 +296,7 @@ test("a benign extension page works through the channel and follows the theme", 
   // The page loads another document into its frame: the panel closes the channel.
   await frame.evaluate(() => location.reload());
   await expect(page.getByText("closed its connection")).toBeVisible();
-  await page.getByRole("button", { name: "Load the page again" }).click();
+  await page.getByRole("button", { name: "Reload" }).click();
   await expect(f.locator("#state")).toHaveText("connected as test/alpha, page usage");
 });
 
@@ -314,7 +314,7 @@ test("the panel draws an extension's settings form from its schema, and saves th
   // Core checks the values against the schema: refused, nothing changes.
   await form.getByLabel("Greeting").fill("from the form");
   await form.getByLabel("Interval (seconds)").fill("5000");
-  await form.getByRole("button", { name: "Save settings" }).click();
+  await form.getByRole("button", { name: "Save" }).click();
   await expect(form.getByText(/interval.*at most 3600/)).toBeVisible();
   expect((await mgmt("GET", "/extensions/test/alpha/config")).body).toEqual(before);
 
@@ -322,7 +322,7 @@ test("the panel draws an extension's settings form from its schema, and saves th
   await form.getByLabel("Unit").selectOption("requests");
   await form.getByLabel("Detailed view").check();
   await form.getByLabel("Export token", { exact: true }).fill("fake-export-token");
-  await form.getByRole("button", { name: "Save settings" }).click();
+  await form.getByRole("button", { name: "Save" }).click();
   await expect(form.getByText("Saved.")).toBeVisible();
   const saved = (await mgmt("GET", "/extensions/test/alpha/config")).body;
   expect(saved.values).toEqual({
@@ -347,7 +347,7 @@ test("the panel draws an extension's settings form from its schema, and saves th
 
   // Clearing the secret.
   await form.getByRole("checkbox", { name: "Clear Export token" }).check();
-  await form.getByRole("button", { name: "Save settings" }).click();
+  await form.getByRole("button", { name: "Save" }).click();
   await expect(form.getByText("Saved.")).toBeVisible();
   expect((await mgmt("GET", "/extensions/test/alpha/config")).body.set).toEqual([]);
 });

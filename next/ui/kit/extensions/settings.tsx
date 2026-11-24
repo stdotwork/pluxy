@@ -12,12 +12,12 @@ const t = strings("settingsForm", {
   unchanged: "unchanged",
   valueSet: "A value is set.",
   clear: "Clear {label}",
-  couldNotLoad: "could not load the settings",
+  couldNotLoad: "Could not load settings. Refresh and try again.",
   settings: "Settings",
   settingsOf: "Settings of {id}",
   saved: "Saved.",
-  notSaved: "not saved",
-  saveSettings: "Save settings",
+  notSaved: "Could not save settings. Check your values and try again.",
+  saveSettings: "Save",
 });
 
 type Draft = Record<string, string | boolean>;

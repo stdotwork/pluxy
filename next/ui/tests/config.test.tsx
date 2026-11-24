@@ -31,10 +31,10 @@ const settings: CoreSettings = {
 
 test("settingsChange refuses a cleared retry count instead of sending ignored null", () => {
   const draft = changeSetting(settings, "routing.retry.request-retry", "");
-  expect(() => settingsChange(settings, draft)).toThrow("Request Retry Count");
+  expect(() => settingsChange(settings, draft)).toThrow("Retry rounds");
   expect(() =>
     settingsChange(settings, changeSetting(settings, "routing.retry.request-retry", null)),
-  ).toThrow("Request Retry Count");
+  ).toThrow("Retry rounds");
   const unset = changeSetting(settings, "routing.retry.request-retry", null);
   expect(settingsChange(unset, unset)).toEqual({});
 });

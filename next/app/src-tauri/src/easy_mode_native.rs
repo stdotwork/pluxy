@@ -299,7 +299,7 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
             fill(main, step1, "API key", &s(&e["api_key"]))?;
             click(main, step1, "Add account")?;
             wait_for("the sign-in to succeed", || {
-                text(main, step1).filter(|t| t.contains("Authentication successful!"))
+                text(main, step1).filter(|t| t.contains("Signed in."))
             })?;
             let listed = accounts(main)?;
             require(

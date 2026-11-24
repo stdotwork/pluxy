@@ -11,17 +11,17 @@ const t = strings("themes", {
   title: "Themes",
   short: "Theme",
   theme: "Theme",
-  notRead: "Themes could not be read from core: {error}",
+  notRead: "Could not load themes from core: {error}. Refresh and try again.",
   currentUnusable:
     "{id} is turned on, but this page cannot use it: {error}. Remove it, or pick another theme.",
-  notTurnedOn: "{name} was not turned on: {error}",
+  notTurnedOn: "Could not apply {name}: {error}. Pick another theme or try again.",
   unusable: "Cannot be used: {error}",
   export: "Export",
   exportLabel: "Export {name} as a theme file",
   remove: "Remove {name}",
   confirmRemove: "Yes, remove {name}",
   cancel: "Cancel",
-  notRemoved: "{name} was not removed: {error}",
+  notRemoved: "Could not remove {name}: {error}. Try again.",
   add: "Add a theme",
   addHelp:
     "pluxy theme files and T3 Code theme files both work. {path} in pluxy's source lists everything a theme file can set.",
@@ -29,8 +29,8 @@ const t = strings("themes", {
   paste: "Or paste a theme file's JSON",
   addButton: "Add",
   adding: "Adding…",
-  added: "{name} was added and turned on.",
-  replaced: "{name} was added and turned on. It replaced a theme with the same name.",
+  added: "Added and applied {name}.",
+  replaced: "Added and applied {name}, replacing the existing theme.",
   notAdded: "Not added: {error}",
   tooLarge: "the file is over {limit} KiB",
   appearance: "Appearance",
@@ -42,7 +42,7 @@ const t = strings("themes", {
   layout: "Layout",
   tabs: "Tabs",
   side: "Side",
-  resetLayout: "Use the theme's layout",
+  resetLayout: "Reset layout",
   choicesStay: "Your choices here stay when you switch themes.",
   navigation: "Navigation",
   sidebar: "Sidebar",
@@ -65,13 +65,11 @@ const t = strings("themes", {
   themeNote: "· theme",
   customCss: "Custom CSS",
   safeMode: "Safe mode",
-  safeModeHint:
-    "Turns off all custom CSS, the theme's and yours. If custom CSS hides this switch, open the panel with ?safe at the end of its address.",
+  safeModeHint: "Turns off all custom CSS. If custom CSS hides this switch, add ?safe to the panel URL.",
   ownCssOn: "{name} adds its own CSS.",
   ownCssOff: "{name} adds its own CSS, turned off by safe mode.",
   yourCss: "Your CSS",
-  cssHint:
-    "Applied on top of every theme, as you type. Style the data-part hooks the theme contract lists; other markup can change in any release.",
+  cssHint: "Applies on top of every theme as you type. Target data-part hooks; other markup may change.",
 });
 
 const layoutChoices = (): { [K in LayoutOption]: { label: string; choices: Choice<Layout[K]>[] } } => ({

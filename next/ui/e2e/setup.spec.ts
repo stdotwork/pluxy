@@ -61,7 +61,7 @@ test("a first run opens Setup, installs the suggested provider, adds an account,
   await expect(paste).toContainText("~/.claude/settings.json");
   await expect(paste.locator("pre")).toContainText(`"ANTHROPIC_BASE_URL": "${core.base}"`);
   await expect(paste.locator("pre")).toContainText("<client-key>");
-  await client.getByRole("button", { name: "Make a client key" }).click();
+  await client.getByRole("button", { name: "Create client key" }).click();
   const value = (await client.locator('[data-part="key-value"]').textContent()) ?? "";
   expect(value.length).toBeGreaterThan(20);
   await expect(paste.locator("pre")).toContainText(`"ANTHROPIC_AUTH_TOKEN": "${value}"`);
@@ -94,16 +94,16 @@ test("the text for a client says what goes where a model's name stands", async (
   const claude = clients.locator('[data-part="setup-client"]').filter({ hasText: "Claude Code" });
   await claude.getByRole("button", { name: "Show what to paste" }).click();
   await expect(claude.locator("pre")).toContainText("ANTHROPIC_BASE_URL");
-  await expect(claude).not.toContainText("a model's name goes");
+  await expect(claude).not.toContainText("Replace <model-id>");
   // OpenCode's does, as <model-id>.
   await clients.getByText(/^Other clients/).click();
   const opencode = clients.locator('[data-part="setup-client"]').filter({ hasText: "OpenCode" });
   await opencode.getByRole("button", { name: "Show what to paste" }).click();
   await expect(opencode.locator("pre")).toContainText("<model-id>");
-  await expect(opencode).toContainText("Where the text says <model-id>, a model's name goes");
+  await expect(opencode).toContainText("Replace <model-id> with a model your accounts serve.");
 });
 
-test("Look again counts an account added while the page stayed in view", async ({ page }) => {
+test("Refresh counts an account added while the page stayed in view", async ({ page }) => {
   await openPanel(page, core);
   await signIn(page, core);
   await page.goto(`${core.base}/panel/#/setup`);
@@ -121,6 +121,6 @@ test("Look again counts an account added while the page stayed in view", async (
     .poll(async () => (await core.mgmt<{ accounts: unknown[] }>("GET", "/accounts")).body.accounts.length)
     .toBe(2);
   await expect(account).toContainText("1 account connected");
-  await page.getByRole("button", { name: "Look again", exact: true }).click();
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect(account).toContainText("2 accounts connected");
 });

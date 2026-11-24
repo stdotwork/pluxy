@@ -29,19 +29,19 @@ test("Accounts and the Dashboard give the same accounts the same numbers", async
   await goTo(page, "Accounts");
   // Active: ok-1, cool-1 (cooling is a short block, it still serves) and err-1. Problem: banned-1 and
   // ghost-1, whose provider is not running. Disabled: off-1.
-  await expect(page.locator('[data-part="account-meta"]')).toHaveText("6 credentials · 3 active · 2 problem");
+  await expect(page.locator('[data-part="account-meta"]')).toHaveText(
+    "6 credentials · 3 available · 2 problems",
+  );
   const ghost = page.locator('[data-part="item"]').filter({ hasText: "ghost-1" });
   await expect(ghost).toContainText("no provider");
   await ghost.click();
-  await expect(
-    page.getByText("ghost/gone is not running, so no request reaches this account."),
-  ).toBeVisible();
+  await expect(page.getByText("ghost/gone is not running, so this account gets no requests.")).toBeVisible();
   await goTo(page, "Dashboard");
   const health = page.getByRole("region", { name: "Credential status", exact: true });
-  await expect(health.locator("dl")).toContainText("Active3");
+  await expect(health.locator("dl")).toContainText("Available3");
   await expect(health.locator("dl")).toContainText("Unavailable2");
   await expect(health.locator("dl")).toContainText("Disabled1");
   const credentials = page.locator('[data-part="stat"]').filter({ hasText: "Credentials" });
-  await expect(credentials).toContainText("3 active · 3 not serving");
+  await expect(credentials).toContainText("3 available · 3 not serving");
   await expect(page.getByRole("link", { name: "3 not serving" })).toHaveAttribute("href", "#/accounts");
 });

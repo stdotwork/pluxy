@@ -68,7 +68,7 @@ test("an account model alias is saved, followed through GET /models, edited, and
   // form kept in the browser.
   expect(await names("fake-model")).toEqual(["panel-alias"]);
   await expect(detail.locator('[data-part="account-settings"]')).toContainText("fake-model → panel-alias");
-  await detail.getByRole("button", { name: "Models", exact: true }).click();
+  await detail.getByRole("button", { name: "Show models", exact: true }).click();
   const listed = detail.locator('[data-part="account-models"]');
   const model = listed.locator('[data-part="item"]').filter({ hasText: "fake-model" });
   await expect(model).toContainText("panel-alias");
