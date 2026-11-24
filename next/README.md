@@ -114,6 +114,19 @@ the providers you use from the bundled registry ([Packages](#packages)) or the p
 - `-bundled`: the index of the bundled packages (default `bundled/index.json` beside the program, when it exists); see [Packages](#packages).
 - `-listen-fd`: serve on the listening TCP socket inherited at this file descriptor instead of binding `listen` (which must still be set). A program that starts core, such as the desktop app in managed mode, binds the socket, hands it over and keeps its own copy, so no other program can take the port while core stops or after it exits.
 
+### Environment variables
+
+Core itself takes no runtime configuration from its environment: everything is set in `config.json`. The `pluxy` program reads these variables:
+
+| Variable | What it does | Default | Example |
+| --- | --- | --- | --- |
+| `PLUXY_URL` | Core's base URL for `pluxy` client subcommands; `--url` overrides it. | Read from `--config` (`config.json`) | `http://127.0.0.1:8400` |
+| `PLUXY_MANAGEMENT_KEY` | Management API key for `pluxy` client subcommands; `--key` overrides it. | Read from `--config` (`config.json`) | `<management-key>` |
+| `PLUXY_INIT_PORT` | Tests only: port written into the auto-generated config on a first start (`0` picks a free port); a non-port value stops core. | Unset (`8317`, or a free port if taken) | `0` |
+| `PLUXY_TEST_LOGIN_HOSTS` | Tests only: when set to `1`, core forwards it to extensions so account settings may point login, token and quota endpoints at a test server. | Unset | `1` |
+
+When core starts a provider extension, it passes `PLUXY_PROTOCOL_VERSIONS`, `PLUXY_SOCKET` and `PLUXY_EXTENSION_ID` to the extension process; see [next/protocol/README.md](protocol/README.md).
+
 A running core answers `curl http://127.0.0.1:8400/healthz` with `ok`.
 
 The web panel is at `http://127.0.0.1:8400/panel/`: core's status,
