@@ -6,13 +6,23 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import type { QuotaLimit, UsageBucket } from "../../api";
 import { Icon, type IconName } from "./icons";
 import { keyCap } from "./keys";
-import { type BoardState, compact, paceOf, percent, type Standing, stamp, wait, windowName } from "./lib";
+import {
+  type BoardState,
+  compact,
+  paceOf,
+  percent,
+  type Standing,
+  stamp,
+  wait,
+  waitCoarse,
+  windowName,
+} from "./lib";
 
 /** Key caps for a binding: "g a" draws two. */
 export function Kbd(props: { keys: string }) {
   return (
     <span class="da-kbd" aria-hidden="true">
-      {props.keys.split(" ").map((k) => (
+      {(props.keys === " " ? [" "] : props.keys.split(" ")).map((k) => (
         <kbd key={k}>{keyCap(k)}</kbd>
       ))}
     </span>
@@ -157,7 +167,7 @@ export function WindowBar(props: { limit: QuotaLimit; now: number; wide?: boolea
   const name = windowName(props.limit);
   if (!pace) return null;
   const used = percent(pace.used).replace(/\.\d%$/, "%");
-  const reset = pace.resetsIn !== undefined ? wait(pace.resetsIn) : undefined;
+  const reset = pace.resetsIn !== undefined ? waitCoarse(pace.resetsIn) : undefined;
   const label =
     `${props.limit.label ?? name}: ${used} used` +
     (reset ? `, resets in ${reset}` : "") +

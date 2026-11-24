@@ -4,14 +4,12 @@
 
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type { UsageEvent, UsageEventsReply, UsageSummary } from "../../api";
-import { usePrivacy } from "../../privacy";
 import { useKit } from "../../ui";
 import { usePoll } from "./data";
-import { FixButton, type Fleet, type Row, useFix, useFleet } from "./fleet";
+import { FixButton, type Fleet, type Row, useFix, useFleet, Why } from "./fleet";
 import { Icon } from "./icons";
 import { useKeys } from "./keys";
 import {
-  ago,
   clock,
   compact,
   countBoard,
@@ -169,7 +167,6 @@ export function WindowsCell(props: { row: Row; fleet: Fleet; wide?: boolean }) {
 
 function Board(props: { fleet: Fleet; fix: ReturnType<typeof useFix>; cursor: number }) {
   const { fleet } = props;
-  const p = usePrivacy();
   const groups = useMemo(() => {
     const by = new Map<string, Row[]>();
     for (const r of fleet.rows) {
@@ -220,9 +217,6 @@ function Board(props: { fleet: Fleet; fix: ReturnType<typeof useFix>; cursor: nu
               index++;
               const a = row.account;
               const s = row.standing;
-              const ids = [a.label, a.id];
-              const err = a.last_error;
-              const why = s.state !== "serving" && s.state !== "off" ? s.why : undefined;
               return (
                 <tr
                   key={a.id}
@@ -237,15 +231,6 @@ function Board(props: { fleet: Fleet; fix: ReturnType<typeof useFix>; cursor: nu
                     <a href={`#/accounts/${encodeURIComponent(a.id)}`} class="da-rowlink" title={row.name}>
                       {row.name}
                     </a>
-                    {s.coolingModels > 0 && s.state === "serving" && (
-                      <span
-                        class="da-note"
-                        data-tone="warn"
-                        title="Models held back while the account serves the others"
-                      >
-                        {s.coolingModels} model{s.coolingModels === 1 ? "" : "s"} cooling down
-                      </span>
-                    )}
                   </th>
                   <td class="da-cell-windows">
                     <WindowsCell row={row} fleet={fleet} />
@@ -255,21 +240,9 @@ function Board(props: { fleet: Fleet; fix: ReturnType<typeof useFix>; cursor: nu
                     {a.max_concurrency ? <span class="da-quiet">/{a.max_concurrency}</span> : null}
                   </td>
                   <td class="da-cell-error">
-                    {why ? (
-                      <span class="da-clip" title={p.text(why, ids)}>
-                        {p.text(why, ids)}
-                      </span>
-                    ) : err ? (
-                      <span class="da-clip da-quiet" title={p.text(err.message, ids)}>
-                        <span class="da-num">{err.status ?? err.code}</span> {p.text(err.message, ids)}
-                        {a.last_error_at && (
-                          <span class="da-num"> · {ago(fleet.now - Date.parse(a.last_error_at))} ago</span>
-                        )}
-                      </span>
-                    ) : (
-                      <span class="da-quiet">–</span>
-                    )}
-                    <FixButton row={row} fix={props.fix} small />
+                    <Why row={row} now={fleet.now} when />
+                    {/* A button only for an account that is out: one that still serves is not stuck. */}
+                    {s.state !== "serving" && <FixButton row={row} fix={props.fix} small />}
                   </td>
                 </tr>
               );
@@ -293,7 +266,6 @@ function TailRow(props: { e: UsageEvent; fleet: Fleet; fresh: boolean }) {
           {clock(e.timestamp)}
         </time>
         <span class="da-tail-status da-num" data-tone={e.failed ? "danger" : undefined}>
-          {e.failed && <Icon name="failed" size={12} />}
           {e.status ?? (e.failed ? "err" : "ok")}
         </span>
         <span class="da-clip da-tail-model">{e.model}</span>
@@ -305,6 +277,7 @@ function TailRow(props: { e: UsageEvent; fleet: Fleet; fresh: boolean }) {
       {(back || (e.failed && hops.length > 0)) && (
         <span class="da-tail-path" title="The accounts tried, in order">
           <Icon name="fallback" size={12} />
+          {(e.chain_step ?? 1) > 1 && <span class="da-hop-chain">chain step {e.chain_step}</span>}
           {hops.map((h, i) => (
             <span key={i} class="da-hop" data-ok={h.ok ? "" : undefined}>
               {i > 0 && <span class="da-hop-then">→</span>}
@@ -339,15 +312,14 @@ function Tail(props: {
     <section class="da-pane da-tail" aria-label="Recent requests">
       <header class="da-pane-head">
         <h2>tail</h2>
-        <span class="da-live" data-paused={props.paused ? "" : undefined}>
+        <span
+          class="da-live"
+          data-paused={props.paused ? "" : undefined}
+          title={`Of the last ${events.length} requests, ${failed} failed and ${back} went past their first account`}
+        >
           <span class="da-live-dot" />
           {props.paused ? "paused" : "live"}
         </span>
-        {events.length > 0 && (
-          <span class="da-quiet da-num da-clip">
-            last {events.length}: {failed} failed, {back} fell back
-          </span>
-        )}
         <span class="da-grow" />
         <Btn small variant="ghost" keys="space" onClick={props.onPause}>
           {props.paused ? "Resume" : "Pause"}
@@ -410,24 +382,25 @@ export function Overview() {
     links[next]?.focus();
   };
   useKeys([
-    { keys: "j", label: "Next account", run: () => move(1), keyOnly: true, quiet: true, group: "Overview" },
+    { keys: "j", label: "Next", run: () => move(1), keyOnly: true, group: "Overview" },
+    { keys: "k", label: "Previous", run: () => move(-1), keyOnly: true, group: "Overview" },
+    { keys: "r", label: "Refresh", run: refresh, group: "Overview" },
     {
-      keys: "k",
-      label: "Previous account",
-      run: () => move(-1),
-      keyOnly: true,
-      quiet: true,
+      keys: "a",
+      label: "Add account",
+      run: () => {
+        location.hash = "#/add-account";
+      },
       group: "Overview",
     },
-    { keys: "r", label: "Refresh", run: refresh, group: "Overview" },
-    { keys: "[", label: "Shorter range", run: () => stepRange(-1), quiet: true, group: "Overview" },
-    { keys: "]", label: "Longer range", run: () => stepRange(1), quiet: true, group: "Overview" },
     {
       keys: " ",
       label: paused ? "Resume the tail" : "Pause the tail",
       run: () => setPaused((v) => !v),
       group: "Overview",
     },
+    { keys: "[", label: "Shorter range", run: () => stepRange(-1), quiet: true, group: "Overview" },
+    { keys: "]", label: "Longer range", run: () => stepRange(1), quiet: true, group: "Overview" },
   ]);
   const u = usage.data;
   return (
@@ -475,7 +448,7 @@ export function Overview() {
               <span>{counts.serving} serving</span>
               {counts.waiting > 0 && <span data-tone="warn">{counts.waiting} waiting</span>}
               {counts.needYou > 0 && <span data-tone="danger">{counts.needYou} need you</span>}
-              {counts.off > 0 && <span class="da-quiet">{counts.off} off</span>}
+              {counts.off > 0 && <span class="da-quiet">{counts.off} disabled</span>}
             </span>
           )}
           <span class="da-grow" />

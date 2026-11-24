@@ -28,8 +28,14 @@
     color: var(--px-color-text-muted);
   }
 
-  .facts {
-    font-size: 13px;
+  /* The pane is narrow: a fact's name goes above its value. */
+  .facts > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  .facts dt {
+    font-size: 12px;
   }
 }
 

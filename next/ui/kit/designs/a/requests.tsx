@@ -150,13 +150,20 @@ function Totals(props: {
   const now = useNow(30_000);
   const query = usageQuery(range, filterQuery(place.filters));
   const usage = usePoll<UsageSummary>(() => api.usage(query), 30_000, query);
+  // A client key is known by its ID in the record; its masked value says a little more.
+  const clientKeys = usePoll(api.clientKeys, 0);
+  const keyName = (id: string) => {
+    if (!id) return "no key";
+    const key = clientKeys.data?.keys.find((k) => k.id === id);
+    return key ? `${key.masked} ${id.slice(0, 6)}` : id;
+  };
   useKeys([
     { keys: "r", label: "Refresh", run: usage.reload, group: "Requests" },
     { keys: "[", label: "Shorter range", run: () => props.stepRange(-1), quiet: true, group: "Requests" },
     { keys: "]", label: "Longer range", run: () => props.stepRange(1), quiet: true, group: "Requests" },
     {
       keys: "l",
-      label: "Show these as a list",
+      label: "As a list",
       run: () => (location.hash = placeAddress({ ...place, view: "list" })),
       group: "Requests",
     },
@@ -235,40 +242,44 @@ function Totals(props: {
         </Blank>
       ) : (
         <div class="da-breakdowns">
-          <Breakdown
-            title="provider"
-            k="provider"
-            groups={u.providers}
-            total={u.total_requests}
-            place={place}
-            setFilter={props.setFilter}
-          />
-          <Breakdown
-            title="model"
-            k="model"
-            groups={u.models}
-            total={u.total_requests}
-            place={place}
-            setFilter={props.setFilter}
-          />
-          <Breakdown
-            title="account"
-            k="account"
-            groups={u.accounts}
-            total={u.total_requests}
-            place={place}
-            setFilter={props.setFilter}
-            name={props.names.nameOf}
-          />
-          <Breakdown
-            title="client key"
-            k="key"
-            groups={u.keys}
-            total={u.total_requests}
-            place={place}
-            setFilter={props.setFilter}
-            name={(n) => n || "no key"}
-          />
+          <div class="da-breakdown-col">
+            <Breakdown
+              title="provider"
+              k="provider"
+              groups={u.providers}
+              total={u.total_requests}
+              place={place}
+              setFilter={props.setFilter}
+            />
+            <Breakdown
+              title="account"
+              k="account"
+              groups={u.accounts}
+              total={u.total_requests}
+              place={place}
+              setFilter={props.setFilter}
+              name={props.names.nameOf}
+            />
+          </div>
+          <div class="da-breakdown-col">
+            <Breakdown
+              title="model"
+              k="model"
+              groups={u.models}
+              total={u.total_requests}
+              place={place}
+              setFilter={props.setFilter}
+            />
+            <Breakdown
+              title="client key"
+              k="key"
+              groups={u.keys}
+              total={u.total_requests}
+              place={place}
+              setFilter={props.setFilter}
+              name={keyName}
+            />
+          </div>
         </div>
       )}
     </div>
@@ -443,9 +454,9 @@ function List(props: {
     table.current?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: "nearest" });
   }, [place.seq]);
   useKeys([
-    { keys: "j", label: "Next request", run: () => move(1), keyOnly: true, group: "Requests" },
-    { keys: "k", label: "Previous request", run: () => move(-1), keyOnly: true, group: "Requests" },
-    { keys: "/", label: "Filter requests", run: () => filter.current?.focus(), group: "Requests" },
+    { keys: "j", label: "Next", run: () => move(1), keyOnly: true, group: "Requests" },
+    { keys: "k", label: "Previous", run: () => move(-1), keyOnly: true, group: "Requests" },
+    { keys: "/", label: "Filter", run: () => filter.current?.focus(), group: "Requests" },
     { keys: "r", label: "Refresh", run: first.reload, group: "Requests" },
     {
       keys: "f",
@@ -462,7 +473,7 @@ function List(props: {
     { keys: "[", label: "Shorter range", run: () => props.stepRange(-1), quiet: true, group: "Requests" },
     { keys: "]", label: "Longer range", run: () => props.stepRange(1), quiet: true, group: "Requests" },
     ...(place.seq !== undefined
-      ? [{ keys: "Escape", label: "Close the request", run: () => open(), keyOnly: true, group: "Requests" }]
+      ? [{ keys: "Escape", label: "Close", run: () => open(), keyOnly: true, group: "Requests" }]
       : []),
   ]);
   const data = first.data;
@@ -627,7 +638,9 @@ function List(props: {
 function PathMarks(props: { e: UsageEvent }) {
   const hops = pathOf(props.e);
   if (hops.length === 0) return <span class="da-quiet">no account</span>;
-  if (hops.length === 1 && hops[0]?.ok) return <span class="da-quiet">direct</span>;
+  const step = props.e.chain_step ?? 1;
+  if (hops.length === 1 && hops[0]?.ok)
+    return <span class="da-quiet">{step > 1 ? `chain step ${step}` : "direct"}</span>;
   return (
     <span class="da-marks" title={hops.map((h) => h.result).join(" → ")}>
       {hops.map((h, i) => (

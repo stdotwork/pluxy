@@ -6,7 +6,7 @@ import { type Account, problem, runningExtensions } from "../../api";
 import { accountIdentities, usePrivacy } from "../../privacy";
 import { useKit } from "../../ui";
 import { type Polled, useNow, usePoll, useWindows, type Windows } from "./data";
-import { FIX_LABEL, type Fix, type Standing, standingOf } from "./lib";
+import { ago, FIX_LABEL, type Fix, type Standing, standingOf, wait } from "./lib";
 import { Btn, ConfirmBtn } from "./parts";
 
 export interface Row {
@@ -198,4 +198,48 @@ export function useAccountNames(): {
     },
     idOf: (id) => (id ? known.get(id)?.id : undefined),
   };
+}
+
+/**
+ * Why an account stands as it does, in one clipped line: what holds it or some of its models
+ * back, else its last error, else a dash. The whole text is its tooltip.
+ */
+export function Why(props: { row: Row; now: number; when?: boolean }) {
+  const p = usePrivacy();
+  const a = props.row.account;
+  const s = props.row.standing;
+  const ids = [a.label, a.id];
+  if (s.state === "serving" && s.coolingModels > 0) {
+    const reason = p.text(s.why, ids);
+    const held = `${s.coolingModels} model${s.coolingModels === 1 ? "" : "s"} cooling down`;
+    return (
+      <span class="da-clip" title={reason ? `${held}: ${reason}` : held}>
+        <span data-tone="warn">
+          {held}
+          {s.modelsUntil ? <span class="da-num"> {wait(s.modelsUntil - props.now)}</span> : null}
+        </span>
+        {reason && <span class="da-quiet"> · {reason}</span>}
+      </span>
+    );
+  }
+  const why = s.state === "off" ? undefined : p.text(s.why, ids);
+  if (why)
+    return (
+      <span class="da-clip" title={why}>
+        {why}
+      </span>
+    );
+  const err = a.last_error;
+  if (err) {
+    const message = p.text(err.message, ids);
+    return (
+      <span class="da-clip da-quiet" title={message}>
+        <span class="da-num">{err.status ?? err.code}</span> {message}
+        {props.when && a.last_error_at && (
+          <span class="da-num"> · {ago(props.now - Date.parse(a.last_error_at))} ago</span>
+        )}
+      </span>
+    );
+  }
+  return <span class="da-quiet">–</span>;
 }

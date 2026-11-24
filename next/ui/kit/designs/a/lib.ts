@@ -48,6 +48,18 @@ export function wait(ms: number): string {
   return `${Math.floor(s / 86_400)}d ${Math.floor((s % 86_400) / 3600)}h`;
 }
 
+/**
+ * A wait that is hours or days away, without the seconds a countdown needs: 42s, 41m, 2h 14m,
+ * 3d 4h. Past 99 days it reads 99d+.
+ */
+export function waitCoarse(ms: number): string {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.ceil(s / 60)}m`;
+  if (s >= 99 * 86_400) return "99d+";
+  return wait(ms);
+}
+
 /** How long ago, in one unit: now, 12s, 4m, 3h, 2d. */
 export function ago(ms: number): string {
   const s = Math.floor(ms / 1000);
@@ -117,8 +129,9 @@ export interface Standing {
   /** Why, as core or the provider put it. */
   why?: string;
   fix?: Fix;
-  /** Models held back while the account still serves the others. */
+  /** Models held back while the account still serves the others, and when the last of them comes back. */
   coolingModels: number;
+  modelsUntil?: number;
 }
 
 const time = (t?: string) => (t ? Date.parse(t) || 0 : 0);
@@ -156,11 +169,12 @@ export function standingOf(a: Account, now: number, running?: ReadonlySet<string
       fix: "extensions",
     };
   if (out === "exhausted") return { ...base, state: "exhausted", tone: "warn", label: "used up", until, why };
-  // A block on the whole account, by core's own word or by a cooldown that is not one model's.
+  // A block on the whole account: a cooldown that is not one model's. Core calls an account
+  // "cooling" for a model's cooldown too, though it still serves its other models.
   const whole = Math.max(
-    a.health?.state === "cooling" ? time(a.health.until) || now + 1 : 0,
     time(a.cooldown_until),
     ...cooldowns.filter((c) => c.scope !== "model").map((c) => time(c.until)),
+    a.health?.state === "cooling" && coolingModels === 0 ? time(a.health.until) || now + 1 : 0,
   );
   if (whole > now)
     return {
@@ -173,6 +187,18 @@ export function standingOf(a: Account, now: number, running?: ReadonlySet<string
         a.health?.why ?? cooldowns.find((c) => c.scope !== "model")?.error?.message ?? a.last_error?.message,
       fix: "clear-cooldown",
     };
+  if (coolingModels > 0) {
+    const held = cooldowns.filter((c) => c.scope === "model");
+    return {
+      ...base,
+      state: "serving",
+      tone: "ok",
+      label: "serving",
+      modelsUntil: Math.max(...held.map((c) => time(c.until))),
+      why: held[0]?.error?.message ?? a.health?.why,
+      fix: "clear-cooldown",
+    };
+  }
   return { ...base, state: "serving", tone: "ok", label: "serving" };
 }
 
@@ -302,7 +328,8 @@ export function pathOf(e: UsageEvent): Hop[] {
 }
 
 /** Whether a request went past its first account: the tail and the list mark these. */
-export const fellBack = (e: UsageEvent): boolean => (e.tried?.length ?? 0) > 1 || (e.attempts ?? 1) > 1;
+export const fellBack = (e: UsageEvent): boolean =>
+  (e.tried?.length ?? 0) > 1 || (e.attempts ?? 1) > 1 || (e.chain_step ?? 1) > 1;
 
 /** Why a request ended where it did, in a sentence for the detail pane. */
 export function verdict(e: UsageEvent, name: (account: string) => string = (a) => a): string {
@@ -312,7 +339,7 @@ export function verdict(e: UsageEvent, name: (account: string) => string = (a) =
   const failed = hops.filter((h) => !h.ok);
   if (!e.failed && failed.length === 0) {
     return e.chain_step && e.chain_step > 1
-      ? `Served by ${name(last.account)} at step ${e.chain_step} of the model's fallback chain.`
+      ? `Served by ${name(last.account)} at step ${e.chain_step} of the model's fallback chain: no account of the earlier ${e.chain_step === 2 ? "step" : "steps"} could be tried.`
       : `Served by ${name(last.account)} at the first try.`;
   }
   const reasons = failed.map((h) => `${name(h.account)} (${h.result.replace(/_/g, " ")})`).join(", then ");

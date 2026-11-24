@@ -9,7 +9,7 @@ import { AccountTools } from "../../pages/accountTools";
 import { accountIdentities, usePrivacy } from "../../privacy";
 import { useKit } from "../../ui";
 import { usePoll } from "./data";
-import { FixButton, type Fleet, type Row, useFix, useFleet } from "./fleet";
+import { FixButton, type Fleet, type Row, useFix, useFleet, Why } from "./fleet";
 import { Icon } from "./icons";
 import { useKeys } from "./keys";
 import {
@@ -35,7 +35,7 @@ const SHOWS: { id: Show; label: string }[] = [
   { id: "need-you", label: "need you" },
   { id: "waiting", label: "waiting" },
   { id: "serving", label: "serving" },
-  { id: "off", label: "off" },
+  { id: "off", label: "disabled" },
 ];
 
 function shows(state: BoardState, show: Show): boolean {
@@ -45,6 +45,15 @@ function shows(state: BoardState, show: Show): boolean {
   if (show === "need-you") return NEEDS_YOU.includes(state);
   return state === "cooling" || state === "exhausted";
 }
+
+const rank = (state: BoardState): number =>
+  NEEDS_YOU.includes(state)
+    ? 0
+    : state === "cooling" || state === "exhausted"
+      ? 1
+      : state === "serving"
+        ? 2
+        : 3;
 
 /** Rows that match what was typed (name, label, provider, kind, state, last error) and the state shown. */
 export function filterRows(rows: Row[], typed: string, show: Show): Row[] {
@@ -80,7 +89,14 @@ export function Accounts(props: { rest: string }) {
   const table = useRef<HTMLDivElement>(null);
   const [selectedId, action] = props.rest.split("/").map(decodeURIComponent);
   const selected = fleet.rows.find((r) => r.account.id === selectedId);
-  const rows = useMemo(() => filterRows(fleet.rows, typed, show), [fleet.rows, typed, show]);
+  // Who needs the person comes first, then who waits on a clock, who serves, who is off; by name within each.
+  const rows = useMemo(
+    () =>
+      filterRows(fleet.rows, typed, show).sort(
+        (a, b) => rank(a.standing.state) - rank(b.standing.state) || a.account.id.localeCompare(b.account.id),
+      ),
+    [fleet.rows, typed, show],
+  );
   const counts = countBoard(fleet.rows.map((r) => r.standing));
   const open = (id?: string) => {
     location.hash = id ? `#/accounts/${encodeURIComponent(id)}` : "#/accounts";
@@ -97,12 +113,12 @@ export function Accounts(props: { rest: string }) {
     table.current?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: "nearest" });
   }, [selectedId]);
   useKeys([
-    { keys: "j", label: "Next account", run: () => move(1), keyOnly: true, group: "Accounts" },
-    { keys: "k", label: "Previous account", run: () => move(-1), keyOnly: true, group: "Accounts" },
-    { keys: "/", label: "Filter accounts", run: () => filter.current?.focus(), group: "Accounts" },
+    { keys: "j", label: "Next", run: () => move(1), keyOnly: true, group: "Accounts" },
+    { keys: "k", label: "Previous", run: () => move(-1), keyOnly: true, group: "Accounts" },
+    { keys: "/", label: "Filter", run: () => filter.current?.focus(), group: "Accounts" },
     {
       keys: "r",
-      label: "Refresh accounts and windows",
+      label: "Refresh",
       run: () => {
         fleet.reload();
         fleet.refreshWindows();
@@ -111,7 +127,7 @@ export function Accounts(props: { rest: string }) {
     },
     { keys: "a", label: "Add account", run: () => (location.hash = "#/add-account"), group: "Accounts" },
     ...(selectedId
-      ? [{ keys: "Escape", label: "Close the account", run: () => open(), keyOnly: true, group: "Accounts" }]
+      ? [{ keys: "Escape", label: "Close", run: () => open(), keyOnly: true, group: "Accounts" }]
       : []),
   ]);
   const data = fleet.accounts.data;
@@ -300,12 +316,8 @@ export function Accounts(props: { rest: string }) {
 
 function AccountRow(props: { row: Row; fleet: Fleet; fix: ReturnType<typeof useFix>; selected: boolean }) {
   const { row, fleet } = props;
-  const p = usePrivacy();
   const a = row.account;
   const s = row.standing;
-  const ids = [a.label, a.id];
-  const err = a.last_error;
-  const why = s.state !== "serving" && s.state !== "off" ? s.why : undefined;
   return (
     <tr
       data-tone={s.tone}
@@ -342,17 +354,7 @@ function AccountRow(props: { row: Row; fleet: Fleet; fix: ReturnType<typeof useF
         {a.active_requests ?? 0}
       </td>
       <td class="da-col-error">
-        {why ? (
-          <span class="da-clip" title={p.text(why, ids)}>
-            {p.text(why, ids)}
-          </span>
-        ) : err ? (
-          <span class="da-clip da-quiet" title={p.text(err.message, ids)}>
-            <span class="da-num">{err.status ?? err.code}</span> {p.text(err.message, ids)}
-          </span>
-        ) : (
-          <span class="da-quiet">–</span>
-        )}
+        <Why row={row} now={fleet.now} />
       </td>
       <td class="da-col-fix">
         <FixButton row={row} fix={props.fix} small />

@@ -95,52 +95,53 @@
 }
 
 /* The resets below leave today's pages alone (.da-legacy holds them): those keep the kit's own
-   styles, which sit in a layer and would lose to any rule here. */
-:root[data-design="a"] .da a:not(.da-legacy *) {
+   styles, which sit in a layer and would lose to any rule here. They are written inside :where(),
+   so every class rule of this direction wins over them. */
+:where(:root[data-design="a"] .da) :where(a:not(.da-legacy *)) {
   color: inherit;
   text-decoration: underline;
   text-decoration-color: var(--da-line-strong);
   text-underline-offset: 3px;
 }
 
-:root[data-design="a"] .da a:not(.da-legacy *):hover {
+:where(:root[data-design="a"] .da) :where(a:not(.da-legacy *)):hover {
   text-decoration-color: currentcolor;
 }
 
-:root[data-design="a"] .da :focus-visible:not(.da-legacy *) {
+:where(:root[data-design="a"] .da) :where(:focus-visible:not(.da-legacy *)) {
   outline: 2px solid var(--da-accent);
   outline-offset: 1px;
 }
 
-:root[data-design="a"] .da :is(h1, h2, h3, p, ul, ol, dl, dd, fieldset):not(.da-legacy *) {
+:where(:root[data-design="a"] .da) :where(:is(h1, h2, h3, p, ul, ol, dl, dd, fieldset):not(.da-legacy *)) {
   margin: 0;
   padding: 0;
   border: 0;
   font: inherit;
 }
 
-:root[data-design="a"] .da :is(ul, ol):not(.da-legacy *) {
+:where(:root[data-design="a"] .da) :where(:is(ul, ol):not(.da-legacy *)) {
   list-style: none;
 }
 
-:root[data-design="a"] .da :is(button, input):not(.da-legacy *) {
+:where(:root[data-design="a"] .da) :where(:is(button, input):not(.da-legacy *)) {
   font: inherit;
   color: inherit;
 }
 
-:root[data-design="a"] .da [data-tone="ok"]:not(.da-legacy *) {
+:where(:root[data-design="a"] .da) :where([data-tone="ok"]:not(.da-legacy *)) {
   color: var(--da-ok);
 }
 
-:root[data-design="a"] .da [data-tone="warn"]:not(.da-legacy *) {
+:where(:root[data-design="a"] .da) :where([data-tone="warn"]:not(.da-legacy *)) {
   color: var(--da-warn);
 }
 
-:root[data-design="a"] .da [data-tone="danger"]:not(.da-legacy *) {
+:where(:root[data-design="a"] .da) :where([data-tone="danger"]:not(.da-legacy *)) {
   color: var(--da-danger);
 }
 
-:root[data-design="a"] .da [data-tone="muted"]:not(.da-legacy *) {
+:where(:root[data-design="a"] .da) :where([data-tone="muted"]:not(.da-legacy *)) {
   color: var(--da-ink-3);
 }
 
@@ -438,7 +439,8 @@
   align-items: center;
   gap: 2px;
   min-width: 0;
-  padding: 0 6px;
+  /* The design switcher sits over the bottom right corner while directions are compared. */
+  padding: 0 176px 0 6px;
   overflow: hidden;
   font-size: 12px;
   white-space: nowrap;
@@ -769,7 +771,7 @@
 
 :root[data-design="a"] .da-window {
   display: grid;
-  grid-template-columns: 2ch 56px 4ch 6ch;
+  grid-template-columns: 2ch 48px 4ch 7ch;
   align-items: center;
   gap: 6px;
   flex: none;
