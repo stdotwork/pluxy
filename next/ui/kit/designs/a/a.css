@@ -3,7 +3,10 @@
 
    Colour has four jobs and no others: ink (three strengths), one accent for where you are and
    what has focus, and three state colours that mean state. Selection that matters (the current
-   destination, the one primary action) is reverse video, as a terminal does it. */
+   destination, the one primary action) is reverse video, as a terminal does it.
+
+   Every ink is at least 4.5:1 on every surface it sits on, the selected row included (the third
+   ink is the tightest: 4.7:1 on the selected row in both appearances). */
 
 :root[data-design="a"] {
   --da-font: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -14,7 +17,7 @@
   --da-line-strong: #3d3d35;
   --da-ink: #eae8e0;
   --da-ink-2: #a5a397;
-  --da-ink-3: #86847a;
+  --da-ink-3: #8f8d83;
   --da-accent: #4cc9e0;
   --da-accent-ink: #04242a;
   --da-ok: #7fd68f;
@@ -59,8 +62,8 @@
   --da-line: #d9d5c7;
   --da-line-strong: #b5b09f;
   --da-ink: #1b1a16;
-  --da-ink-2: #58554b;
-  --da-ink-3: #6b685d;
+  --da-ink-2: #4f4c43;
+  --da-ink-3: #605d53;
   --da-accent: #0a6c80;
   --da-accent-ink: #ffffff;
   --da-ok: #17703a;
