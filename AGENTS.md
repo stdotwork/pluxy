@@ -40,8 +40,8 @@ Run each command from the folder named in its heading.
 
 The short way: `make` in `next/` lists targets that run these same commands (`make check`,
 `make test`, `make ui`, `make app`, `make app-rust`, `make tools`; `make all` runs `check`, `ui`
-and `app`). `make app-local` builds the desktop app to open and use, with core and the provider
-extensions inside, into `next/app/local-build` (`next/app/README.md`, "The local build").
+and `app`). `make app-local` builds the desktop app to open and use, with core, the provider
+extensions and the coding-tool add-ons inside, into `next/app/local-build` (`next/app/README.md`, "The local build").
 `make dev` watches `next/ui`, rebuilds the panel on each edit, and serves it from a
 demo core (`PORT=8330`). The commands below stay the reference CI mirrors. `make hooks` turns on an opt-in
 pre-commit hook that checks the formatting of staged files.
