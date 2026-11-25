@@ -409,6 +409,54 @@ func TestSetupImportKeepsCoreAffinityTTL(t *testing.T) {
 	}
 }
 
+// The Lamplighter plugin's window ignition reaches core's config file: every provider it starts
+// windows for is an entry core reads as on, and core's own ignition settings the file does not
+// set stay.
+func TestSetupImportLamplighterIgnition(t *testing.T) {
+	setTestHome(t)
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.json")
+	writeTestFile(t, cfgPath, `{
+		"listen": "127.0.0.1:0", "client_keys": ["fake-client-key-1"], "management_key": "fake-mgmt-key",
+		"routing": {"ignition": {"enabled": false, "grace_ms": 5000, "accounts": {"mine": {"enabled": false}}}}}`)
+	cpa := t.TempDir()
+	writeTestFile(t, filepath.Join(cpa, "config.yaml"), `plugins:
+  enabled: true
+  configs:
+    lamplighter:
+      enabled: true
+      ignition: {start_hour: 6}
+      providers:
+        antigravity: {ignite: true, groups: [Gemini]}
+`)
+	c, err := Start(Options{ConfigPath: cfgPath, SafeMode: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Stop()
+	code, _, body := importCall(t, c, "fake-mgmt-key", management.SetupImportRequest{Config: filepath.Join(cpa, "config.yaml")})
+	if code != http.StatusOK {
+		t.Fatalf("import: %d %s", code, body)
+	}
+	ig := c.Config().Routing.Ignition
+	if ig == nil || !ig.Enabled || ig.StartHour == nil || *ig.StartHour != 6 || ig.GraceMS == nil || *ig.GraceMS != 5000 {
+		b, _ := os.ReadFile(cfgPath)
+		t.Fatalf("routing.ignition after the import: %s", b)
+	}
+	for _, ext := range []string{"pluxy/claude", "pluxy/codex", "pluxy/antigravity"} {
+		if !ig.AccountOn("someone", ext) {
+			b, _ := os.ReadFile(cfgPath)
+			t.Errorf("ignition is not on for %s's accounts: %s", ext, b)
+		}
+	}
+	if ig.AccountOn("mine", "pluxy/claude") {
+		t.Error("the import turned on an account core had turned off")
+	}
+	if w := ig.Extensions["pluxy/antigravity"].Windows; len(w) != 1 {
+		t.Errorf("antigravity windows = %v", w)
+	}
+}
+
 // Two auth files whose names make one account ID: the dry run refuses the second as the import
 // does, so both reports name it as not brought.
 func TestSetupImportDryRunOneAccountID(t *testing.T) {

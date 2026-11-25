@@ -9,6 +9,7 @@ import (
 
 	"github.com/stdotwork/pluxy/next/internal/cred"
 	"github.com/stdotwork/pluxy/next/internal/host"
+	"github.com/stdotwork/pluxy/next/internal/ignite"
 	"github.com/stdotwork/pluxy/next/internal/logfile"
 	"github.com/stdotwork/pluxy/next/internal/packages"
 	"github.com/stdotwork/pluxy/next/internal/route"
@@ -218,7 +219,14 @@ type Account struct {
 
 	// Check is the result of core's last check of the account; absent while core has none.
 	Check *AccountCheck `json:"check,omitempty"`
+	// Ignition is the account's window ignition (routing.ignition): each usage window core
+	// starts, its state and when core starts it next. Absent when ignition does not run for the
+	// account.
+	Ignition *AccountIgnition `json:"ignition,omitempty"`
 }
+
+// AccountIgnition is an account's window ignition, in Account.
+type AccountIgnition = ignite.View
 
 // Account check states (AccountCheck.State).
 const (
@@ -511,6 +519,9 @@ type RoutingSettings struct {
 	// Timeouts are the default upstream timeouts of every account, in milliseconds; absent when
 	// the config sets none, which leaves core's own.
 	Timeouts *protocol.Timeouts `json:"timeouts,omitempty"`
+	// Ignition is window ignition's settings (routing.ignition) as the config sets them; absent
+	// when it sets none, which leaves ignition off.
+	Ignition *ignite.Config `json:"ignition,omitempty"`
 }
 
 // RetrySettings are the retry settings in RoutingSettings.

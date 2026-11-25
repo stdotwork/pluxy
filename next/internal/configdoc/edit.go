@@ -10,6 +10,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/stdotwork/pluxy/next/internal/ignite"
 	"github.com/stdotwork/pluxy/next/internal/proxyurl"
 	"github.com/stdotwork/pluxy/next/internal/route"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -180,6 +181,11 @@ type RoutingPatch struct {
 	// null removes them all. This core's own setting, so a config.yaml, which today's core
 	// also reads, has no name for it.
 	Timeouts json.RawMessage `json:"timeouts"`
+	// Ignition replaces window ignition's settings (routing.ignition) whole: an object with
+	// enabled, the hours, the waits and the extensions and accounts it runs for; null removes
+	// them, which turns ignition off. This core's own setting, so a config.yaml, which today's core
+	// also reads, has no name for it.
+	Ignition json.RawMessage `json:"ignition"`
 }
 
 // CooldownPatch is a change to the cooldown settings.
@@ -446,9 +452,48 @@ func (d *Doc) applyRouting(r *RoutingPatch) error {
 		}
 	}
 	if r.Timeouts != nil {
-		return d.applyTimeouts(r.Timeouts)
+		if err := d.applyTimeouts(r.Timeouts); err != nil {
+			return err
+		}
+	}
+	if r.Ignition != nil {
+		return d.applyIgnition(r.Ignition)
 	}
 	return nil
+}
+
+// applyIgnition writes window ignition's settings whole: null removes them; anything else must be
+// the section, with no field it does not have, that ignite.Config.Validate accepts. A config.yaml
+// has no name for the section (its Lamplighter plugin settings are read as it, but not written),
+// so a change there is refused, and null changes nothing there, as for the timeouts.
+func (d *Doc) applyIgnition(raw json.RawMessage) error {
+	if string(bytes.TrimSpace(raw)) == "null" {
+		if !d.YAML {
+			d.Delete("routing", "ignition")
+		}
+		return nil
+	}
+	if d.YAML {
+		return fmt.Errorf("%w: routing.ignition is this core's own setting and a config.yaml has no name for it; a config.yaml's plugins.configs.lamplighter is read as it, so change that instead", ErrInvalid)
+	}
+	var c ignite.Config
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&c); err != nil {
+		return fmt.Errorf("%w: routing.ignition: %v", ErrInvalid, err)
+	}
+	if err := c.Validate(); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	b, err := json.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("%w: routing.ignition: %v", ErrInvalid, err)
+	}
+	var n yaml.Node
+	if err := yaml.Unmarshal(b, &n); err != nil || n.Kind != yaml.DocumentNode || len(n.Content) != 1 {
+		return fmt.Errorf("%w: routing.ignition: %v", ErrInvalid, err)
+	}
+	return d.Set(n.Content[0], "routing", "ignition")
 }
 
 // applyTimeouts writes the default upstream timeouts of every account: null removes the section,

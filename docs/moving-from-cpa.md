@@ -116,7 +116,14 @@ From `config.yaml`:
 - model aliases and excluded models for signed-in accounts (`oauth-model-alias`,
   `oauth-excluded-models`);
 - the payload rules;
-- the log, request-log and usage settings.
+- the log, request-log and usage settings;
+- the [Lamplighter plugin](https://github.com/PosvdM/cpa-plugin-lamplighter)'s window ignition,
+  when the plugin is on: pluxy has it built in as `routing.ignition` (see
+  [Window ignition](../next/README.md#window-ignition)). Its hours, waits and retries, and the
+  providers it starts windows for, with their models, carry over: `claude` and `codex` become
+  `pluxy/claude` and `pluxy/codex`, and `antigravity` becomes `pluxy/antigravity` with one window
+  per group (`Gemini`, `Claude / GPT`). The Antigravity provider is archived: it serves only once
+  you install it by hand.
 
 From the auth folder, the files of these types: `codex`, `claude`, `kimi`, `vertex`, `xai`, `meta`,
 `devin` and `antigravity`. Each becomes an account whose ID is the file's name without `.json`,
@@ -139,7 +146,9 @@ describes a `config.yaml` written for pluxy's own earlier core, a CPA fork, whic
 | Auth files of any other type, or with no `type` | No provider in pluxy serves them. The import names each one |
 | The settings that make another client look like Claude Code (cloaking, fingerprint profiles) and the header defaults | pluxy does not make another client look like Claude Code, so these are left out. One exception: `disable-codex-cloaking` carries over, as `codex_identity: false` on the imported Codex accounts |
 | A header whose value holds `$CPA-SESSION-ID`, or that copies the client's `Authorization`, `Proxy-Authorization`, `X-Api-Key`, `X-Goog-Api-Key` or `Cookie` header | pluxy has no CPA session ID, and never sends a client's key, a proxy password or cookies upstream. The import names each one |
-| `plugins` | pluxy's providers are separate programs, installed as packages, not libraries loaded into the core |
+| `plugins` | pluxy's providers are separate programs, installed as packages, not libraries loaded into the core. The Lamplighter plugin's window ignition is the one exception: it carries over (above) |
+| Lamplighter's notifications and reminders (Bark, webhooks, the usage thresholds, reset reminders) and its own page | pluxy sends no usage notifications. The panel shows each account's usage, and `pluxy account list` its health |
+| Lamplighter's `timezone` | pluxy reads the ignition hours in the machine's local time zone. Move `start_hour` and `end_hour`, or set the machine's time zone |
 | The panel download settings (`panel-github-repository`, `disable-auto-update-panel`, `disable-control-panel`) | The panel is built into pluxy; nothing is downloaded, and it is always on with the management API |
 | The remote model catalogs (`models.catalog` and the others) | Each provider carries its own model list |
 | Response compression, `commercial-mode`, discovery, `max-request-body-bytes` | Left to a reverse proxy, or switches for features pluxy does not have. Request bodies are capped at 24 MiB |
@@ -192,6 +201,11 @@ The names on the right are the ones in pluxy's `config.json`, its commands and i
   CPA waits a fixed minute.
 - **Quota blocks survive a restart, and are checked at once when pluxy starts**, so a restart
   sends no requests to an account whose usage ran out.
+- **Window ignition checks the window started.** A minute (`hold_ms`) after the request that
+  starts a window, pluxy reads the account's usage again; a window that still does not run counts
+  as a failed ignition. A rate limit is retried with the backoff, where Lamplighter paused until
+  the next morning, and an account that is cooling or exhausted waits until its block ends. What
+  ignition knows is not saved: after a restart pluxy reads each account at once.
 
 ## Running both side by side
 

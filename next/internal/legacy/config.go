@@ -987,6 +987,7 @@ func (x *translator) run() error {
 	if err := x.routing(); err != nil {
 		return err
 	}
+	x.lamplighter()
 	if err := x.options(); err != nil {
 		return err
 	}

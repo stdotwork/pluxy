@@ -41,6 +41,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/cred"
 	"github.com/stdotwork/pluxy/next/internal/extconfig"
 	"github.com/stdotwork/pluxy/next/internal/host"
+	"github.com/stdotwork/pluxy/next/internal/ignite"
 	"github.com/stdotwork/pluxy/next/internal/logfile"
 	"github.com/stdotwork/pluxy/next/internal/packages"
 	"github.com/stdotwork/pluxy/next/internal/proxyurl"
@@ -109,6 +110,8 @@ type Core struct {
 
 	checks *checks // each account's last check
 
+	ignition *ignite.Planner // window ignition's plan for each account (routing.ignition)
+
 	routing *routing // routing's checks and saved blocks, from start
 
 	usage        *usage.Store         // the usage record, kept across reloads
@@ -150,7 +153,7 @@ func Start(opts Options) (*Core, error) {
 	// the account's settings: the values the management API shows as placeholders.
 	opts.Host.SettingsSecrets = configdoc.SettingsSecrets
 	bgCtx, bgCancel := context.WithCancel(context.Background())
-	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), requests: server.NewRequests(), checks: newChecks(),
+	c := &Core{opts: opts, state: route.NewState(), redactor: configdoc.NewRedactor(), requests: server.NewRequests(), checks: newChecks(), ignition: ignite.NewPlanner(),
 		bgCtx: bgCtx, bgCancel: bgCancel, catalogueNow: time.Now}
 	c.loadPublicKey()
 	// Every extension call carries the proxy of the config active when it is sent.

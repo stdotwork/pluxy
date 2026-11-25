@@ -255,7 +255,7 @@ func settings(cfg *server.Config) settingsView {
 		Retry: retryView{RequestRetry: r.RequestRetry, MaxRetryCredentials: r.MaxAccounts, MaxRetryInterval: float64(r.MaxWaitMS) / 1000},
 		Cooldown: cooldownView{DisableCooling: r.DisableCooling, TransientErrorCooldownSeconds: float64(max(r.TransientErrorCooldownMS, -1000)) / 1000,
 			QuotaResponseMode: cmp.Or(r.QuotaResponseMode, route.QuotaRetryable)},
-		Timeouts: r.Timeouts}
+		Timeouts: r.Timeouts, Ignition: r.Ignition}
 	switch r.Strategy {
 	case "":
 		v.Strategy = route.StrategyRoundRobin

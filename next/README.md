@@ -1874,6 +1874,7 @@ nearest second (at least 1), so with 1.2 s left it says `reset_time` "1s" next t
 | `session_affinity` | On by default, with no setting needed: requests of one session go to the same account while it is eligible, so a coding agent's conversation keeps its provider-side prompt cache. `{"enabled": false}` turns it off; `{"ttl_ms": 1800000}` sets how long a session stays bound after its last request (default one hour, 3600000). The session comes from the `X-Claude-Code-Session-Id`, `Session-Id`, `X-Session-Id` or `X-Session-Affinity` header, or the body's `prompt_cache_key`; a request with none takes turns as usual. Bindings are per client key and model. A `config.yaml` keeps today's default, off (below). |
 | `timeouts` | Upstream HTTP request timeouts in milliseconds: `header_ms` (default 60000) for response headers and `idle_ms` (default 300000) between raw upstream bytes on streamed requests, and `total_ms` (default 600000) in all on non-streamed requests; `0` turns a limit off. For an extension that speaks protocol 0.23, core also ends an attempt on which the extension sent it nothing at all for as long as the SDK may wait on the upstream plus a minute (the longer of `header_ms` and `idle_ms` when streamed, the longest of the three when not) with `extension_timeout`, which moves the request to another account when no reply has started; with any limit it needs at `0`, there is no such deadline. A timeout before any reply byte (this one or an upstream limit's) moves a request to one more account, once: a second timeout ends the request with that error, so a stuck upstream costs a client two limits and not one per account. |
 | `chains` | Fallback chains, by the model name clients ask for (below). Default: none. |
+| `ignition` | [Window ignition](#window-ignition): start an account's next usage window right after the last one resets. Off by default. |
 | account `priority` | Higher first; lower accounts serve only while every higher one is blocked. Default 0. |
 | account `weight` | For `weighted`. Default 1; 0 leaves the account out. |
 | account `disable_cooling` | Overrides `disable_cooling` for the account. |
@@ -1923,6 +1924,88 @@ there only when every account belongs to one extension; `limit_window_minutes` o
 is known. `last_upstream_error` and the message's last error have credentials, tokens and local
 paths replaced, as today's core replaces them. A stream that has already started ends with the
 same error, and a Chat Completions stream then with `data: [DONE]`.
+
+### Window ignition
+
+Window ignition starts an account's next 5-hour usage window right after the last one resets,
+instead of at the first real request. Core sends the account one small request for this: the
+request `pluxy account test` sends (`Hi`, at most 16 output tokens), straight to the account's
+extension, with routing and its state left alone. Ignition runs only between set hours. It is
+off by default, and turned on for the accounts of the extensions it lists:
+
+```json
+{"routing": {"ignition": {
+  "enabled": true,
+  "start_hour": 7, "end_hour": 22, "end_grace_ms": 1800000,
+  "grace_ms": 2000, "retry_ms": 300000, "backoff_multiplier": 3, "max_failures": 3, "hold_ms": 60000,
+  "extensions": {
+    "pluxy/claude": {},
+    "pluxy/codex": {"model": "gpt-6-luna"},
+    "pluxy/antigravity": {"windows": {"claude_and_gpt_models_five_hour": "gpt-oss-120b-medium", "gemini_models_five_hour": ""}}
+  },
+  "accounts": {"work-claude": {"enabled": false}}
+}}}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `enabled` | `true` turns ignition on. Default `false`. |
+| `start_hour`, `end_hour` | The hours ignition runs in, **in the machine's local time zone**: from `start_hour`:00 to `end_hour`:00 plus `end_grace_ms`. An `end_hour` not after `start_hour` is the next day's (22 to 6 runs over midnight; 0 to 0 all day). Defaults 7 and 22. |
+| `end_grace_ms` | How long past `end_hour`:00 ignition still runs. Default 1800000 (30 minutes). |
+| `grace_ms` | How long after a window's reset core reads the account's usage again and starts the window. Default 3000. |
+| `retry_ms`, `backoff_multiplier` | The wait after a failed ignition before the next try, multiplied by `backoff_multiplier` for each further failure in a row (1 to 10). Defaults 300000 (5 minutes) and 3: 5 minutes, then 15. |
+| `max_failures` | Failures in a row (1 to 10) that pause the window's ignition until the next `start_hour`:00. Default 3. |
+| `hold_ms` | How long after a request that succeeded core reads the window again to see that it started (at least 15000). Default 60000. |
+| `extensions` | The extensions whose accounts ignition runs for, by extension ID; an extension not listed has none. Each takes `enabled` (`false` leaves it out), `model` (the model the request names; empty: a small one, below) and `windows` (below). |
+| `accounts` | One account's own switch and model, by account ID: `enabled` `true` or `false` wins over its extension's choice, and `model` names the model for the account's windows that `windows` gives none. |
+
+Core reads each such account's usage from its provider (the extension's `quota` call, as the
+checks of long blocks do) when ignition turns on for it, when the settings change, a `grace_ms`
+after each window's reset, a `hold_ms` after each ignition, and an hour after a reading that found
+nothing to wait for. From each reading it takes the windows to start: every usage window of five
+hours, whether it counts all the account's requests or those of one group of models (Antigravity
+has one per group); a provider with one usage window only has that one started, whatever its
+length. A weekly window, or one model family's, is never started: a request starts it anyway once
+a 5-hour window is used. `windows` lists the IDs of the windows to start (the IDs
+`GET /accounts/{id}/quota` gives them), each with its model ("" for the extension's `model` or the
+default); listed, only those are started.
+
+A window is started only when all of these hold:
+
+- it is not running: its reset has passed, or the reading gives none, or it is a window nothing has
+  used whose reset is always the reading's time plus its length (within 10 seconds), as some
+  providers report a window that has not started;
+- the time is within the hours; a window that resets outside them is started at the next
+  `start_hour`:00;
+- the account is in service and can serve now (its health is `ok`): an account that is turned off
+  or waiting for a login is not read at all, and one that is cooling, exhausted or banned waits
+  until its block ends (a `retry_ms` when no end is known);
+- no other usage window that covers the same requests (the account's, or the same group's) is
+  full: a request would start nothing, so the window waits for that one's reset;
+- no retry's wait or pause holds it.
+
+A window still not running a `hold_ms` after the request counts as a failed ignition, as does a
+request that failed. A failure retrying cannot mend (a refused key or account, a missing model, a
+refused request, no model to choose) pauses the window at once. Every reading that shows the
+window running clears its failures and pause, and so does a change of the settings (a model set
+after "no model to choose", say). With no model set, core picks a small model the
+account serves: among the models it lists (not excluded ones; image, audio, embedding, thinking and
+review models left out, and for a group's window only models of the group's families, such as
+`gemini` or `claude`), the first of `haiku`, `luna`, `flash-lite`, `lite`, `mini`, `nano`, `flash`,
+`oss` and `small` that is part of a model ID, the newest such model by the numbers in its ID; else
+the first model left. An account whose models are not listed (a config account that names none)
+needs a `model`.
+
+Each ignition request goes into the [usage record](#usage-statistics) with `endpoint`
+`ignition`, which no client request has, and no `key_id`. Core logs each one (`ignition: account
+"work": sent the request that starts window five_hour, with claude-haiku-5-5`, or why it failed).
+`GET /accounts` (and `pluxy account list --json`) shows each account's `ignition`: for each window
+its `id`, `state` (`running`; `waiting` for the hours, the account, a full window or a retry;
+`starting` while the request is checked; `paused`), `next` (when core starts it next), `why`,
+`failures`, and the `last` request's time, `model` and `error`; and an `error` when the usage
+cannot be read. What ignition knows is kept in memory only: after a restart it reads each account
+at once, and a window that has reset is started then, inside the hours. Reload applies a change at
+once (see [Reloading config and swapping extensions](#reloading-config-and-swapping-extensions)).
 
 ### Fallback chains
 
@@ -2475,7 +2558,7 @@ its keys and its indent. `PUT /config` writes the document as sent.
 | `POST /v0/management/management-key/rotate` | Replaces the management key with a new random one and returns it as `value`. The old key stops working as the reply is sent. |
 | `GET /v0/management/models` | The models `GET /v1/models` lists, as one list in the same order: `models`, each with `id` (the name clients use), what the account, the catalogue and the extension say about the model (`owned_by`, `display_name`, `context_length`, `max_output_tokens`, `capabilities`, `from`, ...), `upstream` (its name upstream), `extension` (the extension of the account whose entry the list shows) and `accounts` (the IDs of the accounts a request for the name uses, as routing chooses them: one provider's, or with a fallback chain each step's in step order, highest priority first within a step). An account that serves any model because its list is not known adds no name, but is among the accounts of the names its provider serves; a fallback chain that only such accounts serve is listed as the first of them, with its step's model as `upstream`. Under the `weighted` strategy an account of `weight` 0 is in no entry. A name whose accounts all wait for a login or are turned off is left out. Never a credential. |
 | `POST /v0/management/models/refresh` | Ask providers for their model lists again now; optional JSON body `{"account": "<id>"}` for one account. Returns the updated `models` list and per-account `accounts` results (`models`, `kept`, `error`). A read that fails, times out, comes back empty or falls back to the extension's built-in list keeps the last good list (the last live one, when it was read from the provider). |
-| `GET /v0/management/settings` | The basic and routing settings, by today's core's names, and `token_count_estimate` and `routing.timeouts`, this core's own, under their own names (below). |
+| `GET /v0/management/settings` | The basic and routing settings, by today's core's names, and `token_count_estimate`, `routing.timeouts` and `routing.ignition`, this core's own, under their own names (below). |
 | `PATCH /v0/management/settings` | Changes the settings the body names (`{"routing": {"strategy": "fill-first"}}`) and replies with them all. 400 for a name or value it does not take. |
 
 In the document, a placeholder stands for the secret it replaced, so a document read with `GET
@@ -2536,6 +2619,7 @@ to `management.secret-key`, or `remote-management.secret-key` when only that is 
 | `routing.cooldown.transient-error-cooldown-seconds` | `routing.transient_error_cooldown_ms` (seconds × 1000) | Seconds a failing upstream cools down: 0 for this core's backoff (1 second doubling to a minute), -1 for none. |
 | `routing.cooldown.quota-response-mode` | `routing.quota_response_mode` | `retryable` (the default) or `usage-limit`: what a client gets when every account is out of quota (see [Accounts and routing](#accounts-and-routing)). |
 | `routing.timeouts` | `routing.timeouts` | The default upstream timeouts of every account, in milliseconds: `header_ms`, `idle_ms` and `total_ms`. `0` turns a limit off, a field left out stays as it is, and `null` removes them. This core's own setting: a `config.yaml` has no name for it. |
+| `routing.ignition` | `routing.ignition` | [Window ignition](#window-ignition)'s settings, replaced whole: a field left out goes back to its default, and `null` removes them, which turns ignition off. Absent from `GET` when the config sets none. This core's own setting: a `config.yaml` has no name for it (its Lamplighter plugin settings are read as it, below, but not written). |
 | `observability.logs.logging-to-file` | `logs.to_file` | `true` or `false`: whether core also writes its log to [files](#log-files). |
 | `observability.logs.logs-max-total-size-mb` | `logs.max_total_size_mb` | Megabytes the logs folder's `.log` files may take; 0 (the default) is no cap. |
 | `observability.logs.request-log` | `logs.request_log` | `true` or `false`: whether every client request is written to a [request log](#request-logs). |
@@ -3083,7 +3167,9 @@ are accepted silently.
 | `observability.usage.redis-usage-queue-retention-seconds` (`redis-usage-queue-retention-seconds`) | The record keeps requests by `usage.max_events` and `usage.max_age_ms`. | Dropped: it was how long a queued usage record waited for a reader that removed it; reading the record here removes nothing, and its default of 60 seconds would leave little to read |
 | `observability.pprof.enable` (`pprof.enable`), `observability.pprof.addr` (`pprof.addr`) | `pprof.enable` and `pprof.addr`: the [profiling pages](#profiling-pages). Only a build with `-tags pprof` serves them; the default build logs that the setting does nothing. An address that is not loopback is refused. | Supported (in the `pprof` build) |
 | `models.catalog`, `models.codex-catalog`, `models.devin-catalog` | Each extension carries its model list, and a developer refreshes it by hand (see [Codex client catalog](#codex-client-catalog)). | Dropped: core has no such setting; it reads each account's live list and the `models.dev` catalogue |
-| `plugins.*` | Extensions are separate programs (packages), not libraries loaded into core. | Dropped: replaced by packages |
+| `plugins.configs.lamplighter.ignition.*`, `plugins.configs.lamplighter.providers.*` | The [Lamplighter plugin](https://github.com/PosvdM/cpa-plugin-lamplighter)'s window ignition, while the plugin is on (`plugins.enabled` and its own `enabled` both `true`): `routing.ignition`, with the plugin's defaults for what it leaves out. `start_hour`, `end_hour`, `failure_backoff_multiplier` and `max_transient_failures` keep their values; `end_grace_minutes` becomes `end_grace_ms`, `grace_seconds` `grace_ms`, `failure_retry_seconds` `retry_ms` and `post_success_hold_seconds` `hold_ms`, held to the plugin's ranges (a retry of at least 60 seconds, a hold of at least 15). A provider that ignites (its `ignite`, by default on for `claude` and `codex`, and not turned off by `monitor: false`) becomes an entry of `extensions`, `pluxy/claude`, `pluxy/codex` or `pluxy/antigravity` (archived: it serves once installed by hand), with its `model`. Antigravity's `groups` (by default `Gemini`) and `models` become `windows`: `Gemini` is `gemini_models_five_hour`, `Claude / GPT` `claude_and_gpt_models_five_hour`, any other group its name in lower case with `_` for what is not a letter or digit, then `_five_hour`; an empty list is both groups. The hours are the machine's local time. | Brought (the rows of the Antigravity entry say it is archived) |
+| `plugins.configs.lamplighter.*`, other | The plugin's notifications and reminders (`bark_*`, `webhook`, the thresholds, `recovery_notify`, `reset_reminder`, `codex_reset_updates`), its time zone, poll interval, MCP server, page and records, and how it reached core (`cpa_base_url`, `models_api_key`). | Dropped: pluxy sends no usage notifications; it reads the hours in the machine's local time and usage when a window is due. While the plugin is off, all of its settings are dropped |
+| `plugins.*`, other | Extensions are separate programs (packages), not libraries loaded into core. | Dropped: replaced by packages |
 | `credentials.*` (`credential-concurrency`, `credential-in-flight`) | | Dropped: only the Home control plane used them |
 
 Environment variables today's core reads (`MANAGEMENT_PASSWORD`, `PGSTORE_*`, `GITSTORE_*`,
