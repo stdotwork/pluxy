@@ -122,7 +122,7 @@ func TestReadAuthDir(t *testing.T) {
 	for _, f := range files {
 		got[f.Record.ID] = f
 	}
-	if len(got) != 8 {
+	if len(got) != 9 {
 		t.Fatalf("read %d accounts, want 9: %v", len(got), got)
 	}
 
@@ -180,6 +180,18 @@ func TestReadAuthDir(t *testing.T) {
 	equalJSON(t, xc.Data, `{"token_endpoint": "https://auth.x.ai/oauth2/token"}`)
 	equalJSON(t, x.Record.Account.Settings, `{"base_url": "http://127.0.0.1:3/v1"}`)
 
+	// An Antigravity file is the archived extension's account: the Google Cloud project stays with
+	// the credential and base_url is a setting.
+	ag := got["antigravity-user-example.com"]
+	agc := ag.Record.Credential
+	if ag.Record.Extension != Antigravity || ag.Record.Label != "user@example.com" || agc.Kind != protocol.CredentialOAuth ||
+		agc.AccessToken != "fake-ag-access" || agc.RefreshToken != "fake-ag-refresh" ||
+		agc.ExpiresAt != exp.Unix() || agc.RefreshAt != exp.Add(-30*time.Minute).Unix() || len(ag.Ignored) != 0 {
+		t.Errorf("antigravity: %+v", ag)
+	}
+	equalJSON(t, agc.Data, `{"project_id": "proj-1"}`)
+	equalJSON(t, ag.Record.Account.Settings, `{"base_url": "http://127.0.0.1:2"}`)
+
 	mm := got["meta-minted"]
 	mc := mm.Record.Credential
 	if mm.Record.Extension != Meta || mm.Record.Label != "muse@example.com" || mc.Kind != protocol.CredentialOAuth ||
@@ -205,18 +217,17 @@ func TestReadAuthDir(t *testing.T) {
 		reasons[s.File] = s.Reason
 	}
 	for file, want := range map[string]string{
-		"antigravity-user@example.com.json": "pluxy no longer ships the Antigravity provider",
-		"devin-empty.json":                  "it holds no token",
-		"gemini-old.json":                   "today's core does not load it either",
-		"notype.json":                       "today's core does not load it either",
-		"broken.json":                       "not a JSON object",
-		"codex-empty.json":                  "it holds no token",
+		"devin-empty.json": "it holds no token",
+		"gemini-old.json":  "today's core does not load it either",
+		"notype.json":      "today's core does not load it either",
+		"broken.json":      "not a JSON object",
+		"codex-empty.json": "it holds no token",
 	} {
 		if reasons[file] != want {
 			t.Errorf("%s skipped for %q, want %q", file, reasons[file], want)
 		}
 	}
-	if len(skipped) != 6 {
+	if len(skipped) != 5 {
 		t.Errorf("skipped %v", skipped)
 	}
 }
@@ -685,4 +696,35 @@ func TestImportClaudeModelLevelCooling(t *testing.T) {
 		t.Fatalf("read %v, %v", files, err)
 	}
 	equalJSON(t, files[0].Record.Account.Settings, `{"model_level_cooling": true}`)
+}
+
+// An Antigravity file with no project_id still imports, and its account is renewed at once when it
+// has a refresh token, because a request needs the Google Cloud project and the extension's
+// renewal finds it. A file with no token at all is skipped, as every other type is.
+func TestAntigravityWithoutProject(t *testing.T) {
+	now := time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)
+	read := func(file map[string]any) ([]AuthFile, []Skipped) {
+		b, _ := json.Marshal(file)
+		return ReadAuthFile("antigravity-a.json", b, DefaultImportOptions, now)
+	}
+
+	files, skipped := read(map[string]any{"type": "antigravity", "access_token": "fake-a", "refresh_token": "fake-r"})
+	if len(files) != 1 || len(skipped) != 0 {
+		t.Fatalf("read %v, skipped %v", files, skipped)
+	}
+	c := files[0].Record.Credential
+	if c.Data != nil || c.RefreshAt != now.Unix() || files[0].Record.Account.Settings != nil {
+		t.Errorf("no project: data %s, refresh_at %d (want %d), settings %s", c.Data, c.RefreshAt, now.Unix(), files[0].Record.Account.Settings)
+	}
+
+	// Without a refresh token there is nothing to renew with: the account is left as it is.
+	files, _ = read(map[string]any{"type": "antigravity", "access_token": "fake-a"})
+	if len(files) != 1 || files[0].Record.Credential.RefreshAt != 0 {
+		t.Errorf("no project, no refresh token: %+v", files)
+	}
+
+	files, skipped = read(map[string]any{"type": "antigravity", "project_id": "proj-1"})
+	if len(files) != 0 || !slices.Equal(skipped, []Skipped{{File: "antigravity-a.json", Reason: "it holds no token"}}) {
+		t.Errorf("no token: files %v, skipped %v", files, skipped)
+	}
 }

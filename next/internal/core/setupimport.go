@@ -309,6 +309,12 @@ func plural(n int, one, many string) string {
 	return many
 }
 
+// notShipped are the provider packages the import brings accounts for that pluxy does not ship:
+// what a Needs row adds so that the owner is not sent to install one from a registry that has none.
+var notShipped = map[string]string{
+	legacy.Antigravity: "pluxy does not ship it: build and install it by hand from next/archive/antigravity (its README says how)",
+}
+
 // importNeeds lists the provider packages the imported accounts need that core has not installed.
 func (c *Core) importNeeds(p *importPlan, imported []legacy.AuthFile) []management.ImportNeed {
 	count := map[string]int{}
@@ -331,7 +337,11 @@ func (c *Core) importNeeds(p *importPlan, imported []legacy.AuthFile) []manageme
 		if _, ok := installed[pkg]; ok || count[pkg] == 0 {
 			continue
 		}
-		out = append(out, management.ImportNeed{Pick: pkg, Why: fmt.Sprintf("%d %s", count[pkg], plural(count[pkg], "account needs it", "accounts need it"))})
+		why := fmt.Sprintf("%d %s", count[pkg], plural(count[pkg], "account needs it", "accounts need it"))
+		if hint := notShipped[pkg]; hint != "" {
+			why += ", and " + hint
+		}
+		out = append(out, management.ImportNeed{Pick: pkg, Why: why})
 	}
 	return out
 }

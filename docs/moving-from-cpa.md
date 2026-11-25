@@ -84,6 +84,11 @@ the **Needs** list named, once:
 `./pluxy account list` shows every account with the provider it needs in the `EXTENSION` column.
 The panel's **Set up pluxy** page at `/panel/` installs providers too.
 
+Antigravity is the exception. pluxy does not ship that provider, so no registry offers it, and
+`pluxy ext install pluxy/antigravity` finds nothing until you have built it yourself: the steps
+are in [`next/archive/antigravity/README.md`](../next/archive/antigravity/README.md). If your CPA
+has Antigravity accounts, the **Needs** list names `pluxy/antigravity` with that pointer.
+
 ### 5. Check
 
 ```bash
@@ -112,9 +117,11 @@ From `config.yaml`:
 - the payload rules;
 - the log, request-log and usage settings.
 
-From the auth folder, the files of these types: `codex`, `claude`, `kimi`, `vertex`, `xai`, `meta`
-and `devin`. Each becomes an account whose ID is the file's name without `.json`, with the file's
-label, priority, prefix, proxy, headers and whether it was disabled.
+From the auth folder, the files of these types: `codex`, `claude`, `kimi`, `vertex`, `xai`, `meta`,
+`devin` and `antigravity`. Each becomes an account whose ID is the file's name without `.json`,
+with the file's label, priority, prefix, proxy, headers and whether it was disabled. An
+`antigravity` account serves only once you have built and installed the Antigravity extension by
+hand (step 4).
 
 [`next/README.md`](../next/README.md#configyaml-with-todays-key-names) has the full list: every
 CPA setting with what pluxy does with it, and every field read from each type of auth file. It
@@ -127,7 +134,7 @@ describes a `config.yaml` written for pluxy's own earlier core, a CPA fork, whic
 | --- | --- |
 | The management key, plain or as a bcrypt hash | pluxy keeps its own management key: it guards every client of core, and an import does not change it. Change it with `POST /v0/management/management-key/rotate` |
 | The example config's client keys (`your-api-key-1` and the rest) | They are public. The import leaves them out |
-| Antigravity auth files | pluxy does not ship an Antigravity provider. The import names each file it leaves |
+| The Antigravity provider, and its `oauth.providers.antigravity` settings | pluxy does not ship it (it is archived). The auth files do come across as accounts, but they do not serve until you build the extension by hand (step 4); the extension does not read the provider settings (`sensitive-words`, `connection-pool`, the signature and credit switches), and the import names them |
 | Auth files of any other type, or with no `type` | No provider in pluxy serves them. The import names each one |
 | The settings that make another client look like Claude Code (cloaking, fingerprint profiles) and the header defaults | pluxy does not make another client look like Claude Code, so these are left out. One exception: `disable-codex-cloaking` carries over, as `codex_identity: false` on the imported Codex accounts |
 | `plugins` | pluxy's providers are separate programs, installed as packages, not libraries loaded into the core |

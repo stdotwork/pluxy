@@ -424,7 +424,7 @@ models: {catalog: "https://example.com/models.json", codex-catalog: /etc/codex.j
 	}
 	for _, want := range []string{
 		"server.response-compression (", "server.discovery.enabled (", "routing.session-affinity-rebind-on (",
-		"oauth.request-scoped-errors (", "oauth.providers.antigravity (pluxy no longer ships the Antigravity provider)", "oauth.providers.devin (", "api-keys.meta (",
+		"oauth.request-scoped-errors (", "oauth.providers.antigravity (the Antigravity extension does not read these settings)", "oauth.providers.devin (", "api-keys.meta (",
 		"api-keys.openai-compatibility.support-prompt-cache-key", "api-keys.openai-compatibility.connection-pool",
 		"api-keys.openai-compatibility.request-scoped-errors",
 		"api-keys.openai-compatibility.models.display-name", "api-keys.openai-compatibility.models.max-context-length",
@@ -847,10 +847,12 @@ oauth-model-alias:
     - {name: kimi-k2, alias: k2}
   antigravity:
     - {name: gemini-3.8-flash-high, alias: ag}
+    - {name: claude-opus-5-5-thinking, alias: opus, display-name: Opus}
   gemini-cli:
     - {name: gemini-2.5-pro, alias: pro}
 oauth-excluded-models:
   codex: [" GPT-IMAGE-* ", "gpt-image-*"]
+  antigravity: [" Gemini-2.5-* "]
   qwen: [qwen-max]
 codex-api-key:
   - api-key: k1
@@ -884,6 +886,11 @@ openai-compatibility:
 	]`)
 	equalJSON(t, exts[Codex].(map[string]any)["excluded_models"], `["gpt-image-*"]`)
 	equalJSON(t, exts[Kimi], `{"model_alias": [{"name": "kimi-k2", "alias": "k2"}]}`)
+	// The archived Antigravity extension's accounts take their channel's rules like any other's.
+	equalJSON(t, exts[Antigravity], `{
+		"model_alias": [{"name": "gemini-3.8-flash-high", "alias": "ag"}, {"name": "claude-opus-5-5-thinking", "alias": "opus", "display_name": "Opus"}],
+		"excluded_models": ["gemini-2.5-*"]
+	}`)
 	// openai-compatibility has no excluded-models in today's core, and a prefix with a slash
 	// inside is none.
 	equalJSON(t, exts[OpenAICompatible].(map[string]any)["accounts"], `[{
@@ -892,7 +899,7 @@ openai-compatibility:
 		"credential": {"kind": "api_key", "api_key": "k2"}
 	}]`)
 	n := notices(r)
-	for _, want := range []string{"oauth.model-alias.force-mapping", "oauth.model-alias.antigravity: no extension", "oauth.model-alias.gemini-cli: no extension", "oauth.excluded-models.qwen: no extension"} {
+	for _, want := range []string{"oauth.model-alias.force-mapping", "oauth.model-alias.gemini-cli: no extension", "oauth.excluded-models.qwen: no extension"} {
 		if !strings.Contains(n, want) {
 			t.Errorf("notices lack %q:\n%s", want, n)
 		}

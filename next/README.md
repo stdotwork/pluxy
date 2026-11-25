@@ -559,7 +559,10 @@ It writes one `dist/bundled/<publisher>-<name>-<version>-<goos>-<goarch>.tar.gz`
 and platform, and `dist/bundled/index.json`, which pins each archive's SHA-256 and size. Packing
 the same sources twice gives byte-identical archives and index. `-platforms` defaults to the host
 platform; `-extensions codex,claude` packs only those extension folders, by folder name or
-package ID. `go run ./cmd/pluxy-pack -h` lists the flags.
+package ID. `-archived` also packs the extensions under `archive/`, which pluxy no longer ships
+(each is a Go module of its own, built in its folder, and the index lists it with the tier
+`unverified`); without it they are neither packed nor named. `go run ./cmd/pluxy-pack -h` lists
+the flags.
 
 With `-app-tools <folder>` it packs the desktop app's native tools under `app-tools/` instead
 (not the test fixture `usage-fixture`), each for the platforms among `-platforms` that its
@@ -3129,7 +3132,7 @@ use it from one core only, or sign in again in the other.
 | `xai` | `pluxy/xai` Grok login account | `access_token`, `refresh_token`, `expired`; `token_endpoint` stays with the credential and `base_url` is an account setting. |
 | `meta` | `pluxy/meta` Muse Code login account | `api_key` (else `access_token`) is the minted key and `dca_token` (else a `dca:` `access_token`) the device token that mints a new one; `base_url` stays with the credential. A file with only the device token mints its key on the first request. |
 | `devin` | `pluxy/devin` account with a session token | `session_token` (else `api_key`) is the credential; `base_url` is an account setting and `user_name` the label when the file has no `label` or `email`. |
-| `antigravity` | Not brought | pluxy no longer ships the Antigravity provider. |
+| `antigravity` | `pluxy/antigravity` login account | `access_token`, `refresh_token`, `expired`; `project_id` (the Google Cloud project requests are billed to) stays with the credential, and a file without one is renewed at once, which finds it; `base_url` is an account setting. pluxy does not ship this extension (it is [archived](archive/antigravity/README.md)): the account is added whether or not the package is installed, the **Needs** list names `pluxy/antigravity` and says it is built by hand, and the account serves once it is. |
 | anything else | Not brought | Today's core does not load a file with no `type` or with `gemini` either. |
 
 From every file: `disabled: true` imports the account disabled, `priority` and `weight` are the
