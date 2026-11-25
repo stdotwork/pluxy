@@ -31,6 +31,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/stdotwork/pluxy/next/internal/ignite"
 	"github.com/stdotwork/pluxy/next/llm"
 	"github.com/stdotwork/pluxy/next/protocol"
 )
@@ -98,6 +99,9 @@ type Config struct {
 	// unset, 30 minutes; 0 turns the readings off, and accounts are then ranked only by the
 	// readings the checks of long blocks take.
 	QuotaRefreshMS *int64 `json:"quota_refresh_ms,omitempty"`
+	// Ignition starts an account's next usage window right after the last one resets, between
+	// set hours (see package ignite). Off unless it says "enabled": true.
+	Ignition *ignite.Config `json:"ignition,omitempty"`
 }
 
 // Quota response modes (Config.QuotaResponseMode).
@@ -155,6 +159,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("routing.quota_response_mode %q: want %q or %q", c.QuotaResponseMode, QuotaRetryable, QuotaUsageLimit)
 	}
 	if err := ValidateTimeouts("routing.timeouts", c.Timeouts); err != nil {
+		return err
+	}
+	if err := c.Ignition.Validate(); err != nil {
 		return err
 	}
 	return ValidateChains(c.Chains)

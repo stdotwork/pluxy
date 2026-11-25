@@ -45,8 +45,10 @@ type routing struct {
 	every time.Duration // the check interval
 	stop  context.CancelFunc
 	done  chan struct{}
-	// refreshed is closed when the usage readings' loop (runQuotaRefresh) has ended.
+	// refreshed is closed when the usage readings' loop (runQuotaRefresh) has ended, ignited
+	// when window ignition's (runIgnition) has.
 	refreshed chan struct{}
+	ignited   chan struct{}
 	path      string // routing.json
 	// saved is what routing.json holds now, when core read or wrote it; nil when there is no
 	// file or core could not read it.
@@ -59,7 +61,7 @@ type routing struct {
 // startRouting reads routing.json back into the routing state, then checks blocks on a timer
 // (the blocks read back at once) and writes the file again whenever its blocks change.
 func (c *Core) initRouting() {
-	r := &routing{every: defaultCheckEvery, done: make(chan struct{}), refreshed: make(chan struct{}), path: filepath.Join(StateDir(c.opts.ConfigPath), routingFile)}
+	r := &routing{every: defaultCheckEvery, done: make(chan struct{}), refreshed: make(chan struct{}), ignited: make(chan struct{}), path: filepath.Join(StateDir(c.opts.ConfigPath), routingFile)}
 	if v := os.Getenv(checkIntervalEnv); v != "" {
 		if ms, err := strconv.ParseInt(v, 10, 64); err == nil && ms > 0 {
 			r.every = time.Duration(ms) * time.Millisecond
@@ -78,6 +80,7 @@ func (c *Core) startRouting() {
 	c.routing.stop = cancel
 	go c.runRouting(ctx, c.routing)
 	go c.runQuotaRefresh(ctx, c.routing)
+	go c.runIgnition(ctx, c.routing)
 }
 
 // runQuotaRefresh reads the accounts' usage for soonest-reset (route.Router.Refresh), on a timer
@@ -160,6 +163,7 @@ func (c *Core) stopRouting() {
 	c.routing.stop()
 	<-c.routing.done
 	<-c.routing.refreshed
+	<-c.routing.ignited
 }
 
 func (c *Core) checkRouting(ctx context.Context) {

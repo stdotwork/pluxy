@@ -91,7 +91,10 @@ type Management struct {
 	creds *cred.Manager
 	// Check, when set, returns the result of core's check of account id, or nil.
 	Check func(id string) *AccountCheck
-	state *route.State
+	// Ignition, when set, returns account id's window ignition (routing.ignition), or nil when
+	// ignition does not run for it.
+	Ignition func(id string) *management.AccountIgnition
+	state    *route.State
 	// lockout blocks a client that keeps sending a wrong key.
 	lockout *lockout
 	// routes are the patterns added with Handle, in order.
@@ -243,6 +246,7 @@ func (m *Management) view(r cred.Record) AccountView {
 		}
 	}
 	v.Check = m.check(r.ID)
+	v.Ignition = m.ignition(r.ID)
 	return v
 }
 
@@ -339,6 +343,14 @@ func (m *Management) check(id string) *AccountCheck {
 	return m.Check(id)
 }
 
+// ignition returns account id's window ignition, or nil.
+func (m *Management) ignition(id string) *management.AccountIgnition {
+	if m.Ignition == nil {
+		return nil
+	}
+	return m.Ignition(id)
+}
+
 // configView returns config account a as the management API lists it.
 func (m *Management) configView(a route.Account) AccountView {
 	v := AccountView{ID: a.ID, Source: "config", Extension: a.Extension, State: cred.StateActive}
@@ -347,6 +359,7 @@ func (m *Management) configView(a route.Account) AccountView {
 	}
 	setFields(&v, a, m.state, route.Hold{}, m.Redactor)
 	v.Check = m.check(a.ID)
+	v.Ignition = m.ignition(a.ID)
 	return v
 }
 

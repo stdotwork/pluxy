@@ -1095,6 +1095,68 @@ func TestApplySettingsTimeouts(t *testing.T) {
 	}
 }
 
+func TestApplySettingsIgnition(t *testing.T) {
+	patch := func(body string) SettingsPatch {
+		t.Helper()
+		dec := json.NewDecoder(strings.NewReader(body))
+		dec.DisallowUnknownFields()
+		var p SettingsPatch
+		if err := dec.Decode(&p); err != nil {
+			t.Fatalf("%s: %v", body, err)
+		}
+		return p
+	}
+	apply := func(src, body string, isYAML bool) (string, error) {
+		d := mustParse(t, src, isYAML)
+		if err := d.ApplySettings(patch(body)); err != nil {
+			return "", err
+		}
+		b, err := d.Bytes()
+		return string(b), err
+	}
+	src := `{
+  "listen": "127.0.0.1:8400",
+  "client_keys": ["fake-key-one"],
+  "management_key": "fake-old-management",
+  "routing": {"strategy": "fill-first", "ignition": {"enabled": false, "start_hour": 6}}
+}
+`
+	// The section is replaced whole: a field left out (start_hour) goes back to its default.
+	got, err := apply(src, `{"routing":{"ignition":{"enabled":true,"end_hour":21,"extensions":{"pluxy/claude":{},"pluxy/antigravity":{"windows":{"gemini_models_five_hour":"gemini-3-flash"}}}}}}`, false)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	r := loads(t, got, false).Routing
+	ig := r.Ignition
+	if r.Strategy != "fill-first" || ig == nil || !ig.Enabled || ig.StartHour != nil || ig.EndHour == nil || *ig.EndHour != 21 ||
+		ig.Extensions["pluxy/antigravity"].Windows["gemini_models_five_hour"] != "gemini-3-flash" || !ig.AccountOn("a", "pluxy/claude") {
+		t.Fatalf("routing = %+v in\n%s", r, got)
+	}
+	// Each value is checked as the config checks it, and an unknown field is refused.
+	for _, body := range []string{
+		`{"routing":{"ignition":{"start_hour":24}}}`,
+		`{"routing":{"ignition":{"hold_ms":1000}}}`,
+		`{"routing":{"ignition":{"enable":true}}}`,
+		`{"routing":{"ignition":{"extensions":{"pluxy/claude":{"model":1}}}}}`,
+		`{"routing":{"ignition":true}}`,
+	} {
+		if _, err := apply(src, body, false); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: err = %v, want ErrInvalid", body, err)
+		}
+	}
+	// null removes it, which turns ignition off.
+	if got, err := apply(src, `{"routing":{"ignition":null}}`, false); err != nil || strings.Contains(got, "ignition") {
+		t.Errorf("null = %v, %v", got, err)
+	}
+	// A config.yaml has no name for it.
+	if _, err := apply(editYAMLV8, `{"routing":{"ignition":{"enabled":true}}}`, true); !errors.Is(err, ErrInvalid) {
+		t.Errorf("a config.yaml: err = %v, want ErrInvalid", err)
+	}
+	if got, err := apply(editYAMLV8, `{"routing":{"ignition":null}}`, true); err != nil || got != editYAMLV8 {
+		t.Errorf("a config.yaml with null = %v, %v; want it unchanged", got, err)
+	}
+}
+
 func TestScrub(t *testing.T) {
 	r := NewRedactor()
 	long, short := "zzzz-long-secret", "zzzz"

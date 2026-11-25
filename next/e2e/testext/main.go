@@ -37,7 +37,10 @@
 // Two settings serve the account health tests: "exhausted_until" (Unix seconds) makes every
 // request on the account fail with a used-up quota until then, and its quota show the five-hour
 // window full until then; "generate_log" names a file each request on the account appends the
-// account's ID to, one line each.
+// account's ID to, one line each. A third serves the window ignition test: "window_starts" makes
+// the five-hour window work as a provider's does: once its reset has passed it shows no reset
+// (not started) until a request on the account (one written to generate_log after the reset), and
+// from then it resets five hours after that request.
 //
 // Five more settings are for the demo mode of e2e/panelcore, each off unless an account sets it:
 // "report_usage" makes each reply carry token counts (derived from the request, so the same
@@ -96,6 +99,9 @@ type settings struct {
 	// HoldPrompt, when set, makes a streaming request whose first text part starts with this
 	// prefix send a chunk every second until the call is cancelled.
 	HoldPrompt string `json:"hold_prompt"`
+	// WindowStarts makes the five-hour window start with a request after its reset (see the
+	// package comment); it needs GenerateLog.
+	WindowStarts bool `json:"window_starts"`
 }
 
 // The models that fail on purpose.
@@ -463,6 +469,14 @@ func quota(_ context.Context, call sdk.QuotaCall) (*protocol.Quota, error) {
 	}
 	if s.ExhaustedUntil > time.Now().Unix() {
 		fiveHourUsed, fiveHourReset = 100, s.ExhaustedUntil
+	}
+	if s.WindowStarts && fiveHourReset <= time.Now().Unix() {
+		// The window has reset: not started until a request after the reset, which the log's
+		// last write dates.
+		fiveHourUsed, fiveHourReset = 0, 0
+		if fi, err := os.Stat(s.GenerateLog); err == nil && fi.ModTime().Unix() >= s.FiveHourResetsAt {
+			fiveHourUsed, fiveHourReset = 1, fi.ModTime().Unix()+fiveHourWindowSec
+		}
 	}
 	limits := []protocol.QuotaLimit{
 		{ID: "five_hour", Label: "5-hour limit", UsedPercent: pct(fiveHourUsed), ResetsAt: fiveHourReset, WindowSeconds: fiveHourWindowSec},
