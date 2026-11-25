@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // cliResult is what one run of the pluxy command printed and how it exited.
@@ -25,11 +27,20 @@ type cliResult struct {
 // runCLI runs the built pluxy program with args and the extra environment variables env.
 func runCLI(t *testing.T, env []string, args ...string) cliResult {
 	t.Helper()
-	cmd := exec.Command(filepath.Join(binDir, "pluxy"), args...)
 	// Only what the test names: PLUXY_URL or PLUXY_MANAGEMENT_KEY from the environment the test
 	// runs in must not reach the command.
-	cmd.Env = append([]string{"HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH")}, env...)
-	cmd.Dir = t.TempDir() // no config.json here
+	return runCLIIn(t, t.TempDir(), append([]string{"HOME=" + t.TempDir(), "PATH=" + os.Getenv("PATH")}, env...), args...)
+}
+
+// runCLIIn runs the built pluxy program with args in the folder dir with the whole environment
+// env, and stops it after a minute.
+func runCLIIn(t *testing.T, dir string, env []string, args ...string) cliResult {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, filepath.Join(binDir, "pluxy"), args...)
+	cmd.Env = env
+	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()

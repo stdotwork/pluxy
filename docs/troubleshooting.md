@@ -66,15 +66,15 @@ Exit code 3. Nothing answered at the address from `config.json`, `--url`, or `PL
 
 Start core with `pluxy serve -config config.json`, or pass the running core's address with `--url http://127.0.0.1:<port>`.
 
-### No config file in this folder
+### No config file in this folder or in pluxy's home
 
 ```text
-pluxy: no config file at ./config.json in this folder. Run pluxy init to write one, or pass --config <file>, or --url and --key
+pluxy: no core to call: there is no config.json in this folder, and none in pluxy's home, /home/you/.local/share/pluxy/config.json. Start pluxy with pluxy serve, which writes its first config in pluxy's home (pluxy init writes it without starting), or pass --config <file>, or --url and --key
 ```
 
-Exit code 1. Client subcommands read `config.json` in the current folder by default to find core's address and management key.
+Exit code 1. Client subcommands read `config.json` in the current folder when there is one, and otherwise the one in [pluxy's home](../next/README.md#pluxys-home), to find core's address and management key.
 
-Change to the folder holding `config.json`, pass `--config <file>`, or pass both `--url` and `--key` (or set `PLUXY_URL` and `PLUXY_MANAGEMENT_KEY`).
+Start pluxy with `pluxy serve`, change to the folder holding your `config.json`, pass `--config <file>`, or pass both `--url` and `--key` (or set `PLUXY_URL` and `PLUXY_MANAGEMENT_KEY`). When the desktop app runs its own core, the message names that core's config: pass it with `--config` to reach that core. `--verbose` on any client command says which config it read.
 
 ### Wrong or missing management key
 
@@ -212,7 +212,7 @@ If the panel prints `Core refused the management key. Sign in again.`, verify yo
 
 ## Seeing what happened
 
-Core reads `config.json` from the folder it starts in (or the path given to `-config`). Log files live in the `logs` folder beside `config.json`: `main.log` (rotated to `main-<time>.log`), `error-<name>.log` for failed requests, and per-request logs when request logging is on.
+Core reads the path given to `-config`, else `config.json` in the folder it starts in, else the one in [pluxy's home](../next/README.md#pluxys-home); a start without `-config` logs which (`config: <path>`). Log files live in the `logs` folder beside `config.json`: `main.log` (rotated to `main-<time>.log`), `error-<name>.log` for failed requests, and per-request logs when request logging is on.
 
 ### File logging is off
 

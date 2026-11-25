@@ -29,7 +29,6 @@ var laterCommands = []string{
 	// pluxy settings set <name> <value>
 	"PATCH /settings",
 	// pluxy key rotate-management
-	"POST /management-key/rotate",
 	// pluxy ext config <id> [name=value]...
 	"GET /extensions/{publisher}/{name}/config", "PATCH /extensions/{publisher}/{name}/config",
 }
@@ -311,20 +310,17 @@ func TestFindCore(t *testing.T) {
 	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := findCore(path, true, "", "")
+	got, err := findCore(where{configFlag: path, getenv: noEnv})
 	if err != nil || got.url != "http://127.0.0.1:8499" || got.key != "from-config" {
 		t.Errorf("from the config: %+v %v", got, err)
 	}
-	if got, err := findCore(path, true, "", "given"); err != nil || got.key != "given" || got.url != "http://127.0.0.1:8499" {
+	if got, err := findCore(where{configFlag: path, keyFlag: "given", getenv: noEnv}); err != nil || got.key != "given" || got.url != "http://127.0.0.1:8499" {
 		t.Errorf("with a key: %+v %v", got, err)
 	}
-	if got, err := findCore(filepath.Join(t.TempDir(), "none.json"), true, "http://h:1", "k"); err != nil || got.url != "http://h:1" {
+	if got, err := findCore(where{configFlag: filepath.Join(t.TempDir(), "none.json"), urlFlag: "http://h:1", keyFlag: "k", getenv: noEnv}); err != nil || got.url != "http://h:1" {
 		t.Errorf("with both and no config: %+v %v", got, err)
 	}
-	if _, err := findCore("config.json", false, "", ""); err == nil || !strings.Contains(err.Error(), "pluxy init") || !strings.Contains(err.Error(), "--url") {
-		t.Errorf("default missing config: %v", err)
-	}
-	if _, err := findCore(filepath.Join(t.TempDir(), "none.json"), true, "", ""); err == nil || !strings.Contains(err.Error(), "Check the --config path") || strings.Contains(err.Error(), "pass --config") {
+	if _, err := findCore(where{configFlag: filepath.Join(t.TempDir(), "none.json"), getenv: noEnv}); err == nil || !strings.Contains(err.Error(), "Check the --config path") || strings.Contains(err.Error(), "pass --config") {
 		t.Errorf("explicit missing config: %v", err)
 	}
 }
@@ -809,9 +805,9 @@ func TestSetupStartLine(t *testing.T) {
 		listen     string
 		want       string
 	}{
-		{true, "http://127.0.0.1:8317", "config.json", "127.0.0.1:8317",
+		{true, "http://127.0.0.1:8317", "", "127.0.0.1:8317",
 			"first-run setup is not finished. Next: open http://127.0.0.1:8317/panel/ in a browser and sign in with the management key, or run pluxy setup"},
-		{false, "http://127.0.0.1:8317", "config.json", "127.0.0.1:8317",
+		{false, "http://127.0.0.1:8317", "", "127.0.0.1:8317",
 			"first-run setup is not finished. Next: run pluxy setup"},
 		{true, "https://127.0.0.1:9000", "/etc/pluxy/config.json", "0.0.0.0:9000",
 			"first-run setup is not finished. Next: open https://127.0.0.1:9000/panel/ in a browser and sign in with the management key, or run pluxy setup --config /etc/pluxy/config.json"},
@@ -1290,7 +1286,7 @@ func TestCLIMessages(t *testing.T) {
 
 	// init -h hides Go's -1 sentinel; init on an existing file names pluxy serve -config.
 	var initOut, initErr bytes.Buffer
-	if code := initConfig([]string{"-h"}, &initOut, &initErr); code != exitOK || initErr.Len() != 0 || !strings.Contains(initOut.String(), "pluxy init") || strings.Contains(initOut.String(), "(default -1)") {
+	if code := initConfig([]string{"-h"}, &initOut, &initErr, noEnv); code != exitOK || initErr.Len() != 0 || !strings.Contains(initOut.String(), "pluxy init") || strings.Contains(initOut.String(), "(default -1)") {
 		t.Errorf("init -h: code=%d out=%q err=%q", code, initOut.String(), initErr.String())
 	}
 	existing := filepath.Join(t.TempDir(), "config.json")
@@ -1299,10 +1295,13 @@ func TestCLIMessages(t *testing.T) {
 	}
 	initOut.Reset()
 	initErr.Reset()
-	if code := initConfig([]string{"-config", existing, "-port", "0"}, &initOut, &initErr); code != exitFailed || !strings.Contains(initErr.String(), "pluxy serve -config "+existing) {
+	if code := initConfig([]string{"-config", existing, "-port", "0"}, &initOut, &initErr, noEnv); code != exitFailed || !strings.Contains(initErr.String(), "pluxy serve -config "+existing) {
 		t.Errorf("init existing: code=%d err=%q", code, initErr.String())
 	}
 }
+
+// noEnv is an environment with nothing set, for a test that must not find pluxy's home.
+func noEnv(string) string { return "" }
 
 func TestCLIExitCodesAndStreams(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1375,7 +1374,7 @@ func TestCLIExitCodesAndStreams(t *testing.T) {
 	}
 	out.Reset()
 	errOut.Reset()
-	if code := initConfig([]string{"-h"}, &out, &errOut); code != exitOK || errOut.Len() != 0 || !strings.Contains(out.String(), "pluxy init") {
+	if code := initConfig([]string{"-h"}, &out, &errOut, noEnv); code != exitOK || errOut.Len() != 0 || !strings.Contains(out.String(), "pluxy init") {
 		t.Errorf("init -h: code=%d out=%q err=%q", code, out.String(), errOut.String())
 	}
 

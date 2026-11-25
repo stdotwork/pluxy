@@ -24,6 +24,7 @@ import (
 	"github.com/stdotwork/pluxy/next/internal/buildinfo"
 	"github.com/stdotwork/pluxy/next/internal/core"
 	"github.com/stdotwork/pluxy/next/internal/cred"
+	"github.com/stdotwork/pluxy/next/internal/home"
 	"github.com/stdotwork/pluxy/next/internal/logfile"
 	"github.com/stdotwork/pluxy/next/internal/pages"
 	"github.com/stdotwork/pluxy/next/internal/panel"
@@ -40,7 +41,7 @@ func main() {
 	case args[0] == "serve":
 		serve(args[1:])
 	case args[0] == "init":
-		os.Exit(initConfig(args[1:], os.Stdout, os.Stderr))
+		os.Exit(initConfig(args[1:], os.Stdout, os.Stderr, os.Getenv))
 	default:
 		// Every other subcommand is a client of a running core's management API (cli.go).
 		os.Exit(runCLI(args, os.Stdout, os.Stderr, os.Getenv))
@@ -51,7 +52,7 @@ func main() {
 func serve(args []string) {
 	fs := flag.NewFlagSet("pluxy serve", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	configPath := fs.String("config", "config.json", "path to the config file")
+	configPath := fs.String("config", "", "path to the config file (default: config.json in this folder when there is one, else in pluxy's home)")
 	safeMode := fs.Bool("safe-mode", false, "start no extensions: client requests fail, the management API works")
 	watch := fs.Duration("watch-interval", time.Second, "how often to look for config file changes (0: do not watch)")
 	bundled := fs.String("bundled", "", "index of the registry of bundled packages (default: bundled/index.json beside this program, when it exists)")
@@ -80,7 +81,16 @@ func serve(args []string) {
 		fmt.Println(buildinfo.Line())
 		return
 	}
-	if err := run(*configPath, *safeMode, *watch, *bundled, *listenFD); err != nil {
+	path, byRule := *configPath, false
+	if path == "" {
+		p, _, err := defaultConfig(os.Getenv)
+		if err != nil {
+			log.Print(err)
+			os.Exit(1)
+		}
+		path, byRule = p, true
+	}
+	if err := run(path, byRule, *safeMode, *watch, *bundled, *listenFD); err != nil {
 		log.Print(err)
 		os.Exit(1)
 	}
@@ -123,10 +133,20 @@ const initPortEnv = "PLUXY_INIT_PORT"
 // firstStart writes a first config at configPath when there is no file there, and says where
 // it is: a new install starts with no config. It logs the file's path, never its keys.
 // With inherited set, core serves on a socket it was handed (-listen-fd), not on the address it
-// writes, so it does not name that address.
-func firstStart(configPath string, inherited bool) error {
+// writes, so it does not name that address. inHome says configPath is pluxy's home's config,
+// found by the rule rather than named: then no first config is written while the desktop app
+// keeps a core of its own, since that would make a second pluxy beside it without being asked.
+func firstStart(configPath string, inHome, inherited bool) error {
 	if _, err := os.Stat(configPath); !errors.Is(err, fs.ErrNotExist) {
 		return nil // core reads it, and says what is wrong with it
+	}
+	if inHome {
+		if app, err := home.AppCoreConfig(os.Getenv); err == nil && exists(app) {
+			return fmt.Errorf("there is no config in pluxy's home, %s, and the desktop app keeps a pluxy of its own, with its own keys and accounts, at %s. "+
+				"A first start here would make a second pluxy beside it, so none was written. "+
+				"To run the app's core while the app is not running it: pluxy serve -config %s. To make a new, separate pluxy in pluxy's home: pluxy init",
+				configPath, app, quoteArg(app))
+		}
 	}
 	port := -1
 	if v, ok := os.LookupEnv(initPortEnv); ok {
@@ -154,16 +174,13 @@ func firstStart(configPath string, inherited bool) error {
 // setupStartLine is what core's start says while first-run setup has not ended: where to go
 // on. It names the panel only when this build serves one (panelBuilt), at local, the address
 // core is reached at on this machine, and the setup command with what it needs to find this
-// core: the config file when it is not the default one, and the address when the config's
-// listen address does not give it (port 0, a port core picked at start).
-func setupStartLine(panelBuilt bool, local, configPath, listen string) string {
+// core: configArg, the config file when the command would not find it by itself ("" when it
+// would), and the address when the config's listen address does not give it (port 0, a port
+// core picked at start).
+func setupStartLine(panelBuilt bool, local, configArg, listen string) string {
 	command := "pluxy setup"
-	if configPath != "config.json" {
-		arg := configPath
-		if strings.ContainsAny(arg, " \t") {
-			arg = `"` + arg + `"` // one argument when the line is pasted into a shell
-		}
-		command += " --config " + arg
+	if configArg != "" {
+		command += " --config " + quoteArg(configArg) // one argument when the line is pasted into a shell
 	}
 	if _, port, err := net.SplitHostPort(listen); err != nil || port == "0" {
 		command += " --url " + local
@@ -175,11 +192,12 @@ func setupStartLine(panelBuilt bool, local, configPath, listen string) string {
 }
 
 // initConfig is pluxy init: it writes a first config, as a first start does, without starting
-// core, and returns the exit code.
-func initConfig(args []string, stdout, stderr io.Writer) int {
+// core, and returns the exit code. With no -config it writes config.json in pluxy's home, or
+// finds the one in the current folder already there.
+func initConfig(args []string, stdout, stderr io.Writer, getenv func(string) string) int {
 	fs := flag.NewFlagSet("pluxy init", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	configPath := fs.String("config", "config.json", "where to write the config file; an existing file is never replaced")
+	configPath := fs.String("config", "", "where to write the config file (default: config.json in pluxy's home; when this folder has a config.json, that one); an existing file is never replaced")
 	port := fs.Int("port", 0, "the port core listens on (default: 8317, or a free port when 8317 is taken; 0: a free port)")
 	fs.Usage = func() {
 		out := fs.Output()
@@ -215,13 +233,25 @@ func initConfig(args []string, stdout, stderr io.Writer) int {
 		}
 		portVal = *port
 	}
-	fc, err := core.WriteFirstConfig(*configPath, portVal)
+	path, src := *configPath, fromFlag
+	if path == "" {
+		p, s, err := defaultConfig(getenv)
+		if err != nil {
+			fmt.Fprintf(stderr, "pluxy: %v\n", err)
+			return exitFailed
+		}
+		path, src = p, s
+	}
+	fc, err := core.WriteFirstConfig(path, portVal)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
-			path := *configPath
 			var pe *os.PathError
 			if errors.As(err, &pe) && pe.Path != "" {
 				path = pe.Path
+			}
+			if src == fromHome {
+				fmt.Fprintf(stderr, "pluxy: %s already exists: pluxy's home has a config. Start core with: pluxy serve, or pick another file with -config.\n", path)
+				return exitFailed
 			}
 			fmt.Fprintf(stderr, "pluxy: %s already exists. Start core with: pluxy serve -config %s, or pick another file with -config.\n", path, path)
 			return exitFailed
@@ -230,6 +260,12 @@ func initConfig(args []string, stdout, stderr io.Writer) int {
 		return exitFailed
 	}
 	fmt.Fprintf(stdout, "wrote %s: core listens on %s; its client key and management key are in that file\n", fc.Path, fc.Listen)
+	if src == fromHome {
+		fmt.Fprintf(stderr, "This is pluxy's home: pluxy serve and the pluxy commands find it from any folder without a config.json.\n")
+		if app, err := home.AppCoreConfig(getenv); err == nil && exists(app) {
+			fmt.Fprintf(stderr, "The desktop app keeps a separate pluxy at %s, with its own keys and accounts; this new one shares none of them.\n", app)
+		}
+	}
 	return exitOK
 }
 
@@ -246,7 +282,9 @@ func defaultBundled() string {
 	return p
 }
 
-func run(configPath string, safeMode bool, watch time.Duration, bundled string, listenFD int) error {
+// run serves core on the config at configPath. byRule says no -config named it: it is
+// config.json in the current folder or in pluxy's home (defaultConfig).
+func run(configPath string, byRule, safeMode bool, watch time.Duration, bundled string, listenFD int) error {
 	if bundled == "" {
 		bundled = defaultBundled()
 	} else if abs, err := filepath.Abs(bundled); err == nil {
@@ -267,7 +305,16 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string, 
 		}
 		ln = l
 	}
-	if err := firstStart(configPath, ln != nil); err != nil {
+	// Which config a run with no -config found is said, since there are two places it looks.
+	inHome := byRule && configPath != home.ConfigName
+	if inHome {
+		log.Printf("config: %s (pluxy's home)", configPath)
+	} else if byRule {
+		if abs, err := filepath.Abs(configPath); err == nil {
+			log.Printf("config: %s (config.json in the current folder)", abs)
+		}
+	}
+	if err := firstStart(configPath, inHome, ln != nil); err != nil {
 		if ln != nil {
 			ln.Close()
 		}
@@ -364,7 +411,11 @@ func run(configPath string, safeMode bool, watch time.Duration, bundled string, 
 	// A core handed its socket was started by a program, which shows setup itself.
 	if listenFD < 0 && c.Status().FirstRun {
 		if local, err := server.LocalURL(ln.Addr().String(), tlsConfig != nil); err == nil {
-			fmt.Fprintf(os.Stderr, "pluxy: %s\n", setupStartLine(panel.Built(assets), local, configPath, cfg.Listen))
+			configArg := configPath
+			if byRule || configPath == home.ConfigName {
+				configArg = "" // pluxy setup finds it as core did
+			}
+			fmt.Fprintf(os.Stderr, "pluxy: %s\n", setupStartLine(panel.Built(assets), local, configArg, cfg.Listen))
 		}
 	}
 
