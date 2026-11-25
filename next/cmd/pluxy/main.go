@@ -1,6 +1,7 @@
 // Command pluxy is the pluxy core: pluxy serve (or pluxy with no subcommand) serves the client
-// APIs and answers through a provider extension; every other subcommand is a client of a running
-// core's management API (next/management/README.md).
+// APIs and answers through a provider extension; pluxy init writes a first config; every other
+// subcommand is a client of a running core's management API (next/management/README.md), but for
+// pluxy key management, which reads only the config.
 package main
 
 import (
@@ -43,7 +44,8 @@ func main() {
 	case args[0] == "init":
 		os.Exit(initConfig(args[1:], os.Stdout, os.Stderr, os.Getenv))
 	default:
-		// Every other subcommand is a client of a running core's management API (cli.go).
+		// Every other subcommand is a client of a running core's management API (cli.go), but for
+		// pluxy key management, which reads only the config.
 		os.Exit(runCLI(args, os.Stdout, os.Stderr, os.Getenv))
 	}
 }

@@ -135,7 +135,8 @@ Without `-config` (or `--config`), every `pluxy` command reads `config.json` in 
 runs in when there is one, and otherwise the one in pluxy's home:
 
 - `pluxy serve` serves it. With no config in either place, its first start writes pluxy's home's
-  config (and makes the folder, which only your user can read), so the next `pluxy serve`, from
+  config (and, when the folder is not there yet, makes it so only your user can read it; a folder
+  that is already there, such as one `PLUXY_HOME` names, keeps its permissions), so the next `pluxy serve`, from
   any folder, finds the same one. A start that found its config this way logs which:
   `config: <path> (pluxy's home)` or `config: <path> (config.json in the current folder)`.
 - `pluxy init` writes pluxy's home's config and never replaces it. In a folder with a
@@ -157,14 +158,19 @@ The desktop app's own core is a separate pluxy, with its own keys and accounts, 
 one exists, a plain `pluxy serve` writes no first config, since that would make a second pluxy
 beside the app's: it says so and names the two ways on, `pluxy serve -config <the app's config>`
 (while the app is not running that core) and `pluxy init` (a new pluxy in pluxy's home, which
-init writes when asked, naming the app's). The client commands call the app's core only when
-given its config with `--config`; their error names it.
+init writes when asked, naming the app's). The client commands never read the app's core's config
+unless given it with `--config`; when they find no other config, their error names it and offers
+those same ways on.
 
 The management key is the config's `management_key`. `pluxy key management` says where the key
 the commands use came from, and prints it only with `--show-key`. `pluxy key rotate-management`
 replaces it through the management API: core writes the new key to its config file, and the
 command says what must be given the new key
-([details](management/README.md#the-pluxy-command)).
+([details](management/README.md#the-pluxy-command)). The old key stops working at once, so the
+command rotates only when the person can get the new one afterwards: from the config file it read,
+once core has shown that file is the one it runs on, or from its standard output with
+`--show-key`. When core's reply is lost or the key cannot be written out, it fails and says
+where the new key is.
 
 [docs/design.md](../docs/design.md#where-a-pluxy-keeps-its-files) gives the reasons for this
 folder.
@@ -2547,7 +2553,8 @@ config can still be checked and reloaded through management.
 
 [`management/README.md`](management/README.md) is the API's contract and describes the `pluxy`
 command, its client: `pluxy serve` runs core, and the other subcommands (`pluxy status`,
-`pluxy account list`, `pluxy help` for the rest) call a running core's management API.
+`pluxy account list`, `pluxy help` for the rest) call a running core's management API, except
+`pluxy init`, which writes a first config, and `pluxy key management`, which reads one.
 
 Beside the account calls [above](#accounts-added-by-login), management serves these. Every call
 needs `Authorization: Bearer <management_key>`.

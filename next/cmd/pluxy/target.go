@@ -98,7 +98,7 @@ func findCore(w where) (target, error) {
 	}
 	path, src, err := pickConfig(w)
 	if err != nil {
-		if needURL {
+		if needURL || w.local {
 			return t, err
 		}
 		return t, nil // the key stays empty: core answers 401
@@ -111,10 +111,12 @@ func findCore(w where) (target, error) {
 	}
 	cfg, err := server.LoadConfig(path)
 	if err != nil {
-		if !needURL {
-			return t, nil
-		}
-		if errors.Is(err, os.ErrNotExist) {
+		switch {
+		case !needURL && !w.local:
+			return t, nil // the key stays empty: core answers 401
+		case errors.Is(err, os.ErrNotExist) && w.local:
+			return t, notFoundError{fmt.Sprintf("no management key: none was given with --key or PLUXY_MANAGEMENT_KEY, and there is no config file at %s. Check the --config path, or pass --key", path)}
+		case errors.Is(err, os.ErrNotExist):
 			return t, fmt.Errorf("no config file at %s. Check the --config path, run pluxy init -config %s, or pass --url and --key", path, path)
 		}
 		return t, core.ScrubConfigError(path, err)
@@ -173,7 +175,11 @@ func pickConfig(w where) (string, configSource, error) {
 		return path, src, nil
 	}
 	var b strings.Builder
-	b.WriteString("no core to call: there is no config.json in this folder")
+	if w.local {
+		b.WriteString("no management key: none was given with --key or PLUXY_MANAGEMENT_KEY, and there is no config.json in this folder")
+	} else {
+		b.WriteString("no core to call: there is no config.json in this folder")
+	}
 	if err != nil {
 		fmt.Fprintf(&b, ", and pluxy's home cannot be found (%v)", err)
 	} else {
@@ -182,9 +188,22 @@ func pickConfig(w where) (string, configSource, error) {
 			fmt.Fprintf(&b, " (from %s)", home.Env)
 		}
 	}
-	b.WriteString(". Start pluxy with pluxy serve, which writes its first config in pluxy's home (pluxy init writes it without starting), or pass --config <file>, or --url and --key")
-	if app, aerr := home.AppCoreConfig(w.getenv); aerr == nil && exists(app) {
-		fmt.Fprintf(&b, ". The desktop app keeps its own core's config at %s: pass --config %s to call that core", app, quoteArg(app))
+	other := "--url and --key"
+	if w.local {
+		other = "--key"
+	}
+	app, aerr := home.AppCoreConfig(w.getenv)
+	if aerr != nil || !exists(app) {
+		fmt.Fprintf(&b, ". Start pluxy with pluxy serve, which writes its first config in pluxy's home (pluxy init writes it without starting), or pass --config <file>, or %s", other)
+	} else {
+		// A plain pluxy serve writes no first config beside the app's core (firstStart), so it is
+		// not offered.
+		fmt.Fprintf(&b, ". The desktop app keeps its own core's config at %s: pass --config %s to use that core "+
+			"(to start it while the app does not run it: pluxy serve -config %s). "+
+			"To make a new, separate pluxy in pluxy's home, run pluxy init; or pass --config <file>, or %s", app, quoteArg(app), quoteArg(app), other)
+	}
+	if w.local {
+		return "", 0, notFoundError{b.String()}
 	}
 	return "", 0, errors.New(b.String())
 }

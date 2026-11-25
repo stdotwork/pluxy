@@ -70,13 +70,15 @@ in this package (`types.go`, `client.go`); core's handlers write the same types.
 `pluxy` is one program: `pluxy serve` runs the core (as does `pluxy -config ...` with no subcommand),
 `pluxy init [-config file] [-port n]` writes a first config without starting core, `pluxy -version`
 prints the build's version, commit and date, and `pluxy help` lists every subcommand. Every other
-subcommand is a client of the management API of a core that is already running.
+subcommand is a client of the management API of a core that is already running, except
+`pluxy key management`, which calls no core.
 
 - **Which core.** The address and the management key each come from the first of: `--url` and `--key`;
   `PLUXY_URL` and `PLUXY_MANAGEMENT_KEY`; the config file, which is `--config <path>`, else `config.json`
   in the current folder, else `config.json` in [pluxy's home](../README.md#pluxys-home). `--verbose` says
   on standard error which core the command called and where its address and key came from. With no
-  config file anywhere, the error names each place looked in and what to run (exit code 1).
+  config file anywhere, the error names each place looked in and what to run (exit code 1; 5 for
+  `pluxy key management`).
 - **Environment variables.** Client subcommands read two variables:
 
   | Variable | What it does | Default | Example |
@@ -93,8 +95,10 @@ subcommand is a client of the management API of a core that is already running.
 - **Nothing asks a question** unless standard input is a terminal; `--yes` answers yes.
 - **The management key.** `pluxy key management [--show-key]` calls no core: it says where the key the
   commands use came from, the `management_key` field of the config file read, `PLUXY_MANAGEMENT_KEY` or
-  `--key`, and with `--show-key` prints the key alone on standard output (exit code 5 when there is no key
-  to find). Its `--json` is `{"from": "config", "config": "<path>"}` (`from` is `config`, `--key` or
+  `--key`, and with `--show-key` prints the key alone on standard output. When there is no key to find it
+  says why: each place it looked, the `--config` file that is not there, or the config without a
+  `management_key` (exit code 5), or the config file that does not parse (exit code 1). When the key or
+  its place cannot be written to standard output, it exits 1. Its `--json` is `{"from": "config", "config": "<path>"}` (`from` is `config`, `--key` or
   `PLUXY_MANAGEMENT_KEY`, and `config` is there for `config`), with `key` only with `--show-key`.
   `pluxy key rotate-management [--show-key] [--yes]` is in the [Core](#core) table.
 - **Signing in.** `pluxy account add` and `pluxy account login` start a sign-in and follow it: the
@@ -152,7 +156,7 @@ subcommand is a client of the management API of a core that is already running.
 | `GET /config`, `POST /config/validate`, `PUT /config` | `pluxy config show`, `pluxy config validate <file>` (not built yet), `pluxy config apply <file>` (not built yet) | The config file with secrets replaced by placeholders; check a document; replace the file |
 | `GET /settings`, `PATCH /settings` | `pluxy settings` | The basic and routing settings by name, [window ignition](../README.md#window-ignition)'s (`routing.ignition`) among them. `pluxy settings` only reads them (a command for `PATCH /settings` is not built yet; the Config Panel changes them) |
 | `GET /client-keys`, `POST /client-keys`, `DELETE /client-keys/{id}` | `pluxy key list`, `pluxy key add`, `pluxy key remove <id>` | Client keys. `id` is stable across restarts. `add` prints the key once |
-| `POST /management-key/rotate` | `pluxy key rotate-management [--show-key] [--yes]` | A new management key, which core writes to its config file; the old one stops working at once. The reply is `{"value": "<new key>"}`. The command asks first on a terminal and needs `--yes` without one. It prints the new key only with `--show-key`; without it, it rotates only when it read core's address and key from a config file, then checks that file holds the new key. `--json` prints the reply, so it needs `--show-key` too. It ends by naming what must be given the new key: the web panel, the desktop app, `PLUXY_MANAGEMENT_KEY` and `--key` |
+| `POST /management-key/rotate` | `pluxy key rotate-management [--show-key] [--yes]` | A new management key, which core writes to its config file; the old one stops working at once. The reply is `{"value": "<new key>"}`. The command asks first on a terminal and needs `--yes` without one. It prints the new key only with `--show-key`. Before it rotates, it calls `GET /config` and compares the `hash` with the config file it read: when they match, core writes the new key to that file. Without `--show-key` it rotates only when it read core's address and key from a config file and the hashes match. After the rotation it checks that the file holds the new key. When core's reply is lost, the old key's answer (`GET /status`) says whether core rotated; the new key is then read from the file and checked with core, and printed with `--show-key`. It exits 0 only when the new key was printed or is in the file it read; otherwise it exits 1 and says where the new key is, including when the key cannot be written to standard output. A copy of core's config file with the same contents cannot be told apart beforehand: core rotates, and the command exits 1 saying the copy does not hold the new key. `--json` prints the reply, so it needs `--show-key` too. It ends by naming what must be given the new key: the web panel, the desktop app, `PLUXY_MANAGEMENT_KEY` and `--key` |
 | `GET /logs`, `DELETE /logs`, `GET /request-error-logs[/{name}]`, `GET /request-log-by-id/{id}` | `pluxy logs [--after n] [--limit n]`, `pluxy logs clear`, `pluxy logs errors [name]`, `pluxy logs request <id>` | Core's log and request logs. `logs errors` lists the error logs (name, size in bytes, modified); with a name, and `logs request`, it copies the file's text to standard output as it arrives, however large, and on a terminal shows control and Unicode format characters escaped (`\x1b`) so a logged escape sequence cannot act on it; `pluxy logs` escapes its lines the same way. `--json` is the reply (`?format=json`, which core refuses above 2 MiB with 413 `log_too_large`). `logs clear` says what core reports: `main.log` emptied, how many rotated files it deleted, request and error logs kept. If any file could not be deleted or emptied, `DELETE /logs` still tries the rest and answers 500 `internal` naming how many rotated files it deleted and what is left |
 
 ### Setup

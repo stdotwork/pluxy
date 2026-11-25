@@ -28,7 +28,6 @@ var laterCommands = []string{
 	"POST /config/validate", "PUT /config",
 	// pluxy settings set <name> <value>
 	"PATCH /settings",
-	// pluxy key rotate-management
 	// pluxy ext config <id> [name=value]...
 	"GET /extensions/{publisher}/{name}/config", "PATCH /extensions/{publisher}/{name}/config",
 }

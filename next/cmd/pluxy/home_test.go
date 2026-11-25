@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stdotwork/pluxy/next/internal/core"
@@ -124,7 +127,12 @@ func TestFindCoreOrder(t *testing.T) {
 		if err == nil {
 			t.Fatal("the app's own core was called without --config")
 		}
-		mustContain(t, "app's core", err.Error(), h.homeCfg, "desktop app", "--config "+h.appCfg)
+		mustContain(t, "app's core", err.Error(), h.homeCfg, "desktop app", "--config "+h.appCfg, "pluxy init", "pluxy serve -config "+h.appCfg)
+		// A plain pluxy serve writes no config beside the app's core (TestNoSecondPluxyBesideTheApp),
+		// so the error offers pluxy serve only with the app's -config.
+		if n, withConfig := strings.Count(err.Error(), "pluxy serve"), strings.Count(err.Error(), "pluxy serve -config "); n != withConfig {
+			t.Errorf("app's core: %v offers a plain pluxy serve, which refuses here", err)
+		}
 	})
 	t.Run("pluxy's home from any folder", func(t *testing.T) {
 		h := newTestHome(t)
@@ -309,8 +317,28 @@ func TestManagementKeyCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Stop()
+	// drop loses the reply of a rotation on its way back: dropAfter once core has rotated the
+	// key and written it, dropBefore before core sees the call. The connection just closes.
+	const (
+		dropAfter = iota + 1
+		dropBefore
+	)
+	var drop atomic.Int32
+	mgmt := c.Management()
 	mux := http.NewServeMux()
-	mux.Handle(core.ManagementPrefix, c.Management())
+	mux.Handle(core.ManagementPrefix, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mode := drop.Load()
+		if mode == 0 || !strings.HasSuffix(r.URL.Path, "/management-key/rotate") {
+			mgmt.ServeHTTP(w, r)
+			return
+		}
+		if mode == dropAfter {
+			mgmt.ServeHTTP(httptest.NewRecorder(), r)
+		}
+		if conn, _, err := http.NewResponseController(w).Hijack(); err == nil {
+			conn.Close()
+		}
+	}))
 	srv := &http.Server{Handler: mux}
 	go srv.Serve(ln)
 	defer srv.Close()
@@ -398,4 +426,181 @@ func TestManagementKeyCommands(t *testing.T) {
 		t.Errorf("rotate --show-key: %d %q %q", code, out, errOut)
 	}
 	mustContain(t, "rotate --show-key", errOut, "PLUXY_MANAGEMENT_KEY still holds the old key")
+
+	// runTo runs with standard output going to w.
+	runTo := func(w io.Writer, env map[string]string, args ...string) (string, int) {
+		var errOut bytes.Buffer
+		getenv := func(k string) string {
+			if v, ok := env[k]; ok {
+				return v
+			}
+			return h.env[k]
+		}
+		code := runCLIWithInput(args, strings.NewReader(""), w, &errOut, getenv, false)
+		return errOut.String(), code
+	}
+	full := failingWriter{}
+
+	// The key cannot be written out (a full disk): key management fails rather than say nothing.
+	if errOut, code := runTo(full, nil, "key", "management", "--show-key"); code != exitFailed || !strings.Contains(errOut, "writing to standard output failed") {
+		t.Errorf("key management --show-key to a full output: %d %q", code, errOut)
+	}
+	if errOut, code := runTo(full, nil, "key", "management"); code != exitFailed {
+		t.Errorf("key management to a full output: %d %q", code, errOut)
+	}
+
+	// A config file with core's address and key that is not core's own file: core would write the
+	// new key elsewhere, so nothing is rotated.
+	key := fileKey()
+	stale := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(stale, []byte(fmt.Sprintf(`{"listen": %q, "client_keys": ["fake-other-client-key"], "management_key": %q}`, ln.Addr().String(), key)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code = run(nil, "", false, "key", "rotate-management", "--yes", "--config", stale)
+	if code != exitUsage || out != "" || fileKey() != key {
+		t.Fatalf("rotate from a stale config: %d %q %q (rotated: %v)", code, out, errOut, fileKey() != key)
+	}
+	mustContain(t, "rotate from a stale config", errOut, "does not run on "+stale, "--show-key")
+
+	// A copy with the same contents cannot be told apart beforehand: core rotates, the copy does
+	// not get the new key, and the command fails saying so.
+	b, err := os.ReadFile(h.homeCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(copied, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code = run(nil, "", false, "key", "rotate-management", "--yes", "--config", copied)
+	if code != exitFailed || out != "" || fileKey() == key {
+		t.Errorf("rotate from a copy: %d %q %q (rotated: %v)", code, out, errOut, fileKey() != key)
+	}
+	mustContain(t, "rotate from a copy", errOut, copied+" (--config) does not hold the new key")
+
+	// The new key cannot be written out: the command fails and names the file that holds it.
+	key = fileKey()
+	errOut, code = runTo(full, nil, "key", "rotate-management", "--yes", "--show-key")
+	if code != exitFailed || fileKey() == key {
+		t.Errorf("rotate --show-key to a full output: %d %q (rotated: %v)", code, errOut, fileKey() != key)
+	}
+	mustContain(t, "rotate --show-key to a full output", errOut, "could not be written to standard output", "it is in "+h.homeCfg)
+
+	// Core rotates and its reply is lost: the new key is in core's config file, which the command
+	// checks with core before naming it, and prints with --show-key.
+	drop.Store(dropAfter)
+	key = fileKey()
+	out, errOut, code = run(nil, "", false, "key", "rotate-management", "--yes")
+	if code != exitOK || out != "" || fileKey() == key {
+		t.Errorf("rotate, reply lost: %d %q %q (rotated: %v)", code, out, errOut, fileKey() != key)
+	}
+	mustContain(t, "rotate, reply lost", errOut, "reply was lost", "Core wrote the new key to "+h.homeCfg)
+	key = fileKey()
+	out, errOut, code = run(nil, "", false, "key", "rotate-management", "--yes", "--show-key")
+	if code != exitOK || fileKey() == key || out != fileKey()+"\n" {
+		t.Errorf("rotate --show-key, reply lost: %d %q %q", code, out, errOut)
+	}
+	// With no config file to find it in, the command says the key was rotated and lost to it.
+	key = fileKey()
+	out, errOut, code = run(map[string]string{"PLUXY_URL": base, "PLUXY_MANAGEMENT_KEY": key}, "", false, "key", "rotate-management", "--yes", "--show-key")
+	if code != exitFailed || out != "" || fileKey() == key {
+		t.Errorf("rotate --show-key, reply lost, no config: %d %q %q", code, out, errOut)
+	}
+	mustContain(t, "rotate --show-key, reply lost, no config", errOut, "rotated the management key, but its reply, which held the new key, was lost", "the old key no longer works")
+	// The reply is lost before core sees the call: the old key still works, and the command fails.
+	drop.Store(dropBefore)
+	key = fileKey()
+	out, errOut, code = run(nil, "", false, "key", "rotate-management", "--yes")
+	if code != exitFailed || out != "" || fileKey() != key {
+		t.Errorf("rotate, call lost: %d %q %q", code, out, errOut)
+	}
+	mustContain(t, "rotate, call lost", errOut, "the old key still works")
+}
+
+// failingWriter is an output that takes nothing, as /dev/full.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("no space left on device") }
+
+// pluxy key management says why there is no key to show: the config file that does not parse,
+// the --config that is not there, each place it looked, and the desktop app's core.
+func TestKeyManagementSaysWhyThereIsNoKey(t *testing.T) {
+	run := func(h *testHome, args ...string) (string, string, int) {
+		var out, errOut bytes.Buffer
+		code := runCLIWithInput(append([]string{"key", "management"}, args...), strings.NewReader(""), &out, &errOut, h.getenv, false)
+		return out.String(), errOut.String(), code
+	}
+	t.Run("nothing anywhere", func(t *testing.T) {
+		h := newTestHome(t)
+		emptyFolder(t)
+		out, errOut, code := run(h)
+		if code != exitNotFound || out != "" {
+			t.Errorf("%d %q %q", code, out, errOut)
+		}
+		mustContain(t, "nothing anywhere", errOut, "no config.json in this folder", h.homeCfg, "pluxy init")
+	})
+	t.Run("a config that does not parse", func(t *testing.T) {
+		h := newTestHome(t)
+		emptyFolder(t)
+		if err := os.MkdirAll(filepath.Dir(h.homeCfg), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(h.homeCfg, []byte("{not json"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out, errOut, code := run(h)
+		if code != exitFailed || out != "" || strings.Contains(errOut, "no config file was found") {
+			t.Errorf("%d %q %q", code, out, errOut)
+		}
+		mustContain(t, "a config that does not parse", errOut, h.homeCfg)
+	})
+	t.Run("a --config that is not there", func(t *testing.T) {
+		h := newTestHome(t)
+		emptyFolder(t)
+		missing := filepath.Join(t.TempDir(), "missing.json")
+		out, errOut, code := run(h, "--config", missing)
+		if code != exitNotFound || out != "" {
+			t.Errorf("%d %q %q", code, out, errOut)
+		}
+		mustContain(t, "a --config that is not there", errOut, "no config file at "+missing)
+	})
+	t.Run("only the desktop app's core", func(t *testing.T) {
+		h := newTestHome(t)
+		emptyFolder(t)
+		writeConfig(t, h.appCfg, 18414, "fake-app-core-key")
+		out, errOut, code := run(h)
+		if code != exitNotFound || out != "" || strings.Contains(out+errOut, "fake-app-core-key") {
+			t.Errorf("%d %q %q", code, out, errOut)
+		}
+		mustContain(t, "only the app's core", errOut, h.homeCfg, "--config "+h.appCfg, "pluxy init")
+		// Its key is shown from that core's config only when asked for with --config.
+		if out, errOut, code := run(h, "--config", h.appCfg, "--show-key"); code != exitOK || out != "fake-app-core-key\n" {
+			t.Errorf("--config of the app's core: %d %q %q", code, out, errOut)
+		}
+	})
+}
+
+// The path key management names is escaped when the output is a terminal, since a folder's name
+// can hold bytes that would drive the terminal.
+func TestKeyManagementPathEscaped(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows file names cannot hold control characters")
+	}
+	h := newTestHome(t)
+	emptyFolder(t)
+	cfg := filepath.Join(t.TempDir(), foreignSample, "config.json")
+	writeConfig(t, cfg, 18415, "fake-escaped-key")
+	oldOut, oldErr := stdoutIsTerminal, stderrIsTerminal
+	defer func() { stdoutIsTerminal, stderrIsTerminal = oldOut, oldErr }()
+	stdoutIsTerminal = func(io.Writer) bool { return true }
+	stderrIsTerminal = func(io.Writer) bool { return true }
+	for _, args := range [][]string{{"key", "management"}, {"key", "management", "--show-key"}} {
+		var out, errOut bytes.Buffer
+		if code := runCLIWithInput(append(args, "--config", cfg), strings.NewReader(""), &out, &errOut, h.getenv, false); code != exitOK {
+			t.Fatalf("%v: %d %q", args, code, errOut.String())
+		}
+		assertNoRawControls(t, "stdout", out.String())
+		assertNoRawControls(t, "stderr", errOut.String())
+		mustContain(t, "escaped path", out.String()+errOut.String(), foreignCellEscaped)
+	}
 }

@@ -109,6 +109,18 @@ func TestPluxysHomeFromAnyFolder(t *testing.T) {
 	if r.code != 3 || !strings.Contains(r.stderr, "config.json in this folder") || !strings.Contains(r.stderr, "pluxy's home has a config too, "+h.homeCfg) {
 		t.Errorf("status in a folder with its own config.json: %s", r)
 	}
+	// A plain pluxy serve in such a folder serves that config.json, not pluxy's home's.
+	ownServe := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ownServe, "config.json"), []byte(`{"listen": "127.0.0.1:0", "client_keys": ["fake-client-key-1"], "management_key": "fake-folder-key"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, logs, _, err = startCoreDir(t, h.env, ownServe, filepath.Join(binDir, "pluxy"), "serve", "-watch-interval", "0", "-safe-mode")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !logs.contains("config: " + filepath.Join(ownServe, "config.json") + " (config.json in the current folder)") {
+		t.Errorf("serve in a folder with its own config.json did not serve it")
+	}
 }
 
 // With no config anywhere a client command says where it looked and what to run; with only the
@@ -135,7 +147,15 @@ func TestPluxysHomeNotFound(t *testing.T) {
 		t.Errorf("the refused serve made pluxy's home: %v", err)
 	}
 	r = h.run(t, t.TempDir(), nil, "status")
-	if r.code != 1 || !strings.Contains(r.stderr, "--config "+h.appCfg) {
+	if r.code != 1 || !strings.Contains(r.stderr, "--config "+h.appCfg) || !strings.Contains(r.stderr, "pluxy init") {
 		t.Errorf("status beside the app's own core: %s", r)
+	}
+	// The serve just refused: the advice offers pluxy serve only with the app's -config.
+	if strings.Count(r.stderr, "pluxy serve") != strings.Count(r.stderr, "pluxy serve -config ") {
+		t.Errorf("status beside the app's own core offers a plain pluxy serve, which refuses: %s", r)
+	}
+	r = h.run(t, t.TempDir(), nil, "key", "management")
+	if r.code != 5 || r.stdout != "" || !strings.Contains(r.stderr, h.homeCfg) || !strings.Contains(r.stderr, "--config "+h.appCfg) {
+		t.Errorf("key management beside the app's own core: %s", r)
 	}
 }
