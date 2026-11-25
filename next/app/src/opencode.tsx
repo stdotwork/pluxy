@@ -39,7 +39,6 @@ import { keptTerminal, launcherProblem, useDeviceChanged } from "./startCli";
 
 const t = strings("opencode", {
   title: "OpenCode",
-  short: "OpenCode",
   tip: "Set up and start OpenCode with this core",
   intro:
     "Adds this core to OpenCode's config with a client key, model list, and default model. Apply, Clear, and Restore backup ask for confirmation and keep other settings. Restart OpenCode afterward.",
@@ -449,9 +448,9 @@ export function OpenCodePage() {
 export const opencodePage = (): AgentPage => ({
   id: "opencode",
   package: PACKAGE,
-  group: "control",
+  dest: "tools",
+  kind: "topic",
   title: t("title"),
-  short: t("short"),
   tip: t("tip"),
   render: () => <OpenCodePage />,
 });

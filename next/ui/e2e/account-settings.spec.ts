@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { openPanel, signIn, useCore } from "./support";
+import { goToId, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 const secret = "sk-account-settings-panel";
@@ -39,7 +39,7 @@ async function listed(id: string): Promise<Listed | undefined> {
 }
 
 async function openAccount(page: Page, id: string) {
-  await page.locator('nav a[href="#/accounts"]').click();
+  await goToId(page, "accounts");
   await expect(page.getByRole("heading", { level: 1, name: "Accounts" })).toBeVisible();
   await page.getByRole("button", { name: id, exact: true }).click();
   return page.getByRole("complementary", { name: `Details: ${id}`, exact: true });

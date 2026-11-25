@@ -2,7 +2,7 @@
 // machine holds Claude Code (panelcore -first-run). The case walks a new install from signing
 // in to the Dashboard.
 import { expect, test } from "@playwright/test";
-import { nav, openPanel, signIn, useCore } from "./support";
+import { goTo, nav, openPanel, signIn, useCore } from "./support";
 
 const core = useCore({ firstRun: true });
 
@@ -73,14 +73,14 @@ test("a first run opens Setup, installs the suggested provider, adds an account,
   await page.setViewportSize({ width: 700, height: 500 });
   await page.getByRole("button", { name: "Finish", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeInViewport();
-  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+  expect(await page.locator("main").evaluate((m) => m.scrollTop)).toBe(0);
   await page.setViewportSize({ width: 1280, height: 800 });
   await openPanel(page, core);
   await expect(nav(page)).toBeVisible();
   await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 1, name: "Set up pluxy" })).toBeHidden();
-  // Setup stays in the navigation, now as a status of the same things.
-  await nav(page).getByRole("link", { name: "Set up pluxy" }).click();
+  // Setup stays among the Settings topics, now as a status of the same things.
+  await goTo(page, "Set up pluxy");
   await expect(page.getByRole("region", { name: "Providers" })).toContainText("Installed");
   await expect(page.getByRole("button", { name: "Finish", exact: true })).toBeHidden();
 });

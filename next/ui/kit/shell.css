@@ -1,4 +1,5 @@
-/* The shell (shell.tsx): navigation, the page area and signing in. */
+/* The shell (shell.tsx) and the frame it shows its pages in (frame.tsx): the navigation, the
+   header strip, topics, the page area, and signing in. */
 @layer kit {
   /* Shell and navigation */
 
@@ -8,8 +9,7 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  /* A shell with no navigation (signing in, the desktop app before it is connected) gives its one
-     part the whole window, not the navigation's column or row. */
+  /* A shell with no frame (signing in) gives its one part the whole window. */
   .shell > :only-child {
     grid-column: 1 / -1;
     grid-row: 1 / -1;
@@ -51,60 +51,105 @@
     outline: none;
   }
 
-  .nav {
-    background: var(--px-color-nav);
-    /* For the navigation laid out as a bar, which scrolls sideways when it is wider than the
-       window: a shadow at an edge says there is more past it. The shadows stay at the bar's two
-       edges; the covers over them scroll with the entries, so each hides its shadow only when the
-       bar is scrolled to that end. */
-    --nav-more-shadow: color-mix(in srgb, var(--px-color-nav-text) 35%, transparent);
-    --nav-more:
-      linear-gradient(to right, var(--px-color-nav) 40%, transparent) left center / 3em 100% no-repeat local,
-      linear-gradient(to left, var(--px-color-nav) 40%, transparent) right center / 3em 100% no-repeat local,
-      radial-gradient(farthest-side at 0 50%, var(--nav-more-shadow), transparent) left center / 0.9em 100%
-      no-repeat scroll,
-      radial-gradient(farthest-side at 100% 50%, var(--nav-more-shadow), transparent) right center / 0.9em
-      100% no-repeat scroll,
-      var(--px-color-nav);
-    border: 0 solid var(--px-color-nav-border);
-    display: flex;
-    gap: calc(var(--s) * 1);
-    z-index: 1;
+  /* The frame (frame.tsx). data-frame says how the navigation is drawn: the theme's `nav` option
+     (sidebar, rail, top), or what a narrow window makes of it (rail, then bar). The frame fills
+     the window and does not scroll; the pane does. */
+
+  .shell[data-frame] {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+    grid-template-columns: var(--px-size-nav) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    --stick: calc(var(--px-size-header) + var(--s) * 4);
   }
 
-  .nav ul {
-    list-style: none;
-    margin: 0;
-    padding: 0;
+  .shell[data-frame="rail"] {
+    grid-template-columns: var(--px-size-rail) minmax(0, 1fr);
+  }
+
+  .shell:is([data-frame="top"], [data-frame="bar"]) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    --stick: calc(var(--px-size-header) * 2 + var(--s) * 4);
+  }
+
+  .icon {
+    flex: none;
+    display: block;
+  }
+
+  /* Navigation */
+
+  .nav {
+    background: var(--px-color-nav);
+    border: 0 solid var(--px-color-nav-border);
+    border-inline-end-width: var(--px-shape-border);
     display: flex;
-    gap: calc(var(--s) * 0.5);
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    /* Over the page: the status block's menu opens across the navigation's edge. */
+    position: relative;
+    z-index: 2;
   }
 
   .brand {
+    flex: none;
+    display: flex;
+    align-items: center;
+    min-height: var(--px-size-header);
+    padding-inline: calc(var(--s) * 4);
     font-weight: var(--px-font-weight-strong);
     color: var(--px-color-nav-text);
     text-decoration: none;
     letter-spacing: 0.02em;
-    padding: calc(var(--s) * 2) calc(var(--s) * 3);
+    min-width: 0;
+  }
+
+  .brand > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .nav-list {
+    list-style: none;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: calc(var(--s) * 0.5);
+    padding: calc(var(--s) * 1) calc(var(--s) * 2);
+  }
+
+  /* In a window too short for the whole navigation, the destinations scroll: Settings and the
+     status block stay in view. */
+  .shell:is([data-frame="sidebar"], [data-frame="rail"]) .nav-list:not(.nav-foot) {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  /* Settings sits at the navigation's foot, over the status block. */
+  .nav-foot {
+    margin-top: auto;
+    padding-bottom: calc(var(--s) * 2);
   }
 
   .nav-item {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 2.5);
     color: var(--px-color-nav-muted);
     text-decoration: none;
     border-radius: var(--px-shape-radius);
-    padding: calc(var(--s) * 2) calc(var(--s) * 3);
+    padding: calc(var(--s) * 1.5) calc(var(--s) * 2.5);
     transition:
       background var(--t),
       color var(--t);
-    background: none;
-    border: 0;
-    font: inherit;
-    text-align: start;
-    cursor: pointer;
   }
 
-  .nav-item:hover {
+  a.nav-item:hover {
     background: var(--px-color-nav-hover);
     color: var(--px-color-nav-text);
   }
@@ -115,148 +160,501 @@
     font-weight: var(--px-font-weight-strong);
   }
 
-  .nav-item .short {
+  /* A destination that cannot be chosen: the frame has no session to show its pages for. */
+  .nav-item[aria-disabled="true"] {
+    opacity: 0.55;
+    cursor: default;
+  }
+
+  .nav-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The status block: a state's dot and word, and under them where pluxy runs. */
+
+  .status {
+    flex: none;
+    position: relative;
+    border-top: var(--px-shape-border) solid var(--px-color-nav-border);
+    --status-color: var(--px-color-nav-muted);
+  }
+
+  .status[data-state="running"] {
+    --status-color: var(--px-color-ok);
+  }
+
+  .status[data-state="down"] {
+    --status-color: var(--px-color-danger);
+  }
+
+  .status-block {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+    width: 100%;
+    min-height: calc(var(--s) * 14);
+    padding: calc(var(--s) * 2) calc(var(--s) * 3) calc(var(--s) * 2) calc(var(--s) * 4);
+    border: 0;
+    background: none;
+    color: var(--px-color-nav-text);
+    font: inherit;
+    text-align: start;
+  }
+
+  button.status-block {
+    cursor: pointer;
+    transition: background var(--t);
+  }
+
+  button.status-block:is(:hover, [aria-expanded="true"]) {
+    background: var(--px-color-nav-hover);
+  }
+
+  button.status-block:focus-visible {
+    outline-offset: -2px;
+  }
+
+  /* A filled dot while pluxy runs or should; a ring while it is stopped or not known. The word
+     beside it says which, so the state never rests on colour alone. */
+  .status-dot {
+    flex: none;
+    width: calc(var(--s) * 2);
+    height: calc(var(--s) * 2);
+    border-radius: 50%;
+    border: var(--px-shape-border) solid var(--status-color);
+    background: var(--status-color);
+  }
+
+  .status:is([data-state="stopped"], [data-state="unknown"]) .status-dot {
+    background: none;
+  }
+
+  .status-text {
+    display: grid;
+    min-width: 0;
+    line-height: 1.3;
+  }
+
+  .status-text b {
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .status-text span {
+    color: var(--px-color-nav-muted);
+    font-size: var(--px-font-size-small);
+  }
+
+  .status-text > * {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .status-menu {
+    position: absolute;
+    inset-block-end: calc(100% + var(--s) * 1);
+    inset-inline-start: calc(var(--s) * 2);
+    width: max(100% - var(--s) * 4, 17rem);
+    max-width: calc(100vw - var(--s) * 4);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    padding: calc(var(--s) * 1);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--px-shape-radius);
+    background: var(--px-color-overlay);
+    color: var(--px-color-text);
+    box-shadow: var(--px-shadow-raised);
+  }
+
+  .status-address {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+    padding: calc(var(--s) * 1) calc(var(--s) * 1) calc(var(--s) * 1) calc(var(--s) * 2);
+  }
+
+  .status-address code {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .status-copy,
+  .status-item {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 1.5);
+    border: 0;
+    border-radius: var(--px-shape-radius);
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: start;
+    text-decoration: none;
+    cursor: pointer;
+    padding: calc(var(--s) * 1.5) calc(var(--s) * 2);
+    transition: background var(--t);
+  }
+
+  .status-copy {
+    flex: none;
+    border: var(--px-shape-border) solid var(--px-color-border);
+    padding-block: calc(var(--s) * 1);
+  }
+
+  .status-item {
+    justify-content: space-between;
+  }
+
+  :is(.status-copy, .status-item):hover {
+    background: var(--px-color-surface-raised);
+  }
+
+  .status-item[aria-busy="true"] {
+    cursor: progress;
+  }
+
+  .status-note {
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+  }
+
+  .status-error {
+    margin: 0;
+    padding: calc(var(--s) * 1) calc(var(--s) * 2);
+    color: var(--px-color-danger);
+    font-size: var(--px-font-size-small);
+  }
+
+  /* The rail: icons only. Each entry's name is its tooltip and its accessible name; the status
+     block is its dot. */
+
+  .shell[data-frame="rail"] .brand {
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  /* The product name's first letter stands for it. */
+  .shell:is([data-frame="rail"], [data-frame="bar"]) .brand > span {
+    width: 1ch;
+    text-overflow: clip;
+    letter-spacing: 1ch;
+  }
+
+  .shell:is([data-frame="top"], [data-frame="bar"]) .status-text span {
     display: none;
   }
 
-  .privacy {
-    margin-top: auto;
-  }
-
-  /* Accent while masking, as the old app's toggle. */
-  .privacy[aria-pressed="true"] {
-    color: var(--px-color-accent);
-  }
-
-  .privacy + .signout {
-    margin-top: 0;
-  }
-
-  .signout {
-    margin-top: auto;
-  }
-
-  /* Navigation groups: a label over each group's entries. */
-  .nav-group {
-    display: grid;
-    gap: calc(var(--s) * 0.5);
-  }
-
-  .nav-group-label {
-    font-size: var(--px-font-size-small);
-    font-weight: var(--px-font-weight-strong);
-    color: var(--px-color-nav-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    padding: calc(var(--s) * 2) calc(var(--s) * 3) calc(var(--s) * 0.5);
-  }
-
-  /* Where there is no room for the labels, screen readers still get them, and a line divides the groups. */
-  html:is([data-nav="rail"], [data-nav="top"]) .nav-group-label {
+  /* Still read by assistive technology: the entry's name, and the state's word. */
+  .shell:is([data-frame="rail"], [data-frame="bar"]) :is(.nav-label, .status-text) {
     position: absolute;
     width: 1px;
     height: 1px;
     overflow: hidden;
     clip-path: inset(50%);
-    white-space: nowrap;
   }
 
-  html[data-nav="rail"] .nav-group + .nav-group {
-    border-top: var(--px-shape-border) solid var(--px-color-nav-border);
-    padding-top: calc(var(--s) * 1);
-  }
-
-  html:is([data-nav="sidebar"], [data-nav="rail"]) .shell {
-    grid-template-columns: var(--px-size-nav) minmax(0, 1fr);
-  }
-
-  html[data-nav="rail"] .shell {
-    grid-template-columns: var(--rail) minmax(0, 1fr);
-  }
-
-  html:is([data-nav="sidebar"], [data-nav="rail"]) .nav {
-    flex-direction: column;
-    position: sticky;
-    top: 0;
-    height: 100vh;
-    /* More entries than the window is tall: the navigation scrolls by itself. */
-    overflow-y: auto;
-    border-inline-end-width: var(--px-shape-border);
-    padding: calc(var(--s) * 2);
-  }
-
-  html:is([data-nav="sidebar"], [data-nav="rail"]) .nav ul {
-    flex-direction: column;
-  }
-
-  html[data-nav="rail"] .nav {
+  .shell[data-frame="rail"] .nav-list {
     padding-inline: calc(var(--s) * 1);
-    align-items: stretch;
+    align-items: center;
   }
 
-  html[data-nav="rail"] .brand {
+  .shell:is([data-frame="rail"], [data-frame="bar"]) .nav-item {
+    justify-content: center;
+    width: calc(var(--s) * 6 + 16px);
+    height: calc(var(--s) * 4 + 16px);
+    padding: 0;
+  }
+
+  .shell:is([data-frame="rail"], [data-frame="bar"]) .status-block {
+    justify-content: center;
     padding-inline: 0;
-    text-align: center;
-    font-size: var(--px-font-size-small);
   }
 
-  html[data-nav="rail"] .nav-item {
-    text-align: center;
-    padding-inline: calc(var(--s) * 1);
-    font-size: var(--px-font-size-small);
+  .shell[data-frame="rail"] .status-menu {
+    inset-block-end: calc(var(--s) * 2);
+    inset-inline-start: calc(100% + var(--s) * 1);
+    width: 17rem;
   }
 
-  html[data-nav="rail"] .nav-item .full {
-    display: none;
-  }
+  /* On top: the destinations in a row, Settings and the status block at its end. */
 
-  html[data-nav="rail"] .nav-item .short {
-    display: inline;
-  }
-
-  html[data-nav="top"] .shell {
-    grid-template-rows: auto minmax(0, 1fr);
-  }
-
-  html[data-nav="top"] .nav {
-    position: sticky;
-    top: 0;
+  .shell:is([data-frame="top"], [data-frame="bar"]) .nav {
     flex-direction: row;
     align-items: center;
+    border-inline-end-width: 0;
     border-block-end-width: var(--px-shape-border);
-    padding: calc(var(--s) * 1) calc(var(--s) * 3);
-    overflow-x: auto;
-    background: var(--nav-more);
+    padding-inline: calc(var(--s) * 2);
   }
 
-  html[data-nav="top"] .privacy {
+  .shell:is([data-frame="top"], [data-frame="bar"]) .nav-list {
+    flex-direction: row;
+    padding: 0 calc(var(--s) * 1);
+  }
+
+  .shell:is([data-frame="top"], [data-frame="bar"]) .nav-foot {
     margin-top: 0;
     margin-inline-start: auto;
   }
 
-  html[data-nav="top"] .signout {
-    margin-top: 0;
+  .shell:is([data-frame="top"], [data-frame="bar"]) .brand {
+    flex: 0 1 auto;
+    padding-inline: calc(var(--s) * 2) calc(var(--s) * 3);
   }
 
-  html[data-nav="top"] .nav-group {
+  .shell:is([data-frame="top"], [data-frame="bar"]) .status {
+    border-top: 0;
+    border-inline-start: var(--px-shape-border) solid var(--px-color-nav-border);
+    margin-inline-start: calc(var(--s) * 1);
+  }
+
+  .shell:is([data-frame="top"], [data-frame="bar"]) .status-block {
+    min-height: var(--px-size-header);
+    padding-inline: calc(var(--s) * 3);
+    white-space: nowrap;
+  }
+
+  .shell:is([data-frame="top"], [data-frame="bar"]) .status-menu {
+    inset-block: 100% auto;
+    inset-inline: auto 0;
+    width: 17rem;
+    margin-top: calc(var(--s) * 1);
+  }
+
+  /* The header strip: the page's name or the way back to the page above it, the destination's
+     tabs, and at its end the page's actions. */
+
+  .frame-body {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    /* A stacking context of its own: nothing in a page (a table's sticky header) is drawn over
+       the navigation or the status block's menu. */
+    position: relative;
+    z-index: 0;
+  }
+
+  .strip {
+    flex: none;
     display: flex;
     align-items: center;
+    flex-wrap: wrap;
+    column-gap: calc(var(--s) * 5);
+    min-height: var(--px-size-header);
+    padding-inline: calc(var(--s) * 6);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
   }
 
-  html[data-nav="top"] .nav-group + .nav-group {
-    border-inline-start: var(--px-shape-border) solid var(--px-color-nav-border);
-    padding-inline-start: calc(var(--s) * 1);
+  .strip-title {
+    display: flex;
+    align-items: baseline;
+    gap: calc(var(--s) * 2);
+    min-width: 0;
   }
 
-  /* Page area */
+  .strip-title h1 {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* A page change puts focus on the heading, which is not a control. */
+  .strip-title h1:focus {
+    outline: none;
+  }
+
+  .crumb {
+    display: flex;
+    gap: calc(var(--s) * 2);
+    color: var(--px-color-text-muted);
+    white-space: nowrap;
+  }
+
+  .crumb a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .crumb a:hover {
+    color: var(--px-color-text);
+  }
+
+  .strip-tabs {
+    align-self: stretch;
+    display: flex;
+    gap: calc(var(--s) * 1);
+    min-width: 0;
+  }
+
+  .strip-tab {
+    display: flex;
+    align-items: center;
+    min-height: var(--px-size-header);
+    padding-inline: calc(var(--s) * 2);
+    color: var(--px-color-text-muted);
+    text-decoration: none;
+    white-space: nowrap;
+    /* The current tab's line sits on the strip's own border. */
+    border-block: 2px solid transparent;
+    margin-bottom: calc(var(--px-shape-border) * -1);
+    transition: color var(--t);
+  }
+
+  .strip-tab:hover {
+    color: var(--px-color-text);
+  }
+
+  .strip-tab[aria-current="page"] {
+    color: var(--px-color-text);
+    font-weight: var(--px-font-weight-strong);
+    border-bottom-color: var(--px-color-accent);
+  }
+
+  .strip-tab:focus-visible {
+    outline-offset: -2px;
+  }
+
+  .strip-end {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+    margin-inline-start: auto;
+    padding-block: calc(var(--s) * 1);
+    min-width: 0;
+  }
+
+  .strip-end .actions:empty {
+    display: none;
+  }
+
+  .strip-button {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 1.5);
+    height: calc(var(--s) * 3 + 16px);
+    min-width: calc(var(--s) * 3 + 16px);
+    justify-content: center;
+    padding: 0 calc(var(--s) * 1.5);
+    border: 0;
+    border-radius: var(--px-shape-radius);
+    background: none;
+    color: var(--px-color-text-muted);
+    font: inherit;
+    font-size: var(--px-font-size-small);
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+      background var(--t),
+      color var(--t);
+  }
+
+  .strip-button:hover {
+    background: var(--px-color-surface-raised);
+    color: var(--px-color-text);
+  }
+
+  /* Accent while masking, and it says so. */
+  .privacy[aria-pressed="true"] {
+    color: var(--px-color-accent);
+  }
+
+  /* Topics: a destination's pages listed beside the page. */
+
+  .frame-pane {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+  }
+
+  .topics {
+    flex: none;
+    width: var(--px-size-topics);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: calc(var(--s) * 3);
+    padding: calc(var(--s) * 3) calc(var(--s) * 2);
+    border-inline-end: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .topics ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: calc(var(--s) * 0.5);
+  }
+
+  .nav-group {
+    display: grid;
+    gap: calc(var(--s) * 1);
+  }
+
+  .nav-group-label {
+    font-size: var(--px-font-size-small);
+    font-weight: var(--px-font-weight-strong);
+    color: var(--px-color-text-muted);
+    padding-inline: calc(var(--s) * 2.5);
+  }
+
+  .topic {
+    display: block;
+    padding: calc(var(--s) * 1.5) calc(var(--s) * 2.5);
+    border-radius: var(--px-shape-radius);
+    color: var(--px-color-text-muted);
+    text-decoration: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition:
+      background var(--t),
+      color var(--t);
+  }
+
+  .topic:hover {
+    background: var(--px-color-surface-raised);
+    color: var(--px-color-text);
+  }
+
+  .topic[aria-current="page"] {
+    background: var(--px-color-selected);
+    color: var(--px-color-selected-text);
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  /* In a narrow window the topics are a select above the page. */
+  .shell[data-narrow] .frame-pane[data-topics] {
+    flex-direction: column;
+  }
+
+  .topics-select {
+    flex: none;
+    display: block;
+    padding: calc(var(--s) * 2) calc(var(--s) * 4);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .topics-select select {
+    width: 100%;
+  }
+
+  /* Page area: the pane, the frame's one part that scrolls. */
 
   .main {
+    flex: 1;
     min-width: 0;
+    min-height: 0;
+    overflow: auto;
   }
 
   .content {
     margin-inline: auto;
-    padding: calc(var(--s) * 6) calc(var(--s) * 6) calc(var(--s) * 12);
+    padding: calc(var(--s) * 5) calc(var(--s) * 6) calc(var(--s) * 12);
     max-width: var(--px-size-width-wide);
   }
 
@@ -266,6 +664,16 @@
 
   html[data-width="narrow"] .content {
     max-width: var(--px-size-width-narrow);
+  }
+
+  /* A narrow window (under 820 pixels) gives the page more of its width. */
+  .shell[data-narrow] .strip {
+    padding-inline: calc(var(--s) * 4);
+    column-gap: calc(var(--s) * 3);
+  }
+
+  .shell[data-narrow] .content {
+    padding: calc(var(--s) * 4) calc(var(--s) * 4) calc(var(--s) * 10);
   }
 
   /* Signing in */
@@ -284,69 +692,5 @@
 
   .signin p {
     margin: 0;
-  }
-
-  /* Narrow windows: the side navigation goes on top. */
-  @media (max-width: 720px) {
-    html:is([data-nav="sidebar"], [data-nav="rail"]) .shell {
-      grid-template-columns: minmax(0, 1fr);
-      grid-template-rows: auto minmax(0, 1fr);
-    }
-
-    html:is([data-nav="sidebar"], [data-nav="rail"]) .nav {
-      height: auto;
-      flex-direction: row;
-      align-items: center;
-      border-inline-end-width: 0;
-      border-block-end-width: var(--px-shape-border);
-      overflow-x: auto;
-      background: var(--nav-more);
-    }
-
-    html:is([data-nav="sidebar"], [data-nav="rail"]) .nav ul {
-      flex-direction: row;
-    }
-
-    html:is([data-nav="sidebar"], [data-nav="rail"]) .nav-group {
-      display: flex;
-      align-items: center;
-    }
-
-    html[data-nav="sidebar"] .nav-group-label {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      overflow: hidden;
-      clip-path: inset(50%);
-      white-space: nowrap;
-    }
-
-    html:is([data-nav="sidebar"], [data-nav="rail"]) .nav-group + .nav-group {
-      border-top: 0;
-      padding-top: 0;
-      border-inline-start: var(--px-shape-border) solid var(--px-color-nav-border);
-      padding-inline-start: calc(var(--s) * 1);
-    }
-
-    html[data-nav="rail"] .nav-item .full {
-      display: inline;
-    }
-
-    html[data-nav="rail"] .nav-item .short {
-      display: none;
-    }
-
-    .privacy {
-      margin-top: 0;
-      margin-inline-start: auto;
-    }
-
-    .signout {
-      margin-top: 0;
-    }
-
-    .content {
-      padding: calc(var(--s) * 4) calc(var(--s) * 4) calc(var(--s) * 10);
-    }
   }
 }

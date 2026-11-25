@@ -2,7 +2,7 @@
 // drawn control may be smaller when its hit area reaches past it. The hit area is what a click at
 // a point lands on, found with elementFromPoint, not the size of the drawn box.
 import { expect, type Page, test } from "@playwright/test";
-import { nav, openPanel, signIn, useCore } from "./support";
+import { goTo, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 const MIN = 24;
@@ -117,7 +117,7 @@ for (const name of PAGES) {
     await openPanel(page, core);
     await signIn(page, core);
     // By its exact name: "Usage" is also part of an extension page's name.
-    await nav(page).getByRole("link", { name, exact: true }).click();
+    await goTo(page, name);
     await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
     await page.waitForLoadState("networkidle");
     if (name === "Accounts") {

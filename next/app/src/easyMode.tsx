@@ -12,7 +12,17 @@ import { useState } from "preact/hooks";
 import { AddAccountPage } from "../../ui/kit/pages/addAccount";
 import type { PageDef } from "../../ui/kit/shell";
 import { strings } from "../../ui/kit/strings";
-import { Button, Card, Empty, Notice, PageHead, useAction, useKit, useLoad } from "../../ui/kit/ui";
+import {
+  Button,
+  Card,
+  Empty,
+  InlineHeads,
+  Notice,
+  PageHead,
+  useAction,
+  useKit,
+  useLoad,
+} from "../../ui/kit/ui";
 import { type DeviceCatalog, device } from "./device";
 import { type Item, items } from "./easyModeItems";
 
@@ -24,7 +34,6 @@ export const LAUNCHER = "pluxy/execution";
 
 const t = strings("easyMode", {
   title: "Beginner Mode",
-  short: "Easy",
   tip: "Guided model and agent setup",
   intro: "Connect a model, then connect an agent. You can repeat either step later from its own page.",
   stepsLabel: "Connection wizard steps",
@@ -188,7 +197,8 @@ function ConnectAgent(props: { agents: AgentPage[]; catalog?: DeviceCatalog; onC
       </Card>
       {page && ready && (
         <section class="stack" data-part="easy-client-page">
-          {page.render()}
+          {/* A page shown inside this one keeps its head with it, not in the frame's header strip. */}
+          <InlineHeads>{page.render()}</InlineHeads>
         </section>
       )}
     </>
@@ -228,7 +238,9 @@ export function EasyModePage(props: { agents: AgentPage[]; catalog?: DeviceCatal
         <section class="stack" data-part="easy-step" data-step="1">
           <h2>{t("step1")}</h2>
           <p class="muted">{t("providerDescription")}</p>
-          <AddAccountPage onSuccess={accounts.reload} />
+          <InlineHeads>
+            <AddAccountPage onSuccess={accounts.reload} />
+          </InlineHeads>
           <Card>
             <div class="actions" data-part="easy-sources">
               {accounts.error && <Notice tone="danger">{accounts.error}</Notice>}
@@ -264,9 +276,9 @@ export const easyModePage = (
   onChanged: () => void,
 ): PageDef => ({
   id: "easy-mode",
-  group: "operate",
+  dest: "tools",
+  kind: "topic",
   title: t("title"),
-  short: t("short"),
   tip: t("tip"),
   render: () => <EasyModePage agents={agents} catalog={catalog} onChanged={onChanged} />,
 });

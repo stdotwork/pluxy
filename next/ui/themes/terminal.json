@@ -21,6 +21,8 @@
     "font.size": "13px",
     "font.size-title": "16px",
     "density": "0.75",
+    "size.rail": "40px",
+    "size.header": "36px",
     "shape.radius": "0px",
     "shadow.raised": "none",
     "motion.duration": "0ms"

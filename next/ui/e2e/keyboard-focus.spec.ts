@@ -65,6 +65,43 @@ test("the first Tab stop is a link that skips to the main content", async ({ pag
   expect(await page.evaluate(() => document.activeElement?.closest("main") !== null)).toBe(true);
 });
 
+test("Tab goes through the frame in reading order: the navigation, the status block, the header strip, then the page", async ({
+  page,
+}) => {
+  await openPanel(page, core, "/panel/#/routing");
+  await signIn(page, core);
+  await expect(page.getByRole("heading", { level: 1, name: "Routing" })).toBeVisible();
+  const host = new URL(core.base).host;
+  // Each stop's name, until focus is inside the page.
+  const stops: string[] = [];
+  for (let i = 0; i < 20; i++) {
+    await page.keyboard.press("Tab");
+    const stop = await page.evaluate(() => {
+      const el = document.activeElement;
+      if (!el || el.closest("main")) return null;
+      return el.getAttribute("aria-label") ?? el.textContent?.trim() ?? "";
+    });
+    if (stop === null) break;
+    stops.push(stop);
+  }
+  expect(stops).toEqual([
+    "Skip to main content",
+    "pluxy",
+    "Home",
+    "Accounts",
+    "Activity",
+    "Settings",
+    `Running, ${host}. Open the menu`,
+    "Accounts",
+    "Order & fallback",
+    "Limits",
+    "Refresh",
+    "Privacy mode",
+    "Sign out",
+  ]);
+  expect(await page.evaluate(() => document.activeElement?.closest("main") !== null)).toBe(true);
+});
+
 test("Escape closes the account detail and focus returns to the row that opened it", async ({ page }) => {
   await openAccounts(page);
   const row = page.getByRole("button", { name: "kb-one", exact: true });
@@ -187,7 +224,7 @@ test("a page change moves focus to the page heading and announces the title", as
   await signIn(page, core);
   const link = page
     .getByRole("navigation", { name: "Main" })
-    .getByRole("link", { name: "Usage", exact: true });
+    .getByRole("link", { name: "Activity", exact: true });
   await link.focus();
   await page.keyboard.press("Enter");
   const heading = page.getByRole("heading", { level: 1, name: "Usage", exact: true });

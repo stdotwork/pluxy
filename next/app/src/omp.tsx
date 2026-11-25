@@ -29,7 +29,6 @@ import { CLIENT, modelOf, PACKAGE, type ReadBack, validModel } from "./ompForm";
 
 const t = strings("omp", {
   title: "Oh My Pi",
-  short: "Oh My Pi",
   tip: "Set up and start Oh My Pi with this core",
   intro:
     "Adds this core to Oh My Pi's models.yml with a client key and default model. Apply, Clear, and Restore backup ask for confirmation and keep other settings. Restart Oh My Pi afterward.",
@@ -312,9 +311,9 @@ export function OmpPage() {
 export const ompPage = (): AgentPage => ({
   id: "omp",
   package: PACKAGE,
-  group: "control",
+  dest: "tools",
+  kind: "topic",
   title: t("title"),
-  short: t("short"),
   tip: t("tip"),
   render: () => <OmpPage />,
 });

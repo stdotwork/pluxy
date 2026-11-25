@@ -40,7 +40,6 @@ import { connectionGet, reply } from "./host";
 
 const t = strings("grok", {
   title: "Grok Build",
-  short: "Grok",
   tip: "Set up and start Grok Build with this core",
   intro:
     "Adds this core's models and a client key to Grok Build's config.toml and sets a default model. Apply, Clear, and Restore backup ask for confirmation and keep other settings. Restart Grok Build afterward.",
@@ -372,9 +371,9 @@ export function GrokPage() {
 export const grokPage = (): AgentPage => ({
   id: "grok-build",
   package: PACKAGE,
-  group: "control",
+  dest: "tools",
+  kind: "topic",
   title: t("title"),
-  short: t("short"),
   tip: t("tip"),
   render: () => <GrokPage />,
 });

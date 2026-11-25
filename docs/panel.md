@@ -44,10 +44,13 @@ label says that it spends one request.
 | System | Replaced Management Center Info. "Management Center" was the upstream panel's product name. |
 | Routing, Quota Management, Config Panel, Logs Viewer | The old panel's names: these pages do the same job as the old ones did. |
 | Usage | A new page; see [The Usage page](#the-usage-page). |
-| Set up pluxy | A new page, named for what a person does there. The panel opens it by itself on a first start; afterwards it stays in the navigation and shows the same things as they are now. |
+| Set up pluxy | A new page, named for what a person does there. The panel opens it by itself on a first start; afterwards it stays among the Settings topics and shows the same things as they are now. |
 
-The navigation keeps the old panel's groups: Operate, Gateway, Observe, Control, and the
-extensions' pages last. Since every text goes through the string layer, renaming a page later is a
+The navigation has five destinations: Home (the Dashboard), Accounts (with Routing as the tab
+"Order & fallback" and Quota Management as the tab "Limits"), Activity (Usage), Tools (the desktop
+app's client pages; the panel has none yet) and Settings, which lists every other page as a topic,
+the extensions' pages last. The old panel's groups (Operate, Gateway, Observe, Control) are gone.
+Since every text goes through the string layer, renaming a page later is a
 change of text; the page ID stays, because it is the page's address and theme hook.
 
 ## Where an API key added in the panel lives

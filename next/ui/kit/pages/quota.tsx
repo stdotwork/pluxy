@@ -8,7 +8,7 @@ import { Button, Empty, Facts, List, Notice, PageHead, useKit, useLoad, when } f
 
 const t = strings("quota", {
   title: "Quota Management",
-  short: "Quota",
+  tab: "Limits",
   tip: "Account quotas and limits",
   account: "Account",
   quota: "Quota",
@@ -328,9 +328,10 @@ export function QuotaPage() {
 
 export const quotaPage = (): PageDef => ({
   id: "quota",
-  group: "observe",
+  dest: "accounts",
+  kind: "tab",
+  label: t("tab"),
   title: t("title"),
-  short: t("short"),
   tip: t("tip"),
   render: () => <QuotaPage />,
 });

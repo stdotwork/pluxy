@@ -2,7 +2,7 @@
 // shows that it is working without changing size, an empty list says how to fill it, and a trace
 // ID has a copy button.
 import { expect, type Page, test } from "@playwright/test";
-import { goTo, nav, openPanel, signIn, useCore } from "./support";
+import { goTo, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 
@@ -47,11 +47,14 @@ for (const navLayout of ["sidebar", "rail", "top"]) {
     );
     await openPanel(page, core);
     await signIn(page, core);
+    // The navigation layout, chosen as a person does on the Themes page.
+    await goTo(page, "Themes");
+    await page
+      .getByRole("radiogroup", { name: "Navigation" })
+      .getByRole("radio", { name: navLayout, exact: false })
+      .check();
+    await expect(page.locator('[data-part="shell"]')).toHaveAttribute("data-frame", navLayout);
     await goTo(page, "Accounts");
-    // The layout a theme picks is an attribute on the page.
-    await page.evaluate((nav) => {
-      document.documentElement.dataset.nav = nav;
-    }, navLayout);
     const rows = page.locator('[data-part="list"] tbody tr');
     await expect(rows).toHaveCount(25);
     const header = page.locator('[data-part="list"] thead th').first();
@@ -266,8 +269,8 @@ test("a list that failed to load shows the failure, not an empty state", async (
   await signIn(page, core);
   const main = page.getByRole("main");
   for (const name of ["Accounts", "Quota Management", "Usage", "Extensions"]) {
-    await nav(page).getByRole("link", { name, exact: true }).click();
-    await expect(page.getByRole("heading", { level: 1, name, exact: true })).toBeVisible();
+    await goTo(page, name);
+    await expect(page).toHaveTitle(new RegExp(`^${name} · `));
     await expect(main.getByRole("alert").filter({ hasText: "core could not read it" }).first()).toBeVisible();
     await expect(main.locator('[data-part="empty"]')).toHaveCount(0);
   }
@@ -307,7 +310,7 @@ test("Usage: no request leads to setup, filters with no match can be cleared, a 
   });
   await openPanel(page, core);
   await signIn(page, core);
-  await nav(page).getByRole("link", { name: "Usage", exact: true }).click();
+  await goTo(page, "Usage");
   const rows = page.locator('[data-page="usage"] [data-part="item"]');
   await expect(rows).toHaveCount(2);
 

@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import type { LoginMethodsExtension } from "../kit/api/logins";
-import { goTo, openPanel, signIn, useCore } from "./support";
+import { goTo, goToId, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 
@@ -198,12 +198,12 @@ async function captureSignInStates(page: Page) {
   mkdirSync(dir, { recursive: true });
   for (const theme of ["default", "terminal", "paper"]) {
     await openPanel(page, core);
-    await page.locator('nav a[href="#/themes"]').click();
+    await goToId(page, "themes");
     await page
       .getByRole("radiogroup", { name: "Theme" })
       .getByRole("radio", { name: theme, exact: false })
       .check();
-    await page.locator('nav a[href="#/add-account"]').click();
+    await goToId(page, "add-account");
     await expect(page.getByRole("heading", { level: 1, name: "Add Account" })).toBeVisible();
     const shot = (state: string) =>
       page.screenshot({ path: join(dir, theme.concat("-", state, ".png")), fullPage: true });

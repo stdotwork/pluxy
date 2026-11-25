@@ -41,7 +41,11 @@ export function watchPref(name: string, fn: (value: string | null) => void) {
   });
 }
 
-export function browserHost(): Host {
+/**
+ * heard is called after each request to core with whether any reply came back, so the panel can
+ * say whether pluxy answers.
+ */
+export function browserHost(options?: { heard?: (answered: boolean) => void }): Host {
   const local = store("localStorage");
   const session = store("sessionStorage");
   let key = read(session, KEY) ?? read(local, KEY);
@@ -78,8 +82,10 @@ export function browserHost(): Host {
         referrerPolicy: "no-referrer",
       });
     } catch {
+      options?.heard?.(false);
       return { status: 0 };
     }
+    options?.heard?.(true);
     let text: string;
     try {
       text = await resp.text();

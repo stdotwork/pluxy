@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 import type { Account } from "../kit/api/accounts";
-import { nav, openPanel, signIn, useCore } from "./support";
+import { goToId, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 
@@ -18,7 +18,7 @@ test("Upload file imports an auth file and refuses a file that is not JSON", asy
   const before = await ids();
   await openPanel(page, core);
   await signIn(page, core);
-  await nav(page).locator('a[href="#/accounts"]').click();
+  await goToId(page, "accounts");
   await expect(page.getByRole("heading", { name: /Accounts$/, level: 1 })).toBeVisible();
 
   // An auth file of today's core, of a type the import takes.

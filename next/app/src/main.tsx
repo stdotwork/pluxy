@@ -1,5 +1,7 @@
 // The desktop app's window: the kit's shell with core's pages, the same as the panel's and in the
-// same places, then the app's own Connection and Device extensions pages. Extension pages, from
+// same places, then the app's own: the topics of Tools (Beginner Mode, Manage Clients and the
+// listed clients' pages), and Connection, Version Management, Device
+// extensions and Launcher among the Settings topics. Extension pages, from
 // core and from packages installed on this device (devicePage.tsx), open in webviews of their
 // own (nativePage.tsx).
 
@@ -7,11 +9,13 @@ import { listen } from "@tauri-apps/api/event";
 import { render } from "preact";
 import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
 import { api } from "../../ui/kit/api";
+import { DESTINATIONS } from "../../ui/kit/destinations";
+import { Frame } from "../../ui/kit/frame";
 import { corePages } from "../../ui/kit/pages/core";
 import { PrivacyState } from "../../ui/kit/privacy";
 import { type PageDef, Shell } from "../../ui/kit/shell";
 import { ThemeState } from "../../ui/kit/theme/state";
-import { KitContext } from "../../ui/kit/ui";
+import { InlineHeads, KitContext } from "../../ui/kit/ui";
 import defaultTheme from "../../ui/themes/default.json";
 import paper from "../../ui/themes/paper.json";
 import terminal from "../../ui/themes/terminal.json";
@@ -22,6 +26,7 @@ import { ConnectionPage } from "./connection";
 import { type DeviceCatalog, type DeviceRegistry, device, newest } from "./device";
 import { DevicePage, devicePage } from "./devicePage";
 import { easyModePage } from "./easyMode";
+import { connectionStatus } from "./frameStatus";
 import { appHost, type Connection, connectionGet, privacyGet, privacySet } from "./host";
 import { launcherPage } from "./launcherPage";
 import { NativeExtensionPage } from "./nativePage";
@@ -41,8 +46,9 @@ function devicePages(catalog?: DeviceCatalog): PageDef[] {
       p.active.pages.map((page) => ({
         id: `device/${p.id}/${page.id}`,
         title: page.title,
-        short: page.short,
-        group: "extensions" as const,
+        dest: "settings" as const,
+        kind: "topic" as const,
+        section: "extensions" as const,
         tip: `${page.title} (on this device)`,
         render: () => (
           <NativeExtensionPage
@@ -147,25 +153,27 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
     return [
       ...corePages({ setup }),
       easyModePage(agents, catalog, loadDevice),
+      clientListPage(clients, installed, saved, visible.length, saveClients),
+      ...visible.flatMap((c) => agents.find((a) => a.id === c.id) ?? []),
       {
         id: "connection",
         title: "Connection",
-        short: "Conn",
-        group: "control",
+        dest: "settings",
+        kind: "topic",
+        section: "device",
         render: () => <ConnectionPage connection={shown} onChange={changed} />,
       },
       {
         id: "versions",
         title: "Version Management",
-        short: "Vers",
-        group: "control",
+        dest: "settings",
+        kind: "topic",
+        section: "device",
         tip: "App and core versions, and release notes",
         render: () => <UpdatesPage />,
       },
       devicePage(loadDevice),
       launcherPage(),
-      clientListPage(clients, installed, saved, visible.length, saveClients),
-      ...visible.flatMap((c) => agents.find((a) => a.id === c.id) ?? []),
       ...devicePages(catalog),
     ];
   }, [conn.mode, shown, catalog, offers, loadDevice, agents, clients, saved, open, saveClients]);
@@ -182,20 +190,28 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
       unauthorized: () => {},
       extensionsChanged: () => {},
     };
+    // The frame with no session: the destinations show what the app holds once it is connected,
+    // and cannot be chosen yet.
     return (
       <KitContext.Provider value={kit}>
-        <div class="shell" data-part="shell">
-          <main class="main" data-part="main">
-            <div class="content stack">
-              <div>
-                <ConnectionPage connection={shown} onChange={changed} />
-              </div>
+        <Frame
+          themes={themes}
+          brand={brand(conn)}
+          destinations={DESTINATIONS.map((id) => ({ id }))}
+          status={connectionStatus(shown)}
+          title="Connection"
+        >
+          <div class="stack">
+            <div>
+              <ConnectionPage connection={shown} onChange={changed} />
+            </div>
+            <InlineHeads>
               <div>
                 <DevicePage onChanged={loadDevice} />
               </div>
-            </div>
-          </main>
-        </div>
+            </InlineHeads>
+          </div>
+        </Frame>
       </KitContext.Provider>
     );
   }
@@ -207,6 +223,7 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
       privacy={privacy}
       pages={pages}
       brand={brand(conn)}
+      status={connectionStatus(shown)}
       extensionPages
       extensionPage={NativeExtensionPage}
     />

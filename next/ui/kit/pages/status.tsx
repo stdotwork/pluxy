@@ -28,7 +28,6 @@ import {
 
 const t = strings("dashboard", {
   title: "Dashboard",
-  short: "Dash",
   tip: "Operations overview",
   refresh: "Refresh",
   updated: "Updated {time}",
@@ -440,9 +439,8 @@ export function StatusPage() {
 
 export const statusPage = (): PageDef => ({
   id: "status",
-  group: "operate",
+  dest: "home",
   title: t("title"),
-  short: t("short"),
   tip: t("tip"),
   render: () => <StatusPage />,
 });

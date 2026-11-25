@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Locator, type Page, test } from "@playwright/test";
-import { goTo, openPanel, signIn, useCore } from "./support";
+import { goTo, goToId, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 async function addAccount(id: string, method = "api_key") {
@@ -28,7 +28,7 @@ async function addAccount(id: string, method = "api_key") {
     .toBe("done");
 }
 async function openAccount(page: Page, id: string) {
-  await page.locator('nav a[href="#/accounts"]').click();
+  await goToId(page, "accounts");
   await expect(page.getByRole("heading", { level: 1, name: "Accounts" })).toBeVisible();
   await page.getByRole("button", { name: id, exact: true }).click();
   return page.getByRole("complementary", { name: `Details: ${id}`, exact: true });
@@ -86,7 +86,7 @@ test("account health, cooldown reset, models and a paid test", async ({ page }) 
   const shots = process.env.ACCOUNT_DETAIL_SHOTS;
   if (shots) mkdirSync(shots, { recursive: true });
   for (const theme of ["default", "terminal"]) {
-    await page.locator('nav a[href="#/themes"]').click();
+    await goToId(page, "themes");
     await page
       .getByRole("radiogroup", { name: "Theme" })
       .getByRole("radio", { name: theme, exact: false })

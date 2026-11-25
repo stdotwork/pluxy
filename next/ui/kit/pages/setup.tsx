@@ -57,7 +57,6 @@ import {
 
 const t = strings("setup", {
   title: "Set up pluxy",
-  short: "Setup",
   tip: "What pluxy found, and what is still missing",
   introFirst: "pluxy looks at this machine and offers what fits.",
   introUntilStart: "Nothing is installed until you press Start, and nothing on this page is required.",
@@ -208,7 +207,7 @@ const t = strings("setup", {
   finishTitle: "Finish",
   finish: "Finish",
   finishHint:
-    "This ends setup and opens the Dashboard. You can come back to this page at any time: it stays in the navigation.",
+    "This ends setup and opens the Dashboard. You can come back to this page at any time: it stays under Settings.",
 });
 
 /** A button that copies text, and says so. */
@@ -1167,9 +1166,9 @@ export function SetupView(props: {
 
 export const setupPage = (options?: SetupOptions): PageDef => ({
   id: "setup",
-  group: "control",
+  dest: "settings",
+  kind: "topic",
   title: t("title"),
-  short: t("short"),
   tip: t("tip"),
   render: () => <SetupPage options={options} />,
 });

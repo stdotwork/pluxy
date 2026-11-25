@@ -24,7 +24,6 @@ import { ConfigDialog } from "./configDialog";
 
 const t = strings("accounts", {
   title: "Accounts",
-  short: "Accts",
   tip: "Auth files & credentials",
   refresh: "Refresh",
   empty: "No accounts yet. Sign in to one on {page}, or set them in core's config.",
@@ -346,7 +345,14 @@ export function AccountsPage() {
 
   return (
     <>
-      <PageHead title={t("title")} />
+      <PageHead
+        title={t("title")}
+        actions={
+          <a class="btn" data-part="button" data-variant="primary" href="#/add-account">
+            {t("addAccount")}
+          </a>
+        }
+      />
       <p class="muted accounts-meta" data-part="account-meta">
         {accounts.data
           ? t("meta", {
@@ -632,9 +638,9 @@ export function AccountsPage() {
 
 export const accountsPage = (): PageDef => ({
   id: "accounts",
-  group: "gateway",
+  dest: "accounts",
+  kind: "tab",
   title: t("title"),
-  short: t("short"),
   tip: t("tip"),
   render: () => <AccountsPage />,
 });

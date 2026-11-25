@@ -288,9 +288,9 @@ export function ConfigPage() {
 }
 export const configPage = (): PageDef => ({
   id: "config",
-  group: "control",
+  dest: "settings",
+  kind: "topic",
   title: t("title"),
-  short: t("short"),
   tip: t("tip"),
   render: () => <ConfigPage />,
 });

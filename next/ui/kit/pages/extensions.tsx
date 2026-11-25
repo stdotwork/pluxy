@@ -24,7 +24,6 @@ import {
 
 const t = strings("extensions", {
   title: "Extensions",
-  short: "Ext",
   state: "State",
   version: "Version",
   registry: "Registry",
@@ -264,8 +263,8 @@ export function ExtensionsPage() {
 
 export const extensionsPage = (): PageDef => ({
   id: "extensions",
-  group: "control",
+  dest: "settings",
+  kind: "topic",
   title: t("title"),
-  short: t("short"),
   render: () => <ExtensionsPage />,
 });

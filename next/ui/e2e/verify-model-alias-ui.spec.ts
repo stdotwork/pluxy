@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
-import { openPanel, signIn, useCore } from "./support";
+import { goToId, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 const id = "verify-alias";
@@ -25,7 +25,7 @@ async function addAccount() {
 }
 
 async function openAccount(page: Page) {
-  await page.locator('nav a[href="#/accounts"]').click();
+  await goToId(page, "accounts");
   await expect(page.getByRole("heading", { level: 1, name: "Accounts" })).toBeVisible();
   await page.getByRole("button", { name: id, exact: true }).click();
   return page.getByRole("complementary", { name: `Details: ${id}`, exact: true });

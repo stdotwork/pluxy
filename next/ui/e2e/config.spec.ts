@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { CoreSettings } from "../kit/api/settings";
-import { goTo, nav, openPanel, signIn, useCore } from "./support";
+import { goTo, goToId, openPanel, signIn, topics, useCore } from "./support";
 
 const core = useCore();
 test("config settings, exact source diff, revision and concurrent edit protection", async ({ page }) => {
@@ -49,7 +49,7 @@ test("config settings, exact source diff, revision and concurrent edit protectio
   const revision = (await core.mgmt<{ active: { revision: number } }>("GET", "/status")).body.active.revision;
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Configuration saved.", { exact: true })).toBeVisible();
-  await nav(page).getByRole("link", { name: "Dashboard" }).click();
+  await goTo(page, "Dashboard");
   await expect(page.locator(".facts > div").filter({ hasText: "Active revision" }).locator("dd")).toHaveText(
     String(revision + 1),
   );
@@ -71,7 +71,8 @@ test("config settings, exact source diff, revision and concurrent edit protectio
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("pluxy did not save");
   await expect(editor).toHaveValue(draft);
-  await nav(page).getByRole("link", { name: "Themes" }).click();
+  // Leaving with unsaved changes: the topic's link asks first.
+  await topics(page).getByRole("link", { name: "Themes", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Unsaved changes" })).toBeVisible();
   await page.getByRole("button", { name: "Stay", exact: true }).click();
   await expect(editor).toHaveValue(draft);
@@ -90,7 +91,7 @@ for (const theme of ["default", "terminal", "paper"]) {
     }, theme);
     await openPanel(page, core);
     await signIn(page, core);
-    await nav(page).locator('a[href="#/config"]').click();
+    await goToId(page, "config");
     await expect(page.getByRole("heading", { level: 1, name: /Config Panel$/ })).toBeVisible();
     for (const tab of ["Common", "Network", "Logging", "Advanced", "Source"]) {
       await page.getByRole("tab", { name: tab, exact: true }).click();
@@ -140,7 +141,7 @@ for (const theme of ["default", "terminal", "paper"]) {
     await reloadDialog.getByRole("button", { name: "Reload", exact: true }).click();
     await expect(editor).toHaveValue(original);
     await editor.fill(changed);
-    await nav(page).locator('a[href="#/themes"]').click();
+    await topics(page).getByRole("link", { name: "Themes", exact: true }).click();
     await page.getByRole("button", { name: "Leave", exact: true }).click();
     await expect(page.getByRole("heading", { name: /Themes$/, level: 1 })).toBeVisible();
   });

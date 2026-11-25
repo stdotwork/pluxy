@@ -30,7 +30,6 @@ import { selectionFor, type Where } from "./piForm";
 
 const t = strings("pi", {
   title: "Pi",
-  short: "Pi",
   tip: "Set up and start Pi with this core",
   intro:
     "Installs pluxy's Pi plugin, writes core's address and a client key to cliproxyapi.json, and sets Pi's default model. All write actions ask for confirmation and keep other settings. Restart Pi afterward.",
@@ -434,9 +433,9 @@ export function PiPage() {
 export const piPage = (): AgentPage => ({
   id: "pi",
   package: PACKAGE,
-  group: "control",
+  dest: "tools",
+  kind: "topic",
   title: t("title"),
-  short: t("short"),
   tip: t("tip"),
   render: () => <PiPage />,
 });

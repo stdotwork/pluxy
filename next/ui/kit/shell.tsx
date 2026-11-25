@@ -1,15 +1,21 @@
-// The kit's shell: signing in, navigation and the page area, laid out by the theme's layout
-// options. A host build passes the pages it offers; the shell knows nothing else about them.
+// The kit's shell: signing in, and the pages shown in the application frame (frame.tsx), laid out
+// by the theme's layout options. A host build passes the pages it offers and what the status
+// block says; the shell knows nothing else about them.
 
 import type { VNode } from "preact";
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { api } from "./api";
+import { DESTINATIONS, destinationHome, type PageDef, place } from "./destinations";
 import { ExtensionPage, type ExtensionPageProps } from "./extensions/page";
+import { destinationLabel, Frame, type FrameLink, type FrameStatus } from "./frame";
 import type { Host, Reply } from "./host";
+import { Icon } from "./icons";
 import { PrivacyContext, type PrivacyState, privacyMasks } from "./privacy";
 import { strings } from "./strings";
 import type { ThemeState } from "./theme/state";
 import { Button, type Kit, KitContext, Notice } from "./ui";
+
+export type { Destination, PageDef, TopicSection } from "./destinations";
 
 const t = strings("shell", {
   signInHint: "Sign in with the management key from core's config.",
@@ -17,48 +23,13 @@ const t = strings("shell", {
   remember: "Remember on this device",
   signIn: "Sign in",
   refused: "Core refused the management key. Sign in again.",
-  navigation: "Main",
-  skip: "Skip to main content",
   signOut: "Sign out",
-  signOutShort: "Out",
   safeAddress: "If custom CSS hides the panel, add ?safe to the URL to disable it.",
   privacy: "Privacy mode",
-  privacyShort: "Priv",
+  privacyOn: "Privacy on",
   privacyEnable: "Turn on privacy mode to hide account emails and identifiers",
   privacyDisable: "Turn off privacy mode to show full account details",
-  "group.operate": "Operate",
-  "group.gateway": "Gateway",
-  "group.observe": "Observe",
-  "group.control": "Control",
-  "group.extensions": "Extension pages",
 });
-
-/**
- * The navigation's groups, in the order it shows them; a group that holds no page is not shown.
- * Extension pages are always in "extensions".
- */
-export const PAGE_GROUPS = ["operate", "gateway", "observe", "control", "extensions"] as const;
-export type PageGroup = (typeof PAGE_GROUPS)[number];
-
-/**
- * A page in the navigation. Extension pages are pages too: their render mounts the extension's
- * isolated document, so the shell and the theme hooks treat them like any other.
- */
-export interface PageDef {
-  /**
-   * Stable ID: the address is #/<id>, and the root element carries data-page="<id>". An
-   * extension page's ID is ext/<publisher>/<name>/<page>.
-   */
-  id: string;
-  title: string;
-  /** A label of up to about six characters, for the rail navigation. */
-  short: string;
-  /** The navigation group the page is listed in. */
-  group: PageGroup;
-  /** The navigation entry's tooltip, a few words on what the page is for. Default: the title. */
-  tip?: string;
-  render: () => VNode;
-}
 
 /**
  * Asked before the shell follows a change of the address's hash to another page: it returns true
@@ -120,8 +91,9 @@ function useExtensionPages(on: boolean, kit: Kit, version: number, View: Extensi
           ext.pages.map((page) => ({
             id: `ext/${ext.id}/${page.id}`,
             title: page.title,
-            short: page.short,
-            group: "extensions" as const,
+            dest: "settings" as const,
+            kind: "topic" as const,
+            section: "extensions" as const,
             render: () => (
               <View ext={ext} page={page} pagesOrigin={ui.pages_origin} pagesError={ui.pages_error} />
             ),
@@ -211,6 +183,8 @@ export function Shell(props: {
    * sign-in page says so, where custom CSS applies too.
    */
   safeAddress?: boolean;
+  /** What the status block at the navigation's foot says: where pluxy runs, and its state. */
+  status?: FrameStatus;
 }) {
   const { host, themes, privacy } = props;
   const privacyOn = usePrivacyOn(privacy);
@@ -283,53 +257,18 @@ export function Shell(props: {
     return () => window.removeEventListener("hashchange", onHash);
   }, [pages]);
 
-  // A change of page opens the new page at its top: the window keeps its scroll position from one
-  // page to the next. A change inside a page (a tab or a filter in the address) keeps it.
-  // useLayoutEffect resets the scroll synchronously on commit, before paint and before any
-  // interaction with the new page can race with a deferred effect.
-  const shownPage = useRef(page);
-  useLayoutEffect(() => {
-    if (shownPage.current === page) return;
-    shownPage.current = page;
-    window.scrollTo(0, 0);
-  }, [page]);
-
   const active = pages.find((p) => p.id === page);
-  const navId = useId();
-  // Laid out as a bar (the theme's top navigation, or any navigation in a narrow window), the
-  // navigation scrolls sideways when it is wider than the window: the current page's entry is
-  // brought into view when the page opens, and when the entries or the bar's size change.
-  const navRef = useRef<HTMLElement>(null);
-  useEffect(() => {
-    const bar = navRef.current;
-    if (!bar) return;
-    const show = () => {
-      const entry = bar.querySelector('[aria-current="page"]');
-      if (!entry || bar.scrollWidth <= bar.clientWidth) return;
-      const b = bar.getBoundingClientRect();
-      const e = entry.getBoundingClientRect();
-      // Past the entry by a little, so the cue at the bar's edge does not cover it.
-      const margin = 24;
-      if (e.left < b.left + margin) bar.scrollLeft -= b.left + margin - e.left;
-      else if (e.right > b.right - margin) bar.scrollLeft += e.right - (b.right - margin);
-    };
-    show();
-    if (typeof ResizeObserver === "undefined") return;
-    const sizes = new ResizeObserver(show);
-    sizes.observe(bar);
-    return () => sizes.disconnect();
-  }, [page, signedIn, pages]);
-  const title = active && signedIn ? `${active.title} · ${props.brand ?? "pluxy"}` : (props.brand ?? "pluxy");
+  const brand = props.brand ?? "pluxy";
+  const title = active && signedIn ? `${active.title} · ${brand}` : brand;
   useEffect(() => {
     document.documentElement.dataset.page = signedIn ? page : "signin";
     document.title = title;
   }, [page, signedIn, title]);
 
-  // After a change of page, focus moves to the new page's heading (the main area when the page
-  // has none, as an extension page's frame does), and the new title goes to a live region, so a
-  // keyboard or screen reader user is told where they are. Opening the panel on a page is not a
-  // change: nothing takes focus then.
-  const mainRef = useRef<HTMLElement>(null);
+  // After a change of page, focus moves to the new page's heading in the header strip, and the
+  // new title goes to a live region, so a keyboard or screen reader user is told where they are.
+  // Opening the panel on a page is not a change: nothing takes focus then.
+  const rootRef = useRef<HTMLDivElement>(null);
   const [announced, setAnnounced] = useState("");
   const announcedPage = useRef<string | undefined>(undefined);
   useEffect(() => {
@@ -337,12 +276,19 @@ export function Shell(props: {
     const changed = announcedPage.current !== page;
     announcedPage.current = page;
     if (!signedIn || first || !changed) return;
-    const heading = mainRef.current?.querySelector<HTMLElement>("h1");
-    // A heading takes focus from script only with a tabindex.
-    heading?.setAttribute("tabindex", "-1");
-    (heading ?? mainRef.current)?.focus({ preventScroll: true });
+    rootRef.current?.querySelector<HTMLElement>("h1")?.focus({ preventScroll: true });
     setAnnounced(title);
   }, [page, signedIn, title]);
+
+  const placed = useMemo(() => place(pages, page), [pages, page]);
+  const destinations = useMemo(
+    () =>
+      DESTINATIONS.flatMap((id) => {
+        const home = destinationHome(pages, id);
+        return home ? [{ id, href: `#/${home.id}` }] : [];
+      }),
+    [pages],
+  );
 
   if (!signedIn) {
     return (
@@ -360,102 +306,70 @@ export function Shell(props: {
     );
   }
 
+  const link = (p: PageDef): FrameLink => ({
+    label: p.label ?? p.title,
+    href: `#/${p.id}`,
+    current: p.id === placed?.current,
+    tip: p.tip,
+  });
+  // The way back names a destination's first page as the navigation does: "Tools", not the
+  // page's own title.
+  const above = (placed?.above ?? []).map((p) => ({
+    label: destinationHome(pages, p.dest) === p ? destinationLabel(p.dest) : (p.label ?? p.title),
+    href: `#/${p.id}`,
+  }));
+
   return (
     <KitContext.Provider value={kit}>
       <PrivacyContext.Provider value={masks}>
-        <div class="shell" data-part="shell">
-          <a
-            class="skip-link"
-            href={`#/${page}`}
-            onClick={(e) => {
-              // Not a jump to an element ID: the address's hash names the page.
-              e.preventDefault();
-              mainRef.current?.focus();
-            }}
-          >
-            {t("skip")}
-          </a>
-          <nav class="nav" data-part="nav" data-slot="sidebar" aria-label={t("navigation")} ref={navRef}>
-            <a class="brand" href={`#/${pages[0]?.id ?? ""}`}>
-              {props.brand ?? "pluxy"}
-            </a>
-            {PAGE_GROUPS.map((group) => {
-              const listed = pages.filter((p) => p.group === group);
-              if (listed.length === 0) return null;
-              const label = `${navId}-${group}`;
-              return (
-                // biome-ignore lint/a11y/useSemanticElements: a fieldset groups form controls; this groups links
-                <div
-                  key={group}
-                  class="nav-group"
-                  data-part="nav-group"
-                  data-group={group}
-                  role="group"
-                  aria-labelledby={label}
-                >
-                  <span class="nav-group-label" id={label}>
-                    {t(`group.${group}`)}
-                  </span>
-                  <ul>
-                    {listed.map((p) => (
-                      <li key={p.id}>
-                        <a
-                          href={`#/${p.id}`}
-                          class="nav-item"
-                          data-part="nav-item"
-                          aria-current={p.id === page ? "page" : undefined}
-                          title={p.tip ?? p.title}
-                        >
-                          <span class="full">{p.title}</span>
-                          <span class="short" aria-hidden="true">
-                            {p.short}
-                          </span>
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              );
-            })}
-            <button
-              type="button"
-              class="nav-item privacy"
-              data-part="privacy-toggle"
-              aria-pressed={privacyOn}
-              aria-label={t("privacy")}
-              title={t(privacyOn ? "privacyDisable" : "privacyEnable")}
-              onClick={() => privacy.set(!privacyOn)}
-            >
-              <span class="full">{t("privacy")}</span>
-              <span class="short" aria-hidden="true">
-                {t("privacyShort")}
-              </span>
-            </button>
-            {host.features.has("signOut") && (
+        <Frame
+          themes={themes}
+          brand={brand}
+          home={`#/${pages[0]?.id ?? ""}`}
+          destinations={destinations}
+          current={placed?.dest}
+          status={props.status}
+          title={active?.title ?? ""}
+          above={above}
+          tabs={placed?.tabs.map(link)}
+          topics={placed?.topics.map((g) => ({ section: g.section, links: g.pages.map(link) }))}
+          page={page}
+          rootRef={rootRef}
+          announced={announced}
+          headerEnd={
+            <>
               <button
                 type="button"
-                class="nav-item signout"
-                aria-label={t("signOut")}
-                title={t("signOut")}
-                onClick={() => {
-                  host.signOut();
-                  setSignedIn(false);
-                }}
+                class="strip-button privacy"
+                data-part="privacy-toggle"
+                aria-pressed={privacyOn}
+                aria-label={t("privacy")}
+                title={t(privacyOn ? "privacyDisable" : "privacyEnable")}
+                onClick={() => privacy.set(!privacyOn)}
               >
-                <span class="full">{t("signOut")}</span>
-                <span class="short" aria-hidden="true">
-                  {t("signOutShort")}
-                </span>
+                <Icon name={privacyOn ? "eyeOff" : "eye"} />
+                {privacyOn && <span aria-hidden="true">{t("privacyOn")}</span>}
               </button>
-            )}
-          </nav>
-          <main class="main" data-part="main" tabIndex={-1} ref={mainRef}>
-            <div class="content">{active?.render()}</div>
-          </main>
-          <div class="sr-only" data-part="page-announcer" aria-live="polite" aria-atomic="true">
-            {announced}
-          </div>
-        </div>
+              {host.features.has("signOut") && (
+                <button
+                  type="button"
+                  class="strip-button signout"
+                  data-part="sign-out"
+                  aria-label={t("signOut")}
+                  title={t("signOut")}
+                  onClick={() => {
+                    host.signOut();
+                    setSignedIn(false);
+                  }}
+                >
+                  <Icon name="signOut" />
+                </button>
+              )}
+            </>
+          }
+        >
+          {active?.render()}
+        </Frame>
       </PrivacyContext.Provider>
     </KitContext.Provider>
   );
