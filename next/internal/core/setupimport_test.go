@@ -60,7 +60,7 @@ func TestSetupImport(t *testing.T) {
 	cpa := t.TempDir()
 	auths := filepath.Join(cpa, "auths")
 	writeTestFile(t, filepath.Join(auths, "claude-a.json"), `{"type": "claude", "access_token": "fake-claude"}`)
-	writeTestFile(t, filepath.Join(auths, "antigravity-a.json"), `{"type": "antigravity", "access_token": "fake-ag"}`)
+	writeTestFile(t, filepath.Join(auths, "antigravity-a.json"), `{"type": "antigravity", "access_token": "fake-ag", "refresh_token": "fake-ag-refresh", "project_id": "fake-project"}`)
 	// The name makes the ID of the config's own claude-api-key account: a collision.
 	writeTestFile(t, filepath.Join(auths, "claude-api-key-1.json"), `{"type": "claude", "access_token": "fake-collide"}`)
 	writeTestFile(t, filepath.Join(cpa, "config.yaml"), `
@@ -111,6 +111,7 @@ claude-api-key:
 				{What: "api-keys", As: "1 client key"},
 				{What: "claude-api-key[0]", As: "pluxy/claude account claude-api-key-1"},
 				{What: "auth-dir", Why: "the folder is not kept: core keeps no auth folder, so a later import needs --auth-dir again"},
+				{What: "auth file", Name: "antigravity-a.json", As: "pluxy/antigravity account antigravity-a"},
 				{What: "auth file", Name: "claude-a.json", As: "pluxy/claude account claude-a"},
 			},
 			"changed": {
@@ -120,7 +121,6 @@ claude-api-key:
 			"not_brought": {
 				{What: "remote-management.secret-key", Why: managementKeyWhy},
 				{What: "debug", Why: "this core writes no debug-level log lines"},
-				{What: "auth file", Name: "antigravity-a.json", Why: "pluxy no longer ships the Antigravity provider"},
 				{What: "auth file", Name: "claude-api-key-1.json", Why: `the config already has an account "claude-api-key-1"`},
 			},
 		}
@@ -133,12 +133,17 @@ claude-api-key:
 				t.Errorf("%s:\ngot  %+v\nwant %+v", list, got, want[list])
 			}
 		}
-		if len(rep.Needs) != 1 || rep.Needs[0].Pick != "pluxy/claude" || rep.Needs[0].Why != "2 accounts need it" {
-			t.Errorf("needs %+v", rep.Needs)
+		// The archived Antigravity extension is not in any registry: its row says to build it.
+		wantNeeds := []management.ImportNeed{
+			{Pick: "pluxy/antigravity", Why: "1 account needs it, and pluxy does not ship it: build and install it by hand from next/archive/antigravity (its README says how)"},
+			{Pick: "pluxy/claude", Why: "2 accounts need it"},
+		}
+		if !reflect.DeepEqual(rep.Needs, wantNeeds) {
+			t.Errorf("needs:\ngot  %+v\nwant %+v", rep.Needs, wantNeeds)
 		}
 	}
 	check(rep)
-	if strings.Contains(body, "$2a$") || strings.Contains(body, "fake-claude") || strings.Contains(body, "fake-cpa-client-key") {
+	if strings.Contains(body, "$2a$") || strings.Contains(body, "fake-claude") || strings.Contains(body, "fake-ag") || strings.Contains(body, "fake-cpa-client-key") {
 		t.Errorf("the report holds a secret: %s", body)
 	}
 
@@ -164,7 +169,7 @@ claude-api-key:
 	for _, r := range c.creds.Records() {
 		ids[r.ID] = true
 	}
-	if !ids["claude-api-key-1"] || !ids["claude-a"] || ids["antigravity-a"] {
+	if !ids["claude-api-key-1"] || !ids["claude-a"] || !ids["antigravity-a"] {
 		t.Errorf("accounts %v", ids)
 	}
 

@@ -557,7 +557,7 @@ func TestAuthFolderRows(t *testing.T) {
 		"xai-a.json":         "0 pluxy/xai",
 		"meta-a.json":        "0 pluxy/meta",
 		"devin-a.json":       "0 pluxy/devin",
-		"antigravity-a.json": "2  | pluxy no longer ships the Antigravity provider",
+		"antigravity-a.json": "0 pluxy/antigravity account antigravity-a",
 		"gemini-a.json":      "2  | today's core does not load it either",
 		"notype.json":        "2  | today's core does not load it either",
 		"qwen-a.json":        "2  | its type is not one the import takes",

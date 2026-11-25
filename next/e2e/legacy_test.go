@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -339,7 +340,7 @@ openai-compatibility:
 		Brought    []row
 		Changed    []row
 		NotBrought []row `json:"not_brought"`
-		Needs      []any
+		Needs      []struct{ Pick, Why string }
 	}
 	if err := json.Unmarshal([]byte(r.stdout), &rep); err != nil || rep.DryRun {
 		t.Fatalf("import reply: %v %s", err, r)
@@ -356,8 +357,15 @@ openai-compatibility:
 	if h := find(rep.Changed, "server.host", ""); h == nil || !strings.HasPrefix(h.To, "127.0.0.1:") || !strings.Contains(h.Why, "core keeps listening on "+h.To) || !strings.Contains(h.KeepWith, "0.0.0.0:8317") {
 		t.Errorf("server.host row %+v", h)
 	}
-	if a := find(rep.NotBrought, "auth file", "antigravity-user@example.com.json"); a == nil || !strings.Contains(a.Why, "Antigravity") {
+	// The archived Antigravity extension is not installed here: the account comes across, and the
+	// import says it is not shipped.
+	if a := find(rep.Brought, "auth file", "antigravity-user@example.com.json"); a == nil || a.As != "pluxy/antigravity account antigravity-user-example.com" {
 		t.Errorf("antigravity row %+v", a)
+	}
+	if !slices.ContainsFunc(rep.Needs, func(n struct{ Pick, Why string }) bool {
+		return n.Pick == "pluxy/antigravity" && strings.Contains(n.Why, "next/archive/antigravity")
+	}) {
+		t.Errorf("needs %+v do not name the Antigravity extension and where it is built", rep.Needs)
 	}
 	if g := find(rep.NotBrought, "auth file", "gemini-old.json"); g == nil {
 		t.Error("gemini-old.json is not under not_brought")
@@ -445,14 +453,12 @@ openai-compatibility:
 	for _, a := range accounts.Accounts {
 		have[a.ID] = a.Source + " " + a.Kind + " " + strconv.FormatBool(a.Disabled)
 	}
-	if _, ok := have["antigravity-user-example.com"]; ok {
-		t.Errorf("antigravity account was imported: %v", have["antigravity-user-example.com"])
-	}
 	for id, want := range map[string]string{
 		"local":                                "config api_key false",
 		"kimi-1700000000000":                   "login oauth false",
 		"codex-ab12cd34-user-example.com-plus": "login oauth false",
 		"claude-user-example.com":              "login oauth true",
+		"antigravity-user-example.com":         "login oauth false",
 		"xai-grok-example.com":                 "login oauth false",
 		"meta-muse":                            "login oauth false",
 		"devin-user":                           "login api_key false",

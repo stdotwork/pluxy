@@ -85,6 +85,7 @@ var DefaultImportOptions = ImportOptions{CodexIdentity: true, ImageGenerationToo
 
 // Package IDs of the extensions today's provider sections and auth files map to.
 const (
+	Antigravity      = "pluxy/antigravity" // archived: not shipped, built by hand (next/archive/antigravity)
 	Codex            = "pluxy/codex"
 	Claude           = "pluxy/claude"
 	Gemini           = "pluxy/gemini"
@@ -99,7 +100,7 @@ const (
 // the package whose accounts added by login they apply to (core/sdk/cliproxy/auth
 // OAuthModelAliasChannel); a channel without one has no extension here.
 var channels = map[string]string{
-	"codex": Codex, "claude": Claude, "vertex": Gemini, "kimi": Kimi, "kimi-ai": Kimi, "kimi.ai": Kimi,
+	"codex": Codex, "claude": Claude, "antigravity": Antigravity, "vertex": Gemini, "kimi": Kimi, "kimi-ai": Kimi, "kimi.ai": Kimi,
 	"kimi.com": Kimi, "xai": XAI, "meta": Meta, "devin": Devin,
 }
 
@@ -297,7 +298,7 @@ var rules = map[string]rule{
 	"oauth.providers.aistudio.ws-auth":                     {dropped, "the AI Studio relay needs a long-lived listener the extension protocol does not have"},
 	"oauth.providers.codex.live-media-relay":               {dropped, "realtime and WebRTC are out of scope"},
 	"oauth.providers.codex.signin-with-chatgpt-identifier": {supported, ""}, // reported in options
-	"oauth.providers.antigravity":                          {dropped, "pluxy no longer ships the Antigravity provider"},
+	"oauth.providers.antigravity":                          {dropped, "the Antigravity extension does not read these settings"},
 	"oauth.providers.devin":                                {dropped, "rewriting words to get past a content filter is out of scope"},
 
 	"multimedia.disable-image-generation":                     {supported, ""},
