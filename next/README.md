@@ -2014,8 +2014,8 @@ OpenCode sends one as `x-opencode-session` and the Codex CLI as `session-id`:
 Core fills in such a value on the traffic of each client request: model requests and their
 streams, token counts, endpoint calls, and a WebSocket session, whose client request is the
 client's handshake. It takes the first value of the client's header of that name, letter case
-aside, and leaves the header out when the client did not send it or sent it empty, so the
-extension's own value for that name stays. Traffic that serves no client request (token
+aside, and leaves the header out when the client did not send it, sent it blank or with a
+control character other than a tab, so the extension's own value for that name stays. Traffic that serves no client request (token
 renewals, logins, model lists, checks and quota reads) leaves every copied header out. Only the
 headers an account names this way leave core. A copy of `Authorization`, `Proxy-Authorization`,
 `X-Api-Key`, `X-Goog-Api-Key` or `Cookie` fails the load, since they hold the client's key for
@@ -3058,7 +3058,7 @@ are accepted silently.
 | `oauth.providers.codex.signin-with-chatgpt-identifier` (`codex.signin-with-chatgpt-identifier`) | `signin_with_chatgpt_identifier` on the Sign in with ChatGPT (SIWC) accounts `pluxy import cpa` adds. Left unset, they use the extension's default, `pluxy`. | Supported when importing |
 | `oauth.providers.devin.*` (`devin`) | Only `sensitive-words`. | Dropped: rewriting words to get past a content filter is out of scope |
 | `api-keys.meta` (`meta-api-key`) | | Dropped: the login is built; no need for a bare key |
-| Every `headers` on a group or key | The account's [`headers`](#upstream-headers): a key's own, else its group's (a key's `headers: {}` sends none), and an `openai-compatibility` group's for all its keys. Names and values are trimmed and empty ones dropped, as in today's core. A value that copies a header from the client's request (`$` and a header name) comes across as `$` and that name, without the spaces today's core allows after the `$`; one with no header name after the `$`, which today's core never sends, is dropped. A copy of `Authorization`, `Proxy-Authorization`, `X-Api-Key`, `X-Goog-Api-Key` or `Cookie`, which today's core sends on and this core never does, and a value that holds `$CPA-SESSION-ID` are named in the log and not imported. A header this core refuses (`Host`, `Content-Length`, `Transfer-Encoding`, `Connection`) fails the load, where today's core sends it. | Supported |
+| Every `headers` on a group or key | The account's [`headers`](#upstream-headers): a key's own, else its group's (a key's `headers: {}` sends none), and an `openai-compatibility` group's for all its keys. Names and values are trimmed and empty ones dropped, as in today's core. A value that copies a header from the client's request (`$` and a header name) comes across as `$` and that name, without the spaces today's core allows after the `$`; one whose rest is not a header name (such as `$` alone or `$5/mo`), which today's core never sends, is dropped. A copy of `Authorization`, `Proxy-Authorization`, `X-Api-Key`, `X-Goog-Api-Key` or `Cookie`, which today's core sends on and this core never does, and a value that holds `$CPA-SESSION-ID` are named in the log and not imported. A header this core refuses (`Host`, `Content-Length`, `Transfer-Encoding`, `Connection`) fails the load, where today's core sends it. | Supported |
 | Every `connection-pool` | | Dropped: extensions own their connections |
 | Every `disable-cooling` on a group or key | The account's `disable_cooling`. | Supported |
 | Every `request-retry` on a group or key | The account's `request_retry`: a key's own, else its group's (an `openai-compatibility` group's for all its keys, which have none of their own there). A negative one inherits `routing.retry.request-retry`, as in today's core. | Supported |
