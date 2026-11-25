@@ -337,7 +337,8 @@ describe("resolving", () => {
       "color-mix(in srgb, var(--px-color-text-muted) 70%, var(--px-color-surface))",
     );
     expect(plain["color.code-bg"]).toBe("var(--px-color-surface-raised)");
-    expect(plain["color.danger-surface"]).toBe("color-mix(in srgb, var(--px-color-danger) 8%, transparent)");
+    // A notice is a bar, not a tinted box, unless a theme sets its background.
+    expect(plain["color.danger-surface"]).toBe("transparent");
     const set = resolve(ok({ ...base, tokens: { "color.nav": "#102030" } }).theme, DEFAULT_CHOICES, env);
     expect(set.tokens["color.nav"]).toBe("#102030");
     expect(tokensCss(set.tokens)).toContain("--px-color-nav:#102030;");

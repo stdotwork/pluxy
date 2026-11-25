@@ -3,8 +3,6 @@
     display: block;
     font-size: var(--px-font-size-small);
     color: var(--px-color-text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
   }
   .hero {
     grid-template-columns: repeat(auto-fit, minmax(14em, 1fr));

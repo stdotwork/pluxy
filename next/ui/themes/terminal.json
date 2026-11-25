@@ -21,6 +21,7 @@
     "color.diff-remove": "#ff7b72",
     "color.nav": "var(--px-color-surface)",
     "color.input-border": "var(--px-color-border)",
+    "color.nav-selected": "color-mix(in srgb, var(--px-color-accent) 14%, transparent)",
     "font.body": "ui-monospace, \"SF Mono\", Menlo, Consolas, monospace",
     "font.mono": "ui-monospace, \"SF Mono\", Menlo, Consolas, monospace",
     "font.size": "13px",
