@@ -181,3 +181,44 @@ func TestImportLamplighterDefaultsAndOff(t *testing.T) {
 		}
 	}
 }
+
+func TestImportLamplighterOddShapes(t *testing.T) {
+	doc := `access:
+  api-keys: [k]
+plugins:
+  enabled: true
+  configs:
+    lamplighter:
+      enabled: true
+      ignition: {}
+      providers:
+        Claude: {ignite: false}
+        claude: {model: claude-haiku-5-5}
+        codex: false
+        antigravity:
+          ignite: true
+          models: {"Claude / GPT": gpt-oss-120b-medium}
+`
+	res, err := ImportConfig([]byte(doc), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(res.Config["routing"].(map[string]any)["ignition"])
+	// claude is the key the plugin reads; codex: false keeps codex's defaults (on); antigravity
+	// starts its default group only, so the model set for another group goes nowhere.
+	want := `{"enabled":true,"extensions":{"pluxy/antigravity":{"enabled":true,"windows":{"gemini_models_five_hour":""}},"pluxy/claude":{"enabled":true,"model":"claude-haiku-5-5"},"pluxy/codex":{"enabled":true}}}`
+	if string(b) != want {
+		t.Fatalf("routing.ignition = %s\nwant %s", b, want)
+	}
+	rows := rowsOf(t, res)
+	for what, want := range map[string]string{
+		"plugins.configs.lamplighter.providers.Claude.ignite":                   "the file sets providers.claude too",
+		"plugins.configs.lamplighter.providers.codex":                           "the plugin's defaults apply",
+		"plugins.configs.lamplighter.ignition":                                  "the plugin's defaults apply",
+		"plugins.configs.lamplighter.providers.antigravity.models.Claude / GPT": "groups does not name it",
+	} {
+		if r := rows[what]; r[0] != "not brought" || !strings.Contains(r[1], want) {
+			t.Errorf("%s: %v, want not brought: %s", what, r, want)
+		}
+	}
+}

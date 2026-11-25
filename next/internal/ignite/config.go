@@ -208,24 +208,45 @@ func (c *Config) span(t time.Time) (start, end time.Time, all bool) {
 	loc := t.Location()
 	y, m, d := t.Date()
 	sh, eh, g := c.startHour(), c.endHour(), c.endGrace()
+	// Whether the hours are the whole day is a matter of the clock's hours, not of a day's
+	// length, which a change to or from daylight saving time makes 23 or 25 hours.
+	hours := eh - sh
+	if hours <= 0 {
+		hours += 24
+	}
+	if time.Duration(hours)*time.Hour+g >= day {
+		return t, t, true
+	}
 	for dd := -1; dd <= 1; dd++ {
-		s := time.Date(y, m, d+dd, sh, 0, 0, 0, loc)
+		s := clock(y, m, d+dd, sh, loc)
 		// An end hour not after the start hour is the next day's: 22 to 6 runs over midnight,
 		// and 7 to 7 all day.
 		over := 0
 		if eh <= sh {
 			over = 1
 		}
-		e := time.Date(y, m, d+dd+over, eh, 0, 0, 0, loc).Add(g)
-		if e.Sub(s) >= day {
-			return s, e, true
-		}
+		e := clock(y, m, d+dd+over, eh, loc).Add(g)
 		if !t.Before(s) && t.Before(e) || t.Before(s) {
 			return s, e, false
 		}
 	}
 	// Not reached: the next day's range starts after t.
 	return t, t, true
+}
+
+// clock returns when the clock in loc first shows hour:00 on the day: on a day the clocks go
+// forward over that hour, the moment they jump to (02:00 becomes 03:00); on a day they go back
+// over it, the first of its two times.
+func clock(y int, m time.Month, d, hour int, loc *time.Location) time.Time {
+	t := time.Date(y, m, d, hour, 0, 0, 0, loc)
+	if t.Hour() != hour {
+		// The hour does not exist: time.Date gave a time an hour off it; the jump is at hour+1.
+		return time.Date(y, m, d, hour+1, 0, 0, 0, loc)
+	}
+	if u := t.Add(-time.Hour); u.Hour() == hour && u.Minute() == 0 {
+		return u
+	}
+	return t
 }
 
 // InHours returns t when it is within the hours, else when they next start.
@@ -241,9 +262,9 @@ func (c *Config) InHours(t time.Time) time.Time {
 // again.
 func (c *Config) nextStart(t time.Time) time.Time {
 	y, m, d := t.Date()
-	s := time.Date(y, m, d, c.startHour(), 0, 0, 0, t.Location())
+	s := clock(y, m, d, c.startHour(), t.Location())
 	if !s.After(t) {
-		s = time.Date(y, m, d+1, c.startHour(), 0, 0, 0, t.Location())
+		s = clock(y, m, d+1, c.startHour(), t.Location())
 	}
 	return s
 }

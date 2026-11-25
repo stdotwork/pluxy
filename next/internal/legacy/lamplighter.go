@@ -183,8 +183,11 @@ func (x *translator) lamplighter() {
 		}
 		as := "routing.ignition." + s.to
 		if held != n {
-			row(rest, Changed, Row{From: strconv.FormatFloat(n, 'g', -1, 64), To: fmt.Sprintf("%s %v", as, ign[s.to]),
-				Why: fmt.Sprintf("the plugin holds it to %v-%v, so it used %v", s.low, s.high, held)})
+			why := fmt.Sprintf("the plugin holds it to %v-%v, so it used %v", s.low, s.high, held)
+			if n >= s.low && n <= s.high {
+				why = fmt.Sprintf("the plugin reads a whole number, so it used %v", held)
+			}
+			row(rest, Changed, Row{From: strconv.FormatFloat(n, 'g', -1, 64), To: fmt.Sprintf("%s %v", as, ign[s.to]), Why: why})
 		} else {
 			row(rest, Brought, Row{As: as})
 		}
@@ -196,11 +199,27 @@ func (x *translator) lamplighter() {
 	for _, p := range lampProviders {
 		var block tree
 		key := p.id
-		for k, b := range provs {
-			if strings.ToLower(strings.TrimSpace(k)) == p.id {
-				block, _ = b.(tree)
-				key = k
+		// The key spelled as the plugin's ID wins; else the first, in order, that reads as it.
+		var also []string
+		found := false
+		for _, k := range slices.Sorted(maps.Keys(provs)) {
+			if strings.ToLower(strings.TrimSpace(k)) != p.id {
+				continue
 			}
+			if !found || k == p.id && key != p.id {
+				if found {
+					also = append(also, key)
+				}
+				block, _ = provs[k].(tree)
+				key, found = k, true
+			} else {
+				also = append(also, k)
+			}
+		}
+		for _, k := range also {
+			lampLeaves("providers."+k, provs[k], func(q string, _ any) {
+				row(q, NotBrought, Row{Why: "the file sets providers." + key + " too, and the plugin reads that one"})
+			})
 		}
 		base := "providers." + key + "."
 		as := "routing.ignition.extensions." + p.ext
@@ -267,19 +286,28 @@ func (x *translator) lamplighter() {
 					row(rest, NotBrought, Row{Why: "the plugin starts no windows for this provider here, so nothing is lost"})
 				default:
 					models[lampLabel(label)] = strings.TrimSpace(m)
-					row(rest, Brought, Row{As: as + ".windows." + lampWindow(label)})
 				}
 			}
 			if len(groups) == 0 {
 				// An empty list starts every group: the two Antigravity has, and any a model is set for.
-				groups = []string{"Gemini", "Claude / GPT"}
-				for _, label := range slices.Sorted(maps.Keys(mt)) {
-					groups = append(groups, label)
-				}
+				groups = append([]string{"Gemini", "Claude / GPT"}, slices.Sorted(maps.Keys(mt))...)
 			}
 			windows := map[string]any{}
+			started := map[string]bool{}
 			for _, g := range groups {
 				windows[lampWindow(g)] = models[lampLabel(g)]
+				started[lampLabel(g)] = true
+			}
+			for _, label := range slices.Sorted(maps.Keys(mt)) {
+				rest := base + "models." + label
+				if _, done := rows[rest]; done {
+					continue
+				}
+				if started[lampLabel(label)] {
+					row(rest, Brought, Row{As: as + ".windows." + lampWindow(label)})
+				} else {
+					row(rest, NotBrought, Row{Why: "the plugin starts no window for this group (groups does not name it), so nothing is lost"})
+				}
 			}
 			ext["windows"] = windows
 		} else {
@@ -345,6 +373,11 @@ func (x *translator) lamplighter() {
 				x.mark(NotBrought, p, Row{Why: "the plugin starts no windows for this provider either, and pluxy has no usage notifications, so nothing is lost"})
 				return
 			}
+		}
+		if rest == "ignition" || rest == "providers" || top == "providers" && strings.Count(rest, ".") == 1 {
+			// A section that is empty or not a mapping: the plugin reads its defaults in its place.
+			x.mark(NotBrought, p, Row{Why: "empty or not a mapping, so the plugin's defaults apply, here too"})
+			return
 		}
 		x.mark(NotBrought, p, Row{Why: "not a key the Lamplighter plugin or pluxy reads"})
 	})

@@ -9,7 +9,7 @@ import (
 // small are the words that mark a provider's small, cheap models, best first.
 var small = []string{"haiku", "luna", "flash-lite", "lite", "mini", "nano", "flash", "oss", "small"}
 
-// unfit are the words of models a short text request does not suit or that cost more than it
+// unfit are the words that start a part of the IDs of models a short text request does not suit or that cost more than it
 // needs: image and audio models, embeddings, reasoning variants, review models.
 var unfit = []string{"image", "audio", "tts", "embed", "thinking", "review", "realtime", "transcribe", "search"}
 
@@ -35,7 +35,7 @@ func ChooseModel(models, counts []string) string {
 	var cands []string
 	for _, m := range models {
 		l := strings.ToLower(m)
-		if containsAny(l, unfit) || len(fam) > 0 && !containsAny(l, fam) {
+		if unfitModel(l) || len(fam) > 0 && !containsAny(l, fam) {
 			continue
 		}
 		cands = append(cands, m)
@@ -55,6 +55,20 @@ func ChooseModel(models, counts []string) string {
 		return cands[0]
 	}
 	return ""
+}
+
+// unfitModel reports whether model ID m (in lower case) has a part (split as names splits) that
+// starts with a word of unfit: text-embedding-3 and gpt-image-2 do, gemini-3-flash-preview does
+// not.
+func unfitModel(m string) bool {
+	for _, p := range strings.FieldsFunc(m, func(r rune) bool { return r == '-' || r == '.' || r == '_' || r == ' ' }) {
+		for _, w := range unfit {
+			if strings.HasPrefix(p, w) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // names reports whether model ID m names word: as one of its parts (split at "-", ".", "_" and

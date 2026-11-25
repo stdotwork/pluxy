@@ -113,7 +113,12 @@ func (p *Planner) Set(cfg *Config, accounts []Ref, now time.Time) {
 			continue
 		}
 		if changed {
+			// New settings may mend what failed (a model set, say): failures, waits and pauses
+			// start over. A request still being checked stays so.
 			pl.next = now
+			for _, ws := range pl.windows {
+				ws.failures, ws.retryAt, ws.paused = 0, time.Time{}, time.Time{}
+			}
 		}
 	}
 	for id := range p.accounts {
@@ -252,6 +257,8 @@ func (p *Planner) Plan(id string, q *protocol.Quota, h Health, now time.Time) []
 			wake(t)
 			continue
 		}
+		// Sent now: starting from the moment it is sent, so no one reads it as waiting.
+		ws.state, ws.next, ws.why = StateStarting, time.Time{}, ""
 		fire = append(fire, Fire{Window: w, Model: c.Model(id, pl.ext, w.ID)})
 	}
 	for wid := range pl.windows {

@@ -457,10 +457,59 @@ func TestChooseModel(t *testing.T) {
 		{"antigravity gemini group: the newest flash-lite", ag, []string{"Gemini 3 Flash", "Gemini 3 Pro"}, "gemini-3.5-flash-lite"},
 		{"antigravity claude and gpt group: gpt-oss, not a thinking model", ag, []string{"Claude Sonnet 4.6", "GPT-OSS 120B"}, "gpt-oss-120b-medium"},
 		{"gemini is not mini", []string{"gemini-3-pro", "gemini-3-ultra"}, nil, "gemini-3-pro"},
+		{"a preview is not a review model", []string{"gemini-3-pro-preview", "gemini-3.1-flash-lite-preview", "text-embedding-3", "gemini-embedding-001"}, nil, "gemini-3.1-flash-lite-preview"},
+		{"an embedding model is not", []string{"text-embedding-3", "gemini-embedding-001"}, nil, ""},
 		{"none fit", []string{"gpt-image-2"}, nil, ""},
 	} {
 		if got := ChooseModel(tc.models, tc.counts); got != tc.want {
 			t.Errorf("%s: ChooseModel = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestSettingsChangeLiftsAPause(t *testing.T) {
+	// No model to choose pauses the window; setting one starts it at once, not the next morning.
+	now := at(10, 12, 0, 0)
+	p := newOwnerPlanner(now)
+	run(t, p, claudeReading(0, 0, 10), ok, now)
+	p.Done("a", "five_hour", "", &Failure{Message: "no model", Hard: true}, now)
+	c := owner()
+	c.Extensions["pluxy/claude"] = Extension{Model: "claude-haiku-5-5"}
+	now = now.Add(time.Minute)
+	p.Set(c, []Ref{{ID: "a", Extension: "pluxy/claude"}}, now)
+	if f := run(t, p, claudeReading(0, 0, 10), ok, now); len(f) != 1 || f[0].Model != "claude-haiku-5-5" {
+		t.Fatalf("fires after the settings changed = %+v", f)
+	}
+}
+
+func TestStateWhileTheRequestRuns(t *testing.T) {
+	now := at(10, 12, 0, 0)
+	p := newOwnerPlanner(now)
+	run(t, p, claudeReading(0, 0, 10), ok, now)
+	if v := p.View("a").Windows[0]; v.State != StateStarting || v.Next != nil {
+		t.Fatalf("while the request runs: %+v", v)
+	}
+}
+
+func TestInHoursAcrossDaylightSaving(t *testing.T) {
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skip("no time zone database:", err)
+	}
+	for _, tc := range []struct {
+		name       string
+		start, end int
+		now, want  time.Time
+	}{
+		// The day the clocks go back is 25 hours long: 0 to 23 is still not the whole day.
+		{"0 to 23, the night the clocks go back", 0, 23, time.Date(2026, 10, 31, 23, 30, 0, 0, ny), time.Date(2026, 11, 1, 0, 0, 0, 0, ny)},
+		// The day the clocks go forward is 23 hours long: 0 to 2 still holds 01:00 to 02:00.
+		{"0 to 2, the morning the clocks go forward", 0, 2, time.Date(2026, 3, 8, 1, 30, 0, 0, ny), time.Date(2026, 3, 8, 1, 30, 0, 0, ny)},
+		{"7 to 22, the day the clocks go back", 7, 22, time.Date(2026, 11, 1, 6, 30, 0, 0, ny), time.Date(2026, 11, 1, 7, 0, 0, 0, ny)},
+	} {
+		c := &Config{Enabled: true, StartHour: ip(tc.start), EndHour: ip(tc.end), EndGraceMS: i64(0)}
+		if got := c.InHours(tc.now); !got.Equal(tc.want) {
+			t.Errorf("%s: InHours(%s) = %s, want %s", tc.name, tc.now, got, tc.want)
 		}
 	}
 }

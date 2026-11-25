@@ -20,7 +20,7 @@ func TestIgnitionStartsTheWindowAfterItsReset(t *testing.T) {
 	pkg := testPackageID(t, "test/ignition", "1.0.0")
 	dir := t.TempDir()
 	logOn, logOff := filepath.Join(dir, "on.log"), filepath.Join(dir, "off.log")
-	reset := time.Now().Add(4 * time.Second).Truncate(time.Second)
+	reset := time.Now().Add(6 * time.Second).Truncate(time.Second)
 	settings := func(log string) map[string]any {
 		return map[string]any{"five_hour_resets_at": reset.Unix(), "window_starts": true, "generate_log": log}
 	}

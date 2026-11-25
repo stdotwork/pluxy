@@ -1984,7 +1984,8 @@ A window is started only when all of these hold:
 A window still not running a `hold_ms` after the request counts as a failed ignition, as does a
 request that failed. A failure retrying cannot mend (a refused key or account, a missing model, a
 refused request, no model to choose) pauses the window at once. Every reading that shows the
-window running clears its failures and pause. With no model set, core picks a small model the
+window running clears its failures and pause, and so does a change of the settings (a model set
+after "no model to choose", say). With no model set, core picks a small model the
 account serves: among the models it lists (not excluded ones; image, audio, embedding, thinking and
 review models left out, and for a group's window only models of the group's families, such as
 `gemini` or `claude`), the first of `haiku`, `luna`, `flash-lite`, `lite`, `mini`, `nano`, `flash`,
