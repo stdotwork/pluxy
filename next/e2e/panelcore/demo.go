@@ -533,7 +533,10 @@ func writeDemoUsage(dir string, setup *demoSetup) error {
 	}
 	// Today's events end a few minutes before core starts, so the demo's own requests come last.
 	end := setup.now.Add(-5 * time.Minute)
-	today := time.Date(setup.now.Year(), setup.now.Month(), setup.now.Day(), 0, 0, 0, 0, time.UTC)
+	// The days are UTC days, as core's usage files are, so today is the UTC date of now: taking
+	// the date in the host's zone names a day ahead of now where that zone is ahead of UTC.
+	utc := setup.now.UTC()
+	today := time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)
 	var seq uint64
 	for back := 7; back >= 0; back-- {
 		day := today.AddDate(0, 0, -back)
