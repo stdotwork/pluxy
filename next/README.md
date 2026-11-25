@@ -1997,9 +1997,7 @@ accounts that have one: their requests go to other accounts, and the error says 
 They go on the same traffic as the [outbound proxy](#outbound-proxy): model requests and their
 streams, WebSocket handshakes, token renewals, logins, model lists, checks and quota reads. A
 configured header replaces the extension's own value for that name (letter case aside); the
-extension's other headers stay. A value is sent as written: today's `$Header` (copy a header
-from the client's request) and `$CPA-SESSION-ID` are not supported. A login that adds an account
-uses the `headers` it names. `Host`, `Content-Length`, `Transfer-Encoding` and `Connection`, a
+extension's other headers stay. A login that adds an account uses the `headers` it names. `Host`, `Content-Length`, `Transfer-Encoding` and `Connection`, a
 name that is not a valid header name or is given twice (letter case aside), an empty value and a
 value with a line break fail the load with a message that names the header, never its value.
 A redirect to another host or scheme (`https` to `http`) than the request's first one carries
@@ -2008,6 +2006,26 @@ itself under that name, as an HTTP client leaves out `Authorization` there.
 `PATCH /accounts/{id}` with `headers` as an object replaces all the account's headers (one left
 out is removed), and with `null` or `{}` removes them all.
 
+A value of `$` and a header name copies that header from the client's request, as today's
+`$Header` does. OpenCode Go, for example, refuses a request that carries no session header;
+OpenCode sends one as `x-opencode-session` and the Codex CLI as `session-id`:
+
+```json
+{"id": "opencode-go", "headers": {"x-opencode-session": "$x-opencode-session", "session-id": "$session-id"}, "...": "..."}
+```
+
+Core fills in such a value on the traffic of each client request: model requests and their
+streams, token counts, endpoint calls, and a WebSocket session, whose client request is the
+client's handshake. It takes the first value of the client's header of that name, letter case
+aside, and leaves the header out when the client did not send it, sent it blank or with a
+control character other than a tab, so the extension's own value for that name stays. Traffic that serves no client request (token
+renewals, logins, model lists, checks and quota reads) leaves every copied header out. Only the
+headers an account names this way leave core. A copy of `Authorization`, `Proxy-Authorization`,
+`X-Api-Key`, `X-Goog-Api-Key` or `Cookie` fails the load, since they hold the client's key for
+pluxy, a proxy password or the client's cookies. So does a value that starts with `$` but is not
+`$` and a header name, and a value that holds `$CPA-SESSION-ID` (today's core's own session ID,
+which this core does not have). Any other value is sent as written, a `$` later in it included.
+
 The value of a header whose name is about authentication (it holds `auth`, `key`, `token`,
 `secret`, `cookie`, `session`, `password`, `passphrase` or `signature`, letter case aside) is a secret, by the
 rule config redaction uses: `GET /config` and `GET /accounts` show the same placeholder in its
@@ -2015,7 +2033,9 @@ place (that of the header core sends, also for a value of a provider section of 
 written as a number or with spaces around it), except for a value written as `true` or `false`,
 which `GET /config` shows as written, as it shows `true` and `false` everywhere, while `GET
 /accounts` shows a placeholder. A placeholder sent back keeps the value, and the value is removed
-from what extensions log and send back. Core writes no header value in its own logs or errors. An extension older than
+from what extensions log and send back. A copied header counts by the same rule: under such a
+name the `$` value shows as a placeholder, and the value copied for a request is removed from
+what that request's call sends back. Core writes no header value in its own logs or errors. An extension older than
 protocol 0.12 cannot send headers, so core does not send it the accounts that have them: their
 requests go to other accounts, and the error says why.
 
@@ -3041,7 +3061,7 @@ are accepted silently.
 | `oauth.providers.codex.signin-with-chatgpt-identifier` (`codex.signin-with-chatgpt-identifier`) | `signin_with_chatgpt_identifier` on the Sign in with ChatGPT (SIWC) accounts `pluxy import cpa` adds. Left unset, they use the extension's default, `pluxy`. | Supported when importing |
 | `oauth.providers.devin.*` (`devin`) | Only `sensitive-words`. | Dropped: rewriting words to get past a content filter is out of scope |
 | `api-keys.meta` (`meta-api-key`) | | Dropped: the login is built; no need for a bare key |
-| Every `headers` on a group or key | The account's [`headers`](#upstream-headers): a key's own, else its group's (a key's `headers: {}` sends none), and an `openai-compatibility` group's for all its keys. Names and values are trimmed and empty ones dropped, as in today's core. A header whose value today's core takes from the client's request (`$` and a header name, or `$CPA-SESSION-ID`) is named in the log and not imported. A header this core refuses (`Host`, `Content-Length`, `Transfer-Encoding`, `Connection`) fails the load, where today's core sends it. | Supported |
+| Every `headers` on a group or key | The account's [`headers`](#upstream-headers): a key's own, else its group's (a key's `headers: {}` sends none), and an `openai-compatibility` group's for all its keys. Names and values are trimmed and empty ones dropped, as in today's core. A value that copies a header from the client's request (`$` and a header name) comes across as `$` and that name, without the spaces today's core allows after the `$`; one whose rest is not a header name (such as `$` alone or `$5/mo`), which today's core never sends, is dropped. A copy of `Authorization`, `Proxy-Authorization`, `X-Api-Key`, `X-Goog-Api-Key` or `Cookie`, which today's core sends on and this core never does, and a value that holds `$CPA-SESSION-ID` are named in the log and not imported. A header this core refuses (`Host`, `Content-Length`, `Transfer-Encoding`, `Connection`) fails the load, where today's core sends it. | Supported |
 | Every `connection-pool` | | Dropped: extensions own their connections |
 | Every `disable-cooling` on a group or key | The account's `disable_cooling`. | Supported |
 | Every `request-retry` on a group or key | The account's `request_retry`: a key's own, else its group's (an `openai-compatibility` group's for all its keys, which have none of their own there). A negative one inherits `routing.retry.request-retry`, as in today's core. | Supported |
@@ -3144,6 +3164,7 @@ entries of its `model_aliases` (or `models`) with a `name` and an `alias` its `m
 today's core reads them. A file's `proxy_url` (or `proxy-url`) is the account's `proxy_url`; a file
 whose value this core cannot use is skipped rather than imported without its proxy. A file's
 `headers` are the account's `headers`: text values only, trimmed, empty ones dropped, as today's
-core reads them; one whose value today's core takes from the client's request (`$` and a header
-name, or `$CPA-SESSION-ID`) is named under **changed** and not brought, and a file with a header this
+core reads them, with a copy of a client header (`$` and a header name) brought as in a key's
+`headers` above; a copy of a client's key, proxy password or cookie header and a value that holds
+`$CPA-SESSION-ID` are named under **changed** and not brought, and a file with a header this
 core refuses is skipped rather than imported without it.

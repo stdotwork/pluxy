@@ -361,7 +361,7 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 				text[k] = s
 			}
 		}
-		h, dynamic, err := upheader.Import(text)
+		h, left, err := upheader.Import(text)
 		if err != nil {
 			return f, nil, err.Error()
 		}
@@ -369,8 +369,8 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 			return f, nil, err.Error()
 		}
 		r.Account.Headers = h
-		for _, k := range dynamic {
-			f.Ignored = append(f.Ignored, "headers."+k+" (a value taken from the client's request)")
+		for _, l := range left {
+			f.Ignored = append(f.Ignored, "headers."+l.Name+" ("+l.Why+")")
 		}
 	}
 	f.Record = r

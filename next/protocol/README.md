@@ -788,6 +788,12 @@ the extension's other headers stay. Core never sends `Host`, `Content-Length`,
 `Transfer-Encoding` or `Connection`, two names that differ only in letter case, an empty value,
 or a value with a line break or another control character: its config load refuses them.
 
+An account header configured to copy a header from the client's request (`$` and its name) is
+filled in by core before each call, so an extension never sees the setting: a `generate`,
+`count_tokens`, `endpoint` or `session` call made for a client's request carries the client's
+value, and one the client did not send is left out, as is every such header on any other call.
+The headers of one account can therefore differ from call to call: read them from each call.
+
 The value of a header whose name is about authentication (its name holds `auth`, `key`,
 `token`, `secret`, `cookie`, `session`, `password`, `passphrase` or `signature`, letter case aside) is a
 secret: an extension never logs or shows it, and core removes it from everything a call sends

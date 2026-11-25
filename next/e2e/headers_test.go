@@ -159,6 +159,101 @@ func TestUpstreamHeadersEveryExtension(t *testing.T) {
 	}
 }
 
+// An account's header whose value is "$" and a header name copies that header from the client's
+// request, on every provider extension: the named client headers reach the upstream under the
+// account's names, a client header the account does not name does not, and a copy the client
+// did not send is left out, so the extension's own value for that name stays (Content-Type here).
+// Traffic that serves no client request (a model list) carries no copy, and no "$" value ever
+// reaches the upstream.
+func TestUpstreamHeadersCopiedFromClient(t *testing.T) {
+	const (
+		session = "client-session-e2e-7f3a"
+		trace   = "client-trace-e2e-2b9c"
+		unnamed = "client-unnamed-e2e-4d1e"
+	)
+	for _, ext := range proxyExtensions {
+		t.Run(strings.TrimPrefix(ext.id, "pluxy/"), func(t *testing.T) {
+			t.Parallel()
+			up := newHeaderUpstream(t)
+			base := runCore(t, map[string]any{
+				"listen":         "127.0.0.1:0",
+				"client_keys":    []string{clientKey},
+				"management_key": managementKey,
+				"extension": map[string]any{
+					"manifest": filepath.Join(binDir, ext.manifest),
+					"accounts": []any{map[string]any{"id": "copy", "models": []string{"m-headers"},
+						"settings": map[string]any{"base_url": up.URL + "/copy"}, "credential": ext.credential,
+						"headers": map[string]string{"X-Session-Copy": "$x-opencode-session", "X-Trace": "$X-Client-Trace",
+							"X-Absent": "$X-Not-Sent", "Content-Type": "$X-Not-Sent-Either", "X-Title": "plain-title"}}},
+				},
+			})
+			pinnedWith(t, base, "copy", "m-headers", map[string]string{"X-Opencode-Session": session, "X-Client-Trace": trace, "X-Unnamed": unnamed})
+			posts := up.posts("/copy")
+			if len(posts) == 0 {
+				t.Fatalf("no POST at the upstream; it saw %d requests", len(up.seen))
+			}
+			for _, r := range posts {
+				for name, want := range map[string]string{"X-Session-Copy": session, "X-Trace": trace, "X-Title": "plain-title"} {
+					if got := r.header.Values(name); len(got) != 1 || got[0] != want {
+						t.Errorf("%s: %s %q, want %q", r.path, name, got, want)
+					}
+				}
+				for _, name := range []string{"X-Absent", "X-Unnamed", "X-Client-Trace"} {
+					if got := r.header.Values(name); len(got) != 0 {
+						t.Errorf("%s: %s %q, want none", r.path, name, got)
+					}
+				}
+				if ct := r.header.Get("Content-Type"); ct == "" || strings.HasPrefix(ct, "$") {
+					t.Errorf("%s: Content-Type %q, want the extension's own", r.path, ct)
+				}
+			}
+			up.mu.Lock()
+			defer up.mu.Unlock()
+			for _, r := range up.seen {
+				for name, values := range r.header {
+					for _, v := range values {
+						if strings.HasPrefix(v, "$") {
+							t.Errorf("%s %s: %s %q, a value as written in the setting", r.method, r.path, name, v)
+						}
+					}
+				}
+				if r.method != http.MethodPost && (r.header.Get("X-Session-Copy") != "" || r.header.Get("X-Trace") != "") {
+					t.Errorf("%s %s, which serves no client request, carries a copied header", r.method, r.path)
+				}
+			}
+		})
+	}
+}
+
+// A Responses WebSocket session copies from the client's handshake: the session-id the Codex CLI
+// sends reaches the upstream's handshake under the account's name for it.
+func TestUpstreamHeadersCopiedOverWebSocket(t *testing.T) {
+	u := newWSUpstream(t)
+	base := runCore(t, map[string]any{
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "codex", "pluxy-extension.json"),
+			"accounts": []any{map[string]any{"id": "ws", "models": []string{"gpt-test"},
+				"headers":    map[string]string{"X-Opencode-Session": "$Session-Id"},
+				"settings":   map[string]any{"base_url": u.URL + "/v1", "websockets": true},
+				"credential": map[string]any{"kind": "api_key", "api_key": "sk-ws"}}},
+		},
+	})
+	c := dialResponses(t, base, "Session-Id", "codex-session-e2e-9a1f")
+	if m := wsTurn(t, c, wsCreate("hello", "")); m["type"] != "response.completed" {
+		t.Fatalf("turn ended with %v", m)
+	}
+	conns := u.connections()
+	if len(conns) != 1 {
+		t.Fatalf("%d upstream sockets, want 1", len(conns))
+	}
+	if got := conns[0].header.Values("X-Opencode-Session"); len(got) != 1 || got[0] != "codex-session-e2e-9a1f" {
+		t.Errorf("handshake X-Opencode-Session %q, want the client's session-id", got)
+	}
+}
+
 // A Responses WebSocket session's handshake carries the account's headers, over the Codex
 // extension's own OpenAI-Beta.
 func TestUpstreamHeadersWebSocket(t *testing.T) {
@@ -297,6 +392,25 @@ func TestUpstreamHeadersRefusedNames(t *testing.T) {
 			refuse(t, path, "accounts[0].headers", "header "+name+" cannot be set")
 		})
 	}
+	// A copy of the client's key header is refused, whatever its letter case.
+	t.Run("copy of Authorization", func(t *testing.T) {
+		b, _ := json.Marshal(map[string]any{
+			"listen":         "127.0.0.1:0",
+			"client_keys":    []string{clientKey},
+			"management_key": managementKey,
+			"extension": map[string]any{
+				"manifest": filepath.Join(binDir, "pluxy-extension.json"),
+				"accounts": []any{map[string]any{"id": "a", "headers": map[string]string{"X-Upstream-Auth": "$authorization"},
+					"settings":   map[string]any{"base_url": "http://127.0.0.1:9/v1"},
+					"credential": map[string]any{"kind": "api_key", "api_key": upstreamKey}}},
+			},
+		})
+		path := filepath.Join(t.TempDir(), "config.json")
+		if err := os.WriteFile(path, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		refuse(t, path, "accounts[0].headers", "header X-Upstream-Auth cannot copy the client's Authorization header")
+	})
 	t.Run("config.yaml", func(t *testing.T) {
 		yaml := `config-version: 8
 server:
@@ -334,7 +448,7 @@ func TestUpstreamHeadersImportedAndSecret(t *testing.T) {
 		kimiKey   = "gk-Ty5Rc8Hn1Zw6-33"
 		kimi2Key  = "gk-Mu3Ef9Ka2Qd7Yb-44"
 		// What the client's requests send as X-Client-Header: kimi-1's "X-Copy": "$X-Client-Header"
-		// must not copy it.
+		// copies it.
 		clientHeader = "fake-client-header-e2e-5d1c"
 	)
 	up := newHeaderUpstream(t)
@@ -418,8 +532,8 @@ api-keys:
 		if code != http.StatusOK || !strings.Contains(raw, `"id":"`+strings.TrimSuffix(name, ".json")+`"`) {
 			t.Fatalf("import %s: %d %s", name, code, raw)
 		}
-		if name == "kimi-1.json" && !strings.Contains(raw, "headers.X-Copy (a value taken from the client's request)") {
-			t.Errorf("import %s does not name the header it left out: %s", name, raw)
+		if strings.Contains(raw, "X-Copy") {
+			t.Errorf("import %s names X-Copy, which it brings: %s", name, raw)
 		}
 	}
 
@@ -475,7 +589,7 @@ api-keys:
 	}
 	for _, r := range kreqs {
 		check("kimi X-Gateway-Key", r.Header.Values("X-Gateway-Key"), kimiKey)
-		check("kimi X-Copy", r.Header.Values("X-Copy"), "")
+		check("kimi X-Copy", r.Header.Values("X-Copy"), clientHeader)
 		check("kimi X-Number", r.Header.Values("X-Number"), "")
 	}
 	before := len(kreqs)

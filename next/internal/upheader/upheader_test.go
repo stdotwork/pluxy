@@ -3,6 +3,7 @@ package upheader
 import (
 	"fmt"
 	"maps"
+	"net/http"
 	"reflect"
 	"slices"
 	"strings"
@@ -27,6 +28,21 @@ func TestCheck(t *testing.T) {
 		{map[string]string{"X-A": "  "}, "header X-A has no value"},
 		{map[string]string{"X-A": value + "\r\nX-Injected: 1"}, "line break"},
 		{map[string]string{"X-A": "a\tb"}, ""},
+		// A value of "$" and a header name copies that header from the client's request.
+		{map[string]string{"X-Opencode-Session": "$x-opencode-session", "User-Agent": "$User-Agent"}, ""},
+		{map[string]string{"X-A": "$"}, "it must be $ and a header name"},
+		{map[string]string{"X-A": "$X B"}, "it must be $ and a header name"},
+		{map[string]string{"X-A": "$ X-B"}, "it must be $ and a header name"},
+		// Never the client's key, a proxy password or its cookies, whatever the letter case.
+		{map[string]string{"X-A": "$authorization"}, "cannot copy the client's Authorization header"},
+		{map[string]string{"X-A": "$X-API-KEY"}, "cannot copy the client's X-Api-Key header"},
+		{map[string]string{"X-A": "$x-goog-api-key"}, "cannot copy the client's X-Goog-Api-Key header"},
+		{map[string]string{"X-A": "$Cookie"}, "cannot copy the client's Cookie header"},
+		{map[string]string{"X-A": "$Proxy-Authorization"}, "cannot copy the client's Proxy-Authorization header"},
+		{map[string]string{"X-A": "$CPA-SESSION-ID"}, "$CPA-SESSION-ID (today's core's own session ID) is not supported"},
+		{map[string]string{"X-A": "id-$cpa-session-id"}, "$CPA-SESSION-ID (today's core's own session ID) is not supported"},
+		// "$" elsewhere is part of a value sent as written.
+		{map[string]string{"X-Price": "5$"}, ""},
 	} {
 		err := Check("headers", c.h)
 		switch {
@@ -40,19 +56,63 @@ func TestCheck(t *testing.T) {
 	}
 }
 
-// Import trims and drops empty pairs as today's core does, and leaves out the values today's
-// core fills in from the client's request.
+// Import trims and drops empty pairs as today's core does, brings the values that copy a client
+// header as "$" and its name, and leaves out, saying why, those this core does not send.
 func TestImport(t *testing.T) {
-	got, dynamic, err := Import(map[string]string{" X-Test ": " v ", "": "x", "X-Empty": " ", "X-Copy": "$X-Client",
-		"X-Session": "id-$cpa-session-id", "X-Price": "5$"})
+	got, left, err := Import(map[string]string{" X-Test ": " v ", "": "x", "X-Empty": " ", "X-Copy": " $ X-Client ",
+		"X-Session": "id-$cpa-session-id", "X-Price": "5$", "X-Key": "$Authorization", "X-Nothing": "$", "X-Spaced": "$X B"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := map[string]string{"X-Test": "v", "X-Price": "5$"}; !reflect.DeepEqual(got, want) {
+	if want := map[string]string{"X-Test": "v", "X-Price": "5$", "X-Copy": "$X-Client"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("Import = %v, want %v", got, want)
 	}
-	if want := []string{"X-Copy", "X-Session"}; !reflect.DeepEqual(dynamic, want) {
-		t.Errorf("dynamic = %v, want %v", dynamic, want)
+	var names []string
+	for _, l := range left {
+		names = append(names, l.Name)
+	}
+	if want := []string{"X-Key", "X-Session"}; !reflect.DeepEqual(names, want) {
+		t.Errorf("left out %v, want %v", left, want)
+	}
+	if len(left) == 2 && (!strings.Contains(left[0].Why, "client's Authorization header") || !strings.Contains(left[1].Why, "$CPA-SESSION-ID")) {
+		t.Errorf("left out %v: the reasons do not name the client's key header and $CPA-SESSION-ID", left)
+	}
+	// What Import brings, Check accepts.
+	if err := Check("headers", got); err != nil {
+		t.Errorf("Check(Import) = %v", err)
+	}
+}
+
+// Fill copies each named client header's first value, letter case aside, leaves out a copy the
+// client did not send (or sent empty or with a control character), and sends values written
+// as they are. Without a client request every copy is left out.
+func TestFill(t *testing.T) {
+	h := map[string]string{"X-Opencode-Session": "$x-opencode-session", "Session-Id": "$Session-Id", "X-Title": "pluxy",
+		"User-Agent": "$User-Agent", "X-Bad": "$X-Bad", "X-Odd": "$session_id"}
+	client := http.Header{
+		"X-Opencode-Session": {"oc-1", "oc-2"},
+		"Session-Id":         {"codex-1"},
+		"User-Agent":         {""},
+		"X-Bad":              {"a\nb"},
+		"session_id":         {"odd-1"}, // not in canonical form, as a map built by hand may hold it
+		"X-Unnamed":          {"never-copied"},
+	}
+	want := map[string]string{"X-Opencode-Session": "oc-1", "Session-Id": "codex-1", "X-Title": "pluxy", "X-Odd": "odd-1"}
+	if got := Fill(h, client); !reflect.DeepEqual(got, want) {
+		t.Errorf("Fill = %v, want %v", got, want)
+	}
+	if got := Fill(h, nil); !reflect.DeepEqual(got, map[string]string{"X-Title": "pluxy"}) {
+		t.Errorf("Fill without a client = %v, want only the written value", got)
+	}
+	if got := Fill(map[string]string{"X-A": "$X-A"}, nil); got != nil {
+		t.Errorf("Fill with nothing left = %v, want nil", got)
+	}
+	plain := map[string]string{"X-Title": "pluxy"}
+	if got := Fill(plain, client); !reflect.DeepEqual(got, plain) || !Copies(h) || Copies(plain) {
+		t.Errorf("Fill(plain) = %v; Copies(h) %v, Copies(plain) %v", got, Copies(h), Copies(plain))
+	}
+	if h["X-Opencode-Session"] != "$x-opencode-session" {
+		t.Error("Fill changed the setting it was given")
 	}
 }
 

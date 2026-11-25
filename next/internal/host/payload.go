@@ -28,9 +28,18 @@ type payloadClient struct {
 // WithPayloadClient returns ctx carrying the client's request for payload rules: the model it
 // asked for (before an alias or prefix is resolved, without a thinking suffix) and its headers.
 // Rules match the model of each call made with ctx and also this one, and their header
-// conditions match these headers, which never leave core.
+// conditions match these headers. The generate, count_tokens, endpoint and session calls made
+// with ctx also fill in from them the account headers that copy a client header (upheader.Fill):
+// only the headers an account names that way leave core.
 func WithPayloadClient(ctx context.Context, model string, headers http.Header) context.Context {
 	return context.WithValue(ctx, payloadClientKey{}, payloadClient{model: model, headers: headers})
+}
+
+// clientHeaders returns the headers of the client's request ctx carries (WithPayloadClient), or
+// nil when it carries none.
+func clientHeaders(ctx context.Context) http.Header {
+	c, _ := ctx.Value(payloadClientKey{}).(payloadClient)
+	return c.headers
 }
 
 // Channel is the payload rules' protocol for an extension: the last part of its package ID

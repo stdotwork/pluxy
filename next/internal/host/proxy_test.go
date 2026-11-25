@@ -252,7 +252,7 @@ func TestHeldOutboundDoesNotCollideWithAccountID(t *testing.T) {
 		e.held.add(id, &protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: newKey})
 		secrets = append(secrets, oldKey, newKey)
 	}
-	if _, perr := e.outbound(&protocol.Account{ID: "a", ProxyURL: "http://alice:" + pass + "@127.0.0.1:3128", Headers: map[string]string{"X-Gateway-Key": header}}); perr != nil {
+	if _, perr := e.outbound(&protocol.Account{ID: "a", ProxyURL: "http://alice:" + pass + "@127.0.0.1:3128", Headers: map[string]string{"X-Gateway-Key": header}}, nil); perr != nil {
 		t.Fatal(perr)
 	}
 	for _, secret := range secrets {
@@ -282,6 +282,41 @@ func TestCallCarriesHeadersWithoutLeakingSecrets(t *testing.T) {
 	}
 	if out := log.String(); strings.Contains(out, testHeaderSecret) || !strings.Contains(out, protocol.Redacted+" X-Title=plain-title") {
 		t.Errorf("the log holds the secret header value, or not the headers:\n%s", out)
+	}
+}
+
+// A call made for a client's request (WithPayloadClient) fills in the account's headers that copy
+// a client header: the named ones only, a copy the client did not send left out, and a copied
+// value under a secret name removed from what the call sends back. A call made for no client
+// request sends only the values written.
+func TestCallFillsCopiedHeaders(t *testing.T) {
+	const session = "client-session-value-58"
+	ext, err := Start(filepath.Join(fakePackage(t, "echo-proxy"), ManifestFile), Options{Log: &syncBuffer{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ext.Stop()
+	account := protocol.Account{ID: "c", Headers: map[string]string{"X-Title": "plain-title", "X-Trace": "$x-client-trace",
+		"X-Session-Copy": "$X-Client-Session", "X-Absent": "$X-Not-Sent"}}
+	client := http.Header{"X-Client-Trace": {"trace-1"}, "X-Client-Session": {session}, "X-Unnamed": {"unnamed-1"},
+		"Authorization": {"Bearer client-key-1"}}
+	for _, c := range []struct {
+		name string
+		ctx  context.Context
+		want string
+	}{
+		{"client request", WithPayloadClient(context.Background(), "m", client), "cannot reach  " + protocol.Redacted + " X-Title=plain-title X-Trace=trace-1"},
+		{"no client request", context.Background(), "cannot reach  X-Title=plain-title"},
+	} {
+		s := ext.Generate(c.ctx, account, llm.Request{Model: "m"})
+		ev := s.Next()
+		s.Close()
+		if ev.Type != llm.EventError || ev.Error.Message != c.want {
+			t.Errorf("%s: event %+v, want the error %q", c.name, ev, c.want)
+		}
+	}
+	if account.Headers["X-Trace"] != "$x-client-trace" {
+		t.Error("the call changed the account it was given")
 	}
 }
 

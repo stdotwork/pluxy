@@ -1804,18 +1804,18 @@ func (x *translator) account(f family, g, k tree, id, path string) (map[string]a
 	if f.v8 == "openai-compatibility" {
 		hv = g["headers"]
 	}
-	if h, dynamic, err := headers(hv, path+".headers"); err != nil {
+	if h, left, err := headers(hv, path+".headers"); err != nil {
 		return nil, err
-	} else if len(h) > 0 || len(dynamic) > 0 {
+	} else if len(h) > 0 || len(left) > 0 {
 		if err := upheader.Check(display(path)+" key "+id+" headers", h); err != nil {
 			return nil, err
 		}
 		if len(h) > 0 {
 			a["headers"] = h
 		}
-		for _, name := range dynamic {
-			x.note(fmt.Sprintf("config.yaml: %s key %s header %s takes its value from the client's request, which this core does not do: not imported", display(path), id, name),
-				"header "+name+" not brought (its value comes from the client's request, which pluxy does not do)")
+		for _, l := range left {
+			x.note(fmt.Sprintf("config.yaml: %s key %s header %s not imported: %s", display(path), id, l.Name, l.Why),
+				"header "+l.Name+" not brought ("+l.Why+")")
 		}
 	}
 	if f.v8 != "openai-compatibility" {
@@ -2654,7 +2654,7 @@ func scalar(v any, path string) (string, error) {
 
 // headers reads a headers mapping as today's core does (upheader.Import): each value is a
 // scalar, read as its text (see scalar).
-func headers(v any, path string) (map[string]string, []string, error) {
+func headers(v any, path string) (map[string]string, []upheader.Left, error) {
 	if v == nil {
 		return nil, nil, nil
 	}
@@ -2670,15 +2670,15 @@ func headers(v any, path string) (map[string]string, []string, error) {
 		}
 		text[k] = s
 	}
-	h, dynamic, err := upheader.Import(text)
+	h, left, err := upheader.Import(text)
 	if err != nil {
 		return nil, nil, fmt.Errorf("%s: %w", path, err)
 	}
-	return h, dynamic, nil
+	return h, left, nil
 }
 
 // HeaderText returns a header value of a provider section of a config.yaml as the header core
-// sends: its text as written, without the spaces around it (upheader.Import). ok is false for
+// sends: its text as written, without the spaces around it (upheader.ImportValue). ok is false for
 // a value core refuses.
 func HeaderText(n *yaml.Node) (text string, ok bool) {
 	var d node
@@ -2686,7 +2686,7 @@ func HeaderText(n *yaml.Node) (text string, ok bool) {
 		return "", false
 	}
 	s, err := scalar(d.v, "")
-	return strings.TrimSpace(s), err == nil
+	return upheader.ImportValue(s), err == nil
 }
 
 // boolean_ reads a true or false setting; absent is false. As today's core's YAML decoder

@@ -485,6 +485,31 @@ func TestAuthFileProxyURL(t *testing.T) {
 	}
 }
 
+// A file's headers that copy a client header come across as "$" and its name; a copy of the
+// client's key header and $CPA-SESSION-ID are named under ignored, with why, and not brought.
+func TestAuthFileCopiedHeaders(t *testing.T) {
+	dir := writeFiles(t, map[string]any{"codex-a.json": map[string]any{"type": "codex", "access_token": "fake-codex-access",
+		"headers": map[string]any{"X-Opencode-Session": "$x-opencode-session", "User-Agent": " $ User-Agent ",
+			"X-Cpa": "$CPA-SESSION-ID", "X-Key": "$Authorization", "X-Title": "pluxy"}}})
+	files, skipped, err := ReadAuthDir(dir, ImportOptions{}, time.Now())
+	if err != nil || len(files) != 1 || len(skipped) != 0 {
+		t.Fatalf("files %+v, skipped %+v, err %v", files, skipped, err)
+	}
+	want := map[string]string{"X-Opencode-Session": "$x-opencode-session", "User-Agent": "$User-Agent", "X-Title": "pluxy"}
+	if got := files[0].Record.Account.Headers; !reflect.DeepEqual(got, want) {
+		t.Errorf("headers = %v, want %v", got, want)
+	}
+	ignored := strings.Join(files[0].Ignored, "\n")
+	for _, w := range []string{"headers.X-Cpa (its value holds $CPA-SESSION-ID", "headers.X-Key (it copies the client's Authorization header"} {
+		if !strings.Contains(ignored, w) {
+			t.Errorf("ignored does not say %q:\n%s", w, ignored)
+		}
+	}
+	if len(files[0].Ignored) != 2 {
+		t.Errorf("ignored = %v, want the two headers only", files[0].Ignored)
+	}
+}
+
 // An imported xAI login gets "inject_x_search": true when the config turns on
 // upstream.xai.inject-x-search (or its older spelling), and no such setting by default, as an
 // imported Codex login gets its own options.
