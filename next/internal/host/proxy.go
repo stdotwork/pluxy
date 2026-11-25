@@ -3,6 +3,7 @@ package host
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 
 	"github.com/stdotwork/pluxy/next/internal/proxyurl"
 	"github.com/stdotwork/pluxy/next/internal/upheader"
@@ -26,12 +27,16 @@ const (
 )
 
 // outbound turns account.ProxyURL, the account's own proxy_url setting, into the proxy the call
-// carries: that setting, else Options.ProxyURL; none for direct or none. It refuses the call when
-// it needs a proxy or headers and the extension predates them, which would send it without. The
-// proxy's user name and password and the account's secret header values then count as a
+// carries: that setting, else Options.ProxyURL; none for direct or none. It fills in the account's
+// headers that copy a header from the client's request from client, the headers of the request
+// the call serves, or leaves them out when client is nil (upheader.Fill). It refuses the call
+// when it needs a proxy or headers and the extension predates them, which would send it without.
+// The proxy's user name and password and the account's secret header values then count as a
 // credential the extension holds, so its output is logged without them; the returned credential
-// holds them for the call's own redaction.
-func (e *Extension) outbound(account *protocol.Account) (*protocol.Credential, *llm.Error) {
+// holds them, and the secret values copied from client, for the call's own redaction. The copied
+// values are the client's own and change from request to request, so they are not held past the
+// call.
+func (e *Extension) outbound(account *protocol.Account, client http.Header) (*protocol.Credential, *llm.Error) {
 	global := ""
 	if e.opts.ProxyURL != nil {
 		global = e.opts.ProxyURL()
@@ -42,21 +47,21 @@ func (e *Extension) outbound(account *protocol.Account) (*protocol.Credential, *
 			Message: fmt.Sprintf("extension %s implements protocol 0.%d, which cannot send through a proxy (0.%d adds proxy_url); the account has one, so it is not sent there",
 				e.manifest.ID, e.info.ProtocolMinor, proxyMinor)}
 	}
+	copies := upheader.Copies(account.Headers)
+	configured := account.Headers
+	account.Headers = upheader.Fill(account.Headers, client)
 	if len(account.Headers) > 0 && e.info.ProtocolMinor < headersMinor {
 		return nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
 			Message: fmt.Sprintf("extension %s implements protocol 0.%d, which cannot send an account's headers (0.%d adds headers); the account has some, so it is not sent there",
 				e.manifest.ID, e.info.ProtocolMinor, headersMinor)}
 	}
-	var d outboundForms
-	d.Proxy = proxyurl.Password(account.ProxyURL)
-	d.Headers = upheader.Forms(account.Headers)
-	if len(d.Proxy) == 0 && len(d.Headers) == 0 {
-		return nil, nil
+	call := outboundForms{Proxy: proxyurl.Password(account.ProxyURL), Headers: upheader.Forms(account.Headers)}
+	held := call
+	if copies {
+		held.Headers = upheader.Forms(upheader.Fill(configured, nil))
 	}
-	data, _ := json.Marshal(d)
-	c := &protocol.Credential{Kind: "upstream", Data: data}
-	e.held.addOutbound(account.ID, c)
-	return c, nil
+	e.held.addOutbound(account.ID, held.credential())
+	return call.credential(), nil
 }
 
 // outboundForms are the forms of an account's proxy secret and secret header values that are
@@ -64,6 +69,15 @@ func (e *Extension) outbound(account *protocol.Account) (*protocol.Credential, *
 type outboundForms struct {
 	Proxy   []string `json:"proxy,omitempty"`
 	Headers []string `json:"headers,omitempty"`
+}
+
+// credential returns d as a credential, or nil when it holds no form.
+func (d outboundForms) credential() *protocol.Credential {
+	if len(d.Proxy) == 0 && len(d.Headers) == 0 {
+		return nil
+	}
+	data, _ := json.Marshal(d)
+	return &protocol.Credential{Kind: "upstream", Data: data}
 }
 
 // outboundSecrets returns the forms that c, a credential outbound returned, holds, by name.

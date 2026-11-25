@@ -84,6 +84,11 @@ the **Needs** list named, once:
 `./pluxy account list` shows every account with the provider it needs in the `EXTENSION` column.
 The panel's **Set up pluxy** page at `/panel/` installs providers too.
 
+Antigravity is the exception. pluxy does not ship that provider, so no registry offers it, and
+`pluxy ext install pluxy/antigravity` finds nothing until you have built it yourself: the steps
+are in [`next/archive/antigravity/README.md`](../next/archive/antigravity/README.md). If your CPA
+has Antigravity accounts, the **Needs** list names `pluxy/antigravity` with that pointer.
+
 ### 5. Check
 
 ```bash
@@ -104,9 +109,10 @@ From `config.yaml`:
 - the client keys (never the management key: pluxy keeps its own);
 - routing: the strategy, session affinity, retries, and the cooldown settings;
 - the provider keys (`codex`, `claude`, `gemini`, `vertex`, `interactions`, `xai`,
-  `openai-compatibility`): each key becomes an account, with its base URL, proxy, headers,
-  priority, weight, prefix, excluded models and its `models` names and aliases; models pooled
-  under one alias become a fallback chain;
+  `openai-compatibility`): each key becomes an account, with its base URL, proxy, headers
+  (also those that copy a header from the client's request, `$` and a header name), priority,
+  weight, prefix, excluded models and its `models` names and aliases; models pooled under one
+  alias become a fallback chain;
 - model aliases and excluded models for signed-in accounts (`oauth-model-alias`,
   `oauth-excluded-models`);
 - the payload rules;
@@ -119,9 +125,11 @@ From `config.yaml`:
   per group (`Gemini`, `Claude / GPT`). The Antigravity provider is archived: it serves only once
   you install it by hand.
 
-From the auth folder, the files of these types: `codex`, `claude`, `kimi`, `vertex`, `xai`, `meta`
-and `devin`. Each becomes an account whose ID is the file's name without `.json`, with the file's
-label, priority, prefix, proxy, headers and whether it was disabled.
+From the auth folder, the files of these types: `codex`, `claude`, `kimi`, `vertex`, `xai`, `meta`,
+`devin` and `antigravity`. Each becomes an account whose ID is the file's name without `.json`,
+with the file's label, priority, prefix, proxy, headers and whether it was disabled. An
+`antigravity` account serves only once you have built and installed the Antigravity extension by
+hand (step 4).
 
 [`next/README.md`](../next/README.md#configyaml-with-todays-key-names) has the full list: every
 CPA setting with what pluxy does with it, and every field read from each type of auth file. It
@@ -134,9 +142,10 @@ describes a `config.yaml` written for pluxy's own earlier core, a CPA fork, whic
 | --- | --- |
 | The management key, plain or as a bcrypt hash | pluxy keeps its own management key: it guards every client of core, and an import does not change it. Change it with `POST /v0/management/management-key/rotate` |
 | The example config's client keys (`your-api-key-1` and the rest) | They are public. The import leaves them out |
-| Antigravity auth files | pluxy does not ship an Antigravity provider. The import names each file it leaves |
+| The Antigravity provider, and its `oauth.providers.antigravity` settings | pluxy does not ship it (it is archived). The auth files do come across as accounts, but they do not serve until you build the extension by hand (step 4); the extension does not read the provider settings (`sensitive-words`, `connection-pool`, the signature and credit switches), and the import names them |
 | Auth files of any other type, or with no `type` | No provider in pluxy serves them. The import names each one |
 | The settings that make another client look like Claude Code (cloaking, fingerprint profiles) and the header defaults | pluxy does not make another client look like Claude Code, so these are left out. One exception: `disable-codex-cloaking` carries over, as `codex_identity: false` on the imported Codex accounts |
+| A header whose value holds `$CPA-SESSION-ID`, or that copies the client's `Authorization`, `Proxy-Authorization`, `X-Api-Key`, `X-Goog-Api-Key` or `Cookie` header | pluxy has no CPA session ID, and never sends a client's key, a proxy password or cookies upstream. The import names each one |
 | `plugins` | pluxy's providers are separate programs, installed as packages, not libraries loaded into the core. The Lamplighter plugin's window ignition is the one exception: it carries over (above) |
 | Lamplighter's notifications and reminders (Bark, webhooks, the usage thresholds, reset reminders) and its own page | pluxy sends no usage notifications. The panel shows each account's usage, and `pluxy account list` its health |
 | Lamplighter's `timezone` | pluxy reads the ignition hours in the machine's local time zone. Move `start_hour` and `end_hour`, or set the machine's time zone |

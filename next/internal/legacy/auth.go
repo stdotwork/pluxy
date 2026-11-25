@@ -38,15 +38,16 @@ type Skipped struct {
 }
 
 // How long before expiry the extensions renew what they log in: Codex 4 days ahead, Claude an
-// hour ahead and xAI five minutes ahead
-// (next/extensions/*/login.go, next/extensions/claude/oauth.go), and a Codex SIWC sign-in five
-// minutes ahead (next/extensions/codex/siwc.go). Imported accounts get the same;
-// the others use core's default.
+// hour ahead, xAI five minutes ahead and Antigravity half an hour ahead
+// (next/extensions/*/login.go, next/extensions/claude/oauth.go, next/archive/antigravity/login.go),
+// and a Codex SIWC sign-in five minutes ahead (next/extensions/codex/siwc.go). Imported accounts
+// get the same; the others use core's default.
 const (
-	codexRefreshLead  = 96 * time.Hour
-	claudeRefreshLead = time.Hour
-	xaiRefreshLead    = 5 * time.Minute
-	siwcRefreshLead   = 5 * time.Minute
+	codexRefreshLead       = 96 * time.Hour
+	claudeRefreshLead      = time.Hour
+	xaiRefreshLead         = 5 * time.Minute
+	siwcRefreshLead        = 5 * time.Minute
+	antigravityRefreshLead = 30 * time.Minute
 )
 
 // googleTokenURI is the token endpoint a service account key names by default; the Gemini
@@ -227,7 +228,20 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 			settings["interactions"] = true
 		}
 	case "antigravity":
-		return f, nil, "pluxy no longer ships the Antigravity provider"
+		// pluxy does not ship this extension (next/archive/antigravity), so the account is added
+		// whether or not it is installed: it serves once it is, and the import's Needs list names it.
+		// A request needs the account's Google Cloud project, which the extension keeps with the
+		// credential; a file without one is renewed at once, which finds it.
+		r.Extension = Antigravity
+		renewAhead(antigravityRefreshLead)
+		project := text(m, "project_id")
+		c.Data = object(map[string]any{"project_id": project})
+		if project == "" && c.RefreshToken != "" {
+			c.RefreshAt = now.Unix()
+		}
+		if u := text(m, "base_url"); u != "" {
+			settings["base_url"] = u
+		}
 	case "xai":
 		r.Extension = XAI
 		renewAhead(xaiRefreshLead)
@@ -347,7 +361,7 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 				text[k] = s
 			}
 		}
-		h, dynamic, err := upheader.Import(text)
+		h, left, err := upheader.Import(text)
 		if err != nil {
 			return f, nil, err.Error()
 		}
@@ -355,8 +369,8 @@ func readAuthFile(name string, b []byte, opts ImportOptions, now time.Time) (f A
 			return f, nil, err.Error()
 		}
 		r.Account.Headers = h
-		for _, k := range dynamic {
-			f.Ignored = append(f.Ignored, "headers."+k+" (a value taken from the client's request)")
+		for _, l := range left {
+			f.Ignored = append(f.Ignored, "headers."+l.Name+" ("+l.Why+")")
 		}
 	}
 	f.Record = r

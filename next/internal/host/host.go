@@ -646,7 +646,7 @@ func (e *Extension) call(ctx context.Context, op string, account protocol.Accoun
 		return failed(llm.CodeExtensionUnavailable, fmt.Sprintf("extension %s is not running", e.manifest.ID))
 	default:
 	}
-	proxy, perr := e.outbound(&account)
+	proxy, perr := e.outbound(&account, clientHeaders(ctx))
 	if perr != nil {
 		s := &Stream{}
 		s.fail(perr)

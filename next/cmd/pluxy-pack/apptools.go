@@ -207,7 +207,7 @@ func packAppTools(root, out, programs string, platforms []string, only string, s
 			fmt.Fprintf(stdout, "%s %s %s\n", tool.manifest.ID, tool.manifest.Version, platform)
 		}
 		if len(release.Artifacts) > 0 {
-			ix.Packages[tool.manifest.ID] = tool.manifest.indexPackage("", release)
+			ix.Packages[tool.manifest.ID] = tool.manifest.indexPackage("", tier(tool.manifest.ID), release)
 		}
 	}
 	if count == 0 {

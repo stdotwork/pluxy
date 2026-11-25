@@ -391,14 +391,14 @@ var probePackage = pkg{
 
 // writeCPASetup puts a CLIProxyAPI setup where setup's scan looks for one, below home: a
 // config.yaml and its auth folder. Every key and token in it is made up. Two of the accounts are
-// ones the pick of -first-run serves; the third is of a provider pluxy does not ship.
+// ones the pick of -first-run serves; the third is of a type the import does not take.
 func writeCPASetup(home string) error {
 	dir := filepath.Join(home, ".cli-proxy-api")
 	files := map[string]string{
 		"config.yaml": "port: 8317\napi-keys: [fake-cpa-client-key]\nauth-dir: auths\ndebug: on\n",
-		filepath.Join("auths", "claude-work.json"):   `{"type": "claude", "access_token": "fake-claude-work"}`,
-		filepath.Join("auths", "claude-home.json"):   `{"type": "claude", "access_token": "fake-claude-home"}`,
-		filepath.Join("auths", "antigravity-a.json"): `{"type": "antigravity", "access_token": "fake-antigravity"}`,
+		filepath.Join("auths", "claude-work.json"): `{"type": "claude", "access_token": "fake-claude-work"}`,
+		filepath.Join("auths", "claude-home.json"): `{"type": "claude", "access_token": "fake-claude-home"}`,
+		filepath.Join("auths", "qwen-a.json"):      `{"type": "qwen", "access_token": "fake-qwen"}`,
 	}
 	if err := os.MkdirAll(filepath.Join(dir, "auths"), 0o700); err != nil {
 		return err

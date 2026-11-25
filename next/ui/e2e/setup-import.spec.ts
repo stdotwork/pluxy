@@ -63,7 +63,7 @@ test("a found CLIProxyAPI setup is shown as a dry run, brought across, and its p
   await expect(report).toContainText("Different in pluxy (2)");
   await expect(report).toContainText("listen cannot change while core runs");
   await expect(report).toContainText("Does not come across (2)");
-  await expect(report).toContainText("antigravity-a.json");
+  await expect(report).toContainText("qwen-a.json");
   await expect(report).toContainText("Claude is not installed, and 2 accounts need it.");
   // No key or token of the setup is on the page.
   await expect(page.locator("body")).not.toContainText("fake-c");

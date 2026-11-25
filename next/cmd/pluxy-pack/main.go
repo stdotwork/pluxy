@@ -50,13 +50,16 @@ const manifestFile = "pluxy-extension.json"
 const usage = `pluxy-pack builds the release archives of the extensions in ./extensions and the registry
 index that installs them. Run it from the next module (the folder with go.mod).
 
-usage: pluxy-pack -out <folder> [-platforms <goos>/<goarch>,...] [-extensions <name>,...]
+usage: pluxy-pack -out <folder> [-platforms <goos>/<goarch>,...] [-extensions <name>,...] [-archived]
        pluxy-pack -out <folder> -app-tools <programs> [-platforms ...] [-extensions ...]
 
 For every extension and platform it builds the program, writes
 <folder>/bundled/<publisher>-<name>-<version>-<goos>-<goarch>.tar.gz and lists every archive
 in <folder>/bundled/index.json. Start core with -bundled <folder>/bundled/index.json (or put
 the bundled folder beside the pluxy program) to install and enable them on its first start.
+
+With -archived it also packs the extensions pluxy no longer ships, from ./archive, each built in
+its own module and listed with the tier "unverified". Nothing packs them by default.
 
 With -app-tools it packs the desktop app's native tools under ./app-tools instead, for each
 platform a tool's manifest names among -platforms, from the program built beforehand at
@@ -88,6 +91,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	out := flags.String("out", "", "output folder (required)")
 	platformsFlag := flags.String("platforms", runtime.GOOS+"/"+runtime.GOARCH, "comma-separated GOOS/GOARCH platforms (default: the host platform)")
 	extensionsFlag := flags.String("extensions", "", "comma-separated extension folder names to pack (default: all)")
+	archivedFlag := flags.Bool("archived", false, "also pack the archived extensions under archive/, which pluxy no longer ships (tier unverified)")
 	appToolsFlag := flags.String("app-tools", "", "pack the app's native tools from the programs built in this folder, as <folder>/<goos>-<goarch>/<program>")
 	flags.Usage = func() {
 		fmt.Fprint(stderr, usage)
@@ -114,7 +118,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if *appToolsFlag != "" {
 		return packAppTools(root, *out, *appToolsFlag, platforms, *extensionsFlag, stdout)
 	}
-	extensions, err := loadExtensions(root)
+	extensions, err := loadExtensions(root, *archivedFlag)
 	if err != nil {
 		return err
 	}
@@ -147,7 +151,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			}
 			goos, goarch, _ := strings.Cut(platform, "/")
 			built := filepath.Join(buildDir, ext.name+"-"+goos+"-"+goarch)
-			if err := buildProgram(root, "./extensions/"+ext.name, built, goos, goarch, stderr); err != nil {
+			if err := ext.build(root, built, goos, goarch, stderr); err != nil {
 				return err
 			}
 			archive, err := ext.archive(program, built)
@@ -167,7 +171,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			count++
 			fmt.Fprintf(stdout, "%s %s %s\n", ext.manifest.ID, ext.manifest.Version, platform)
 		}
-		ix.Packages[ext.manifest.ID] = ext.manifest.indexPackage(kindProvider, release)
+		ix.Packages[ext.manifest.ID] = ext.manifest.indexPackage(kindProvider, ext.tier(), release)
 	}
 
 	body, err := json.MarshalIndent(ix, "", "  ")
@@ -226,8 +230,9 @@ func moduleRoot() (string, error) {
 
 // extension is one extension folder with a package manifest.
 type extension struct {
-	name     string // the folder name under extensions/
+	name     string // the folder name under extensions/ (or archive/)
 	dir      string // the folder's path
+	archived bool   // from archive/: a module of its own that pluxy no longer ships
 	manifest manifest
 	raw      []byte // the manifest's bytes, as the archive holds them
 }
@@ -249,12 +254,31 @@ type manifest struct {
 }
 
 // loadExtensions reads every extension folder under root/extensions that has a manifest, in
-// folder order.
-func loadExtensions(root string) ([]extension, error) {
+// folder order, and with archived the folders of root/archive that have one, after them.
+func loadExtensions(root string, archived bool) ([]extension, error) {
 	dir := filepath.Join(root, "extensions")
-	entries, err := os.ReadDir(dir)
+	extensions, err := readExtensions(dir, false)
 	if err != nil {
 		return nil, fmt.Errorf("extensions folder: %w", err)
+	}
+	if len(extensions) == 0 {
+		return nil, fmt.Errorf("no extension with a %s under %s", manifestFile, dir)
+	}
+	if archived {
+		old, err := readExtensions(filepath.Join(root, "archive"), true)
+		if err != nil {
+			return nil, fmt.Errorf("archive folder: %w", err)
+		}
+		extensions = append(extensions, old...)
+	}
+	return extensions, nil
+}
+
+// readExtensions reads the folders of dir that have a manifest, in folder order.
+func readExtensions(dir string, archived bool) ([]extension, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
 	}
 	var extensions []extension
 	for _, entry := range entries {
@@ -276,10 +300,7 @@ func loadExtensions(root string) ([]extension, error) {
 		if err := m.validate(); err != nil {
 			return nil, fmt.Errorf("%s: %w", entry.Name(), err)
 		}
-		extensions = append(extensions, extension{name: entry.Name(), dir: extDir, manifest: m, raw: raw})
-	}
-	if len(extensions) == 0 {
-		return nil, fmt.Errorf("no extension with a %s under %s", manifestFile, dir)
+		extensions = append(extensions, extension{name: entry.Name(), dir: extDir, archived: archived, manifest: m, raw: raw})
 	}
 	return extensions, nil
 }
@@ -360,10 +381,19 @@ func archiveName(m manifest, platform string) string {
 	return fmt.Sprintf("%s-%s-%s-%s.tar.gz", name, m.Version, goos, goarch)
 }
 
-// buildProgram builds the extension at pkg, relative to root, into out for goos/goarch.
-func buildProgram(root, pkg, out, goos, goarch string, stderr io.Writer) error {
+// build builds the extension's program into out for goos/goarch: a package of the module at
+// root, or, for an archived extension, the module of its own folder.
+func (e extension) build(root, out, goos, goarch string, stderr io.Writer) error {
+	if e.archived {
+		return buildProgram(e.dir, ".", out, goos, goarch, stderr)
+	}
+	return buildProgram(root, "./extensions/"+e.name, out, goos, goarch, stderr)
+}
+
+// buildProgram builds the package pkg of the module at dir into out for goos/goarch.
+func buildProgram(dir, pkg, out, goos, goarch string, stderr io.Writer) error {
 	cmd := exec.Command("go", "build", "-buildvcs=false", "-trimpath", "-ldflags", "-s -w", "-o", out, pkg)
-	cmd.Dir = root
+	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "CGO_ENABLED=0")
 	cmd.Stdout, cmd.Stderr = stderr, stderr
 	if err := cmd.Run(); err != nil {
@@ -511,10 +541,18 @@ func tier(id string) string {
 	return "verified"
 }
 
+// tier is the index's tier for the extension: an archived one is no longer reviewed.
+func (e extension) tier() string {
+	if e.archived {
+		return "unverified"
+	}
+	return tier(e.manifest.ID)
+}
+
 // indexPackage is the index's entry for m with its one release; kind is used when the manifest
-// names none.
-func (m manifest) indexPackage(kind string, release indexRelease) indexPackage {
-	return indexPackage{Title: m.Title, Summary: m.Summary, Kind: cmp.Or(m.Kind, kind), Tier: tier(m.ID),
+// names none, and tier says how far the registry vouches for it.
+func (m manifest) indexPackage(kind, tier string, release indexRelease) indexPackage {
+	return indexPackage{Title: m.Title, Summary: m.Summary, Kind: cmp.Or(m.Kind, kind), Tier: tier,
 		Releases: []indexRelease{release}}
 }
 
