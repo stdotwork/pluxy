@@ -25,7 +25,7 @@ func ReportsQuota(info protocol.Info) bool {
 // from every other reply. A limit's feature counts only from an extension that implements minor
 // version 18 or later.
 func (e *Extension) Quota(ctx context.Context, account protocol.Account) (*protocol.Quota, *llm.Error) {
-	proxy, perr := e.outbound(&account)
+	proxy, perr := e.outbound(&account, nil)
 	if perr != nil {
 		return nil, perr
 	}

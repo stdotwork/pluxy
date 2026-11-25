@@ -26,7 +26,7 @@ const MaxListedModels = 10000
 // credential and every secret in its settings is removed from the reply, as from every other
 // reply.
 func (e *Extension) Models(ctx context.Context, account protocol.Account) (*protocol.ModelList, *llm.Error) {
-	proxy, perr := e.outbound(&account)
+	proxy, perr := e.outbound(&account, nil)
 	if perr != nil {
 		return nil, perr
 	}

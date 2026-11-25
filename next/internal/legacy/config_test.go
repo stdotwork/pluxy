@@ -1271,15 +1271,16 @@ claude-api-key:
 }
 
 // A provider key's headers, as today's core reads them: values that are numbers or true or false
-// are their text, names and values are trimmed, empty ones are dropped, and a value today's core
-// takes from the client's request is named and not imported. In the older layout an entry's
-// headers are its key's; an openai-compatibility group's are each of its keys'.
+// are their text, names and values are trimmed, empty ones are dropped, a value that copies a
+// client header comes across as "$" and its name, and one this core does not send (a copy of the
+// client's key header, $CPA-SESSION-ID) is named with why and not imported. In the older layout
+// an entry's headers are its key's; an openai-compatibility group's are each of its keys'.
 func TestProviderHeaders(t *testing.T) {
 	r := translate(t, `
 claude-api-key:
   - api-key: k1
     base-url: https://gw.example
-    headers: {" X-Gateway-Key ": " fake-gw ", X-Port: 8080, X-On: true, X-Empty: "", X-Copy: "$X-Client", X-Session: "s-$CPA-SESSION-ID"}
+    headers: {" X-Gateway-Key ": " fake-gw ", X-Port: 8080, X-On: true, X-Empty: "", X-Copy: "$ X-Client", X-Session: "s-$CPA-SESSION-ID", X-Key: "$x-api-key"}
 openai-compatibility:
   - name: relay
     base-url: https://relay.example/v1
@@ -1290,15 +1291,18 @@ openai-compatibility:
 `)
 	exts := asJSON(t, r.Config["extensions"]).(map[string]any)
 	claude := exts[Claude].(map[string]any)["accounts"].([]any)[0].(map[string]any)
-	equalJSON(t, claude["headers"], `{"X-Gateway-Key": "fake-gw", "X-Port": "8080", "X-On": "true"}`)
+	equalJSON(t, claude["headers"], `{"X-Gateway-Key": "fake-gw", "X-Port": "8080", "X-On": "true", "X-Copy": "$X-Client"}`)
 	for _, a := range exts[OpenAICompatible].(map[string]any)["accounts"].([]any) {
 		equalJSON(t, a.(map[string]any)["headers"], `{"X-Relay": "one"}`)
 	}
 	n := notices(r)
-	for _, name := range []string{"X-Copy", "X-Session"} {
-		if !strings.Contains(n, "header "+name+" takes its value from the client's request") {
-			t.Errorf("notices do not name %s:\n%s", name, n)
+	for _, want := range []string{"header X-Session not imported: its value holds $CPA-SESSION-ID", "header X-Key not imported: it copies the client's X-Api-Key header"} {
+		if !strings.Contains(n, want) {
+			t.Errorf("notices do not say %q:\n%s", want, n)
 		}
+	}
+	if strings.Contains(n, "X-Copy") {
+		t.Errorf("notices name X-Copy, which came across:\n%s", n)
 	}
 	if strings.Contains(n, "fake-gw") || strings.Contains(n, ".headers") {
 		t.Errorf("notices name the headers setting or a value:\n%s", n)

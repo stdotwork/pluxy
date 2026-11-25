@@ -31,7 +31,7 @@ func (e *Extension) Login(ctx context.Context, account protocol.Account, login p
 		}
 	}
 	l.addSecrets(login.Input)
-	proxy, perr := e.outbound(&account)
+	proxy, perr := e.outbound(&account, nil)
 	if perr != nil {
 		l.fail(perr)
 		return l
@@ -336,7 +336,7 @@ func (l *LoginCall) readError(err error) *llm.Error {
 // one. Errors have the sent credential and the secrets in the account's settings removed from
 // them.
 func (e *Extension) Refresh(ctx context.Context, account protocol.Account) (*protocol.Credential, *llm.Error) {
-	proxy, perr := e.outbound(&account)
+	proxy, perr := e.outbound(&account, nil)
 	if perr != nil {
 		return nil, perr
 	}

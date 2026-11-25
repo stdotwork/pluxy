@@ -104,9 +104,10 @@ From `config.yaml`:
 - the client keys (never the management key: pluxy keeps its own);
 - routing: the strategy, session affinity, retries, and the cooldown settings;
 - the provider keys (`codex`, `claude`, `gemini`, `vertex`, `interactions`, `xai`,
-  `openai-compatibility`): each key becomes an account, with its base URL, proxy, headers,
-  priority, weight, prefix, excluded models and its `models` names and aliases; models pooled
-  under one alias become a fallback chain;
+  `openai-compatibility`): each key becomes an account, with its base URL, proxy, headers
+  (also those that copy a header from the client's request, `$` and a header name), priority,
+  weight, prefix, excluded models and its `models` names and aliases; models pooled under one
+  alias become a fallback chain;
 - model aliases and excluded models for signed-in accounts (`oauth-model-alias`,
   `oauth-excluded-models`);
 - the payload rules;
@@ -130,6 +131,7 @@ describes a `config.yaml` written for pluxy's own earlier core, a CPA fork, whic
 | Antigravity auth files | pluxy does not ship an Antigravity provider. The import names each file it leaves |
 | Auth files of any other type, or with no `type` | No provider in pluxy serves them. The import names each one |
 | The settings that make another client look like Claude Code (cloaking, fingerprint profiles) and the header defaults | pluxy does not make another client look like Claude Code, so these are left out. One exception: `disable-codex-cloaking` carries over, as `codex_identity: false` on the imported Codex accounts |
+| A header whose value holds `$CPA-SESSION-ID`, or that copies the client's `Authorization`, `Proxy-Authorization`, `X-Api-Key`, `X-Goog-Api-Key` or `Cookie` header | pluxy has no CPA session ID, and never sends a client's key, a proxy password or cookies upstream. The import names each one |
 | `plugins` | pluxy's providers are separate programs, installed as packages, not libraries loaded into the core |
 | The panel download settings (`panel-github-repository`, `disable-auto-update-panel`, `disable-control-panel`) | The panel is built into pluxy; nothing is downloaded, and it is always on with the management API |
 | The remote model catalogs (`models.catalog` and the others) | Each provider carries its own model list |
