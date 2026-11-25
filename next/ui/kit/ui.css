@@ -58,7 +58,7 @@
 
   .mono {
     font-family: var(--px-font-mono);
-    font-size: 0.95em;
+    font-size: var(--px-font-size-mono);
   }
 
   .muted,

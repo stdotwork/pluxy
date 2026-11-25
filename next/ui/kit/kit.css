@@ -5,6 +5,7 @@
    Each file below wraps its rules in @layer kit. A page's CSS sits beside the page and is
    imported here; the order of the imports is the cascade order. */
 
+@import "./fonts.css";
 @import "./ui.css";
 @import "./shell.css";
 @import "./pages/themes.css";

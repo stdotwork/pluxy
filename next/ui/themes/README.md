@@ -91,32 +91,32 @@ anything.
 
 | Token | Used for | Default (light / dark) |
 | --- | --- | --- |
-| `color.bg` | Page background | `#f7f7f8` / `#111214` |
-| `color.surface` | Navigation, cards, panes, table rows | `#ffffff` / `#1a1b1e` |
-| `color.surface-raised` | Hover and selected rows, inputs | `#f0f0f2` / `#24262a` |
-| `color.text` | Body text | `#18181b` / `#e7e7ea` |
-| `color.text-muted` | Labels, secondary text | `#5f6068` / `#9a9ba3` |
-| `color.border` | Borders and dividers | `#e2e2e6` / `#2e3035` |
-| `color.accent` | Buttons, selection, links | `#2f5fd0` / `#7aa2ff` |
-| `color.accent-text` | Text on `color.accent` | `#ffffff` / `#0b1020` |
-| `color.ok` | Healthy states | `#1f7a3d` / `#5cc98a` |
-| `color.warn` | Degraded states | `#9a5b00` / `#e6b450` |
-| `color.danger` | Errors, destructive actions | `#b42318` / `#ff7b72` |
-| `color.focus` | Keyboard focus ring | `#2f5fd0` / `#7aa2ff` |
+| `color.bg` | Page background | `#fdfcf9` / `#171614` |
+| `color.surface` | Cards, panes, table rows | `#fdfcf9` / `#171614` |
+| `color.surface-raised` | Hover and selected rows, inputs | `#f2f0e9` / `#24231f` |
+| `color.text` | Body text | `#1b1a17` / `#eceae3` |
+| `color.text-muted` | Labels, secondary text | `#55524a` / `#b5b2a7` |
+| `color.border` | Borders and dividers | `#e3e0d6` / `#34322d` |
+| `color.accent` | Main buttons, selection, links | `#1b1a17` / `#eceae3` |
+| `color.accent-text` | Text on `color.accent` | `#fdfcf9` / `#171614` |
+| `color.ok` | Healthy states | `#1f7a43` / `#86d3a0` |
+| `color.warn` | Degraded states | `#8f5600` / `#e5b866` |
+| `color.danger` | Errors, destructive actions | `#b3261e` / `#ff8f80` |
+| `color.focus` | Keyboard focus ring | `#1b1a17` / `#eceae3` |
 | `color.meter-track` | Unused part of a quota meter | `var(--px-color-surface-raised)` |
 | `color.meter-fill` | Used share of a quota meter | `var(--px-color-accent)` |
 | `color.chart-success` | Successful requests in the Dashboard's traffic chart | `var(--px-color-ok)` |
 | `color.chart-failure` | Failed requests in the Dashboard's traffic chart | `var(--px-color-danger)` |
-| `color.diff-add` | Added lines in a diff | `#1f7a3d` / `#5cc98a` |
-| `color.diff-remove` | Removed lines in a diff | `#b42318` / `#ff7b72` |
-| `color.nav` | Navigation background | `var(--px-color-surface)` |
+| `color.diff-add` | Added lines in a diff | `#1f7a43` / `#86d3a0` |
+| `color.diff-remove` | Removed lines in a diff | `#b3261e` / `#ff8f80` |
+| `color.nav` | Navigation background | `color-mix(in srgb, var(--px-color-surface) 97%, black)` / `color-mix(in srgb, var(--px-color-surface) 80%, black)` |
 | `color.nav-text` | The product name in the navigation, and a hovered entry's text | `var(--px-color-text)` |
 | `color.nav-muted` | Navigation entries, and the status block's second line | `var(--px-color-text-muted)` |
 | `color.nav-hover` | Background of a hovered navigation entry | `var(--px-color-surface-raised)` |
 | `color.nav-selected` | Background of the current navigation entry; its text is `color.accent` | `color-mix(in srgb, var(--px-color-accent) 14%, transparent)` |
 | `color.nav-border` | The navigation's border, and the line over its status block | `var(--px-color-border)` |
 | `color.overlay` | Dialog background | `var(--px-color-surface)` |
-| `color.input-border` | Border of text inputs, selects and text areas | `var(--px-color-border)` |
+| `color.input-border` | Border of text inputs, selects and text areas | `color-mix(in srgb, var(--px-color-text-muted) 70%, var(--px-color-surface))` |
 | `color.placeholder` | Placeholder text in an empty input | `var(--px-color-text-muted)` |
 | `color.selected` | Background of a selected table row and of the selected tab | `var(--px-color-surface-raised)` |
 | `color.selected-text` | Text of a selected list item | `var(--px-color-text)` |
@@ -131,17 +131,28 @@ placeholder text now has one colour and full opacity in every browser (`color.pl
 configuration diff now has a background (`color.code-bg`), where each had only the browser's or no
 colour of its own.
 
+`color.nav` and `color.input-border` are mixed from other tokens in the same way: the navigation
+is a shade darker than `color.surface`, and an input's border is `color.text-muted` faded towards
+`color.surface`, which keeps it at least 3:1 against the surface in the default theme.
+
 ### Type
 
 | Token | Used for | Default |
 | --- | --- | --- |
-| `font.body` | All text | `system-ui, -apple-system, "Segoe UI", sans-serif` |
-| `font.mono` | IDs, versions, code | `ui-monospace, "SF Mono", Menlo, Consolas, monospace` |
-| `font.size` | Body text size | `14px` |
+| `font.body` | All text | `"IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif` |
+| `font.mono` | IDs, versions, code | `"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace` |
+| `font.size` | Body text size | `13px` |
 | `font.size-small` | Labels, table headings | `12px` |
-| `font.size-title` | Page titles | `20px` |
-| `font.line-height` | Body line height | `1.45` |
+| `font.size-title` | Page titles, in the header strip | `14px` |
+| `font.size-mono` | Monospaced values inside text, such as addresses, IDs and versions | `12px` |
+| `font.line-height` | Body line height | `1.4` |
 | `font.weight-strong` | Headings, emphasis | `600` |
+
+The UI ships IBM Plex Sans (weights 400, 500 and 600) and IBM Plex Mono (400 and 500), Latin
+characters only, as files of its own: the default `font.body` and `font.mono` look the same on
+every machine and load nothing from elsewhere. A character they lack comes from the device's own
+fonts, as does a family a theme names that the device has. Digits all have one width, so numbers
+in a column line up.
 
 ### Spacing and density
 
@@ -153,17 +164,25 @@ colour of its own.
 | `size.rail` | Width of the navigation as a rail of icons | `48px` |
 | `size.header` | Height of the header strip over the page, and of the product name's row in the navigation. The strip grows when its content needs more | `44px` |
 | `size.topics` | Width of the list of topics beside a page | `180px` |
+| `size.row` | Height of a one-line row in a list | `36px` |
+| `size.row-tall` | Height of a row with a second line under its name, such as a reason | `44px` |
+| `size.control` | Height of buttons, inputs, selects and segmented choices | `28px` |
+| `size.control-main` | Height of a page's one main action | `32px` |
 | `size.width-wide` | Content width for the `wide` width option | `1200px` |
 | `size.width-narrow` | Content width for the `narrow` width option | `760px` |
 | `size.detail` | Width of the detail pane beside a list | `360px` |
+
+`density` does not change the four heights (`size.row`, `size.row-tall`, `size.control` and
+`size.control-main`): a theme that wants shorter rows sets them. The kit's lists and controls do not
+read them yet; a theme can set them now, and they take effect as the controls move to them.
 
 ### Shape
 
 | Token | Used for | Default |
 | --- | --- | --- |
-| `shape.radius` | Corners of cards, panes, buttons and inputs | `8px` |
+| `shape.radius` | Corners of cards, panes, buttons and inputs | `4px` |
 | `shape.border` | Border width | `1px` |
-| `shadow.raised` | Shadow of cards and panes | `0 1px 2px rgb(0 0 0 / 0.06)` |
+| `shadow.raised` | Shadow of cards and panes | `none` |
 
 ### Motion
 

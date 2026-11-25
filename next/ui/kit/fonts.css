@@ -1,0 +1,47 @@
+/* The typefaces the default theme names: IBM Plex Sans and IBM Plex Mono, Latin subsets, kept as
+   files of the kit so text looks the same on every machine. The build embeds them in the built
+   stylesheet as data: URLs, which the panel's and the app window's Content Security Policies allow
+   for fonts, so nothing is fetched for them. Their licence (SIL Open Font License 1.1) is in
+   THIRD_PARTY_NOTICES.md. */
+
+@layer kit {
+  @font-face {
+    font-family: "IBM Plex Sans";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url("./fonts/plex-sans-400.woff2") format("woff2");
+  }
+
+  @font-face {
+    font-family: "IBM Plex Sans";
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url("./fonts/plex-sans-500.woff2") format("woff2");
+  }
+
+  @font-face {
+    font-family: "IBM Plex Sans";
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url("./fonts/plex-sans-600.woff2") format("woff2");
+  }
+
+  @font-face {
+    font-family: "IBM Plex Mono";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url("./fonts/plex-mono-400.woff2") format("woff2");
+  }
+
+  @font-face {
+    font-family: "IBM Plex Mono";
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url("./fonts/plex-mono-500.woff2") format("woff2");
+  }
+}
