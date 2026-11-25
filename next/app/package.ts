@@ -1,9 +1,10 @@
-// The app's two package commands. Run from next/app (the front end built first, bun run build):
+// The app's three package commands. Run from next/app (the front end built first, bun run build):
 //
-//   bun package.ts test <out-dir>        the test package: a disposable Linux AppImage, Windows
 //   bun package.ts test <out-dir>        the test package: a disposable Linux AppImage, Windows
 //                                        folder bundle and per-user setup program, or macOS app
 //                                        bundle and disk image, for checks only
+//   bun package.ts local <out-dir>       the local build: a Linux app a person can open and use,
+//                                        with a core and the real providers inside; not a release
 //   bun package.ts release [artifact...] the release gate: builds the release app and checks it
 //                                        and each artifact given (an AppImage, a Windows folder
 //                                        bundle or a macOS app bundle); it uploads nothing
@@ -71,6 +72,19 @@
 // and every proxy variable pointing at a closed port, so a download that is still tried fails the
 // build. After the build, the tools folder must hold only the pinned tools and the two plugin
 // scripts the bundler writes from its own copy.
+//
+// local builds the app for this Linux computer with tauri build --no-bundle: the release profile,
+// the local-build feature (the window's title says "local build", and the program carries the
+// test build marker the release gate refuses) and an overlay: identifier dev.pluxy.desktop.local,
+// product name "pluxy Local", binary pluxy-app-local, so its settings and data folders are its
+// own. No native-test feature: it runs no checks and stays open. Its core is a release made here
+// as the test package's are, but with the real provider extensions of ./extensions as its
+// bundled/ packages (`go run ./cmd/pluxy-pack`), signed with a key made here and dropped when the
+// command ends. It writes the installed layout bundled_core.rs `place` expects:
+// <out-dir>/bin/pluxy-app-local and <out-dir>/bin/pluxy, <out-dir>/lib/pluxy Local/core/bundled/,
+// and <out-dir>/local-build.json naming the program and the core's packages. An <out-dir> that is
+// not empty is replaced only if it holds a local-build.json. Run it with
+// <out-dir>/bin/pluxy-app-local. It has no updater key, so it never updates itself.
 //
 // release builds the release validator (src-tauri/examples/validate-release-config.rs, a debug
 // tooling build with the same config and features), then the app with tauri build --no-bundle: the
@@ -141,14 +155,33 @@ interface BundledCore {
 /** The test-signed core releases the two test builds come with, checked and unpacked by the
  * bundle-core tool into work (see the top of this file), by core version. */
 function bundledCores(work: string): Record<string, BundledCore> {
-  const releases = join(work, "core-releases");
   const prepared = join(work, "core-prepared");
-  mkdirSync(releases);
   run("go", ["run", "./e2e/panelcore", "-probe", "-prepare", prepared], next);
+  return signedCores(work, [CORE_VERSION, UPDATE_CORE_VERSION], "test-package", (bundled, v) => {
+    cpSync(join(prepared, "bundled"), bundled, { recursive: true });
+    // Both versions bundle the same test packages: a file naming the version makes each part of
+    // the program set differ between them, as two releases' do (the update session ends an
+    // update after its first part, bundled\, and checks that the folder is then neither set).
+    writeFileSync(join(bundled, "test-core-version.txt"), `${v}\n`);
+  });
+}
+
+/** Core releases of versions, each a core built with Go at that version with the packages fill
+ * puts in its bundled/ folder, signed with a publisher key made here whose private key stays in
+ * this process (its ID starts with label), then checked and unpacked by the bundle-core tool into
+ * work, by core version. */
+function signedCores(
+  work: string,
+  versions: string[],
+  label: string,
+  fill: (bundled: string, version: string) => void,
+): Record<string, BundledCore> {
+  const releases = join(work, "core-releases");
+  mkdirSync(releases);
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
-  const keyId = `test-package-${randomUUID()}`;
+  const keyId = `${label}-${randomUUID()}`;
   const entries = [];
-  for (const v of [CORE_VERSION, UPDATE_CORE_VERSION]) {
+  for (const v of versions) {
     const folder = join(releases, `core-${v}`);
     mkdirSync(folder);
     // As a release builds it (next/Dockerfile): no cgo, no local paths, the version linked in.
@@ -167,11 +200,7 @@ function bundledCores(work: string): Record<string, BundledCore> {
       next,
       { ...(process.env as Record<string, string>), CGO_ENABLED: "0" },
     );
-    cpSync(join(prepared, "bundled"), join(folder, "bundled"), { recursive: true });
-    // Both versions bundle the same test packages: a file naming the version makes each part of
-    // the program set differ between them, as two releases' do (the update session ends an
-    // update after its first part, bundled\, and checks that the folder is then neither set).
-    writeFileSync(join(folder, "bundled", "test-core-version.txt"), `${v}\n`);
+    fill(join(folder, "bundled"), v);
     entries.push(coreRelease(releases, v, folder, privateKey, keyId));
   }
   const index = join(releases, "index.json");
@@ -182,7 +211,7 @@ function bundledCores(work: string): Record<string, BundledCore> {
   const exe = process.platform === "win32" ? ".exe" : "";
   const tool = join(targetDir, "debug", "examples", `bundle-core${exe}`);
   const cores: Record<string, BundledCore> = {};
-  for (const v of [CORE_VERSION, UPDATE_CORE_VERSION]) {
+  for (const v of versions) {
     const out = join(work, `bundled-${v}`);
     mkdirSync(out);
     run(tool, [index, v, keyId, pub, out], app);
@@ -635,6 +664,80 @@ async function bundleTestPackage(outDir: string) {
   }
 }
 
+/** The local build's names (see the top of this file): never the release's or the test package's. */
+const LOCAL = {
+  identifier: "dev.pluxy.desktop.local",
+  productName: "pluxy Local",
+  mainBinaryName: "pluxy-app-local",
+};
+/** The file a local build's folder holds, which marks the folder as one this command may replace. */
+const LOCAL_RECORD = "local-build.json";
+
+/** The local build (see the top of this file). */
+function localBuild(outDir: string) {
+  if (process.platform !== "linux" || process.arch !== "x64") {
+    throw new Error(`the local build is made on x86_64 Linux; this is ${process.platform} ${process.arch}`);
+  }
+  if (existsSync(outDir) && readdirSync(outDir).length > 0) {
+    if (!existsSync(join(outDir, LOCAL_RECORD))) {
+      throw new Error(`${outDir} is not empty and holds no ${LOCAL_RECORD}: not replacing it`);
+    }
+    rmSync(outDir, { recursive: true, force: true });
+  }
+  mkdirSync(outDir, { recursive: true });
+  const work = mkdtempSync(join(outDir, "work-"));
+  try {
+    // The real provider extensions, as the bundled registry of the core the build comes with.
+    const packs = join(work, "packs");
+    run("go", ["run", "./cmd/pluxy-pack", "-out", packs], next);
+    const cores = signedCores(work, [CORE_VERSION], "local-build", (bundled) => {
+      cpSync(join(packs, "bundled"), bundled, { recursive: true });
+    });
+    const core = cores[CORE_VERSION] as BundledCore;
+    const overlay = join(work, "tauri.local.conf.json");
+    writeFileSync(overlay, JSON.stringify(LOCAL));
+    run(
+      tauri,
+      ["build", "--ci", "--no-bundle", "--features", "local-build", "--config", overlay, "--", "--locked"],
+      app,
+      { ...(process.env as Record<string, string>), PLUXY_BUNDLED_CORE: core.manifest },
+    );
+    // The installed layout bundled_core.rs `place` reads on Linux: the core's program beside the
+    // app's, and its bundled/ in the app's resource folder, lib/<product name>/core/bundled.
+    const bin = join(outDir, "bin");
+    const lib = join(outDir, "lib", LOCAL.productName);
+    mkdirSync(bin);
+    mkdirSync(join(lib, "core"), { recursive: true });
+    const program = join(bin, LOCAL.mainBinaryName);
+    copyFileSync(join(targetDir, "release", LOCAL.mainBinaryName), program);
+    copyFileSync(join(core.dir, coreProgram), join(bin, coreProgram));
+    cpSync(join(core.dir, "bundled"), join(lib, "core", "bundled"), { recursive: true });
+    const config = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), LOCAL.identifier);
+    const data = join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), LOCAL.identifier);
+    writeFileSync(
+      join(outDir, LOCAL_RECORD),
+      `${JSON.stringify(
+        {
+          program,
+          identifier: LOCAL.identifier,
+          product_name: LOCAL.productName,
+          bundled_core: { version: core.version, packages: core.packages },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    console.log(
+      `local build: core ${core.version} with ${core.packages.length} providers: ${core.packages.join(", ")}`,
+    );
+    console.log(`local build: ${outDir}`);
+    console.log(`local build: run it with ${program}`);
+    console.log(`local build: its settings and data go to ${config} and ${data}`);
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+}
+
 /** The build's OUT_DIR whose receipt the built binary carries: its snapshots describe that build. */
 function snapshots(binary: string): string {
   const bytes = readFileSync(binary);
@@ -689,10 +792,14 @@ const [command, ...args] = process.argv.slice(2);
 try {
   if (command === "test" && args.length === 1) {
     await testPackage(resolve(args[0] as string));
+  } else if (command === "local" && args.length === 1) {
+    localBuild(resolve(args[0] as string));
   } else if (command === "release") {
     process.exitCode = releasePackage(args) ? 0 : 1;
   } else {
-    console.error("usage: bun package.ts test <out-dir> | bun package.ts release [artifact...]");
+    console.error(
+      "usage: bun package.ts test <out-dir> | bun package.ts local <out-dir> | bun package.ts release [artifact...]",
+    );
     process.exitCode = 2;
   }
 } catch (e) {

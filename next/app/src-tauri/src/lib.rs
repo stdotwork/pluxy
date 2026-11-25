@@ -9,7 +9,11 @@
 //! device (`device.rs`) serve their pages' files to those webviews over the `pluxy-app:` scheme.
 
 include!(concat!(env!("OUT_DIR"), "/build_receipt.rs"));
-#[cfg(any(feature = "native-test", feature = "artifact-test-trust"))]
+#[cfg(any(
+    feature = "native-test",
+    feature = "artifact-test-trust",
+    feature = "local-build"
+))]
 #[used]
 #[no_mangle]
 pub static PLUXY_TEST_BUILD: [u8; 31] = *b"PLUXY_TEST_BUILD_DO_NOT_RELEASE";
@@ -409,6 +413,13 @@ fn show_in_dock(app: &AppHandle, shown: bool) {
     let _ = (app, shown);
 }
 
+/// The window's title: a local build (package.ts local) says it is one.
+const WINDOW_TITLE: &str = if cfg!(feature = "local-build") {
+    "pluxy (local build)"
+} else {
+    "pluxy"
+};
+
 /// Shows the window, making a new one if it was closed.
 fn open_window(app: &AppHandle) -> tauri::Result<()> {
     show_in_dock(app, true);
@@ -420,7 +431,7 @@ fn open_window(app: &AppHandle) -> tauri::Result<()> {
     let saved = app.state::<App>().window.lock().unwrap().prefs.geometry;
     let (width, height, place) = window::opening(app, saved);
     let mut builder = WindowBuilder::new(app, WINDOW)
-        .title("pluxy")
+        .title(WINDOW_TITLE)
         .inner_size(width, height)
         .min_inner_size(window::MIN_SIZE.0, window::MIN_SIZE.1);
     if let Some((x, y)) = place {
@@ -3170,7 +3181,11 @@ pub fn run() {
     #[cfg(native_stack)]
     spawn::capture();
     std::hint::black_box(&PLUXY_BUILD_RECEIPT);
-    #[cfg(any(feature = "native-test", feature = "artifact-test-trust"))]
+    #[cfg(any(
+        feature = "native-test",
+        feature = "artifact-test-trust",
+        feature = "local-build"
+    ))]
     std::hint::black_box(&PLUXY_TEST_BUILD);
     let context = tauri::generate_context!();
     // The updater plugin exists only when the updater gate passes, before anything else runs: a

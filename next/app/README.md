@@ -1823,13 +1823,14 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
 
 ## Packages
 
-The base `tauri.conf.json` keeps bundling off. Two commands build packages, from this folder,
-after `bun run build`; both use the Tauri CLI pinned in `package.json`:
+The base `tauri.conf.json` keeps bundling off. Three commands build packages, from this folder,
+after `bun run build`; all use the Tauri CLI pinned in `package.json`:
 
 ```bash
 bun run package:test <out-dir>          # the test package, for checks: an AppImage (Linux), a
                                         # folder bundle and a per-user setup program (Windows) or
                                         # an app bundle and disk image (macOS)
+bun run package:local <out-dir>         # the local build, to open and use (Linux): see below
 bun run package:release [artifact...]   # the release gate: builds and checks; uploads nothing
 ```
 
@@ -1919,6 +1920,66 @@ the staged trust folder (`src-tauri/trust`), the built binary (`pluxy-app.exe` o
 each artifact given: an AppImage, a Windows folder bundle or a macOS app bundle. Its last
 line says `release-package: valid`, `release-package: refused: <reason>` or, when it could not
 check, `release-package: failed: <reason>`.
+
+### The local build
+
+The local build is the desktop app built to open and use on this Linux computer, with a core and
+the real provider extensions inside. It is not a release and cannot pass for one. From `next/`:
+
+```bash
+make app-local                        # into next/app/local-build
+make app-local LOCAL=/some/folder     # into a folder of your choice
+```
+
+`make app-local` builds the web panel core embeds (`make panel`), installs and builds the window
+(`bun run build`), then runs `bun run package:local <folder>` here. It needs what the app's other
+builds need ([Build and check](#build-and-check)) and Go. Its last lines say where the build is
+and which providers it carries. Running it again replaces the folder, but only a folder that holds
+`local-build.json`; it refuses any other folder that is not empty.
+
+The folder holds:
+
+| Path in the folder | What it is |
+| --- | --- |
+| `bin/pluxy-app-local` | The app. Start it from here. |
+| `bin/pluxy` | The core the app comes with ([The core the app comes with](#the-core-the-app-comes-with)). |
+| `lib/pluxy Local/core/bundled` | The core's bundled registry: every provider extension in `next/extensions`, built by `go run ./cmd/pluxy-pack`. |
+| `local-build.json` | The app's path, the core's version and the IDs of the providers it carries. |
+
+Start it with `next/app/local-build/bin/pluxy-app-local` from the repository's root (or from the
+folder you gave). On first launch, choose **Run core here** and press **Connect** with both fields empty: the app copies the
+core it came with into its own cores, starts it on a free loopback port and connects. Setup and
+Extensions then offer the providers; none is installed until you install it, and installing one
+needs no network, since the archives are in the folder.
+
+How it differs from a release:
+
+- **Its own name and folders.** Identifier `dev.pluxy.desktop.local`, product name
+  `pluxy Local`, program `pluxy-app-local`. Its settings go to
+  `~/.config/dev.pluxy.desktop.local`, its data and cores to
+  `~/.local/share/dev.pluxy.desktop.local` (under `$XDG_CONFIG_HOME` and `$XDG_DATA_HOME` when
+  set), and its login entry, if you turn one on, to its own file
+  (`dev.pluxy.desktop.local.desktop`), so it never shares anything with an installed release.
+- **Marked as a local build.** The window's title is "pluxy (local build)". The `local-build`
+  Cargo feature also puts the test build marker in the program, so the
+  [release validator](#validate-release-inputs) refuses the program given as an artifact (`test
+  build marker/identity in artifact`), and refuses the build's own config for its identifier and
+  product name.
+- **No test checks.** It is built in the release profile without the `native-test` feature, so it
+  runs no checks and does not exit by itself, as the test package does.
+- **Keys made for the build.** Its core is a release the command makes, as the test package's
+  are, signed with a publisher key made for that one build; the private key stays in the
+  command's memory and is gone when it ends. Nothing is signed with a key kept in the repository.
+  The build has no updater key, so it never updates itself: build it again to update it.
+- **No coding-tool add-ons yet.** The native tools in `next/app-tools` are not built into it,
+  and it has no trusted source for them, so it cannot install them.
+
+To remove it, quit the app (its core stops with it), then delete the build folder and its data:
+
+```bash
+rm -rf next/app/local-build ~/.config/dev.pluxy.desktop.local ~/.local/share/dev.pluxy.desktop.local
+rm -f ~/.config/autostart/dev.pluxy.desktop.local.desktop   # only if you turned on Launch at startup
+```
 
 ### The updater gate
 
