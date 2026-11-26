@@ -440,8 +440,14 @@
     color: var(--px-color-text);
   }
 
+  /* The page behind is veiled in its own background colour, so the prompt stands out in either scheme. */
+  dialog[data-part="close-prompt"] {
+    box-shadow: 0 calc(var(--s) * 2) calc(var(--s) * 8) color-mix(in srgb, var(--px-color-text) 22%, transparent);
+  }
+
   dialog[data-part="close-prompt"]::backdrop {
-    background: color-mix(in srgb, black 40%, transparent);
+    background: color-mix(in srgb, var(--px-color-bg) 60%, transparent);
+    backdrop-filter: blur(2px);
   }
 
   dialog[data-part="close-prompt"] .card,
