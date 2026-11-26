@@ -276,8 +276,7 @@ feature, it keeps the old label, unless the label named something this core does
   [`next/README.md`](../README.md#what-each-setting-does-here)): "Debug Mode", "Commercial Mode",
   "Redis Usage Queue Retention (seconds)", "Auth Auto-refresh Workers", "Pass Through Upstream
   Headers", "WebSocket Authentication", "Subagent session affinity", "Persist cooldown status"
-  (core saves quota blocks and bans to `state/routing.json` by itself, and other cooldowns last in
-  memory through a config reload), "GPT Image 2 Base
+  (core saves quota blocks, rate limits, cooldowns and bans to `state/routing.json` by itself), "GPT Image 2 Base
   Model", "Video result credential cache TTL", the "LAN discovery" section, every Streaming field
   (so there is no Streaming tab), every payload rule (so there is no Payload tab), Claude's and
   Codex's cloaking and header defaults, Codex's response steering and live media relay, the

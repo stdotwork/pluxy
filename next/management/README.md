@@ -300,7 +300,10 @@ the blocks themselves, that one too, stay in `cooldowns`. When several blocks ho
 `exhausted` one decides, then the one that ends last. `next_check` is when core next reads the account's
 usage from its provider; it is absent when no check is due, and while a check of an account without a usage
 reading waits for the one request it lets through. `pluxy account list` shows `state` (with
-`(unverified)`), `until` and `why` as its HEALTH, UNTIL and WHY columns.
+`(unverified)`), `until` and `why` as its HEALTH, UNTIL and WHY columns. Blocks on the account and
+its models with more than 30 seconds left survive a restart, each with its `error`, and so do the
+account's `last_error` and `last_error_at` when one of them set it (see `next/README.md`); endpoint
+blocks and shorter ones do not.
 
 A `broken` account is one whose credential file cannot be read: core knows it only by its file's
 name, so `extension`, `kind` and `state` are empty and `why` names the file and the error. It never

@@ -1885,9 +1885,16 @@ extension says which; see `protocol/README.md`, "quota"). When no window that co
 full, the block ends; otherwise it lasts until the covering full window that resets last resets. An account with no usage reading, such as an API key, lets one
 request through at the check instead, and that request's outcome decides. A real request is never
 the check where a reading exists. A check that cannot be made leaves the block and is made again
-15 minutes later. Quota blocks are saved to `state/routing.json` beside the config file (mode
-0600) and read back at start, where each is checked at once, so a restart sends no requests to
-accounts whose usage ran out. Bans are saved in the same file and read back at start too: for
+15 minutes later. Blocks of every kind (quota, rate limit and cooldown) on an account or one of its
+models with more than 30 seconds left are saved to `state/routing.json` beside the config file
+(mode 0600), each with its kind and the failure that set it (code, status and message, the message
+cut to 256 bytes), and read back at start, with the account's last error when one of them set it, so
+a restart sends no requests to accounts whose usage ran out, that a provider rate limited, or that
+it refused. A quota block read back is checked at once; a rate limit with more than 15 minutes left
+is checked 15 minutes on, as it would have been had core kept running. Endpoint blocks are not
+saved. A file an older core wrote, whose blocks have
+no kind, still loads: they are quota blocks, with the reason "a usage window was used up before
+pluxy restarted". Bans are saved in the same file and read back at start too: for
 each, the account, the provider's reason and when it was banned. A saved ban whose account the
 config no longer has is dropped, at start and on a reload; one for an account that is only out of
 routing for now, such as an extension that is stopped or a login still due, is kept. A ban has no
@@ -1895,8 +1902,8 @@ expiry: it ends when the account signs in again, is removed, or is turned back o
 enable`), and `pluxy account clear` does not lift it. A file core cannot read, or that another
 version wrote, is not loaded and is left as it is until a block must be saved; it is then moved to
 `routing.json.bad`. `pluxy account clear` (`POST /accounts/{id}/cooldown/reset`) still clears an
-account's blocks at once. Each account's `health` in `GET /accounts` sums this up in one word (see
-`management/README.md`, "Accounts").
+account's blocks at once, and `state/routing.json` is written again without them. Each account's
+`health` in `GET /accounts` sums this up in one word (see `management/README.md`, "Accounts").
 
 When every account is blocked, the reply tells the client how long is left in whole seconds,
 rounded up and at least 1 while anything is left: the message's "try again in 1s" (or `1m1s`),
@@ -3183,7 +3190,7 @@ are accepted silently.
 | `routing.cooldown.disable-cooling` (`disable-cooling`) | `routing.disable_cooling`. | Supported |
 | `routing.cooldown.transient-error-cooldown-seconds` (`transient-error-cooldown-seconds`) | `routing.transient_error_cooldown_ms`: above 0 that many seconds, below 0 none. 0 is this core's backoff, from a second doubling to a minute, where today's core waits a fixed minute. | Supported |
 | `routing.cooldown.quota-response-mode` (`quota-cooldown-response-mode`) | `routing.quota_response_mode`: `retryable` (default) or `usage-limit`, letter case aside; another value fails the load, as in today's core. | Supported |
-| `routing.cooldown.save-cooldown-status` (`save-cooldown-status`) | Core saves quota blocks and bans to `state/routing.json` by itself; other blocks live in memory and carry over reloads. | Dropped: no need found |
+| `routing.cooldown.save-cooldown-status` (`save-cooldown-status`) | Core saves bans, and blocks with more than 30 seconds left on accounts and their models, to `state/routing.json` by itself; shorter blocks and endpoint blocks live in memory and carry over reloads. | Dropped: no need found |
 | `quota-exceeded.switch-project`, `quota-exceeded.switch-preview-model` | | Dead |
 | `requests.proxy-url` (`proxy-url`) | `proxy_url`: the [outbound proxy](#outbound-proxy) of every account. A value that is not an `http`, `https`, `socks5` or `socks5h` URL, `direct` or `none` fails the load, where today's core logs it and goes without the proxy. | Supported |
 | Every `proxy-url` on a group or key | The account's `proxy_url`: a key's own, else its group's. | Supported |

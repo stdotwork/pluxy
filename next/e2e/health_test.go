@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -239,6 +240,212 @@ func TestSavedBlockKeepsAccountOutAfterRestart(t *testing.T) {
 	_ = json.Unmarshal(api, &fromAPI)
 	if a, b := mustJSON(fromCLI), mustJSON(fromAPI); a != b {
 		t.Errorf("account list --json printed\n%s\nthe API answers\n%s", a, b)
+	}
+}
+
+// A rate limit, a refused sign-in and a model the upstream does not have are saved with their
+// kind and error when they have more than 30 seconds left, and read back after a restart: each
+// account shows its cooldown and last error, and no request reaches it. A block with 20 seconds
+// left is not saved. Clearing a cooldown is saved while core runs, so after the next restart
+// the account serves. A file an older core wrote, whose blocks have no kind, still loads.
+func TestSavedCooldownSurvivesRestart(t *testing.T) {
+	u := newUpstream(t)
+	u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Header.Get("Authorization") {
+		case "Bearer sk-1111":
+			w.Header().Set("Retry-After", "6831")
+			w.WriteHeader(http.StatusTooManyRequests)
+			io.WriteString(w, `{"error":{"message":"Rate limit reached for requests","type":"requests","code":"rate_limit_exceeded"}}`)
+		case "Bearer sk-2222":
+			w.WriteHeader(http.StatusUnauthorized)
+			io.WriteString(w, `{"error":{"message":"Incorrect API key provided","type":"invalid_request_error","code":"invalid_api_key"}}`)
+		case "Bearer sk-3333":
+			w.WriteHeader(http.StatusNotFound)
+			io.WriteString(w, `{"error":{"message":"The model gpt-test does not exist","type":"invalid_request_error","code":"model_not_found"}}`)
+		case "Bearer sk-4444":
+			w.Header().Set("Retry-After", "20")
+			w.WriteHeader(http.StatusTooManyRequests)
+			io.WriteString(w, `{"error":{"message":"Rate limit reached for requests","type":"requests","code":"rate_limit_exceeded"}}`)
+		default:
+			okReply(w)
+		}
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	account := func(id, key string) map[string]any {
+		return map[string]any{"id": id, "settings": map[string]any{"base_url": u.URL + "/v1"}, "credential": map[string]any{"kind": "api_key", "api_key": key}}
+	}
+	writeConfig(t, path, map[string]any{
+		"listen":         "127.0.0.1:0",
+		"client_keys":    []string{clientKey},
+		"management_key": managementKey,
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "pluxy-extension.json"),
+			"accounts": []any{account("alpha", "sk-1111"), account("bravo", "sk-2222"), account("charlie", "sk-3333"),
+				account("delta", "sk-4444"), account("echo", "sk-ok")},
+		},
+	})
+	bin := filepath.Join(binDir, "pluxy")
+	start := func() (string, func()) {
+		t.Helper()
+		base, _, stop, err := startCoreStoppable(t, bin, "-config", path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return base, stop
+	}
+	accounts := func(base string) map[string]mgmt.Account {
+		t.Helper()
+		code, b := mcall(t, base, managementKey, http.MethodGet, "/accounts", nil)
+		if code != http.StatusOK {
+			t.Fatalf("GET /accounts: %d %s", code, b)
+		}
+		var r mgmt.AccountsReply
+		if err := json.Unmarshal(b, &r); err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]mgmt.Account{}
+		for _, a := range r.Accounts {
+			out[a.ID] = a
+		}
+		return out
+	}
+	sent := func() []string {
+		_, auth := u.received()
+		return auth
+	}
+	type want struct {
+		scope, model, kind, code, message string
+		until                             time.Time
+	}
+	refusedAt := time.Now()
+	wants := map[string]want{
+		"alpha":   {"model", "gpt-test", "rate_limit", "rate_limit", "Rate limit reached for requests", refusedAt.Add(6831 * time.Second)},
+		"bravo":   {"credential", "", "cooldown", "auth", "Incorrect API key provided", refusedAt.Add(30 * time.Minute)},
+		"charlie": {"model", "gpt-test", "cooldown", "not_found", "The model gpt-test does not exist", refusedAt.Add(12 * time.Hour)},
+	}
+	held := func(when string, all map[string]mgmt.Account) {
+		t.Helper()
+		for id, w := range wants {
+			a := all[id]
+			if len(a.Cooldowns) != 1 {
+				t.Errorf("%s %s: cooldowns %+v, want one", id, when, a.Cooldowns)
+				continue
+			}
+			cd := a.Cooldowns[0]
+			if cd.Scope != w.scope || cd.Model != w.model || cd.Kind != w.kind || cd.Until.Sub(w.until).Abs() > 5*time.Second ||
+				cd.Error == nil || cd.Error.Code != w.code || cd.Error.Message != w.message {
+				t.Errorf("%s %s: cooldown %+v (error %+v), want %s %s %s until about %v with %s %q", id, when, cd, cd.Error, w.scope, w.model, w.kind, w.until, w.code, w.message)
+			}
+			if a.LastError == nil || a.LastError.Code != w.code || a.LastError.Message != w.message || a.LastErrorAt == nil || a.LastErrorAt.Sub(refusedAt).Abs() > 5*time.Second {
+				t.Errorf("%s %s: last error %+v at %v, want %s %q at about %v", id, when, a.LastError, a.LastErrorAt, w.code, w.message, refusedAt)
+			}
+		}
+		if h := all["alpha"].Health; h.State != mgmt.HealthCooling || h.Until == nil {
+			t.Errorf("alpha %s: health %+v, want cooling", when, h)
+		}
+		if h := all["bravo"].Health; h.State != mgmt.HealthCooling || h.Why != "Incorrect API key provided" {
+			t.Errorf("bravo %s: health %+v, want cooling with the provider's words", when, h)
+		}
+	}
+
+	base, stop := start()
+	postOK(t, base, plainBody) // alpha, bravo, charlie and delta refuse; echo serves
+	if got, want := sent(), []string{"Bearer sk-1111", "Bearer sk-2222", "Bearer sk-3333", "Bearer sk-4444", "Bearer sk-ok"}; !slices.Equal(got, want) {
+		t.Fatalf("upstream requests = %v, want %v", got, want)
+	}
+	held("before the restart", accounts(base))
+	if a := accounts(base)["delta"]; len(a.Cooldowns) != 1 {
+		t.Fatalf("delta before the restart: cooldowns %+v, want its 20-second rate limit", a.Cooldowns)
+	}
+	stop()
+
+	file := filepath.Join(dir, "state", "routing.json")
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		V      int `json:"v"`
+		Blocks []struct {
+			Account string `json:"account"`
+			Kind    string `json:"kind"`
+			Error   *struct {
+				Code    string `json:"code"`
+				Status  int    `json:"status"`
+				Message string `json:"message"`
+			} `json:"error"`
+		} `json:"blocks"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("%s: %v\n%s", file, err, raw)
+	}
+	var kinds []string
+	for _, b := range doc.Blocks {
+		if b.Error == nil {
+			t.Errorf("%s: %s's block has no error\n%s", file, b.Account, raw)
+			continue
+		}
+		kinds = append(kinds, fmt.Sprintf("%s %s %s %d", b.Account, b.Kind, b.Error.Code, b.Error.Status))
+	}
+	if want := []string{"alpha rate_limit rate_limit 429", "bravo cooldown auth 401", "charlie cooldown not_found 404"}; doc.V != 1 || !slices.Equal(kinds, want) {
+		t.Errorf("%s holds version %d with %v, want version 1 with %v\n%s", file, doc.V, kinds, want, raw)
+	}
+
+	base, stop = start()
+	all := accounts(base)
+	held("after the restart", all)
+	if a := all["delta"]; len(a.Cooldowns) != 0 || a.LastError != nil {
+		t.Errorf("delta after the restart: cooldowns %+v, last error %+v, want none (its block had 20 seconds left)", a.Cooldowns, a.LastError)
+	}
+	for range 3 {
+		postOK(t, base, plainBody)
+	}
+	for _, auth := range sent()[5:] {
+		if auth != "Bearer sk-4444" && auth != "Bearer sk-ok" {
+			t.Errorf("upstream requests after the restart = %v, want none to a held account", sent()[5:])
+			break
+		}
+	}
+
+	// Clear cooldown is saved at once, while core runs: routing.json loses the block.
+	before, _ := os.ReadFile(file)
+	if code, b := mcall(t, base, managementKey, http.MethodPost, "/accounts/alpha/cooldown/reset", nil); code != http.StatusOK {
+		t.Fatalf("cooldown reset: %d %s", code, b)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		b, _ := os.ReadFile(file)
+		if !bytes.Equal(b, before) {
+			if strings.Contains(string(b), `"alpha"`) {
+				t.Errorf("%s after alpha's cooldown was cleared: %s", file, b)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s did not change after alpha's cooldown was cleared: %s", file, b)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	stop()
+	base, stop = start()
+	if a := accounts(base)["alpha"]; len(a.Cooldowns) != 0 || a.Health.State != mgmt.HealthOK {
+		t.Errorf("alpha after its cooldown was cleared and core restarted: %+v, %+v, want ok and no cooldowns", a.Health, a.Cooldowns)
+	}
+	stop()
+
+	// A file an older core wrote: its block has no kind and no error, and reads as a quota block.
+	until := time.Now().Add(3 * time.Hour).UTC().Truncate(time.Second)
+	old := fmt.Sprintf(`{"v": 1, "blocks": [{"account": "alpha", "scope": "credential", "until": %q, "source": "provider"}]}`, until.Format(time.RFC3339))
+	if err := os.WriteFile(file, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base, _ = start()
+	a := accounts(base)["alpha"]
+	if a.Health.State != mgmt.HealthExhausted || len(a.Cooldowns) != 1 || a.Cooldowns[0].Kind != "quota" || !a.Cooldowns[0].Until.Equal(until) ||
+		a.Cooldowns[0].Error == nil || a.Cooldowns[0].Error.Message != "a usage window was used up before pluxy restarted" {
+		t.Errorf("alpha from an older file: %+v, %+v, want exhausted by a quota block until %v with the restart's reason", a.Health, a.Cooldowns, until)
 	}
 }
 
