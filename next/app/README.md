@@ -1979,7 +1979,12 @@ that file does not exist yet (when it exists and names other sources, `start` sa
 It rewrites the root at each start, and keeps the marker and its nonce while the marker names that
 home, so an app already running keeps its trust. Nothing else changes: every add-on's signature,
 size, SHA-256, manifest and installed files are checked as in any build, an archive changed after
-the build is refused, and turning one on still asks you.
+the build is refused, and turning one on still asks you. The Rust test
+`local_build_start_trusts_its_add_ons_and_refuses_a_flipped_byte` (`tests/artifact_trust.rs`, run
+with the `artifact-test-trust` feature) checks that with an add-on signed the way the build signs
+them: the profile `start` writes lets the app install it, and one flipped byte in its archive is
+refused. With `PLUXY_LOCAL_BUILD` naming a build's folder, it runs on that build's own `start` and
+every one of its add-ons.
 
 How it differs from a release:
 
@@ -1996,7 +2001,10 @@ How it differs from a release:
   build marker in the program, so the [release validator](#validate-release-inputs) refuses the
   program given as an artifact (`test build marker/identity in artifact`), refuses the build's own
   config for its identifier and product name, and refuses its `local-build` and
-  `artifact-test-trust` features (`test cargo feature in release`).
+  `artifact-test-trust` features (`test cargo feature in release`). Given the build's own
+  snapshots and program, it says `release configuration refused: release identifier/product must be
+  dev.pluxy.desktop/pluxy`; given a release identifier and product name in that config instead, it
+  says `release configuration refused: test cargo feature in release` for each of the two features.
 - **No test checks.** It is built in the release profile without the `native-test` feature, so it
   runs no checks and does not exit by itself, as the test package does.
 - **Keys made for the build.** Its core and its add-ons are signed with two publisher keys made for
@@ -2065,6 +2073,12 @@ and installed providers stay. An installed provider keeps running the copy you i
 when the new build carries a changed one at the same version: to run the new one, remove the
 provider and install it again (on Extensions, or `pluxy ext remove` and `pluxy ext install`); its
 accounts stay.
+
+The add-ons are signed with a key made for each build, and `start` trusts only the key of the build
+it belongs to. So after a rebuild, the add-ons installed in `home/` show as **Unverified** and turned
+off, and Add-ons says to remove them: **Remove** each one there, **Install** it again and turn it on.
+What Connect wrote into a tool's settings stays, so the tool keeps reaching pluxy meanwhile; only
+its page in the app waits for its add-on.
 
 ### The updater gate
 
