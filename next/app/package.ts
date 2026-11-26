@@ -86,11 +86,15 @@
 // <out-dir>/bin/pluxy-app-local and <out-dir>/bin/pluxy, <out-dir>/lib/pluxy Local/core/bundled/,
 // and <out-dir>/local-build.json: {"program": <out-dir>/bin/pluxy-app-local, "identifier",
 // "product_name", "bundled_core": {"version", "packages"}}. Before building it refuses an <out-dir>
-// that is a link, not a folder, not empty without a valid record, that a program runs from, or
-// that has an <out-dir>.old beside it (checkOutDir). It builds into <out-dir>.stage-<random>, beside
-// it, removed when the build fails or is stopped (SIGINT or SIGTERM: exit 130), so <out-dir> is as
-// it was; then it puts the stage in place, keeping <out-dir>/home (swapIn). Run it with
-// <out-dir>/bin/pluxy-app-local. It has no updater key, so it never updates itself.
+// that is a link or has one among the folders above it, is not a folder, is not empty and not a
+// local build (its record, naming <out-dir>/bin/pluxy-app-local as the program, and that program,
+// the core and its bundled/index.json, files in it), that a program runs from (or when /proc cannot
+// tell), or that has an <out-dir>.old beside it (checkOutDir). It builds into
+// <out-dir>.stage-<random>, beside it, removed when the build fails or is stopped (SIGINT or SIGTERM:
+// exit 130), so <out-dir> is as it was; then it puts the stage in place, keeping <out-dir>/home, once
+// the renamed <out-dir> is checked again (swapIn). A signal during the swap is handled when it ends:
+// exit 130, saying which build is in place. Run it with <out-dir>/bin/pluxy-app-local. It has no
+// updater key, so it never updates itself.
 //
 // release builds the release validator (src-tauri/examples/validate-release-config.rs, a debug
 // tooling build with the same config and features), then the app with tauri build --no-bundle: the
@@ -710,59 +714,105 @@ function present(path: string): boolean {
   return lstatSync(path, { throwIfNoEntry: false }) !== undefined;
 }
 
-/** Whether outDir's record says it is a local build this command made: the local build's
- * identifier and product name, its program inside outDir and a core version. */
-function isLocalBuild(outDir: string): boolean {
-  const path = join(outDir, LOCAL_RECORD);
-  if (!lstatSync(path, { throwIfNoEntry: false })?.isFile()) return false;
-  let record: unknown;
+/** Whether dir is a folder (not a link) holding a local build this command made, whose record names
+ * it as named (dir, or where dir stood before it was renamed): the record has the local build's
+ * identifier and product name and a core version, and names as its program exactly
+ * <named>/bin/pluxy-app-local; and that program, the core beside it and the core's bundled/index.json
+ * are files in dir, reached through no link. */
+function isLocalBuild(dir: string, named = dir): boolean {
   try {
-    record = JSON.parse(readFileSync(path, "utf8"));
+    if (!lstatSync(dir).isDirectory()) return false;
+    const path = join(dir, LOCAL_RECORD);
+    if (!lstatSync(path, { throwIfNoEntry: false })?.isFile()) return false;
+    const r = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown> | null;
+    const core = r?.bundled_core as Record<string, unknown> | null | undefined;
+    if (
+      r?.identifier !== LOCAL.identifier ||
+      r.product_name !== LOCAL.productName ||
+      r.program !== join(named, "bin", LOCAL.mainBinaryName) ||
+      typeof core?.version !== "string"
+    ) {
+      return false;
+    }
+    const real = realpathSync(dir);
+    const parts = [
+      ["bin", LOCAL.mainBinaryName],
+      ["bin", coreProgram],
+      ["lib", LOCAL.productName, "core", "bundled", "index.json"],
+    ];
+    return parts.every(
+      (p) =>
+        lstatSync(join(dir, ...p), { throwIfNoEntry: false })?.isFile() === true &&
+        realpathSync(join(dir, ...p)) === join(real, ...p),
+    );
   } catch {
     return false;
   }
-  if (typeof record !== "object" || record === null) return false;
-  const r = record as Record<string, unknown>;
-  const core = r.bundled_core;
-  return (
-    r.identifier === LOCAL.identifier &&
-    r.product_name === LOCAL.productName &&
-    typeof r.program === "string" &&
-    isAbsolute(r.program) &&
-    inside(outDir, r.program) &&
-    typeof core === "object" &&
-    core !== null &&
-    typeof (core as Record<string, unknown>).version === "string"
-  );
 }
 
 /** The ID of a process whose program is inside outDir (the app, or a core it runs from a home
- * folder there), read from proc's <pid>/exe links; processes it may not read are skipped. */
+ * folder there), read from proc's <pid>/exe links. It throws when it cannot tell: proc cannot be
+ * listed, or the program of a process that could be the build's (plain) cannot be read. A process
+ * with no program (ended since, a zombie, a kernel thread) is skipped. */
 function runningFrom(outDir: string, proc: string): string | undefined {
   const real = realpathSync(outDir);
+  const unsure = (what: string, e: unknown) =>
+    new Error(
+      `cannot tell whether ${LOCAL_NAME} is running: ${what} (${(e as NodeJS.ErrnoException).code ?? (e as Error).message})`,
+    );
   let pids: string[];
   try {
     pids = readdirSync(proc).filter((name) => /^\d+$/.test(name));
-  } catch {
-    return undefined;
+  } catch (e) {
+    throw unsure(`${proc} cannot be listed`, e);
   }
   for (const pid of pids) {
     let exe: string;
     try {
       exe = readlinkSync(join(proc, pid, "exe")).replace(/ \(deleted\)$/, "");
-    } catch {
-      continue;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT" || !plain(join(proc, pid))) continue;
+      throw unsure(`${join(proc, pid, "exe")} cannot be read`, e);
     }
     if (inside(real, exe) || inside(outDir, exe)) return pid;
   }
   return undefined;
 }
 
+/** Whether the process whose proc folder is entry could be one of the local build's programs, which
+ * run as this user and hold no capability: its exe link is this user's (not another user's, nor
+ * root's as for a process that gave up its dump rights, like systemd's (sd-pam)) and its CapPrm is
+ * zero (not so for systemd --user). The kernel hides the program of each of those. */
+function plain(entry: string): boolean {
+  try {
+    if (lstatSync(join(entry, "exe")).uid !== process.getuid?.()) return false;
+    const caps = /^CapPrm:\s*([0-9a-f]+)$/m.exec(readFileSync(join(entry, "status"), "utf8"))?.[1];
+    return caps === undefined || BigInt(`0x${caps}`) === 0n;
+  } catch {
+    // Ended since it was listed.
+    return false;
+  }
+}
+
 /** Throws, saying what to do, unless the local build may be built into outDir: a missing or empty
- * folder, or a local build's (its record checked) that nothing runs from. It refuses a link or
- * anything not a folder, and any outDir while <outDir>.old is left from an earlier build. */
+ * folder, or a local build (isLocalBuild) that nothing runs from. It refuses a link, as outDir or
+ * among the folders above it, anything not a folder, and any outDir while <outDir>.old is left from
+ * an earlier build. */
 export function checkOutDir(outDir: string, proc = "/proc") {
   const elsewhere = "make app-local LOCAL=<folder>";
+  let above = dirname(outDir);
+  while (!present(above)) above = dirname(above);
+  let real = "";
+  try {
+    real = realpathSync(above);
+  } catch {
+    // A dangling link: refused below.
+  }
+  if (real !== above) {
+    throw new Error(
+      `not building into ${outDir}: ${above} is a link or inside one. Name the folder by its own path: make app-local LOCAL=${real ? join(real, relative(above, outDir)) : "<folder>"}`,
+    );
+  }
   if (present(`${outDir}.old`)) {
     throw new Error(
       `${outDir}.old is left from an earlier build and may hold its home folder: move out what you need, delete it, then build again`,
@@ -790,9 +840,11 @@ export function checkOutDir(outDir: string, proc = "/proc") {
 }
 
 /** Puts the finished build in stage in place of outDir. With no outDir, stage is renamed to it.
- * Otherwise outDir becomes <outDir>.old, stage becomes outDir (if that fails, .old is renamed back),
- * .old's home/ moves into the new build, and only then is .old removed: a folder that still holds
- * home/ is never deleted. move renames (renameSync unless given). */
+ * Otherwise outDir becomes <outDir>.old, which must still be an empty folder or a local build
+ * (isLocalBuild), else it is renamed back and nothing else changes; stage becomes outDir (if that
+ * fails, .old is renamed back), .old's home/ moves into the new build, and only then is .old
+ * removed: a folder that still holds home/ is never deleted. Each failure says where the builds and
+ * home/ are. move renames (renameSync unless given). */
 export function swapIn(stage: string, outDir: string, move: (from: string, to: string) => void = renameSync) {
   if (!present(outDir)) {
     move(stage, outDir);
@@ -803,6 +855,19 @@ export function swapIn(stage: string, outDir: string, move: (from: string, to: s
     move(outDir, old);
   } catch (e) {
     throw new Error(`could not put the new build in place (${(e as Error).message}); ${outDir} is as it was`);
+  }
+  // What was renamed is what gets removed below: it must still be what checkOutDir let through, not
+  // something put in its place since.
+  if (!emptyFolder(old) && !isLocalBuild(old, outDir)) {
+    const why = `not putting the new build in place: ${outDir} is no longer a local build (it changed while the build ran)`;
+    try {
+      move(old, outDir);
+    } catch (e) {
+      throw new Error(
+        `${why}, and it could not be put back (${(e as Error).message}): it is in ${old}; move it back to ${outDir}`,
+      );
+    }
+    throw new Error(`${why}; it is as it was`);
   }
   try {
     move(stage, outDir);
@@ -818,16 +883,33 @@ export function swapIn(stage: string, outDir: string, move: (from: string, to: s
     throw new Error(`could not put the new build in place (${why}); the previous build is back in ${outDir}`);
   }
   const home = join(old, "home");
-  if (present(home)) {
-    try {
+  let kept = false;
+  try {
+    if (present(home)) {
       move(home, join(outDir, "home"));
-    } catch (e) {
-      throw new Error(
-        `the new build is in ${outDir}, but its home folder could not be moved there (${(e as Error).message}): it is in ${home}; move it to ${join(outDir, "home")}, then delete ${old}`,
-      );
+      kept = true;
     }
+  } catch (e) {
+    throw new Error(
+      `the new build is in ${outDir}, but its home folder could not be moved there (${(e as Error).message}): it is in ${home}; move it to ${join(outDir, "home")}, then delete ${old}`,
+    );
   }
-  rmSync(old, { recursive: true, force: true });
+  try {
+    rmSync(old, { recursive: true, force: true });
+  } catch (e) {
+    throw new Error(
+      `the new build is in ${outDir}${kept ? " with its home folder" : ""}, but the previous build could not be removed (${(e as Error).message}): delete ${old}, then build again`,
+    );
+  }
+}
+
+/** Whether path is a folder (not a link) with nothing in it. */
+function emptyFolder(path: string): boolean {
+  try {
+    return lstatSync(path).isDirectory() && readdirSync(path).length === 0;
+  } catch {
+    return false;
+  }
 }
 
 /** Runs the local build's commands so that SIGINT or SIGTERM stops the build: each command runs
@@ -883,14 +965,23 @@ class Stoppable {
 }
 
 /** Set when a signal stopped the local build: it then exits with 130. */
-let interrupted = false;
+export let interrupted = false;
 
-/** The local build (see the top of this file). */
-async function localBuild(outDir: string) {
+/** Lets a signal that came while synchronous code ran be handled: its handler runs only when the
+ * event loop next turns. */
+const settle = () => new Promise<void>((done) => setImmediate(done));
+
+/** The local build (see the top of this file). The tests give build, move and proc in place of
+ * buildStage, the swap's rename and /proc. */
+export async function localBuild(
+  outDir: string,
+  stand: { build?: typeof buildStage; move?: (from: string, to: string) => void; proc?: string } = {},
+) {
+  const { build = buildStage, move = renameSync, proc = "/proc" } = stand;
   if (process.platform !== "linux" || process.arch !== "x64") {
     throw new Error(`the local build is made on x86_64 Linux; this is ${process.platform} ${process.arch}`);
   }
-  checkOutDir(outDir);
+  checkOutDir(outDir, proc);
   mkdirSync(dirname(outDir), { recursive: true });
   // Beside outDir, on the same file system, so that putting it in place is a rename.
   const stage = mkdtempSync(`${outDir}.stage-`);
@@ -900,17 +991,30 @@ async function localBuild(outDir: string) {
     const program = join(outDir, "bin", LOCAL.mainBinaryName);
     let core: BundledCore;
     try {
-      core = await buildStage(stage, version, program, stop);
+      core = await build(stage, version, program, stop);
       stop.check();
       // It may have been started while the build ran.
-      checkOutDir(outDir);
+      checkOutDir(outDir, proc);
+      await settle();
+      stop.check();
     } catch (e) {
       interrupted = stop.stopped !== undefined;
       console.error(`package local: ${(e as Error).message}`);
       throw new Error(`the build failed; ${outDir} is as it was`);
     }
-    stop.end();
-    swapIn(stage, outDir);
+    // The handlers stay on through the swap, which is synchronous: a signal that comes during it is
+    // handled once it has ended, with the old build or the new one in place, and then stops here.
+    try {
+      swapIn(stage, outDir, move);
+    } finally {
+      await settle();
+      interrupted = stop.stopped !== undefined;
+    }
+    if (stop.stopped) {
+      throw new Error(
+        `stopped by ${stop.stopped} once the new build was in place: ${outDir} holds the new build, pluxy ${version}`,
+      );
+    }
     const config = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), LOCAL.identifier);
     const data = join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), LOCAL.identifier);
     console.log(

@@ -1959,7 +1959,9 @@ How it differs from a release:
   `~/.config/dev.pluxy.desktop.local`, its data and cores to
   `~/.local/share/dev.pluxy.desktop.local` (under `$XDG_CONFIG_HOME` and `$XDG_DATA_HOME` when
   set), and its login entry, if you turn one on, to its own file
-  (`dev.pluxy.desktop.local.desktop`), so it never shares anything with an installed release.
+  (`dev.pluxy.desktop.local.desktop`), so it never shares anything with an installed release. The
+  entry's name is written when you turn **Launch at startup** on, so an entry an earlier build
+  wrote keeps that build's name until you turn it off and on again.
 - **Marked as a local build.** The window's title, the tray's tooltip and its Open item, and the
   login item's name say "pluxy (local build)". The `local-build` Cargo feature also puts the test
   build marker in the program, so the [release validator](#validate-release-inputs) refuses the
@@ -1987,16 +1989,24 @@ rm -f ~/.config/autostart/dev.pluxy.desktop.local.desktop   # only if you turned
 After a change, quit the app (from its tray menu when it is in the tray), then run
 `make app-local` again with the same folder. The build:
 
-1. **Checks the folder first, and changes nothing if it refuses.** It refuses a link or a file; a
-   folder with files in it but no `local-build.json` that names this kind of build and a program
-   inside that folder; any folder while a `<folder>.old` is beside it; and a folder that the app, or
-   a core it started from there, is still running from. Each refusal says what to do.
+1. **Checks the folder first, and changes nothing if it refuses.** It refuses a link, the folder
+   itself or one among the folders above it (name the folder by its own path); a file; a folder
+   with files in it that is not a local build: a local build has a `local-build.json` that names
+   this kind of build and `<folder>/bin/pluxy-app-local` as its app, and that app, the core
+   `bin/pluxy` and `lib/pluxy Local/core/bundled/index.json` are files in the folder, not links;
+   any folder while a `<folder>.old` is beside it; and a folder that the app, or a core it started
+   from there, is still running from, or when it cannot tell (it cannot list `/proc`, or cannot
+   read the program of one of your processes that holds no special rights). Each refusal says what
+   to do.
 2. **Builds into a new folder beside it,** `<folder>.stage-<random>`. If the build fails or you
-   stop it (Ctrl-C), that folder is removed and the last line says your folder is as it was.
-3. **Swaps the new build in:** your folder becomes `<folder>.old`, the new build takes its name, a
-   `home/` folder in the old build moves into the new one, and then `<folder>.old` is removed. If a
-   step fails, the message says where the old build or its `home/` is, and nothing that still
-   holds `home/` is removed.
+   stop it (Ctrl-C) before the swap, that folder is removed and the last line says your folder is
+   as it was. Ctrl-C during the swap takes effect when the swap has ended: the last line then says
+   that the new build is in your folder.
+3. **Swaps the new build in:** your folder becomes `<folder>.old`, which is checked again as in
+   step 1 (if something else took its place during the build, it is renamed back and nothing is
+   removed); the new build takes its name, a `home/` folder in the old build moves into the new
+   one, and then `<folder>.old` is removed. If a step fails, the message says where the old build
+   or its `home/` is, and nothing that still holds `home/` is removed.
 
 So a rebuild replaces `bin/`, `lib/` and `local-build.json`, keeps `home/`, and removes anything
 else in the folder. `home/` is where the app keeps its settings and data when you start it with
@@ -2005,8 +2015,10 @@ else in the folder. `home/` is where the app keeps its settings and data when yo
 
 Each build has a version of its own, the core version the app names (`core-release.json`) followed
 by `+local.` and 12 random hex digits, such as `0.1.0+local.90a173983d0c`. The app and its core
-both carry it, so at its next start the app installs the core it came with and switches to it. The
-core it ran before stays installed, to switch back to; older ones are removed. Accounts, settings
+both carry it, so at its next start the app installs the core it came with and switches to it,
+unless the core it runs is one you chose (an install, an adoption or a rollback): that one stays
+([The core the app comes with](#the-core-the-app-comes-with)). The core it ran before stays
+installed, to switch back to; older ones are removed. Accounts, settings
 and installed providers stay. An installed provider keeps running the copy you installed, even
 when the new build carries a changed one at the same version: to run the new one, remove the
 provider and install it again (on Extensions, or `pluxy ext remove` and `pluxy ext install`); its
