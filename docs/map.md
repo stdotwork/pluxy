@@ -116,8 +116,9 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
 
 ### Desktop app behaviour
 - **Entry (UI)**: `next/app/src/main.tsx` mounts the shared kit with `appHost`
-  (`next/app/src/host.ts`), connection UI (`next/app/src/connection.tsx`), and device extensions
-  (`next/app/src/devicePage.tsx`).
+  (`next/app/src/host.ts`), the first launch screen and the not-running pane
+  (`next/app/src/firstLaunch.tsx`, every word of them in `connectionCopy.ts`), the Where pluxy runs
+  page (`next/app/src/connection.tsx`), and device extensions (`next/app/src/devicePage.tsx`).
 - **Entry (Tauri Rust in `next/app/src-tauri/src`)**:
   - `lib.rs`: Tauri command registration, tray, and window wiring.
   - `conn.rs`, `managed.rs`, `cores.rs`: managed/local/remote connection modes, managed core
