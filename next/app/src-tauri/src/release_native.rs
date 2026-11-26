@@ -491,8 +491,30 @@ pub(crate) fn run(
         "refused": downloads, "saved": saved, "right_clicks": menus, "menu_shown": menu_shown,
     });
 
+    // What the page shows of the notes area, from the page's own numbers: the notes webview covers
+    // only that part, which is all of the area only while the area is wholly in the window.
+    let geometry = "(() => { const r = document.querySelector('[data-part=release-notes][data-product=app]').getBoundingClientRect(); \
+        const m = document.querySelector('[data-part=main]'); const p = m.getBoundingClientRect(); const v = document.documentElement; \
+        return {left: r.left, top: r.top, right: r.right, bottom: r.bottom, nav: p.top, pane_left: p.left, \
+        view_width: v.clientWidth, view_height: v.clientHeight, scroll: m.scrollTop}; })()";
+    let shows = |g: &Value| -> Value {
+        let f = |k: &str| g[k].as_f64().unwrap_or(f64::NAN);
+        let (x, y) = (f("left").max(f("pane_left")), f("top").max(f("nav")));
+        let (w, h) = (
+            f("right").min(f("view_width")) - x,
+            f("bottom").min(f("view_height")) - y,
+        );
+        if w >= 1.0 && h >= 1.0 {
+            json!({"x": x, "y": y, "width": w, "height": h})
+        } else {
+            Value::Null
+        }
+    };
+
     // Expanded at first, the notes webview over the notes area; Collapse hides the notes and
-    // closes their webview, Expand shows them again in a new one, over the area again.
+    // closes their webview, Expand shows them again in a new one, over what shows of the area
+    // again: Collapse shortens the page, so the pane's scroll position can change, and the area
+    // can then come back partly below the window's edge.
     let toggle = "[data-part=release-notes-toggle][data-product=app]";
     let first = area(main, "app");
     let first_follows = near(&first, &placed(app, &label)?);
@@ -509,10 +531,11 @@ pub(crate) fn run(
             .and_then(|l| app.get_webview(l).map(|_| l.to_string()))
     })?;
     std::thread::sleep(Duration::from_millis(500));
+    let shown_again = shows(&eval(main, geometry).unwrap_or(Value::Null));
     evidence["expand"] = json!({
         "first_follows": first_follows,
         "collapse_closed": true,
-        "expand_follows": near(&area(main, "app"), &placed(app, &again)?),
+        "expand_follows": near(&shown_again, &placed(app, &again)?),
         "area": first,
     });
 
@@ -522,24 +545,6 @@ pub(crate) fn run(
     // (control). "nav" is the pane's top edge: the strip and anything else above it end there.
     main.eval("{ const m = document.querySelector('[data-part=main]'); m.style.paddingBottom = '3000px'; m.scrollTo(0, 0); }")
         .map_err(|e| e.to_string())?;
-    let geometry = "(() => { const r = document.querySelector('[data-part=release-notes][data-product=app]').getBoundingClientRect(); \
-        const m = document.querySelector('[data-part=main]'); const p = m.getBoundingClientRect(); const v = document.documentElement; \
-        return {left: r.left, top: r.top, right: r.right, bottom: r.bottom, nav: p.top, pane_left: p.left, \
-        view_width: v.clientWidth, view_height: v.clientHeight, scroll: m.scrollTop}; })()";
-    // What should show of the area, from the page's own numbers.
-    let shows = |g: &Value| -> Value {
-        let f = |k: &str| g[k].as_f64().unwrap_or(f64::NAN);
-        let (x, y) = (f("left").max(f("pane_left")), f("top").max(f("nav")));
-        let (w, h) = (
-            f("right").min(f("view_width")) - x,
-            f("bottom").min(f("view_height")) - y,
-        );
-        if w >= 1.0 && h >= 1.0 {
-            json!({"x": x, "y": y, "width": w, "height": h})
-        } else {
-            Value::Null
-        }
-    };
     // Scrolls the pane to y, then waits until the webview is where the area shows (or hidden).
     let scrolled = |y: f64| -> Result<Value, String> {
         main.eval(format!(

@@ -175,7 +175,12 @@ export function useAction(done: () => void) {
   return { busy, error, run };
 }
 
-type Variant = "primary" | "quiet" | "danger";
+/**
+ * A button's weight: primary is a view's one main action (filled), quiet the ordinary button
+ * (outlined), ghost a button with no border until hovered, danger an outlined button in the
+ * danger colour.
+ */
+type Variant = "primary" | "quiet" | "ghost" | "danger";
 
 /** How long a Copy button says it copied. */
 const COPIED_MS = 2000;
@@ -486,7 +491,7 @@ export function CopyTrace(props: { id: string }) {
       class="btn"
       data-part="button"
       data-slot="button"
-      data-variant="quiet"
+      data-variant="ghost"
       data-size="small"
       aria-label={t("copyTrace", { id: props.id })}
       onClick={(e) => {
@@ -591,7 +596,7 @@ export function List<T>(props: {
     );
   }
   return (
-    <div class="table-wrap">
+    <TableFrame>
       <table class="table" data-part="list" aria-label={props.label}>
         <thead>
           <tr>
@@ -624,6 +629,48 @@ export function List<T>(props: {
           ))}
         </tbody>
       </table>
+    </TableFrame>
+  );
+}
+
+/** Which sides of a box that scrolls sideways have more to see. */
+export function overflowSides(box: {
+  scrollLeft: number;
+  scrollWidth: number;
+  clientWidth: number;
+}): "start" | "end" | "both" | undefined {
+  // In a right-to-left page scrollLeft runs from 0 down to a negative number.
+  const before = Math.abs(box.scrollLeft) > 1;
+  const after = box.scrollWidth - box.clientWidth - Math.abs(box.scrollLeft) > 1;
+  return before && after ? "both" : before ? "start" : after ? "end" : undefined;
+}
+
+/**
+ * The box a table scrolls in. When the table is wider than the box, data-more on the frame
+ * names the side (or sides) with columns out of view, and the frame fades that side out.
+ */
+function TableFrame(props: { children: ComponentChildren }) {
+  const wrap = useRef<HTMLDivElement>(null);
+  const [more, setMore] = useState<ReturnType<typeof overflowSides>>();
+  useLayoutEffect(() => {
+    const box = wrap.current;
+    if (!box) return;
+    const update = () => setMore(overflowSides(box));
+    update();
+    box.addEventListener("scroll", update, { passive: true });
+    const seen = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(update);
+    seen?.observe(box);
+    if (box.firstElementChild) seen?.observe(box.firstElementChild);
+    return () => {
+      box.removeEventListener("scroll", update);
+      seen?.disconnect();
+    };
+  }, []);
+  return (
+    <div class="table-frame" data-part="list-frame" data-more={more}>
+      <div class="table-wrap" ref={wrap}>
+        {props.children}
+      </div>
     </div>
   );
 }
@@ -680,7 +727,7 @@ export function Detail(props: { title: string; onClose: () => void; children: Co
     >
       <header class="card-head">
         <h2 class="mono">{props.title}</h2>
-        <Button label={t("closeDetails")} onClick={props.onClose}>
+        <Button variant="ghost" label={t("closeDetails")} onClick={props.onClose}>
           ✕
         </Button>
       </header>

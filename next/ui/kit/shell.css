@@ -136,14 +136,16 @@
     padding-bottom: calc(var(--s) * 2);
   }
 
+  /* A destination: as high as a page's main action (size.control-main, 32 pixels by default). */
   .nav-item {
     display: flex;
     align-items: center;
     gap: calc(var(--s) * 2.5);
+    min-height: var(--px-size-control-main);
     color: var(--px-color-nav-muted);
     text-decoration: none;
     border-radius: var(--px-shape-radius);
-    padding: calc(var(--s) * 1.5) calc(var(--s) * 2.5);
+    padding: 0 calc(var(--s) * 2.5);
     transition:
       background var(--t),
       color var(--t);
@@ -154,10 +156,12 @@
     color: var(--px-color-nav-text);
   }
 
+  /* The current destination: a light tonal fill and a 2 pixel bar at its start. */
   .nav-item[aria-current="page"] {
     background: var(--px-color-nav-selected);
     color: var(--px-color-accent);
     font-weight: var(--px-font-weight-strong);
+    box-shadow: inset 2px 0 0 var(--px-color-accent);
   }
 
   /* A destination that cannot be chosen: the frame has no session to show its pages for. */
@@ -302,12 +306,15 @@
 
   .status-copy {
     flex: none;
-    border: var(--px-shape-border) solid var(--px-color-border);
-    padding-block: calc(var(--s) * 1);
+    min-height: var(--px-size-control);
+    border: var(--px-shape-border) solid var(--px-color-input-border);
+    padding-block: 0;
   }
 
   .status-item {
     justify-content: space-between;
+    min-height: var(--px-size-control);
+    padding-block: 0;
   }
 
   :is(.status-copy, .status-item):hover {
@@ -394,6 +401,11 @@
   .shell:is([data-frame="top"], [data-frame="bar"]) .nav-list {
     flex-direction: row;
     padding: 0 calc(var(--s) * 1);
+  }
+
+  /* Across the top, the current destination's bar is under it. */
+  .shell:is([data-frame="top"], [data-frame="bar"]) .nav-item[aria-current="page"] {
+    box-shadow: inset 0 -2px 0 var(--px-color-accent);
   }
 
   .shell:is([data-frame="top"], [data-frame="bar"]) .nav-foot {
@@ -532,12 +544,17 @@
     display: none;
   }
 
+  /* The page's one main action is a step taller than the other controls. */
+  .strip-end .btn[data-variant="primary"] {
+    min-height: var(--px-size-control-main);
+  }
+
   .strip-button {
     display: flex;
     align-items: center;
     gap: calc(var(--s) * 1.5);
-    height: calc(var(--s) * 3 + 16px);
-    min-width: calc(var(--s) * 3 + 16px);
+    height: var(--px-size-control);
+    min-width: var(--px-size-control);
     justify-content: center;
     padding: 0 calc(var(--s) * 1.5);
     border: 0;
@@ -602,9 +619,11 @@
     padding-inline: calc(var(--s) * 2.5);
   }
 
+  /* One line, size.control high. */
   .topic {
     display: block;
-    padding: calc(var(--s) * 1.5) calc(var(--s) * 2.5);
+    padding: calc((var(--px-size-control) - var(--px-font-size) * var(--px-font-line-height)) / 2)
+      calc(var(--s) * 2.5);
     border-radius: var(--px-shape-radius);
     color: var(--px-color-text-muted);
     text-decoration: none;

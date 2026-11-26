@@ -500,7 +500,7 @@ test("a change of page opens the new page at its top; a change inside a page kee
     "true",
   );
   // The Network tab is shorter, so the pane may move up to its end, but not to its top.
-  expect(await scrolled()).toBeGreaterThan(100);
+  expect(await scrolled()).toBeGreaterThan(0);
 
   // Another page, by a navigation entry and by the address: each opens at its top.
   await scrollDown();

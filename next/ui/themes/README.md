@@ -113,15 +113,17 @@ anything.
 | `color.nav-text` | The product name in the navigation, and a hovered entry's text | `var(--px-color-text)` |
 | `color.nav-muted` | Navigation entries, and the status block's second line | `var(--px-color-text-muted)` |
 | `color.nav-hover` | Background of a hovered navigation entry | `var(--px-color-surface-raised)` |
-| `color.nav-selected` | Background of the current navigation entry; its text is `color.accent` | `color-mix(in srgb, var(--px-color-accent) 14%, transparent)` |
+| `color.nav-selected` | Background of the current navigation entry, which also has a 2px bar in `color.accent` and its text in `color.accent` | `color-mix(in srgb, var(--px-color-accent) 7%, transparent)` / `color-mix(in srgb, var(--px-color-accent) 9%, transparent)` |
 | `color.nav-border` | The navigation's border, and the line over its status block | `var(--px-color-border)` |
 | `color.overlay` | Dialog background | `var(--px-color-surface)` |
+| `color.card` | Background of a card and of the detail pane. `transparent` draws a card as a section: its heading, a hairline and its content | `transparent` |
+| `color.card-border` | Border of a card and of the detail pane (the detail pane always has a `color.border` line on the list's side) | `transparent` |
 | `color.input-border` | Border of text inputs, selects and text areas | `color-mix(in srgb, var(--px-color-text-muted) 70%, var(--px-color-surface))` |
 | `color.placeholder` | Placeholder text in an empty input | `var(--px-color-text-muted)` |
 | `color.selected` | Background of a selected table row and of the selected tab | `var(--px-color-surface-raised)` |
 | `color.selected-text` | Text of a selected list item | `var(--px-color-text)` |
-| `color.danger-surface` | Background of an error notice | `color-mix(in srgb, var(--px-color-danger) 8%, transparent)` |
-| `color.warn-surface` | Background of a warning notice | `color-mix(in srgb, var(--px-color-warn) 8%, transparent)` |
+| `color.danger-surface` | Background of an error notice, which has a 3px bar in `color.danger` at its start | `transparent` |
+| `color.warn-surface` | Background of a warning notice, which has a 3px bar in `color.warn` at its start | `transparent` |
 | `color.code-bg` | Background of the configuration source editor, log views and diffs | `var(--px-color-surface-raised)` |
 | `color.code-text` | Their text | `var(--px-color-text)` |
 
@@ -171,10 +173,15 @@ in a column line up.
 | `size.width-wide` | Content width for the `wide` width option | `1200px` |
 | `size.width-narrow` | Content width for the `narrow` width option | `760px` |
 | `size.detail` | Width of the detail pane beside a list | `360px` |
+| `size.card-padding` | Room inside a card's border. With `color.card` and `color.card-border` it draws cards as boxes, as Paper does | `0px` |
 
 `density` does not change the four heights (`size.row`, `size.row-tall`, `size.control` and
-`size.control-main`): a theme that wants shorter rows sets them. The kit's lists and controls do not
-read them yet; a theme can set them now, and they take effect as the controls move to them.
+`size.control-main`): a theme that wants shorter rows sets them. Buttons, inputs, selects, a
+`Choices` group, topics and the header strip's buttons are `size.control` high; the page's main
+action in the header strip and the navigation's destinations are `size.control-main`. A table row is
+`size.row` high, and its cells' top and bottom padding is half the difference between `size.row-tall`
+and `size.row`, so a row whose text takes two lines comes out at about `size.row-tall`. Every
+control stays at least 24 pixels to hit, whatever these are set to.
 
 ### Shape
 
@@ -280,10 +287,11 @@ These stay stable within a theme contract version:
 | `data-part="topics-select"` | The select that replaces a list beside the page in a narrow window |
 | `data-part="main"` | The page area, the one part that scrolls |
 | `data-part="list"` | A list of items, whichever `list` layout it uses |
+| `data-part="list-frame"` | The box a `table` list scrolls in. When the table is wider than the box, `data-more` is `start`, `end` or `both`: the sides with columns out of view, which fade out |
 | `data-part="item"` | One item in a list; a selected one has `aria-current="true"` |
 | `data-part="detail"` | The detail pane |
 | `data-part="card"` | A card or panel grouping related content |
-| `data-part="button"` | A button; `data-variant` is `primary`, `quiet` or `danger` |
+| `data-part="button"` | A button; `data-variant` is `primary` (a view's main action, filled), `quiet` (the ordinary button, outlined), `ghost` (no border until hovered) or `danger` (outlined, in the danger colour) |
 | `data-part="badge"` | A state badge; `data-tone` is `ok`, `warn`, `danger` or `muted` |
 | `data-part="field"` | A labelled form control |
 | `data-part="meter"` | A quota usage meter; `data-tone` is `ok`, `warn` or `danger`. Its child is the fill; warning and danger use the matching state colour. |
