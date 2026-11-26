@@ -5,11 +5,15 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -597,6 +601,189 @@ func TestManageAccountQuota(t *testing.T) {
 	}
 	if code := manage(t, base, "GET", "/accounts/nobody/quota", nil, nil); code != http.StatusNotFound {
 		t.Fatalf("quota of an unknown account: %d, want 404", code)
+	}
+}
+
+// countQuotaCalls puts a proxy in front of the fake provider that counts the quota reads it
+// gets, and returns its URL (the accounts' base_url) and the count.
+func countQuotaCalls(t *testing.T, srv *oauthtest.Server) (string, *atomic.Int64) {
+	t.Helper()
+	target, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := &atomic.Int64{}
+	rp := httputil.NewSingleHostReverseProxy(target)
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/quota") {
+			calls.Add(1)
+		}
+		rp.ServeHTTP(w, r)
+	}))
+	t.Cleanup(front.Close)
+	return front.URL, calls
+}
+
+// accountQuotaView is an account of GET /accounts with its last quota reply.
+type accountQuotaView struct {
+	ID    string
+	Quota *struct {
+		FetchedAt time.Time `json:"fetched_at"`
+		Quota     struct {
+			Plan   string
+			Limits []struct {
+				ID          string
+				UsedPercent *float64 `json:"used_percent"`
+				ResetsAt    int64    `json:"resets_at"`
+			}
+		}
+	}
+}
+
+func listQuotas(t *testing.T, base string) map[string]accountQuotaView {
+	t.Helper()
+	var list struct{ Accounts []accountQuotaView }
+	if code := manage(t, base, "GET", "/accounts", nil, &list); code != http.StatusOK {
+		t.Fatalf("GET /accounts: %d", code)
+	}
+	out := map[string]accountQuotaView{}
+	for _, a := range list.Accounts {
+		out[a.ID] = a
+	}
+	return out
+}
+
+// GET /accounts shows each account's last quota reply with when it was read, and reads nothing
+// from the provider itself; an account never read, or with no reading, has none; removing an
+// account forgets its reply.
+func TestManageAccountsListLastQuota(t *testing.T) {
+	srv := oauthtest.New(t)
+	front, calls := countQuotaCalls(t, srv)
+	settings := map[string]string{"base_url": front}
+	base := runCore(t, map[string]any{
+		"listen":          "127.0.0.1:0",
+		"client_keys":     []string{clientKey},
+		"management_key":  managementKey,
+		"credentials_dir": filepath.Join(t.TempDir(), "credentials"),
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "oauth", "pluxy-extension.json"),
+			"accounts": []any{
+				map[string]any{"id": "fine", "settings": settings, "credential": map[string]any{"kind": "oauth", "access_token": srv.IssueToken("text")}},
+				map[string]any{"id": "full", "settings": settings, "credential": map[string]any{"kind": "oauth", "access_token": srv.IssueToken("rate_limited")}},
+				map[string]any{"id": "key", "settings": settings, "credential": map[string]any{"kind": "api_key", "api_key": "k-e2e"}},
+			},
+		},
+	})
+	for _, a := range listQuotas(t, base) {
+		if a.Quota != nil {
+			t.Fatalf("account %s has a quota before anything read one: %+v", a.ID, a.Quota)
+		}
+	}
+
+	var read struct {
+		FetchedAt time.Time `json:"fetched_at"`
+	}
+	if code := manage(t, base, "GET", "/accounts/fine/quota", nil, &read); code != http.StatusOK {
+		t.Fatalf("quota of fine: %d", code)
+	}
+	if code := manage(t, base, "GET", "/accounts/key/quota", nil, nil); code != http.StatusUnprocessableEntity {
+		t.Fatalf("quota of the API key account: %d, want 422", code)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("the provider saw %d quota calls after one read, want 1", got)
+	}
+
+	for range 2 {
+		list := listQuotas(t, base)
+		q := list["fine"].Quota
+		if q == nil || !q.FetchedAt.Equal(read.FetchedAt) || q.Quota.Plan != "test" || len(q.Quota.Limits) != 1 ||
+			q.Quota.Limits[0].UsedPercent == nil || *q.Quota.Limits[0].UsedPercent != 25 || q.Quota.Limits[0].ResetsAt != oauthtest.QuotaResetsAt {
+			t.Fatalf("fine in GET /accounts: %+v, want the reply read at %v", q, read.FetchedAt)
+		}
+		if list["full"].Quota != nil || list["key"].Quota != nil {
+			t.Fatalf("an account nobody read, or with no reading, has a quota: full %+v, key %+v", list["full"].Quota, list["key"].Quota)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("the provider saw %d quota calls after GET /accounts, want still 1", got)
+	}
+
+	// A new read replaces the reply.
+	time.Sleep(10 * time.Millisecond)
+	var again struct {
+		FetchedAt time.Time `json:"fetched_at"`
+	}
+	manage(t, base, "GET", "/accounts/fine/quota", nil, &again)
+	if q := listQuotas(t, base)["fine"].Quota; q == nil || !q.FetchedAt.Equal(again.FetchedAt) || !again.FetchedAt.After(read.FetchedAt) {
+		t.Fatalf("fine after a second read: %+v, want fetched_at %v", q, again.FetchedAt)
+	}
+
+	// Removing an account forgets its reply: added again under the same ID, it has none.
+	id := addByDevice(t, base, srv, map[string]any{"id": "gone"})
+	if code := manage(t, base, "GET", "/accounts/"+id+"/quota", nil, nil); code != http.StatusOK {
+		t.Fatalf("quota of %s: %d", id, code)
+	}
+	if listQuotas(t, base)[id].Quota == nil {
+		t.Fatalf("%s has no quota after a read", id)
+	}
+	if code := manage(t, base, "DELETE", "/accounts/"+id, nil, nil); code != http.StatusNoContent {
+		t.Fatalf("removing %s: %d", id, code)
+	}
+	id = addByDevice(t, base, srv, map[string]any{"id": id})
+	if q := listQuotas(t, base)[id].Quota; q != nil {
+		t.Fatalf("%s added again after its removal still has the old quota: %+v", id, q)
+	}
+}
+
+// With soonest-reset, core reads each account's usage for routing; GET /accounts then shows
+// those readings, though nobody asked the quota call and the list reads nothing.
+func TestManageAccountsListRoutingsQuota(t *testing.T) {
+	// The readings' loop ticks every 100 ms; the first refresh is due at its first tick.
+	t.Setenv("PLUXY_TEST_CHECK_INTERVAL_MS", "1500")
+	srv := oauthtest.New(t)
+	front, calls := countQuotaCalls(t, srv)
+	settings := map[string]string{"base_url": front}
+	base := runCore(t, map[string]any{
+		"listen":          "127.0.0.1:0",
+		"client_keys":     []string{clientKey},
+		"management_key":  managementKey,
+		"credentials_dir": filepath.Join(t.TempDir(), "credentials"),
+		"routing":         map[string]any{"strategy": "soonest-reset"},
+		"extension": map[string]any{
+			"manifest": filepath.Join(binDir, "oauth", "pluxy-extension.json"),
+			"accounts": []any{
+				map[string]any{"id": "fine", "settings": settings, "credential": map[string]any{"kind": "oauth", "access_token": srv.IssueToken("text")}},
+				map[string]any{"id": "full", "settings": settings, "credential": map[string]any{"kind": "oauth", "access_token": srv.IssueToken("rate_limited")}},
+			},
+		},
+	})
+	var list map[string]accountQuotaView
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		list = listQuotas(t, base)
+		if list["fine"].Quota != nil && list["full"].Quota != nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no routing readings in GET /accounts after 30 s: %+v", list)
+		}
+	}
+	for id, want := range map[string]float64{"fine": 25, "full": 100} {
+		q := list[id].Quota
+		if q.FetchedAt.IsZero() || time.Since(q.FetchedAt) > time.Minute || q.Quota.Plan != "test" || len(q.Quota.Limits) != 1 ||
+			q.Quota.Limits[0].UsedPercent == nil || *q.Quota.Limits[0].UsedPercent != want {
+			t.Fatalf("%s in GET /accounts: %+v, want plan test with %v%% used", id, q, want)
+		}
+	}
+	// Only routing's readings reached the provider, and listing adds none.
+	before := calls.Load()
+	if before == 0 {
+		t.Fatal("the provider saw no quota call, yet the list has quotas")
+	}
+	for range 3 {
+		listQuotas(t, base)
+	}
+	if got := calls.Load(); got != before {
+		t.Fatalf("GET /accounts made quota calls: %d before, %d after", before, got)
 	}
 }
 
