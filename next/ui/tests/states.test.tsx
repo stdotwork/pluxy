@@ -93,6 +93,13 @@ test("an account's badge is its plain state: turned off first, then what keeps r
   expect(badge({ cooldowns: [{ scope: "model", model: "m", kind: "rate_limit", until: later }] })).toBe(
     "Serving",
   );
+  // Core's health reads cooling for a block on one model too: the cooldowns it lists say which.
+  expect(
+    badge({
+      health: { state: "cooling", until: later },
+      cooldowns: [{ scope: "model", model: "m", kind: "rate_limit", until: later }],
+    }),
+  ).toBe("Serving");
   expect(badge({ state: "reauth_required" })).toBe("Needs sign-in");
   expect(badge({ health: { state: "needs_login" } })).toBe("Needs sign-in");
   expect(badge({ health: { state: "exhausted" } })).toBe("Limit used up");

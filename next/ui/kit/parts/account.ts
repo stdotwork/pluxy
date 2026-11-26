@@ -136,9 +136,10 @@ export function accountCondition(a: Account, running?: ReadonlySet<string>, now 
       resting,
     };
   }
-  // A core that names the cooldown only by its health and its end.
+  // A core that names the cooldown only by its health and its end. One that lists its cooldowns
+  // has said what cools: its health reads cooling for a block on one model too.
   const until = ms(a.health?.until) ?? ms(a.cooldown_until);
-  if (a.health?.state === "cooling" && until !== undefined && until > now) {
+  if (a.cooldowns === undefined && a.health?.state === "cooling" && until !== undefined && until > now) {
     return { kind: "cooling", group: "waiting", until, resting };
   }
   return { kind: "serving", group: "serving", resting };
