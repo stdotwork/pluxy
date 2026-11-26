@@ -292,22 +292,29 @@ pub(super) fn act(
     outcome(main, before)
 }
 
-/// The `what` of the action the dialog shows. The dialog shows the action only as JSON, where
-/// the same values come again outside `what` (the executor's digest and contract, the selected
-/// files), so the checks read `what` alone, parsed: a Windows path's doubled `\` is undone.
-/// The dialog's labels come as one text, the action's JSON among them: the first JSON object in
-/// it that has a `what`.
+/// The `what` of the action the dialog shows. An install or rollback shows the action as JSON,
+/// where the same values come again outside `what` (the executor's digest and contract, the
+/// selected files), so the checks read `what` alone, parsed: a Windows path's doubled `\` is
+/// undone. The dialog's labels come as one text, the action's JSON among them: the first JSON
+/// object in it that has a `what`. An adoption shows its action in plain words alone, no JSON:
+/// the text that asks to run the program.
 fn shown_what(texts: &[String]) -> Option<String> {
-    texts.iter().find_map(|t| {
-        t.match_indices('{').find_map(|(i, _)| {
-            let v = serde_json::Deserializer::from_str(&t[i..])
-                .into_iter::<Value>()
-                .next()?
-                .ok()?;
-            v["what"].as_str().map(String::from)
+    texts
+        .iter()
+        .find_map(|t| {
+            t.match_indices('{').find_map(|(i, _)| {
+                let v = serde_json::Deserializer::from_str(&t[i..])
+                    .into_iter::<Value>()
+                    .next()?
+                    .ok()?;
+                v["what"].as_str().map(String::from)
+            })
         })
-    })
+        .or_else(|| texts.iter().find(|t| t.contains(ADOPT_QUESTION)).cloned())
 }
+
+/// How an adoption's plain review begins (`core_updates::adopt_what`).
+const ADOPT_QUESTION: &str = "Run this program as pluxy?";
 
 /// The SHA-256 of release version's archive, as the core source's index (the runner's) gives it
 /// in the signed descriptor.
@@ -509,7 +516,12 @@ pub fn run(app: &AppHandle, main: &Webview) -> Result<(), String> {
         "core_adopt",
         json!({}),
         CONFIRM,
-        &[custom.display().to_string(), file_sha(&custom)?],
+        // Plain words: the program, and the start of its SHA-256 (the whole one binds the file).
+        &[
+            ADOPT_QUESTION.into(),
+            custom.display().to_string(),
+            format!("SHA-256 {}", &file_sha(&custom)?[..12]),
+        ],
     )?;
     let (version, pid, _) = current(main)?;
     let pid_custom = pid.unwrap_or_default();

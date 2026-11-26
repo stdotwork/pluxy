@@ -148,10 +148,7 @@ fn ask(app: &AppHandle, ask: Ask) -> Result<(), String> {
             }
             Ask::Adopt => {
                 let (path, sha256, size) = st.conn.lock().unwrap().prepare_adopt()?;
-                let what = format!(
-                    "Copy the core program {} ({size} bytes, SHA-256 {sha256}) into the app's own cores, and run the copy as the app's core. It is not signed: run only a program you trust.",
-                    path.display()
-                );
+                let what = adopt_what(&path, size, &sha256);
                 let executor = Package {
                     id: "custom core".into(),
                     source: path.display().to_string(),
@@ -171,6 +168,9 @@ fn ask(app: &AppHandle, ask: Ask) -> Result<(), String> {
         }
     })();
     let (what, executor, files, change) = checked.map_err(release)?;
+    // Adopting is reviewed in plain words alone; a signed release's install or rollback shows
+    // the full action.
+    let plain = matches!(change, CoreChange::Adopt { .. });
     let app_package = Package {
         id: "pluxy app".into(),
         source: "the app's window".into(),
@@ -191,7 +191,12 @@ fn ask(app: &AppHandle, ask: Ask) -> Result<(), String> {
     };
     let id = {
         let mut c = st.confirmations.lock().unwrap();
-        c.prepare_main(action).and_then(|p| c.queue(p))
+        if plain {
+            c.prepare_plain(action)
+        } else {
+            c.prepare_main(action)
+        }
+        .and_then(|p| c.queue(p))
     }
     .map_err(release)?;
     *st.core_change.lock().unwrap() = Some(Pending {
@@ -204,6 +209,28 @@ fn ask(app: &AppHandle, ask: Ask) -> Result<(), String> {
     let app = app.clone();
     std::thread::spawn(move || settle(&app, &id, name));
     Ok(())
+}
+
+/// What the confirmation for adopting the program at path says, in plain words: the program, its
+/// size and the start of its SHA-256 (the whole digest binds the file the dialog was opened for),
+/// what the app does with it, and that nothing vouches for it. The path's line breaks and other
+/// control and format characters show escaped, so a path cannot add lines of its own.
+pub(crate) fn adopt_what(path: &std::path::Path, size: u64, sha256: &str) -> String {
+    format!(
+        "Run this program as pluxy?\n\nThe app copies {} ({}, SHA-256 {}) into its own folder and runs the copy. It is not signed: use only a program you trust.",
+        crate::confirmation::escape_format_characters(&path.display().to_string()),
+        size_text(size),
+        sha256.get(..12).unwrap_or(sha256)
+    )
+}
+
+/// A file's size as a person reads it, in powers of 1000 as file managers show it.
+fn size_text(bytes: u64) -> String {
+    match bytes {
+        b if b < 1_000 => format!("{b} bytes"),
+        b if b < 1_000_000 => format!("{:.1} KB", b as f64 / 1e3),
+        b => format!("{:.1} MB", b as f64 / 1e6),
+    }
 }
 
 /// Waits for the confirmation's native result; only a confirmed, consumed token applies the

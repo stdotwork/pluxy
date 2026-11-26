@@ -164,6 +164,8 @@ struct App {
     status: Mutex<Option<MenuItem<Wry>>>,
     /// Start, Stop and Restart, in that order.
     core_actions: Mutex<Vec<MenuItem<Wry>>>,
+    /// Quit, whose words say whether quitting stops the app's own pluxy.
+    quit_item: Mutex<Option<MenuItem<Wry>>>,
     /// The newest view the tray shows. Only the main thread touches it.
     shown: Mutex<Shown>,
     /// A tray Start, Stop or Restart is running; the tray refuses another until it ends.
@@ -228,22 +230,43 @@ fn trusted(w: &Webview) -> Result<(), String> {
     }
 }
 
+/// The tray's status line, in the words a person reads.
 fn status_text(v: &View) -> String {
     match (v.mode, &v.target, &v.core) {
-        (Some(Mode::Managed), Some(t), Some(c)) if c.state == "running" => {
-            format!("Core running at {t}")
-        }
-        (Some(Mode::Managed), _, Some(c)) if c.state == "missing" => "No core installed".into(),
+        (Some(Mode::Managed), Some(_), Some(c)) if c.state == "running" => "pluxy: Running".into(),
+        (Some(Mode::Managed), _, Some(c)) if c.state == "missing" => "pluxy: Not installed".into(),
         (Some(Mode::Managed), _, Some(c)) if c.state == "paused" => {
-            "Core recovery paused — Start core to try again".into()
+            "pluxy: Stopped restarting".into()
         }
-        (Some(Mode::Managed), _, Some(c)) if c.state == "recovering" => {
-            "Core stopped — waiting to restart".into()
+        (Some(Mode::Managed), _, Some(c)) if c.state == "recovering" => "pluxy: Restarting".into(),
+        (Some(Mode::Managed), _, _) => "pluxy: Stopped".into(),
+        (Some(Mode::Local | Mode::Remote), Some(t), _) if v.signed_in => {
+            format!("pluxy: Connected to {}", host_of(t))
         }
-        (Some(Mode::Managed), _, _) => "Core stopped".into(),
-        (Some(Mode::Local), Some(t), _) => format!("Connected to {t}"),
-        (Some(Mode::Remote), Some(t), _) => format!("Remote core {t}"),
-        _ => "Not connected".into(),
+        _ => "pluxy: Not connected".into(),
+    }
+}
+
+/// The host (and port, when the address names one) of a pluxy's address, as the tray names it.
+fn host_of(address: &str) -> String {
+    Url::parse(address)
+        .ok()
+        .and_then(|u| {
+            let host = u.host_str()?.to_string();
+            Some(match u.port() {
+                Some(p) => format!("{host}:{p}"),
+                None => host,
+            })
+        })
+        .unwrap_or_else(|| address.to_string())
+}
+
+/// The tray's Quit: in managed mode quitting stops the app's own pluxy, and it says so.
+fn quit_text(mode: Option<Mode>) -> &'static str {
+    if mode == Some(Mode::Managed) {
+        "Quit (stops pluxy)"
+    } else {
+        "Quit"
     }
 }
 
@@ -269,13 +292,15 @@ impl Shown {
 }
 
 const CORE_ACTIONS: [&str; 3] = ["core-start", "core-stop", "core-restart"];
+/// The tray items of `CORE_ACTIONS`, as a person reads them.
+const CORE_ACTION_TEXT: [&str; 3] = ["Start pluxy", "Stop pluxy", "Restart pluxy"];
 
 /// The tray's status line, and whether Start, Stop and Restart are enabled. While a tray action
 /// runs, all three are off.
 fn tray_presentation(v: &View, busy: bool) -> (String, [bool; 3]) {
     let managed = v.mode == Some(Mode::Managed);
     if managed && busy {
-        return ("Core working…".into(), [false; 3]);
+        return ("pluxy: Working…".into(), [false; 3]);
     }
     let state = v.core.as_ref().map(|c| c.state);
     let running = state == Some("running");
@@ -328,6 +353,10 @@ fn apply_tray(app: &AppHandle, shown: &Shown) {
             let _ = item.set_enabled(enabled[i]);
         }
     }
+    let quit = st.quit_item.lock().unwrap();
+    if let Some(item) = quit.as_ref() {
+        let _ = item.set_text(quit_text(v.mode));
+    }
 }
 
 /// A tray Start, Stop or Restart, one at a time. It acts only if its item would be enabled now,
@@ -370,7 +399,9 @@ fn tray_action(app: &AppHandle, action: &str) {
                 0 => {
                     let _ = c.resume_core();
                 }
-                1 => c.stop_core(),
+                1 => {
+                    let _ = c.stop_by_user();
+                }
                 _ => {
                     let _ = c.restart_core();
                 }
@@ -630,51 +661,63 @@ fn close_to_tray(app: &AppHandle) {
     show_in_dock(app, false);
 }
 
-/// The person closed the window: do what they chose. Off the window's thread, since asking the
-/// desktop about its tray waits on D-Bus.
+/// The person closed the window: do what they chose (`window::closing`). Off the window's
+/// thread, since asking the desktop about its tray waits on D-Bus.
 fn close_requested(app: &AppHandle) {
     let app = app.clone();
     std::thread::spawn(move || {
-        let choice = app
-            .state::<App>()
-            .window
-            .lock()
-            .unwrap()
-            .prefs
-            .close_behavior;
-        match (usable_tray(&app), choice) {
-            (Err(e), _) => {
-                eprintln!("pluxy-app: no usable tray ({e}): closing the window quits");
-                quit(&app);
+        let tray = usable_tray(&app);
+        if let Err(e) = &tray {
+            eprintln!(
+                "pluxy-app: no usable tray ({e}): closing the window quits (in managed mode it asks first)"
+            );
+        }
+        // Only without a tray does it matter whether quitting stops the app's own pluxy.
+        let managed =
+            tray.is_err() && app.state::<App>().conn.lock().unwrap().mode() == Some(Mode::Managed);
+        let prefs = app.state::<App>().window.lock().unwrap().prefs;
+        let step = match window::closing(&prefs, tray.is_ok(), managed) {
+            ask @ (window::Closing::Ask | window::Closing::AskWithoutTray) => {
+                if ask_on_close(&app, ask) {
+                    // The window answers with `window_close`, or keeps itself open.
+                    return;
+                }
+                let instead = window::unanswered(ask);
+                eprintln!("pluxy-app: the window did not answer the close request: {instead:?}");
+                instead
             }
-            (Ok(()), window::Close::Exit) => quit(&app),
-            (Ok(()), window::Close::MinimizeToTray) => close_to_tray(&app),
-            (Ok(()), window::Close::Ask) => ask_on_close(&app),
+            step => step,
+        };
+        match step {
+            window::Closing::Quit => quit(&app),
+            window::Closing::ToTray => close_to_tray(&app),
+            _ => {}
         }
     });
 }
 
-/// Asks the window what closing should do (src/window.tsx answers with `window_close`). A
-/// window that cannot answer (its page is still loading, or busy) closes to the tray, from where
-/// it can be opened again.
-fn ask_on_close(app: &AppHandle) {
+/// Asks the window what closing should do (src/window.tsx answers with `window_close`), and says
+/// whether it took the question within three seconds. With no tray, the question is whether to
+/// quit, which stops the app's own pluxy (`__pluxyClosePrompt("no-tray")`).
+fn ask_on_close(app: &AppHandle, ask: window::Closing) -> bool {
     #[cfg(feature = "native-test")]
     native_test::window_prompted();
+    let call = if ask == window::Closing::AskWithoutTray {
+        r#"window.__pluxyClosePrompt?.("no-tray") === true"#
+    } else {
+        "window.__pluxyClosePrompt?.() === true"
+    };
     let (tx, rx) = std::sync::mpsc::channel();
-    let asked = app.get_webview(MAIN).is_some_and(|main| {
-        main.eval_with_callback("window.__pluxyClosePrompt?.() === true", move |r| {
+    app.get_webview(MAIN).is_some_and(|main| {
+        main.eval_with_callback(call, move |r| {
             let _ = tx.send(r == "true");
         })
         .is_ok()
-    }) && rx.recv_timeout(std::time::Duration::from_secs(3)) == Ok(true);
-    if !asked {
-        eprintln!("pluxy-app: the window did not answer the close request: closing to the tray");
-        close_to_tray(app);
-    }
+    }) && rx.recv_timeout(std::time::Duration::from_secs(3)) == Ok(true)
 }
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
-    let status = MenuItem::with_id(app, "status", "Not connected", false, None::<&str>)?;
+    let status = MenuItem::with_id(app, "status", "pluxy: Not connected", false, None::<&str>)?;
     let open = MenuItem::with_id(
         app,
         "open",
@@ -682,7 +725,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
         true,
         None::<&str>,
     )?;
-    let quit_item = MenuItem::with_id(app, "quit", "Quit pluxy", true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, "quit", quit_text(None), true, None::<&str>)?;
     let access = MenuItem::with_id(
         app,
         "launch-settings",
@@ -694,9 +737,16 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     // Remembered launches, one click each (`launcher.rs`).
     #[cfg(native_stack)]
     let launches = launcher::tray_menu(app)?;
-    let start = MenuItem::with_id(app, "core-start", "Start core", false, None::<&str>)?;
-    let stop = MenuItem::with_id(app, "core-stop", "Stop core", false, None::<&str>)?;
-    let restart = MenuItem::with_id(app, "core-restart", "Restart core", false, None::<&str>)?;
+    let [start, stop, restart] = [0, 1, 2].map(|i| {
+        MenuItem::with_id(
+            app,
+            CORE_ACTIONS[i],
+            CORE_ACTION_TEXT[i],
+            false,
+            None::<&str>,
+        )
+    });
+    let (start, stop, restart) = (start?, stop?, restart?);
     let menu = Menu::with_items(
         app,
         &[
@@ -728,6 +778,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     tray.build(app)?;
     *app.state::<App>().status.lock().unwrap() = Some(status);
     *app.state::<App>().core_actions.lock().unwrap() = vec![start, stop, restart];
+    *app.state::<App>().quit_item.lock().unwrap() = Some(quit_item);
     Ok(())
 }
 
@@ -756,15 +807,13 @@ fn tray_menu(app: &AppHandle, id: &str) {
 }
 
 fn window_view(app: &AppHandle) -> window::View {
+    // One read, its lock let go before the next line: a second lock taken while the first one's
+    // guard still lives (as in one struct expression) waits for itself.
+    let prefs = app.state::<App>().window.lock().unwrap().prefs;
     window::View {
-        close_behavior: app
-            .state::<App>()
-            .window
-            .lock()
-            .unwrap()
-            .prefs
-            .close_behavior,
+        close_behavior: prefs.close_behavior,
         tray: usable_tray(app).is_ok(),
+        ask_without_tray: prefs.ask_without_tray,
     }
 }
 
@@ -834,30 +883,27 @@ async fn window_set(
     Ok(window_view(app))
 }
 
-/// The window's answer to "What would you like to do?": Exit App or Minimize to Tray, and
-/// whether to remember it.
+/// The window's answer to the close prompt of kind it showed: quit (Exit) or keep the app in the
+/// tray (Minimize to Tray, only on Ask's prompt), and whether to remember it. Remembered, Ask's
+/// answer becomes the close choice and the no-tray prompt's ("Don't ask again") only stops that
+/// prompt, whether or not a tray shows by the time the person answers (`window::remember`).
 #[tauri::command]
 async fn window_close(
     webview: Webview,
     action: window::Close,
     remember: bool,
+    kind: window::Prompt,
 ) -> Result<(), String> {
     trusted(&webview)?;
     let app = webview.app_handle().clone();
-    match action {
-        window::Close::Ask => return Err("choose Exit app or Minimize to tray".into()),
-        window::Close::MinimizeToTray => usable_tray(&app).map_err(|e| {
-            format!("The system tray is unavailable ({e}); keep the window open or exit the app")
-        })?,
-        window::Close::Exit => {}
-    }
+    window::check(kind, action, || usable_tray(&app))?;
     if remember {
         let st = app.state::<App>();
         let mut store = st.window.lock().unwrap();
-        let before = store.prefs.close_behavior;
-        store.prefs.close_behavior = action;
+        let before = store.prefs;
+        window::remember(&mut store.prefs, kind, action);
         if let Err(e) = store.save() {
-            store.prefs.close_behavior = before;
+            store.prefs = before;
             return Err(e);
         }
     }
@@ -952,6 +998,14 @@ async fn core_start(webview: Webview) -> Result<View, String> {
 #[tauri::command]
 async fn core_restart(webview: Webview) -> Result<View, String> {
     with_conn(&webview, |c| c.restart_core()).await
+}
+
+/// Stops the app's own pluxy, as the tray's Stop does. A local or remote pluxy is not the app's
+/// to stop: the view comes back with why, and nothing changes. The view then says the person
+/// stopped it (`stop_reason`), until a Start.
+#[tauri::command]
+async fn core_stop(webview: Webview) -> Result<View, String> {
+    with_conn(&webview, |c| c.stop_by_user()).await
 }
 
 /// This command accepts connection metadata only; native key entry supplies the secret on the native side.
@@ -3219,6 +3273,7 @@ pub fn run() {
             connection_get,
             connection_set,
             core_start,
+            core_stop,
             core_restart,
             core_call,
             core_versions,
@@ -3493,6 +3548,7 @@ pub fn run() {
                 environments: Mutex::new(environments::Environments::open(environments_file)),
                 status: Mutex::new(None),
                 core_actions: Mutex::new(Vec::new()),
+                quit_item: Mutex::new(None),
                 shown: Mutex::new(Shown::default()),
                 busy: AtomicBool::new(false),
                 window: Mutex::new(window_prefs),
@@ -3559,7 +3615,7 @@ pub fn run() {
             }
             match build_tray(&handle) {
                 Ok(()) => handle.state::<App>().has_tray.store(true, Ordering::SeqCst),
-                // No tray: closing the window quits the app.
+                // No tray: closing the window quits the app (in managed mode it asks first).
                 Err(e) => eprintln!("pluxy-app: no tray icon: {e}"),
             }
             // A core that exited before the app state existed had no one to recover it.
@@ -3729,6 +3785,7 @@ mod tests {
                 version: None,
                 adopt: None,
                 detail: None,
+                stop_reason: None,
             }),
             version,
             ..View::default()
@@ -3752,7 +3809,7 @@ mod tests {
             );
             assert_eq!(
                 tray_presentation(&managed(state, 1), true),
-                ("Core working…".to_string(), [false; 3]),
+                ("pluxy: Working…".to_string(), [false; 3]),
                 "{state} while busy"
             );
         }
@@ -3763,6 +3820,82 @@ mod tests {
             };
             assert_eq!(tray_presentation(&v, false).1, [false; 3]);
             assert_eq!(tray_presentation(&v, true).1, [false; 3]);
+        }
+    }
+
+    /// The tray's words in each mode: what pluxy is doing, and whether Quit stops it. A person
+    /// never reads "core" there.
+    #[test]
+    fn the_tray_says_pluxy_in_each_mode() {
+        let at = |mode, target: Option<&str>, signed_in| View {
+            mode,
+            target: target.map(String::from),
+            signed_in,
+            ..View::default()
+        };
+        let mut running = managed("running", 1);
+        running.target = Some("http://127.0.0.1:8317".into());
+        let managed_quit = "Quit (stops pluxy)";
+        let mut words = vec![];
+        for (v, status, quit) in [
+            (running, "pluxy: Running", managed_quit),
+            (managed("stopped", 1), "pluxy: Stopped", managed_quit),
+            (managed("recovering", 1), "pluxy: Restarting", managed_quit),
+            (
+                managed("paused", 1),
+                "pluxy: Stopped restarting",
+                managed_quit,
+            ),
+            (managed("missing", 1), "pluxy: Not installed", managed_quit),
+            (
+                at(Some(Mode::Local), Some("http://127.0.0.1:8317"), true),
+                "pluxy: Connected to 127.0.0.1:8317",
+                "Quit",
+            ),
+            (
+                at(Some(Mode::Remote), Some("https://pluxy.example"), true),
+                "pluxy: Connected to pluxy.example",
+                "Quit",
+            ),
+            (
+                at(Some(Mode::Remote), Some("https://[::1]:9443"), true),
+                "pluxy: Connected to [::1]:9443",
+                "Quit",
+            ),
+            // An address but no key yet (or a refused one): not connected until signed in.
+            (
+                at(Some(Mode::Local), Some("http://127.0.0.1:8317"), false),
+                "pluxy: Not connected",
+                "Quit",
+            ),
+            (
+                at(Some(Mode::Remote), Some("https://pluxy.example"), false),
+                "pluxy: Not connected",
+                "Quit",
+            ),
+            (
+                at(Some(Mode::Remote), None, false),
+                "pluxy: Not connected",
+                "Quit",
+            ),
+            (at(None, None, false), "pluxy: Not connected", "Quit"),
+        ] {
+            assert_eq!(tray_presentation(&v, false).0, status, "{v:?}");
+            assert_eq!(quit_text(v.mode), quit, "{v:?}");
+            words.extend([status.to_string(), quit.to_string()]);
+        }
+        assert_eq!(
+            tray_presentation(&managed("running", 1), true).0,
+            "pluxy: Working…"
+        );
+        assert_eq!(
+            CORE_ACTION_TEXT,
+            ["Start pluxy", "Stop pluxy", "Restart pluxy"]
+        );
+        assert_eq!(format!("Open {}", display_name(false)), "Open pluxy");
+        words.extend(CORE_ACTION_TEXT.map(String::from));
+        for w in words {
+            assert!(!w.to_lowercase().contains("core"), "{w}");
         }
     }
 

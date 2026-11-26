@@ -98,7 +98,7 @@ async function coreStopped(name: string, s: Stage) {
   check(typeof pid === "number" && !alive(pid), `${name}: quitting stopped the app's own core`);
 }
 
-function saved(): { close_behavior?: string; geometry?: Record<string, number> } {
+function saved(): { close_behavior?: string; geometry?: Record<string, number>; ask_without_tray?: boolean } {
   try {
     return JSON.parse(readFileSync(settings, "utf8"));
   } catch {
@@ -107,17 +107,38 @@ function saved(): { close_behavior?: string; geometry?: Record<string, number> }
 }
 
 if (noTray) {
+  // The defaults: quitting stops the app's own pluxy, so closing asks first.
+  const asked = await stage("no-tray-ask");
+  check(
+    asked.prompts === 3,
+    `no-tray-ask: closing asked at each of its three closes: unanswered, Keep open, Close and stop pluxy (${asked.prompts} prompts)`,
+  );
+  await coreStopped("no-tray-ask", asked);
+  const kept = saved();
+  check(
+    kept.ask_without_tray === false && kept.close_behavior === "minimize-to-tray",
+    `no-tray-ask: Don't ask again is kept apart from the close choice (${JSON.stringify(kept)})`,
+  );
   for (const choice of ["minimize-to-tray", "ask"]) {
-    writeFileSync(settings, JSON.stringify({ close_behavior: choice }), { mode: 0o600 });
+    writeFileSync(settings, JSON.stringify({ close_behavior: choice, ask_without_tray: false }), {
+      mode: 0o600,
+    });
     const s = await stage("no-tray");
-    check(s.prompts === 0, `no-tray (${choice}): closing quit without asking (${s.prompts} prompts)`);
+    check(
+      s.prompts === 0,
+      `no-tray (${choice}): with Don't ask again, closing quit without asking (${s.prompts} prompts)`,
+    );
     await coreStopped(`no-tray (${choice})`, s);
+    check(
+      saved().close_behavior === choice,
+      `no-tray (${choice}): quitting kept the close choice (${saved().close_behavior})`,
+    );
   }
 } else {
   const first = await stage("first");
   check(
     first.prompts === 3,
-    `first: Ask every time asked at each of its three closes (${first.prompts} prompts)`,
+    `first: the default closed without asking, then Ask every time asked at each of its three closes (${first.prompts} prompts)`,
   );
   await coreStopped("first", first);
   const kept = saved();

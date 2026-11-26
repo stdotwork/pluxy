@@ -313,6 +313,9 @@ pub struct Prepared {
     /// The app's own action (prepare_app): no package, file or launch to show, so its review is
     /// its description alone, and no launch notice follows it.
     own: bool,
+    /// An action native code built and described in full, in plain words (`prepare_plain`): its
+    /// review is that description alone, as an own action's; a launch notice still follows it.
+    plain: bool,
     exact: ExactAction,
     files: Vec<OpenTarget>,
     executable: Option<OpenTarget>,
@@ -382,21 +385,22 @@ impl Prepared {
             .as_ref()
             .map(|l| l.environment_revision.as_str())
     }
+    /// Requester and action, for the launch notice: each on its own line. Only a description
+    /// native code wrote keeps its own lines; any other shows its line breaks escaped.
     pub(crate) fn notice(&self) -> String {
-        escape_format_characters(&format!(
-            "Requester: {}\nAction: {}",
-            self.exact.chain[0].id, self.exact.what
-        ))
+        let what = if self.own || self.plain {
+            escape_lines(&self.exact.what)
+        } else {
+            escape_format_characters(&self.exact.what)
+        };
+        format!(
+            "Requester: {}\nAction: {what}",
+            escape_format_characters(&self.exact.chain[0].id)
+        )
     }
     pub fn review(&self) -> Result<String, String> {
-        if self.own {
-            return Ok(self
-                .exact
-                .what
-                .split('\n')
-                .map(escape_format_characters)
-                .collect::<Vec<_>>()
-                .join("\n"));
+        if self.own || self.plain {
+            return Ok(escape_lines(&self.exact.what));
         }
         // JSON quoting makes argv boundaries, newlines and control characters unambiguous.
         let mut s = review_text(&self.exact)?;
@@ -682,6 +686,13 @@ pub(crate) fn escape_format_characters(text: &str) -> String {
         }
     }
     out
+}
+/// text with each line escaped and the line breaks kept.
+fn escape_lines(text: &str) -> String {
+    text.split('\n')
+        .map(escape_format_characters)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 fn review_text(exact: &ExactAction) -> Result<String, String> {
     serde_json::to_string_pretty(exact)
@@ -1084,6 +1095,14 @@ impl Confirmations {
     pub(crate) fn prepare_main(&mut self, action: Action) -> Result<Prepared, String> {
         self.prepare(action, Origin::Main)
     }
+    /// `prepare_main` for an action whose description says, in plain words, everything the
+    /// person decides on (adopting a pluxy program: its path, size and digest): the review shows
+    /// that description alone. Its files are still opened and bound as `prepare_main` binds them.
+    pub(crate) fn prepare_plain(&mut self, action: Action) -> Result<Prepared, String> {
+        let mut p = self.prepare(action, Origin::Main)?;
+        p.plain = true;
+        Ok(p)
+    }
     /// `prepare_main` for a call a native gesture started: prepared with the gesture's origin
     /// (the window's launcher or the tray), which `remembered` may then use.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -1225,6 +1244,7 @@ impl Confirmations {
         let p = Prepared {
             origin,
             own: false,
+            plain: false,
             exact: ExactAction {
                 what: action.what,
                 chain: action.chain,
