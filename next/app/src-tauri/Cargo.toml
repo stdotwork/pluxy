@@ -20,6 +20,9 @@ path = "src/main.rs"
 native-test = []
 # Loads publisher roots only for tests that create an isolated temporary trust profile.
 artifact-test-trust = []
+# The local build (package.ts local): the window's title says so, and the program carries the
+# test build marker, so the release gate refuses it. Never in a release build.
+local-build = []
 
 # The native test's probe of the desktop services (native/session.ts). Not part of any build
 # without the native-test feature.

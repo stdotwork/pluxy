@@ -1824,13 +1824,14 @@ When the app has exited, the session stops what it started. On Ubuntu 24.04 the 
 
 ## Packages
 
-The base `tauri.conf.json` keeps bundling off. Two commands build packages, from this folder,
-after `bun run build`; both use the Tauri CLI pinned in `package.json`:
+The base `tauri.conf.json` keeps bundling off. Three commands build packages, from this folder,
+after `bun run build`; all use the Tauri CLI pinned in `package.json`:
 
 ```bash
 bun run package:test <out-dir>          # the test package, for checks: an AppImage (Linux), a
                                         # folder bundle and a per-user setup program (Windows) or
                                         # an app bundle and disk image (macOS)
+bun run package:local <out-dir>         # the local build, to open and use (Linux): see below
 bun run package:release [artifact...]   # the release gate: builds and checks; uploads nothing
 ```
 
@@ -1920,6 +1921,109 @@ the staged trust folder (`src-tauri/trust`), the built binary (`pluxy-app.exe` o
 each artifact given: an AppImage, a Windows folder bundle or a macOS app bundle. Its last
 line says `release-package: valid`, `release-package: refused: <reason>` or, when it could not
 check, `release-package: failed: <reason>`.
+
+### The local build
+
+The local build is the desktop app built to open and use on this Linux computer, with a core and
+the real provider extensions inside. It is not a release and cannot pass for one. From `next/`:
+
+```bash
+make app-local                        # into next/app/local-build
+make app-local LOCAL=/some/folder     # into a folder of your choice
+```
+
+`make app-local` builds the web panel core embeds (`make panel`), installs and builds the window
+(`bun run build`), then runs `bun run package:local <folder>` here. It needs what the app's other
+builds need ([Build and check](#build-and-check)) and Go. Its last lines give the build's version,
+the providers it carries, where it is and how to start it. It builds only into a new or empty
+folder or an earlier local build ([Building it again](#building-it-again)).
+
+The folder holds:
+
+| Path in the folder | What it is |
+| --- | --- |
+| `bin/pluxy-app-local` | The app. Start it from here. |
+| `bin/pluxy` | The core the app comes with ([The core the app comes with](#the-core-the-app-comes-with)). |
+| `lib/pluxy Local/core/bundled` | The core's bundled registry: every provider extension in `next/extensions`, built by `go run ./cmd/pluxy-pack`. |
+| `local-build.json` | The app's path, the core's version and the IDs of the providers it carries. |
+
+Start it with `next/app/local-build/bin/pluxy-app-local` from the repository's root (or from the
+folder you gave). On first launch, choose **Run core here** and press **Connect** with both fields empty: the app copies the
+core it came with into its own cores, starts it on a free loopback port and connects. Setup and
+Extensions then offer the providers; none is installed until you install it, and installing one
+needs no network, since the archives are in the folder.
+
+How it differs from a release:
+
+- **Its own name and folders.** Identifier `dev.pluxy.desktop.local`, product name
+  `pluxy Local`, program `pluxy-app-local`. Its settings go to
+  `~/.config/dev.pluxy.desktop.local`, its data and cores to
+  `~/.local/share/dev.pluxy.desktop.local` (under `$XDG_CONFIG_HOME` and `$XDG_DATA_HOME` when
+  set), and its login entry, if you turn one on, to its own file
+  (`dev.pluxy.desktop.local.desktop`), so it never shares anything with an installed release. The
+  entry's name is written when you turn **Launch at startup** on, so an entry an earlier build
+  wrote keeps that build's name until you turn it off and on again.
+- **Marked as a local build.** The window's title, the tray's tooltip and its Open item, and the
+  login item's name say "pluxy (local build)". The `local-build` Cargo feature also puts the test
+  build marker in the program, so the [release validator](#validate-release-inputs) refuses the
+  program given as an artifact (`test build marker/identity in artifact`), refuses the build's own
+  config for its identifier and product name, and refuses the `local-build` feature (`test cargo
+  feature in release`).
+- **No test checks.** It is built in the release profile without the `native-test` feature, so it
+  runs no checks and does not exit by itself, as the test package does.
+- **Keys made for the build.** Its core is a release the command makes, as the test package's
+  are, signed with a publisher key made for that one build; the private key stays in the
+  command's memory and is gone when it ends. Nothing is signed with a key kept in the repository.
+  The build has no updater key, so it never updates itself: build it again to update it.
+- **No coding-tool add-ons yet.** The native tools in `next/app-tools` are not built into it,
+  and it has no trusted source for them, so it cannot install them.
+
+To remove it, quit the app (its core stops with it), then delete the build folder and its data:
+
+```bash
+rm -rf next/app/local-build ~/.config/dev.pluxy.desktop.local ~/.local/share/dev.pluxy.desktop.local
+rm -f ~/.config/autostart/dev.pluxy.desktop.local.desktop   # only if you turned on Launch at startup
+```
+
+### Building it again
+
+After a change, quit the app (from its tray menu when it is in the tray), then run
+`make app-local` again with the same folder. The build:
+
+1. **Checks the folder first, and changes nothing if it refuses.** It refuses a link, the folder
+   itself or one among the folders above it (name the folder by its own path); a file; a folder
+   with files in it that is not a local build: a local build has a `local-build.json` that names
+   this kind of build and `<folder>/bin/pluxy-app-local` as its app, and that app, the core
+   `bin/pluxy` and `lib/pluxy Local/core/bundled/index.json` are files in the folder, not links;
+   any folder while a `<folder>.old` is beside it; and a folder that the app, or a core it started
+   from there, is still running from, or when it cannot tell (it cannot list `/proc`, or cannot
+   read the program of one of your processes that holds no special rights). Each refusal says what
+   to do.
+2. **Builds into a new folder beside it,** `<folder>.stage-<random>`. If the build fails or you
+   stop it (Ctrl-C) before the swap, that folder is removed and the last line says your folder is
+   as it was. Ctrl-C during the swap takes effect when the swap has ended: the last line then says
+   that the new build is in your folder.
+3. **Swaps the new build in:** your folder becomes `<folder>.old`, which is checked again as in
+   step 1 (if something else took its place during the build, it is renamed back and nothing is
+   removed); the new build takes its name, a `home/` folder in the old build moves into the new
+   one, and then `<folder>.old` is removed. If a step fails, the message says where the old build
+   or its `home/` is, and nothing that still holds `home/` is removed.
+
+So a rebuild replaces `bin/`, `lib/` and `local-build.json`, keeps `home/`, and removes anything
+else in the folder. `home/` is where the app keeps its settings and data when you start it with
+`HOME` pointing there; started as above, they are in `~/.config/dev.pluxy.desktop.local` and
+`~/.local/share/dev.pluxy.desktop.local`, which a rebuild does not touch either.
+
+Each build has a version of its own, the core version the app names (`core-release.json`) followed
+by `+local.` and 12 random hex digits, such as `0.1.0+local.90a173983d0c`. The app and its core
+both carry it, so at its next start the app installs the core it came with and switches to it,
+unless the core it runs is one you chose (an install, an adoption or a rollback): that one stays
+([The core the app comes with](#the-core-the-app-comes-with)). The core it ran before stays
+installed, to switch back to; older ones are removed. Accounts, settings
+and installed providers stay. An installed provider keeps running the copy you installed, even
+when the new build carries a changed one at the same version: to run the new one, remove the
+provider and install it again (on Extensions, or `pluxy ext remove` and `pluxy ext install`); its
+accounts stay.
 
 ### The updater gate
 

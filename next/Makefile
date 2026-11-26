@@ -2,9 +2,10 @@
 # Each target runs the same commands as AGENTS.md and CI; those stay the reference.
 
 .DEFAULT_GOAL := help
-.PHONY: help panel dev check test test-short ui ui-browser app app-rust tools all hooks
+.PHONY: help panel dev check test test-short ui ui-browser app app-rust app-local tools all hooks
 
 PORT ?= 8330
+LOCAL ?= app/local-build
 
 help: ## List the targets
 	@awk -F':.*## ' '/^[a-z-]+:.*## /{printf "  make %-11s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -41,6 +42,9 @@ app: ## Desktop app, bun side: install (the kit's packages too), check, lint, te
 
 app-rust: ## Desktop app, Rust side: cargo fmt --check, cargo test
 	cd app/src-tauri && cargo fmt --check && cargo test --locked
+
+app-local: panel ## Desktop app you can open and use, with core and providers inside (LOCAL=app/local-build)
+	cd app && bun install --frozen-lockfile && bun run build && bun package.ts local $(abspath $(LOCAL))
 
 tools: ## app-tools: cargo fmt --check, clippy, test
 	cd app-tools && cargo fmt --check && cargo clippy --locked --all-targets -- -D warnings && cargo test --locked

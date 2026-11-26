@@ -388,6 +388,13 @@ fn the_app_moves_only_its_own_selection_once_per_change_of_its_version() {
             BundledMove::Record
         );
     }
+    // Each local build (package.ts local) is a new app version, the same as its core's: the
+    // rebuilt app moves its own selection to its core.
+    let (a, b) = ("0.1.0+local.0123456789ab", "0.1.0+local.ba9876543210");
+    assert_eq!(
+        bundled_move(&s(Some(a), app, Some(a)), b, b),
+        BundledMove::Switch
+    );
 }
 
 #[test]
