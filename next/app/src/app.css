@@ -442,7 +442,8 @@
 
   /* The page behind is veiled in its own background colour, so the prompt stands out in either scheme. */
   dialog[data-part="close-prompt"] {
-    box-shadow: 0 calc(var(--s) * 2) calc(var(--s) * 8) color-mix(in srgb, var(--px-color-text) 22%, transparent);
+    box-shadow: 0 calc(var(--s) * 2) calc(var(--s) * 8)
+      color-mix(in srgb, var(--px-color-text) 22%, transparent);
   }
 
   dialog[data-part="close-prompt"]::backdrop {
