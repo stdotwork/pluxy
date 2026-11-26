@@ -334,7 +334,14 @@
 
   .confirm {
     display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
     gap: calc(var(--s) * 2);
+  }
+
+  /* ConfirmButton's question, beside its answers. */
+  .confirm-question {
+    color: var(--px-color-text);
   }
 
   /* A state as a word with a dot in the state's colour before it. The word is mixed towards the

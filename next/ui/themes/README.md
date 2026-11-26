@@ -294,7 +294,7 @@ These stay stable within a theme contract version:
 | `data-part="button"` | A button; `data-variant` is `primary` (a view's main action, filled), `quiet` (the ordinary button, outlined), `ghost` (no border until hovered) or `danger` (outlined, in the danger colour) |
 | `data-part="badge"` | A state badge; `data-tone` is `ok`, `warn`, `danger` or `muted` |
 | `data-part="field"` | A labelled form control |
-| `data-part="meter"` | A quota usage meter; `data-tone` is `ok`, `warn` or `danger`. Its child is the fill; warning and danger use the matching state colour. |
+| `data-part="meter"` | A share as a bar: a quota usage meter, or a limit's gauge of what is left. `data-mode` is `used` (fills by the share used) or `left` (fills by the share left, so full is plenty); `data-tone` is `ok`, `warn` or `danger`. Its child is the fill; warning and danger use the matching state colour. |
 | `data-part="tabs"` | A group of tabs |
 | `data-part="tab"` | One tab |
 | `data-part="tab-panel"` | The panel shown by the selected tab |
@@ -340,6 +340,13 @@ These stay stable within a theme contract version:
 | `data-part="setup-pick"` | One provider on the Setup page's checklist; `data-state` is `offered`, `installed` or `failed`. |
 | `data-part="setup-client"` | One client on the Setup page; `data-state` is `not-configured`, `configured`, `needs-update`, `refused` or `not-found`. |
 | `data-part="setup-paste"` | The text to paste into a client's settings files, open under its client. |
+| `data-part="account-row"` | One account on one line, the same on every page: its group's mark, name, provider, plan and limits, and why and its fix when it needs the person or waits. `data-group` is `needs`, `waiting`, `serving` or `off`; `data-condition` is `serving`, `cooling`, `exhausted`, `needs_login`, `banned`, `broken`, `no_provider` or `off`; `data-tall` is set on a row that says why under the name; `data-wide` on the Accounts list's wider row |
+| `data-part="request-row"` | One request on one line: its time, model, account, key, tokens, time taken and result. `data-failed` is set on a failed one; `data-open` while it shows its details; `data-compact` on Home's shorter row, a link to the request |
+| `data-part="setting-row"` | One setting: its name and what it does beside its control. `data-disabled` is set while the control cannot be used |
+| `data-part="tool-row"` | One coding tool: its name, version, state and settings file. `data-state` is `configured`, `not-configured`, `needs-update`, `refused`, `not_installed` or `unchecked` |
+| `data-part="state-pane"` | What a whole pane shows while it loads, when it is empty, or when it could not be read; `data-kind` is `loading`, `empty` or `failed` |
+| `data-part="plan-pill"` | An account's plan as a word; `data-plan-tier` is `top` (the largest plans), `mid` or `free`. The default theme sets the tiers apart by ink weight only, never colour |
+| `data-part="limits"` | An account's limits on its row; `data-state` is `read`, `reading`, `none` or `failed` |
 
 Some parts also carry the `data-slot` name that [T3 Code](https://github.com/pingdotgg/t3code)
 gives the same part, and the root's `dark` class is the one T3 Code uses. They exist so that the

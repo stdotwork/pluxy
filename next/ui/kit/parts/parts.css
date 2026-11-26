@@ -1,0 +1,614 @@
+/* The shared parts (parts/*.tsx): AccountRow, RequestRow, SettingRow, ToolRow and StatePane. Each
+   sits on hairline dividers, never in a boxed card, and reads only --px-* tokens. A part that must
+   fit a narrow pane is a size container: its grid changes by its own width, not the window's. */
+@layer kit {
+  /* ---- the group mark and the plan --------------------------------------------------------- */
+
+  .group-mark {
+    display: inline-flex;
+    flex: none;
+    color: var(--px-color-text-muted);
+  }
+
+  .group-mark[data-group="needs"] {
+    color: var(--px-color-danger);
+  }
+
+  .group-mark[data-group="waiting"] {
+    color: var(--px-color-warn);
+  }
+
+  .group-mark[data-group="serving"] {
+    color: var(--px-color-ok);
+  }
+
+  /* The plan by ink weight only, never colour: no tier is filled, so a plan never outweighs a
+     condition mark. Themes may colour [data-plan-tier]. */
+  .plan-pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 calc(var(--s) * 1.5);
+    border: var(--px-shape-border) solid transparent;
+    border-radius: var(--px-shape-radius);
+    color: var(--px-color-text);
+    font-size: var(--px-font-size-small);
+    line-height: 1.5;
+    white-space: nowrap;
+  }
+
+  .plan-pill[data-plan-tier="top"] {
+    border-color: var(--px-color-text);
+    font-weight: 500;
+  }
+
+  .plan-pill[data-plan-tier="mid"] {
+    border-color: var(--px-color-text-muted);
+  }
+
+  .plan-pill[data-plan-tier="free"] {
+    padding-inline: 0;
+    color: var(--px-color-text-muted);
+  }
+
+  /* ---- limits ------------------------------------------------------------------------------- */
+
+  .limits {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--s) * 4);
+    white-space: nowrap;
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+  }
+
+  .limits[data-state="read"] {
+    color: var(--px-color-text);
+  }
+
+  .limit {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--s) * 1.5);
+  }
+
+  .limit-name,
+  .limit-reset {
+    color: var(--px-color-text-muted);
+  }
+
+  /* A gauge of what is left: full is plenty. */
+  .meter[data-mode="left"] {
+    display: inline-block;
+    flex: none;
+    width: calc(var(--s) * 10);
+    height: calc(var(--s) * 1.5);
+    overflow: hidden;
+    border-radius: var(--px-shape-radius);
+    background: var(--px-color-meter-track);
+  }
+
+  .meter[data-mode="left"] > span {
+    display: block;
+    height: 100%;
+    background: var(--px-color-meter-fill);
+  }
+
+  .meter[data-mode="left"][data-tone="warn"] > span {
+    background: var(--px-color-warn);
+  }
+
+  .meter[data-mode="left"][data-tone="danger"] > span {
+    background: var(--px-color-danger);
+  }
+
+  /* ---- AccountRow --------------------------------------------------------------------------- */
+
+  .account-row {
+    container-type: inline-size;
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+    cursor: pointer;
+  }
+
+  .account-row:hover {
+    background: color-mix(in srgb, var(--px-color-surface-raised) 60%, transparent);
+  }
+
+  .account-grid {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    align-items: center;
+    column-gap: calc(var(--s) * 3);
+    min-height: var(--px-size-row);
+    padding: 0 calc(var(--s) * 2);
+  }
+
+  .account-row[data-tall] .account-grid {
+    min-height: var(--px-size-row-tall);
+    padding-block: var(--s);
+  }
+
+  .account-row[data-wide] .account-grid {
+    grid-template-columns: auto minmax(0, 1fr) auto minmax(5em, auto) minmax(8em, auto);
+  }
+
+  .account-who {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .account-line {
+    display: flex;
+    align-items: baseline;
+    gap: calc(var(--s) * 2);
+    min-width: 0;
+  }
+
+  .account-name {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--px-color-text);
+    font-weight: var(--px-font-weight-strong);
+    text-decoration: none;
+  }
+
+  .account-name:hover {
+    text-decoration: underline;
+  }
+
+  .account-meta {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+    white-space: nowrap;
+  }
+
+  /* A reason wraps rather than lose its end: the end often says what to do. */
+  .account-reason {
+    overflow-wrap: anywhere;
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+  }
+
+  .account-side,
+  .account-fix {
+    justify-self: end;
+    min-width: 0;
+  }
+
+  .account-week {
+    justify-self: end;
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+    white-space: nowrap;
+  }
+
+  .fix {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: var(--s);
+    padding-block: calc(var(--s) * 0.5);
+  }
+
+  .fix-error {
+    max-width: 22em;
+    color: color-mix(in srgb, var(--px-color-danger) 75%, var(--px-color-text));
+    font-size: var(--px-font-size-small);
+    text-align: end;
+  }
+
+  /* A narrow pane: the limits go on a line of their own under the name. */
+  @container (max-width: 620px) {
+    .account-grid,
+    .account-row[data-wide] .account-grid {
+      grid-template-columns: auto minmax(0, 1fr) auto;
+    }
+
+    .account-side:empty {
+      display: none;
+    }
+
+    .account-side:has(> .limits) {
+      grid-row: 2;
+      grid-column: 2 / -1;
+      justify-self: start;
+      padding-block-end: var(--s);
+    }
+
+    .account-week {
+      display: none;
+    }
+  }
+
+  /* ---- RequestRow --------------------------------------------------------------------------- */
+
+  .request-row {
+    container-type: inline-size;
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .request-line,
+  .request-row[data-compact] {
+    display: grid;
+    grid-template-columns:
+      8.5ch minmax(0, 1.4fr) minmax(0, 1.2fr) minmax(0, 1fr) 8ch 7ch minmax(7em, auto)
+      16px;
+    align-items: center;
+    column-gap: calc(var(--s) * 3);
+    width: 100%;
+    min-height: var(--px-size-control);
+    padding: 0 calc(var(--s) * 2);
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: start;
+    text-decoration: none;
+    cursor: pointer;
+  }
+
+  .request-row[data-compact] {
+    container-type: normal;
+    grid-template-columns: 6ch minmax(0, 1.2fr) minmax(0, 1fr) auto;
+  }
+
+  .request-line:hover,
+  .request-row[data-compact]:hover {
+    background: color-mix(in srgb, var(--px-color-surface-raised) 60%, transparent);
+  }
+
+  .request-time,
+  .request-model,
+  .request-tokens {
+    font-family: var(--px-font-mono);
+    font-size: var(--px-font-size-mono);
+  }
+
+  .request-time {
+    color: var(--px-color-text-muted);
+  }
+
+  .request-model,
+  .request-account,
+  .request-key {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .request-key,
+  .request-note {
+    color: var(--px-color-text-muted);
+  }
+
+  .request-tokens,
+  .request-taken {
+    text-align: end;
+    white-space: nowrap;
+  }
+
+  .request-result {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--s) * 1.5);
+    white-space: nowrap;
+  }
+
+  .request-result[data-result="ok"] {
+    color: var(--px-color-ok);
+  }
+
+  .request-result[data-result="failed"],
+  .request-attempt-result[data-result="failed"] {
+    color: color-mix(in srgb, var(--px-color-danger) 75%, var(--px-color-text));
+  }
+
+  .request-chevron {
+    display: inline-flex;
+    color: var(--px-color-text-muted);
+  }
+
+  .request-chevron .icon {
+    transition: transform var(--t);
+  }
+
+  .request-row[data-open] .request-chevron .icon {
+    transform: rotate(90deg);
+  }
+
+  .request-detail {
+    display: grid;
+    gap: calc(var(--s) * 3);
+    padding: calc(var(--s) * 2) calc(var(--s) * 2) calc(var(--s) * 4);
+  }
+
+  .request-attempts h3 {
+    margin: 0 0 var(--s);
+    font-size: var(--px-font-size);
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .request-attempts ol {
+    margin: 0;
+    padding-inline-start: calc(var(--s) * 5);
+  }
+
+  /* The trace's Copy button is a control like the others here. */
+  .request-detail .btn[data-size="small"] {
+    min-height: var(--px-size-control);
+  }
+
+  @container (max-width: 620px) {
+    .request-line {
+      grid-template-columns: 8.5ch minmax(0, 1.2fr) minmax(0, 1fr) 7ch auto 16px;
+    }
+
+    .request-key,
+    .request-tokens {
+      display: none;
+    }
+  }
+
+  /* ---- SettingRow --------------------------------------------------------------------------- */
+
+  .setting-row {
+    container-type: inline-size;
+    padding-block: calc(var(--s) * 3);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .setting-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, auto);
+    align-items: start;
+    gap: calc(var(--s) * 2) calc(var(--s) * 6);
+    padding: 0 calc(var(--s) * 2);
+  }
+
+  .setting-about {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s);
+    min-width: 0;
+  }
+
+  .setting-name {
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .setting-description {
+    color: var(--px-color-text-muted);
+  }
+
+  .setting-key {
+    overflow-wrap: anywhere;
+    color: var(--px-color-text-muted);
+    font-family: var(--px-font-mono);
+    font-size: var(--px-font-size-mono);
+  }
+
+  .setting-control {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: calc(var(--s) * 2);
+    min-width: 0;
+  }
+
+  .setting-control fieldset {
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .setting-control fieldset:disabled {
+    opacity: 0.55;
+  }
+
+  .setting-saving,
+  .setting-why {
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+  }
+
+  .setting-saving:empty {
+    display: none;
+  }
+
+  .setting-why {
+    flex-basis: 100%;
+    text-align: end;
+  }
+
+  .setting-error {
+    padding: calc(var(--s) * 2) calc(var(--s) * 2) 0;
+  }
+
+  @container (max-width: 520px) {
+    .setting-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .setting-control {
+      justify-content: flex-start;
+    }
+
+    .setting-why {
+      text-align: start;
+    }
+  }
+
+  /* ---- ToolRow ------------------------------------------------------------------------------ */
+
+  .tool-row {
+    container-type: inline-size;
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .tool-line {
+    display: grid;
+    grid-template-columns: minmax(8em, 1fr) minmax(max-content, auto) minmax(0, 1.2fr) auto;
+    align-items: center;
+    gap: calc(var(--s) * 3);
+    min-height: var(--px-size-row);
+    padding: 0 calc(var(--s) * 2);
+  }
+
+  .tool-who {
+    display: flex;
+    align-items: baseline;
+    gap: calc(var(--s) * 2);
+    min-width: 0;
+  }
+
+  .tool-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .tool-version,
+  .tool-path {
+    color: var(--px-color-text-muted);
+    font-family: var(--px-font-mono);
+    font-size: var(--px-font-size-mono);
+  }
+
+  .tool-version {
+    white-space: nowrap;
+  }
+
+  .tool-path {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tool-action {
+    justify-self: end;
+  }
+
+  .tool-action:empty {
+    display: none;
+  }
+
+  .tool-more {
+    padding: 0 calc(var(--s) * 2) calc(var(--s) * 3);
+  }
+
+  @container (max-width: 560px) {
+    .tool-line {
+      grid-template-columns: minmax(0, 1fr) auto auto;
+    }
+
+    .tool-path {
+      display: none;
+    }
+  }
+
+  /* ---- StatePane ---------------------------------------------------------------------------- */
+
+  .state-pane {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: calc(var(--s) * 2);
+    padding: calc(var(--s) * 6) calc(var(--s) * 2);
+  }
+
+  .state-pane-head {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+  }
+
+  .state-pane-title {
+    font-size: var(--px-font-size-title);
+  }
+
+  .state-pane[data-kind="failed"] .state-pane-mark {
+    display: inline-flex;
+    color: var(--px-color-danger);
+  }
+
+  .state-pane-mark {
+    display: inline-flex;
+    color: var(--px-color-text-muted);
+  }
+
+  .state-pane-text {
+    max-width: 40rem;
+    color: var(--px-color-text-muted);
+  }
+
+  .state-pane-text p {
+    margin: 0;
+  }
+
+  .state-pane-details {
+    max-width: 100%;
+  }
+
+  .state-pane-details summary {
+    cursor: pointer;
+    color: var(--px-color-text-muted);
+  }
+
+  .state-pane-details pre {
+    margin: calc(var(--s) * 2) 0 0;
+    padding: calc(var(--s) * 2);
+    border-radius: var(--px-shape-radius);
+    background: var(--px-color-code-bg);
+    color: var(--px-color-code-text);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .state-pane-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: calc(var(--s) * 2);
+  }
+
+  /* Placeholder rows, each one row high, shown a moment after a load starts. */
+  .placeholder {
+    align-self: stretch;
+  }
+
+  .placeholder i {
+    display: flex;
+    align-items: center;
+    height: var(--px-size-row);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .placeholder i::before {
+    content: "";
+    width: 40%;
+    height: calc(var(--s) * 2);
+    border-radius: var(--px-shape-radius);
+    background: var(--px-color-surface-raised);
+  }
+
+  .placeholder i:nth-child(2n)::before {
+    width: 55%;
+  }
+
+  .stale-notice .notice {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+  }
+}

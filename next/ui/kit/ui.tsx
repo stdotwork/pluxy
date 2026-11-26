@@ -297,11 +297,15 @@ export function confirmActionLabel(label: string): string {
   );
 }
 
-/** A button that asks once more before it acts. */
+/**
+ * A button that asks once more before it acts. question, when given, is shown beside the
+ * answers while it asks ("Delete the key Claude Code? Tools using it stop working.").
+ */
 export function ConfirmButton(props: {
   /** A promise it returns keeps the button busy until it ends. */
   onConfirm: () => unknown;
   disabled?: boolean;
+  question?: string;
   children: string;
 }) {
   const [asking, setAsking] = useState(false);
@@ -340,6 +344,7 @@ export function ConfirmButton(props: {
   }
   return (
     <span class="confirm">
+      {props.question && <span class="confirm-question">{props.question}</span>}
       <Button
         variant="danger"
         disabled={props.disabled}

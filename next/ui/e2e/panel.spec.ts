@@ -69,7 +69,7 @@ test("panel shows core, switches layout and theme live, and recovers from custom
   const beta = packages.locator('[data-part="item"]', { hasText: "test/beta" });
   await expect(alpha).toBeVisible();
   await expect(alpha.locator('[data-part="badge"]')).toHaveText("Running");
-  await expect(beta.locator('[data-part="badge"]')).toHaveText("Disabled");
+  await expect(beta.locator('[data-part="badge"]')).toHaveText("Turned off");
 
   // Themes: switching a layout option applies at once, without reloading the page.
   await goTo(page, "Themes");
