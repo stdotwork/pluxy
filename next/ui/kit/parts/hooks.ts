@@ -85,11 +85,15 @@ const asked = new Set<string>();
 const READING: Windows = { state: "reading", limits: [] };
 
 /**
- * Marks every reply kept as out of date, so the next look reads each again; each keeps showing
- * its last reply until the new one comes. A page's Refresh calls it.
+ * Marks every reply kept as out of date, so the next look reads each again from core, not from
+ * the copy GET /accounts carries; each keeps showing its last reply until the new one comes. A
+ * page's Refresh calls it.
  */
 export function expireWindows() {
-  for (const [id, w] of kept) kept.set(id, { ...w, at: 0 });
+  for (const [id, w] of kept) {
+    kept.set(id, { ...w, at: 0 });
+    asked.add(id);
+  }
 }
 
 /** Forgets every reply kept, for tests. */
