@@ -1,9 +1,8 @@
 // The tool pages' file preview: a read of the settings file that answers after the person changed
-// the path is dropped, so the page's target is always the file its field shows and Connect (Apply,
-// on the pages not yet on the shared parts) never writes to another. These drive the real pages
-// through Preact's DOM renderer against a fake window command channel (pageHarness.tsx). The pages
-// on the shared parts read their default file as they open, and name the other files under
-// "Settings file, key and backups"; the others read only when Refresh is pressed.
+// the path is dropped, so the page's target is always the file its field shows and Connect never
+// writes to another. These drive the real pages, all eight, through Preact's DOM renderer against a
+// fake window command channel (pageHarness.tsx). Each page reads its default file as it opens, and
+// names the other files under "Settings file, key and backups", read with Read this file.
 import { expect, test } from "bun:test";
 import type { VNode } from "preact";
 import { ClaudeCodePage } from "../src/claudeCode";
@@ -22,19 +21,44 @@ const MORE = "Settings file, key and backups";
 interface PageCase {
   name: string;
   page: () => VNode;
-  /** On the shared parts: the file choice is under MORE, and the write is Connect. */
-  shared: boolean;
   /** The choice that makes the file or folder a typed path, and that field's label. */
   pick: string;
   field: string;
-  read: string;
   /** The button that writes the settings. */
   write: string;
-  /** The tool's answer to a read of the path typed in the field. */
-  body: (path: string) => unknown;
+  /** Every file the tool's preview pins for the path typed in the field, as its add-on gives them. */
+  targets: (path: string) => Pin[];
+  /** The tool's reading of the settings in its answer to a read, apart from the pins. */
+  reading: unknown;
 }
 
-const pinned = (path: string) => [{ selected: path, target: `${path}/target.json`, link: null }];
+interface Pin {
+  selected: string;
+  target: string;
+  link: string | null;
+  path?: string;
+  root?: string;
+}
+
+// Each typed path resolves somewhere else (as a link the add-on follows and keeps), so a target
+// on screen or in a write can only have come from the reading, never from the field.
+const REAL = "/real";
+/** A typed file: one pin, its link followed. */
+const fileTarget = (path: string): Pin[] => [
+  { selected: path, target: `${REAL}${path}`, link: `${REAL}${path}` },
+];
+/** A typed folder holding the add-on's files: one pin per file, each a path in the folder. */
+const folderTargets =
+  (...files: string[]) =>
+  (root: string): Pin[] =>
+    files.map((path) => ({
+      selected: root,
+      path,
+      root: `${REAL}${root}`,
+      target: `${REAL}${root}/${path}`,
+      link: null,
+    }));
+const targetsOf = (c: PageCase, path: string) => c.targets(path).map((t) => t.target);
 const unconfigured = { state: "not-configured" };
 const codexRead = {
   ...unconfigured,
@@ -66,100 +90,117 @@ const codexRead = {
 const pages: PageCase[] = [
   {
     name: "Claude Code",
+    targets: fileTarget,
     page: () => <ClaudeCodePage />,
-    shared: true,
     pick: "A file",
     field: "File",
-    read: "Read this file",
     write: "Connect Claude Code",
-    body: (path) => ({
-      targets: pinned(path),
+    reading: {
       applied: false,
       settings: { ...unconfigured, startup_model: null },
-    }),
+    },
   },
   {
     name: "Claude Desktop",
+    targets: folderTargets(
+      "claude_desktop_config.json",
+      "configLibrary/00000000-0000-4000-8000-000000831700.json",
+      "configLibrary/_meta.json",
+    ),
     page: () => <ClaudeDesktopPage />,
-    shared: true,
     pick: "In a folder",
     field: "Folder",
-    read: "Read this file",
     write: "Connect Claude Desktop",
-    body: (path) => ({ targets: pinned(path), applied: false, settings: unconfigured }),
+    reading: { applied: false, settings: unconfigured },
   },
   {
     name: "Codex",
+    targets: folderTargets("config.toml", "pluxy-model-catalog.json"),
     page: () => <CodexPage />,
-    shared: true,
     pick: "In a folder",
     field: "Folder",
-    read: "Read this file",
     write: "Connect Codex",
-    body: (path) => ({
-      targets: pinned(path),
+    reading: {
       applied: false,
       settings: { ...codexRead, model: "gpt-6.1-sol" },
-    }),
+    },
   },
   {
     name: "Grok Build",
+    targets: fileTarget,
     page: () => <GrokPage />,
-    shared: false,
-    pick: "A selected file",
+    pick: "A file",
     field: "File",
-    read: "Refresh",
-    write: "Apply",
-    body: (path) => ({ targets: pinned(path), applied: false, settings: unconfigured }),
+    write: "Connect Grok Build",
+    reading: {
+      applied: false,
+      settings: {
+        ...unconfigured,
+        model: "gpt-6.1-sol",
+        models: [{ model: "gpt-6.1-sol", name: null, context_window: null }],
+      },
+    },
   },
   {
     name: "Hermes Agent",
+    targets: fileTarget,
     page: () => <HermesPage />,
-    shared: false,
-    pick: "A selected config file",
-    field: "Config file",
-    read: "Refresh",
-    write: "Apply",
-    body: (path) => ({ targets: pinned(path), applied: false, config: unconfigured }),
+    pick: "A file",
+    field: "File",
+    write: "Connect Hermes Agent",
+    reading: {
+      applied: false,
+      config: { ...unconfigured, model: "gpt-6.1-sol" },
+    },
   },
   {
     name: "Oh My Pi",
+    targets: folderTargets("models.yml", "config.yml"),
     page: () => <OmpPage />,
-    shared: false,
-    pick: "A selected agent folder",
+    pick: "In a folder",
     field: "Folder",
-    read: "Refresh",
-    write: "Apply",
-    body: (path) => ({ targets: pinned(path), applied: false, config: unconfigured }),
+    write: "Connect Oh My Pi",
+    reading: {
+      applied: false,
+      config: { ...unconfigured, model: "gpt-6.1-sol" },
+    },
   },
   {
     name: "OpenCode",
+    targets: fileTarget,
     page: () => <OpenCodePage />,
-    shared: false,
-    pick: "A selected file",
+    pick: "A file",
     field: "File",
-    read: "Refresh",
-    write: "Apply",
-    body: (path) => ({ targets: pinned(path), applied: false, config: unconfigured }),
+    write: "Connect OpenCode",
+    reading: {
+      applied: false,
+      config: {
+        ...unconfigured,
+        model: "gpt-6.1-sol",
+        models: [{ id: "gpt-6.1-sol", name: "", attachment: false }],
+      },
+    },
   },
   {
     name: "Pi",
+    targets: folderTargets("cliproxyapi.json", "settings.json", "cliproxyapi-models.json"),
     page: () => <PiPage />,
-    shared: false,
-    pick: "A selected agent folder",
+    pick: "In a folder",
     field: "Folder",
-    read: "Refresh",
-    write: "Apply",
-    body: (path) => ({
-      targets: pinned(path),
+    write: "Connect Pi",
+    reading: {
       applied: false,
       pi: {
         ...unconfigured,
-        adapter: { installed: false, version: null, bundled: "1.0.0", update: false, foreign: false },
+        model: "gpt-6.1-sol",
+        adapter: { installed: true, version: "1.0.0", bundled: "1.0.0", update: false, foreign: false },
       },
-    }),
+    },
   },
 ];
+
+/** The tool's whole answer to a read of path: its reading, with every file its add-on pins. */
+const answerOf = (c: PageCase, path: string) => ({ targets: c.targets(path), ...(c.reading as object) });
 
 const A = "/home/me/A.json";
 const B = "/home/me/B.json";
@@ -169,7 +210,7 @@ const REFUSAL = "disk exploded";
 async function typedA(c: PageCase) {
   const ch = channel();
   const page = await mount(c.page, ch.invoke);
-  if (c.shared) await page.open(MORE);
+  await page.open(MORE);
   await page.pick(c.pick);
   await page.type(c.field, A);
   return { ch, page };
@@ -179,17 +220,15 @@ async function typedA(c: PageCase) {
 async function readThenEdit(c: PageCase) {
   const { ch, page } = await typedA(c);
   const before = ch.reads.length;
-  await page.click(c.read);
+  await page.click("Read this file");
   expect(ch.reads.length).toBe(before + 1);
   await page.type(c.field, B);
   await settle();
   return { ch, page, read: ch.reads[before] };
 }
 
-/** Presses the page's write if it offers one it can press (choosing the vault's key where the page
- * asks for one), and gives every target it wrote. */
+/** Presses the page's write if it offers one it can press, and gives every target it wrote. */
 async function writeIfOffered(c: PageCase, ch: Channel, page: Mounted) {
-  if (!c.shared && page.hasButton(c.write)) await page.pick("My key");
   if (page.canPress(c.write)) await page.click(c.write);
   return ch.writes
     .filter((w) => w.op === "apply")
@@ -199,46 +238,45 @@ async function writeIfOffered(c: PageCase, ch: Channel, page: Mounted) {
 for (const c of pages) {
   test(`${c.name}: a read of the path the field shows is kept`, async () => {
     const { ch, page } = await typedA(c);
-    await page.click(c.read);
-    ch.pending()?.answer(c.body(A));
+    await page.click("Read this file");
+    ch.pending()?.answer(answerOf(c, A));
     await settle();
-    expect(page.text()).toContain(`${A}/target.json`);
-    // Connect writes to it (the older pages' Apply needs more than a key; Claude Code's below).
-    if (c.shared) expect(await writeIfOffered(c, ch, page)).toEqual([`${A}/target.json`]);
+    // Every file the reading pinned is named under "What Connect changes", and Connect writes to
+    // all of them.
+    for (const target of targetsOf(c, A)) expect(page.text()).toContain(target);
+    expect(await writeIfOffered(c, ch, page)).toEqual(targetsOf(c, A));
   });
 
   test(`${c.name}: a failed read of the path the field shows is shown`, async () => {
     const { ch, page } = await typedA(c);
-    await page.click(c.read);
+    await page.click("Read this file");
     ch.pending()?.fail(REFUSAL);
     await settle();
-    // The pages on the shared parts start the native reason with a capital.
+    // The page starts the native reason with a capital.
     expect(page.text().toLowerCase()).toContain(REFUSAL);
   });
 
   test(`${c.name}: a read that answers after the path changed is dropped`, async () => {
     const { page, read } = await readThenEdit(c);
-    read?.answer(c.body(A));
+    read?.answer(answerOf(c, A));
     await settle();
     expect(page.shown(c.field)).toBe(B);
-    expect(page.text()).not.toContain(`${A}/target.json`);
+    for (const target of targetsOf(c, A)) expect(page.text()).not.toContain(target);
   });
 
   test(`${c.name}: the write never goes to a file the field no longer shows`, async () => {
     const { ch, page, read } = await readThenEdit(c);
-    read?.answer(c.body(A));
+    read?.answer(answerOf(c, A));
     await settle();
-    // On the old pages the late answer pinned A: the write was offered, for A, beside a field showing B.
+    // Before the pages kept the file they read, the late answer pinned A: the write was offered,
+    // for A, beside a field showing B. Now nothing is offered until B is read; then the write goes to B.
     const sent = await writeIfOffered(c, ch, page);
-    expect(sent.filter((target) => target !== `${B}/target.json`)).toEqual([]);
-    if (!c.shared) return;
-    // On the shared pages, nothing was offered until B is read; then the write goes to B.
     expect(sent).toEqual([]);
-    await page.click(c.read);
-    ch.pending()?.answer(c.body(B));
+    await page.click("Read this file");
+    ch.pending()?.answer(answerOf(c, B));
     await settle();
     expect(page.canPress(c.write)).toBe(true);
-    expect(await writeIfOffered(c, ch, page)).toEqual([`${B}/target.json`]);
+    expect(await writeIfOffered(c, ch, page)).toEqual(targetsOf(c, B));
   });
 
   test(`${c.name}: a failed read that answers after the path changed is dropped`, async () => {
@@ -250,7 +288,7 @@ for (const c of pages) {
   });
 }
 
-for (const c of pages.filter((p) => p.shared)) {
+for (const c of pages) {
   test(`${c.name}: the default file's read, answering after another file was chosen, is dropped`, async () => {
     const ch = channel();
     const page = await mount(c.page, ch.invoke);
@@ -259,9 +297,9 @@ for (const c of pages.filter((p) => p.shared)) {
     const first = ch.reads[0];
     await page.open(MORE);
     await page.pick(c.pick);
-    first?.answer(c.body("/home/me/default"));
+    first?.answer(answerOf(c, "/home/me/default"));
     await settle();
-    expect(page.text()).not.toContain("/home/me/default/target.json");
+    for (const target of targetsOf(c, "/home/me/default")) expect(page.text()).not.toContain(target);
     expect(page.canPress(c.write)).toBe(false);
   });
 }

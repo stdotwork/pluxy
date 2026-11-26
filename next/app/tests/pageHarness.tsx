@@ -205,7 +205,7 @@ export const ADDONS = [
   "pluxy/claude-code",
   "pluxy/codex-setup",
   "pluxy/claude-desktop",
-  "pluxy/opencode-setup",
+  "pluxy/opencode",
   "pluxy/omp-setup",
   "pluxy/grok-setup",
   "pluxy/hermes-setup",
@@ -268,6 +268,8 @@ export function channel(o: ChannelOptions = {}) {
   const records: unknown[] = [];
   const secrets = [...(o.secrets ?? [{ id: "k1", label: "My key" }])];
   const held: (() => void)[] = [];
+  /** The events the page listens to (listen's plugin:event|listen), by the id listen returns. */
+  const listeners = new Map<number, { event: string; handler: number }>();
   let secretReads = 0;
   const invoke = (cmd: string, args: Record<string, unknown> = {}): Promise<unknown> => {
     calls.push({ cmd, args });
@@ -323,8 +325,14 @@ export function channel(o: ChannelOptions = {}) {
         return Promise.resolve({ history: {} });
       case "launcher_terminals":
         return Promise.resolve({ terminals: [{ id: "automatic", label: "Automatic" }] });
-      case "plugin:event|listen":
-        return Promise.resolve(1);
+      case "plugin:event|listen": {
+        const id = listeners.size + 1;
+        listeners.set(id, args as { event: string; handler: number });
+        return Promise.resolve(id);
+      }
+      case "plugin:event|unlisten":
+        listeners.delete((args as { eventId: number }).eventId);
+        return Promise.resolve({});
       case "program_call": {
         const {
           op,
@@ -390,7 +398,18 @@ export function channel(o: ChannelOptions = {}) {
   const release = () => {
     for (const r of held.splice(0)) r();
   };
-  return { reads, writes, calls, invoke, pending, secrets, release };
+  /** The native side sends event (such as pluxy-device): every listener the page still has hears it. */
+  const emit = async (event: string) => {
+    const callbacks = (
+      window as unknown as { __TAURI_INTERNALS__: { callbacks: Map<number, (e: unknown) => void> } }
+    ).__TAURI_INTERNALS__.callbacks;
+    await act(async () => {
+      for (const l of [...listeners.values()].filter((x) => x.event === event))
+        callbacks.get(l.handler)?.({ event, id: 0, payload: null });
+    });
+    await settle();
+  };
+  return { reads, writes, calls, invoke, pending, secrets, release, emit };
 }
 
 export type Channel = ReturnType<typeof channel>;
@@ -415,11 +434,20 @@ export const SERVED = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5
 /** Installs the window (with the channel's invoke) and a document, without mounting anything. */
 export function installWindow(invoke: Channel["invoke"]) {
   const document = new FakeDocument();
+  const callbacks = new Map<number, (e: unknown) => void>();
   Object.defineProperty(globalThis, "document", { configurable: true, value: document });
   Object.defineProperty(globalThis, "window", {
     configurable: true,
     value: {
-      __TAURI_INTERNALS__: { invoke, transformCallback: () => 1 },
+      __TAURI_INTERNALS__: {
+        invoke,
+        // Each callback (an event's handler) by the id it was given, so the channel can call it.
+        callbacks,
+        transformCallback: (callback: (e: unknown) => void) => {
+          callbacks.set(callbacks.size + 1, callback);
+          return callbacks.size;
+        },
+      },
       __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener() {} },
       addEventListener() {},
       removeEventListener() {},
@@ -437,12 +465,13 @@ export function later<T = unknown>() {
   return { promise, give };
 }
 
-/** Mounts page in the kit. served are the models pluxy serves; found the tools pluxy's own look at
- * this computer found (GET /setup); privacy turns privacy mode on. */
+/** Mounts page in the kit. served are the models pluxy serves (a function is asked on each call of
+ * GET /models); found the tools pluxy's own look at this computer found (GET /setup); privacy turns
+ * privacy mode on. */
 export async function mount(
   page: () => VNode,
   invoke: Channel["invoke"],
-  served: string[] = SERVED,
+  served: string[] | (() => string[]) = SERVED,
   found: unknown[] = [],
   o: { privacy?: boolean } = {},
 ) {
@@ -450,7 +479,10 @@ export async function mount(
   const kit = {
     host: { prefs: { get: () => null, set: () => {} } },
     api: {
-      servedModels: async () => ({ status: 200, body: { models: served.map((id) => ({ id })) } }),
+      servedModels: async () => ({
+        status: 200,
+        body: { models: (typeof served === "function" ? served() : served).map((id) => ({ id })) },
+      }),
       setup: async () => ({ status: 200, body: { found: { clients: found } } }),
     },
     unauthorized: () => {},
