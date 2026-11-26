@@ -76,7 +76,7 @@ const found: Setup = {
       },
       ...noClients.slice(1),
     ],
-    sign_ins: [{ provider: "pluxy/codex", from: "codex", label: "Codex is signed in on this machine" }],
+    sign_ins: [{ provider: "pluxy/codex", from: "codex", label: "Codex is signed in on this computer" }],
     imports: [
       {
         kind: "cliproxyapi",
@@ -88,8 +88,8 @@ const found: Setup = {
     core: { listen: "0.0.0.0:8317", reachable_from_network: true },
   },
   picks: [
-    pick("pluxy/codex", "Codex", { suggested: true, because: "Codex is signed in on this machine" }),
-    pick("pluxy/claude", "Claude", { suggested: true, because: "Claude Code is installed on this machine" }),
+    pick("pluxy/codex", "Codex", { suggested: true, because: "Codex is signed in on this computer" }),
+    pick("pluxy/claude", "Claude", { suggested: true, because: "Claude Code is installed on this computer" }),
     pick("pluxy/gemini", "Gemini"),
     { ...pick("pluxy/claude-code", "Claude Code settings", { suggested: true }), kind: "client" },
   ],
@@ -260,20 +260,20 @@ test("found clients, a sign-in and a CLIProxyAPI setup are named, and what they 
   expect(page).toContain("Found on the machine pluxy runs on");
   expect(page).toContain("<strong>Claude Code 2.4.1</strong>");
   expect(page).toContain("Does not point at pluxy yet");
-  expect(page).toContain("<strong>Codex is signed in on this machine</strong>");
+  expect(page).toContain("<strong>Codex is signed in on this computer</strong>");
   expect(page).toContain("<strong>A CLIProxyAPI setup with 7 accounts</strong>");
   expect(page).toContain("pluxy import cpa ~/.cli-proxy-api/config.yaml");
   expect(page).toContain("Other machines on the network can reach pluxy at this address.");
   // The two suggested providers are ticked, with why; the client pick is no checkbox at all.
   expect(ticked(page)).toBe(2);
-  expect(page).toContain("Claude Code is installed on this machine");
+  expect(page).toContain("Claude Code is installed on this computer");
   expect(page).not.toContain("Claude Code settings");
   expect(toInstall(found, {}, {})).toEqual(["pluxy/codex", "pluxy/claude"]);
   expect(page).toContain("Start installs: Codex, Claude.");
   expect(primary(page)).toEqual(["Start"]);
   expect(page).toContain("Other clients (4)");
   // With its provider installed and no account, the sign-in found is named above the sign-in.
-  const named = "Codex is signed in on this machine. You can sign in to the same account here.";
+  const named = "Codex is signed in on this computer. You can sign in to the same account here.";
   expect(page).not.toContain(named);
   expect(view(found, { results: { "pluxy/claude": { status: "done" } } })).not.toContain(named);
   expect(view(found, { results: { "pluxy/codex": { status: "done" } } })).toContain(named);

@@ -200,7 +200,7 @@ The reply to `GET /setup/clients/{id}/paste`: `tool` (the canonical ID), `name`,
      "config": "~/.claude/settings.json", "state": "not-configured"}
   ],
   "sign_ins": [
-    {"provider": "pluxy/codex", "from": "codex", "label": "Codex is signed in on this machine"}
+    {"provider": "pluxy/codex", "from": "codex", "label": "Codex is signed in on this computer"}
   ],
   "imports": [
     {"kind": "cliproxyapi", "config": "~/.cli-proxy-api/config.yaml", "auth_dir": "~/.cli-proxy-api", "accounts": 7,
@@ -226,7 +226,7 @@ shows the time in its Imports table.
 ```json
 [
   {"id": "pluxy/claude", "kind": "provider", "title": "Claude", "summary": "Claude subscriptions and API keys",
-   "installed": false, "suggested": true, "because": "Claude Code is installed on this machine"}
+   "installed": false, "suggested": true, "because": "Claude Code is installed on this computer"}
 ]
 ```
 

@@ -194,9 +194,9 @@ fn first(c: &mut Checks, app: &AppHandle) {
         until(
             app,
             5,
-            &format!("{PICK_ROW}?.textContent.includes('Claude Code is installed on this machine') === true"),
+            &format!("{PICK_ROW}?.textContent.includes('Claude Code is installed on this computer') === true"),
         ),
-        "the Claude pick says Claude Code is installed on this machine",
+        "the Claude pick says Claude Code is installed on this computer",
     );
     // The Set up button comes once the device's catalog and the registries' offers have loaded.
     let buttons = within(20, || {

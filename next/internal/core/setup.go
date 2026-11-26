@@ -548,17 +548,17 @@ var setupSuggestions = []struct {
 	// config is one its writer refuses.
 	setsUp bool
 }{
-	{pick: "pluxy/claude", client: "claude-code", signIn: "pluxy/claude", because: "Claude Code is installed and signed in on this machine"},
-	{pick: "pluxy/claude", client: "claude-code", because: "Claude Code is installed on this machine"},
-	{pick: "pluxy/claude", signIn: "pluxy/claude", because: "Claude Code is signed in on this machine"},
-	{pick: "pluxy/claude-code", client: "claude-code", because: "Claude Code is installed on this machine", setsUp: true},
-	{pick: "pluxy/codex", client: "codex", signIn: "pluxy/codex", because: "Codex CLI is installed and Codex is signed in on this machine"},
-	{pick: "pluxy/codex", client: "codex", because: "Codex CLI is installed on this machine"},
-	{pick: "pluxy/codex", signIn: "pluxy/codex", because: "Codex is signed in on this machine"},
-	{pick: "pluxy/codex-setup", client: "codex", because: "Codex CLI is installed on this machine", setsUp: true},
-	{pick: "pluxy/opencode", client: "opencode", because: "OpenCode is installed on this machine", setsUp: true},
-	{pick: "pluxy/pi-setup", client: "pi", because: "Pi is installed on this machine", setsUp: true},
-	{pick: "pluxy/omp-setup", client: "omp", because: "Oh My Pi is installed on this machine", setsUp: true},
+	{pick: "pluxy/claude", client: "claude-code", signIn: "pluxy/claude", because: "Claude Code is installed and signed in on this computer"},
+	{pick: "pluxy/claude", client: "claude-code", because: "Claude Code is installed on this computer"},
+	{pick: "pluxy/claude", signIn: "pluxy/claude", because: "Claude Code is signed in on this computer"},
+	{pick: "pluxy/claude-code", client: "claude-code", because: "Claude Code is installed on this computer", setsUp: true},
+	{pick: "pluxy/codex", client: "codex", signIn: "pluxy/codex", because: "Codex CLI is installed and Codex is signed in on this computer"},
+	{pick: "pluxy/codex", client: "codex", because: "Codex CLI is installed on this computer"},
+	{pick: "pluxy/codex", signIn: "pluxy/codex", because: "Codex is signed in on this computer"},
+	{pick: "pluxy/codex-setup", client: "codex", because: "Codex CLI is installed on this computer", setsUp: true},
+	{pick: "pluxy/opencode", client: "opencode", because: "OpenCode is installed on this computer", setsUp: true},
+	{pick: "pluxy/pi-setup", client: "pi", because: "Pi is installed on this computer", setsUp: true},
+	{pick: "pluxy/omp-setup", client: "omp", because: "Oh My Pi is installed on this computer", setsUp: true},
 }
 
 // suggestPick says whether pick id is suggested and why. clients holds the client tools found
@@ -878,13 +878,13 @@ func scanSignIns(home string) []management.SetupSignIn {
 			path:     filepath.Join(home, ".codex", "auth.json"),
 			provider: "pluxy/codex",
 			from:     "codex",
-			label:    "Codex is signed in on this machine",
+			label:    "Codex is signed in on this computer",
 		},
 		{
 			path:     filepath.Join(home, ".claude", ".credentials.json"),
 			provider: "pluxy/claude",
 			from:     "claude-code",
-			label:    "Claude Code is signed in on this machine",
+			label:    "Claude Code is signed in on this computer",
 		},
 	}
 	for _, c := range checks {
