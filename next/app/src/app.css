@@ -428,6 +428,216 @@
     align-self: stretch;
   }
 
+  /* ---- Updates, Add-ons and Launcher ------------------------------------------------------------ */
+
+  /* The pages are sections on hairlines, a section apart (24 pixels, as the kit's own pages). */
+  .update-page,
+  .addons,
+  .launcher {
+    display: grid;
+    gap: calc(var(--s) * 6);
+    align-content: start;
+    min-width: 0;
+  }
+
+  /* The updater's carrier holds data for what reads the page and draws nothing itself. */
+  .update-page > [data-part="app-update"] {
+    display: contents;
+  }
+
+  .update-page > .notice,
+  .addons > .notice,
+  .launcher > .notice {
+    margin: 0;
+  }
+
+  .page-intro {
+    max-width: 48rem;
+    margin: 0 0 calc(var(--s) * 4);
+    color: var(--px-color-text-muted);
+  }
+
+  .update-page > .page-intro {
+    margin: 0;
+  }
+
+  .page-details {
+    margin-top: calc(var(--s) * 2);
+  }
+
+  .page-details summary {
+    cursor: pointer;
+    color: var(--px-color-text-muted);
+  }
+
+  .page-details pre {
+    margin: calc(var(--s) * 2) 0 0;
+    font-size: var(--px-font-size-small);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .notice > .btn {
+    margin-inline-start: calc(var(--s) * 2);
+  }
+
+  .update-body,
+  .addon-section-body {
+    display: grid;
+    gap: calc(var(--s) * 3);
+    padding: calc(var(--s) * 2);
+    min-width: 0;
+  }
+
+  .update-body > p,
+  .update-body > .notice {
+    margin: 0;
+  }
+
+  .update-progress {
+    width: 100%;
+    max-width: 24rem;
+    height: calc(var(--s) * 2);
+    accent-color: var(--px-color-accent);
+  }
+
+  .version-facts {
+    display: grid;
+    justify-items: end;
+    gap: var(--s);
+    min-width: 0;
+    text-align: end;
+  }
+
+  .version-line,
+  .version-latest {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: calc(var(--s) * 2);
+  }
+
+  .version-latest {
+    font-size: var(--px-font-size-small);
+  }
+
+  .source-form {
+    display: grid;
+    justify-items: end;
+    gap: calc(var(--s) * 2);
+    width: min(100%, 24rem);
+  }
+
+  .source-form .field,
+  .launch-folder .field {
+    width: 100%;
+  }
+
+  /* A row's buttons, commands and names stay on one line; a narrow list scrolls in its own box instead. */
+  .table td .actions {
+    flex-wrap: nowrap;
+    white-space: nowrap;
+  }
+
+  .addons .table .mono,
+  .launcher .table .mono {
+    white-space: nowrap;
+  }
+
+  .source-form .actions {
+    justify-content: flex-end;
+  }
+
+  .launch-folder {
+    display: grid;
+    gap: calc(var(--s) * 2);
+    width: min(100%, 24rem);
+  }
+
+  .launch-start {
+    display: grid;
+    gap: calc(var(--s) * 2);
+    padding: calc(var(--s) * 3) calc(var(--s) * 2);
+  }
+
+  .launch-start .notice {
+    margin: 0;
+  }
+
+  .launch-start .actions {
+    align-items: center;
+  }
+
+  .addon-detail {
+    display: grid;
+    gap: calc(var(--s) * 3);
+    margin-top: calc(var(--s) * 2);
+    padding-top: calc(var(--s) * 3);
+    border-top: var(--px-shape-border) solid var(--px-color-border);
+    outline-offset: calc(var(--s) * 2);
+  }
+
+  .addon-detail-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: calc(var(--s) * 2);
+  }
+
+  .addon-detail-head h3 {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .addon-block {
+    display: grid;
+    gap: calc(var(--s) * 2);
+  }
+
+  .addon-block p,
+  .addon-block h4 {
+    margin: 0;
+  }
+
+  .addon-block h4 {
+    font-size: var(--px-font-size-small);
+    font-weight: var(--px-font-weight-strong);
+    color: var(--px-color-text-muted);
+  }
+
+  .addon-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+  }
+
+  .addon-grants {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .addon-grants li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--s) * 2) calc(var(--s) * 3);
+    padding-block: calc(var(--s) * 2);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .addon-path {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .addon-blocked {
+    display: grid;
+    gap: var(--s);
+  }
+
   /* ---- the close prompts ----------------------------------------------------------------------- */
 
   dialog[data-part="close-prompt"] {

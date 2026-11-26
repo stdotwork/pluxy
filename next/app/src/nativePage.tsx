@@ -209,9 +209,7 @@ export function NativeExtensionPage(props: ExtensionPageProps & { device?: boole
       ) : (
         <>
           {phase === "failed" && (
-            <Notice tone="danger">
-              Could not open this page: {error}. Reload or check Device extensions.
-            </Notice>
+            <Notice tone="danger">Could not open this page: {error}. Reload or check Add-ons.</Notice>
           )}
           {phase === "closed" && (
             <div class="actions">

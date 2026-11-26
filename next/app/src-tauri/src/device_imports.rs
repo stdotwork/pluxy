@@ -734,7 +734,7 @@ impl Catalog {
             })
             .ok_or_else(|| {
                 forbidden(format!(
-                    "{caller}'s native imports are not allowed; allow them on the Device extensions page"
+                    "{caller}'s native imports are not allowed; allow them on the Add-ons page"
                 ))
             })?;
         let a = self.importable(i, roots)?;
