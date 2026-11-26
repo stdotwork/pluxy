@@ -1,0 +1,172 @@
+/* The Extensions page: hairline rows of installed and installable extensions, and the detail of
+   one. Settings, buttons, badges and panes come from the shared parts. Tokens only. */
+@layer kit {
+  .ext {
+    gap: calc(var(--s) * 6);
+  }
+
+  .ext > p,
+  .ext > .notice {
+    margin: 0;
+  }
+
+  .ext-section {
+    display: grid;
+    gap: calc(var(--s) * 3);
+    align-content: start;
+    min-width: 0;
+  }
+
+  .ext-section > .notice,
+  .ext-section > p {
+    margin: 0;
+  }
+
+  .ext-heading {
+    font-size: var(--px-font-size-title);
+  }
+
+  .ext-rows {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-top: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .ext-rows > li {
+    container-type: inline-size;
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .ext-rows > li > .notice {
+    margin: 0 calc(var(--s) * 2) calc(var(--s) * 2);
+  }
+
+  /* A row: the provider and the program's ID, the version, then its state (or its Install). */
+  .ext-row {
+    display: grid;
+    grid-template-columns: minmax(10em, 1fr) 8ch 12em;
+    align-items: center;
+    gap: calc(var(--s) * 3);
+    inline-size: 100%;
+    min-height: var(--px-size-row);
+    padding: var(--s) calc(var(--s) * 2);
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: start;
+  }
+
+  button.ext-row {
+    cursor: pointer;
+  }
+
+  button.ext-row:hover,
+  button.ext-row[aria-current="true"] {
+    background: var(--px-color-surface-raised);
+  }
+
+  .ext-who {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    column-gap: calc(var(--s) * 2);
+    min-width: 0;
+  }
+
+  .ext-name {
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .ext-id,
+  .ext-version {
+    color: var(--px-color-text-muted);
+    font-family: var(--px-font-mono);
+    font-size: var(--px-font-size-mono);
+    overflow-wrap: anywhere;
+  }
+
+  .ext-state {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  /* A narrow list (a window with the detail beside it, or a small one): the name takes the first
+     line, the version and the state the second. */
+  @container (max-width: 34em) {
+    .ext-row {
+      grid-template-columns: minmax(0, 1fr) auto;
+      row-gap: 0;
+    }
+
+    .ext-who {
+      grid-column: 1 / -1;
+    }
+  }
+
+  /* ---- the detail ---- */
+
+  .ext-copy {
+    display: grid;
+    gap: var(--s);
+  }
+
+  .ext-copy > p {
+    margin: 0;
+  }
+
+  .ext-actions {
+    display: grid;
+    gap: calc(var(--s) * 3);
+  }
+
+  .ext-action {
+    display: grid;
+    gap: var(--s);
+  }
+
+  .ext-action-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--s) * 2) calc(var(--s) * 3);
+  }
+
+  .ext-action-line > .muted {
+    flex: 1 1 14em;
+    min-width: 0;
+  }
+
+  /* ---- an extension's settings ---- */
+
+  .ext-settings {
+    display: grid;
+    gap: var(--s);
+  }
+
+  .ext-settings form {
+    display: grid;
+    gap: calc(var(--s) * 3);
+  }
+
+  .ext-subheading {
+    font-size: var(--px-font-size);
+  }
+
+  .ext-control {
+    display: grid;
+    gap: var(--s);
+    inline-size: min(100%, 18em);
+  }
+
+  .ext-control input:not([type="checkbox"]),
+  .ext-control select {
+    inline-size: 100%;
+  }
+
+  .ext-secret {
+    display: grid;
+    gap: var(--s);
+  }
+}

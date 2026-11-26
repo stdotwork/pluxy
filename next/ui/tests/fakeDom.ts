@@ -97,6 +97,12 @@ export class FakeNode {
     );
   }
 
+  /** Whether node is this node or lies inside it. */
+  contains(node: FakeNode | null): boolean {
+    for (let at = node; at; at = at.parentNode) if (at === this) return true;
+    return false;
+  }
+
   /** Takes focus: the document's activeElement is then this node. */
   focus() {
     this.ownerDocument.activeElement = this;
