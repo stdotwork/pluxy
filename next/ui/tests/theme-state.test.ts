@@ -3,10 +3,9 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Host, Method, Reply } from "../kit/host";
-import { ThemeState } from "../kit/theme/state";
 import defaultTheme from "../themes/default.json";
 import terminal from "../themes/terminal.json";
+import { setup, stubStyleSheets } from "./themeHarness";
 
 const fixture = (name: string) => readFileSync(join(import.meta.dir, "fixtures", name), "utf8");
 const nightfallText = fixture("t3-docs-nightfall.json");
@@ -14,95 +13,11 @@ const nightfall = JSON.parse(nightfallText) as Record<string, unknown>;
 const dawn = JSON.parse(fixture("t3-short-variants-css.json")) as Record<string, unknown>;
 const CANVAS = "--app-theme-canvas";
 
-const g = globalThis as { CSSStyleSheet?: unknown };
-const had = g.CSSStyleSheet;
+let restoreSheets = () => {};
 beforeAll(() => {
-  g.CSSStyleSheet = class {
-    text = "";
-    replaceSync(text: string) {
-      this.text = text;
-    }
-  };
+  restoreSheets = stubStyleSheets();
 });
-afterAll(() => {
-  g.CSSStyleSheet = had;
-});
-
-/** Core's themes, as its management API serves them, with the calls it got. */
-class FakeCore {
-  current = "";
-  files = new Map<string, unknown>();
-  calls: string[] = [];
-  /** A reply to give instead, for a call this returns one for. */
-  instead: (method: Method, path: string) => Reply<unknown> | undefined = () => undefined;
-
-  call(method: Method, path: string, body?: unknown): Reply<unknown> {
-    this.calls.push(`${method} ${path}`);
-    const forced = this.instead(method, path);
-    if (forced) return forced;
-    if (method === "GET" && path === "/themes") {
-      const themes = [...this.files].map(([id, file]) => ({
-        id,
-        name: String((file as { name?: unknown }).name ?? ""),
-        bytes: JSON.stringify(file).length,
-      }));
-      return { status: 200, body: { current: this.current, themes } };
-    }
-    if (method === "PUT" && path === "/theme") {
-      this.current = (body as { id: string }).id;
-      return { status: 200, body: { id: this.current } };
-    }
-    const id = path.replace(/^\/themes\//, "");
-    if (method === "GET") {
-      return this.files.has(id) ? { status: 200, body: this.files.get(id) } : { status: 404 };
-    }
-    if (method === "PUT") {
-      this.files.set(id, body);
-      return { status: 200, body: { id, name: "", bytes: JSON.stringify(body).length } };
-    }
-    if (method === "DELETE") {
-      this.files.delete(id);
-      if (this.current === id) this.current = "";
-      return { status: 204 };
-    }
-    return { status: 404 };
-  }
-
-  count(call: string) {
-    return this.calls.filter((c) => c === call).length;
-  }
-}
-
-function setup(prefs: Record<string, string> = {}) {
-  const core = new FakeCore();
-  const kept = new Map(Object.entries(prefs));
-  const host: Host = {
-    call: async <T>(method: Method, path: string, body?: unknown) =>
-      core.call(method, path, body) as Reply<T>,
-    signedIn: () => true,
-    signIn: async () => undefined,
-    signOut: () => {},
-    prefs: {
-      get: (name) => kept.get(name) ?? null,
-      set: (name, value) => {
-        if (value === null) kept.delete(name);
-        else kept.set(name, value);
-      },
-    },
-    features: new Set(),
-  };
-  const doc = Object.assign(new EventTarget(), {
-    visibilityState: "visible",
-    documentElement: { dataset: {}, classList: { toggle() {} }, style: {} },
-    adoptedStyleSheets: [],
-  });
-  const win = Object.assign(new EventTarget(), {
-    matchMedia: () => ({ matches: false, addEventListener() {} }),
-  });
-  const state = () =>
-    new ThemeState(host, doc as unknown as Document, [defaultTheme, terminal], win as unknown as Window);
-  return { core, kept, doc, win, state };
-}
+afterAll(() => restoreSheets());
 
 /** Waits until check holds: the state's calls to core run one after another, out of sight. */
 async function until(check: () => boolean) {

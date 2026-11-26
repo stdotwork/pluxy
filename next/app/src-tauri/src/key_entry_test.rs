@@ -321,9 +321,17 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
       new MutationObserver(() => {
         if (document.querySelector('input[type=password]')) window.__passwordSeen = true;
       }).observe(document.body, {subtree: true, childList: true});
-      document.querySelector('button.signout').click();"#,
+      location.hash = '#/connection';"#,
     )
-    .map_err(|_| "could not sign out through the window")?;
+    .map_err(|_| "could not open Where pluxy runs")?;
+    // The app's Sign out is on Where pluxy runs, beside the connection it ends.
+    wait_for("Where pluxy runs' Sign out, pressed", || {
+        eval(
+            main,
+            "(() => { const b = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Sign out'); if (!b) return false; b.click(); return true; })()",
+        )
+        .filter(|v| v == true)
+    })?;
     wait_for("signed-out native entry", || {
         eval(
             main,

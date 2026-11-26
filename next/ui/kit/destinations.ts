@@ -9,10 +9,10 @@ export const DESTINATIONS = ["home", "accounts", "activity", "tools", "settings"
 export type Destination = (typeof DESTINATIONS)[number];
 
 /**
- * The labelled groups a destination's topics are listed in, in order: pluxy's own, this
- * device's (the desktop app's), and the pages extensions bring.
+ * The labelled groups a destination's topics are listed in, in order: this device's (General,
+ * Themes and the desktop app's pages), pluxy's own, and the pages extensions bring.
  */
-export const TOPIC_SECTIONS = ["core", "device", "extensions"] as const;
+export const TOPIC_SECTIONS = ["device", "core", "extensions"] as const;
 export type TopicSection = (typeof TOPIC_SECTIONS)[number];
 
 /**
@@ -36,6 +36,12 @@ export interface PageDef {
   kind?: "tab" | "topic";
   /** The ID of the page this one sits under: the header strip shows the way back to it. */
   under?: string;
+  /**
+   * Other addresses the page answers besides its ID: an exact old ID (such as a page it replaced),
+   * or a prefix ending in "/" that the page answers for whatever follows it. Where several pages
+   * match an address, the longest match wins (shell.tsx, currentId).
+   */
+  addresses?: string[];
   /** The page's name in its tab or topic entry, when the title does not fit there. */
   label?: string;
   /** The group a topic is listed in. Default: "core". */

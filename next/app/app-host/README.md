@@ -489,7 +489,7 @@ target. Enabling the tool is the person's consent to its imports.
 ### Web packages: native consent
 
 Only a curated web package may call native tools; an Unverified one is refused, always. Its
-imports are refused until the person allows them on the Device extensions page, which calls
+imports are refused until the person allows them on the Add-ons page, which calls
 `device_imports {id, allowed: true}` (main window only) and opens a native confirmation listing
 the caller's source, digest and signer and each target operation with its effect. The consent
 is bound to the caller's release and to each target's release, export contract and operations.
@@ -1074,9 +1074,14 @@ A client key, the key a client program sends core with its requests, is a secret
 apart from the management key, which stays in the app's connection. It enters the vault only
 natively, never through the window:
 
-- `client_key_capture` (label, client) asks a native confirmation naming the core, the tool and
-  the label; then the app itself asks core for a new key (`POST /v0/management/client-keys`) with
-  the management key and keeps core's reply. Core shows a new key once: the app keeps it and shows
+- `client_key_capture` (label, client) trims the label, as core does, and uses that one name
+  throughout: it asks a native confirmation naming the core, the tool and the label; then the app
+  itself asks core for a new key (`POST /v0/management/client-keys`, with `{"label"}` so core
+  lists the key under the name the vault keeps) with the management key and keeps core's reply. A
+  label core's own label check would refuse (once trimmed, more than 64 characters or more than
+  one line) is refused before the confirmation. Core also refuses a label equal to one of its keys,
+  which the app cannot check, as it does not hold every key core has: that refusal comes after the
+  confirmation, before core makes a key. Core shows a new key once: the app keeps it and shows
   it to no one. If the vault cannot keep it, the app deletes it on core again.
 - `client_key_enter` (label, client) reads an existing client key from native key entry and keeps
   it once the core takes it.

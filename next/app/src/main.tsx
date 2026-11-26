@@ -1,7 +1,7 @@
 // The desktop app's window: the kit's shell with core's pages, the same as the panel's and in the
 // same places, then the app's own: the topics of Tools (Beginner Mode, Manage Clients and the
-// listed clients' pages), and Where pluxy runs, Version Management, Device
-// extensions and Launcher among the Settings topics. Until the app is connected and signed in it
+// listed clients' pages), and Where pluxy runs, Updates, Add-ons
+// and Launcher among the Settings topics. Until the app is connected and signed in it
 // shows the first launch screen or the not-running pane (firstLaunch.tsx). Extension pages, from
 // core and from packages installed on this device (devicePage.tsx), open in webviews of their
 // own (nativePage.tsx).
@@ -31,7 +31,7 @@ import { connectionStatus } from "./frameStatus";
 import { appHost, type Connection, connectionGet, privacyGet, privacySet } from "./host";
 import { launcherPage } from "./launcherPage";
 import { NativeExtensionPage } from "./nativePage";
-import { UpdatesPage } from "./updates";
+import { updatesPage } from "./updates";
 import { ClosePrompt } from "./window";
 
 function brand(c: Connection): string {
@@ -152,7 +152,7 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
     // it offers to only when core runs here.
     const setup = conn.mode === "remote" ? undefined : setupClientAction(agents, catalog, offers);
     return [
-      ...corePages({ setup }),
+      ...corePages({ general: { signOut: false }, setup }),
       easyModePage(agents, catalog, loadDevice),
       clientListPage(clients, installed, saved, visible.length, saveClients),
       ...visible.flatMap((c) => agents.find((a) => a.id === c.id) ?? []),
@@ -164,15 +164,7 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
         section: "device",
         render: () => <ConnectionPage connection={shown} onChange={changed} />,
       },
-      {
-        id: "versions",
-        title: "Version Management",
-        dest: "settings",
-        kind: "topic",
-        section: "device",
-        tip: "App and core versions, and release notes",
-        render: () => <UpdatesPage />,
-      },
+      updatesPage(shown),
       devicePage(loadDevice),
       launcherPage(),
       ...devicePages(catalog),

@@ -18,8 +18,9 @@ Linux is the only platform the app supports now. Windows, macOS and WSL are late
 does not support them, and none of the Linux checks on this page says anything about them. Some
 groundwork for them is merged and runs in CI, such as the native key entry and confirmation
 dialogs, login items and one app per profile; [the README's Platforms section](README.md#platforms)
-lists it and what still refuses there, which includes every native tool, so every client, usage
-source and the launcher on this page.
+lists it and what still refuses there. Native tools run there in test builds, and the native test
+checks the launcher and Claude Desktop's model alias there; the clients and usage sources on this
+page are later work there, as their tables say.
 
 On Linux, every native tool's manifest but `pluxy/wsl`'s names programs for `linux/amd64` and
 `linux/arm64`. The native test runs on GitHub's `ubuntu-24.04` runner, which is x86-64, so it
@@ -73,7 +74,7 @@ original back. The exact keys each tool writes are in the [app tools README](../
 | --- | --- | --- | --- | --- | --- | --- |
 | Claude Code | `claude` in a terminal | Done | `claude-code` | Later | Later | Later |
 | Codex | `codex` in a terminal; Codex App: a program you name (Codex has no Linux app); `codex app-server daemon restart` | Done | `codex` | Later | Later | Later |
-| Claude Desktop | `claude-desktop`, run directly; **Create alias in pluxy** adds a model alias in the core | Done | `claude-desktop` | Later | Later | Later |
+| Claude Desktop | `claude-desktop`, run directly; **Create alias in pluxy** adds a model alias in the core | Done | `claude-desktop` | Setup and start: Later. The alias: Done, checked by `src-tauri/src/core_alias_native.rs` | Setup and start: Later. The alias: Done, checked by `src-tauri/src/core_alias_native.rs` | Later |
 | OpenCode | `opencode` in a terminal; OpenCode Desktop (`/opt/OpenCode/ai.opencode`) run directly | Done | `opencode` | Later | Later | Later |
 | Oh My Pi | `omp` in a terminal | Done | `omp` | Later | Later | Later |
 | Grok Build | `grok` in a terminal | Done | `grok` | Later | Later | Later |
@@ -206,11 +207,11 @@ drops are proposals the owner has not reviewed yet; their rows say so.
 | Managed-core recovery and the tray's Start, Stop and Restart | Kept | | [README](README.md#the-window-and-the-tray) |
 | One app per profile, startup preferences, close and window preferences | Kept | | [README](README.md#one-app-per-profile) |
 | Privacy mode | Kept | | [README](README.md#privacy-mode) |
-| Release feed, release notes, channels, signed app update and rollback | Kept | | [README](README.md#version-management-and-release-notes) |
+| Release feed, release notes, channels, signed app update and rollback | Kept | | [README](README.md#updates-and-release-notes) |
 | Portable replacement helper, upstream release addresses, the kernel version picker and preset mirrors | Dropped | The app updates only through the signed updater, from a feed address the person sets, which replaces the old app's core-version page (its `versions` page) | — |
 | MCP server and skills management | Dropped | The owner's decision; app packages are not agent skills | — |
 | Windows installers: the old app's NSIS setup and MSI package (`bundle.targets` `all`), which its updater ran to update | Replaced | One per-user NSIS setup program, no administrator rights; the MSI is dropped: it installs machine-wide, for managed deployment, which is not a goal. The app updates the installed program set itself and never runs the setup, and the setup refuses while the app runs instead of closing it by force. Test package only until release signing | [README](README.md#packages) |
-| Windows and macOS | Deferred | Later platform work. Some groundwork is merged (native key entry and confirmations, login items, one app per profile, test packages), but no native tool runs there | [README](README.md#platforms) |
+| Windows and macOS | Deferred | Later platform work. Some groundwork is merged (native key entry and confirmations, login items, one app per profile, test packages, and native tools in test builds, with the launcher and Claude Desktop's model alias checked there), but the clients and usage sources are later work there | [README](README.md#platforms) |
 
 ### Smaller old features not carried
 

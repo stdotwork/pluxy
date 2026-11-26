@@ -118,7 +118,8 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
 - **Entry (UI)**: `next/app/src/main.tsx` mounts the shared kit with `appHost`
   (`next/app/src/host.ts`), the first launch screen and the not-running pane
   (`next/app/src/firstLaunch.tsx`, every word of them in `connectionCopy.ts`), the Where pluxy runs
-  page (`next/app/src/connection.tsx`), and device extensions (`next/app/src/devicePage.tsx`).
+  page (`next/app/src/connection.tsx`), and the Updates, Add-ons and Launcher pages
+  (`next/app/src/updates.tsx`, `next/app/src/devicePage.tsx`, `next/app/src/launcherPage.tsx`).
 - **Entry (Tauri Rust in `next/app/src-tauri/src`)**:
   - `lib.rs`: Tauri command registration, tray, and window wiring.
   - `conn.rs`, `managed.rs`, `cores.rs`: managed/local/remote connection modes, managed core
@@ -129,7 +130,8 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
   - `pages.rs`, `access_broker.rs`: sandboxed extension-page webviews and Unix file-access grants.
   - `vault.rs`, `instance.rs`, `release.rs`: host-private secret/backup vault, single-instance
     profile lock, and signed release feed.
-- **Tests**: from `next/app`, `bun test tests/host.test.ts`; Rust unit tests in
+- **Tests**: from `next/app`, `bun test tests/host.test.ts` (the three pages:
+  `tests/updates-page.test.tsx`, `tests/device.test.tsx`, `tests/launcher-page.test.tsx`); Rust unit tests in
   `next/app/src-tauri` via `cargo test --locked` (see `AGENTS.md`).
 - **Handbook**: `next/app/README.md` ("How the app reaches core", "Commands", "Extensions on this
   device") and `next/app/app-host/README.md`.

@@ -1,7 +1,7 @@
-// Keyboard use of the panel: where focus starts, where it goes when a page, a detail, a dialog or
-// a confirm closes, and what a keyboard can scroll. Each test drives the keys a person would press.
+// Keyboard use of the panel: where focus starts, where it goes when a page, a dialog or a confirm
+// closes, and what a keyboard can scroll. Each test drives the keys a person would press.
 import { expect, type Page, test } from "@playwright/test";
-import { goTo, openPanel, signIn, useCore } from "./support";
+import { goTo, openAccount as openAccountPage, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 
@@ -10,7 +10,7 @@ async function addAccount(id: string) {
     id,
     extension: "test/alpha",
     method: "api_key",
-    input: { api_key: "ak-keyboard-focus-test" },
+    input: { api_key: "ak-keyboard-focus-test", label: id },
   });
   expect(r.status).toBe(202);
   await expect
@@ -38,7 +38,13 @@ async function openAccounts(page: Page) {
   await openPanel(page, core);
   await signIn(page, core);
   await goTo(page, "Accounts");
-  await expect(page.getByRole("button", { name: "kb-one", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "kb-one", exact: true })).toBeVisible();
+}
+
+async function openAccount(page: Page, id: string) {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await openAccountPage(page, id);
 }
 
 /** A description of the focused element, for failure messages. */
@@ -93,61 +99,28 @@ test("Tab goes through the frame in reading order: the navigation, the status bl
     "Tools",
     "Settings",
     `Running, ${host}. Open the menu`,
-    "Accounts",
+    "All accounts",
     "Order & fallback",
-    "Limits",
     "Refresh",
-    "Privacy mode",
-    "Sign out",
   ]);
   expect(await page.evaluate(() => document.activeElement?.closest("main") !== null)).toBe(true);
 });
 
-test("Escape closes the account detail and focus returns to the row that opened it", async ({ page }) => {
-  await openAccounts(page);
-  const row = page.getByRole("button", { name: "kb-one", exact: true });
-  await row.focus();
+test("Escape closes Rename and focus returns to the button that opened it", async ({ page }) => {
+  await openAccount(page, "kb-one");
+  const rename = page.getByRole("button", { name: "Rename", exact: true });
+  await rename.focus();
   await page.keyboard.press("Enter");
-  const detail = page.getByRole("complementary", { name: "Details: kb-one", exact: true });
-  await expect(detail).toBeFocused();
-  await page.keyboard.press("Escape");
-  await expect(detail).toHaveCount(0);
-  await expect(row, `focus is on ${await focused(page)}`).toBeFocused();
-
-  // Also with focus on a control inside the detail.
-  await page.keyboard.press("Enter");
-  await expect(detail).toBeFocused();
-  await detail.getByRole("button", { name: "Disable", exact: true }).focus();
-  await page.keyboard.press("Escape");
-  await expect(detail).toHaveCount(0);
-  await expect(row, `focus is on ${await focused(page)}`).toBeFocused();
-
-  // The Close button returns focus the same way.
-  await page.keyboard.press("Enter");
-  await detail.getByRole("button", { name: "Close details", exact: true }).focus();
-  await page.keyboard.press("Enter");
-  await expect(detail).toHaveCount(0);
-  await expect(row, `focus is on ${await focused(page)}`).toBeFocused();
-});
-
-test("Escape in a dialog opened from the detail does not close the detail", async ({ page }) => {
-  await openAccounts(page);
-  await page.getByRole("button", { name: "kb-one", exact: true }).click();
-  const detail = page.getByRole("complementary", { name: "Details: kb-one", exact: true });
-  await detail.getByRole("button", { name: "Edit", exact: true }).click();
-  const dialog = page.getByRole("dialog", { name: "Edit kb-one", exact: true });
+  const dialog = page.getByRole("dialog", { name: "Rename kb-one", exact: true });
   await expect(dialog).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
-  await expect(detail).toBeVisible();
+  await expect(rename, `focus is on ${await focused(page)}`).toBeFocused();
 });
 
-test("closing the Edit dialog returns focus to the Edit button", async ({ page }) => {
-  await openAccounts(page);
-  await page.getByRole("button", { name: "kb-one", exact: true }).click();
-  const detail = page.getByRole("complementary", { name: "Details: kb-one", exact: true });
-  await expect(detail).toBeFocused();
-  const edit = detail.getByRole("button", { name: "Edit", exact: true });
+test("closing the Edit settings dialog returns focus to Edit settings", async ({ page }) => {
+  await openAccount(page, "kb-one");
+  const edit = page.getByRole("button", { name: "Edit settings", exact: true });
   await edit.focus();
   await page.keyboard.press("Enter");
   const dialog = page.getByRole("dialog", { name: "Edit kb-one", exact: true });
@@ -165,46 +138,43 @@ test("closing the Edit dialog returns focus to the Edit button", async ({ page }
   await expect(edit, `focus is on ${await focused(page)}`).toBeFocused();
 });
 
-test("closing the remove confirm returns focus to the Remove button", async ({ page }) => {
-  await openAccounts(page);
-  await page.getByRole("button", { name: "Select filtered", exact: true }).click();
-  const del = page.getByRole("button", { name: "Remove", exact: true });
-  await del.focus();
+test("closing an account's remove question returns focus to Remove…", async ({ page }) => {
+  await openAccount(page, "kb-two");
+  const remove = page.getByRole("button", { name: "Remove…", exact: true });
+  await remove.focus();
   await page.keyboard.press("Enter");
-  const dialog = page.getByRole("dialog");
-  await expect(dialog).toContainText("Are you sure you want to remove");
+  const dialog = page.getByRole("dialog", { name: "Remove kb-two?", exact: true });
+  await expect(dialog).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
-  await expect(del, `focus is on ${await focused(page)}`).toBeFocused();
+  await expect(remove, `focus is on ${await focused(page)}`).toBeFocused();
 
   await page.keyboard.press("Enter");
-  await expect(dialog).toBeVisible();
   await dialog.getByRole("button", { name: "Cancel", exact: true }).focus();
   await page.keyboard.press("Enter");
   await expect(dialog).toHaveCount(0);
-  await expect(del, `focus is on ${await focused(page)}`).toBeFocused();
+  await expect(remove, `focus is on ${await focused(page)}`).toBeFocused();
 });
 
-test("cancelling the inline Remove confirm returns focus to Remove", async ({ page }) => {
+test("closing Select's remove question returns focus to Remove…", async ({ page }) => {
   await openAccounts(page);
-  await page.getByRole("button", { name: "kb-two", exact: true }).click();
-  const detail = page.getByRole("complementary", { name: "Details: kb-two", exact: true });
-  await expect(detail).toBeFocused();
-  const remove = detail.getByRole("button", { name: "Remove", exact: true });
-  await remove.focus();
+  await page.getByRole("button", { name: "Select", exact: true }).click();
+  await page.getByRole("checkbox", { name: "Select kb-one", exact: true }).check();
+  const del = page.getByRole("toolbar").getByRole("button", { name: "Remove…", exact: true });
+  await del.focus();
   await page.keyboard.press("Enter");
-  await detail.getByRole("button", { name: "Cancel", exact: true }).focus();
-  await page.keyboard.press("Enter");
-  await expect(remove, `focus is on ${await focused(page)}`).toBeFocused();
+  const dialog = page.getByRole("dialog", { name: "Remove kb-one?", exact: true });
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(del, `focus is on ${await focused(page)}`).toBeFocused();
 });
 
 // Focus may reach the browser's own controls (the document's body) when it leaves the first or last
 // control, which the platform does for any modal dialog; it must never land on the page behind it.
 test("Tab and Shift+Tab never reach the page behind an open dialog", async ({ page }) => {
-  await openAccounts(page);
-  await page.getByRole("button", { name: "kb-one", exact: true }).click();
-  const detail = page.getByRole("complementary", { name: "Details: kb-one", exact: true });
-  await detail.getByRole("button", { name: "Edit", exact: true }).click();
+  await openAccount(page, "kb-one");
+  await page.getByRole("button", { name: "Edit settings", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Edit kb-one", exact: true });
   await expect(dialog).toBeVisible();
   const outside: string[] = [];

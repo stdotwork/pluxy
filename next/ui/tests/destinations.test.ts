@@ -16,10 +16,10 @@ test("each of core's pages sits under the destination a person looks for it in",
   );
   expect(byDest).toEqual({
     home: ["status"],
-    accounts: ["accounts", "add-account", "routing", "quota"],
+    accounts: ["accounts", "account", "add-account", "routing"],
     activity: ["usage", "activity/usage"],
     tools: ["tools"],
-    settings: ["setup", "config", "system", "extensions", "themes", "logs"],
+    settings: ["settings", "themes", "config", "extensions", "logs", "system", "setup"],
   });
 });
 
@@ -27,7 +27,7 @@ test("a destination opens its first page that sits under no other; one with no p
   const pages = corePages();
   expect(destinationHome(pages, "home")?.id).toBe("status");
   expect(destinationHome(pages, "accounts")?.id).toBe("accounts");
-  expect(destinationHome(pages, "settings")?.id).toBe("setup");
+  expect(destinationHome(pages, "settings")?.id).toBe("settings");
   expect(destinationHome(pages, "tools")?.id).toBe("tools");
   // A destination with no page has none, so its navigation entry is not shown.
   expect(
@@ -41,10 +41,10 @@ test("a destination opens its first page that sits under no other; one with no p
   expect(destinationHome([child, parent], "tools")?.id).toBe("parent");
 });
 
-test("Accounts has three tabs, named for what a person does there", () => {
+test("Accounts has two tabs, named for what a person does there", () => {
   const placed = place(corePages(), "routing");
   expect(placed?.dest).toBe("accounts");
-  expect(placed?.tabs.map((p) => p.label ?? p.title)).toEqual(["Accounts", "Order & fallback", "Limits"]);
+  expect(placed?.tabs.map((p) => p.label ?? p.title)).toEqual(["All accounts", "Order & fallback"]);
   expect(placed?.current).toBe("routing");
   expect(placed?.above).toEqual([]);
   expect(placed?.topics).toEqual([]);
@@ -81,14 +81,49 @@ test("Settings lists its topics by section, the extensions' pages last", () => {
   ];
   const placed = place(pages, "themes");
   expect(placed?.topics.map((g) => [g.section, ids(g.pages)])).toEqual([
-    ["core", ["setup", "config", "system", "extensions", "themes", "logs"]],
-    ["device", ["connection"]],
+    ["device", ["settings", "themes", "connection"]],
+    ["core", ["config", "extensions", "logs", "system", "setup"]],
     ["extensions", ["ext/a/b/c"]],
   ]);
   expect(placed?.current).toBe("themes");
   expect(placed?.tabs).toEqual([]);
-  // The panel alone: one section, so the frame draws no section label.
-  expect(place(corePages(), "themes")?.topics.map((g) => g.section)).toEqual(["core"]);
+  // The panel alone: this device's two topics, then pluxy's own.
+  expect(place(corePages(), "themes")?.topics.map((g) => g.section)).toEqual(["device", "core"]);
+});
+
+test("Settings opens on General, with This device listed first, in the panel and in the app", () => {
+  const app: PageDef[] = [
+    ...corePages({ general: { signOut: false } }),
+    {
+      id: "connection",
+      title: "Where pluxy runs",
+      dest: "settings",
+      kind: "topic",
+      section: "device",
+      render,
+    },
+    { id: "versions", title: "Updates", dest: "settings", kind: "topic", section: "device", render },
+    { id: "device", title: "Add-ons", dest: "settings", kind: "topic", section: "device", render },
+    { id: "launcher", title: "Launcher", dest: "settings", kind: "topic", section: "device", render },
+  ];
+  for (const pages of [corePages(), app]) {
+    expect(destinationHome(pages, "settings")?.id).toBe("settings");
+    const sections = place(pages, "settings")?.topics ?? [];
+    expect(sections.map((g) => g.section)).toEqual(["device", "core"]);
+    expect(place(pages, "settings")?.current).toBe("settings");
+  }
+  // This device's topics are General and Themes, then the app's own; every topic has a tip.
+  expect(ids(place(app, "settings")?.topics[0]?.pages ?? [])).toEqual([
+    "settings",
+    "themes",
+    "connection",
+    "versions",
+    "device",
+    "launcher",
+  ]);
+  const settingsTopics = corePages().filter((p) => p.dest === "settings" && p.kind === "topic");
+  expect(settingsTopics.filter((p) => p.tip === undefined).map((p) => p.id)).toEqual([]);
+  expect(currentId(app, "#/settings")).toBe("settings");
 });
 
 test("a destination with one tab shows no tabs, and a page with no listing has neither", () => {
@@ -152,4 +187,31 @@ describe("the address that opens a page", () => {
     expect(currentId(pages, "#/tools")).toBe("tools");
     expect(currentId([], "#/activity")).toBe("");
   });
+});
+
+test("an account's page sits under All accounts: the strip shows the way back and no tabs", () => {
+  const placed = place(corePages(), "account");
+  expect(placed?.dest).toBe("accounts");
+  expect(ids(placed?.above ?? [])).toEqual(["accounts"]);
+  expect(placed?.tabs).toEqual([]);
+  expect(placed?.current).toBe("accounts");
+});
+
+test("an address opens the page whose ID or address matches it longest", () => {
+  const pages = corePages();
+  expect(currentId(pages, "#/accounts")).toBe("accounts");
+  expect(currentId(pages, "#/accounts/")).toBe("accounts");
+  expect(currentId(pages, "#/accounts?x=1")).toBe("accounts");
+  expect(currentId(pages, "#/accounts/acc_1a2b3c4d")).toBe("account");
+  expect(currentId(pages, "#/accounts/acc_1a2b3c4d/sign-in")).toBe("account");
+  expect(currentId(pages, "#/accounts/a%2Fb?x=1")).toBe("account");
+  // The Quota page is gone: its address lands on All accounts.
+  expect(currentId(pages, "#/quota")).toBe("accounts");
+  expect(currentId(pages, "#/add-account")).toBe("add-account");
+  // An exact address answers itself and what is under it; a prefix only what follows it.
+  const a: PageDef = { id: "a", title: "A", dest: "tools", addresses: ["old"], render };
+  const b: PageDef = { id: "b", title: "B", dest: "tools", addresses: ["a/"], render };
+  expect(currentId([a, b], "#/old/x")).toBe("a");
+  expect(currentId([a, b], "#/a")).toBe("a");
+  expect(currentId([a, b], "#/a/1")).toBe("b");
 });

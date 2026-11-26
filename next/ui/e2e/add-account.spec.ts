@@ -178,7 +178,7 @@ test("secret file selection clears the file control and refuses files over one M
   const secret = page.getByLabel("API key", { exact: true });
   await expect(secret).toBeFocused();
   await expect(secret).toHaveAttribute("autocomplete", "new-password");
-  const file = page.locator('input[type="file"]');
+  const file = page.getByLabel("Choose file", { exact: true });
   await file.setInputFiles({ name: "key.txt", mimeType: "text/plain", buffer: Buffer.from("file-key") });
   await expect(secret).toHaveValue("file-key");
   await expect(file).toHaveValue("");
@@ -274,7 +274,7 @@ test("device sign-in shows its code and adds the account", async ({ page }) => {
   await expect(page.getByRole("button", { name: "View accounts" })).toBeFocused();
   await page.getByRole("button", { name: "View accounts" }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Accounts" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "device-added", exact: true })).toBeVisible();
+  await expect(page.locator('a.account-name[href="#/accounts/device-added"]')).toBeVisible();
 });
 
 test("browser sign-in accepts a callback and reports provider failures", async ({ page }) => {

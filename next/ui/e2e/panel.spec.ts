@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { goTo, headerTabs, nav, openPanel, pageTitle, signIn, topics, useCore } from "./support";
+import { accountRow, goTo, headerTabs, nav, openPanel, pageTitle, signIn, topics, useCore } from "./support";
 
 const core = useCore();
 
@@ -59,16 +59,12 @@ test("panel shows core, switches layout and theme live, and recovers from custom
 
   // Accounts: config accounts of both extensions.
   await goTo(page, "Accounts");
-  const accounts = page.locator('[data-part="list"]');
-  for (const id of ["local-1", "alpha-1", "alpha-2"]) {
-    await expect(accounts.locator('[data-part="item"]', { hasText: id })).toBeVisible();
-  }
+  for (const id of ["local-1", "alpha-1", "alpha-2"]) await expect(accountRow(page, id)).toBeVisible();
 
   // Extensions: the installed packages, one enabled and running, one disabled.
   await goTo(page, "Extensions");
-  const packages = page.locator('[data-part="list"][aria-label="Installed extensions"]');
-  const alpha = packages.locator('[data-part="item"]', { hasText: "test/alpha" });
-  const beta = packages.locator('[data-part="item"]', { hasText: "test/beta" });
+  const alpha = page.getByRole("button", { name: /test\/alpha/ });
+  const beta = page.getByRole("button", { name: /test\/beta/ });
   await expect(alpha).toBeVisible();
   await expect(alpha.locator('[data-part="badge"]')).toHaveText("Running");
   await expect(beta.locator('[data-part="badge"]')).toHaveText("Turned off");
@@ -98,15 +94,16 @@ test("panel shows core, switches layout and theme live, and recovers from custom
   await expect.poll(bg).not.toBe(before);
   await expect(root(page)).toHaveAttribute("data-nav", "top");
 
-  // Custom CSS applies live; safe mode turns it off and on again.
+  // Custom CSS applies live; the Custom CSS switch turns it off and on again.
   const title = page.locator('[data-part="page-title"]');
   const titleColor = () => title.evaluate((e) => getComputedStyle(e).color);
   await page.getByLabel("Your CSS").fill('[data-part="page-title"] { color: rgb(255, 0, 0); }');
   await expect.poll(titleColor).toBe("rgb(255, 0, 0)");
-  const safe = page.getByRole("switch", { name: "Safe mode" });
-  await safe.check();
+  const customCss = page.getByRole("switch", { name: "Custom CSS" });
+  await expect(customCss).toBeChecked();
+  await customCss.uncheck();
   await expect.poll(titleColor).not.toBe("rgb(255, 0, 0)");
-  await safe.uncheck();
+  await customCss.check();
   await expect.poll(titleColor).toBe("rgb(255, 0, 0)");
 
   // Custom CSS cannot load anything from elsewhere: the CSP refuses it, so nothing is sent.
@@ -128,7 +125,7 @@ test("panel shows core, switches layout and theme live, and recovers from custom
   expect(reached).toBe(0);
   canary.close();
 
-  // CSS that hides the navigation: ?safe in the address brings it back, and safe mode stays on.
+  // CSS that hides the navigation: ?safe in the address brings it back, and custom CSS stays off.
   await page.getByLabel("Your CSS").fill('[data-part="nav"] { display: none; }');
   await expect(nav(page)).toBeHidden();
   await openPanel(page, core, "/panel/?safe");
@@ -136,7 +133,7 @@ test("panel shows core, switches layout and theme live, and recovers from custom
   await page.reload();
   await expect(nav(page)).toBeVisible();
   await goTo(page, "Themes");
-  await expect(page.getByRole("switch", { name: "Safe mode" })).toBeChecked();
+  await expect(page.getByRole("switch", { name: "Custom CSS" })).not.toBeChecked();
 
   // The management key went to core's own management API and nowhere else, and the page
   // reached no other origin.
@@ -177,7 +174,7 @@ test("themes are kept by core: added from a file and from pasted JSON, followed,
 
   // A T3 Code theme file, chosen as a file: it applies at once and core keeps it.
   await page.getByLabel("Theme file", { exact: true }).setInputFiles(nightfall);
-  await expect(page.getByText("Added and applied Nightfall.")).toBeVisible();
+  await expect(page.getByText("Added and turned on Nightfall.")).toBeVisible();
   await expect(picker.getByRole("radio", { name: "Nightfall" })).toBeChecked();
   await expect.poll(() => variable("--px-color-bg")).not.toBe(defaultBg);
   const nightfallBg = await variable("--px-color-bg");
@@ -188,7 +185,7 @@ test("themes are kept by core: added from a file and from pasted JSON, followed,
   });
 
   // Pasted JSON goes the same way.
-  const paste = page.getByLabel("Or paste a theme file's JSON");
+  const paste = page.getByLabel("Or paste a theme file");
   const add = page.getByRole("button", { name: "Add", exact: true });
   await expect(add).toBeDisabled();
   await paste.fill(dawn);
@@ -220,9 +217,9 @@ test("themes are kept by core: added from a file and from pasted JSON, followed,
   await expect(picker.getByRole("radio", { name: "Nightfall" })).toBeChecked();
   await expect.poll(() => variable("--px-color-bg")).toBe(nightfallBg);
 
-  // Export saves the theme's file as it was given.
+  // Save theme file saves the theme's file as it was given.
   const saving = page.waitForEvent("download");
-  await page.getByRole("button", { name: "Export Nightfall as a theme file" }).click();
+  await page.getByRole("button", { name: "Save theme file", exact: true }).click();
   const saved = await saving;
   expect(saved.suggestedFilename()).toBe("nightfall.json");
   expect(JSON.parse(readFileSync(await saved.path(), "utf8"))).toEqual(
@@ -253,7 +250,7 @@ test("the Themes page says what is still true, and what to do about a file it ca
 }) => {
   const fixtures = join(import.meta.dirname, "..", "tests", "fixtures");
   const picker = page.getByRole("radiogroup", { name: "Theme" });
-  const paste = page.getByLabel("Or paste a theme file's JSON");
+  const paste = page.getByLabel("Or paste a theme file");
   const add = page.getByRole("button", { name: "Add", exact: true });
   const alerts = page.getByRole("alert");
   const ids = async () =>
@@ -277,7 +274,7 @@ test("the Themes page says what is still true, and what to do about a file it ca
   await picker.getByRole("radio", { name: "Terminal" }).check();
   await expect(alerts).toHaveCount(0);
 
-  // A built-in theme's own file, as Export saves it: the reason says which field to change.
+  // A built-in theme's own file, as Save theme file saves it: the reason says which field to change.
   await paste.fill(readFileSync(join(import.meta.dirname, "..", "themes", "default.json"), "utf8"));
   await add.click();
   await expect(alerts).toHaveText(
@@ -288,7 +285,7 @@ test("the Themes page says what is still true, and what to do about a file it ca
   await page
     .getByLabel("Theme file", { exact: true })
     .setInputFiles(join(fixtures, "t3-docs-nightfall.json"));
-  const added = page.getByText("Added and applied Nightfall.");
+  const added = page.getByText("Added and turned on Nightfall.");
   await expect(added).toBeVisible();
   await expect(alerts).toHaveCount(0);
   await picker.getByRole("radio", { name: "Default" }).check();
@@ -300,10 +297,12 @@ test("the Themes page says what is still true, and what to do about a file it ca
   const changed = JSON.stringify({ ...nightfallFile, description: "A second file with this name" });
   const secondFile = { name: "nightfall.json", mimeType: "application/json", buffer: Buffer.from(changed) };
   await page.getByLabel("Theme file", { exact: true }).setInputFiles(secondFile);
-  await expect(page.getByText("Added and applied Nightfall, replacing the existing theme.")).toBeVisible();
+  await expect(
+    page.getByText("Added and turned on Nightfall, replacing the theme of the same name."),
+  ).toBeVisible();
   // The very same file again takes no theme's place.
   await page.getByLabel("Theme file", { exact: true }).setInputFiles(secondFile);
-  await expect(page.getByText("Added and applied Nightfall.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Added and turned on Nightfall.", { exact: true })).toBeVisible();
 
   // A theme removed somewhere else since this page read the list: removing it here just works.
   await picker.getByRole("radio", { name: "Nightfall" }).check();
@@ -319,8 +318,8 @@ test("the Themes page says what is still true, and what to do about a file it ca
   expect((await core.mgmt("PUT", "/themes/me/broken", { name: "Broken Thing" })).status).toBe(200);
   await core.mgmt("PUT", "/theme", { id: "me/broken" });
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-  await expect(alerts).toHaveText(
-    /^me\/broken is turned on, but this page cannot use it: the file is not a theme file\..* Remove it, or pick another theme\.$/,
+  await expect(page.getByRole("status").filter({ hasText: "cannot be used" })).toHaveText(
+    /^Broken Thing cannot be used: the file is not a theme file\..* Pick another theme or remove it\.$/,
   );
   const broken = picker.locator('[data-part="card"][data-unusable]');
   await expect(broken).toContainText("Broken Thing");
@@ -379,7 +378,7 @@ test("a narrow window shows the rail, then a bar of icons, whatever the theme sa
   const bar = await nav(page).boundingBox();
   expect(bar && bar.width === 500 && bar.height < 70 && bar.y === 0).toBe(true);
   await nav(page).getByRole("link", { name: "Accounts", exact: true }).click();
-  await expect(headerTabs(page).getByRole("link")).toHaveText(["Accounts", "Order & fallback", "Limits"]);
+  await expect(headerTabs(page).getByRole("link")).toHaveText(["All accounts", "Order & fallback"]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBe(0);
 });
 
@@ -389,10 +388,10 @@ test("the header strip names the page, shows a destination's tabs, and the way b
   await open(page);
   await signIn(page, core);
   await goTo(page, "Accounts");
-  // The three pages of Accounts are tabs; the heading names the destination and the page.
+  // The two pages of Accounts are tabs; the heading names the destination and the page.
   const tabs = headerTabs(page);
-  await expect(tabs.getByRole("link")).toHaveText(["Accounts", "Order & fallback", "Limits"]);
-  await expect(tabs.getByRole("link", { name: "Accounts", exact: true })).toHaveAttribute(
+  await expect(tabs.getByRole("link")).toHaveText(["All accounts", "Order & fallback"]);
+  await expect(tabs.getByRole("link", { name: "All accounts", exact: true })).toHaveAttribute(
     "aria-current",
     "page",
   );
@@ -420,15 +419,27 @@ test("the header strip names the page, shows a destination's tabs, and the way b
   await strip.getByRole("link", { name: "Accounts", exact: true }).click();
   await expect(page).toHaveURL(/#\/accounts$/);
 
+  // An account's page sits under All accounts too: its name in the strip, the way back before it.
+  await page.getByRole("link", { name: "alpha-1", exact: true }).click();
+  await expect(page).toHaveURL(/#\/accounts\/alpha-1$/);
+  await expect(tabs).toHaveCount(0);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveAccessibleName("alpha-1");
+  await expect(nav(page).getByRole("link", { name: "Accounts", exact: true })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await strip.getByRole("link", { name: "Accounts", exact: true }).click();
+  await expect(page).toHaveURL(/#\/accounts$/);
+
   // With tabs at the side, a destination's tabs are a list beside the page.
   await goTo(page, "Themes");
   await page.getByRole("radiogroup", { name: "Tabs" }).getByRole("radio", { name: "Side" }).check();
   await goTo(page, "Accounts");
   await expect(tabs).toHaveCount(0);
   const beside = page.getByRole("navigation", { name: "Accounts pages" });
-  await expect(beside.getByRole("link")).toHaveText(["Accounts", "Order & fallback", "Limits"]);
-  await beside.getByRole("link", { name: "Limits", exact: true }).click();
-  await expect(page).toHaveURL(/#\/quota$/);
+  await expect(beside.getByRole("link")).toHaveText(["All accounts", "Order & fallback"]);
+  await beside.getByRole("link", { name: "Order & fallback", exact: true }).click();
+  await expect(page).toHaveURL(/#\/routing$/);
 });
 
 test("the status block says where pluxy runs; its menu copies the address and closes on Escape and on a click outside", async ({
@@ -521,7 +532,7 @@ test("a change of page opens the new page at its top; a change inside a page kee
   expect(await scrolled()).toBe(0);
 });
 
-test("the sign-in page fills the window, says how to open the panel without custom CSS, and the sign-out button has its name", async ({
+test("the sign-in page fills the window, says how to open the panel without custom CSS, and Sign out in General asks first", async ({
   page,
 }) => {
   await open(page);
@@ -533,16 +544,19 @@ test("the sign-in page fills the window, says how to open the panel without cust
   expect(Math.abs(box.x + box.width / 2 - 640)).toBeLessThan(2);
   await expect(card).toContainText("add ?safe to the URL to disable it.");
 
-  // The sign-out control is an icon in the header strip: it has its whole name.
+  // Sign out is a row of General, in the panel: it asks first, and Cancel leaves the person in.
   await signIn(page, core);
   await goTo(page, "Themes");
   await page.getByRole("radiogroup", { name: "Theme" }).getByRole("radio", { name: "Terminal" }).check();
   await expect(root(page)).toHaveAttribute("data-nav", "rail");
   await expect(page.locator('[data-part="shell"]')).toHaveAttribute("data-frame", "rail");
-  const out = page.locator('[data-part="header"] [data-part="sign-out"]');
-  await expect(out).toHaveAccessibleName("Sign out");
-  await expect(out).toHaveAttribute("title", "Sign out");
-  await out.click();
+  await expect(page.locator('[data-part="header"] [data-part="sign-out"]')).toHaveCount(0);
+  await goTo(page, "General");
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(pageTitle(page)).toHaveText("General");
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await page.getByRole("button", { name: "Yes, sign out", exact: true }).click();
   // Signed out in a theme with the navigation on top or in a rail, the card is in the middle too.
   const again = await card.boundingBox();
   if (!again) throw new Error("no sign-in card");
@@ -554,7 +568,7 @@ test("what an add came to is brought into view, and a theme from a file leaves n
   page,
 }) => {
   const nightfall = join(import.meta.dirname, "..", "tests", "fixtures", "t3-docs-nightfall.json");
-  const paste = page.getByLabel("Or paste a theme file's JSON");
+  const paste = page.getByLabel("Or paste a theme file");
   const add = page.getByRole("button", { name: "Add", exact: true });
   await page.setViewportSize({ width: 1280, height: 560 });
   await open(page);
@@ -573,7 +587,7 @@ test("what an add came to is brought into view, and a theme from a file leaves n
 
   // A theme then added from a file: the refused text does not stay in the box.
   await page.getByLabel("Theme file", { exact: true }).setInputFiles(nightfall);
-  await expect(page.getByText("Added and applied Nightfall.")).toBeInViewport({ ratio: 0.95 });
+  await expect(page.getByText("Added and turned on Nightfall.")).toBeInViewport({ ratio: 0.95 });
   await expect(paste).toHaveValue("");
   await page.getByRole("button", { name: "Remove Nightfall", exact: true }).click();
   await page.getByRole("button", { name: "Yes, remove Nightfall", exact: true }).click();
@@ -596,8 +610,8 @@ test("screenshots in two themes", async ({ page }) => {
     await goTo(page, "Themes");
     await page.getByRole("radiogroup", { name: "Theme" }).getByRole("radio", { name: theme }).check();
     await goTo(page, "Accounts");
-    await page.locator('[data-part="item"]', { hasText: "alpha-1" }).click();
-    await expect(page.locator('[data-part="detail"]')).toBeVisible();
+    await page.getByRole("link", { name: "alpha-1", exact: true }).click();
+    await expect(page.locator('[data-part="account-page"]')).toBeVisible();
     await page.screenshot({ path: join(dir, file), fullPage: true, animations: "disabled" });
   }
   await goTo(page, "Themes");

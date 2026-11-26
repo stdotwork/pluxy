@@ -2,8 +2,8 @@
 
 The desktop app is the UI kit's second build ([`../ui`](../ui/README.md)), in a Tauri 2 window,
 with a tray icon. It shows core's pages in the same places and with the same themes as the web
-panel, then adds its own: Beginner Mode, Manage Clients and the client pages as topics beside the Tools page, and Where pluxy runs, Version Management, Device
-extensions and Launcher among the Settings topics. Extension pages, from core and
+panel, then adds its own: Beginner Mode, Manage Clients and the client pages as topics beside the Tools page, and Where pluxy runs, Updates, Add-ons
+and Launcher among the Settings topics. Extension pages, from core and
 from packages installed on this device, open in webviews of their own.
 
 Linux is the only platform the app supports now; Windows, macOS and WSL are later work
@@ -371,15 +371,15 @@ other launch is an ordinary later launch.
 
 ## Privacy mode
 
-The **Privacy mode** toggle at the header strip's end masks account e-mail addresses and identifiers where
+The **Hide names** setting in General masks account e-mail addresses and identifiers where
 the kit shows them, as in the panel (`ui/kit/privacy.ts`), and extension pages are told in their
-theme snapshot. The app keeps the choice natively, in `privacy-mode.json` beside
+theme snapshot. While it is on, the header strip shows a **Names hidden** button that turns it off. The app keeps the choice natively, in `privacy-mode.json` beside
 `connection.json` (readable only by your user), not in the window's storage, so losing that
 storage cannot turn it off. A file that cannot be read or parsed counts as on.
 
 ## Files the window saves
 
-The Themes page's **Export**, the Logs page's downloads and the Requests page's **Save as spreadsheet** save
+The Themes page's **Save theme file**, the Logs page's downloads and the Requests page's **Save as spreadsheet** save
 a file. In the panel that is a browser download. The app's window opens no address but the app's
 own, so a download link, whose address starts with `blob:`, does nothing there; these pages hand
 the file to the `file_save` command instead (`src-tauri/src/export.rs`). It saves the file in
@@ -451,7 +451,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `confirmation_request` | Opens native review for an opaque action ID already prepared by native code; returns no approval or token |
 | `confirmation_settings` | Opens native settings to inspect and revoke exact remembered launches |
 | `release_get`, `release_check` | The release feed's view (versions, dates, status); `release_check` reads the feed first ("Check for updates") |
-| `release_channel_set` | Picks the Stable or the Preview (latest) channel |
+| `release_channel_set` | Picks the Stable or the Preview channel |
 | `release_source_set` | Asks to change or remove the feed's address; opens a native confirmation and applies nothing itself |
 | `release_notes_open`, `release_notes_place`, `release_notes_close` | Opens a release's notes in a webview of their own over part of the window, moves it, closes it |
 | `release_notes_full` | Opens the release's notes address from the feed in the browser ("View full release notes") |
@@ -473,7 +473,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `vault_secrets`, `vault_secret_remove` | The vault's secrets, by ID and label (and a client key's binding), never their values; removes one |
 | `client_key_capture` | After a native confirmation, asks the connected core for a new client key for a native tool and keeps it in the vault, bound to that core and tool; returns its ID, label and binding, never the key |
 | `client_key_enter` | Opens native key entry for an existing client key of the connected core and keeps it the same way once core accepts it |
-| `core_alias_create` | After a native confirmation, adds a model alias (`fork`, so the model keeps its name) to the `model_alias` of each account added by login that serves the model in the connected core; refuses an alias core already serves for anything else and a model only accounts set in core's config serve, and takes the alias out again when core then does not serve it; returns the accounts that have it (Linux) |
+| `core_alias_create` | After a native confirmation, adds a model alias (`fork`, so the model keeps its name) to the `model_alias` of each account added by login that serves the model in the connected core; refuses an alias core already serves for anything else and a model only accounts set in core's config serve, and takes the alias out again when core then does not serve it; returns the accounts that have it |
 | `launcher_state` | The launcher's state: whether the execution program can be used, the remembered launches with their source, the recent folders and the notice setting |
 | `launcher_terminals` | The terminals the execution program finds, Automatic first |
 | `launcher_launch` | A new launch, prepared by the execution program (in a WSL environment the window names, by `pluxy/wsl`); it always opens the native confirmation |
@@ -532,14 +532,22 @@ bounded FIFO of eight calls one at a time; hello and closed messages always ente
 the matching channel error. Oversized transport bodies are rejected without scanning for an id.
 Permissions and extension settings still use the shared kit's channel. No page receives a key.
 
-## Version Management and release notes
+## Updates and release notes
 
-The Version Management page (a Settings topic) shows, for the app ("Desktop app") and for
-core, the current version, the latest version on the chosen channel and when it was published,
+The Updates page (a Settings topic) shows, for the app ("This app") and for
+pluxy, the current version, the latest version on the chosen channel and when it was published,
 then the app release's notes. Stable shows the
-highest stable version; Preview (latest) shows the highest version on either channel, so it is a
+highest stable version; Preview shows the highest version on either channel, so it is a
 stable release when that is the newest. Versions compare by semantic version precedence. The
 current core version is what the connected core reports in `GET /v0/management/status`.
+
+A section with nothing to say is not drawn. With no update source set, the page says so in one line
+and draws no App update or Release notes section, and the Update source section is open for a
+person who has one. A build with no updater key says "This copy of the app cannot update itself."
+under This app instead of an App update section; that section appears only when an update is on
+offer, a download or an outcome is shown, a version to go back to is kept, or the updater gives
+another reason. The page reads the update source's view and the updater's together, and shows a
+loading or failed pane until both have answered.
 
 The app has no built-in feed address and reads nothing until the person sets one. Setting,
 changing or removing the address opens the native confirmation (below), with the old and the
@@ -576,8 +584,8 @@ stay links (a link to an IPv6 address does not: the renderer's escaping of its b
 break it). The document has no script,
 and its policy (`script-src 'none'`, `img-src 'none'`, `connect-src 'none'`, no frames or
 forms) allows none and loads nothing but its style sheet, with the window's theme colours and
-fonts, which native code checks as the kit checks theme values. The notes are expanded at first;
-Collapse hides them and closes their webview, Expand opens a new one. The notes webview never
+fonts, which native code checks as the kit checks theme values. The notes are shown at first;
+Hide closes their webview, Show opens a new one. The notes webview never
 navigates: following a link opens it in the browser,
 only when the notes link to that exact address (as the rendered link writes it), and at most one
 address a second, notes links and "View full release notes" together; the code that starts the
@@ -626,7 +634,7 @@ feed addresses, keys and formats are decided at release; until then there is no 
 
 ### Application update
 
-Version Management's App update card offers **Update now** when the feed's latest app
+The Updates page's App update section offers **Update now** when the feed's latest app
 release on the chosen channel is newer than the running version and has an artifact for this
 system, and says why not otherwise. It uses the stock Tauri updater plugin
 (`tauri-plugin-updater` 2.14.1) for its release check and signature check only, never for
@@ -820,7 +828,7 @@ In this order:
    prefix aside, compared without case), and never makes one: a folder bundle, or another install
    of the same product, is left alone. The setup program itself is never run.
 
-**Roll back to <version>…** lists versions that ran here and were kept. It restores only such a
+**Go back to <version>…** lists versions that ran here and were kept. It restores only such a
 copy, only while it still has its pinned digest, and only after the native confirmation (with
 the version, digest and installed copy); then the same restart and acceptance follow. It passes the
 updater gate first, as Update now does, so a build without updater trust refuses it. A version
@@ -829,7 +837,7 @@ confirmation is open, Update now and other rollbacks wait.
 
 ## Extensions on this device
 
-The Device extensions page manages app packages (see
+The Add-ons page (it calls a native tool a coding-tool add-on, and a curated one verified) manages app packages (see
 [the app package contract](app-host/README.md)) installed on this computer: page-only packages
 (`app.tier` `web`) and curated native tools (`native`). They are apart from
 the extensions of the core the app is connected to: installing one never installs it in core,
@@ -884,10 +892,9 @@ signature, then the archive's size and SHA-256, are checked before it is unpacke
 manifest's ID, version and tier after. A curated registry lists only its root's keys: any other
 signature in it is refused, whatever the package's publisher. A signature another registry lists
 is checked the same way with the `public_key` the index names, as a web package's (a native tool
-signed so is refused), and kept for Access; the package stays **Unverified**. The Device
-extensions page marks an entry the index already shows install would refuse. Its
+signed so is refused), and kept for Access; the package stays **Unverified**. The Add-ons page marks an entry the index already shows install would refuse **Blocked**, with the reason. Its
 program for this computer must be an executable file in the package, and the SHA-256 of every
-file is recorded. It is labelled **Curated** and installs disabled. Enabling it opens a native
+file is recorded. It is labelled **Verified** (the records and this README call it curated) and installs disabled. Enabling it opens a native
 confirmation that says it has **full access to your user account** and shows its ID, source,
 digest, signer, contracts, operations and program; only Confirm there enables it, and the catalog
 records that admission against the release, source, signer and key. Disabling, updating, rolling
@@ -916,8 +923,8 @@ from the window, from a page (its `native.call` method, answered in the page's o
 from another native tool (a call on its pipe). The router checks each call against the catalog at
 that moment: a tool calls only what it imports and its target exports, under an accepted export
 contract; a native tool's page calls only its own tool; a curated web package's page calls only
-its imports, once the person allowed them in a native confirmation from the Device extensions
-page (**Allow native imports**, revoked with **Revoke native imports**). An Unverified package
+its imports, once the person allowed them in a native confirmation from the Add-ons
+page (**Allow tool access…**, taken back with **Remove tool access**). An Unverified package
 never gets that. A native tool is enabled only when its required imports are enabled tools that
 export them, and only if its imports lead back to it nowhere; its enable confirmation lists them.
 The host sets each call's chain (the requester, then each tool that called on), refuses a call
@@ -959,7 +966,7 @@ Installing a newer release keeps the one it replaces as the last good release. A
 fails any check leaves the active release, its files and its open pages as they were. **Roll
 back** makes the last good release active again, after checking that its files are unchanged.
 Starting the app with `--safe-mode` lists no page of a package on this device and opens or serves
-none, and admits no native tool; the Device extensions page still shows and manages them.
+none, and admits no native tool; the Add-ons page still shows and manages them.
 
 A device page opens like a core page, in a page webview with the app's page document, but its
 frame loads from the `pluxy-app:` scheme. That scheme serves a page webview only the files of the
@@ -986,12 +993,12 @@ Granting takes three things, each in native UI the window can only start:
 1. **A signed web release.** Only a web package's release whose registry listed a publisher
    signature can be granted files; one installed from a file, or listed unsigned, is refused, and
    so is a native tool or a package whose publisher a trust root reserves, whoever signed it.
-2. **An approved signer.** The package's detail on the Device extensions page shows the signer
-   (publisher, key ID and full public key) and the registry it came from. **Approve signer…**
+2. **An approved signer.** The package's detail on the Add-ons page shows the signer
+   (publisher, key ID and full public key) and the registry it came from. **Approve publisher…**
    opens a native confirmation showing them. The approval holds for that key from that registry
    only: the same package, key and bytes from another registry start with no approval and no
    grants.
-3. **A grant.** **Grant…** next to a resource opens the native file chooser (the desktop portal's
+3. **A grant.** **Choose a file…** (**Choose a folder…** for a folder) next to a resource opens the native file chooser (the desktop portal's
    when GTK uses portals) for a file or a folder. A folder that is or holds the root folder,
    your home folder or the document portal's store is refused. So is anything that is, holds or
    lies inside one of the app's own folders: its settings folder (`connection.json`,
@@ -1029,7 +1036,7 @@ a filesystem mounted inside the granted folder. Only regular files are read, at 
 call. A listing stops after 1,000 entries and says it was cut. Hard links inside a granted
 folder disclose the files they name.
 
-**Revoke** removes a grant and bumps a revision every read checks before it answers. A read
+**Remove** next to a given file removes its grant and bumps a revision every read checks before it answers. A read
 already under way answers `revoked`, not its bytes, and the revocation answers only once such
 reads have finished. A revocation cannot take back what a page already read.
 
@@ -1126,19 +1133,19 @@ Revoking a remembered approval also invalidates its outstanding tokens.
 The Launcher page and the tray's **Start…** menu start agents and terminals, drawn from host data
 (`src-tauri/src/launcher.rs`, `src/launcherPage.tsx`). They need the curated execution program
 `pluxy/execution` ([app tools](../app-tools/README.md#execution)), installed and enabled on the
-Device extensions page; without it the page says so.
+Add-ons page; without it the page says so, links to Add-ons, and shows the reason under **Details**.
 
 A **new launch** names a client label, a kind (in a terminal or directly), a program (a name found
 on the launch environment's `PATH`, or a full path), an optional executable override, arguments,
-a working folder (the page offers the client's eight most recently used), a terminal (**Automatic**
-or one found on `PATH`) and a lifetime (detached or managed; **managed is for direct launches only**,
+a folder (the page offers the client's eight most recently used), a terminal (**Automatic**
+or one found on `PATH`) and what happens when the app quits (**Keep it running** or **Stop it**, which are detached and managed; **Stop it is for direct launches only**,
 since many terminals hand their windows to a server process and exit at once, so the app could not
 stop an agent run in one: a launch in a terminal is always detached, and the host refuses it
 otherwise). The execution program prepares the
 executable, argv and cwd; the app's native confirmation shows them in full, with the program a
 terminal runs, the lifetime and the environment, and offers **Remember this exact executable,
-argv and cwd**. A remembered launch joins the page's list (client, command, folder, the execution
-program's release that runs it) and the tray's Start… menu.
+argv and cwd**. A remembered launch joins the page's list (tool, command, folder and when it was last used) and the
+tray's Start… menu.
 
 **Start** on the page, or a click in the tray's Start… menu, starts a remembered launch again in
 one click, with no dialog, while it is exactly the launch remembered: the same executable and
@@ -1147,7 +1154,7 @@ program release, from the same window. A terminal launch remembered as managed b
 version is refused when started (**Forget** it and launch it again, detached). Anything changed asks again, and remembering it again
 replaces the old approval; a page's Start or a launch through another package always asks. One
 start of a launch per second; after each the app shows its launch notice ("Started …" or why it
-did not), unless **Show a notice after a one-click start** is off. **Forget** revokes the
+did not), unless **Show a notification after a one-click start** is off. **Forget** revokes the
 approval; so does revoking it in the tray's **Remembered launches…**, which also takes it out of
 the menu. The list, the recent folders and the notice setting are in `launcher.json` beside
 `connection.json`, readable only by your user; it holds no secret (a secret field holds a vault
@@ -1166,8 +1173,8 @@ for one distribution or user never starts in another.
 
 Detached launches keep running after the app quits, each in a transient systemd scope of its own
 when a systemd user manager runs ([Launches](app-host/README.md#launches-and-managed-runtimes)). The
-page lists the managed runtimes the execution program started, with **Stop** and **Restart** (each
-confirmed natively, never remembered); disabling or removing a package with managed runtimes running
+page lists what the execution program started that still runs under **Running now**, with **Restart**
+and **Stop** (each asks first in the page, then is confirmed natively, never remembered); disabling or removing a package with managed runtimes running
 asks first, and cancelling leaves both as they are.
 
 ## The tool pages
@@ -1205,8 +1212,9 @@ the page.
   after the page was left writes nothing.
 - **Connect {tool}** is one press. It uses the vault's key bound to this add-on and to the pluxy the
   app is connected to (or the one the person chose); with none, it makes one with
-  `client_key_capture`, named for the tool (`Claude Code`, `Codex`, `Claude Desktop`), in its
-  own native confirmation, then writes the settings in the add-on's confirmation. A cancel stops
+  `client_key_capture`, named for the tool (`Claude Code`, `Codex`, `Claude Desktop`) in the vault
+  and in pluxy, which shows that name for the key in Activity and the web panel, in its own native
+  confirmation, then writes the settings in the add-on's confirmation. A cancel stops
   quietly and a key that could not be made writes nothing. When the key was made but the write did
   not happen, the page says the key is kept, and the next Connect uses it, even before the key
   list is read again. Connect, Update and Save say each reason they are held, such as the app not
@@ -1656,7 +1664,7 @@ One more session in managed mode (`native/privacy.ts`) runs the privacy mode che
 (`src-tauri/src/native_privacy.rs`) and then the themes checks (`src-tauri/src/native_themes.rs`):
 the T3 Code theme file `ui/tests/fixtures/t3-docs-nightfall.json`, pasted on the Themes page and
 added, paints the window in its canvas colour with the root's `dark` class, the picker lists it,
-`GET /themes` through the app's host has it as `current`, Export saves `nightfall.json` in the
+`GET /themes` through the app's host has it as `current`, Save theme file saves `nightfall.json` in the
 session's Downloads folder with the theme file's JSON (read from disk at the path the page shows),
 and the next launch paints in it. The session ends on the Themes page in that theme.
 
@@ -1763,8 +1771,8 @@ a child and runs a fixture script through `fexecve`, checking `FD_CLOEXEC` behav
 when both it and the system temporary folder are mounted noexec. Native GUI fixture actions do
 not execute a program.
 
-The same run checks the release feed (`src-tauri/src/release_native.rs`) on the Version
-Management page,
+The same run checks the release feed (`src-tauri/src/release_native.rs`) on the Updates
+page,
 against a fake https feed the runner serves on a random loopback port (`native/feed.ts`, with
 `native/release-feed.json`) and a certificate authority made with `openssl` for that run. Only
 native-test builds read that authority (`PLUXY_APP_TEST_FEED_CA`); other builds check a feed
@@ -1772,7 +1780,7 @@ against the public roots only. A stand-in browser, the run's default `https` han
 its own XDG folders, logs each address it is asked to open. The check confirms a feed address in
 the real dialog, then cancels a second change and finds the old address, its file and its copy
 kept; asks for a third, finds Channel disabled, changes the channel by a direct call and confirms,
-and finds the change not applied and the page saying why; checks for updates and reads the stable and the Preview (latest) versions, and finds
+and finds the change not applied and the page saying why; checks for updates and reads the stable and the Preview versions, and finds
 Update now not offered and refused (a build without updater trust is not configured for it, and the
 fixture has no signed update for the test package); opens hostile
 notes and finds no script, image, frame, handler or extra link, the Markdown rendered and the
@@ -2050,7 +2058,9 @@ app supported there:
     with client keys), and a launcher check of its own
     (`src-tauri/src/launcher_platform_native.rs`), in the app built with the test trust, in local
     mode against a test core. The client keys are made on that test core, not on the app's own core
-    as on Linux. On Windows the client-key check reads the agent's command line from Windows, but
+    as on Linux, and after them the vault session makes a model alias on it through its native
+    confirmation (`src-tauri/src/core_alias_native.rs`; on Linux the `claude-desktop` session's
+    `alias` step checks it). On Windows the client-key check reads the agent's command line from Windows, but
     its environment is the agent's own report, as Windows gives no supported way to read another
     process's. The launcher check starts a stand-in agent in each terminal kind (Console window,
     Command Prompt and PowerShell on Windows; a real Terminal window on macOS), through an npm
@@ -2122,8 +2132,8 @@ Access gives no page anything there: approving a signer and making a grant are L
 signer or grant can be made. On Windows its commands and a page's Access calls are refused; on
 macOS its list, revocation and a page's calls answer, with nothing granted.
 
-Still refused at run time there: a native tool's `files` frames (saving a file), core aliases and
-installing a package from a file. Changing the release feed works there through the native
+Still refused at run time there: a native tool's `files` frames (saving a file) and installing a
+package from a file. Changing the release feed works there through the native
 confirmation. The app updates itself, with test updater trust only, as an AppImage on Linux, on
 Windows x86_64 as the program set of a folder bundle or of a copy the per-user setup program
 installed, and as an app bundle on macOS
@@ -2131,7 +2141,7 @@ installed, and as an app bundle on macOS
 
 ## Limits
 
-- Device extensions: no production trust roots (so no curated source outside tests) or settings
+- Add-ons: no production trust roots (so no curated source outside tests) or settings
   yet, and native tools run on Linux (5.11 or later: the program host needs `close_range` with
   `CLOSE_RANGE_CLOEXEC`), Windows and macOS, where a tool's `files` frames (saving a file) are
   refused; the host starts only a launch the person confirmed,

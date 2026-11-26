@@ -9,9 +9,12 @@
 //! independent record; the app never shows them. Each refusal has a positive control on the same
 //! route:
 //!
+//! - label: a capture whose label core would refuse is refused before any confirmation;
 //! - cancel: a capture the person cancels adds no key to core and none to the vault;
 //! - capture: a confirmed capture adds one key to core's config and keeps it in the vault bound to
-//!   the core, core's key ID and the agent; the window gets the secret's ID and binding only;
+//!   the core, core's key ID and the agent; sent with spaces around its label, it is named by the
+//!   trimmed label in the confirmation, in core's list and in the vault alike; the window gets the
+//!   secret's ID, that label and the binding only;
 //! - serve: the agent, given the key for its `serve` after a native confirmation, is served by
 //!   core with it (200); the key is in neither the agent's argv nor its environment nor its log
 //!   (argv and environment as the system has them, `proc_native.rs`; on Windows the command line
@@ -47,6 +50,9 @@ use tauri::{AppHandle, Manager, Webview};
 const AGENT: &str = "pluxy/agent";
 const OTHER: &str = "pluxy/consumer";
 const LABEL: &str = "fixture agent key";
+/// The label the window sends with each capture: LABEL with spaces around it, which core trims
+/// (`CheckLabel`), so core and the vault must both keep LABEL.
+const SENT: &str = "  fixture agent key  ";
 const ENTRY: &str = "pluxy client key";
 /// The mode of the core the check uses: the app's own on Linux, a test core elsewhere.
 const MODE: &str = if cfg!(target_os = "linux") {
@@ -117,12 +123,18 @@ fn serve(
     settle_unasked(main, &slot)
 }
 
-/// A capture of a client key for the agent, confirmed (or cancelled): the window's answer.
-fn capture(app: &AppHandle, main: &Webview, base: &str, confirm: bool) -> Result<Value, String> {
+/// A capture of a client key for the agent, confirmed (or cancelled): the window's answer and
+/// the text of the confirmation it asked.
+fn capture(
+    app: &AppHandle,
+    main: &Webview,
+    base: &str,
+    confirm: bool,
+) -> Result<(Value, String), String> {
     let slot = start(
         main,
         "client_key_capture",
-        json!({"label": LABEL, "client": AGENT}),
+        json!({"label": SENT, "client": AGENT}),
     )?;
     // Answered without a confirmation: say so now, rather than wait for one.
     wait_for("the capture's native confirmation", || {
@@ -136,9 +148,9 @@ fn capture(app: &AppHandle, main: &Webview, base: &str, confirm: bool) -> Result
         .filter(|v| !v.is_null())
         .map(|r| Err(format!("the capture answered without asking: {r}")))
     })??;
-    dialog_with(app, &[base, AGENT, LABEL])?;
+    let asked = dialog_with(app, &[base, AGENT, LABEL])?;
     press(if confirm { "alt+o" } else { "alt+c" })?;
-    settle(main, &slot)
+    Ok((settle(main, &slot)?, asked))
 }
 
 /// The one key in after that is not in before.
@@ -348,13 +360,24 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         })(),
     )?;
 
+    // ---- label: one core would refuse (a line separator in it) is refused before any confirmation
+    step(
+        "label",
+        refused_unasked(
+            main,
+            "client_key_capture",
+            json!({"label": "fixture\u{2028}agent key", "client": AGENT}),
+            "one line of at most 64 characters",
+        ),
+    )?;
+
     // ---- cancel
     step(
         "cancel",
         (|| {
             let before = core_keys(&config)?;
             require(!before.is_empty(), "core's config has no client keys")?;
-            let r = capture(app, main, &base, false)?;
+            let (r, _) = capture(app, main, &base, false)?;
             require(
                 r["ok"] == false && r["error"].as_str().is_some_and(|e| e.contains("cancelled")),
                 format!("the cancelled capture: {r}"),
@@ -377,23 +400,48 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         "capture",
         (|| {
             let before = core_keys(&config)?;
-            let r = capture(app, main, &base, true)?;
+            let (r, asked) = capture(app, main, &base, true)?;
             let key = new_key(&before, &core_keys(&config)?)?;
             note(&audit, &key)?;
             keys.push(key.clone());
-            first = captured(&r, &base, &key)?;
+            // One name for the key: the confirmation, core's list and the vault's entry all say
+            // LABEL, though the capture sent SENT.
             let listed = ok(
                 main,
                 "core_call",
                 json!({"method": "GET", "path": "/client-keys"}),
             )?;
+            let in_core = listed["body"]["keys"]
+                .as_array()
+                .and_then(|a| {
+                    a.iter()
+                        .find(|k| k["id"] == r["value"]["client_key"]["key_id"])
+                        .cloned()
+                })
+                .unwrap_or_default();
+            let list = ok(main, "vault_secrets", json!({}))?;
+            let in_vault = list["secrets"]
+                .as_array()
+                .and_then(|a| a.iter().find(|s| s["id"] == r["value"]["id"]).cloned())
+                .unwrap_or_default();
+            require(
+                in_core["label"] == LABEL && in_vault["label"] == LABEL,
+                format!(
+                    "core lists the captured key as {}, the vault keeps it as {}; both should be {LABEL:?}",
+                    in_core["label"], in_vault["label"]
+                ),
+            )?;
+            require(
+                asked.contains(&format!("\"{LABEL}\"")),
+                format!("the confirmation should name the key {LABEL:?}: {asked}"),
+            )?;
+            first = captured(&r, &base, &key)?;
             require(
                 listed["body"]["keys"]
                     .as_array()
                     .is_some_and(|a| a.iter().any(|k| k["id"] == first.1.as_str())),
                 format!("core's list lacks the captured key's ID: {listed}"),
             )?;
-            let list = ok(main, "vault_secrets", json!({}))?;
             let entry = list["secrets"]
                 .as_array()
                 .and_then(|a| a.iter().find(|s| s["id"] == first.0.as_str()).cloned())
@@ -457,7 +505,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         "deleted",
         (|| {
             let before = core_keys(&config)?;
-            let r = capture(app, main, &base, true)?;
+            let (r, _) = capture(app, main, &base, true)?;
             let key = new_key(&before, &core_keys(&config)?)?;
             note(&audit, &key)?;
             keys.push(key.clone());

@@ -2,10 +2,11 @@
 // Core checks every change against the schema, so the form leaves checking to it and shows
 // what core says.
 
-import { useEffect, useId, useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import { problem as replyProblem, type SettingField, type Settings } from "../api";
+import { SettingRow } from "../parts";
 import { strings } from "../strings";
-import { Button, Card, Notice, useKit } from "../ui";
+import { Button, Notice, Switch, useKit } from "../ui";
 
 const t = strings("settingsForm", {
   none: "(none)",
@@ -64,82 +65,68 @@ function FieldInput(props: {
   onChange: (v: string | boolean) => void;
   onClear: (c: boolean) => void;
 }) {
-  const id = useId();
   const { field: f } = props;
   const label = f.title ?? props.name;
   const hint = f.description;
-  if (f.type === "boolean") {
-    return (
-      <label class="check" data-part="field">
-        <input
-          type="checkbox"
-          checked={props.value === true}
-          onChange={(e) => props.onChange(e.currentTarget.checked)}
-        />
-        <span>
-          <span class="label">{label}</span>
-          {hint && <small class="hint">{hint}</small>}
-        </span>
-      </label>
-    );
-  }
   const value = typeof props.value === "string" ? props.value : "";
   return (
-    <div class="field" data-part="field">
-      <label class="label" for={id}>
-        {label}
-      </label>
-      {f.enum ? (
-        <select
-          data-slot="select-trigger"
-          id={id}
-          value={value}
-          onChange={(e) => props.onChange(e.currentTarget.value)}
-        >
-          {!f.enum.includes(value) && <option value="">{t("none")}</option>}
-          {f.enum.map((o) => (
-            <option key={o} value={o}>
-              {o}
-            </option>
-          ))}
-        </select>
+    <SettingRow name={label} description={hint}>
+      {f.type === "boolean" ? (
+        <Switch label={label} checked={props.value === true} onChange={props.onChange} />
       ) : (
-        <input
-          data-slot="input"
-          id={id}
-          {...(f.writeOnly
-            ? {
-                type: "password" as const,
-                autocomplete: "off",
-                placeholder: props.isSet ? t("unchanged") : undefined,
-              }
-            : f.type === "string"
-              ? { type: "text" as const, maxLength: f.maxLength }
-              : {
-                  type: "number" as const,
-                  min: f.minimum,
-                  max: f.maximum,
-                  step: f.type === "integer" ? 1 : "any",
-                })}
-          value={value}
-          onInput={(e) => props.onChange(e.currentTarget.value)}
-        />
-      )}
-      {hint && <small class="hint">{hint}</small>}
-      {f.writeOnly && props.isSet && (
-        <span class="check">
-          <small class="hint">{t("valueSet")}</small>
-          <label class="check">
+        <div class="ext-control">
+          {f.enum ? (
+            <select
+              data-slot="select-trigger"
+              aria-label={label}
+              value={value}
+              onChange={(e) => props.onChange(e.currentTarget.value)}
+            >
+              {!f.enum.includes(value) && <option value="">{t("none")}</option>}
+              {f.enum.map((o) => (
+                <option key={o} value={o}>
+                  {o}
+                </option>
+              ))}
+            </select>
+          ) : (
             <input
-              type="checkbox"
-              checked={props.clear}
-              onChange={(e) => props.onClear(e.currentTarget.checked)}
+              data-slot="input"
+              aria-label={label}
+              {...(f.writeOnly
+                ? {
+                    type: "password" as const,
+                    autocomplete: "off",
+                    placeholder: props.isSet ? t("unchanged") : undefined,
+                  }
+                : f.type === "string"
+                  ? { type: "text" as const, maxLength: f.maxLength }
+                  : {
+                      type: "number" as const,
+                      min: f.minimum,
+                      max: f.maximum,
+                      step: f.type === "integer" ? 1 : "any",
+                    })}
+              value={value}
+              onInput={(e) => props.onChange(e.currentTarget.value)}
             />
-            <span>{t("clear", { label })}</span>
-          </label>
-        </span>
+          )}
+          {f.writeOnly && props.isSet && (
+            <span class="ext-secret">
+              <small class="hint">{t("valueSet")}</small>
+              <label class="check">
+                <input
+                  type="checkbox"
+                  checked={props.clear}
+                  onChange={(e) => props.onClear(e.currentTarget.checked)}
+                />
+                <span>{t("clear", { label })}</span>
+              </label>
+            </span>
+          )}
+        </div>
       )}
-    </div>
+    </SettingRow>
   );
 }
 
@@ -171,10 +158,10 @@ export function SettingsForm(props: { id: string }) {
 
   if (missing) return null;
   return (
-    <Card title={t("settings")}>
+    <section class="ext-settings">
+      <h3 class="ext-subheading">{t("settings")}</h3>
       {settings && (
         <form
-          class="stack"
           aria-label={t("settingsOf", { id: props.id })}
           noValidate
           onSubmit={async (e) => {
@@ -218,6 +205,6 @@ export function SettingsForm(props: { id: string }) {
         </form>
       )}
       {!settings && message && <Notice tone="danger">{message.text}</Notice>}
-    </Card>
+    </section>
   );
 }

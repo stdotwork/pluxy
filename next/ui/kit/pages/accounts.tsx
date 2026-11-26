@@ -1,634 +1,490 @@
-// The Accounts list; accountDetail.tsx owns one account's details.
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { type Account, countAccounts, leftOut, problem, providerMissing, runningExtensions } from "../api";
-import { one } from "../api/path";
+// All accounts: every account in the group of what it needs from the person (Needs you, Waiting,
+// Serving, Turned off), each a wide AccountRow with its limits and its week's requests. Select
+// turns on a checkbox per row and a bar of actions for the ones ticked. One account's own page is
+// account.tsx.
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { type Account, problem, runningExtensions } from "../api";
+import type { Reply } from "../host";
+import { Icon } from "../icons";
+import {
+  AccountRow,
+  accountName,
+  conditionUnchecked,
+  GROUPS,
+  type Group,
+  groupWord,
+  type Outcome,
+  StatePane,
+  staleWords,
+  tryAgainWord,
+  uncheckedWord,
+  useNaming,
+  useWindows,
+} from "../parts";
 import { accountIdentities, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
-import { rich, strings } from "../strings";
-import { Tabs } from "../tabs";
-import {
-  Button,
-  Empty,
-  List,
-  MasterDetail,
-  Notice,
-  PageHead,
-  shortDuration,
-  type Tone,
-  useKit,
-  useLoad,
-  usePoll,
-} from "../ui";
-import { AccountDetail, AccountState } from "./accountDetail";
+import { strings } from "../strings";
+import { Button, Empty, Notice, PageHead, useKit, usePoll } from "../ui";
+import { type BatchAction, batchTargets, countsLine, groupAccounts, matchesSearch } from "./accounts.helpers";
 import { ConfigDialog } from "./configDialog";
+import { type Read, staleOf } from "./home.helpers";
 
 const t = strings("accounts", {
   title: "Accounts",
-  tip: "Auth files & credentials",
-  refresh: "Refresh",
-  empty: "No accounts yet. Sign in to one on {page}, or set them in core's config.",
-  addAccount: "Add Account",
-  noResults: "No matching accounts. Clear or change your filters.",
+  tab: "All accounts",
+  tip: "Every account, by what it needs from you",
+  add: "Add an account",
   loading: "Loading accounts…",
-  list: "Accounts",
-  account: "Account",
-  extension: "Extension",
-  state: "State",
-  label: "Label",
-  credential: "Type",
-  from: "From",
-  fromConfig: "AI providers",
-  fromLogin: "Auth files",
-  search: "Search credentials by name, account, type, provider, or error message",
-  searchPlaceholder:
-    "Search name, account, type, provider, or error (403, 429, invalid). Use * as a wildcard",
-  providers: "Extensions",
-  tabCount: "{name} ({count})",
-  all: "All",
-  status: "Status filter",
-  enabled: "Enabled",
-  disabled: "Disabled",
-  problem: "Problem",
-  source: "Source",
-  sort: "Sort",
-  default: "Default",
-  name: "Name (A–Z)",
-  priority: "Priority",
-  perPage: "Per page",
-  previous: "Previous",
-  next: "Next",
-  page: {
-    one: "Page {current} / {total} · {count} account",
-    other: "Page {current} / {total} · {count} accounts",
-  },
+  failed: "Could not read the accounts.",
+  empty: "No accounts yet.",
+  emptyText: "An account is a subscription or an API key that pluxy sends your requests through.",
+  find: "Find an account",
+  noMatch: 'No account matches "{search}".',
+  clearSearch: "Clear search",
+  select: "Select",
+  selectOne: "Select {name}",
   selected: { one: "{count} selected", other: "{count} selected" },
-  select: "Select {id}",
-  selectColumn: "Select",
-  selectPage: "Select page",
-  selectFiltered: "Select filtered",
-  deselect: "Deselect",
-  batch: "Batch actions",
-  enable: "Enable",
-  disable: "Disable",
-  delete: "Remove",
-  confirmDelete: {
-    one: "Are you sure you want to remove {count} account?",
-    other: "Are you sure you want to remove {count} accounts?",
-  },
-  cancel: "Cancel",
+  selectedHidden: "{count} selected, {hidden} hidden",
+  hiddenOne: "The search hides it.",
+  hiddenMany: { one: "The search hides {count} of them.", other: "The search hides {count} of them." },
+  statusUnread: "Could not check which providers are running.",
+  weekUnread: "Could not read this week's requests.",
+  actions: "Actions for the selected accounts",
+  turnOn: "Turn on",
+  turnOff: "Turn off",
   clearCooldown: "Clear cooldown",
+  remove: "Remove…",
+  removeNow: "Remove",
+  done: "Done",
+  cancel: "Cancel",
+  removeOne: "Remove {name}?",
+  removeMany: { one: "Remove {count} account?", other: "Remove {count} accounts?" },
+  removeText: "pluxy deletes its saved sign-in. To use it again, add it again.",
   skipped: {
-    one: "Skipped {count} config account; change it in Config Panel.",
-    other: "Skipped {count} config accounts; change them in Config Panel.",
+    one: "Skipped {count} account set in pluxy's settings file.",
+    other: "Skipped {count} accounts set in pluxy's settings file.",
   },
-  completed: { one: "{count} account updated", other: "{count} accounts updated" },
-  failure: "{id}: {error}",
-  check: "Check",
-  checking: "Checking",
-  ok: "Passed",
-  failed: "Failed",
-  notChecked: "Not checked",
-  cooldown: "Cooldown",
-  cooling: "Cooling down ({time})",
-  lastError: "Last error",
-  requests: "Requests now",
-  credentials: { one: "{count} credential", other: "{count} credentials" },
-  active: { one: "{count} available", other: "{count} available" },
-  problems: { one: "{count} problem", other: "{count} problems" },
-  meta: "{credentials} · {active} · {problem}",
-  upload: "Upload file",
-  uploadJson: "Choose a JSON file (.json).",
-  uploadSize: "File exceeds {maxSize}. Choose a smaller file.",
-  maxSize: "1 MB",
-  uploaded: "Uploaded",
-  uploadedAs: "{file}: {uploaded} as {id} ({extension})",
-  ignored: "not supported yet, not imported: {names}",
+  failure: "{name}: {error}",
+  group: "{group} ({count})",
 });
 
-/** The largest auth file core imports (legacy.MaxAuthFile in next/internal/legacy/auth.go). */
-const maxAuthFile = 1 << 20;
-const REFRESH_MS = 5_000;
+/** How often the list is read again while the page shows. */
+export const ACCOUNTS_POLL_MS = 10_000;
 
-export interface AccountFilters {
-  search?: string;
-  extension?: string;
-  status?: string;
-  source?: string;
-  sort?: string;
+const unreachable = (error: unknown): Reply<never> => ({
+  status: 0,
+  error: { code: "unreachable", message: error instanceof Error ? error.message : String(error) },
+});
+
+/** What a read comes to: the data when it worked, else the failure over the data read before. */
+function settleRead<T>(prev: Read<T>, r: Reply<T>, at: number): Read<T> {
+  const error = problem(r);
+  if (error === undefined) return { phase: "ready", data: r.body, at };
+  return { phase: "failed", data: prev.data, error, status: r.status, at: prev.at };
 }
 
-function coolingUntil(a: Account): number {
-  return Math.max(
-    Date.parse(a.cooldown_until ?? "") || 0,
-    ...(a.cooldowns ?? []).map((c) => Date.parse(c.until) || 0),
-  );
-}
-
-export function hasProblem(a: Account, now = Date.now(), running?: ReadonlySet<string>): boolean {
-  return (
-    providerMissing(a, running) ||
-    a.state === "reauth_required" ||
-    a.check?.state === "failed" ||
-    !!a.last_error ||
-    coolingUntil(a) > now ||
-    !!leftOut(a)
-  );
-}
-
-/** Case insensitive search: * matches any text; other characters are literal. */
-export function filterAccounts(
-  accounts: Account[],
-  filters: AccountFilters,
-  now = Date.now(),
-  running?: ReadonlySet<string>,
-): Account[] {
-  const terms = filters.search?.trim().toLowerCase().split("*").filter(Boolean) ?? [];
-  const matches = (text: string) => {
-    const value = text.toLowerCase();
-    let offset = 0;
-    for (const term of terms) {
-      const index = value.indexOf(term, offset);
-      if (index < 0) return false;
-      offset = index + term.length;
-    }
-    return true;
-  };
-  const result = accounts.filter((a) => {
-    if (filters.extension && a.extension !== filters.extension) return false;
-    if (filters.source && a.source !== filters.source) return false;
-    if (filters.status === "enabled" && a.disabled) return false;
-    if (filters.status === "disabled" && !a.disabled) return false;
-    if (filters.status === "problem" && !hasProblem(a, now, running)) return false;
-    return (
-      terms.length === 0 ||
-      [
-        a.id,
-        a.label,
-        a.kind,
-        a.extension,
-        a.reason,
-        a.last_error?.code,
-        a.last_error?.message,
-        a.last_error?.status?.toString(),
-        a.last_error?.provider_code,
-        a.check?.error?.code,
-        a.check?.error?.message,
-        a.check?.error?.status?.toString(),
-        a.renewal_error?.message,
-      ].some((s) => s && matches(s))
-    );
-  });
-  if (filters.sort === "name") result.sort((a, b) => a.id.localeCompare(b.id));
-  if (filters.sort === "priority") result.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
-  return result;
-}
-
-export type BatchAction = "enable" | "disable" | "delete" | "cooldown";
+export type Reads<T> = { [K in keyof T]: Read<T[K]> };
 
 /**
- * The accounts of a selection a batch action is sent for. Core refuses to disable or delete an
- * account set in its config, so those two leave config accounts out. Enable reaches them: it is
- * what lifts a provider's ban, and core lifts one from a config account too.
+ * A page's reads taken together in rounds, one round at a time, every ms while active: the page
+ * draws once all of a round's replies are in, so the accounts never show before the status that
+ * says which providers run. run reads one round now (or joins the one under way); again reads one
+ * more after it, for a change that worked. A failed read keeps the data read before.
  */
-export function batchTargets(selected: Account[], action: BatchAction): Account[] {
-  if (action === "enable" || action === "cooldown") return selected;
-  return selected.filter((a) => a.source !== "config");
+export function useRound<T extends Record<string, unknown>>(
+  loads: { [K in keyof T]: () => Promise<Reply<T[K]>> },
+  ms: number,
+  active = true,
+) {
+  const { unauthorized } = useKit();
+  const [reads, setReads] = useState<Reads<T>>(
+    () => Object.fromEntries(Object.keys(loads).map((k) => [k, { phase: "loading" }])) as Reads<T>,
+  );
+  const loadsRef = useRef(loads);
+  loadsRef.current = loads;
+  const inflight = useRef<Promise<void>>(undefined);
+  const live = useRef(true);
+  useEffect(() => {
+    live.current = true;
+    return () => {
+      live.current = false;
+    };
+  }, []);
+  const run = useCallback((): Promise<void> => {
+    if (inflight.current) return inflight.current;
+    const p = (async () => {
+      const now = loadsRef.current;
+      const keys = Object.keys(now) as (keyof T & string)[];
+      const replies = await Promise.all(keys.map((k) => now[k]().catch(unreachable)));
+      if (!live.current) return;
+      if (replies.some((r) => r.status === 401)) return unauthorized();
+      const at = Date.now();
+      setReads((prev) => {
+        const next = { ...prev };
+        keys.forEach((k, i) => {
+          next[k] = settleRead(prev[k], replies[i] as Reply<T[typeof k]>, at);
+        });
+        return next;
+      });
+    })().finally(() => {
+      inflight.current = undefined;
+    });
+    inflight.current = p;
+    return p;
+  }, [unauthorized]);
+  const again = useCallback(async () => {
+    await inflight.current;
+    await run();
+  }, [run]);
+  useEffect(() => {
+    void run();
+  }, [run]);
+  usePoll(run, ms, active);
+  return { reads, run, again };
+}
+
+/**
+ * One notice for a round that did not all work, with one Try again: "Could not refresh" when a
+ * read failed over data read before (K3's stale notice), then what could not be read at all.
+ * Nothing when every read worked. ids mask core's error, shown in the title.
+ */
+export function RoundNotice(props: {
+  reads: Read<unknown>[];
+  unread: string[];
+  ids: readonly string[];
+  onRetry: () => unknown;
+}) {
+  const p = usePrivacy();
+  const stale = staleOf(props.reads);
+  if (!stale && props.unread.length === 0) return null;
+  const error = stale?.error ?? props.reads.find((r) => r.phase === "failed")?.error;
+  const words = [stale && staleWords(stale.at), ...props.unread].filter(Boolean).join(" ");
+  return (
+    <div class="stale-notice" data-part="round-notice" title={p.text(error, props.ids)}>
+      <Notice tone="warn">
+        {words} <Button onClick={props.onRetry}>{tryAgainWord()}</Button>
+      </Notice>
+    </div>
+  );
+}
+/** Above this many accounts the list offers Find an account. */
+const SEARCH_ABOVE = 6;
+
+/** The button that leads to Add an account. */
+function AddButton() {
+  return (
+    <a class="btn" data-part="button" data-variant="primary" href="#/add-account">
+      <Icon name="plus" />
+      {t("add")}
+    </a>
+  );
+}
+
+interface Report {
+  skipped: number;
+  errors: string[];
 }
 
 export function AccountsPage() {
-  const { api, host, unauthorized } = useKit();
-  const accounts = useLoad(api.accounts);
-  const status = useLoad(api.status);
-  const [selected, setSelected] = useState<string>();
-  const [filters, setFilters] = useState<AccountFilters>({});
-  const [page, setPage] = useState(1);
-  const [perPage, setPerPage] = useState(25);
-  const [checked, setChecked] = useState<Set<string>>(new Set());
-  const [busy, setBusy] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [report, setReport] = useState<{ success: number; skipped: number; errors: string[] }>();
-  const [uploads, setUploads] = useState<{ tone: Tone; text: string }[]>();
-  const fileInput = useRef<HTMLInputElement>(null);
-  const [now, setNow] = useState(Date.now());
-  const list = accounts.data?.accounts ?? [];
+  const { api, unauthorized } = useKit();
   const p = usePrivacy();
-  // Notices name accounts by ID, with their labels masked inside when privacy mode is on.
-  const labels = list.flatMap(accountIdentities);
-  const chosen = list.find((a) => a.id === selected);
-  const running = useMemo(() => runningExtensions(status.data), [status.data]);
-  const counts = useMemo(() => countAccounts(list, running), [list, running]);
-  const filtered = useMemo(() => filterAccounts(list, filters, now, running), [list, filters, now, running]);
-  const total = Math.max(1, Math.ceil(filtered.length / perPage));
-  const current = Math.min(page, total);
-  const pageItems = filtered.slice((current - 1) * perPage, current * perPage);
-  const selectedAccounts = list.filter((a) => checked.has(a.id));
-  const extensions = [...new Set(list.map((a) => a.extension).filter((e): e is string => !!e))].sort();
-
-  usePoll(
-    () => {
-      if (!accounts.loading) accounts.reload();
-    },
-    REFRESH_MS,
-    !busy,
+  const [selecting, setSelecting] = useState(false);
+  const [busy, setBusy] = useState(false);
+  // Paused while Select is on and during a batch, so rows do not move under the person's hand.
+  const { reads, run, again } = useRound(
+    { accounts: api.accounts, status: api.status, week: () => api.usage("since=7d") },
+    ACCOUNTS_POLL_MS,
+    !selecting && !busy,
   );
-  useEffect(() => {
-    const update = () => {
-      if (!document.hidden) setNow(Date.now());
-    };
-    const timer = setInterval(update, 1000);
-    document.addEventListener("visibilitychange", update);
-    return () => {
-      clearInterval(timer);
-      document.removeEventListener("visibilitychange", update);
-    };
-  }, []);
-  useEffect(() => {
-    if (accounts.data)
-      setChecked((old) => new Set([...old].filter((id) => accounts.data?.accounts.some((a) => a.id === id))));
-  }, [accounts.data]);
+  const { accounts, status, week } = reads;
+  const list = accounts.data?.accounts;
+  const naming = useNaming(list);
+  const running = useMemo(() => runningExtensions(status.data), [status.data]);
+  // A status never read: whether each provider runs is not known, so no account reads Serving.
+  const unchecked = status.phase === "failed" && status.data === undefined;
+  const [query, setQuery] = useState("");
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [asking, setAsking] = useState(false);
+  const [report, setReport] = useState<Report>();
 
-  const change = (key: keyof AccountFilters, value: string) => {
-    setFilters((f) => ({ ...f, [key]: value }));
-    setPage(1);
+  // A ticked account that is gone is no longer selected.
+  useEffect(() => {
+    if (list) setChecked((old) => new Set([...old].filter((id) => list.some((a) => a.id === id))));
+  }, [list]);
+
+  const now = Date.now();
+  const sections = useMemo(() => {
+    const all = groupAccounts(list ?? [], running, now);
+    const shown = (rows: typeof all.needs) =>
+      rows.filter((x) => matchesSearch(x.account, x.c, query)).map((x) => x.account);
+    // The accounts whose condition waits on a status never read: one group of their own, by name,
+    // in the place of Waiting and Serving.
+    const waits = (x: (typeof all.needs)[number]) => unchecked && conditionUnchecked(x.account, x.c, running);
+    const notChecked = shown(
+      [...all.waiting, ...all.serving]
+        .filter(waits)
+        .sort(
+          (x, y) =>
+            accountName(x.account).localeCompare(accountName(y.account)) ||
+            x.account.id.localeCompare(y.account.id),
+        ),
+    );
+    const out: { key: Group | "unchecked"; rows: Account[] }[] = [];
+    for (const g of GROUPS) {
+      if (g === "waiting" && notChecked.length) out.push({ key: "unchecked", rows: notChecked });
+      const rows = shown(all[g].filter((x) => !waits(x)));
+      if (rows.length) out.push({ key: g, rows });
+    }
+    return out;
+    // now moves on every render; the groups follow the list, the providers and the search.
+  }, [list, running, query, unchecked]);
+  // The accounts in the order the page shows them: the first ones get their limits read.
+  const ordered = useMemo(() => sections.flatMap((s) => s.rows), [sections]);
+  const windows = useWindows(list ? ordered : undefined, running);
+  // The week's requests once read: an account with none this week reads 0.
+  const requests = new Map<string, number>();
+  for (const g of week.data?.accounts ?? []) requests.set(g.name, g.total_requests);
+  const weekCount = (id: string) => (week.data ? (requests.get(id) ?? 0) : undefined);
+  const selected = (list ?? []).filter((a) => checked.has(a.id));
+  // Selected accounts the search hides: the bar and the question say how many, and a batch acts on
+  // every selected account, as they say.
+  const shownIds = new Set(ordered.map((a) => a.id));
+  const hidden = selected.filter((a) => !shownIds.has(a.id)).length;
+
+  const settle = (r: Outcome): string | undefined => {
+    if (typeof r === "string") return r || undefined;
+    if (!r) return undefined;
+    if (r.status === 401) {
+      unauthorized();
+      return undefined;
+    }
+    const why = problem(r);
+    if (why === undefined) void again();
+    return why;
   };
-  const selectItems = (items: Account[]) => setChecked((old) => new Set([...old, ...items.map((a) => a.id)]));
+  const turnOn = async (id: string) => settle(await api.setDisabled(id, false));
+  const clearCooldown = async (id: string) => settle(await api.resetCooldown(id));
+
+  // One account after another; a failure is one line and the rest still run.
   const runBatch = async (action: BatchAction) => {
-    setConfirmDelete(false);
+    setAsking(false);
     setBusy(true);
     setReport(undefined);
-    const targets = batchTargets(selectedAccounts, action);
-    const skipped = selectedAccounts.length - targets.length;
+    const targets = batchTargets(selected, action);
     const errors: string[] = [];
-    const succeeded = new Set<string>();
-    let cursor = 0;
-    await Promise.all(
-      Array.from({ length: Math.min(3, targets.length) }, async () => {
-        while (cursor < targets.length) {
-          const a = targets[cursor++];
-          if (!a) break;
-          try {
-            const reply =
-              action === "delete"
-                ? await api.removeAccount(a.id)
-                : action === "cooldown"
-                  ? await host.call("POST", `/accounts/${one(a.id)}/cooldown/reset`)
-                  : await api.setDisabled(a.id, action === "disable");
-            if (reply.status === 401) unauthorized();
-            const error = problem(reply);
-            if (error) errors.push(t("failure", { id: a.id, error }));
-            else succeeded.add(a.id);
-          } catch (error) {
-            errors.push(t("failure", { id: a.id, error: String(error) }));
-          }
-        }
-      }),
-    );
-    if (action === "delete") setChecked((old) => new Set([...old].filter((id) => !succeeded.has(id))));
-    setReport({ success: succeeded.size, skipped, errors });
-    setBusy(false);
-    accounts.reload();
-  };
-  // Each file is imported on its own, in turn, and has its own result.
-  const upload = async (files: File[]) => {
-    setBusy(true);
-    setUploads(undefined);
-    const results: { tone: Tone; text: string }[] = [];
-    const failed = (file: File, error: string) =>
-      results.push({ tone: "danger", text: t("failure", { id: file.name, error }) });
-    for (const file of files) {
-      if (!file.name.toLowerCase().endsWith(".json")) {
-        failed(file, t("uploadJson"));
-        continue;
-      }
-      if (file.size > maxAuthFile) {
-        failed(file, t("uploadSize", { maxSize: t("maxSize") }));
-        continue;
-      }
+    const removed = new Set<string>();
+    for (const a of targets) {
+      let why: string | undefined;
       try {
-        const reply = await api.importAuthFile(file.name, await file.text());
-        if (reply.status === 401) unauthorized();
-        const error = problem(reply);
-        if (error || !reply.body) {
-          failed(file, error ?? "");
-          continue;
+        const r =
+          action === "remove"
+            ? await api.removeAccount(a.id)
+            : action === "clearCooldown"
+              ? await api.resetCooldown(a.id)
+              : await api.setDisabled(a.id, action === "turnOff");
+        if (r.status === 401) {
+          unauthorized();
+          return;
         }
-        for (const a of reply.body.imported) {
-          const text = t("uploadedAs", {
-            file: file.name,
-            uploaded: t("uploaded"),
-            id: a.id,
-            extension: a.extension,
-          });
-          const ignored = a.ignored?.length ? ` · ${t("ignored", { names: a.ignored.join(", ") })}` : "";
-          results.push({ tone: "ok", text: text + ignored });
-        }
-        for (const reason of reply.body.skipped) failed(file, reason);
+        why = problem(r);
       } catch (error) {
-        failed(file, String(error));
+        why = String(error);
       }
+      if (why !== undefined)
+        errors.push(p.text(t("failure", { name: naming.of(a), error: why }), accountIdentities(a)));
+      else if (action === "remove") removed.add(a.id);
     }
-    setUploads(results);
+    setChecked((old) => new Set([...old].filter((id) => !removed.has(id))));
+    setReport({ skipped: selected.length - targets.length, errors });
     setBusy(false);
-    accounts.reload();
+    void again();
   };
-  const toolbarActions = [
-    {
-      id: "refresh",
-      label: t("refresh"),
-      run: () => {
-        accounts.reload();
-        status.reload();
-      },
-    },
-    { id: "upload", label: t("upload"), run: () => fileInput.current?.click() },
-  ];
 
+  const stopSelecting = () => {
+    setSelecting(false);
+    setChecked(new Set());
+    setReport(undefined);
+  };
+  const tick = (id: string, on: boolean) =>
+    setChecked((old) => {
+      const next = new Set(old);
+      if (on) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+
+  const head = <PageHead title={t("title")} actions={<AddButton />} />;
+  if (accounts.phase === "loading") {
+    return (
+      <>
+        {head}
+        <StatePane kind="loading" title={t("loading")} rows={6} />
+      </>
+    );
+  }
+  if (!list || (accounts.phase === "failed" && list.length === 0)) {
+    // Whether the list is still empty is not known after a failure.
+    return (
+      <>
+        {head}
+        <StatePane
+          kind="failed"
+          title={t("failed")}
+          details={accounts.error}
+          primary={{ label: tryAgainWord(), onClick: run }}
+        />
+      </>
+    );
+  }
+  if (list.length === 0) {
+    return (
+      <>
+        {head}
+        <StatePane kind="empty" title={t("empty")} primary={{ label: t("add"), href: "#/add-account" }}>
+          <p>{t("emptyText")}</p>
+        </StatePane>
+      </>
+    );
+  }
+
+  const one = selected.length === 1 ? selected[0] : undefined;
+  const unread = [
+    unchecked ? t("statusUnread") : "",
+    week.phase === "failed" && week.data === undefined ? t("weekUnread") : "",
+  ].filter(Boolean);
   return (
     <>
-      <PageHead
-        title={t("title")}
-        actions={
-          <a class="btn" data-part="button" data-variant="primary" href="#/add-account">
-            {t("addAccount")}
-          </a>
-        }
+      {head}
+      <RoundNotice
+        reads={[accounts, status, week]}
+        unread={unread}
+        ids={list.flatMap(accountIdentities)}
+        onRetry={run}
       />
-      <p class="muted accounts-meta" data-part="account-meta">
-        {accounts.data
-          ? t("meta", {
-              credentials: t("credentials", { count: list.length }),
-              active: t("active", { count: counts.active }),
-              problem: t("problems", { count: counts.unavailable }),
-            })
-          : accounts.phase === "loading" && t("loading")}
-      </p>
-      {accounts.error && <Notice tone="danger">{p.text(accounts.error, labels)}</Notice>}
-      <Tabs
-        label={t("providers")}
-        active={filters.extension || "all"}
-        onChange={(id) => change("extension", id === "all" ? "" : id)}
-        tabs={[
-          {
-            id: "all",
-            label: accounts.data ? t("tabCount", { name: t("all"), count: list.length }) : t("all"),
-          },
-          ...extensions.map((id) => ({
-            id,
-            label: t("tabCount", { name: id, count: list.filter((a) => a.extension === id).length }),
-          })),
-        ]}
-      >
-        <div class="accounts-toolbar" data-part="toolbar">
-          <label class="field accounts-search" data-part="field">
-            <span class="label">{t("search")}</span>
-            <input
-              data-slot="input"
-              type="text"
-              placeholder={t("searchPlaceholder")}
-              value={filters.search ?? ""}
-              onInput={(e) => change("search", e.currentTarget.value)}
-            />
-          </label>
-          <label class="field" data-part="field">
-            <span class="label">{t("status")}</span>
-            <select
-              data-slot="select-trigger"
-              aria-label={t("status")}
-              value={filters.status ?? "all"}
-              onChange={(e) => change("status", e.currentTarget.value)}
-            >
-              <option value="all">{t("all")}</option>
-              <option value="enabled">{t("enabled")}</option>
-              <option value="disabled">{t("disabled")}</option>
-              <option value="problem">{t("problem")}</option>
-            </select>
-          </label>
-          <label class="field" data-part="field">
-            <span class="label">{t("source")}</span>
-            <select
-              data-slot="select-trigger"
-              aria-label={t("source")}
-              value={filters.source ?? ""}
-              onChange={(e) => change("source", e.currentTarget.value)}
-            >
-              <option value="">{t("all")}</option>
-              <option value="login">{t("fromLogin")}</option>
-              <option value="config">{t("fromConfig")}</option>
-            </select>
-          </label>
-          <label class="field" data-part="field">
-            <span class="label">{t("sort")}</span>
-            <select
-              data-slot="select-trigger"
-              aria-label={t("sort")}
-              value={filters.sort ?? "default"}
-              onChange={(e) => change("sort", e.currentTarget.value)}
-            >
-              <option value="default">{t("default")}</option>
-              <option value="name">{t("name")}</option>
-              <option value="priority">{t("priority")}</option>
-            </select>
-          </label>
-          {toolbarActions.map((action) => (
-            <Button key={action.id} onClick={action.run} disabled={busy || accounts.phase === "loading"}>
-              {action.label}
-            </Button>
-          ))}
-          <input
-            ref={fileInput}
-            type="file"
-            accept=".json,application/json"
-            multiple
-            hidden
-            onChange={(e) => {
-              const files = [...(e.currentTarget.files ?? [])];
-              e.currentTarget.value = "";
-              if (files.length) void upload(files);
-            }}
-          />
+      <div class="accounts-page" data-selecting={selecting ? "" : undefined}>
+        <div class="accounts-top">
+          <p class="accounts-counts muted">
+            {/* A long line wraps between its counts, never inside one. */}
+            {countsLine(list, running, now, unchecked)
+              .split(" · ")
+              .map((part, i, all) => (
+                <span key={part}>
+                  <span class="accounts-count">{i < all.length - 1 ? `${part} ·` : part}</span>
+                  {i < all.length - 1 && " "}
+                </span>
+              ))}
+          </p>
+          <div class="accounts-tools">
+            {(list.length > SEARCH_ABOVE || query !== "") && (
+              <label class="accounts-find">
+                <Icon name="search" />
+                <span class="sr-only">{t("find")}</span>
+                <input
+                  data-slot="input"
+                  type="search"
+                  placeholder={t("find")}
+                  value={query}
+                  onInput={(e) => setQuery(e.currentTarget.value)}
+                />
+              </label>
+            )}
+            {list.length >= 2 && !selecting && (
+              <Button onClick={() => setSelecting(true)}>{t("select")}</Button>
+            )}
+          </div>
         </div>
-        <fieldset class="accounts-batch" data-part="batch" aria-label={t("batch")}>
-          <span>{t("selected", { count: selectedAccounts.length })}</span>
-          <Button disabled={busy || !pageItems.length} onClick={() => selectItems(pageItems)}>
-            {t("selectPage")}
-          </Button>
-          <Button disabled={busy || !filtered.length} onClick={() => selectItems(filtered)}>
-            {t("selectFiltered")}
-          </Button>
-          <Button disabled={busy || !selectedAccounts.length} onClick={() => setChecked(new Set())}>
-            {t("deselect")}
-          </Button>
-          {selectedAccounts.length > 0 && (
-            <>
-              <Button disabled={busy} onClick={() => runBatch("enable")}>
-                {t("enable")}
-              </Button>
-              <Button disabled={busy} onClick={() => runBatch("disable")}>
-                {t("disable")}
-              </Button>
-              <Button disabled={busy} onClick={() => runBatch("cooldown")}>
-                {t("clearCooldown")}
-              </Button>
-              <Button variant="danger" disabled={busy} onClick={() => setConfirmDelete(true)}>
-                {t("delete")}
-              </Button>
-            </>
-          )}
-        </fieldset>
-        {report && (
-          <>
-            <Notice tone="ok">
-              {t("completed", { count: report.success })}
-              {report.skipped > 0 && <> · {t("skipped", { count: report.skipped })}</>}
-            </Notice>
+        {selecting && (
+          <div class="accounts-batch" data-part="batch" role="toolbar" aria-label={t("actions")}>
+            <span class="accounts-batch-count" aria-live="polite">
+              {hidden > 0
+                ? t("selectedHidden", { count: selected.length, hidden })
+                : t("selected", { count: selected.length })}
+            </span>
+            <Button disabled={busy || !selected.length} onClick={() => runBatch("turnOn")}>
+              {t("turnOn")}
+            </Button>
+            <Button disabled={busy || !selected.length} onClick={() => runBatch("turnOff")}>
+              {t("turnOff")}
+            </Button>
+            <Button disabled={busy || !selected.length} onClick={() => runBatch("clearCooldown")}>
+              {t("clearCooldown")}
+            </Button>
+            <Button variant="danger" disabled={busy || !selected.length} onClick={() => setAsking(true)}>
+              {t("remove")}
+            </Button>
+            <Button disabled={busy} onClick={stopSelecting}>
+              {t("done")}
+            </Button>
+          </div>
+        )}
+        {report && (report.skipped > 0 || report.errors.length > 0) && (
+          <div class="accounts-report">
+            {report.skipped > 0 && <Notice tone="muted">{t("skipped", { count: report.skipped })}</Notice>}
             {report.errors.map((error) => (
               <Notice key={error} tone="danger">
-                {p.text(error, labels)}
-              </Notice>
-            ))}
-          </>
-        )}
-        {uploads && (
-          <div class="accounts-upload" data-part="upload-results">
-            {uploads.map((u, i) => (
-              <Notice key={i} tone={u.tone}>
-                {p.text(u.text, labels)}
+                {error}
               </Notice>
             ))}
           </div>
         )}
-        <MasterDetail
-          list={
-            accounts.error && list.length === 0 ? null : accounts.data && list.length === 0 ? (
-              <Empty>{rich(t("empty"), { page: <a href="#/add-account">{t("addAccount")}</a> })}</Empty>
-            ) : accounts.data && filtered.length === 0 ? (
-              <Empty
-                onClear={() => {
-                  setFilters({});
-                  setPage(1);
-                }}
-              >
-                {t("noResults")}
-              </Empty>
-            ) : (
-              <List<Account>
-                label={t("list")}
-                items={pageItems}
-                id={(a) => a.id}
-                selected={selected}
-                onSelect={setSelected}
-                columns={[
-                  { label: t("account"), value: (a) => p.text(a.id, accountIdentities(a)), mono: true },
-                  {
-                    label: t("selectColumn"),
-                    value: (a) => (
-                      // biome-ignore lint/a11y/useKeyWithClickEvents: only keeps a click beside the box from opening the row
-                      <label class="hit" onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="checkbox"
-                          data-part="select"
-                          aria-label={t("select", { id: p.text(a.id, accountIdentities(a)) })}
-                          checked={checked.has(a.id)}
-                          disabled={busy}
-                          onClick={(e) => e.stopPropagation()}
-                          onChange={(e) => {
-                            const on = e.currentTarget.checked;
-                            setChecked((old) => {
-                              const next = new Set(old);
-                              if (on) next.add(a.id);
-                              else next.delete(a.id);
-                              return next;
-                            });
-                          }}
-                        />
-                      </label>
-                    ),
-                  },
-                  { label: t("extension"), value: (a) => a.extension ?? "", mono: true },
-                  { label: t("state"), value: (a) => <AccountState a={a} running={running} /> },
-                  { label: t("label"), value: (a) => p.id(a.label) ?? "" },
-                  { label: t("credential"), value: (a) => a.kind ?? "" },
-                  {
-                    label: t("from"),
-                    value: (a) => (a.source === "config" ? t("fromConfig") : t("fromLogin")),
-                  },
-                  {
-                    label: t("check"),
-                    value: (a) => (
-                      <span title={p.text(a.check?.error?.message ?? a.check?.detail, accountIdentities(a))}>
-                        {a.check?.state === "ok"
-                          ? t("ok")
-                          : a.check?.state === "checking"
-                            ? t("checking")
-                            : a.check?.state === "failed"
-                              ? t("failed")
-                              : t("notChecked")}
-                      </span>
-                    ),
-                  },
-                  {
-                    label: t("cooldown"),
-                    value: (a) =>
-                      coolingUntil(a) > now
-                        ? t("cooling", { time: shortDuration((coolingUntil(a) - now) / 1000) })
-                        : "",
-                  },
-                  {
-                    label: t("lastError"),
-                    value: (a) => p.text(a.last_error?.message, accountIdentities(a)) ?? "",
-                  },
-                  { label: t("requests"), value: (a) => a.active_requests ?? 0, numeric: true },
-                ]}
-              />
-            )
-          }
-          detail={
-            chosen && (
-              <AccountDetail
-                account={chosen}
-                running={running}
-                onClose={() => setSelected(undefined)}
-                onChanged={accounts.reload}
-              />
-            )
-          }
-        />
-        <div class="accounts-pager" data-part="pager">
-          <label class="field" data-part="field">
-            <span class="label">{t("perPage")}</span>
-            <select
-              data-slot="select-trigger"
-              aria-label={t("perPage")}
-              value={perPage}
-              onChange={(e) => {
-                setPerPage(Number(e.currentTarget.value));
-                setPage(1);
-              }}
-            >
-              {[10, 25, 50, 100].map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-          </label>
-          <Button disabled={current <= 1} onClick={() => setPage(current - 1)}>
-            {t("previous")}
-          </Button>
-          {accounts.data && <span>{t("page", { current, total, count: filtered.length })}</span>}
-          <Button disabled={current >= total} onClick={() => setPage(current + 1)}>
-            {t("next")}
-          </Button>
-        </div>
-      </Tabs>
-      {confirmDelete && (
-        <ConfigDialog title={t("delete")} close={() => setConfirmDelete(false)}>
-          <p>{t("confirmDelete", { count: selectedAccounts.length })}</p>
+        {sections.length === 0 ? (
+          <Empty onClear={() => setQuery("")} clearLabel={t("clearSearch")}>
+            {t("noMatch", { search: query })}
+          </Empty>
+        ) : (
+          sections.map(({ key, rows }) => {
+            const word = key === "unchecked" ? uncheckedWord() : groupWord(key);
+            return (
+              <section key={key} class="accounts-group" data-group={key} aria-label={word}>
+                <h2 class="accounts-group-head">
+                  {word} <span class="muted">{rows.length}</span>
+                </h2>
+                <ul class="accounts-rows">
+                  {rows.map((a) => (
+                    <li key={a.id} class="accounts-item">
+                      {selecting && (
+                        <label class="accounts-pick hit">
+                          <input
+                            type="checkbox"
+                            data-part="select"
+                            aria-label={t("selectOne", { name: naming.of(a) })}
+                            checked={checked.has(a.id)}
+                            disabled={busy}
+                            onChange={(e) => tick(a.id, e.currentTarget.checked)}
+                          />
+                        </label>
+                      )}
+                      <AccountRow
+                        account={a}
+                        windows={windows.get(a.id)}
+                        wide
+                        requests={weekCount(a.id)}
+                        running={running}
+                        unchecked={key === "unchecked"}
+                        onTurnOn={turnOn}
+                        onClearCooldown={clearCooldown}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            );
+          })
+        )}
+      </div>
+      {asking && (
+        <ConfigDialog
+          title={one ? t("removeOne", { name: naming.of(one) }) : t("removeMany", { count: selected.length })}
+          close={() => setAsking(false)}
+        >
+          <p>{t("removeText")}</p>
+          {hidden > 0 && <p>{one ? t("hiddenOne") : t("hiddenMany", { count: hidden })}</p>}
           <div class="actions">
-            <Button variant="danger" onClick={() => runBatch("delete")}>
-              {t("delete")}
+            <Button variant="danger" onClick={() => runBatch("remove")}>
+              {t("removeNow")}
             </Button>
-            <Button onClick={() => setConfirmDelete(false)}>{t("cancel")}</Button>
+            <Button onClick={() => setAsking(false)}>{t("cancel")}</Button>
           </div>
         </ConfigDialog>
       )}
@@ -641,6 +497,9 @@ export const accountsPage = (): PageDef => ({
   dest: "accounts",
   kind: "tab",
   title: t("title"),
+  label: t("tab"),
   tip: t("tip"),
+  // The Quota page's old address: limits are on every account's row and page now.
+  addresses: ["quota"],
   render: () => <AccountsPage />,
 });

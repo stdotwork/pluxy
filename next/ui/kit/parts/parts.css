@@ -153,7 +153,6 @@
     flex: 0 1 auto;
     min-width: 0;
     min-height: 24px;
-    line-height: 24px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -442,6 +441,26 @@
 
   .setting-error {
     padding: calc(var(--s) * 2) calc(var(--s) * 2) 0;
+  }
+
+  /* The row names its control, so the control's own label is only for assistive technology. */
+  .setting-control .choices > .label,
+  .setting-control .switch .label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  /* With its label hidden, the switch is its track alone: the input under it takes the press. */
+  .setting-control .switch {
+    gap: 0;
+  }
+
+  .setting-control .switch .track {
+    pointer-events: none;
   }
 
   @container (max-width: 40em) {

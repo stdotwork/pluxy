@@ -11,9 +11,9 @@ test("with no account, Accounts names the page that adds one", async ({ page }) 
   await signIn(page, core);
   await page.goto(`${core.base}/panel/#/accounts`);
   await expect(page.getByRole("heading", { level: 1, name: "Accounts" })).toBeVisible();
-  const empty = page.locator("main .empty");
+  const empty = page.locator('main [data-part="state-pane"]');
   await expect(empty).toContainText("No accounts yet.");
-  await empty.getByRole("link", { name: "Add Account", exact: true }).click();
+  await empty.getByRole("link", { name: "Add an account", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Add Account" })).toBeVisible();
 });
 

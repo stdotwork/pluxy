@@ -303,13 +303,20 @@ export function confirmActionLabel(label: string): string {
 /**
  * A button that asks once more before it acts. question, when given, is shown beside the
  * answers while it asks ("Delete the key Claude Code? Tools using it stop working."), and
- * describes both, so a screen reader says it with the answer in focus.
+ * describes both, so a screen reader says it with the answer in focus. The button that asks is
+ * danger unless variant says otherwise (signing out is not a loss, so it asks quietly); the
+ * answer that goes ahead stays danger. confirmLabel is that answer's text when "Yes, {action}"
+ * does not say enough (it names what is removed), and label the asking button's accessible name
+ * when several buttons on a page read the same.
  */
 export function ConfirmButton(props: {
   /** A promise it returns keeps the button busy until it ends. */
   onConfirm: () => unknown;
   disabled?: boolean;
   question?: string;
+  variant?: Variant;
+  confirmLabel?: string;
+  label?: string;
   children: string;
 }) {
   const [asking, setAsking] = useState(false);
@@ -335,9 +342,10 @@ export function ConfirmButton(props: {
   if (!asking) {
     return (
       <Button
-        variant="danger"
+        variant={props.variant ?? "danger"}
         disabled={props.disabled}
         busy={working}
+        label={props.label}
         buttonRef={ask}
         onClick={() => {
           moved.current = true;
@@ -372,7 +380,7 @@ export function ConfirmButton(props: {
           result.then(ended, ended);
         }}
       >
-        {t("confirm", { action: confirmActionLabel(props.children) })}
+        {props.confirmLabel ?? t("confirm", { action: confirmActionLabel(props.children) })}
       </Button>
       <Button buttonRef={cancel} describedBy={describedBy} onClick={() => setAsking(false)}>
         {t("cancel")}

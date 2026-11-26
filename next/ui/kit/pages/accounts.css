@@ -1,48 +1,313 @@
+/* All accounts (accounts.tsx) and one account's page (account.tsx). The rows are the shared
+   AccountRow and RequestRow (parts.css); this file lays out what is around them. */
 @layer kit {
-  .accounts-meta {
-    margin-top: calc(var(--s) * -2);
-  }
-  .accounts-toolbar,
-  .accounts-batch,
-  .accounts-pager {
+  /* ---- All accounts ------------------------------------------------------------------------- */
+
+  .accounts-top {
     display: flex;
     flex-wrap: wrap;
-    align-items: end;
-    gap: calc(var(--s) * 2);
-    margin-bottom: calc(var(--s) * 3);
+    align-items: center;
+    justify-content: space-between;
+    gap: calc(var(--s) * 2) calc(var(--s) * 4);
+    margin-bottom: calc(var(--s) * 4);
   }
-  .accounts-toolbar .accounts-search {
-    flex: 1 1 100%;
+
+  .accounts-counts {
+    flex: 1 1 20em;
+    margin: 0;
     min-width: 0;
   }
-  .accounts-toolbar > .field {
-    flex: 1 1 auto;
+
+  .accounts-count {
+    white-space: nowrap;
   }
+
+  .accounts-tools {
+    flex: 0 0 auto;
+    max-width: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+  }
+
+  .accounts-find {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    width: min(18rem, 100%);
+  }
+
+  .accounts-find .icon {
+    position: absolute;
+    inset-inline-start: calc(var(--s) * 2.5);
+    color: var(--px-color-text-muted);
+    pointer-events: none;
+  }
+
+  .accounts-find input {
+    width: 100%;
+    padding-inline-start: calc(var(--s) * 8);
+  }
+
   .accounts-batch {
+    display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    padding: calc(var(--s) * 2);
-    border: var(--px-shape-border) solid var(--px-color-border);
-    border-radius: var(--px-shape-radius);
-    background: var(--px-color-surface);
+    gap: calc(var(--s) * 2);
+    margin-bottom: calc(var(--s) * 3);
+    padding-block: calc(var(--s) * 2);
+    border-block: var(--px-shape-border) solid var(--px-color-border);
   }
-  .accounts-pager {
-    align-items: center;
-    justify-content: end;
-    margin-top: calc(var(--s) * 3);
+
+  .accounts-batch-count {
+    margin-inline-end: auto;
+    font-weight: var(--px-font-weight-strong);
   }
-  .accounts-pager > .field {
+
+  .accounts-report {
+    display: grid;
+    gap: var(--s);
+    margin-bottom: calc(var(--s) * 3);
+  }
+
+  .accounts-group {
+    margin-bottom: calc(var(--s) * 5);
+  }
+
+  .accounts-group-head {
+    margin: 0;
+    padding: 0 calc(var(--s) * 2) var(--s);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+    font-size: var(--px-font-size);
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .accounts-group-head .muted {
+    font-weight: normal;
+  }
+
+  .accounts-rows {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .accounts-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* With Select on, a checkbox leads each row. */
+  [data-selecting] .accounts-item {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .accounts-pick {
     display: flex;
     align-items: center;
-    margin-right: auto;
+    padding-inline: calc(var(--s) * 2) 0;
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
   }
-  .accounts-pager select {
-    width: auto;
-  }
+
   [data-part="select"] {
+    width: calc(var(--s) * 4);
+    height: calc(var(--s) * 4);
     accent-color: var(--px-color-accent);
   }
+
   [data-part="select"]:focus-visible {
     outline: 2px solid var(--px-color-focus);
     outline-offset: 2px;
+  }
+
+  /* ---- One account's page ------------------------------------------------------------------- */
+
+  .account-page {
+    display: grid;
+    gap: calc(var(--s) * 6);
+    min-width: 0;
+  }
+
+  .account-opening {
+    display: grid;
+    gap: calc(var(--s) * 2);
+    justify-items: start;
+  }
+
+  .account-opening p {
+    margin: 0;
+  }
+
+  .account-dateline {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--s);
+    font-size: var(--px-font-size-small);
+  }
+
+  .account-state {
+    display: flex;
+    align-items: flex-start;
+    gap: calc(var(--s) * 2);
+    font-size: var(--px-font-size-title);
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+
+  .account-state .group-mark {
+    padding-top: 0.2em;
+  }
+
+  .account-said {
+    padding-inline-start: calc(var(--s) * 2);
+    border-inline-start: var(--px-shape-border) solid var(--px-color-border);
+    overflow-wrap: anywhere;
+  }
+
+  .account-details pre {
+    margin: var(--s) 0 0;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .account-columns {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(22rem, 100%), 1fr));
+    gap: calc(var(--s) * 6) calc(var(--s) * 8);
+    align-items: start;
+  }
+
+  .account-column {
+    display: grid;
+    gap: calc(var(--s) * 6);
+    min-width: 0;
+  }
+
+  .account-section {
+    display: grid;
+    gap: calc(var(--s) * 2);
+    min-width: 0;
+  }
+
+  .account-section h2 {
+    margin: 0;
+    font-size: var(--px-font-size);
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .account-section p {
+    margin: 0;
+  }
+
+  .account-section-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: calc(var(--s) * 2);
+  }
+
+  .account-read {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+    font-size: var(--px-font-size-small);
+  }
+
+  .account-onward {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    font-size: var(--px-font-size-small);
+  }
+
+  .account-limits {
+    display: grid;
+    gap: calc(var(--s) * 2);
+  }
+
+  .account-limits .limit {
+    display: grid;
+    grid-template-columns: minmax(7em, 1fr) minmax(4em, 2fr) auto minmax(4ch, auto);
+    gap: calc(var(--s) * 3);
+    font-size: var(--px-font-size-small);
+    white-space: nowrap;
+  }
+
+  .account-limits .limit .meter[data-mode="left"] {
+    width: 100%;
+  }
+
+  .account-limits .limit-left {
+    text-align: end;
+  }
+
+  .account-bars {
+    display: grid;
+    gap: calc(var(--s) * 2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .account-bar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: calc(var(--s) * 0.5) calc(var(--s) * 2);
+    font-size: var(--px-font-size-small);
+  }
+
+  .account-bar-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .account-bar-fill {
+    grid-column: 1 / -1;
+    height: calc(var(--s) * 0.75);
+    border-radius: var(--px-shape-radius);
+    background: var(--px-color-text);
+  }
+
+  .account-requests {
+    border-top: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .account-methods {
+    display: flex;
+    flex-wrap: wrap;
+    gap: calc(var(--s) * 2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .account-change .actions {
+    flex-wrap: wrap;
+  }
+
+  .account-more {
+    display: grid;
+    gap: calc(var(--s) * 4);
+  }
+
+  .account-more .account-tools {
+    margin-top: calc(var(--s) * 4);
+  }
+
+  .account-more h3 {
+    margin: 0;
+    font-size: var(--px-font-size);
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .account-more > summary {
+    justify-self: start;
+    min-height: var(--px-size-control);
+    padding-block: var(--s);
+    cursor: pointer;
+    font-weight: var(--px-font-weight-strong);
   }
 }

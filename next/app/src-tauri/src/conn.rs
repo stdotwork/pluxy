@@ -522,8 +522,8 @@ impl Caller {
     }
 
     /// A caller of the core at base with key, for unit tests against a local listener
-    /// (`core_aliases_tests.rs`, which is Linux only like `core_aliases.rs`).
-    #[cfg(all(test, target_os = "linux"))]
+    /// (`core_aliases_tests.rs`, and `client_keys.rs`'s tests through it).
+    #[cfg(all(test, native_stack))]
     pub(crate) fn for_test(base: &str, key: &str) -> Caller {
         Caller {
             client: Some(Client::new(base, None)),

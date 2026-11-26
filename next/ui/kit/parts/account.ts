@@ -37,6 +37,8 @@ const t = strings("parts.account", {
   seeWhatToDo: "See what to do",
   openExtensions: "Open Extensions",
   noProvider: "No provider",
+  unchecked: "Not checked",
+  uncheckedWhy: "pluxy could not check whether {provider} is running.",
   at: "at {time}",
   tomorrowAt: "tomorrow at {time}",
   dayAt: "{day} at {time}",
@@ -121,7 +123,14 @@ export function accountCondition(a: Account, running?: ReadonlySet<string>, now 
   if (providerMissing(a, running)) return { kind: "no_provider", group: "needs", resting: [] };
   const blocks = a.cooldowns ?? [];
   const block = lastBlock(blocks, now);
-  if (out === "exhausted" || block?.c.kind === "quota") {
+  // Core's health reads exhausted for a quota block on one model too. A core that lists its
+  // cooldowns says what is blocked: with no block over the whole account, only those models wait.
+  const oneModel =
+    out === "exhausted" &&
+    a.cooldowns !== undefined &&
+    !block &&
+    blocks.some((c) => c.scope === "model" && (ms(c.until) ?? 0) > now);
+  if ((out === "exhausted" && !oneModel) || block?.c.kind === "quota") {
     return { kind: "exhausted", group: "waiting", until: ms(a.health?.until) ?? block?.until, resting: [] };
   }
   const resting = blocks
@@ -161,6 +170,19 @@ export const conditionState = (c: Condition) => STATE[c.kind];
 
 /** The condition in a word or two, the same as stateText(…, "account") says it. */
 export const conditionWord = (c: Condition) => stateText(conditionState(c), "account");
+
+/**
+ * Whether an account's condition waits on core's status: one that is not turned off and needs
+ * nothing only the person can fix serves or waits only if its provider runs (providerMissing).
+ * While the running extensions are not known (running undefined), such a condition is not
+ * settled: a page that could not read the status says so instead of "Serving".
+ */
+export const conditionUnchecked = (a: Account, c: Condition, running?: ReadonlySet<string>) =>
+  running === undefined && !!a.extension && (c.group === "serving" || c.group === "waiting");
+
+/** The word for a condition not checked yet, and why, for a mark and a reason. */
+export const uncheckedWord = () => t("unchecked");
+export const uncheckedReason = (a: Account) => t("uncheckedWhy", { provider: providerName(a.extension) });
 
 /** A row that says why under the name: one that needs the person, waits, or cools down on a model. */
 export const conditionTall = (c: Condition) =>

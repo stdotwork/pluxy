@@ -1,7 +1,7 @@
 // Times and states as a person reads them: relative times that keep themselves current, plain
 // words for core's states, and the next step for an account that gets no requests.
 import { expect, test } from "@playwright/test";
-import { goTo, openPanel, signIn, useCore } from "./support";
+import { accountRow, goTo, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 
@@ -30,34 +30,29 @@ test.beforeEach(async ({ page }) => {
   await goTo(page, "Accounts");
 });
 
-const row = (page: import("@playwright/test").Page, id: string) =>
-  page.locator('[data-part="item"]').filter({ hasText: id });
+const mark = (page: import("@playwright/test").Page, id: string) =>
+  accountRow(page, id).locator(".group-mark").getByRole("img");
 
-test("a state shows in plain words and keeps what core sent for support", async ({ page }) => {
+test("a state shows in plain words, and core's own word for it nowhere", async ({ page }) => {
   const states = {
     "relogin-1": "Needs sign-in",
     "used-up-1": "Limit used up",
     "off-1": "Turned off",
     "fine-1": "Serving",
   };
-  for (const [id, words] of Object.entries(states)) {
-    await expect(row(page, id).locator('[data-part="badge"]')).toHaveText(words);
-  }
-  const badge = row(page, "relogin-1").locator('[data-part="badge"]');
-  await expect(badge).toHaveAttribute("data-state", "reauth_required");
-  await expect(badge).toHaveAttribute("title", "reauth_required");
+  for (const [id, words] of Object.entries(states)) await expect(mark(page, id)).toHaveAccessibleName(words);
+  await expect(accountRow(page, "relogin-1")).toHaveAttribute("data-condition", "needs_login");
   await expect(page.getByRole("main")).not.toContainText(/reauth_required|needs_login/);
 });
 
 test("a time reads by its distance, keeps the exact time as its title and stays current", async ({
   page,
 }) => {
-  await row(page, "relogin-1").getByRole("button", { name: "relogin-1", exact: true }).click();
-  const detail = page.getByRole("complementary", { name: "Details: relogin-1" });
-  const added = detail.locator('time[datetime="2026-11-24T15:24:30Z"]');
+  await accountRow(page, "relogin-1").getByRole("link", { name: "relogin-1", exact: true }).click();
+  const added = page.getByRole("region", { name: "About" }).locator('time[datetime="2026-11-24T15:24:30Z"]');
   await expect(added).toHaveText("5m ago");
   await expect(added).toHaveAttribute("title", /\d{4}.*\d:24:30/);
-  // An hour on, the same element says so: nothing was loaded again and the detail stayed open.
+  // An hour on, the same element says so: nothing was drawn again from scratch.
   await added.evaluate((el) => {
     (el as HTMLElement).dataset.same = "yes";
   });
@@ -66,29 +61,21 @@ test("a time reads by its distance, keeps the exact time as its title and stays 
   await expect(added).toHaveAttribute("data-same", "yes");
 });
 
-test("an account that gets no requests says what to do, beside the control that does it", async ({
+test("an account that gets no requests says why on its page, with the control that fixes it", async ({
   page,
 }) => {
-  await row(page, "relogin-1").getByRole("button", { name: "relogin-1", exact: true }).click();
-  const relogin = page.getByRole("complementary", { name: "Details: relogin-1" });
-  const step = relogin.getByRole("status").filter({ hasText: "Sign in again to use it." });
-  await expect(step).toContainText("The provider refused this account's sign-in, so it gets no requests.");
-  await expect(relogin.getByRole("region", { name: "Sign in again", exact: true })).toHaveCount(0);
-  await step.getByRole("button", { name: "Sign in again", exact: true }).click();
-  await expect(relogin.getByRole("region", { name: "Sign in again", exact: true })).toBeInViewport();
+  const opening = page.locator('[data-part="account-opening"]');
+  await accountRow(page, "relogin-1").getByRole("link", { name: "relogin-1", exact: true }).click();
+  await expect(opening).toContainText("Alpha no longer accepts its sign-in.");
+  await expect(page.getByRole("region", { name: "Sign in again", exact: true })).toHaveCount(0);
+  await opening.getByRole("link", { name: "Sign in again", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Sign in again", exact: true })).toBeVisible();
 
-  await row(page, "used-up-1").getByRole("button", { name: "used-up-1", exact: true }).click();
-  const usedUp = page.getByRole("complementary", { name: "Details: used-up-1" });
-  await expect(usedUp).toContainText(
-    "This account's limit is used up, so it gets no requests until the limit resets (in 2h 5m).",
-  );
-  // The sign-in form belongs to the account it was opened for.
-  await expect(usedUp.getByRole("region", { name: "Sign in again", exact: true })).toHaveCount(0);
+  await page.goto(`${core.base}/panel/#/accounts/used-up-1`);
+  await expect(opening).toContainText(/Its limit is used up\. Back at \d\d:\d\d, in 2h 5m\./);
+  await expect(page.getByRole("region", { name: "Sign in again", exact: true })).toHaveCount(0);
 
-  await row(page, "off-1").getByRole("button", { name: "off-1", exact: true }).click();
-  const off = page.getByRole("complementary", { name: "Details: off-1" });
-  await expect(off).toContainText(
-    "This account is disabled, so it gets no requests. Enable it to use it again.",
-  );
-  await expect(off.getByRole("button", { name: "Enable", exact: true })).toBeVisible();
+  await page.goto(`${core.base}/panel/#/accounts/off-1`);
+  await expect(opening).toContainText("You turned it off.");
+  await expect(opening.getByRole("button", { name: "Turn on", exact: true })).toBeVisible();
 });
