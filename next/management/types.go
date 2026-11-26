@@ -453,6 +453,8 @@ type ClientKey struct {
 	// Masked is the key with all but its first and last two characters hidden; a key shorter
 	// than 8 characters is hidden whole.
 	Masked string `json:"masked"`
+	// Label is the key's name, such as the tool it was made for; absent for a key with none.
+	Label string `json:"label,omitempty"`
 }
 
 // ClientKeysReply is GET /client-keys's reply.

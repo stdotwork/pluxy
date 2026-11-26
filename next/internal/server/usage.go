@@ -44,6 +44,9 @@ func (g *Generation) newMeter(r *http.Request, start time.Time, req llm.Request,
 	} else {
 		m.ev.KeyID = g.keyIDOf(key)
 	}
+	if m.ev.KeyID != "" {
+		m.ev.Label = g.Config.ClientKeyLabels[m.ev.KeyID]
+	}
 	if a := ClientIP(r); a.IsValid() {
 		m.ev.ClientIP = a.String()
 	}

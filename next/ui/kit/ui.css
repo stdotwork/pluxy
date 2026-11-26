@@ -6,6 +6,8 @@
     /* The room the frame takes above the pane (shell.css sets it): a part that fills the rest of
        the window's height leaves this much out. */
     --stick: calc(var(--s) * 4);
+    /* What lies under content outside a card: nothing over the page (cards set their fill). */
+    --under-card: transparent;
     /* Digits of one width everywhere, so numbers in table cells, counters and meter labels line
        up and do not shift as they change. */
     font-variant-numeric: tabular-nums;
@@ -109,17 +111,27 @@
     gap: calc(var(--s) * 4);
   }
 
+  /* A card is a section: its heading, a hairline, its content. The three card tokens draw it as a
+     box instead (a fill, a border and room inside), as Paper does. */
   .card,
   .detail {
-    background: var(--px-color-surface);
-    border: var(--px-shape-border) solid var(--px-color-border);
+    /* What lies under a card's content: a table's sticky heading paints it. */
+    --under-card: var(--px-color-card);
+    background: var(--px-color-card);
+    border: var(--px-shape-border) solid var(--px-color-card-border);
     border-radius: var(--px-shape-radius);
     box-shadow: var(--px-shadow-raised);
-    padding: calc(var(--s) * 4);
+    padding: var(--px-size-card-padding);
     display: grid;
     gap: calc(var(--s) * 3);
     align-content: start;
     min-width: 0;
+  }
+
+  /* The detail pane keeps a hairline on the list's side, and room beside it, even as a section. */
+  .detail {
+    border-inline-start-color: var(--px-color-border);
+    padding-inline-start: max(var(--px-size-card-padding), calc(var(--s) * 4));
   }
 
   .card-head {
@@ -127,14 +139,33 @@
     align-items: center;
     justify-content: space-between;
     gap: calc(var(--s) * 2);
+    min-height: var(--px-size-control);
   }
 
+  .card > .card-head {
+    padding-bottom: calc(var(--s) * 2);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  /* Sections that follow one another are 24 pixels apart (6 spacing steps): in the page, and
+     inside a section, whose own gap gives half of it. */
+  .content > .card + .card {
+    margin-top: calc(var(--s) * 6);
+  }
+
+  .card > .card + .card,
+  .card > :not(.card) + .card {
+    margin-top: calc(var(--s) * 3);
+  }
+
+  /* A notice is a line of text with a bar in its state's colour at its start. */
   .notice {
+    --tone: var(--px-color-text-muted);
     margin: 0 0 calc(var(--s) * 3);
-    padding: calc(var(--s) * 2.5) calc(var(--s) * 3);
-    border-radius: var(--px-shape-radius);
-    border: var(--px-shape-border) solid currentColor;
-    background: color-mix(in srgb, currentColor 8%, transparent);
+    padding: calc(var(--s) * 1) 0 calc(var(--s) * 1) calc(var(--s) * 3);
+    border: 0;
+    border-inline-start: 3px solid var(--tone);
+    color: var(--px-color-text);
   }
 
   .card .notice {
@@ -142,17 +173,17 @@
   }
 
   .notice[data-tone="danger"] {
-    color: var(--px-color-danger);
+    --tone: var(--px-color-danger);
     background: var(--px-color-danger-surface);
   }
 
   .notice[data-tone="warn"] {
-    color: var(--px-color-warn);
+    --tone: var(--px-color-warn);
     background: var(--px-color-warn-surface);
   }
 
   .notice[data-tone="ok"] {
-    color: var(--px-color-ok);
+    --tone: var(--px-color-ok);
   }
 
   .empty {
@@ -192,29 +223,34 @@
 
   /* Buttons and badges */
 
+  /* Three weights: main (primary: ink on the page, one per view), plain (quiet, the default: an
+     outline) and ghost (no border until hovered). Danger is a plain button in the danger colour.
+     All are size.control high; a page's main action in the header strip is size.control-main. */
   .btn {
     font: inherit;
+    line-height: 1.2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: calc(var(--s) * 1.5);
+    min-height: var(--px-size-control);
     border-radius: var(--px-shape-radius);
-    border: var(--px-shape-border) solid var(--px-color-border);
-    background: var(--px-color-surface-raised);
+    border: var(--px-shape-border) solid var(--px-color-input-border);
+    background: transparent;
     color: var(--px-color-text);
-    padding: calc(var(--s) * 1.5) calc(var(--s) * 3);
+    padding: 0 calc(var(--s) * 3);
     cursor: pointer;
     transition:
       background var(--t),
-      border-color var(--t);
+      border-color var(--t),
+      color var(--t);
     white-space: nowrap;
-  }
-
-  /* A link drawn as a button: it leads to another page. */
-  a.btn {
-    display: inline-block;
     text-decoration: none;
   }
 
   .btn[data-size="small"] {
     font-size: var(--px-font-size-small);
-    padding: 0 calc(var(--s) * 1.5);
+    padding: 0 calc(var(--s) * 2);
     min-height: 24px;
   }
 
@@ -226,7 +262,6 @@
   }
 
   .btn[aria-busy="true"]:disabled {
-    opacity: 1;
     cursor: progress;
   }
 
@@ -258,12 +293,7 @@
   }
 
   .btn:hover:not(:disabled) {
-    border-color: var(--px-color-text-muted);
-  }
-
-  .btn:disabled {
-    opacity: 0.55;
-    cursor: default;
+    background: var(--px-color-surface-raised);
   }
 
   .btn[data-variant="primary"] {
@@ -272,8 +302,34 @@
     color: var(--px-color-accent-text);
   }
 
+  .btn[data-variant="primary"]:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--px-color-accent) 85%, var(--px-color-bg));
+  }
+
+  .btn[data-variant="ghost"] {
+    border-color: transparent;
+  }
+
   .btn[data-variant="danger"] {
     color: var(--px-color-danger);
+    border-color: color-mix(in srgb, var(--px-color-danger) 55%, var(--px-color-border));
+  }
+
+  .btn[data-variant="danger"]:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--px-color-danger) 10%, transparent);
+  }
+
+  /* Disabled is no fill, a faint outline and muted text, whatever the weight: never a pale main
+     button. A button that waits for its own call keeps its look (aria-busy, above). */
+  .btn:disabled:not([aria-busy="true"]) {
+    background: transparent;
+    border-color: var(--px-color-border);
+    color: var(--px-color-text-muted);
+    cursor: not-allowed;
+  }
+
+  .btn[data-variant="ghost"]:disabled:not([aria-busy="true"]) {
+    border-color: transparent;
   }
 
   .confirm {
@@ -281,18 +337,32 @@
     gap: calc(var(--s) * 2);
   }
 
+  /* A state as a word with a dot in the state's colour before it. The word is mixed towards the
+     text colour, so it reads at 4.5:1 or more on every surface in each built-in theme. */
   .badge {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--s) * 1.5);
     font-size: var(--px-font-size-small);
-    font-weight: var(--px-font-weight-strong);
-    padding: 0 calc(var(--s) * 2);
-    border-radius: 999px;
-    line-height: 1.7;
+    line-height: 1.5;
+    white-space: nowrap;
     --tone: var(--px-color-text-muted);
-    /* The tone alone is too faint to read on its own tint, so the text is mixed towards the text
-       colour: at least 4.5:1 on every surface, in each built-in theme. */
     color: color-mix(in srgb, var(--tone) 75%, var(--px-color-text));
-    background: color-mix(in srgb, var(--tone) 14%, transparent);
+  }
+
+  .badge::before {
+    content: "";
+    flex: none;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--tone);
+  }
+
+  /* No verdict: a ring, not a dot. */
+  .badge[data-tone="muted"]::before {
+    background: none;
+    box-shadow: inset 0 0 0 1px var(--tone);
   }
 
   .badge[data-tone="ok"] {
@@ -349,13 +419,46 @@
   .table-wrap {
     overflow: auto;
     max-height: max(calc(100vh - var(--stick) - var(--s) * 4), calc(var(--s) * 60));
-    border: var(--px-shape-border) solid var(--px-color-border);
-    border-radius: var(--px-shape-radius);
-    background: var(--px-color-surface);
   }
 
-  .card .table-wrap {
-    border: 0;
+  /* A table wider than its frame does not end at a cut-off column: the side with more to see
+     fades out at a hairline (data-more, set by List as the table scrolls). */
+  .table-frame {
+    position: relative;
+    min-width: 0;
+  }
+
+  .table-frame::before,
+  .table-frame::after {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    width: calc(var(--s) * 8);
+    z-index: 3;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity var(--t);
+  }
+
+  .table-frame::before {
+    inset-inline-start: 0;
+    border-inline-start: var(--px-shape-border) solid var(--px-color-border);
+    background:
+      linear-gradient(to right, var(--under-card), transparent),
+      linear-gradient(to right, var(--px-color-bg), transparent);
+  }
+
+  .table-frame::after {
+    inset-inline-end: 0;
+    border-inline-end: var(--px-shape-border) solid var(--px-color-border);
+    background:
+      linear-gradient(to left, var(--under-card), transparent),
+      linear-gradient(to left, var(--px-color-bg), transparent);
+  }
+
+  .table-frame:is([data-more="start"], [data-more="both"])::before,
+  .table-frame:is([data-more="end"], [data-more="both"])::after {
+    opacity: 1;
   }
 
   .table {
@@ -363,12 +466,18 @@
     border-collapse: collapse;
   }
 
+  /* Rows are size.row high; a row whose text takes two lines comes out at about size.row-tall. */
   .table th,
   .table td {
     text-align: start;
-    padding: calc(var(--s) * 2.5) calc(var(--s) * 3);
+    height: var(--px-size-row);
+    padding: calc((var(--px-size-row-tall) - var(--px-size-row)) / 2) calc(var(--s) * 3);
     border-bottom: var(--px-shape-border) solid var(--px-color-border);
     vertical-align: middle;
+  }
+
+  .table :is(th, td):first-child {
+    padding-inline-start: calc(var(--s) * 2);
   }
 
   .table .num {
@@ -380,15 +489,17 @@
     top: 0;
     /* Above the rows' controls, which are raised over their hit areas. */
     z-index: 2;
-    background: var(--px-color-surface);
+    /* Opaque, over the rows that scroll under it: the card's fill (if any) over the page's. */
+    background: linear-gradient(var(--under-card), var(--under-card)) var(--px-color-bg);
     /* A collapsed border does not travel with a sticky cell: the line is drawn inside it. */
     border-bottom: 0;
     box-shadow: inset 0 calc(var(--px-shape-border) * -1) 0 var(--px-color-border);
+    height: auto;
+    padding-block: calc(var(--s) * 2);
     font-size: var(--px-font-size-small);
     font-weight: var(--px-font-weight-strong);
     color: var(--px-color-text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
+    white-space: nowrap;
   }
 
   .table tbody tr:last-child > * {
@@ -404,7 +515,8 @@
     transition: background var(--t);
   }
 
-  .item[data-clickable]:hover {
+  /* A row that opens shows it under the pointer and while its name has keyboard focus. */
+  .item[data-clickable]:is(:hover, :focus-within) {
     background: var(--px-color-surface-raised);
   }
 
@@ -414,7 +526,7 @@
   }
 
   .table .item[aria-current="true"] > :first-child {
-    box-shadow: inset 3px 0 0 var(--px-color-accent);
+    box-shadow: inset 2px 0 0 var(--px-color-accent);
   }
 
   .item-name {
@@ -518,6 +630,13 @@
     width: 100%;
   }
 
+  /* One line of input is size.control high, as tall as the buttons beside it. */
+  input:is([type="password"], [type="search"], [type="text"], [type="number"]),
+  select {
+    height: var(--px-size-control);
+    padding-block: 0;
+  }
+
   /* One colour in every browser: each has its own default, and Firefox also fades it. */
   input::placeholder,
   textarea::placeholder {
@@ -535,6 +654,23 @@
     color: var(--px-color-text-muted);
   }
 
+  /* The file input's own button looks like the kit's plain button. */
+  input[type="file"]::file-selector-button {
+    font: inherit;
+    min-height: var(--px-size-control);
+    margin-inline-end: calc(var(--s) * 2);
+    padding: 0 calc(var(--s) * 3);
+    border: var(--px-shape-border) solid var(--px-color-input-border);
+    border-radius: var(--px-shape-radius);
+    background: transparent;
+    color: var(--px-color-text);
+    cursor: pointer;
+  }
+
+  input[type="file"]::file-selector-button:hover {
+    background: var(--px-color-surface-raised);
+  }
+
   .check {
     display: flex;
     gap: calc(var(--s) * 2);
@@ -545,10 +681,17 @@
     margin-top: calc(var(--s) * 1);
   }
 
+  /* Choices: a segmented control. The group is one outlined box, size.control high; the chosen
+     segment is filled. Each segment is at least 24 pixels high to hit. */
   .segments {
     display: inline-flex;
     flex-wrap: wrap;
-    gap: calc(var(--s) * 1);
+    max-width: 100%;
+    gap: 1px;
+    padding: 1px;
+    border: var(--px-shape-border) solid var(--px-color-input-border);
+    border-radius: var(--px-shape-radius);
+    justify-self: start;
   }
 
   .segment,
@@ -569,35 +712,45 @@
   }
 
   .segment span {
-    display: block;
-    padding: calc(var(--s) * 1.5) calc(var(--s) * 3);
-    border: var(--px-shape-border) solid var(--px-color-border);
-    border-radius: var(--px-shape-radius);
-    background: var(--px-color-surface-raised);
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 1.5);
+    min-height: max(24px, calc(var(--px-size-control) - 2px - var(--px-shape-border) * 2));
+    padding: 0 calc(var(--s) * 3);
+    border-radius: calc(var(--px-shape-radius) - 1px);
+    color: var(--px-color-text-muted);
+    white-space: nowrap;
     transition:
       background var(--t),
       color var(--t);
   }
 
+  .segment input:hover + span {
+    color: var(--px-color-text);
+  }
+
   .segment small {
     color: inherit;
-    /* Faded, but still 4.5:1 on the selected segment's accent colour. */
-    opacity: 0.85;
   }
 
   .segment input:checked + span {
-    background: var(--px-color-accent);
-    border-color: var(--px-color-accent);
-    color: var(--px-color-accent-text);
+    background: var(--px-color-selected);
+    color: var(--px-color-selected-text);
+    box-shadow: inset 0 0 0 var(--px-shape-border) var(--px-color-border);
   }
 
-  .segment input:focus-visible + span,
+  .segment input:focus-visible + span {
+    outline: 2px solid var(--px-color-focus);
+    outline-offset: 0;
+  }
+
   .switch input:focus-visible + .track {
     outline: 2px solid var(--px-color-focus);
     outline-offset: 2px;
   }
 
-  /* At least 24 pixels tall to hit, centred on the switch, whatever the height of its text. */
+  /* Switch: a 28 by 16 pixel track beside its label. At least 24 pixels tall to hit, centred on
+     the switch, whatever the height of its text; as wide as the track and its label. */
   .switch input {
     inset: 50% 0 auto;
     min-height: 24px;
@@ -606,7 +759,7 @@
 
   .switch {
     display: flex;
-    gap: calc(var(--s) * 3);
+    gap: calc(var(--s) * 2.5);
     align-items: flex-start;
     grid-template-columns: none;
   }
@@ -615,14 +768,17 @@
     display: block;
     color: var(--px-color-text);
     font-size: var(--px-font-size);
+    font-weight: normal;
   }
 
   .track {
     flex: none;
-    width: 2.4em;
-    height: 1.4em;
+    width: 28px;
+    height: 16px;
+    /* Centred on the label's first line. */
+    margin-block-start: calc((var(--px-font-size) * var(--px-font-line-height) - 16px) / 2);
     border-radius: 999px;
-    background: var(--px-color-border);
+    background: var(--px-color-input-border);
     position: relative;
     transition: background var(--t);
   }
@@ -630,10 +786,10 @@
   .track::after {
     content: "";
     position: absolute;
-    top: 0.2em;
-    left: 0.2em;
-    width: 1em;
-    height: 1em;
+    top: 2px;
+    left: 2px;
+    width: 12px;
+    height: 12px;
     border-radius: 50%;
     background: var(--px-color-surface);
     transition: transform var(--t);
@@ -644,7 +800,83 @@
   }
 
   .switch input:checked + .track::after {
-    transform: translateX(1em);
+    background: var(--px-color-accent-text);
+    transform: translateX(12px);
+  }
+
+  /* Tabs (tabs.tsx): a page's own tabs, a line under the current one. With tabs: side, a list
+     beside the panel, the current one filled. */
+  .kit-tabs {
+    display: grid;
+    gap: calc(var(--s) * 4);
+    min-width: 0;
+  }
+
+  .kit-tabs > [role="tablist"] {
+    display: flex;
+    flex-wrap: wrap;
+    gap: calc(var(--s) * 1);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  [data-part="tab"] {
+    display: flex;
+    align-items: center;
+    min-height: calc(var(--px-size-control) + var(--s) * 2);
+    padding: 0 calc(var(--s) * 2);
+    border: 0;
+    border-block: 2px solid transparent;
+    margin-bottom: calc(var(--px-shape-border) * -1);
+    background: transparent;
+    color: var(--px-color-text-muted);
+    font: inherit;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: color var(--t);
+  }
+
+  [data-part="tab"]:hover {
+    color: var(--px-color-text);
+  }
+
+  [data-part="tab"][aria-selected="true"] {
+    color: var(--px-color-text);
+    border-bottom-color: var(--px-color-accent);
+  }
+
+  [data-part="tab"]:focus-visible {
+    outline: 2px solid var(--px-color-focus);
+    outline-offset: -2px;
+  }
+
+  .kit-tabs > [role="tabpanel"] {
+    min-width: 0;
+  }
+
+  .kit-tabs[data-layout="side"] {
+    grid-template-columns: max-content minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .kit-tabs[data-layout="side"] > [role="tablist"] {
+    flex-direction: column;
+    gap: calc(var(--s) * 0.5);
+    border-bottom: 0;
+    border-inline-end: var(--px-shape-border) solid var(--px-color-border);
+    padding-inline-end: calc(var(--s) * 3);
+  }
+
+  .kit-tabs[data-layout="side"] [data-part="tab"] {
+    min-height: var(--px-size-control);
+    margin: 0;
+    border: 0;
+    border-radius: var(--px-shape-radius);
+    padding-inline: calc(var(--s) * 2.5);
+  }
+
+  .kit-tabs[data-layout="side"] [data-part="tab"][aria-selected="true"] {
+    background: var(--px-color-selected);
+    color: var(--px-color-selected-text);
   }
 
   /* Narrow windows: details go below the list. */
@@ -655,6 +887,17 @@
 
     html[data-detail="side"] .detail {
       position: static;
+    }
+
+    .kit-tabs[data-layout="side"] {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .kit-tabs[data-layout="side"] > [role="tablist"] {
+      flex-direction: row;
+      border-inline-end: 0;
+      padding-inline-end: 0;
+      border-bottom: var(--px-shape-border) solid var(--px-color-border);
     }
   }
 }

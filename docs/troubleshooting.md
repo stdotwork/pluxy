@@ -76,6 +76,16 @@ Exit code 1. Client subcommands read `config.json` in the current folder when th
 
 Start pluxy with `pluxy serve`, change to the folder holding your `config.json`, pass `--config <file>`, or pass both `--url` and `--key` (or set `PLUXY_URL` and `PLUXY_MANAGEMENT_KEY`). When the desktop app runs its own core, the message names that core's config: pass it with `--config` to reach that core. `--verbose` on any client command says which config it read.
 
+### Not sending the management key to this folder's config.json
+
+```text
+pluxy: not sending the management key from PLUXY_MANAGEMENT_KEY to http://127.0.0.1:8317, the address in this folder's config.json, which holds a different key. To use that pluxy, leave out PLUXY_MANAGEMENT_KEY so the key in its config.json is used. To use another, add --url <its address>.
+```
+
+Exit code 2, and nothing was sent. You gave a key with `--key` or `PLUXY_MANAGEMENT_KEY`, and the only address the command had was the `config.json` in the current folder (pluxy's home, when that is the current folder), which loads, has an address, and holds another key. A file in a folder could name any machine, so pluxy does not send your key there. If that is the pluxy you mean, leave out the key the message names (unset `PLUXY_MANAGEMENT_KEY`, or drop `--key`): the command then uses the key in that `config.json`. To call another pluxy, add `--url <its address>`. A `config.json` that holds exactly the same key is not refused.
+
+A `config.json` in the folder with no `management_key`, or with `listen` on port 0, does not get this message: the command stops with that file's own error, exit code 1, and sends nothing either.
+
 ### Wrong or missing management key
 
 ```text
