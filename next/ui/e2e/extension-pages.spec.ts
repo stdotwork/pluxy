@@ -73,7 +73,7 @@ async function signIn(page: Page, remember = false) {
   await page.getByLabel("Management key").fill(key);
   if (remember) await page.getByLabel("Remember on this device").check();
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
 }
 
 /** Saves a screenshot when PANEL_SHOTS_DIR is set, as e2e/panel.spec.ts does. */

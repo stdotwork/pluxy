@@ -237,7 +237,7 @@
 // pluxy/claude as a pick (core-steps.ts firstRunSource) and a stand-in claude on its PATH
 // (first-run.ts). The window opens on Setup by itself, shows Claude Code found and the pick
 // ticked, offers Set up for it, Start installs the pick and Finish ends the first run; the next
-// launch opens on the Dashboard, and Setup then says it is finished, light and dark.
+// launch opens on Home, and Setup then says it is finished, light and dark.
 //
 // Each run gets a fresh HOME, XDG folders and runtime folder, a session bus and an X server of its
 // own (dbus-run-session, xvfb-run), and random ports. Inside that session, before the app,

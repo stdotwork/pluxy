@@ -257,31 +257,21 @@ test("the panel's other tabs follow privacy mode", async ({ page, context }) => 
   await expect(other.getByRole("button", { name: EMAIL_ID, exact: true })).toBeVisible();
 });
 
-test("the Dashboard hides the upstream proxy's login while privacy mode is on", async ({ page }) => {
-  const line = page
-    .getByRole("region", { name: "Configuration at a glance" })
-    .locator(".facts > div")
-    .filter({ hasText: "Upstream proxy" })
-    .locator("dd");
-  try {
-    // Core shows the proxy with "redacted" in place of its login; privacy mode masks that too.
-    const set = await core.mgmt<{ "proxy-url": string }>("PATCH", "/settings", {
-      "proxy-url": "http://carol:privpass99@127.0.0.1:3128",
-    });
-    expect(set.status).toBe(200);
-    expect(set.body["proxy-url"]).toBe("http://redacted@127.0.0.1:3128");
-    await openPanel(page, core);
-    await signIn(page, core);
-    await goTo(page, "Dashboard");
-    await expect(line).toHaveText("http://redacted@127.0.0.1:3128");
-    await toggle(page).click();
-    await expect(toggle(page)).toHaveAttribute("aria-pressed", "true");
-    await expect(line).toHaveText("http://***@127.0.0.1:3128");
-    await toggle(page).click();
-    await expect(line).toHaveText("http://redacted@127.0.0.1:3128");
-  } finally {
-    await core.mgmt("PATCH", "/settings", { "proxy-url": "" });
-  }
+test("Home hides account names and the failed request's names while privacy mode is on", async ({ page }) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await goTo(page, "Home");
+  const row = (name: string) => page.getByRole("link", { name, exact: true });
+  // Off: the names show as they are, in the account rows and in the latest requests.
+  await expect(row(EMAIL)).toBeVisible();
+  await expect(page.getByRole("link", { name: /server-error/ }).first()).toBeVisible();
+  await toggle(page).click();
+  await expect(toggle(page)).toHaveAttribute("aria-pressed", "true");
+  await expect(row(EMAIL_MASKED)).toBeVisible();
+  await expect(row(EMAIL)).toHaveCount(0);
+  await expectMasked(page);
+  await toggle(page).click();
+  await expect(row(EMAIL)).toBeVisible();
 });
 
 test("with privacy mode on, Usage and Logs say that a saved file holds the real text", async ({ page }) => {

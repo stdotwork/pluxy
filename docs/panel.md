@@ -38,7 +38,7 @@ label says that it spends one request.
 
 | Page | Why this name |
 | --- | --- |
-| Dashboard | The landing page, as in the old panel. Its ID stays `status`, from the earlier Status page, so the address `#/status` and theme rules for `data-page="status"` keep working. |
+| Home | The landing page, in place of the old panel's Dashboard: it answers whether the person's coding tools can be served, so it is named for where a person starts, not for a dashboard of figures. Its ID stays `status`, from the earlier Status page, so the address `#/status` and theme rules for `data-page="status"` keep working. |
 | Accounts | The old Auth Files and AI Providers pages in one. This core has one kind of account, whether it comes from the config or from a sign-in. The old names stay as the source filter's options, "Auth files" and "AI providers". |
 | Add Account | Replaced OAuth Login. It adds API keys as well as sign-ins, from the login methods each running extension offers, so "OAuth" no longer describes it. |
 | System | Replaced Management Center Info. "Management Center" was the upstream panel's product name. |
@@ -46,7 +46,7 @@ label says that it spends one request.
 | Usage | A new page; see [The Usage page](#the-usage-page). |
 | Set up pluxy | A new page, named for what a person does there. The panel opens it by itself on a first start; afterwards it stays among the Settings topics and shows the same things as they are now. |
 
-The navigation has five destinations: Home (the Dashboard), Accounts (with Routing as the tab
+The navigation has five destinations: Home, Accounts (with Routing as the tab
 "Order & fallback" and Quota Management as the tab "Limits"), Activity (Usage), Tools (the desktop
 app's client pages; the panel has none yet) and Settings, which lists every other page as a topic,
 the extensions' pages last. The old panel's groups (Operate, Gateway, Observe, Control) are gone.
@@ -73,9 +73,9 @@ paging and a CSV export, and links each request's trace ID to its request log in
 A request pluxy sent upstream more than once is marked with its number of tries, and a row opens
 the request's detail, which lists each try in order: the account, its provider and model, and
 whether it answered or the code of the error that ended it.
-The Dashboard shows the totals, the traffic chart and the providers; it has no breakdown by
-model, account or key. When core could not write some requests to its usage files (`write_errors`
-in `GET /usage`), it says how many.
+Home shows the last 7 days as one bar for each local day, and the ten latest requests; it has no
+breakdown by model, account or key. `GET /usage` also reports `write_errors`, the requests core could
+not write to its usage files; no page shows that count yet.
 
 The page is in the panel, not only in the desktop app, because core keeps the record and no other
 page lists requests. It shows only what core records: tokens, with no prices or cost views, and the

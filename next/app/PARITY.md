@@ -222,7 +222,7 @@ drops are proposals the owner has not reviewed yet; their rows say so.
 | Installed and version badges on clients | Deferred | The client list says which clients can be set up; badges for what is installed come later | [README](README.md#beginner-mode) |
 | Languages (English, Simplified and Traditional Chinese, Japanese) | Deferred | English only for now; the string layer is ready for more | — |
 | Allow-LAN switch | Deferred | Exposing a service that holds provider credentials to the network is a choice that should be a visible edit. By hand: set `listen` to `0.0.0.0:<port>` in the Source tab and restart; the management API stays on this machine | `listen` in core's config |
-| Usage page of core requests (ranges, trend, analysis, request details, data management) | Kept in part | Totals and chart are on the Dashboard, and the panel's Usage page lists requests with a CSV export; prices and the storage cap are dropped, and analysis is not built | Dashboard and Usage in the panel |
+| Usage page of core requests (ranges, trend, analysis, request details, data management) | Kept in part | Totals and chart are on Home, and the panel's Usage page lists requests with a CSV export; prices and the storage cap are dropped, and analysis is not built | Home and Usage in the panel |
 
 ## Evidence
 

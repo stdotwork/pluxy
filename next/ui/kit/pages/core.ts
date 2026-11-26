@@ -7,11 +7,11 @@ import { accountsPage } from "./accounts";
 import { addAccountPage } from "./addAccount";
 import { configPage } from "./config";
 import { extensionsPage } from "./extensions";
+import { homePage } from "./home";
 import { logsPage } from "./logs";
 import { quotaPage } from "./quota";
 import { routingPage } from "./routing";
 import { type SetupOptions, setupPage } from "./setup";
-import { statusPage } from "./status";
 import { systemPage } from "./system";
 import { themesPage } from "./themes";
 import { usagePage } from "./usage";
@@ -22,7 +22,7 @@ export interface CorePageOptions {
 }
 
 export const corePages = (options?: CorePageOptions): PageDef[] => [
-  statusPage(),
+  homePage(),
   accountsPage(),
   addAccountPage(),
   routingPage(),

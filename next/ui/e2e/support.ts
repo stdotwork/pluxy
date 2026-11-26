@@ -116,7 +116,7 @@ export const pageTitle = (page: Page) => page.locator('[data-part="page-title"]'
  * link to choose after it. A name that is not listed is a topic under Settings.
  */
 const PLACES: Record<string, { dest: string; tab?: string; link?: string }> = {
-  Dashboard: { dest: "Home" },
+  Home: { dest: "Home" },
   Accounts: { dest: "Accounts" },
   "Add Account": { dest: "Accounts", link: "Add Account" },
   Routing: { dest: "Accounts", tab: "Order & fallback" },
@@ -152,7 +152,7 @@ export async function goTo(page: Page, name: string) {
 
 /** The titles of core's pages, by page ID. */
 const TITLES: Record<string, string> = {
-  status: "Dashboard",
+  status: "Home",
   accounts: "Accounts",
   "add-account": "Add Account",
   routing: "Routing",

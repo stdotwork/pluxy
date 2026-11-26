@@ -52,10 +52,13 @@
 
   /* ---- limits ------------------------------------------------------------------------------- */
 
+  /* The two windows stay on a line while they fit and wrap under each other when they do not,
+     rather than run over what is beside the row. */
   .limits {
     display: inline-flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: calc(var(--s) * 4);
+    gap: 0 calc(var(--s) * 4);
     white-space: nowrap;
     color: var(--px-color-text-muted);
     font-size: var(--px-font-size-small);
@@ -144,9 +147,13 @@
     min-width: 0;
   }
 
+  /* The link is at least 24 pixels high to hit (WCAG 2.5.8); the limits' line under it gives
+     back the 4 pixels it gains. */
   .account-name {
     flex: 0 1 auto;
     min-width: 0;
+    min-height: 24px;
+    line-height: 24px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -220,7 +227,6 @@
       grid-row: 2;
       grid-column: 2 / -1;
       justify-self: start;
-      padding-block-end: var(--s);
     }
 
     .account-week {

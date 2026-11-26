@@ -78,10 +78,12 @@ export interface UsageEventsReply {
   lost: boolean;
 }
 
-export type UsageFilters = Record<"since" | "model" | "provider" | "account" | "key_id" | "failed", string>;
+export type UsageFilters = Partial<
+  Record<"since" | "model" | "provider" | "account" | "key_id" | "failed", string>
+>;
 
 const filtered = (filters: UsageFilters, query: URLSearchParams) => {
-  for (const [key, value] of Object.entries(filters)) if (value.trim()) query.set(key, value.trim());
+  for (const [key, value] of Object.entries(filters)) if (value?.trim()) query.set(key, value.trim());
   return query;
 };
 

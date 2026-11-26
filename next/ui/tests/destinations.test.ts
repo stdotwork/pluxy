@@ -1,9 +1,10 @@
 // Where a page sits in the frame (kit/destinations.ts), on the pages core offers and a few a host
 // adds. The expected tabs, topics and ways back are written out by hand.
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { h } from "preact";
 import { DESTINATIONS, destinationHome, type PageDef, place } from "../kit/destinations";
 import { corePages } from "../kit/pages/core";
+import { currentId } from "../kit/shell";
 
 const render = () => h("div", null);
 const ids = (pages: PageDef[]) => pages.map((p) => p.id);
@@ -95,4 +96,40 @@ test("a page that names a missing parent, or pages that name each other, still p
   const a: PageDef = { id: "a", title: "A", dest: "tools", under: "b", render };
   const b: PageDef = { id: "b", title: "B", dest: "tools", under: "a", render };
   expect(ids(place([a, b], "a")?.above ?? [])).toEqual(["b"]);
+});
+
+describe("the address that opens a page", () => {
+  const pages = corePages();
+
+  test("a page's ID, with or without more after it, opens that page", () => {
+    expect(currentId(pages, "#/accounts")).toBe("accounts");
+    expect(currentId(pages, "#/logs/abc123")).toBe("logs");
+    expect(currentId(pages, "#/config/logging")).toBe("config");
+  });
+
+  test("what follows a question mark is ignored in matching", () => {
+    expect(currentId(pages, "#/status?x=1")).toBe("status");
+    expect(currentId(pages, "#/accounts?search=a/b")).toBe("accounts");
+    expect(currentId(pages, "#/config/source?account=x")).toBe("config");
+  });
+
+  test("an address that names a destination with no page of that ID opens the destination's first page", () => {
+    // Activity has the Usage page only, today: the first page of its destination.
+    expect(currentId(pages, "#/activity")).toBe("usage");
+    expect(currentId(pages, "#/activity?account=x")).toBe("usage");
+    expect(currentId(pages, "#/activity/usage")).toBe("usage");
+    expect(currentId(pages, "#/activity?trace=t1")).toBe("usage");
+    // The first of Activity's pages changes when pages are added; the rule does not.
+    const later: PageDef[] = [{ id: "requests", title: "Requests", dest: "activity", render }, ...pages];
+    expect(currentId(later, "#/activity?failed=1")).toBe("requests");
+  });
+
+  test("an unknown address, or a destination with no page, still opens the first page", () => {
+    expect(currentId(pages, "")).toBe("status");
+    expect(currentId(pages, "#/nowhere")).toBe("status");
+    expect(currentId(pages, "#/nowhere?x=1")).toBe("status");
+    // The panel has no Tools pages.
+    expect(currentId(pages, "#/tools")).toBe("status");
+    expect(currentId([], "#/activity")).toBe("");
+  });
 });

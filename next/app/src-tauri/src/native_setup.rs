@@ -10,8 +10,8 @@
 //!   machine" names Claude Code 2.4.1; the Claude pick is ticked, saying why; the Claude Code
 //!   client row has "Set up" beside "Show what to paste"; Start installs the pick (its badge says
 //!   Installed, and `GET /packages` through the app's host lists it enabled); Finish lands on the
-//!   Dashboard and `GET /setup` has `first_run` false.
-//! - `second`: the next launch opens on the Dashboard, not Setup; Setup, opened, says "Setup is
+//!   Home and `GET /setup` has `first_run` false.
+//! - `second`: the next launch opens on Home, not Setup; Setup, opened, says "Setup is
 //!   finished." and has no Finish button; the stage stays on it, then switches GTK to its dark
 //!   variant and stays again, so the session's last screenshot shows it dark.
 //!
@@ -252,9 +252,9 @@ fn first(c: &mut Checks, app: &AppHandle) {
         until(
             app,
             30,
-            "location.hash !== '#/setup' && document.querySelector('[data-part=page-title]')?.textContent === 'Dashboard'",
+            "location.hash !== '#/setup' && document.querySelector('[data-part=page-title]')?.textContent === 'Home'",
         ),
-        format!("Finish lands on the Dashboard ({})", page(app)),
+        format!("Finish lands on Home ({})", page(app)),
     );
     let r = core(app, "GET", "/setup");
     c.check(
@@ -282,17 +282,17 @@ fn second(c: &mut Checks, app: &AppHandle) {
     let dashboard = until(
         app,
         30,
-        "document.querySelector('[data-part=page-title]')?.textContent === 'Dashboard'",
+        "document.querySelector('[data-part=page-title]')?.textContent === 'Home'",
     );
     std::thread::sleep(Duration::from_secs(3));
     let stayed = main_eval(
         app,
-        "location.hash !== '#/setup' && document.querySelector('[data-part=page-title]')?.textContent === 'Dashboard'",
+        "location.hash !== '#/setup' && document.querySelector('[data-part=page-title]')?.textContent === 'Home'",
     ) == Some(json!(true));
     c.check(
         dashboard && stayed,
         format!(
-            "the next launch opens on the Dashboard, not Setup ({})",
+            "the next launch opens on Home, not Setup ({})",
             page(app)
         ),
     );
