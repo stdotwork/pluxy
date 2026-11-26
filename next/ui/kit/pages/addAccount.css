@@ -95,6 +95,10 @@
 
   .auth-import p {
     margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--s) * 2);
   }
 
   .auth-import-lines {
