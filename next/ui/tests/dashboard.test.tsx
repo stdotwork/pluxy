@@ -466,6 +466,23 @@ describe("the page", () => {
     expect(page.text()).not.toContain("requests in 7 days");
   });
 
+  test("Refresh reads the limits of the accounts it shows from core again, though GET /accounts carries a fresh copy", async () => {
+    const copy = {
+      quota: { limits: [{ id: "five", window_seconds: 18000, used_percent: 10 }] },
+      // Read by core a minute ago: fresh, so nothing is read from the provider at first.
+      fetched_at: new Date(Date.now() - 60_000).toISOString(),
+    };
+    const fresh = ok({
+      accounts: [{ id: "work-1", source: "login", state: "active", refreshable: false, quota: copy }],
+    });
+    const page = await mount([{ ...good, accounts: fresh }]);
+    const quotaReads = () => page.reads.filter((p) => p.endsWith("/quota"));
+    expect(page.text()).toContain("work-1");
+    expect(quotaReads()).toEqual([]);
+    await page.refresh();
+    expect(quotaReads()).toEqual(["/accounts/work-1/quota"]);
+  });
+
   test("with no requests in 7 days it says so and reads the coding tools once", async () => {
     const page = await mount([{ ...good, usage: ok(usageBody(0)) }]);
     expect(page.text()).toContain("No requests in the last 7 days.");

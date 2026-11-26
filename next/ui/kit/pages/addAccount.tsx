@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "preact/hooks";
 import { type Account, type LoginMethod, type LoginMethodsExtension, problem } from "../api";
 import { LoginFlow } from "../loginFlow";
-import { accountName, Phases, providerName, StatePane } from "../parts";
+import { Phases, providerName, StatePane } from "../parts";
 import { accountIdentities, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { strings } from "../strings";
@@ -25,6 +25,7 @@ const t = strings("addAccount", {
   start: "Start",
   startMethod: "Start: {method}",
   added: "Added {name}.",
+  addedUnnamed: "Added your {provider} account.",
   name: "Name",
   namePlaceholder: "For example: Work OpenRouter",
   saveName: "Save name",
@@ -39,6 +40,12 @@ interface MethodRow {
   method: LoginMethod;
 }
 
+/** A provider the page offers: its extension ID and, when the caller has its own name for it, the title to show. */
+export interface ProviderChoice {
+  id: string;
+  title?: string;
+}
+
 /** One provider's sign-in ways, under the provider's name. */
 export interface MethodGroup {
   extension: string;
@@ -49,17 +56,25 @@ export interface MethodGroup {
 
 /**
  * The sign-in ways grouped by provider; a provider with none is left out. In the order core lists
- * them, or, given providers (extension IDs), only those and in that order.
+ * them, or, given providers, only those and in that order, each under its own title when it has one.
  */
-export function groupMethods(extensions: LoginMethodsExtension[], providers?: string[]): MethodGroup[] {
+export function groupMethods(
+  extensions: LoginMethodsExtension[],
+  providers?: ProviderChoice[],
+): MethodGroup[] {
   const shown = providers
-    ? providers.flatMap((id) => extensions.filter((extension) => extension.extension === id).slice(0, 1))
-    : extensions;
+    ? providers.flatMap((choice) =>
+        extensions
+          .filter((extension) => extension.extension === choice.id)
+          .slice(0, 1)
+          .map((extension) => ({ extension, title: choice.title })),
+      )
+    : extensions.map((extension) => ({ extension, title: undefined }));
   return shown
-    .filter((extension) => (extension.methods ?? []).length > 0)
-    .map((extension) => ({
+    .filter(({ extension }) => (extension.methods ?? []).length > 0)
+    .map(({ extension, title }) => ({
       extension: extension.extension,
-      title: providerName(extension.extension),
+      title: title || providerName(extension.extension),
       rows: extension.methods.map((method) => ({
         id: `${extension.extension}/${method.method}`,
         extension: extension.extension,
@@ -79,12 +94,15 @@ export function methodWords(method: LoginMethod): string {
  * Once the sign-in is done: the account is added under a name pluxy has for it (often the
  * account's e-mail address, none for an API key). The name is optional and is saved only by Save name.
  */
-function Added(props: { id: string; embedded?: boolean; onAnother: () => void }) {
+function Added(props: { id: string; provider: string; embedded?: boolean; onAnother: () => void }) {
   const { api, unauthorized } = useKit();
   const p = usePrivacy();
   const accounts = useLoad(api.accounts);
   const account: Account | undefined = accounts.data?.accounts.find((a) => a.id === props.id);
-  const prefill = p.id(account?.label ?? "");
+  // The Name field edits the real name. With privacy mode on it starts empty, with the masked name as its
+  // example, so what is saved is only what the person types, never the mask.
+  const label = account?.label?.trim() ?? "";
+  const prefill = p.on ? "" : label;
   const [typed, setTyped] = useState<string>();
   const [kept, setKept] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -114,7 +132,9 @@ function Added(props: { id: string; embedded?: boolean; onAnother: () => void })
   };
   return (
     <section class="added stack" data-part="account-added">
-      <Notice tone="ok">{t("added", { name: account ? p.id(accountName(account)) : p.id(props.id) })}</Notice>
+      <Notice tone="ok">
+        {label ? t("added", { name: p.id(label) }) : t("addedUnnamed", { provider: props.provider })}
+      </Notice>
       <form
         class="stack"
         onSubmit={(e) => {
@@ -129,7 +149,7 @@ function Added(props: { id: string; embedded?: boolean; onAnother: () => void })
             ref={field}
             type="text"
             autocomplete="off"
-            placeholder={t("namePlaceholder")}
+            placeholder={p.on && label ? p.id(label) : t("namePlaceholder")}
             value={value}
             disabled={!ready}
             aria-invalid={error ? "true" : undefined}
@@ -170,15 +190,16 @@ function Added(props: { id: string; embedded?: boolean; onAnother: () => void })
  * No ID is asked for or sent: core makes the account's.
  * embedded: without the page's own title, the Open account link and the CLIProxyAPI import, for
  * a page that shows it as one of its parts. onSuccess: called with the new account's ID once its
- * sign-in is done. providers: only these extensions' ways to sign in (extension IDs), in that order.
+ * sign-in is done. providers: only these extensions' ways to sign in, in that order, each under its
+ * title when it has one (else its plain name).
  */
 export function AddAccountPage(
-  props: { onSuccess?: (accountId: string) => void; embedded?: boolean; providers?: string[] } = {},
+  props: { onSuccess?: (accountId: string) => void; embedded?: boolean; providers?: ProviderChoice[] } = {},
 ) {
   const { api } = useKit();
   const methods = useLoad(api.loginMethods);
   const [selected, setSelected] = useState<string>();
-  const [added, setAdded] = useState<string>();
+  const [added, setAdded] = useState<{ id: string; provider: string }>();
   const [attempt, setAttempt] = useState(0);
   const root = useRef<HTMLDivElement>(null);
   // The method last left, so focus goes back to its Start button.
@@ -203,7 +224,7 @@ export function AddAccountPage(
       {!props.embedded && <PageHead title={t("title")} />}
       <div class="add-account stack" ref={root}>
         {added !== undefined ? (
-          <Added id={added} embedded={props.embedded} onAnother={reset} />
+          <Added id={added.id} provider={added.provider} embedded={props.embedded} onAnother={reset} />
         ) : (
           <Phases
             load={methods}
@@ -264,7 +285,7 @@ export function AddAccountPage(
                                   extension={row.extension}
                                   method={row.method}
                                   onSuccess={(id) => {
-                                    setAdded(id);
+                                    setAdded({ id, provider: group.title });
                                     setSelected(undefined);
                                     props.onSuccess?.(id);
                                   }}

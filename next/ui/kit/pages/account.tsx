@@ -604,6 +604,7 @@ function SignInAgain(props: { account: Account; onDone: () => void }) {
           extension={a.extension ?? ""}
           method={method}
           existingAccountId={a.id}
+          identities={accountIdentities(a)}
           keptInputs={Object.keys(a.settings ?? {})}
           onSuccess={props.onDone}
           onReset={() => {

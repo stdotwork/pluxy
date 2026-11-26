@@ -81,7 +81,7 @@ function world(
   init: {
     methods?: Reply<unknown>[];
     accounts?: Account[];
-    reply?: (call: Call) => Reply<unknown> | undefined;
+    reply?: (call: Call) => Reply<unknown> | Promise<Reply<unknown>> | undefined;
     privacy?: boolean;
   } = {},
 ) {
@@ -145,6 +145,15 @@ async function submit(form: FakeNode) {
   await settle();
 }
 
+/** A promise settled by hand, for a call a test wants to hold in flight. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
 const attr = (node: FakeNode, name: string) => node.attributes.find((a) => a.name === name)?.value;
 const buttons = (root: FakeNode) => all(root, "button");
 const labelled = (root: FakeNode, text: string) => buttons(root).find((b) => b.textContent === text);
@@ -181,8 +190,42 @@ test("a provider is named as AccountRow names it, never by its package ID, and g
     ["pluxy/codex", "Codex", ["pluxy/codex/device"]],
     ["pluxy/gemini", "Gemini", ["pluxy/gemini/api_key"]],
   ]);
-  const two = groupMethods(EXTENSIONS, ["pluxy/gemini", "pluxy/claude", "pluxy/missing"]);
-  expect(two.map((g) => g.extension)).toEqual(["pluxy/gemini", "pluxy/claude"]);
+  const two = groupMethods(EXTENSIONS, [
+    { id: "pluxy/gemini" },
+    { id: "pluxy/claude" },
+    { id: "pluxy/missing" },
+  ]);
+  expect(two.map((g) => [g.extension, g.title])).toEqual([
+    ["pluxy/gemini", "Gemini"],
+    ["pluxy/claude", "Claude"],
+  ]);
+});
+
+test("providers carry the guided setup's own names: a title replaces the plain name, in the given order", async () => {
+  const ext = (extension: string, methods: LoginMethod[]) => ({ extension, methods });
+  const extensions = [
+    ext("pluxy/claude", [browser]),
+    ext("pluxy/codex", [device]),
+    ext("pluxy/openai-compatible", [apiKey]),
+    ext("acme/custom", [apiKey]),
+  ];
+  const providers = [
+    { id: "pluxy/openai-compatible", title: "Another service with an API key" },
+    { id: "pluxy/codex", title: "ChatGPT (Codex)" },
+    { id: "acme/custom", title: "Acme AI" },
+    { id: "pluxy/claude" },
+  ];
+  expect(groupMethods(extensions, providers).map((g) => [g.extension, g.title])).toEqual([
+    ["pluxy/openai-compatible", "Another service with an API key"],
+    ["pluxy/codex", "ChatGPT (Codex)"],
+    ["acme/custom", "Acme AI"],
+    ["pluxy/claude", "Claude"],
+  ]);
+  const w = world({ methods: [ok({ extensions })] });
+  const page = await w.mount(<AddAccountPage embedded providers={providers} />);
+  const headings = all(page.root, "h2").map((h) => h.textContent);
+  expect(headings).toEqual(["Another service with an API key", "ChatGPT (Codex)", "Acme AI", "Claude"]);
+  expect(page.text()).not.toContain("OpenAI Compatible");
 });
 
 test("Add an account asks for no ID: each provider's ways to sign in are rows with Start", async () => {
@@ -383,7 +426,8 @@ test("an API-key account has no name yet: the field is empty with an example, an
   const name = field(page.root, "Name");
   expect(name.value).toBe("");
   expect(attr(name, "placeholder")).toBe("For example: Work OpenRouter");
-  expect(page.text()).toContain("Added acc_1a2b3c4d.");
+  expect(page.text()).toContain("Added your Claude account.");
+  expect(page.text()).not.toContain("acc_");
   // Nothing was typed, so nothing is saved, and the person may go on.
   expect(labelled(page.root, "Save name")?.disabled).toBe(true);
   expect(w.changes()).toEqual(["POST /accounts"]);
@@ -430,7 +474,7 @@ test("embedded: no page title, no Open account and no CLIProxyAPI import; provid
     accounts: [account({ label: "alice@example.com" })],
     reply: (c) => (c.method === "POST" && c.path === "/accounts" ? ok({ login: login("done") }) : undefined),
   });
-  const page = await w.mount(<AddAccountPage embedded providers={["pluxy/gemini"]} />);
+  const page = await w.mount(<AddAccountPage embedded providers={[{ id: "pluxy/gemini" }]} />);
   expect(page.text()).not.toContain("Add an account");
   expect(page.text()).not.toContain("Have auth files from CLIProxyAPI?");
   expect(page.text()).toContain("Gemini");
@@ -449,6 +493,146 @@ test("the page without embedded ends with the CLIProxyAPI import, quiet", async 
   const page = await w.mount(<AddAccountPage />);
   expect(page.text()).toContain("Have auth files from CLIProxyAPI?");
   expect(attr(must(labelled(page.root, "Import files…"), "Import files…"), "data-variant")).toBe("quiet");
+});
+
+test("with privacy on the Name field starts empty, shows the name only masked as its example, and never saves the mask", async () => {
+  const w = world({
+    privacy: true,
+    accounts: [account({ label: "alice@example.com" })],
+    reply: (c) => (c.method === "POST" && c.path === "/accounts" ? ok({ login: login("done") }) : undefined),
+  });
+  const page = await w.mount(<AddAccountPage />);
+  await click(start(page.root, "Claude subscription"));
+  const name = field(page.root, "Name");
+  expect(page.text()).not.toContain("alice");
+  expect(name.value).toBe("");
+  expect(attr(name, "placeholder")).toBe("al***@e***.com");
+  // Nothing typed: nothing to save, also after typing and clearing again.
+  expect(labelled(page.root, "Save name")?.disabled).toBe(true);
+  await type(name, "x");
+  expect(labelled(page.root, "Save name")?.disabled).toBe(false);
+  await type(name, "");
+  expect(labelled(page.root, "Save name")?.disabled).toBe(true);
+  await type(name, "Work Claude");
+  expect(labelled(page.root, "Save name")?.disabled).toBe(false);
+  await submit(must(all(page.root, "form")[0], "form"));
+  const patch = w.calls.find((c) => c.method === "PATCH");
+  expect(patch?.body).toEqual({ label: "Work Claude" });
+  expect(JSON.stringify(patch?.body)).not.toContain("***");
+});
+
+test("the guided setup's provider title names an unnamed account: Added your {title} account", async () => {
+  const w = world({
+    accounts: [account({ extension: "pluxy/codex" })],
+    reply: (c) =>
+      c.method === "POST" && c.path === "/accounts"
+        ? ok({ login: login("done", { extension: "pluxy/codex", method: "device" }) })
+        : undefined,
+  });
+  const page = await w.mount(
+    <AddAccountPage embedded providers={[{ id: "pluxy/codex", title: "ChatGPT (Codex)" }]} />,
+  );
+  await click(start(page.root, "ChatGPT sign-in"));
+  expect(page.text()).toContain("Added your ChatGPT (Codex) account.");
+});
+
+test("Cancel is there while the sign-in starts, leaves at once, and cancels the login when it arrives", async () => {
+  const start1 = deferred<Reply<unknown>>();
+  const w = world({
+    reply: (c) => (c.method === "POST" && c.path === "/accounts" ? start1.promise : undefined),
+  });
+  const page = await w.mount(<AddAccountPage />);
+  await click(start(page.root, "Claude subscription"));
+  expect(page.text()).toContain("Generating sign-in link…");
+  // The first request is still out, and Cancel is already there.
+  await click(must(labelled(page.root, "Cancel"), "Cancel while starting"));
+  expect(page.text()).toContain("Choose how to add it.");
+  expect(w.changes()).toEqual(["POST /accounts"]);
+  // The login it began is cancelled when core answers.
+  start1.resolve(ok({ login: login("pending", { prompt: BROWSER_PROMPT }) }));
+  await settle();
+  expect(w.changes()).toEqual(["POST /accounts", "DELETE /logins/login-1"]);
+  expect(page.text()).toContain("Choose how to add it.");
+});
+
+test("Cancel says Cancelling… and cannot be pressed again while the request to cancel is out", async () => {
+  const gone = deferred<Reply<unknown>>();
+  const w = world({
+    reply: (c) =>
+      c.method === "POST" && c.path === "/accounts"
+        ? ok({ login: login("pending", { prompt: BROWSER_PROMPT }) })
+        : c.method === "DELETE"
+          ? gone.promise
+          : c.method === "GET" && c.path === "/logins/login-1"
+            ? ok({ login: login("cancelled") })
+            : undefined,
+  });
+  const page = await w.mount(<AddAccountPage />);
+  await click(start(page.root, "Claude subscription"));
+  await click(must(labelled(page.root, "Cancel"), "Cancel"));
+  const waiting = must(labelled(page.root, "Cancelling…"), "Cancelling…");
+  expect(waiting.disabled).toBe(true);
+  expect(labelled(page.root, "Cancel")).toBeUndefined();
+  expect(page.text()).not.toContain("Choose how to add it.");
+  gone.resolve({ status: 204 });
+  await settle();
+  expect(page.text()).toContain("Choose how to add it.");
+  expect(w.changes().filter((c) => c.startsWith("DELETE"))).toHaveLength(1);
+});
+
+test("a sign-in that finished before Cancel reached core goes to the done screen, not the methods", async () => {
+  const w = world({
+    accounts: [account({ label: "alice@example.com" })],
+    reply: (c) =>
+      c.method === "POST" && c.path === "/accounts"
+        ? ok({ login: login("pending", { prompt: BROWSER_PROMPT }) })
+        : c.method === "GET" && c.path === "/logins/login-1"
+          ? ok({ login: login("done") })
+          : undefined,
+  });
+  let added = "";
+  const page = await w.mount(<AddAccountPage onSuccess={(id) => (added = id)} />);
+  await click(start(page.root, "Claude subscription"));
+  await click(must(labelled(page.root, "Cancel"), "Cancel"));
+  expect(w.changes()).toContain("DELETE /logins/login-1");
+  expect(added).toBe("acc_1a2b3c4d");
+  expect(page.text()).toContain("Added alice@example.com.");
+  expect(page.text()).not.toContain("Choose how to add it.");
+  expect(labelled(page.root, "Add another")).toBeDefined();
+});
+
+test("Load from file puts text in the field and refuses a file that is not text, before it reaches the field", async () => {
+  const w = world();
+  const page = await w.mount(<AddAccountPage />);
+  await click(start(page.root, "API key"));
+  const picker = all(page.root, "input").find(
+    (i) => attr(i, "type") === "file" && attr(i, "aria-label") === "Load from file",
+  );
+  const choose = async (bytes: number[]) => {
+    const input = must(picker, "file input") as FakeNode & { files?: unknown[] };
+    const buffer = new Uint8Array(bytes).buffer;
+    input.files = [
+      {
+        size: bytes.length,
+        arrayBuffer: async () => buffer,
+        text: async () => new TextDecoder().decode(buffer),
+      },
+    ];
+    await act(async () => {
+      input.dispatchEvent(new Event("change"));
+    });
+    await settle();
+  };
+  await choose([...new TextEncoder().encode("sk-from-file\n")]);
+  expect(field(page.root, "API key").value).toBe("sk-from-file\n");
+  // A PNG header: bytes that are not UTF-8.
+  await choose([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe]);
+  expect(page.text()).toContain("That file is not text.");
+  expect(field(page.root, "API key").value).toBe("sk-from-file\n");
+  // Bytes that decode but hold a NUL are binary too.
+  await choose([0x50, 0x4b, 0x00, 0x00, 0x01]);
+  expect(page.text()).toContain("That file is not text.");
+  expect(field(page.root, "API key").value).toBe("sk-from-file\n");
 });
 
 // ---- LoginFlow ----------------------------------------------------------------------------------
@@ -548,4 +732,45 @@ test("three failed checks in a row stop the sign-in, in the words of the spec", 
   await advance(8000);
   expect(page.text()).toContain("Could not check the sign-in three times in a row. Login unavailable");
   expect(labelled(page.root, "Try again")).toBeDefined();
+});
+
+test("with privacy on, the different-account Details hide the account's ID and e-mail address", async () => {
+  const core =
+    'the login signed in to a different account (its email differs from account "acc_1a2b3c4d"\'s); to use the other account, add it as a new one';
+  const w = world({
+    privacy: true,
+    reply: (c) =>
+      c.path === "/accounts/acc_1a2b3c4d/login"
+        ? ok({ login: login("pending", { prompt: BROWSER_PROMPT }) })
+        : c.method === "GET" && c.path === "/logins/login-1"
+          ? ok({ login: login("failed", { error: { code: "invalid_request", message: core } }) })
+          : undefined,
+  });
+  jest.useFakeTimers();
+  const f = flow(w, { existingAccountId: "acc_1a2b3c4d", identities: ["alice@example.com"] });
+  const page = await f.mount();
+  await advance(2000);
+  const details = must(all(page.root, "details")[0], "Details");
+  expect(details.textContent).toContain("the login signed in to a different account");
+  expect(page.text()).not.toContain("acc_1a2b3c4d");
+  expect(page.text()).toContain("ac***4d");
+});
+
+test("with privacy on, another failure's reason hides the ID of the account that was just added", async () => {
+  const w = world({
+    privacy: true,
+    reply: (c) =>
+      c.method === "POST" && c.path === "/accounts"
+        ? ok({
+            login: login("failed", {
+              error: { code: "invalid_request", message: 'account "acc_1a2b3c4d" refused it' },
+            }),
+          })
+        : undefined,
+  });
+  const page = await flow(w, { method: apiKey }).mount();
+  await type(field(page.root, "API key"), "bad");
+  await submit(must(all(page.root, "form")[0], "form"));
+  expect(page.text()).toContain("Sign-in did not finish");
+  expect(page.text()).not.toContain("acc_1a2b3c4d");
 });

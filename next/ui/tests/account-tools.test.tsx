@@ -153,36 +153,76 @@ test("an account that needs signing in again offers Sign in again once, in its o
   expect(controls(page.root, "Renew sign-in now")).toHaveLength(1);
 });
 
+/** Core's answer to starting a sign-in again on acc-1: pending, with a prompt. */
+const pendingSignIn = (c: { method: string; path: string }) =>
+  c.method === "POST" && c.path === "/accounts/acc-1/login"
+    ? {
+        status: 200,
+        body: {
+          login: {
+            id: "login-1",
+            account: "acc-1",
+            extension: "pluxy/claude",
+            method: "browser",
+            state: "pending",
+            prompt: { kind: "browser", url: "https://claude.example/sign-in" },
+          },
+        },
+      }
+    : c.method === "DELETE"
+      ? { status: 204 }
+      : undefined;
+
 test("on its sign-in address the page shows the sign-in in place of the opening's link", async () => {
-  const page = await open(account({ state: "reauth_required" }), "#/accounts/acc-1/sign-in");
+  const page = await open(account({ state: "reauth_required" }), "#/accounts/acc-1/sign-in", {
+    reply: pendingSignIn,
+  });
   // The link that led here is gone and the sign-in has no second `Sign in again` button: its
-  // heading is all that is left of the words, and its one way to sign in starts at once.
+  // heading is all that is left of the words, and its one way to sign in has started and waits.
   await painted();
   expect(controls(page.root, "Sign in again")).toHaveLength(0);
-  expect(all(page.root, "h2").some((h) => h.textContent === "Sign in again")).toBe(true);
-  expect(page.calls.some((c) => c.method === "POST" && c.path === "/accounts/acc-1/login")).toBe(true);
+  expect(all(page.root, "h2").filter((h) => h.textContent === "Sign in again")).toHaveLength(1);
+  expect(page.text()).toContain("Waiting for sign-in…");
+  expect(controls(page.root, "Open sign-in page")).toHaveLength(1);
+  expect(page.calls.filter((c) => c.method === "POST" && c.path === "/accounts/acc-1/login")).toHaveLength(1);
+});
+
+test("with privacy on, a sign-in again that signed in to another account hides this account's ID and name in Details", async () => {
+  const core =
+    'the login signed in to a different account (its email differs from account "acc-1"\'s, alice@example.com); to use the other account, add it as a new one';
+  const page = await open(
+    account({ state: "reauth_required", label: "alice@example.com" }),
+    "#/accounts/acc-1/sign-in",
+    {
+      privacy: true,
+      reply: (c) =>
+        c.method === "POST" && c.path === "/accounts/acc-1/login"
+          ? {
+              status: 200,
+              body: {
+                login: {
+                  id: "login-1",
+                  account: "acc-1",
+                  extension: "pluxy/claude",
+                  method: "browser",
+                  state: "failed",
+                  error: { code: "invalid_request", message: core },
+                },
+              },
+            }
+          : undefined,
+    },
+  );
+  await painted();
+  expect(page.text()).toContain("That was a different Claude account");
+  expect(page.text()).toContain("the login signed in to a different account");
+  expect(page.text()).not.toContain("acc-1");
+  expect(page.text()).not.toContain("alice");
 });
 
 test("Cancel on a sign-in with one way to sign in stops it and leaves the sign-in for the account's page", async () => {
   const page = await open(account({ state: "reauth_required" }), "#/accounts/acc-1/sign-in", {
-    reply: (c) =>
-      c.method === "POST" && c.path === "/accounts/acc-1/login"
-        ? {
-            status: 200,
-            body: {
-              login: {
-                id: "login-1",
-                account: "acc-1",
-                extension: "pluxy/claude",
-                method: "browser",
-                state: "pending",
-                prompt: { kind: "browser", url: "https://claude.example/sign-in" },
-              },
-            },
-          }
-        : c.method === "DELETE"
-          ? { status: 204 }
-          : undefined,
+    reply: pendingSignIn,
   });
   await painted();
   await click(button(page.root, "Cancel"));

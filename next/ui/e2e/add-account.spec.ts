@@ -212,6 +212,9 @@ test("the paste field takes its words from the provider's prompt and names no ad
   await expect(field).toHaveAttribute("type", "text");
   expect((await field.getAttribute("placeholder")) ?? "").not.toMatch(/localhost|1455|auth\/callback/);
   await expect(page.getByText("Callback URL")).toHaveCount(0);
+  // The provider's sign-in address is not printed or linked: it is only opened or copied.
+  await expect(page.getByText("login.example.test")).toHaveCount(0);
+  await expect(page.locator('a[href*="login.example.test"]')).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Continue", exact: true })).toBeVisible();
 });
 
@@ -358,6 +361,15 @@ test("a secret file clears the file control and a file over one MiB is refused",
     buffer: Buffer.alloc(1024 * 1024 + 1, "x"),
   });
   await expect(page.getByRole("alert")).toHaveText("Could not read the file. Choose it again.");
+  await expect(secret).toHaveValue("file-key");
+  await expect(file).toHaveValue("");
+  // A file that is not text (here a PNG header) is refused before it reaches the field.
+  await file.setInputFiles({
+    name: "picture.png",
+    mimeType: "image/png",
+    buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe]),
+  });
+  await expect(page.getByRole("alert")).toHaveText("That file is not text. Choose a text file.");
   await expect(secret).toHaveValue("file-key");
   await expect(file).toHaveValue("");
 });

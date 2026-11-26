@@ -277,10 +277,22 @@ feature, it keeps the old label, unless the label named something this core does
 **Add an account**
 
 - Sign-in cards written for each provider: one flow serves every login method that a running
-  extension offers, under the provider's name. "Cancel" works for every method and goes back to
-  the ways to sign in.
+  extension offers, under the provider's name. "Cancel" is there for every method from the moment
+  a sign-in starts. While the sign-in is still starting it leaves for the ways to sign in at once,
+  and the sign-in is cancelled when core answers. Once it waits, "Cancel" says "Cancelling…" while
+  core is asked, then goes back to the ways to sign in; if core refuses, the refusal stays on
+  screen and "Cancel" can be pressed again. A sign-in that had just finished when "Cancel" reached
+  core is not lost: the page reads it once more and, when it is done, shows the added account as
+  after any sign-in.
 - The account ID: a person never types or sees one. Core makes it, and the name is asked after
-  the sign-in ("Name", "Save name"), prefilled with what the provider called the account.
+  the sign-in ("Name", "Save name"), prefilled with what the provider called the account. An
+  account the provider gave no name reads "Added your Claude account." and its "Name" is empty,
+  with an example. With privacy mode on, "Name" always starts empty and shows the masked name as its
+  example, so only what the person types is saved, never the mask.
+- "Load from file" fills a secret input from a text file (UTF-8, at most 1 MiB); another kind of
+  file is refused.
+- For the guided setup, `AddAccountPage` takes `providers` as `{ id, title? }` entries: only those
+  extensions, in that order, each under its `title` when given, else its plain name.
 - "Bind SIWC": a Sign in with ChatGPT account is added with the Codex extension's own sign-in
   method for it.
 - The Kimi China and International sponsor tiles and "Join Open Platform": promotion, not a

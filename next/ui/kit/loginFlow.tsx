@@ -11,6 +11,7 @@ const t = strings("loginFlow", {
   moreOptions: "More options",
   loadFromFile: "Load from file",
   readFailed: "Could not read the file. Choose it again.",
+  notText: "That file is not text. Choose a text file.",
   continue: "Continue",
   generating: "Generating sign-in link…",
   waiting: "Waiting for sign-in…",
@@ -36,6 +37,16 @@ const t = strings("loginFlow", {
   cancel: "Cancel",
   cancelling: "Cancelling…",
 });
+
+/** A file's bytes as text, or nothing when they are not UTF-8 text (binary data, or a NUL in it). */
+export function textOfFile(bytes: ArrayBuffer): string | undefined {
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return text.includes("\0") ? undefined : text;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Values stay in this form's memory and go only into a management request body. */
 function LoginField(props: {
@@ -90,7 +101,9 @@ function LoginField(props: {
               props.onReading(true);
               setError(undefined);
               try {
-                props.onChange(await selected.text());
+                const text = textOfFile(await selected.arrayBuffer());
+                if (text === undefined) setError(t("notText"));
+                else props.onChange(text);
               } catch {
                 setError(t("readFailed"));
               } finally {
@@ -166,6 +179,8 @@ export interface LoginFlowProps {
   method: LoginMethod;
   /** Replaces this account's credential instead of adding an account. */
   existingAccountId?: string;
+  /** What names the account this flow acts on (its label, project): masked, with its ID, in any text shown while privacy mode is on. */
+  identities?: readonly string[];
   /** Names of the inputs the account keeps in its settings; a sign-in again may leave them empty. */
   keptInputs?: string[];
   /** Called with the account once the sign-in is done: the caller shows what comes next. */
@@ -203,6 +218,7 @@ export function LoginFlow(props: LoginFlowProps) {
   const [answer, setAnswer] = useState<Record<string, string>>({});
   const [login, setLogin] = useState<Login>();
   const [busy, setBusy] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string>();
   const [pollError, setPollError] = useState<string>();
@@ -223,6 +239,9 @@ export function LoginFlow(props: LoginFlowProps) {
   cancelApi.current = api;
   const root = useRef<HTMLElement>(null);
   success.current = props.onSuccess;
+  // Core's words can name the account by its ID or label; privacy mode hides both in everything shown.
+  const identities = [...(props.identities ?? []), props.existingAccountId, login?.account];
+  const mask = (text: string | undefined) => p.text(text, identities);
   const kept = props.keptInputs ?? [];
   const inputs = (props.method.inputs ?? []).map((field) => ({
     ...field,
@@ -390,11 +409,18 @@ export function LoginFlow(props: LoginFlowProps) {
       }
     }
   };
-  /** Cancel stops the sign-in and goes back to the methods at once; a refusal stays on screen. */
+  /**
+   * Cancel while the sign-in is starting leaves at once; the login core was starting is cancelled
+   * when core answers (the unmount does it). Cancel once it is pending says Cancelling… while core
+   * is asked, then goes back to the methods; core's refusal stays on screen. Core cancels without
+   * saying whether the sign-in had just finished, so the login is read once after a cancel that
+   * worked: one that is done went through, its account exists, and the done screen follows.
+   */
   const cancel = async () => {
     if (!login || locked.current) return;
     locked.current = true;
     setBusy(true);
+    setCancelling(true);
     setError(undefined);
     const version = ++operation.current;
     try {
@@ -402,13 +428,16 @@ export function LoginFlow(props: LoginFlowProps) {
       if (!live.current || version !== operation.current || replyError(r)) return;
       const why = problem(r);
       setError(why);
-      if (!why) {
-        waiting.current = undefined;
-        props.onReset();
-      }
+      if (why) return;
+      waiting.current = undefined;
+      const after = await api.login(login.id);
+      if (!live.current || version !== operation.current || replyError(after)) return;
+      if (after.body?.login?.state === "done" && !problem(after)) accept(after.body.login);
+      else props.onReset();
     } finally {
       if (live.current && version === operation.current) {
         setBusy(false);
+        setCancelling(false);
         locked.current = false;
       }
     }
@@ -424,7 +453,7 @@ export function LoginFlow(props: LoginFlowProps) {
   const remaining = Math.max(0, Math.ceil(((deadline ?? now) - now) / 1000));
   const ended = login?.state === "failed" || login?.state === "cancelled";
   const terminalFailure = ended || startError || pollStopped;
-  // Core's own words for why it ended, masked when shown.
+  // Core's own words for why it ended, masked when shown (with the account's identities).
   const reason =
     pollStopped?.reason ??
     startError ??
@@ -482,13 +511,18 @@ export function LoginFlow(props: LoginFlowProps) {
         </form>
       )}
       {starting && (
-        <Notice tone="muted">{t(props.method.kind === "browser" ? "generating" : "waiting")}</Notice>
+        <>
+          <Notice tone="muted">{t(props.method.kind === "browser" ? "generating" : "waiting")}</Notice>
+          <div data-login-cancel="">
+            <Button onClick={props.onReset}>{t("cancel")}</Button>
+          </div>
+        </>
       )}
       {prompt && (
         <>
           {/* The provider's own words, when it gives some; else ours. */}
           {prompt.message ? (
-            <p>{p.text(prompt.message)}</p>
+            <p>{mask(prompt.message)}</p>
           ) : (
             (prompt.kind === "browser" || prompt.kind === "device") && (
               <p>{t(prompt.kind === "browser" ? "authorize" : "device")}</p>
@@ -553,26 +587,26 @@ export function LoginFlow(props: LoginFlowProps) {
           <Notice tone="muted">{t("waiting")}</Notice>
           <div data-login-cancel="">
             <Button onClick={() => void cancel()} disabled={busy}>
-              {t("cancel")}
+              {cancelling ? t("cancelling") : t("cancel")}
             </Button>
           </div>
         </>
       )}
-      {error && <Notice tone="danger">{p.text(error)}</Notice>}
-      {pollError && <Notice tone="danger">{p.text(pollError)}</Notice>}
+      {error && <Notice tone="danger">{mask(error)}</Notice>}
+      {pollError && <Notice tone="danger">{mask(pollError)}</Notice>}
       {terminalFailure && (
         <>
           <Notice tone="danger">
             {other
               ? t("differentAccount", { provider: providerName(props.extension) })
               : pollStopped?.repeated
-                ? t("pollStopped", { reason: p.text(reason) ?? t("noReason") })
-                : t("failed", { reason: p.text(reason) ?? t("noReason") })}
+                ? t("pollStopped", { reason: mask(reason) ?? t("noReason") })
+                : t("failed", { reason: mask(reason) ?? t("noReason") })}
           </Notice>
           {other && reason && (
             <details class="login-details" data-part="login-details">
               <summary>{t("details")}</summary>
-              <pre class="mono">{p.text(reason)}</pre>
+              <pre class="mono">{mask(reason)}</pre>
             </details>
           )}
           <div>

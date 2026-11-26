@@ -11,7 +11,6 @@ import {
   AccountRow,
   accountCondition,
   accountReason,
-  expireWindows,
   forgetWindow,
   forgetWindows,
   Limits,
@@ -490,58 +489,6 @@ test("an account page's Refresh reads its limits from core again, though GET /ac
   expect(seen?.limits[0]?.used_percent).toBe(70);
   await m.unmount();
 });
-
-test("Home's Refresh (expireWindows) reads limits from core again, though GET /accounts carries a fresh copy", async () => {
-  const calls: string[] = [];
-  const kit = {
-    api: {
-      quota: (id: string) => {
-        calls.push(id);
-        return Promise.resolve({
-          status: 200,
-          body: { quota: { limits: [{ id: "five", window_seconds: 18000, used_percent: 70 }] } },
-        });
-      },
-    },
-    unauthorized: noop,
-  } as unknown as Kit;
-  // The copy GET /accounts carries, read by core a minute ago: fresh, so nothing is read at first.
-  const a = account({
-    id: "a",
-    quota: {
-      quota: { limits: [{ id: "five", window_seconds: 18000, used_percent: 10 }] },
-      fetched_at: iso(Date.now() - 60_000),
-    },
-  });
-  let refresh = noop;
-  let seen: Windows | undefined;
-  function Probe() {
-    const [n, setN] = useState(0);
-    // As Home's Refresh does it.
-    refresh = () => {
-      expireWindows();
-      setN((x) => x + 1);
-    };
-    seen = useWindows([a], undefined, n).get("a");
-    return <p>{seen?.state}</p>;
-  }
-  const m = await mountIn(
-    <KitContext.Provider value={kit}>
-      <Probe />
-    </KitContext.Provider>,
-  );
-  expect(calls).toEqual([]);
-  expect(seen?.limits[0]?.used_percent).toBe(10);
-  await act(async () => {
-    refresh();
-  });
-  await settle();
-  expect(calls).toEqual(["a"]);
-  expect(seen?.limits[0]?.used_percent).toBe(70);
-  await m.unmount();
-});
-
-// ---- words ------------------------------------------------------------------------------------
 
 test("failureWord names every code core sends, from a code alone and from a request", () => {
   const words: Record<string, string> = {
