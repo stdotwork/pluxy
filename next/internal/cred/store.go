@@ -53,14 +53,16 @@ type Record struct {
 	// Label names the account for people; not secret. It is the label a person gave the
 	// account (Named), else the provider's (ProviderLabel).
 	Label string `json:"label,omitempty"`
-	// Named is true when Label is the label the login's caller gave the account
-	// (LoginRequest.Label) or SetAccount set, never the provider's. False in a record stored
-	// before core kept the two apart.
+	// Named is true when Label is a label a person gave the account: the login's caller's
+	// (LoginRequest.Label), one SetAccount set, or an imported credential file's own label; never
+	// the provider's. False in a record stored before core kept the two apart, whose Label then
+	// counts as the provider's, whoever gave it.
 	Named bool `json:"named,omitempty"`
-	// ProviderLabel is the label the provider's last login gave the account (protocol.Grant.Label,
-	// often an e-mail address), kept apart from a label a person gave it, so a new login is
-	// checked against it (sameIdentity); empty when the provider gave none. Also empty in a record
-	// stored before core kept it apart, whose Label is then the provider's.
+	// ProviderLabel is the last non-empty label the provider's logins gave the account
+	// (protocol.Grant.Label, often an e-mail address; for an imported credential file, its e-mail
+	// or Devin's user name), kept apart from a label a person gave it, so a new login is checked
+	// against it (sameIdentity); empty when the provider never gave one. Also empty in a record
+	// stored before core kept it apart, whose old Label then counts as the provider's.
 	ProviderLabel string `json:"provider_label,omitempty"`
 	// Identity names the upstream account the credential signs in to, as the provider's login
 	// reported it (protocol.Grant.Identity); not secret. A new login to the account must sign
@@ -76,7 +78,8 @@ type Record struct {
 
 // identityLabel is the label a new login's is compared with when the record has no identity:
 // the provider's, never one a person gave (Named); "" when the provider gave none. A record
-// stored before core kept ProviderLabel holds the provider's as Label.
+// stored before core kept ProviderLabel (neither Named nor ProviderLabel set) keeps its old Label
+// as the provider's, whoever gave it.
 func (r Record) identityLabel() string {
 	if r.Named || r.ProviderLabel != "" {
 		return r.ProviderLabel

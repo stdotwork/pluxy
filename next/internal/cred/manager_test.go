@@ -1045,7 +1045,8 @@ func TestRemoveCallsOnRemove(t *testing.T) {
 
 type immediateLoginProvider struct {
 	*fakeProvider
-	grant *protocol.Grant
+	grant   *protocol.Grant
+	onLogin func() // called as each login starts, when not nil
 }
 
 type immediateLoginCall struct {
@@ -1064,6 +1065,9 @@ func (c *immediateLoginCall) Send(map[string]string) error { return nil }
 func (c *immediateLoginCall) Close()                       {}
 
 func (p *immediateLoginProvider) Login(context.Context, protocol.Account, protocol.Login) LoginCall {
+	if p.onLogin != nil {
+		p.onLogin()
+	}
 	return &immediateLoginCall{grant: p.grant}
 }
 

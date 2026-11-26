@@ -835,7 +835,7 @@ func (c *Core) reserved(id string) bool {
 }
 
 // takenByConfig reports whether an account the active config sets has id as its ID or its public
-// ID, which an ID core makes for a new account may then not be.
+// ID, which a new account's ID and its public ID may then not be.
 func (c *Core) takenByConfig(id string) bool {
 	s := c.cur.Load()
 	return s != nil && slices.ContainsFunc(s.Config.Accounts(), func(a route.Account) bool {

@@ -31,8 +31,8 @@ const (
 // LoginRequest starts a login.
 type LoginRequest struct {
 	// Account is the account to add: its ID, routing fields and settings. Without an ID, core
-	// makes one (newAccountID); an ID of that shape is refused while it is taken (idTaken). For a
-	// new login to an existing account (Reauth) only the ID is read; the account keeps its fields.
+	// makes one (newAccountID); an ID is refused while it or its public ID is taken (idTaken). For
+	// a new login to an existing account (Reauth) only the ID is read; the account keeps its fields.
 	Account route.Account
 	// Extension is the ID of the extension that signs in and owns the account. Empty: the one
 	// extension that runs (for a reauth, the account's own).
@@ -162,7 +162,7 @@ func (m *Manager) StartLogin(ctx context.Context, req LoginRequest) (LoginView, 
 		return LoginView{}, fmt.Errorf("%w: account %q was removed and added again", ErrConflict, id)
 	case exists:
 		l.registration, l.fields = rec.Registration, rec.Account
-	case !fresh && m.ownPublicID(id) && m.idTaken(id):
+	case !fresh && m.idTaken(id):
 		m.mu.Unlock()
 		return LoginView{}, idTakenError(id)
 	}
@@ -210,7 +210,8 @@ func (m *Manager) runLogin(l *login) {
 			m.mu.Lock()
 			if err != nil {
 				l.state, l.err = LoginFailed, &llm.Error{Code: llm.CodeInternal, Message: err.Error()}
-				if errors.Is(err, ErrExists) || errors.Is(err, ErrNotFound) || errors.Is(err, ErrStale) || errors.Is(err, ErrIdentity) {
+				if errors.Is(err, ErrExists) || errors.Is(err, ErrNotFound) || errors.Is(err, ErrStale) || errors.Is(err, ErrIdentity) ||
+					errors.Is(err, ErrConflict) {
 					l.err.Code = llm.CodeInvalidRequest
 				}
 			} else {
@@ -277,13 +278,14 @@ func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 			return nil
 		}
 	}
+	// The config may have changed since the login started: the new account's ID and its public ID
+	// must still be no config account's ID or public ID. (A config reload between this check and
+	// the store's Create below is not caught.)
 	if m.reserved(l.account) {
-		return fmt.Errorf("account %q is now set in core's config", l.account)
+		return fmt.Errorf("%w: account %q is now set in core's config", ErrConflict, l.account)
 	}
-	// The config may have changed since the login started: an ID that is its own public ID must
-	// still be no config account's ID or public ID.
-	if m.ownPublicID(l.account) && m.taken != nil && m.taken(l.account) {
-		return fmt.Errorf("account %q is now an account's ID or public ID in core's config", l.account)
+	if m.configTaken(l.account) {
+		return fmt.Errorf("%w: account ID %q or its public ID is now an account's ID or public ID in core's config; choose another account ID", ErrConflict, l.account)
 	}
 	label := l.label
 	if label == "" {
@@ -343,18 +345,33 @@ func (m *Manager) newAccountID() string {
 	}
 }
 
-// ownPublicID reports whether id is its own public ID, as an ID of the shape core makes is.
-func (m *Manager) ownPublicID(id string) bool { return m.publicID != nil && m.publicID(id) == id }
+// publicIDOf returns the public ID of account id (Options.PublicID), or id when there is none.
+func (m *Manager) publicIDOf(id string) string {
+	if m.publicID == nil {
+		return id
+	}
+	return m.publicID(id)
+}
 
-// idTaken reports whether an account core knows, or a login still running, has id as its ID
-// (letter case aside, as the store compares IDs) or its public ID, or an account outside the
-// store (core's config) does. An ID that is its own public ID may then not name a new account,
-// or two accounts would answer to it. Call with m.mu held.
+// configTaken reports whether an account outside the store (core's config, Options.Taken) has id
+// or id's public ID as its ID or public ID.
+func (m *Manager) configTaken(id string) bool {
+	return m.taken != nil && (m.taken(id) || m.taken(m.publicIDOf(id)))
+}
+
+// idTaken reports whether id or its public ID is the ID (letter case aside, as the store compares
+// IDs) or the public ID of an account core knows, of a login still running, or of an account
+// outside the store (configTaken). A new account may then not have id, or two accounts would
+// answer to one ID. Call with m.mu held.
 func (m *Manager) idTaken(id string) bool {
-	if m.taken != nil && m.taken(id) {
+	if m.configTaken(id) {
 		return true
 	}
-	clash := func(k string) bool { return strings.EqualFold(k, id) || m.publicID != nil && m.publicID(k) == id }
+	pub := m.publicIDOf(id)
+	clash := func(k string) bool {
+		pk := m.publicIDOf(k)
+		return strings.EqualFold(k, id) || strings.EqualFold(k, pub) || pk == id || pk == pub
+	}
 	if slices.ContainsFunc(m.store.List(), func(r Record) bool { return clash(r.ID) }) ||
 		slices.ContainsFunc(m.store.Broken(), func(b Broken) bool { return clash(b.ID) }) {
 		return true
@@ -367,9 +384,9 @@ func (m *Manager) idTaken(id string) bool {
 	return false
 }
 
-// idTakenError refuses a new account an ID that is its own public ID and taken (idTaken).
+// idTakenError refuses a new account an ID that is taken (idTaken).
 func idTakenError(id string) error {
-	return fmt.Errorf("%w: account ID %q is another account's ID or public ID; leave the ID out and core makes one", ErrConflict, id)
+	return fmt.Errorf("%w: account ID %q or its public ID is another account's ID or public ID; choose another account ID", ErrConflict, id)
 }
 
 // Login returns login id.

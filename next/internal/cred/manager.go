@@ -132,11 +132,11 @@ type renewal struct {
 type Options struct {
 	// Reserved reports IDs that core's config already uses, which logins may not take.
 	Reserved func(id string) bool
-	// PublicID returns an account's public ID (route.State.PublicID). An ID core makes for a new
-	// account is no stored account's public ID. Nil: only IDs are compared.
+	// PublicID returns an account's public ID (route.State.PublicID). Neither a new account's ID
+	// nor its public ID may be another account's ID or public ID. Nil: only IDs are compared.
 	PublicID func(id string) string
 	// Taken reports whether an account outside the store (one core's config sets) has id as its
-	// ID or its public ID, which an ID core makes for a new account may then not be.
+	// ID or its public ID, which a new account's ID and its public ID may then not be.
 	Taken func(id string) bool
 	// OnReauth is called after an existing account signs in again with a new credential.
 	OnReauth func(id string)
@@ -668,8 +668,8 @@ func (m *Manager) SetAccount(id string, change func(*route.Account) error, disab
 
 // Create adds account r, made elsewhere than by a login (an imported credential file), and
 // routes to it at once, as a finished login does. Like a login, it may not take an ID core's
-// config uses, nor, whatever its case, one a login still running will take, nor an ID that is
-// its own public ID and is another account's ID or public ID (idTaken). Its routing fields
+// config uses, nor, whatever its case, one a login still running will take, nor an ID that, or
+// whose public ID, is another account's ID or public ID (idTaken). Its routing fields
 // are checked as SetAccount checks them: one that routing refuses would stop every account
 // routing.
 func (m *Manager) Create(r Record) (Record, error) {
@@ -689,7 +689,9 @@ func (m *Manager) Create(r Record) (Record, error) {
 			return Record{}, fmt.Errorf("%w: a login for account %q is running (%s)", ErrConflict, l.account, l.id)
 		}
 	}
-	if _, dup := m.store.Get(r.ID); !dup && m.ownPublicID(r.ID) && m.idTaken(r.ID) {
+	// An ID the store has, whatever its case, is left to the store, which refuses it (ErrExists).
+	dup := slices.ContainsFunc(m.store.List(), func(s Record) bool { return strings.EqualFold(s.ID, r.ID) })
+	if !dup && m.idTaken(r.ID) {
 		m.mu.Unlock()
 		return Record{}, idTakenError(r.ID)
 	}

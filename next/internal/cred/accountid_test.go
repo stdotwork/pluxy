@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/stdotwork/pluxy/next/internal/route"
+	"github.com/stdotwork/pluxy/next/llm"
 )
 
 // A login started without an account ID adds the account under a new ID, acc_ and 8 hex digits
@@ -120,20 +121,77 @@ func TestSuppliedCoreShapedIDMustBeFree(t *testing.T) {
 	}
 }
 
-// A login to a new account whose ID is its own public ID fails, and adds nothing, when core's
-// config comes to have that ID as an account's ID or public ID while the login runs.
+// A login to a new account fails, and adds nothing, when core's config comes to have its ID or
+// its public ID as an account's ID or public ID while the login runs. The login reports a
+// conflict, as a refusal at its start does, not an internal error.
 func TestLoginRefusedWhenConfigTakesItsIDMeanwhile(t *testing.T) {
 	p := &immediateLoginProvider{fakeProvider: &fakeProvider{}, grant: grantLabelled("jane@example.test", nil)}
 	m := loginManager(t, p)
-	m.publicID = route.NewState().PublicID
-	var calls atomic.Int32
-	m.taken = func(id string) bool { return calls.Add(1) > 1 } // free when the login starts, taken after
-
-	v, err := m.StartLogin(context.Background(), LoginRequest{Account: route.Account{ID: "acc_0a1b2c3d"}, Method: "device"})
-	if err != nil || v.State != LoginFailed {
-		t.Fatalf("a login whose ID the config took meanwhile = %+v, %v; want failed", v, err)
+	state := route.NewState()
+	m.publicID = state.PublicID
+	var configID atomic.Value
+	configID.Store("")
+	m.taken = func(id string) bool {
+		c := configID.Load().(string)
+		return c != "" && (strings.EqualFold(c, id) || state.PublicID(c) == id)
 	}
-	if _, ok := m.store.Get("acc_0a1b2c3d"); ok {
-		t.Fatal("the account was added")
+
+	for _, tc := range []struct{ id, config string }{
+		{"acc_0a1b2c3d", "acc_0a1b2c3d"}, // the config takes the ID itself
+		{"foo", state.PublicID("foo")},   // the config takes the ID's public ID
+		{state.PublicID("bar"), "bar"},   // the ID is the public ID of the config's account
+	} {
+		configID.Store("")
+		p.onLogin = func() { configID.Store(tc.config) } // free when the login starts, taken after
+		v, err := m.StartLogin(context.Background(), LoginRequest{Account: route.Account{ID: tc.id}, Method: "device"})
+		if err != nil || v.State != LoginFailed || v.Error == nil {
+			t.Fatalf("a login to %s whose ID the config took meanwhile (as %s) = %+v, %v; want failed", tc.id, tc.config, v, err)
+		}
+		if v.Error.Code != llm.CodeInvalidRequest || !strings.Contains(v.Error.Message, "conflict") {
+			t.Errorf("a login to %s whose ID the config took meanwhile failed with %s: %s; want a conflict", tc.id, v.Error.Code, v.Error.Message)
+		}
+		if _, ok := m.store.Get(tc.id); ok {
+			t.Fatalf("account %s was added", tc.id)
+		}
+	}
+}
+
+// The ID check works both ways: a new account, by login or by import, is refused while its public
+// ID is another account's ID, not only while its ID is another account's public ID. Account foo
+// is added, removed, and an account is added whose ID is foo's public ID; adding foo again is then
+// refused. The same holds when that account is set in core's config. The refusal does not tell an
+// import to leave the ID out, which an import cannot do.
+func TestNewAccountWhosePublicIDIsTakenIsRefused(t *testing.T) {
+	p := &immediateLoginProvider{fakeProvider: &fakeProvider{}, grant: grantLabelled("jane@example.test", nil)}
+	m := loginManager(t, p)
+	state := route.NewState()
+	m.publicID = state.PublicID
+
+	if v := runLoginTo(t, m, LoginRequest{Account: route.Account{ID: "foo"}}); v.State != LoginDone {
+		t.Fatalf("adding foo: %+v", v)
+	}
+	pub := state.PublicID("foo")
+	if err := m.Remove("foo"); err != nil {
+		t.Fatal(err)
+	}
+	if v := runLoginTo(t, m, LoginRequest{Account: route.Account{ID: pub}}); v.State != LoginDone {
+		t.Fatalf("adding %s, foo's public ID, once foo is gone: %+v", pub, v)
+	}
+	configID := state.PublicID("bar")
+	m.taken = func(id string) bool { return strings.EqualFold(configID, id) || state.PublicID(configID) == id }
+
+	for _, id := range []string{"foo", "bar"} {
+		_, err := m.Create(Record{ID: id, Extension: provID, State: StateActive})
+		if !errors.Is(err, ErrConflict) {
+			t.Errorf("importing %s, whose public ID %s is another account's ID: %v; want a conflict", id, state.PublicID(id), err)
+		} else if strings.Contains(err.Error(), "leave the ID out") {
+			t.Errorf("importing %s: the refusal tells an import to leave the ID out: %v", id, err)
+		}
+		if v, err := m.StartLogin(context.Background(), LoginRequest{Account: route.Account{ID: id}, Method: "device"}); !errors.Is(err, ErrConflict) {
+			t.Errorf("a login to new account %s, whose public ID is another account's ID: %+v, %v; want a conflict", id, v, err)
+		}
+		if _, ok := m.store.Get(id); ok {
+			t.Errorf("account %s was added", id)
+		}
 	}
 }
