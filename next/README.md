@@ -146,7 +146,10 @@ runs in when there is one, and otherwise the one in pluxy's home:
   `config.json` in the current folder, else pluxy's home's. `--verbose` says on standard error
   which core a command called and where its address and key came from, and names pluxy's home's
   config when a `config.json` in the current folder was read instead. With no config anywhere,
-  the error names each place it looked in and what to run.
+  the error names each place it looked in and what to run. A key from `--key` or
+  `PLUXY_MANAGEMENT_KEY` is not sent to an address that only the current folder's `config.json`
+  names, unless that file holds the same key: the command refuses, exits 2 and calls nothing. Add
+  `--config ./config.json` to use that pluxy, or `--url` to use another.
 
 pluxy moves and copies nothing into its home. A core started with `-config`, such as the desktop
 app's own core or the [container](#run-it-in-a-container), keeps its files beside that config,

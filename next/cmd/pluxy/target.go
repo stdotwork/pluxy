@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -82,6 +84,11 @@ func defaultConfig(getenv func(string) string) (path string, src configSource, e
 // home. From the config come its listen address (on this machine when it listens on every
 // interface) and its management key. A core serving TLS with its own certificate is called with
 // that certificate trusted.
+//
+// A key from --key or PLUXY_MANAGEMENT_KEY is never sent to the address of a config.json that
+// only the current folder put there, unless that file holds the same key: a file in a folder
+// could name any machine. The refusal is a usageError, made before any request. --config, --url
+// and PLUXY_URL are a person's own choice of address and are not refused.
 func findCore(w where) (target, error) {
 	t := target{http: &http.Client{Timeout: 2 * time.Minute}}
 	t.url, t.urlFrom = firstSet(w.urlFlag, "--url", w.getenv("PLUXY_URL"), "PLUXY_URL")
@@ -93,6 +100,7 @@ func findCore(w where) (target, error) {
 		}
 	}
 	needURL := t.url == "" && !w.local
+	keyGiven := t.key != ""
 	if !needURL && t.key != "" {
 		return t, nil
 	}
@@ -138,6 +146,10 @@ func findCore(w where) (target, error) {
 		return t, err
 	}
 	t.urlFrom = fromConfig
+	if keyGiven && src == fromFolder && !sameKey(t.key, cfg.ManagementKey) {
+		return target{}, usageError{fmt.Sprintf("not sending the management key from %s to %s, the address in this folder's config.json, which holds a different key. "+
+			"To use that pluxy, add --config ./config.json. To use another, add --url <its address>.", t.keyFrom, t.url)}
+	}
 	if cfg.TLS.Enable {
 		if pool, err := x509.SystemCertPool(); err == nil {
 			cert := cfg.TLS.Cert
@@ -150,6 +162,13 @@ func findCore(w where) (target, error) {
 		}
 	}
 	return t, nil
+}
+
+// sameKey reports whether a and b are the same key, in constant time: it compares their SHA-256
+// digests, so the time taken does not tell how much of one key the other matches or its length.
+func sameKey(a, b string) bool {
+	da, db := sha256.Sum256([]byte(a)), sha256.Sum256([]byte(b))
+	return subtle.ConstantTimeCompare(da[:], db[:]) == 1
 }
 
 // firstSet returns the first of a and b that is set, with its name.

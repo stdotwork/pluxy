@@ -672,3 +672,206 @@ func TestKeyManagementPathEscaped(t *testing.T) {
 		mustContain(t, "escaped path", out.String()+errOut.String(), foreignCellEscaped)
 	}
 }
+
+// A command whose management key came from --key or PLUXY_MANAGEMENT_KEY and whose address came
+// only from config.json in the current folder does not send the key there unless that file holds
+// the same key: a folder's file could otherwise steer a key to another machine. --config,
+// --url and PLUXY_URL, which a person gives on purpose, are never refused.
+func TestKeyIsNotSentToTheFoldersAddress(t *testing.T) {
+	serve := func(t *testing.T) (*httptest.Server, *atomic.Int32, *[]string) {
+		t.Helper()
+		var n atomic.Int32
+		var got []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			n.Add(1)
+			got = append(got, r.Header.Get("Authorization"))
+			w.Write([]byte(`{"version":"dev"}`))
+		}))
+		t.Cleanup(srv.Close)
+		return srv, &n, &got
+	}
+	port := func(srv *httptest.Server) int { return srv.Listener.Addr().(*net.TCPAddr).Port }
+	run := func(h *testHome, args ...string) (int, string) {
+		t.Helper()
+		var out, errOut bytes.Buffer
+		code := runCLIWithInput(args, strings.NewReader(""), &out, &errOut, h.getenv, false)
+		return code, errOut.String()
+	}
+
+	t.Run("a different key in the folder's file is refused before any request", func(t *testing.T) {
+		for _, c := range []struct {
+			name, from string
+			env        map[string]string
+			args       []string
+		}{
+			{"environment", "PLUXY_MANAGEMENT_KEY", map[string]string{"PLUXY_MANAGEMENT_KEY": "fake-env-key"}, []string{"status"}},
+			{"--key", "--key", nil, []string{"status", "--key", "fake-flag-key"}},
+			{"--key before the environment", "--key", map[string]string{"PLUXY_MANAGEMENT_KEY": "fake-env-key"}, []string{"status", "--key", "fake-flag-key"}},
+		} {
+			t.Run(c.name, func(t *testing.T) {
+				srv, n, _ := serve(t)
+				h := newTestHome(t)
+				dir := emptyFolder(t)
+				writeConfig(t, filepath.Join(dir, "config.json"), port(srv), "fake-folder-key")
+				for k, v := range c.env {
+					h.env[k] = v
+				}
+				code, stderr := run(h, c.args...)
+				want := fmt.Sprintf("pluxy: not sending the management key from %s to %s, the address in this folder's config.json, which holds a different key. "+
+					"To use that pluxy, add --config ./config.json. To use another, add --url <its address>.\n", c.from, srv.URL)
+				if code != exitUsage || stderr != want {
+					t.Errorf("exit %d, want %d; stderr\n%q, want\n%q", code, exitUsage, stderr, want)
+				}
+				if n.Load() != 0 {
+					t.Errorf("%d requests reached the address in the folder's file, want 0", n.Load())
+				}
+			})
+		}
+	})
+
+	t.Run("a folder's file with no management key sends nothing either", func(t *testing.T) {
+		srv, n, _ := serve(t)
+		h := newTestHome(t)
+		dir := emptyFolder(t)
+		cfg := fmt.Sprintf(`{"listen": "127.0.0.1:%d", "client_keys": ["fake-client-key-1"]}`, port(srv))
+		if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(cfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		h.env["PLUXY_MANAGEMENT_KEY"] = "fake-env-key"
+		if code, stderr := run(h, "status"); code == exitOK || stderr == "" || n.Load() != 0 {
+			t.Errorf("exit %d, %d requests, stderr %q", code, n.Load(), stderr)
+		}
+	})
+
+	t.Run("--json says it as an invalid request", func(t *testing.T) {
+		srv, n, _ := serve(t)
+		h := newTestHome(t)
+		dir := emptyFolder(t)
+		writeConfig(t, filepath.Join(dir, "config.json"), port(srv), "fake-folder-key")
+		h.env["PLUXY_MANAGEMENT_KEY"] = "fake-env-key"
+		code, stderr := run(h, "status", "--json")
+		if code != exitUsage || !strings.Contains(stderr, `"code":"invalid_request"`) || !strings.Contains(stderr, "not sending the management key") || n.Load() != 0 {
+			t.Errorf("exit %d, %d requests, stderr %q", code, n.Load(), stderr)
+		}
+	})
+
+	t.Run("a command that changes something is refused too", func(t *testing.T) {
+		srv, n, _ := serve(t)
+		h := newTestHome(t)
+		dir := emptyFolder(t)
+		writeConfig(t, filepath.Join(dir, "config.json"), port(srv), "fake-folder-key")
+		h.env["PLUXY_MANAGEMENT_KEY"] = "fake-env-key"
+		code, stderr := run(h, "key", "rotate-management", "--yes", "--show-key")
+		if code != exitUsage || !strings.Contains(stderr, "not sending the management key from PLUXY_MANAGEMENT_KEY") || n.Load() != 0 {
+			t.Errorf("exit %d, %d requests, stderr %q", code, n.Load(), stderr)
+		}
+	})
+
+	t.Run("the same key in the folder's file goes ahead", func(t *testing.T) {
+		for _, c := range []struct {
+			name string
+			env  map[string]string
+			args []string
+		}{
+			{"environment", map[string]string{"PLUXY_MANAGEMENT_KEY": "fake-same-key"}, []string{"status"}},
+			{"--key", nil, []string{"status", "--key", "fake-same-key"}},
+		} {
+			t.Run(c.name, func(t *testing.T) {
+				srv, n, auths := serve(t)
+				h := newTestHome(t)
+				dir := emptyFolder(t)
+				writeConfig(t, filepath.Join(dir, "config.json"), port(srv), "fake-same-key")
+				for k, v := range c.env {
+					h.env[k] = v
+				}
+				if code, stderr := run(h, c.args...); code != exitOK || stderr != "" {
+					t.Errorf("exit %d, stderr %q", code, stderr)
+				}
+				if n.Load() != 1 || (*auths)[0] != "Bearer fake-same-key" {
+					t.Errorf("%d requests, headers %q, want one with the key", n.Load(), *auths)
+				}
+			})
+		}
+	})
+
+	t.Run("an address given on purpose goes ahead", func(t *testing.T) {
+		for _, c := range []struct {
+			name string
+			env  map[string]string
+			args func(srv *httptest.Server, cfg string) []string
+		}{
+			{"--config", map[string]string{"PLUXY_MANAGEMENT_KEY": "fake-env-key"}, func(_ *httptest.Server, cfg string) []string { return []string{"status", "--config", cfg} }},
+			{"--url", map[string]string{"PLUXY_MANAGEMENT_KEY": "fake-env-key"}, func(srv *httptest.Server, _ string) []string { return []string{"status", "--url", srv.URL} }},
+			{"PLUXY_URL", map[string]string{"PLUXY_MANAGEMENT_KEY": "fake-env-key"}, func(srv *httptest.Server, _ string) []string { return []string{"status"} }},
+			{"--url and --key", nil, func(srv *httptest.Server, _ string) []string {
+				return []string{"status", "--url", srv.URL, "--key", "fake-env-key"}
+			}},
+		} {
+			t.Run(c.name, func(t *testing.T) {
+				srv, n, auths := serve(t)
+				h := newTestHome(t)
+				dir := emptyFolder(t)
+				// The folder's file names another pluxy and holds another key; with --url or
+				// PLUXY_URL it is not read at all (here it is not even a config).
+				folderKey := "fake-folder-key"
+				if c.name == "--config" {
+					writeConfig(t, filepath.Join(dir, "config.json"), port(srv), folderKey)
+				} else if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("not a config"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				for k, v := range c.env {
+					h.env[k] = v
+				}
+				if c.name == "PLUXY_URL" {
+					h.env["PLUXY_URL"] = srv.URL
+				}
+				if code, stderr := run(h, c.args(srv, "./config.json")...); code != exitOK || stderr != "" {
+					t.Errorf("exit %d, stderr %q", code, stderr)
+				}
+				if n.Load() != 1 || (*auths)[0] != "Bearer fake-env-key" {
+					t.Errorf("%d requests, headers %q, want one with the key given", n.Load(), *auths)
+				}
+			})
+		}
+	})
+
+	t.Run("no key given: the folder's file is the whole target", func(t *testing.T) {
+		srv, n, auths := serve(t)
+		h := newTestHome(t)
+		dir := emptyFolder(t)
+		writeConfig(t, filepath.Join(dir, "config.json"), port(srv), "fake-folder-key")
+		if code, stderr := run(h, "status"); code != exitOK || stderr != "" {
+			t.Errorf("exit %d, stderr %q", code, stderr)
+		}
+		if n.Load() != 1 || (*auths)[0] != "Bearer fake-folder-key" {
+			t.Errorf("%d requests, headers %q", n.Load(), *auths)
+		}
+	})
+
+	t.Run("a key given and the address from pluxy's home is not refused", func(t *testing.T) {
+		srv, n, auths := serve(t)
+		h := newTestHome(t)
+		emptyFolder(t)
+		writeConfig(t, h.homeCfg, port(srv), "fake-home-key")
+		h.env["PLUXY_MANAGEMENT_KEY"] = "fake-env-key"
+		if code, stderr := run(h, "status"); code != exitOK || stderr != "" {
+			t.Errorf("exit %d, stderr %q", code, stderr)
+		}
+		if n.Load() != 1 || (*auths)[0] != "Bearer fake-env-key" {
+			t.Errorf("%d requests, headers %q", n.Load(), *auths)
+		}
+	})
+
+	t.Run("pluxy key management sends nothing and is not refused", func(t *testing.T) {
+		srv, n, _ := serve(t)
+		h := newTestHome(t)
+		dir := emptyFolder(t)
+		writeConfig(t, filepath.Join(dir, "config.json"), port(srv), "fake-folder-key")
+		h.env["PLUXY_MANAGEMENT_KEY"] = "fake-env-key"
+		var out, errOut bytes.Buffer
+		code := runCLIWithInput([]string{"key", "management", "--show-key"}, strings.NewReader(""), &out, &errOut, h.getenv, false)
+		if code != exitOK || strings.TrimSpace(out.String()) != "fake-env-key" || n.Load() != 0 {
+			t.Errorf("exit %d, out %q, stderr %q, %d requests", code, out.String(), errOut.String(), n.Load())
+		}
+	})
+}
