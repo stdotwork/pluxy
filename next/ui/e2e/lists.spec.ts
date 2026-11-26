@@ -355,7 +355,7 @@ test("Requests: no request leads to a tool, filters with no match can be cleared
   const none = page.locator('[data-part="state-pane"]');
   await expect(none).toContainText("No recent requests.");
   await none.getByRole("link", { name: "Connect a tool", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Set up pluxy" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Tools" })).toBeVisible();
 });
 
 test("Logs: a search with no match can be cleared", async ({ page }) => {

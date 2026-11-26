@@ -62,16 +62,19 @@ export function setupGate(
   return { offered: true, open: reply.body?.first_run === true && hash.replace(/^#\/?/, "") === "" };
 }
 
-export function currentId(pages: PageDef[]): string {
-  // What follows a ? is the page's own business (its filters), not a page's name.
-  const path = location.hash.replace(/^#\/?/, "").split("?")[0] ?? "";
+/**
+ * The page the address (hash) opens: the page whose ID it equals or starts with, the longest. What
+ * follows a "?" is ignored when matching. An address whose first part names a destination with no
+ * page of that ID (such as #/activity) opens that destination's first page; any other unknown
+ * address opens the first page.
+ */
+export function currentId(pages: PageDef[], hash = location.hash): string {
+  const path = (hash.replace(/^#\/?/, "").split("?")[0] ?? "").replace(/\/$/, "");
   const match = pages.filter((p) => path === p.id || path.startsWith(`${p.id}/`));
   const longest = match.sort((a, b) => b.id.length - a.id.length)[0];
   if (longest) return longest.id;
-  // An address whose first part names a destination opens that destination's first page.
-  const named = DESTINATIONS.find((d) => d === path.split("/")[0]);
-  const home = named && destinationHome(pages, named);
-  return home?.id ?? pages[0]?.id ?? "";
+  const dest = DESTINATIONS.find((d) => d === path.split("/")[0]);
+  return (dest && destinationHome(pages, dest)?.id) ?? pages[0]?.id ?? "";
 }
 
 /** Draws one extension page. The panel's default shows it in a sandboxed frame. */

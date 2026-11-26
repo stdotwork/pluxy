@@ -383,8 +383,7 @@ export function RequestsPage() {
           <StatePane
             kind="empty"
             title={t("noRecent")}
-            // P5: the panel has no Tools page until P5 lands; its Connect link goes to #/setup meanwhile.
-            secondary={counted ? undefined : { label: t("connect"), href: "#/setup" }}
+            secondary={counted ? undefined : { label: t("connect"), href: "#/tools" }}
           >
             {counted
               ? rich(t("olderCounted"), { usage: <a href="#/activity/usage">{t("usage")}</a> })

@@ -23,7 +23,7 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test("Accounts and the Dashboard give the same accounts the same numbers", async ({ page }) => {
+test("Accounts and Home give the same accounts the same numbers", async ({ page }) => {
   await openPanel(page, core);
   await signIn(page, core);
   await goTo(page, "Accounts");
@@ -36,12 +36,23 @@ test("Accounts and the Dashboard give the same accounts the same numbers", async
   await expect(ghost).toContainText("Provider stopped");
   await ghost.click();
   await expect(page.getByText("ghost/gone is not running, so this account gets no requests.")).toBeVisible();
-  await goTo(page, "Dashboard");
-  const health = page.getByRole("region", { name: "Credential status", exact: true });
-  await expect(health.locator("dl")).toContainText("Available3");
-  await expect(health.locator("dl")).toContainText("Unavailable2");
-  await expect(health.locator("dl")).toContainText("Disabled1");
-  const credentials = page.locator('[data-part="stat"]').filter({ hasText: "Credentials" });
-  await expect(credentials).toContainText("3 available · 3 not serving");
-  await expect(page.getByRole("link", { name: "3 not serving" })).toHaveAttribute("href", "#/accounts");
+  await goTo(page, "Home");
+  // Home sorts the same six: banned-1 and ghost-1 need the person, cool-1 waits (it serves other
+  // models, but its cooldown is on the whole account), ok-1 and err-1 serve, off-1 is turned off.
+  const group = (name: string) => page.getByRole("region", { name, exact: true });
+  await expect(page.getByRole("heading", { level: 2, name: "2 accounts need you." })).toBeVisible();
+  await expect(page.locator(".home-counts")).toHaveText("1 waiting · 2 serving · 1 turned off");
+  for (const [name, ids] of [
+    ["Needs you", ["banned-1", "ghost-1"]],
+    ["Waiting", ["cool-1"]],
+    ["Serving", ["ok-1", "err-1"]],
+    ["Turned off", ["off-1"]],
+  ] as const) {
+    await expect(group(name).locator('[data-part="account-row"]')).toHaveCount(ids.length);
+    for (const id of ids)
+      await expect(group(name).getByRole("link", { name: id, exact: true })).toBeVisible();
+  }
+  await expect(group("Needs you").locator('[data-part="account-row"]', { hasText: "ghost-1" })).toContainText(
+    "Open Extensions",
+  );
 });

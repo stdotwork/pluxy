@@ -24,7 +24,7 @@ async function addAccount(id: string) {
 test.beforeAll(async () => {
   await addAccount("kb-one");
   await addAccount("kb-two");
-  // One request, so the Dashboard has a traffic table.
+  // One request, so Home has a day with a request.
   const r = await fetch(`${core.base}/v1/chat/completions`, {
     method: "POST",
     headers: { Authorization: `Bearer ${core.clientKey}`, "Content-Type": "application/json" },
@@ -252,23 +252,19 @@ test("opening the panel is not a page change, so it moves no focus", async ({ pa
   await expect(page.getByRole("link", { name: "Skip to main content", exact: true })).toBeFocused();
 });
 
-test("the traffic table and the log text scroll from the keyboard and have names", async ({ page }) => {
+test("Home's day bars take focus and say their day, and the log text scrolls from the keyboard", async ({
+  page,
+}) => {
   await openPanel(page, core);
   await signIn(page, core);
-  await goTo(page, "Dashboard");
-  const table = page.getByRole("region", { name: "Requests in each 10-minute bucket", exact: true });
-  await expect(table.getByRole("row").nth(1)).toBeVisible();
-  // The table scrolls only when its rows do not fit: make them not fit.
-  await table.evaluate((el) => {
-    el.style.maxHeight = "4em";
-  });
-  expect(await table.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
-  await expect(table).toHaveAttribute("tabindex", "0");
-  await table.focus();
-  await expect(table).toBeFocused();
-  const before = await table.evaluate((el) => el.scrollTop);
-  await page.keyboard.press("PageDown");
-  await expect.poll(() => table.evaluate((el) => el.scrollTop)).toBeGreaterThan(before);
+  await goTo(page, "Home");
+  const bars = page.locator('[data-part="days"] .day');
+  await expect(bars).toHaveCount(7);
+  await bars.last().focus();
+  await expect(bars.last()).toBeFocused();
+  await expect(page.locator(".days-readout")).toContainText("1 request, 0 failed");
+  await bars.first().focus();
+  await expect(page.locator(".days-readout")).toContainText(": 0 requests, 0 failed");
 
   await goTo(page, "Logs Viewer");
   const coreLog = page.getByRole("region", { name: "Core logs", exact: true });
