@@ -1,0 +1,379 @@
+/* A coding tool's page (clientPage.tsx and the pages on it: claudeCode.tsx, codex.tsx,
+   claudeDesktop.tsx): the head with the tool's state and its one next step, then sections on kit
+   hairlines (never boxed cards) whose rows are the kit's SettingRow, then the collapsed "Settings
+   file, key and backups". Only --px-* tokens, in the kit's layer so a theme's own CSS wins. The
+   page is a size container: a narrow pane puts the head's buttons under its facts and every
+   control under its label, and nothing scrolls sideways. */
+@layer kit {
+  .tool-page {
+    container-type: inline-size;
+    display: grid;
+    gap: 0;
+    max-width: 64rem;
+    min-width: 0;
+  }
+
+  .tool-page p {
+    margin: 0;
+  }
+
+  /* ---- the head ----------------------------------------------------------------------------- */
+
+  .tool-head {
+    display: grid;
+    gap: calc(var(--s) * 2);
+    padding: calc(var(--s) * 2) calc(var(--s) * 2) calc(var(--s) * 4);
+  }
+
+  .tool-head-top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: calc(var(--s) * 3) calc(var(--s) * 6);
+  }
+
+  .tool-head-who {
+    display: grid;
+    gap: var(--s);
+    min-width: 0;
+  }
+
+  .tool-head-name {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+    font-size: var(--px-font-size-title);
+  }
+
+  .tool-head-name .badge {
+    font-size: var(--px-font-size-small);
+  }
+
+  .tool-head-facts {
+    overflow-wrap: anywhere;
+    color: var(--px-color-text-muted);
+    font-family: var(--px-font-mono);
+    font-size: var(--px-font-size-mono);
+  }
+
+  .tool-head-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+  }
+
+  .tool-head-lines {
+    display: grid;
+    gap: calc(var(--s) * 1.5);
+    max-width: 48rem;
+  }
+
+  .tool-held {
+    color: var(--px-color-text-muted);
+  }
+
+  /* ---- sections ----------------------------------------------------------------------------- */
+
+  .tool-section {
+    display: grid;
+    min-width: 0;
+    border-top: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .tool-section-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: calc(var(--s) * 2);
+    min-height: var(--px-size-row);
+    padding: calc(var(--s) * 2);
+  }
+
+  .tool-section-head h2 {
+    margin: 0;
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .tool-section-aside {
+    display: flex;
+    gap: calc(var(--s) * 2);
+  }
+
+  .tool-say,
+  .tool-where > p,
+  .tool-where > .field,
+  .tool-section > .notice {
+    padding: calc(var(--s) * 2);
+  }
+
+  .tool-say {
+    display: grid;
+    justify-items: start;
+    gap: calc(var(--s) * 2);
+  }
+
+  .tool-where {
+    padding-bottom: calc(var(--s) * 2);
+  }
+
+  .tool-where > .btn {
+    justify-self: start;
+  }
+
+  .tool-where > :not(header, p, .field, .notice) {
+    margin-inline: calc(var(--s) * 2);
+  }
+
+  /* Controls in a row: one line where they fit, wrapping where they do not. */
+  .tool-inline {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: calc(var(--s) * 2);
+    min-width: 0;
+  }
+
+  /* Fields in a row are one width, and never wider than the row. A field the page wraps (a model
+     with its line under it, a path with its notices) takes that width itself. */
+  .tool-page .setting-control :is(input[type="text"], select, textarea),
+  .tool-page .setting-control :is(.tool-model, .tool-path) {
+    width: 18rem;
+    max-width: 100%;
+  }
+
+  .tool-page .setting-control :is(.tool-model, .tool-path) input {
+    width: 100%;
+  }
+
+  /* A switch that is a row's whole control: the row's name says what it is, so its own label is
+     only read, not shown twice. */
+  .tool-page .setting-control fieldset > .switch .label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .tool-page .setting-control .tool-number {
+    width: 10rem;
+  }
+
+  /* A model field with its 1M switch beside it keeps to one line where the pane allows. */
+  .tool-page .setting-control .tool-inline .tool-model {
+    width: 12rem;
+  }
+
+  .tool-page .setting-control .tool-recent {
+    width: auto;
+    max-width: 10rem;
+  }
+
+  .tool-model,
+  .tool-path {
+    display: inline-grid;
+    gap: var(--s);
+    min-width: 0;
+  }
+
+  .tool-unserved {
+    color: var(--px-color-warn);
+    font-size: var(--px-font-size-small);
+  }
+
+  /* ---- the collapsed parts -------------------------------------------------------------------- */
+
+  .tool-more {
+    padding: 0;
+    border-top: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .tool-more > summary {
+    display: flex;
+    align-items: center;
+    min-height: var(--px-size-row);
+    padding: 0 calc(var(--s) * 2);
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+    font-weight: var(--px-font-weight-strong);
+    cursor: pointer;
+  }
+
+  .tool-more > summary:hover {
+    color: var(--px-color-text);
+  }
+
+  /* A chevron drawn with two borders: right while closed, down while open. */
+  :is(.tool-more, .tool-model-row) > summary {
+    list-style: none;
+  }
+
+  :is(.tool-more, .tool-model-row) > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  :is(.tool-more, .tool-model-row) > summary::before {
+    content: "";
+    flex: none;
+    width: 0.4em;
+    height: 0.4em;
+    margin-inline-end: calc(var(--s) * 2);
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: rotate(-45deg);
+  }
+
+  :is(.tool-more, .tool-model-row)[open] > summary::before {
+    transform: rotate(45deg);
+  }
+
+  /* The ones inside a section (Context and auto-compaction, Subagents) sit on the rows' hairline. */
+  .tool-more-inner {
+    border-top: 0;
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .tool-files {
+    display: grid;
+    justify-items: start;
+    gap: calc(var(--s) * 3);
+    padding: calc(var(--s) * 2) calc(var(--s) * 2) calc(var(--s) * 4);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .tool-files > .field {
+    width: min(100%, 34rem);
+  }
+
+  .tool-key {
+    display: grid;
+    justify-items: end;
+    gap: calc(var(--s) * 2);
+    min-width: 0;
+  }
+
+  .tool-key-is {
+    color: var(--px-color-text-muted);
+  }
+
+  .tool-facts {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: var(--s) calc(var(--s) * 3);
+    margin: 0;
+  }
+
+  .tool-facts dt {
+    color: var(--px-color-text-muted);
+  }
+
+  .tool-facts dd {
+    display: grid;
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .tool-backups {
+    padding: calc(var(--s) * 2);
+  }
+
+  .tool-backups h3 {
+    margin: 0 0 calc(var(--s) * 2);
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .backups,
+  .backups-version,
+  .backups-file {
+    display: grid;
+    justify-items: start;
+    gap: calc(var(--s) * 2);
+    min-width: 0;
+  }
+
+  .backups-version {
+    padding-top: calc(var(--s) * 2);
+    border-top: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .backups-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+  }
+
+  /* ---- Claude Desktop's models: the model and its alias one above the other, then the rest. -- */
+
+  .tool-page .setting-control .tool-desktop-model {
+    display: grid;
+    justify-items: end;
+    gap: calc(var(--s) * 2);
+    width: 18rem;
+    max-width: 100%;
+  }
+
+  .tool-page .setting-control .tool-desktop-model :is(.tool-model, input[type="text"]) {
+    width: 100%;
+  }
+
+  /* ---- Codex's model list --------------------------------------------------------------------- */
+
+  .tool-models {
+    display: grid;
+  }
+
+  .tool-model-row {
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .tool-model-row > summary {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: calc(var(--s) * 2);
+    min-height: var(--px-size-row);
+    padding: calc(var(--s) * 2);
+    cursor: pointer;
+  }
+
+  .tool-model-row > summary small {
+    overflow-wrap: anywhere;
+  }
+
+  .tool-model-remove {
+    padding: calc(var(--s) * 2);
+  }
+
+  /* ---- a narrow pane -------------------------------------------------------------------------- */
+
+  @container (max-width: 40em) {
+    .tool-head-actions {
+      width: 100%;
+    }
+
+    .tool-inline {
+      justify-content: flex-start;
+    }
+
+    .tool-key {
+      justify-items: start;
+    }
+
+    .tool-page .setting-control :is(input[type="text"], select, textarea),
+    .tool-page .setting-control :is(.tool-model, .tool-path),
+    .tool-page .setting-control .tool-inline .tool-model {
+      width: 100%;
+    }
+  }
+}

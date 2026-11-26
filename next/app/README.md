@@ -1159,148 +1159,151 @@ page lists the managed runtimes the execution program started, with **Stop** and
 confirmed natively, never remembered); disabling or removing a package with managed runtimes running
 asks first, and cancelling leaves both as they are.
 
+## The tool pages
+
+The Claude Code, Codex and Claude Desktop pages share one frame (`src/clientPage.tsx`, styled by
+`src/toolPage.css` on the kit's hairlines); the other tool pages below keep their own until they
+move to it. Each is the window's own page, not an extension page, because Connect gives the tool a
+key: only the window can name a vault secret for an operation, and the key's value never reaches
+the page.
+
+- **The head** says how the tool stands in the same six words as the Tools list (`Connected`,
+  `Installed · not connected`, `Settings need update`, `Cannot change settings`, `Not
+  installed`, `Not checked`), its version and settings file, and the one thing to press next.
+  Whether the tool is installed comes from pluxy's own look at this computer (`GET /setup`, only
+  when pluxy runs here); settings that are set up or refused mean it is; with neither, the page
+  says `Not checked`.
+- **The add-on first:** the page reads this device's packages before anything else. With the
+  tool's add-on missing it says so and links to Add-ons; with it off it offers **Turn on add-on**
+  (the native confirmation enables it); in safe mode it says tool add-ons are paused. It reads no
+  file then. When the packages cannot be read, it says so with **Try again**, and reads and offers
+  nothing until they are.
+- **Reading:** the default settings file is read as the page opens, again for another WSL
+  environment, and again when the person comes back to **Default**. Another file is chosen under
+  **Settings file, key and backups** and read with **Read this file**; choosing another file drops
+  the reading, and an answer for a file no longer shown, good or failed, is dropped. A read that
+  fails after a good one leaves the reading on screen with a line saying it may be out of date, and
+  nothing is written until a read succeeds (**Try again**).
+- **Writes go to the file shown:** each write sends the pinned targets of the reading on screen
+  (the add-on refuses a file that changed since). While a write or its confirmation waits, the
+  file and environment choices are locked. Each write's `program_call` carries a ticket, and
+  leaving the page withdraws a confirmation still open (`program_cancel`); a Connect whose key
+  window closes after the page was left writes nothing.
+- **Connect {tool}** is one press. It uses the vault's key bound to this add-on and to the pluxy the
+  app is connected to (or the one the person chose); with none, it makes one with
+  `client_key_capture`, named for the tool (`Claude Code`, `Codex`, `Claude Desktop`), in its
+  own native confirmation, then writes the settings in the add-on's confirmation. A cancel stops
+  quietly and a key that could not be made writes nothing. When the key was made but the write did
+  not happen, the page says the key is kept, and the next Connect uses it, even before the key
+  list is read again. Connect, Update and Save say each reason they are held, such as the app not
+  being connected to pluxy. **Update {tool}** does the same for
+  settings that point elsewhere or miss part of what pluxy needs, and **Save**, in the section
+  edited, for a connected tool. **Disconnect** (the add-on's `clear`: pluxy's values go, the
+  person's edits stay) and **Restore backup** (the copy from before pluxy first changed the file)
+  ask only in the add-on's window. A file pluxy will not change shows why, with **Read this file**
+  and **Restore backup**, and no Connect.
+- **Models:** each page's model fields suggest what pluxy serves (`GET /models`, read once as the
+  page opens) and say `Your accounts do not offer {model}.` under a model no account serves;
+  Connect still writes it. **Remove model** asks first, inline.
+- **Start** (one section for every tool, through the launcher, `pluxy/execution`): the folder,
+  with the recent ones for the tool, the terminal, and **Start {tool}**, which, for a tool that
+  starts in a folder, stays off until one is chosen (Claude Desktop starts with none); without the
+  Launcher add-on it says so and links to Add-ons. The terminal list
+  loads again whenever this device's packages change (`pluxy-device`); a chosen terminal the list
+  no longer offers falls back to Automatic (`src/startCli.ts`). The launcher's confirmation shows
+  each launch in full. No key is part of a launch: each tool reads it from its settings.
+- **Settings file, key and backups** (collapsed; it opens itself on a file pluxy will not change):
+  which file, the program to start instead of the tool's own, the key (`Created for {tool}` or
+  `Entered by you`, its masked form, and **Use an existing key…**, which enters a key natively with
+  `client_key_enter`, checked against pluxy and bound to the add-on), what Connect changes (the
+  files, the address now and after, whether a key is in the file), **Restore backup**, and the
+  backups (`src/backups.tsx`): **Create backup** saves the files as they are on disk in the app's
+  vault through the add-on's standard backup operations
+  ([app tools](../app-tools/README.md#libtransactions)), the newest 10 kept; choosing a saved copy
+  shows whether each file was present and its size, and the settings restoring it would add,
+  change or remove, by name only (never a value); **Restore** and **Delete** each ask in the
+  add-on's window.
+- **What the native side says** (`src/toolWords.ts`): every native call of these pages goes
+  through `nativeReply`, which turns the native side's words into the page's (`core` becomes
+  `pluxy`, a client key a key, the vault the app). In privacy mode the pages mask what they show
+  of paths (the home folder's user name, and all but the last two parts), WSL users' names,
+  account IDs, and the errors and reasons the native side gives.
+
+`readExtraTools` (`src/clientPage.tsx`) reads Claude Desktop, Grok Build and Hermes Agent for
+the Tools list in the app: each add-on that is on previews its tool's default settings; a reading
+that has settings in it says the tool is installed and how it stands, and a reading of nothing set
+up, or none at all, is marked `Not checked` unless pluxy's own look at this computer says whether
+the tool is installed.
+
 ## Claude Code
 
-The Claude Code page sets up and starts Claude Code with this core (`src/claudeCode.tsx`). It needs
-the curated native tool `pluxy/claude-code` ([app tools](../app-tools/README.md#claude-code)) and,
-for **Start CLI**, the execution program, both installed and enabled on the Device extensions page.
-It is the window's own page, not an extension page: **Apply** gives the tool the client key, and
-only the window can name a vault secret for an operation (an extension page cannot pass secrets).
+The Claude Code page (`src/claudeCode.tsx`) needs the curated native tool `pluxy/claude-code`
+([app tools](../app-tools/README.md#claude-code)). Its default file is Claude Code's user settings
+(`~/.claude/settings.json`); the others are a file (a link, as stow makes, is followed and kept)
+or a file in a folder. A file Claude Code would not take (not strict JSON, or another `$schema`)
+is one pluxy will not change. **Models** holds Opus, Sonnet, Haiku and Fable (each with **1M
+context**; Fable follows Sonnet when empty), **Starts with** (a model, or one of Claude Code's
+aliases), **Subagents**, and under **Context and auto-compaction** the **Auto-compact window**, the
+percentage it compacts at and **Turn off auto-compaction**. Opus, Sonnet and Haiku each need a model
+(not only `[1m]`), and the window and percentage are whole numbers in Claude Code's ranges; until
+they are, Connect is held and the head says why (`src/claudeCodeForm.ts`). **Start Claude Code**
+asks the tool for its recipe (`claude` in a terminal, no arguments).
 
-**Refresh** previews the settings file: Claude Code's user settings
-(`~/.claude/settings.json`), a selected file (a link, as stow makes, is followed and kept) or a file
-in a selected folder; it shows whether pluxy's integration is applied, the file it writes to and
-whether a key is in it, never the key, and fills the form from the file. A file Claude Code would
-not take (not strict JSON, or another `$schema`) shows why instead of the form: Apply and Close
-configuration stay off, and Restore backup stays reachable. Choosing another file drops the last
-preview, so read it again before a write. The form keeps the old
-app's controls: **Claude Code Model → Upstream Model** (Sonnet, Opus, Fable, Haiku, each with a
-**1M** switch; Fable follows Sonnet when empty), **Default model**, **Subagent model**, and under
-**Context and auto-compaction (advanced)** the **Auto-compact window**, **Auto-compact trigger**
-and **Disable auto-compaction**. Model fields suggest Claude Code's own models and aliases until the
-model picker lists the core's; Opus, Sonnet and Haiku each need one (not only `[1m]`), and the
-window and percentage are whole numbers. The **Client key** is one of the vault's plain
-secrets or client keys captured for this tool (`src/claudeCodeForm.ts`), or a new one through native
-key entry (**Add key…**).
-
-**Apply** (or **Update** / **Repair** once applied),
-**Clear** (Clear) and **Restore backup** each call the tool with the file the last
-preview pinned (refused if the file changed since); the tool's native confirmation names the file it resolves to, the key's label for Apply, and that
-an edit made in the same instant by another program may be lost. **Start CLI** asks the tool for its
-recipe (`claude` in a terminal, no arguments) and starts it through the launcher in the chosen
-working directory (recently used ones offered), terminal and optional program path; the launcher's
-confirmation shows it in full. The key is not part of the launch: Claude Code reads it from its
-settings. The card's terminal list loads again whenever this device's packages change
-(`pluxy-device`), such as when the launcher is enabled from Beginner Mode; a chosen terminal the
-list no longer offers falls back to Automatic (`src/startCli.ts`). Every client page's Start CLI
-does the same.
-
-**In WSL** (Windows): the page's **Environment and configuration folder** block
-(`src/environmentBlock.tsx`, shared by client pages) chooses **Windows local** or **WSL
-subsystem**, then a **Distribution** and a **User**. Choosing WSL lists the distributions without
-starting any (`pluxy/wsl`, which must be installed and enabled); reading a distribution's users
-starts it, which the block says. Picking a user has the app check that distribution and user and
-keep its record ([Tools in WSL](app-host/README.md#tools-in-wsl-windows)); **Refresh** lists
-them again. Every call of the page then goes to Claude Code's Linux build running in that
-distribution as that user, so the default file is that user's `~/.claude/settings.json` and typed
-paths are paths in the distribution (a `\\wsl.localhost\<distribution>\…` or `\\wsl$\…` path of the
-chosen distribution becomes its Linux path; any other network path is refused there). The first
-use asks to **Install the Linux build for WSL**, in its own native confirmation. **Start CLI**
-starts Claude Code in that distribution through the launcher, in the Windows console. The page
-keeps its last choice for the window; the app checks it against its records on every call.
-**Apply** does not work in WSL yet: it needs a client key or one of the vault's secrets, and the
-vault's secrets, client key capture and native key entry are Linux only for now, so on Windows
-there is no key to give. Reading, previewing, backups and **Start CLI** work there.
-
-**Backup and restore** (`src/backups.tsx`, the backup browser every writer's page shows) keeps
-manual backups of the previewed file in the app's vault through the tool's standard backup
-operations ([app tools](../app-tools/README.md#libtransactions)). It shows once the file has been
-read, a file Claude Code would not take included, and acts on the file that read pinned.
-**Create backup** saves the file as it is on disk (or that it does not exist) and selects the new
-backup, leaving the form as it is; the newest 10 are kept, and saving another deletes the oldest,
-which its confirmation says. **Backup versions** lists each by date; selecting one
-shows its ID, whether the file was present and its size, and the settings restoring it would add,
-change or remove, by name only: this page never gets a value or the backup's bytes. **Restore this
-version** puts it back over whatever the file holds now (a file absent in the backup is removed;
-no automatic backup is made) and **Delete this version** deletes only that backup, each in the
-tool's native confirmation.
+**In WSL** (Windows): the page's **Where Claude Code runs** section (`src/environmentBlock.tsx`)
+chooses **Windows** or **WSL**, then a **Distribution** and a **User**. Choosing WSL lists the
+distributions without starting any (`pluxy/wsl`, which must be installed and enabled); reading a
+distribution's users starts it, which the section says. Picking a user has the app check that
+distribution and user and keep its record ([Tools in WSL](app-host/README.md#tools-in-wsl-windows));
+**Detect again** lists them again. Every call of the page then goes to Claude Code's Linux build
+running in that distribution as that user, so the default file is that user's
+`~/.claude/settings.json` and typed paths are paths in the distribution (a
+`\\wsl.localhost\<distribution>\…` or `\\wsl$\…` path of the chosen distribution becomes its Linux
+path; any other network path is refused there). The first use asks to **Install the Linux build for
+WSL**, in its own native confirmation. **Start Claude Code** starts it in that distribution through
+the launcher, in the Windows console. The page keeps its last choice for the window; the app checks
+it against its records on every call. **Connect** makes and keeps the key on Windows, as on any
+computer (the vault and its keys work on Linux, Windows and macOS), and the add-on's write in the
+distribution gets it after its confirmation.
 
 ## Codex
 
-The Codex page sets up and starts Codex with this core (`src/codex.tsx`). It needs the curated
-native tool `pluxy/codex-setup` ([app tools](../app-tools/README.md#codex)) and, for the launches,
-the execution program, both installed and enabled on the Device extensions page. Like the Claude
-Code page it is the window's own page, because **Apply** gives the tool the client key.
-
-**Refresh** previews Codex's `config.toml` and model catalog: in Codex's folder
-(`~/.codex`), selected files (links followed and kept), or a selected folder (such as a
-`CODEX_HOME`); it shows the status, the files it writes to, whether a key is in config.toml and the
-provider Codex uses now. When that provider is not pluxy's, it says that Codex hides conversations
-of another provider from resume, and that the app does not sync or change past conversations;
-nothing is rewritten. Files Codex would not take (config.toml not TOML, for example, or a catalog
-with no models list) show why instead of the form: Apply and Clear stay off, and
-Restore backup and the backups stay reachable. Choosing other files drops the last preview, so read
-them again before a write. The form keeps the old app's controls: **Model**, **Approval model** (Codex
-default or a catalog model), **Remote compaction (experimental)**, **Codex subagent settings**
-(**Enable subagents**, **Maximum concurrent threads per session**, **Default subagent model**,
-**Default reasoning effort**, **Include interruption messages**) and the **Codex model catalog**:
-**Import models from core** reads the core's served models only when pressed (no background or
-silent fetch) and adds those pluxy has a Codex template for; each model's display name,
-description, context windows, effective context, auto-compaction threshold, reasoning levels, input
-types, visibility, Tool Search and system prompt can be edited, or the model removed. The old app's
-OAuth sign-in method and openai-provider-identity switch are not carried. The **Client key** is one of the vault's plain secrets or client keys captured for this tool
-(`src/codexForm.ts`), or a new one through native key entry (**Add key…**).
-
-**Apply** (or **Update** / **Repair** once applied),
-**Clear** and **Restore backup** each call the tool with the files the last
-preview pinned (refused if a file changed since); its native confirmation names both files, the key's label for Apply, and that an edit made
-in the same instant by another program may be lost; **Backup and restore** shows once the files
-have been read and keeps both files in each manual backup. **Start Codex CLI** starts `codex` in a terminal through the launcher, **Start Codex
-App** starts the program the person names (Codex has no Linux app) in the working folder
-entered under Start CLI, which its card asks for while it is empty, and **Restart CLI service**,
-after its own confirmation that active CLI sessions are interrupted, runs `codex app-server daemon
-restart` detached; the launcher's confirmation shows each in full. The key is not part of any
-launch: Codex reads it from config.toml.
+The Codex page (`src/codex.tsx`) needs the curated native tool `pluxy/codex-setup`
+([app tools](../app-tools/README.md#codex)). It reads and writes Codex's `config.toml` and model
+list file together: by default in `~/.codex`, or two files (links followed and kept), or a folder
+(such as a `CODEX_HOME`). Before Connect, when the provider Codex uses now is not pluxy's, the head
+says that Codex hides conversations of another provider from resume, and that the app does not
+change past conversations. **Models** holds the **Default model** (one from the model list; Connect
+is held, with the reason, until there is one), the **Approval model** (Codex's default or a listed
+model), **Remote compaction**, **Subagents** (collapsed) and the **Model list**: **Import models from
+pluxy** reads what pluxy serves only when pressed and adds those Codex has a template for (the ones
+it has none for are named, until the files are read again); each model's display name, description,
+context windows, context used, compaction point, reasoning levels, input types, visibility, tool
+search and system prompt can be edited, or the model removed. **Start** adds **Restart Codex
+service** (after its own question, since it stops every running Codex session; it runs `codex
+app-server daemon restart` detached) and **Start Codex App** (the program the person names, in the
+folder chosen above: Codex has no Linux app).
 
 ## Claude Desktop
 
-The Claude Desktop page sets up and starts Claude Desktop (its Linux beta) with this core as its
-third-party inference gateway (`src/claudeDesktop.tsx`). It needs the curated native tool
-`pluxy/claude-desktop` ([app tools](../app-tools/README.md#claude-desktop)) and, for **Start Claude
-Desktop**, the execution program. Like the Claude Code page it is the window's own page, because
-**Apply** gives the tool the client key.
-
-**Refresh** previews Claude Desktop's three third-party files: in its folder
-`~/.config/Claude-3p` (`claude_desktop_config.json`, pluxy's gateway profile in `configLibrary` and
-`configLibrary/_meta.json`), in a selected folder (which may be a link) or as three selected files
-(links followed and kept). When nothing is at `~/.config/Claude-3p/configLibrary` yet (Claude
-Desktop makes it only once a configuration is saved in its own window), the page offers **Create
-configuration folder**, which asks in a native confirmation. Files Claude Desktop would not take
-are shown as such: Apply and Clear stay disabled, Restore backup and the backups stay
-reachable. The form keeps the
-old app's **Claude Desktop models and aliases** list: rows of **Original model**, **Alias (optional
-for Claude models)** and **1M**, **Add model** and **Remove model**, three Claude models to start
-with. Claude Desktop takes only Claude model names, so a non-Claude model needs an alias, and Claude
-Desktop sends that alias to the core, which must serve the model under it too. For a row whose alias
-the core does not list (`GET /models`), the page offers **Create alias in core**: after a native
-confirmation naming the core, the alias, the model and the accounts, the app adds the alias through
-the management API (`PATCH /v0/management/accounts/{id}`, its `model_alias`) to every account added
-by login that serves the model. An account set in core's config is changed only in core's config,
-so it is named and left alone, and a model only such accounts serve is refused; so is an alias the
-core already serves for anything else. Clear and Restore backup leave an alias made in
-core: the core's config is not the tool's file. The old app wrote the alias into the core's config
-file itself. The **Client key** is one of the
-vault's secrets (a client key only when it is bound to this tool), or a new one through native key
-entry.
-
-**Apply** (or **Update** / **Repair**), **Clear** and **Restore backup** each write the files the last preview pinned (the tool refuses
-one that changed since; choosing other files drops the preview), in the tool's native confirmation,
-which names the three files, the key's label for Apply and the same-instant warning.
-**Start Claude Desktop** asks the tool for its recipe (`claude-desktop`, run directly with no
-arguments in the home folder) and starts it through the launcher, with an optional program path for
-other installs. Claude Desktop reads its configuration at launch: quit and reopen it after a
-change (the page does not stop a running Claude Desktop). **Backup and restore** keeps manual
-backups of the three files, as on the Claude Code page.
+The Claude Desktop page (`src/claudeDesktop.tsx`) sets up Claude Desktop's third-party inference
+gateway (its Linux beta). It needs the curated native tool `pluxy/claude-desktop`
+([app tools](../app-tools/README.md#claude-desktop)). It reads and writes three files together: by
+default in `~/.config/Claude-3p` (`claude_desktop_config.json`, pluxy's gateway profile in
+`configLibrary` and `configLibrary/_meta.json`), or in a folder (which may be a link), or three
+files (links followed and kept). When nothing is at `~/.config/Claude-3p/configLibrary` yet
+(Claude Desktop makes it only once a configuration is saved in its own window), the head says so
+and offers **Create settings folder**, in a native confirmation. **Models** lists up to 16 models,
+each with an alias and **1M context**; three Claude models to start with. Claude Desktop takes only
+Claude model names, so a non-Claude model needs an alias, which pluxy must serve too. For a row whose
+alias pluxy does not list (`GET /models`), the page offers **Create alias in pluxy**: after a
+native confirmation naming pluxy, the alias, the model and the accounts, the app adds the alias
+through the management API (`PATCH /v0/management/accounts/{id}`, its `model_alias`) to every
+account added by sign-in that serves the model. An account set in pluxy's settings file is changed
+only there, so it is named and left alone, and a model only such accounts serve is refused; so is an
+alias pluxy already serves for anything else. Disconnect and Restore backup leave an alias made in
+pluxy. **Start Claude Desktop** asks the tool for its recipe (`claude-desktop`, run directly with
+no arguments in the home folder); Claude Desktop reads its settings at launch, so quit and reopen it
+after a change.
 
 ## OpenCode
 
@@ -1514,8 +1517,8 @@ installed on this device or offered by a registry, and the launcher (`pluxy/exec
 tool's native confirmation ("full access to your user account"), answered in that dialog only,
 and **Set up** shows the client's own page below, where its configuration is applied and the
 client started as on that page. The guide writes nothing itself and keeps no draft: a cancelled
-confirmation, or leaving the guide, leaves files and packages as they were; Clear
-and Restore backup on the client's page undo an apply.
+confirmation, or leaving the guide, leaves files and packages as they were; Disconnect (Clear,
+on the pages not yet on the shared parts) and Restore backup on the client's page undo an apply.
 
 A client joins the list by being an agent page: a window page that names the package it drives
 (`AgentPage` in `src/easyMode.tsx`), listed in `agentPages` in `src/agentPages.ts`. The list itself
