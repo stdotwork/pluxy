@@ -55,8 +55,7 @@ The window is a frame that does not scroll (`kit/frame.tsx`). It has four fixed 
 that scrolls:
 
 - **The navigation** holds five destinations, Home, Accounts, Activity, Tools and Settings, each
-  with a line icon; Settings sits at its foot. A destination no page belongs to is not shown: the
-  panel has no Tools.
+  with a line icon; Settings sits at its foot. A destination no page belongs to is not shown.
 - **The status block** at the navigation's foot says whether pluxy runs and where. The host fills
   it (`status` on the shell, a `FrameStatus`): a state (`running`, `down` for not answering,
   `stopped`, `unknown`), a word for it, a line saying where pluxy runs, and optionally a menu of
@@ -159,6 +158,26 @@ one sentence shown while a client has a button. A client whose settings file was
 button: the page says to paste the text there. The panel passes none; the desktop app offers
 "Set up" for the clients it can set up on its own computer.
 
+The Tools page (`#/tools`, `kit/pages/tools.tsx`) is where a person connects a coding tool and
+manages the keys tools send. It lists the tools core's scan found (Claude Code, Codex, OpenCode, Pi,
+Oh My Pi, and the three only the desktop app sets up, shown as `Not checked`), connected ones first,
+and `Set up` on a row opens three steps under it: make a key for that tool, put the text in its
+settings file, start the tool again. The key made in step 1 is named for the tool and is in that
+row's text only; its value is held in the page's memory, never in prefs, storage or the address, and
+goes when its notice is closed, the key is deleted or the page is left. Under the tools the page
+shows the address programs reach pluxy at and the keys: `New key` asks for a name, `Rename` and
+`Delete` (which asks first, and is off for the last key) work on each one. `ToolList`, the list
+of tools with its steps and no address or keys, is exported for the guided setup.
+
+A host adds to the page through `corePages({ tools })` (`ToolsOptions` in `kit/pages/tools.tsx`),
+and the panel passes nothing: `toolAction(client)` is what goes at the end of a row in place of
+`Set up`; `extraTools` are rows core's scan does not give; `keyOwners` reads the tool each key
+was made for, by key ID or masked key, for a key with no name; `isRemote` says the tools listed are
+on another computer than the one showing the page; `localPages` are links to the host's own pages
+for this computer's tools; `onRefresh` runs on `Refresh`. The page reads a key's name from its
+`label`, `PATCH /client-keys/{id}` renames it (a pluxy that answers 405 loses `Rename` for the
+visit), and `POST /client-keys` sends the name with the new key.
+
 | Page (ID) | Where it sits | Replaces (old route) |
 | --- | --- | --- |
 | Dashboard (`status`) | Home | Dashboard (`/`) |
@@ -168,6 +187,7 @@ button: the page says to paste the text there. The panel passes none; the deskto
 | Quota Management (`quota`) | Accounts, the tab "Limits" | Quota Management (`/quota`) |
 | Logs Viewer (`logs`) | Settings, a topic | Logs Viewer (`/logs`) |
 | Usage (`usage`) | Activity | No old panel page: the old desktop app's list of recorded requests |
+| Tools (`tools`) | Tools | No old page |
 | Set up pluxy (`setup`) | Settings, a topic | No old page |
 | Config Panel (`config`) | Settings, a topic | Config Panel (`/config`; `/settings` and `/api-keys` led there) |
 | System (`system`) | Settings, a topic | Management Center Info (`/system`) |
@@ -260,7 +280,7 @@ feature, it keeps the old label, unless the label named something this core does
 **Logs Viewer**
 
 - The "Method", "Status" and "Path" filters, and "Show Raw Logs": core's log holds no request
-  lines. Requests are on the Usage page and in the request logs.
+  lines. Requests are on the Activity page and in the request logs.
 - "Full Screen": a theme's `width` layout option `full` does it.
 - New lines every second: "Continuous reading" reads new lines every 2 seconds while the page is
   visible.

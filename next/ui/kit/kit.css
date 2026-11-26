@@ -13,7 +13,7 @@
 @import "./extensions/page.css";
 @import "./pages/quota.css";
 @import "./pages/status.css";
-@import "./pages/usage.css";
+@import "./pages/activity.css";
 
 @import "./pages/config.css";
 
@@ -25,3 +25,4 @@
 @import "./pages/accountTools.css";
 @import "./pages/accountSettings.css";
 @import "./pages/setup.css";
+@import "./pages/tools.css";

@@ -39,6 +39,8 @@ use tauri::{AppHandle, Webview};
 const PACKAGE: &str = "pluxy/claude-code";
 const EXECUTION: &str = "pluxy/execution";
 const LABEL: &str = "fixture Claude Code key";
+/// The page's one-press Connect.
+const CONNECT: &str = "Connect Claude Code";
 const FULL_ACCESS: &str = "full access to your user account";
 /// The guide's own element.
 const ROOT: &str = "[data-part=easy-mode]";
@@ -92,15 +94,17 @@ fn click(main: &Webview, selector: &str, text: &str) -> Result<(), String> {
 }
 
 /// Types value into the field labelled label inside the guide's element selector, as typing does
-/// (the input event a page listens to); waits for the field.
+/// (the input event a page listens to); waits for the field. A field whose row names it (no label of
+/// its own) is found by its accessible name.
 fn fill(main: &Webview, selector: &str, label: &str, value: &str) -> Result<(), String> {
     until(
         main,
         &format!("the field {label:?} in {selector}"),
         &format!(
-            "const s = {}; const l = [...(s?.querySelectorAll('label') ?? [])].find((l) => l.querySelector('.label')?.textContent.trim() === {}); \
-             const i = l?.querySelector('input'); if (!i || i.disabled) return false; \
-             Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, {}); \
+            "const s = {0}; const l = [...(s?.querySelectorAll('label') ?? [])].find((l) => l.querySelector('.label')?.textContent.trim() === {1}); \
+             const i = l?.querySelector('input') ?? [...(s?.querySelectorAll('input[aria-label]') ?? [])].find((i) => i.getAttribute('aria-label') === {1}); \
+             if (!i || i.disabled) return false; \
+             Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(i, {2}); \
              i.dispatchEvent(new Event('input', {{ bubbles: true }})); return true;",
             within(selector),
             json!(label),
@@ -232,14 +236,16 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
         "pluxy/claude-code is still installed before the guide",
     )?;
 
-    // ---- open: listed in the navigation, two steps, the first shown
+    // ---- open: listed among the topics of Tools, two steps, the first shown
     step(
         "open",
         (|| {
+            main.eval("location.hash = '#/tools'")
+                .map_err(|e| e.to_string())?;
             until(
                 main,
-                "Beginner Mode in the navigation",
-                "return [...document.querySelectorAll('[data-part=nav] a')].some((a) => a.getAttribute('href') === '#/easy-mode');",
+                "Beginner Mode among the topics of Tools",
+                "return [...document.querySelectorAll('[data-part=topics] a, [data-part=topics-select] option')].some((a) => (a.getAttribute('href') ?? a.value) === '#/easy-mode');",
             )
             .map_err(|_| "the window lists no Beginner Mode page (#/easy-mode)".to_string())?;
             main.eval("location.hash = '#/easy-mode'")
@@ -428,17 +434,20 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
                     within(page)
                 ),
             )?;
+            // The page reads Claude Code's own file as it opens; the check names another one under
+            // "Settings file, key and backups" and reads that.
             choose(main, page, "file")?;
             fill(main, page, "File", &txt(&settings))?;
-            click(main, page, "Refresh")?;
+            click(main, page, "Read this file")?;
             wait_for("the page to read the file", || {
-                text(main, &format!("{page} dl.facts dd")).filter(|t| t == "Not configured")
+                text(main, &format!("{page} .tool-facts")).filter(|t| t.contains(&txt(&settings)))
             })
             .map_err(|e| format!("{e}: {:?}", text(main, page)))?;
+            // The key the check entered: Connect then makes none.
             choose(main, page, c.secret)?;
             let needles = [PACKAGE, "apply", &txt(&settings), LABEL];
             // Cancelled: the file stays as it was.
-            click(main, page, "Apply")?;
+            click(main, page, CONNECT)?;
             confirmation(c, &needles)?;
             std::thread::sleep(SETTLE);
             press("alt+c")?;
@@ -446,8 +455,9 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
                 js(
                     main,
                     &format!(
-                        "return [...({}?.querySelectorAll('button') ?? [])].some((b) => b.textContent.trim() === 'Apply' && !b.disabled);",
-                        within(page)
+                        "return [...({}?.querySelectorAll('button') ?? [])].some((b) => b.textContent.trim() === {} && !b.disabled);",
+                        within(page),
+                        json!(CONNECT)
                     ),
                 )
                 .filter(|v| v == true)
@@ -459,12 +469,12 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
             )?;
             // Confirmed: core's address, the key and the default mapping; the person's own value
             // stays.
-            click(main, page, "Apply")?;
+            click(main, page, CONNECT)?;
             confirmation(c, &needles)?;
             std::thread::sleep(SETTLE);
             press("alt+o")?;
-            wait_for("the page to show the file applied", || {
-                text(main, &format!("{page} dl.facts dd")).filter(|t| t == "Applied")
+            wait_for("the page to show Claude Code connected", || {
+                text(main, &format!("{page} .tool-head .badge")).filter(|t| t == "Connected")
             })
             .map_err(|e| format!("{e}: {:?}", text(main, page)))?;
             let target = s(&ok(main, "connection_get", json!({}))?["target"]);
@@ -498,7 +508,7 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
                     let _ = std::fs::remove_file(records.join(format!("{name}.{x}")));
                 }
             }
-            fill(main, page, "Working folder", &txt(&work))?;
+            fill(main, page, "Folder", &txt(&work))?;
             click(main, page, "Start Claude Code")?;
             confirmation(
                 c,

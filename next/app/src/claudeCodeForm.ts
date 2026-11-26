@@ -1,10 +1,10 @@
 // The Claude Code page's form logic (claudeCode.tsx), apart from the page so its unit tests need no
 // webview: the form from what the settings file holds, and whether the form can be applied.
 
-import { inHome, linuxBuildMissing, notInWsl } from "./environment";
+import { inHome } from "./environment";
 
-/** Claude Code's own models (its documentation's alias table), suggested until the model picker
- * lists the core's. */
+/** Claude Code's own models (its documentation's alias table): the form's models before a file is
+ * read. */
 export const MODELS = [
   "claude-opus-5-5",
   "claude-sonnet-5-5",
@@ -93,8 +93,3 @@ export function ready(f: Form): boolean {
 
 /** Where Claude Code keeps its user settings: in the home of the selected WSL user, else `~`. */
 export const settingsNote = (home?: string) => inHome(home ?? "~", ".claude/settings.json");
-
-/** Whether a refusal says the tool cannot be used here at all (not installed, not enabled), rather
- * than that its Linux build for WSL is missing or that it does not run in WSL. */
-export const toolUnavailable = (e?: string) =>
-  !!e && !linuxBuildMissing(e) && !notInWsl(e) && (e.includes(PACKAGE) || e.includes("not installed"));

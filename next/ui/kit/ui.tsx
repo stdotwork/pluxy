@@ -668,7 +668,7 @@ export function overflowSides(box: {
  * The box a table scrolls in. When the table is wider than the box, data-more on the frame
  * names the side (or sides) with columns out of view, and the frame fades that side out.
  */
-function TableFrame(props: { children: ComponentChildren }) {
+export function TableFrame(props: { children: ComponentChildren }) {
   const wrap = useRef<HTMLDivElement>(null);
   const [more, setMore] = useState<ReturnType<typeof overflowSides>>();
   useLayoutEffect(() => {
@@ -767,6 +767,8 @@ export function Choices<V extends string>(props: {
   value: V | undefined;
   choices: Choice<V>[];
   onChange: (v: V) => void;
+  /** Every choice shown but none can be picked, such as while what it chooses is in use. */
+  disabled?: boolean;
 }) {
   const id = useId();
   return (
@@ -782,6 +784,7 @@ export function Choices<V extends string>(props: {
               name={id}
               value={c.value}
               checked={props.value === c.value}
+              disabled={props.disabled}
               onChange={() => props.onChange(c.value)}
             />
             <span>

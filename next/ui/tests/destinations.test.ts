@@ -16,8 +16,8 @@ test("each of core's pages sits under the destination a person looks for it in",
   expect(byDest).toEqual({
     home: ["status"],
     accounts: ["accounts", "add-account", "routing", "quota"],
-    activity: ["usage"],
-    tools: [],
+    activity: ["usage", "activity/usage"],
+    tools: ["tools"],
     settings: ["setup", "config", "system", "extensions", "themes", "logs"],
   });
 });
@@ -27,8 +27,14 @@ test("a destination opens its first page that sits under no other; one with no p
   expect(destinationHome(pages, "home")?.id).toBe("status");
   expect(destinationHome(pages, "accounts")?.id).toBe("accounts");
   expect(destinationHome(pages, "settings")?.id).toBe("setup");
-  // The panel has no Tools pages, so its navigation shows no Tools.
-  expect(destinationHome(pages, "tools")).toBeUndefined();
+  expect(destinationHome(pages, "tools")?.id).toBe("tools");
+  // A destination with no page has none, so its navigation entry is not shown.
+  expect(
+    destinationHome(
+      pages.filter((p) => p.dest !== "tools"),
+      "tools",
+    ),
+  ).toBeUndefined();
   const child: PageDef = { id: "child", title: "Child", dest: "tools", under: "parent", render };
   const parent: PageDef = { id: "parent", title: "Parent", dest: "tools", render };
   expect(destinationHome([child, parent], "tools")?.id).toBe("parent");
@@ -41,6 +47,14 @@ test("Accounts has three tabs, named for what a person does there", () => {
   expect(placed?.current).toBe("routing");
   expect(placed?.above).toEqual([]);
   expect(placed?.topics).toEqual([]);
+});
+
+test("Activity has two tabs, Requests first, so the destination opens on it", () => {
+  const pages = corePages();
+  expect(destinationHome(pages, "activity")?.id).toBe("usage");
+  const placed = place(pages, "activity/usage");
+  expect(placed?.tabs.map((p) => p.label ?? p.title)).toEqual(["Requests", "Usage"]);
+  expect(placed?.current).toBe("activity/usage");
 });
 
 test("a page under another shows the way back and no tabs", () => {

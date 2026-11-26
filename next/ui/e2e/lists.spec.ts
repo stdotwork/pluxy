@@ -268,7 +268,7 @@ test("a list that failed to load shows the failure, not an empty state", async (
   await openPanel(page, core);
   await signIn(page, core);
   const main = page.getByRole("main");
-  for (const name of ["Accounts", "Quota Management", "Usage", "Extensions"]) {
+  for (const name of ["Accounts", "Quota Management", "Requests", "Extensions"]) {
     await goTo(page, name);
     await expect(page).toHaveTitle(new RegExp(`^${name} · `));
     await expect(main.getByRole("alert").filter({ hasText: "core could not read it" }).first()).toBeVisible();
@@ -298,7 +298,7 @@ test("Quota: no account leads to Add Account, a search with no match can be clea
   await expect(page.locator('[data-part="item"]')).toHaveCount(1);
 });
 
-test("Usage: no request leads to setup, filters with no match can be cleared, a trace ID copies", async ({
+test("Requests: no request leads to a tool, filters with no match can be cleared, a trace ID copies", async ({
   page,
   context,
 }) => {
@@ -306,40 +306,55 @@ test("Usage: no request leads to setup, filters with no match can be cleared, a 
   await page.route("**/v0/management/usage/events?*", (route) => {
     const filtered = new URL(route.request().url()).searchParams.get("model");
     const events = filtered === null ? [event(2), event(1)] : [];
-    return route.fulfill({ json: { events, next: 3, more: false, lost: false } });
+    return route.fulfill({ json: { events, next: 1, more: false, lost: false } });
   });
   await openPanel(page, core);
   await signIn(page, core);
-  await goTo(page, "Usage");
-  const rows = page.locator('[data-page="usage"] [data-part="item"]');
+  await goTo(page, "Requests");
+  const rows = page.locator('[data-page="usage"] [data-part="request-row"]');
   await expect(rows).toHaveCount(2);
 
-  // The copy button copies the ID and does not open the row.
-  const row = rows.filter({ hasText: "trace-2" });
+  // The copy button copies the ID and does not open or close the row.
+  const row = rows.filter({ hasText: "fake-model" }).first();
+  await row.getByRole("button", { expanded: false }).click();
   const trace = row.locator('[data-part="trace-id"]');
-  await expect(trace.getByRole("link", { name: "trace-2", exact: true })).toBeVisible();
+  await expect(trace).toContainText("trace-2");
   await trace.getByRole("button", { name: "Copy trace ID trace-2", exact: true }).click();
   await expect(trace.getByRole("button")).toHaveText("Copied");
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("trace-2");
-  await expect(page.getByRole("complementary")).toHaveCount(0);
-  // Latency and tokens are numbers: set against the end edge.
-  const ends = await row.locator("td.num").allTextContents();
-  expect(ends).toEqual(["12 ms", "2,000"]);
+  await expect(row.getByRole("button", { expanded: true })).toBeVisible();
 
+  // A filter with no match says so, and can be cleared.
+  await page.goto(`${core.base}/panel/#/usage?model=no-such-model`);
   const empty = page.getByRole("main").locator('[data-part="empty"]');
-  await page.getByLabel("Model", { exact: true }).fill("no-such-model");
   await expect(empty).toHaveAttribute("data-variant", "filter");
+  await expect(empty).toContainText("No requests match.");
   await empty.getByRole("button", { name: "Clear filters", exact: true }).click();
   await expect(rows).toHaveCount(2);
-  await expect(page.getByLabel("Model", { exact: true })).toHaveValue("");
+  expect(new URL(page.url()).hash).toBe("#/usage");
 
+  // Nothing kept leads to connecting a tool.
   await page.unroute("**/v0/management/usage/events?*");
   await page.route("**/v0/management/usage/events?*", (route) =>
     route.fulfill({ json: { events: [], next: 0, more: false, lost: false } }),
   );
+  await page.route("**/v0/management/usage?*", (route) =>
+    route.fulfill({
+      json: {
+        enabled: true,
+        total_requests: 0,
+        series: [],
+        models: [],
+        providers: [],
+        accounts: [],
+        keys: [],
+      },
+    }),
+  );
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
-  await expect(empty).toHaveAttribute("data-variant", "none");
-  await empty.getByRole("link", { name: "Set up pluxy", exact: true }).click();
+  const none = page.locator('[data-part="state-pane"]');
+  await expect(none).toContainText("No recent requests.");
+  await none.getByRole("link", { name: "Connect a tool", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "Set up pluxy" })).toBeVisible();
 });
 

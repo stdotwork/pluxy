@@ -9,16 +9,19 @@ import { configPage } from "./config";
 import { extensionsPage } from "./extensions";
 import { logsPage } from "./logs";
 import { quotaPage } from "./quota";
+import { requestsPage } from "./requests";
 import { routingPage } from "./routing";
 import { type SetupOptions, setupPage } from "./setup";
 import { statusPage } from "./status";
 import { systemPage } from "./system";
 import { themesPage } from "./themes";
-import { usagePage } from "./usage";
+import { type ToolsOptions, toolsPage } from "./tools";
+import { usageTabPage } from "./usage";
 
 /** What a build adds to core's pages; the panel adds nothing. */
 export interface CorePageOptions {
   setup?: SetupOptions;
+  tools?: ToolsOptions;
 }
 
 export const corePages = (options?: CorePageOptions): PageDef[] => [
@@ -27,8 +30,10 @@ export const corePages = (options?: CorePageOptions): PageDef[] => [
   addAccountPage(),
   routingPage(),
   quotaPage(),
-  usagePage(),
+  requestsPage(),
+  usageTabPage(),
   setupPage(options?.setup),
+  toolsPage(options?.tools),
   configPage(),
   systemPage(),
   extensionsPage(),

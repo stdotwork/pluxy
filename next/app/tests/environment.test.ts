@@ -10,7 +10,6 @@ import {
   linuxBuildMissing,
   linuxPath,
   linuxPlatform,
-  notInWsl,
   parseSelection,
   prefKey,
   recordOf,
@@ -189,11 +188,5 @@ describe("refusals the pages recognise", () => {
     expect(linuxBuildMissing("pluxy/claude-code is not installed on this device")).toBe(false);
     expect(linuxBuildMissing("pluxy has no Linux build for riscv64")).toBe(false);
     expect(linuxBuildMissing("pluxy/claude-code does not run in WSL")).toBe(false);
-  });
-
-  test("a package that does not run in WSL", () => {
-    expect(notInWsl("pluxy/claude-desktop does not run in WSL")).toBe(true);
-    expect(notInWsl("pluxy/claude-code is not installed on this device")).toBe(false);
-    expect(notInWsl(undefined)).toBe(false);
   });
 });

@@ -121,7 +121,9 @@ const PLACES: Record<string, { dest: string; tab?: string; link?: string }> = {
   "Add Account": { dest: "Accounts", link: "Add Account" },
   Routing: { dest: "Accounts", tab: "Order & fallback" },
   "Quota Management": { dest: "Accounts", tab: "Limits" },
-  Usage: { dest: "Activity" },
+  Requests: { dest: "Activity" },
+  Usage: { dest: "Activity", tab: "Usage" },
+  Tools: { dest: "Tools" },
 };
 
 /**
@@ -157,13 +159,15 @@ const TITLES: Record<string, string> = {
   "add-account": "Add Account",
   routing: "Routing",
   quota: "Quota Management",
-  usage: "Usage",
+  usage: "Requests",
+  "activity/usage": "Usage",
   setup: "Set up pluxy",
   config: "Config Panel",
   system: "System",
   extensions: "Extensions",
   themes: "Themes",
   logs: "Logs Viewer",
+  tools: "Tools",
 };
 
 /** Goes to one of core's pages by its ID, as goTo does by title. */

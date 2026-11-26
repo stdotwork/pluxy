@@ -1,6 +1,6 @@
-// What the client pages (Claude Code, Codex, Claude Desktop, OpenCode, Oh My Pi, Grok Build, Hermes
-// Agent, Pi) share about what is missing: where a client key comes from, why Apply or Start is
-// switched off, and the tool-not-installed notice that links to Device extensions.
+// What the tool pages share about what is missing: where a key comes from and why Apply is off
+// (on the pages not yet on the shared parts: OpenCode, Oh My Pi, Grok Build, Hermes Agent, Pi), why
+// Start is off, and the add-on-not-installed notice that links to Add-ons.
 
 import type { ComponentChildren } from "preact";
 import { rich, strings } from "../../ui/kit/strings";
@@ -8,12 +8,12 @@ import { type Loaded, Notice } from "../../ui/kit/ui";
 
 const t = strings("clientHelp", {
   noKeys: "No keys yet: add one.",
-  keyFrom: "Create a client key in {config} under Client keys, or run pluxy key add.",
+  keyFrom: "Make a key in {config}, then add it here.",
   loadingKeys: "Loading keys…",
-  config: "Config Panel",
-  needKey: "Choose a client key above: this button stays off until one is chosen.",
-  needFolder: "Start stays off until you enter the folder to start in.",
-  deviceName: "Device extensions",
+  config: "pluxy's settings",
+  needKey: "Choose a key above: this button stays off until one is chosen.",
+  needFolder: "Start stays off until you choose a folder.",
+  deviceName: "Add-ons",
 });
 
 /** Words for where a client key comes from, with a link to the page that makes one. */
@@ -43,7 +43,7 @@ export function NeedsKey(props: { missing: boolean }) {
 /** What Start waits for, while the working directory is empty (undefined once it is not). */
 export const folderWait = (cwd: string): string | undefined => (cwd.trim() ? undefined : t("needFolder"));
 
-/** A notice text with "{device}" turned into a link to the Device extensions page. */
+/** A notice text with "{device}" turned into a link to the Add-ons page (#/device). */
 export const withDeviceLink = (text: string): ComponentChildren =>
   rich(text, { device: <a href="#/device">{t("deviceName")}</a> });
 

@@ -62,11 +62,16 @@ export function setupGate(
   return { offered: true, open: reply.body?.first_run === true && hash.replace(/^#\/?/, "") === "" };
 }
 
-function currentId(pages: PageDef[]): string {
-  const path = location.hash.replace(/^#\/?/, "");
+export function currentId(pages: PageDef[]): string {
+  // What follows a ? is the page's own business (its filters), not a page's name.
+  const path = location.hash.replace(/^#\/?/, "").split("?")[0] ?? "";
   const match = pages.filter((p) => path === p.id || path.startsWith(`${p.id}/`));
   const longest = match.sort((a, b) => b.id.length - a.id.length)[0];
-  return longest?.id ?? pages[0]?.id ?? "";
+  if (longest) return longest.id;
+  // An address whose first part names a destination opens that destination's first page.
+  const named = DESTINATIONS.find((d) => d === path.split("/")[0]);
+  const home = named && destinationHome(pages, named);
+  return home?.id ?? pages[0]?.id ?? "";
 }
 
 /** Draws one extension page. The panel's default shows it in a sandboxed frame. */

@@ -461,11 +461,11 @@
 
   .tool-line {
     display: grid;
-    grid-template-columns: minmax(10em, 1fr) minmax(max-content, auto) minmax(0, 1.2fr) auto;
+    grid-template-columns: minmax(10em, 1fr) 28ch minmax(0, 1.2fr) max(14em, 27ch);
     align-items: center;
     gap: calc(var(--s) * 3);
     min-height: var(--px-size-row);
-    padding: 0 calc(var(--s) * 2);
+    padding: var(--s) calc(var(--s) * 2);
   }
 
   .tool-who {
@@ -514,7 +514,7 @@
   }
 
   /* A narrow pane: the state goes under the name, and the path is left out. */
-  @container (max-width: 44em) {
+  @container (max-width: 54em) {
     .tool-line {
       grid-template-columns: minmax(0, 1fr) auto;
       row-gap: 0;
