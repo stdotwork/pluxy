@@ -213,11 +213,12 @@ fn ask(app: &AppHandle, ask: Ask) -> Result<(), String> {
 
 /// What the confirmation for adopting the program at path says, in plain words: the program, its
 /// size and the start of its SHA-256 (the whole digest binds the file the dialog was opened for),
-/// what the app does with it, and that nothing vouches for it.
+/// what the app does with it, and that nothing vouches for it. The path's line breaks and other
+/// control and format characters show escaped, so a path cannot add lines of its own.
 pub(crate) fn adopt_what(path: &std::path::Path, size: u64, sha256: &str) -> String {
     format!(
         "Run this program as pluxy?\n\nThe app copies {} ({}, SHA-256 {}) into its own folder and runs the copy. It is not signed: use only a program you trust.",
-        path.display(),
+        crate::confirmation::escape_format_characters(&path.display().to_string()),
         size_text(size),
         sha256.get(..12).unwrap_or(sha256)
     )

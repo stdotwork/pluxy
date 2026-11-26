@@ -869,6 +869,11 @@ fn the_adopt_review_says_in_plain_words_what_runs() {
         ),
         "{notice}"
     );
+    // A path cannot add lines of its own to the review.
+    let odd = dir.join("pluxy\nIt is signed by pluxy.");
+    let what = crate::core_updates::adopt_what(&odd, 2_500_000, &sha256);
+    assert_eq!(what.lines().count(), 3, "{what}");
+    assert!(what.contains("pluxy\\u000aIt is signed"), "{what}");
     // The file is still bound: replaced, the review is refused.
     let p = c.prepare_plain(action).unwrap();
     fs::remove_file(&program_path).unwrap();
