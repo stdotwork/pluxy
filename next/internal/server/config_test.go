@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"maps"
 	"os"
 	"path/filepath"
@@ -491,6 +492,23 @@ func TestConfigJSONErrorsInTheFilesTerms(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A client key's label that is a client key or the management key is refused when the file loads, in
+// both layouts: a label is listed and recorded in usage events.
+func TestParseConfigRefusesKeyAsLabel(t *testing.T) {
+	for _, secret := range []string{"key-a", "key-m", "  key-b "} {
+		json := `{"listen": ":1", "management_key": "key-m", "client_keys": ["key-a", "key-b"], "client_key_labels": {"id-a": "` + secret + `"}}`
+		yaml := "server: {host: 127.0.0.1, port: 9100}\naccess:\n  api-keys: [key-a, key-b]\nmanagement: {secret-key: key-m}\nclient_key_labels: {id-a: '" + secret + "'}\n"
+		for name, tc := range map[string]struct{ src, path string }{"json": {json, "/srv/config.json"}, "yaml": {yaml, "/srv/config.yaml"}} {
+			_, err := ParseConfig([]byte(tc.src), tc.path)
+			if !errors.Is(err, ErrLabelIsKey) {
+				t.Errorf("%s: label %q: err = %v, want ErrLabelIsKey", name, secret, err)
+			} else if strings.Contains(err.Error(), "key-") {
+				t.Errorf("%s: the error shows a key: %v", name, err)
+			}
+		}
 	}
 }
 

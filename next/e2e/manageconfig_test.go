@@ -1067,13 +1067,128 @@ func TestManageClientKeyLabels(t *testing.T) {
 	}
 }
 
+// A label that is a client key or the management key is refused, as the label of any key: labels
+// are listed by GET /client-keys and recorded on usage events.
+func TestManageClientKeyLabelsRefusesKeys(t *testing.T) {
+	for _, f := range formats() {
+		t.Run(f.name, func(t *testing.T) {
+			c := startManaged(t, f.yaml, clientKey, secondClientKey)
+			first := c.keys(t)[0]
+			before := c.snap(t)
+			for name, label := range map[string]string{
+				"a client key":          clientKey,
+				"another client key":    secondClientKey,
+				"the management key":    managementKey,
+				"a key with its spaces": "  " + clientKey + " ",
+			} {
+				body := map[string]string{"label": label}
+				for _, call := range []struct{ method, path string }{{http.MethodPatch, "/client-keys/" + first.ID}, {http.MethodPost, "/client-keys"}} {
+					b := c.expect(t, http.StatusBadRequest, call.method, call.path, body)
+					if errorCode(t, b) != "invalid_request" {
+						t.Errorf("%s %s with %s: %s", call.method, call.path, name, b)
+					}
+					wantNoSecrets(t, call.method+" "+call.path+" with "+name, string(b), managedSecrets...)
+				}
+			}
+			c.wantSame(t, before, "a key as a label")
+		})
+	}
+}
+
+// A label that a config.yaml sets through an alias or a merge key cannot be set or cleared in
+// place: PATCH refuses with 422 and a message saying to edit the file, and writes nothing, where
+// it used to answer 200 and leave the label as it was.
+func TestManageClientKeyLabelsThroughAliasOrMerge(t *testing.T) {
+	cases := []struct {
+		name  string
+		block func(id string) string
+		// freeKey: another key's label can still be set, as the file holds no mapping of labels
+		// that is another's.
+		freeKey bool
+	}{
+		{"an alias for the labels", func(id string) string { return "x-labels: &l\n  " + id + ": Shared\nclient_key_labels: *l\n" }, false},
+		{"a merge key", func(id string) string {
+			return "x-labels: &l\n  " + id + ": Shared\nclient_key_labels:\n  <<: *l\n"
+		}, true},
+		{"an alias for a label", func(id string) string { return "x-name: &n Shared\nclient_key_labels:\n  " + id + ": *n\n" }, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := startManaged(t, true, clientKey, secondClientKey)
+			keys := c.keys(t)
+			first, second := keys[0], keys[1]
+			cur := c.config(t)
+			c.expect(t, http.StatusOK, http.MethodPut, "/config", map[string]string{"content": replaceOnce(t, cur.Content, "access:", tc.block(first.ID)+"access:"), "base_hash": cur.Hash})
+			if got := c.labelOf(t, first.Masked); got != "Shared" {
+				t.Fatalf("label in effect = %q\n%s", got, c.file(t))
+			}
+			before := c.snap(t)
+			for _, label := range []any{"Mine", nil, ""} {
+				b := c.expect(t, http.StatusUnprocessableEntity, http.MethodPatch, "/client-keys/"+first.ID, map[string]any{"label": label})
+				var e struct {
+					Error struct{ Code, Message string }
+				}
+				if err := json.Unmarshal(b, &e); err != nil || e.Error.Code != "refused" || !strings.Contains(e.Error.Message, "alias or merge in config.yaml") || !strings.Contains(e.Error.Message, "edit config.yaml") {
+					t.Errorf("PATCH label %v: %s", label, b)
+				}
+				c.wantSame(t, before, fmt.Sprintf("PATCH label %v", label))
+				if got := c.labelOf(t, first.Masked); got != "Shared" {
+					t.Errorf("label after the refused PATCH = %q", got)
+				}
+			}
+			if !tc.freeKey {
+				// Nothing can be added to labels that are another mapping.
+				c.expect(t, http.StatusUnprocessableEntity, http.MethodPatch, "/client-keys/"+second.ID, map[string]string{"label": "Two"})
+				c.expect(t, http.StatusUnprocessableEntity, http.MethodPost, "/client-keys", map[string]string{"label": "Two"})
+				c.wantSame(t, before, "naming a key beside aliased labels")
+			} else {
+				// Another key's own label is set in place, and the reply is what is stored.
+				var patched keyView
+				if err := json.Unmarshal(c.expect(t, http.StatusOK, http.MethodPatch, "/client-keys/"+second.ID, map[string]string{"label": " Two "}), &patched); err != nil {
+					t.Fatal(err)
+				}
+				if got := c.labelOf(t, second.Masked); patched.Label != "Two" || got != "Two" || c.labelOf(t, first.Masked) != "Shared" {
+					t.Errorf("reply %+v, listed %q, first key %q\n%s", patched, got, c.labelOf(t, first.Masked), c.file(t))
+				}
+				c.expect(t, http.StatusOK, http.MethodPatch, "/client-keys/"+second.ID, map[string]any{"label": nil})
+			}
+			// A key whose label is set through an alias or merge can still be removed.
+			c.expect(t, http.StatusNoContent, http.MethodDelete, "/client-keys/"+first.ID, nil)
+		})
+	}
+}
+
+// A body is one JSON object: data after it is refused (400), also by the calls that refuse
+// unknown fields, which used to read only the first object.
+func TestManageBodiesAreOneObject(t *testing.T) {
+	c := startManaged(t, false)
+	first := c.keys(t)[0]
+	before := c.snap(t)
+	for _, tail := range []string{` {"label":"B"}`, " x", " 1", " {"} {
+		for _, call := range []struct{ method, path, body string }{
+			{http.MethodPatch, "/client-keys/" + first.ID, `{"label":"A"}`},
+			{http.MethodPost, "/client-keys", `{"label":"A"}`},
+			{http.MethodPost, "/config/validate", `{"content":"{}"}`},
+			{http.MethodPatch, "/settings", `{}`},
+		} {
+			b := c.expect(t, http.StatusBadRequest, call.method, call.path, call.body+tail)
+			if errorCode(t, b) != "invalid_request" {
+				t.Errorf("%s %s with %q after the object: %s", call.method, call.path, tail, b)
+			}
+		}
+	}
+	c.wantSame(t, before, "bodies with data after the object")
+	// White space after the object is fine.
+	c.expect(t, http.StatusOK, http.MethodPatch, "/client-keys/"+first.ID, "{\"label\":\"A\"}\n \t")
+}
+
 // A label in the file that is not a valid name is refused like any invalid setting.
 func TestManageClientKeyLabelsRefusesBadFile(t *testing.T) {
 	c := startManaged(t, false)
 	first := c.keys(t)[0]
 	cur := c.config(t)
 	before := c.snap(t)
-	for name, label := range map[string]string{"long": strings.Repeat("x", 65), "two lines": "a\\nb"} {
+	for name, label := range map[string]string{"long": strings.Repeat("x", 65), "two lines": "a\\nb", "a client key": clientKey, "the management key": managementKey} {
 		content := replaceOnce(t, cur.Content, `"client_keys"`, `"client_key_labels": {"`+first.ID+`": "`+label+`"}, "client_keys"`)
 		if code, b := c.call(t, http.MethodPut, "/config", map[string]string{"content": content, "base_hash": cur.Hash}); code < 400 || code >= 500 {
 			t.Errorf("%s label in the file: status %d: %s", name, code, b)
