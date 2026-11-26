@@ -4,6 +4,7 @@
 
 import { useEffect, useState } from "preact/hooks";
 import type { Account } from "../api/accounts";
+import type { QuotaLimit } from "../api/quota";
 import { Icon, type IconName } from "../icons";
 import { Meter } from "../meter";
 import { accountIdentities, usePrivacy } from "../privacy";
@@ -24,6 +25,7 @@ import {
   providerName,
   resetsIn,
   rowWindows,
+  uncheckedWord,
   windowName,
   windowShort,
 } from "./account";
@@ -54,7 +56,15 @@ const MARK: Record<Group, IconName> = {
 };
 
 /** A group's mark: its shape, in its state colour, with the condition word as its name. */
-export function GroupMark(props: { c: Condition }) {
+export function GroupMark(props: { c: Condition; unchecked?: boolean }) {
+  // A condition that waits on a status pluxy could not read: a muted mark, named Not checked.
+  if (props.unchecked) {
+    return (
+      <span class="group-mark" data-group="unchecked">
+        <Icon name="waiting" label={uncheckedWord()} />
+      </span>
+    );
+  }
   // An account that serves but cools down on a model is marked as waiting: something is held back.
   const group = props.c.kind === "serving" && props.c.resting.length > 0 ? "waiting" : props.c.group;
   return (
@@ -123,44 +133,54 @@ export function Limits(props: {
   }
   return (
     <span class="limits" data-part="limits" data-state="read">
-      {rowWindows(w.limits).map((l) => {
-        const name = windowName(l);
-        const left = leftPercent(l);
-        const reset = resetsIn(l, now);
-        const countdown = reset === undefined ? undefined : shortDuration(reset / 1000);
-        const said = l.unlimited
-          ? t("titleNoLimit", { name })
-          : left === undefined
-            ? name
-            : left === 0
-              ? t("titleUsedUp", { name })
-              : t("titleLeft", { name, percent: left });
-        const title = countdown ? t("titleResets", { title: said, duration: countdown }) : said;
-        const word = l.unlimited
-          ? t("noLimit")
-          : left === undefined
-            ? ""
-            : left === 0
-              ? t("usedUp")
-              : t("left", { percent: left });
-        return (
-          <span class="limit" key={l.id} title={title}>
-            <span class="limit-name">{windowShort(l)}</span>
-            {left !== undefined ? (
-              <Meter
-                mode="left"
-                percent={left}
-                label={t("gauge", { account: props.account, name })}
-                valueText={word}
-              />
-            ) : (
-              <span class="meter" data-mode="left" data-tone="none" aria-hidden="true" />
-            )}
-            <span class="limit-left">{word}</span>
-            {countdown && <span class="limit-reset">{countdown}</span>}
-          </span>
-        );
-      })}
+      {rowWindows(w.limits).map((l) => (
+        <LimitLine key={l.id} limit={l} account={props.account} now={now} />
+      ))}
+    </span>
+  );
+}
+
+/**
+ * One limit: its name (short, "5h", or long, "5-hour limit"), a gauge of what is left, the share
+ * left and the countdown to its reset. account names the gauge for assistive technology.
+ */
+export function LimitLine(props: { limit: QuotaLimit; account: string; now?: number; long?: boolean }) {
+  const l = props.limit;
+  const now = props.now ?? Date.now();
+  const name = windowName(l);
+  const left = leftPercent(l);
+  const reset = resetsIn(l, now);
+  const countdown = reset === undefined ? undefined : shortDuration(reset / 1000);
+  const said = l.unlimited
+    ? t("titleNoLimit", { name })
+    : left === undefined
+      ? name
+      : left === 0
+        ? t("titleUsedUp", { name })
+        : t("titleLeft", { name, percent: left });
+  const title = countdown ? t("titleResets", { title: said, duration: countdown }) : said;
+  const word = l.unlimited
+    ? t("noLimit")
+    : left === undefined
+      ? ""
+      : left === 0
+        ? t("usedUp")
+        : t("left", { percent: left });
+  return (
+    <span class="limit" title={title}>
+      <span class="limit-name">{props.long ? windowName(l) : windowShort(l)}</span>
+      {left !== undefined ? (
+        <Meter
+          mode="left"
+          percent={left}
+          label={t("gauge", { account: props.account, name })}
+          valueText={word}
+        />
+      ) : (
+        <span class="meter" data-mode="left" data-tone="none" aria-hidden="true" />
+      )}
+      <span class="limit-left">{word}</span>
+      {countdown && <span class="limit-reset">{countdown}</span>}
     </span>
   );
 }
@@ -220,7 +240,8 @@ function FixButton(props: {
  * { disabled: false } and POST /accounts/{id}/cooldown/reset): each gives back the reply, or an
  * error to show, or nothing; the page reads the accounts again after one that worked. The row
  * builds its own links, so every page sends a fix to the same place. running is the extensions
- * core runs, for Provider stopped.
+ * core runs, for Provider stopped. unchecked marks a row whose condition waits on a status the
+ * page could not read (conditionUnchecked). requests is the week's count once read: 0 shows.
  */
 export function AccountRow(props: {
   account: Account;
@@ -228,6 +249,7 @@ export function AccountRow(props: {
   wide?: boolean;
   requests?: number;
   running?: ReadonlySet<string>;
+  unchecked?: boolean;
   onTurnOn: (id: string) => Promise<Outcome> | Outcome;
   onClearCooldown: (id: string) => Promise<Outcome> | Outcome;
 }) {
@@ -262,7 +284,7 @@ export function AccountRow(props: {
       class="account-row"
       data-part="account-row"
       data-group={c.group}
-      data-condition={c.kind}
+      data-condition={props.unchecked ? "unchecked" : c.kind}
       data-tall={tall ? "" : undefined}
       data-wide={props.wide ? "" : undefined}
       onClick={(e) => {
@@ -272,14 +294,15 @@ export function AccountRow(props: {
       }}
     >
       <div class="account-grid">
-        <GroupMark c={c} />
+        <GroupMark c={c} unchecked={props.unchecked} />
         <span class="account-who">
           <span class="account-line">
             <a class="account-name" href={href} title={name}>
               {name}
             </a>
             <span class="account-meta">
-              <span class="account-provider">{providerName(a.extension)}</span>
+              {/* An account pluxy cannot read names no provider: nothing to say here. */}
+              {a.extension && <span class="account-provider">{providerName(a.extension)}</span>}
               {plan && <PlanPill plan={plan} />}
             </span>
           </span>
@@ -298,7 +321,7 @@ export function AccountRow(props: {
         </span>
         {props.wide && (
           <span class="account-week">
-            {props.requests ? t("week", { count: props.requests.toLocaleString() }) : ""}
+            {props.requests === undefined ? "" : t("week", { count: props.requests.toLocaleString() })}
           </span>
         )}
         {(props.wide || limited) && <span class="account-fix">{fix}</span>}

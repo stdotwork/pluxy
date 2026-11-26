@@ -50,5 +50,7 @@ test("Home with every account out says so and leads to each fix", async ({ page 
   const signInAgain = page.getByRole("link", { name: "Sign in again: b", exact: true });
   await expect(signInAgain).toHaveAttribute("href", "#/accounts/b/sign-in");
   await signInAgain.click();
-  await expect(page.getByRole("heading", { level: 1, name: "Accounts" })).toBeVisible();
+  // The account's own page, with its sign-in open.
+  await expect(page.getByRole("heading", { level: 1, name: "b", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Sign in again", exact: true })).toBeVisible();
 });

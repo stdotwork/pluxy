@@ -22,4 +22,33 @@
     font-weight: var(--px-font-weight-strong);
     letter-spacing: 0.08em;
   }
+
+  .auth-import {
+    margin-top: calc(var(--s) * 4);
+    padding-top: calc(var(--s) * 3);
+    border-top: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .auth-import p {
+    margin: 0;
+  }
+
+  .auth-import-lines {
+    margin: calc(var(--s) * 2) 0 0;
+    padding: 0;
+    list-style: none;
+    overflow-wrap: anywhere;
+  }
+
+  .auth-import-lines [data-tone="ok"] {
+    color: var(--px-color-ok);
+  }
+
+  .auth-import-lines [data-tone="danger"] {
+    color: color-mix(in srgb, var(--px-color-danger) 75%, var(--px-color-text));
+  }
+
+  .auth-import-lines [data-tone="muted"] {
+    color: var(--px-color-text-muted);
+  }
 }

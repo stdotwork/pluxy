@@ -143,6 +143,8 @@ export interface AccountModelAlias {
 /** The fields PATCH /accounts/{id} changes; null sets one back to its default. */
 export interface AccountChange {
   disabled?: boolean;
+  /** The account's name as a person gave it; "" or null takes it away. Core refuses it (409) for an account set in its config. */
+  label?: string | null;
   prefix?: string | null;
   /** A proxy URL, `direct` or `none`; the URL as the account shows it keeps its password. */
   proxy_url?: string | null;

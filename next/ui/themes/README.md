@@ -103,8 +103,8 @@ anything.
 | `color.warn` | Degraded states | `#8f5600` / `#e5b866` |
 | `color.danger` | Errors, destructive actions | `#b3261e` / `#ff8f80` |
 | `color.focus` | Keyboard focus ring | `#1b1a17` / `#eceae3` |
-| `color.meter-track` | Unused part of a quota meter | `var(--px-color-surface-raised)` |
-| `color.meter-fill` | Used share of a quota meter | `var(--px-color-accent)` |
+| `color.meter-track` | The empty part of a limit's gauge | `var(--px-color-surface-raised)` |
+| `color.meter-fill` | What is left of a limit, on its gauge | `var(--px-color-accent)` |
 | `color.chart-success` | Successful requests in Home's chart of the last 7 days | `var(--px-color-text)` |
 | `color.chart-failure` | Failed requests in Home's chart of the last 7 days | `var(--px-color-danger)` |
 | `color.diff-add` | Added lines in a diff | `#1f7a43` / `#86d3a0` |
@@ -265,7 +265,7 @@ These stay stable within a theme contract version:
 | `data-appearance="light"` or `"dark"` | Root element |
 | `class="dark"` | Root element, while the appearance is dark |
 | `data-nav`, `data-list`, `data-detail`, `data-width`, `data-tabs` | Root element, set to the active layout value |
-| `data-page="<page id>"` | Root element: `status`, `accounts`, `add-account`, `routing`, `quota`, `logs`, `usage` (Requests), `activity/usage` (Usage), `setup`, `config`, `system`, `extensions`, `themes`, or an extension page's ID |
+| `data-page="<page id>"` | Root element: `status`, `accounts`, `account` (one account's page), `add-account`, `routing`, `logs`, `usage` (Requests), `activity/usage` (Usage), `setup`, `config`, `system`, `extensions`, `themes`, or an extension page's ID |
 | `data-part="shell"` | The whole UI below the root. Signed in, `data-frame` says how the navigation is drawn: `sidebar`, `rail` or `top` (the `nav` option), or `bar` in a very narrow window; `data-narrow` is set while the window is under 820 pixels wide |
 | `data-part="nav"` | The navigation |
 | `data-part="nav-idle"` | The navigation drawn where nothing in it can be chosen yet: the desktop app before it is connected. It has the same content and the same `data-slot` |
@@ -294,7 +294,7 @@ These stay stable within a theme contract version:
 | `data-part="button"` | A button; `data-variant` is `primary` (a view's main action, filled), `quiet` (the ordinary button, outlined), `ghost` (no border until hovered) or `danger` (outlined, in the danger colour) |
 | `data-part="badge"` | A state badge; `data-tone` is `ok`, `warn`, `danger` or `muted` |
 | `data-part="field"` | A labelled form control |
-| `data-part="meter"` | A share as a bar: a quota usage meter, or a limit's gauge of what is left. `data-mode` is `used` (fills by the share used) or `left` (fills by the share left, so full is plenty); `data-tone` is `ok`, `warn` or `danger`. Its child is the fill; warning and danger use the matching state colour. |
+| `data-part="meter"` | A limit's gauge of what is left, beside "{n}% left": full is plenty. `data-mode` is `left`; `data-tone` is `ok`, `warn` (10% left or less) or `danger` (used up). Its child is the fill; warning and danger use the matching state colour. |
 | `data-part="tabs"` | A group of tabs |
 | `data-part="tab"` | One tab |
 | `data-part="tab-panel"` | The panel shown by the selected tab |
@@ -304,12 +304,9 @@ These stay stable within a theme contract version:
 | `data-part="dialog"` | A dialog window |
 | `data-part="log"` | A core log or request log text view |
 | `data-part="log-line"` | One core log line; `data-level` is `info`, `warn` or empty for a line without a level |
-| `data-part="toolbar"` | A page's search, filters and actions |
-| `data-part="pager"` | Page size and previous/next controls |
 | `data-part="select"` | An item's batch selection checkbox |
-| `data-part="batch"` | Batch selection and account actions |
-| `data-part="account-meta"` | Account totals, active accounts and problems |
-| `data-part="upload-results"` | The result of each auth file uploaded on Accounts: the account it became, or why it was not imported |
+| `data-part="batch"` | All accounts' bar of actions for the selected accounts, while Select is on |
+| `data-part="upload-results"` | The result of each CLIProxyAPI auth file imported on Add Account: the account it became, or why it was not added |
 | `data-part="key-notice"` | A notice revealing a newly generated key until closed or its tab is left |
 | `data-part="key-value"` | The selectable value of a newly generated key inside its notice |
 | `data-part="method"` | A sign-in method tile with its label, kind caption and selected flow. |
@@ -319,12 +316,7 @@ These stay stable within a theme contract version:
 | `data-part="tile"` | One fact on the System page's about card: a label, its value and a note. |
 | `data-part="model-group"` | The models of one extension on the System page, under the extension's name and their count. |
 | `data-part="days"` | Home's chart of the last 7 days: seven day bars, each with its succeeded part and its failed part on top. |
-| `data-part="account-tools"` | Account detail health and tools. |
-| `data-part="account-check"` | Account check and recent request health. |
-| `data-part="account-cooldowns"` | Account routing cooldown list. |
-| `data-part="account-cooldown-confirm"` | Explanation of the local cooldown reset. |
-| `data-part="account-tool-actions"` | Account tool buttons. |
-| `data-part="account-config-link"` | Link to edit a config account. |
+| `data-part="account-tools"` | An account's models, test request and Renew sign-in now, under its page's "Settings, models and a test request". |
 | `data-part="account-test-hint"` | Account test cost and behavior. |
 | `data-part="account-models"` | Supported models and test model choice. |
 | `data-part="account-test-result"` | The last explicit account test result. |
@@ -334,12 +326,15 @@ These stay stable within a theme contract version:
 | `data-part="account-edit"` | The Edit form of an account added by login. |
 | `data-part="account-edit-row"` | One model or model alias row in the Edit form. |
 | `data-part="account-edit-discard"` | The Edit form's question before unsaved changes are discarded. |
-| `data-part="subscription-end"` | The Quota card's line with the day a subscription ends. |
 | `data-part="setup-found"` | The Setup page's list of what core found on its machine; `aria-busy="true"` while core looks again. |
 | `data-part="setup-pick"` | One provider on the Setup page's checklist; `data-state` is `offered`, `installed` or `failed`. |
 | `data-part="setup-client"` | One client on the Setup page; `data-state` is `not-configured`, `configured`, `needs-update`, `refused` or `not-found`. |
 | `data-part="setup-paste"` | The text to paste into a client's settings files, open under its client. |
-| `data-part="account-row"` | One account on one line, the same on every page: its group's mark, name, provider, plan and limits, and why and its fix when it needs the person or waits. `data-group` is `needs`, `waiting`, `serving` or `off`; `data-condition` is `serving`, `cooling`, `exhausted`, `needs_login`, `banned`, `broken`, `no_provider` or `off`; `data-tall` is set on a row that says why under the name; `data-wide` on the Accounts list's wider row |
+| `data-part="account-page"` | One account's own page; `data-group` is its group, as on its row |
+| `data-part="account-opening"` | The top of an account's page: its provider and plan, its condition and why, and its one fix |
+| `data-part="account-more"` | An account's "Settings, models and a test request" disclosure |
+| `data-part="auth-import"` | Add Account's "Have auth files from CLIProxyAPI?" line and its results |
+| `data-part="account-row"` | One account on one line, the same on every page: its group's mark, name, provider, plan and limits, and why and its fix when it needs the person or waits. `data-group` is `needs`, `waiting`, `serving` or `off`; `data-condition` is `serving`, `cooling`, `exhausted`, `needs_login`, `banned`, `broken`, `no_provider` or `off`, or `unchecked` when the status that says whether its provider runs could not be read (its mark then has `data-group="unchecked"`); `data-tall` is set on a row that says why under the name; `data-wide` on the Accounts list's wider row |
 | `data-part="request-row"` | One request on one line: its time, model, account, key, tokens, time taken and result. `data-failed` is set on a failed one; `data-open` while it shows its details; `data-compact` on Home's shorter row, a link to the request |
 | `data-part="setting-row"` | One setting: its name and what it does beside its control. `data-disabled` is set while the control cannot be used |
 | `data-part="tool-row"` | One coding tool: its name, version, state and settings file. `data-state` is `configured`, `not-configured`, `needs-update`, `refused`, `not_installed` or `unchecked` |

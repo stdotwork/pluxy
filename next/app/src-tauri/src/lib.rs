@@ -29,7 +29,7 @@ mod command_names;
 #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
 pub mod confirmation;
 pub mod conn;
-#[cfg(target_os = "linux")]
+#[cfg(native_stack)]
 mod core_aliases;
 mod core_updates;
 pub mod cores;
@@ -3004,17 +3004,17 @@ async fn core_alias_create(
     alias: String,
 ) -> Result<Value, String> {
     trusted(&webview)?;
-    #[cfg(target_os = "linux")]
+    #[cfg(native_stack)]
     {
         let app = webview.app_handle().clone();
         tauri::async_runtime::spawn_blocking(move || core_aliases::create(&app, &model, &alias))
             .await
             .map_err(|e| e.to_string())?
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(native_stack))]
     {
         let _ = (model, alias);
-        Err("native confirmations are supported on Linux only".into())
+        Err("native confirmations are supported on Linux, Windows and macOS only".into())
     }
 }
 

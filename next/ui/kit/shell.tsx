@@ -60,18 +60,41 @@ export function setupGate(
 }
 
 /**
- * The page the address (hash) opens: the page whose ID it equals or starts with, the longest. What
- * follows a "?" is ignored when matching. An address whose first part names a destination with no
- * page of that ID (such as #/activity) opens that destination's first page; any other unknown
- * address opens the first page.
+ * How much of path an address of a page matches, or 0 for none: an ID or an exact address matches
+ * itself and anything under it ("logs" matches "logs/abc"); a prefix ending in "/" matches what
+ * starts with it and has more after it ("accounts/" matches "accounts/acc_1", not "accounts").
+ */
+function matched(path: string, address: string): number {
+  if (address.endsWith("/"))
+    return path.length > address.length && path.startsWith(address) ? address.length : 0;
+  return path === address || path.startsWith(`${address}/`) ? address.length : 0;
+}
+
+/**
+ * The page the address (hash) opens: the page whose ID or one of its addresses (PageDef.addresses)
+ * matches it, the longest match first. What follows a "?" is ignored when matching. An address
+ * whose first part names a destination with no page of that ID (such as #/activity) opens that
+ * destination's first page; any other unknown address opens the first page.
  */
 export function currentId(pages: PageDef[], hash = location.hash): string {
+  // What follows a ? is the page's own business (its filters), not a page's name.
   const path = (hash.replace(/^#\/?/, "").split("?")[0] ?? "").replace(/\/$/, "");
-  const match = pages.filter((p) => path === p.id || path.startsWith(`${p.id}/`));
-  const longest = match.sort((a, b) => b.id.length - a.id.length)[0];
-  if (longest) return longest.id;
-  const dest = DESTINATIONS.find((d) => d === path.split("/")[0]);
-  return (dest && destinationHome(pages, dest)?.id) ?? pages[0]?.id ?? "";
+  let best: PageDef | undefined;
+  let length = 0;
+  for (const p of pages) {
+    for (const address of [p.id, ...(p.addresses ?? [])]) {
+      const n = matched(path, address);
+      if (n > length) {
+        best = p;
+        length = n;
+      }
+    }
+  }
+  if (best) return best.id;
+  // An address whose first part names a destination opens that destination's first page.
+  const named = DESTINATIONS.find((d) => d === path.split("/")[0]);
+  const home = named && destinationHome(pages, named);
+  return home?.id ?? pages[0]?.id ?? "";
 }
 
 /** Draws one extension page. The panel's default shows it in a sandboxed frame. */

@@ -90,6 +90,7 @@ render function, and where it sits:
 | `dest` | The destination the page belongs to |
 | `kind` | `"tab"`: one of the destination's tabs in the header strip. `"topic"`: one of its topics beside the page. Left out: the page is reached from the navigation entry itself or from another page |
 | `under` | The ID of the page it sits under. The header strip then shows the way back (`Accounts / Add Account`), and no tabs |
+| `addresses` | Other addresses the page answers: an exact old ID (All accounts answers `quota`, the Quota page it replaced), or a prefix ending in `/` for whatever follows it (an account's page answers `accounts/`, so `#/accounts/<id>` opens it). Where several pages match, the longest match wins |
 | `label` | Its name in its tab or topic entry, when the title does not fit there (Routing's tab reads "Order & fallback") |
 | `section` | The group a topic is listed in: `core` (the default), `device` or `extensions` |
 | `tip` | The tooltip of its tab or topic entry |
@@ -123,19 +124,23 @@ panel that `extensions/panel` held) that each one replaces. A page's ID is its a
 (`#/<id>`) and its theme hook `data-page`. Why the pages have these names, and the other
 decisions behind them, is in [docs/panel.md](../../docs/panel.md).
 
-The shell matches an address to a page by its ID, the longest match, and ignores what follows a `?`
-(`#/status?x=1` opens Home). An address whose first part names a destination that has no page
-of that ID, such as `#/activity` or `#/activity?trace=<id>`, opens that destination's first page.
+The shell matches an address to a page by its ID or one of the other addresses the page answers
+(an exact old ID, or a prefix ending in `/`), the longest match, and ignores what follows a `?`
+(`#/status?x=1` opens Home; `#/quota`, the retired Quota page's address, opens All accounts).
+An address whose first part names a destination that has no page of that ID, such as `#/activity` or `#/activity?trace=<id>`, opens that destination's first page.
 Any other unknown address opens the first page.
 
 A change of page opens the new page at its top: the frame scrolls the pane there, so a page
 opened from a button far down another one shows from its start. A change inside a page (a tab or
 a filter in its address) keeps the place.
 
-Two pages add to their address. `#/logs/<trace ID>` opens that request's log in the Logs Viewer.
+Three pages add to their address. `#/accounts/<id>` opens that account's own page (the page
+`account`, which answers that prefix), and `#/accounts/<id>/sign-in` opens it with its sign-in in
+place. `#/logs/<trace ID>` opens that
+request's log in the Logs Viewer.
 `#/config/<tab>` opens a tab of the Config Panel: `common` (what `#/config` opens),
 `connectivity`, `network`, `logging`, `advanced` or `source`. `#/config/source?account=<id>`
-opens the Source tab with that account's ID selected; an account's "Edit in Config Panel" leads
+opens the Source tab with that account's ID selected; an account's "Open the settings file" leads
 there. An account from a provider key section of `config.yaml` opens the Source tab with nothing
 selected, because the file does not hold its ID: core makes the ID when it reads the file.
 
@@ -190,10 +195,10 @@ visit), and `POST /client-keys` sends the name with the new key.
 | Page (ID) | Where it sits | Replaces (old route) |
 | --- | --- | --- |
 | Home (`status`) | Home | Dashboard (`/`) |
-| Accounts (`accounts`) | Accounts, a tab | Auth Files (`/auth-files`) and AI Providers (`/ai-providers`), with the OAuth excluded models and OAuth model alias pages (`/auth-files/oauth-excluded`, `/auth-files/oauth-model-alias`) |
+| Accounts (`accounts`) | Accounts, the tab "All accounts"; `#/quota` opens it too | Auth Files (`/auth-files`) and AI Providers (`/ai-providers`), with the OAuth excluded models and OAuth model alias pages (`/auth-files/oauth-excluded`, `/auth-files/oauth-model-alias`) |
+| An account's page (`account`) | Accounts, under All accounts: `#/accounts/<id>`, and `#/accounts/<id>/sign-in` with its sign-in open | The details of one auth file on Auth Files |
 | Add Account (`add-account`) | Accounts, under the Accounts page | OAuth Login (`/oauth`) |
 | Routing (`routing`) | Accounts, the tab "Order & fallback" | Routing (`/routing`) |
-| Quota Management (`quota`) | Accounts, the tab "Limits" | Quota Management (`/quota`) |
 | Logs Viewer (`logs`) | Settings, a topic | Logs Viewer (`/logs`) |
 | Usage (`usage`) | Activity | No old panel page: the old desktop app's list of recorded requests |
 | Tools (`tools`) | Tools | No old page |
@@ -240,17 +245,20 @@ feature, it keeps the old label, unless the label named something this core does
 
 - "Download", "Download selected" and "Auth file JSON (preview)": core never hands a credential
   back out. Only the extension that created an account receives its credential.
-- "Delete All", "Delete filtered results" and "Delete Problem Files": "Select filtered" and then
-  "Remove" do the same, with the status filter set to "Problem" for problem accounts.
-- Provider tabs for providers this core has no extension for (Qwen, iFlow, AIStudio, "Empty"): the
-  tabs are the running extensions.
-- "Card layout": a theme's `list` layout option (`table` or `cards`) sets it.
+- "Delete All", "Delete filtered results" and "Delete Problem Files": "Select", ticking the accounts
+  (the ones that need you are grouped at the top) and "Remove…" do the same.
+- Provider tabs, the status, source and sort filters, and paging: "Find an account" matches a
+  name, an ID, a provider's name, a condition or the last error, and the groups keep accounts in a
+  fixed order (soonest back, then by name).
+- "Card layout": every account is one row, the same on every page and every theme.
+- "Upload file" on the list: importing CLIProxyAPI auth files is at the end of Add Account,
+  "Import files…".
 - OpenAI-compatible provider groups (one name and base URL holding several keys): each key is an
   account of its own, with the same base URL.
 - The connection test "Hi" with its "Test model" field: the old test built the upstream request
   in the browser, with the account's key in it, and sent it through a general relay call that
-  this core does not have. The account's "Test" sends the request from core, and its label says
-  that it spends a request.
+  this core does not have. An account's "Send a test request" sends the request from core, and
+  says under it that it uses one request.
 - "Use SIWC": a Sign in with ChatGPT account is added with the Codex extension's own sign-in
   method for it.
 - "Note" and tags: core keeps no note or tags on an account.
@@ -263,8 +271,8 @@ feature, it keeps the old label, unless the label named something this core does
   joined by lines: the System page's "Available models" lists each extension's models with their
   aliases and the accounts that serve them. A sign-in's own aliases are changed in "Account model
   aliases" on its Edit form.
-- "Invert page", which flipped the selection on the current page: "Select page", "Select
-  filtered" and "Deselect" cover the selections the batch actions need.
+- "Invert page", which flipped the selection on the current page: with "Select" on, each row has
+  its own checkbox.
 
 **Add Account**
 
@@ -285,14 +293,17 @@ feature, it keeps the old label, unless the label named something this core does
 - The route preview for a model: the browser guessed the route without seeing cooldowns or session
   bindings, so it could be wrong.
 
-**Quota Management**
+**Quota Management** (now each account's limits)
 
+- The page itself: every account's row on All accounts shows its two shortest limits, what is
+  left and when each resets, and its own page shows every limit, the manual resets left and when
+  the subscription ends.
 - "Reset quota" with Claude's reset grants, and xAI's paid one-token refresh: both spend from the
-  account. Nothing in the panel spends from an account behind a click, except an account's "Test".
+  account. Nothing in the panel spends from an account behind a click, except an account's "Send
+  a test request".
 - The DEV tier preview: a preview for the old panel's developers.
 - The quota timeline, which drew each account's quota windows over the next days: a richer view of
-  the same data. The desktop app does not have it either. Each card shows every limit's use and
-  when it resets.
+  the same data. The desktop app does not have it either.
 
 **Logs Viewer**
 
@@ -390,8 +401,8 @@ side touch shared files only by one line each:
   `strings("<page>", {...})` and exports its `PageDef` as a function, such as
   `export const routingPage = (): PageDef => ({ id: "routing", dest: "accounts", kind: "tab", label: t("tab"), title: t("title"), tip: t("tip"), render: () => <RoutingPage /> })`.
   A part with texts of its own declares its own namespace. A page as large as two files splits
-  along a typed interface, as Accounts does (`accounts.tsx` the list, `accountDetail.tsx` one
-  account's details, joined by `AccountDetailProps`).
+  along what each part works out, as Accounts does (`accounts.tsx` the list, `account.tsx` one
+  account's page, and `accounts.helpers.ts` the groups, counts and search both use).
 - **The page list:** one entry in `corePages()` (`kit/pages/core.ts`), in the order the page
   shows among its destination's tabs or topics. The page ID never changes: it is the address and the theme hook
   `data-page`.
