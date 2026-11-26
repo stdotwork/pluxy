@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stdotwork/pluxy/next/internal/route"
@@ -84,5 +86,54 @@ func TestSetAccountLabel(t *testing.T) {
 	}
 	if r, _ := m.store.Get("old"); r.Label != "Old one" || !strings.EqualFold(r.ProviderLabel, "old@example.test") {
 		t.Fatalf("old account after the logins: %+v", r)
+	}
+}
+
+// A login started with an ID of the shape core makes (acc_ and 8 lower-case hex digits), which is
+// its own public ID, is refused when that ID is another account's public ID, stored or set in
+// core's config, as a drawn ID would be drawn again; so is an imported account of such an ID. A
+// free one is taken.
+func TestSuppliedCoreShapedIDMustBeFree(t *testing.T) {
+	p := &immediateLoginProvider{fakeProvider: &fakeProvider{}, grant: grantLabelled("jane@example.test", nil)}
+	m := loginManager(t, p)
+	state := route.NewState()
+	m.publicID = state.PublicID
+	if _, err := m.store.Create(Record{ID: "jane.example", Extension: provID, State: StateActive}); err != nil {
+		t.Fatal(err)
+	}
+	stored, config := state.PublicID("jane.example"), state.PublicID("from-config")
+	m.taken = func(id string) bool { return id == "from-config" || id == config }
+
+	for _, id := range []string{stored, config} {
+		if _, err := m.Create(Record{ID: id, Extension: provID, State: StateActive}); !errors.Is(err, ErrConflict) {
+			t.Errorf("importing account %s, another account's public ID: %v; want a conflict", id, err)
+		}
+		if v, err := m.StartLogin(context.Background(), LoginRequest{Account: route.Account{ID: id}, Method: "device"}); !errors.Is(err, ErrConflict) {
+			t.Errorf("a login to new account %s, another account's public ID: %+v, %v; want a conflict", id, v, err)
+		}
+		if _, ok := m.store.Get(id); ok {
+			t.Errorf("account %s was added", id)
+		}
+	}
+	if v, err := m.StartLogin(context.Background(), LoginRequest{Account: route.Account{ID: "acc_0a1b2c3d"}, Method: "device"}); err != nil || v.State != LoginDone {
+		t.Fatalf("a login to new account acc_0a1b2c3d: %+v, %v", v, err)
+	}
+}
+
+// A login to a new account whose ID is its own public ID fails, and adds nothing, when core's
+// config comes to have that ID as an account's ID or public ID while the login runs.
+func TestLoginRefusedWhenConfigTakesItsIDMeanwhile(t *testing.T) {
+	p := &immediateLoginProvider{fakeProvider: &fakeProvider{}, grant: grantLabelled("jane@example.test", nil)}
+	m := loginManager(t, p)
+	m.publicID = route.NewState().PublicID
+	var calls atomic.Int32
+	m.taken = func(id string) bool { return calls.Add(1) > 1 } // free when the login starts, taken after
+
+	v, err := m.StartLogin(context.Background(), LoginRequest{Account: route.Account{ID: "acc_0a1b2c3d"}, Method: "device"})
+	if err != nil || v.State != LoginFailed {
+		t.Fatalf("a login whose ID the config took meanwhile = %+v, %v; want failed", v, err)
+	}
+	if _, ok := m.store.Get("acc_0a1b2c3d"); ok {
+		t.Fatal("the account was added")
 	}
 }

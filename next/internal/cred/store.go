@@ -51,12 +51,16 @@ type Record struct {
 	// Reason says why the account needs a new login.
 	Reason string `json:"reason,omitempty"`
 	// Label names the account for people; not secret. It is the label a person gave the
-	// account, else the provider's (ProviderLabel).
+	// account (Named), else the provider's (ProviderLabel).
 	Label string `json:"label,omitempty"`
+	// Named is true when Label is the label the login's caller gave the account
+	// (LoginRequest.Label) or SetAccount set, never the provider's. False in a record stored
+	// before core kept the two apart.
+	Named bool `json:"named,omitempty"`
 	// ProviderLabel is the label the provider's last login gave the account (protocol.Grant.Label,
 	// often an e-mail address), kept apart from a label a person gave it, so a new login is
-	// checked against it (sameIdentity). Empty in a record stored before core kept it apart, whose
-	// Label is then the provider's.
+	// checked against it (sameIdentity); empty when the provider gave none. Also empty in a record
+	// stored before core kept it apart, whose Label is then the provider's.
 	ProviderLabel string `json:"provider_label,omitempty"`
 	// Identity names the upstream account the credential signs in to, as the provider's login
 	// reported it (protocol.Grant.Identity); not secret. A new login to the account must sign
@@ -71,20 +75,22 @@ type Record struct {
 }
 
 // identityLabel is the label a new login's is compared with when the record has no identity:
-// the provider's.
+// the provider's, never one a person gave (Named); "" when the provider gave none. A record
+// stored before core kept ProviderLabel holds the provider's as Label.
 func (r Record) identityLabel() string {
-	if r.ProviderLabel != "" {
+	if r.Named || r.ProviderLabel != "" {
 		return r.ProviderLabel
 	}
 	return r.Label
 }
 
-// setLabel sets the label a person gave the account; "" takes it away, leaving the provider's.
+// setLabel sets the label a person gave the account; "" takes it away, leaving the provider's
+// (none when the provider gave none).
 func (r *Record) setLabel(label string) {
 	// A record stored before ProviderLabel holds its provider's label as Label: keep it apart
 	// first, so the new label does not take its place in the identity check.
 	r.ProviderLabel = r.identityLabel()
-	r.Label = label
+	r.Label, r.Named = label, label != ""
 	if label == "" {
 		r.Label = r.ProviderLabel
 	}

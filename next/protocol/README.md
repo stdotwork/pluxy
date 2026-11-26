@@ -1251,8 +1251,9 @@ identity must be in the new grant's identity with the same value, letter case as
 core refuses the login and keeps the old credential, so a login never silently turns an account
 into someone else's. Report the fields that tell two accounts apart: for a provider whose users
 can belong to several workspaces, both the user and the workspace. An account stored without an
-identity is checked by `label` instead, when both have one: the grant's label core stored, never a
-name a person gave the account, which core shows in place of the grant's. A grant with an identity that breaks
+identity is checked by `label` instead, when both have one: the label of the last grant core stored
+(none when that grant had none), never a name a person gave the account, which core shows in place
+of the grant's. A grant with an identity that breaks
 these bounds fails the login with `extension_protocol`. A refusal (the user denied access, the code expired, the key was refused) is an
 `error` with code `auth`. Closing the connection cancels the login: stop polling and release any
 callback listener. A login may wait for a person for a long time; core ends it after 15 minutes.

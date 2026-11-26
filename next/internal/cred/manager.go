@@ -668,7 +668,8 @@ func (m *Manager) SetAccount(id string, change func(*route.Account) error, disab
 
 // Create adds account r, made elsewhere than by a login (an imported credential file), and
 // routes to it at once, as a finished login does. Like a login, it may not take an ID core's
-// config uses, nor, whatever its case, one a login still running will take. Its routing fields
+// config uses, nor, whatever its case, one a login still running will take, nor an ID that is
+// its own public ID and is another account's ID or public ID (idTaken). Its routing fields
 // are checked as SetAccount checks them: one that routing refuses would stop every account
 // routing.
 func (m *Manager) Create(r Record) (Record, error) {
@@ -687,6 +688,10 @@ func (m *Manager) Create(r Record) (Record, error) {
 			m.mu.Unlock()
 			return Record{}, fmt.Errorf("%w: a login for account %q is running (%s)", ErrConflict, l.account, l.id)
 		}
+	}
+	if _, dup := m.store.Get(r.ID); !dup && m.ownPublicID(r.ID) && m.idTaken(r.ID) {
+		m.mu.Unlock()
+		return Record{}, idTakenError(r.ID)
 	}
 	rec, err := m.store.Create(r)
 	m.mu.Unlock()

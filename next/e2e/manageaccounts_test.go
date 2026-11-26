@@ -796,4 +796,18 @@ func TestManageAccountIDAndLabel(t *testing.T) {
 		!strings.Contains(e.Error.Message, "set in core's config; change it there") {
 		t.Fatalf("PATCH label of a config account: %d, %+v", code, e)
 	}
+
+	// An ID of the shape core makes is its own public ID, so one that is another account's public
+	// ID, stored or in the config, is refused.
+	named := addByDevice(t, base, srv, map[string]any{"id": "named-one"})
+	for _, other := range []string{named, "fine"} {
+		pub := labelOf(t, base, other).PublicID
+		body := map[string]any{"id": pub, "method": "device", "settings": map[string]string{"base_url": srv.URL}}
+		var e struct {
+			Error struct{ Code, Message string }
+		}
+		if code := manage(t, base, "POST", "/accounts", body, &e); code != http.StatusConflict || !strings.Contains(e.Error.Message, "public ID") {
+			t.Fatalf("POST /accounts with id %s, account %s's public ID: %d, %+v; want 409", pub, other, code, e)
+		}
+	}
 }
