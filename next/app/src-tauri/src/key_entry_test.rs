@@ -283,7 +283,10 @@ pub(super) fn check(app: &AppHandle, main: &Webview) -> Result<(), String> {
         return Err("Where pluxy runs still has a webview password field".into());
     }
     fn button(app: &AppHandle, main: &Webview, key: &str, cancel: bool) -> Result<Value, String> {
-        main.eval("window.__keyOutcome = null; [...document.querySelectorAll('button')].find(b => b.textContent === 'Enter management key').click()")
+        // The button the window shows: "Enter management key" once it knows it is signed out, and
+        // "Enter it again" under "Versions and advanced" while it still shows a session (this test
+        // signs out natively, so the window has not heard).
+        main.eval("window.__keyOutcome = null; [...document.querySelectorAll('button')].find(b => b.textContent === 'Enter management key' || b.textContent === 'Enter it again').click()")
             .map_err(|_| "could not press the entry button")?;
         answer(app.clone(), key.to_string(), true, cancel)
             .join()
