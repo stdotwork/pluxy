@@ -189,8 +189,9 @@ fn not_kept(e: &str, binding: &ClientKey, undone: bool) -> String {
 const CORE_MAX_LABEL: usize = 64;
 
 /// Checks that core takes label as a client key's name, as `CheckLabel` in
-/// next/internal/server/manage.go does: once trimmed, one line (no control character, line or
-/// paragraph separator) of at most CORE_MAX_LABEL characters. Core also refuses a label that is
+/// next/internal/server/manage.go does: once trimmed (as `capture` trims it first, so core keeps
+/// the label the vault does), one line (no control character, line or paragraph separator) of at
+/// most CORE_MAX_LABEL characters. Core also refuses a label that is
 /// one of its keys; the app cannot check that, as it does not have every key core holds, and core
 /// refuses such a label before it makes a key.
 fn core_label(label: &str) -> Result<(), String> {
@@ -221,8 +222,11 @@ fn make_key(caller: &Caller, label: &str) -> Result<Value, String> {
 }
 
 /// Asks core for a new client key for client after the person confirms, and keeps it in the
-/// vault as label; gives the window's view of it. Run off the window's thread.
+/// vault as label, trimmed; gives the window's view of it. Run off the window's thread.
 pub fn capture(app: &AppHandle, label: &str, client: &str) -> Result<Value, String> {
+    // Core keeps a label trimmed (`CheckLabel`): this one trimmed value is what the checks, the
+    // confirmation, core, the vault and the window all get, so the key has one name.
+    let label = label.trim();
     check(app, label, client)?;
     // Core gets the label too: one it would refuse is refused before the person is asked.
     core_label(label)?;
@@ -597,8 +601,9 @@ mod tests {
     }
 
     #[test]
-    fn a_label_core_would_refuse_is_refused_before_anything() {
-        // Core's own cases (CheckLabel): trimmed, then one line of at most 64 characters.
+    fn core_label_takes_what_core_s_check_label_takes() {
+        // Core's own cases (CheckLabel): trimmed, then one line of at most 64 characters. That
+        // capture refuses such a label before its confirmation is the native test's `label` step.
         for good in [
             "Claude Code",
             "  Codex  ",
