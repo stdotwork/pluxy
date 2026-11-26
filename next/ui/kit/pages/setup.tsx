@@ -208,7 +208,7 @@ const t = strings("setup", {
   finishTitle: "Finish",
   finish: "Finish",
   finishHint:
-    "This ends setup and opens the Dashboard. You can come back to this page at any time: it stays under Settings.",
+    "This ends setup and opens Home. You can come back to this page at any time: it stays under Settings.",
 });
 
 /** A button that copies text, and says so. */

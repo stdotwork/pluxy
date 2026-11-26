@@ -1412,7 +1412,7 @@ as above, and reach their tools only through the router.
 ## Setup
 
 On a first run of a core (a new "Run core here" core is one), the window opens the kit's Setup
-page ([`../ui`](../ui/README.md), `#/setup`) in place of the Dashboard when the window's address
+page ([`../ui`](../ui/README.md), `#/setup`) in place of Home when the window's address
 names no page, as the web panel does:
 what core found on its machine, the providers to install, an account, the clients, and Finish. It
 opens once the app is connected and signed in, so the Connection page still comes first. After
@@ -1631,8 +1631,8 @@ curated registry offers the Claude Code page's package (`native/first-run.ts`). 
 on Setup by itself (`#/setup`, "Set up pluxy"); "Found on this machine" names Claude Code 2.4.1;
 the Claude pick is ticked; the Claude Code client row has "Set up" beside "Show what to paste";
 Start installs the pick, which then says Installed, and `GET /packages` through the app's host
-lists it; Finish lands on the Dashboard and `GET /setup` has `first_run` false. The next launch
-opens on the Dashboard; Setup, opened, says "Setup is finished." and has no Finish button. The
+lists it; Finish lands on Home and `GET /setup` has `first_run` false. The next launch
+opens on Home; Setup, opened, says "Setup is finished." and has no Finish button. The
 session keeps a screenshot of each screen it holds (Claude Code found, after Start, finished) and
 ends on that page in GTK's dark variant.
 

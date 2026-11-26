@@ -105,8 +105,8 @@ anything.
 | `color.focus` | Keyboard focus ring | `#1b1a17` / `#eceae3` |
 | `color.meter-track` | Unused part of a quota meter | `var(--px-color-surface-raised)` |
 | `color.meter-fill` | Used share of a quota meter | `var(--px-color-accent)` |
-| `color.chart-success` | Successful requests in the Dashboard's traffic chart | `var(--px-color-ok)` |
-| `color.chart-failure` | Failed requests in the Dashboard's traffic chart | `var(--px-color-danger)` |
+| `color.chart-success` | Successful requests in Home's chart of the last 7 days | `var(--px-color-text)` |
+| `color.chart-failure` | Failed requests in Home's chart of the last 7 days | `var(--px-color-danger)` |
 | `color.diff-add` | Added lines in a diff | `#1f7a43` / `#86d3a0` |
 | `color.diff-remove` | Removed lines in a diff | `#b3261e` / `#ff8f80` |
 | `color.nav` | Navigation background | `color-mix(in srgb, var(--px-color-surface) 97%, black)` / `color-mix(in srgb, var(--px-color-surface) 80%, black)` |
@@ -318,8 +318,7 @@ These stay stable within a theme contract version:
 | `data-part="tier"` | A Routing priority tier, containing its heading and account list. |
 | `data-part="tile"` | One fact on the System page's about card: a label, its value and a note. |
 | `data-part="model-group"` | The models of one extension on the System page, under the extension's name and their count. |
-| `data-part="stat"` | A figure with its label and hint on the Dashboard (requests handled, success rate, credentials); `data-tone` is `ok`, `warn` or `danger` when the figure has a verdict. |
-| `data-part="chart"` | The Dashboard's traffic chart (an SVG). Each bar carries `data-outcome`, `success` or `failure`. |
+| `data-part="days"` | Home's chart of the last 7 days: seven day bars, each with its succeeded part and its failed part on top. |
 | `data-part="account-tools"` | Account detail health and tools. |
 | `data-part="account-check"` | Account check and recent request health. |
 | `data-part="account-cooldowns"` | Account routing cooldown list. |

@@ -131,10 +131,10 @@ for (const theme of ["default", "terminal"]) {
       core.key = newKey;
       await management.getByRole("button", { name: "Close", exact: true }).click();
       await expect(value).toHaveCount(0);
-      await goTo(page, "status", "Dashboard");
+      await goTo(page, "status", "Home");
       await expect(page.getByRole("button", { name: "Sign in", exact: true })).toHaveCount(0);
       await page.reload();
-      await expect(page.locator('[data-part="page-title"]')).toHaveText("Dashboard");
+      await expect(page.locator('[data-part="page-title"]')).toHaveText("Home");
     });
   });
 }

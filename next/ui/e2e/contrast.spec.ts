@@ -6,6 +6,17 @@ import { goTo, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 
+// One request, so Home draws its chart of the last 7 days.
+test.beforeAll(async () => {
+  const r = await fetch(`${core.base}/v1/chat/completions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${core.clientKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "fake-model", messages: [{ role: "user", content: "hi" }] }),
+  });
+  expect(r.status).toBe(200);
+  await r.arrayBuffer();
+});
+
 const THEMES = ["", "pluxy/terminal", "pluxy/paper"] as const; // "" is the default theme
 const APPEARANCES = ["light", "dark"] as const;
 const TONES = ["ok", "warn", "danger", "muted"] as const;
@@ -60,6 +71,27 @@ for (const theme of THEMES) {
         }))
         .filter((m) => m.ratio < AA)
         .map((m) => `${m.tone} on ${m.surface}: ${m.ratio.toFixed(2)}:1 (${m.fg} on ${m.bg})`);
+      expect(low).toEqual([]);
+    });
+
+    test(`Home's chart labels, counts and group names are readable: ${name}`, async ({ page }) => {
+      await open(page, theme, appearance);
+      await goTo(page, "Home");
+      await expect(page.locator('[data-part="days"]')).toBeVisible();
+      // A bar's readout shows on hover: it is text too.
+      await page.locator('[data-part="days"] .day').last().hover();
+      await expect(page.locator(".days-readout")).not.toBeEmpty();
+      const parts = page.locator(
+        ".day-name, .days-top, .days-readout, .home-counts, .home-group-head, .home-address-label, .home-section-head a",
+      );
+      const measured = await measureContrast(parts);
+      const texts = await parts.allTextContents();
+      // Seven day names, the top figure, the readout, the counts line, a group name, the address label, two links.
+      expect(measured.length).toBeGreaterThanOrEqual(13);
+      const low = measured
+        .map((m, i) => ({ text: texts[i]?.trim().slice(0, 30), ...m }))
+        .filter((m) => m.ratio < AA)
+        .map((m) => `"${m.text}": ${m.ratio.toFixed(2)}:1 (${m.fg} on ${m.bg})`);
       expect(low).toEqual([]);
     });
 
