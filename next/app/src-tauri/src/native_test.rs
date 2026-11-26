@@ -385,6 +385,7 @@ fn every_command() -> Vec<String> {
 const ACTING: &[&str] = &[
     "sign_out",
     "core_start",
+    "core_stop",
     "core_restart",
     "core_adopt",
     "key_entry",

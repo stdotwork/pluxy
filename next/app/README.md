@@ -266,31 +266,42 @@ through Adopt.
 
 ## The window and the tray
 
-What closing the window does is the Connection page's **Close behavior**: **Ask every time**
-(the default), **Minimize to tray** or **Exit app**. Ask every time shows "What would you like to
+What closing the window does is the Connection page's **Close behavior**: **Minimize to tray**
+(the default), **Ask every time** or **Exit app**. Ask every time shows "What would you like to
 do?" with Minimize to tray, Exit app, Cancel and **Remember this choice**. Exit app quits as the
 tray's Quit does. Minimize to tray destroys the window and its webviews, so they hold no memory
 while the app sits in the tray. A window that does not answer the question within three seconds
 (its page still loading, or busy) closes to the tray.
 
-The tray menu shows what the app is connected to, and has "Open pluxy" (a new window), "Start…"
-(remembered launches, [The launcher](#the-launcher)) and "Quit pluxy". In managed mode, "Start core", "Stop core" and "Restart core" control only the core the
-app started. They work with the window closed and no renderer running. "Restart core" is
-enabled only while the core runs. While one of them runs, the tray says "Core working…",
-disables all three and refuses another click. They are disabled in local and remote modes, and
-the native side refuses them there too, even if a desktop delivers a click on a disabled item.
+The tray menu's first line says what pluxy is doing: "pluxy: Running", "pluxy: Stopped",
+"pluxy: Restarting", "pluxy: Stopped restarting" or "pluxy: Not installed" in managed mode,
+"pluxy: Connected to <host>" in local and remote modes, "pluxy: Not connected" otherwise. The
+menu has "Open pluxy" (a new window), "Start…" (remembered launches,
+[The launcher](#the-launcher)) and "Quit", which reads "Quit (stops pluxy)" in managed mode,
+where quitting stops the core the app runs. In managed mode, "Start pluxy", "Stop pluxy" and
+"Restart pluxy" control only the core the app started. They work with the window closed and no
+renderer running. "Restart pluxy" is enabled only while the core runs. While one of them runs,
+the tray says "pluxy: Working…", disables all three and refuses another click. They are disabled
+in local and remote modes, and the native side refuses them there too, even if a desktop
+delivers a click on a disabled item.
+
 Closing the window quits the app, whatever the choice, when there is no usable tray: the
 app made no tray icon, or the session's `org.kde.StatusNotifierWatcher` is missing or has no
 registered host (asked at each close, since GTK makes an icon even with no desktop to show it).
-The setting then says so.
+The setting then says so. In managed mode, where quitting stops the app's own core, the app
+first asks the window (`__pluxyClosePrompt("no-tray")`); a window that does not answer within
+three seconds stays open. That prompt's remembered answer is kept as `ask_without_tray: false`,
+apart from the Close behavior, which stays as it was for a session that has a tray.
 
 When an owned core exits unexpectedly, the app retries after 2, 5 and 15 seconds, with at most
 three automatic recovery attempts in a rolling five-minute window. A successful recovery keeps
 that budget, so a core that keeps crashing still stops being restarted. After the third failed
-recovery or another crash within that window, the tray shows "Core recovery paused" and the
+recovery or another crash within that window, the tray shows "pluxy: Stopped restarting" and the
 Connection page shows the reason. An explicit Start, Stop or Restart, from the tray or the
 window, or a mode change, cancels any scheduled recovery and clears the budget. A core you
-stopped stays stopped, and so does one that Start core on launch left unstarted.
+stopped stays stopped, and so does one that Start core on launch left unstarted; the
+connection's `core.stop_reason` tells them apart (`stopped_by_user` or `not_started`) until
+something starts it.
 
 The window opens at the size and place it last had, kept when it closes and when the app quits:
 the size in logical pixels, the place in physical ones, never noted while minimized, maximized
@@ -410,6 +421,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `connection_set` | Changes connection settings without accepting a key |
 | `key_entry` | Opens native key entry, checks the key against core, and returns only signed-in, wrong-key, cancelled or error status plus the connection without its key |
 | `core_start` | Starts the app's own core only if it is not running (managed mode) |
+| `core_stop` | Stops the app's own core, as the tray's Stop does (managed mode); refused in local and remote modes, which it never stops |
 | `core_restart` | Starts the app's own core again (managed mode) |
 | `core_versions` | The app's own core versions, what the core source offers, and how the last change ended |
 | `core_install`, `core_rollback`, `core_adopt` | Asks to install a release from the core source, to run an installed version again, or to adopt the chosen core program; each opens a native confirmation and applies nothing itself |
@@ -456,8 +468,8 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `app_update_start` | **Update now**: downloads, checks and installs the newer release, then restarts the app; the window hears `pluxy-app-update` as it goes |
 | `app_update_cancel` | **Cancel download** |
 | `app_update_rollback` | Rolls back to a version that ran here and was kept, by its digest, after the native confirmation |
-| `window_get`, `window_set` | Reads or saves the Close behavior, and whether there is a usable tray |
-| `window_close` | Answers the close prompt: Exit app or Minimize to tray, and whether to remember it |
+| `window_get`, `window_set` | Reads or saves the Close behavior, and whether there is a usable tray and whether closing without one asks first (`ask_without_tray`) |
+| `window_close` | Answers the close prompt: Exit app or Minimize to tray, and whether to remember it (with no tray, remembering only stops the no-tray prompt) |
 | `privacy_get`, `privacy_set` | Reads or saves privacy mode |
 | `file_save` | Saves a file one of the window's own pages made (a theme file, a log, the usage table) in the Downloads folder, never over another file, and returns its path |
 
@@ -1582,7 +1594,7 @@ its PID in the tray watcher's registered item list. It checks login with Silent 
 off, an app-menu launch with Silent launch on, managed-core startup, core startup off, foreign
 core ownership, and removal. In the core-startup-off launch it waits past the first recovery
 delay and checks that no core started and no recovery ran, then starts the core with the
-tray's Start core and crashes it: that core is recovered. A separate session with no watcher verifies that a silent login
+tray's Start pluxy and crashes it: that core is recovered. A separate session with no watcher verifies that a silent login
 opens exactly one window and webview. Visible launches are positive controls for the same
 renderer-process count used by silent launches.
 
@@ -1655,13 +1667,16 @@ file.
 In managed mode, two more sessions run the window checks (`native/window.ts`, which launches
 the app through the stages in `src-tauri/src/native_window.rs`), one with a tray watcher and
 one without. They close the window as its window manager would (a GTK delete event) and answer the prompt in the window:
-Cancel keeps it, Minimize to tray and the remembered choices close it with no webview or web
+the default Minimize to tray closes it without asking; with Ask every time saved, Cancel keeps
+it, Minimize to tray and the remembered choices close it with no webview or web
 process left, and the app's own tray item (through the watcher and its menu, `session_probe tray`)
 opens it again at the size and place it had; Exit app, from the prompt or the setting, quits and
 stops the app's own core; the next launch opens where the window was. A pending test sign-in's
 polls are counted while the window shows, while it is unmapped (as a window manager minimizes it;
-GDK then reports it minimized) and once it is mapped again. Without a tray watcher, closing quits
-without asking, with Minimize to tray or Ask saved.
+GDK then reports it minimized) and once it is mapped again. Without a tray watcher, closing asks
+the window first (as `no-tray`); a window that does not answer stays open with the core running,
+and Exit app with Remember this choice quits and saves `ask_without_tray: false` with the Close
+behavior unchanged; after that, closing quits without asking, with Minimize to tray or Ask saved.
 
 One more session in managed mode (`native/privacy.ts`) runs the privacy mode checks
 (`src-tauri/src/native_privacy.rs`) and then the themes checks (`src-tauri/src/native_themes.rs`):

@@ -208,6 +208,11 @@ pub struct CoreView {
     pub adopt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// Why a core that is `stopped` with no detail is not running: `stopped_by_user` (the tray's
+    /// Stop, or `core_stop`) or `not_started` (Start core on launch is off, so nothing started
+    /// it yet).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<&'static str>,
 }
 
 /// The app's own core versions, as the window sees them.
@@ -367,6 +372,8 @@ pub struct Connection {
     /// The core that came with the app, and why it was not installed at the last start.
     bundled: Option<Bundled>,
     bundled_refusal: Option<cores::BundledRefusal>,
+    /// The person stopped the app's own core (`stop_by_user`); cleared by any start or stop.
+    stopped_by_user: bool,
 }
 
 /// Validated native destination, frozen before asking for a secret.
@@ -600,6 +607,7 @@ impl Connection {
             views: 0,
             bundled,
             bundled_refusal: None,
+            stopped_by_user: false,
         };
         if let Ok(store) = c.store() {
             store.clear_staging();
@@ -674,6 +682,7 @@ impl Connection {
     /// confirmation: installing the app was the consent. A switch undone here moves nothing; the
     /// next start does.
     fn start_core(&mut self) -> Result<(), String> {
+        self.stopped_by_user = false;
         let store = self.store()?;
         let mut copied = false;
         let bundled = self.bundled.clone().filter(|b| {
@@ -779,6 +788,7 @@ impl Connection {
     /// Calls taken before refuse from the moment it begins (its flag stays set); calls taken
     /// after have no address or key, at quit too.
     pub fn stop_core(&mut self) {
+        self.stopped_by_user = false;
         self.recovery.cancel();
         if self.settings.mode == Some(Mode::Managed) {
             self.client = None;
@@ -791,6 +801,20 @@ impl Connection {
             self.key = None;
         }
         self.running = None;
+    }
+
+    /// Stops the app's own core because the person asked (the tray's Stop, the window's
+    /// `core_stop`): it stays stopped, and the view says so, until something starts it. A local
+    /// or remote pluxy is not the app's to stop: the call is refused and nothing changes.
+    pub fn stop_by_user(&mut self) -> Result<(), String> {
+        if self.settings.mode != Some(Mode::Managed) {
+            return Err(
+                "the app stops only the pluxy it runs itself, and it runs none here".into(),
+            );
+        }
+        self.stop_core();
+        self.stopped_by_user = true;
+        Ok(())
     }
 
     fn require_managed(&self) -> Result<(), String> {
@@ -1573,6 +1597,7 @@ impl Connection {
                     version: self.running.clone().or(selected),
                     adopt,
                     detail: Some(detail),
+                    stop_reason: None,
                 }
             } else {
                 match self.managed.as_ref() {
@@ -1583,6 +1608,7 @@ impl Connection {
                             version: self.running.clone(),
                             adopt,
                             detail: None,
+                            stop_reason: None,
                         },
                         Some(why) => CoreView {
                             state: "stopped",
@@ -1590,6 +1616,7 @@ impl Connection {
                             version: self.running.clone(),
                             adopt,
                             detail: Some(why),
+                            stop_reason: None,
                         },
                     },
                     None if selected.is_none() => CoreView {
@@ -1598,6 +1625,7 @@ impl Connection {
                         version: None,
                         adopt,
                         detail: Some(self.error.clone().unwrap_or_else(|| MISSING.into())),
+                        stop_reason: None,
                     },
                     None => CoreView {
                         state: "stopped",
@@ -1605,6 +1633,11 @@ impl Connection {
                         version: selected,
                         adopt,
                         detail: self.error.clone(),
+                        stop_reason: self.error.is_none().then_some(if self.stopped_by_user {
+                            "stopped_by_user"
+                        } else {
+                            "not_started"
+                        }),
                     },
                 }
             })
@@ -2691,6 +2724,107 @@ mod tests {
             "explicit Start still tries the chosen program"
         );
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A core the person stopped and one that was never started both show `stopped` with no
+    /// detail; `stop_reason` tells them apart. Any start clears it.
+    #[test]
+    fn the_stop_reason_tells_a_stop_by_the_person_from_one_never_started() {
+        let dir = std::env::temp_dir().join(format!(
+            "pluxy-stop-reason-{}",
+            crate::managed::random_key()
+        ));
+        let dirs = Dirs {
+            config: dir.join("config"),
+            core: dir.join("core"),
+            cores: dir.join("cores"),
+        };
+        let real = crate::managed::real_core();
+        let program = dir.join("program").join(real.file_name().unwrap());
+        fs::create_dir_all(program.parent().unwrap()).unwrap();
+        fs::copy(&real, &program).unwrap();
+        let mut c = Connection::open(dirs.clone(), None);
+        c.change(Change {
+            mode: Some(Mode::Managed),
+            core_path: Some(program.display().to_string()),
+            ..Change::default()
+        })
+        .unwrap();
+        let (path, sha256, size) = c.prepare_adopt().unwrap();
+        c.apply(CoreChange::Adopt { path, sha256, size }).unwrap();
+        let pid = c.core_pid().expect("the adopted core runs");
+        let reason = |c: &mut Connection| {
+            let core = c.view().core.unwrap();
+            (core.state, core.detail, core.stop_reason)
+        };
+        assert_eq!(reason(&mut c), ("running", None, None));
+
+        c.stop_by_user().unwrap();
+        assert_eq!(c.core_pid(), None);
+        assert_eq!(reason(&mut c), ("stopped", None, Some("stopped_by_user")));
+        let json = serde_json::to_value(c.view()).unwrap();
+        assert_eq!(json["core"]["stop_reason"], "stopped_by_user");
+        #[cfg(target_os = "linux")]
+        assert!(
+            !std::path::Path::new(&format!("/proc/{pid}")).exists(),
+            "the stopped core {pid} still runs"
+        );
+        let _ = pid;
+
+        // Start clears it.
+        c.resume_core().unwrap();
+        assert_eq!(reason(&mut c), ("running", None, None));
+        c.stop_core();
+        drop(c);
+
+        // The next launch, with Start core on launch off: never started.
+        let mut c = Connection::open_at_startup(dirs.clone(), None, false);
+        assert_eq!(c.core_pid(), None);
+        assert_eq!(reason(&mut c), ("stopped", None, Some("not_started")));
+        // A stop by the person while nothing runs says they stopped it; a start clears it again.
+        c.stop_by_user().unwrap();
+        assert_eq!(reason(&mut c), ("stopped", None, Some("stopped_by_user")));
+        c.restart_core().unwrap();
+        assert_eq!(reason(&mut c), ("running", None, None));
+        c.stop_core();
+        drop(c);
+        cores::remove_tree(&dir);
+    }
+
+    /// The window's Stop stops only the app's own pluxy: in local and remote mode it is refused
+    /// and the connection stays as it was, signed in to the pluxy it reaches.
+    #[test]
+    fn stopping_is_refused_for_a_pluxy_the_app_does_not_run() {
+        for (mode, url) in [
+            (Mode::Local, "http://127.0.0.1:1"),
+            (Mode::Remote, "https://pluxy.example"),
+        ] {
+            let dir = std::env::temp_dir().join(format!(
+                "pluxy-stop-foreign-{}",
+                crate::managed::random_key()
+            ));
+            let dirs = Dirs {
+                config: dir.join("config"),
+                core: dir.join("core"),
+                cores: dir.join("cores"),
+            };
+            Settings {
+                mode: Some(mode),
+                url: Some(url.into()),
+                key: Some(crate::managed::random_key()),
+                ..Settings::default()
+            }
+            .save(&dirs.settings())
+            .unwrap();
+            let mut c = Connection::open(dirs, None);
+            let before = c.view();
+            assert!(before.signed_in && before.target.is_some(), "{before:?}");
+            let e = c.stop_by_user().unwrap_err();
+            assert!(!e.contains("core"), "{e}");
+            assert_eq!(c.view(), before, "{mode:?}");
+            assert!(c.signed_in());
+            fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     #[test]

@@ -98,11 +98,12 @@ function liveParent(pid: number): number | undefined {
   }
 }
 let offCore: number | undefined; // the core coreOff left running, which must not outlive the app
-/** With Start core on launch off the app starts no core and recovers none. Positive controls on
- * the same launch: the tray's Start core starts one, and that core is recovered after a crash. */
+/** With Start core on launch off the app starts no core and recovers none, and says it was not
+ * started. Positive controls on the same launch: the tray's Start pluxy starts one, and that core
+ * is recovered after a crash. */
 async function coreOff(report: Report, lines: string[]) {
   const stateFile = process.env.PLUXY_APP_TEST_STATE as string;
-  type Core = { state?: string; pid?: number; detail?: string };
+  type Core = { state?: string; pid?: number; detail?: string; stop_reason?: string };
   const core = (): Core | undefined => JSON.parse(readFileSync(stateFile, "utf8")).view?.core;
   const attempts = () => lines.filter((l) => l.startsWith("native-test: recovery-attempt ")).length;
   const wait = async (what: string, ok: (c?: Core) => boolean) => {
@@ -122,12 +123,16 @@ async function coreOff(report: Report, lines: string[]) {
     idle?.state === "stopped" && !idle.pid && attempts() === 0,
     `Start core on launch off: a core started or was recovered: ${JSON.stringify(idle)}, ${attempts()} recovery attempts`,
   );
-  const click = spawnSync(probe as string, ["tray", String(report.app_pid), "Start core"], {
+  check(
+    idle?.stop_reason === "not_started",
+    `Start core on launch off: the stopped core does not say it was not started: ${JSON.stringify(idle)}`,
+  );
+  const click = spawnSync(probe as string, ["tray", String(report.app_pid), "Start pluxy"], {
     encoding: "utf8",
     timeout: 15_000,
   });
-  check(click.status === 0, `tray Start core: ${click.stderr}`);
-  const started = (await wait("tray Start core", running)).pid as number;
+  check(click.status === 0, `tray Start pluxy: ${click.stderr}`);
+  const started = (await wait("tray Start pluxy", running)).pid as number;
   // Test-only crash fixture, as in recovery.ts: only the app's own live child is signalled.
   check(liveParent(started) === report.app_pid, `core pid ${started} is not a live child of the app`);
   process.kill(started, "SIGKILL");
@@ -135,7 +140,7 @@ async function coreOff(report: Report, lines: string[]) {
     .pid;
   check(attempts() === 1, `${attempts()} recovery attempts after one crash, want 1`);
   console.log(
-    "native-recovery: Start core on launch off: no core started or recovered; tray Start core started one, and it was recovered after a crash",
+    "native-recovery: Start core on launch off: no core started or recovered, and it says not_started; tray Start pluxy started one, and it was recovered after a crash",
   );
 }
 

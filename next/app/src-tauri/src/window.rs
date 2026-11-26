@@ -1,9 +1,11 @@
 //! What closing the window does, and the window's size and place, kept in `window.json` in the
 //! app's config folder, readable only by this user.
 //!
-//! Closing asks (Ask every time), quits (Exit App) or leaves the app in the tray (Minimize to
-//! Tray), which destroys the window and its webviews. Without a usable tray, closing quits
-//! whatever the choice, so the app is never left running with no way back to it.
+//! Closing leaves the app in the tray (Keep in the tray, the default), which destroys the window
+//! and its webviews, quits (Quit) or asks (Ask). Without a usable tray the app is never left
+//! running with no way back to it: closing quits whatever the choice. When that would stop the
+//! app's own pluxy, the window asks first, unless the person said not to (`ask_without_tray`, kept
+//! apart from the choice so it still holds the day a tray appears).
 //!
 //! The size is kept in logical pixels and the place in physical ones (monitor layouts, including
 //! displays left of the primary one), never while the window is minimized, maximized or full
@@ -22,9 +24,9 @@ pub const MIN_SIZE: (f64, f64) = (640.0, 480.0);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Close {
-    #[default]
     Ask,
     Exit,
+    #[default]
     MinimizeToTray,
 }
 
@@ -36,11 +38,68 @@ pub struct Geometry {
     pub y: i32,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Preferences {
     pub close_behavior: Close,
     pub geometry: Option<Geometry>,
+    /// With no usable tray in managed mode, whether closing asks before it quits and stops the
+    /// app's own pluxy. The prompt's "Don't ask again" turns it off; the close choice stays.
+    pub ask_without_tray: bool,
+}
+
+impl Default for Preferences {
+    fn default() -> Preferences {
+        Preferences {
+            close_behavior: Close::default(),
+            geometry: None,
+            ask_without_tray: true,
+        }
+    }
+}
+
+/// What closing the window does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Closing {
+    Quit,
+    ToTray,
+    /// Ask with the window's close prompt (`window.__pluxyClosePrompt()`).
+    Ask,
+    /// Ask whether to quit, which stops the app's own pluxy (`window.__pluxyClosePrompt("no-tray")`).
+    AskWithoutTray,
+    /// Nothing: the window stays open.
+    KeepOpen,
+}
+
+/// What closing does, from the preferences, whether there is a usable tray, and whether the app
+/// runs pluxy itself (managed mode), which quitting stops.
+pub fn closing(prefs: &Preferences, tray: bool, managed: bool) -> Closing {
+    match (tray, prefs.close_behavior) {
+        (false, _) if managed && prefs.ask_without_tray => Closing::AskWithoutTray,
+        (false, _) | (true, Close::Exit) => Closing::Quit,
+        (true, Close::MinimizeToTray) => Closing::ToTray,
+        (true, Close::Ask) => Closing::Ask,
+    }
+}
+
+/// What a close prompt the window did not answer within three seconds (its page still loading,
+/// or busy) does instead: with a tray the window closes to it, from where it opens again; with
+/// none the window stays open, since quitting would stop pluxy without asking.
+pub fn unanswered(asked: Closing) -> Closing {
+    match asked {
+        Closing::Ask => Closing::ToTray,
+        _ => Closing::KeepOpen,
+    }
+}
+
+/// Keeps a close prompt's answer the person asked to remember. With a tray it becomes the close
+/// choice; with none it only stops the no-tray prompt, so the choice stays as it was.
+pub fn remember(prefs: &mut Preferences, action: Close, tray: bool) {
+    if tray {
+        prefs.close_behavior = action;
+    } else {
+        prefs.ask_without_tray = false;
+    }
 }
 
 pub struct Store {
@@ -237,6 +296,8 @@ pub struct View {
     pub close_behavior: Close,
     /// Whether closing can leave the app in the tray now.
     pub tray: bool,
+    /// Whether closing with no tray in managed mode asks first.
+    pub ask_without_tray: bool,
 }
 
 #[cfg(test)]
@@ -251,8 +312,13 @@ mod tests {
     }
 
     #[test]
-    fn choices_use_the_old_apps_names_and_default_to_ask() {
-        assert_eq!(Preferences::default().close_behavior, Close::Ask);
+    fn choices_use_the_old_apps_names_and_default_to_keep_in_the_tray() {
+        assert_eq!(Preferences::default().close_behavior, Close::MinimizeToTray);
+        // A file saved before the choice had a default of its own reads the same.
+        assert_eq!(
+            serde_json::from_str::<Preferences>("{}").unwrap(),
+            Preferences::default()
+        );
         for (c, name) in [
             (Close::Ask, "ask"),
             (Close::Exit, "exit"),
@@ -268,13 +334,14 @@ mod tests {
         let mut s = Store::open(dir.join("config").join("window.json"));
         assert_eq!(s.prefs, Preferences::default());
         s.prefs = Preferences {
-            close_behavior: Close::MinimizeToTray,
+            close_behavior: Close::Ask,
             geometry: Some(Geometry {
                 width: 900.0,
                 height: 640.0,
                 x: -1200,
                 y: 90,
             }),
+            ask_without_tray: false,
         };
         s.save().unwrap();
         assert_eq!(Store::open(s.file.clone()).prefs, s.prefs);
@@ -287,8 +354,85 @@ mod tests {
         // A file with only the choice (or fields a later app adds) still reads.
         fs::write(&s.file, br#"{"close_behavior":"exit","later":1}"#).unwrap();
         let p = Store::open(s.file.clone()).prefs;
-        assert_eq!((p.close_behavior, p.geometry), (Close::Exit, None));
+        assert_eq!(
+            (p.close_behavior, p.geometry, p.ask_without_tray),
+            (Close::Exit, None, true)
+        );
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// With a tray, closing does what the choice says. With none, closing quits, except in
+    /// managed mode, where it stops the app's own pluxy: there it asks first, until the person
+    /// says not to.
+    #[test]
+    fn closing_with_no_tray_asks_only_when_it_would_stop_the_apps_own_pluxy() {
+        let prefs = |close_behavior, ask_without_tray| Preferences {
+            close_behavior,
+            ask_without_tray,
+            ..Preferences::default()
+        };
+        for managed in [true, false] {
+            for (choice, want) in [
+                (Close::MinimizeToTray, Closing::ToTray),
+                (Close::Exit, Closing::Quit),
+                (Close::Ask, Closing::Ask),
+            ] {
+                for ask in [true, false] {
+                    assert_eq!(closing(&prefs(choice, ask), true, managed), want);
+                }
+            }
+        }
+        for choice in [Close::MinimizeToTray, Close::Exit, Close::Ask] {
+            assert_eq!(
+                closing(&prefs(choice, true), false, true),
+                Closing::AskWithoutTray,
+                "{choice:?}"
+            );
+            assert_eq!(closing(&prefs(choice, false), false, true), Closing::Quit);
+            // Local and remote: pluxy keeps running whatever the app does, so it never asks.
+            assert_eq!(closing(&prefs(choice, true), false, false), Closing::Quit);
+        }
+        // The default asks.
+        assert_eq!(
+            closing(&Preferences::default(), false, true),
+            Closing::AskWithoutTray
+        );
+    }
+
+    #[test]
+    fn a_close_prompt_with_no_answer_keeps_the_window_unless_a_tray_holds_the_app() {
+        assert_eq!(unanswered(Closing::AskWithoutTray), Closing::KeepOpen);
+        assert_eq!(unanswered(Closing::Ask), Closing::ToTray);
+    }
+
+    /// "Don't ask again" on the no-tray prompt stops the prompt and leaves the close choice; with
+    /// a tray, Remember this choice saves the choice.
+    #[test]
+    fn dont_ask_again_without_a_tray_keeps_the_close_choice() {
+        for choice in [Close::MinimizeToTray, Close::Ask, Close::Exit] {
+            let mut p = Preferences {
+                close_behavior: choice,
+                ..Preferences::default()
+            };
+            remember(&mut p, Close::Exit, false);
+            assert_eq!((p.close_behavior, p.ask_without_tray), (choice, false));
+            assert_eq!(closing(&p, false, true), Closing::Quit);
+            // The day a tray appears, the choice still holds.
+            assert_eq!(
+                closing(&p, true, true),
+                closing(
+                    &Preferences {
+                        close_behavior: choice,
+                        ..Preferences::default()
+                    },
+                    true,
+                    true
+                )
+            );
+        }
+        let mut p = Preferences::default();
+        remember(&mut p, Close::Exit, true);
+        assert_eq!((p.close_behavior, p.ask_without_tray), (Close::Exit, true));
     }
 
     #[test]

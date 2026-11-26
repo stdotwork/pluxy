@@ -93,8 +93,11 @@ export function WindowSettings() {
 
 declare global {
   interface Window {
-    /** Shows the close prompt; the native side calls it when the choice is Ask every time. */
-    __pluxyClosePrompt?: () => boolean;
+    /** Shows the close prompt; the native side calls it when the choice is Ask every time, and
+     * with "no-tray" when there is no tray and closing would quit and stop the app's own pluxy.
+     * A prompt that does not answer true within 3 s: with a tray the window closes to it, with
+     * none it stays open. */
+    __pluxyClosePrompt?: (kind?: "no-tray") => boolean;
   }
 }
 

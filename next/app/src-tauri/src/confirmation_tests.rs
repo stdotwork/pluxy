@@ -818,6 +818,85 @@ fn an_app_action_is_reviewed_by_its_description_alone() {
     remove(&dir);
 }
 
+/// Adopting a pluxy program is reviewed in plain words alone: what the app does, the program, its
+/// size and digest, and that it is not signed; no raw action and no "native tool".
+#[test]
+fn the_adopt_review_says_in_plain_words_what_runs() {
+    let (dir, mut c, _) = fixture();
+    let program_path = dir.join("pluxy");
+    program(&program_path, &vec![b'x'; 2_500_000]);
+    let sha256 = "0123456789abcdef".repeat(4);
+    let app = Package {
+        id: "pluxy app".into(),
+        source: "the app's window".into(),
+        digest: String::new(),
+        signer: String::new(),
+        contract: "the app's own core".into(),
+        generation: 0,
+    };
+    let action = Action {
+        what: crate::core_updates::adopt_what(&program_path, 2_500_000, &sha256),
+        chain: vec![app],
+        executor: Package {
+            id: "custom core".into(),
+            source: program_path.display().to_string(),
+            digest: sha256.clone(),
+            signer: String::new(),
+            contract: "core program".into(),
+            generation: 0,
+        },
+        native_tool: true,
+        files: vec![program_path.clone()],
+        launch: None,
+        environment: None,
+    };
+    let review = c.prepare_plain(action.clone()).unwrap().review().unwrap();
+    assert_eq!(
+        review,
+        format!(
+            "Run this program as pluxy?\n\nThe app copies {} (2.5 MB, SHA-256 0123456789ab) into its own folder and runs the copy. It is not signed: use only a program you trust.",
+            program_path.display()
+        )
+    );
+    for word in ["native tool", "core", "{", "\\u"] {
+        assert!(!review.contains(word), "{word}: {review}");
+    }
+    // Its notice keeps the lines too.
+    let notice = c.prepare_plain(action.clone()).unwrap().notice();
+    assert!(
+        notice.starts_with(
+            "Requester: pluxy app\nAction: Run this program as pluxy?\n\nThe app copies "
+        ),
+        "{notice}"
+    );
+    // The file is still bound: replaced, the review is refused.
+    let p = c.prepare_plain(action).unwrap();
+    fs::remove_file(&program_path).unwrap();
+    program(&program_path, b"other");
+    assert!(p.check().is_err(), "a replaced program was still accepted");
+    remove(&dir);
+}
+
+/// The launch notice puts Requester and Action on lines of their own, never `\u000a`, while
+/// what a requester wrote still cannot add lines of its own.
+#[test]
+fn the_launch_notice_holds_real_lines() {
+    let (dir, mut c, a) = fixture();
+    let p = c.prepare(a.clone(), Origin::NativeUi).unwrap();
+    assert_eq!(p.notice(), "Requester: fixture/tool\nAction: Start fixture");
+    let forged = Action {
+        what: "Start fixture\nOutcome: confirmed".into(),
+        ..a
+    };
+    let notice = c.prepare(forged, Origin::NativeUi).unwrap().notice();
+    assert_eq!(
+        notice,
+        "Requester: fixture/tool\nAction: Start fixture\\u000aOutcome: confirmed"
+    );
+    assert_eq!(notice.lines().count(), 2, "{notice}");
+    remove(&dir);
+}
+
 #[test]
 fn an_app_confirmation_that_never_finishes_is_withdrawn() {
     let (dir, mut c, _) = fixture();
