@@ -364,3 +364,77 @@ func TestCLISetupAndClientShow(t *testing.T) {
 		t.Errorf("pluxy setup after setup done: %s", r)
 	}
 }
+
+// GET /setup finds Claude Desktop, Grok Build and Hermes Agent where the desktop app looks for
+// them, and reports each as not installed when they are not there. Claude Desktop is never run
+// (it would open its window), so it has no version.
+func TestSetupScansDesktopTools(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell script fake tools")
+	}
+	t.Parallel()
+	tools := []struct{ id, name string }{
+		{"claude-desktop", "Claude Desktop"},
+		{"grok-build", "Grok Build"},
+		{"hermes", "Hermes Agent"},
+	}
+
+	t.Run("installed", func(t *testing.T) {
+		home := t.TempDir()
+		fakeBin := t.TempDir()
+		ran := filepath.Join(t.TempDir(), "claude-desktop-ran")
+		if runtime.GOOS == "darwin" {
+			// An application bundle in the home folder's Applications.
+			if err := os.MkdirAll(filepath.Join(home, "Applications", "Claude.app"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			writeFakeTool(t, fakeBin, "claude-desktop", `echo ran >> `+ran+`; echo "9.9.9"`)
+		}
+		// Grok Build and Hermes Agent are in the folders their installers use, not on the PATH.
+		for rel, script := range map[string]string{
+			filepath.Join(".grok", "bin", "grok"):    `echo "grok 0.4.2"`,
+			filepath.Join(".local", "bin", "hermes"): `echo "Hermes Agent v1.2.3"`,
+		} {
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(home, rel)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeFakeTool(t, home, rel, script)
+		}
+
+		_, client, _ := startSetupCore(t, isolatedSetupEnv(home, fakeBin), filepath.Join(t.TempDir(), "config.json"), "")
+		sv := waitForSetupScan(t, client)
+		want := map[string]struct{ version, config string }{
+			"claude-desktop": {"", map[string]string{
+				"darwin": "~/Library/Application Support/Claude-3p/claude_desktop_config.json",
+			}[runtime.GOOS]},
+			"grok-build": {"0.4.2", "~/.grok/config.toml"},
+			"hermes":     {"1.2.3", "~/.hermes/config.yaml"},
+		}
+		if w := want["claude-desktop"]; w.config == "" {
+			want["claude-desktop"] = struct{ version, config string }{"", "~/.config/Claude-3p/claude_desktop_config.json"}
+		}
+		for _, tool := range tools {
+			c := clientByID(sv, tool.id)
+			w := want[tool.id]
+			if c.ID != tool.id || c.Name != tool.name || !c.Installed || c.Version != w.version || c.Config != w.config || c.State != "not-configured" {
+				t.Errorf("%s = %+v, want installed, version %q, config %q, not-configured", tool.id, c, w.version, w.config)
+			}
+		}
+		if _, err := os.Stat(ran); err == nil {
+			t.Error("the scan ran claude-desktop, which opens its window")
+		}
+	})
+
+	t.Run("absent", func(t *testing.T) {
+		// A PATH that holds only the fake folder and the system's, and a home with no tool in it.
+		_, client, _ := startSetupCore(t, isolatedSetupEnv(t.TempDir(), t.TempDir()), filepath.Join(t.TempDir(), "config.json"), "")
+		sv := waitForSetupScan(t, client)
+		for _, tool := range tools {
+			c := clientByID(sv, tool.id)
+			if c.ID != tool.id || c.Name != tool.name || c.Installed || c.Version != "" {
+				t.Errorf("%s = %+v, want listed and not installed", tool.id, c)
+			}
+		}
+	})
+}
