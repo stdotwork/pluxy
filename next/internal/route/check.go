@@ -146,9 +146,7 @@ func (s *State) checked(claims []claim, q *protocol.Quota, e *llm.Error, now tim
 			s.set(b, c.key, blockKinds[c.i], now.Add(d), source, why, now)
 			b.window = window
 		}
-		if c.i == kindIndex(blockQuota) {
-			s.notify()
-		}
+		s.notify() // claims are on credentials and models, whose blocks Saved returns
 	}
 }
 

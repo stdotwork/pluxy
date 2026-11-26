@@ -156,7 +156,7 @@ type State struct {
 	// unbannedSeq records the highest sequence number seen when each account was unbanned, so
 	// outcomes from attempts started before the unban record nothing.
 	unbannedSeq map[string]uint64
-	// changes is signalled when the quota blocks or bans Saved/SavedBans return may have changed.
+	// changes is signalled when the blocks or bans Saved/SavedBans return may have changed.
 	changes chan struct{}
 	// usage holds, per account ID, its latest usage reading, which soonest-reset ranks it by;
 	// refreshed is when Router.Refresh last began reading.
@@ -232,7 +232,7 @@ func (s *State) drop(k scopeKey) {
 	if !ok {
 		return
 	}
-	if !st.blocks[kindIndex(blockQuota)].until.IsZero() {
+	if k.kind != scopeEndpoint && !st.lastEnd().IsZero() {
 		s.notify()
 	}
 	delete(s.scopes, k)
@@ -695,9 +695,11 @@ func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now 
 	}
 	// The block is kept, so the failure is the account's last error, unless an attempt on the
 	// account that started after this one has since succeeded.
+	saved := key.kind != scopeEndpoint
 	if cred := s.scopes[scopeKey{kind: scopeCredential, id: a.ID}]; cred == nil || cred.won <= seq {
 		if l, ok := s.last[a.ID]; !ok || l.mark <= seq {
 			s.last[a.ID] = lastFailure{at: now, mark: seq, err: e}
+			saved = true // which saved block's error is the account's last error may change
 		}
 	}
 	b := &st.blocks[kindIndex(kind)]
@@ -745,7 +747,7 @@ func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now 
 	if seq >= b.mark {
 		b.mark, b.reason = seq, e
 	}
-	if kind == blockQuota {
+	if saved {
 		s.notify()
 	}
 }
@@ -806,6 +808,7 @@ func (s *State) success(a *Account, model string, seq uint64) {
 	}
 	if l, ok := s.last[a.ID]; ok && l.mark < seq && !s.stale(scopeKey{kind: scopeCredential, id: a.ID}, a) {
 		delete(s.last, a.ID)
+		s.notify() // a saved block's error may have been the account's last error
 	}
 	o := s.oldest()
 	older := o != 0 && o < seq // an attempt that started before this one is still running
@@ -834,7 +837,7 @@ func (s *State) success(a *Account, model string, seq uint64) {
 		for i := range st.blocks {
 			b := &st.blocks[i]
 			if b.mark < seq {
-				if i == kindIndex(blockQuota) && !b.until.IsZero() {
+				if k.kind != scopeEndpoint && !b.until.IsZero() {
 					s.notify()
 				}
 				*b = block{}

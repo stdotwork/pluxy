@@ -199,8 +199,9 @@ The names on the right are the ones in pluxy's `config.json`, its commands and i
 - **A failing upstream is retried sooner.** After a server error from the upstream (a 5xx), with
   `transient-error-cooldown-seconds` at 0, pluxy backs off from one second up to a minute, where
   CPA waits a fixed minute.
-- **Quota blocks survive a restart, and are checked at once when pluxy starts**, so a restart
-  sends no requests to an account whose usage ran out.
+- **Quota blocks, rate limits and cooldowns survive a restart** with their errors, when they have
+  more than 30 seconds left, so a restart sends no requests to an account whose usage ran out, or
+  that a provider rate limited or refused. Quota blocks are checked at once when pluxy starts.
 - **Window ignition checks the window started.** A minute (`hold_ms`) after the request that
   starts a window, pluxy reads the account's usage again; a window that still does not run counts
   as a failed ignition. A rate limit is retried with the backoff, where Lamplighter paused until

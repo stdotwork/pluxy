@@ -19,10 +19,10 @@ import (
 	"github.com/stdotwork/pluxy/next/protocol"
 )
 
-// routingFile is the file in the state folder that holds routing's quota blocks and bans.
+// routingFile is the file in the state folder that holds routing's blocks and bans.
 const routingFile = "routing.json"
 
-// routingDoc is routing.json: the quota blocks of route.State.Saved and the bans of
+// routingDoc is routing.json: the blocks of route.State.Saved and the bans of
 // route.State.SavedBans, under the version of the document's form (routingVersion).
 type routingDoc struct {
 	V      int                `json:"v"`
@@ -30,7 +30,9 @@ type routingDoc struct {
 	Bans   []route.SavedBan   `json:"bans,omitempty"`
 }
 
-// routingVersion is the version of routing.json's form that this core reads and writes.
+// routingVersion is the version of routing.json's form that this core reads and writes. Blocks
+// gained their kind and error within version 1: a block without them, as an older core wrote it,
+// is a quota block (route.SavedBlock).
 const routingVersion = 1
 
 // checkIntervalEnv, for tests only, sets how often routing checks long blocks, in milliseconds,
@@ -123,7 +125,7 @@ func (c *Core) loadRouting(r *routing) {
 	}
 	if err != nil {
 		r.bad = true
-		log.Printf("routing: %s cannot be read, so accounts start with no blocks; it is left as it is until a quota block must be saved, and then moved to %s: %v",
+		log.Printf("routing: %s cannot be read, so accounts start with no blocks; it is left as it is until a block must be saved, and then moved to %s: %v",
 			r.path, filepath.Base(r.path)+".bad", err)
 		return
 	}
@@ -172,7 +174,7 @@ func (c *Core) checkRouting(ctx context.Context) {
 	}
 }
 
-// saveRouting writes routing's state, its quota blocks and bans, to routing.json when they
+// saveRouting writes routing's state, its blocks and bans, to routing.json when they
 // changed: whole, to a temporary file renamed into place, readable by its owner only. With
 // neither to save it writes nothing unless the file holds state core saved or read before. A
 // file loadRouting could not read is left in place until state must be saved, and then moved
@@ -187,14 +189,14 @@ func (c *Core) saveRouting(r *routing) {
 	if r.bad {
 		aside := r.path + ".bad"
 		if err := os.Rename(r.path, aside); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			log.Printf("routing: the quota blocks are not saved: moving %s, which cannot be read, aside: %v", r.path, err)
+			log.Printf("routing: the blocks are not saved: moving %s, which cannot be read, aside: %v", r.path, err)
 			return
 		}
 		log.Printf("routing: moved %s, which cannot be read, to %s", r.path, aside)
 		r.bad = false
 	}
 	if err := writePrivate(r.path, b); err != nil {
-		log.Printf("routing: saving the quota blocks: %v", err)
+		log.Printf("routing: saving the blocks: %v", err)
 		return
 	}
 	r.saved = b
