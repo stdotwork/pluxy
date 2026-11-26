@@ -444,22 +444,6 @@ describe("the page", () => {
     expect(page.text()).not.toContain("refused");
   });
 
-  test("in safe mode no account is blamed for its provider not running", async () => {
-    const accounts = ok({
-      accounts: [
-        { id: "work-1", extension: "pluxy/claude", source: "login", state: "active", refreshable: false },
-      ],
-    });
-    const safe = await mount([{ ...good, accounts, status: ok({ ...statusBody, safe_mode: true }) }]);
-    expect(safe.text()).toContain("pluxy is in safe mode.");
-    expect(safe.text()).not.toContain("is not running");
-    expect(safe.text()).not.toContain("Open Extensions");
-    // With nothing wrong but a provider that does not run, the account is the person's to fix.
-    const plain = await mount([{ ...good, accounts, status: ok(statusBody) }]);
-    expect(plain.text()).toContain("Claude is not running");
-    expect(plain.text()).toContain("Open Extensions");
-  });
-
   test("a refused settings change shows its error, once", async () => {
     const refused = {
       ...statusBody,

@@ -220,8 +220,7 @@ export function HomePage() {
   const [refreshed, setRefreshed] = useState(0);
   const { accounts, status, week, latest } = round;
   const list = accounts.data;
-  // In safe mode no extension runs, and that is not a fault of each account: the verdict says it.
-  const running = status.data?.safe_mode ? undefined : runningExtensions(status.data);
+  const running = runningExtensions(status.data);
   const naming = useNaming(list);
   const now = new Date();
   const grouped = list && groupAccounts(list, running, now.getTime());
