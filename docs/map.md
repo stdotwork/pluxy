@@ -106,7 +106,8 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
   `PARTS`, `LAYOUT`); resolution and DOM application in `next/ui/kit/theme/engine.ts` (`resolve`,
   `ThemeApplier`); state and persistence in `next/ui/kit/theme/state.ts` (`ThemeState`); validation
   in `next/ui/kit/theme/validate.ts`; built-in files in `next/ui/themes/default.json`,
-  `next/ui/themes/paper.json`, `next/ui/themes/terminal.json`; core storage in
+  `next/ui/themes/paper.json`, `next/ui/themes/terminal.json`; the shipped typefaces in
+  `next/ui/kit/fonts/`, declared in `next/ui/kit/fonts.css`; core storage in
   `next/internal/core/managethemes.go`.
 - **Tests**: from `next/ui`, `bun test tests/theme.test.ts tests/theme-state.test.ts`; from `next/`,
   `go test -count=1 -run TestHandleThemesHTTP ./internal/core`.
