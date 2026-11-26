@@ -100,6 +100,12 @@ type Event struct {
 	// Account and Provider say it all. At most 16 entries are kept, the first 15 and the last;
 	// Attempts stays the true count.
 	Tried []llm.Tried `json:"tried,omitempty"`
+	// LeftOut are the accounts that serve the request's model and that routing left out of a
+	// failed request, and why, as the error body's left_out names them: the account's public ID,
+	// its state and until when (and, through a fallback chain, its provider and model). They are
+	// recorded whatever routing.explain says. At most 8 entries are kept, the first 8. Absent when
+	// none were left out. Account stays empty for a request that made no attempt.
+	LeftOut []llm.LeftOut `json:"left_out,omitempty"`
 	// KeyID identifies the client key the request came with, as the management API lists client
 	// keys; empty with no client keys set.
 	KeyID string `json:"key_id,omitempty"`

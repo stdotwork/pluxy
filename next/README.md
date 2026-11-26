@@ -399,7 +399,8 @@ at least one key: core does not start on a config without one, and a reload or a
 change that would leave none is refused, keeping the running config. Today's core serves anyone
 who reaches it when it has no client keys. A missing or wrong client key gets a 401 with
 `X-Should-Retry: false`, in every client format and in the error message of an open Responses
-WebSocket; an upstream's own 401 does not carry that header.
+WebSocket; an upstream's own 401 carries that header only when no account can take the request
+for more than 5 minutes (see "Telling a client to stop" below).
 
 The example config's client keys (`your-api-key-1`, `your-api-key-2` and `your-api-key-3`) are
 public, so as in today's core (its example API-key safe mode) core starts with one in
@@ -503,7 +504,8 @@ Core's log line for such an error says the same to the operator, after the error
 2026-11-09T17:00:00Z; old-key: banned]`. It names each account by its ID in the config, as the line's
 `account` and core's other log lines do (the client's member has the public ID), and the first 8
 accounts of each list, counting the rest (`+3 more`). It is written when `routing.explain` is
-`false` too, since the log is the operator's, not the client's.
+`false` too, since the log is the operator's, not the client's. The request's usage event records
+the first 8 entries of `left_out` the same way, by public ID, whatever `routing.explain` says.
 
 An upstream's error keeps the fields the client's format shares with the upstream's. A Messages
 client keeps `request_id` and the text `error_code` of `error.details` from a Messages upstream
@@ -511,7 +513,8 @@ client keeps `request_id` and the text `error_code` of `error.details` from a Me
 keeps `param` from an OpenAI-format upstream, and a Gemini client keeps `details` from a Google
 upstream; no field is copied into a format that does not define it. `param` is the upstream's own
 path, so on a translated request it can name a field in the upstream's shape. A 429, 503 or 529
-carries `Retry-After` when the upstream said how long to wait. A Google upstream's error names the
+carries `Retry-After` when the upstream said how long to wait, unless no account can take the
+request for more than 5 minutes (see "Telling a client to stop" below). A Google upstream's error names the
 Google project, organization, folder, billing account or person behind the pluxy account (in its
 message, and in its details); the Gemini extension — and the OpenAI-compatible extension for a
 `googleapis.com` host or a Google-shaped error — replace those names with `[redacted]` in what a
@@ -1839,6 +1842,16 @@ rounds `Retry-After` and `reset_seconds` up, but shows `reset_time` and "reset a
 nearest second (at least 1), so with 1.2 s left it says `reset_time` "1s" next to
 `reset_seconds` 2; core says "2s" in all of them. That is an intended difference.
 
+**Telling a client to stop.** When a request ends because no account that serves its model can
+take it for more than 5 minutes (the usage-limit reply's threshold below), or because none can
+until a person acts (every one is turned off, waits for a new sign-in, was closed by its provider
+or has no running provider), the reply says `X-Should-Retry: false` and carries no `Retry-After`,
+so a coding tool stops at once and shows the message instead of retrying in silence or sleeping
+through a long wait. Its status, body and message are the same as otherwise. A shorter wait keeps
+`Retry-After`, so a client still retries a brief overload; a request that failed while an account
+could still take it keeps today's reply too. Today's core sends `Retry-After` on these replies.
+A Responses WebSocket turn that fails this way closes the socket as before.
+
 ```json
 {
   "routing": {
@@ -1869,7 +1882,7 @@ nearest second (at least 1), so with 1.2 s left it says `reset_time` "1s" next t
 | `request_retry` | When set, rounds run as today's `request-retry` runs them: at most this many after the first, each trying every eligible account again. A round starts at once when no account is blocked, or else when the first block ends if that is within `max_wait_ms`; an account refused for rate or quota in the request waits at least 10 seconds; a refused key (401) or a missing model (404) starts none. An account's own `request_retry` counts for it instead. Unset (here and on every account): rounds are bounded by `max_attempts` and `max_wait_ms`, and each needs a wait. |
 | `disable_cooling` | `true`: failures leave no block, so every account stays eligible. |
 | `transient_error_cooldown_ms` | How long a failing upstream or endpoint (a 5xx or a broken connection) is blocked when it gave no `Retry-After`: 0 (default) backs off from a second to a minute, above 0 that long, below 0 not at all, `Retry-After` or not. |
-| `quota_response_mode` | What a client gets when every account that serves its model is out of quota until a reset the upstream named, the first of them more than 5 minutes away: `retryable` (default) a retryable 429 with `Retry-After`, as for any block; `usage-limit` the final usage-limit reply below. |
+| `quota_response_mode` | What a client gets when every account that serves its model is out of quota until a reset the upstream named, the first of them more than 5 minutes away: `retryable` (default) the 429 any block gets, which, the wait being over 5 minutes, says `X-Should-Retry: false` and has no `Retry-After` (see "Telling a client to stop"); `usage-limit` the final usage-limit reply below. |
 | `explain` | `false` leaves out of replies the headers that name the account (`X-Pluxy-Account`, `X-Pluxy-Provider`, `X-Pluxy-Model`, `X-Pluxy-Attempts`) and the `pluxy` member of errors (see [Run it](#run-it)), for a core whose client keys go to people who should not see which accounts serve them. The trace ID stays. Default `true`. |
 | `session_affinity` | On by default, with no setting needed: requests of one session go to the same account while it is eligible, so a coding agent's conversation keeps its provider-side prompt cache. `{"enabled": false}` turns it off; `{"ttl_ms": 1800000}` sets how long a session stays bound after its last request (default one hour, 3600000). The session comes from the `X-Claude-Code-Session-Id`, `Session-Id`, `X-Session-Id` or `X-Session-Affinity` header, or the body's `prompt_cache_key`; a request with none takes turns as usual. Bindings are per client key and model. A `config.yaml` keeps today's default, off (below). |
 | `timeouts` | Upstream HTTP request timeouts in milliseconds: `header_ms` (default 60000) for response headers and `idle_ms` (default 300000) between raw upstream bytes on streamed requests, and `total_ms` (default 600000) in all on non-streamed requests; `0` turns a limit off. For an extension that speaks protocol 0.23, core also ends an attempt on which the extension sent it nothing at all for as long as the SDK may wait on the upstream plus a minute (the longer of `header_ms` and `idle_ms` when streamed, the longest of the three when not) with `extension_timeout`, which moves the request to another account when no reply has started; with any limit it needs at `0`, there is no such deadline. A timeout before any reply byte (this one or an upstream limit's) moves a request to one more account, once: a second timeout ends the request with that error, so a stuck upstream costs a client two limits and not one per account. |

@@ -537,7 +537,8 @@ func (c *call) anyModel() bool {
 
 // route runs attempts until one starts a reply, and returns that reply's first event; or it
 // gives up and returns the error event that ends the request, which in the usage-limit quota
-// response mode is the usage-limit reply when every account is out of quota.
+// response mode is the usage-limit reply when every account is out of quota. The error is marked
+// Exhausted when no account that serves the model can take a request now.
 func (c *call) route() llm.Event {
 	ev := c.attempts()
 	if ev.Type == llm.EventError && c.cur == nil {
@@ -545,6 +546,11 @@ func (c *call) route() llm.Event {
 			ev.Error = u
 		}
 		ev.Error = c.explained(ev.Error)
+		if x := c.exhausted(ev.Error); x != nil {
+			e := *ev.Error // a copy: routing state may hold the error
+			e.Exhausted = x
+			ev.Error = &e
+		}
 	}
 	return ev
 }

@@ -53,6 +53,18 @@
         "type": "rate_limit_error",
         "pluxy": "(volatile)"
       }
+    },
+    {
+      "path": "client.headers.Retry-After",
+      "kind": "intended",
+      "reason": "When no account can serve the request for more than 5 minutes (here the soonest is back in 30 minutes), the new core tells the client to stop rather than when to retry: X-Should-Retry: false and no Retry-After, so a coding tool stops at once with the message instead of sleeping through the wait or retrying in silence. The old core sent Retry-After.",
+      "absent": true
+    },
+    {
+      "path": "client.headers.X-Should-Retry",
+      "kind": "intended",
+      "reason": "When no account can serve the request for more than 5 minutes (here the soonest is back in 30 minutes), the new core tells the client to stop rather than when to retry: X-Should-Retry: false and no Retry-After, so a coding tool stops at once with the message instead of sleeping through the wait or retrying in silence. The old core sent Retry-After.",
+      "want": "false"
     }
   ],
   "recorded_old_core": {

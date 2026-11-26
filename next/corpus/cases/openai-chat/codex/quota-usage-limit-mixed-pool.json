@@ -75,8 +75,32 @@
     {
       "path": "then[0].body.error",
       "kind": "gap",
-      "reason": "When every account is cooling, today's core names the model, provider, reset time and last upstream error in its own fields; the new core says the same in its message and gives the wait as Retry-After.",
+      "reason": "When every account is cooling, today's core names the model, provider, reset time and last upstream error in its own fields; the new core says the same in its message, and with the reset more than 5 minutes away sends no Retry-After (see the header exceptions).",
       "want": {"code":"model_cooldown","message":"(volatile)","type":"rate_limit_error", "pluxy": "(volatile)"}
+    },
+    {
+      "path": "client.headers.Retry-After",
+      "kind": "intended",
+      "reason": "When no account can serve the request for more than 5 minutes (here the soonest is back in 2 hours), the new core tells the client to stop rather than when to retry: X-Should-Retry: false and no Retry-After, so a coding tool stops at once with the message instead of sleeping through the wait or retrying in silence. The old core sent Retry-After.",
+      "absent": true
+    },
+    {
+      "path": "client.headers.X-Should-Retry",
+      "kind": "intended",
+      "reason": "When no account can serve the request for more than 5 minutes (here the soonest is back in 2 hours), the new core tells the client to stop rather than when to retry: X-Should-Retry: false and no Retry-After, so a coding tool stops at once with the message instead of sleeping through the wait or retrying in silence. The old core sent Retry-After.",
+      "want": "false"
+    },
+    {
+      "path": "then[0].headers.Retry-After",
+      "kind": "intended",
+      "reason": "When no account can serve the request for more than 5 minutes (here the soonest is back in 2 hours), the new core tells the client to stop rather than when to retry: X-Should-Retry: false and no Retry-After, so a coding tool stops at once with the message instead of sleeping through the wait or retrying in silence. The old core sent Retry-After.",
+      "absent": true
+    },
+    {
+      "path": "then[0].headers.X-Should-Retry",
+      "kind": "intended",
+      "reason": "When no account can serve the request for more than 5 minutes (here the soonest is back in 2 hours), the new core tells the client to stop rather than when to retry: X-Should-Retry: false and no Retry-After, so a coding tool stops at once with the message instead of sleeping through the wait or retrying in silence. The old core sent Retry-After.",
+      "want": "false"
     }
   ],
   "then": [

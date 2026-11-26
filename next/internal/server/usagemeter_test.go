@@ -36,6 +36,40 @@ func onlyEvent(t *testing.T, s *usage.Store) usage.Event {
 	return ev[0]
 }
 
+// A failed request records the accounts its error says routing left out, by public ID, state and
+// until, at most 8 of them and never by config ID, whether or not the client's error shows them;
+// with no attempt, it names no account.
+func TestMeterRecordsLeftOut(t *testing.T) {
+	m, s := meterFor(t)
+	until := time.Unix(1_800_000_000, 0).UTC()
+	var left []llm.LeftOut
+	for i := range 10 {
+		left = append(left, llm.LeftOut{ID: fmt.Sprint("config-", i), Account: fmt.Sprintf("acc_%d", i), State: "cooling", Until: &until})
+	}
+	m.fail(&llm.Error{Code: llm.CodeRateLimit, Routed: &llm.Explain{Tried: []llm.Tried{}, LeftOut: left}}, 429)
+	e := onlyEvent(t, s)
+	b, _ := json.Marshal(e)
+	if e.Account != "" || e.Attempts != 0 || len(e.LeftOut) != 8 || strings.Contains(string(b), "config-") {
+		t.Fatalf("event %s", b)
+	}
+	for i, l := range e.LeftOut {
+		if l.Account != fmt.Sprintf("acc_%d", i) || l.State != "cooling" || l.Until == nil || !l.Until.Equal(until) || l.ID != "" {
+			t.Errorf("left_out[%d] = %+v", i, l)
+		}
+	}
+	if !strings.Contains(string(b), `"left_out":[{"account":"acc_0","state":"cooling","until":"2027-01-15T08:00:00Z"}`) {
+		t.Errorf("event %s, want left_out with account, state and until", b)
+	}
+
+	// A request that left none out records no list.
+	m, s = meterFor(t)
+	attemptOn(m, 1)
+	m.fail(&llm.Error{Code: llm.CodeRateLimit, Routed: &llm.Explain{Tried: []llm.Tried{}, LeftOut: []llm.LeftOut{}}}, 429)
+	if b, _ := json.Marshal(onlyEvent(t, s)); strings.Contains(string(b), "left_out") {
+		t.Errorf("event %s, want no left_out", b)
+	}
+}
+
 func TestMeterOneSuccessfulAttemptStoresNoTried(t *testing.T) {
 	m, s := meterFor(t)
 	attemptOn(m, 1)

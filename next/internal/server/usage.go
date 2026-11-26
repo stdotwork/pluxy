@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/stdotwork/pluxy/next/internal/route"
@@ -124,7 +125,26 @@ func (m *meter) fail(e *llm.Error, status int) {
 	}
 	ev := m.event(status, route.ResultCode(e))
 	ev.Failed, ev.ErrorCode, ev.Tokens = true, e.Code, usage.TokensOf(e.Usage)
+	if e.Routed != nil {
+		ev.LeftOut = leftOut(e.Routed.LeftOut)
+	}
 	m.store.Add(ev)
+}
+
+// maxLeftOut is how many left-out accounts an event keeps.
+const maxLeftOut = 8
+
+// leftOut returns the first maxLeftOut entries of l without the accounts' config IDs, which only
+// core's log shows; nil when l is empty.
+func leftOut(l []llm.LeftOut) []llm.LeftOut {
+	if len(l) == 0 {
+		return nil
+	}
+	out := slices.Clone(l[:min(len(l), maxLeftOut)])
+	for i := range out {
+		out[i].ID = ""
+	}
+	return out
 }
 
 // drop records nothing for the request.
