@@ -355,6 +355,11 @@ func (f clientFormat) writeError(w http.ResponseWriter, e *llm.Error) int {
 	case e == errClientKey:
 		// Trying again with the same key cannot succeed.
 		w.Header().Set("X-Should-Retry", "false")
+	case route.WaitCannotHelp(e):
+		// No account can serve the request for longer than the usage-limit reply's threshold, or
+		// none will until a person acts: the client stops at once with this message instead of
+		// retrying in silence, or sleeping through a long Retry-After.
+		w.Header().Set("X-Should-Retry", "false")
 	case (status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable || status == 529) && e.RetryAfterMS > 0:
 		// Tell a rate-limited or overloaded client when to try again, in whole seconds rounded up
 		// (RFC 9110 section 10.2.3, RFC 6585 section 4).

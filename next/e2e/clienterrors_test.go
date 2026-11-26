@@ -12,6 +12,9 @@ import (
 	"time"
 
 	"github.com/stdotwork/pluxy/next/examples/oauth/oauthtest"
+	"github.com/stdotwork/pluxy/next/internal/cred"
+	"github.com/stdotwork/pluxy/next/internal/route"
+	"github.com/stdotwork/pluxy/next/protocol"
 )
 
 // No error that reaches a client names an account by the ID it is configured under or the ID a
@@ -220,5 +223,83 @@ func TestClientErrorsOfRemovedAndDisabledDoNotNameTheAccount(t *testing.T) {
 				t.Errorf("%s: message %q says none of %q", c.name, r.message, c.want)
 			}
 		})
+	}
+}
+
+// retryHeaders sends a chat request and returns its status, message, X-Should-Retry and
+// Retry-After.
+func retryHeaders(t *testing.T, base string) (status int, message, shouldRetry, retryAfter string) {
+	t.Helper()
+	resp := post(t, context.Background(), base, clientKey, plainBody)
+	r := readLeakReply(t, resp)
+	return r.status, r.message, resp.Header.Get("X-Should-Retry"), resp.Header.Get("Retry-After")
+}
+
+// A coding tool is told to stop (X-Should-Retry false, no Retry-After) when no account can serve
+// its model for more than five minutes: on the request the upstream refused and on the next one,
+// which finds the account cooling. A shorter wait keeps today's Retry-After, so the tool retries.
+// The status and message are today's either way.
+func TestLongWaitTellsClientsToStop(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name, retryAfter string
+		stop             bool
+	}{{"soonest in 6831s", "6831", true}, {"soonest in 30s", "30", false}} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			u := newUpstream(t)
+			u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				w.Header().Set("Content-Type", "application/json")
+				w.Header().Set("Retry-After", c.retryAfter)
+				w.WriteHeader(http.StatusTooManyRequests)
+				io.WriteString(w, `{"error":{"message":"Rate limit reached","type":"requests","code":"rate_limit_exceeded"}}`)
+			}
+			base := startExplainCore(t, u, nil, explainAccount{id: "acct-a", key: "sk-a"})
+			for i, want := range []string{"Rate limit reached", "is cooling down; try again in "} {
+				status, message, retry, after := retryHeaders(t, base)
+				if status != http.StatusTooManyRequests || !strings.Contains(message, want) {
+					t.Errorf("request %d: status %d, message %q; want 429 and %q", i+1, status, message, want)
+				}
+				switch {
+				case c.stop && (retry != "false" || after != ""):
+					t.Errorf("request %d: X-Should-Retry %q, Retry-After %q; want false and none", i+1, retry, after)
+				case !c.stop && (retry != "" || after == ""):
+					t.Errorf("request %d: X-Should-Retry %q, Retry-After %q; want none and a wait", i+1, retry, after)
+				}
+			}
+			if n := len(usedKeys(u)); n != 1 {
+				t.Errorf("the upstream got %d requests, want 1: the second request finds the account cooling", n)
+			}
+		})
+	}
+}
+
+// A coding tool is told to stop when every account that serves its model needs a new sign-in:
+// no wait can help until a person signs in again. The status and message are today's.
+func TestEveryAccountNeedingSignInTellsClientsToStop(t *testing.T) {
+	t.Parallel()
+	dir := filepath.Join(t.TempDir(), "credentials")
+	store, err := cred.Open(cred.FileBackend{Dir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Create(cred.Record{ID: "login-a", Extension: "pluxy/openai-compatible", State: cred.StateReauth,
+		Account: route.Account{Models: []route.ModelEntry{{Name: "gpt-test"}}}, Reason: "the provider refused the sign-in",
+		Credential: protocol.Credential{Kind: protocol.CredentialAPIKey, APIKey: "sk-login"}}); err != nil {
+		t.Fatal(err)
+	}
+	base := runCore(t, map[string]any{
+		"listen":          "127.0.0.1:0",
+		"client_keys":     []string{clientKey},
+		"management_key":  managementKey,
+		"credentials_dir": dir,
+		"extension":       map[string]any{"manifest": filepath.Join(binDir, "pluxy-extension.json")},
+	})
+	status, message, retry, after := retryHeaders(t, base)
+	if want := `no account can serve model "gpt-test": every account that serves it needs a new sign-in`; status != http.StatusNotFound || message != want {
+		t.Errorf("status %d, message %q; want 404 and %q", status, message, want)
+	}
+	if retry != "false" || after != "" {
+		t.Errorf("X-Should-Retry %q, Retry-After %q; want false and none", retry, after)
 	}
 }

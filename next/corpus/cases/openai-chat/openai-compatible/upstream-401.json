@@ -27,6 +27,12 @@
         "type": "authentication_error",
         "pluxy": "(volatile)"
       }
+    },
+    {
+      "path": "client.headers.X-Should-Retry",
+      "kind": "intended",
+      "reason": "The upstream refused the account's credential, which keeps the account out for 30 minutes, and no other account serves the model; when no account can serve the request for more than 5 minutes, the new core tells the client not to retry (X-Should-Retry: false). The old core sent no such header.",
+      "want": "false"
     }
   ],
   "recorded_old_core": {

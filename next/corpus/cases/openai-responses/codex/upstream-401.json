@@ -44,6 +44,12 @@
       "kind": "intended",
       "reason": "The new core keeps the upstream's error code (token_expired) in the error body it builds; today's core replaces it with its own auth_unavailable.",
       "want": "token_expired"
+    },
+    {
+      "path": "client.headers.X-Should-Retry",
+      "kind": "intended",
+      "reason": "The upstream refused the account's credential, which keeps the account out for 30 minutes, and no other account serves the model; when no account can serve the request for more than 5 minutes, the new core tells the client not to retry (X-Should-Retry: false). The old core sent no such header.",
+      "want": "false"
     }
   ],
   "recorded_old_core": {

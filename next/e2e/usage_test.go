@@ -34,26 +34,33 @@ type usageTried struct {
 	Result   string `json:"result"`
 }
 
+type usageLeftOut struct {
+	Account string     `json:"account"`
+	State   string     `json:"state"`
+	Until   *time.Time `json:"until"`
+}
+
 type usageEvent struct {
-	Seq           uint64       `json:"seq"`
-	ID            string       `json:"id"`
-	Timestamp     time.Time    `json:"timestamp"`
-	Endpoint      string       `json:"endpoint"`
-	Stream        bool         `json:"stream"`
-	Model         string       `json:"model"`
-	UpstreamModel string       `json:"upstream_model"`
-	ServedModel   string       `json:"served_model"`
-	Provider      string       `json:"provider"`
-	Account       string       `json:"account"`
-	Attempts      int          `json:"attempts"`
-	Tried         []usageTried `json:"tried"`
-	KeyID         string       `json:"key_id"`
-	ClientIP      string       `json:"client_ip"`
-	Failed        bool         `json:"failed"`
-	Status        int          `json:"status"`
-	ErrorCode     string       `json:"error_code"`
-	LatencyMS     int64        `json:"latency_ms"`
-	Tokens        usageTokens  `json:"tokens"`
+	Seq           uint64         `json:"seq"`
+	ID            string         `json:"id"`
+	Timestamp     time.Time      `json:"timestamp"`
+	Endpoint      string         `json:"endpoint"`
+	Stream        bool           `json:"stream"`
+	Model         string         `json:"model"`
+	UpstreamModel string         `json:"upstream_model"`
+	ServedModel   string         `json:"served_model"`
+	Provider      string         `json:"provider"`
+	Account       string         `json:"account"`
+	Attempts      int            `json:"attempts"`
+	Tried         []usageTried   `json:"tried"`
+	LeftOut       []usageLeftOut `json:"left_out"`
+	KeyID         string         `json:"key_id"`
+	ClientIP      string         `json:"client_ip"`
+	Failed        bool           `json:"failed"`
+	Status        int            `json:"status"`
+	ErrorCode     string         `json:"error_code"`
+	LatencyMS     int64          `json:"latency_ms"`
+	Tokens        usageTokens    `json:"tokens"`
 }
 
 type usagePage struct {
@@ -264,6 +271,51 @@ func TestUsageRecordsRequests(t *testing.T) {
 	// The usage calls need the management key, as every management call does.
 	if code, _ := mcall(t, c.base, clientKey, http.MethodGet, "/usage", nil); code != http.StatusUnauthorized {
 		t.Errorf("usage with a client key: status %d", code)
+	}
+}
+
+// A request no account could take is recorded with the accounts routing left out, by public ID,
+// with their state and until when, and with no account, also when routing.explain keeps the
+// list from the client.
+func TestUsageRecordsLeftOut(t *testing.T) {
+	u := newUpstream(t)
+	u.respond = func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "6831")
+		w.WriteHeader(http.StatusTooManyRequests)
+		io.WriteString(w, `{"error":{"message":"Rate limit reached","type":"requests","code":"rate_limit_exceeded"}}`)
+	}
+	base := startExplainCore(t, u, map[string]any{"explain": false}, explainAccount{id: "acct-a", key: "sk-a"}, explainAccount{id: "acct-b", key: "sk-b"})
+	ids, _ := publicIDs(t, base)
+	for i := range 2 {
+		resp := post(t, context.Background(), base, clientKey, plainBody)
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusTooManyRequests || strings.Contains(string(b), "left_out") {
+			t.Fatalf("request %d: %d %s; want a 429 without the pluxy member", i+1, resp.StatusCode, b)
+		}
+	}
+	c := &mcore{base: base}
+	p, raw := c.usageEvents(t, "")
+	if len(p.Events) != 2 {
+		t.Fatalf("events: %s", raw)
+	}
+	if first := p.Events[0]; first.Attempts != 2 || len(first.Tried) != 2 || first.LeftOut != nil {
+		t.Errorf("the request that tried both accounts: %+v, want both tried and none left out", first)
+	}
+	second := p.Events[1]
+	if second.Account != "" || second.Provider != "" || second.Attempts != 0 || !second.Failed || len(second.LeftOut) != 2 {
+		t.Fatalf("the request that tried nothing: %s", raw)
+	}
+	seen := map[string]bool{}
+	for _, l := range second.LeftOut {
+		seen[l.Account] = true
+		if l.State != "cooling" || l.Until == nil || time.Until(*l.Until) < time.Hour {
+			t.Errorf("left out %+v, want cooling until about 6831s from now", l)
+		}
+	}
+	if !seen[ids["acct-a"]] || !seen[ids["acct-b"]] {
+		t.Errorf("left out %+v, want accounts %v by public ID", second.LeftOut, ids)
 	}
 }
 

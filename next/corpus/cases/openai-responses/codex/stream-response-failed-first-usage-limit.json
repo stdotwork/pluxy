@@ -57,12 +57,6 @@
       "reason": "Today's core copies the failed event's sequence_number into the error body it passes through; the new core builds the error body itself and the reply never started, so there is no stream position to report."
     },
     {
-      "path": "client.headers.Retry-After",
-      "kind": "intended",
-      "reason": "The new core sends the usage limit's reset time (resets_in_seconds) in Retry-After, as both cores do when the limit comes as an HTTP 429; today's core does not read it from a failed stream event.",
-      "want": "7200"
-    },
-    {
       "path": "upstream[*].headers.Accept-Encoding",
       "kind": "intended",
       "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
@@ -76,6 +70,12 @@
       "path": "upstream[*].body.prompt_cache_key",
       "kind": "intended",
       "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "client.headers.X-Should-Retry",
+      "kind": "intended",
+      "reason": "When no account can serve the request for more than 5 minutes (here the soonest is back in 2 hours), the new core tells the client to stop rather than when to retry: X-Should-Retry: false and no Retry-After, so a coding tool stops at once with the message instead of sleeping through the wait or retrying in silence. The old core sent neither header on this reply.",
+      "want": "false"
     }
   ],
   "recorded_old_core": {
