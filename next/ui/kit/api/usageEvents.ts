@@ -72,6 +72,8 @@ export interface UsageLeftOut {
 }
 
 export interface UsageEventsReply {
+  /** Whether core records requests at all (usage.enabled). Absent from an older core. */
+  enabled?: boolean;
   events: UsageEvent[];
   next: number;
   more: boolean;

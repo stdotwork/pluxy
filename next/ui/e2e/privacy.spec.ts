@@ -274,16 +274,24 @@ test("Home hides account names and the failed request's names while privacy mode
   await expect(row(EMAIL)).toBeVisible();
 });
 
-test("with privacy mode on, Usage and Logs say that a saved file holds the real text", async ({ page }) => {
+test("with privacy mode on, Requests and Logs say that a saved file holds the real text", async ({
+  page,
+}) => {
   await openPanel(page, core);
   await signIn(page, core);
-  const usage = page.getByText("An exported file holds them as core recorded them.");
+  const requests = page.getByText("Names are hidden on screen only. The saved file has them.");
   const logs = page.getByText("A downloaded log holds the text as core wrote it.");
   await page.goto(`${core.base}/panel/#/usage`);
-  await expect(page.getByRole("button", { name: "Export", exact: true })).toBeVisible();
-  await expect(usage).toHaveCount(0);
+  const save = page.getByRole("button", { name: "Save as spreadsheet", exact: true });
+  await expect(save).toBeVisible();
+  await expect(requests).toHaveCount(0);
   await toggle(page).click();
-  await expect(usage).toBeVisible();
+  // It is said once a file has been saved, not before.
+  await expect(requests).toHaveCount(0);
+  const download = page.waitForEvent("download");
+  await save.click();
+  await download;
+  await expect(requests).toBeVisible();
   await page.goto(`${core.base}/panel/#/logs`);
   await expect(logs).toBeVisible();
   await toggle(page).click();

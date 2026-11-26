@@ -43,12 +43,13 @@ label says that it spends one request.
 | Add Account | Replaced OAuth Login. It adds API keys as well as sign-ins, from the login methods each running extension offers, so "OAuth" no longer describes it. |
 | System | Replaced Management Center Info. "Management Center" was the upstream panel's product name. |
 | Routing, Quota Management, Config Panel, Logs Viewer | The old panel's names: these pages do the same job as the old ones did. |
-| Usage | A new page; see [The Usage page](#the-usage-page). |
+| Requests, Usage | The two tabs of Activity; see [The Activity page](#the-activity-page). Requests keeps the ID `usage` of the page it replaced, so `#/usage` and `data-page="usage"` still work; Usage is `activity/usage`. |
+| Tools | A new page, named for what a person does there: connect a coding tool, copy the address for any other program, and make, name and delete the keys tools send. It sits under the Tools destination; in the desktop app its topics sit beside it. |
 | Set up pluxy | A new page, named for what a person does there. The panel opens it by itself on a first start; afterwards it stays among the Settings topics and shows the same things as they are now. |
 
 The navigation has five destinations: Home, Accounts (with Routing as the tab
-"Order & fallback" and Quota Management as the tab "Limits"), Activity (Usage), Tools (the desktop
-app's client pages; the panel has none yet) and Settings, which lists every other page as a topic,
+"Order & fallback" and Quota Management as the tab "Limits"), Activity (Requests and Usage), Tools (the Tools
+page, and in the desktop app its client pages as topics) and Settings, which lists every other page as a topic,
 the extensions' pages last. The old panel's groups (Operate, Gateway, Observe, Control) are gone.
 Since every text goes through the string layer, renaming a page later is a
 change of text; the page ID stays, because it is the page's address and theme hook.
@@ -65,21 +66,37 @@ Accounts set in the config are listed in the panel but changed only in the confi
 keys out of the config file means core needs no structured write of config accounts for both
 config layouts it reads, and a key is never shown after it is added.
 
-## The Usage page
+## The Activity page
 
-Core keeps a record of recent requests, in memory within the limits `usage.max_events` and
-`usage.max_age_ms`, and in day files on disk. The panel's Usage page lists these requests, newest first, with filters,
-paging and a CSV export, and links each request's trace ID to its request log in the Logs Viewer.
-A request pluxy sent upstream more than once is marked with its number of tries, and a row opens
-the request's detail, which lists each try in order: the account, its provider and model, and
-whether it answered or the code of the error that ended it.
-Home shows the last 7 days as one bar for each local day, and the ten latest requests; it has no
-breakdown by model, account or key. `GET /usage` also reports `write_errors`, the requests core could
-not write to its usage files; no page shows that count yet.
+Activity has two tabs. Both read what core records, and both say so when core is told not to keep
+a record (`observability.usage.usage-statistics-enabled` is off): they show one pane that links
+to the setting.
+
+**Requests** (`#/activity`, or `#/usage`) lists what core still keeps in memory, newest first,
+under the day each request came on, 50 at a time. That is a day by default and at most 10,000
+requests (`usage.max_age_ms` and `usage.max_events`), so the list has no time range; its end says
+how far back it goes. It is read when the page opens, on Refresh and when a filter changes, not on
+a timer. A row opens to why the request went where it did, in a sentence, what each attempt came
+to, and its facts. The trace links to the request's log in the Logs Viewer for a failed request,
+and for a successful one only while `observability.logs.request-log` is on (the log of a
+successful request is kept only then); otherwise it shows as text to copy. The filters are in the
+address: `failed=1`, `provider`, `account` (the account's ID, which is what a request
+records; a public ID is turned into it), `model` and `key`. `trace=<id>` opens one request, reading down
+the record until it finds it. **Save as spreadsheet** writes the newest 10,000 matching requests,
+with the columns `Time, Model, Provider, Account, Client key, Failed, Status, Latency, Tokens,
+Trace ID`, newest first.
+
+**Usage** (`#/activity/usage`) adds the requests up over 24 hours, 7 days or 30 days: the totals,
+a chart with a bar per hour (24 hours) or per local day, and a breakdown by provider, model,
+account or key. Core adds closed days from its day files (kept 90 days) and today from memory, so
+the 7 and 30 days are real, though Requests holds less. `GET /usage` is asked for hourly steps and
+the page adds them into the person's local days. When core could not write some requests to its
+usage files (`write_errors` and `dropped` in `GET /usage`), Requests says how many.
 
 The page is in the panel, not only in the desktop app, because core keeps the record and no other
 page lists requests. It shows only what core records: tokens, with no prices or cost views, and the
-app has none either.
+app has none either. Home shows the last 7 days as one bar for each local day, and the ten latest requests; it has no
+breakdown by model, account or key, which is what the Usage tab is for.
 
 ## Themes reach every page
 

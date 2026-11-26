@@ -2,7 +2,7 @@
 
 The desktop app is the UI kit's second build ([`../ui`](../ui/README.md)), in a Tauri 2 window,
 with a tray icon. It shows core's pages in the same places and with the same themes as the web
-panel, then adds its own: Beginner Mode, Manage Clients and the client pages as the topics of Tools, and Connection, Version Management, Device
+panel, then adds its own: Beginner Mode, Manage Clients and the client pages as topics beside the Tools page, and Connection, Version Management, Device
 extensions and Launcher among the Settings topics. Extension pages, from core and
 from packages installed on this device, open in webviews of their own.
 
@@ -371,7 +371,7 @@ storage cannot turn it off. A file that cannot be read or parsed counts as on.
 
 ## Files the window saves
 
-The Themes page's **Export**, the Logs page's downloads and the Usage page's **Export** save
+The Themes page's **Export**, the Logs page's downloads and the Requests page's **Save as spreadsheet** save
 a file. In the panel that is a browser download. The app's window opens no address but the app's
 own, so a download link, whose address starts with `blob:`, does nothing there; these pages hand
 the file to the `file_save` command instead (`src-tauri/src/export.rs`). It saves the file in
@@ -1504,7 +1504,7 @@ is still there and unchanged.
 
 ## Beginner Mode
 
-Beginner Mode (`src/easyMode.tsx`, the first topic of Tools, so the Tools entry opens it) is the guided setup of the old app's Easy
+Beginner Mode (`src/easyMode.tsx`, a topic of Tools; the Tools entry itself opens the kit's Tools page) is the guided setup of the old app's Easy
 mode, in its two steps. **Connect a model** is the Add Account page's own sign-in (every browser,
 device code and API-key method core's extensions offer); it counts core's accounts, and **Next:
 connect an agent** stays off until there is one. **Connect an agent** lists the agent clients this

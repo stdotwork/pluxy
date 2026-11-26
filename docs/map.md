@@ -96,7 +96,8 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
   `next/ui/kit/strings.ts`; screen-share masks in `next/ui/kit/privacy.ts`; register a core page in
   `next/ui/kit/pages/core.ts` (`corePages`). Browser host wiring is in
   `next/ui/panel/browserHost.ts` (`browserHost`) and `next/ui/panel/main.tsx`.
-- **Tests** (from `next/ui`): `bun test tests/browserHost.test.ts` and `bun run check`.
+- **Tests** (from `next/ui`): `bun test tests/browserHost.test.ts` and `bun run check`; the Tools page
+  (`next/ui/kit/pages/tools.tsx`, coding tools and client keys) has `next/ui/tests/tools.test.tsx` and `next/ui/e2e/tools.spec.ts`.
 - **Fakes and helpers**: `next/e2e/panelcore/main.go` (starts a real core with fake extensions for
   Playwright and app tests).
 - **Handbook**: `next/ui/README.md` ("How a host build uses the kit", "Adding a page").
@@ -148,7 +149,8 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
   `Store.Add`, `Store.Summarize`); daily JSONL files and closed-day summaries in
   `next/internal/usage/disk.go` (`Open`); request metering in `next/internal/server/usage.go`
   (`meter`, `meterStream`); management endpoints in `next/internal/core/manageusage.go`
-  (`Core.handleUsage`); panel view in `next/ui/kit/pages/usage.tsx`.
+  (`Core.handleUsage`); panel views in `next/ui/kit/pages/requests.tsx` (Requests) and `usage.tsx` (Usage), with their
+  shared logic in `activity.ts`.
 - **Tests**: `go test -count=1 -run TestStore ./internal/usage` and
   `go test -count=1 -run TestManageUsageRangesByKeyAndBefore ./internal/core`.
 - **Handbook**: `next/README.md` ("Usage statistics").

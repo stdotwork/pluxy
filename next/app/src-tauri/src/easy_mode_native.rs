@@ -232,14 +232,16 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
         "pluxy/claude-code is still installed before the guide",
     )?;
 
-    // ---- open: listed in the navigation, two steps, the first shown
+    // ---- open: listed among the topics of Tools, two steps, the first shown
     step(
         "open",
         (|| {
+            main.eval("location.hash = '#/tools'")
+                .map_err(|e| e.to_string())?;
             until(
                 main,
-                "Beginner Mode in the navigation",
-                "return [...document.querySelectorAll('[data-part=nav] a')].some((a) => a.getAttribute('href') === '#/easy-mode');",
+                "Beginner Mode among the topics of Tools",
+                "return [...document.querySelectorAll('[data-part=topics] a, [data-part=topics-select] option')].some((a) => (a.getAttribute('href') ?? a.value) === '#/easy-mode');",
             )
             .map_err(|_| "the window lists no Beginner Mode page (#/easy-mode)".to_string())?;
             main.eval("location.hash = '#/easy-mode'")
