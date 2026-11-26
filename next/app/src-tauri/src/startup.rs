@@ -353,7 +353,7 @@ fn render_entry(executable: &Path, identifier: &str) -> Result<Vec<u8>, String> 
     #[cfg(target_os = "linux")]
     {
         let _ = identifier;
-        desktop_entry(executable).map(String::into_bytes)
+        desktop_entry(executable, crate::DISPLAY_NAME).map(String::into_bytes)
     }
     #[cfg(target_os = "macos")]
     {
@@ -466,8 +466,9 @@ fn parse_launch_agent(bytes: &[u8], identifier: &str) -> Registration {
     }
 }
 
+/// The desktop entry that starts `executable` at login, named `name` (the app's display name).
 #[cfg(target_os = "linux")]
-fn desktop_entry(executable: &Path) -> Result<String, String> {
+fn desktop_entry(executable: &Path, name: &str) -> Result<String, String> {
     validate_executable(executable)?;
     let path = executable.to_str().ok_or("the app path is not UTF-8")?;
     // Exec quoting, then Desktop Entry string escaping.
@@ -479,7 +480,7 @@ fn desktop_entry(executable: &Path) -> Result<String, String> {
         quoted.push(c);
     }
     let quoted = quoted.replace('\\', "\\\\");
-    Ok(format!("[Desktop Entry]\nType=Application\nName=pluxy\nExec=\"{quoted}\" --autostart\nTerminal=false\nX-Pluxy-Autostart=true\n"))
+    Ok(format!("[Desktop Entry]\nType=Application\nName={name}\nExec=\"{quoted}\" --autostart\nTerminal=false\nX-Pluxy-Autostart=true\n"))
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -657,9 +658,9 @@ mod tests {
             if name != "missing" {
                 fs::write(&path, b"fixture").unwrap();
             }
-            assert!(desktop_entry(&path).is_err(), "{name}");
+            assert!(desktop_entry(&path, "pluxy").is_err(), "{name}");
         }
-        assert!(desktop_entry(&s.base).is_err());
+        assert!(desktop_entry(&s.base, "pluxy").is_err());
         fs::remove_dir_all(&s.base).unwrap();
     }
 
@@ -668,9 +669,19 @@ mod tests {
         let s = store();
         let path = s.base.join("space quote\" dollar$ tick` ;&=");
         fs::write(&path, b"fixture").unwrap();
-        let text = desktop_entry(&path).unwrap();
+        let text = desktop_entry(&path, "pluxy").unwrap();
         let expected = format!("[Desktop Entry]\nType=Application\nName=pluxy\nExec=\"{}/space quote\\\\\" dollar\\\\$ tick\\\\` ;&=\" --autostart\nTerminal=false\nX-Pluxy-Autostart=true\n", s.base.display());
         assert_eq!(text, expected);
+        fs::remove_dir_all(&s.base).unwrap();
+    }
+
+    #[test]
+    fn a_local_builds_login_item_is_named_as_its_window() {
+        let s = store();
+        let path = s.base.join("pluxy-app-local");
+        fs::write(&path, b"fixture").unwrap();
+        let text = desktop_entry(&path, crate::display_name(true)).unwrap();
+        assert_eq!(text, format!("[Desktop Entry]\nType=Application\nName=pluxy (local build)\nExec=\"{}/pluxy-app-local\" --autostart\nTerminal=false\nX-Pluxy-Autostart=true\n", s.base.display()));
         fs::remove_dir_all(&s.base).unwrap();
     }
 }

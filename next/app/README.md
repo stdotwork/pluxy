@@ -1933,9 +1933,9 @@ make app-local LOCAL=/some/folder     # into a folder of your choice
 
 `make app-local` builds the web panel core embeds (`make panel`), installs and builds the window
 (`bun run build`), then runs `bun run package:local <folder>` here. It needs what the app's other
-builds need ([Build and check](#build-and-check)) and Go. Its last lines say where the build is
-and which providers it carries. Running it again replaces the folder, but only a folder that holds
-`local-build.json`; it refuses any other folder that is not empty.
+builds need ([Build and check](#build-and-check)) and Go. Its last lines give the build's version,
+the providers it carries, where it is and how to start it. It builds only into a new or empty
+folder or an earlier local build ([Building it again](#building-it-again)).
 
 The folder holds:
 
@@ -1960,11 +1960,12 @@ How it differs from a release:
   `~/.local/share/dev.pluxy.desktop.local` (under `$XDG_CONFIG_HOME` and `$XDG_DATA_HOME` when
   set), and its login entry, if you turn one on, to its own file
   (`dev.pluxy.desktop.local.desktop`), so it never shares anything with an installed release.
-- **Marked as a local build.** The window's title is "pluxy (local build)". The `local-build`
-  Cargo feature also puts the test build marker in the program, so the
-  [release validator](#validate-release-inputs) refuses the program given as an artifact (`test
-  build marker/identity in artifact`), and refuses the build's own config for its identifier and
-  product name.
+- **Marked as a local build.** The window's title, the tray's tooltip and its Open item, and the
+  login item's name say "pluxy (local build)". The `local-build` Cargo feature also puts the test
+  build marker in the program, so the [release validator](#validate-release-inputs) refuses the
+  program given as an artifact (`test build marker/identity in artifact`), refuses the build's own
+  config for its identifier and product name, and refuses the `local-build` feature (`test cargo
+  feature in release`).
 - **No test checks.** It is built in the release profile without the `native-test` feature, so it
   runs no checks and does not exit by itself, as the test package does.
 - **Keys made for the build.** Its core is a release the command makes, as the test package's
@@ -1980,6 +1981,36 @@ To remove it, quit the app (its core stops with it), then delete the build folde
 rm -rf next/app/local-build ~/.config/dev.pluxy.desktop.local ~/.local/share/dev.pluxy.desktop.local
 rm -f ~/.config/autostart/dev.pluxy.desktop.local.desktop   # only if you turned on Launch at startup
 ```
+
+### Building it again
+
+After a change, quit the app (from its tray menu when it is in the tray), then run
+`make app-local` again with the same folder. The build:
+
+1. **Checks the folder first, and changes nothing if it refuses.** It refuses a link or a file; a
+   folder with files in it but no `local-build.json` that names this kind of build and a program
+   inside that folder; any folder while a `<folder>.old` is beside it; and a folder that the app, or
+   a core it started from there, is still running from. Each refusal says what to do.
+2. **Builds into a new folder beside it,** `<folder>.stage-<random>`. If the build fails or you
+   stop it (Ctrl-C), that folder is removed and the last line says your folder is as it was.
+3. **Swaps the new build in:** your folder becomes `<folder>.old`, the new build takes its name, a
+   `home/` folder in the old build moves into the new one, and then `<folder>.old` is removed. If a
+   step fails, the message says where the old build or its `home/` is, and nothing that still
+   holds `home/` is removed.
+
+So a rebuild replaces `bin/`, `lib/` and `local-build.json`, keeps `home/`, and removes anything
+else in the folder. `home/` is where the app keeps its settings and data when you start it with
+`HOME` pointing there; started as above, they are in `~/.config/dev.pluxy.desktop.local` and
+`~/.local/share/dev.pluxy.desktop.local`, which a rebuild does not touch either.
+
+Each build has a version of its own, the core version the app names (`core-release.json`) followed
+by `+local.` and 12 random hex digits, such as `0.1.0+local.90a173983d0c`. The app and its core
+both carry it, so at its next start the app installs the core it came with and switches to it. The
+core it ran before stays installed, to switch back to; older ones are removed. Accounts, settings
+and installed providers stay. An installed provider keeps running the copy you installed, even
+when the new build carries a changed one at the same version: to run the new one, remove the
+provider and install it again (on Extensions, or `pluxy ext remove` and `pluxy ext install`); its
+accounts stay.
 
 ### The updater gate
 

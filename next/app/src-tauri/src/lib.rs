@@ -413,12 +413,18 @@ fn show_in_dock(app: &AppHandle, shown: bool) {
     let _ = (app, shown);
 }
 
-/// The window's title: a local build (package.ts local) says it is one.
-const WINDOW_TITLE: &str = if cfg!(feature = "local-build") {
-    "pluxy (local build)"
-} else {
-    "pluxy"
-};
+/// The app's name where a person reads it: the window's title, the tray's tooltip and Open item,
+/// and the login item's name (`startup.rs`). A local build (package.ts local) says it is one.
+pub(crate) const DISPLAY_NAME: &str = display_name(cfg!(feature = "local-build"));
+
+/// The display name of a local build, or of any other.
+pub(crate) const fn display_name(local_build: bool) -> &'static str {
+    if local_build {
+        "pluxy (local build)"
+    } else {
+        "pluxy"
+    }
+}
 
 /// Shows the window, making a new one if it was closed.
 fn open_window(app: &AppHandle) -> tauri::Result<()> {
@@ -431,7 +437,7 @@ fn open_window(app: &AppHandle) -> tauri::Result<()> {
     let saved = app.state::<App>().window.lock().unwrap().prefs.geometry;
     let (width, height, place) = window::opening(app, saved);
     let mut builder = WindowBuilder::new(app, WINDOW)
-        .title(WINDOW_TITLE)
+        .title(DISPLAY_NAME)
         .inner_size(width, height)
         .min_inner_size(window::MIN_SIZE.0, window::MIN_SIZE.1);
     if let Some((x, y)) = place {
@@ -669,7 +675,13 @@ fn ask_on_close(app: &AppHandle) {
 
 fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     let status = MenuItem::with_id(app, "status", "Not connected", false, None::<&str>)?;
-    let open = MenuItem::with_id(app, "open", "Open pluxy", true, None::<&str>)?;
+    let open = MenuItem::with_id(
+        app,
+        "open",
+        format!("Open {DISPLAY_NAME}"),
+        true,
+        None::<&str>,
+    )?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit pluxy", true, None::<&str>)?;
     let access = MenuItem::with_id(
         app,
@@ -694,7 +706,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
     #[cfg(native_stack)]
     menu.insert(&launches, 6)?;
     let mut tray = TrayIconBuilder::with_id("pluxy")
-        .tooltip("pluxy")
+        .tooltip(DISPLAY_NAME)
         .menu(&menu)
         .on_menu_event(|app, e| tray_menu_event(app, e.id().as_ref()))
         .on_tray_icon_event(|tray, e| {
@@ -3658,6 +3670,12 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_local_build_says_so_wherever_its_name_shows() {
+        assert_eq!(display_name(true), "pluxy (local build)");
+        assert_eq!(display_name(false), "pluxy");
+    }
 
     #[test]
     fn a_device_page_loads_its_files_from_the_asset_scheme_as_served() {

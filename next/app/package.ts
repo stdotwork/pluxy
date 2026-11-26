@@ -74,16 +74,22 @@
 // scripts the bundler writes from its own copy.
 //
 // local builds the app for this Linux computer with tauri build --no-bundle: the release profile,
-// the local-build feature (the window's title says "local build", and the program carries the
-// test build marker the release gate refuses) and an overlay: identifier dev.pluxy.desktop.local,
-// product name "pluxy Local", binary pluxy-app-local, so its settings and data folders are its
-// own. No native-test feature: it runs no checks and stays open. Its core is a release made here
-// as the test package's are, but with the real provider extensions of ./extensions as its
-// bundled/ packages (`go run ./cmd/pluxy-pack`), signed with a key made here and dropped when the
-// command ends. It writes the installed layout bundled_core.rs `place` expects:
+// the local-build feature (the window, tray and login item say "pluxy (local build)", and the
+// program carries the test build marker the release gate refuses) and an overlay: identifier
+// dev.pluxy.desktop.local, product name "pluxy Local", binary pluxy-app-local, so its settings and
+// data folders are its own, and a version of its own for each build, <core version>+local.<12 random
+// hex digits>, which its core has too, so the app switches to the new core at its next start. No
+// native-test feature: it runs no checks and stays open. Its core is a release made here as the
+// test package's are, but with the real provider extensions of ./extensions as its bundled/
+// packages (`go run ./cmd/pluxy-pack`), signed with a key made here and dropped when the command
+// ends. It writes the installed layout bundled_core.rs `place` expects:
 // <out-dir>/bin/pluxy-app-local and <out-dir>/bin/pluxy, <out-dir>/lib/pluxy Local/core/bundled/,
-// and <out-dir>/local-build.json naming the program and the core's packages. An <out-dir> that is
-// not empty is replaced only if it holds a local-build.json. Run it with
+// and <out-dir>/local-build.json: {"program": <out-dir>/bin/pluxy-app-local, "identifier",
+// "product_name", "bundled_core": {"version", "packages"}}. Before building it refuses an <out-dir>
+// that is a link, not a folder, not empty without a valid record, that a program runs from, or
+// that has an <out-dir>.old beside it (checkOutDir). It builds into <out-dir>.stage-<random>, beside
+// it, removed when the build fails or is stopped (SIGINT or SIGTERM: exit 130), so <out-dir> is as
+// it was; then it puts the stage in place, keeping <out-dir>/home (swapIn). Run it with
 // <out-dir>/bin/pluxy-app-local. It has no updater key, so it never updates itself.
 //
 // release builds the release validator (src-tauri/examples/validate-release-config.rs, a debug
@@ -95,23 +101,26 @@
 // `release-package: refused: <reason>` or, when it could not check, `release-package: failed:
 // <reason>`; the exit code is 0 only for valid.
 
-import { spawnSync } from "node:child_process";
-import { generateKeyPairSync, randomUUID } from "node:crypto";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
 import {
   copyFileSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
+  realpathSync,
   renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { arch, homedir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { appImageHeader, type Pin, pinnedBytes, runtimeBytes } from "./native/appimage";
 import { release as coreRelease } from "./native/core-steps";
 import { signUpdate, updaterKey } from "./native/minisign";
@@ -134,6 +143,14 @@ function run(cmd: string, args: string[], cwd: string, env?: Record<string, stri
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(" ")} exited with ${r.status}`);
 }
 
+/** How a step runs a command: run, or a Stoppable's run. */
+type Runner = (
+  cmd: string,
+  args: string[],
+  cwd: string,
+  env?: Record<string, string>,
+) => void | Promise<void>;
+
 /** The version of the update the test package is built at too (newer than the app's). */
 const UPDATE_VERSION = "0.2.0";
 /** The core version the app names (core-release.json), which it comes with. */
@@ -143,7 +160,7 @@ const UPDATE_CORE_VERSION = "0.2.0";
 const next = resolve(app, "..");
 const coreProgram = process.platform === "win32" ? "pluxy.exe" : "pluxy";
 
-/** One test build's core: its manifest, the checked files, and the packages its index lists. */
+/** One app build's bundled core: its manifest, the checked files, and the packages its index lists. */
 interface BundledCore {
   version: string;
   manifest: string;
@@ -154,10 +171,10 @@ interface BundledCore {
 
 /** The test-signed core releases the two test builds come with, checked and unpacked by the
  * bundle-core tool into work (see the top of this file), by core version. */
-function bundledCores(work: string): Record<string, BundledCore> {
+async function bundledCores(work: string): Promise<Record<string, BundledCore>> {
   const prepared = join(work, "core-prepared");
   run("go", ["run", "./e2e/panelcore", "-probe", "-prepare", prepared], next);
-  return signedCores(work, [CORE_VERSION, UPDATE_CORE_VERSION], "test-package", (bundled, v) => {
+  return await signedCores(work, [CORE_VERSION, UPDATE_CORE_VERSION], "test-package", (bundled, v) => {
     cpSync(join(prepared, "bundled"), bundled, { recursive: true });
     // Both versions bundle the same test packages: a file naming the version makes each part of
     // the program set differ between them, as two releases' do (the update session ends an
@@ -169,13 +186,14 @@ function bundledCores(work: string): Record<string, BundledCore> {
 /** Core releases of versions, each a core built with Go at that version with the packages fill
  * puts in its bundled/ folder, signed with a publisher key made here whose private key stays in
  * this process (its ID starts with label), then checked and unpacked by the bundle-core tool into
- * work, by core version. */
-function signedCores(
+ * work, by core version. exec runs each command (run unless given). */
+async function signedCores(
   work: string,
   versions: string[],
   label: string,
   fill: (bundled: string, version: string) => void,
-): Record<string, BundledCore> {
+  exec: Runner = run,
+): Promise<Record<string, BundledCore>> {
   const releases = join(work, "core-releases");
   mkdirSync(releases);
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
@@ -185,7 +203,7 @@ function signedCores(
     const folder = join(releases, `core-${v}`);
     mkdirSync(folder);
     // As a release builds it (next/Dockerfile): no cgo, no local paths, the version linked in.
-    run(
+    await exec(
       "go",
       [
         "build",
@@ -207,14 +225,14 @@ function signedCores(
   writeFileSync(index, JSON.stringify({ format: 1, releases: entries }, null, 2));
   const jwk = publicKey.export({ format: "jwk" });
   const pub = Buffer.from(jwk.x ?? "", "base64url").toString("hex");
-  run("cargo", ["build", "--locked", "--example", "bundle-core"], tauriDir);
+  await exec("cargo", ["build", "--locked", "--example", "bundle-core"], tauriDir);
   const exe = process.platform === "win32" ? ".exe" : "";
   const tool = join(targetDir, "debug", "examples", `bundle-core${exe}`);
   const cores: Record<string, BundledCore> = {};
   for (const v of versions) {
     const out = join(work, `bundled-${v}`);
     mkdirSync(out);
-    run(tool, [index, v, keyId, pub, out], app);
+    await exec(tool, [index, v, keyId, pub, out], app);
     const dir = join(out, "core");
     const listed = JSON.parse(readFileSync(join(dir, "bundled", "index.json"), "utf8")).packages ?? {};
     cores[v] = {
@@ -394,7 +412,7 @@ async function testPackage(outDir: string) {
       writeFileSync(join(tools, tool.file), await pinnedBytes(tool), { mode: 0o700 });
     }
     const key = updaterKey();
-    const cores = bundledCores(work);
+    const cores = await bundledCores(work);
     const triple = hostTriple();
     // One build at each version, each with its core; the second rebuilds only the app's own crate.
     const build = (v: string, core: BundledCore, bundle = true): string => {
@@ -513,7 +531,7 @@ async function bundleTestPackage(outDir: string) {
     const key = updaterKey();
     const name = "pluxy Test";
     const exe = windows ? "pluxy-app-test.exe" : "pluxy-app-test";
-    const cores = bundledCores(work);
+    const cores = await bundledCores(work);
     const triple = hostTriple();
     if (windows) await placeNsisTools(work);
     // One build at each version, each with its core, its bundle copied into folder; the second
@@ -670,72 +688,296 @@ const LOCAL = {
   productName: "pluxy Local",
   mainBinaryName: "pluxy-app-local",
 };
-/** The file a local build's folder holds, which marks the folder as one this command may replace. */
-const LOCAL_RECORD = "local-build.json";
+/** The local build's name where a person reads it: the app's DISPLAY_NAME under local-build. */
+const LOCAL_NAME = "pluxy (local build)";
+/** The record a local build's folder holds (see the top of this file). */
+export const LOCAL_RECORD = "local-build.json";
+
+/** A version of its own for one local build, the app's and its core's: the core version the app
+ * names, then +local. and 12 random hex digits. */
+export function localVersion(): string {
+  return `${CORE_VERSION}+local.${randomBytes(6).toString("hex")}`;
+}
+
+/** Whether path is inside dir (not dir itself), by their names. */
+function inside(dir: string, path: string): boolean {
+  const r = relative(dir, path);
+  return r !== "" && r !== ".." && !r.startsWith(`..${sep}`) && !isAbsolute(r);
+}
+
+/** Whether something, a dangling link too, has this name. */
+function present(path: string): boolean {
+  return lstatSync(path, { throwIfNoEntry: false }) !== undefined;
+}
+
+/** Whether outDir's record says it is a local build this command made: the local build's
+ * identifier and product name, its program inside outDir and a core version. */
+function isLocalBuild(outDir: string): boolean {
+  const path = join(outDir, LOCAL_RECORD);
+  if (!lstatSync(path, { throwIfNoEntry: false })?.isFile()) return false;
+  let record: unknown;
+  try {
+    record = JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return false;
+  }
+  if (typeof record !== "object" || record === null) return false;
+  const r = record as Record<string, unknown>;
+  const core = r.bundled_core;
+  return (
+    r.identifier === LOCAL.identifier &&
+    r.product_name === LOCAL.productName &&
+    typeof r.program === "string" &&
+    isAbsolute(r.program) &&
+    inside(outDir, r.program) &&
+    typeof core === "object" &&
+    core !== null &&
+    typeof (core as Record<string, unknown>).version === "string"
+  );
+}
+
+/** The ID of a process whose program is inside outDir (the app, or a core it runs from a home
+ * folder there), read from proc's <pid>/exe links; processes it may not read are skipped. */
+function runningFrom(outDir: string, proc: string): string | undefined {
+  const real = realpathSync(outDir);
+  let pids: string[];
+  try {
+    pids = readdirSync(proc).filter((name) => /^\d+$/.test(name));
+  } catch {
+    return undefined;
+  }
+  for (const pid of pids) {
+    let exe: string;
+    try {
+      exe = readlinkSync(join(proc, pid, "exe")).replace(/ \(deleted\)$/, "");
+    } catch {
+      continue;
+    }
+    if (inside(real, exe) || inside(outDir, exe)) return pid;
+  }
+  return undefined;
+}
+
+/** Throws, saying what to do, unless the local build may be built into outDir: a missing or empty
+ * folder, or a local build's (its record checked) that nothing runs from. It refuses a link or
+ * anything not a folder, and any outDir while <outDir>.old is left from an earlier build. */
+export function checkOutDir(outDir: string, proc = "/proc") {
+  const elsewhere = "make app-local LOCAL=<folder>";
+  if (present(`${outDir}.old`)) {
+    throw new Error(
+      `${outDir}.old is left from an earlier build and may hold its home folder: move out what you need, delete it, then build again`,
+    );
+  }
+  const st = lstatSync(outDir, { throwIfNoEntry: false });
+  if (!st) return;
+  if (st.isSymbolicLink()) {
+    throw new Error(`not building into ${outDir}: it is a link. Name the folder itself: ${elsewhere}`);
+  }
+  if (!st.isDirectory()) {
+    throw new Error(
+      `not building into ${outDir}: it is not a folder. Choose an empty or new folder: ${elsewhere}`,
+    );
+  }
+  if (readdirSync(outDir).length === 0) return;
+  if (!isLocalBuild(outDir)) {
+    throw new Error(
+      `not building into ${outDir}: it holds files that are not a local build. Choose an empty or new folder: ${elsewhere}`,
+    );
+  }
+  if (runningFrom(outDir, proc) !== undefined) {
+    throw new Error(`${LOCAL_NAME} is running from ${outDir}: quit it from its tray menu, then build again`);
+  }
+}
+
+/** Puts the finished build in stage in place of outDir. With no outDir, stage is renamed to it.
+ * Otherwise outDir becomes <outDir>.old, stage becomes outDir (if that fails, .old is renamed back),
+ * .old's home/ moves into the new build, and only then is .old removed: a folder that still holds
+ * home/ is never deleted. move renames (renameSync unless given). */
+export function swapIn(stage: string, outDir: string, move: (from: string, to: string) => void = renameSync) {
+  if (!present(outDir)) {
+    move(stage, outDir);
+    return;
+  }
+  const old = `${outDir}.old`;
+  try {
+    move(outDir, old);
+  } catch (e) {
+    throw new Error(`could not put the new build in place (${(e as Error).message}); ${outDir} is as it was`);
+  }
+  try {
+    move(stage, outDir);
+  } catch (e) {
+    const why = (e as Error).message;
+    try {
+      move(old, outDir);
+    } catch {
+      throw new Error(
+        `could not put the new build in place (${why}); the previous build and its home folder are in ${old}: move it back to ${outDir}`,
+      );
+    }
+    throw new Error(`could not put the new build in place (${why}); the previous build is back in ${outDir}`);
+  }
+  const home = join(old, "home");
+  if (present(home)) {
+    try {
+      move(home, join(outDir, "home"));
+    } catch (e) {
+      throw new Error(
+        `the new build is in ${outDir}, but its home folder could not be moved there (${(e as Error).message}): it is in ${home}; move it to ${join(outDir, "home")}, then delete ${old}`,
+      );
+    }
+  }
+  rmSync(old, { recursive: true, force: true });
+}
+
+/** Runs the local build's commands so that SIGINT or SIGTERM stops the build: each command runs
+ * in a process group of its own, which the signal is passed to (SIGKILL on a second one); that
+ * command's run then fails, and so does every later one. */
+class Stoppable {
+  stopped: NodeJS.Signals | undefined;
+  private child: ChildProcess | undefined;
+  private readonly onSignal = (signal: NodeJS.Signals) => {
+    const again = this.stopped !== undefined;
+    this.stopped = signal;
+    const pid = this.child?.pid;
+    if (pid === undefined) return;
+    try {
+      process.kill(-pid, again ? "SIGKILL" : signal);
+    } catch {
+      // The command has ended already.
+    }
+  };
+  constructor() {
+    process.on("SIGINT", this.onSignal);
+    process.on("SIGTERM", this.onSignal);
+  }
+  end() {
+    process.off("SIGINT", this.onSignal);
+    process.off("SIGTERM", this.onSignal);
+  }
+  check() {
+    if (this.stopped) throw new Error(`stopped by ${this.stopped}`);
+  }
+  run: Runner = (cmd, args, cwd, env) => {
+    this.check();
+    return new Promise((done, fail) => {
+      const child = spawn(cmd, args, {
+        cwd,
+        env: env ?? process.env,
+        stdio: ["ignore", "inherit", "inherit"],
+        detached: true,
+      });
+      this.child = child;
+      child.on("error", (e) => {
+        this.child = undefined;
+        fail(e);
+      });
+      child.on("close", (code, signal) => {
+        this.child = undefined;
+        if (this.stopped) fail(new Error(`stopped by ${this.stopped}`));
+        else if (code === 0) done();
+        else fail(new Error(`${cmd} ${args.join(" ")} exited with ${code ?? signal}`));
+      });
+    });
+  };
+}
+
+/** Set when a signal stopped the local build: it then exits with 130. */
+let interrupted = false;
 
 /** The local build (see the top of this file). */
-function localBuild(outDir: string) {
+async function localBuild(outDir: string) {
   if (process.platform !== "linux" || process.arch !== "x64") {
     throw new Error(`the local build is made on x86_64 Linux; this is ${process.platform} ${process.arch}`);
   }
-  if (existsSync(outDir) && readdirSync(outDir).length > 0) {
-    if (!existsSync(join(outDir, LOCAL_RECORD))) {
-      throw new Error(`${outDir} is not empty and holds no ${LOCAL_RECORD}: not replacing it`);
-    }
-    rmSync(outDir, { recursive: true, force: true });
-  }
-  mkdirSync(outDir, { recursive: true });
-  const work = mkdtempSync(join(outDir, "work-"));
+  checkOutDir(outDir);
+  mkdirSync(dirname(outDir), { recursive: true });
+  // Beside outDir, on the same file system, so that putting it in place is a rename.
+  const stage = mkdtempSync(`${outDir}.stage-`);
+  const stop = new Stoppable();
   try {
-    // The real provider extensions, as the bundled registry of the core the build comes with.
-    const packs = join(work, "packs");
-    run("go", ["run", "./cmd/pluxy-pack", "-out", packs], next);
-    const cores = signedCores(work, [CORE_VERSION], "local-build", (bundled) => {
-      cpSync(join(packs, "bundled"), bundled, { recursive: true });
-    });
-    const core = cores[CORE_VERSION] as BundledCore;
-    const overlay = join(work, "tauri.local.conf.json");
-    writeFileSync(overlay, JSON.stringify(LOCAL));
-    run(
-      tauri,
-      ["build", "--ci", "--no-bundle", "--features", "local-build", "--config", overlay, "--", "--locked"],
-      app,
-      { ...(process.env as Record<string, string>), PLUXY_BUNDLED_CORE: core.manifest },
-    );
-    // The installed layout bundled_core.rs `place` reads on Linux: the core's program beside the
-    // app's, and its bundled/ in the app's resource folder, lib/<product name>/core/bundled.
-    const bin = join(outDir, "bin");
-    const lib = join(outDir, "lib", LOCAL.productName);
-    mkdirSync(bin);
-    mkdirSync(join(lib, "core"), { recursive: true });
-    const program = join(bin, LOCAL.mainBinaryName);
-    copyFileSync(join(targetDir, "release", LOCAL.mainBinaryName), program);
-    copyFileSync(join(core.dir, coreProgram), join(bin, coreProgram));
-    cpSync(join(core.dir, "bundled"), join(lib, "core", "bundled"), { recursive: true });
+    const version = localVersion();
+    const program = join(outDir, "bin", LOCAL.mainBinaryName);
+    let core: BundledCore;
+    try {
+      core = await buildStage(stage, version, program, stop);
+      stop.check();
+      // It may have been started while the build ran.
+      checkOutDir(outDir);
+    } catch (e) {
+      interrupted = stop.stopped !== undefined;
+      console.error(`package local: ${(e as Error).message}`);
+      throw new Error(`the build failed; ${outDir} is as it was`);
+    }
+    stop.end();
+    swapIn(stage, outDir);
     const config = join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), LOCAL.identifier);
     const data = join(process.env.XDG_DATA_HOME || join(homedir(), ".local", "share"), LOCAL.identifier);
-    writeFileSync(
-      join(outDir, LOCAL_RECORD),
-      `${JSON.stringify(
-        {
-          program,
-          identifier: LOCAL.identifier,
-          product_name: LOCAL.productName,
-          bundled_core: { version: core.version, packages: core.packages },
-        },
-        null,
-        2,
-      )}\n`,
-    );
     console.log(
-      `local build: core ${core.version} with ${core.packages.length} providers: ${core.packages.join(", ")}`,
+      `local build: pluxy ${version} with ${core.packages.length} providers: ${core.packages.join(", ")}`,
     );
     console.log(`local build: ${outDir}`);
     console.log(`local build: run it with ${program}`);
-    console.log(`local build: its settings and data go to ${config} and ${data}`);
+    console.log(
+      `local build: its settings and data go to ${config} and ${data}; building again leaves them as they are`,
+    );
   } finally {
-    rmSync(work, { recursive: true, force: true });
+    stop.end();
+    rmSync(stage, { recursive: true, force: true });
   }
+}
+
+/** Builds the local build into stage, at version, with its record naming program (its path once
+ * in place), and returns its core. */
+async function buildStage(
+  stage: string,
+  version: string,
+  program: string,
+  stop: Stoppable,
+): Promise<BundledCore> {
+  const work = join(stage, "work");
+  mkdirSync(work);
+  // The real provider extensions, as the bundled registry of the core the build comes with.
+  const packs = join(work, "packs");
+  await stop.run("go", ["run", "./cmd/pluxy-pack", "-out", packs], next);
+  const cores = await signedCores(
+    work,
+    [version],
+    "local-build",
+    (bundled) => {
+      cpSync(join(packs, "bundled"), bundled, { recursive: true });
+    },
+    stop.run,
+  );
+  const core = cores[version] as BundledCore;
+  const overlay = join(work, "tauri.local.conf.json");
+  writeFileSync(overlay, JSON.stringify({ ...LOCAL, version }));
+  await stop.run(
+    tauri,
+    ["build", "--ci", "--no-bundle", "--features", "local-build", "--config", overlay, "--", "--locked"],
+    app,
+    { ...(process.env as Record<string, string>), PLUXY_BUNDLED_CORE: core.manifest },
+  );
+  // The installed layout bundled_core.rs `place` reads on Linux: the core's program beside the
+  // app's, and its bundled/ in the app's resource folder, lib/<product name>/core/bundled.
+  const bin = join(stage, "bin");
+  const lib = join(stage, "lib", LOCAL.productName);
+  mkdirSync(bin);
+  mkdirSync(join(lib, "core"), { recursive: true });
+  copyFileSync(join(targetDir, "release", LOCAL.mainBinaryName), join(bin, LOCAL.mainBinaryName));
+  copyFileSync(join(core.dir, coreProgram), join(bin, coreProgram));
+  cpSync(join(core.dir, "bundled"), join(lib, "core", "bundled"), { recursive: true });
+  const kept = { version: core.version, packages: core.packages };
+  rmSync(work, { recursive: true, force: true });
+  writeFileSync(
+    join(stage, LOCAL_RECORD),
+    `${JSON.stringify(
+      { program, identifier: LOCAL.identifier, product_name: LOCAL.productName, bundled_core: kept },
+      null,
+      2,
+    )}\n`,
+  );
+  return core;
 }
 
 /** The build's OUT_DIR whose receipt the built binary carries: its snapshots describe that build. */
@@ -788,23 +1030,25 @@ function releasePackage(appImages: string[]): boolean {
   return false;
 }
 
-const [command, ...args] = process.argv.slice(2);
-try {
-  if (command === "test" && args.length === 1) {
-    await testPackage(resolve(args[0] as string));
-  } else if (command === "local" && args.length === 1) {
-    localBuild(resolve(args[0] as string));
-  } else if (command === "release") {
-    process.exitCode = releasePackage(args) ? 0 : 1;
-  } else {
-    console.error(
-      "usage: bun package.ts test <out-dir> | bun package.ts local <out-dir> | bun package.ts release [artifact...]",
-    );
-    process.exitCode = 2;
+if (import.meta.main) {
+  const [command, ...args] = process.argv.slice(2);
+  try {
+    if (command === "test" && args.length === 1) {
+      await testPackage(resolve(args[0] as string));
+    } else if (command === "local" && args.length === 1) {
+      await localBuild(resolve(args[0] as string));
+    } else if (command === "release") {
+      process.exitCode = releasePackage(args) ? 0 : 1;
+    } else {
+      console.error(
+        "usage: bun package.ts test <out-dir> | bun package.ts local <out-dir> | bun package.ts release [artifact...]",
+      );
+      process.exitCode = 2;
+    }
+  } catch (e) {
+    // Not a verdict: the gate did not get to check anything.
+    if (command === "release") console.log(`release-package: failed: ${(e as Error).message}`);
+    console.error(`package ${command}: ${(e as Error).message}`);
+    process.exitCode = interrupted ? 130 : 1;
   }
-} catch (e) {
-  // Not a verdict: the gate did not get to check anything.
-  if (command === "release") console.log(`release-package: failed: ${(e as Error).message}`);
-  console.error(`package ${command}: ${(e as Error).message}`);
-  process.exitCode = 1;
 }

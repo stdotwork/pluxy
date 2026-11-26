@@ -87,6 +87,7 @@ pub fn validate(inputs: &ReleaseInputs) -> Result<(), String> {
     for feature in features {
         let feature = feature.as_str().ok_or("feature must be a string")?;
         if feature.to_ascii_lowercase().contains("test")
+            || feature == "local-build"
             || !feature
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))

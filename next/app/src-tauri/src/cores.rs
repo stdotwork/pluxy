@@ -1816,6 +1816,12 @@ impl ConfigSnapshot {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_local_builds_version_is_a_core_id() {
+        // package.ts local: <core version>+local.<12 hex digits>.
+        assert!(valid_id("0.1.0+local.0123456789ab"));
+    }
+
     /// macOS: the store's folders keep no extended access list entry, as they keep no group or
     /// other mode bits, so nothing made in them inherits one.
     #[cfg(target_os = "macos")]
