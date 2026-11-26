@@ -44,11 +44,12 @@ label says that it spends one request.
 | System | Replaced Management Center Info. "Management Center" was the upstream panel's product name. |
 | Routing, Quota Management, Config Panel, Logs Viewer | The old panel's names: these pages do the same job as the old ones did. |
 | Requests, Usage | The two tabs of Activity; see [The Activity page](#the-activity-page). Requests keeps the ID `usage` of the page it replaced, so `#/usage` and `data-page="usage"` still work; Usage is `activity/usage`. |
+| Tools | A new page, named for what a person does there: connect a coding tool, copy the address for any other program, and make, name and delete the keys tools send. It sits under the Tools destination; in the desktop app its topics sit beside it. |
 | Set up pluxy | A new page, named for what a person does there. The panel opens it by itself on a first start; afterwards it stays among the Settings topics and shows the same things as they are now. |
 
 The navigation has five destinations: Home (the Dashboard), Accounts (with Routing as the tab
-"Order & fallback" and Quota Management as the tab "Limits"), Activity (Requests and Usage), Tools (the desktop
-app's client pages; the panel has none yet) and Settings, which lists every other page as a topic,
+"Order & fallback" and Quota Management as the tab "Limits"), Activity (Requests and Usage), Tools (the Tools
+page, and in the desktop app its client pages as topics) and Settings, which lists every other page as a topic,
 the extensions' pages last. The old panel's groups (Operate, Gateway, Observe, Control) are gone.
 Since every text goes through the string layer, renaming a page later is a
 change of text; the page ID stays, because it is the page's address and theme hook.

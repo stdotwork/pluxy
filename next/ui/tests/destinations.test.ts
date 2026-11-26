@@ -17,7 +17,7 @@ test("each of core's pages sits under the destination a person looks for it in",
     home: ["status"],
     accounts: ["accounts", "add-account", "routing", "quota"],
     activity: ["usage", "activity/usage"],
-    tools: [],
+    tools: ["tools"],
     settings: ["setup", "config", "system", "extensions", "themes", "logs"],
   });
 });
@@ -27,8 +27,14 @@ test("a destination opens its first page that sits under no other; one with no p
   expect(destinationHome(pages, "home")?.id).toBe("status");
   expect(destinationHome(pages, "accounts")?.id).toBe("accounts");
   expect(destinationHome(pages, "settings")?.id).toBe("setup");
-  // The panel has no Tools pages, so its navigation shows no Tools.
-  expect(destinationHome(pages, "tools")).toBeUndefined();
+  expect(destinationHome(pages, "tools")?.id).toBe("tools");
+  // A destination with no page has none, so its navigation entry is not shown.
+  expect(
+    destinationHome(
+      pages.filter((p) => p.dest !== "tools"),
+      "tools",
+    ),
+  ).toBeUndefined();
   const child: PageDef = { id: "child", title: "Child", dest: "tools", under: "parent", render };
   const parent: PageDef = { id: "parent", title: "Parent", dest: "tools", render };
   expect(destinationHome([child, parent], "tools")?.id).toBe("parent");

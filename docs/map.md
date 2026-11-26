@@ -96,7 +96,8 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
   `next/ui/kit/strings.ts`; screen-share masks in `next/ui/kit/privacy.ts`; register a core page in
   `next/ui/kit/pages/core.ts` (`corePages`). Browser host wiring is in
   `next/ui/panel/browserHost.ts` (`browserHost`) and `next/ui/panel/main.tsx`.
-- **Tests** (from `next/ui`): `bun test tests/browserHost.test.ts` and `bun run check`.
+- **Tests** (from `next/ui`): `bun test tests/browserHost.test.ts` and `bun run check`; the Tools page
+  (`next/ui/kit/pages/tools.tsx`, coding tools and client keys) has `next/ui/tests/tools.test.tsx` and `next/ui/e2e/tools.spec.ts`.
 - **Fakes and helpers**: `next/e2e/panelcore/main.go` (starts a real core with fake extensions for
   Playwright and app tests).
 - **Handbook**: `next/ui/README.md` ("How a host build uses the kit", "Adding a page").

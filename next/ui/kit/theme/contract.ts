@@ -190,6 +190,8 @@ export const PARTS = [
   "usage-chip",
   "usage-numbers",
   "usage-breakdown",
+  "tool-steps",
+  "tool-key",
 ] as const;
 
 export type Part = (typeof PARTS)[number];

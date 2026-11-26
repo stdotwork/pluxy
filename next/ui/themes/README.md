@@ -353,6 +353,8 @@ These stay stable within a theme contract version:
 | `data-part="usage-chip"` | The one filter a breakdown click set on the Usage tab, a button that removes it |
 | `data-part="usage-numbers"` | The table behind the Usage chart, shown on request |
 | `data-part="usage-breakdown"` | The Usage tab's breakdown table by provider, model, account or key |
+| `data-part="tool-steps"` | The numbered steps under a coding tool's row on the Tools page: make a key, put the text in the settings file, start the tool again |
+| `data-part="tool-key"` | One key on the Tools page: its name, its use this week, Rename and Delete |
 
 Some parts also carry the `data-slot` name that [T3 Code](https://github.com/pingdotgg/t3code)
 gives the same part, and the root's `dark` class is the one T3 Code uses. They exist so that the

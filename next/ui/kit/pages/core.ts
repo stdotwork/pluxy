@@ -15,11 +15,13 @@ import { type SetupOptions, setupPage } from "./setup";
 import { statusPage } from "./status";
 import { systemPage } from "./system";
 import { themesPage } from "./themes";
+import { type ToolsOptions, toolsPage } from "./tools";
 import { usageTabPage } from "./usage";
 
 /** What a build adds to core's pages; the panel adds nothing. */
 export interface CorePageOptions {
   setup?: SetupOptions;
+  tools?: ToolsOptions;
 }
 
 export const corePages = (options?: CorePageOptions): PageDef[] => [
@@ -31,6 +33,7 @@ export const corePages = (options?: CorePageOptions): PageDef[] => [
   requestsPage(),
   usageTabPage(),
   setupPage(options?.setup),
+  toolsPage(options?.tools),
   configPage(),
   systemPage(),
   extensionsPage(),
