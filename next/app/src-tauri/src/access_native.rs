@@ -26,7 +26,7 @@
 //!
 //! One line on stderr: `native-test: access <JSON>`.
 
-use super::device::{call, listed, ok, refused, require, settle, start, x};
+use super::device::{call, listed, ok, refused, require, settle, start, wait_for_nav_entry, x};
 use super::{channel_open, chooser, eval, log, wait_for};
 use crate::MAIN;
 use serde_json::{json, Value};
@@ -177,13 +177,7 @@ fn grant_of(main: &Webview, id: &str, resource: &str) -> Result<Option<Value>, S
 
 /// The page webview showing a release of digest, its page answering through the channel.
 fn page(app: &AppHandle, main: &Webview, route: &str, digest: &str) -> Result<Webview, String> {
-    wait_for(&format!("{route} in the navigation"), || {
-        (eval(
-            main,
-            &format!("document.querySelector('a[href=\"#/{route}\"]') !== null"),
-        ) == Some(json!(true)))
-        .then_some(())
-    })?;
+    wait_for_nav_entry(main, route)?;
     main.eval(format!("location.hash = {}", json!(format!("#/{route}"))))
         .map_err(|e| e.to_string())?;
     let label = wait_for(&format!("a page webview showing {digest}"), || {

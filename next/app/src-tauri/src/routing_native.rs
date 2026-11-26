@@ -37,6 +37,7 @@
 const REMEMBER: &str = "Remember this exact executable, argv and cwd";
 
 use super::admission::{dialog, dialog_text, ok, press, require, settle, start};
+use super::device::wait_for_nav_entry;
 use super::{eval, log, wait_for};
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -189,13 +190,7 @@ pub(super) struct Page {
 impl Page {
     pub(super) fn open(app: &AppHandle, main: &Webview, id: &str) -> Result<Page, String> {
         let route = format!("device/{id}/page");
-        wait_for(&format!("{route} in the navigation"), || {
-            eval(
-                main,
-                &format!("document.querySelector('a[href=\"#/{route}\"]') !== null"),
-            )
-            .filter(|v| v == true)
-        })?;
+        wait_for_nav_entry(main, &route)?;
         main.eval(format!("location.hash = {}", json!(format!("#/{route}"))))
             .map_err(|e| e.to_string())?;
         let label = wait_for(&format!("a page webview showing {id}"), || {

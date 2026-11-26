@@ -52,6 +52,7 @@
 //! One line on stderr: `native-test: usage <JSON>`.
 
 use super::admission::{dialog_text, ok, press, require};
+use super::device::wait_for_nav_entry;
 use super::program::processes;
 use super::routing::{call, enable, install, showing, Page};
 use super::{eval, log, wait_for};
@@ -920,13 +921,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
             })?;
             out["idle_stop_secs"] = json!(t.elapsed().as_secs_f64());
             let route = format!("device/{hub}/usage");
-            wait_for(&format!("{route} in the navigation"), || {
-                eval(
-                    main,
-                    &format!("document.querySelector('a[href=\"#/{route}\"]') !== null"),
-                )
-                .filter(|v| v == true)
-            })?;
+            wait_for_nav_entry(main, &route)?;
             main.eval(format!("location.hash = {}", json!(format!("#/{route}"))))
                 .map_err(|e| e.to_string())?;
             let label = wait_for(&format!("a page webview showing {hub}"), || {

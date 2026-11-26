@@ -154,6 +154,21 @@ fn nav_entry(main: &Webview, route: &str) -> bool {
     ) == Some(json!(true))
 }
 
+/// Waits until route's link is in the navigation. Device extension pages are Settings topics,
+/// and the frame lists a destination's topics only while one of its pages is open, so a window
+/// that is on Home (as the Windows and macOS sessions start) has no such link. When the link is
+/// not there yet, this opens the Settings device topic first, as the person would, so the wait
+/// does not depend on the page the window was on. A window already showing the link is left alone.
+pub(super) fn wait_for_nav_entry(main: &Webview, route: &str) -> Result<(), String> {
+    if !nav_entry(main, route) {
+        main.eval("location.hash = '#/device'")
+            .map_err(|e| e.to_string())?;
+    }
+    wait_for(&format!("{route} in the navigation"), || {
+        nav_entry(main, route).then_some(())
+    })
+}
+
 /// Opens route in the window and returns the page webview showing digest, once its page
 /// reported marker through the channel.
 pub(super) fn open_page(
@@ -163,9 +178,7 @@ pub(super) fn open_page(
     digest: &str,
     marker: &str,
 ) -> Result<String, String> {
-    wait_for("the page in the navigation", || {
-        nav_entry(main, route).then_some(())
-    })?;
+    wait_for_nav_entry(main, route)?;
     main.eval(format!("location.hash = {}", json!(format!("#/{route}"))))
         .map_err(|e| e.to_string())?;
     showing(app, digest, marker)

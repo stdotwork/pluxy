@@ -40,6 +40,7 @@
 //! One line on stderr: `native-test: sessions <JSON>`.
 
 use super::admission::{dialog_text, ok, press, require, x};
+use super::device::wait_for_nav_entry;
 use super::key_entry_test::{clean_webview, watch};
 use super::program::processes;
 use super::routing::{call, enable, install, showing, Page};
@@ -685,13 +686,7 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
 
     // The reader's own page starts it with its list call.
     let route = format!("device/{id}/sessions");
-    wait_for(&format!("{route} in the navigation"), || {
-        eval(
-            main,
-            &format!("document.querySelector('a[href=\"#/{route}\"]') !== null"),
-        )
-        .filter(|v| v == true)
-    })?;
+    wait_for_nav_entry(main, &route)?;
     main.eval(format!("location.hash = {}", json!(format!("#/{route}"))))
         .map_err(|e| e.to_string())?;
     let own = page_webview(app, &id)?;
