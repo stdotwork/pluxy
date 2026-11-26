@@ -10,8 +10,9 @@
 //! route:
 //!
 //! - cancel: a capture the person cancels adds no key to core and none to the vault;
-//! - capture: a confirmed capture adds one key to core's config and keeps it in the vault bound to
-//!   the core, core's key ID and the agent; the window gets the secret's ID and binding only;
+//! - capture: a confirmed capture adds one key to core's config, which core lists under the
+//!   capture's label, and keeps it in the vault bound to the core, core's key ID and the agent;
+//!   the window gets the secret's ID and binding only;
 //! - serve: the agent, given the key for its `serve` after a native confirmation, is served by
 //!   core with it (200); the key is in neither the agent's argv nor its environment nor its log
 //!   (argv and environment as the system has them, `proc_native.rs`; on Windows the command line
@@ -392,6 +393,14 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
                     .as_array()
                     .is_some_and(|a| a.iter().any(|k| k["id"] == first.1.as_str())),
                 format!("core's list lacks the captured key's ID: {listed}"),
+            )?;
+            // Core names the key as the vault does: the capture sent the label.
+            require(
+                listed["body"]["keys"].as_array().is_some_and(|a| {
+                    a.iter()
+                        .any(|k| k["id"] == first.1.as_str() && k["label"] == LABEL)
+                }),
+                format!("core's list does not name the captured key {LABEL:?}: {listed}"),
             )?;
             let list = ok(main, "vault_secrets", json!({}))?;
             let entry = list["secrets"]

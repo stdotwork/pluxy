@@ -324,4 +324,4 @@ fn undone(caller: &Caller, done: &[(String, Value)], e: String) -> String {
 
 #[cfg(test)]
 #[path = "core_aliases_tests.rs"]
-mod tests;
+pub(crate) mod tests;

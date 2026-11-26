@@ -21,7 +21,8 @@
 //!    (`admission_native.rs`) and quits; with `PLUXY_APP_TEST_PROGRAM`, only the program host
 //!    (`program_native.rs`, then `swap_native.rs`); with `PLUXY_APP_TEST_VAULT`, only the vault,
 //!    secret delivery and references and journal recovery (`vault_native.rs`), then native
-//!    client-key capture (`client_key_native.rs`); with
+//!    client-key capture (`client_key_native.rs`), then on Windows and macOS a model alias made in
+//!    core (`core_alias_native.rs`); with
 //!    `PLUXY_APP_TEST_SPAWN`, only the host's spawn service, managed runtimes and launch
 //!    environment (`spawn_native.rs`), then a launch's client keys (`spawn_keys_native.rs`); with
 //!    `PLUXY_APP_TEST_SESSIONS`, only the read-only Codex session reader (`sessions_native.rs`);
@@ -98,6 +99,12 @@ mod client_key;
 #[cfg(target_os = "linux")]
 #[path = "codex_native.rs"]
 mod codex;
+// Off Linux, a model alias made in core (on Linux, the Claude Desktop session's alias step). Built
+// on Linux too, so the checks there build what Windows and macOS run.
+#[cfg(native_stack)]
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+#[path = "core_alias_native.rs"]
+mod core_alias;
 #[path = "native_core.rs"]
 mod core_updates;
 #[path = "device_native.rs"]
@@ -812,6 +819,10 @@ fn run(app: &AppHandle) -> Result<(), String> {
         vault::run(app, &main, dir.clone().into())?;
         // Native one-time client-key capture (client_key_native.rs), with the same tools.
         client_key::run(app, &main, dir.into())?;
+        // Off Linux, a model alias made in core through the same connection
+        // (core_alias_native.rs); on Linux the Claude Desktop session checks it.
+        #[cfg(not(target_os = "linux"))]
+        core_alias::run(app, &main)?;
         log("quit", json!({}));
         crate::quit(app);
         return Ok(());
