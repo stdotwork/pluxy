@@ -1,5 +1,12 @@
 // The Pi page's form logic (src/pi.tsx), kept apart so its tests need no window.
 
+export const PACKAGE = "pluxy/pi-setup";
+/** The name the launcher keeps Pi's recent folders under. */
+export const CLIENT = "Pi";
+
+/** A model ID the plugin takes: non-empty, without whitespace, at most 240 characters. */
+export const validModel = (m: string) => m.length > 0 && !/\s/.test(m) && [...m].length <= 240;
+
 /** Where the person says Pi's files are: Pi's agent folder, a selected agent folder (which may be a
  * link), or a folder whose files are links (as stow makes). */
 export type Where = "default" | "folder" | "links";

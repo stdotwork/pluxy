@@ -1,7 +1,7 @@
 // The OpenCode page's form logic (src/opencodeForm.ts): the models it lists and
-// when Apply is allowed.
+// every reason Connect is held.
 import { describe, expect, test } from "bun:test";
-import { attachmentDefault, ready, withModels } from "../src/opencodeForm";
+import { attachmentDefault, heldOf, MODELS_MAX, withModels } from "../src/opencodeForm";
 
 describe("models", () => {
   const m = (id: string) => ({ id, name: "", attachment: false });
@@ -15,11 +15,13 @@ describe("models", () => {
     expect(attachmentDefault("deepseek-v4")).toBe(false);
   });
 
-  test("apply needs a listed default and IDs the tool takes", () => {
-    expect(ready([m("a"), m("b")], "b")).toBe(true);
-    expect(ready([], "")).toBe(false);
-    expect(ready([m("a")], "b")).toBe(false);
-    expect(ready([m("a#high")], "a#high")).toBe(false);
-    expect(ready([m("x".repeat(241))], "x".repeat(241))).toBe(false);
+  test("Connect needs a listed default and IDs the tool takes, and says every reason", () => {
+    expect(heldOf([m("a"), m("b")], "b")).toEqual([]);
+    expect(heldOf([], "")).toEqual(["none"]);
+    expect(heldOf([m("a")], "b")).toEqual(["model"]);
+    expect(heldOf([m("a#high")], "a#high")).toEqual(["text"]);
+    expect(heldOf([m("x".repeat(241))], "x".repeat(241))).toEqual(["text"]);
+    const many = Array.from({ length: MODELS_MAX + 1 }, (_, i) => m(`m${i}#`));
+    expect(heldOf(many, "elsewhere")).toEqual(["too-many", "text", "model"]);
   });
 });

@@ -1,5 +1,5 @@
 // The OpenCode page's form logic (opencode.tsx), apart from the page so its unit tests need no
-// webview: the models' Attachments default, and whether the form can be applied.
+// webview: the models' Attachments default, and why the form cannot be written yet.
 
 export const PACKAGE = "pluxy/opencode";
 /** The client label the tool's CLI recipe gives its launches, which the launcher keys recent
@@ -13,7 +13,7 @@ export interface Model {
 }
 
 /** What the tool's preview reads back of the config file; `refused` (with `reason`) for a file
- * OpenCode would not take, which apply and clear refuse and Restore Backup still reaches. */
+ * OpenCode would not take, which apply and clear refuse and Restore backup still reaches. */
 export interface ReadBack {
   state: "configured" | "not-configured" | "needs-update" | "refused";
   reason?: string;
@@ -23,7 +23,7 @@ export interface ReadBack {
   default_model?: string | null;
   models?: Model[];
   old_provider?: boolean;
-  /** OpenCode 2's `providers.pluxy` is in the file: OpenCode would use it, so Apply refuses. */
+  /** OpenCode 2's `providers.pluxy` is in the file: OpenCode would use it, so apply refuses. */
   v2_provider?: boolean;
 }
 
@@ -60,22 +60,30 @@ export const withModels = (have: Model[], found: Model[]) => [
 
 /** The longest model ID or display name the tool takes. */
 const TEXT_MAX = 240;
+/** The most models one apply writes (the tool's limit). */
+export const MODELS_MAX = 256;
 
-/** Whether the form can be applied: 1 to 256 models with IDs the tool takes (no control characters
- * or #, at most 240 characters) and names of at most 240, and the default one of them. */
-export function ready(models: Model[], model: string): boolean {
+/** Why the form cannot be written yet: no models, more than the tool takes, an ID or name it
+ * would refuse (empty, a control character or #, more than 240 characters), or a default that is
+ * not one of the models. Empty when it can be written. */
+export type Held = "none" | "too-many" | "text" | "model";
+
+export function heldOf(models: Model[], model: string): Held[] {
   // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it refuses
   const bad = /[\u0000-\u001f\u007f#]/;
-  return (
-    models.length >= 1 &&
-    models.length <= 256 &&
-    models.every(
+  const held: Held[] = [];
+  if (models.length === 0) return ["none"];
+  if (models.length > MODELS_MAX) held.push("too-many");
+  if (
+    !models.every(
       (m) =>
         m.id.trim() !== "" &&
         m.id.trim().length <= TEXT_MAX &&
         !bad.test(m.id) &&
         m.name.trim().length <= TEXT_MAX,
-    ) &&
-    models.some((m) => m.id === model)
-  );
+    )
+  )
+    held.push("text");
+  if (!models.some((m) => m.id === model)) held.push("model");
+  return held;
 }

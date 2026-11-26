@@ -1161,9 +1161,9 @@ asks first, and cancelling leaves both as they are.
 
 ## The tool pages
 
-The Claude Code, Codex and Claude Desktop pages share one frame (`src/clientPage.tsx`, styled by
-`src/toolPage.css` on the kit's hairlines); the other tool pages below keep their own until they
-move to it. Each is the window's own page, not an extension page, because Connect gives the tool a
+The eight tool pages (Claude Code, Codex, Claude Desktop, OpenCode, Oh My Pi, Grok Build, Hermes
+Agent and Pi) share one frame (`src/clientPage.tsx`, styled by `src/toolPage.css` on the kit's
+hairlines). Each is the window's own page, not an extension page, because Connect gives the tool a
 key: only the window can name a vault secret for an operation, and the key's value never reaches
 the page.
 
@@ -1307,172 +1307,98 @@ after a change.
 
 ## OpenCode
 
-The OpenCode page sets up and starts OpenCode with this core (`src/opencode.tsx`). It needs the
-curated native tool `pluxy/opencode` ([app tools](../app-tools/README.md#opencode)) and, for
-**Start CLI** and **Start app**, the execution program, both installed and enabled on the Device
-extensions page. Like the Claude Code page it is the window's own page, because **Apply** gives the
-tool the client key.
-
-**Refresh** previews the config file: OpenCode's global config
+The OpenCode page (`src/opencode.tsx`) needs the curated native tool `pluxy/opencode`
+([app tools](../app-tools/README.md#opencode)). Its default file is OpenCode's global config
 (`~/.config/opencode/opencode.jsonc`, or `opencode.json` when only that exists, as OpenCode picks
-the file it writes), a selected file (for example the one `OPENCODE_CONFIG` names; a link, as stow
-makes, is followed and kept) or a file in a selected folder (for example `OPENCODE_CONFIG_DIR`). It
-shows whether pluxy's integration is applied, the file it writes to, whether a key is in it and the
-default model, never the key, and warns when the old desktop app's `cpa-gui` provider is still
-there, or when OpenCode 2's own `providers.pluxy` is (OpenCode uses that one, so Apply stays off
-until it is removed). A file OpenCode would not take is shown with the reason: Apply and Clear
-stay off, Restore backup and the backups still work on it. Choosing another file
-drops the last preview: every write uses the pins of the preview on screen. **Models** lists the models OpenCode shows under the pluxy provider: **Import models from
-core** adds the core's served models, **Add model** one by ID; each has a display name, an
-**Attachments** switch (images and PDFs; new models start from the old app's list of model names
-that take images) and **Remove**; **Default model** is one of them. The **Client key** is
-one of the vault's secrets (plain ones, or client keys bound to this tool), or a new one through
-native key entry (**Add key…**).
-
-**Apply** (or **Update** / **Repair** once applied),
-**Clear** and **Restore backup** each preview the file again and call the
-tool, whose native confirmation names the file it resolves to, the key's label for Apply, and that
-an edit made in the same instant by another program may be lost; comments and everything else in
-the file stay. **Backup and restore** is the shared backup browser. **Start CLI** asks the tool for
-its CLI recipe (`opencode` in a terminal, no arguments; `~/.opencode/bin/opencode`, where OpenCode's
-install script puts it, when that exists) and starts it through the launcher in the chosen working
-folder (recently used ones offered), terminal and optional program path. **Start app** starts
-OpenCode Desktop (`/opt/OpenCode/ai.opencode`, or OpenCode 1's `ai.opencode.desktop` there, where its
-.deb and .rpm install it, or a given path such as an AppImage) in the home folder. Each launch's confirmation shows it in full; the key is not
-part of a launch: OpenCode reads it from its config. There is no Restart App: the app never stops a
-program it did not start, so quit OpenCode and start it again to load a new configuration.
+the file it writes); the others are a file (for example the one `OPENCODE_CONFIG` names; a link, as
+stow makes, is followed and kept) or a file in a folder (for example `OPENCODE_CONFIG_DIR`). The
+head notes the old desktop app's `cpa-gui` provider when the file still has it, which pluxy leaves
+alone; when the file has OpenCode 2's own `providers.pluxy` (OpenCode uses that one instead of
+what pluxy writes), it says so and Connect is held until it is removed. **Models** holds the **Model
+list**, the models OpenCode shows under the pluxy provider: **Import models from pluxy** adds what
+pluxy serves, only when pressed, and **Add model** one by ID; each has a display name, an
+**Attachments** switch (images and PDFs; a new model starts from the old app's list of model names
+that take images) and **Remove model**, which asks first. **Default model** is one of them. Connect
+is held, with each reason, until the list has 1 to 256 models whose IDs OpenCode takes (no `#` or
+control characters, at most 240 characters) and the default is one of them (`src/opencodeForm.ts`).
+**Start OpenCode** asks the tool for its recipe (`opencode` in a terminal, no arguments;
+`~/.opencode/bin/opencode`, where OpenCode's install script puts it, when that exists). **Start
+OpenCode Desktop** starts the app (`/opt/OpenCode/ai.opencode`, or OpenCode 1's
+`ai.opencode.desktop` there, where its .deb and .rpm install it, or a path the person gives, such as
+an AppImage) in the home folder. The app never stops a program it did not start, so quit OpenCode
+and start it again to load new settings.
 
 ## Oh My Pi
 
-The Oh My Pi page sets up and starts Oh My Pi with this core (`src/omp.tsx`). It needs the curated
-native tool `pluxy/omp-setup` ([app tools](../app-tools/README.md#omp-setup)) and, for **Start
-CLI**, the execution program, both installed and enabled on the Device extensions page. Like the
-Claude Code page it is the window's own page, because **Apply** gives the tool the client key.
-
-**Refresh** previews Oh My Pi's two files, `models.yml` and `config.yml`: in its agent folder
-(`~/.omp/agent`), in a selected agent folder (for example a profile's
-`~/.omp/profiles/<name>/agent`, or the folder `PI_CODING_AGENT_DIR` names; the folder may be a link,
-as chezmoi can make) or as two selected files (a link, as stow makes, is followed and kept). It
-shows whether pluxy's integration is applied, the files it writes to, whether a key is in the models
-file and the default model role, never the key, and warns when the old desktop app's
-`easy-cliproxyapi` provider is still there. **Default model** is the model Oh My Pi starts with
-through this core (the core's served models are suggested; **Refresh models** reloads them); Oh My
-Pi lists the core's other models itself. The **Client key** is one of the vault's secrets (a captured
-client key only when it is this tool's), or a new one through native key entry (**Add key…**).
-
-Files Oh My Pi would not take show as refused, with the reason: **Apply** and **Clear**
-stay off, and **Restore backup** and the backups stay available. Choosing other files drops the last
-preview. **Apply** (or **Update** / **Repair** once applied),
-**Clear** and **Restore backup** call the tool with the files the last preview pinned
-(the tool refuses them if a file changed since), and its native confirmation names both files they
-resolve to, the key's label for Apply, and that an edit
-made in the same instant by another program may be lost; comments and everything else in the files
-stay, including the person's own models under the pluxy provider. **Backup and restore** is the
-shared backup browser. **Start CLI** asks the tool for its recipe (`omp` in a terminal, no
-arguments; `~/.bun/bin/omp` or `~/.local/bin/omp`, where bun and Oh My Pi's install script put it,
-when one exists) and starts it through the launcher in the chosen working directory (recently used
-ones offered), terminal and optional program path. Each launch's confirmation shows it in full; the
-key is not part of a launch: Oh My Pi reads it from its models file. Oh My Pi has no desktop app.
+The Oh My Pi page (`src/omp.tsx`) needs the curated native tool `pluxy/omp-setup`
+([app tools](../app-tools/README.md#omp-setup)). It reads and writes Oh My Pi's two files,
+`models.yml` and `config.yml`, together: by default in its agent folder (`~/.omp/agent`), or in a
+folder (for example a profile's `~/.omp/profiles/<name>/agent`, or the folder `PI_CODING_AGENT_DIR`
+names; the folder may be a link, as chezmoi can make), or as two files (a link, as stow makes, is
+followed and kept). The head notes the old desktop app's `easy-cliproxyapi` provider when it is
+still there, which pluxy leaves alone. **Models** holds the **Default model**, the one model Oh My
+Pi starts with (pluxy's served models are suggested, and **Refresh suggestions** reads them again);
+Oh My Pi lists pluxy's other models itself. Connect is held, with the reason, until it is one model
+ID (no spaces or commas, not starting with `@` or `*`). Everything else in the files stays,
+including the person's own models under the pluxy provider. **Start Oh My Pi** asks the tool for its
+recipe (`omp` in a terminal, no arguments; `~/.bun/bin/omp` or `~/.local/bin/omp`, where bun and
+Oh My Pi's install script put it, when one exists). Oh My Pi has no desktop app.
 
 ## Grok Build
 
-The Grok Build page sets up and starts Grok Build with this core (`src/grok.tsx`). It needs the
-curated native tool `pluxy/grok-setup` ([app tools](../app-tools/README.md#grok-setup)) and, for
-**Start CLI**, the execution program, both installed and enabled on the Device extensions page. Like
-the Claude Code page it is the window's own page, because **Apply** gives the tool the client key.
-
-**Refresh** previews Grok Build's `config.toml`: its user config (`~/.grok/config.toml`),
-a selected file (such as `$GROK_HOME/config.toml`; a link is followed and kept) or a file in a
-selected folder; it shows the status, the file it writes to, Grok Build's default model now and
-whether a key is in pluxy's entry, never the key, and notes model entries an older app left
-(`cpa-gui/…`), which pluxy leaves alone. A file Grok Build would not take shows as refused, with the
-reason: Apply and Clear stay off, Restore backup and the backups stay available. The **Model catalog** holds the models pluxy's entries
-list: those the file has, and the core's served models, added (all selected, as the old app wrote
-them all) when **Refresh models** is pressed, never in the background. Each can be left out or
-given its **Context window**; the **Default model** is one of the selected models. Apply stays off,
-with a notice, while more than 256 models are selected. The **Client key** is one of the
-vault's plain secrets or this tool's client keys, or a new one through native key entry.
-
-**Apply** (or **Update** / **Repair** once applied),
-**Clear** and **Restore backup** call the tool on the file the last preview
-pinned (changing the file selection drops that preview; the tool refuses a file changed since),
-whose native confirmation names the file, the key's label for Apply, and that an edit made in
-the same instant by another program may be lost; **Backup and restore** keeps the file in manual
-backups, as on the Claude Code page. **Start CLI** asks the tool for its recipe (`~/.grok/bin/grok`
-when Grok Build's installer put it there, else `grok` from PATH, in a terminal with no arguments)
-and starts it through the launcher in the chosen working folder, terminal and optional program
-path. The key is not part of the launch: Grok Build reads it from config.toml. Grok Build has no
-Linux desktop app.
+The Grok Build page (`src/grok.tsx`) needs the curated native tool `pluxy/grok-setup`
+([app tools](../app-tools/README.md#grok-setup)). Its default file is Grok Build's user config
+(`~/.grok/config.toml`); the others are a file (such as `$GROK_HOME/config.toml`; a link is
+followed and kept) or a file in a folder. The head notes model entries an older app left
+(`cpa-gui/…`), which pluxy leaves alone. **Models** holds the **Model list**, the models pluxy's
+entries list: those the file has, and what pluxy serves, added (all listed, as the old app wrote
+them all) when **Import models from pluxy** is pressed, never in the background. Each can be turned
+off or given its **Context window** (Grok Build compacts by it); the **Default model** is one of the
+models listed. Connect is held, with one line for each reason (no model listed, a window that is not
+a whole number from 1 to 100000000, no default model, more than 256 models listed;
+`src/grokForm.ts`). Entries pluxy wrote for models turned off are removed on Connect; the person's
+own entries stay. **Start Grok Build** asks the tool for its recipe (`~/.grok/bin/grok` when Grok
+Build's installer put it there, else `grok` from PATH, in a terminal with no arguments). Grok Build
+has no Linux desktop app.
 
 ## Hermes Agent
 
-The Hermes Agent page sets up and starts Hermes Agent with this core (`src/hermes.tsx`). It needs
-the curated native tool `pluxy/hermes-setup` ([app tools](../app-tools/README.md#hermes-setup))
-and, for **Start CLI**, the execution program, both installed and enabled on the Device extensions
-page. Like the Claude Code page it is the window's own page, because **Apply** gives the tool the
-client key.
-
-**Refresh** previews Hermes Agent's `config.yaml`: in its default home (`~/.hermes`, or the
-profile `~/.hermes/active_profile` names), in a selected Hermes home folder (the folder
-`HERMES_HOME` names, or a profile's `~/.hermes/profiles/<name>`; the folder may be a link, as
-chezmoi can make) or as a selected file (a link, as stow makes, is followed and kept). It shows
-whether pluxy's integration is applied, the file it writes to, the provider's address, whether a
-key is in the file, the selected provider and the default model, never the key, and warns when the
-old desktop app's `cpa-gui` provider is still there. **Default model** is the model Hermes Agent
-starts with through this core (the core's served models are suggested; **Refresh models** reloads
-them). The **Client key** is one of the vault's secrets (a captured client key only when it
-is this tool's), or a new one through native key entry (**Add key…**).
-
-A file Hermes would not take shows as refused, with the reason: **Apply** and **Clear**
-stay off, and **Restore backup** and the backups stay available. Choosing another file or folder
-drops the last preview. **Apply** (or **Update** / **Repair** once applied), **Clear** and **Restore backup** call the tool with the file
-the last preview pinned (the tool refuses it if the file changed since), and its native
-confirmation names the file it resolves to, the key's label for Apply, and that an edit made
-in the same instant by another program may be lost; comments and everything else in the file stay,
-including the person's own settings under the pluxy provider. **Backup and restore** is the shared
-backup browser. **Start CLI** asks the tool for its recipe (`hermes` in a terminal, no arguments,
-which starts a chat; `~/.local/bin/hermes`, where Hermes's installer puts it, when it exists) and
-starts it through the launcher in the chosen working directory (recently used ones offered),
-terminal and optional program path. Each launch's confirmation shows it in full; the key is not
-part of a launch: Hermes Agent reads it from its config file. Hermes Agent's desktop app is not
-offered: its Linux packages are not released.
+The Hermes Agent page (`src/hermes.tsx`) needs the curated native tool `pluxy/hermes-setup`
+([app tools](../app-tools/README.md#hermes-setup)). Its default file is `config.yaml` in Hermes
+Agent's home (`~/.hermes`, or the profile `~/.hermes/active_profile` names); the others are a
+folder (the folder `HERMES_HOME` names, or a profile's `~/.hermes/profiles/<name>`; the folder may
+be a link, as chezmoi can make) or a file (a link, as stow makes, is followed and kept). The head
+notes the old desktop app's `cpa-gui` provider when it is still there, which pluxy leaves alone.
+**Models** holds the **Default model**, the model Hermes Agent starts with (pluxy's served models
+are suggested, and **Refresh suggestions** reads them again). Connect is held, with the reason,
+until it is one model ID with no spaces and no `${` (Hermes expands it). Everything else in the file
+stays, including the person's own settings under the pluxy provider. **Start Hermes Agent** asks
+the tool for its recipe (`hermes` in a terminal, no arguments, which starts a chat;
+`~/.local/bin/hermes`, where Hermes's installer puts it, when it exists). Hermes Agent's desktop app
+is not offered: its Linux packages are not released.
 
 ## Pi
 
-The Pi page sets up and starts Pi with this core (`src/pi.tsx`). It needs the curated native tool
-`pluxy/pi-setup` ([app tools](../app-tools/README.md#pi-setup)) and, for **Start CLI**, the
-execution program, both installed and enabled on the Device extensions page. Like the Claude Code
-page it is the window's own page, because **Apply** gives the tool the client key.
-
-Pi reaches the core through the CLIProxyAPI provider plugin. The tool carries a reviewed copy of
-it and installs it as a local Pi package in Pi's agent folder; it never runs `pi install` or npm.
-**Refresh** previews Pi's files, `cliproxyapi.json`, `settings.json` and the plugin's model
-cache `cliproxyapi-models.json`, in its agent folder (`~/.pi/agent`) or in a selected agent folder
-(the one `PI_CODING_AGENT_DIR` names; the folder may be a link, as chezmoi can make), or as the
-linked files in a folder (links, as stow makes, are followed and kept). Files Pi would not take
-are still read: the page says why, leaves Apply, Clear and Uninstall off, and keeps Restore backup
-and the backups. It shows whether the plugin is
-installed and its version (with **Update available** when the tool carries another), whether
-pluxy's integration is applied, the files it writes to, whether a key is in `cliproxyapi.json` and
-Pi's default provider and model, never the key; it warns when `settings.json` still lists the npm
-copy an older app installed, or when a folder of the plugin's name is not pluxy's. **Model** is the
-model Pi starts with through this core (the core's served models are suggested; **Refresh models**
-reloads them; the plugin itself lists the core's Codex catalog in Pi). The **Client key**
-is one of the vault's secrets, or a new one through native key entry (**Add key…**).
-
-**Install plugin** (or **Apply**, **Update** / **Repair** once installed) installs the plugin when it is not there and writes the core's
-address, the key and Pi's defaults. **Plugin management** has **Update plugin** (the tool's copy
-replaces the installed one) and **Uninstall plugin** (its entry and folder go; the connection
-settings stay). **Clear** and **Restore backup** also remove the plugin's folder once
-`settings.json` no longer lists it. Each of these previews the files again and calls the tool,
-whose native confirmation names the files it resolves to (or the agent folder, for Update), the
-key's label for Apply, and that an edit made in the same instant by another program may be lost;
-everything else in the files stays. **Backup and restore** is the shared backup browser. **Start
-CLI** asks the tool for its recipe (`pi` in a terminal, no arguments; `~/.pi/agent/bin/pi` or
-`~/.local/bin/pi`, where Pi's installer puts it, when one exists) and starts it through the
-launcher in the chosen working directory (recently used ones offered), terminal and optional
-program path. The key is not part of a launch: the plugin reads it from `cliproxyapi.json`. Pi has
-no desktop app.
+The Pi page (`src/pi.tsx`) needs the curated native tool `pluxy/pi-setup`
+([app tools](../app-tools/README.md#pi-setup)). Pi reaches pluxy through the CLIProxyAPI provider
+plugin. The tool carries a reviewed copy of it and installs it as a local Pi package in Pi's agent
+folder; it never runs `pi install` or npm. The page reads and writes Pi's files together,
+`cliproxyapi.json`, `settings.json` and the plugin's model list `cliproxyapi-models.json`: by
+default in its agent folder (`~/.pi/agent`), or in a folder (the one `PI_CODING_AGENT_DIR` names;
+the folder may be a link, as chezmoi can make), or as the linked files in a folder (links, as stow
+makes, are followed and kept). While the plugin is not installed, Connect is **Install plugin**: one
+press makes the key, installs the plugin and writes pluxy's address, the key and Pi's defaults.
+When a folder of the plugin's name is there that pluxy did not install, the head says so and Install
+plugin is held until it is moved. The head also notes when `settings.json` still lists the npm copy
+an older app installed, which Connect replaces. **Models** holds the **Default model**, the model Pi
+starts with (pluxy's served models are suggested, and **Refresh suggestions** reads them again; the
+plugin itself lists pluxy's Codex models in Pi; Connect is held until it is one model ID, with no
+spaces, of at most 240 characters), and the **Pi plugin**: its version, **Update plugin** (the
+tool's copy replaces the installed one) and **Uninstall plugin** (asks first; its entry and folder
+go, the connection settings stay). **Disconnect** and **Restore backup** also remove the plugin's
+folder once `settings.json` no longer lists it. **Start Pi** asks the tool for its recipe (`pi` in a
+terminal, no arguments; `~/.pi/agent/bin/pi` or `~/.local/bin/pi`, where Pi's installer puts it,
+when one exists). Pi has no desktop app.
 
 ## Agent usage and Codex sessions
 
@@ -1512,13 +1438,13 @@ mode, in its two steps. **Connect a model** is the Add Account page's own sign-i
 device code and API-key method core's extensions offer); it counts core's accounts, and **Next:
 connect an agent** stays off until there is one. **Connect an agent** lists the agent clients this
 window can set up (the eight client pages above, Claude Code to Pi) whose optional tool is
-installed on this device or offered by a registry, and the launcher (`pluxy/execution`) that
-**Start CLI** runs through: **Install** installs a tool from its registry, **Enable** opens the
+installed on this device or offered by a registry, and the launcher (`pluxy/execution`) that each
+page's **Start** runs through: **Install** installs a tool from its registry, **Enable** opens the
 tool's native confirmation ("full access to your user account"), answered in that dialog only,
 and **Set up** shows the client's own page below, where its configuration is applied and the
 client started as on that page. The guide writes nothing itself and keeps no draft: a cancelled
-confirmation, or leaving the guide, leaves files and packages as they were; Disconnect (Clear,
-on the pages not yet on the shared parts) and Restore backup on the client's page undo an apply.
+confirmation, or leaving the guide, leaves files and packages as they were; Disconnect and Restore backup on the client's page undo an
+apply.
 
 A client joins the list by being an agent page: a window page that names the package it drives
 (`AgentPage` in `src/easyMode.tsx`), listed in `agentPages` in `src/agentPages.ts`. The list itself

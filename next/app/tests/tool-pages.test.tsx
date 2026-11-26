@@ -1,5 +1,4 @@
-// The tool pages on the shared parts (clientPage.tsx: Claude Code, Codex, Claude Desktop), driven
-// as a person would through the fake window channel (pageHarness.tsx): what the head says and
+// The eight tool pages on the shared parts (clientPage.tsx), driven as a person would through the fake window channel (pageHarness.tsx): what the head says and
 // offers in each state, the one-press Connect and its key, the questions only the page asks, the
 // model lines, and the words no page may use.
 import { describe, expect, test } from "bun:test";
@@ -10,6 +9,11 @@ import { ClaudeDesktopPage } from "../src/claudeDesktop";
 import { MISSING_LIBRARY } from "../src/claudeDesktopForm";
 import { readExtraTools } from "../src/clientPage";
 import { CodexPage } from "../src/codex";
+import { GrokPage } from "../src/grok";
+import { HermesPage } from "../src/hermes";
+import { OmpPage } from "../src/omp";
+import { OpenCodePage } from "../src/opencode";
+import { PiPage } from "../src/pi";
 import {
   ADDONS,
   all,
@@ -79,11 +83,58 @@ const desktop = (state: string, applied = false) => ({
   },
 });
 
+const opencode = (state: string, applied = false) => ({
+  targets: pin("/home/me/.config/opencode/opencode.jsonc"),
+  applied,
+  config: {
+    state,
+    key_set: state === "configured",
+    model: "gpt-6.1-sol",
+    models: [{ id: "gpt-6.1-sol", name: "", attachment: false }],
+  },
+});
+const omp = (state: string, applied = false) => ({
+  targets: [...pin("/home/me/.omp/agent/models.yml"), ...pin("/home/me/.omp/agent/config.yml")],
+  applied,
+  config: { state, key_set: state === "configured", model: "gpt-6.1-sol" },
+});
+const grok = (state: string, applied = false) => ({
+  targets: pin("/home/me/.grok/config.toml"),
+  applied,
+  settings: {
+    state,
+    key_set: state === "configured",
+    model: "gpt-6.1-sol",
+    models: [{ model: "gpt-6.1-sol", name: null, context_window: null }],
+  },
+});
+const hermes = (state: string, applied = false) => ({
+  targets: pin("/home/me/.hermes/config.yaml"),
+  applied,
+  config: { state, key_set: state === "configured", model: "gpt-6.1-sol" },
+});
+const plugin = (installed = true) => ({
+  installed,
+  version: installed ? "1.0.0" : null,
+  bundled: "1.0.0",
+  update: false,
+  foreign: false,
+});
+const pi = (state: string, applied = false, adapter = plugin()) => ({
+  targets: ["cliproxyapi.json", "settings.json", "cliproxyapi-models.json"].flatMap((f) =>
+    pin(`/home/me/.pi/agent/${f}`),
+  ),
+  applied,
+  pi: { state, key_set: state === "configured", model: "gpt-6.1-sol", adapter },
+});
+
 interface Tool {
   name: string;
   pkg: string;
   page: () => VNode;
   read: (state: string, applied?: boolean) => unknown;
+  /** Where the add-on's preview puts its reading of the settings. */
+  field: "settings" | "config" | "pi";
 }
 
 const TOOLS: Tool[] = [
@@ -92,10 +143,39 @@ const TOOLS: Tool[] = [
     pkg: "pluxy/claude-code",
     page: () => <ClaudeCodePage />,
     read: (s, a) => claudeCode(s, {}, a),
+    field: "settings",
   },
-  { name: "Codex", pkg: "pluxy/codex-setup", page: () => <CodexPage />, read: codex },
-  { name: "Claude Desktop", pkg: "pluxy/claude-desktop", page: () => <ClaudeDesktopPage />, read: desktop },
+  { name: "Codex", pkg: "pluxy/codex-setup", page: () => <CodexPage />, read: codex, field: "settings" },
+  {
+    name: "Claude Desktop",
+    pkg: "pluxy/claude-desktop",
+    page: () => <ClaudeDesktopPage />,
+    read: desktop,
+    field: "settings",
+  },
+  { name: "OpenCode", pkg: "pluxy/opencode", page: () => <OpenCodePage />, read: opencode, field: "config" },
+  { name: "Oh My Pi", pkg: "pluxy/omp-setup", page: () => <OmpPage />, read: omp, field: "config" },
+  { name: "Grok Build", pkg: "pluxy/grok-setup", page: () => <GrokPage />, read: grok, field: "settings" },
+  {
+    name: "Hermes Agent",
+    pkg: "pluxy/hermes-setup",
+    page: () => <HermesPage />,
+    read: hermes,
+    field: "config",
+  },
+  { name: "Pi", pkg: "pluxy/pi-setup", page: () => <PiPage />, read: (s, a) => pi(s, a), field: "pi" },
 ];
+
+/** tool's reading of a file pluxy will not change, for reason. */
+const refusedRead = (tool: Tool, reason: string) => {
+  const read = tool.read("refused") as Record<string, Record<string, unknown>>;
+  const field = read[tool.field] ?? {};
+  // Pi's add-on reads its plugin's folder even when it will not change the files.
+  return {
+    ...read,
+    [tool.field]: { state: "refused", reason, ...(field.adapter ? { adapter: field.adapter } : {}) },
+  };
+};
 
 /** The page open, its default file read as state. */
 async function opened(tool: Tool, state: string, o: ChannelOptions = {}, applied = false) {
@@ -252,8 +332,7 @@ describe("the head, by state", () => {
     for (const tool of TOOLS) {
       const ch = channel();
       const page = await mount(tool.page, ch.invoke);
-      const read = tool.read("refused") as { settings: Record<string, unknown> };
-      ch.reads[0]?.answer({ ...read, settings: { state: "refused", reason: "it is not JSON" } });
+      ch.reads[0]?.answer(refusedRead(tool, "it is not JSON"));
       await settle();
       expect(page.text()).toContain("Cannot change settings");
       expect(page.text()).toContain(`so ${tool.name} stays as it is.`);
@@ -414,6 +493,7 @@ describe("models", () => {
   for (const [name, page, read] of [
     ["Codex", () => <CodexPage />, codex("not-configured")],
     ["Claude Desktop", () => <ClaudeDesktopPage />, desktop("not-configured")],
+    ["OpenCode", () => <OpenCodePage />, opencode("not-configured")],
   ] as const) {
     test(`${name}: Remove model asks first`, async () => {
       const ch = channel();
@@ -597,6 +677,11 @@ const TYPED: Record<string, string> = {
   "Claude Code": "A file",
   Codex: "In a folder",
   "Claude Desktop": "In a folder",
+  OpenCode: "A file",
+  "Oh My Pi": "In a folder",
+  "Grok Build": "A file",
+  "Hermes Agent": "A file",
+  Pi: "In a folder",
 };
 const MORE = "Settings file, key and backups";
 const bound = (pkg: string) => ({
@@ -747,11 +832,7 @@ describe("privacy mode", () => {
 
     test(`${tool.name}: a refused file's path and reason are masked`, async () => {
       const { ch, page } = await privately(tool);
-      const read = alice(tool.read("refused")) as { settings: Record<string, unknown> };
-      ch.reads[0]?.answer({
-        ...read,
-        settings: { state: "refused", reason: "/home/alice/settings is not JSON (alice@example.com)" },
-      });
+      ch.reads[0]?.answer(alice(refusedRead(tool, "/home/me/settings is not JSON (alice@example.com)")));
       await settle();
       expect(page.text()).toContain("Cannot change settings");
       expect(page.text()).toContain("pluxy will not change …/");
@@ -944,5 +1025,224 @@ describe("the key Connect made", () => {
     expect(applies(ch).map((w) => w.input.key)).toEqual([made.id, made.id]);
     ch.release();
     await settle();
+  });
+});
+
+describe("OpenCode, Oh My Pi, Grok Build, Hermes Agent and Pi", () => {
+  const rest = TOOLS.slice(3);
+
+  for (const tool of rest) {
+    test(`${tool.name}: an add-on that is off says so and offers Turn on add-on, before any read`, async () => {
+      const ch = channel({ catalog: catalogOf(ADDONS.map((id) => ({ id, enabled: id !== tool.pkg }))) });
+      const page = await mount(tool.page, ch.invoke);
+      expect(ch.reads).toEqual([]);
+      expect(page.text()).toContain(`Changing ${tool.name}'s settings needs the ${tool.name} add-on.`);
+      expect(page.canPress("Turn on add-on")).toBe(true);
+      expect(page.text()).not.toContain(MORE);
+    });
+
+    test(`${tool.name}: connected, it offers Start and Disconnect, and Disconnect asks only in the add-on's window`, async () => {
+      const { ch, page } = await opened(tool, "configured", {}, true);
+      expect(page.text()).toContain("Connected");
+      expect(page.canPress(`Start ${tool.name}`)).toBe(false);
+      expect(page.hasButton(`Start ${tool.name}`)).toBe(true);
+      await page.click("Disconnect");
+      expect(ch.writes.map((w) => w.op)).toEqual(["clear"]);
+      expect(typeof op(ch, "clear")?.args.ticket).toBe("string");
+    });
+  }
+
+  for (const [tool, label] of [
+    [rest[1], "Default model"],
+    [rest[3], "Default model"],
+    [rest[4], "Default model"],
+  ] as const) {
+    test(`${tool?.name}: a default model pluxy's accounts do not serve has its line, and Connect still writes it`, async () => {
+      const { ch, page } = await opened(tool as Tool, "not-configured");
+      await page.type(label, "odd-model");
+      await settle();
+      expect(page.text()).toContain("Your accounts do not offer odd-model.");
+      await page.click(`Connect ${tool?.name}`);
+      expect(applies(ch).map((w) => w.input.model)).toEqual(["odd-model"]);
+    });
+  }
+
+  test("Refresh suggestions reads pluxy's models again and leaves the field as it is", async () => {
+    let calls = 0;
+    const ch = channel();
+    const page = await mount(
+      () => <OmpPage />,
+      ch.invoke,
+      () => (calls++ === 0 ? ["gpt-6.1-sol"] : ["gpt-6.1-sol", "newer-model"]),
+    );
+    ch.reads[0]?.answer(omp("not-configured"));
+    await settle();
+    const options = () => all(page.root, "option").map((o) => o.value);
+    expect(options()).not.toContain("newer-model");
+    await page.click("Refresh suggestions");
+    expect(options()).toContain("newer-model");
+    expect(page.shown("Default model")).toBe("gpt-6.1-sol");
+  });
+
+  test(`Hermes Agent: a model ID it cannot write holds Connect and says why`, async () => {
+    const { ch, page } = await opened(rest[3] as Tool, "not-configured");
+    await page.type("Default model", "my model");
+    await settle();
+    expect(page.text()).toContain('Enter one model ID, with no spaces and no "${".');
+    // Not a model ID at all, so not said to be missing from pluxy.
+    expect(page.text()).not.toContain("Your accounts do not offer my model");
+    expect(page.canPress("Connect Hermes Agent")).toBe(false);
+    await page.type("Default model", `x${"${"}HOME}`);
+    await settle();
+    expect(page.canPress("Connect Hermes Agent")).toBe(false);
+    await page.type("Default model", "gpt-6.1-sol");
+    await settle();
+    expect(page.text()).not.toContain("Enter one model ID");
+    await page.click("Connect Hermes Agent");
+    expect(applies(ch).length).toBe(1);
+  });
+
+  test("Oh My Pi: a list or a role is not one model, and Connect waits", async () => {
+    const { page } = await opened(rest[1] as Tool, "not-configured");
+    for (const bad of ["a,b", "@slow"]) {
+      await page.type("Default model", bad);
+      await settle();
+      expect(page.text()).toContain(
+        "Enter one model ID, with no spaces or commas, not starting with @ or *.",
+      );
+      expect(page.canPress("Connect Oh My Pi")).toBe(false);
+    }
+  });
+
+  test("Grok Build: each reason Connect is held has its own line", async () => {
+    const reasons = {
+      none: "Import models from pluxy and list at least one.",
+      window: "Each context window must be a whole number from 1 to 100000000.",
+      model: "Choose a default model from the models listed.",
+      many: "Grok Build takes at most 256 models from here: turn some off.",
+    };
+    const read = (settings: Record<string, unknown>) => {
+      const r = grok("not-configured");
+      return { ...r, settings: { ...r.settings, ...settings } };
+    };
+    const entry = (model: string, context_window: number | null = null) => ({
+      model,
+      name: null,
+      context_window,
+    });
+    const cases: [Record<string, unknown>, string[]][] = [
+      [{ models: [], model: null }, [reasons.none]],
+      [{ models: [entry("gpt-6.1-sol", 0)] }, [reasons.window, "A whole number from 1 to 100000000."]],
+      [{ models: [entry("gpt-6.1-sol")], model: null }, [reasons.model]],
+      [
+        {
+          models: Array.from({ length: 257 }, (_, i) => entry(`m${i}`, i === 0 ? 0 : null)),
+          model: "elsewhere",
+        },
+        [reasons.many, reasons.window, reasons.model],
+      ],
+    ];
+    for (const [settings, lines] of cases) {
+      const ch = channel();
+      const page = await mount(() => <GrokPage />, ch.invoke);
+      ch.reads[0]?.answer(read(settings));
+      await settle();
+      for (const line of Object.values(reasons)) {
+        if (lines.includes(line)) expect(page.text()).toContain(line);
+        else expect(page.text()).not.toContain(line);
+      }
+      expect(page.hasButton("Connect Grok Build")).toBe(true);
+      expect(page.canPress("Connect Grok Build")).toBe(false);
+    }
+  });
+
+  test("Grok Build: Import models from pluxy adds the models it serves, and a model turned off is not written", async () => {
+    const { ch, page } = await opened(rest[2] as Tool, "not-configured");
+    await page.click("Import models from pluxy");
+    expect(page.text()).toContain("4 of 4 models listed");
+    const off = all(page.root, "input").filter((i) => i.getAttribute("type") === "checkbox")[1];
+    if (!off) throw new Error("no second switch");
+    off.checked = false;
+    await act(async () => {
+      off.dispatchEvent(new Event("change"));
+    });
+    await settle();
+    expect(page.text()).toContain("3 of 4 models listed");
+    await page.click("Connect Grok Build");
+    const written = ((applies(ch)[0]?.input.models ?? []) as { model: string }[]).map((m) => m.model);
+    expect(written.length).toBe(3);
+    expect(written).toContain("gpt-6.1-sol");
+  });
+
+  test("OpenCode: providers.pluxy in the file holds Connect and says what to do", async () => {
+    const ch = channel();
+    const page = await mount(() => <OpenCodePage />, ch.invoke);
+    const r = opencode("not-configured");
+    ch.reads[0]?.answer({ ...r, config: { ...r.config, v2_provider: true, old_provider: true } });
+    await settle();
+    expect(page.text()).toContain("This file has providers.pluxy");
+    expect(page.text()).toContain("Connect waits until providers.pluxy is out of the file.");
+    expect(page.text()).toContain("cpa-gui");
+    expect(page.canPress("Connect OpenCode")).toBe(false);
+  });
+
+  test("OpenCode: a model pluxy's accounts do not serve has its line, and a model added by hand is written", async () => {
+    const { ch, page } = await opened(rest[0] as Tool, "not-configured");
+    await page.type("Model ID", "odd-model");
+    await page.click("Add");
+    expect(page.text()).toContain("Your accounts do not offer odd-model.");
+    expect(page.text()).not.toContain("Your accounts do not offer gpt-6.1-sol.");
+    await page.click("Connect OpenCode");
+    expect(((applies(ch)[0]?.input.models ?? []) as { id: string }[]).map((m) => m.id)).toEqual([
+      "gpt-6.1-sol",
+      "odd-model",
+    ]);
+  });
+
+  test("Pi without its plugin offers Install plugin, which makes the key and installs it in one press", async () => {
+    const ch = channel();
+    const page = await mount(() => <PiPage />, ch.invoke);
+    ch.reads[0]?.answer(pi("not-configured", false, plugin(false)));
+    await settle();
+    expect(page.text()).toContain("Not installed. Install plugin installs it and connects Pi.");
+    expect(page.hasButton("Connect Pi")).toBe(false);
+    // Nothing to update or uninstall yet.
+    expect(page.hasButton("Update plugin")).toBe(false);
+    expect(page.hasButton("Uninstall plugin")).toBe(false);
+    await page.click("Install plugin");
+    expect(captures(ch).map((c) => c.args)).toEqual([{ label: "Pi", client: "pluxy/pi-setup" }]);
+    expect(applies(ch).length).toBe(1);
+  });
+
+  test("Pi: a plugin folder pluxy did not install holds Install plugin and says what to do", async () => {
+    const ch = channel();
+    const page = await mount(() => <PiPage />, ch.invoke);
+    ch.reads[0]?.answer(pi("not-configured", false, { ...plugin(false), foreign: true }));
+    await settle();
+    expect(page.text()).toContain("a folder named pluxy-cliproxyapi-provider that pluxy did not put there");
+    expect(page.text()).toContain("Install plugin waits until that folder is moved.");
+    expect(page.canPress("Install plugin")).toBe(false);
+  });
+
+  test("Pi: Update plugin, offered only when a newer plugin is ready, updates the folder read; Uninstall plugin asks first", async () => {
+    const current = await opened(rest[4] as Tool, "configured", {}, true);
+    expect(current.page.hasButton("Update plugin")).toBe(false);
+    const ch = channel();
+    const page = await mount(() => <PiPage />, ch.invoke);
+    ch.reads[0]?.answer(pi("configured", true, { ...plugin(), version: "0.9.0", update: true }));
+    await settle();
+    expect(page.text()).toContain("Version 0.9.0 is installed. Update plugin installs version 1.0.0.");
+    await page.click("Update plugin");
+    expect(op(ch, "update")?.args.input).toEqual({ folder: "/home/me/.pi/agent" });
+    expect(typeof op(ch, "update")?.args.ticket).toBe("string");
+    ch.pending()?.answer(pi("configured", true));
+    await settle();
+    expect(page.text()).toContain("The Pi plugin is updated.");
+    await page.click("Uninstall plugin");
+    expect(page.text()).toContain("Uninstall the Pi plugin? Pi's settings for pluxy stay.");
+    expect(ch.writes.map((w) => w.op)).toEqual(["update"]);
+    await page.click("Yes, uninstall plugin");
+    expect(ch.writes.map((w) => w.op)).toEqual(["update", "uninstall"]);
+    expect(op(ch, "uninstall")?.args.input).toEqual({ targets: pi("configured").targets });
   });
 });

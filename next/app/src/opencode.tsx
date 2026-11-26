@@ -1,200 +1,111 @@
-// The app's OpenCode page: Agent Configuration (Apply, Clear, Restore Backup), Start CLI and Start
-// App for OpenCode, through the optional curated native tool pluxy/opencode
-// (next/app-tools/opencode) and the launcher. The page is the window's own, not an extension page,
-// because Apply takes the client key: the window names a vault secret's ID and the native
-// confirmation of the apply names its label; an extension page can pass no secret. The key's value
-// never reaches this webview: native key entry keeps it, and the tool's preview reads back only
-// whether one is set. Labels follow the old app's Agents page.
+// The app's OpenCode page, on the shared tool-page parts (clientPage.tsx): how OpenCode stands and
+// Connect in the head, its models (the list OpenCode shows under the pluxy provider, imported from
+// pluxy on request and then edited, and the default model), Start (the command line and OpenCode
+// Desktop), and the settings file, key and backups, through the optional add-on pluxy/opencode
+// (next/app-tools/opencode) and the launcher. The key's value never reaches this webview.
 
-import { useEffect, useState } from "preact/hooks";
+import { useId, useState } from "preact/hooks";
+import { SettingRow } from "../../ui/kit/parts/settingRow";
 import { strings } from "../../ui/kit/strings";
-import {
-  Button,
-  Card,
-  Choices,
-  ConfirmButton,
-  Facts,
-  Notice,
-  PageHead,
-  Switch,
-  useAction,
-  useKit,
-  useLoad,
-} from "../../ui/kit/ui";
+import { Button, ConfirmButton, Notice, PageHead, Switch, useAction, useKit } from "../../ui/kit/ui";
 import { Backups } from "./backups";
-import { folderWait, NeedsKey, NoKeys, toolMissing, withDeviceLink } from "./clientHelp";
-import { keysOf, type Secret, Text, usePreview } from "./clientPage";
+import {
+  FileChoice,
+  FileKeyBackups,
+  fileDefault,
+  ModelList,
+  SaveButton,
+  Section,
+  StartSection,
+  servedNames,
+  Text,
+  type ToolPreview,
+  ToolTop,
+  Unserved,
+  useStart,
+  useToolSetup,
+} from "./clientPage";
 import type { AgentPage } from "./easyMode";
-import { connectionGet, reply } from "./host";
+import { PathText } from "./environmentBlock";
 import {
   attachmentDefault,
   CLIENT,
+  type Held,
+  heldOf,
+  MODELS_MAX,
   type Model,
   PACKAGE,
   type ReadBack,
-  ready,
   withModels,
 } from "./opencodeForm";
-import { keptTerminal, launcherProblem, useDeviceChanged } from "./startCli";
+import { plainReply, useShown } from "./toolWords";
 
 const t = strings("opencode", {
   title: "OpenCode",
-  tip: "Set up and start OpenCode with this core",
-  intro:
-    "Adds this core to OpenCode's config with a client key, model list, and default model. Apply, Clear, and Restore backup ask for confirmation and keep other settings. Restart OpenCode afterward.",
-  unavailable:
-    "Install and enable the curated OpenCode tool (pluxy/opencode) on the {device} page to set up OpenCode from here.",
-  file: "Configuration file",
-  fileDefault: "OpenCode's global config",
-  fileDefaultNote: "~/.config/opencode/opencode.jsonc, or opencode.json when only that exists",
-  fileSelected: "A selected file",
-  fileInRoot: "A file in a selected folder",
+  tip: "Connect OpenCode to pluxy and start it",
+  fileOne: "A file",
+  fileRoot: "In a folder",
   filePath: "File",
   filePathHint:
-    "A full path, for example the file OPENCODE_CONFIG names; a link (as stow makes) is followed and kept",
+    "A full path, such as the file OPENCODE_CONFIG names; a link (as stow makes) is followed and kept.",
   root: "Folder",
-  rootHint: "A full path, for example OPENCODE_CONFIG_DIR; the folder may be a link (as chezmoi can make)",
+  rootHint: "A full path, such as OPENCODE_CONFIG_DIR; the folder may be a link (as chezmoi can make).",
   inRoot: "File in the folder",
-  read: "Refresh",
-  status: "Status",
-  target: "Writes to",
-  keySet: "Key in the file",
-  currentModel: "Default model",
-  yes: "Yes",
-  no: "No",
-  applied: "Applied",
-  notConfigured: "Not configured",
-  configured: "Configured",
-  needsUpdate: "Configuration modified",
   oldProvider:
-    "This file still has the old desktop app's cpa-gui provider. Apply leaves it alone; remove it from the file if you no longer use it.",
-  models: "Models",
-  modelsHint:
-    "The models OpenCode lists under the pluxy provider. Attachments lets OpenCode send images and PDFs to a model.",
-  importModels: "Import models from core",
-  noModels: "No models yet: import them from the core or add one.",
-  modelId: "Model",
-  modelName: "Display name",
-  attachments: "Attachments",
-  remove: "Remove",
-  addModel: "Add model",
-  add: "Add",
-  useModel: "Default model",
-  useModelHint: "The model OpenCode starts with; one of the models above.",
-  key: "Client key",
-  keyHint: "The client key OpenCode uses to reach this core.",
-  addKey: "Add key…",
-  keyLabel: "OpenCode client key",
-  connect: "Apply",
-  repair: "Repair",
-  update: "Update",
-  clear: "Clear",
-  clearHint: "Remove pluxy's integration settings and keep other settings. Restart the agent afterward.",
-  restore: "Restore backup",
-  restoreHint: "Put the file back as it was before the first apply.",
-  noCore: "Connect to a core first: its address goes into the config.",
-  start: "Start CLI",
-  cwd: "Working folder",
-  recent: "Recently used",
-  override: "Agent program path",
-  overrideHint:
-    "A full path used instead of ~/.opencode/bin/opencode or opencode found on the PATH (optional)",
-  terminal: "Terminal",
-  launch: "Start OpenCode",
-  app: "Start app",
-  appPath: "Desktop program path",
-  appHint:
-    "A full path used instead of /opt/OpenCode/ai.opencode (or ai.opencode.desktop, from OpenCode 1), where OpenCode's .deb and .rpm install it; for example an AppImage (optional)",
-  launchApp: "Start OpenCode Desktop",
-  restartNote: "To apply a new configuration to a running OpenCode, quit it and start it again.",
-  refused: "OpenCode would not take this file",
-  refusedHint: "Apply and Clear leave this file unchanged until you fix it; Restore backup reverts it.",
+    "This file still has the old desktop app's cpa-gui provider. pluxy leaves it as it is; remove it from the file if you no longer use it.",
   v2Provider:
-    "This file has providers.pluxy, OpenCode 2's own form of the provider, and OpenCode uses it instead of what Apply writes. Remove it from the file to apply here.",
-  invalid:
-    "List at least one model (IDs without # or control characters, at most 240 characters) and pick the default.",
+    "This file has providers.pluxy, the form OpenCode 2 writes itself, and OpenCode uses it instead of what pluxy writes. Remove it from the file, then press Read this file.",
+  models: "Models",
+  list: "Model list",
+  listNote:
+    "The models OpenCode lists under pluxy. Attachments lets OpenCode send images and PDFs to a model.",
+  count: { one: "{count} model", other: "{count} models" },
+  importModels: "Import models from pluxy",
+  empty: "No models yet. Import models from pluxy, or add one below.",
+  displayName: "Display name",
+  attachments: "Attachments",
+  removeModel: "Remove model",
+  removeAsk: "Remove {model} from the list?",
+  addModel: "Add model",
+  addModelNote: "A model ID, as pluxy serves it.",
+  modelId: "Model ID",
+  add: "Add",
+  model: "Default model",
+  modelNote: "The model OpenCode starts with, one from the list.",
+  chooseModel: "Choose a model",
+  heldNone: "Import models from pluxy or add one, then choose a default model.",
+  heldTooMany: "OpenCode takes at most {max} models from here: remove some.",
+  heldText:
+    "Model IDs cannot be empty or hold # or control characters, and IDs and names are at most 240 characters.",
+  heldModel: "Choose a default model from the list.",
+  heldV2: "Connect waits until providers.pluxy is out of the file.",
+  app: "OpenCode Desktop",
+  appNote:
+    "Empty: /opt/OpenCode/ai.opencode, where OpenCode's .deb and .rpm put it. Or the full path of another, such as an AppImage.",
+  launchApp: "Start OpenCode Desktop",
 });
 
-const tool = <T,>(op: string, input: Record<string, unknown>) =>
-  reply<T>("program_call", { package: PACKAGE, op, input });
-
-interface Preview {
-  /** The pinned file: passed as is to apply, clear and restore. */
-  targets: { selected: string; target: string; link: string | null; [k: string]: unknown }[];
-  applied: boolean;
+interface Preview extends ToolPreview {
   config: ReadBack;
 }
 
-/** Start CLI and Start App, through the launcher. */
-function Launch(props: { available: boolean }) {
-  const [cwd, setCwd] = useState("");
-  const [override, setOverride] = useState("");
-  const [terminal, setTerminal] = useState("automatic");
-  const [appPath, setAppPath] = useState("");
-  const state = useLoad(() => reply<{ history: Record<string, string[]> }>("launcher_state"));
-  const terminals = useLoad(() =>
-    reply<{ terminals: { id: string; label: string }[] }>("launcher_terminals"),
-  );
-  useDeviceChanged(terminals.reload);
-  const action = useAction(state.reload);
-  const recent = state.data?.history[CLIENT] ?? [];
-  const shownTerminal = keptTerminal(terminal, terminals.data?.terminals);
-  const go = (target: "cli" | "app", extra: Record<string, unknown>) =>
-    action.run(async () => {
-      const recipe = await tool<Record<string, unknown>>("recipe", { target });
-      if (!recipe.body) return recipe;
-      return reply("launcher_launch", { launch: { ...recipe.body, ...extra } });
-    });
-  return (
-    <>
-      <Card title={t("start")}>
-        <Text label={t("cwd")} hint={folderWait(cwd)} value={cwd} onInput={setCwd} />
-        {recent.length > 0 && (
-          <Choices
-            label={t("recent")}
-            value={recent.includes(cwd) ? cwd : undefined}
-            choices={recent.map((r) => ({ value: r, label: r }))}
-            onChange={setCwd}
-          />
-        )}
-        <Text label={t("override")} hint={t("overrideHint")} value={override} onInput={setOverride} />
-        {terminals.data && (
-          <Choices
-            label={t("terminal")}
-            value={shownTerminal}
-            choices={terminals.data.terminals.map((x) => ({ value: x.id, label: x.label }))}
-            onChange={setTerminal}
-          />
-        )}
-        {terminals.error && <Notice tone="warn">{launcherProblem(terminals.error)}</Notice>}
-        <Button
-          variant="primary"
-          onClick={() =>
-            go("cli", {
-              cwd: cwd.trim(),
-              terminal: shownTerminal,
-              ...(override.trim() ? { override: override.trim() } : {}),
-            })
-          }
-          disabled={action.busy || !props.available || !cwd.trim()}
-        >
-          {t("launch")}
-        </Button>
-      </Card>
-      <Card title={t("app")}>
-        <Text label={t("appPath")} hint={t("appHint")} value={appPath} onInput={setAppPath} />
-        <Button
-          onClick={() => go("app", appPath.trim() ? { override: appPath.trim() } : {})}
-          disabled={action.busy || !props.available}
-        >
-          {t("launchApp")}
-        </Button>
-        <p class="muted">{t("restartNote")}</p>
-      </Card>
-      {action.error && <Notice tone="danger">{launcherProblem(action.error)}</Notice>}
-    </>
-  );
+const HELD: Record<Held, () => string> = {
+  none: () => t("heldNone"),
+  "too-many": () => t("heldTooMany", { max: MODELS_MAX }),
+  text: () => t("heldText"),
+  model: () => t("heldModel"),
+};
+
+/** The form Connect writes: the model list and the default model. */
+interface Form {
+  models: Model[];
+  model: string;
 }
+
+const fromFile = (r: ReadBack): Form => {
+  const models = r.state === "refused" ? [] : (r.models ?? []);
+  return { models, model: r.state === "refused" ? "" : (r.model ?? models[0]?.id ?? "") };
+};
 
 export function OpenCodePage() {
   const { api } = useKit();
@@ -202,245 +113,244 @@ export function OpenCodePage() {
   const [file, setFile] = useState("");
   const [root, setRoot] = useState("");
   const [inRoot, setInRoot] = useState("opencode.jsonc");
-  const [models, setModels] = useState<Model[]>([]);
-  const [model, setModel] = useState("");
+  const [form, setForm] = useState<Form>({ models: [], model: "" });
+  const [read, setRead] = useState<Form>({ models: [], model: "" });
   const [newModel, setNewModel] = useState("");
-  const [secret, setSecret] = useState("");
-  const [core, setCore] = useState<string>();
-  const secrets = useLoad(() => reply<{ secrets: Secret[] }>("vault_secrets"));
-  const keys = keysOf(PACKAGE, secrets.data);
-  useEffect(() => {
-    connectionGet().then(
-      (c) => setCore(c.signed_in ? c.target : undefined),
-      () => setCore(undefined),
-    );
-  }, []);
-  const selection = () =>
+  const [appPath, setAppPath] = useState("");
+  const typed = where === "file" ? file : where === "root" ? root : "";
+  const selection =
     where === "file"
       ? { targets: [{ file: file.trim() }] }
       : where === "root"
         ? { targets: [{ root: root.trim(), path: inRoot.trim() }] }
         : {};
-  // A write acts on the file the last preview pinned (the tool refuses it if the file changed
-  // since); the preview belongs to the selection it was read for, so a write never pins a file unread.
-  const selected = JSON.stringify(selection());
-  const { preview, readFor } = usePreview<Preview>(selected);
-  const read = useAction(() => {});
-  const load = () =>
-    read.run(async () => {
-      const r = await readFor(selected, () =>
-        tool<Preview>("preview", { ...selection(), ...(core ? { base_url: core } : {}) }),
-      );
+  const s = useToolSetup<Preview>({
+    pkg: PACKAGE,
+    name: t("title"),
+    scan: "opencode",
+    selection,
+    isDefault: where === "default",
+    canRead: where === "default" || typed.trim() !== "",
+    settings: (p) => p.config,
+    onRead: (p) => {
+      const f = fromFile(p.config);
+      setForm(f);
+      setRead(f);
+    },
+  });
+  const start = useStart({ s, client: CLIENT, folder: true, recipe: { target: "cli" } });
+  const shown = useShown();
+  const listId = useId();
+  const served = servedNames(s);
+  const edit = (patch: Partial<Form>) => {
+    s.setDone(false);
+    setForm((f) => ({ ...f, ...patch }));
+  };
+  const setRow = (i: number, patch: Partial<Model>) =>
+    edit({ models: form.models.map((m, j) => (j === i ? { ...m, ...patch } : m)) });
+  const imports = useAction(() => {});
+  const doImport = () =>
+    imports.run(async () => {
+      const r = plainReply(await api.servedModels());
       if (r.body) {
-        const listed = r.body.config.models ?? [];
-        setModels(listed);
-        setModel(r.body.config.model ?? listed[0]?.id ?? "");
+        const found = r.body.models.map((m) => ({
+          id: m.id,
+          name: m.display_name ?? "",
+          attachment: attachmentDefault(m.id),
+        }));
+        edit({ models: withModels(form.models, found) });
       }
       return r;
     });
-  const write = useAction(load);
-  const addModels = (found: Model[]) => setModels((have) => withModels(have, found));
-  const importModels = useAction(() => {});
-  const doImport = () =>
-    importModels.run(async () => {
-      const served = await api.servedModels();
-      if (served.body)
-        addModels(
-          served.body.models.map((m) => ({
-            id: m.id,
-            name: m.display_name ?? "",
-            attachment: attachmentDefault(m.id),
-          })),
-        );
-      return served;
-    });
-  const apply = () =>
-    write.run(() =>
-      tool("apply", {
-        targets: preview?.targets,
-        base_url: core,
-        key: secret,
-        model,
-        models: models.map((m) => ({ id: m.id.trim(), name: m.name.trim(), attachment: m.attachment })),
-      }),
-    );
-  const undo = (op: "clear" | "restore") => write.run(() => tool(op, { targets: preview?.targets }));
-  const addKey = useAction(secrets.reload);
-  const st = preview?.config;
-  const refused = st?.state === "refused";
-  const valid = ready(models, model);
-  const applyLabel = !preview?.applied
-    ? t("connect")
-    : st?.state === "configured"
-      ? t("update")
-      : t("repair");
-  const unavailable = read.error?.includes(PACKAGE) || read.error?.includes("not installed");
-  const busy = read.busy || write.busy;
-  const setRow = (i: number, patch: Partial<Model>) =>
-    setModels(models.map((m, j) => (j === i ? { ...m, ...patch } : m)));
+  const add = () => {
+    const id = newModel.trim();
+    edit({ models: withModels(form.models, [{ id, name: "", attachment: attachmentDefault(id) }]) });
+    setNewModel("");
+  };
+  const input = () => ({
+    model: form.model,
+    models: form.models.map((m) => ({ id: m.id.trim(), name: m.name.trim(), attachment: m.attachment })),
+  });
+  const st = s.preview?.config.state === "refused" ? undefined : s.preview?.config;
+  const held = [
+    ...(st?.v2_provider ? [t("heldV2")] : []),
+    ...heldOf(form.models, form.model).map((h) => HELD[h]()),
+  ];
+  const dirty = JSON.stringify(form) !== JSON.stringify(read);
+  const target = s.preview?.targets[0]?.target;
+  const path =
+    where === "default"
+      ? (s.found?.config ?? target ?? "~/.config/opencode/opencode.jsonc")
+      : (target ?? typed.trim());
+  const ids = form.models.map((m) => m.id);
+  const lines = st && (
+    <>
+      {st.v2_provider && <Notice tone="warn">{t("v2Provider")}</Notice>}
+      {st.old_provider && <p class="muted">{t("oldProvider")}</p>}
+    </>
+  );
 
   return (
-    <div class="stack">
+    <div class="tool-page" data-tool="opencode">
       <PageHead title={t("title")} />
-      <p class="muted">{t("intro")}</p>
-      {unavailable && <Notice tone="warn">{withDeviceLink(t("unavailable"))}</Notice>}
-      {!core && <Notice tone="warn">{t("noCore")}</Notice>}
-      <Card title={t("file")}>
-        <Choices
-          label={t("file")}
-          value={where}
-          choices={[
-            { value: "default", label: t("fileDefault"), note: t("fileDefaultNote") },
-            { value: "file", label: t("fileSelected") },
-            { value: "root", label: t("fileInRoot") },
-          ]}
-          onChange={setWhere}
-        />
-        {where === "file" && (
-          <Text label={t("filePath")} hint={t("filePathHint")} value={file} onInput={setFile} />
-        )}
-        {where === "root" && (
-          <>
-            <Text label={t("root")} hint={t("rootHint")} value={root} onInput={setRoot} />
-            <Text label={t("inRoot")} value={inRoot} onInput={setInRoot} />
-          </>
-        )}
-        {read.error && !toolMissing(read.error, PACKAGE) && <Notice tone="danger">{read.error}</Notice>}
-        <Button onClick={load} disabled={busy}>
-          {t("read")}
-        </Button>
-        {preview && st && (
-          <Facts
-            rows={[
-              [
-                t("status"),
-                refused
-                  ? t("refused")
-                  : preview.applied
-                    ? t("applied")
-                    : st.state === "configured"
-                      ? t("configured")
-                      : st.state === "needs-update"
-                        ? t("needsUpdate")
-                        : t("notConfigured"),
-              ],
-              [t("target"), preview.targets[0]?.target ?? ""],
-              ...(refused
-                ? []
-                : ([
-                    [t("keySet"), st.key_set ? t("yes") : t("no")],
-                    [t("currentModel"), st.default_model ?? ""],
-                  ] as [string, string][])),
-            ]}
-          />
-        )}
-        {refused && (
-          <Notice tone="warn">
-            {st?.reason} {t("refusedHint")}
-          </Notice>
-        )}
-        {st?.old_provider && <Notice tone="warn">{t("oldProvider")}</Notice>}
-        {st?.v2_provider && <Notice tone="warn">{t("v2Provider")}</Notice>}
-      </Card>
-      {preview && !refused && (
-        <>
-          <Card title={t("models")}>
-            <p class="muted">{t("modelsHint")}</p>
-            <Button onClick={doImport} disabled={busy || importModels.busy || !core}>
-              {t("importModels")}
-            </Button>
-            {importModels.error && <Notice tone="danger">{importModels.error}</Notice>}
-            {models.length === 0 && <p class="muted">{t("noModels")}</p>}
-            {models.map((m, i) => (
-              <div key={m.id} class="row">
-                <span class="label">{m.id}</span>
-                <Text label={t("modelName")} value={m.name} onInput={(v) => setRow(i, { name: v })} />
+      <ToolTop
+        s={s}
+        start={start}
+        facts={[s.found?.version]}
+        paths={[path]}
+        held={held}
+        form={input}
+        lines={lines}
+      />
+      {s.addon === "on" && st && (
+        <Section title={t("models")} aside={<SaveButton s={s} dirty={dirty} form={input} held={held} />}>
+          <ModelList id={listId} s={s} />
+          <SettingRow name={t("list")} description={t("listNote")}>
+            <span class="tool-inline">
+              <span class="muted">{t("count", { count: form.models.length })}</span>
+              <Button busy={imports.busy} onClick={doImport} disabled={s.busy || imports.busy || !s.core}>
+                {t("importModels")}
+              </Button>
+            </span>
+          </SettingRow>
+          {imports.error && <Notice tone="danger">{shown.text(imports.error)}</Notice>}
+          {form.models.length === 0 && (
+            <div class="tool-say">
+              <p class="muted">{t("empty")}</p>
+            </div>
+          )}
+          {form.models.map((m, i) => (
+            <SettingRow key={m.id} name={m.id}>
+              <span class="tool-inline">
+                <input
+                  type="text"
+                  aria-label={t("displayName")}
+                  placeholder={t("displayName")}
+                  autocomplete="off"
+                  spellcheck={false}
+                  value={m.name}
+                  onInput={(e) => setRow(i, { name: e.currentTarget.value })}
+                />
                 <Switch
                   label={t("attachments")}
                   checked={m.attachment}
                   onChange={(on) => setRow(i, { attachment: on })}
                 />
-                <Button onClick={() => setModels(models.filter((_, j) => j !== i))}>{t("remove")}</Button>
-              </div>
-            ))}
-            <div class="row">
-              <Text label={t("addModel")} value={newModel} onInput={setNewModel} />
-              <Button
-                disabled={!newModel.trim()}
-                onClick={() => {
-                  const id = newModel.trim();
-                  addModels([{ id, name: "", attachment: attachmentDefault(id) }]);
-                  setNewModel("");
-                }}
-              >
+                <ConfirmButton
+                  question={t("removeAsk", { model: m.name.trim() || m.id })}
+                  onConfirm={() => edit({ models: form.models.filter((_, j) => j !== i) })}
+                >
+                  {t("removeModel")}
+                </ConfirmButton>
+              </span>
+              <Unserved model={m.id} served={served} />
+            </SettingRow>
+          ))}
+          <SettingRow name={t("addModel")} description={t("addModelNote")}>
+            <span class="tool-inline">
+              <input
+                type="text"
+                class="mono"
+                aria-label={t("modelId")}
+                autocomplete="off"
+                spellcheck={false}
+                list={listId}
+                value={newModel}
+                onInput={(e) => setNewModel(e.currentTarget.value)}
+              />
+              <Button onClick={add} disabled={!newModel.trim() || ids.includes(newModel.trim())}>
                 {t("add")}
               </Button>
-            </div>
-            {models.length > 0 && (
-              <Choices
-                label={t("useModel")}
-                value={models.some((m) => m.id === model) ? model : undefined}
-                choices={models.map((m) => ({ value: m.id, label: m.name.trim() || m.id }))}
-                onChange={setModel}
-              />
-            )}
-            <small class="hint">{t("useModelHint")}</small>
-          </Card>
-          <Card title={t("key")}>
-            <p class="muted">{t("keyHint")}</p>
-            {secrets.error && <Notice tone="danger">{secrets.error}</Notice>}
-            {keys.length > 0 ? (
-              <Choices
-                label={t("key")}
-                value={secret || undefined}
-                choices={keys.map((s) => ({ value: s.id, label: s.label }))}
-                onChange={setSecret}
-              />
-            ) : (
-              <NoKeys secrets={secrets} />
-            )}
-            {addKey.error && <Notice tone="danger">{addKey.error}</Notice>}
-            <Button
-              disabled={addKey.busy}
-              onClick={() =>
-                addKey.run(async () => {
-                  const r = await reply<{ id: string }>("vault_secret_add", { label: t("keyLabel") });
-                  if (r.body) setSecret(r.body.id);
-                  return r;
-                })
-              }
+            </span>
+          </SettingRow>
+          <SettingRow name={t("model")} description={t("modelNote")}>
+            <select
+              aria-label={t("model")}
+              value={form.model}
+              onChange={(e) => edit({ model: e.currentTarget.value })}
             >
-              {t("addKey")}
-            </Button>
-          </Card>
-        </>
+              {!ids.includes(form.model) && (
+                <option value={form.model}>{form.model || t("chooseModel")}</option>
+              )}
+              {form.models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name.trim() || m.id}
+                </option>
+              ))}
+            </select>
+          </SettingRow>
+        </Section>
       )}
-      {preview && (
-        <Card>
-          {!refused && !valid && <Notice tone="warn">{t("invalid")}</Notice>}
-          {write.error && <Notice tone="danger">{write.error}</Notice>}
-          <Button
-            variant="primary"
-            onClick={apply}
-            disabled={busy || refused || st?.v2_provider || !valid || !secret || !core}
-          >
-            {applyLabel}
-          </Button>
-          <NeedsKey missing={!secret} />
-          <ConfirmButton disabled={busy || refused || !preview.applied} onConfirm={() => undo("clear")}>
-            {t("clear")}
-          </ConfirmButton>
-          <small class="hint">{t("clearHint")}</small>
-          <ConfirmButton disabled={busy} onConfirm={() => undo("restore")}>
-            {t("restore")}
-          </ConfirmButton>
-          <small class="hint">{t("restoreHint")}</small>
-        </Card>
+      {s.addon === "on" && (
+        <StartSection s={s} start={start}>
+          <SettingRow name={t("app")} description={t("appNote")}>
+            <span class="tool-inline">
+              <PathText label={t("app")} value={appPath} onInput={setAppPath} bare />
+              <Button
+                busy={start.busy}
+                onClick={() =>
+                  start.go({ target: "app" }, appPath.trim() ? { override: appPath.trim() } : {})
+                }
+                disabled={start.busy || !start.on}
+              >
+                {t("launchApp")}
+              </Button>
+            </span>
+          </SettingRow>
+        </StartSection>
       )}
-      {preview && (
-        <Backups pkg={PACKAGE} pins={async () => preview.targets} disabled={busy} onChange={load} />
+      {s.addon === "on" && (
+        <FileKeyBackups
+          s={s}
+          start={start}
+          program="opencode"
+          files={
+            <FileChoice
+              s={s}
+              value={where}
+              onChange={setWhere}
+              options={[
+                { value: "default", label: fileDefault(), note: "~/.config/opencode/opencode.jsonc" },
+                { value: "file", label: t("fileOne") },
+                { value: "root", label: t("fileRoot") },
+              ]}
+            >
+              {where === "file" && (
+                <Text
+                  label={t("filePath")}
+                  hint={t("filePathHint")}
+                  value={file}
+                  onInput={setFile}
+                  disabled={s.locked}
+                />
+              )}
+              {where === "root" && (
+                <>
+                  <Text
+                    label={t("root")}
+                    hint={t("rootHint")}
+                    value={root}
+                    onInput={setRoot}
+                    disabled={s.locked}
+                  />
+                  <Text label={t("inRoot")} value={inRoot} onInput={setInRoot} disabled={s.locked} />
+                </>
+              )}
+            </FileChoice>
+          }
+          backups={
+            s.preview && (
+              <Backups
+                pkg={PACKAGE}
+                pins={async () => s.preview?.targets}
+                disabled={!s.writable}
+                onBusy={s.setOutside}
+                onChange={s.load}
+              />
+            )
+          }
+        />
       )}
-      <Launch available={!unavailable} />
     </div>
   );
 }
@@ -450,6 +360,7 @@ export const opencodePage = (): AgentPage => ({
   package: PACKAGE,
   dest: "tools",
   kind: "topic",
+  under: "tools",
   title: t("title"),
   tip: t("tip"),
   render: () => <OpenCodePage />,

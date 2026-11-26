@@ -1,27 +1,6 @@
-// What the tool pages share (src/clientPage.tsx): the keys a page offers from the vault, the key
-// Connect sends, how an add-on stands, and whether a tool counts as installed.
+// What the tool pages share (src/clientPage.tsx): the key Connect sends, how an add-on stands, and whether a tool counts as installed.
 import { describe, expect, test } from "bun:test";
-import { addonState, installedOf, keyFor, keysOf, readingState, usableKeys } from "../src/clientPage";
-
-describe("keys", () => {
-  test("lists plain secrets and this package's client keys from vault_secrets' answer", () => {
-    const body = {
-      secrets: [
-        { id: "a", label: "Plain" },
-        { id: "b", label: "Ours", client_key: { client: "pluxy/claude-code" } },
-        { id: "c", label: "Codex's", client_key: { client: "pluxy/codex-setup" } },
-      ],
-    };
-    expect(keysOf("pluxy/claude-code", body).map((s) => s.id)).toEqual(["a", "b"]);
-    expect(keysOf("pluxy/codex-setup", body).map((s) => s.id)).toEqual(["a", "c"]);
-  });
-
-  test("lists nothing while the answer is missing or empty", () => {
-    expect(keysOf("pluxy/claude-code", undefined)).toEqual([]);
-    expect(keysOf("pluxy/claude-code", { secrets: [] })).toEqual([]);
-    expect(keysOf("pluxy/claude-code", {})).toEqual([]);
-  });
-});
+import { addonState, installedOf, keyFor, readingState, usableKeys } from "../src/clientPage";
 
 describe("the key Connect sends", () => {
   const HERE = "http://127.0.0.1:8317";

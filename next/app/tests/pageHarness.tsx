@@ -205,7 +205,7 @@ export const ADDONS = [
   "pluxy/claude-code",
   "pluxy/codex-setup",
   "pluxy/claude-desktop",
-  "pluxy/opencode-setup",
+  "pluxy/opencode",
   "pluxy/omp-setup",
   "pluxy/grok-setup",
   "pluxy/hermes-setup",
@@ -437,12 +437,13 @@ export function later<T = unknown>() {
   return { promise, give };
 }
 
-/** Mounts page in the kit. served are the models pluxy serves; found the tools pluxy's own look at
- * this computer found (GET /setup); privacy turns privacy mode on. */
+/** Mounts page in the kit. served are the models pluxy serves (a function is asked on each call of
+ * GET /models); found the tools pluxy's own look at this computer found (GET /setup); privacy turns
+ * privacy mode on. */
 export async function mount(
   page: () => VNode,
   invoke: Channel["invoke"],
-  served: string[] = SERVED,
+  served: string[] | (() => string[]) = SERVED,
   found: unknown[] = [],
   o: { privacy?: boolean } = {},
 ) {
@@ -450,7 +451,10 @@ export async function mount(
   const kit = {
     host: { prefs: { get: () => null, set: () => {} } },
     api: {
-      servedModels: async () => ({ status: 200, body: { models: served.map((id) => ({ id })) } }),
+      servedModels: async () => ({
+        status: 200,
+        body: { models: (typeof served === "function" ? served() : served).map((id) => ({ id })) },
+      }),
       setup: async () => ({ status: 200, body: { found: { clients: found } } }),
     },
     unauthorized: () => {},

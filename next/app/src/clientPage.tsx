@@ -1,11 +1,10 @@
 // What the coding-tool pages (Claude Code, Claude Desktop, Codex, Grok Build, Hermes Agent, Oh My
-// Pi, OpenCode, Pi) share, so a fix to one is a fix to all. The pages built on the shared parts
-// (Claude Code, Codex and Claude Desktop) take their whole frame from here: the add-on, the reading
-// of the settings file pinned to the file shown (usePreview), the one-press Connect that makes a
-// key named for the tool (keyFor, client_key_capture), the head that says how the tool stands and
-// what to press (ToolHead, ToolTop), the Start section (StartSection), and the collapsed settings
-// file, key and backups (FileKeyBackups). The other pages still use the older parts at the end of
-// this file (Text, StartCli) until they move to these.
+// Pi, OpenCode, Pi) share, so a fix to one is a fix to all. Each page takes its whole frame from
+// here: the add-on, the reading of the settings file pinned to the file shown (usePreview), the
+// one-press Connect that makes a key named for the tool (keyFor, client_key_capture), the head that
+// says how the tool stands and what to press (ToolHead, ToolTop), the model fields (ModelInput,
+// DefaultModel, Unserved), the Start section (StartSection), and the collapsed settings file, key
+// and backups (FileKeyBackups).
 
 import type { ComponentChildren } from "preact";
 import { useEffect, useId, useRef, useState } from "preact/hooks";
@@ -14,7 +13,7 @@ import type { Reply } from "../../ui/kit/host";
 import { SettingRow } from "../../ui/kit/parts/settingRow";
 import { toolState } from "../../ui/kit/parts/toolRow";
 import { strings } from "../../ui/kit/strings";
-import { Button, Card, Choices, Notice, StateBadge, useAction, useKit, useLoad } from "../../ui/kit/ui";
+import { Button, Choices, Notice, StateBadge, useAction, useKit, useLoad } from "../../ui/kit/ui";
 import { folderWait } from "./clientHelp";
 import { type DeviceCatalog, device } from "./device";
 import { LAUNCHER } from "./easyMode";
@@ -49,6 +48,8 @@ const t = strings("toolPage", {
   keyFailed: "Could not make a key for {tool}. {reason}",
   noBackup: "There is no copy from before pluxy changed this file.",
   unserved: "Your accounts do not offer {model}.",
+  refreshSuggestions: "Refresh suggestions",
+  suggestionsFailed: "Could not read the models pluxy serves. {reason}",
   connect: "Connect {tool}",
   update: "Update {tool}",
   save: "Save",
@@ -104,12 +105,6 @@ export interface Secret {
   /** Set for a key the app made or checked: the add-on it may be given to, the pluxy it belongs
    * to (its address as the app reaches it), pluxy's ID of it and its masked form. */
   client_key?: { client: string; core?: { mode?: string; origin: string }; key_id?: string; masked?: string };
-}
-
-/** The keys a page offers from vault_secrets's answer ({secrets: [...]}): plain secrets, and
- * keys bound to its package pkg; a key bound to another package would be refused. */
-export function keysOf(pkg: string, body: { secrets?: Secret[] } | undefined): Secret[] {
-  return (body?.secrets ?? []).filter((s) => !s.client_key || s.client_key.client === pkg);
 }
 
 /** An address's origin (scheme, host and port), or the text itself when it is not a URL. */
@@ -659,7 +654,8 @@ export function LinkButton(props: { href: string; primary?: boolean; children: C
  * the facts and in the lines that name them), held the reasons the page's form holds Connect
  * (each a line), form the settings Connect writes. failedRead gives the page's own words and
  * button for a read that failed in a way it knows (Claude Desktop's missing folder); lines adds
- * the page's own.
+ * the page's own. connectLabel names Connect and Update when the write does more than connect
+ * (Pi's Install plugin, which installs the plugin first).
  */
 export function ToolTop(props: {
   s: ToolSetup;
@@ -670,6 +666,7 @@ export function ToolTop(props: {
   form: () => Record<string, unknown>;
   failedRead?: { line: string; action: ComponentChildren };
   lines?: ComponentChildren;
+  connectLabel?: string;
 }) {
   const { s } = props;
   const shown = useShown();
@@ -804,12 +801,12 @@ export function ToolTop(props: {
           {address ? t("elsewhere", { tool, address: shown.text(address) }) : t("partial", { tool })}
         </p>,
       );
-      actions.push(connectButton(t("update", { tool })));
+      actions.push(connectButton(props.connectLabel ?? t("update", { tool })));
       if (disconnect) actions.push(disconnect);
     } else {
       if (state === "unchecked") lines.push(<p key="unchecked">{t("notChecked", { tool })}</p>);
       if (state === "not_installed") lines.push(<p key="missing">{t("notInstalled", { tool })}</p>);
-      actions.push(connectButton(t("connect", { tool })));
+      actions.push(connectButton(props.connectLabel ?? t("connect", { tool })));
     }
     if (s.stale) {
       // The reading shown may be out of date: it says so, and only reading again is offered.
@@ -965,7 +962,6 @@ export function ModelInput(props: {
   placeholder?: string;
 }) {
   const model = props.value.trim();
-  const missing = !!props.served && model !== "" && !props.served.has(model) && !props.known?.includes(model);
   return (
     <span class="tool-model">
       <input
@@ -980,9 +976,58 @@ export function ModelInput(props: {
         value={props.value}
         onInput={(e) => props.onInput(e.currentTarget.value)}
       />
-      {missing && <small class="tool-unserved">{t("unserved", { model })}</small>}
+      {!props.known?.includes(model) && <Unserved model={model} served={props.served} />}
     </span>
   );
+}
+
+/**
+ * A tool's one default model (Oh My Pi, Hermes Agent, Pi): a field that suggests what pluxy serves,
+ * and Refresh suggestions, which reads those again; it changes only the suggestions, never the
+ * field. note goes under the name. valid says whether the field holds a model ID the tool takes:
+ * one it does not take is not said to be missing from pluxy (the head says what is wrong with it).
+ */
+export function DefaultModel(props: {
+  s: ToolSetup;
+  name: string;
+  note: string;
+  value: string;
+  onInput: (v: string) => void;
+  valid: boolean;
+}) {
+  const { s } = props;
+  const shown = useShown();
+  const id = useId();
+  return (
+    <SettingRow name={props.name} description={props.note}>
+      <ModelList id={id} s={s} />
+      <span class="tool-inline">
+        <ModelInput
+          label={props.name}
+          value={props.value}
+          onInput={props.onInput}
+          list={id}
+          served={props.valid ? servedNames(s) : undefined}
+        />
+        <Button busy={s.served.loading} disabled={s.served.loading} onClick={s.served.reload}>
+          {t("refreshSuggestions")}
+        </Button>
+      </span>
+      {s.served.error && (
+        <small class="tool-unserved">
+          {t("suggestionsFailed", { reason: sentence(shown.text(s.served.error)) })}
+        </small>
+      )}
+    </SettingRow>
+  );
+}
+
+/** The line under a model's field when pluxy's accounts do not offer it (nothing until what they
+ * serve is read). Connect still writes the model, for an account added later. */
+export function Unserved(props: { model: string; served: Set<string> | undefined }) {
+  const model = props.model.trim();
+  if (!props.served || model === "" || props.served.has(model)) return null;
+  return <small class="tool-unserved">{t("unserved", { model })}</small>;
 }
 
 // ---- Start -------------------------------------------------------------------------------------
@@ -1161,6 +1206,21 @@ export function StartSection(props: {
 
 // ---- Settings file, key and backups ------------------------------------------------------------
 
+/** A path that a narrow column wraps after a slash rather than inside a name. */
+function BreakAtSlashes(props: { path: string }) {
+  const parts = props.path.split(/(?<=[\\/])/);
+  return (
+    <>
+      {parts.map((p, i) => (
+        <span key={`${i}:${p}`}>
+          {p}
+          {i < parts.length - 1 && <wbr />}
+        </span>
+      ))}
+    </>
+  );
+}
+
 /** A choice of where the tool's settings file is, as FileChoice shows it. */
 export interface FileOption<V extends string> {
   value: V;
@@ -1275,7 +1335,9 @@ export function FileKeyBackups(props: {
             <dt>{t("writesTo")}</dt>
             <dd class="mono">
               {s.preview.targets.map((x) => (
-                <span key={x.target}>{shown.path(x.target)}</span>
+                <span key={x.target}>
+                  <BreakAtSlashes path={shown.path(x.target)} />
+                </span>
               ))}
             </dd>
             <dt>{t("addressNow")}</dt>
@@ -1302,7 +1364,7 @@ export function FileKeyBackups(props: {
   );
 }
 
-// ---- the older parts, for the pages not moved yet -----------------------------------------------
+// ---- fields and the reading ---------------------------------------------------------------------
 
 /** A labelled text field: one line, or with area a few lines; list names a datalist. */
 export function Text(props: {
@@ -1342,76 +1404,6 @@ export function Text(props: {
       )}
       {props.hint && <small class="hint">{props.hint}</small>}
     </label>
-  );
-}
-
-/** The texts a Start CLI card takes from its page's strings. */
-export type StartCliText = (
-  key: "start" | "cwd" | "recent" | "override" | "overrideHint" | "terminal" | "launch",
-) => string;
-
-/**
- * The Start CLI card of a page that starts its client in a terminal on this device: the folder, the
- * program path, the terminal, and the launch the client's tool recipes. client is the name the
- * launcher keeps recent folders under; recipe asks the tool for the launch.
- */
-export function StartCli(props: {
-  available: boolean;
-  client: string;
-  recipe: () => Promise<Reply<Record<string, unknown>>>;
-  t: StartCliText;
-}) {
-  const { t } = props;
-  const [cwd, setCwd] = useState("");
-  const [override, setOverride] = useState("");
-  const [terminal, setTerminal] = useState("automatic");
-  const state = useLoad(() => reply<{ history: Record<string, string[]> }>("launcher_state"));
-  const terminals = useLoad(() =>
-    reply<{ terminals: { id: string; label: string }[] }>("launcher_terminals"),
-  );
-  useDeviceChanged(terminals.reload);
-  const action = useAction(state.reload);
-  const recent = state.data?.history[props.client] ?? [];
-  const shownTerminal = keptTerminal(terminal, terminals.data?.terminals);
-  const start = () =>
-    action.run(async () => {
-      const recipe = await props.recipe();
-      if (!recipe.body) return recipe;
-      return reply("launcher_launch", {
-        launch: {
-          ...recipe.body,
-          cwd: cwd.trim(),
-          terminal: shownTerminal,
-          ...(override.trim() ? { override: override.trim() } : {}),
-        },
-      });
-    });
-  return (
-    <Card title={t("start")}>
-      <Text label={t("cwd")} hint={folderWait(cwd)} value={cwd} onInput={setCwd} />
-      {recent.length > 0 && (
-        <Choices
-          label={t("recent")}
-          value={recent.includes(cwd) ? cwd : undefined}
-          choices={recent.map((r) => ({ value: r, label: r }))}
-          onChange={setCwd}
-        />
-      )}
-      <Text label={t("override")} hint={t("overrideHint")} value={override} onInput={setOverride} />
-      {terminals.data && (
-        <Choices
-          label={t("terminal")}
-          value={shownTerminal}
-          choices={terminals.data.terminals.map((x) => ({ value: x.id, label: x.label }))}
-          onChange={setTerminal}
-        />
-      )}
-      {terminals.error && <Notice tone="warn">{launcherProblem(terminals.error)}</Notice>}
-      {action.error && <Notice tone="danger">{launcherProblem(action.error)}</Notice>}
-      <Button variant="primary" onClick={start} disabled={action.busy || !props.available || !cwd.trim()}>
-        {t("launch")}
-      </Button>
-    </Card>
   );
 }
 

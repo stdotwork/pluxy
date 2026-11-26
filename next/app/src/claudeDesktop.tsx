@@ -312,7 +312,6 @@ export function ClaudeDesktopPage() {
           backups={
             s.preview && (
               <Backups
-                bare
                 pkg={PACKAGE}
                 pins={async () => s.preview?.targets}
                 disabled={!s.writable}
