@@ -805,22 +805,13 @@ fn tray_menu(app: &AppHandle, id: &str) {
 }
 
 fn window_view(app: &AppHandle) -> window::View {
+    // One read, its lock let go before the next line: a second lock taken while the first one's
+    // guard still lives (as in one struct expression) waits for itself.
+    let prefs = app.state::<App>().window.lock().unwrap().prefs;
     window::View {
-        close_behavior: app
-            .state::<App>()
-            .window
-            .lock()
-            .unwrap()
-            .prefs
-            .close_behavior,
+        close_behavior: prefs.close_behavior,
         tray: usable_tray(app).is_ok(),
-        ask_without_tray: app
-            .state::<App>()
-            .window
-            .lock()
-            .unwrap()
-            .prefs
-            .ask_without_tray,
+        ask_without_tray: prefs.ask_without_tray,
     }
 }
 
