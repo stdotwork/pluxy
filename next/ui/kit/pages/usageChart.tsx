@@ -141,7 +141,13 @@ export function UsageChart(props: { bars: Bar[]; unit: "hour" | "day"; range: st
                 />
               )}
               {label && (
-                <text class="chart-label" x={x + barW / 2} y={H - 6} text-anchor="middle">
+                <text
+                  class="chart-label"
+                  x={i === bars.length - 1 && i > 0 ? W : x + barW / 2}
+                  y={H - 6}
+                  // The last label ends at the chart's edge, so a long one (Today) is not cut off.
+                  text-anchor={i === bars.length - 1 && i > 0 ? "end" : "middle"}
+                >
                   {label}
                 </text>
               )}

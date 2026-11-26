@@ -291,6 +291,7 @@ export function UsagePage() {
                             <button
                               type="button"
                               class="usage-name"
+                              title={nameOf(group.filter, g.name)}
                               onClick={() => filterTo(group.filter, g.name)}
                             >
                               {nameOf(group.filter, g.name)}
@@ -314,8 +315,10 @@ export function UsagePage() {
                             </span>
                           </td>
                           <td class="num">{g.failure_count.toLocaleString()}</td>
-                          <td class="num">{g.tokens ? shortCount(g.tokens.total_tokens) : ""}</td>
-                          <td class="num">{g.average_latency_ms ? timeTaken(g.average_latency_ms) : ""}</td>
+                          <td class="num">
+                            {g.tokens?.total_tokens ? shortCount(g.tokens.total_tokens) : "—"}
+                          </td>
+                          <td class="num">{g.average_latency_ms ? timeTaken(g.average_latency_ms) : "—"}</td>
                         </tr>
                       ))}
                     </tbody>

@@ -135,8 +135,10 @@
     stroke-width: 1;
   }
 
+  /* The labels set colour as well as fill, so the contrast test reads the colour drawn. */
   .usage-chart .chart-label {
-    fill: var(--px-color-text-muted);
+    color: var(--px-color-text-muted);
+    fill: currentColor;
     font-size: 11px;
   }
 
@@ -230,7 +232,14 @@
     min-width: 36em;
   }
 
+  /* A long name stays on one line, cut with an ellipsis (its title has all of it), so the table
+     keeps its rows one line high and scrolls inside its frame when the window is narrow. */
   .usage-name {
+    display: block;
+    max-width: 18em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     min-height: var(--px-size-control);
     padding: 0;
     border: 0;
