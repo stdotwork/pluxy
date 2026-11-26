@@ -7,11 +7,12 @@
 //! The folder is pluxy's only when it holds pluxy's marker file; any other folder of that name is
 //! the person's, never written or removed. The folder is written, replaced and removed through
 //! pluxy-transactions' [`Folder`]: through a handle on the agent folder, the copy moved aside
-//! checked to be the one pinned, each change journalled and reconciled at the next start.
+//! checked to be the one pinned, each hidden copy removed or put back only while it is the folder
+//! the operation recorded, each change journalled and reconciled at the next start.
 
 use crate::pi::FOLDER;
 use pluxy_program::Error;
-use pluxy_transactions::{sha256_of, Folder, Pin, Selection, Target, Transactions};
+use pluxy_transactions::{sha256_of, Folder, Id, Pin, Selection, Target, Transactions};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -169,8 +170,10 @@ pub fn pinned(agent: &Path, pin: &Pin) -> Result<Folder, Error> {
 
 /// Puts the carried copy in folder's place (pluxy's copy pinned, or the empty place), through the
 /// library: a new folder written beside it and renamed in, the old copy moved aside, checked to
-/// be the one pinned, and removed; journalled, so the next start puts back what a stop left aside.
-fn put(tx: &Transactions, folder: &Folder) -> Result<(), Error> {
+/// be the one pinned, and removed once checked again; journalled, so the next start puts back what
+/// a stop left aside while nothing else is under the name (else names it in its report). The copy
+/// put, pinned.
+fn put(tx: &Transactions, folder: &Folder) -> Result<Folder, Error> {
     let marker = marker(VERSION);
     let mut files: Vec<(&str, &[u8])> = FILES.to_vec();
     files.push((MARKER, marker.as_bytes()));
@@ -178,32 +181,42 @@ fn put(tx: &Transactions, folder: &Folder) -> Result<(), Error> {
 }
 
 /// Install Pi Plugin: puts the carried copy in agent unless pluxy's copy is there already (an
-/// update is explicit). True when it installed one.
-pub fn ensure(tx: &Transactions, agent: &Path) -> Result<bool, Error> {
+/// update is explicit). The copy it installed, pinned in the agent folder held open (so a failed
+/// Apply removes that very copy), or None when it kept the one there.
+pub fn ensure(tx: &Transactions, agent: &Path) -> Result<Option<Folder>, Error> {
     match state(agent) {
-        State::Installed(_) => Ok(false),
+        State::Installed(_) => Ok(None),
         State::Foreign => Err(foreign(agent)),
-        State::Absent => put(tx, &Folder::empty(agent, FOLDER, MARKER)?).map(|_| true),
+        State::Absent => put(tx, &Folder::empty(agent, FOLDER, MARKER)?).map(Some),
     }
 }
 
 /// Update Pi Plugin: replaces pluxy's copy the preview pinned (see [`pinned`]) with the carried
 /// one.
 pub fn update(tx: &Transactions, pinned: &Folder) -> Result<(), Error> {
-    put(tx, pinned)
+    put(tx, pinned).map(|_| ())
 }
 
-/// Removes pluxy's copy (with the cache the adapter keeps in it): with pinned, the copy the
-/// preview pinned (see [`pinned`]); else pluxy's copy as it is in agent now, pinned and held open
-/// as it is read. Anything else stays. True when it removed one.
-pub fn remove(tx: &Transactions, agent: &Path, pinned: Option<&Folder>) -> Result<bool, Error> {
-    if let Some(f) = pinned {
-        return tx.remove_folder(crate::SET, f).map(|_| true);
-    }
-    if !matches!(state(agent), State::Installed(_)) {
+/// Removes the copy pinned (with the cache the adapter keeps in it): the one the preview pinned
+/// (see [`pinned`]) or the one [`ensure`] installed, through the agent folder held open, while it
+/// is still that copy.
+pub fn remove(tx: &Transactions, pinned: &Folder) -> Result<(), Error> {
+    tx.remove_folder(crate::SET, pinned)
+}
+
+/// Removes pluxy's copy as it is now in the agent folder a write's file transaction pinned (root,
+/// its resolved path, while the folder there is still the one of identity id), never through the
+/// selected agent folder's link again; the copy is pinned and held open as it is read. Anything
+/// else stays. True when it removed one.
+pub fn remove_in(tx: &Transactions, root: &Path, id: Id) -> Result<bool, Error> {
+    if !matches!(state(root), State::Installed(_)) {
         return Ok(false);
     }
-    let t = Target::resolve(&selection(agent))?;
+    let t = Target::resolve(&selection(root))?;
+    // Another folder at that path now: not the agent folder the files were written in.
+    if t.pin.root_id != Some(id) {
+        return Ok(false);
+    }
     // pluxy's by the marker's bytes the pin holds, read again through its folder's handle.
     let (_, bytes) = t.read_now()?;
     if sha256_of(bytes.as_deref()) != t.pin.sha256

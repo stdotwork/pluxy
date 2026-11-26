@@ -258,31 +258,48 @@ How a folder write goes (`put_folder`, `remove_folder`):
   write stays in the folder pinned. The journal (`intent.folder`) names the root's resolved path
   and identity, the folder's name, its marker's name, the pinned copy's identities (folder, marker)
   and SHA-256, the two hidden names it uses beside the folder (`.<name>.pluxy-<hex>.old` and
-  `.new`) and the new marker's SHA-256.
-- `put_folder` writes the new copy under the `.new` name (on Linux and macOS folders 0755 and
-  files 0644, less the umask; on Windows as their folder passes down). For a pinned folder it then
-  moves the old copy aside to the `.old` name and checks that what moved is the copy pinned: its
-  folder's identity, its marker's identity and its marker's SHA-256. If not, what moved goes back
-  under the folder's name and the write is refused, as changed since the preview. Then it renames
-  the new copy in where nothing is, removes the old copy and commits the journal. If the new copy
-  is in place but the old one cannot be removed, the error says where it is and the journal stays
-  open: the next start removes it.
-- `remove_folder` moves the folder aside and checks it the same way, removes its marker (from then
-  on the removal is finished, not undone) and then the rest.
-- When what moved aside cannot go back (something else is under the folder's name now), the
-  error names where it is and the journal stays open.
-- `reconcile` opens the root by the path and identity the journal names. A copy put in place (the
-  folder under its name holds the new marker, and is not the old copy) is committed and the old
-  copy aside removed; a removal whose marker is gone is committed and finished; anything else is
-  rolled back: the new copy removed and what was moved aside put back under its name. What cannot
-  be put back or removed (something else under the name, or the root gone or replaced) is left
-  where it is, named in the report's `conflicts`, and the journal is ended all the same, so the
-  tool still starts. Repeating it changes nothing more.
-- On Linux and macOS a folder is renamed by its name in the held root, its identity checked just
-  before the rename and what moved checked after. On Windows the folder is opened through the
-  held root, checked, and renamed through its own handle (`rename_open`); cap-std removes files and
-  folders there by the held folder's path as it is at that moment (cap-primitives 4.0.3 joins that
-  path and the name, then removes by path), not through a handle.
+  `.new`) and the new copy's folder identity.
+- `put_folder` makes the new copy's folder under the `.new` name, empty, before it begins the
+  journal, so the journal names its identity; then it writes the copy there (on Linux and macOS
+  folders 0755 and files 0644, less the umask; on Windows as their folder passes down). For a
+  pinned folder it then moves the old copy aside to the `.old` name and checks that what moved is
+  the copy pinned: its folder's identity, its marker's identity and its marker's SHA-256. If not,
+  what moved goes back under the folder's name and the write is refused, as changed since the
+  preview. Then it renames the new copy in where nothing is, checks that the folder under the name
+  is the new copy (its identity), checks the old copy again (its identity, its marker's identity
+  and SHA-256) just before removing it, and commits the journal. It returns the copy put, pinned,
+  so the caller can remove that very copy again.
+- `remove_folder` moves the folder aside and checks it the same way, checks its marker again
+  (identity and SHA-256) just before removing it (from then on the removal is finished, not
+  undone), and then removes the rest.
+- A hidden copy is removed or put back only while it is the folder of the identity the operation
+  recorded (the new copy's, or the folder moved aside); another folder at its name is left as it
+  is. A folder is removed through a handle opened at its name and checked (cap-std's
+  `remove_open_dir_all`).
+- What an operation cannot settle (what moved aside and cannot go back because something else is
+  under the folder's name, a hidden copy that cannot be removed, another folder at a hidden name or
+  under the name after the new copy went in, an old copy whose marker changed once moved aside) is
+  named in the error, and the journal stays open for the next start. A cleanup that fails never
+  ends the journal.
+- `reconcile` opens the root by the path and identity the journal names. A put whose new copy (by
+  its identity) is under the name is committed and the old copy aside removed while it is still
+  the copy pinned (its identity, its marker's identity and SHA-256); a removal whose folder aside (by
+  its identity) has no marker is committed and finished; anything else is rolled back: the new copy
+  removed and what was moved aside put back under its name, each by the identity recorded. Every
+  leftover it does not settle (a hidden copy that cannot be put back because something else is
+  under the name, or cannot be removed; another folder at a hidden name; an old copy whose marker
+  changed; the root gone or replaced) is left where it is and named in the report's `conflicts`,
+  and the journal is ended all the same, so the tool still starts. Repeating it changes nothing
+  more.
+- Limits: on Linux and macOS a folder is renamed by its name in the held root, its identity
+  checked just before the rename, and removed with what it holds through its handle, the folder
+  itself where its parent lists that identity. On Windows the folder is opened through the held
+  root, checked, and renamed through its own handle (`rename_open`); cap-std removes files and
+  folders there by the held folder's path as it is at that moment (cap-primitives 4.0.3 takes that
+  path from the handle, closes it, then removes by path), not through a handle. Other programs do
+  not share these checks: a folder put under a name between the last check and a rename or removal
+  is not seen (on Linux and macOS a rename onto an empty folder replaces it). A stop between making
+  the new copy's empty folder and beginning the journal leaves that empty folder, unrecorded.
 
 In a WSL distribution (`PLUXY_ENVIRONMENT` set, see `lib/program`), a selection on a Windows drive is
 refused (`This file is on a Windows drive; set it up from Windows local.`) when it resolves, before
@@ -1044,15 +1061,19 @@ in its signed program, and writes it into the agent folder as a local Pi package
 copy's version, `1.4.25-pluxy.1`). Pi loads a local package from its folder and never installs or
 updates it. **Update** replaces pluxy's copy with the one the installed tool carries (a newer
 plugin comes with a new pluxy/pi-setup); the page offers it when the installed copy's version
-differs. Update replaces only the copy the preview pinned: before any change it refuses, as changed
-since the preview, a pinned file or the agent folder that resolves elsewhere now (its link pointed
-elsewhere, the folder moved or replaced) or a copy that is not the one pinned (its folder replaced,
-its marker changed, another version put there). The plugin folder is written through the library's
-folder writes (`put_folder`, `remove_folder` in `lib/transactions`): through a handle on the agent
-folder the preview pinned, so a link pointed elsewhere after the check changes nothing; the old copy
+differs. Update replaces only the copy the preview pinned: before it writes the new copy it refuses,
+as changed since the preview, a pinned file or the agent folder that resolves elsewhere now (its
+link pointed elsewhere, the folder moved or replaced) or a copy that is not the one pinned (its
+folder replaced, its marker changed, another version put there). The plugin folder is written
+through the library's folder writes (`put_folder`, `remove_folder` in `lib/transactions`):
+through a handle on the agent folder the preview pinned, so a link pointed elsewhere after the check
+changes nothing; the new copy is written beside the plugin first, under a hidden name; the old copy
 is moved aside and must be the copy pinned (its folder, its marker and the marker's bytes), else it
-goes back under its name and the update is refused; each change is journalled, and the next start
-puts back a copy a stop left aside. A folder of that name without pluxy's marker is someone else's:
+goes back under its name and the update is refused; it is removed only once the new copy is under
+the plugin's name and the old one is checked again. Each change is journalled; the next start puts
+back a copy a stop left aside, unless something else is under the plugin's name then, and names
+in its report what it cannot settle. The library's limits apply (see "How a folder write goes"
+above). A folder of that name without pluxy's marker is someone else's:
 Apply and Update refuse, and nothing removes it. The review read
 the plugin's network, process, file and code-loading calls
 (it starts no processes; it fetches the core's model list and `https://models.dev/api.json` for
@@ -1084,11 +1105,16 @@ cache Apply removed is removed again when there was none before Apply (else the 
 stays). **Uninstall** takes only the plugin's entry out of `settings.json` (through `apply`, so
 Clear and Restore Backup still work afterward) and removes its folder; the connection settings stay,
 as in the old app. Clear, Restore Backup and Uninstall remove pluxy's plugin folder once
-`settings.json` no longer lists it. Uninstall checks the plugin's pin as Update does, before any
-change, and removes only the copy pinned, the same way; when the preview found no copy of pluxy's
-it removes none, and refuses if one is there at that check. Clear and Restore Backup take no plugin
-pin: they pin pluxy's copy as they find it in the agent folder and remove that one. Install Plugin
-(in Apply) puts the first copy in the agent folder as it resolves then, where nothing is. `preview` and `apply` refuse, before writing, a file Pi
+`settings.json` no longer lists it, reading `settings.json` as the file transaction left it (the
+file it pinned). Uninstall checks the plugin's pin as Update does, before any change, and removes
+only the copy pinned, the same way; when the preview found no copy of pluxy's it removes none, and
+refuses if one is there at that check. Clear and Restore Backup take no plugin pin: they pin pluxy's
+copy as they find it in the agent folder their file transaction pinned (its resolved path, while the
+folder there has the identity the pins hold), never through the agent folder's link again, and
+remove that one; when every file is a link to another folder (as stow makes), the transaction pins
+no agent folder and they remove none. Install Plugin (in Apply) puts the first copy in the agent
+folder as it resolves then, where nothing is; when Apply's file write then fails, it removes that
+copy, by its identity, through the agent folder it put it in. `preview` and `apply` refuse, before writing, a file Pi
 or the plugin would not take: `settings.json` or `cliproxyapi.json` not strict JSON (a byte order
 mark too) or not an object, `packages` not a list of package sources (a string, or an object with a
 string `source`), `defaultProvider`, `defaultModel`, `baseUrl`, `apiKey` or `providerId` not text.

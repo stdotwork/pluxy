@@ -446,6 +446,17 @@ fn pinned(agent: &Path) -> pluxy_transactions::Pin {
         .pin
 }
 
+/// The agent folder as a write's file transaction pins it: its resolved path and identity.
+fn agent_root(agent: &Path) -> (PathBuf, pluxy_transactions::Id) {
+    let pin = pluxy_transactions::Target::resolve(&Selection::Root {
+        root: agent.to_path_buf(),
+        path: "settings.json".into(),
+    })
+    .unwrap()
+    .pin;
+    (pin.root.unwrap(), pin.root_id.unwrap())
+}
+
 /// The library's operations with vault, and a data folder of their own beside agent's folder.
 fn tx<'a>(vault: &'a Mem, agent: &Path) -> Transactions<'a> {
     let name = agent.file_name().unwrap().to_string_lossy();
@@ -489,7 +500,7 @@ fn the_plugin_is_installed_updated_and_removed_only_as_pluxys() {
     let vault = Mem::default();
     let tx = tx(&vault, &agent);
     assert_eq!(adapter::state(&agent), State::Absent);
-    assert!(adapter::ensure(&tx, &agent).unwrap());
+    assert!(adapter::ensure(&tx, &agent).unwrap().is_some());
     let dir = agent.join("pluxy-cliproxyapi-provider");
     assert_eq!(files_under(&dir), want);
     assert_eq!(
@@ -497,7 +508,7 @@ fn the_plugin_is_installed_updated_and_removed_only_as_pluxys() {
         State::Installed(Some("1.4.25-pluxy.1".into()))
     );
     // Installed: kept as it is.
-    assert!(!adapter::ensure(&tx, &agent).unwrap());
+    assert!(adapter::ensure(&tx, &agent).unwrap().is_none());
 
     // An older copy with a stale file: an update makes it exactly the carried one.
     std::fs::write(
@@ -514,9 +525,10 @@ fn the_plugin_is_installed_updated_and_removed_only_as_pluxys() {
     assert_eq!(files_under(&dir), want);
     assert_eq!(names(&agent), ["pluxy-cliproxyapi-provider"]);
 
-    assert!(adapter::remove(&tx, &agent, None).unwrap());
+    let (root, id) = agent_root(&agent);
+    assert!(adapter::remove_in(&tx, &root, id).unwrap());
     assert!(!dir.exists());
-    assert!(!adapter::remove(&tx, &agent, None).unwrap());
+    assert!(!adapter::remove_in(&tx, &root, id).unwrap());
     // Nothing there: nothing to update.
     assert!(adapter::pinned(&agent, &pin).is_err());
     // Each change was journalled and committed.
@@ -531,7 +543,7 @@ fn the_plugin_is_installed_updated_and_removed_only_as_pluxys() {
         .message
         .contains("not pluxy's"));
     assert!(adapter::pinned(&agent, &pin).is_err());
-    assert!(!adapter::remove(&tx, &agent, None).unwrap());
+    assert!(!adapter::remove_in(&tx, &root, id).unwrap());
     assert!(dir.join("package.json").exists());
     std::fs::remove_dir_all(&agent).unwrap();
 }
@@ -656,8 +668,15 @@ fn removing_the_plugin_leaves_nothing_under_its_name_or_beside_it() {
     let vault = Mem::default();
     let tx = tx(&vault, &agent);
     adapter::ensure(&tx, &agent).unwrap();
-    assert!(adapter::remove(&tx, &agent, None).unwrap());
+    let (root, id) = agent_root(&agent);
+    assert!(adapter::remove_in(&tx, &root, id).unwrap());
     assert!(names(&agent).is_empty());
+    // An agent folder that is not the one pinned any more: nothing removed.
+    adapter::ensure(&tx, &agent).unwrap();
+    let other = temp("remove-other");
+    assert!(!adapter::remove_in(&tx, &root, agent_root(&other).1).unwrap());
+    assert!(adapter::state(&agent) != State::Absent);
+    std::fs::remove_dir_all(&other).unwrap();
     std::fs::remove_dir_all(&agent).unwrap();
 }
 
@@ -687,7 +706,7 @@ fn a_stop_part_way_through_leaves_nothing_hidden_once_the_next_start_reconciles(
         hook(Some(Box::new(move |s| s == step)));
         let r = match op {
             "update" => adapter::update(&tx, &folder),
-            _ => adapter::remove(&tx, &agent, Some(&folder)).map(|_| ()),
+            _ => adapter::remove(&tx, &folder),
         };
         hook(None);
         drop(folder);
@@ -1114,21 +1133,23 @@ fn uninstall_leaves_a_copy_installed_since_a_preview_that_found_none() {
     std::fs::remove_dir_all(&data).unwrap();
 }
 
+/// What [`confirm_with`] saw: the reply, the tree just after the hook acted, the tree after the
+/// confirmation, the journals it left open, the next start's reports on them and the tree after
+/// those, and the folder holding it all.
+struct Run {
+    r: Result<serde_json::Value, pluxy_program::Error>,
+    seen: Tree,
+    after: Tree,
+    open: usize,
+    reports: Vec<serde_json::Value>,
+    settled: Tree,
+    base: PathBuf,
+}
+
 /// Previews an agent folder (a link to a, beside another agent folder b) and confirms op with what
 /// the page sends, with hook acting between the steps of the plugin folder's change (as another
-/// program would): the reply, the tree just after the hook acted at step, the tree after the
-/// confirmation, and the folder holding both.
-fn confirm_with(
-    op: &str,
-    name: &str,
-    step: Step,
-    act: impl Fn(&Path) + 'static,
-) -> (
-    Result<serde_json::Value, pluxy_program::Error>,
-    Tree,
-    Tree,
-    PathBuf,
-) {
+/// program would); then reconciles what it left open, as the next start does.
+fn confirm_with(op: &str, name: &str, step: Step, act: impl Fn(&Path) + 'static) -> Run {
     let base = temp(name);
     let data = temp(&format!("{name}-data"));
     let (a, b, shown) = (base.join("a"), base.join("b"), base.join("agent"));
@@ -1159,11 +1180,23 @@ fn confirm_with(
         _ => crate::uninstall(&vault, data.clone(), &sent(&preview)),
     };
     hook(None);
-    assert!(vault.open().is_empty(), "{name}: a journal was left open");
     let after = tree(&base);
+    let open = vault.open();
+    let reports = Transactions::new(&vault, data.clone())
+        .reconcile(&open)
+        .unwrap();
+    let settled = tree(&base);
     std::fs::remove_dir_all(&data).unwrap();
     let seen = seen.borrow().clone();
-    (r, seen, after, base)
+    Run {
+        r,
+        seen,
+        after,
+        open: open.len(),
+        reports,
+        settled,
+        base,
+    }
 }
 
 #[test]
@@ -1173,7 +1206,7 @@ fn a_plugin_folder_replaced_after_the_check_is_left_as_it_was_and_the_write_refu
     // (b's). The move is refused, the folder under the name is left as it was (b's copy, which
     // moved and went back), and no copy is written or removed.
     for op in ["update", "uninstall"] {
-        let (r, seen, after, base) = confirm_with(
+        let run = confirm_with(
             op,
             &format!("late-plugin-{op}"),
             Step::Checked,
@@ -1182,57 +1215,85 @@ fn a_plugin_folder_replaced_after_the_check_is_left_as_it_was_and_the_write_refu
                 std::fs::rename(base.join("b").join(plugin), base.join("a").join(plugin)).unwrap();
             },
         );
-        let e = r.unwrap_err();
+        let e = run.r.unwrap_err();
         assert!(
             e.message.contains("preview it again"),
             "{op}: {}",
             e.message
         );
-        assert_eq!(after, seen, "{op}: the folders changed after the swap");
-        std::fs::remove_dir_all(&base).unwrap();
+        assert_eq!(
+            run.after, run.seen,
+            "{op}: the folders changed after the swap"
+        );
+        assert_eq!(run.open, 0, "{op}: a journal was left open");
+        std::fs::remove_dir_all(&run.base).unwrap();
     }
 }
 
 #[test]
-fn a_marker_rewritten_in_place_after_the_move_is_put_back_and_the_write_refused() {
+fn a_marker_rewritten_in_place_once_moved_aside_is_never_removed() {
     let plugin = "pluxy-cliproxyapi-provider";
-    // The copy moved aside, and its marker rewritten in place (same file, other bytes) before
-    // what moved is checked: it is not the copy pinned, so it goes back under its name, as it is
-    // now, and nothing is written or removed.
-    for op in ["update", "uninstall"] {
-        let (r, seen, after, base) =
-            confirm_with(op, &format!("late-marker-{op}"), Step::Moved, move |base| {
-                let aside = aside_in(&base.join("a")).unwrap();
-                std::fs::write(
-                    aside.join(adapter::MARKER),
-                    adapter::marker("1.4.23-pluxy.1"),
-                )
-                .unwrap();
-            });
-        let e = r.unwrap_err();
-        assert!(
-            e.message.contains("preview it again"),
-            "{op}: {}",
-            e.message
-        );
-        // What the hook saw had the copy aside; it is back under its name, all of it, and nothing
-        // else changed.
-        let aside = aside_name(&seen);
-        let mut back: Tree = seen
-            .iter()
-            .map(|e| match e.strip_prefix(&aside) {
-                Some(rest) => format!("a/{plugin}{rest}"),
-                None => e.clone(),
-            })
-            .collect();
-        back.sort();
-        assert_eq!(after, back, "{op}");
-        assert!(aside_in(&base.join("a")).is_none(), "{op}");
-        assert_eq!(
-            std::fs::read(base.join("a").join(plugin).join(adapter::MARKER)).unwrap(),
-            adapter::marker("1.4.23-pluxy.1").as_bytes()
-        );
-        std::fs::remove_dir_all(&base).unwrap();
+    let older = || adapter::marker("1.4.23-pluxy.1");
+    // The copy moved aside and its marker rewritten in place (same file, other bytes) at the latest
+    // point a test reaches: for an update once the new copy is in place, just before the old copy
+    // is checked again and removed; for an uninstall once moved, before what moved is checked and
+    // its marker removed. It is not the copy pinned, so it is never removed.
+    for (op, step) in [("update", Step::Placed), ("uninstall", Step::Moved)] {
+        let run = confirm_with(op, &format!("late-marker-{op}"), step, move |base| {
+            let aside = aside_in(&base.join("a")).unwrap();
+            std::fs::write(aside.join(adapter::MARKER), older()).unwrap();
+        });
+        let e = run.r.unwrap_err();
+        let aside = aside_name(&run.seen);
+        if op == "update" {
+            // The new copy is in place; the old one stays aside, all of it, with its new marker,
+            // and the next start names it instead of removing it.
+            assert!(
+                e.message.contains("is in place") && e.message.contains("not the old copy pinned"),
+                "{op}: {}",
+                e.message
+            );
+            assert_eq!(
+                adapter::state(&run.base.join("a")),
+                State::Installed(Some(adapter::VERSION.into()))
+            );
+            let at = run.base.join(&aside);
+            assert_eq!(std::fs::read(at.join("whose.txt")).unwrap(), b"a", "{op}");
+            assert_eq!(run.open, 1, "{op}");
+            assert_eq!(run.reports[0]["outcome"], "committed", "{op}");
+            assert_eq!(
+                run.reports[0]["conflicts"],
+                serde_json::json!([std::fs::canonicalize(&at).unwrap()]),
+                "{op}"
+            );
+            assert_eq!(
+                std::fs::read(at.join(adapter::MARKER)).unwrap(),
+                older().as_bytes()
+            );
+        } else {
+            // What moved goes back under its name, as it is now, and nothing else changed.
+            assert!(
+                e.message.contains("preview it again"),
+                "{op}: {}",
+                e.message
+            );
+            let mut back: Tree = run
+                .seen
+                .iter()
+                .map(|e| match e.strip_prefix(&aside) {
+                    Some(rest) => format!("a/{plugin}{rest}"),
+                    None => e.clone(),
+                })
+                .collect();
+            back.sort();
+            assert_eq!(run.after, back, "{op}");
+            assert_eq!(run.open, 0, "{op}");
+            assert_eq!(
+                std::fs::read(run.base.join("a").join(plugin).join(adapter::MARKER)).unwrap(),
+                older().as_bytes()
+            );
+        }
+        std::fs::remove_dir_all(&run.base).unwrap();
     }
 }
 
@@ -1247,11 +1308,33 @@ fn aside_name(seen: &Tree) -> String {
         .unwrap()
 }
 
+/// What tree shows of the copy this program carries in the agent folder at prefix: its folders and
+/// its files with their bytes (the marker written by hand).
+fn carried(prefix: &str) -> Tree {
+    let dir = format!("{prefix}/pluxy-cliproxyapi-provider");
+    let mut out = vec![format!("{dir}/")];
+    for (n, b) in adapter::files() {
+        out.push(format!("{dir}/{n}: {}", String::from_utf8_lossy(b)));
+        let mut parts: Vec<&str> = n.split('/').collect();
+        parts.pop();
+        for i in 1..=parts.len() {
+            let folder = format!("{dir}/{}/", parts[..i].join("/"));
+            if !out.contains(&folder) {
+                out.push(folder);
+            }
+        }
+    }
+    out.push(format!(
+        "{dir}/.pluxy-adapter.json: {{\n  \"package\": \"pluxy/pi-setup\",\n  \"adapter\": \"@router-for-me/pi-cliproxyapi-provider\",\n  \"version\": \"1.4.25-pluxy.1\"\n}}\n"
+    ));
+    out
+}
+
 #[test]
 fn a_link_pointed_elsewhere_after_the_check_leaves_the_other_folder_alone() {
     // The agent folder's link pointed at b after the operation checked the copy, or after it moved
     // the copy aside: the operation stays in the folder the preview showed (a, held open), the
-    // copy is never left hidden, and b is as it was.
+    // copy is never left hidden, and nothing else changes anywhere.
     for (op, step) in [
         ("update", Step::Checked),
         ("update", Step::Moved),
@@ -1259,32 +1342,218 @@ fn a_link_pointed_elsewhere_after_the_check_leaves_the_other_folder_alone() {
         ("uninstall", Step::Moved),
     ] {
         let name = format!("late-link-{op}-{step:?}");
-        let (r, seen, after, base) = confirm_with(op, &name, step, |base| {
+        let run = confirm_with(op, &name, step, |base| {
             unlink_dir(&base.join("agent"));
             link_dir(&base.join("b"), &base.join("agent"));
         });
-        let op = format!("{op} after {step:?}");
-        let op = op.as_str();
-        r.unwrap_or_else(|e| panic!("{op}: {e}"));
+        let case = format!("{op} after {step:?}");
+        run.r.unwrap_or_else(|e| panic!("{case}: {e}"));
+        assert_eq!(run.open, 0, "{case}: a journal was left open");
+        // The whole tree: what the hook saw (the link already pointed at b), with a's copy, under
+        // its name or aside, replaced by the carried one (update) or gone (uninstall).
+        let mut want: Tree = run
+            .seen
+            .iter()
+            .filter(|e| {
+                !e.starts_with("a/pluxy-cliproxyapi-provider")
+                    && !e.starts_with("a/.pluxy-cliproxyapi-provider.")
+            })
+            .cloned()
+            .collect();
+        if op == "update" {
+            want.extend(carried("a"));
+        }
+        want.sort();
+        assert_eq!(run.after, want, "{case}");
+        std::fs::remove_dir_all(&run.base).unwrap();
+    }
+}
+
+#[test]
+fn a_hidden_copy_swapped_by_another_program_is_left_as_it_is_and_named() {
+    let plugin = "pluxy-cliproxyapi-provider";
+    // Another program acts at a step of an update or uninstall: it puts its own folder at the new
+    // copy's hidden name, under the plugin's name once the new copy is in, or at the hidden name of
+    // the copy moved aside. The tool removes or moves nothing but the copies it recorded: the other
+    // folder stays as it is, the person's copy is never lost, and the next start names what it
+    // cannot settle.
+    for (op, step, which) in [
+        ("update", Step::Checked, "new"),
+        ("update", Step::Placed, "name"),
+        ("uninstall", Step::Unmarked, "aside"),
+    ] {
+        let case = format!("{op}: {which} swapped at {step:?}");
+        let put = std::rc::Rc::new(std::cell::RefCell::new(None::<PathBuf>));
+        let keep = put.clone();
+        let run = confirm_with(op, &format!("hidden-{op}-{which}"), step, move |base| {
+            let a = base.join("a");
+            let at = match which {
+                "new" => std::fs::read_dir(&a)
+                    .unwrap()
+                    .map(|e| e.unwrap().path())
+                    .find(|p| p.to_string_lossy().ends_with(".new"))
+                    .unwrap(),
+                "name" => a.join(plugin),
+                _ => aside_in(&a).unwrap(),
+            };
+            std::fs::rename(&at, base.join("taken")).unwrap();
+            std::fs::create_dir(&at).unwrap();
+            std::fs::write(at.join("x.txt"), "x").unwrap();
+            *keep.borrow_mut() = Some(at);
+        });
+        let e = run.r.unwrap_err();
+        let a = run.base.join("a");
+        let at = put.borrow().clone().unwrap();
+        // The other program's folder: where it put it, as it put it, after the operation and
+        // after the next start.
+        let name = at.file_name().unwrap().to_string_lossy().into_owned();
+        let entry = format!("a/{name}/x.txt: x");
+        for (when, t) in [
+            ("after it", &run.after),
+            ("after the next start", &run.settled),
+        ] {
+            assert!(t.contains(&entry), "{case}, {when}: {} ({t:?})", e.message);
+        }
+        assert_eq!(run.open, 1, "{case}: {}", e.message);
+        // The person's copy: under its name, or aside (another folder is under the name), or
+        // where the other program moved it.
+        let person = match which {
+            "new" => a.join(plugin),
+            "name" => run.base.join(aside_name(&run.settled)),
+            _ => run.base.join("taken"),
+        };
+        assert_eq!(
+            std::fs::read(person.join("whose.txt")).unwrap(),
+            b"a",
+            "{case}"
+        );
+        let named = match which {
+            "name" => &person,
+            _ => &at,
+        };
+        assert_eq!(
+            run.reports[0]["conflicts"],
+            serde_json::json!([std::fs::canonicalize(named).unwrap()]),
+            "{case}"
+        );
+        // b, the other agent folder, is as it was.
         let b = |t: &Tree| {
             t.iter()
                 .filter(|e| e.starts_with("b/"))
                 .cloned()
-                .collect::<Vec<_>>()
+                .collect::<Tree>()
         };
-        assert_eq!(b(&after), b(&seen), "{op}: b changed");
-        let plugin = base.join("a/pluxy-cliproxyapi-provider");
-        match op.split(' ').next().unwrap() {
-            "update" => {
-                assert_eq!(
-                    adapter::state(&base.join("a")),
-                    State::Installed(Some(adapter::VERSION.into()))
-                );
-                assert!(!plugin.join("whose.txt").exists());
-            }
-            _ => assert!(!plugin.exists()),
-        }
-        assert!(aside_in(&base.join("a")).is_none(), "{op}");
-        std::fs::remove_dir_all(&base).unwrap();
+        assert_eq!(b(&run.settled), b(&run.seen), "{case}");
+        std::fs::remove_dir_all(&run.base).unwrap();
     }
+}
+
+/// Sets up base/a, Pi's files as the person had them before pluxy, and base/b, another agent
+/// folder holding pluxy's copy of the plugin while its settings.json does not list it; base/agent
+/// is a link to a. The vault, the data folder, the base folder, and what the page sends to connect
+/// the agent folder as previewed now (with its key's secrets).
+fn two_agents(
+    name: &str,
+) -> (
+    Mem,
+    PathBuf,
+    PathBuf,
+    serde_json::Value,
+    serde_json::Map<String, serde_json::Value>,
+) {
+    let base = temp(name);
+    let data = temp(&format!("{name}-data"));
+    let (a, b, shown) = (base.join("a"), base.join("b"), base.join("agent"));
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::write(a.join("cliproxyapi.json"), CONFIG).unwrap();
+    std::fs::write(a.join("settings.json"), ORIGINAL).unwrap();
+    set_up(&b, "b");
+    std::fs::write(b.join("settings.json"), UNINSTALLED).unwrap();
+    link_dir(&a, &shown);
+    let vault = Mem::default();
+    let preview =
+        crate::preview(&vault, data.clone(), &serde_json::json!({"folder": shown})).unwrap();
+    let connect = serde_json::json!({"targets": preview["targets"], "key": "secret-1",
+        "base_url": "http://127.0.0.1:41999/", "model": "gpt-6.1-sol"});
+    let mut secrets = serde_json::Map::new();
+    secrets.insert("secret-1".into(), "k-test".into());
+    (vault, data, base, connect, secrets)
+}
+
+/// While it lives, base/agent is pointed at base/b once a write's file transaction has ended.
+struct Retargeted;
+
+impl Drop for Retargeted {
+    fn drop(&mut self) {
+        crate::AFTER_FILES.with(|h| *h.borrow_mut() = None);
+    }
+}
+
+/// Points base/agent at base/b once the write's file transaction has ended (as another program
+/// could), until the returned guard is dropped.
+fn retarget_after_files(base: &Path) -> Retargeted {
+    let base = base.to_path_buf();
+    crate::AFTER_FILES.with(|h| {
+        *h.borrow_mut() = Some(Box::new(move || {
+            unlink_dir(&base.join("agent"));
+            link_dir(&base.join("b"), &base.join("agent"));
+        }))
+    });
+    Retargeted
+}
+
+#[test]
+fn disconnect_and_restore_remove_the_plugin_from_the_agent_folder_they_wrote() {
+    let plugin = "pluxy-cliproxyapi-provider";
+    // Connected (pluxy's copy installed in a), then Disconnect or Restore backup, with the agent
+    // folder's link pointed at b once the files are written: the plugin goes from a, where the
+    // files were written; b's copy, which its settings do not list, stays.
+    for op in ["clear", "restore"] {
+        let (vault, data, base, connect, secrets) = two_agents(&format!("tidy-{op}"));
+        crate::apply(&vault, data.clone(), &connect, &secrets).unwrap();
+        assert!(base.join("a").join(plugin).is_dir());
+        let shown = base.join("agent");
+        let preview =
+            crate::preview(&vault, data.clone(), &serde_json::json!({"folder": shown})).unwrap();
+        let b_before = tree(&base.join("b"));
+        let input = serde_json::json!({"targets": preview["targets"]});
+        let off = retarget_after_files(&base);
+        let r = match op {
+            "clear" => crate::clear(&vault, data.clone(), &input),
+            _ => crate::restore(&vault, data.clone(), &input),
+        };
+        drop(off);
+        assert_eq!(tree(&base.join("b")), b_before, "{op}: b changed");
+        let v = r.unwrap_or_else(|e| panic!("{op}: {e}"));
+        assert_eq!(v["adapter_removed"], true, "{op}");
+        assert!(!base.join("a").join(plugin).exists(), "{op}");
+        assert!(!text(std::fs::read(base.join("a/settings.json")).unwrap()).contains(plugin));
+        assert!(vault.open().is_empty(), "{op}");
+        std::fs::remove_dir_all(&base).unwrap();
+        std::fs::remove_dir_all(&data).unwrap();
+    }
+}
+
+#[test]
+fn a_failed_connect_removes_the_copy_it_installed_and_nothing_else() {
+    let plugin = "pluxy-cliproxyapi-provider";
+    // Connect installs pluxy's copy in a, then its file write fails (settings.json changed since the
+    // preview); the agent folder's link is pointed at b before the copy is taken away again: the
+    // copy it installed goes from a, and b's copy stays.
+    let (vault, data, base, connect, secrets) = two_agents("failed-connect");
+    std::fs::write(base.join("a/settings.json"), EDITED).unwrap();
+    let b_before = tree(&base.join("b"));
+    let off = retarget_after_files(&base);
+    let e = crate::apply(&vault, data.clone(), &connect, &secrets).unwrap_err();
+    drop(off);
+    assert_eq!(tree(&base.join("b")), b_before, "b changed");
+    assert!(e.message.contains("preview it again"), "{}", e.message);
+    assert!(!base.join("a").join(plugin).exists());
+    assert_eq!(
+        names(&base.join("a")),
+        ["cliproxyapi.json", "settings.json"]
+    );
+    assert!(vault.open().is_empty());
+    std::fs::remove_dir_all(&base).unwrap();
+    std::fs::remove_dir_all(&data).unwrap();
 }

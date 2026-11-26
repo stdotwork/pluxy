@@ -1421,15 +1421,20 @@ installed copy's version is unknown; the tool's copy replaces it) and **Uninstal
 first; its entry and folder go, the connection settings stay). **Disconnect** and **Restore
 backup** also remove the plugin's folder once `settings.json` no longer lists it. Pi's three files
 are pinned as on every page, and Update plugin and Uninstall plugin are pinned to the plugin's
-folder the reading found: the add-on refuses them, before changing the plugin, when that folder or
-the agent folder holding it is not the one read (a link pointed elsewhere, a folder moved or
-replaced, another copy put there, its marker changed), and Uninstall plugin removes no folder when
-the reading found none. Past that check the add-on works through the agent folder it read, so a
-link pointed elsewhere then changes nothing; a copy moved aside that is not the one read goes back
-under its name and the write is refused; and a stop part way through is put back, or finished, the
-next time the add-on starts (see the [app tools README](../app-tools/README.md#pi-setup)). Install
-plugin, and the removal after Disconnect and Restore backup, act on the plugin folder in the agent
-folder as the tool finds it when it runs. **Start Pi** asks the tool for its recipe (`pi` in a
+folder the reading found: the add-on refuses them, before it moves or removes the plugin, when that
+folder or the agent folder holding it is not the one read (a link pointed elsewhere, a folder moved
+or replaced, another copy put there, its marker changed), and Uninstall plugin removes no folder
+when the reading found none. Past that check the add-on works through the agent folder it read, so
+a link pointed elsewhere then changes nothing; a copy moved aside that is not the one read goes back
+under its name and the write is refused; the old copy is removed only once the new one is in its
+place and the old one is checked again; and a hidden copy it made or moved is removed or put back
+only while it is that copy. A stop part way through is put back, or finished, the next time the
+add-on starts; what it cannot put back (something else is under the plugin's name) or remove is
+left where it is and named in that start's report (see the
+[app tools README](../app-tools/README.md#pi-setup)). Install plugin acts on the plugin folder in
+the agent folder as the tool finds it when it runs; when Connect then fails to write the files, the
+copy it installed goes again. The removal after Disconnect and Restore backup acts in the agent
+folder those files were written in. **Start Pi** asks the tool for its recipe (`pi` in a
 terminal, no arguments; `~/.pi/agent/bin/pi` or `~/.local/bin/pi`, where Pi's installer puts it,
 when one exists). Pi has no desktop app.
 

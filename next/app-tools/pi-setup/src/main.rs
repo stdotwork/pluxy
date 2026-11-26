@@ -18,10 +18,10 @@ mod pi;
 use pi::{PiMerge, Settings};
 use pluxy_program::{run, Call, Error, Handler};
 use pluxy_transactions::{
-    backup_call, data_dir, json_leaves, sha256_of, Folder, Pin, Selection, Target, Transactions,
-    Vault,
+    backup_call, data_dir, json_leaves, sha256_of, Folder, Id, Pin, Selection, Target,
+    Transactions, Vault,
 };
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
 /// The one set this tool applies: the adapter's config, Pi's settings and the adapter's model
@@ -223,22 +223,61 @@ fn settings(input: &Value, key: &str) -> Result<Settings, Error> {
     })
 }
 
+/// The agent folder a write's file transaction resolved and pinned, as its pins hold it: the
+/// resolved folder of a file selected in a selected agent folder, or of a selected file that is
+/// not a link, with that folder's identity. None when every file is a link to another folder (as
+/// stow makes) or the pins name different folders: the transaction pinned no one agent folder.
+fn pinned_agent(pins: &[Pin; 3]) -> Option<(PathBuf, Id)> {
+    let mut named = pins
+        .iter()
+        .filter(|p| matches!(p.selection, Selection::Root { .. }) || p.link.is_none())
+        .map(|p| (p.target.parent().map(Path::to_path_buf), p.parent_id));
+    let (folder, id) = named.next()?;
+    let folder = folder?;
+    named
+        .all(|(f, i)| f.as_deref() == Some(folder.as_path()) && i == id)
+        .then_some((folder, id))
+}
+
 /// Removes pluxy's adapter once settings.json no longer lists it (after a clear, a restore or an
-/// uninstall): a folder nothing loads; with plugin (uninstall), only the copy the preview pinned.
-/// Whether it removed it.
-fn tidy(
-    tx: &Transactions,
-    agent: &Path,
-    settings: &Pin,
-    plugin: Option<&Folder>,
-) -> Result<bool, Error> {
-    let (_, bytes) = Target::resolve(&settings.selection)?.read_now()?;
+/// uninstall): a folder nothing loads. settings.json is read as the transaction left it, the file
+/// it pinned (never through the selection's link again). With plugin (uninstall), only the copy the
+/// preview pinned; else pluxy's copy as it is now in the agent folder the transaction pinned (none
+/// when it pinned no agent folder). Whether it removed it.
+fn tidy(tx: &Transactions, pins: &[Pin; 3], plugin: Option<&Folder>) -> Result<bool, Error> {
+    let (_, bytes) = Target::pinned(&pins[1])?.read_now()?;
     // A settings file Pi would not take is left to the person, with the adapter.
     if pi::registered(bytes.as_deref()).unwrap_or(true) {
         return Ok(false);
     }
-    adapter::remove(tx, agent, plugin)
+    match plugin {
+        Some(f) => adapter::remove(tx, f).map(|_| true),
+        None => match pinned_agent(pins) {
+            Some((root, id)) => adapter::remove_in(tx, &root, id),
+            None => Ok(false),
+        },
+    }
 }
+
+// Tests only: called once a write's file transaction has ended, before the plugin's folder is
+// tidied or a failed Apply's copy removed (where another program could act).
+#[cfg(test)]
+thread_local! {
+    static AFTER_FILES: std::cell::RefCell<Option<Box<dyn FnMut()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn after_files() {
+    AFTER_FILES.with(|h| {
+        if let Some(f) = h.borrow_mut().as_mut() {
+            f()
+        }
+    });
+}
+
+#[cfg(not(test))]
+fn after_files() {}
 
 /// Where Pi's installer puts `pi` on os, in the order the launcher looks: on Linux and macOS
 /// (`pi.dev/install.sh`) its fallback in Pi's own folder first, then `~/.local/bin` (where it
@@ -334,10 +373,85 @@ fn uninstall(vault: &dyn Vault, data: PathBuf, input: &Value) -> Result<Value, E
         &PiMerge,
         &mut |_| {},
     )?;
+    after_files();
     v["adapter_removed"] = json!(match &folder {
-        Some(f) => tidy(&tx, &agent, &pins[1], Some(f))?,
+        Some(f) => tidy(&tx, &pins, Some(f))?,
         None => false,
     });
+    Ok(v)
+}
+
+/// Connect (`apply`): installs the adapter first when pluxy's copy is not there, so the
+/// registration never names a missing folder, then writes the three files; when that write fails,
+/// the copy this apply installed goes again, by its identity, through the agent folder it was put
+/// in.
+fn apply(
+    vault: &dyn Vault,
+    data: PathBuf,
+    input: &Value,
+    secrets: &Map<String, Value>,
+) -> Result<Value, Error> {
+    let (pins, agent) = pins(input)?;
+    let key = input["key"]
+        .as_str()
+        .and_then(|r| secrets.get(r))
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::invalid_request("key names no secret the app delivered"))?;
+    let s = settings(input, key)?;
+    let (_, config) = Target::open(&pins[0])?.read_now()?;
+    let provider = pi::provider_of(config.as_deref())?;
+    let tx = Transactions::new(vault, data);
+    let installed = adapter::ensure(&tx, &agent)?;
+    let r = tx.apply(
+        SET,
+        &pins,
+        &|i, _, before| match i {
+            0 => pi::apply_config(before, &s).map(Some),
+            1 => pi::apply_settings(before, &s, &provider).map(Some),
+            _ => Ok(None),
+        },
+        &PiMerge,
+        &mut |_| {},
+    );
+    after_files();
+    match r {
+        Ok(mut v) => {
+            v["adapter"] = json!(if installed.is_some() {
+                "installed"
+            } else {
+                "kept"
+            });
+            Ok(v)
+        }
+        Err(e) => {
+            if let Some(f) = &installed {
+                let _ = adapter::remove(&tx, f);
+            }
+            Err(e)
+        }
+    }
+}
+
+/// Disconnect (`clear`): takes the set's values out of the three files, then removes the adapter
+/// from the agent folder they were written in once settings.json no longer lists it.
+fn clear(vault: &dyn Vault, data: PathBuf, input: &Value) -> Result<Value, Error> {
+    let (pins, _) = pins(input)?;
+    checked(&pins)?;
+    let tx = Transactions::new(vault, data);
+    let mut v = tx.clear(SET, &pins, &PiMerge, &mut |_| {})?;
+    after_files();
+    v["adapter_removed"] = json!(tidy(&tx, &pins, None)?);
+    Ok(v)
+}
+
+/// Restore Backup (`restore`) puts the originals back whatever the files hold now (the person's
+/// way back always works), then removes the adapter as Disconnect does.
+fn restore(vault: &dyn Vault, data: PathBuf, input: &Value) -> Result<Value, Error> {
+    let (pins, _) = pins(input)?;
+    let tx = Transactions::new(vault, data);
+    let mut v = tx.restore(SET, &pins, &mut |_| {})?;
+    after_files();
+    v["adapter_removed"] = json!(tidy(&tx, &pins, None)?);
     Ok(v)
 }
 
@@ -353,65 +467,11 @@ impl Handler for Pi {
         }
         match call.op.as_str() {
             "preview" => preview(call, data_dir()?, input),
-            "apply" => {
-                let (pins, agent) = pins(input)?;
-                let key = input["key"]
-                    .as_str()
-                    .and_then(|r| call.secrets.get(r))
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
-                        Error::invalid_request("key names no secret the app delivered")
-                    })?;
-                let s = settings(input, key)?;
-                let (_, config) = Target::open(&pins[0])?.read_now()?;
-                let provider = pi::provider_of(config.as_deref())?;
-                // Install Pi Plugin: the adapter first, so the registration never names a missing
-                // folder; one installed here goes again if the write fails.
-                let tx = Transactions::new(call, data_dir()?);
-                let installed = adapter::ensure(&tx, &agent)?;
-                let r = tx.apply(
-                    SET,
-                    &pins,
-                    &|i, _, before| match i {
-                        0 => pi::apply_config(before, &s).map(Some),
-                        1 => pi::apply_settings(before, &s, &provider).map(Some),
-                        _ => Ok(None),
-                    },
-                    &PiMerge,
-                    &mut |_| {},
-                );
-                match r {
-                    Ok(mut v) => {
-                        v["adapter"] = json!(if installed { "installed" } else { "kept" });
-                        Ok(v)
-                    }
-                    Err(e) => {
-                        if installed {
-                            let _ = adapter::remove(&tx, &agent, None);
-                        }
-                        Err(e)
-                    }
-                }
-            }
+            "apply" => apply(call, data_dir()?, input, &call.secrets),
             "update" => update(call, data_dir()?, input),
             "uninstall" => uninstall(call, data_dir()?, input),
-            "clear" => {
-                let (pins, agent) = pins(input)?;
-                checked(&pins)?;
-                let tx = Transactions::new(call, data_dir()?);
-                let mut v = tx.clear(SET, &pins, &PiMerge, &mut |_| {})?;
-                v["adapter_removed"] = json!(tidy(&tx, &agent, &pins[1], None)?);
-                Ok(v)
-            }
-            // Restore Backup puts the originals back whatever the files hold now: the person's
-            // way back always works.
-            "restore" => {
-                let (pins, agent) = pins(input)?;
-                let tx = Transactions::new(call, data_dir()?);
-                let mut v = tx.restore(SET, &pins, &mut |_| {})?;
-                v["adapter_removed"] = json!(tidy(&tx, &agent, &pins[1], None)?);
-                Ok(v)
-            }
+            "clear" => clear(call, data_dir()?, input),
+            "restore" => restore(call, data_dir()?, input),
             "status" => Transactions::new(call, data_dir()?).status(),
             "recipe" => Ok(recipe(std::env::consts::OS, &home()?)),
             op => Err(Error::unsupported(format!("no operation {op}"))),

@@ -24,7 +24,8 @@
 //! A folder the tool owns inside a selected root, known by a marker file in it (a plugin it
 //! carries), is put in place, replaced and removed the same way ([`Folder`],
 //! [`Transactions::put_folder`], [`Transactions::remove_folder`]): through a handle on the root
-//! opened when the folder was pinned, checked before and after each move, under a journal that
+//! opened when the folder was pinned, checked before and after each move and before each removal
+//! (a hidden copy only by the identity the operation recorded), under a journal that
 //! [`Transactions::reconcile`] settles from disk.
 //!
 //! Other programs do not share these checks: a write between the last check and the rename, or

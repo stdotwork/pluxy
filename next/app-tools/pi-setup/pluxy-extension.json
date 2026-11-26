@@ -207,7 +207,7 @@
       },
       {
         "id": "update",
-        "description": "Update Pi Plugin: replace pluxy's copy of the CLIProxyAPI provider plugin that the preview pinned, the pluxy-cliproxyapi-provider folder in the previewed agent folder, with the copy this tool carries, working through that agent folder; refused when that folder, or the agent folder, is not the one previewed, and a copy found changed once moved aside goes back under its name. No file outside that folder changes.",
+        "description": "Update Pi Plugin: replace pluxy's copy of the CLIProxyAPI provider plugin that the preview pinned, the pluxy-cliproxyapi-provider folder in the previewed agent folder, with the copy this tool carries, working through that agent folder; refused when that folder, or the agent folder, is not the one previewed (a copy found changed once moved aside goes back under its name when nothing else is there). The new copy is written beside the folder under a hidden name first; nothing else changes, and a hidden copy the tool cannot put back or remove is left where it is and named.",
         "effect": "write",
         "input_schema": {
           "type": "object",
@@ -404,7 +404,7 @@
       },
       {
         "id": "uninstall",
-        "description": "Uninstall Pi Plugin: take pluxy's CLIProxyAPI provider plugin out of the previewed settings.json and remove the pluxy-cliproxyapi-provider folder the preview pinned, working through the previewed agent folder (refused when that folder, or the agent folder, is not the one previewed, and a copy found changed once moved aside goes back under its name; none when the preview found no copy of pluxy's, refused when one is there now), keeping the connection settings and everything else. Saving replaces the file; an edit made in the same instant by another program may be lost.",
+        "description": "Uninstall Pi Plugin: take pluxy's CLIProxyAPI provider plugin out of the previewed settings.json and remove the pluxy-cliproxyapi-provider folder the preview pinned, working through the previewed agent folder (refused when that folder, or the agent folder, is not the one previewed, and a copy found changed once moved aside goes back under its name when nothing else is there; none when the preview found no copy of pluxy's, refused when one is there now), keeping the connection settings and everything else. Saving replaces the file; an edit made in the same instant by another program may be lost.",
         "effect": "write",
         "input_schema": {
           "type": "object",
@@ -604,7 +604,7 @@
       },
       {
         "id": "clear",
-        "description": "Clear the Pi integration: take the values Apply wrote out of the previewed files, keeping the edits made since, put back an older app's plugin entry Apply replaced, and remove pluxy's plugin folder. Saving replaces the file; an edit made in the same instant by another program may be lost.",
+        "description": "Clear the Pi integration: take the values Apply wrote out of the previewed files, keeping the edits made since, put back an older app's plugin entry Apply replaced, and remove pluxy's plugin folder from the agent folder those files are in. Saving replaces the file; an edit made in the same instant by another program may be lost.",
         "effect": "write",
         "input_schema": {
           "type": "object",
@@ -713,7 +713,7 @@
       },
       {
         "id": "restore",
-        "description": "Restore Backup: put the previewed files' original bytes back, as they were before the first Apply, and remove pluxy's plugin folder once settings.json no longer lists it. Saving replaces the file; an edit made in the same instant by another program may be lost.",
+        "description": "Restore Backup: put the previewed files' original bytes back, as they were before the first Apply, and remove pluxy's plugin folder from the agent folder those files are in once settings.json no longer lists it. Saving replaces the file; an edit made in the same instant by another program may be lost.",
         "effect": "write",
         "input_schema": {
           "type": "object",

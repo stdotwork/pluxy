@@ -37,9 +37,10 @@ which has full access to your user account. Every client page works the same way
   that reading pinned, after a native confirmation that names them and the key's label. Disconnect
   keeps the edits you made since Connect; Restore backup puts the original bytes back. Updating and
   uninstalling Pi's plugin act only on the plugin folder that reading found, through the agent
-  folder it read, and refuse one that changed since; installing it, and the removal after Disconnect
-  or Restore backup, act on the plugin folder as the tool finds it when it runs
-  ([README](README.md#pi)).
+  folder it read (a link pointed elsewhere after the check changes nothing), and refuse a plugin
+  folder that changed since; installing it acts on the plugin folder as the tool finds it when it
+  runs, and the removal after Disconnect or Restore backup acts in the agent folder those files were
+  written in ([README](README.md#pi)).
 - **Backups** keeps up to 10 manual backups of the client's files in the app's vault.
 - The key comes from the vault and goes to the tool on its private pipe. It is written into the
   client's own config file, and never into a launch's arguments or environment.

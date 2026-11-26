@@ -2499,7 +2499,7 @@ fn copy(v: &str) -> Vec<(&'static str, Vec<u8>)> {
 fn put(tx: &Transactions, f: &Folder, v: &str) -> Result<(), Error> {
     let c = copy(v);
     let files: Vec<(&str, &[u8])> = c.iter().map(|(n, b)| (*n, b.as_slice())).collect();
-    tx.put_folder("s", f, &files)
+    tx.put_folder("s", f, &files).map(|_| ())
 }
 
 /// The pin of the folder plug in root, as a preview takes it.
@@ -2767,5 +2767,237 @@ fn a_folder_moved_aside_that_cannot_go_back_is_named_and_put_back_by_the_next_st
             assert!(aside_in(&root).is_none());
         }
         assert!(v.open().is_empty());
+    }
+}
+
+/// The hidden name a put wrote its new copy under in root, if any.
+fn new_in(root: &Path) -> Option<PathBuf> {
+    std::fs::read_dir(root)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| {
+            let n = p.file_name().unwrap().to_string_lossy();
+            n.starts_with(".plug.pluxy-") && n.ends_with(".new")
+        })
+}
+
+/// Puts another program's folder at at (whatever was there moved to taken first, when given),
+/// holding x.txt.
+fn swap_in(at: &Path, taken: Option<&Path>) {
+    if let Some(to) = taken {
+        std::fs::rename(at, to).unwrap();
+    }
+    std::fs::create_dir(at).unwrap();
+    std::fs::write(at.join("x.txt"), "x").unwrap();
+}
+
+#[test]
+fn a_hidden_copy_swapped_for_another_folder_is_left_as_it_is_and_named() {
+    use Step::*;
+    // Another program acts on a hidden name, or on the folder's own name, at a step: the operation
+    // removes or puts back nothing but the folder of the identity it recorded, says so, and keeps
+    // its journal open; the next start leaves the other folder as it is and names it.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Act {
+        /// The new copy moved away, another folder put at its hidden name.
+        SwapNew,
+        /// The new copy, once renamed in, moved away and another folder put under the name.
+        SwapName,
+        /// The old copy moved aside moved away, another folder put at its hidden name.
+        SwapAside,
+        /// The old copy's marker rewritten in place (same file, other bytes) once moved aside.
+        RewriteOld,
+    }
+    use Act::*;
+    for (op, step, act, outcome) in [
+        ("replace", Checked, SwapNew, "rolled_back"),
+        ("replace", Placed, SwapName, "rolled_back"),
+        ("replace", Placed, SwapAside, "committed"),
+        ("replace", Placed, RewriteOld, "committed"),
+        ("remove", Moved, SwapAside, "rolled_back"),
+        ("remove", Unmarked, SwapAside, "rolled_back"),
+    ] {
+        let case = format!("{op}: {act:?} at {step:?}");
+        let t = Tmp::new();
+        let v = Mem::default();
+        let tx = Transactions::new(&v, t.at("data"));
+        let root = t.at("root");
+        std::fs::create_dir_all(&root).unwrap();
+        put(&tx, &Folder::empty(&root, "plug", MARK).unwrap(), "1").unwrap();
+        let f = Folder::pinned(&plug(&root)).unwrap();
+        let (r, taken) = (root.clone(), t.at("taken"));
+        // Where the other program's folder went.
+        let other = std::rc::Rc::new(RefCell::new(None::<PathBuf>));
+        let keep = other.clone();
+        hook(Some(Box::new(move |s| {
+            if s == step {
+                let at = match act {
+                    SwapNew => new_in(&r).unwrap(),
+                    SwapName => r.join("plug"),
+                    SwapAside | RewriteOld => aside_in(&r).unwrap(),
+                };
+                if act == RewriteOld {
+                    std::fs::write(at.join(MARK), "{\"v\": \"x\"}\n").unwrap();
+                } else {
+                    swap_in(&at, Some(&taken));
+                }
+                *keep.borrow_mut() = Some(at);
+            }
+            false
+        })));
+        let done = match op {
+            "remove" => tx.remove_folder("s", &f),
+            _ => put(&tx, &f, "2"),
+        };
+        hook(None);
+        drop(f);
+        let at = other.borrow().clone().unwrap();
+        let e = done.unwrap_err();
+        assert!(!e.message.contains("stopped at"), "{case}: {}", e.message);
+        // Left as it is: the other folder where it was put, or the old copy with its new marker.
+        let intact = |when: &str| match act {
+            RewriteOld => {
+                assert_eq!(
+                    std::fs::read(at.join("a.txt")).unwrap(),
+                    b"a 1\n",
+                    "{case}, {when}"
+                );
+                assert_eq!(
+                    std::fs::read(at.join(MARK)).unwrap(),
+                    b"{\"v\": \"x\"}\n",
+                    "{case}, {when}"
+                );
+            }
+            _ => assert_eq!(
+                std::fs::read(at.join("x.txt")).unwrap(),
+                b"x",
+                "{case}, {when}"
+            ),
+        };
+        intact("after the operation");
+        // What the operation could not settle keeps its journal open for the next start.
+        let open = v.open();
+        assert_eq!(open.len(), 1, "{case}: {}", e.message);
+        let reports = tx.reconcile(&open).unwrap();
+        assert_eq!(reports[0]["outcome"], outcome, "{case}");
+        // Named: the other folder at a hidden name, or (another folder under the name) the old
+        // copy that cannot go back.
+        let named = match act {
+            SwapName => aside_in(&root).unwrap(),
+            _ => at.clone(),
+        };
+        assert_eq!(reports[0]["conflicts"], json!([named]), "{case}");
+        intact("after the next start");
+        // The copy pinned is never lost: under its name, aside, or where the other program put it.
+        let pinned_copy = match (op, act, step) {
+            (_, SwapName, _) => aside_in(&root),
+            (_, RewriteOld, _) => Some(at.clone()),
+            ("remove", _, _) | ("replace", SwapAside, _) => Some(t.at("taken")),
+            _ => Some(root.join("plug")),
+        }
+        .unwrap();
+        assert_eq!(
+            std::fs::read(pinned_copy.join("a.txt")).unwrap(),
+            b"a 1\n",
+            "{case}"
+        );
+        assert!(v.open().is_empty(), "{case}");
+    }
+}
+
+/// Makes the folder at at impossible to empty for this account until the returned guard is
+/// dropped: on Linux and macOS no write permission in it, on Windows a file in it held open with
+/// no sharing. None when the account can write there all the same (root).
+fn lock_folder(at: &Path) -> Option<Box<dyn std::any::Any>> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(at, std::fs::Permissions::from_mode(0o500)).unwrap();
+        if std::fs::write(at.join(".probe"), "").is_ok() {
+            let _ = std::fs::remove_file(at.join(".probe"));
+            std::fs::set_permissions(at, std::fs::Permissions::from_mode(0o755)).unwrap();
+            return None;
+        }
+        struct Unlock(PathBuf);
+        impl Drop for Unlock {
+            fn drop(&mut self) {
+                let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+            }
+        }
+        Some(Box::new(Unlock(at.to_path_buf())))
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        let file = std::fs::read_dir(at)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(file)
+            .unwrap();
+        Some(Box::new(held))
+    }
+}
+
+#[test]
+fn a_new_copy_that_cannot_be_removed_keeps_its_journal_open_for_the_next_start() {
+    for unlocked in [false, true] {
+        let t = Tmp::new();
+        let v = Mem::default();
+        let tx = Transactions::new(&v, t.at("data"));
+        let root = t.at("root");
+        std::fs::create_dir_all(&root).unwrap();
+        let f = Folder::empty(&root, "plug", MARK).unwrap();
+        // Once the new copy is written: a folder put under its name (so the put is refused) and
+        // the new copy's subfolder made impossible to empty (so it cannot be removed).
+        let (r, guard) = (root.clone(), std::rc::Rc::new(RefCell::new(None)));
+        let keep = guard.clone();
+        hook(Some(Box::new(move |s| {
+            if s == Step::Checked {
+                *keep.borrow_mut() = Some(lock_folder(&new_in(&r).unwrap().join("sub")));
+                std::fs::create_dir(r.join("plug")).unwrap();
+            }
+            false
+        })));
+        let e = put(&tx, &f, "1").unwrap_err();
+        hook(None);
+        drop(f);
+        let Some(lock) = guard.borrow_mut().take().unwrap() else {
+            println!("skipped: this account can empty a folder without write permission (root)");
+            return;
+        };
+        let new = new_in(&root).unwrap();
+        assert!(
+            e.message.contains(&new.display().to_string()) && e.message.contains("next start"),
+            "{}",
+            e.message
+        );
+        // Not ended as rolled back with the new copy left unrecorded: open for the next start.
+        let open = v.open();
+        assert_eq!(open.len(), 1, "{}", e.message);
+        assert_eq!(std::fs::read(new.join("a.txt")).unwrap(), b"a 1\n");
+        let mut lock = Some(lock);
+        if unlocked {
+            lock = None;
+        }
+        let reports = tx.reconcile(&open).unwrap();
+        assert_eq!(reports[0]["outcome"], "rolled_back");
+        if unlocked {
+            assert_eq!(reports[0]["conflicts"], json!([]));
+            assert!(new_in(&root).is_none());
+        } else {
+            // Still not removable: left where it is and named, the journal ended all the same.
+            assert_eq!(reports[0]["conflicts"], json!([new]));
+            assert!(new.join("a.txt").exists());
+        }
+        drop(lock);
+        assert!(v.open().is_empty());
+        // The folder another program put under the name is left as it is.
+        assert!(root.join("plug").is_dir());
     }
 }

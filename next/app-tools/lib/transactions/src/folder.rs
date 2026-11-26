@@ -1,25 +1,33 @@
 //! A folder a tool owns inside a selected root (such as a plugin it carries), known by a marker
-//! file in it: put in place, replaced and removed through a handle on the root, never by a path
-//! again, each change under a journal, so the next start's [`Transactions::reconcile`] puts back a
-//! folder a stop left moved aside and removes a new copy a stop left unfinished.
+//! file in it: put in place, replaced and removed through a handle on the root, each change under a
+//! journal, so the next start's [`Transactions::reconcile`] puts back a folder a stop left moved
+//! aside and removes a new copy a stop left unfinished.
 //!
 //! [`Folder::pinned`] opens the folder a preview pinned (a pin of its marker, selected inside the
-//! root) and [`Folder::empty`] the place for a first copy. [`Transactions::put_folder`] writes a new
-//! copy beside the folder, moves the old one aside, checks that what moved is the folder pinned
-//! (its identity, and its marker's identity and bytes), renames the new copy in and removes the old
-//! one. [`Transactions::remove_folder`] moves the folder aside, checks it the same way, removes its
-//! marker (from then on the removal is finished at the next start, never undone) and then the
-//! rest. A folder that is not the one pinned goes back under its name and the operation is
-//! refused; when it cannot go back, the error names where it is, and the next start puts it back.
+//! root) and [`Folder::empty`] the place for a first copy. [`Transactions::put_folder`] makes the
+//! new copy's folder beside the folder (its identity goes in the journal), writes it, moves the old
+//! one aside, checks that what moved is the folder pinned (its identity, and its marker's identity
+//! and bytes), renames the new copy in, checks that the folder under the name is the new copy, and
+//! removes the old one once it is checked again (its identity, its marker's identity and bytes).
+//! [`Transactions::remove_folder`] moves the folder aside, checks it the same way, removes its marker
+//! once that is checked again (from then on the removal is finished at the next start, never
+//! undone) and then the rest. A hidden copy (the old one moved aside, the new one written beside
+//! it) is removed or put back only while it is the folder of the identity the operation recorded;
+//! another folder at its name is left as it is. A folder moved aside that is not the one pinned goes
+//! back under its name and the operation is refused. What an operation cannot settle (a copy that
+//! cannot go back or be removed, another folder at a hidden name) is named in its error and its
+//! journal stays open: the next start settles it, or names it in its report's `conflicts`.
 //!
 //! Every step goes through the handle on the root opened when the folder was: a link to the root
 //! pointed elsewhere meanwhile changes nothing, the operation stays in the folder pinned. On Linux
-//! and macOS a folder is renamed by its name in the held root, its identity checked just before
-//! and what moved checked after; on Windows the folder is opened and checked first and renamed
-//! through its own handle. Files are removed by name in the held folder on Linux and macOS; on
-//! Windows cap-std removes them by the held folder's path as it is at that moment. Other programs
-//! do not share these checks: something put under the folder's name between the last check and a
-//! rename is not seen.
+//! and macOS a folder is renamed by its name in the held root, its identity checked just before;
+//! on Windows the folder is opened and checked first and renamed through its own handle. A folder
+//! is removed through a handle opened at its name and checked: on Linux and macOS cap-std removes
+//! what it holds through that handle and the folder itself where its parent lists that identity;
+//! on Windows cap-std removes it by the path that handle has at that moment. Other programs do not
+//! share these checks: a folder put under a name between the last check and a rename or removal is
+//! not seen (on Linux and macOS a rename onto an empty folder replaces it). A stop between making
+//! the new copy's empty folder and beginning its journal leaves that empty folder, unrecorded.
 
 use crate::target::{
     changed, dir_id, io, open_dir, open_root, random_hex, sha256, sync_dir, Id, Pin, Selection,
@@ -69,6 +77,7 @@ impl Owned {
 
 /// A folder name in a root folder held open: the one a preview pinned, or the empty place for a
 /// first copy.
+#[derive(Debug)]
 pub struct Folder {
     dir: Dir,
     root: PathBuf,
@@ -232,20 +241,6 @@ impl Folder {
             .is_some_and(|(id, bytes)| id == old.marker && sha256(&bytes) == old.sha256))
     }
 
-    /// Whether name in the held root is a folder (not a link) whose marker has SHA-256 sha.
-    fn holds_copy(&self, name: &str, sha: &str) -> bool {
-        let Ok(Some((true, id))) = entry(&self.dir, name) else {
-            return false;
-        };
-        let Ok(Some(d)) = self.open_folder(name, id) else {
-            return false;
-        };
-        read_marker(&d, &self.marker)
-            .ok()
-            .flatten()
-            .is_some_and(|(_, bytes)| sha256(&bytes) == sha)
-    }
-
     /// The identity of what is at name in the held root, None when nothing is (or it cannot be
     /// read).
     fn id_at(&self, name: &str) -> Option<Id> {
@@ -274,7 +269,8 @@ impl Folder {
 
     /// Renames from to "to" in the held root. With id, what is renamed must be the folder of that
     /// identity: on Windows it is opened and checked, then renamed through its own handle; on
-    /// Linux and macOS it is checked just before the rename (the caller checks what moved after).
+    /// Linux and macOS it is checked just before the rename, by its name (the caller checks what is
+    /// at the name it moved to after).
     fn rename(&self, from: &str, to: &str, id: Option<Id>) -> Result<(), Error> {
         let at = self.path(from);
         let fail = |e| io(&format!("renaming {} to {to}", at.display()), e);
@@ -314,10 +310,11 @@ impl Folder {
         }
     }
 
-    /// Puts what was moved aside back under the folder's name, if nothing took the name meanwhile.
-    fn put_back(&self, aside: &str) -> Result<(), Error> {
+    /// Puts the folder of identity id, moved aside to aside, back under the folder's name, if
+    /// nothing took the name meanwhile and aside still holds that folder.
+    fn put_back(&self, aside: &str, id: Id) -> Result<(), Error> {
         match entry(&self.dir, &self.name)? {
-            None => self.rename(aside, &self.name, None),
+            None => self.rename(aside, &self.name, Some(id)),
             Some(_) => Err(Error::invalid_request(format!(
                 "something else is under {} now",
                 self.path(&self.name).display()
@@ -325,33 +322,55 @@ impl Folder {
         }
     }
 
-    /// Removes the folder name in the held root, with all it holds.
-    fn remove_tree(&self, name: &str) -> Result<(), Error> {
+    /// Removes the folder at name in the held root, with all it holds, when it is the folder of
+    /// identity id: opened at its name and checked, then removed through that handle (cap-std's
+    /// `remove_open_dir_all`: on Linux and macOS what it holds through the handle and the folder
+    /// itself where its parent lists that identity; on Windows by the path the handle has at that
+    /// moment). Another folder there is left as it is.
+    fn remove_tree(&self, name: &str, id: Id) -> Result<(), Error> {
         let at = self.path(name);
-        self.dir
-            .remove_dir_all(name)
+        let d = self
+            .open_folder(name, id)?
+            .ok_or_else(|| other_there(&at))?;
+        d.remove_open_dir_all()
             .map_err(|e| io(&format!("removing {}", at.display()), e))
     }
 
-    /// Writes files (by `/`-separated path inside the folder) into the new folder new in the held
-    /// root: on Linux and macOS folders 0755 and files 0644 (less the umask), on Windows each takes
-    /// its folder's access list. The new folder's identity.
-    fn write_new(&self, new: &str, files: &[(&str, &[u8])]) -> Result<Id, Error> {
+    /// Makes the new copy's folder new in the held root, empty (on Linux and macOS 0755, less the
+    /// umask; on Windows it takes its folder's access list): its identity.
+    fn make_new(&self, new: &str) -> Result<Id, Error> {
         let at = self.path(new);
-        let fail = |e| io(&format!("writing {}", at.display()), e);
+        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut builder = cap_std::fs::DirBuilder::new();
         #[cfg(unix)]
         {
             use cap_std::fs::DirBuilderExt;
             builder.mode(0o755);
         }
-        self.dir.create_dir_with(new, &builder).map_err(fail)?;
+        self.dir
+            .create_dir_with(new, &builder)
+            .map_err(|e| io(&format!("writing {}", at.display()), e))?;
+        match entry(&self.dir, new)? {
+            Some((true, id)) => Ok(id),
+            _ => Err(changed(&at, "it was replaced while it was made")),
+        }
+    }
+
+    /// Writes files (by `/`-separated path inside the folder) into the new copy's folder new, of
+    /// identity id, through a handle opened at it and checked: on Linux and macOS folders 0755 and
+    /// files 0644 (less the umask), on Windows each takes its folder's access list. The marker's
+    /// identity, once read back with SHA-256 sha.
+    fn fill_new(&self, new: &str, id: Id, files: &[(&str, &[u8])], sha: &str) -> Result<Id, Error> {
+        let at = self.path(new);
+        let fail = |e| io(&format!("writing {}", at.display()), e);
         let made = || changed(&at, "it was replaced while it was made");
-        let id = match entry(&self.dir, new)? {
-            Some((true, id)) => id,
-            _ => return Err(made()),
-        };
         let d = self.open_folder(new, id)?.ok_or_else(made)?;
+        let mut builder = cap_std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use cap_std::fs::DirBuilderExt;
+            builder.mode(0o755);
+        }
         builder.recursive(true);
         let mut folders: Vec<PathBuf> = Vec::new();
         for (name, bytes) in files {
@@ -380,12 +399,15 @@ impl Folder {
                 .map_err(fail)?;
         }
         sync_dir(&d).map_err(fail)?;
-        Ok(id)
+        match read_marker(&d, &self.marker)? {
+            Some((marker, bytes)) if sha256(&bytes) == sha => Ok(marker),
+            _ => Err(made()),
+        }
     }
 
     /// The journal's intent for op, with the hidden names it uses: aside for the folder moved
-    /// aside, and for a put the new copy's name and its marker's SHA-256.
-    fn intent(&self, op: &str, set: &str, aside: &str, new: Option<(&str, &str)>) -> Value {
+    /// aside, and for a put the new copy's name and its folder's identity.
+    fn intent(&self, op: &str, set: &str, aside: &str, new: Option<(&str, Id)>) -> Value {
         json!({"kind": KIND, "op": op, "set": set, "folder": {
             "root": self.root,
             "root_id": self.root_id.to_json(),
@@ -394,7 +416,7 @@ impl Folder {
             "old": self.old.as_ref().map(Owned::to_json),
             "aside": aside,
             "new": new.map(|n| n.0),
-            "marker_sha256": new.map(|n| n.1),
+            "new_id": new.map(|n| n.1.to_json()),
         }})
     }
 }
@@ -456,13 +478,21 @@ fn stopped(step: Step) -> Error {
 }
 
 impl Transactions<'_> {
-    /// Puts a copy of files (by `/`-separated path, the marker among them) in folder's place: a new
-    /// folder written beside it, then, for a pinned folder, the old one moved aside and checked to
-    /// be the folder pinned (else put back and refused), the new one renamed in and the old one
-    /// removed; for an empty place, the new one renamed in where nothing is. Under a journal of
-    /// set, which the next start reconciles after a stop. When the new copy is in place but the old
-    /// one cannot be removed, the error says so and where it is, and the next start removes it.
-    pub fn put_folder(&self, set: &str, f: &Folder, files: &[(&str, &[u8])]) -> Result<(), Error> {
+    /// Puts a copy of files (by `/`-separated path, the marker among them) in folder's place: the
+    /// new copy's folder made beside it (its identity in the journal) and written, then, for a
+    /// pinned folder, the old one moved aside and checked to be the folder pinned (else put back and
+    /// refused), the new one renamed in where nothing is, checked to be the folder under the name
+    /// now, and the old one removed once checked again (its identity, and its marker's identity and
+    /// bytes). Under a journal of set, which the next start reconciles after a stop. What it cannot
+    /// settle (the new copy or the old one left beside the folder) is named in the error, and the
+    /// journal stays open for the next start. The copy put, pinned in the root held open, as
+    /// [`Folder::pinned`] pins a folder (so a caller can remove that very copy again).
+    pub fn put_folder(
+        &self,
+        set: &str,
+        f: &Folder,
+        files: &[(&str, &[u8])],
+    ) -> Result<Folder, Error> {
         check_set(set)?;
         let marker_sha = files
             .iter()
@@ -473,24 +503,44 @@ impl Transactions<'_> {
         let aside = format!(".{}.pluxy-{hex}.old", f.name);
         let new = format!(".{}.pluxy-{hex}.new", f.name);
         f.check_place()?;
-        let journal = self.begin_folder(f.intent(PUT, set, &aside, Some((&new, &marker_sha))))?;
-        let new_id = match f.write_new(&new, files) {
-            Ok(id) => id,
+        // The new copy's folder made first, empty, so the journal names its identity.
+        let new_id = f.make_new(&new)?;
+        let journal = match self.begin_folder(f.intent(PUT, set, &aside, Some((&new, new_id)))) {
+            Ok(j) => j,
             Err(e) => {
-                let _ = f.remove_tree(&new);
-                self.end_folder(&journal, ROLLED_BACK);
-                return Err(e);
+                return Err(match f.remove_tree(&new, new_id) {
+                    Ok(()) => e,
+                    Err(c) => Error::new(
+                        &e.code,
+                        format!(
+                            "{}; the empty folder made for the new copy, {}, could not be removed ({})",
+                            e.message,
+                            f.path(&new).display(),
+                            c.message
+                        ),
+                    ),
+                });
             }
+        };
+        let new_marker = match f.fill_new(&new, new_id, files, &marker_sha) {
+            Ok(m) => m,
+            Err(e) => return Err(self.undo_put(&journal, f, &new, new_id, None, e)),
         };
         if stop(Step::Written) {
             return Err(stopped(Step::Written));
         }
         if f.old.is_some() {
             if let Err(m) = self.move_aside(f, &aside) {
-                if !matches!(m, Moved::Stopped(_)) {
-                    let _ = f.remove_tree(&new);
-                }
-                return Err(self.after_move(&journal, m));
+                return Err(match m {
+                    Moved::Stopped(e) => e,
+                    // What moved went back: the new copy goes too, and the journal ends.
+                    Moved::Back(e) => self.undo_put(&journal, f, &new, new_id, None, e),
+                    // What moved stays aside, the journal open: the new copy goes if it can.
+                    Moved::Stuck(e) => match clean_new(f, &new, new_id) {
+                        Ok(()) => e,
+                        Err(c) => Error::new(&e.code, format!("{}; {}", e.message, c.message)),
+                    },
+                });
             }
         } else if stop(Step::Checked) {
             return Err(stopped(Step::Checked));
@@ -504,34 +554,51 @@ impl Transactions<'_> {
             Err(e) => Err(e),
         };
         if let Err(e) = placed {
-            let _ = f.remove_tree(&new);
-            if f.old.is_none() {
-                self.end_folder(&journal, ROLLED_BACK);
-                return Err(e);
-            }
-            return Err(match f.put_back(&aside) {
-                Ok(()) => {
-                    self.end_folder(&journal, ROLLED_BACK);
-                    e
-                }
-                Err(b) => stuck(f, &aside, &e, &b),
-            });
+            let aside = f.old.as_ref().map(|_| aside.as_str());
+            return Err(self.undo_put(&journal, f, &new, new_id, aside, e));
         }
         let _ = sync_dir(&f.dir);
         if stop(Step::Placed) {
             return Err(stopped(Step::Placed));
         }
+        // The folder under the name now must be the new copy before the old one goes.
+        let at = f.path(&f.name);
+        if f.open_folder(&f.name, new_id)?.is_none() {
+            let e = changed(
+                &at,
+                "another folder was put under its name after the new copy was renamed in; it is left as it is",
+            );
+            if f.old.is_none() {
+                // Nothing of the operation's is left hidden.
+                self.end_folder(&journal, ROLLED_BACK);
+                return Err(e);
+            }
+            return Err(Error::new(
+                &e.code,
+                format!(
+                    "{}; the old copy stays at {}, and the tool's next start puts it back once nothing is under {}, or else names it in its report",
+                    e.message,
+                    f.path(&aside).display(),
+                    at.display()
+                ),
+            ));
+        }
         if let Some(old) = &f.old {
-            let gone = match f.id_at(&aside) {
-                Some(id) if id == old.folder => f.remove_tree(&aside),
-                None => Ok(()),
-                Some(_) => Err(changed(&f.path(&aside), "another folder is there now")),
+            // The old copy checked again at the latest point: its identity, and its marker's
+            // identity and bytes, as pinned.
+            let gone = match f.holds_old(&aside) {
+                Ok(true) => f.remove_tree(&aside, old.folder),
+                Ok(false) => Err(changed(
+                    &f.path(&aside),
+                    "it is not the old copy pinned now; it is left as it is",
+                )),
+                Err(e) => Err(e),
             };
             if let Err(e) = gone {
-                // The new copy is in place; the old one waits for the next start, which removes
-                // it: the journal stays open.
+                // The new copy is in place; the journal stays open, so the next start removes the
+                // old copy if it is still the one pinned, or names what is there in its report.
                 return Err(Error::unavailable(format!(
-                    "the new {} is in place, but its old copy, moved aside to {}, could not be removed ({}); the tool's next start removes it",
+                    "the new {} is in place, but its old copy, moved aside to {}, was not removed ({}); the tool's next start removes it if it is still the old copy pinned, or else names it in its report",
                     f.name,
                     f.path(&aside).display(),
                     e.message
@@ -539,14 +606,62 @@ impl Transactions<'_> {
             }
             let _ = sync_dir(&f.dir);
         }
+        let dir = f
+            .dir
+            .try_clone()
+            .map_err(|e| io(&f.root.display().to_string(), e))?;
         self.commit_folder(&journal);
-        Ok(())
+        Ok(Folder {
+            dir,
+            root: f.root.clone(),
+            root_id: f.root_id,
+            name: f.name.clone(),
+            marker: f.marker.clone(),
+            old: Some(Owned {
+                folder: new_id,
+                marker: new_marker,
+                sha256: marker_sha,
+            }),
+        })
+    }
+
+    /// Undoes a put that failed with e before its new copy was in place: the new copy removed while
+    /// it is still the one made, and what was moved to aside (when given) put back while it is
+    /// still the folder pinned. The journal ends rolled back when both are settled; otherwise it
+    /// stays open, and the error says what is left where.
+    fn undo_put(
+        &self,
+        journal: &Value,
+        f: &Folder,
+        new: &str,
+        new_id: Id,
+        aside: Option<&str>,
+        e: Error,
+    ) -> Error {
+        let cleaned = clean_new(f, new, new_id);
+        let back = match (aside, &f.old) {
+            (Some(a), Some(old)) => f.put_back(a, old.folder).map_err(|b| (a, b)),
+            _ => Ok(()),
+        };
+        let mut message = e.message.clone();
+        if let Err(c) = &cleaned {
+            message = format!("{message}; {}", c.message);
+        }
+        if let Err((a, b)) = &back {
+            message = stuck(f, a, &Error::new(&e.code, message), b).message;
+        }
+        if cleaned.is_ok() && back.is_ok() {
+            self.end_folder(journal, ROLLED_BACK);
+            return e;
+        }
+        Error::new(&e.code, message)
     }
 
     /// Removes the pinned folder: moved aside and checked to be the folder pinned (else put back
-    /// and refused), its marker removed (from then on the next start finishes a removal a stop
-    /// cut short, never puts it back), then the rest. Under a journal of set. When the rest cannot
-    /// be removed, the error says so and where it is, and the next start removes it.
+    /// and refused), its marker removed once checked again (its identity and bytes; from then on
+    /// the next start finishes a removal a stop cut short, never puts it back), then the rest while
+    /// it is still that folder. Under a journal of set. When the rest is not removed, the error says
+    /// so and where it is, and the journal stays open for the next start.
     pub fn remove_folder(&self, set: &str, f: &Folder) -> Result<(), Error> {
         check_set(set)?;
         let old = f
@@ -560,17 +675,19 @@ impl Transactions<'_> {
             return Err(self.after_move(&journal, m));
         }
         let _ = sync_dir(&f.dir);
-        let unmarked = f.open_folder(&aside, old.folder).and_then(|d| match d {
-            Some(d) => d.remove_file(&f.marker).map_err(|e| {
-                io(
-                    &format!("removing {}'s marker", f.path(&aside).display()),
-                    e,
-                )
-            }),
-            None => Err(changed(&f.path(&aside), "another folder is there now")),
+        let at = f.path(&aside);
+        // The marker checked again just before it goes: the pinned one, in the folder pinned.
+        let unmarked = f.open_folder(&aside, old.folder).and_then(|d| {
+            let d = d.ok_or_else(|| other_there(&at))?;
+            match read_marker(&d, &f.marker)? {
+                Some((id, bytes)) if id == old.marker && sha256(&bytes) == old.sha256 => {}
+                _ => return Err(changed(&at, "its marker changed")),
+            }
+            d.remove_file(&f.marker)
+                .map_err(|e| io(&format!("removing {}'s marker", at.display()), e))
         });
         if let Err(e) = unmarked {
-            return Err(match f.put_back(&aside) {
+            return Err(match f.put_back(&aside, old.folder) {
                 Ok(()) => {
                     self.end_folder(&journal, ROLLED_BACK);
                     e
@@ -582,11 +699,11 @@ impl Transactions<'_> {
         if stop(Step::Unmarked) {
             return Err(stopped(Step::Unmarked));
         }
-        if let Err(e) = f.remove_tree(&aside) {
+        if let Err(e) = f.remove_tree(&aside, old.folder) {
             return Err(Error::unavailable(format!(
-                "{} is no longer in use (its marker is gone), but its files, moved aside to {}, could not all be removed ({}); the tool's next start removes them",
+                "{} is no longer in use (its marker is gone), but its files, moved aside to {}, were not removed ({}); the tool's next start removes them if they are still that folder, or else names it in its report",
                 f.path(&f.name).display(),
-                f.path(&aside).display(),
+                at.display(),
                 e.message
             )));
         }
@@ -597,7 +714,7 @@ impl Transactions<'_> {
 
     /// Moves the pinned folder aside, to aside, and checks that what moved is the folder pinned:
     /// its identity, and its marker's identity and bytes. Another folder moved goes back under the
-    /// name.
+    /// name, while aside still holds what moved (its identity as read just after the move).
     fn move_aside(&self, f: &Folder, aside: &str) -> Result<(), Moved> {
         let old = f.old.as_ref().expect("a pinned folder");
         if stop(Step::Checked) {
@@ -605,14 +722,22 @@ impl Transactions<'_> {
         }
         f.rename(&f.name, aside, Some(old.folder))
             .map_err(Moved::Back)?;
+        let moved = f.id_at(aside);
         if stop(Step::Moved) {
             return Err(Moved::Stopped(stopped(Step::Moved)));
         }
-        if f.holds_old(aside).unwrap_or(false) {
+        if moved == Some(old.folder) && f.holds_old(aside).unwrap_or(false) {
             return Ok(());
         }
         let at = f.path(&f.name);
-        match f.put_back(aside) {
+        let back = match moved {
+            Some(id) => f.put_back(aside, id),
+            None => Err(Error::unavailable(format!(
+                "nothing is at {} now",
+                f.path(aside).display()
+            ))),
+        };
+        match back {
             Ok(()) => Err(Moved::Back(changed(
                 &at,
                 "another folder, or another copy, was there when it was moved; it is left as it was",
@@ -665,12 +790,15 @@ impl Transactions<'_> {
     }
 
     /// Reconciles a folder journal from what is in its root now (the root opened by the path and
-    /// identity it had): a copy put in place is committed and the old copy it moved aside removed;
-    /// a removal that had removed the marker is committed and finished; anything else is rolled
-    /// back, the new copy it wrote removed and what it moved aside put back under its name. What
-    /// cannot be put back or removed (something else under the name, the root gone) is left where
-    /// it is and named in the report's conflicts; the journal is ended all the same, so the tool
-    /// still starts. The outcome, and the paths restored and left.
+    /// identity it had), each hidden copy known by the identity the journal recorded: a put whose
+    /// new copy (by its identity) is under the name is committed and the old copy aside removed
+    /// while it is still the copy pinned (its identity, its marker's identity and bytes); a removal
+    /// whose folder aside (by its identity) has no marker is committed and finished; anything else
+    /// is rolled back: the new copy removed and the folder moved aside put back under its name.
+    /// Every leftover it does not settle (a hidden copy that cannot be removed or put back, because
+    /// something else is under the name, another folder at a hidden name, the root gone or
+    /// replaced) is left where it is and named in the report's conflicts; the journal is ended all
+    /// the same, so the tool still starts. The outcome, and the paths restored and left.
     pub(crate) fn reconcile_folder(
         &self,
         intent: &Value,
@@ -687,7 +815,12 @@ impl Transactions<'_> {
             .ok_or_else(|| Error::internal("a folder journal without root_id"))?;
         let (name, marker, aside) = (s("name")?, s("marker")?, s("aside")?);
         let new = fo["new"].as_str().map(String::from);
-        let marker_sha = fo["marker_sha256"].as_str().map(String::from);
+        let new_id = Id::from_json(&fo["new_id"])?;
+        if new.is_some() != new_id.is_some() {
+            return Err(Error::internal(
+                "a folder journal names a new copy without its identity",
+            ));
+        }
         for n in [&name, &marker, &aside].into_iter().chain(new.as_ref()) {
             plain(n)?;
         }
@@ -701,9 +834,10 @@ impl Transactions<'_> {
             }
         });
         let Ok(dir) = opened else {
-            // The root is gone or another folder now: nothing is touched, and what was moved
-            // aside, if anything, stays where it is.
-            return Ok((ROLLED_BACK, Vec::new(), vec![at(&aside)]));
+            // The root is gone or another folder now: nothing is touched, and the hidden copies,
+            // if any, stay where they are.
+            let left = std::iter::once(&aside).chain(new.as_ref());
+            return Ok((ROLLED_BACK, Vec::new(), left.map(|n| at(n)).collect()));
         };
         let f = Folder {
             dir,
@@ -714,33 +848,45 @@ impl Transactions<'_> {
             old,
         };
         let (mut restored, mut conflicts) = (Vec::new(), Vec::new());
-        let back = |restored: &mut Vec<Value>, conflicts: &mut Vec<Value>| {
-            if f.id_at(&aside).is_some() {
-                match f.put_back(&aside) {
-                    Ok(()) => restored.push(at(&f.name)),
-                    Err(_) => conflicts.push(at(&aside)),
+        let old_id = f.old.as_ref().map(|o| o.folder);
+        // The folder moved aside put back under the name while it is still the one moved.
+        let back = |restored: &mut Vec<Value>, conflicts: &mut Vec<Value>| match f.id_at(&aside) {
+            None => {}
+            Some(id) if Some(id) == old_id => match f.put_back(&aside, id) {
+                Ok(()) => restored.push(at(&f.name)),
+                Err(_) => conflicts.push(at(&aside)),
+            },
+            Some(_) => conflicts.push(at(&aside)),
+        };
+        let outcome = if intent["op"] == PUT {
+            let placed = new_id.is_some() && f.id_at(&f.name) == new_id;
+            if let (Some(n), Some(id)) = (&new, new_id) {
+                // The new copy's hidden name: removed while it holds the new copy (a put not in
+                // place), else whatever is there is another folder's.
+                match f.id_at(n) {
+                    None => {}
+                    Some(now) if now == id && !placed => {
+                        if f.remove_tree(n, id).is_err() {
+                            conflicts.push(at(n));
+                        }
+                    }
+                    Some(_) => conflicts.push(at(n)),
                 }
             }
-        };
-        let old_id = f.old.as_ref().map(|o| o.folder);
-        let outcome = if intent["op"] == PUT {
-            let new_gone = new.as_ref().is_none_or(|n| f.id_at(n).is_none());
-            let placed = new_gone
-                && marker_sha
-                    .as_ref()
-                    .is_some_and(|sha| f.holds_copy(&f.name, sha))
-                && (old_id.is_none() || f.id_at(&f.name) != old_id);
             if placed {
-                if old_id.is_some() && f.id_at(&aside) == old_id && f.remove_tree(&aside).is_err() {
-                    conflicts.push(at(&aside));
+                if let Some(old_id) = old_id {
+                    match f.id_at(&aside) {
+                        None => {}
+                        Some(_) if f.holds_old(&aside).unwrap_or(false) => {
+                            if f.remove_tree(&aside, old_id).is_err() {
+                                conflicts.push(at(&aside));
+                            }
+                        }
+                        Some(_) => conflicts.push(at(&aside)),
+                    }
                 }
                 COMMITTED
             } else {
-                if let Some(n) = &new {
-                    if f.id_at(n).is_some() && f.remove_tree(n).is_err() {
-                        conflicts.push(at(n));
-                    }
-                }
                 back(&mut restored, &mut conflicts);
                 ROLLED_BACK
             }
@@ -753,7 +899,7 @@ impl Transactions<'_> {
                         .flatten()
                         .is_some_and(|d| matches!(read_marker(&d, &f.marker), Ok(None)));
                     if unmarked {
-                        if f.remove_tree(&aside).is_err() {
+                        if f.remove_tree(&aside, id).is_err() {
                             conflicts.push(at(&aside));
                         }
                         COMMITTED
@@ -762,8 +908,10 @@ impl Transactions<'_> {
                         ROLLED_BACK
                     }
                 }
+                // Another folder at the hidden name: left as it is; the folder moved is not
+                // there, so nothing of the removal is known to be done.
                 Some(_) => {
-                    back(&mut restored, &mut conflicts);
+                    conflicts.push(at(&aside));
                     ROLLED_BACK
                 }
                 None if old_id.is_some() && f.id_at(&f.name) == old_id => ROLLED_BACK,
@@ -775,16 +923,42 @@ impl Transactions<'_> {
     }
 }
 
-/// The error for what was moved aside and could not go back: where it is now.
+/// Removes the new copy at new while it is still the folder of identity new_id; nothing there is
+/// settled too. Its error says what is left where and what the next start does.
+fn clean_new(f: &Folder, new: &str, new_id: Id) -> Result<(), Error> {
+    if f.id_at(new).is_none() {
+        return Ok(());
+    }
+    f.remove_tree(new, new_id).map_err(|c| {
+        Error::unavailable(format!(
+            "the new copy written at {} was not removed ({}); the tool's next start removes it if it is still that copy, or else names it in its report",
+            f.path(new).display(),
+            c.message
+        ))
+    })
+}
+
+/// The error for a hidden name that holds another folder than the one the operation made or
+/// moved: it is left as it is.
+fn other_there(at: &Path) -> Error {
+    Error::invalid_request(format!(
+        "{} is not the folder this operation made or moved (another folder is there now); it is left as it is",
+        at.display()
+    ))
+}
+
+/// The error for what was moved aside and could not go back: where it was moved, and what the next
+/// start does with it.
 fn stuck(f: &Folder, aside: &str, e: &Error, back: &Error) -> Error {
     Error::new(
         &e.code,
         format!(
-            "{}; what was moved aside could not be put back under {} ({}): it is at {}, and the tool's next start puts it back",
+            "{}; what was moved aside could not be put back under {} ({}): it was moved to {}, and the tool's next start puts it back once nothing is under {} and it is still the folder moved, or else names it in its report",
             e.message,
             f.path(&f.name).display(),
             back.message,
-            f.path(aside).display()
+            f.path(aside).display(),
+            f.path(&f.name).display()
         ),
     )
 }
