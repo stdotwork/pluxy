@@ -1,0 +1,56 @@
+{
+  "description": "The upstream answers 200 with a body that is not JSON.",
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {"model":"gpt-test","messages":[{"role":"user","content":"Say hello"}]}
+  },
+  "upstream": [{"headers":{"Content-Type":"application/json"},"body_text":"{not json"}],
+  "exceptions": [
+    {
+      "path": "client.status",
+      "kind": "gap",
+      "reason": "The old core passes a non-JSON 200 body to the client unchanged with status 200; the new core fails the request with 502 and an upstream error saying the response is malformed. Whether to pass such bodies through is not decided.",
+      "want": 502
+    },
+    {
+      "path": "client.body",
+      "kind": "gap",
+      "reason": "The old core passes a non-JSON 200 body to the client unchanged with status 200; the new core fails the request with 502 and an upstream error saying the response is malformed. Whether to pass such bodies through is not decided.",
+      "want": {
+        "error": {
+          "code": "upstream",
+          "message": "upstream sent a malformed response",
+          "type": "server_error",
+          "pluxy": "(volatile)"
+        }
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": "{not json",
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {"messages":[{"content":"Say hello","role":"user"}],"model":"gpt-test"},
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  }
+}

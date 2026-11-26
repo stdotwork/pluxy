@@ -1,0 +1,477 @@
+package host
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"net/url"
+	"slices"
+	"strings"
+	"sync"
+	"unicode"
+
+	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/protocol"
+)
+
+// Login starts a login call for account (its ID and settings; any credential is left out).
+// The call is cancelled when ctx ends or the call is closed.
+func (e *Extension) Login(ctx context.Context, account protocol.Account, login protocol.Login) *LoginCall {
+	account.Credential = nil
+	// What the user entered (an API key, a pasted redirect URL with its code) and the secrets in
+	// the account's settings count as secret in everything the call sends back, but for a typed
+	// plain address (wholeSecrets), of which only its user info counts.
+	l := &LoginCall{ext: e, ctx: ctx, account: account.ID, settings: e.holdSettings(account), secretInputs: map[string]bool{}}
+	for _, m := range e.info.LoginMethods {
+		if m.Method == login.Method {
+			l.markSecret(m.Inputs)
+		}
+	}
+	l.addSecrets(login.Input)
+	proxy, perr := e.outbound(&account, nil)
+	if perr != nil {
+		l.fail(perr)
+		return l
+	}
+	if proxy != nil {
+		l.addForms(outboundSecrets(proxy))
+	}
+	l.pieces = l.pieces.add(e.accountPieces(account))
+	conn, lerr := e.dial(ctx)
+	if lerr != nil {
+		l.fail(lerr)
+		return l
+	}
+	l.conn = conn
+	l.stop = context.AfterFunc(ctx, func() { conn.Close() })
+	// The extension's output waits until the grant, which may be written in it, is recorded.
+	l.release = e.out.hold()
+	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: protocol.OpLogin, Account: &account, Login: &login}
+	if err := protocol.WriteFrame(conn, call); err != nil {
+		l.fail(l.readError(err))
+	}
+	return l
+}
+
+// LoginCall is a running login. Next returns its prompts and then exactly one terminal frame
+// (login.done or error), which it keeps returning.
+type LoginCall struct {
+	ext     *Extension
+	ctx     context.Context
+	account string
+	conn    net.Conn
+	stop    func() bool
+
+	wmu      sync.Mutex // guards writes, secrets and redact
+	secrets  map[string]string
+	settings *protocol.Credential // the secrets in the account's settings
+	redact   *protocol.Redactor
+	final    *protocol.Reply
+	onClose  func() // ends the call on its managed generation; safe to call more than once
+	release  func() // logs the extension's output held while the call ran; safe to call more than once
+
+	// pieces are the secrets whose pieces are removed from the login's error (see pieces): the
+	// account's, and those of the inputs the login marks secret, by name in secretInputs. wmu
+	// guards both.
+	pieces       pieces
+	secretInputs map[string]bool
+
+	// Close may run on another goroutine while Next runs. Next may then have read a grant it has
+	// not recorded yet, so the output is released only once no Next runs (release).
+	rmu     sync.Mutex
+	reading bool // Next runs
+	closed  bool // Close ran
+}
+
+// endRelease releases the output held while the call ran, once the call is closed and no Next
+// runs.
+func (l *LoginCall) endRelease(closing bool) {
+	l.rmu.Lock()
+	if closing {
+		l.closed = true
+	} else {
+		l.reading = false
+	}
+	ready := l.closed && !l.reading
+	l.rmu.Unlock()
+	if ready && l.release != nil {
+		l.release()
+	}
+}
+
+// markSecret records which of inputs the login marks secret, for their pieces (addSecrets).
+func (l *LoginCall) markSecret(inputs []protocol.LoginInput) {
+	for _, in := range inputs {
+		if in.Secret {
+			l.secretInputs[in.Name] = true
+		}
+	}
+}
+
+// addSecrets adds what the user entered to what is removed from the frames the call returns,
+// and to the pieces removed from its error: each value of an input the login marks secret, by the
+// rules for a credential's, or for one that is a JSON object (a service account's key file), its
+// secrets by the rules for an account's settings, as its field names and plain values (a
+// project ID, a token endpoint) are no secret; and of any other value that is a URL (a pasted
+// redirect URL), its user name, password and secret query or fragment values
+// (protocol.AccountSecretsWith).
+func (l *LoginCall) addSecrets(input map[string]string) {
+	l.add(input, true)
+}
+
+// addForms is addSecrets for the forms of the account's proxy and secret headers, which count
+// whole whatever they hold, a plain address too: a proxy password can be one.
+func (l *LoginCall) addForms(forms map[string]string) {
+	l.add(forms, false)
+}
+
+// add records the values of input for removal; with typed set they are what a person typed, of
+// which a plain address counts by its user info only (wholeSecrets).
+func (l *LoginCall) add(input map[string]string, typed bool) {
+	// pieces.add rebuilds a set of every secret on each call: collect, then add once.
+	var found pieces
+	for k, v := range input {
+		var obj map[string]json.RawMessage
+		switch {
+		case l.secretInputs[k] && json.Unmarshal([]byte(v), &obj) == nil:
+			found = append(found, l.ext.accountPieces(protocol.Account{Settings: json.RawMessage(v)})...)
+		case l.secretInputs[k]:
+			found = append(found, protocol.AccountSecrets(protocol.Account{Credential: &protocol.Credential{APIKey: v}})...)
+		default:
+			found = append(found, protocol.AccountSecretsWith(protocol.Account{}, urlOnly(v))...)
+		}
+	}
+	l.pieces = l.pieces.add(found)
+	for k, v := range input {
+		if l.secrets == nil {
+			l.secrets = map[string]string{}
+		}
+		whole := []string{v}
+		if typed {
+			whole = wholeSecrets(v, l.secretInputs[k])
+		}
+		for _, s := range whole {
+			l.secrets[fmt.Sprintf("%s.%d", k, len(l.secrets))] = s
+		}
+	}
+	l.redact = protocol.NewRedactor(inputCredential(l.secrets), l.settings)
+	l.ext.held.add(l.account+" login input", inputCredential(l.secrets))
+}
+
+func (l *LoginCall) redactor() *protocol.Redactor {
+	l.wmu.Lock()
+	defer l.wmu.Unlock()
+	return l.redact
+}
+
+// errorPieces returns the pieces removed from the login's error.
+func (l *LoginCall) errorPieces() pieces {
+	l.wmu.Lock()
+	defer l.wmu.Unlock()
+	return slices.Clone(l.pieces)
+}
+
+// pathChars are the characters of a plain address's host and path (wholeSecrets).
+const pathChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~/"
+
+// minBareName is the shortest user name that counts on its own, as the proxy's rule has it
+// (proxyurl's minBare): a shorter one would remove its letters from every word of an error. Its
+// "user:password" form and the password always count.
+const minBareName = 8
+
+// wholeSecrets returns what of a login input v the call's redactor removes whole. It is v itself,
+// but for an input the login does not mark secret that is a plain address: an absolute http or
+// https URL with no query or fragment, whose host holds only letters, digits and "-.:[]" and whose
+// path only the characters of pathChars (so no "@", ";", "%", "," or a second address that Go reads
+// as part of the path or host, which would hide a password), such as a base URL a person typed, whose
+// words are no secret and which an error should quote. Of such an address only its user info
+// counts: as written, and its password, its user name from minBareName bytes, and "user:password".
+// The path and host show, as an account's saved base URL does. Anything else keeps the whole
+// value secret, a query or fragment included, which can hold a secret under any name (an OAuth
+// redirect's code).
+func wholeSecrets(v string, secret bool) []string {
+	if secret {
+		return []string{v}
+	}
+	t := strings.TrimSpace(v)
+	u, err := url.Parse(t)
+	if err != nil || u.Host == "" || u.Opaque != "" || u.Scheme != "http" && u.Scheme != "https" ||
+		strings.ContainsAny(t, "?#") || strings.IndexFunc(t, unicode.IsSpace) >= 0 ||
+		strings.Trim(u.EscapedPath(), pathChars) != "" ||
+		strings.Trim(u.Host, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-.:[]") != "" {
+		return []string{v}
+	}
+	if u.User == nil {
+		return nil
+	}
+	// With the host and path as above, the user info is what stands before the last "@" of the
+	// authority, as written.
+	authority := t[strings.Index(t, "://")+3:]
+	authority, _, _ = strings.Cut(authority, "/")
+	name, p, hasPassword := u.User.Username(), "", false
+	if p, hasPassword = u.User.Password(); p == "" {
+		hasPassword = false
+	}
+	forms := []string{authority[:strings.LastIndexByte(authority, '@')], u.User.String(), name}
+	var out []string
+	for _, f := range forms {
+		// With a password the user info as written counts whatever its length; a user name alone, or
+		// with an empty password, counts only from minBareName bytes, as written or decoded.
+		if len(f) >= minBareName || hasPassword && f != name {
+			out = append(out, f)
+		}
+	}
+	if hasPassword {
+		out = append(out, p, name+":"+p)
+	}
+	return out
+}
+
+// urlOnly returns s alone when it is an absolute URL, and nothing otherwise.
+func urlOnly(s string) []string {
+	if u, err := url.Parse(strings.TrimSpace(s)); err == nil && u.Host != "" && strings.Contains(s, "://") {
+		return []string{s}
+	}
+	return nil
+}
+
+// Next returns the next frame: a login.prompt, or the terminal login.done or error.
+func (l *LoginCall) Next() protocol.Reply {
+	l.rmu.Lock()
+	l.reading = true
+	l.rmu.Unlock()
+	defer l.endRelease(false)
+	if l.final != nil {
+		return *l.final
+	}
+	var r protocol.Reply
+	if err := protocol.ReadFrame(l.conn, &r); err != nil {
+		l.fail(l.readError(err))
+		return *l.final
+	}
+	switch {
+	case r.Type == protocol.TypeLoginPrompt && r.Prompt != nil:
+		l.wmu.Lock()
+		l.markSecret(r.Prompt.Inputs)
+		l.wmu.Unlock()
+		p := redactPrompt(l.redactor(), *r.Prompt)
+		return protocol.Reply{Event: llm.Event{Type: protocol.TypeLoginPrompt}, Prompt: &p}
+	case r.Type == protocol.TypeLoginDone && validGrant(r.Grant):
+		l.ext.held.add(l.account, r.Grant.Credential)
+		// What the user entered, the account's settings secrets and the grant's own credential
+		// are left out of a field name the error quotes.
+		grant := protocol.NewRedactor(r.Grant.Credential)
+		redact := func(s string) string { return l.redactor().String(grant.String(s)) }
+		if err := validIdentity(r.Grant.Identity, redact); err != "" {
+			l.fail(&llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent a grant whose identity %s", l.ext.manifest.ID, err)})
+			return *l.final
+		}
+		if err := validGrantSettings(r.Grant.Settings); err != "" {
+			l.fail(&llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent a grant whose settings %s", l.ext.manifest.ID, err)})
+			return *l.final
+		}
+		if bytes.Equal(bytes.TrimSpace(r.Grant.Settings), []byte("null")) {
+			r.Grant.Settings = nil
+		}
+		// Identity is kept as it is, even a value the credential also holds (an account ID in
+		// its data): core stores it beside the credential and compares it, and never shows it.
+		done := protocol.Reply{Event: llm.Event{Type: protocol.TypeLoginDone}, Grant: r.Grant}
+		l.final = &done
+		l.Close()
+		return done
+	case r.Type == llm.EventError && r.Error != nil:
+		ev := l.ext.normalizeEvent(l.errorPieces().event(l.redactor().Event(r.Event)))
+		l.final = &protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: ev.Error}}
+		l.Close()
+		return *l.final
+	}
+	l.fail(&llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent %q during a login", l.ext.manifest.ID, l.redactor().String(r.Type))})
+	return *l.final
+}
+
+// Send passes what the user entered to the login. Input to a login that has ended — its
+// connection closed when it finished, or never opened — is reported as a closed connection
+// (net.ErrClosed), which the credential manager answers as input to a login that has finished.
+func (l *LoginCall) Send(input map[string]string) error {
+	l.wmu.Lock()
+	defer l.wmu.Unlock()
+	if l.conn == nil {
+		return fmt.Errorf("the login is not running: %w", net.ErrClosed)
+	}
+	l.addSecrets(input)
+	err := protocol.WriteFrame(l.conn, protocol.Call{Type: protocol.TypeLoginInput, Input: input})
+	if errors.Is(err, net.ErrClosed) {
+		return fmt.Errorf("the login has ended: %w", err)
+	}
+	return err
+}
+
+// Close ends the login; if it had not finished, the extension sees it cancelled.
+func (l *LoginCall) Close() {
+	if l.onClose != nil {
+		defer l.onClose()
+	}
+	if l.stop != nil {
+		l.stop()
+	}
+	if l.conn != nil {
+		l.conn.Close()
+	}
+	l.endRelease(true)
+}
+
+func (l *LoginCall) fail(e *llm.Error) {
+	l.final = &protocol.Reply{Event: llm.Event{Type: llm.EventError, Error: e}}
+	l.Close()
+}
+
+func (l *LoginCall) readError(err error) *llm.Error {
+	return callError(l.ctx, l.ext, l.redactor(), err)
+}
+
+// Refresh runs a refresh call: the extension renews account's credential and returns the new
+// one. Errors have the sent credential and the secrets in the account's settings removed from
+// them.
+func (e *Extension) Refresh(ctx context.Context, account protocol.Account) (*protocol.Credential, *llm.Error) {
+	proxy, perr := e.outbound(&account, nil)
+	if perr != nil {
+		return nil, perr
+	}
+	redact := protocol.NewRedactor(append(e.holdAccount(account), proxy)...)
+	conn, lerr := e.dial(ctx)
+	if lerr != nil {
+		return nil, lerr
+	}
+	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	// The extension's output waits until the new credential, which may be written in it, is
+	// recorded below.
+	defer e.out.hold()()
+	call := protocol.Call{Type: protocol.TypeCall, ID: e.nextID(), Op: protocol.OpRefresh, Account: &account}
+	if err := protocol.WriteFrame(conn, call); err != nil {
+		return nil, callError(ctx, e, redact, err)
+	}
+	var r protocol.Reply
+	if err := protocol.ReadFrame(conn, &r); err != nil {
+		return nil, callError(ctx, e, redact, err)
+	}
+	switch {
+	case r.Type == protocol.TypeRefreshDone && validGrant(r.Grant):
+		e.held.add(account.ID, r.Grant.Credential)
+		return r.Grant.Credential, nil
+	case r.Type == llm.EventError && r.Error != nil:
+		return nil, e.normalizeEvent(e.accountPieces(account).event(redact.Event(r.Event))).Error
+	}
+	return nil, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s replied %q to a refresh", e.manifest.ID, redact.String(r.Type))}
+}
+
+// validIdentity says what is wrong with a grant's identity, or "" when nothing is; a field name
+// it quotes goes through redact first.
+func validIdentity(id map[string]string, redact func(string) string) string {
+	if len(id) > protocol.MaxIdentityFields {
+		return fmt.Sprintf("has more than %d fields", protocol.MaxIdentityFields)
+	}
+	for k, v := range id {
+		switch {
+		case k == "" || len(k) > protocol.MaxIdentityKey:
+			return fmt.Sprintf("has a field name that is empty or longer than %d bytes", protocol.MaxIdentityKey)
+		case v == "" || len(v) > protocol.MaxIdentityValue:
+			return fmt.Sprintf("field %q is empty or longer than %d bytes", redact(k), protocol.MaxIdentityValue)
+		}
+	}
+	return ""
+}
+
+func validGrant(g *protocol.Grant) bool {
+	return g != nil && g.Credential != nil && g.Credential.Kind != ""
+}
+
+// dial opens a call connection.
+func (e *Extension) dial(ctx context.Context) (net.Conn, *llm.Error) {
+	select {
+	case <-e.exited:
+		return nil, &llm.Error{Code: llm.CodeExtensionUnavailable, Message: fmt.Sprintf("extension %s is not running", e.manifest.ID)}
+	default:
+	}
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "unix", e.socket)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, &llm.Error{Code: llm.CodeCancelled, Message: "the call was cancelled"}
+		}
+		return nil, &llm.Error{Code: llm.CodeExtensionUnavailable, Message: fmt.Sprintf("extension %s is not reachable: %v", e.manifest.ID, err)}
+	}
+	return conn, nil
+}
+
+// callError says why a call's connection failed, with redact applied to what the extension sent.
+func callError(ctx context.Context, e *Extension, redact *protocol.Redactor, err error) *llm.Error {
+	if ctx != nil && ctx.Err() != nil {
+		return &llm.Error{Code: llm.CodeCancelled, Message: "the call was cancelled"}
+	}
+	var se *json.SyntaxError
+	var te *json.UnmarshalTypeError
+	if errors.Is(err, protocol.ErrFrameTooLarge) || errors.As(err, &se) || errors.As(err, &te) {
+		return redacted(redact, &llm.Error{Code: llm.CodeExtensionProtocol, Message: fmt.Sprintf("extension %s sent a bad frame: %v", e.manifest.ID, err)})
+	}
+	return &llm.Error{Code: llm.CodeExtensionCrashed, Message: fmt.Sprintf("extension %s ended the call without finishing it", e.manifest.ID)}
+}
+
+// inputCredential holds what a user entered as a credential, so all of it counts as secret: the
+// values addSecrets keeps (wholeSecrets), and an account's proxy and header forms.
+func inputCredential(input map[string]string) *protocol.Credential {
+	if len(input) == 0 {
+		return nil
+	}
+	data, _ := json.Marshal(input)
+	return &protocol.Credential{Kind: "input", Data: data}
+}
+
+// secretsCredential holds secrets found in an account's settings as a credential, so all of them
+// count as secret.
+func secretsCredential(secrets []string) *protocol.Credential {
+	if len(secrets) == 0 {
+		return nil
+	}
+	data, _ := json.Marshal(secrets)
+	return &protocol.Credential{Kind: "settings", Data: data}
+}
+
+// redactPrompt removes what the user entered (but for a typed plain address, wholeSecrets) from
+// every text a prompt shows, in case the extension echoes it.
+func redactPrompt(r *protocol.Redactor, p protocol.Prompt) protocol.Prompt {
+	for _, f := range []*string{&p.Kind, &p.Message, &p.URL, &p.UserCode, &p.VerificationURI, &p.VerificationURIComplete} {
+		*f = r.String(*f)
+	}
+	inputs := make([]protocol.LoginInput, len(p.Inputs))
+	for i, in := range p.Inputs {
+		in.Name, in.Label = r.String(in.Name), r.String(in.Label)
+		inputs[i] = in
+	}
+	if p.Inputs != nil {
+		p.Inputs = inputs
+	}
+	return p
+}
+
+// validGrantSettings checks the non-secret object at the extension's trust boundary.
+func validGrantSettings(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	if len(raw) > protocol.MaxGrantSettings {
+		return "exceed the 8192-byte limit"
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return ""
+	}
+	var settings map[string]json.RawMessage
+	if json.Unmarshal(raw, &settings) != nil || settings == nil {
+		return "must be an object"
+	}
+	return ""
+}

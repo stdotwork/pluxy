@@ -1,0 +1,473 @@
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { type ErrorLogFile, type LogContent, problem } from "../api";
+import { useAccountLabels, usePrivacy } from "../privacy";
+import { useSave } from "../save";
+import type { PageDef } from "../shell";
+import { strings } from "../strings";
+import {
+  Button,
+  Card,
+  CopyTrace,
+  Detail,
+  Empty,
+  List,
+  MasterDetail,
+  Notice,
+  PageHead,
+  Switch,
+  useKit,
+  useLoad,
+  usePoll,
+  when,
+} from "../ui";
+
+const t = strings("logs", {
+  title: "Logs Viewer",
+  tip: "Request tracing",
+  core: "Core logs",
+  content: "Log content",
+  continuous: "Continuous reading",
+  refresh: "Refresh",
+  search: "Search logs by content or keyword",
+  level: "Log level",
+  allLevels: "All levels",
+  info: "info",
+  warn: "warn",
+  wrap: "Wrap long lines",
+  downloadLogs: "Download",
+  clear: "Clear",
+  confirmClear: "Yes, clear",
+  cancel: "Cancel",
+  clearConfirm: "Clear all logs? You cannot undo this.",
+  errors: "Error request logs",
+  noErrors: "No error request logs yet. Failed requests appear here.",
+  size: "Size",
+  bytes: { one: "{count} byte", other: "{count} bytes" },
+  modified: "Last modified",
+  name: "Name",
+  actions: "Actions",
+  open: "Open",
+  download: "Download",
+  downloadReal:
+    "Privacy mode hides names on this page only. A downloaded log holds the text as core wrote it.",
+  errorDetail: "Error request log details",
+  requestId: "Trace ID",
+  request: "Request log",
+  view: "View",
+  viewRequest: "View log for request {id}",
+  loading: "Loading logs…",
+  empty: "No logs yet. Turn on file logging in Config Panel or wait for traffic.",
+  noMatch: "No matching logs. Clear or broaden your search and level filter.",
+  off: "File logging is off. Enable it in Config Panel's Logging tab, then refresh.",
+  noRequestLog:
+    "Request logging was off during this request. Enable it in Config Panel's Logging tab to record future requests.",
+  config: "Config Panel — Logging",
+  retained: "Showing the latest 10,000 loaded lines. Older lines are no longer searched or downloaded here.",
+});
+
+function logLevel(line: string) {
+  return line.match(/^\[[^\]]+\] \[(info|warn)\s*\]/)?.[1] ?? "";
+}
+
+/** The local day as core's log writes it: 2026-11-23. */
+const logDay = (d: Date) =>
+  [d.getFullYear(), d.getMonth() + 1, d.getDate()].map((n) => String(n).padStart(2, "0")).join("-");
+
+/**
+ * A line of core's log. Each starts with its full date and time; a line of today shows the time
+ * alone, so the times line up and read at a glance, and keeps the full one as its title.
+ */
+export function LogLine({ text, today }: { text: string; today: string }) {
+  const stamp = text.match(/^\[(\d{4}-\d\d-\d\d) (\d\d:\d\d:\d\d(?:\.\d+)?)\]/);
+  if (!stamp || stamp[1] !== today) return <>{text}</>;
+  return (
+    <>
+      [
+      <time dateTime={`${stamp[1]}T${stamp[2]}`} title={`${stamp[1]} ${stamp[2]}`}>
+        {stamp[2]}
+      </time>
+      {text.slice(stamp[0].length - 1)}
+    </>
+  );
+}
+
+/** A log's text. It scrolls, so the keyboard reaches it and it has a name. */
+function LogText({ content, wrap, label }: { content: string; wrap: boolean; label: string }) {
+  return (
+    <section
+      class="logs-text"
+      data-part="log"
+      data-wrap={wrap ? "" : undefined}
+      aria-label={label}
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must take focus for the keyboard to scroll it
+      tabIndex={0}
+    >
+      {content}
+    </section>
+  );
+}
+
+export function LogsPage() {
+  const { api, unauthorized } = useKit();
+  const saved = useSave();
+  const saveLog = (name: string, content: string) => saved.save(name, content, "text/plain;charset=utf-8");
+  // Privacy mode masks what the views show; search, downloads and the files keep the real text.
+  const p = usePrivacy();
+  const files = useLoad(api.errorLogs);
+  const [lines, setLines] = useState<string[]>([]);
+  const labels = useAccountLabels(lines);
+  const mask = useMemo(() => p.masker(labels), [p, labels]);
+  const [error, setError] = useState<string>();
+  const [off, setOff] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [continuous, setContinuous] = useState(false);
+  const [wrap, setWrap] = useState(false);
+  const [search, setSearch] = useState("");
+  const [level, setLevel] = useState("");
+  const [asking, setAsking] = useState(false);
+  const [trimmed, setTrimmed] = useState(false);
+  const [selected, setSelected] = useState<string>();
+  const [detail, setDetail] = useState<LogContent>();
+  const [detailError, setDetailError] = useState<string>();
+  const [detailBusy, setDetailBusy] = useState(false);
+  const [id, setId] = useState("");
+  const [requested, setRequested] = useState("");
+  const [request, setRequest] = useState<LogContent>();
+  const [requestError, setRequestError] = useState<string>();
+  /** Core holds no request log under the trace asked for. */
+  const [requestMissing, setRequestMissing] = useState(false);
+  const [requestBusy, setRequestBusy] = useState(false);
+  const mounted = useRef(true);
+  const inFlight = useRef(false);
+  const latest = useRef<number | undefined>(undefined);
+  const detailVersion = useRef(0);
+  const requestVersion = useRef(0);
+
+  const read = async (append = false) => {
+    if (inFlight.current || !mounted.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    const r = await api.logs(append ? latest.current : undefined);
+    inFlight.current = false;
+    if (!mounted.current) return;
+    setBusy(false);
+    if (r.status === 401) return unauthorized();
+    const isOff = r.status === 400 && r.error?.message === "logging to file is off";
+    setOff(isOff);
+    setError(isOff ? undefined : problem(r));
+    if (isOff) {
+      setLines([]);
+      latest.current = undefined;
+    }
+    if (!problem(r) && r.body) {
+      latest.current = r.body["latest-timestamp"];
+      const incoming = r.body.lines;
+      setLines((old) => {
+        // Nothing new: the same lines, so nothing is masked again.
+        if (append && incoming.length === 0) return old;
+        const next = append ? [...old, ...incoming] : incoming;
+        if (next.length > 10000) setTrimmed(true);
+        else if (!append) setTrimmed(false);
+        return next.slice(-10000);
+      });
+    }
+  };
+  const viewRequest = async (trace: string) => {
+    const version = ++requestVersion.current;
+    setRequested(trace);
+    setRequest(undefined);
+    setRequestError(undefined);
+    setRequestMissing(false);
+    setRequestBusy(!!trace);
+    if (!trace) return;
+    const r = await api.requestLog(trace);
+    if (!mounted.current || requestVersion.current !== version) return;
+    setRequestBusy(false);
+    if (r.status === 401) return unauthorized();
+    setRequestError(problem(r));
+    setRequestMissing(r.status === 404);
+    if (!problem(r)) setRequest(r.body);
+  };
+  useEffect(() => {
+    mounted.current = true;
+    void read();
+    const fromAddress = () => {
+      const raw = location.hash.startsWith("#/logs/") ? location.hash.slice(7) : undefined;
+      if (!raw) return;
+      let trace = raw;
+      try {
+        trace = decodeURIComponent(raw);
+      } catch {
+        /* Keep malformed input as text. */
+      }
+      setId(trace);
+      void viewRequest(trace);
+    };
+    fromAddress();
+    window.addEventListener("hashchange", fromAddress);
+    return () => {
+      mounted.current = false;
+      window.removeEventListener("hashchange", fromAddress);
+    };
+  }, []);
+  usePoll(() => read(true), 2000, continuous && !off);
+  const clear = async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setBusy(true);
+    const r = await api.clearLogs();
+    inFlight.current = false;
+    if (!mounted.current) return;
+    setBusy(false);
+    if (r.status === 401) return unauthorized();
+    setError(problem(r));
+    if (!problem(r)) {
+      setLines([]);
+      setTrimmed(false);
+      latest.current = undefined;
+      setAsking(false);
+    }
+  };
+  const open = async (name: string, download = false) => {
+    const version = ++detailVersion.current;
+    setSelected(name);
+    setDetail(undefined);
+    setDetailError(undefined);
+    setDetailBusy(true);
+    const r = await api.errorLog(name);
+    if (!mounted.current || version !== detailVersion.current) return;
+    setDetailBusy(false);
+    if (r.status === 401) return unauthorized();
+    setDetailError(problem(r));
+    if (!problem(r) && r.body) {
+      setDetail(r.body);
+      if (download) saveLog(r.body.name, r.body.content);
+    }
+  };
+  const query = search.toLocaleLowerCase();
+  const today = logDay(new Date());
+  // Masked once per change of the lines or the labels, not on each render (a read every 2 seconds
+  // while reading continuously, each keystroke in the search).
+  const masked = useMemo(() => lines.map(mask), [lines, mask]);
+  const shownAt = lines.flatMap((line, i) =>
+    (!level || logLevel(line) === level) && line.toLocaleLowerCase().includes(query) ? [i] : [],
+  );
+  const shown = shownAt.map((i) => lines[i] as string);
+  return (
+    <>
+      <PageHead
+        title={t("title")}
+        actions={
+          <Button
+            onClick={() => {
+              void read();
+              files.reload();
+            }}
+            disabled={busy}
+          >
+            {t("refresh")}
+          </Button>
+        }
+      />
+      {saved.notice}
+      {p.on && <p class="hint">{t("downloadReal")}</p>}
+      <Card title={t("content")}>
+        {error && <Notice tone="danger">{mask(error)}</Notice>}
+        {off && (
+          <Notice tone="warn">
+            {t("off")}{" "}
+            <a href="#/config" data-part="button">
+              {t("config")}
+            </a>
+          </Notice>
+        )}
+        <div class="logs-controls">
+          <Switch label={t("continuous")} checked={continuous} onChange={setContinuous} />
+          <Switch label={t("wrap")} checked={wrap} onChange={setWrap} />
+          <label class="field logs-search" data-part="field">
+            <span class="label">{t("search")}</span>
+            <input
+              data-slot="input"
+              type="search"
+              value={search}
+              onInput={(e) => setSearch(e.currentTarget.value)}
+            />
+          </label>
+          <label class="field" data-part="field">
+            <span class="label">{t("level")}</span>
+            <select
+              data-slot="select-trigger"
+              aria-label={t("level")}
+              value={level}
+              onChange={(e) => setLevel(e.currentTarget.value)}
+            >
+              <option value="">{t("allLevels")}</option>
+              <option value="info">{t("info")}</option>
+              <option value="warn">{t("warn")}</option>
+            </select>
+          </label>
+        </div>
+        {trimmed && <Notice tone="muted">{t("retained")}</Notice>}
+        <section
+          aria-label={t("core")}
+          data-part="log"
+          class="logs-text logs-core"
+          data-wrap={wrap ? "" : undefined}
+          // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrollable region must take focus for the keyboard to scroll it
+          tabIndex={0}
+        >
+          {shown.length
+            ? shownAt.map((i) => (
+                <div key={i} data-part="log-line" data-level={logLevel(lines[i] as string)}>
+                  <LogLine text={masked[i] as string} today={today} />
+                </div>
+              ))
+            : // A read that failed has its notice above: nothing is known to be empty.
+              !error &&
+              (search || level ? (
+                <Empty
+                  onClear={() => {
+                    setSearch("");
+                    setLevel("");
+                  }}
+                >
+                  {t("noMatch")}
+                </Empty>
+              ) : (
+                // With file logging off, the notice above already leads to the setting.
+                <Empty action={!off && <a href="#/config/logging">{t("config")}</a>}>{t("empty")}</Empty>
+              ))}
+        </section>
+        <div class="actions">
+          <Button disabled={off || shown.length === 0} onClick={() => saveLog("logs.txt", shown.join("\n"))}>
+            {t("downloadLogs")}
+          </Button>
+          <Button variant="danger" disabled={busy || off} onClick={() => setAsking(true)}>
+            {t("clear")}
+          </Button>
+        </div>
+        {asking && (
+          <section data-part="card" class="logs-confirm">
+            <p>{t("clearConfirm")}</p>
+            <div class="actions">
+              <Button variant="danger" disabled={busy} onClick={() => void clear()}>
+                {t("confirmClear")}
+              </Button>
+              <Button onClick={() => setAsking(false)}>{t("cancel")}</Button>
+            </div>
+          </section>
+        )}
+      </Card>
+      <Card title={t("errors")}>
+        {files.error && <Notice tone="danger">{mask(files.error)}</Notice>}
+        <MasterDetail
+          list={
+            files.loading ? (
+              <Notice tone="muted">{t("loading")}</Notice>
+            ) : !files.data || files.error ? null : files.data.files.length === 0 ? (
+              <Empty>{t("noErrors")}</Empty>
+            ) : (
+              <List<ErrorLogFile>
+                label={t("errors")}
+                items={files.data.files}
+                id={(file) => file.name}
+                selected={selected}
+                columns={[
+                  { label: t("name"), value: (file) => mask(file.name), mono: true },
+                  { label: t("size"), value: (file) => t("bytes", { count: file.size }), numeric: true },
+                  { label: t("modified"), value: (file) => when(file.modified) },
+                  {
+                    label: t("actions"),
+                    value: (file) => (
+                      <div class="actions">
+                        <Button onClick={() => void open(file.name)}>{t("open")}</Button>
+                        <Button
+                          onClick={() => {
+                            if (detail?.name === file.name) saveLog(detail.name, detail.content);
+                            else void open(file.name, true);
+                          }}
+                        >
+                          {t("download")}
+                        </Button>
+                      </div>
+                    ),
+                  },
+                ]}
+              />
+            )
+          }
+          detail={
+            selected && (
+              <Detail
+                title={t("errorDetail")}
+                onClose={() => {
+                  ++detailVersion.current;
+                  setSelected(undefined);
+                }}
+              >
+                <p class="mono">{mask(selected)}</p>
+                {detailBusy && <Notice tone="muted">{t("loading")}</Notice>}
+                {detailError && <Notice tone="danger">{mask(detailError)}</Notice>}
+                {detail && (
+                  <>
+                    <Button onClick={() => saveLog(detail.name, detail.content)}>{t("download")}</Button>
+                    <LogText content={mask(detail.content) ?? ""} wrap={wrap} label={t("errorDetail")} />
+                  </>
+                )}
+              </Detail>
+            )
+          }
+        />
+      </Card>
+      <Card title={t("request")}>
+        <form
+          class="logs-controls"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void viewRequest(id.trim());
+          }}
+        >
+          <label class="field logs-search" data-part="field">
+            <span class="label">{t("requestId")}</span>
+            <input data-slot="input" value={id} onInput={(e) => setId(e.currentTarget.value)} />
+          </label>
+          <Button type="submit" disabled={!id.trim() || requestBusy}>
+            {t("view")}
+          </Button>
+        </form>
+        {requested && (
+          <section data-part="card" aria-label={t("viewRequest", { id: requested })}>
+            <h3>
+              {t("viewRequest", { id: requested })} <CopyTrace id={requested} />
+            </h3>
+            {requestBusy && <Notice tone="muted">{t("loading")}</Notice>}
+            {requestError && <Notice tone="danger">{mask(requestError)}</Notice>}
+            {requestMissing && (
+              <p class="hint">
+                {t("noRequestLog")}{" "}
+                <a href="#/config/logging" data-part="button">
+                  {t("config")}
+                </a>
+              </p>
+            )}
+            {request && (
+              <>
+                <Button onClick={() => saveLog(request.name, request.content)}>{t("download")}</Button>
+                <LogText content={mask(request.content) ?? ""} wrap={wrap} label={t("request")} />
+              </>
+            )}
+          </section>
+        )}
+      </Card>
+    </>
+  );
+}
+
+export const logsPage = (): PageDef => ({
+  id: "logs",
+  dest: "settings",
+  kind: "topic",
+  title: t("title"),
+  tip: t("tip"),
+  render: () => <LogsPage />,
+});

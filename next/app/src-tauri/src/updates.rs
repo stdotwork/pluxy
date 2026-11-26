@@ -1,0 +1,593 @@
+//! The window's commands for the release feed (`release.rs`) and the release notes webviews
+//! (`notes.rs`). Each refuses any caller but the window, as every app command does. Changing the
+//! feed's address opens a native confirmation; only its confirmed, consumed token applies it.
+
+use crate::notes::{Doc, Style};
+use crate::release::{self, Channel, Product, View};
+use crate::{trusted, App, Rect, MAIN};
+use std::time::{Duration, Instant};
+use tauri::webview::NewWindowResponse;
+use tauri::{
+    AppHandle, LogicalPosition, LogicalSize, Manager, Url, Webview, WebviewBuilder, WebviewUrl,
+    Window,
+};
+use tauri::{Emitter, EventTarget};
+
+/// The certificates a feed's https is checked against: the public roots. A native-test build
+/// takes the test feed's own authority from its runner instead; no release build has that code.
+pub(crate) fn roots() -> release::Roots {
+    #[cfg(feature = "native-test")]
+    if let Ok(p) = std::env::var("PLUXY_APP_TEST_FEED_CA") {
+        return std::fs::read(p)
+            .ok()
+            .and_then(|b| crate::client::certificates(&b).ok())
+            .map(std::sync::Arc::new);
+    }
+    None
+}
+
+fn app_version(app: &AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
+/// The view, with the version of the core the app is connected to, if it says one.
+fn view(app: &AppHandle) -> View {
+    let caller = app.state::<App>().conn.lock().unwrap().caller();
+    let status = caller.call("GET", "/status", None);
+    let core = release::core_version(status.body.as_ref().filter(|_| status.status == 200));
+    app.state::<App>()
+        .releases
+        .lock()
+        .unwrap()
+        .view(&app_version(app), core)
+}
+
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn release_get(webview: Webview) -> Result<View, String> {
+    trusted(&webview)?;
+    let app = webview.app_handle().clone();
+    blocking(move || view(&app)).await
+}
+
+/// "Check for Updates": reads the feed now. A failure keeps the last good copy, shown with it.
+#[tauri::command]
+pub async fn release_check(webview: Webview) -> Result<View, String> {
+    trusted(&webview)?;
+    let app = webview.app_handle().clone();
+    blocking(move || {
+        let check = app.state::<App>().releases.lock().unwrap().begin_check();
+        let Some(check) = check else {
+            return Err("No release feed is set.".to_string());
+        };
+        // Read without the lock; a check started later, or a feed change, wins over this one.
+        let read = release::fetch(&check.source, &roots());
+        app.state::<App>()
+            .releases
+            .lock()
+            .unwrap()
+            .checked(&check, read);
+        Ok(view(&app))
+    })
+    .await?
+}
+
+#[tauri::command]
+pub async fn release_channel_set(webview: Webview, channel: Channel) -> Result<View, String> {
+    trusted(&webview)?;
+    let app = webview.app_handle().clone();
+    blocking(move || {
+        app.state::<App>()
+            .releases
+            .lock()
+            .unwrap()
+            .set_channel(channel)?;
+        Ok(view(&app))
+    })
+    .await?
+}
+
+/// Asks to change the feed's address (none: no feed). Returns once the native confirmation is
+/// showing; the window hears `pluxy-release` when it is settled, with whether the feed changed
+/// and, when a confirmed change could not be applied, why. Cancelling keeps the old feed.
+#[tauri::command]
+pub fn release_source_set(webview: Webview, source: Option<String>) -> Result<(), String> {
+    trusted(&webview)?;
+    {
+        use crate::confirmation::{self, Action, Package};
+        let app = webview.app_handle().clone();
+        let st = app.state::<App>();
+        let (new, old, revision) = {
+            let r = st.releases.lock().unwrap();
+            let new = r.check_source(source.as_deref())?;
+            (new, r.settings().source.clone(), r.revision())
+        };
+        let none = || "no feed".to_string();
+        let app_package = Package {
+            id: "pluxy app".into(),
+            source: "the app's window".into(),
+            digest: String::new(),
+            signer: String::new(),
+            contract: "release feed".into(),
+            generation: revision,
+        };
+        let action = Action {
+            what: format!(
+                "Change the release feed from {} to {}",
+                old.unwrap_or_else(none),
+                new.clone().unwrap_or_else(none)
+            ),
+            chain: vec![app_package.clone()],
+            executor: app_package,
+            native_tool: false,
+            files: vec![],
+            launch: None,
+            environment: None,
+        };
+        let id = {
+            let mut c = st.confirmations.lock().unwrap();
+            let p = c.prepare_main(action)?;
+            c.queue(p)?
+        };
+        st.releases.lock().unwrap().change = Some(release::SourceChange {
+            action: id.clone(),
+            source: new,
+            revision,
+        });
+        if let Err(e) = confirmation::request(&app, id.clone()) {
+            st.releases.lock().unwrap().change = None;
+            return Err(e);
+        }
+        std::thread::spawn(move || settle_source(&app, &id));
+        Ok(())
+    }
+}
+
+/// Waits for the confirmation's native result; only a confirmed, consumed token applies the change.
+fn settle_source(app: &AppHandle, id: &str) {
+    let st = app.state::<App>();
+    // The dialog cancels itself after its lifetime; window close invalidates it sooner.
+    let deadline = Instant::now() + Duration::from_secs(75);
+    let result = loop {
+        if let Some(r) = st.confirmations.lock().unwrap().take_result(id) {
+            break Some(r);
+        }
+        if Instant::now() > deadline {
+            break None;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let authorized = match result {
+        Some(Ok(Some(token))) => st.confirmations.lock().unwrap().consume(id, &token).is_ok(),
+        _ => false,
+    };
+    let mut r = st.releases.lock().unwrap();
+    let change = r.change.take_if(|c| c.action == id);
+    // Confirmed but not applied (the settings changed meanwhile, or could not be saved) is an
+    // error the window shows; cancelled, or not confirmed in time, keeps the feed quietly.
+    let outcome = match change {
+        Some(c) if authorized => match r.apply_source(c.source, c.revision) {
+            Ok(()) => serde_json::json!({"changed": true, "error": null}),
+            Err(e) => serde_json::json!({"changed": false, "error": e}),
+        },
+        _ => serde_json::json!({"changed": false, "error": null}),
+    };
+    drop(r);
+    let _ = app.emit_to(EventTarget::webview(MAIN), "pluxy-release", outcome);
+}
+
+fn notes_url() -> Url {
+    #[cfg(any(windows, target_os = "android"))]
+    let s = format!("http://{}.localhost/", crate::notes::SCHEME);
+    #[cfg(not(any(windows, target_os = "android")))]
+    let s = format!("{}://localhost/", crate::notes::SCHEME);
+    Url::parse(&s).expect("the notes scheme's URL")
+}
+
+/// Opens an https address in the person's browser; any other address is refused here too,
+/// whatever its caller checked, before anything else.
+pub(crate) fn open_external(app: &AppHandle, url: String) {
+    let url = match release::https_url(&url) {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("pluxy-app: not opening {url:?}: {e}");
+            return;
+        }
+    };
+    #[cfg(target_os = "linux")]
+    {
+        let _ = app.run_on_main_thread(move || {
+            use gtk::gio;
+            if let Err(e) =
+                gio::AppInfo::launch_default_for_uri(&url, None::<&gio::AppLaunchContext>)
+            {
+                eprintln!("pluxy-app: could not open {url}: {e}");
+            }
+        });
+    }
+    // The shell's `open` verb on the address, with the https class's handler (the person's
+    // browser), on the main thread, which the window's event loop has set up for COM.
+    #[cfg(windows)]
+    {
+        let _ = app.run_on_main_thread(move || {
+            if let Err(e) = shell_open(&url) {
+                eprintln!("pluxy-app: could not open {url}: {e}");
+            }
+        });
+    }
+    // The person's default browser, through LaunchServices, on the main thread.
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.run_on_main_thread(move || {
+            use objc2_app_kit::NSWorkspace;
+            use objc2_foundation::{NSString, NSURL};
+            let opened = NSURL::URLWithString(&NSString::from_str(&url))
+                .is_some_and(|u| NSWorkspace::sharedWorkspace().openURL(&u));
+            if !opened {
+                eprintln!("pluxy-app: could not open {url}");
+            }
+        });
+    }
+}
+
+/// Opens https address url with the `open` verb of the `https` class (the person's browser):
+/// `ShellExecuteExW`, which takes the address as one string, with no dialog of its own.
+#[cfg(windows)]
+fn shell_open(url: &str) -> Result<(), String> {
+    use windows_sys::Win32::UI::Shell::{
+        ShellExecuteExW, SEE_MASK_CLASSNAME, SEE_MASK_FLAG_NO_UI, SEE_MASK_NOASYNC,
+        SHELLEXECUTEINFOW,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+    let (verb, file, class) = (wide("open"), wide(url), wide("https"));
+    // SAFETY: an all-zero SHELLEXECUTEINFOW is its documented empty value.
+    let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+    info.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI | SEE_MASK_CLASSNAME;
+    info.lpVerb = verb.as_ptr();
+    info.lpFile = file.as_ptr();
+    info.lpClass = class.as_ptr();
+    info.nShow = SW_SHOWNORMAL;
+    // SAFETY: every pointer in info outlives the call.
+    if unsafe { ShellExecuteExW(&mut info) } == 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(())
+}
+
+/// Opens a webview over rect of the window (the part of the notes area that shows; none: hidden),
+/// showing product's release notes on the current channel, and returns its label. On the main
+/// thread on Linux only, as `page_open` is: on Windows, making a webview there deadlocks.
+#[cfg_attr(target_os = "linux", tauri::command)]
+#[cfg_attr(not(target_os = "linux"), tauri::command(async))]
+pub fn release_notes_open(
+    webview: Webview,
+    state: tauri::State<App>,
+    product: Product,
+    rect: Option<Rect>,
+    style: Style,
+) -> Result<String, String> {
+    trusted(&webview)?;
+    let notes = state
+        .releases
+        .lock()
+        .unwrap()
+        .latest(product)
+        .map(|r| r.notes.clone())
+        .filter(|n| !n.trim().is_empty())
+        .ok_or("this release has no notes")?;
+    let label = state
+        .notes
+        .lock()
+        .unwrap()
+        .bind(Doc::new(product, &notes, &style))?;
+    let doc = notes_url();
+    let app = webview.app_handle().clone();
+    let nav_label = label.clone();
+    let builder = WebviewBuilder::new(&label, WebviewUrl::CustomProtocol(doc.clone()))
+        .data_directory(state.notes_dir.clone())
+        .devtools(false)
+        .on_navigation(move |u| {
+            if *u == doc {
+                return true;
+            }
+            let open = app
+                .state::<App>()
+                .notes
+                .lock()
+                .unwrap()
+                .external(&nav_label, u);
+            if let Some(open) = open {
+                open_external(&app, open);
+            }
+            false
+        })
+        .on_new_window(|_, _| NewWindowResponse::Deny)
+        // Nothing the notes link to is saved: WebKit's "Download Linked File" included.
+        .on_download(|_w, _| {
+            #[cfg(feature = "native-test")]
+            {
+                _w.app_handle()
+                    .state::<App>()
+                    .notes
+                    .lock()
+                    .unwrap()
+                    .downloads += 1;
+            }
+            false
+        });
+    let window: Window = webview.window();
+    // No rect: none of the notes area shows, so the webview starts hidden.
+    let b = rect.map(Rect::bounds);
+    let at = b.unwrap_or(crate::place::Bounds {
+        x: 0.0,
+        y: 0.0,
+        width: 1.0,
+        height: 1.0,
+    });
+    let placed = window
+        .add_child(
+            builder,
+            LogicalPosition::new(at.x.max(0.0), at.y.max(0.0)),
+            LogicalSize::new(at.width.max(1.0), at.height.max(1.0)),
+        )
+        .map_err(|e| e.to_string())
+        .and_then(|_| crate::place::adopt(&window, &label, b))
+        .and_then(|_| no_context_menu(webview.app_handle(), &label));
+    if let Err(e) = placed {
+        state.notes.lock().unwrap().unbind(&label);
+        if let Some(w) = webview.app_handle().get_webview(&label) {
+            let _ = w.close();
+        }
+        return Err(e);
+    }
+    Ok(label)
+}
+
+/// Turns off the notes webview's context menu: its entries (download, copy or open a link
+/// elsewhere) would reach past the one way out, a person following a rendered link.
+fn no_context_menu(app: &AppHandle, label: &str) -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    {
+        let w = app
+            .get_webview(label)
+            .ok_or_else(|| format!("no notes webview {label}"))?;
+        let _app = app.clone();
+        w.with_webview(move |pw| {
+            use webkit2gtk::WebViewExt;
+            pw.inner().connect_context_menu(move |_, _, _, _| {
+                #[cfg(feature = "native-test")]
+                {
+                    _app.state::<App>().notes.lock().unwrap().menus += 1;
+                }
+                true
+            });
+        })
+        .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (app, label);
+        Ok(())
+    }
+}
+
+fn notes_webview(app: &AppHandle, label: &str) -> Result<Webview, String> {
+    if !app.state::<App>().notes.lock().unwrap().has(label) {
+        return Err(format!("no notes webview {label}"));
+    }
+    app.get_webview(label)
+        .ok_or_else(|| format!("no notes webview {label}"))
+}
+
+#[tauri::command]
+pub fn release_notes_place(
+    webview: Webview,
+    label: String,
+    rect: Option<Rect>,
+) -> Result<(), String> {
+    trusted(&webview)?;
+    crate::place::place(
+        &notes_webview(webview.app_handle(), &label)?,
+        rect.map(Rect::bounds),
+    )
+}
+
+/// Closes a notes webview. Off Linux it runs as an async command, off the main thread: there a
+/// close while another webview is being made waits for good (`close_webviews` in lib.rs says
+/// why), and from another thread the close is posted until that webview is made. On Linux it
+/// stays on the main thread.
+#[cfg_attr(target_os = "linux", tauri::command)]
+#[cfg_attr(not(target_os = "linux"), tauri::command(async))]
+pub fn release_notes_close(
+    webview: Webview,
+    state: tauri::State<App>,
+    label: String,
+) -> Result<(), String> {
+    trusted(&webview)?;
+    let w = notes_webview(webview.app_handle(), &label);
+    state.notes.lock().unwrap().unbind(&label);
+    crate::place::forget(&label);
+    w?.close().map_err(|e| e.to_string())
+}
+
+/// "View full release notes": opens the release's notes address, from the feed, in the browser.
+#[tauri::command]
+pub fn release_notes_full(
+    webview: Webview,
+    state: tauri::State<App>,
+    product: Product,
+) -> Result<(), String> {
+    trusted(&webview)?;
+    let url = state
+        .releases
+        .lock()
+        .unwrap()
+        .latest(product)
+        .and_then(|r| r.notes_url.clone())
+        .ok_or("this release has no notes address")?;
+    if !state.notes.lock().unwrap().rate() {
+        return Err("one address a second".into());
+    }
+    open_external(webview.app_handle(), url);
+    Ok(())
+}
+
+/// The `pluxy-notes:` scheme: each notes webview's own document and style sheet, nothing else.
+pub fn notes_scheme(
+    ctx: tauri::UriSchemeContext<'_, tauri::Wry>,
+    request: tauri::http::Request<Vec<u8>>,
+) -> tauri::http::Response<Vec<u8>> {
+    use tauri::http::{header, Response};
+    let served = ctx.app_handle().state::<App>().notes.lock().unwrap().serve(
+        ctx.webview_label(),
+        request.method().as_str(),
+        request.uri().path(),
+    );
+    Response::builder()
+        .status(served.status)
+        .header(header::CONTENT_TYPE, served.kind)
+        .header("Content-Security-Policy", crate::notes::CSP)
+        .header(header::CACHE_CONTROL, "no-store")
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Referrer-Policy", "no-referrer")
+        .body(served.body)
+        .expect("a response")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::path::Path;
+
+    /// What creates a webview or a window: on Windows each deadlocks on the main thread, where
+    /// Tauri runs a command that is not async (`Window::add_child`'s "Known issues").
+    const CREATES: &[&str] = &[
+        ".add_child(",
+        "WebviewWindowBuilder::new(",
+        "WindowBuilder::new(",
+    ];
+
+    /// What closes a webview: on Windows a close on the main thread while another webview is
+    /// being made there waits for good (`close_webviews` in lib.rs says why).
+    const CLOSES: &[&str] = &["w.close()", "w?.close()", "webview.close()"];
+
+    /// The top-level functions of a file: name, the attributes just above it, and its text up to
+    /// the next top-level item.
+    fn functions(text: &str) -> Vec<(String, String, String)> {
+        let mut out = Vec::new();
+        let mut attrs = String::new();
+        let mut current: Option<(String, String, String)> = None;
+        for line in text.lines() {
+            // An item starts at the left margin; a signature's closing `)` and a body's `}` do not.
+            let top = line.starts_with(|c: char| c.is_ascii_alphabetic() || c == '#' || c == '/');
+            if top {
+                let name = ["fn ", "pub fn ", "pub(crate) fn ", "pub(super) fn "]
+                    .iter()
+                    .find_map(|p| line.strip_prefix(p))
+                    .map(|r| r.split(['(', '<']).next().unwrap_or("").to_string());
+                if line.starts_with("#[") {
+                    if let Some(f) = current.take() {
+                        out.push(f);
+                    }
+                    attrs.push_str(line);
+                    attrs.push('\n');
+                    continue;
+                }
+                if let Some(f) = current.take() {
+                    out.push(f);
+                }
+                if let Some(name) = name {
+                    current = Some((name, std::mem::take(&mut attrs), String::new()));
+                } else {
+                    attrs.clear();
+                }
+            }
+            if let Some(f) = current.as_mut() {
+                f.2.push_str(line);
+                f.2.push('\n');
+            }
+        }
+        out.extend(current);
+        out
+    }
+
+    // A command that creates a webview or a window, or closes a webview, itself or through the
+    // functions it calls, runs off the main thread on Windows and macOS
+    // (`tauri::command(async)`), as `page_open` and `page_close` do: on Windows a synchronous
+    // one can hang the window (its webview answers nothing more).
+    #[test]
+    fn a_command_that_creates_or_closes_a_webview_is_async_off_linux() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut all: BTreeMap<String, (String, String)> = BTreeMap::new();
+        for e in std::fs::read_dir(&src).unwrap().flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if !name.ends_with(".rs") || name.ends_with("_native.rs") || name.contains("test") {
+                continue;
+            }
+            let text = std::fs::read_to_string(e.path()).unwrap();
+            // Only the code before the file's inline tests.
+            let code = text.split("\n#[cfg(test)]\nmod tests").next().unwrap_or("");
+            for (f, attrs, body) in functions(code) {
+                all.insert(f, (attrs, body));
+            }
+        }
+        assert!(
+            [
+                "release_notes_open",
+                "release_notes_close",
+                "page_open",
+                "add_page"
+            ]
+            .iter()
+            .all(|f| all.contains_key(*f)),
+            "the scan did not find the functions it checks"
+        );
+        // The functions that create one, then every function that calls one of those.
+        let mut reach: BTreeSet<String> = all
+            .iter()
+            .filter(|(_, (_, body))| CREATES.iter().chain(CLOSES).any(|c| body.contains(c)))
+            .map(|(f, _)| f.clone())
+            .collect();
+        loop {
+            let more: Vec<String> = all
+                .iter()
+                .filter(|(f, (_, body))| {
+                    !reach.contains(*f)
+                        && reach.iter().any(|r| {
+                            body.match_indices(&format!("{r}(")).any(|(i, _)| {
+                                !body[..i].ends_with(|c: char| c.is_alphanumeric() || c == '_')
+                            })
+                        })
+                })
+                .map(|(f, _)| f.clone())
+                .collect();
+            if more.is_empty() {
+                break;
+            }
+            reach.extend(more);
+        }
+        let sync: Vec<&String> = reach
+            .iter()
+            .filter(|f| {
+                let attrs = &all[*f].0;
+                attrs.contains("tauri::command")
+                    && !attrs
+                        .contains("#[cfg_attr(not(target_os = \"linux\"), tauri::command(async))]")
+                    && !attrs.contains("#[tauri::command(async)]")
+            })
+            .collect();
+        assert!(
+            sync.is_empty(),
+            "commands that create a webview or a window, or close a webview, but run on the main \
+             thread on Windows: \
+             {sync:?} (reached from {reach:?})"
+        );
+    }
+}

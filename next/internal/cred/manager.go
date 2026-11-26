@@ -1,0 +1,727 @@
+package cred
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log"
+	"reflect"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/stdotwork/pluxy/next/internal/route"
+	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/protocol"
+)
+
+// Providers are the provider extensions accounts log in and renew through, by extension ID.
+type Providers interface {
+	// Provider returns the extension with ID id while it runs, else nil. Each call on it goes
+	// to one version of the extension, the one current when the call starts.
+	Provider(id string) Provider
+	// Running returns the IDs of the extensions that run now.
+	Running() []string
+}
+
+// Provider is one provider extension accounts log in and renew through.
+type Provider interface {
+	Info() protocol.Info
+	Login(ctx context.Context, account protocol.Account, login protocol.Login) LoginCall
+	Refresh(ctx context.Context, account protocol.Account) (*protocol.Credential, *llm.Error)
+}
+
+// LoginCall is a running login call on the provider (host.LoginCall).
+type LoginCall interface {
+	Next() protocol.Reply
+	Send(input map[string]string) error
+	Close()
+}
+
+// Renewal timing.
+var (
+	// refreshLead: without a refresh_at, a credential is renewed when it expires within this
+	// long.
+	refreshLead = 5 * time.Minute
+	// After a renewal that failed in a way that may pass, automatic renewal waits this long
+	// (or as long as the provider said), as today's core does.
+	failedBackoff = 5 * time.Minute
+	// After a renewal that gave a credential already due for renewal again, automatic renewal
+	// waits this long, so a provider issuing short-lived tokens is not asked on every request.
+	ineffectiveBackoff = 30 * time.Second
+	// A credential renewed this recently and refused again by the upstream is not renewed
+	// again: the refusal is not about its age.
+	renewedRecently = time.Minute
+	// LoginTimeout bounds a login that waits for a person: the named liveness limit on login
+	// calls.
+	LoginTimeout = 15 * time.Minute
+	// loginKeep is how long a finished login stays visible to the management API.
+	loginKeep = 10 * time.Minute
+)
+
+// Errors from Manager besides the Store's.
+var (
+	// ErrInvalid: the request is malformed.
+	ErrInvalid = errors.New("invalid request")
+	// ErrConflict: the request clashes with the current state.
+	ErrConflict = errors.New("conflict")
+	// ErrIdentity: a new login to an existing account signed in to a different upstream account.
+	ErrIdentity = errors.New("the login signed in to a different account")
+)
+
+// Manager is core's credential authority: it hands credentials to routing, renews them (one
+// renewal per credential at a time, shared by every caller, applied only to the version it
+// renewed) through the extension that owns the account, and runs logins. It is safe for
+// concurrent use.
+type Manager struct {
+	store    *Store
+	provs    Providers
+	reserved func(id string) bool
+	publicID func(id string) string
+	taken    func(id string) bool
+	now      func() time.Time
+	random   io.Reader // the random bytes of new account IDs
+
+	// ctx outlives every caller: renewals and logins run on it, so a client that gives up
+	// waiting never cancels a renewal halfway (the provider may already have rotated the
+	// refresh token, RFC 9700 section 4.14). Close cancels it.
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+
+	mu sync.Mutex
+	// flights is the per-credential refresh lock: at most one renewal per account runs, and
+	// callers that need the same version renewed wait for it.
+	flights            map[string]*flight
+	renewals           map[string]*renewal
+	logins             map[string]*login
+	loginSeq           uint64
+	onChange           func()
+	onCredentialChange func(id string)
+	onReauth           func(id string)
+	onRemove           func(id string)
+}
+
+type flight struct {
+	version uint64
+	done    chan struct{}
+	rec     Record
+	err     *llm.Error
+}
+
+// renewal is what the last renewal of an account left behind. It is about one credential
+// (reg, cred) under one set of settings: once the account holds another credential, or its
+// settings change, it no longer applies.
+type renewal struct {
+	reg      string
+	cred     protocol.Credential
+	settings json.RawMessage
+	// refused: the provider refused this credential's grant, and recording that failed.
+	refused bool
+	at      time.Time  // when it ended
+	until   time.Time  // no automatic renewal before this
+	err     *llm.Error // the failure that set until, if it failed
+}
+
+// Options configure a Manager.
+type Options struct {
+	// Reserved reports IDs that core's config already uses, which logins may not take.
+	Reserved func(id string) bool
+	// PublicID returns an account's public ID (route.State.PublicID). Neither a new account's ID
+	// nor its public ID may be another account's ID or public ID. Nil: only IDs are compared.
+	PublicID func(id string) string
+	// Taken reports whether an account outside the store (one core's config sets) has id as its
+	// ID or its public ID, which a new account's ID and its public ID may then not be.
+	Taken func(id string) bool
+	// OnReauth is called after an existing account signs in again with a new credential.
+	OnReauth func(id string)
+	// OnRemove is called after an account is deleted from the store.
+	OnRemove func(id string)
+}
+
+// NewManager returns the manager for store's accounts on provs.
+func NewManager(store *Store, provs Providers, opts Options) *Manager {
+	ctx, cancel := context.WithCancel(context.Background())
+	m := &Manager{store: store, provs: provs, reserved: opts.Reserved, publicID: opts.PublicID, taken: opts.Taken,
+		onReauth: opts.OnReauth, onRemove: opts.OnRemove, now: time.Now, random: rand.Reader, ctx: ctx, cancel: cancel,
+		flights: map[string]*flight{}, renewals: map[string]*renewal{}, logins: map[string]*login{}}
+	if m.reserved == nil {
+		m.reserved = func(string) bool { return false }
+	}
+	return m
+}
+
+// OnChange sets f to be called after the set of usable accounts may have changed.
+func (m *Manager) OnChange(f func()) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onChange = f
+}
+
+func (m *Manager) changed() {
+	m.mu.Lock()
+	f := m.onChange
+	m.mu.Unlock()
+	if f != nil {
+		f()
+	}
+}
+
+// OnCredentialChange sets f to be called with an account's ID after its credential is renewed
+// or it signs in again.
+func (m *Manager) OnCredentialChange(f func(id string)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onCredentialChange = f
+}
+
+func (m *Manager) credentialChanged(id string) {
+	m.mu.Lock()
+	f := m.onCredentialChange
+	m.mu.Unlock()
+	if f != nil {
+		f(id)
+	}
+}
+
+// Close cancels running renewals and logins and waits for them to end.
+func (m *Manager) Close() {
+	m.cancel()
+	m.wg.Wait()
+}
+
+// Accounts returns the usable accounts, for routing, each with the extension it belongs to.
+func (m *Manager) Accounts() []route.Account {
+	var out []route.Account
+	for _, r := range m.store.List() {
+		if r.Usable() {
+			a := r.Account
+			a.ID, a.Credential, a.Managed, a.Extension = r.ID, nil, true, r.Extension
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// Records returns every stored account, including unusable ones.
+func (m *Manager) Records() []Record { return m.store.List() }
+
+// Broken returns the record files the store could not read, each the account its file name
+// gives. They are never routed to; they are listed so the account shows as broken, and removing
+// one removes its file.
+func (m *Manager) Broken() []Broken { return m.store.Broken() }
+
+// StoredCredential returns the saved credential of a usable account owned by extension,
+// without renewing it. Local model catalogs can read plan metadata from an expired token.
+func (m *Manager) StoredCredential(extension, id string) (*protocol.Credential, *llm.Error) {
+	rec, ok := m.store.Get(id)
+	if !ok || rec.Extension != extension || !rec.Usable() {
+		return nil, credentialError(llm.CodeUnavailable, fmt.Sprintf("the account of extension %s is unavailable", extension))
+	}
+	return &rec.Credential, nil
+}
+
+// LastRenewalError returns why the last automatic renewal of r's credential failed, while
+// automatic renewal is waiting because of it.
+func (m *Manager) LastRenewalError(r Record) *llm.Error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if rn := m.renewalFor(r); rn != nil && rn.err != nil && rn.until.After(m.now()) {
+		return rn.err
+	}
+	return nil
+}
+
+// renewalFor returns what the last renewal of r's current credential left behind, or nil.
+// Call with m.mu held.
+func (m *Manager) renewalFor(r Record) *renewal {
+	rn := m.renewals[r.ID]
+	if rn == nil || rn.reg != r.Registration || !sameCredential(rn.cred, r.Credential) || !bytes.Equal(rn.settings, r.Account.Settings) {
+		return nil
+	}
+	return rn
+}
+
+// Refreshable reports whether core renews r's credential: it is not a static key, and the
+// extension it belongs to runs and can refresh.
+func (m *Manager) Refreshable(r Record) bool {
+	if r.Credential.Kind == protocol.CredentialAPIKey {
+		return false
+	}
+	p := m.provs.Provider(r.Extension)
+	return p != nil && slices.Contains(p.Info().Operations, protocol.OpRefresh)
+}
+
+func credentialError(code, msg string) *llm.Error {
+	return &llm.Error{Code: code, Scope: llm.ScopeCredential, Retryable: true, Message: msg}
+}
+
+// Credential returns the credential an attempt on account id presents to extension, renewing
+// it first when it expires within refreshLead. An account of another extension is refused:
+// its credential never reaches extension.
+func (m *Manager) Credential(ctx context.Context, extension, id string) (*protocol.Credential, uint64, *llm.Error) {
+	rec, ok := m.store.Get(id)
+	if !ok || rec.Extension != extension {
+		return nil, 0, credentialError(llm.CodeUnavailable, fmt.Sprintf("the account of extension %s is not in the credential store", extension))
+	}
+	if !rec.Usable() {
+		return nil, 0, credentialError(llm.CodeAuth, "the account is "+describeState(rec))
+	}
+	m.mu.Lock()
+	rn := m.renewalFor(rec)
+	m.mu.Unlock()
+	if rn != nil && rn.refused {
+		return nil, 0, credentialError(llm.CodeAuth, "the provider refused the grant; the account needs a new login")
+	}
+	now := m.now()
+	expired := rec.Credential.ExpiresAt != 0 && rec.Credential.ExpiresAt <= now.Unix()
+	if !m.due(rec) && expired && m.Refreshable(rec) {
+		// Renewal is waiting after a failure, and the credential no longer works.
+		return nil, 0, m.waitingError(rec, now)
+	}
+	if m.due(rec) {
+		r, e := m.renew(ctx, rec, false)
+		now = m.now()
+		switch {
+		case e == nil && (r.Registration != rec.Registration || r.Extension != extension):
+			// Removed during the renewal, and maybe added again for another extension: the
+			// record is not the account this attempt asked for.
+			return nil, 0, credentialError(llm.CodeUnavailable, "the account was removed")
+		case e == nil:
+			rec = r
+			if !rec.Usable() {
+				return nil, 0, credentialError(llm.CodeAuth, "the account is "+describeState(rec))
+			}
+		case e.Code == llm.CodeCancelled && ctx.Err() != nil:
+			return nil, 0, &llm.Error{Code: llm.CodeCancelled, Message: "the request was cancelled"}
+		case rec.Credential.ExpiresAt > now.Unix() && !rejectedGrant(e) && !keyless(rec.Credential):
+			// Renewal failed but the credential still works for now: use it.
+		default:
+			out := credentialError(llm.CodeUnavailable, "the credential has expired and renewing it failed: "+e.Message)
+			if rejectedGrant(e) {
+				out.Code = llm.CodeAuth
+			} else if until := m.retryAt(rec); until.After(now) {
+				out.RetryAfterMS = until.Sub(now).Milliseconds()
+			}
+			return nil, 0, out
+		}
+	}
+	// The one place a credential leaves: a keyless one has nothing to present, whichever way it
+	// got here (a renewal that gave no key, or one that failed while another request renewed).
+	if keyless(rec.Credential) && m.Refreshable(rec) {
+		return nil, 0, m.waitingError(rec, now)
+	}
+	c := rec.Credential
+	return &c, rec.Version, nil
+}
+
+// waitingError is what a request gets while rec's renewal waits out its backoff and the
+// credential has nothing to present.
+func (m *Manager) waitingError(rec Record, now time.Time) *llm.Error {
+	msg := "the credential has expired and renewal is waiting after a failure"
+	if last := m.LastRenewalError(rec); last != nil {
+		msg += ": " + last.Message
+	}
+	out := credentialError(llm.CodeUnavailable, msg)
+	if until := m.retryAt(rec); until.After(now) {
+		out.RetryAfterMS = until.Sub(now).Milliseconds()
+	}
+	return out
+}
+
+// Rejected renews account id's credential after the upstream refused version, and reports
+// whether a newer usable one is ready.
+func (m *Manager) Rejected(ctx context.Context, id string, version uint64) bool {
+	rec, ok := m.store.Get(id)
+	if !ok || !m.Refreshable(rec) {
+		return false
+	}
+	if rec.Version != version {
+		return rec.Usable() // renewed (or replaced) since that attempt began
+	}
+	m.mu.Lock()
+	rn := m.renewalFor(rec)
+	recent := rn != nil && rn.err == nil && m.now().Sub(rn.at) < renewedRecently
+	m.mu.Unlock()
+	if recent {
+		return false
+	}
+	r, e := m.renew(ctx, rec, false)
+	return e == nil && r.Version != version && r.Usable()
+}
+
+// Refresh renews account id's credential now, whatever its expiry and backoff.
+func (m *Manager) Refresh(ctx context.Context, id string) (Record, error) {
+	rec, ok := m.store.Get(id)
+	if !ok {
+		return Record{}, ErrNotFound
+	}
+	if !m.Refreshable(rec) {
+		return rec, fmt.Errorf("%w: account %q's credential cannot be refreshed", ErrConflict, id)
+	}
+	if rec.Disabled {
+		return rec, fmt.Errorf("%w: account %q is disabled", ErrConflict, id)
+	}
+	r, e := m.renew(ctx, rec, true)
+	if e != nil {
+		return r, e
+	}
+	return r, nil
+}
+
+// renewAt returns when c should be renewed, in Unix seconds; 0 for never.
+func renewAt(c protocol.Credential) int64 {
+	switch {
+	case c.RefreshAt != 0:
+		return c.RefreshAt
+	case c.ExpiresAt != 0:
+		return c.ExpiresAt - int64(refreshLead/time.Second)
+	}
+	return 0
+}
+
+// keyless reports whether c is an OAuth credential with no access token, such as an imported
+// Meta device token or a lone refresh token: it can only be renewed. A credential of an
+// extension's own kind keeps its secret in its data, so it is never keyless. Core acts on this
+// only for a credential it renews (see Refreshable).
+func keyless(c protocol.Credential) bool {
+	return c.Kind == protocol.CredentialOAuth && c.AccessToken == ""
+}
+
+// due reports whether rec's credential should be renewed before use. A keyless one is due
+// whenever its backoff is not running.
+func (m *Manager) due(rec Record) bool {
+	if !m.Refreshable(rec) {
+		return false
+	}
+	now := m.now()
+	if !keyless(rec.Credential) {
+		if at := renewAt(rec.Credential); at == 0 || now.Unix() < at {
+			return false
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rn := m.renewalFor(rec)
+	return rn == nil || !rn.until.After(now)
+}
+
+func (m *Manager) retryAt(r Record) time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if rn := m.renewalFor(r); rn != nil {
+		return rn.until
+	}
+	return time.Time{}
+}
+
+// renew renews seen's credential, or waits for the renewal of that version already running.
+// When the record has moved past seen's version, it returns the current record: someone else
+// renewed or replaced the credential. force skips the backoff after earlier failures.
+func (m *Manager) renew(ctx context.Context, seen Record, force bool) (Record, *llm.Error) {
+	for {
+		m.mu.Lock()
+		cur, ok := m.store.Get(seen.ID)
+		if !ok || cur.Registration != seen.Registration {
+			m.mu.Unlock()
+			return Record{}, credentialError(llm.CodeUnavailable, "the account was removed")
+		}
+		if cur.Version != seen.Version {
+			m.mu.Unlock()
+			return cur, nil
+		}
+		f := m.flights[seen.ID]
+		if f != nil && f.version != cur.Version {
+			// A renewal of an older version is finishing; wait for it, then look again.
+			m.mu.Unlock()
+			select {
+			case <-f.done:
+				continue
+			case <-ctx.Done():
+				return Record{}, &llm.Error{Code: llm.CodeCancelled, Message: "cancelled while waiting for a credential renewal"}
+			}
+		}
+		if f == nil {
+			if rn := m.renewalFor(cur); !force && rn != nil && rn.until.After(m.now()) {
+				m.mu.Unlock()
+				return cur, rn.err
+			}
+			f = &flight{version: cur.Version, done: make(chan struct{})}
+			m.flights[seen.ID] = f
+			m.wg.Add(1)
+			go m.runRenewal(cur, f)
+		}
+		m.mu.Unlock()
+		select {
+		case <-f.done:
+			return f.rec, f.err
+		case <-ctx.Done():
+			return Record{}, &llm.Error{Code: llm.CodeCancelled, Message: "cancelled while waiting for a credential renewal"}
+		}
+	}
+}
+
+// runRenewal is one renewal: it holds the account's refresh lock (its flight) from start to
+// finish.
+func (m *Manager) runRenewal(seen Record, f *flight) {
+	defer m.wg.Done()
+	var rec Record
+	var e *llm.Error
+	// Read the record again now the lock is held: the caller's copy may already be out of
+	// date.
+	cur, ok := m.store.Get(seen.ID)
+	switch {
+	case !ok || cur.Registration != seen.Registration:
+		e = credentialError(llm.CodeUnavailable, "the account was removed")
+	case cur.Version != seen.Version:
+		rec = cur
+	default:
+		p := m.provs.Provider(cur.Extension)
+		if p == nil {
+			rec, e = cur, credentialError(llm.CodeExtensionUnavailable, fmt.Sprintf("extension %s does not run", cur.Extension))
+			break
+		}
+		acct := protocol.Account{ID: cur.ID, Settings: cur.Account.Settings, Credential: &cur.Credential, ProxyURL: cur.Account.ProxyURL, Headers: cur.Account.Headers}
+		cred, perr := p.Refresh(m.ctx, acct)
+		rec, e = m.apply(cur, cred, perr)
+	}
+	m.mu.Lock()
+	f.rec, f.err = rec, e
+	delete(m.flights, seen.ID)
+	m.mu.Unlock()
+	close(f.done)
+}
+
+// rejectedGrant reports whether a refresh failed because the provider refused the grant
+// itself: only a new login helps.
+func rejectedGrant(e *llm.Error) bool {
+	return e != nil && e.Code == llm.CodeAuth && e.Scope == llm.ScopeCredential && !e.Retryable
+}
+
+// apply records the outcome of renewing cur's credential. A new credential is written only
+// if the record is still at cur's registration and version; otherwise the result is refused
+// and the newer record stands.
+func (m *Manager) apply(cur Record, cred *protocol.Credential, perr *llm.Error) (Record, *llm.Error) {
+	now := m.now()
+	switch {
+	case perr == nil:
+		// Kept even when the settings changed meanwhile: the provider may have rotated the
+		// refresh token, and the credential is the account's, whatever its settings.
+		next, err := m.updateRenewed(cur, false, func(r *Record) {
+			r.Credential = *cred
+			r.State, r.Reason = StateActive, ""
+		})
+		switch {
+		case errors.Is(err, ErrNotFound):
+			log.Printf("credentials: account %q: refused a renewed credential: the account was removed while it was being renewed", cur.ID)
+			return Record{}, credentialError(llm.CodeUnavailable, "the account was removed")
+		case errors.Is(err, ErrStale):
+			log.Printf("credentials: account %q: refused a renewed credential: the account's credential was replaced while it was being renewed", cur.ID)
+			return next, nil
+		case err != nil:
+			log.Printf("error: credentials: account %q: saving the renewed credential failed: %v", cur.ID, err)
+			return cur, credentialError(llm.CodeInternal, "saving the renewed credential failed")
+		}
+		rn := &renewal{at: now}
+		if at := renewAt(*cred); at != 0 && now.Unix() >= at || keyless(*cred) {
+			// Ineffective: the new credential is already due for renewal again, or has no key
+			// to present.
+			rn.until = now.Add(ineffectiveBackoff)
+		}
+		m.setRenewal(next, rn)
+		m.credentialChanged(next.ID)
+		return next, nil
+	case rejectedGrant(perr):
+		next, err := m.updateRenewed(cur, true, func(r *Record) {
+			r.State, r.Reason = StateReauth, perr.Message
+		})
+		switch {
+		case errors.Is(err, ErrNotFound):
+			return Record{}, credentialError(llm.CodeUnavailable, "the account was removed")
+		case errors.Is(err, ErrStale):
+			// The credential was replaced meanwhile (a new login), or the settings changed: the
+			// refusal was about the account as it was.
+			return next, nil
+		case err != nil:
+			log.Printf("error: credentials: account %q: the provider refused the grant, and saving that failed: %v", cur.ID, err)
+			m.setRenewal(cur, &renewal{at: now, until: now.Add(failedBackoff), err: perr, refused: true})
+			return cur, perr
+		}
+		log.Printf("error: credentials: account %q needs a new login: %s", cur.ID, perr.Message)
+		m.setRenewal(next, &renewal{at: now, err: perr})
+		m.changed()
+		return next, perr
+	case perr.Code == llm.CodeCancelled:
+		return cur, perr
+	default:
+		if latest, ok := m.store.Get(cur.ID); !ok {
+			return Record{}, credentialError(llm.CodeUnavailable, "the account was removed")
+		} else if latest.Registration != cur.Registration || !sameCredential(latest.Credential, cur.Credential) ||
+			!bytes.Equal(latest.Account.Settings, cur.Account.Settings) {
+			// The failure was about a credential that has since been replaced, or about the
+			// account's old settings: it says nothing about the account now.
+			return latest, nil
+		}
+		wait := failedBackoff
+		if perr.RetryAfterMS > 0 {
+			wait = time.Duration(perr.RetryAfterMS) * time.Millisecond
+		}
+		log.Printf("credentials: account %q: renewing the credential failed (next try in %s): %s", cur.ID, llm.WholeSeconds(wait), perr.Message)
+		m.setRenewal(cur, &renewal{at: now, until: now.Add(wait), err: perr})
+		return cur, perr
+	}
+}
+
+// updateRenewed applies change to the account renewed from cur, if the account still holds
+// cur's credential under cur's registration, and, when sameSettings is set, cur's settings.
+// Changes to anything else made meanwhile (a disable, a label) do not refuse it: change is
+// applied on top of them. A replaced credential (or changed settings) returns ErrStale with the
+// current record; a removed account, ErrNotFound.
+func (m *Manager) updateRenewed(cur Record, sameSettings bool, change func(*Record)) (Record, error) {
+	base := cur
+	for {
+		next, err := m.store.Update(base.ID, base.Registration, base.Version, change)
+		if !errors.Is(err, ErrStale) {
+			return next, err
+		}
+		if next.Registration != cur.Registration || !sameCredential(next.Credential, cur.Credential) ||
+			sameSettings && !bytes.Equal(next.Account.Settings, cur.Account.Settings) {
+			return next, ErrStale
+		}
+		base = next
+	}
+}
+
+// sameCredential reports whether a and b are the same credential.
+func sameCredential(a, b protocol.Credential) bool {
+	return reflect.DeepEqual(a, b)
+}
+
+// setRenewal records what a renewal left behind for r's credential and settings.
+func (m *Manager) setRenewal(r Record, rn *renewal) {
+	rn.reg, rn.cred, rn.settings = r.Registration, r.Credential, r.Account.Settings
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.renewals[r.ID] = rn
+}
+
+func describeState(r Record) string {
+	switch {
+	case r.Disabled:
+		return "disabled"
+	case r.State == StateReauth:
+		return "waiting for a new login"
+	}
+	return r.State
+}
+
+// SetDisabled disables or enables account id. Enabling does not clear a refused grant.
+func (m *Manager) SetDisabled(id string, disabled bool) (Record, error) {
+	return m.SetAccount(id, nil, &disabled, nil)
+}
+
+// SetAccount changes the routing fields and settings of account id (its route.Account) with
+// change, which may be nil, then checks them, and sets its disabled flag when disabled is not
+// nil and the label a person gave it when label is not nil ("" takes that label away, leaving
+// the provider's), in one update. change is given the account as it is now, each time the
+// update is tried again, and an error from it changes nothing and is returned as it is. The
+// account's ID and credential stay as they are. The caller checks the label.
+func (m *Manager) SetAccount(id string, change func(*route.Account) error, disabled *bool, label *string) (Record, error) {
+	for {
+		cur, ok := m.store.Get(id)
+		if !ok {
+			return Record{}, ErrNotFound
+		}
+		a := cur.Account
+		if change != nil {
+			if err := change(&a); err != nil {
+				return Record{}, err
+			}
+			a.ID, a.Credential = cur.Account.ID, nil
+			if err := a.Check(); err != nil {
+				return Record{}, fmt.Errorf("%w: %v", ErrInvalid, err)
+			}
+		}
+		next, err := m.store.Update(id, cur.Registration, cur.Version, func(r *Record) {
+			r.Account = a
+			if disabled != nil {
+				r.Disabled = *disabled
+			}
+			if label != nil {
+				r.setLabel(*label)
+			}
+		})
+		if errors.Is(err, ErrStale) {
+			continue // a renewal landed meanwhile; apply the change to the new version
+		}
+		if err == nil {
+			m.changed()
+		}
+		return next, err
+	}
+}
+
+// Create adds account r, made elsewhere than by a login (an imported credential file), and
+// routes to it at once, as a finished login does. Like a login, it may not take an ID core's
+// config uses, nor, whatever its case, one a login still running will take, nor an ID that, or
+// whose public ID, is another account's ID or public ID (idTaken). Its routing fields
+// are checked as SetAccount checks them: one that routing refuses would stop every account
+// routing.
+func (m *Manager) Create(r Record) (Record, error) {
+	if m.reserved(r.ID) {
+		return Record{}, fmt.Errorf("%w: account %q is set in core's config", ErrConflict, r.ID)
+	}
+	a := r.Account
+	a.ID, a.Credential = r.ID, nil
+	if err := a.Check(); err != nil {
+		return Record{}, fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	// m.mu is held across the create, so a login cannot start for the ID in between.
+	m.mu.Lock()
+	for _, l := range m.logins {
+		if l.state == LoginPending && strings.EqualFold(l.account, r.ID) {
+			m.mu.Unlock()
+			return Record{}, fmt.Errorf("%w: a login for account %q is running (%s)", ErrConflict, l.account, l.id)
+		}
+	}
+	// An ID the store has, whatever its case, is left to the store, which refuses it (ErrExists).
+	dup := slices.ContainsFunc(m.store.List(), func(s Record) bool { return strings.EqualFold(s.ID, r.ID) })
+	if !dup && m.idTaken(r.ID) {
+		m.mu.Unlock()
+		return Record{}, idTakenError(r.ID)
+	}
+	rec, err := m.store.Create(r)
+	m.mu.Unlock()
+	if err != nil {
+		return Record{}, err
+	}
+	log.Printf("credentials: account %q added", rec.ID)
+	m.changed()
+	return rec, nil
+}
+
+// Remove removes account id and cancels a login running for it. A renewal still running for
+// it finds the account gone and its result is refused.
+func (m *Manager) Remove(id string) error {
+	if err := m.store.Delete(id); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	delete(m.renewals, id)
+	for _, l := range m.logins {
+		if l.account == id && l.state == LoginPending {
+			l.cancel()
+		}
+	}
+	m.mu.Unlock()
+	if m.onRemove != nil {
+		m.onRemove(id)
+	}
+	m.changed()
+	return nil
+}

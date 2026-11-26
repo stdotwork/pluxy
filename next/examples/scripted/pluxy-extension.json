@@ -1,0 +1,12 @@
+{
+  "manifest_version": 0,
+  "id": "example/scripted",
+  "version": "0.1.0",
+  "protocol": [0],
+  "programs": {
+    "linux/amd64": "scripted",
+    "linux/arm64": "scripted",
+    "darwin/amd64": "scripted",
+    "darwin/arm64": "scripted"
+  }
+}

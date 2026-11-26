@@ -1,0 +1,225 @@
+{
+  "description": "A Muse Code login whose config lists no models: the new core's GET /v0/management/accounts/{id}/models against the old core's GET /v0/management/auth-files/models for the same account.",
+  "source": [
+    "core/internal/api/handlers/management/auth_files.go GetAuthFileModels",
+    "core/sdk/cliproxy/service_models.go",
+    "core/internal/registry/models/ catalog for meta"
+  ],
+  "client": {"method":"GET","path":"/v0/management/accounts/corpus/models","auth":"management-key"},
+  "old_client": {
+    "method": "GET",
+    "path": "/v0/management/auth-files/models?name=meta-corpus-1.json",
+    "auth": "management-key"
+  },
+  "account_models": ["muse-spark-1.3"],
+  "old_core": {"account":{"models":null}},
+  "new_core": {"account":{"models":null}},
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "models": [
+          {"display_name":"Muse Wonder 1.0","id":"muse-wonder-1.0","owned_by":"meta","type":"meta"},
+          {
+            "display_name": "Muse Wonder 1.0 Contributor",
+            "id": "muse-wonder-1.0-contributor",
+            "owned_by": "meta",
+            "type": "meta"
+          },
+          {
+            "display_name": "Muse Wonder Full 1.0",
+            "id": "muse-wonder-full-1.0",
+            "owned_by": "meta",
+            "type": "meta"
+          },
+          {
+            "display_name": "Muse Wonder Full 1.0 Contributor",
+            "id": "muse-wonder-full-1.0-contributor",
+            "owned_by": "meta",
+            "type": "meta"
+          },
+          {"display_name":"Muse Spark 1.3","id":"muse-spark-1.3","owned_by":"meta","type":"meta"},
+          {
+            "display_name": "Muse Spark 1.3 Contributor",
+            "id": "muse-spark-1.3-contributor",
+            "owned_by": "meta",
+            "type": "meta"
+          },
+          {"display_name":"Muse Spark 1.2","id":"muse-spark-1.2","owned_by":"meta","type":"meta"},
+          {
+            "display_name": "Muse Spark 1.2 Contributor",
+            "id": "muse-spark-1.2-contributor",
+            "owned_by": "meta",
+            "type": "meta"
+          },
+          {"display_name":"Muse Spark 1.1","id":"muse-spark-1.1","owned_by":"meta","type":"meta"}
+        ]
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8",
+        "X-Cpa-Build-Date": "unknown",
+        "X-Cpa-Commit": "none",
+        "X-Cpa-Support-Plugin": "1",
+        "X-Cpa-Version": "dev"
+      },
+      "status": 200
+    },
+    "upstream": []
+  },
+  "exceptions": [
+    {
+      "path": "client.headers.Content-Type",
+      "kind": "intended",
+      "want": "application/json",
+      "reason": "Different management API by design: the new management API answers application/json; today's core's gin handlers add a charset."
+    },
+    {
+      "path": "client.body.models[*].type",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The old list's type is not carried."
+    },
+    {
+      "path": "client.body.models[*].context_length",
+      "kind": "intended",
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's context_length is not in the old list."
+    },
+    {
+      "path": "client.body.models[*].created",
+      "kind": "intended",
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's created is not in the old list."
+    },
+    {
+      "path": "client.body.models[*].description",
+      "kind": "intended",
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's description is not in the old list."
+    },
+    {
+      "path": "client.body.models[0].input_modalities",
+      "kind": "intended",
+      "want": ["text","image","video","audio"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[1].input_modalities",
+      "kind": "intended",
+      "want": ["text","image","video","audio"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[2].input_modalities",
+      "kind": "intended",
+      "want": ["text","image","video","audio"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[3].input_modalities",
+      "kind": "intended",
+      "want": ["text","image","video","audio"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[4].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[5].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[6].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[7].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[8].input_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[*].max_completion_tokens",
+      "kind": "intended",
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's max_completion_tokens is not in the old list."
+    },
+    {
+      "path": "client.body.models[*].name",
+      "kind": "intended",
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's name is not in the old list."
+    },
+    {
+      "path": "client.body.models[0].names",
+      "kind": "intended",
+      "want": ["muse-wonder-1.0"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[1].names",
+      "kind": "intended",
+      "want": ["muse-wonder-1.0-contributor"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[2].names",
+      "kind": "intended",
+      "want": ["muse-wonder-full-1.0"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[3].names",
+      "kind": "intended",
+      "want": ["muse-wonder-full-1.0-contributor"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[4].names",
+      "kind": "intended",
+      "want": ["muse-spark-1.3"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[5].names",
+      "kind": "intended",
+      "want": ["muse-spark-1.3-contributor"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[6].names",
+      "kind": "intended",
+      "want": ["muse-spark-1.2"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[7].names",
+      "kind": "intended",
+      "want": ["muse-spark-1.2-contributor"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[8].names",
+      "kind": "intended",
+      "want": ["muse-spark-1.1"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[*].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    }
+  ]
+}

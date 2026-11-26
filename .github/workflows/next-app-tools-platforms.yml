@@ -1,0 +1,398 @@
+name: Next app tools platforms
+
+# Builds, lints and unit-tests the app tools (next/app-tools, the native programs the desktop app
+# runs on demand) on Windows and macOS: the whole workspace. Linux runs them in next-app.yml. The
+# wsl job runs pluxy/wsl, the Linux side of a WSL instance and the desktop app's program host and
+# spawn service against real WSL distributions.
+
+on:
+  # Pull requests and merge-queue groups run this through ci.yml, which runs it only when
+  # its paths below are touched.
+  workflow_call:
+    inputs:
+      wsl:
+        description: Run the WSL jobs. ci.yml passes false when nothing they build or run changed.
+        type: boolean
+        default: true
+  workflow_dispatch:
+  # Not on every push to main: the merge queue already ran this for the last change it merges that
+  # touched what this builds, and the hosted macOS pool is short enough that re-runs on main starved
+  # the queue's own jobs. One run a day on main keeps main's caches fresh for the PR and
+  # merge-queue runs that restore them.
+  schedule:
+    - cron: '47 3 * * *'
+
+concurrency:
+  # A literal name: called from ci.yml, github.workflow is the caller's name, the same for every
+  # workflow it calls.
+  group: next-app-tools-platforms-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+    working-directory: next/app-tools
+
+jobs:
+  tools:
+    name: app tools (${{ matrix.os }})
+    # On macOS, the repository variable PLUXY_MACOS_CLOUD_RUNNER, when set, gives the runner label
+    # to use instead of GitHub's for pushes, the daily run and manual runs; pull requests and merge
+    # groups use GitHub's, as the Terminal window tests run one at a time (docs/ci.md, "Where jobs
+    # run"). On Windows the transaction and
+    # recipe tests fail on Blacksmith's runner, so the Windows leg stays on GitHub's (or the
+    # maintainers' PLUXY_WINDOWS_RUNNER).
+    runs-on: ${{ matrix.os == 'windows-latest' && (github.event_name == 'push' || github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) && vars.PLUXY_WINDOWS_RUNNER && fromJSON(vars.PLUXY_WINDOWS_RUNNER) || matrix.os == 'macos-latest' && github.event_name != 'pull_request' && github.event_name != 'merge_group' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.97.0
+        with:
+          components: clippy
+      - name: Cache Rust dependencies and build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: next/app-tools -> target
+          key: ${{ matrix.os }}
+          # Saved from main only: a cache saved on a PR or merge-group ref is usable only there, and
+          # those filled the repo's 10 GB and evicted main's, which every run restores.
+          save-if: ${{ runner.environment == 'github-hosted' && github.ref == 'refs/heads/main' }}
+      - name: Clippy
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      # Unit tests with an empty temporary home, so no test can reach the runner's own.
+      - name: Tests
+        run: |
+          export RUSTUP_HOME="${RUSTUP_HOME:-$(cygpath -u "${USERPROFILE:-$HOME}" 2>/dev/null || echo "$HOME")/.rustup}"
+          export CARGO_HOME="${CARGO_HOME:-$(cygpath -u "${USERPROFILE:-$HOME}" 2>/dev/null || echo "$HOME")/.cargo}"
+          test_env="$(mktemp -d)"
+          export HOME="$test_env/home"
+          mkdir -p "$HOME"
+          if [ "$RUNNER_OS" = Windows ]; then
+            export USERPROFILE="$(cygpath -w "$HOME")"
+            export APPDATA="$(cygpath -w "$test_env/appdata")" LOCALAPPDATA="$(cygpath -w "$test_env/localappdata")"
+            mkdir -p "$test_env/appdata" "$test_env/localappdata"
+          fi
+          status=0
+          # --show-output prints what passing tests said, so a test's own skip line is seen.
+          cargo test --locked --no-fail-fast --workspace -- --show-output 2>&1 | tee "$RUNNER_TEMP/cargo-test.log" || status=$?
+          # Record the counts, with the tests that skipped a part this account may not do (such as
+          # making a symbolic link), and refuse a run that ran nothing.
+          awk '/^test result:/ { p += $4; f += $6; i += $8 } /^skipped: / { s++ } END {
+            printf "passed %d, failed %d, ignored %d, skipped parts %d\n", p, f, i, s
+            if (p == 0) exit 1
+          }' "$RUNNER_TEMP/cargo-test.log" | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "$status"
+
+  # pluxy/wsl (next/app-tools/wsl) and the Linux side of a WSL instance (pluxy-program's
+  # environment check, pluxy-transactions in a distribution) against Windows' own wsl.exe and real
+  # distributions, under WSL 2 and WSL 1. Always a GitHub-hosted runner, discarded after the job: it
+  # installs distributions and users. Nothing stands in for WSL. Every test the job names must
+  # run and pass; a skipped or missing one fails it.
+  wsl:
+    name: WSL ${{ matrix.wsl }}
+    # The daily run and manual runs always run it; ci.yml decides for pull requests and merge
+    # groups. (On the daily and manual runs there is no wsl input, and an expression's null equals
+    # false, so the event is checked, not inputs.wsl != false. Called from ci.yml, the event is
+    # ci.yml's: pull_request or merge_group.)
+    if: (github.event_name != 'pull_request' && github.event_name != 'merge_group') || inputs.wsl
+    runs-on: windows-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        wsl: ['2', '1']
+    env:
+      WSL_UTF8: '1'
+      # The Linux programs are built here for Linux (static, musl), linked by Rust's own lld.
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: rust-lld
+      PLUXY_WSL_TEST_DISTRO: Ubuntu
+      PLUXY_WSL_TEST_OTHER: Other
+      PLUXY_WSL_TEST_VERSION: ${{ matrix.wsl }}
+      PLUXY_WSL_TEST_WRITER: /mnt/c/pluxy-wsl/writer/fixture-writer
+      PLUXY_WSL_TEST_WRITER_DIR: /mnt/c/pluxy-wsl/writer
+      PLUXY_WSL_TEST_DRIVE_DIR: /mnt/c/pluxy-wsl/drive
+      # Git Bash rewrites values that look like POSIX paths (/mnt/c/...) into Windows paths under
+      # its own folder when it starts a Windows program such as cargo; these are Linux paths.
+      MSYS2_ENV_CONV_EXCL: PLUXY_WSL_TEST_
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.97.0
+        with:
+          targets: x86_64-unknown-linux-musl
+      - name: Cache Rust dependencies and build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: next/app-tools -> target
+          key: wsl
+          # Saved from main only: a cache saved on a PR or merge-group ref is usable only there, and
+          # those filled the repo's 10 GB and evicted main's, which every run restores.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build the Windows tests and the Linux programs
+        run: |
+          cargo test --locked -p wsl --test real_wsl --no-run
+          mkdir -p /c/pluxy-wsl/linux /c/pluxy-wsl/writer /c/pluxy-wsl/drive
+          # The unit tests of pluxy-program and pluxy-transactions, built for Linux.
+          cargo test --locked --no-run --target x86_64-unknown-linux-musl -p pluxy-program -p pluxy-transactions --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .profile.test and .executable != null) | "\(.target.name) \(.executable)"' \
+            | while read -r name exe; do cp "$(cygpath -u "$exe")" "/c/pluxy-wsl/linux/$name"; done
+          ls -l /c/pluxy-wsl/linux
+          test -f /c/pluxy-wsl/linux/pluxy_program && test -f /c/pluxy-wsl/linux/pluxy_transactions
+          # The fixture writer's Linux program, in a package folder of its own.
+          cargo build --locked --target x86_64-unknown-linux-musl -p pluxy-transactions --example fixture-writer
+          cp target/x86_64-unknown-linux-musl/debug/examples/fixture-writer lib/transactions/examples/fixture-writer/pluxy-extension.json /c/pluxy-wsl/writer/
+          printf '{"theme": "light"}\n' > /c/pluxy-wsl/drive/settings.json
+      - name: Windows test before any distribution is installed
+        run: |
+          # What wsl.exe itself answers, for the record: exit code, then the bytes.
+          code=0; /c/Windows/System32/wsl.exe --list --quiet > "$RUNNER_TEMP/list.out" 2> "$RUNNER_TEMP/list.err" || code=$?
+          echo "wsl.exe --list --quiet: exit $code"; od -c "$RUNNER_TEMP/list.out" | head -20; od -c "$RUNNER_TEMP/list.err" | head -20
+          cargo test --locked -p wsl --test real_wsl -- --ignored --exact distros_before_any_distribution_is_installed_says_not_installed 2>&1 | tee "$RUNNER_TEMP/no-distro.log"
+          grep -q '^test result: ok. 1 passed' "$RUNNER_TEMP/no-distro.log"
+      - name: Set up the distributions
+        shell: pwsh
+        timeout-minutes: 40
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
+          # Runs wsl.exe with a time limit; a launch WSL 1 refuses with 0xd0000225 (nothing ran) is
+          # tried again within it. The later steps use these helpers too.
+          $helper = @'
+          $WSL = "$env:SystemRoot\System32\wsl.exe"
+          [Console]::OutputEncoding = [Text.UTF8Encoding]::new()
+          # When set, no wsl.exe call waits past it (the setup's own budget).
+          $script:Deadline = $null
+          $script:Calls = 0
+
+          # Reads a file another stream may still be writing.
+          function Read-Shared([string]$path) {
+            if (-not (Test-Path $path)) { return '' }
+            $s = [IO.FileStream]::new($path, 'Open', 'Read', 'ReadWrite')
+            try { [IO.StreamReader]::new($s).ReadToEnd() } finally { $s.Dispose() }
+          }
+
+          # What a stalled call was waiting on: its output so far, the WSL and installer processes
+          # still running, and what WSL says of itself, each with a short limit of its own.
+          function Show-Stall([string[]]$a, [int]$seconds, [string]$out, [string]$err) {
+            Write-Host "::error::wsl.exe $a did not finish in $seconds s"
+            Write-Host "--- what it wrote so far:"
+            Write-Host (Read-Shared $out)
+            Write-Host (Read-Shared $err)
+            Write-Host "--- WSL and installer processes still running:"
+            $names = '^(wsl|wslservice|wslhost|wslrelay|wslinstaller|msiexec|vmcompute|vmwp|vmmem)'
+            try {
+              Get-CimInstance Win32_Process -OperationTimeoutSec 20 | Where-Object Name -match $names |
+                Format-Table ProcessId, ParentProcessId, Name, CreationDate, CommandLine -AutoSize -Wrap | Out-String -Width 400 | Write-Host
+            } catch {
+              Get-Process | Where-Object Name -match $names | Format-Table Id, Name, StartTime -AutoSize | Out-String -Width 400 | Write-Host
+            }
+            foreach ($d in @(, @('--status')) + @(, @('--list', '--verbose'))) {
+              Write-Host "--- wsl.exe $d (30 s at most):"
+              $c = Invoke-Wsl $d 30 -Report:$false -Unbounded
+              Write-Host "$($script:WOut)(exit $(if ($null -eq $c) { 'none: it did not finish' } else { $c }))"
+            }
+          }
+
+          # Runs wsl.exe with args a for at most seconds s, and never past the deadline unless
+          # Unbounded: its exit code, or $null when it did not finish (then it was reported unless
+          # Report is false, and stopped). Both streams go to files as they come, so a stalled call
+          # still shows what it wrote; the text ends up in $script:WOut.
+          function Invoke-Wsl([string[]]$a, [int]$s, [bool]$Report = $true, [switch]$Unbounded) {
+            if ($script:Deadline -and -not $Unbounded) {
+              $left = [int][Math]::Floor(($script:Deadline - [DateTime]::UtcNow).TotalSeconds)
+              if ($left -lt $s) { $s = $left }
+              if ($s -le 0) { throw "the setup's time is up before wsl.exe $a" }
+            }
+            $script:Calls++
+            $out = Join-Path $env:RUNNER_TEMP "wsl-$($script:Calls).out"
+            $err = Join-Path $env:RUNNER_TEMP "wsl-$($script:Calls).err"
+            $si = [Diagnostics.ProcessStartInfo]::new($WSL)
+            foreach ($x in $a) { $si.ArgumentList.Add($x) }
+            $si.UseShellExecute = $false
+            $si.RedirectStandardInput = $true
+            $si.RedirectStandardOutput = $true
+            $si.RedirectStandardError = $true
+            $p = [Diagnostics.Process]::Start($si)
+            $p.StandardInput.Close()
+            $sinks = @($out, $err | ForEach-Object { [IO.FileStream]::new($_, 'Create', 'Write', 'ReadWrite', 1) })
+            $copies = [Threading.Tasks.Task[]]@($p.StandardOutput.BaseStream.CopyToAsync($sinks[0]), $p.StandardError.BaseStream.CopyToAsync($sinks[1]))
+            $done = $p.WaitForExit($s * 1000)
+            if (-not $done) {
+              if ($Report) { Show-Stall $a $s $out $err }
+              try { $p.Kill($true) } catch { Write-Host "stopping it: $_" }
+              $null = $p.WaitForExit(10000)
+            }
+            try { $null = [Threading.Tasks.Task]::WaitAll($copies, 10000) } catch { }
+            $sinks | ForEach-Object { $_.Dispose() }
+            $script:WOut = (Read-Shared $out) + (Read-Shared $err)
+            if ($done) { return $p.ExitCode }
+            return $null
+          }
+
+          # wsl.exe with args a, for at most seconds s in all, its output shown: its exit code, or
+          # $null when it did not finish (reported and stopped).
+          function W([string[]]$a, [int]$s = 600) {
+            $until = [DateTime]::UtcNow.AddSeconds($s)
+            for ($k = 1; ; $k++) {
+              $left = [int][Math]::Ceiling(($until - [DateTime]::UtcNow).TotalSeconds)
+              $code = Invoke-Wsl $a ([Math]::Max($left, 1))
+              if ($null -eq $code) { return $null }
+              if ($code -eq -1 -and $script:WOut -match '0xd0000225' -and $k -lt 5 -and $left -gt 5) {
+                Write-Host "retry: WSL refused a launch with 0xd0000225 ($k): $a"
+                Start-Sleep -Seconds 2
+                continue
+              }
+              Write-Host $script:WOut
+              return $code
+            }
+          }
+          function Must([string[]]$a, [int]$s = 600) {
+            $c = W $a $s
+            if ($null -eq $c) { throw "wsl.exe $a did not finish in its time (reported above)" }
+            if ($c -ne 0) { throw "wsl.exe $a exited $c" }
+          }
+          '@
+          Set-Content -Path "$env:RUNNER_TEMP\wsl.ps1" -Value $helper
+          . "$env:RUNNER_TEMP\wsl.ps1"
+          # The time this step may take: each call below has a limit of its own (seconds), and none
+          # waits past a deadline 33 minutes from now. Calls in order, at most: version 60, two
+          # installs of 600 each (the install has been seen to stall), each failed one followed by an
+          # unregister of 60, set-version 300 (WSL 1 only), setup.sh 180, terminate 60, export 300,
+          # import 300, the user check 120, list 60, version 60: 2760 s in all, so the deadline is what
+          # holds. A call that reaches its limit or the deadline is reported once and the step fails:
+          # its output so far, the process query (20 s at most), wsl --status and wsl --list --verbose
+          # (30 s each, plus up to 20 s each to stop them if they hang too), and up to 20 s to stop
+          # the call itself: 140 s at most. So the step ends by 35 min 20 s, more than 4.5 minutes
+          # under its 40-minute limit. A setup that does not stall takes about 3 minutes.
+          $script:Deadline = [DateTime]::UtcNow.AddMinutes(33)
+          Must @('--version') 60
+          $installed = $false
+          for ($i = 1; $i -le 2 -and -not $installed; $i++) {
+            $code = W @('--install', '-d', 'Ubuntu', '--no-launch') 600
+            $installed = ($code -eq 0)
+            if (-not $installed) {
+              Write-Host "install $(if ($null -eq $code) { 'did not finish' } else { "exited $code" }) (attempt $i)"
+              $null = W @('--unregister', 'Ubuntu') 60
+            }
+          }
+          if (-not $installed) { throw 'WSL could not install Ubuntu' }
+          if ($env:PLUXY_WSL_TEST_VERSION -eq '1') { Must @('--set-version', 'Ubuntu', '1') 300 }
+          $setup = @'
+          set -e
+          useradd -m -s /bin/bash alice
+          useradd -m -s /bin/bash bob
+          printf '[user]\ndefault=alice\n' > /etc/wsl.conf
+          install -d -o bob -g bob /home/bob/.local /home/bob/.local/bin /home/bob/.claude
+          printf '#!/bin/sh\necho nonlogin\n' > /home/bob/.local/bin/pluxy-nonlogin
+          chmod 755 /home/bob/.local/bin/pluxy-nonlogin
+          printf 'export PATH="$HOME/.local/bin:$PATH"\n' >> /home/bob/.bashrc
+          printf '{"theme": "light"}\n' > /home/bob/.claude/settings.json
+          chown bob:bob /home/bob/.local/bin/pluxy-nonlogin /home/bob/.claude/settings.json
+          cat > /usr/local/bin/pluxy-standin <<'EOS'
+          #!/bin/sh
+          { id -un; pwd; for a in "$@"; do printf '%s\n' "$a"; done; } > /tmp/pluxy-standin.out
+          EOS
+          chmod 755 /usr/local/bin/pluxy-standin
+          echo SETUP-OK
+          '@
+          [IO.File]::WriteAllText('C:\pluxy-wsl\setup.sh', $setup.Replace("`r`n", "`n"))
+          Must @('-d', 'Ubuntu', '-u', 'root', '--exec', '/bin/sh', '/mnt/c/pluxy-wsl/setup.sh') 180
+          Must @('--terminate', 'Ubuntu') 60
+          # A second distribution, a copy of the first, for the wrong-distribution cases.
+          Must @('--export', 'Ubuntu', 'C:\pluxy-wsl\ubuntu.tar') 300
+          Must @('--import', 'Other', 'C:\pluxy-wsl\other', 'C:\pluxy-wsl\ubuntu.tar', '--version', $env:PLUXY_WSL_TEST_VERSION) 300
+          Remove-Item 'C:\pluxy-wsl\ubuntu.tar'
+          Must @('-d', 'Ubuntu', '--exec', '/bin/sh', '-c', 'id -un; command -v pluxy-standin') 120
+          if ($script:WOut -notmatch 'alice') { throw "the default user is not alice: $script:WOut" }
+          Must @('--list', '--verbose') 60
+          Must @('--version') 60
+          "WSL: $($script:WOut.Trim() -replace '\s+', ' ')" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+      - name: Linux tests inside the distribution, as a user that is not its default
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          . "$env:RUNNER_TEMP\wsl.ps1"
+          $env:PLUXY_WSL_TEST_EXPECT = 'Ubuntu:bob'
+          $env:PLUXY_ENVIRONMENT = 'wsl:Ubuntu:bob'
+          $env:WSLENV = 'PLUXY_WSL_TEST_EXPECT/u:PLUXY_WSL_TEST_OTHER/u:PLUXY_ENVIRONMENT/u:PLUXY_WSL_TEST_DRIVE_DIR/u'
+          $failed = $false
+          # Each suite whole, then its real-WSL tests by name: the counts must be the expected ones.
+          foreach ($run in @(
+              @{ bin = 'pluxy_program'; filter = 'wsl_real'; real = 1 },
+              @{ bin = 'pluxy_transactions'; filter = 'wsl_real'; real = 2 })) {
+            $exe = "/mnt/c/pluxy-wsl/linux/$($run.bin)"
+            $code = W @('-d', 'Ubuntu', '-u', 'bob', '--cd', '/home/bob', '--exec', $exe, '--test-threads=1')
+            if ($code -ne 0) { $failed = $true; Write-Host "::error::$($run.bin) failed in WSL $env:PLUXY_WSL_TEST_VERSION" }
+            "$($run.bin), whole suite in WSL $($env:PLUXY_WSL_TEST_VERSION): $((($script:WOut -split "`n") | Select-String '^test result:') -join ' ')" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+            $code = W @('-d', 'Ubuntu', '-u', 'bob', '--cd', '/home/bob', '--exec', $exe, '--ignored', $run.filter, '--test-threads=1')
+            $m = [regex]::Match($script:WOut, 'test result: \w+\. (\d+) passed; (\d+) failed; (\d+) ignored')
+            $passed, $fails, $ignored = if ($m.Success) { (1..3 | ForEach-Object { [int]$m.Groups[$_].Value }) } else { 0, 0, 0 }
+            $counts = "passed $passed of $($run.real), failed $fails, ignored $ignored$(if (-not $m.Success) { ' (no test result line)' })"
+            "$($run.bin), real-WSL tests: $counts" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+            if ($code -ne 0 -or -not $m.Success -or $passed -ne $run.real -or $fails -ne 0 -or $ignored -ne 0) { $failed = $true; Write-Host "::error::$($run.bin) real-WSL tests: exit $code, $counts" }
+          }
+          if ($failed) { exit 1 }
+      - name: Windows tests against the distributions
+        run: |
+          # What a Windows program sees of a Linux path variable, as set and without the exclusion.
+          cmd //c "echo PLUXY_WSL_TEST_WRITER_DIR=%PLUXY_WSL_TEST_WRITER_DIR%"
+          env -u MSYS2_ENV_CONV_EXCL cmd //c "echo without MSYS2_ENV_CONV_EXCL: PLUXY_WSL_TEST_WRITER_DIR=%PLUXY_WSL_TEST_WRITER_DIR%"
+          status=0
+          cargo test --locked -p wsl --test real_wsl -- --ignored --skip distros_before_any_distribution_is_installed --test-threads=1 2>&1 | tee "$RUNNER_TEMP/real-wsl.log" || status=$?
+          # Five tests, each run and passed: none may be skipped or missing.
+          awk '/^test result:/ { p += $4; f += $6; i += $8 } END {
+            printf "pluxy/wsl real-WSL tests: passed %d, failed %d, ignored %d\n", p, f, i
+            if (p != 5 || f != 0 || i != 0) exit 1
+          }' "$RUNNER_TEMP/real-wsl.log" | tee -a "$GITHUB_STEP_SUMMARY" || status=1
+          exit "$status"
+      # The desktop app's program host and spawn service against the distribution
+      # (next/app/src-tauri/src/wsl_real_tests.rs): pluxy/claude-code's Linux build as a WSL
+      # instance for bob, its Windows build as the local instance, and a managed launch through
+      # wsl.exe. The app crate embeds its built window, as in next-app-platforms.yml.
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.3'
+      - name: Build the app's window
+        working-directory: next/app
+        run: |
+          (cd ../ui && bun install --frozen-lockfile)
+          bun install --frozen-lockfile
+          bun run build
+      - name: Build claude-code for Linux and Windows, and the host's tests
+        run: |
+          cargo build --locked --target x86_64-unknown-linux-musl -p claude-code
+          cargo build --locked -p claude-code
+          mkdir -p /c/pluxy-wsl/claude-code
+          cp target/x86_64-unknown-linux-musl/debug/claude-code target/debug/claude-code.exe /c/pluxy-wsl/claude-code/
+          cd ../app/src-tauri
+          cargo test --locked --lib --no-run
+      - name: Host tests against the distribution
+        working-directory: next/app/src-tauri
+        env:
+          PLUXY_WSL_TEST_CLAUDE_CODE: 'C:\pluxy-wsl\claude-code\claude-code'
+          PLUXY_WSL_TEST_CLAUDE_CODE_WINDOWS: 'C:\pluxy-wsl\claude-code\claude-code.exe'
+        run: |
+          status=0
+          cargo test --locked --lib -- --ignored wsl_real_ --test-threads=1 2>&1 | tee "$RUNNER_TEMP/host-wsl.log" || status=$?
+          # Five tests, each run and passed: none may be skipped or missing.
+          awk '/^test result:/ { p += $4; f += $6; i += $8 } END {
+            printf "host real-WSL tests: passed %d, failed %d, ignored %d\n", p, f, i
+            if (p != 5 || f != 0 || i != 0) exit 1
+          }' "$RUNNER_TEMP/host-wsl.log" | tee -a "$GITHUB_STEP_SUMMARY" || status=1
+          exit "$status"

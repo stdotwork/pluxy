@@ -1,0 +1,11 @@
+[package]
+name = "pluxy-sqlite-ro"
+version = "0.1.0"
+description = "Opens another program's SQLite database strictly read-only, creating no file beside it"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+pluxy-files = { path = "../files" }
+rusqlite = { version = "=0.41.1", features = ["bundled"] }

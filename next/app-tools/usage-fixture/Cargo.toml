@@ -1,0 +1,12 @@
+[package]
+name = "usage-fixture"
+version = "0.1.0"
+description = "A test-only usage parser of a simple fixture format, for the usage hub's checks; never released"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+pluxy-program = { path = "../lib/program" }
+pluxy-usage = { path = "../lib/usage" }
+serde_json = "1"

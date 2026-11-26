@@ -1,0 +1,1185 @@
+# App package contract
+
+This reference defines the app contribution to a pluxy package and app program contract v0.
+The signature verifier is shared Rust code in `src-tauri/src/artifact.rs`. The desktop app
+installs page-only web packages and curated signed native tools on this device
+([extensions on this device](../README.md#extensions-on-this-device)), grants signed web
+packages files through [Access](#access-for-web-packages), and runs an admitted tool's program
+on demand through the program host (`src-tauri/src/program.rs`; Linux, Windows and macOS).
+Core recognizes app contributions to refuse app-only packages and use only the provider part of
+a mixed package. Start with the [tutorial](TUTORIAL.md).
+
+## Manifest
+
+An app package has one `pluxy-extension.json` at the archive root. It uses `manifest_version: 1`,
+the same `publisher/name` ID and package version rules as the [provider manifest](../../protocol/README.md#package-manifest).
+Version 0 provider manifests keep their existing meaning and ignore an unknown app field. Version 1 adds `app`. The top-level
+`title`, `summary` and `kind` describe the package as in the provider manifest; a tool that points
+a coding client at core says `"kind": "client"`. A mixed package
+keeps provider `protocol`, `programs`, `ui` and `config` at the top level and adds `app` beside
+them. App-only packages omit provider fields; no dummy provider is needed.
+
+| Field inside `app` | Meaning |
+| --- | --- |
+| `version` | App contribution format, initially `0`. |
+| `tier` | `web` for assets and broker resources, or `native` for a full-access program. |
+| `host_versions` | Nonempty list of compatible app host contract major versions, initially `[0]`. These are contract versions, not desktop release numbers. |
+| `ui` | Optional pages, using the existing [UI format](../../ui/extension-pages/README.md#ui), with its own version. Paths are relative to the package root. |
+| `config` | Optional settings, using the existing [config format](../../ui/extension-pages/README.md#config), with its own version. App settings belong to this device. |
+| `resources` | Web only: requested broker resources, each with an `id`, `kind` (`file` or `subtree`) and nonempty `operations` list. A declaration grants no access. |
+| `programs` | Native only: platform (`GOOS/GOARCH`) to relative executable path, as for provider programs. At least one entry is required. |
+| `environments` | Native only, optional: where else its program may run, each once. The only one is `wsl`: on Windows, its Linux program may run in a WSL distribution. Its releases must then publish `linux/amd64` and/or `linux/arm64` archives as well, which the app installs as the [Linux build for WSL](#linux-build-for-wsl). Any other value is refused. |
+| `operations` | Native only: declared operations, each with an `id`, plain `description`, `input_schema` and `output_schema` JSON objects, an optional `effect` (`read`, `write`, `launch` or `disclose`; absent means `write`) and optional `secrets`: at most four input fields that carry a secret, each `"value"` (the tool receives the secret) or `"reference"` (it receives only a reference to it; a `launch` operation's are references only); each must be a `string` property of the input schema. See [Secrets, references and the vault](#secrets-references-and-the-vault). At least one operation is required. |
+| `exports` | Native only, optional: `{"contract": <nonnegative integer>, "operations": [<declared IDs>]}`, the operations other packages may import and the version of that export contract. |
+| `imports` | Optional, both tiers: at most 16 entries `{"package": <ID>, "contract": [<accepted export contracts>], "operations": [<IDs>], "required": <bool, default true>, "secrets": [<IDs>]}`, one per package, never the package itself. `secrets` (native tools only) lists the imported operations it may pass secret references to. See [Calls between packages](#calls-between-packages). |
+| `state` | Native only: `version` written by this release and nonempty `readable_versions` list. Check state compatibility before swap or rollback. |
+| `produces` | Native only, optional: at most 8 entries `{"kind": "<package ID>/<stream>", "schema": <nonnegative integer>, "operation": <declared ID>}`, each kind once: the kinds of data it produces as [jobs](#jobs), at which schema version, by which operation, which has no secret fields. |
+| `consumes` | Native only, optional: at most 8 entries `{"kind": "<its own ID>/<stream>", "schema": [<accepted schema versions>], "deliver": <declared ID>}`, each kind once: the kinds it consumes, in its own namespace, and the operation the host delivers their batches to, which no package may export, no `produces` entry may name, which has no secret fields and whose effect is `read` or `write` (a delivery asks no confirmation, so `disclose` and `launch` are refused). |
+
+Resource and operation IDs use 1 to 32 lower-case letters, digits and hyphens, starting with a
+letter or digit, and are unique within their respective lists. State and host contract versions
+are nonnegative integers. Paths must stay inside the
+package. Web packages cannot declare programs, native operations or state; native packages cannot
+request folder grants through `resources`. Resources describe exact files or bounded subtrees
+selected later by the user, never automatic home-directory access. [Jobs](#jobs) and
+[secrets](#secrets-references-and-the-vault) have their own sections.
+
+Package release, manifest, provider protocol, UI, config and app contribution versions are
+separate. App program negotiation is separate too. A mixed package can be compatible with core
+while incompatible with this desktop host. Each target installs independently: core never serves
+`app.ui`, reads `app.config` as provider settings or starts `app.programs`. Core refuses an app
+contribution with neither provider `protocol` nor provider `programs` with
+`app-only package: install it in the desktop app`. A partial provider contribution is invalid;
+it cannot borrow fields from `app`.
+
+## Archives, catalogs and provenance
+
+Use the provider [archive and index limits](../../protocol/README.md#release-archives): one
+platform archive, regular files and folders only, no links, devices, traversal or install hooks;
+512 MiB unpacked, 10,000 entries and an 8 MiB index limit. Copy selected local archives into an
+immutable store. Hash the installed tree and verify it again before serving assets or spawning.
+The device and `Core <address>` catalogs have separate stores, grants and secrets. Installing in
+one never installs in the other. An offline catalog preserves installed releases.
+
+Reserve publisher `pluxy` and configured first-party publisher identities for curated entries.
+Refuse local/private sources claiming them. Other non-curated web packages are labelled
+**Unverified** and may display without resource access. Native programs require an exact
+first-party release in the curated index and a curated first-party key. An untrusted index
+listing the same ID or digest does not qualify.
+
+Resource access requires a publisher signature and an explicitly approved signer key, followed
+by native confirmation. Native imports require separate native confirmation and are limited to
+curated first-party web packages. A signature proves the signer, not safety. A source change
+clears prefilled grants and trust and requires fresh confirmation, even with matching ID, version
+and content. Record source trust domain, key identity, digest and contract versions. Native
+enablement displays **full access to your user account** in the main UI and native confirmation.
+Its page still has no Tauri permissions. Process isolation contains crashes; it does not confine
+a native program.
+
+The program host takes a native tool only as `device::Admitted`
+(`src-tauri/src/device_admission.rs`), from `Catalog::admitted`, which checks the confirmation,
+the root, the signature and every installed file again each time it is called. Only the
+catalog builds one; it offers, read-only: ID, version, archive SHA-256 and size, install time,
+source, signature, the root's public key, store folder, program path and the program's SHA-256
+(check the opened file against it before running it), operations, state versions, app
+contribution version and host contract.
+
+### Linux build for WSL
+
+A native tool that declares `"environments": ["wsl"]` may also run its Linux program in a WSL
+distribution. That program comes from the release's `linux/<arch>` archive, the Linux build,
+installed beside the device's own archive only when the person asks for it in the main window
+(`device_install_wsl`, for `linux/amd64` or `linux/arm64`). The tool must be enabled and confirmed
+for its active release. The Linux build is the active release's version from the registry the tool
+was installed from, signed by the same signer (publisher, key ID and source), with a signature
+that holds for that platform. Its manifest has the same ID and version, is a native tool for this
+host contract, declares `wsl`, declares the same operations, state, imports, exports, jobs and
+environments as the active release, and has a program for the platform whose mode in the archive
+lets it run. The app checks it as it checks any archive, then asks in a native confirmation that
+names the package, version, platform and the archive's SHA-256. Only once the person confirms is
+it kept in the same store, by its own SHA-256, and recorded on the package by platform; a cancel
+keeps nothing. Any change of the active release (an update, a rollback, a removal) drops every
+Linux build of the package, so a tool in WSL never runs another version than the device's; the
+next use in WSL asks again. Before each start in WSL the program host takes it as
+`device::admitted_linux_unlocked`, which checks the tool's own admission, the Linux build's
+signature for its platform and every one of its files again.
+
+### Signed descriptor bytes
+
+A signed artifact has a UTF-8 JSON descriptor, detached Ed25519 signature and archive:
+
+```json
+{"id":"example/notes","version":"0.1.0","tier":"web","platform":"linux/amd64","size":1234,"sha256":"<64 lower-case hex digits>"}
+```
+
+`size` is the exact archive byte count; `sha256` hashes the archive, covering its manifest, assets
+and programs. The publisher fixes the descriptor bytes before signing. Verify the detached
+signature over those exact bytes against the trusted publisher key, then verify archive size
+and SHA-256 **before extraction**. Check the extracted manifest ID, version and tier against the
+descriptor, and platform against the selected artifact. Store the exact descriptor bytes and
+signature; never verify a receiver's reserialized JSON. Whitespace and key order are signed too.
+The index pins size, digest, key identity and signature: a signed artifact adds `key_id` (1 to
+64 letters, digits, `.`, `_` or `-`), `public_key`, `descriptor` (the exact descriptor bytes as a
+JSON string) and `signature` beside `url`, `sha256` and `size`, all four or none; part of a
+signature is refused. The desktop app verifies one only for a reserved publisher's package from a
+curated registry, one whose index address equals a trust root's `source` exactly: the key is the
+root's for that publisher and `key_id`, and `public_key` must be that key, or the package is
+refused. In a curated registry every listed signature is checked so, whatever the package's
+publisher: a key that is not the root's is refused. A signature a registry no root names lists
+is verified with the `public_key` the index names and kept for
+[Access](#access-for-web-packages); the package is Unverified, is never a native tool and never
+has a reserved ID. Detached signature files contain exactly
+64 raw Ed25519 bytes; JSON/index transport encodes them as 128 lower-case hexadecimal digits.
+Public keys are 32 bytes, encoded as 64 lower-case hexadecimal digits. Verification uses pinned
+`ed25519-dalek` 2.2.0 with `VerifyingKey::verify_strict` and default features disabled. This is
+separate from Tauri updater signatures. Trust binds the publisher, key identity and exact source
+trust domain; a changed source needs fresh trust. The feature-free `verify_descriptor` accepts
+an approved key from native settings for web resources or curated native admission; both use
+the same verifier. `PublisherKeys` supplies publisher/source/key lookup separately.
+`VerifiedArchive<R>` retains the rewound checked reader. Later folder-grant, native-admission and core-update code uses `into_archive()`
+instead of reopening a path, prevent concurrent writes, and check manifest identity after extraction.
+
+For such a signature, the desktop app refuses a release whose descriptor does not match the
+index's ID, version, `web` tier, this computer's platform, size and SHA-256, or the archive,
+before unpacking it. Its key comes from the index: a person approves it natively, for that
+source only, before any grant. Whether a signature is curated is derived from the app's current
+roots each time, never from a release carrying one.
+
+Version 2.2.0 is retained over stable 3.0.0 to avoid its curve25519-dalek 5, ed25519/signature 3
+and sha2 0.11 dependency transition. The app already uses sha2 0.10; both Dalek versions expose
+strict verification. This pin enables no optional features and makes no independent audit claim.
+Public RFC 8032 vectors, noncanonical S + L refusal and generated-package signature controls
+run in plain cargo tests.
+
+Schema-0 provider packages retain digest-only trust. This contract adds no signature claim to
+them. Production keys and feeds are release configuration. Generate test keys at runtime in
+temporary storage; never track private keys. Test public roots require both a dedicated test
+build and isolated temporary trust profile. Normal builds with no production roots refuse native
+enablement; they never substitute test roots.
+
+## Access for web packages
+
+A web package's pages read granted files through its page channel (version 0), with three methods
+the desktop app's native code answers for a page of a package on this device. A page core lists
+gets `unknown_method` for each. Grants come only from the person, in native UI (the app README's
+Access section); a page cannot ask for one.
+
+| Method | `params` | `result` |
+| --- | --- | --- |
+| `resources.status` | `null` | `{"resources": [{"id", "kind", "operations", "granted", "session_only"}]}`: each resource this release declares, and whether it is granted to it now |
+| `resources.read` | `{"resource", "path"?, "offset"?}` | `{"data", "size", "offset", "eof"}`: up to 1 MiB of a regular file from `offset` (default 0), as base64 in `data`; `size` is the file's size |
+| `resources.list` | `{"resource", "path"?}` | `{"entries": [{"name", "kind", "size"?}], "truncated"}`: a folder's entries sorted by name, at most 1,000; `kind` is `file` (with `size`), `folder`, `link` or `other`. The app reads no further than 1,000 entries: for a bigger folder, `truncated` is true and the entries are the first 1,000 the folder gave |
+
+A `file` resource is read with no `path`. A `subtree` resource takes `path`, slash-separated parts
+inside the granted folder; for `resources.list`, empty or absent means the folder itself. A
+`file` resource cannot be listed. Unknown parameters are refused. Error codes:
+
+| Code | When |
+| --- | --- |
+| `bad_request` | Parameters of the wrong shape or unknown, an undeclared resource or operation, a `path` with a `file` resource |
+| `not_granted` | No grant for this package, release, source and signer, or the operation is not granted |
+| `refused` | An absolute path, `..`, `.` or empty parts, a link leaving the folder, a file or folder on another mount than the granted folder (such as one mounted inside it), not a regular file, or a grant whose target has come to be, hold or lie inside one of the app's own folders (the app README's Access section) |
+| `changed` | The chosen link, where it resolves, or the target (its identity or its mount) changed since it was granted; it stays refused until granted again |
+| `unavailable` | The file is gone, cannot be reached for now (permissions, an I/O error, too many open files), or the document portal no longer offers it; the grant stays, and a later call may read |
+| `revoked` | The grant was revoked while the call was in flight |
+
+The native ingress limits of every page channel call apply to these too. Grants are bound to the
+package's source, release digest and approved signer: a new release asks again. No grant reaches
+the app's own folders (its settings, data, vault, packages and caches): the app refuses to grant
+one, anything inside one or a folder holding one, so the vault below stays out of every page's
+reach.
+
+## App program contract v0
+
+The Rust program host implements this contract on Linux, Windows and macOS; [The Linux host](#the-linux-host)
+says what it adds and what is still to come, and [Windows and macOS](#windows-and-macos) how those
+differ. It adds no provider operation and does not change
+provider wire version 0.7. Start a verified absolute executable directly in its immutable
+package folder, with a cleared environment and only required platform values. Pass selected
+home/config/context explicitly; do not inherit shell credentials.
+The host supplies `PLUXY_APP_CONTRACT_VERSIONS` (comma-separated supported major versions,
+initially `0`), `PLUXY_EXTENSION_ID` (the manifest ID), and `PLUXY_APP_ARTIFACT_SHA256` (the
+verified archive digest) in that environment. The program echoes the ID and digest in hello;
+this checks that it is answering the expected host context, not an independent signature check.
+
+Use private anonymous stdin/stdout pipes, not core's socket or a browser/loopback API. Reuse
+provider [framing](../../protocol/README.md#framing): a four-byte big-endian unsigned length
+followed by that many UTF-8 JSON bytes, at most 64 MiB. Ignore unknown fields. Stdout is frames
+only; stderr is bounded, redacted logging, never credentials.
+
+1. The program sends `{"type":"hello","contract":"app","versions":[0],"id":"example/tool","sha256":"<archive digest>"}`.
+   The host checks identity, installed artifact digest and a shared contract version before work.
+2. The host sends `{"type":"call","id":"c-1","op":"describe","contract_version":0}`.
+   The reply is `{"type":"result","id":"c-1","operations":[...],"state":{...}}`, using the
+   manifest's operation descriptions and state compatibility. Readiness requires compatibility;
+   describe cannot dynamically add raw Tauri commands.
+3. Work uses `{"type":"call","id":"c-2","op":"<declared ID>","input":{...}}`.
+   Replies may send bounded `{"type":"progress","id":"c-2","value":{...}}`, then exactly
+   one `{"type":"result","id":"c-2","output":{...}}` or `error` frame. IDs are unique within
+   the host process. Native code validates schema, IDs, size and in-flight limits before dispatch
+   or delivery. Mutations are serialized by default; concurrent reads require declared bounds.
+4. `{"type":"cancel","id":"c-2"}` cancels one call on the shared pipe. Reuse provider
+   [cancellation](../../protocol/README.md#events): stop underlying work and progress. This pipe
+   also carries other calls, so cancellation does not close it. A cancelled call ends with error
+   code `cancelled`; a result already sent remains its sole terminal outcome. Pipe closure cancels
+   all calls.
+
+Error frames reuse the provider [error object and codes](../../protocol/README.md#errors), with
+`type: "error"`, the call `id`, and `error`. Unknown operations return `unsupported`. EOF or
+process exit before a terminal reply fails pending calls, never succeeds with an empty result.
+Never automatically retry a mutation whose outcome is unknown.
+
+### States and lifetime
+
+| State | Meaning |
+| --- | --- |
+| installed | Verified files are present. |
+| enabled | The user enabled the package. |
+| authorized | Native authorization exists for this source and digest. |
+| idle | After idle stop, no lease, program, watcher, scan or thread remains. |
+| starting | Spawn and hello/describe readiness are in progress. |
+| ready | Started and described, with no lease: it stops after the idle delay. |
+| active | Calls or jobs own leases. |
+| draining | Admission stopped; work is finishing or cancelling. |
+| crashed | Unexpected exit failed pending calls. |
+| quarantined | Repeated crashes prevent automatic starts. |
+| incompatible | Host, operation or state compatibility failed. |
+| stopped | The process exited and was reaped. |
+
+Installation, enablement and authorization are distinct from process state. Start on demand with
+a ten-second startup limit. Last lease release schedules idle stop, default 30 seconds. On stdin
+EOF/stop, checkpoint, end every process the tool started and exit; do the same on SIGTERM, which
+the tool gets if the app dies without stopping it, when nothing kills its group. After five seconds, kill/reap only the owned tool group. A dedicated
+supervisor thread remains until exit/reap, including on Linux where the parent-death signal follows
+the creating thread. Explicitly launched agents have separate lifetimes outside tool cleanup.
+
+Crash backoff runs from one second to one minute, with quarantine after five consecutive crashes
+and reset after ten stable minutes. Restart only while demand remains. For swap, verify and
+describe the candidate without secrets or work; switch new calls only after readiness and native
+authorization. Old calls retain their generation until drain ends. Candidate failure keeps the old
+version. Serialize mutation commit/recovery across versions. Revoke old page channels and tokens
+at switch. Rollback rechecks trust and state compatibility. Disable/removal stops admission,
+cancels work, drains/reconciles commits, closes pipes and reaps processes. Preserve private backups
+until explicit removal. Stop a full-access process to end its access; grants cannot revoke its OS
+access while it runs.
+
+### The Linux host
+
+The program host starts a tool from `Catalog::admitted`'s record at that moment, never from
+anything a caller passes. On top of the rules above:
+
+- It opens the program file, checks its SHA-256 against the record and executes that opened file,
+  so a replaced file never runs. A program must therefore be a native executable, not a script:
+  an interpreter would open the path again.
+- The tool's environment holds exactly the three variables above and two more: `HOME`, the
+  app's own home folder, and `PLUXY_TOOL_DATA_DIR`, the tool's own data folder,
+  `<app data>/tools/<publisher>/<name>` (on Linux `<app data>` is usually
+  `~/.local/share/<the app's identifier>`). The host makes that folder as the tool starts, from
+  the package ID it verified, never from anything the tool says: each part is opened without
+  following a link, made 0700 when missing, and must be a folder of this user's that no one else
+  may use, or the start fails. It is beside the vault, never in it, and it stays across updates,
+  rollbacks and removal, so a tool keeps its settings; to delete a removed tool's data, delete its
+  folder while the app is not running. Only stdin, stdout and stderr
+  are open in it; every other descriptor closes as it executes. It leads a process group of its
+  own and gets SIGTERM if the app dies without stopping it. Its command line (`argv[0]`) is its
+  program's path; its short process name (`comm`) is the number of the descriptor it was run
+  from. Its supervisor thread starts it and stays until it has been reaped. It needs
+  Linux 5.11 or later (`close_range` with `CLOSE_RANGE_CLOEXEC`).
+- Hello must come first and name the record's ID and digest and contract 0. The describe reply's
+  `operations` are objects with an `id`; their IDs must be exactly the manifest's, and
+  `state.version` the manifest's. A tool that does not match stays **incompatible** until its
+  package changes. `describe` is the host's call: a manifest may not declare it.
+- A frame from a tool may be at most 1 MiB; a larger one, an unknown frame type or a reply
+  before hello breaks the pipe and the tool is stopped; a start it breaks fails saying which.
+  A reply to a call that is no longer
+  waiting is dropped. Progress frames of a job's call are its batches ([Jobs](#jobs)); other
+  progress frames are read and not delivered.
+- Inputs are at most 64 KiB of JSON. Inputs and outputs are checked against the operation's
+  schemas, which may use only `type`, `properties`, `required`, `additionalProperties`, `items`,
+  `enum`, `const`, `minimum`, `maximum`, `minLength`, `maxLength`, `minItems`, `maxItems` and
+  the annotations `title`, `description`, `default`, `examples` and `$comment`; a schema using
+  any other keyword makes the tool incompatible rather than half checked. An output its schema
+  refuses fails the call with `extension_protocol`.
+- A call is checked against its operation and input schema before the tool is leased or
+  started. Calls to one tool run one at a time, at most eight at once counting those waiting
+  their turn, and at most eight more wait for it to start or stop. Calls that waited on a start
+  that failed get that start's error rather than starting it again. A cancelled call has five
+  seconds for its terminal reply; after that the tool is stopped. A cancel also ends a call
+  still waiting for its tool to start or stop.
+- Each call holds a lease. Idle stop, a change to the package and app quit close the tool's
+  stdin, kill its whole process group after five seconds (once its leader exits, the rest of
+  the group at once), and the tool itself if it left that group, and reap it. A child that
+  leaves the group is not followed. Closing the window cancels every call, so the tools stop
+  when idle; once the app is quitting, no call or swap starts a tool.
+- Stderr lines are logged prefixed with the tool's ID, at most 8 KiB each (a longer one is left
+  out with a note) and 50 a second (the rest are left out and counted), with control and format
+  characters (such as U+202E) escaped and the values the host knows the tool must not show
+  removed: every secret value in the vault and every reference the host gave (see
+  [Secrets, references and the vault](#secrets-references-and-the-vault)). The last 20 lines,
+  kept whether or not the rate let them into the log, and the count
+  of those left out, say why it stopped. Error messages and hello or describe values a tool
+  sends reach the window and the status escaped the same way.
+- A tool that exits on its own, breaks its pipe or leaves a cancel unanswered has **crashed**.
+  Nothing restarts it on its own: a call after the backoff (one second, doubling with each crash
+  in a row, up to a minute) starts it, and a call during the backoff is refused. Five crashes in a
+  row make it **quarantined**: calls are refused until its package changes (disabled and enabled
+  again, updated, rolled back). A clean stop (when idle, or a stop the host asked for, such as a
+  disable) or a run of ten minutes starts a new count: with the 30-second idle stop, crashes in a
+  row are those with no clean stop between them. A crash of a release that is draining is not
+  counted. A stop the host asks for while the tool is not running (crashed, quarantined or
+  incompatible) clears that state too: it reads as idle until its next call.
+- A call the tool received and did not answer (it crashed, was stopped, left a cancel unanswered
+  or reached the drain limit) has an **unknown outcome**: its error says so, and it is never sent
+  again. The host keeps it, recorded by the time the tool is reaped, until the package's next
+  start, which carries the list in describe,
+  as `{"type":"call","id":"c-9","op":"describe","contract_version":0,"unknown":[{"id":"c-7","op":"apply","generation":1700000000}]}`
+  (`generation` is the release's install time). A tool that writes must reconcile those calls
+  with its own records before it answers describe. The describe that carries them waits for the
+  package's turn, so no call of the package runs while the tool reconciles; if the turn does not
+  come within the startup limit, that describe carries none. Whichever release starts next gets
+  them, except a swap's candidate, which gets none; once that start serves, the host forgets them.
+  Delivery may repeat (a start that fails after its describe is told again at the next one), so
+  reconciliation must be idempotent. A call refused before it was sent, an `error` frame and a
+  cancel the tool answered all have known outcomes.
+- **Swaps.** Updating or rolling back an enabled native tool stages the release and asks for
+  its own native confirmation. Once confirmed, the host starts the release's tool and runs hello
+  and describe with no call; it fails as any start does. It does not start if the package was
+  disabled, removed or changed while the confirmation was open, and a second update of a package
+  is refused while one is under way. Then the catalog commits it as active,
+  enabled and admitted, only if the release it replaces is still the active, admitted one, and
+  new calls and leases go to the new tool. The old one **drains**: calls holding its leases,
+  including those waiting their turn, finish on it; then its stdin closes as for any stop. After
+  ten minutes (the drain limit) it is stopped and its unanswered calls have unknown outcomes.
+  Calls of one package run one at a time, whichever release they reach: the new release's first
+  call waits for the call running on the old one, and calls still waiting their turn on either
+  release go in no set order. The package's pages close at the switch. A cancelled confirmation
+  or a candidate that fails installs nothing; the old release stays active and serving.
+
+Still to come: deleting a tool's data folder from the Device page.
+
+### Windows and macOS
+
+The app runs native tools on Windows and macOS as on Linux: enabling a package, its imports, the
+router, the program host, the launch service and the launcher (`program.rs`, `route.rs`,
+`spawn.rs`, `launcher.rs`) are built and wired there, under the rules of
+[The Linux host](#the-linux-host), with these differences:
+
+- On Windows a tool's `HOME` is the profile folder the person's clients use (`USERPROFILE`), and
+  it also gets `SystemRoot` (parts of Windows refuse to load without it), `APPDATA` and
+  `LOCALAPPDATA`, each as the app's own environment has it and only when it is a full path. Its
+  data folder is under the app's local data folder (`<app local data>/tools`), which does not
+  roam with the profile, made private by its access list as the vault's folders are.
+- On Windows an installed package's files and folders are read-only by their access lists: the
+  user and SYSTEM may read and run them, no one may write, delete or add to them, as 0444 and
+  0500 make them on Linux and macOS. A native release's program must be a `.exe` or `.com` file
+  starting `MZ` when it is installed.
+- Saving files (`files` frames, [Saving files](#saving-files)) stays Linux only: elsewhere the
+  host refuses them, as a host with no save service does.
+
+Every process the app starts goes through `src/owned/`, which is the only code in
+the app that signals or ends a process, and only one the app started and still holds: an unreaped
+child on Linux and macOS, the process handle and its job object on Windows. `owned_tests.rs`
+checks the sources for any other call that could end a process.
+
+| | Windows | macOS |
+| --- | --- | --- |
+| What runs | The file the host opened and checked: its path now (with `\\?\` removed), opened again with only reading shared, so it cannot be renamed, replaced or written until the process runs; only `.exe` and `.com` files that start with `MZ` | The file the host opened and checked, by the path it has now (`F_GETPATH`), once no other user can change that file or any folder above it and the path still names the same file (device, inode, size, mode and times). That reads each part's mode and extended access list together, from `/` down to the file, inherited entries too: an allow entry for another user or group that holds any right but the read-only ones (`read`, `execute`, `readattr`, `readextattr`, `readsecurity`, `synchronize`, and the kernel's generic read and execute) is refused, so `write`, `add_file`, `delete` and the like, the kernel's `generic_write` and `generic_all`, and any right not known today. The refusal gives the entry's number, who it is for, its rights and how to remove it (`chmod -a#`, or `chmod -N` for every entry, with the path quoted for the shell). Deny entries pass, as home folders carry `group:everyone deny delete`. Each part must be on a volume that keeps ownership: one that ignores it (`MNT_IGNORE_OWNERSHIP`, Finder's "Ignore ownership on this volume", the default for many external drives) shows every file as owned by whoever asks and lets any user change it, so a part there is refused, a folder above the program too when the program is on another volume mounted below it, with a message that names the part and the volume and says to turn ownership on (`sudo diskutil enableOwnership`) or move the program. For the program of a detached launch or a managed runtime, and the program a terminal launch runs, a folder above it may also be writable by the `admin` group, by its mode or an access list entry, as macOS makes `/Applications` and Homebrew makes its folders. Another admin account can then replace the program between the check and the exec (and, for a program inside an app, whatever it later loads or starts from its app: frameworks, plug-ins, helper apps), and, with or without that rule, can replace at any time what any program loads from such folders (Homebrew's libraries, a script's interpreter and modules) |
+| Handles and descriptors it gets | Only its three standard handles (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), made inheritable only while it starts | Every descriptor above 2 closes as it executes, but for a terminal launch the program it runs, as 3 (see `program` in [Launches and managed runtimes](#launches-and-managed-runtimes)) |
+| Tool, managed runtime, the app's core | A job object of its own, which ends the process and everything it started when stopped and when the app exits or crashes (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`) | A process group of its own (a tool's, a runtime's); the app's core stays in the app's group |
+| Asked to stop | `CTRL_BREAK` to its process group on its own hidden console, then the job ends after the grace. An app that has a console of its own (a debug build run from a terminal) cannot send it, and ends the job at once | SIGTERM, then SIGKILL to the group after the grace, as on Linux |
+| Detached launch | Started outside every job of the app's, held by nothing once it runs. Refused, and nothing starts, when the job the app runs in does not let a process leave it (a terminal, an editor or a service that started the app may hold it in one) | A session and process group of its own, as on Linux, without the systemd scope |
+| If the app crashes | Tools, runtimes and the core end with their jobs; detached launches run on | A tool sees its input close and exits; managed runtimes and the core run on (macOS has no parent-death signal) and are reported `unknown` at the next start, as on Linux |
+
+Names of environment variables are compared ignoring case on Windows. Besides the names a launch
+never gets anywhere ([What a launch gets](#what-a-launch-gets)), it never gets `DYLD_*` on macOS,
+nor `COR_*` or `__COMPAT_LAYER` on Windows: each makes a program load code it was not asked to
+run. Nor may it set `WSLENV` on Windows, which would pass the Windows variables it names on into
+a WSL distribution: for a launch of Windows' own `wsl.exe` (a launch in WSL, prepared by
+`pluxy/wsl`), the host itself sets `WSLENV` to the variables the launch sets or gives a secret
+in, each passed on unchanged (`/u`), and to nothing else.
+
+### Tools in WSL (Windows)
+
+On Windows a package whose manifest names `"environments": ["wsl"]` may also run in a WSL
+distribution, as one of its users: an instance of its own beside the one on this computer
+(`src-tauri/src/environments.rs`). Only the app's window chooses where a call runs; the host
+carries that choice itself (never in an operation's input, so a page or another package cannot
+choose it) and refuses, before anything starts, an environment it has no record of or a package
+that does not run in WSL. The host's record of an environment is what `pluxy/wsl`'s `check` gave
+when the person added it ([app tools](../../app-tools/README.md#wsl)): the distribution, the user,
+their home, the processor and the Windows drives mounted there, kept in `environments.json` beside
+`launcher.json`, readable only by your user.
+
+- **What runs.** The release's Linux build for the distribution's processor (`linux/amd64` or
+  `linux/arm64`), installed for WSL after its own native confirmation and verified like any
+  release. Its program runs from the Windows disk, through the drive the distribution mounts
+  (`/mnt/c/...`; a distribution that mounts no drive, or mounts it `noexec`, is refused): Windows'
+  own `wsl.exe -d <distribution> -u <user> --cd <its folder> --exec <its program>`, started and
+  held like any tool (its own job, three pipes). `wsl.exe` does not open the program itself, so
+  the host keeps it pinned (no writer, rename or delete) for the whole run, not only until it
+  starts.
+- **What it gets.** `wsl.exe` gets only `SystemRoot` (WSL 2 refuses to start without it), the
+  contract's values, `PLUXY_TOOL_DATA_DIR`, `PLUXY_ENVIRONMENT=wsl:<distribution>:<user>` and
+  `PLUXY_ENVIRONMENT_ACCOUNT=<user ID>:<home>` (the record's), each passed into the distribution
+  unchanged by `WSLENV` (`/u`). No `PATH`, so WSL adds no Windows
+  folder to the tool's. A tool in WSL also sees the variables WSL itself sets there (`HOME`,
+  `USER`, `PATH`, `WSL_DISTRO_NAME`, `WSL_INTEROP`, the WSLg display variables and others); the
+  host does not remove them. Before it says hello the tool checks that it runs in that
+  distribution as that user, with the record's user ID and home, so a stale record (a
+  distribution or user made again under the name, or a home since moved) runs nothing.
+- **Its data folder** is `<home>/.local/state/pluxy/tools/<publisher>/<name>` in the
+  distribution, which the tool makes at its first write (the host never writes in a
+  distribution).
+- **Its own state.** Each instance has its own process, turn, calls of unknown outcome and vault
+  records (backups and journals, in a folder named by the package's digest and a digest of the
+  distribution and user). Changing, disabling or removing the package stops its instances in
+  every environment; removing an environment stops what runs there and forgets the launcher's
+  remembered launches and recent folders there, revoking their approvals.
+- **Start.** A tool in WSL has 60 seconds to say hello and describe itself (a stopped WSL 2
+  distribution starts first). When WSL itself refuses to start the program (WSL 1's `0xd0000225` on
+  either stream: nothing ran), the start is tried twice more, two seconds apart, and none of those
+  tries counts as a crash; only when the last one is refused too does one crash count, with its
+  backoff. What `wsl.exe` prints instead of a frame (at most 512 characters of its first 4 KiB) is
+  shown in the start's error, and so is that refusal when it comes on standard error; other
+  standard error goes to the status log.
+- **Native confirmations** of its writes show `Runs in WSL: distribution "<d>", user "<u>"
+  (<home>).` above the review (the names quoted: neither holds a `"`), and that line is part of
+  what a remembered approval names. A launch the launcher starts there shows its own line,
+  `Starts in WSL: …`, and runs only if `pluxy/wsl`'s prepared launch is exactly the one asked for
+  (Windows' own `wsl.exe` started in the app's home folder, that distribution, user, folder,
+  program, arguments and kind) and holds nothing else (only `executable`, `argv`, `cwd` and
+  `program`).
+- **Not yet.** A tool in WSL may use its vault, but its own calls, jobs, launches, runtimes and
+  saves are refused.
+
+## Calls between packages
+
+The host routes every call of a native tool's operation, whoever makes it: the main window
+(`program_call`), a page (its `native.call` method) or another native tool (a `call` frame on its
+pipe). Each call is checked against the catalog as it is at that moment, and the host, never the
+call, says who the caller is: the window, the page's webview and its package release, or the
+calling tool's running release. Programs never talk to each other directly.
+
+### What a package declares
+
+A native tool lists the operations it offers other packages in `exports`, under an export
+contract number it raises when it changes them incompatibly. A package lists what it calls in
+`imports`: the target package, the export contracts it works with and the exact operations.
+Package versions are not compared; only the contract number is.
+
+Each operation has an effect: `read` (runs with no question asked), `write` (asks a native
+confirmation each call), `launch` (asks a native confirmation of the exact launch) or `disclose`
+(shows content the tool reads, such as a session's messages: asks a native confirmation each
+call, as `write` does; dialogs and the Device page say it "shows content"). Every effect but an
+exact `read` asks, and only a launch's confirmation can be remembered. A `disclose` call may also
+hand the person one file of what it shows, through the host's save dialog
+([Saving files](#saving-files)). A launch operation's input
+schema must require `executable`, `argv` and `cwd`.
+
+### Enabling a native tool with imports
+
+A native tool is enabled only when each required import's target is an enabled, admitted native
+tool that exports those operations under a contract the import accepts, and when its imports,
+required or optional, do not lead back to it through other enabled tools (no cycles). Its native
+confirmation lists its imports. The same checks apply to an update or rollback of an enabled tool
+(a swap), when it is staged and again when it commits. A missing optional target is not an error
+at enable: a call to it fails as `extension_unavailable`. The host never installs or picks a replacement for a missing
+target. Enabling the tool is the person's consent to its imports.
+
+### Web packages: native consent
+
+Only a curated web package may call native tools; an Unverified one is refused, always. Its
+imports are refused until the person allows them on the Device extensions page, which calls
+`device_imports {id, allowed: true}` (main window only) and opens a native confirmation listing
+the caller's source, digest and signer and each target operation with its effect. The consent
+is bound to the caller's release and to each target's release, export contract and operations.
+Disabling, updating, rolling back or removing the caller clears it, and so does disabling,
+updating, rolling back, swapping or removing any target it names: enabling that target again is a
+new decision, so those calls are refused until the person allows them again. `allowed: false`
+revokes it and cancels the package's page calls still running; their answers are never
+delivered. A page call is registered before it is granted, so a revocation at any point after
+the grant reaches it.
+
+### Frames
+
+A call from the host to a tool carries the call's chain:
+
+```json
+{"type":"call","id":"c-2","op":"summary","input":{"items":["a"]},
+ "chain":[{"kind":"main"},{"kind":"package","id":"pluxy/relay","sha256":"<digest>","generation":1700000000}]}
+```
+
+The chain starts with the original requester, `{"kind":"main"}` or
+`{"kind":"page","id":<package>,"sha256":<release digest>,"page":<page ID>}`, followed by each tool
+that called on, at its release digest and generation (install time). A tool calls an import for
+the host call it is serving, named in `for`:
+
+```json
+{"type":"call","id":"o-1","for":"c-2","package":"pluxy/target","op":"summary","input":{"items":["a"]}}
+```
+
+The host answers on the tool's stdin with `{"type":"result","id":"o-1","output":{...}}` or an
+`error` frame; the tool may send `{"type":"cancel","id":"o-1"}`. Its calls are cancelled when the
+call they serve is cancelled or ends. A frame naming `chain`, `caller`, `requester`, `from`,
+`origin` or `context` is refused with `permission`, as is a `for` the tool is not serving or an
+ID in use; a tool has at most eight calls of its own at once.
+
+A page calls with the page channel method `native.call`, params `{"package", "op", "input"}`. The
+app answers it in the page's own webview and never forwards it to the main window. Error codes
+map to the page channel's: `permission` and `cancelled` to `forbidden`, `invalid_request` to
+`bad_request`, the rest to `unavailable`. A native tool's own page may call only its own
+operations; a web package's page calls only what it imports, with consent. A page call is
+cancelled when its page closes or its consent is revoked, and its answer is delivered only if the
+call is still allowed then.
+
+### How a call is decided
+
+A call goes ahead only if all of these hold, checked again for each call:
+
+- The window may call any declared operation of an admitted tool. A tool may call only an
+  operation it imports and its target exports, under an accepted contract, and only while it
+  runs its current admitted release. A web package's page needs its consent, as above.
+- The target is enabled and admitted. The call is pinned to the target release it was allowed
+  for: if another release would serve it, it fails with `extension_unavailable` and starts
+  nothing.
+- The target is not already in the chain (no call back into the chain), and the chain is at most
+  five hops long, the requester and four tools.
+- The input is at most 64 KiB and matches the operation's input schema, and its secret fields
+  are filled as [Secrets, references and the vault](#secrets-references-and-the-vault) says.
+- A `write` or `disclose` call has a fresh native confirmation naming the whole chain and the
+  exact input (its effect in parentheses: `(write)`, `(shows content)`). A
+  `launch` call has a fresh native confirmation of the exact executable, `argv` and `cwd`. Only
+  the window's own direct call, made from a native gesture, may use a remembered approval, and
+  only of exactly that launch: a Start in the app's launcher (a launch of the host's own list) or
+  in the tray's Start… menu ([the app's README](../README.md#the-launcher)). A call with a tool hop in its chain is
+  prepared as an import, whoever started it, and never uses or saves a remembered approval; a
+  chain a page started always asks too. Neither dialog offers "remember". The host
+  confirms the launch, with its lifetime and launch environment; the operation receives it as its
+  input, as with any call, and may ask the host to spawn it
+  ([Launches and managed runtimes](#launches-and-managed-runtimes)). The confirmation's rate and pending limits are checked before an
+  executable is hashed, and it is hashed without holding the confirmations' lock. A call cancelled
+  while its confirmation is open (its ticket, the window closing, its page closing or its consent
+  revoked) withdraws it, and the dialog closes. Once confirmed, the call is granted again and runs
+  only if the target release and operation are the ones confirmed.
+
+A routed call is then a call like any other: it is registered so a cancel and the window's
+closing reach it, and it goes through the same limits, per-package turn, backoff, quarantine and
+unknown-outcome rules as a call from the window.
+
+## Jobs
+
+A job is bounded asynchronous work one native tool, the **consumer**, asks of another, the
+**producer**, through the host: the producer streams batches of a declared kind, and the host
+delivers each one to the consumer with its source, which only the host names. The usage hub and
+its parsers are built on this; the facility itself knows nothing of usage.
+
+### Registrations
+
+A kind is `<package ID>/<stream>`: the namespace of the package that consumes it, which defines
+its schema. A producer **registers** by declaring `produces` in its manifest: the kind, the schema
+version it produces and the operation that runs a job of it. There is no registration message: a
+registration is read from the catalog at each request, from an enabled, admitted native tool's
+active release, as the package ID, version, archive SHA-256, generation (install time), schema,
+source (the registry index of its curated signature) and signer the catalog admitted it with.
+Disabling, updating, rolling back, swapping or removing it ends its registration. A consumer
+declares `consumes` for kinds in its own namespace only. Neither adds an import: a consumer does
+not depend on its producers, and the manifest graph stays acyclic.
+
+### Asking the host
+
+A consumer asks the host's job service with a `jobs` frame, for a host call it is serving, as it
+would call an import; the host answers on its stdin with a `result` or `error` frame of that ID:
+
+```json
+{"type":"jobs","id":"q-1","for":"c-2","op":"registrations","input":{"kind":"example/hub/items"}}
+{"type":"jobs","id":"q-2","for":"c-2","op":"start","input":{"kind":"example/hub/items","package":"example/parser","sha256":"<digest>","generation":1700000000,"input":{...}}}
+{"type":"jobs","id":"q-3","for":"c-2","op":"cancel","input":{"job":"j-7"}}
+```
+
+- `registrations` gives `{"registrations": [{"package", "version", "sha256", "generation",
+  "schema", "source", "signer": {"publisher", "key_id"}}]}`: every registration of a kind the
+  caller consumes, at a schema it accepts, other than its own. A kind it does not consume is
+  refused with `permission`.
+- `start` names one registration exactly. It is decided as a call of the producer's operation
+  with the consumer as caller: the consumer must be the release it runs and consume the kind, the
+  producer must still be that release, admitted and producing the kind at an accepted schema; the
+  chain, input and confirmation rules of [How a call is decided](#how-a-call-is-decided) apply,
+  and the job is pinned to the producer's release. A consumer that reaches the producer through
+  its imports is refused (a job could wait on its own consumer). It is answered at once with
+  `{"job": "j-<n>"}`, an ID the host issues. A consumer has at most four jobs at once, the host
+  sixteen; one more is refused with `unavailable`. A job counts, and a change to either package
+  reaches it, from before it is granted: a change while it is granted or confirmed refuses it
+  with `cancelled`.
+- `cancel` cancels one of the caller's own jobs; any other ID is refused with `permission`.
+
+A job's operation and a deliver operation have no secret fields (a manifest that gives them any is
+invalid): a job is started by a tool and delivered by the host, and neither fills one. A secret's
+value or a reference anywhere in a start's `input` is refused as in any call's input
+([Secrets and references](#secrets-and-references)), and the host refuses to deliver a batch
+holding one, which fails the job; an end holding one is delivered as `failed` without it.
+
+### Running a job
+
+The host calls the producer's operation with the job in the call frame,
+`"job": {"id": "j-7", "kind": "example/hub/items", "window": 4}`. The producer sends each batch as
+`{"type":"progress","id":"c-9","value":{...}}`, with nothing but `type`, `id` and `value`, and the
+host acknowledges each batch once the consumer took it with `{"type":"ack","id":"c-9","seq":1}`
+(batches are numbered from 1). At most `window` batches may wait unacknowledged. A batch past the
+window, one whose value is larger than 48 KiB, or one naming anything else (a `source`, say) ends
+the job as failed and cancels the producer's call; the batches it had not delivered are dropped.
+The producer's `result` ends the job as done; its `error` or cancellation ends it as failed or
+cancelled.
+
+The host delivers to the consumer's `deliver` operation, as host calls of it with the job's chain
+followed by the producer, pinned to the consumer's release, one at a time and in order:
+
+```json
+{"job":"j-7","kind":"example/hub/items","seq":1,"event":"batch","value":{...},"source":{"package":"example/parser","version":"1.2.0","sha256":"<digest>","generation":1700000000,"schema":1,"source":"<index>","signer":{"publisher":"example","key_id":"k1"}}}
+```
+
+and then one end: `{"job", "kind", "event": "done", "output", "batches", "source"}` (the
+producer's output, after every batch) or `"event": "failed"` or `"cancelled"` with an `error`.
+A deliver operation's input schema must accept these. Each batch is granted again first: if
+either package changed, the job is cancelled and nothing more of it is delivered. The end is
+`done` only while both packages are still those releases and the producer's output is at most
+48 KiB; otherwise it is `cancelled` or `failed`, saying why. It is delivered only while the
+consumer is still that release, once and best-effort: if the consumer does not take it (it
+crashed, is stopping or busy, or its schema refuses it), it is not sent again, the job is over,
+and a `cancel` of its ID is refused as no job under way. A batch the consumer does not take fails
+the job.
+
+A delivery waits at most ten seconds (the startup limit) for the consumer's turn, since calls to
+one package run one at a time. A consumer must therefore answer the call that started a job
+before its deliveries can arrive, and never wait for its own job inside a call; a consumer kept
+busy longer (by another call, or a native confirmation one of its calls waits for) fails the job,
+saying it stayed busy. The window, pages and other tools are refused the deliver operation: only the host
+calls it, so a batch's source is always the host's. The consumer is leased while its job runs;
+the producer, as for any call, while its call runs. A change to either package cancels its jobs,
+and closing the window cancels every call, jobs' included. A job's operation cannot be a `launch`
+(refused at start): a launch is spawned for the call that confirmed it
+([Launches and managed runtimes](#launches-and-managed-runtimes)).
+
+## Launches and managed runtimes
+
+The host spawns what a person confirmed; a tool never starts an agent itself through the host by
+naming a program. A `launch` operation's input names `executable`, `argv` (the arguments after the
+program's name) and `cwd`, and may name:
+
+- `program`: the program a terminal runs, the argument of `argv` its terminal runs (below; on
+  Windows, any of `argv`). The confirmation opens and
+  hashes it as it does the executable, so a remembered approval does not stand for a replaced
+  program (a self-update) either, and the spawn refuses one changed since it was confirmed. The
+  terminal starts it after the spawn, so the spawn (on Windows the terminal) also checks who
+  could change it by then:
+  - on Linux the terminal finds it by the path `argv` names, the argument right after the
+    terminal's exec flag (`-e`, `-x` or `--`, which must be the first argument), which `program`
+    must be (refused otherwise). The check covers only a launch that names `program` there: a
+    package that starts a terminal without naming `program` gets no check, and the app has no
+    list of terminals to catch it. The spawn refuses the launch
+    unless that path still leads to the file confirmed and only root and the person can change
+    the file or where the path leads: each folder on the way, each link and the file must be
+    root's or the person's, writable by others only in a sticky folder (`/tmp`) whose entry is
+    root's or the person's, and by their group only when it is the person's own private group:
+    their primary group, named as they are, with no other member, no other user's primary group,
+    and no other line of `/etc/group` with its number (Homebrew on Linux, and a umask of 002,
+    make folders and programs writable by it). Other users and groups are read from
+    `/etc/passwd` and `/etc/group`: those from other sources (LDAP, sssd, systemd-userdb) are not
+    seen, and the group database is trusted to list a group's members. A program below a folder any other
+    group may write is refused, as is one reached through a link another user could change, or a
+    path through `/proc` (and `/dev/fd`, `/dev/std*`), which leads elsewhere for the terminal. The
+    refusal names the path and a `chmod g-w,o-w` that fixes it. It does not stop the person's
+    own processes from swapping the program;
+  - on macOS the terminal is the execution program, and `program` must be the argument right
+    after `--`. The app gives it the confirmed file as descriptor 3. It hands that descriptor to
+    the execution program it starts in Terminal's
+    window, which runs that file by the path it has then, under the rule for a direct launch's
+    program ([What runs](#windows-and-macos), `admin` folders included): a file put at the
+    program's path since the confirmation never runs. The spawn applies the same rule first, so
+    the app refuses a program in a folder another user may change;
+  - on Windows the execution program's terminal mode runs the argument right after `--` by its
+    path (the app requires only that `program` is one of `argv`, since a WSL launch names its
+    Linux program after `--exec`). The app checks no more than that the program is still the
+    file confirmed. The execution program, in the launch's console, first opens the program and
+    every folder above it with deleting shared with no one (and writing too, for the program), so
+    none of them can be renamed, removed or replaced, nor the program written, until it starts.
+    It then checks that the path names exactly what it holds (its final path, so no link,
+    junction or short name is on the way, and the same volume serial number and file ID), that
+    the program is a PE image (`.exe` or `.com` starting `MZ`), and that no account but the
+    person, SYSTEM, Administrators and TrustedInstaller may change the program or its folder,
+    nor remove or rename what a folder above holds (owner and access list, read through the held
+    handles; adding to a folder above is allowed, as every account may in `C:\`). It refuses
+    otherwise, naming the path and why, and the program never runs: a program another account
+    swapped in since the confirmation is that account's own, or that account held a right the
+    check refuses. The refusal shows in the terminal's window, after the app has started the
+    launch;
+- `file` and `within`: the file the launch opens, which must be one of `argv`, and the folder it
+  must be inside, named together, each by its resolved path. The confirmation resolves both and
+  refuses, before any dialog:
+  - a file that is not a regular file, has an execute bit, is named `.desktop`, or does not
+    resolve inside the folder;
+  - a file, the folder it must be inside, or any folder between the two (from the file's
+    parent up to and including that folder) that is not the person's own (the effective
+    user's) or that someone else may write (group or world write bits), or that is not a
+    real folder (a link): another user could replace the file, or rename another into its
+    place, before the opener reads it. The spawn checks every one of these again, by its
+    resolved path and without following links, so a folder made writable or turned into a
+    link since the confirmation is refused. Folders above the one it must be inside are not
+    checked;
+  - a folder that is `/`, the home folder or a folder above it, or any folder when the home
+    folder cannot be found (`HOME`, else the user's passwd entry, is missing or does not
+    resolve), since it cannot be checked against it;
+  - a file whose content type is not plain text (`text/plain`, `application/json`,
+    `application/x-ndjson`, `application/jsonl`, `text/markdown` or `text/x-log`). The type is
+    the one GIO guesses from the file's name and first bytes, with the shared-mime-info rules
+    the desktop's opener uses: an HTML, SVG, script or archive file named `.jsonl` is refused,
+    since the desktop would open it in an app that may run it;
+  - a launch of any other shape: the executable must be `xdg-open` (argv exactly the file) or
+    `gio` (argv `open` and the file) from `/usr/local/bin`, `/usr/bin`, `/bin` or
+    `/run/current-system/sw/bin`, the cwd the file's folder, detached, with no `program`,
+    `environment`, `stdin` or secret. A native-test build also takes an opener from the folder
+    `PLUXY_APP_TEST_OPENERS` names, for the native test's stand-in.
+
+  The dialog's first line says "Opens the file <file> (<type>, inside <folder>) with <opener>.",
+  with the resolved paths. Both identities, the file's metadata (mode, size, times) and its type
+  are bound: the spawn refuses the launch if either was replaced, reached through a different
+  link, written or changed mode since it was confirmed. The launch gets the launch environment
+  with only the absolute entries of `PATH`. The executing tool, not the host, decides which
+  folder is its own ([the execution program's `open`
+  launch](../../app-tools/README.md#execution)). A desktop whose opener guesses types otherwise
+  than GIO (KDE's `kde-open`, which xdg-open runs there) may still pick another app for a file
+  the check let through.
+
+  On Windows and macOS the system picks the app by the file's extension, not its content, so the
+  type is the extension's: `.txt` (`text/plain`), `.json`, `.jsonl`, `.ndjson`, `.md` or `.log`
+  (the types above), any other refused; the content is not read (`src/confirmation_open.rs`).
+  The folder may not be a drive's root or `/`, the home folder or a folder above it, and is
+  refused when the home folder cannot be resolved. The file, the folder and every folder between
+  them must be the person's own and writable by no one else: on Windows their owner and access
+  list (`src/win_acl.rs`: owned by the person or by the owner Windows gives the person's new
+  files, the token's default owner, which is the Administrators group for an elevated
+  administrator; no allow entry giving anyone but the person, SYSTEM or Administrators a right to
+  change it; and not a link or junction); on macOS
+  their owner, mode and no access list entry at all. On Windows the file must also be on a local
+  drive (not a network path), name no alternate data stream, have a path shorter than 260
+  characters, and be named by its plain path (`C:\…`, never `\\?\`); the launch runs
+  `pluxy/execution`'s own program (compared by identity; another package's own program is
+  refused) with argv exactly `open`, `--` and the file, which hands the file to the app Windows
+  opens its extension with, and it starts with no console (as does that program's `app` mode,
+  and no other launch). On macOS the file has no execute bit and none of the
+  attributes that can choose another app for it (`com.apple.FinderInfo`,
+  `com.apple.ResourceFork`, `com.apple.LaunchServices.OpenWith`), and the launch runs
+  `/usr/bin/open` with argv exactly the file. The dialog's first line says "Opens the file <file>
+  (<type>, inside <folder>) with the app Windows (or macOS) opens .<ext> files with, through
+  <opener>." The spawn checks the file's identity and metadata again as on Linux. On Windows a
+  permissions change on a folder above the file between confirming and launching can also
+  refuse the open: setting a folder's access list as `icacls` does also goes through what is
+  inside it and changes the file's change time, even when the file's own permissions stay the
+  same (an inheritable entry changes them too), and the person then confirms the open again;
+- `stdin`: one of the launch's secret fields, whose secret the host writes to the launch's
+  standard input and then closes: the private channel to a credential bridge, never argv, its
+  environment or a file. The confirmation names it; it is part of the environment revision;
+
+- `lifetime`: `detached` (the default: an agent or a terminal that is no longer the app's) or
+  `managed` (a runtime the app keeps and stops). `managed` applies to direct launches only: a
+  launch that names a `program` (a terminal launch) may be detached only, and the host refuses
+  `managed` for it, before any confirmation ([Detached and managed](#detached-and-managed));
+- `environment`: `{"set": {NAME: value}, "unset": [NAME], "inherit": [NAME], "secrets": {NAME: <secret field>}}`,
+  at most 64 names in each: variables set, session values removed, variables of the app's own
+  environment passed on by name, and variables that get the secret of one of the launch's secret
+  fields (a reference field the router filled). Names are letters, digits and `_`. Some can never
+  be set, inherited or given a secret: the app's own and its tests' (`PLUXY_*`), the AppImage
+  runtime's (`APPIMAGE`, `APPDIR`, `ARGV0`, `OWD`), and those that make the dynamic loader, the C
+  library, a shell or an interpreter load or run code (`LD_*`, `MALLOC_*`, `GCONV_PATH`,
+  `GLIBC_TUNABLES`, `LOCPATH`, `NLSPATH`, `HOSTALIASES`, `RES_OPTIONS`, `NODE_OPTIONS`, `BASH_ENV`,
+  `ENV`, `SHELLOPTS`, `BASHOPTS`, `PROMPT_COMMAND`, `PS4`, `PYTHONSTARTUP`, `PYTHONINSPECT`,
+  `PERL5OPT`, `PERL5DB`, `PERL5LIB`, `RUBYOPT`, `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS`,
+  `JDK_JAVA_OPTIONS`, `DOTNET_STARTUP_HOOKS`, `COR_PROFILER`, `DOTNET_ADDITIONAL_DEPS`,
+  `PYTHONPATH`, `PYTHONHOME`, `NODE_PATH`, `RUBYLIB`, and the prefixes `CORECLR_*`,
+  `COR_PROFILER_PATH*`, `DOTNET_PROFILER*` and `COMPlus_*`), in any case. A name that looks like a
+  credential (containing `TOKEN`, `SECRET`, `PASSWORD`, `PASSWD`, `CREDENTIAL`, `APIKEY` or `_KEY_`,
+  ending in `_KEY`, or starting `TAURI_SIGNING_`, in any case) cannot be inherited: such a value
+  reaches a launch only as a vault secret, through `secrets`. `SSH_AUTH_SOCK`, a socket path, can
+  be inherited.
+
+The native confirmation shows the lifetime and each variable: its name, a set value, "inherited
+from the app's environment", "removed", or the secret's label and ID; never an inherited value or
+a secret's value. Its environment revision is a SHA-256 of the policy (its version and the
+selected names below), the lifetime and the request, so a remembered approval of one launch does
+not stand for one with another lifetime or environment. Session values themselves (the display,
+the bus address, `PATH`'s entries) are not part of it.
+
+While the target serves that call, it asks the host to spawn the confirmed launch:
+
+```json
+{"type":"spawn","id":"s-1","for":"c-2"}
+```
+
+The frame names nothing else: the host spawns exactly the launch it confirmed for that call and
+that tool's release, once, and answers `{"lifetime":"detached"}` or
+`{"lifetime":"managed","runtime":"rt-<hex>","pid":1234}`. A second spawn for the call, a spawn for
+a call that confirmed no launch, and one for a call the tool is not serving are refused with
+`permission`; a launch whose executable or cwd changed since its confirmation, or whose secret is
+refused now (removed from the vault, or a client key that no longer passes its checks, see
+[Client keys](#client-keys)), fails with `unavailable`. The call the spawn served may then end: what it
+started does not end with it.
+
+### What a launch gets
+
+- The executable the confirmation opened, run from that opened file (never its path again), with
+  the confirmed argv and the executable as named as `argv[0]`; for a script (`#!`), the
+  interpreter gets the opened file's `/proc/self/fd` path. It starts in the cwd the confirmation
+  opened.
+- /dev/null on stdin, stdout and stderr, and no other descriptor of the app's: no tool pipe, vault
+  file or socket. A terminal launch on macOS also gets the confirmed program its terminal runs, as
+  descriptor 3 (`program` in [Launches and managed runtimes](#launches-and-managed-runtimes)).
+- The launch environment, and nothing else of the app's: the app's own environment as it started
+  holds `HOME`, `USER`, `LOGNAME`, `SHELL`, `PATH`, `LANG`, `LANGUAGE`, `LC_*`, `TZ`, `TERM`,
+  `COLORTERM`, `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`, `DBUS_SESSION_BUS_ADDRESS`, the XDG
+  folders and session values (`XDG_RUNTIME_DIR`, `XDG_CONFIG_HOME`, `XDG_DATA_HOME`,
+  `XDG_CACHE_HOME`, `XDG_STATE_HOME`, `XDG_CONFIG_DIRS`, `XDG_DATA_DIRS`, `XDG_SESSION_TYPE`,
+  `XDG_CURRENT_DESKTOP`, `XDG_SESSION_DESKTOP`) and the proxy variables (`http_proxy`,
+  `https_proxy`, `no_proxy`, `all_proxy`, and the same in capitals); those it has are passed on,
+  but those the launch removes. When the app runs as an AppImage, entries inside its own folder
+  are taken out of `PATH`, `XDG_DATA_DIRS` and `XDG_CONFIG_DIRS`. On macOS `PATH` then gets, after
+  its own entries, the folders people's command-line clients are installed in that exist and it
+  lacks: `~/.local/bin`, `~/.npm-global/bin`, `~/.bun/bin`, `~/.cargo/bin`, `~/.volta/bin`,
+  `~/Library/pnpm` and `~/bin` (`~` the app's `HOME`), then `/opt/homebrew/bin` and
+  `/usr/local/bin`: an app started from the Finder or the Dock has launchd's `PATH`, which finds
+  none of them. Then come the variables the launch
+  inherits by name, those it sets, and its secrets, which the host resolves from the vault at the
+  spawn, each checked then as a delivery to the tool whose launch it is: the tool that asked holds
+  references only. No shell is run to read a login environment.
+- A process given a secret's value has its core file size limits set to 1, soft and hard, and so
+  does every process it starts: the kernel writes no core file for it and runs no core dump
+  handler. A limit of 0 would not do: with 0 the kernel still runs a `|` handler from
+  `/proc/sys/kernel/core_pattern`, and systemd-coredump records the crashed process's environment,
+  the secret included, in the journal. A kernel that treats 1 differently, or a handler started
+  otherwise, may record the environment again. Other launches get the limits the app started with.
+
+### Detached and managed
+
+A **detached** launch is started by a short-lived wrapper process, which starts it in a session and
+process group of its own with no parent-death signal and exits; the app reaps the wrapper. The app
+never signals a detached launch again: it runs on after its tool stops when idle, crashes, is
+swapped, disabled or removed, and after the app quits.
+
+Only a direct launch can be managed. For a terminal launch (one that names a `program`), the
+process the host holds is the terminal emulator's own launcher, and many terminals end it at once:
+gnome-terminal's `gnome-terminal` command is only a client that asks `gnome-terminal-server` to
+open the window and returns (the man page's `--wait` option, "wait until the terminal's child
+exits", exists for that reason), and konsole and kitty may do the same (kitty, run with
+`--single-instance`, opens its window in the first instance and quits at once). The
+agent then runs under that server, outside the process group the host signals, so a managed
+terminal launch's `status` would report a process that has exited and `stop` would stop nothing.
+A promise that holds for some terminals and silently fails for others is worse than none, so the
+host refuses `lifetime: "managed"` with a `program` (`invalid_request`, before the confirmation,
+for a new launch, a remembered one started again, or a launch another package asks for), and the
+Launcher page offers Managed for direct launches only. A terminal that keeps its process, such as
+xterm or foot, loses nothing the app promised before: launch the agent directly to have the app
+stop it.
+
+A **managed** runtime is the app's. It leads a process group of its own (never its tool's) and gets
+SIGTERM if the app dies without stopping it. The host keeps its live process (so its process ID is
+never another process's while the host may signal it), a start token and its exit status, on a
+dedicated thread that started it and stays until it is reaped. It belongs to its package, whatever
+release or generation of the package's tool asks: a tool restarted after a crash or swapped for an
+update controls the runtimes its package started. While serving a call, a tool sends:
+
+```json
+{"type":"runtime","id":"u-1","for":"c-5","op":"status","runtime":"rt-<hex>"}
+```
+
+| `op` | `output` |
+| --- | --- |
+| `list` | `{"runtimes": [<status>...]}`: its package's runtimes |
+| `status` | `{"runtime", "package", "state", "pid", "started", "restarts", "executable", "argv"}`, with `exit` once it ended; `state` is `running`, `stopping`, `exited` or `unknown` |
+| `stop` | the status once it has been reaped: SIGTERM to its process group, SIGKILL to the group after five seconds, or as soon as its leader exits |
+| `restart` | the status once it runs again: stopped as above, then the same confirmed launch started again, unless its executable or cwd changed since it was confirmed (launch it again) or a secret it gets is refused now (removed, or a client key that no longer passes its checks) |
+
+Another package's runtime is `not_found`, as one that never was. A package keeps at most eight
+runtimes, running or ended (those reported `unknown` do not count); the oldest ended one that is
+not being restarted makes room. A runtime whose leader exits on its
+own has the rest of its group killed as it is reaped. The window's `program_status` lists the
+package's runtimes too. The app's quit stops every managed runtime (and starts none after: a
+start or restart under way is either running already, and stopped with the rest, or refused).
+Disabling or removing the package retires its runtimes, since nothing could control them then:
+each is stopped, its confirmed launch is dropped (enabling the package again does not bring it
+back: `restart` is refused, and a new launch needs a new confirmation), no runtime starts for the
+package until it is enabled again (a start or restart under way when it is disabled is stopped if
+it started already, and refused otherwise, also when the package is enabled again before it
+would start), and a removed package's entries go once they have been reaped, those of a start or
+restart under way too. A tool's idle stop, crash or swap stops none.
+
+A tool's `spawn` and `runtime` requests are refused once the tool is stopping, and unless it still
+runs its package's enabled, admitted release, as its own calls are. A spawn is refused, and starts
+nothing, once the call it serves is cancelled (its page closed, its consent revoked, the window
+closed, the call's ticket cancelled) or the tool cancels the request itself.
+
+If the app itself dies, the runtime's leader gets SIGTERM, but a descendant that ignores it or
+starts a session of its own lives on as an orphan: a process group and a parent-death signal are
+not crash cleanup of every descendant, and the host adds no crash supervisor. The app's data
+folder holds `runtimes.json` (owner-only), naming the runtimes running; the next start reports each
+as `unknown` and never signals it: a process ID alone does not prove the process is still that
+runtime.
+
+### What a detached launch does not leave
+
+`setsid` gives a detached launch a session and process group of its own, but not a cgroup of its
+own. So when the session bus has a systemd user manager, the host asks it
+(`org.freedesktop.systemd1.Manager.StartTransientUnit`, without starting one, waiting at most two
+seconds) for a transient scope `app-pluxy-launch-<hex>.scope` holding the launch's short-lived
+wrapper, which waits before it starts the launch until its cgroup is that scope (at most two
+seconds more): the launch and everything it starts are then outside the app's cgroup, and stopping
+a systemd unit that runs the app (its default cgroup kill mode, `ExitType=cgroup`) or
+`systemd-oomd` acting on the app's cgroup does not end them. The scope goes once its last process
+has exited. With no user manager (or no session bus), or when it refuses (the app runs in a cgroup
+it does not own, such as a login session's scope), the launch runs in the app's cgroup and the app
+logs why: once for a missing user manager, each time for a refusal. And a process of the same user,
+a native tool among them, can read a launch's environment, its secrets included, in
+`/proc/<pid>/environ`; the runtimes' process IDs are reported to their package. Same-user isolation
+is not claimed (see [Secrets, references and the vault](#secrets-references-and-the-vault)).
+
+### The app's own core files
+
+At its start the app lowers its own soft core file size limit to zero, keeping the hard limit: it
+holds the vault's secrets, and its tools, which inherit the limit, receive secret values on their
+pipes. A developer can raise it again for a running app (`prlimit --core=unlimited --pid <app>`).
+The app does not mark itself undumpable (`PR_SET_DUMPABLE`): that would also stop same-user
+debugging and crash reports, and a process of the same user is not kept out anyway. With a soft
+limit of 0 the kernel writes no core file, but still runs a `|` core dump handler for the app
+(systemd-coredump keeps no core then, and records the app's environment in the journal). Unlike a
+launch given a secret, the app keeps the vault's secrets in its memory, not in its environment, so
+that record holds no secret.
+
+## Saving files
+
+A native tool saves a file for the person only through the host, and only where the person
+chooses it in a native save dialog: neither a page nor a tool ever names the path. The tool asks
+while it serves a call of one of its `disclose` operations, which the person confirmed for that
+call (from the window, a page or another tool); the file's bytes go from the tool's pipe to the
+host and the chosen file, never through a page. That is how a page offers an export: it calls its
+tool's `disclose` operation, and the tool hands over what it read. A call of any other effect, a
+job and a delivery cannot save. There is no page channel method for it.
+
+The tool sends `files` frames for the call it serves, as it sends `spawn` frames, and the host
+answers each on its stdin with a `result` or `error` frame of that ID:
+
+```json
+{"type":"files","id":"f-1","for":"c-2","op":"append","input":{"offset":0,"data":"<base64>"}}
+{"type":"files","id":"f-2","for":"c-2","op":"save","input":{"name":"session-019a.jsonl"}}
+```
+
+- `append` adds bytes (`data`, standard base64) at `offset`, which must be the number of bytes
+  so far; it answers `{"size": <bytes so far>}`. A frame is at most 1 MiB, so a larger file takes
+  several. At most 64 MiB in all: the append that would pass it is refused with
+  `invalid_request`, and the bytes so far are dropped.
+- `save` names the file name to suggest, nothing else; the host shows the native save dialog,
+  titled `Save a file from <package>` and holding the suggested name, and answers
+  `{"outcome": "saved", "size": <bytes>}` or `{"outcome": "cancelled"}`. A name holding `/`, `\`
+  or NUL (a path) and an input with any other field are refused with `invalid_request`; control
+  and format characters (such as U+202E) become `_`, leading dots and spaces are dropped and the
+  name is cut to 255 bytes. One save per call: once a `save` passes those checks, whatever the
+  answer, every later `append` or `save` for the call is refused with `permission`, and so is a
+  `files` frame for a call whose operation is not `disclose`.
+
+The dialog is GTK's file chooser in save mode, as the Access chooser (the desktop portal's with
+`GTK_USE_PORTAL=1` or inside a sandbox), with its own overwrite question: an existing file is
+replaced only after the person answers Replace. One save dialog shows at a time; a `save` while
+another shows is refused with `unavailable`. Cancelling it writes nothing; so does the call it
+serves ending (cancelled, its page closing, the window closing), which closes the dialog.
+
+The host opens the chosen folder once, as the dialog answers, and writes into that opened folder.
+The folder must be one no other user can change: owned by the person (the app's effective user)
+or root, and not writable by group or others unless it is sticky (as `/tmp`). Otherwise another
+user could put a file at the chosen name after GTK's question, and the host cannot tell what GTK
+asked. The chosen name must hold nothing or a regular file of the person's: a link, a folder,
+another user's file or anything else there is refused (`unavailable`), since writing through a
+link would write a file the dialog did not show.
+
+The host writes the file atomically beside the chosen one: a temporary file in the same folder,
+opened relative to that folder without following a link, mode 0600, the bytes and an fsync. Then it
+checks that the tool still runs its package's admitted release (a release disabled, removed or
+swapped out while the dialog was open saves nothing), that the opened folder is still the one at the
+chosen path and still the person's, and that the name is still what the dialog answered (an
+existing file by its device, inode, size and modification and change times). A link, another or a
+changed file or a folder now at the name, a file that appeared where there was none, or a moved or
+replaced folder is refused with `permission`, and the temporary file is removed. Then a replaced
+file's permission bits are set on the new one, and it is renamed over the chosen name, and the
+folder is synced. A new file never replaces anything: it is renamed with `RENAME_NOREPLACE`, or on
+a file system without it, hard-linked at the name (which fails if something is there) and the
+temporary file removed; on a file system with neither, the save is refused (`unavailable`). For an
+overwrite, the check and the rename are two steps, and a change between them is not caught. Nothing
+of the bytes or the chosen path is logged, and the answers carry neither.
+
+## Secrets, references and the vault
+
+The app keeps a host-private **vault** in its data folder (`vault`; on Windows in its local data
+folder, which does not roam with the profile), owner-only: on Linux and macOS folders 0700 and files
+0600 of the user; on Windows a protected access list whose allow entries name only the user and
+SYSTEM, set as each folder and file is made, and an owner that is the user, the token's default
+owner (Administrators for an elevated account) or SYSTEM, checked at each read. The vault holds each
+native tool's backups and journals and the secrets the person entered, on all three systems. It is
+never a folder a package names or reads through the host, and no window or page API gives its paths,
+a secret's value, a backup's bytes or a journal's intent. A native tool has the user's full access
+and could read it directly: this separates APIs and storage, it is not an operating-system sandbox,
+and it does not protect a secret from another program of the same user.
+
+### Secrets and references
+
+A secret enters only through native key entry (`vault_secret_add`, the app README's Commands):
+the hidden entry (GTK's on Linux, Win32's on Windows, AppKit's on macOS) reads it, and the window
+gets back its opaque ID (`s-` and 32 hexadecimal digits) and label, never the value. An
+operation's `secrets` fields carry secrets:
+
+- From the window, a secret field holds a vault secret's ID.
+- From a native tool, it holds a reference the host gave that tool in the call it is serving,
+  passed on to an operation its import lists in `secrets`.
+- From a page, never: a page cannot pass secrets.
+- A secret's value or a reference anywhere else in an input is refused: in any other field's
+  value or name, at any depth, or as the whole input. The refusal is the one any input that does
+  not match the operation's schema gets, so it does not say whether a string was a secret. A
+  field filled any other way is refused too.
+
+A call that delivers a secret's value (a `value` field), or one the window gives a secret to,
+asks a native confirmation naming each secret, its label and the tool that gets it, even for a
+`read` operation. A launch's secrets are references only (a manifest with a `value` field on a
+`launch` operation is invalid), so a remembered launch approval never stands for a value's
+delivery; it is remembered only with the same secrets' IDs, which its dialog and its Remember
+checkbox name. Passing a reference on to a
+`reference` field asks nothing more. The tool then finds, in each secret field, a new reference
+(`r-` and 32 hexadecimal digits) of its own, and a `value` field's secret in the call frame's
+`secrets`, by that reference:
+
+```json
+{"type":"call","id":"c-4","op":"apply","input":{"key":"r-<hex>","file":"/home/me/.config/x.json"},
+ "chain":[{"kind":"main"}],"secrets":{"r-<hex>":"<the secret>"}}
+```
+
+A reference is bound to its secret, to the release of the tool it was given to (ID, digest and
+generation) and to the call it was given in, and so to that call's chain. It is refused when
+another tool presents it, when another release of the tool does (after an update or rollback),
+in any other call of the tool, after its call has ended, and once its secret is removed. A tool
+that only receives references (an execution program) never receives the secret. References live
+in the app's memory only.
+
+The host never shows a secret's value or a reference: they are replaced by `[redacted]` in a
+tool's logged stderr lines and its status, in the errors leaving the host, and in every call's
+output, whether it goes to the window, a page or a calling tool. Overlapping values are replaced
+as one, and a removed secret's value is still replaced until the app restarts. Only exact values
+are replaced: a tool that encodes a secret otherwise can still show it.
+
+### Client keys
+
+A client key, the key a client program sends core with its requests, is a secret of its own,
+apart from the management key, which stays in the app's connection. It enters the vault only
+natively, never through the window:
+
+- `client_key_capture` (label, client) asks a native confirmation naming the core, the tool and
+  the label; then the app itself asks core for a new key (`POST /v0/management/client-keys`) with
+  the management key and keeps core's reply. Core shows a new key once: the app keeps it and shows
+  it to no one. If the vault cannot keep it, the app deletes it on core again.
+- `client_key_enter` (label, client) reads an existing client key from native key entry and keeps
+  it once the core takes it.
+
+Either way the key is bound to the core the app is connected to (the connection's mode and
+origin), to core's ID of it then (core's IDs change when it restarts; the ID is left out when no
+single key of core's has the key's masked form), to its masked form and to the native tool it is
+for (`client`). The window gets the secret's ID, label and that binding, never the key; a masked
+form or ID cannot give the key back. A client key is then used like any vault secret, with three
+more checks at every use, made before the native confirmation and, for a value, again just before
+it is put in the call frame:
+
+- From the window it goes only to its tool, and its value is delivered only to its tool, also
+  when another tool passes a reference to it on. Another tool is refused.
+- The app must be connected to the core the key belongs to. This is checked before anything is
+  sent, so the key never goes to another core.
+- Before its value is delivered, that core must still take it: the app asks core's client API
+  (`GET /v1/models`) with the key, and a key core no longer has (deleted on core) is refused. Once
+  core has answered, the app checks again that its connection has not changed meanwhile (no
+  switch, sign-out or key change) and that the secret is still in the vault.
+
+A launch's secret that its `environment` or `stdin` gives to the process it starts is a value
+delivered to the tool whose launch it is, though that tool holds only a reference. Its checks are made before the
+native confirmation and before the call, like any delivery's, and again each time the host turns
+the reference into a value: at the spawn, and at a managed runtime's start and every restart. A
+key deleted on core, bound to a core the app is not connected to then, or bound to another tool
+refuses that spawn, start or restart; no value from an earlier check stands for it. Once all of a
+launch's secrets have values, right before the process is started, the host checks once more that
+each is still in the vault and that the connection is the one each client key was checked on. A
+key deleted on core in the moment between core's answer and the start is not seen.
+
+```json
+{"id":"s-<hex>","label":"Claude Code","client_key":{"core":{"mode":"managed","origin":"http://127.0.0.1:8400"},
+ "key_id":"<24 hex digits>","masked":"sk******XY","client":"pluxy/claude-code"}}
+```
+
+### Vault frames
+
+While a tool serves a host call, it may send `vault` frames on its stdout for it (`for`), answered
+on its stdin like its own calls, with `result` or `error`. While it answers a describe on its
+package's turn (one that names journals or unknown outcomes), it may send them for that describe
+too, only to read backups (`backup.get`, `backup.list`) and to end the journals that describe named
+(`journal.commit`, `journal.end`):
+
+```json
+{"type":"vault","id":"v-1","for":"c-4","op":"journal.begin","intent":{"file":"/home/me/.config/x.json","sha256":"<hex>"}}
+```
+
+| `op` | Fields | `output` |
+| --- | --- | --- |
+| `backup.put` | `label` (at most 64 characters, holding no secret or reference), `data` (base64, at most 512 KiB) | `{"backup": "b-<hex>"}` |
+| `backup.get` | `backup` | `{"backup", "label", "size", "created", "data"}` |
+| `backup.list` | none | `{"backups": [{"backup", "label", "size", "created"}]}` |
+| `backup.delete` | `backup` | `{}` |
+| `journal.begin` | `intent` (a JSON object of at most 16 KiB, holding no secret or reference) | `{"journal": "j-<hex>"}` |
+| `journal.commit` | `journal` | `{"journal", "outcome": "committed"}` |
+| `journal.end` | `journal`, `outcome` (`committed` or `rolled_back`) | `{"journal", "outcome"}` |
+
+Backups and journals belong to the package, whatever its release, and stay when it is removed; a
+package keeps at most 256 backups, a backstop: retention is the tool's, which alone knows which of
+its backups its records still name (the transaction library keeps 10 manual backups per set). In a call, a tool commits or ends only a journal its own release
+began; in describe, any journal that describe named. The vault's folders are opened without
+following links, and files in a package's folder that its records do not name (a write cut
+short, a removal that failed) are removed the next time they are read. Errors, which never name
+another journal: `invalid_request` for bad fields (an `intent` or a `label` that holds a secret's
+value or a reference, which the error names neither of) or a journal ended already with another outcome,
+`not_found` for another package's or an unknown ID (or a journal the tool may not end),
+`unavailable` when the vault cannot be read or written, a second journal is begun while one is
+open, or the package keeps 256 backups, `permission` for a `for` the tool is not serving or an
+`op` describe may not send, and `unsupported` for an unknown `op`.
+
+### Journals and recovery
+
+A tool that writes begins a journal before the write, naming what it means to write in `intent`
+(such as each file and the SHA-256 of its new bytes), keeps the old bytes as a backup, and commits
+the journal once the write is done. A journal still open when the tool or the app stopped is kept
+on disk, and the package's next start names it in describe, with the calls of unknown outcome and
+on the package's turn:
+
+```json
+{"type":"call","id":"c-9","op":"describe","contract_version":0,"unknown":[...],
+ "journals":[{"id":"j-<hex>","op":"apply","generation":1700000000,"began":1700000001000,"intent":{...}}]}
+```
+
+The tool must reconcile each before it answers: look at what is on disk and end the journal as
+`committed` (the write took effect) or `rolled_back` (it did not, or the tool put the old bytes
+back), never by writing again. A start whose describe leaves one open fails, and so does one whose
+journals cannot be read (the status says why, in `journals_error`) and one that cannot take its
+package's turn within the startup limit while the package has a journal open (`extension_unavailable`;
+it is never described with no journals, and is retried by the backoff). Calls of unknown outcome
+alone wait for a later start's turn. Ending a journal
+again with the same outcome is answered the same, with `"again": true`, because delivery may
+repeat; another outcome is refused. While one is open, no other journal begins. A swap's
+candidate is told of none, as of unknown outcomes. The window's `program_status` lists the
+package's open and recently ended journals and whether each was reconciled after a crash.
+
+Config writers use the app tools' transaction library for this
+([`lib/transactions`](../../app-tools/README.md#libtransactions)): it pins a selected file or root
+(through a stow or chezmoi link) at preview, writes only its target, keeps backups and a journal
+here, and reconciles them from disk.
+
+## Shared manifest fixtures
+
+[`protocol/testdata/app-manifests`](../../protocol/testdata/app-manifests) holds JSON cases with
+expected core outcomes in `cases.json`. Go exercises them through the installer; Rust can reuse
+them later. These are manifest fixtures, not signed artifacts or proof of an implemented app host.

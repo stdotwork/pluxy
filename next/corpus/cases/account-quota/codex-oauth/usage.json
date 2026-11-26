@@ -1,0 +1,434 @@
+{
+  "description": "A ChatGPT sign-in's quota: the new core's GET /v0/management/accounts/{id}/quota against the usage request the old panel sends through the old core's api-call relay.",
+  "source": [
+    "d0f7af2ff:extensions/panel/src/features/quota/providers/codex/data.ts fetchCodexQuota",
+    "d0f7af2ff:extensions/panel/src/utils/quota/constants.ts CODEX_USAGE_URL, CODEX_REQUEST_HEADERS",
+    "core/internal/api/handlers/management/api_tools.go APICall"
+  ],
+  "client": {"method":"GET","path":"/v0/management/accounts/corpus/quota","auth":"management-key"},
+  "old_client": {
+    "path": "/v0/management/api-call",
+    "auth": "management-key",
+    "body": {
+      "auth_index": "{{auth_index}}",
+      "method": "GET",
+      "url": "{{upstream}}/backend-api/wham/usage",
+      "header": {
+        "Authorization": "Bearer $TOKEN$",
+        "Content-Type": "application/json",
+        "User-Agent": "codex-tui/0.149.1 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.149.1)",
+        "Chatgpt-Account-Id": "acct-sk-Cq7Vx2Np9Lw4Zr8"
+      }
+    }
+  },
+  "old_client_more": [
+    {
+      "path": "/v0/management/api-call",
+      "auth": "management-key",
+      "body": {
+        "auth_index": "{{auth_index}}",
+        "method": "GET",
+        "url": "{{upstream}}/backend-api/subscriptions?account_id=acct-sk-Cq7Vx2Np9Lw4Zr8",
+        "header": {
+          "Authorization": "Bearer $TOKEN$",
+          "Content-Type": "application/json",
+          "User-Agent": "codex-tui/0.149.1 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.149.1)",
+          "Chatgpt-Account-Id": "acct-sk-Cq7Vx2Np9Lw4Zr8"
+        }
+      }
+    },
+    {
+      "path": "/v0/management/api-call",
+      "auth": "management-key",
+      "body": {
+        "auth_index": "{{auth_index}}",
+        "method": "GET",
+        "url": "{{upstream}}/backend-api/wham/rate-limit-reset-credits",
+        "header": {
+          "Authorization": "Bearer $TOKEN$",
+          "Content-Type": "application/json",
+          "User-Agent": "codex-tui/0.149.1 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.149.1)",
+          "Chatgpt-Account-Id": "acct-sk-Cq7Vx2Np9Lw4Zr8",
+          "Accept": "application/json",
+          "OpenAI-Beta": "codex-1",
+          "Originator": "Codex Desktop"
+        }
+      }
+    }
+  ],
+  "account_models": ["gpt-6.1-sol"],
+  "upstream": [
+    {
+      "body": {
+        "user_id": "user-corpus",
+        "account_id": "acct-sk-Cq7Vx2Np9Lw4Zr8",
+        "email": "sk-Cq7Vx2Np9Lw4Zr8@example.invalid",
+        "plan_type": "plus",
+        "rate_limit": {
+          "allowed": true,
+          "limit_reached": false,
+          "primary_window": {
+            "used_percent": 42,
+            "limit_window_seconds": 18000,
+            "reset_after_seconds": 3600,
+            "reset_at": 1893456000
+          },
+          "secondary_window": {
+            "used_percent": 7,
+            "limit_window_seconds": 604800,
+            "reset_after_seconds": 86400,
+            "reset_at": 1893542400
+          }
+        },
+        "code_review_rate_limit": {
+          "allowed": true,
+          "limit_reached": false,
+          "primary_window": {
+            "used_percent": 3,
+            "limit_window_seconds": 604800,
+            "reset_after_seconds": 86400,
+            "reset_at": 1893542400
+          },
+          "secondary_window": null
+        },
+        "additional_rate_limits": [
+          {
+            "limit_name": "GPT-6.1-Codex-Spark",
+            "metered_feature": "codex_bengalfox",
+            "rate_limit": {
+              "allowed": true,
+              "limit_reached": false,
+              "primary_window": {
+                "used_percent": 11,
+                "limit_window_seconds": 18000,
+                "reset_after_seconds": 3600,
+                "reset_at": 1893456000
+              },
+              "secondary_window": {
+                "used_percent": 2,
+                "limit_window_seconds": 604800,
+                "reset_after_seconds": 86400,
+                "reset_at": 1893542400
+              }
+            }
+          }
+        ],
+        "credits": {"has_credits":true,"unlimited":false,"balance":"12.50"}
+      }
+    },
+    {"body":{"active_until":"2031-01-01T00:00:00Z"}},
+    {"body":{"available_count":0,"credits":[]}}
+  ],
+  "volatile": ["client.body.fetched_at","client.body.header.Date","client_more[*].body.header.Date"],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "body": "{\"user_id\":\"user-corpus\",\"account_id\":\"acct-sk-Cq7Vx2Np9Lw4Zr8\",\"email\":\"sk-Cq7Vx2Np9Lw4Zr8@example.invalid\",\"plan_type\":\"plus\",\"rate_limit\":{\"allowed\":true,\"limit_reached\":false,\"primary_window\":{\"used_percent\":42,\"limit_window_seconds\":18000,\"reset_after_seconds\":3600,\"reset_at\":1893456000},\"secondary_window\":{\"used_percent\":7,\"limit_window_seconds\":604800,\"reset_after_seconds\":86400,\"reset_at\":1893542400}},\"code_review_rate_limit\":{\"allowed\":true,\"limit_reached\":false,\"primary_window\":{\"used_percent\":3,\"limit_window_seconds\":604800,\"reset_after_seconds\":86400,\"reset_at\":1893542400},\"secondary_window\":null},\"additional_rate_limits\":[{\"limit_name\":\"GPT-6.1-Codex-Spark\",\"metered_feature\":\"codex_bengalfox\",\"rate_limit\":{\"allowed\":true,\"limit_reached\":false,\"primary_window\":{\"used_percent\":11,\"limit_window_seconds\":18000,\"reset_after_seconds\":3600,\"reset_at\":1893456000},\"secondary_window\":{\"used_percent\":2,\"limit_window_seconds\":604800,\"reset_after_seconds\":86400,\"reset_at\":1893542400}}}],\"credits\":{\"has_credits\":true,\"unlimited\":false,\"balance\":\"12.50\"}}",
+        "header": {
+          "Content-Length": ["1069"],
+          "Content-Type": ["application/json"],
+          "Date": "(volatile)"
+        },
+        "status_code": 200
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8",
+        "X-Cpa-Build-Date": "unknown",
+        "X-Cpa-Commit": "none",
+        "X-Cpa-Support-Plugin": "1",
+        "X-Cpa-Version": "dev"
+      },
+      "status": 200
+    },
+    "client_more": [
+      {
+        "body": {
+          "body": "{\"active_until\":\"2031-01-01T00:00:00Z\"}",
+          "header": {
+            "Content-Length": ["39"],
+            "Content-Type": ["application/json"],
+            "Date": "(volatile)"
+          },
+          "status_code": 200
+        },
+        "headers": {
+          "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+          "Content-Type": "application/json; charset=utf-8",
+          "X-Cpa-Build-Date": "unknown",
+          "X-Cpa-Commit": "none",
+          "X-Cpa-Support-Plugin": "1",
+          "X-Cpa-Version": "dev"
+        },
+        "status": 200
+      },
+      {
+        "body": {
+          "body": "{\"available_count\":0,\"credits\":[]}",
+          "header": {
+            "Content-Length": ["34"],
+            "Content-Type": ["application/json"],
+            "Date": "(volatile)"
+          },
+          "status_code": 200
+        },
+        "headers": {
+          "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+          "Content-Type": "application/json; charset=utf-8",
+          "X-Cpa-Build-Date": "unknown",
+          "X-Cpa-Commit": "none",
+          "X-Cpa-Support-Plugin": "1",
+          "X-Cpa-Version": "dev"
+        },
+        "status": 200
+      }
+    ],
+    "upstream": [
+      {
+        "body": null,
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsInN1YiI6ImNvcnB1c3xzay1DcTdWeDJOcDlMdzRacjgifQ.Zx8Kp3Qa",
+          "Chatgpt-Account-Id": "acct-sk-Cq7Vx2Np9Lw4Zr8",
+          "Content-Type": "application/json",
+          "User-Agent": "codex-tui/0.149.1 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.149.1)"
+        },
+        "method": "GET",
+        "path": "/backend-api/wham/usage"
+      },
+      {
+        "body": null,
+        "headers": {
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsInN1YiI6ImNvcnB1c3xzay1DcTdWeDJOcDlMdzRacjgifQ.Zx8Kp3Qa",
+          "Chatgpt-Account-Id": "acct-sk-Cq7Vx2Np9Lw4Zr8",
+          "Content-Type": "application/json",
+          "User-Agent": "codex-tui/0.149.1 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.149.1)"
+        },
+        "method": "GET",
+        "path": "/backend-api/subscriptions?account_id=acct-sk-Cq7Vx2Np9Lw4Zr8"
+      },
+      {
+        "body": null,
+        "headers": {
+          "Accept": "application/json",
+          "Accept-Encoding": "gzip",
+          "Authorization": "Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJleHAiOjQxMDI0NDQ4MDAsInN1YiI6ImNvcnB1c3xzay1DcTdWeDJOcDlMdzRacjgifQ.Zx8Kp3Qa",
+          "Chatgpt-Account-Id": "acct-sk-Cq7Vx2Np9Lw4Zr8",
+          "Content-Type": "application/json",
+          "Openai-Beta": "codex-1",
+          "Originator": "Codex Desktop",
+          "User-Agent": "codex-tui/0.149.1 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.149.1)"
+        },
+        "method": "GET",
+        "path": "/backend-api/wham/rate-limit-reset-credits"
+      }
+    ]
+  },
+  "exceptions": [
+    {
+      "path": "client.body",
+      "kind": "intended",
+      "want": {
+        "fetched_at": "(volatile)",
+        "quota": {
+          "limits": [
+            {
+              "id": "five_hour",
+              "label": "5-hour limit",
+              "resets_at": 1893456000,
+              "used_percent": 42,
+              "window_seconds": 18000
+            },
+            {
+              "id": "weekly",
+              "label": "Weekly limit",
+              "resets_at": 1893542400,
+              "used_percent": 7,
+              "window_seconds": 604800
+            },
+            {
+              "feature": true,
+              "id": "code_review_weekly",
+              "label": "Code review weekly limit",
+              "resets_at": 1893542400,
+              "used_percent": 3,
+              "window_seconds": 604800
+            },
+            {
+              "feature": true,
+              "id": "gpt_6_1_codex_spark_five_hour",
+              "label": "GPT-6.1-Codex-Spark 5-hour limit",
+              "resets_at": 1893456000,
+              "used_percent": 11,
+              "window_seconds": 18000
+            },
+            {
+              "feature": true,
+              "id": "gpt_6_1_codex_spark_weekly",
+              "label": "GPT-6.1-Codex-Spark weekly limit",
+              "resets_at": 1893542400,
+              "used_percent": 2,
+              "window_seconds": 604800
+            },
+            {"id":"credits","label":"Credit balance","remaining":12.5,"unit":"credits"},
+            {"id":"reset_credits","label":"Manual resets","remaining":0,"unit":"resets"}
+          ],
+          "plan_ends_at": 1924992000,
+          "plan": "plus",
+          "raw": {
+            "subscriptions": {"active_until":"2031-01-01T00:00:00Z"},
+            "reset_credits": {"available_count":0,"credits":[]},
+            "usage": {
+              "account_id": "[redacted]",
+              "additional_rate_limits": [
+                {
+                  "limit_name": "GPT-6.1-Codex-Spark",
+                  "metered_feature": "codex_bengalfox",
+                  "rate_limit": {
+                    "allowed": true,
+                    "limit_reached": false,
+                    "primary_window": {
+                      "limit_window_seconds": 18000,
+                      "reset_after_seconds": 3600,
+                      "reset_at": 1893456000,
+                      "used_percent": 11
+                    },
+                    "secondary_window": {
+                      "limit_window_seconds": 604800,
+                      "reset_after_seconds": 86400,
+                      "reset_at": 1893542400,
+                      "used_percent": 2
+                    }
+                  }
+                }
+              ],
+              "code_review_rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {
+                  "limit_window_seconds": 604800,
+                  "reset_after_seconds": 86400,
+                  "reset_at": 1893542400,
+                  "used_percent": 3
+                },
+                "secondary_window": null
+              },
+              "credits": {"balance":"12.50","has_credits":true,"unlimited":false},
+              "email": "sk-Cq7Vx2Np9Lw4Zr8@example.invalid",
+              "plan_type": "plus",
+              "rate_limit": {
+                "allowed": true,
+                "limit_reached": false,
+                "primary_window": {
+                  "limit_window_seconds": 18000,
+                  "reset_after_seconds": 3600,
+                  "reset_at": 1893456000,
+                  "used_percent": 42
+                },
+                "secondary_window": {
+                  "limit_window_seconds": 604800,
+                  "reset_after_seconds": 86400,
+                  "reset_at": 1893542400,
+                  "used_percent": 7
+                }
+              },
+              "user_id": "user-corpus"
+            }
+          }
+        }
+      },
+      "reason": "Different management API by design: the old core's api-call relay answers with the upstream's reply wrapped as {status_code, header, body} for the panel to read, and the panel works out the plan and windows itself; the new core's quota call reads the usage itself and answers {quota, fetched_at}. The want pins the new quota for this usage reply."
+    },
+    {
+      "path": "client.headers.Content-Type",
+      "kind": "intended",
+      "want": "application/json",
+      "reason": "Different management API by design: the new management API answers application/json; today's core's gin handlers add a charset."
+    },
+    {
+      "path": "client_more",
+      "kind": "intended",
+      "absent": true,
+      "reason": "The new quota call folds the subscription and reset-credit reads into its single management response, so it has one reply rather than separate management replies for the extra upstream requests."
+    },
+    {
+      "path": "upstream[0].headers.User-Agent",
+      "kind": "intended",
+      "reason": "Quota fetchers use each provider's own client identity for its own subscription (a decision on record): the new core sends the Codex extension's own User-Agent, the old panel a pinned codex-tui version."
+    },
+    {
+      "path": "upstream[0].headers.Originator",
+      "kind": "intended",
+      "want": "codex-tui",
+      "reason": "The new core's quota call carries the Originator the account's requests carry (the Codex client identity); the panel's usage request sends none."
+    },
+    {
+      "path": "upstream[0].headers.Accept",
+      "kind": "intended",
+      "want": "application/json",
+      "reason": "The new core's quota call asks for JSON explicitly; the panel's usage request sets no Accept."
+    },
+    {
+      "path": "upstream[0].headers.Content-Type",
+      "kind": "intended",
+      "absent": true,
+      "reason": "The panel gives every Codex call the Content-Type of its request header set, including GETs without a body; the new core's GET sends none."
+    },
+    {
+      "path": "upstream[1].headers.User-Agent",
+      "kind": "intended",
+      "reason": "The new core uses the Codex extension's own User-Agent for every quota request; its version is intentionally not pinned here."
+    },
+    {
+      "path": "upstream[1].headers.Originator",
+      "kind": "intended",
+      "want": "codex-tui",
+      "reason": "The new core uses the Codex client identity on the subscription request."
+    },
+    {
+      "path": "upstream[1].headers.Accept",
+      "kind": "intended",
+      "want": "application/json",
+      "reason": "The new core asks for JSON explicitly on the subscription request."
+    },
+    {
+      "path": "upstream[1].headers.Content-Type",
+      "kind": "intended",
+      "absent": true,
+      "reason": "The new core's GET subscription request has no request body and sends no Content-Type."
+    },
+    {
+      "path": "upstream[2].headers.User-Agent",
+      "kind": "intended",
+      "reason": "The new core uses the Codex extension's own User-Agent for every quota request; its version is intentionally not pinned here."
+    },
+    {
+      "path": "upstream[2].headers.Originator",
+      "kind": "intended",
+      "want": "codex-tui",
+      "reason": "The new core uses the Codex client identity on the reset-credit request."
+    },
+    {
+      "path": "upstream[2].headers.Content-Type",
+      "kind": "intended",
+      "absent": true,
+      "reason": "The new core's GET reset-credit request has no request body and sends no Content-Type."
+    },
+    {
+      "path": "upstream[2].headers.Openai-Beta",
+      "kind": "intended",
+      "absent": true,
+      "reason": "The new core uses its own Codex identity and does not send the panel's OpenAI-Beta header."
+    }
+  ]
+}

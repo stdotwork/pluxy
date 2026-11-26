@@ -1,0 +1,27 @@
+{
+  "description": "GET /v1/models/{id} for a model no account serves is a 404 model_not_found; an alias's upstream name is not a model clients can name.",
+  "source": ["core/sdk/api/handlers/handlers_interceptors.go model detail"],
+  "client": {"method":"GET","path":"/v1/models/up-model-a"},
+  "old_core": {"account":{"models":[{"name":"up-model-a","alias":"pub-a"},{"name":"up-model-b"}]}},
+  "new_core": {"account":{"models":[{"name":"up-model-a","alias":"pub-a"},"up-model-b"]}},
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "code": "model_not_found",
+          "message": "Model not found",
+          "type": "invalid_request_error"
+        }
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      "status": 404
+    },
+    "upstream": []
+  }
+}

@@ -1,0 +1,37 @@
+[package]
+name = "execution"
+version = "0.1.0"
+description = "Prepares terminal, direct and open launches for pluxy's desktop app, which spawns them"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+pluxy-program = { path = "../lib/program" }
+serde_json = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.191"
+
+# Windows' and macOS' launch checks and private folders.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+pluxy-files = { path = "../lib/files" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_Storage_FileSystem",
+  "Win32_System_Com",
+  "Win32_System_Console",
+  "Win32_System_Registry",
+  "Win32_System_SystemInformation",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[features]
+# For the native test only (next/app/native/run.ts, platform-tools.ts): an open launch also takes
+# its opener from the input's search_path, for the test's stand-in opener; on Windows a `console`
+# window does not wait for Enter, and the shell after the program runs one fixed command that
+# writes its working folder to `pluxy-after-exit` (src/launch_windows.rs). Never in a release build.
+native-test = []

@@ -1,0 +1,29 @@
+{
+  "description": "GET /v1beta/models/{name} shows one model in Gemini's shape, without the list's filled-in fields.",
+  "source": ["core/sdk/api/handlers/gemini/gemini_handlers.go GeminiGetHandler"],
+  "client": {"method":"GET","path":"/v1beta/models/pub-a"},
+  "old_core": {"account":{"models":[{"name":"up-model-a","alias":"pub-a"},{"name":"up-model-b"}]}},
+  "new_core": {"account":{"models":[{"name":"up-model-a","alias":"pub-a"},"up-model-b"]}},
+  "exceptions": [
+    {
+      "path": "client.body.displayName",
+      "kind": "intended",
+      "reason": "A model a key's config lists under an alias shows its upstream name as its display name for every provider in the new core, as today's core shows it for Codex, Claude and Gemini keys; today's core shows the alias instead for an openai-compatibility key.",
+      "want": "up-model-a"
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {"displayName":"pub-a","name":"models/pub-a"},
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      "status": 200
+    },
+    "upstream": []
+  }
+}

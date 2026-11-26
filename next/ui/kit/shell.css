@@ -1,0 +1,726 @@
+/* The shell (shell.tsx) and the frame it shows its pages in (frame.tsx): the navigation, the
+   header strip, topics, the page area, and signing in. */
+@layer kit {
+  /* Shell and navigation */
+
+  .shell {
+    min-height: 100vh;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* A shell with no frame (signing in) gives its one part the whole window. */
+  .shell > :only-child {
+    grid-column: 1 / -1;
+    grid-row: 1 / -1;
+  }
+
+  /* Text for assistive technology only. */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  /* The first Tab stop: hidden until it has focus. */
+  .skip-link {
+    position: fixed;
+    top: calc(var(--s) * 2);
+    inset-inline-start: calc(var(--s) * 2);
+    z-index: 10;
+    padding: calc(var(--s) * 2) calc(var(--s) * 3);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--px-shape-radius);
+    color: var(--px-color-text);
+    background: var(--px-color-surface);
+  }
+  .skip-link:not(:focus) {
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  /* The skip link and a page change put focus on the main area, which is not a control. */
+  .main:focus {
+    outline: none;
+  }
+
+  /* The frame (frame.tsx). data-frame says how the navigation is drawn: the theme's `nav` option
+     (sidebar, rail, top), or what a narrow window makes of it (rail, then bar). The frame fills
+     the window and does not scroll; the pane does. */
+
+  .shell[data-frame] {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+    grid-template-columns: var(--px-size-nav) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    --stick: calc(var(--px-size-header) + var(--s) * 4);
+  }
+
+  .shell[data-frame="rail"] {
+    grid-template-columns: var(--px-size-rail) minmax(0, 1fr);
+  }
+
+  .shell:is([data-frame="top"], [data-frame="bar"]) {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    --stick: calc(var(--px-size-header) * 2 + var(--s) * 4);
+  }
+
+  .icon {
+    flex: none;
+    display: block;
+  }
+
+  /* Navigation */
+
+  .nav {
+    background: var(--px-color-nav);
+    border: 0 solid var(--px-color-nav-border);
+    border-inline-end-width: var(--px-shape-border);
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    /* Over the page: the status block's menu opens across the navigation's edge. */
+    position: relative;
+    z-index: 2;
+  }
+
+  .brand {
+    flex: none;
+    display: flex;
+    align-items: center;
+    min-height: var(--px-size-header);
+    padding-inline: calc(var(--s) * 4);
+    font-weight: var(--px-font-weight-strong);
+    color: var(--px-color-nav-text);
+    text-decoration: none;
+    letter-spacing: 0.02em;
+    min-width: 0;
+  }
+
+  .brand > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .nav-list {
+    list-style: none;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: calc(var(--s) * 0.5);
+    padding: calc(var(--s) * 1) calc(var(--s) * 2);
+  }
+
+  /* In a window too short for the whole navigation, the destinations scroll: Settings and the
+     status block stay in view. */
+  .shell:is([data-frame="sidebar"], [data-frame="rail"]) .nav-list:not(.nav-foot) {
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  /* Settings sits at the navigation's foot, over the status block. */
+  .nav-foot {
+    margin-top: auto;
+    padding-bottom: calc(var(--s) * 2);
+  }
+
+  /* A destination: as high as a page's main action (size.control-main, 32 pixels by default). */
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 2.5);
+    min-height: var(--px-size-control-main);
+    color: var(--px-color-nav-muted);
+    text-decoration: none;
+    border-radius: var(--px-shape-radius);
+    padding: 0 calc(var(--s) * 2.5);
+    transition:
+      background var(--t),
+      color var(--t);
+  }
+
+  a.nav-item:hover {
+    background: var(--px-color-nav-hover);
+    color: var(--px-color-nav-text);
+  }
+
+  /* The current destination: a light tonal fill and a 2 pixel bar at its start. */
+  .nav-item[aria-current="page"] {
+    background: var(--px-color-nav-selected);
+    color: var(--px-color-accent);
+    font-weight: var(--px-font-weight-strong);
+    box-shadow: inset 2px 0 0 var(--px-color-accent);
+  }
+
+  /* A destination that cannot be chosen: the frame has no session to show its pages for. */
+  .nav-item[aria-disabled="true"] {
+    opacity: 0.55;
+    cursor: default;
+  }
+
+  .nav-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The status block: a state's dot and word, and under them where pluxy runs. */
+
+  .status {
+    flex: none;
+    position: relative;
+    border-top: var(--px-shape-border) solid var(--px-color-nav-border);
+    --status-color: var(--px-color-nav-muted);
+  }
+
+  .status[data-state="running"] {
+    --status-color: var(--px-color-ok);
+  }
+
+  .status[data-state="down"] {
+    --status-color: var(--px-color-danger);
+  }
+
+  .status-block {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+    width: 100%;
+    min-height: calc(var(--s) * 14);
+    padding: calc(var(--s) * 2) calc(var(--s) * 3) calc(var(--s) * 2) calc(var(--s) * 4);
+    border: 0;
+    background: none;
+    color: var(--px-color-nav-text);
+    font: inherit;
+    text-align: start;
+  }
+
+  button.status-block {
+    cursor: pointer;
+    transition: background var(--t);
+  }
+
+  button.status-block:is(:hover, [aria-expanded="true"]) {
+    background: var(--px-color-nav-hover);
+  }
+
+  button.status-block:focus-visible {
+    outline-offset: -2px;
+  }
+
+  /* A filled dot while pluxy runs or should; a ring while it is stopped or not known. The word
+     beside it says which, so the state never rests on colour alone. */
+  .status-dot {
+    flex: none;
+    width: calc(var(--s) * 2);
+    height: calc(var(--s) * 2);
+    border-radius: 50%;
+    border: var(--px-shape-border) solid var(--status-color);
+    background: var(--status-color);
+  }
+
+  .status:is([data-state="stopped"], [data-state="unknown"]) .status-dot {
+    background: none;
+  }
+
+  .status-text {
+    display: grid;
+    min-width: 0;
+    line-height: 1.3;
+  }
+
+  .status-text b {
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .status-text span {
+    color: var(--px-color-nav-muted);
+    font-size: var(--px-font-size-small);
+  }
+
+  .status-text > * {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The menu is as wide as its widest line (the address and Copy): at least 17rem, and at most
+     the room the window has beside where it opens (--menu-room). Narrower than that, the address
+     wraps; it is never cut. */
+  .status-menu {
+    --menu-room: calc(100vw - var(--s) * 4);
+    position: absolute;
+    inset-block-end: calc(100% + var(--s) * 1);
+    inset-inline-start: calc(var(--s) * 2);
+    width: max-content;
+    min-width: min(max(100% - var(--s) * 4, 17rem), var(--menu-room));
+    max-width: var(--menu-room);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    padding: calc(var(--s) * 1);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--px-shape-radius);
+    background: var(--px-color-overlay);
+    color: var(--px-color-text);
+    box-shadow: var(--px-shadow-raised);
+  }
+
+  .status-address {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+    padding: calc(var(--s) * 1) calc(var(--s) * 1) calc(var(--s) * 1) calc(var(--s) * 2);
+  }
+
+  .status-address code {
+    flex: 1;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .status-copy,
+  .status-item {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 1.5);
+    border: 0;
+    border-radius: var(--px-shape-radius);
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: start;
+    text-decoration: none;
+    cursor: pointer;
+    padding: calc(var(--s) * 1.5) calc(var(--s) * 2);
+    transition: background var(--t);
+  }
+
+  .status-copy {
+    flex: none;
+    min-height: var(--px-size-control);
+    border: var(--px-shape-border) solid var(--px-color-input-border);
+    padding-block: 0;
+  }
+
+  .status-item {
+    justify-content: space-between;
+    min-height: var(--px-size-control);
+    padding-block: 0;
+  }
+
+  :is(.status-copy, .status-item):hover {
+    background: var(--px-color-surface-raised);
+  }
+
+  .status-item[aria-busy="true"] {
+    cursor: progress;
+  }
+
+  .status-note {
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+  }
+
+  .status-error {
+    margin: 0;
+    padding: calc(var(--s) * 1) calc(var(--s) * 2);
+    color: var(--px-color-danger);
+    font-size: var(--px-font-size-small);
+  }
+
+  /* The rail: icons only. Each entry's name is its tooltip and its accessible name; the status
+     block is its dot. */
+
+  .shell[data-frame="rail"] .brand {
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  /* The product name's first letter stands for it. */
+  .shell:is([data-frame="rail"], [data-frame="bar"]) .brand > span {
+    width: 1ch;
+    text-overflow: clip;
+    letter-spacing: 1ch;
+  }
+
+  .shell:is([data-frame="top"], [data-frame="bar"]) .status-text span {
+    display: none;
+  }
+
+  /* Still read by assistive technology: the entry's name, and the state's word. */
+  .shell:is([data-frame="rail"], [data-frame="bar"]) :is(.nav-label, .status-text) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .shell[data-frame="rail"] .nav-list {
+    padding-inline: calc(var(--s) * 1);
+    align-items: center;
+  }
+
+  .shell:is([data-frame="rail"], [data-frame="bar"]) .nav-item {
+    justify-content: center;
+    width: calc(var(--s) * 6 + 16px);
+    height: calc(var(--s) * 4 + 16px);
+    padding: 0;
+  }
+
+  .shell:is([data-frame="rail"], [data-frame="bar"]) .status-block {
+    justify-content: center;
+    padding-inline: 0;
+  }
+
+  .shell[data-frame="rail"] .status-menu {
+    --menu-room: calc(100vw - var(--px-size-rail) - var(--s) * 3);
+    inset-block-end: calc(var(--s) * 2);
+    inset-inline-start: calc(100% + var(--s) * 1);
+  }
+
+  /* On top: the destinations in a row, Settings and the status block at its end. */
+
+  .shell:is([data-frame="top"], [data-frame="bar"]) .nav {
+    flex-direction: row;
+    align-items: center;
+    border-inline-end-width: 0;
+    border-block-end-width: var(--px-shape-border);
+    padding-inline: calc(var(--s) * 2);
+  }
+
+  .shell:is([data-frame="top"], [data-frame="bar"]) .nav-list {
+    flex-direction: row;
+    padding: 0 calc(var(--s) * 1);
+  }
+
+  /* Across the top, the current destination's bar is under it. */
+  .shell:is([data-frame="top"], [data-frame="bar"]) .nav-item[aria-current="page"] {
+    box-shadow: inset 0 -2px 0 var(--px-color-accent);
+  }
+
+  .shell:is([data-frame="top"], [data-frame="bar"]) .nav-foot {
+    margin-top: 0;
+    margin-inline-start: auto;
+  }
+
+  .shell:is([data-frame="top"], [data-frame="bar"]) .brand {
+    flex: 0 1 auto;
+    padding-inline: calc(var(--s) * 2) calc(var(--s) * 3);
+  }
+
+  .shell:is([data-frame="top"], [data-frame="bar"]) .status {
+    border-top: 0;
+    border-inline-start: var(--px-shape-border) solid var(--px-color-nav-border);
+    margin-inline-start: calc(var(--s) * 1);
+  }
+
+  .shell:is([data-frame="top"], [data-frame="bar"]) .status-block {
+    min-height: var(--px-size-header);
+    padding-inline: calc(var(--s) * 3);
+    white-space: nowrap;
+  }
+
+  .shell:is([data-frame="top"], [data-frame="bar"]) .status-menu {
+    inset-block: 100% auto;
+    inset-inline: auto 0;
+    margin-top: calc(var(--s) * 1);
+  }
+
+  /* The header strip: the page's name or the way back to the page above it, the destination's
+     tabs, and at its end the page's actions. */
+
+  .frame-body {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    /* A stacking context of its own: nothing in a page (a table's sticky header) is drawn over
+       the navigation or the status block's menu. */
+    position: relative;
+    z-index: 0;
+  }
+
+  .strip {
+    flex: none;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    column-gap: calc(var(--s) * 5);
+    min-height: var(--px-size-header);
+    padding-inline: calc(var(--s) * 6);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .strip-title {
+    display: flex;
+    align-items: baseline;
+    gap: calc(var(--s) * 2);
+    min-width: 0;
+  }
+
+  .strip-title h1 {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* A page change puts focus on the heading, which is not a control. */
+  .strip-title h1:focus {
+    outline: none;
+  }
+
+  .crumb {
+    display: flex;
+    gap: calc(var(--s) * 2);
+    color: var(--px-color-text-muted);
+    white-space: nowrap;
+  }
+
+  .crumb a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .crumb a:hover {
+    color: var(--px-color-text);
+  }
+
+  .strip-tabs {
+    align-self: stretch;
+    display: flex;
+    gap: calc(var(--s) * 1);
+    min-width: 0;
+  }
+
+  .strip-tab {
+    display: flex;
+    align-items: center;
+    min-height: var(--px-size-header);
+    padding-inline: calc(var(--s) * 2);
+    color: var(--px-color-text-muted);
+    text-decoration: none;
+    white-space: nowrap;
+    /* The current tab's line sits on the strip's own border. */
+    border-block: 2px solid transparent;
+    margin-bottom: calc(var(--px-shape-border) * -1);
+    transition: color var(--t);
+  }
+
+  .strip-tab:hover {
+    color: var(--px-color-text);
+  }
+
+  .strip-tab[aria-current="page"] {
+    color: var(--px-color-text);
+    font-weight: var(--px-font-weight-strong);
+    border-bottom-color: var(--px-color-accent);
+  }
+
+  .strip-tab:focus-visible {
+    outline-offset: -2px;
+  }
+
+  /* The page's actions take the room left beside the title and the tabs, at its end. Those that do
+     not fit there wrap to a second row and the strip grows to hold it, so the tabs (stretched to
+     the strip's height) keep the current tab's line on the strip's border, under every control. */
+  .strip-end {
+    flex: 1 1 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: calc(var(--s) * 2);
+    padding-block: calc(var(--s) * 1);
+    min-width: min-content;
+  }
+
+  .strip-end .actions {
+    justify-content: flex-end;
+  }
+
+  .strip-end .actions:empty {
+    display: none;
+  }
+
+  /* The page's one main action is a step taller than the other controls. */
+  .strip-end .btn[data-variant="primary"] {
+    min-height: var(--px-size-control-main);
+  }
+
+  .strip-button {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--s) * 1.5);
+    height: var(--px-size-control);
+    min-width: var(--px-size-control);
+    justify-content: center;
+    padding: 0 calc(var(--s) * 1.5);
+    border: 0;
+    border-radius: var(--px-shape-radius);
+    background: none;
+    color: var(--px-color-text-muted);
+    font: inherit;
+    font-size: var(--px-font-size-small);
+    white-space: nowrap;
+    cursor: pointer;
+    transition:
+      background var(--t),
+      color var(--t);
+  }
+
+  .strip-button:hover {
+    background: var(--px-color-surface-raised);
+    color: var(--px-color-text);
+  }
+
+  /* Accent while masking, and it says so. */
+  .privacy[aria-pressed="true"] {
+    color: var(--px-color-accent);
+  }
+
+  /* Topics: a destination's pages listed beside the page. */
+
+  .frame-pane {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+  }
+
+  .topics {
+    flex: none;
+    width: var(--px-size-topics);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: calc(var(--s) * 3);
+    padding: calc(var(--s) * 3) calc(var(--s) * 2);
+    border-inline-end: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .topics ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: calc(var(--s) * 0.5);
+  }
+
+  .nav-group {
+    display: grid;
+    gap: calc(var(--s) * 1);
+  }
+
+  .nav-group-label {
+    font-size: var(--px-font-size-small);
+    font-weight: var(--px-font-weight-strong);
+    color: var(--px-color-text-muted);
+    padding-inline: calc(var(--s) * 2.5);
+  }
+
+  /* One line, size.control high. */
+  .topic {
+    display: block;
+    padding: calc((var(--px-size-control) - var(--px-font-size) * var(--px-font-line-height)) / 2)
+      calc(var(--s) * 2.5);
+    border-radius: var(--px-shape-radius);
+    color: var(--px-color-text-muted);
+    text-decoration: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition:
+      background var(--t),
+      color var(--t);
+  }
+
+  .topic:hover {
+    background: var(--px-color-surface-raised);
+    color: var(--px-color-text);
+  }
+
+  .topic[aria-current="page"] {
+    background: var(--px-color-selected);
+    color: var(--px-color-selected-text);
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  /* In a narrow window the topics are a select above the page. */
+  .shell[data-narrow] .frame-pane[data-topics] {
+    flex-direction: column;
+  }
+
+  .topics-select {
+    flex: none;
+    display: block;
+    padding: calc(var(--s) * 2) calc(var(--s) * 4);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .topics-select select {
+    width: 100%;
+  }
+
+  /* Page area: the pane, the frame's one part that scrolls. */
+
+  .main {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+  }
+
+  .content {
+    margin-inline: auto;
+    padding: calc(var(--s) * 5) calc(var(--s) * 6) calc(var(--s) * 12);
+    max-width: var(--px-size-width-wide);
+  }
+
+  html[data-width="full"] .content {
+    max-width: none;
+  }
+
+  html[data-width="narrow"] .content {
+    max-width: var(--px-size-width-narrow);
+  }
+
+  /* A narrow window (under 820 pixels) gives the page more of its width. */
+  .shell[data-narrow] .strip {
+    padding-inline: calc(var(--s) * 4);
+    column-gap: calc(var(--s) * 3);
+  }
+
+  .shell[data-narrow] .content {
+    padding: calc(var(--s) * 4) calc(var(--s) * 4) calc(var(--s) * 10);
+  }
+
+  /* Signing in */
+
+  .signin {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: calc(var(--s) * 4);
+  }
+
+  .signin form {
+    width: min(100%, 24em);
+    gap: calc(var(--s) * 4);
+  }
+
+  .signin p {
+    margin: 0;
+  }
+}

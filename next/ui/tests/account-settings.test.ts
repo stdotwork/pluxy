@@ -1,0 +1,166 @@
+import { expect, test } from "bun:test";
+import type { Account } from "../kit/api";
+import { accountChange, draftOf } from "../kit/pages/accountSettings.helpers";
+
+// An account as core's reply reads after the browser parsed it.
+const account = (settingsJSON: string, inexact?: boolean): Account => ({
+  id: "a",
+  source: "login",
+  state: "active",
+  refreshable: false,
+  settings: JSON.parse(settingsJSON),
+  ...(inexact ? { settings_inexact: true } : {}),
+});
+
+test("a number the browser cannot keep exactly is refused, not changed", () => {
+  const a = account(`{"base_url":"https://one.example"}`);
+  for (const n of ["9007199254740993", "1e-400", "1e400", "0.10000000000000001"]) {
+    const d = { ...draftOf(a), settings: `{"base_url":"https://one.example","n":${n}}` };
+    expect(accountChange(a, d)).toEqual({ invalid: "settingsNumber" });
+  }
+  for (const [n, kept] of [
+    ["1.0", 1],
+    ["0.1", 0.1],
+    ["-0", -0],
+    ["2e3", 2000],
+    ["9007199254740991", 9007199254740991],
+  ] as const) {
+    const d = { ...draftOf(a), settings: `{"base_url":"https://one.example","n":${n}}` };
+    expect(accountChange(a, d)).toEqual({
+      change: { settings: { base_url: "https://one.example", n: kept } },
+    });
+  }
+  // Digits inside a string are text, not a number.
+  const d = { ...draftOf(a), settings: `{"base_url":"https://one.example","s":"9007199254740993"}` };
+  expect(accountChange(a, d)).toEqual({
+    change: { settings: { base_url: "https://one.example", s: "9007199254740993" } },
+  });
+});
+
+test("settings holding a number the browser did not keep cannot be edited here", () => {
+  // Core marks them: the browser shows these numbers rounded, and would write them back so.
+  for (const stored of [
+    `{"big":9007199254740993}`,
+    `{"huge":1e400}`,
+    `{"n":0.10000000000000001}`,
+    `{"tiny":1e-400}`,
+  ]) {
+    const a = account(stored, true);
+    // Another field: settings are not sent, so the stored number stays as it is.
+    expect(accountChange(a, { ...draftOf(a), priority: "5" })).toEqual({ change: { priority: 5 } });
+    // The settings text: refused, since the number shown is not the one core holds.
+    const edited = { ...draftOf(a), settings: draftOf(a).settings.replace("{", `{"websockets": true,`) };
+    expect(accountChange(a, edited)).toEqual({ invalid: "settingsNumber" });
+  }
+  // Unmarked settings can be edited, a large integer the browser keeps exactly included.
+  const a = account(`{"big":9007199254740994}`);
+  const edited = { ...draftOf(a), settings: draftOf(a).settings.replace("{", `{"websockets": true,`) };
+  expect(accountChange(a, edited)).toEqual({
+    change: { settings: { websockets: true, big: 9007199254740994 } },
+  });
+});
+
+// An account added by login, with the proxy_url core shows: "redacted" in place of the user name
+// and password.
+const proxied = (proxy?: string): Account => ({
+  id: "a",
+  source: "login",
+  state: "active",
+  refreshable: false,
+  ...(proxy === undefined ? {} : { proxy_url: proxy }),
+});
+
+test("the proxy URL as core shows it is not sent back, so the stored password stays", () => {
+  const a = proxied("socks5://redacted@proxy.example:1080");
+  expect(draftOf(a).proxyUrl).toBe("socks5://redacted@proxy.example:1080");
+  // Untouched, and with another field changed: no proxy_url in the PATCH.
+  expect(accountChange(a, draftOf(a))).toEqual({ change: {} });
+  expect(accountChange(a, { ...draftOf(a), priority: "5" })).toEqual({ change: { priority: 5 } });
+  // Spaces around the shown value are not a change either.
+  expect(accountChange(a, { ...draftOf(a), proxyUrl: "  socks5://redacted@proxy.example:1080 " })).toEqual({
+    change: {},
+  });
+});
+
+test("a typed proxy URL is sent trimmed, and clearing the field sets the default", () => {
+  const none = proxied();
+  expect(draftOf(none).proxyUrl).toBe("");
+  expect(accountChange(none, { ...draftOf(none), proxyUrl: " http://u:p@proxy.example:3128 " })).toEqual({
+    change: { proxy_url: "http://u:p@proxy.example:3128" },
+  });
+  // direct and none are values core stores, not the default.
+  expect(accountChange(none, { ...draftOf(none), proxyUrl: "direct" })).toEqual({
+    change: { proxy_url: "direct" },
+  });
+  const set = proxied("http://redacted@proxy.example:3128");
+  expect(accountChange(set, { ...draftOf(set), proxyUrl: "" })).toEqual({ change: { proxy_url: null } });
+  expect(accountChange(set, { ...draftOf(set), proxyUrl: "   " })).toEqual({ change: { proxy_url: null } });
+  // Clearing a field that was empty is no change.
+  expect(accountChange(none, { ...draftOf(none), proxyUrl: "  " })).toEqual({ change: {} });
+});
+
+// An account as core shows one with headers: a placeholder in place of the value of a header whose
+// name is about authentication.
+const placeholder = "pluxy-redacted-0123456789abcdef01234567";
+const headed = (headers?: Record<string, string>): Account => ({
+  id: "a",
+  source: "login",
+  state: "active",
+  refreshable: false,
+  ...(headers === undefined ? {} : { headers }),
+});
+const shown = { Authorization: placeholder, "X-Title": "pluxy" };
+
+test("headers as core shows them are not sent back, so the stored secret stays", () => {
+  const a = headed(shown);
+  // Shown as core sends them, secrets as placeholders, never decoded.
+  expect(JSON.parse(draftOf(a).headers)).toEqual(shown);
+  expect(draftOf(a).headers).toContain(placeholder);
+  // Untouched, and with another field changed: no headers in the PATCH.
+  expect(accountChange(a, draftOf(a))).toEqual({ change: {} });
+  expect(accountChange(a, { ...draftOf(a), priority: "5" })).toEqual({ change: { priority: 5 } });
+  // The same headers written another way (order, spacing) are no change either.
+  expect(
+    accountChange(a, { ...draftOf(a), headers: `{"X-Title":"pluxy",\n "Authorization": "${placeholder}"}` }),
+  ).toEqual({ change: {} });
+});
+
+test("edited headers go whole, an untouched secret as its placeholder", () => {
+  const a = headed(shown);
+  const edited = `{"Authorization": "${placeholder}", "X-Title": "other", "X-New": "1"}`;
+  expect(accountChange(a, { ...draftOf(a), headers: edited })).toEqual({
+    change: { headers: { Authorization: placeholder, "X-Title": "other", "X-New": "1" } },
+  });
+  // A header left out of the text is removed; a secret typed anew is sent as typed.
+  expect(accountChange(a, { ...draftOf(a), headers: `{"Authorization": "sk-new-value"}` })).toEqual({
+    change: { headers: { Authorization: "sk-new-value" } },
+  });
+  // Headers added to an account that had none.
+  const none = headed();
+  expect(draftOf(none).headers).toBe("");
+  expect(accountChange(none, { ...draftOf(none), headers: `{"X-Title": "pluxy"}` })).toEqual({
+    change: { headers: { "X-Title": "pluxy" } },
+  });
+});
+
+test("removing all headers sends null, and an empty field on an account without headers is no change", () => {
+  const a = headed(shown);
+  for (const text of ["", "  ", "{}", " {\n} "]) {
+    expect(accountChange(a, { ...draftOf(a), headers: text })).toEqual({ change: { headers: null } });
+  }
+  const none = headed();
+  for (const text of ["  ", "{}"]) {
+    expect(accountChange(none, { ...draftOf(none), headers: text })).toEqual({ change: {} });
+  }
+});
+
+test("headers that are not a JSON object of text values are refused", () => {
+  const a = headed(shown);
+  const bad = (text: string) => accountChange(a, { ...draftOf(a), headers: text });
+  expect(bad("{")).toEqual({ invalid: "headersJson" });
+  expect(bad(`["X-Title"]`)).toEqual({ invalid: "headersObject" });
+  expect(bad("null")).toEqual({ invalid: "headersObject" });
+  expect(bad(`"X-Title: pluxy"`)).toEqual({ invalid: "headersObject" });
+  expect(bad(`{"X-Title": 1}`)).toEqual({ invalid: "headersValue" });
+  expect(bad(`{"X-Title": null}`)).toEqual({ invalid: "headersValue" });
+});

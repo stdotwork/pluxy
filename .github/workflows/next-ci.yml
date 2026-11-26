@@ -1,0 +1,237 @@
+name: Next CI
+
+on:
+  # Pull requests and merge-queue groups run this through ci.yml, which runs it only when
+  # its paths below are touched.
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'next/**'
+      - '.github/workflows/next-ci.yml'
+      # The docs TestDocs reads (next/cmd/pluxy/docs_test.go: docFiles and docs/*.md).
+      - 'README.md'
+      - 'AGENTS.md'
+      - 'docs/*.md'
+
+concurrency:
+  # A literal name: called from ci.yml, github.workflow is the caller's name, the same for every
+  # workflow it calls.
+  group: next-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CGO_ENABLED: 1
+  # The browser-test container can write the checkout, so a planted go.mod must not make a later
+  # step or setup-go's post-step switch Go toolchains. next/go.mod's go line is what setup-go installs.
+  GOTOOLCHAIN: local
+
+defaults:
+  run:
+    working-directory: next
+
+jobs:
+  next:
+    # GitHub's runners, never PLUXY_LINUX_CLOUD_RUNNER: this job is shorter than the native test, so
+    # Namespace's vCPUs are kept for that (docs/ci.md, "Where jobs run").
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # The checkout is mounted into the Playwright container, and no step needs git
+          # credentials, so the job token is not stored in .git/config.
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: next/go.mod
+          cache: true
+          cache-dependency-path: next/go.mod
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.3'
+      - name: UI install
+        working-directory: next/ui
+        run: bun install --frozen-lockfile
+      - name: UI type check
+        working-directory: next/ui
+        run: bun run check
+      - name: UI lint
+        working-directory: next/ui
+        run: bun run lint
+      - name: UI unit tests
+        working-directory: next/ui
+        run: bun run test
+      - name: Build the panel core embeds
+        run: go generate ./internal/panel
+      - name: Format
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        run: go vet ./...
+      # Both run as `go run pkg@version`, so neither is a dependency of the module and go.mod and
+      # go.sum stay as they are. To update one, change its version here and in AGENTS.md.
+      - name: Staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
+      # Needs vuln.go.dev; it reports a reachable vulnerability in the Go standard library this
+      # job installed or in a module pluxy requires. It does not fail the job: a newly published
+      # vulnerability would otherwise block every open PR until Go or the module is updated. With
+      # continue-on-error: true GitHub shows the step as passed; only the warning annotation on the
+      # run shows a finding. Fix it by updating.
+      - name: Govulncheck
+        continue-on-error: true
+        run: |
+          go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./... || {
+            echo "::warning title=govulncheck::a reachable vulnerability was found; update Go or the module named in this step's log"
+            exit 1
+          }
+      - name: Test
+        env:
+          PLUXY_REQUIRE_PANEL: '1'
+        run: go test -race -count=1 ./...
+      # Firefox and WebKit need about 185 system packages the runner image lacks, and installing
+      # them with apt fails whenever the Ubuntu archives are unreachable. Microsoft's Playwright
+      # image for the installed Playwright version already has all three browsers and their
+      # libraries, so the browser tests run in it, with this job's checkout, Go, Bun and Go module
+      # cache mounted at the same paths.
+      # The image is pinned by digest, so a replaced tag can't change what runs the tests. To move to
+      # a new Playwright version, update next/ui/package.json and bun.lock, then add that version's
+      # digest here (the Docker-Content-Digest header of
+      # https://mcr.microsoft.com/v2/playwright/manifests/v<version>-resolute, requested with
+      # Accept: application/vnd.oci.image.index.v1+json); the step fails until it is there.
+      - name: Pull the Playwright image for the browser tests
+        working-directory: next/ui
+        timeout-minutes: 10
+        run: |
+          version="$(jq -r .version node_modules/@playwright/test/package.json)"
+          case "$version" in
+            1.65.0) digest=sha256:916c9fb63a8340822589dd5c821dae82e8012106bb8515a72f278d97f277446a ;;
+            *)
+              echo "::error::no pinned digest for the Playwright image of version ${version}; add it to the case in this step of .github/workflows/next-ci.yml" >&2
+              exit 1
+              ;;
+          esac
+          image="mcr.microsoft.com/playwright:v${version}-resolute@${digest}"
+          docker pull "$image"
+          echo "PLAYWRIGHT_IMAGE=$image" >> "$GITHUB_ENV"
+      - name: Browser tests
+        working-directory: next/ui
+        timeout-minutes: 15
+        run: |
+          goroot="$(go env GOROOT)"
+          gomodcache="$(go env GOMODCACHE)"
+          bun="$(readlink -f "$(command -v bun)")"
+          bun_dir="$(dirname "$bun")"
+          # setup-go saves this job's Go caches for later runs (pull-request runs of the release
+          # workflow's pack job among them), so the container reads the module cache without writing
+          # to it and builds in its own GOCACHE.
+          # Docker would create a missing mount source owned by root, which the test user can't write.
+          mkdir -p "$gomodcache"
+          # Unlike the Test step, cgo is off here: the image has no C compiler, and next/ has no cgo code.
+          # playwright test runs on the image's own Node (26 in 1.65.0), not on the Node 24 this job sets up.
+          # The checkout is mounted read-only, with .git read-only again explicitly: the checkout's
+          # post-step runs git there with the job token in its environment, so the image must not be
+          # able to change git's config. The one folder in it that the browser tests write is the panel
+          # build (next/internal/panel/dist), made here so Docker doesn't create it owned by root.
+          # Playwright's output goes to a folder under the runner's temp folder, mounted writable, for
+          # the upload step below: it removes and recreates its output folder, which fails on a mount
+          # point, so the mount is the folder above it. The folder holds nothing the job token or
+          # git could reach.
+          # Submodules aren't supported: fail rather than mount their .git files unreviewed.
+          if [ -e "$GITHUB_WORKSPACE/.gitmodules" ] || [ -L "$GITHUB_WORKSPACE/.gitmodules" ]; then echo "::error::a submodule's .git file would need its own read-only mount" >&2; exit 1; fi
+          dist="$GITHUB_WORKSPACE/next/internal/panel/dist"
+          mkdir -p "$dist"
+          output="$RUNNER_TEMP/playwright"
+          mkdir -p "$output"
+          docker run --rm --init --ipc=host --entrypoint "" \
+            --user "$(id -u):$(id -g)" \
+            -e CI -e PLUXY_ALL_BROWSERS=1 -e HOME=/tmp -e CGO_ENABLED=0 \
+            -e PATH="$goroot/bin:$bun_dir:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+            -e GOMODCACHE="$gomodcache" -e GOCACHE=/tmp/go-build \
+            -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro" \
+            -v "$GITHUB_WORKSPACE/.git:$GITHUB_WORKSPACE/.git:ro" \
+            -v "$dist:$dist" \
+            -v "$output:$output" \
+            -v "$goroot:$goroot:ro" -v "$bun_dir:$bun_dir:ro" \
+            -v "$gomodcache:$gomodcache:ro" \
+            -w "$PWD" \
+            "$PLAYWRIGHT_IMAGE" bun run test:browser --output "$output/test-results"
+      # The panel's screenshots (every chromium test) and the traces of failed tests, for a PR to
+      # link as proof of what the UI showed. Kept 7 days.
+      - name: Upload the browser test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-test-output
+          path: ${{ runner.temp }}/playwright/test-results
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # Core's private folders on Windows (internal/private/private_windows.go): the access lists of
+  # the credentials folder, the extensions' settings folder, the logs folder and the usage folder,
+  # and of the files in them, and of the config file a change writes again and the client-key-ID
+  # key, read back from the file system, which the Linux job cannot do. internal/cred's and
+  # internal/home's (pluxy's home folder and its Windows paths) tests run whole; internal/core, internal/extconfig, internal/logfile, internal/server, internal/usage and
+  # internal/configdoc run only their Windows tests, the rest of their tests being Linux's. Pure
+  # Go, so no C compiler is needed.
+  private-windows:
+    name: private files (windows)
+    runs-on: windows-latest
+    env:
+      CGO_ENABLED: 0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: next/go.mod
+          cache: true
+          cache-dependency-path: next/go.mod
+      - name: Vet
+        run: go vet ./internal/cred/ ./internal/private/... ./internal/core/ ./internal/extconfig/ ./internal/logfile/ ./internal/server/ ./internal/usage/ ./internal/configdoc/ ./internal/home/
+      # -v lists each test, so the log shows the Windows access-list tests ran.
+      - name: Test
+        run: go test -count=1 -v ./internal/cred/
+      - name: Test the home folder checks
+        run: go test -count=1 -v ./internal/home/
+      - name: Test the config file, usage files, and the settings and logs folders
+        run: go test -count=1 -v -run Windows ./internal/core/ ./internal/extconfig/ ./internal/logfile/ ./internal/server/ ./internal/usage/ ./internal/configdoc/
+
+  bench:
+    name: Benchmark check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: next/go.mod
+          cache: true
+          cache-dependency-path: next/go.mod
+      - name: Benchmark regression check
+        working-directory: next
+        run: go run ./cmd/pluxy-bench -check

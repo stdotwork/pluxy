@@ -1,0 +1,136 @@
+name: Next app tools pack
+
+# Builds the desktop app's native tools (next/app-tools) on each platform's own runner and packs
+# them with `pluxy-pack -app-tools`, as a release would: one archive for each tool and each
+# platform its manifest names, and the app's registry index. It uploads nothing: the app installs
+# a native tool only with a curated signature, which no release makes yet. Pull requests and
+# merge-queue groups run it through ci.yml when a tool's manifest, the workspace's or a member's
+# Cargo.toml, Cargo.lock, the pack tool or this workflow changes; a next-v* tag runs it by itself.
+
+on:
+  workflow_call:
+  push:
+    tags:
+      - 'next-v*'
+
+concurrency:
+  # A literal name: called from ci.yml, github.workflow is the caller's name, the same for every
+  # workflow it calls.
+  group: next-app-tools-pack-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  # The platforms the tools are packed for: each tool is packed for those its manifest names.
+  PLATFORMS: linux/amd64,linux/arm64,darwin/amd64,darwin/arm64,windows/amd64
+
+jobs:
+  # Builds, for each platform of the entry (one, except on macOS, where both darwin platforms
+  # share a job), the program of every tool whose manifest names that platform (not the test
+  # fixture usage-fixture), as programs/<goos>-<goarch>/<program file name>.
+  build:
+    name: build (${{ matrix.platform }})
+    # On macOS, the repository variable PLUXY_MACOS_CLOUD_RUNNER, when set, gives the runner label
+    # to use instead of GitHub's, except in pull requests (docs/ci.md, "Where jobs run").
+    runs-on: ${{ matrix.os == 'macos-latest' && github.event_name != 'pull_request' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, platform: linux/amd64, target: x86_64-unknown-linux-gnu }
+          - { os: ubuntu-24.04-arm, platform: linux/arm64, target: aarch64-unknown-linux-gnu }
+          # One macOS job builds both darwin targets: macOS runner minutes are the scarce ones, and
+          # a second job would repeat the checkout and the toolchain set-up. platform and target
+          # are lists here, in the same order.
+          - { os: macos-latest, platform: 'darwin/arm64,darwin/amd64', target: 'aarch64-apple-darwin,x86_64-apple-darwin', artifact: darwin }
+          - { os: windows-latest, platform: windows/amd64, target: x86_64-pc-windows-msvc }
+    defaults:
+      run:
+        shell: bash
+        working-directory: next/app-tools
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.97.0
+        with:
+          targets: ${{ matrix.target }}
+      - name: Build the programs this platform's manifests name
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          IFS=, read -ra platforms <<<"$PLATFORM"
+          IFS=, read -ra targets <<<"$TARGET"
+          [ "${#platforms[@]}" -eq "${#targets[@]}" ]
+          for i in "${!platforms[@]}"; do
+            platform="${platforms[$i]}"
+            target="${targets[$i]}"
+            out="$GITHUB_WORKSPACE/programs/${platform/\//-}"
+            mkdir -p "$out"
+            programs=()
+            for m in */pluxy-extension.json; do
+              [ "${m%%/*}" = usage-fixture ] && continue
+              program="$(jq -r --arg p "$platform" '.app.programs[$p] // empty' "$m")"
+              if [ -n "$program" ]; then programs+=("$(basename "$program")"); fi
+            done
+            [ "${#programs[@]}" -gt 0 ]
+            bins=()
+            for p in "${programs[@]}"; do bins+=(--bin "${p%.exe}"); done
+            cargo build --release --locked --target "$target" "${bins[@]}"
+            for p in "${programs[@]}"; do cp "target/$target/release/$p" "$out/$p"; done
+            ls -l "$out"
+          done
+      - name: Keep the programs for the pack
+        uses: actions/upload-artifact@v4
+        with:
+          name: programs-${{ matrix.artifact || matrix.target }}
+          path: programs
+          if-no-files-found: error
+
+  # Packs every tool for every platform its manifest names, from the programs built above, and
+  # checks the count of archives and the index.
+  pack:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: next/go.mod
+          cache: ${{ github.event_name == 'pull_request' }}
+          cache-dependency-path: next/go.mod
+      - name: Get the programs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: programs-*
+          path: programs
+          merge-multiple: true
+      - name: Pack the app tools
+        working-directory: next
+        run: go run ./cmd/pluxy-pack -out dist -app-tools ../programs -platforms "$PLATFORMS"
+      - name: Check the archives and the index
+        working-directory: next
+        run: |
+          set -euo pipefail
+          want=0
+          for m in app-tools/*/pluxy-extension.json; do
+            [ "$m" = app-tools/usage-fixture/pluxy-extension.json ] && continue
+            n="$(jq --arg ps "$PLATFORMS" '($ps | split(",")) as $ps | [.app.programs | keys[] | select(. as $k | $ps | index($k))] | length' "$m")"
+            want=$((want + n))
+          done
+          got="$(ls dist/app-tools/*.tar.gz | wc -l)"
+          echo "App tool archives: $got, one for each tool and platform its manifest names: $want" | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$got" -eq "$want" ]
+          jq -e --argjson n "$want" '[.packages[].releases[].artifacts | length] | add == $n' dist/app-tools/index.json > /dev/null

@@ -1,0 +1,188 @@
+import { expect, type Page, test } from "@playwright/test";
+import { goTo, goToId, nav, openPanel, signIn, useCore } from "./support";
+
+const core = useCore();
+
+/** One chat request to the client API with the client key; the model picks what the fake does. */
+async function chat(model: string): Promise<number> {
+  const r = await fetch(`${core.base}/v1/chat/completions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${core.clientKey}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ model, messages: [{ role: "user", content: "hi" }] }),
+  });
+  await r.arrayBuffer();
+  return r.status;
+}
+
+const stat = (page: Page, name: string) =>
+  page.locator('[data-part="stat"]').filter({ has: page.getByText(name, { exact: true }) });
+
+test.beforeAll(async () => {
+  // A sign-in account serves the fake's models fake-model and server-error.
+  const started = await core.mgmt<{ login: { id: string } }>("POST", "/accounts", {
+    id: "dash-a",
+    extension: "test/alpha",
+    method: "api_key",
+    input: { api_key: "test-dash-a" },
+  });
+  expect(started.status).toBe(202);
+  await expect
+    .poll(
+      async () =>
+        (await core.mgmt<{ login: { state: string } }>("GET", `/logins/${started.body.login.id}`)).body.login
+          .state,
+    )
+    .toBe("done");
+  for (const model of ["fake-model", "fake-model", "fake-model"]) expect(await chat(model)).toBe(200);
+  expect(await chat("server-error")).toBeGreaterThanOrEqual(500);
+});
+
+test("the Dashboard sums up the requests core recorded and the accounts it holds", async ({ page }) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await expect(nav(page).getByRole("link", { name: "Status" })).toHaveCount(0);
+  await goTo(page, "Dashboard");
+
+  await expect(page.getByRole("heading", { level: 2, name: "Needs attention" })).toBeVisible();
+  await expect(stat(page, "Requests handled").locator("strong")).toHaveText("4");
+  await expect(page.getByText("Rolling 3h 20m window · 10-minute buckets")).toBeVisible();
+  await expect(stat(page, "Success rate").locator("strong")).toHaveText("75%");
+  await expect(stat(page, "Success rate")).toContainText("Across 4 requests in the window");
+
+  // Core counts in buckets that start at whole multiples of ten minutes, newest first in the
+  // table. The four requests were sent within seconds of each other, so they are in the newest
+  // bucket, or split between the newest two when a boundary fell between sending them and
+  // loading the page: the first two rows hold them all, and the other rows none.
+  const table = page.getByRole("table", { name: "Requests in each 10-minute bucket" });
+  const sum = (rows: number[][]) => [0, 1].map((col) => rows.reduce((n, row) => n + (row[col] ?? 0), 0));
+  await expect
+    .poll(async () => {
+      const rows = await table
+        .locator("tbody tr")
+        .evaluateAll((trs) =>
+          trs.map((tr) => [...tr.querySelectorAll("td")].map((td) => Number(td.textContent))),
+        );
+      return { all: sum(rows), newestTwo: sum(rows.slice(0, 2)) };
+    })
+    .toEqual({ all: [3, 1], newestTwo: [3, 1] });
+  const chart = page.locator('svg[data-part="chart"]');
+  await expect(chart).toHaveAttribute(
+    "aria-label",
+    "4 requests over the last 200 minutes: 3 succeeded, 1 failed.",
+  );
+  await expect(chart.locator('[data-outcome="success"]')).not.toHaveCount(0);
+  await expect(chart.locator('[data-outcome="failure"]')).not.toHaveCount(0);
+
+  // Credentials: what GET /accounts reports.
+  const accounts = (
+    await core.mgmt<{ accounts: { disabled?: boolean; state: string }[] }>("GET", "/accounts")
+  ).body.accounts;
+  const active = accounts.filter((a) => !a.disabled && a.state === "active").length;
+  expect(accounts.length).toBeGreaterThan(0);
+  const credentials = stat(page, "Credentials");
+  await expect(credentials.locator("strong")).toHaveText(String(accounts.length));
+  await expect(credentials).toContainText(`${active} available · ${accounts.length - active} not serving`);
+
+  // Models: the count GET /v0/management/models reports for the models core serves.
+  const served = (await core.mgmt<{ models: unknown[] }>("GET", "/models")).body.models;
+  expect(served.length).toBeGreaterThan(0);
+  const models = stat(page, "Models");
+  await expect(models.locator("strong")).toHaveText(String(served.length));
+  await expect(models).toContainText("Served through the proxy endpoint");
+
+  // Fleet: requests and success rate per extension; Health and Runtime link on.
+  await expect(
+    page.getByRole("table", { name: "Every provider, side by side" }).locator("tbody tr"),
+  ).not.toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Open Accounts" })).toHaveAttribute("href", "#/accounts");
+  await expect(page.getByRole("link", { name: "Edit configuration" })).toHaveAttribute("href", "#/config");
+  await expect(page.getByText(/^Updated /)).toBeVisible();
+
+  if (process.env.DASHBOARD_SHOTS) {
+    for (const theme of ["default", "terminal", "paper"]) {
+      await goToId(page, "themes");
+      await page.getByRole("radio", { name: new RegExp(`^${theme}`, "i") }).check();
+      await goToId(page, "status");
+      await expect(stat(page, "Requests handled").locator("strong")).toHaveText("4");
+      await page.screenshot({ path: `${process.env.DASHBOARD_SHOTS}/${theme}.png`, fullPage: true });
+    }
+  }
+});
+
+test("the Dashboard shows core's global proxy URL as core shows it, or a dash for none", async ({ page }) => {
+  const line = () =>
+    page
+      .getByRole("region", { name: "Configuration at a glance" })
+      .locator(".facts > div")
+      .filter({ hasText: "Upstream proxy" })
+      .locator("dd");
+  await openPanel(page, core);
+  await signIn(page, core);
+  await goTo(page, "Dashboard");
+  await expect(line()).toHaveText("—");
+  if (process.env.DASHBOARD_SHOTS)
+    await page.screenshot({ path: `${process.env.DASHBOARD_SHOTS}/proxy-none.png`, fullPage: true });
+
+  const set = await core.mgmt<{ "proxy-url": string }>("PATCH", "/settings", {
+    "proxy-url": "http://carol:dashpass99@127.0.0.1:3128",
+  });
+  expect(set.status).toBe(200);
+  expect(set.body["proxy-url"]).toBe("http://redacted@127.0.0.1:3128");
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(line()).toHaveText("http://redacted@127.0.0.1:3128");
+  await expect(line()).not.toContainText("dashpass99");
+  if (process.env.DASHBOARD_SHOTS)
+    await page.screenshot({ path: `${process.env.DASHBOARD_SHOTS}/proxy-set.png`, fullPage: true });
+
+  expect((await core.mgmt("PATCH", "/settings", { "proxy-url": "" })).status).toBe(200);
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(line()).toHaveText("—");
+});
+
+test("the Dashboard says when core could not save requests to its usage files", async ({ page }) => {
+  await openPanel(page, core);
+  await signIn(page, core);
+  await goTo(page, "Dashboard");
+  const notice = page.getByText("Core could not save");
+  // The test core writes every request, so its count is 0 and the page says nothing.
+  await expect(stat(page, "Success rate")).toContainText("75%");
+  await expect(notice).toHaveCount(0);
+
+  // The same reply with three failed writes, as a core with a full disk gives it.
+  await page.route("**/v0/management/usage?*", async (route) => {
+    const reply = await route.fetch();
+    await route.fulfill({ response: reply, json: { ...(await reply.json()), write_errors: 3 } });
+  });
+  await page.getByRole("button", { name: "Refresh", exact: true }).click();
+  await expect(notice).toContainText(
+    "Core could not save 3 requests to its usage files since it last started. Check Logs Viewer for details.",
+  );
+});
+
+test("the Dashboard refreshes every minute, and only while the document is visible", async ({ page }) => {
+  const reads: string[] = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).pathname.endsWith("/v0/management/usage")) reads.push(r.url());
+  });
+  await page.clock.install();
+  await openPanel(page, core);
+  await signIn(page, core);
+  await goTo(page, "Dashboard");
+  await expect.poll(() => reads.length).toBe(1);
+
+  await page.clock.fastForward(61_000);
+  await expect.poll(() => reads.length).toBe(2);
+
+  const setVisibility = (state: "hidden" | "visible") =>
+    page.evaluate((s) => {
+      Object.defineProperty(document, "visibilityState", { value: s, configurable: true });
+      document.dispatchEvent(new Event("visibilitychange"));
+    }, state);
+  await setVisibility("hidden");
+  await page.clock.fastForward(180_000);
+  expect(reads.length).toBe(2);
+
+  // Coming back after more than a minute reads again at once.
+  await setVisibility("visible");
+  await expect.poll(() => reads.length).toBe(3);
+});

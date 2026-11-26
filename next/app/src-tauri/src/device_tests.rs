@@ -1,0 +1,4066 @@
+use super::*;
+use std::io::Write;
+
+/// No native-tier root: what a normal build has.
+struct NoRoots;
+impl crate::artifact::PublisherKeys for NoRoots {
+    fn publisher_key(
+        &self,
+        _: &str,
+        _: &str,
+        _: &str,
+    ) -> Result<ed25519_dalek::VerifyingKey, String> {
+        Err("native-tier trust not configured".into())
+    }
+}
+impl Roots for NoRoots {
+    fn configured(&self) -> bool {
+        false
+    }
+    fn curated(&self, _: &str) -> bool {
+        false
+    }
+    fn reserved(&self, _: &str) -> bool {
+        false
+    }
+}
+
+fn temp() -> PathBuf {
+    let mut rnd = [0u8; 8];
+    getrandom::fill(&mut rnd).unwrap();
+    let base = std::env::var_os("CARGO_TARGET_TMPDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let d = base.join(format!("pluxy-device-{}", hex(&rnd)));
+    fs::create_dir_all(&d).unwrap();
+    d
+}
+
+fn dirs(root: &Path) -> Dirs {
+    Dirs {
+        root: root.join("device-packages"),
+        registries: root.join("device-registries.json"),
+    }
+}
+
+fn manifest(id: &str, version: &str, extra: Value) -> Vec<u8> {
+    let mut m = serde_json::json!({
+        "manifest_version": 1, "id": id, "version": version,
+        "app": {"version": 0, "tier": "web", "host_versions": [0],
+            "ui": {"version": 0, "dir": "pages", "pages": [{"id": "p", "title": "P", "short": "P", "path": "index.html"}]}}
+    });
+    if let Value::Object(o) = extra {
+        for (k, v) in o {
+            m["app"][k] = v;
+        }
+    }
+    serde_json::to_vec(&m).unwrap()
+}
+
+/// A gzip-compressed tar of (name, bytes) files, with names written into the header as given.
+fn archive(files: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut b = tar::Builder::new(Vec::new());
+    for (name, data) in files {
+        let mut h = tar::Header::new_old();
+        h.as_old_mut().name[..name.len()].copy_from_slice(name.as_bytes());
+        h.set_size(data.len() as u64);
+        h.set_mode(0o644);
+        h.set_entry_type(tar::EntryType::Regular);
+        h.set_cksum();
+        b.append(&h, *data).unwrap();
+    }
+    let tar = b.into_inner().unwrap();
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    gz.write_all(&tar).unwrap();
+    gz.finish().unwrap()
+}
+
+fn package(id: &str, version: &str) -> Vec<u8> {
+    let m = manifest(id, version, Value::Null);
+    archive(&[
+        ("pluxy-extension.json", &m),
+        ("pages/index.html", format!("<p>{version}").as_bytes()),
+    ])
+}
+
+fn local(name: &str) -> Source {
+    Source {
+        kind: "local".into(),
+        name: name.into(),
+        index: None,
+    }
+}
+
+fn registry(name: &str, index: &str) -> Source {
+    Source {
+        kind: "registry".into(),
+        name: name.into(),
+        index: Some(index.into()),
+    }
+}
+
+fn install(c: &mut Catalog, bytes: &[u8], source: Source) -> Result<(), String> {
+    let cand = stage(&c.dirs, bytes, source, None, &NoRoots)?;
+    c.commit(cand)
+}
+
+fn store_names(d: &Dirs) -> BTreeSet<String> {
+    fs::read_dir(d.store())
+        .map(|r| {
+            r.flatten()
+                .map(|e| e.file_name().into_string().unwrap())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn digest(b: &[u8]) -> String {
+    hex(&Sha256::digest(b))
+}
+
+#[test]
+fn shared_manifest_fixtures_agree_with_core() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../protocol/testdata/app-manifests");
+    let cases: Vec<Value> =
+        serde_json::from_slice(&fs::read(dir.join("cases.json")).unwrap()).unwrap();
+    assert!(cases.len() >= 10, "the shared cases were not read");
+    for case in cases {
+        let file = case["file"].as_str().unwrap();
+        let m: Manifest = serde_json::from_slice(&fs::read(dir.join(file)).unwrap()).unwrap();
+        let got = validate(&m);
+        assert_eq!(
+            got.is_ok(),
+            case["manifest_valid"] == true,
+            "{file}: {:?}",
+            got.err()
+        );
+    }
+}
+
+#[test]
+fn ids_versions_and_paths() {
+    for ok in ["example/notes", "a.b/c-d", "0/9"] {
+        assert!(valid_id(ok), "{ok}");
+    }
+    for bad in [
+        "example",
+        "Example/notes",
+        "-a/b",
+        "a/b/c",
+        "a/",
+        "/b",
+        "a/.b",
+    ] {
+        assert!(!valid_id(bad), "{bad}");
+    }
+    assert!(valid_version("1.0.0+b_1-x"));
+    assert!(!valid_version(".1") && !valid_version("") && !valid_version(&"1".repeat(65)));
+    for bad in ["", "/a", "a/../b", "..", "a//b", "./a", "a\\b"] {
+        assert!(!local_path(bad), "{bad}");
+    }
+    assert!(local_path("a/b.html"));
+}
+
+/// Where page webviews address the asset scheme: Windows serves custom schemes over http.
+#[cfg(windows)]
+const ASSET_BASE: &str = "http://pluxy-app.localhost/";
+#[cfg(not(windows))]
+const ASSET_BASE: &str = "pluxy-app://localhost/";
+
+#[test]
+fn install_swap_failed_candidate_rollback_and_remove() {
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
+    let v1 = package("example/notes", "1.0.0");
+    let v2 = package("example/notes", "2.0.0");
+    install(&mut c, &v1, local("notes-1.tar.gz")).unwrap();
+    let p = c.get("example/notes").unwrap();
+    assert_eq!(p.active.sha256, digest(&v1));
+    assert!(p.enabled && p.last_good.is_none());
+    assert_eq!(p.active.files.len(), 1);
+    let (url, folder, title) = c.page("example/notes", "p").unwrap();
+    assert_eq!(
+        url,
+        format!("{ASSET_BASE}example/notes/{}/index.html", digest(&v1))
+    );
+    assert!(url.starts_with(&folder) && title == "P");
+    assert_eq!(
+        c.asset("example/notes", &digest(&v1), "index.html")
+            .unwrap()
+            .0,
+        b"<p>1.0.0"
+    );
+
+    install(&mut c, &v2, local("notes-1.tar.gz")).unwrap();
+    let p = c.get("example/notes").unwrap();
+    assert_eq!(p.active.sha256, digest(&v2));
+    assert_eq!(p.last_good.as_ref().unwrap().sha256, digest(&v1));
+    assert!(c
+        .asset("example/notes", &digest(&v1), "index.html")
+        .is_none());
+    assert_eq!(store_names(&d), BTreeSet::from([digest(&v1), digest(&v2)]));
+
+    // Candidates that fail leave the catalog and store as they were.
+    let bad_host = archive(&[
+        (
+            "pluxy-extension.json",
+            &manifest(
+                "example/notes",
+                "3.0.0",
+                serde_json::json!({"host_versions": [1]}),
+            ),
+        ),
+        ("pages/index.html", b"x"),
+    ]);
+    let e = install(&mut c, &bad_host, local("notes-1.tar.gz")).unwrap_err();
+    assert!(e.contains("host contract"), "{e}");
+    let other_source = package("example/notes", "4.0.0");
+    let e = install(
+        &mut c,
+        &other_source,
+        registry("r", "/elsewhere/index.json"),
+    )
+    .unwrap_err();
+    assert!(e.contains("remove it first"), "{e}");
+    let e = install(&mut c, &v2, local("notes-1.tar.gz")).unwrap_err();
+    assert!(e.contains("already installed"), "{e}");
+    assert_eq!(c.get("example/notes").unwrap().active.sha256, digest(&v2));
+    assert_eq!(store_names(&d), BTreeSet::from([digest(&v1), digest(&v2)]));
+    assert!(fs::read_dir(d.staging()).unwrap().next().is_none());
+
+    // The catalog persists; roll back makes 1.0.0 active again.
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
+    c.rollback("example/notes").unwrap();
+    let p = c.get("example/notes").unwrap();
+    assert_eq!(p.active.sha256, digest(&v1));
+    assert_eq!(p.last_good.as_ref().unwrap().sha256, digest(&v2));
+
+    c.set_enabled("example/notes", false, &NoRoots).unwrap();
+    assert!(c.page("example/notes", "p").is_err());
+    assert!(c
+        .asset("example/notes", &digest(&v1), "index.html")
+        .is_none());
+    c.set_enabled("example/notes", true, &NoRoots).unwrap();
+
+    c.remove("example/notes").unwrap();
+    assert!(c.get("example/notes").is_none() && store_names(&d).is_empty());
+    assert!(Catalog::open(d, false, &NoRoots)
+        .view(&NoRoots)
+        .packages
+        .is_empty());
+    done(root);
+}
+
+#[test]
+fn reserved_native_and_other_packages_are_refused_before_the_store() {
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
+    let e = install(&mut c, &package("pluxy/notes", "1.0.0"), local("x.tar.gz")).unwrap_err();
+    assert!(e.contains("reserved"), "{e}");
+    // The positive control on the same route.
+    install(
+        &mut c,
+        &package("example/notes", "1.0.0"),
+        local("x.tar.gz"),
+    )
+    .unwrap();
+
+    let native = archive(&[(
+        "pluxy-extension.json",
+        &serde_json::to_vec(&serde_json::json!({
+            "manifest_version": 1, "id": "example/tool", "version": "1",
+            "app": {"version": 0, "tier": "native", "host_versions": [0],
+                "programs": {"linux/amd64": "bin/t"},
+                "operations": [{"id": "x", "description": "d", "input_schema": {}, "output_schema": {}}],
+                "state": {"version": 0, "readable_versions": [0]}}
+        }))
+        .unwrap(),
+    )]);
+    let e = install(&mut c, &native, local("t.tar.gz")).unwrap_err();
+    assert!(e.contains("native tool"), "{e}");
+    let provider = archive(&[(
+        "pluxy-extension.json",
+        br#"{"manifest_version":0,"id":"example/p","version":"1","protocol":[0],"programs":{"linux/amd64":"p"}}"#,
+    )]);
+    let e = install(&mut c, &provider, local("p.tar.gz")).unwrap_err();
+    assert!(e.contains("install it in core"), "{e}");
+    let missing_page = archive(&[(
+        "pluxy-extension.json",
+        &manifest("example/x", "1", Value::Null),
+    )]);
+    assert!(install(&mut c, &missing_page, local("m.tar.gz")).is_err());
+    for (name, data) in [
+        ("../evil", b"x".as_slice()),
+        ("/abs", b"x".as_slice()),
+        ("pages/../../x", b"x".as_slice()),
+    ] {
+        let a = archive(&[
+            (
+                "pluxy-extension.json",
+                &manifest("example/y", "1", Value::Null),
+            ),
+            ("pages/index.html", b"x"),
+            (name, data),
+        ]);
+        let e = install(&mut c, &a, local("y.tar.gz")).unwrap_err();
+        assert!(e.contains("leaves the package folder"), "{name}: {e}");
+    }
+    assert!(install(&mut c, b"not gzip", local("z.tar.gz")).is_err());
+    assert_eq!(store_names(&d).len(), 1);
+    assert!(fs::read_dir(d.staging()).unwrap().next().is_none());
+    done(root);
+}
+
+#[test]
+fn links_devices_and_duplicates_are_refused() {
+    let root = temp();
+    let d = dirs(&root);
+    let m = manifest("example/l", "1", Value::Null);
+    for kind in [
+        tar::EntryType::Symlink,
+        tar::EntryType::Link,
+        tar::EntryType::Char,
+        tar::EntryType::Fifo,
+    ] {
+        let mut b = tar::Builder::new(Vec::new());
+        let mut h = tar::Header::new_gnu();
+        h.set_size(m.len() as u64);
+        h.set_mode(0o644);
+        h.set_path("pluxy-extension.json").unwrap();
+        h.set_cksum();
+        b.append(&h, m.as_slice()).unwrap();
+        let mut h = tar::Header::new_gnu();
+        h.set_entry_type(kind);
+        h.set_size(0);
+        h.set_path("pages/index.html").unwrap();
+        h.set_link_name("/etc/passwd").unwrap();
+        h.set_cksum();
+        b.append(&h, std::io::empty()).unwrap();
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gz.write_all(&b.into_inner().unwrap()).unwrap();
+        let e = stage(&d, &gz.finish().unwrap(), local("l"), None, &NoRoots).unwrap_err();
+        assert!(e.contains("not a regular file or folder"), "{kind:?}: {e}");
+    }
+    let dup = archive(&[
+        ("pluxy-extension.json", &m),
+        ("pages/index.html", b"a"),
+        ("pages/index.html", b"b"),
+    ]);
+    assert!(stage(&d, &dup, local("d"), None, &NoRoots).is_err());
+    done(root);
+}
+
+#[test]
+fn changed_files_are_not_served_or_rolled_back_to() {
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
+    let v1 = package("example/notes", "1.0.0");
+    install(&mut c, &v1, local("n")).unwrap();
+    install(&mut c, &package("example/notes", "2.0.0"), local("n")).unwrap();
+    let file = d.store().join(digest(&v1)).join("pages/index.html");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(file.parent().unwrap(), fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    // Windows: the release's access lists make it read-only (`freeze`).
+    #[cfg(windows)]
+    thaw(file.parent().unwrap());
+    fs::write(&file, b"tampered").unwrap();
+    let e = c.rollback("example/notes").unwrap_err();
+    assert!(e.contains("changed since it was installed"), "{e}");
+    assert_eq!(c.get("example/notes").unwrap().active.version, "2.0.0");
+    // A file changed in the active release is not served.
+    c.remove("example/notes").unwrap();
+    install(&mut c, &v1, local("n")).unwrap();
+    assert!(c
+        .asset("example/notes", &digest(&v1), "index.html")
+        .is_some());
+    let file = d.store().join(digest(&v1)).join("pages/index.html");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(file.parent().unwrap(), fs::Permissions::from_mode(0o700)).unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    // Windows: the release's access lists make it read-only (`freeze`).
+    #[cfg(windows)]
+    thaw(file.parent().unwrap());
+    fs::write(&file, b"tampered").unwrap();
+    assert!(c
+        .asset("example/notes", &digest(&v1), "index.html")
+        .is_none());
+    assert!(c
+        .asset("example/notes", &digest(&v1), "pluxy-extension.json")
+        .is_none());
+    done(root);
+}
+
+#[test]
+fn safe_mode_lists_but_never_serves() {
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
+    let v1 = package("example/notes", "1.0.0");
+    install(&mut c, &v1, local("n")).unwrap();
+    let safe = Catalog::open(d, true, &NoRoots);
+    let v = safe.view(&NoRoots);
+    assert!(v.safe_mode && v.packages.len() == 1);
+    assert!(safe
+        .page("example/notes", "p")
+        .unwrap_err()
+        .contains("safe mode"));
+    assert!(safe
+        .asset("example/notes", &digest(&v1), "index.html")
+        .is_none());
+    done(root);
+}
+
+#[test]
+fn a_damaged_catalog_is_moved_aside() {
+    let root = temp();
+    let d = dirs(&root);
+    fs::create_dir_all(&d.root).unwrap();
+    fs::write(d.catalog(), b"{not json").unwrap();
+    let c = Catalog::open(d.clone(), false, &NoRoots);
+    assert!(c.warning.as_deref().is_some_and(|w| w.contains("moved")));
+    assert!(c.view(&NoRoots).packages.is_empty());
+    assert!(!d.catalog().exists());
+    done(root);
+}
+
+#[test]
+fn registry_pins_reserved_ids_and_paths() {
+    let root = temp();
+    let d = dirs(&root);
+    let reg = root.join("reg");
+    fs::create_dir_all(&reg).unwrap();
+    let v1 = package("example/notes", "1.0.0");
+    fs::write(reg.join("n1.tar.gz"), &v1).unwrap();
+    let p = platform();
+    let index = serde_json::json!({"registry_version": 0, "packages": {
+        "example/notes": {"releases": [
+            {"version": "2.0.0", "artifacts": {p.clone(): {"url": "n1.tar.gz", "sha256": digest(&v1), "size": v1.len()}}},
+            {"version": "1.0.0", "artifacts": {p.clone(): {"url": "n1.tar.gz", "sha256": digest(&v1), "size": v1.len()}}},
+            {"version": "0.9.0", "artifacts": {p.clone(): {"url": "n1.tar.gz", "sha256": "00", "size": v1.len()}}},
+            {"version": "0.8.0", "artifacts": {p.clone(): {"url": "../n1.tar.gz", "sha256": digest(&v1), "size": v1.len()}}}
+        ]},
+        "pluxy/notes": {"releases": [{"version": "1.0.0", "artifacts": {p.clone(): {"url": "missing.tar.gz", "sha256": "00", "size": 1}}}]}
+    }});
+    fs::write(reg.join("index.json"), serde_json::to_vec(&index).unwrap()).unwrap();
+    fs::write(
+        &d.registries,
+        serde_json::to_vec(&serde_json::json!({"version": 0, "registries": [
+            {"name": "fixture", "url": reg.join("index.json")}]}))
+        .unwrap(),
+    )
+    .unwrap();
+    let offers = offers(&d, &NoRoots).unwrap();
+    assert_eq!(offers[0].packages.len(), 2);
+    assert!(offers[0]
+        .packages
+        .iter()
+        .any(|o| o.id == "pluxy/notes" && o.refused.is_some()));
+
+    let e = stage_from_registry(&d, &NoRoots, "fixture", "pluxy/notes", None).unwrap_err();
+    assert!(e.contains("reserved"), "{e}");
+    // The archive holds 1.0.0, not the newest release the index lists.
+    let e = stage_from_registry(&d, &NoRoots, "fixture", "example/notes", None).unwrap_err();
+    assert!(e.contains("not example/notes 2.0.0"), "{e}");
+    let e =
+        stage_from_registry(&d, &NoRoots, "fixture", "example/notes", Some("0.9.0")).unwrap_err();
+    assert!(e.contains("not the one the registry lists"), "{e}");
+    let e =
+        stage_from_registry(&d, &NoRoots, "fixture", "example/notes", Some("0.8.0")).unwrap_err();
+    assert!(e.contains("inside the index's folder"), "{e}");
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
+    let cand =
+        stage_from_registry(&d, &NoRoots, "fixture", "example/notes", Some("1.0.0")).unwrap();
+    assert_eq!(cand.source.kind, "registry");
+    c.commit(cand).unwrap();
+    assert_eq!(c.get("example/notes").unwrap().active.sha256, digest(&v1));
+    done(root);
+}
+
+/// An install without a version, and what `offers` shows first, take the highest version the
+/// index lists for this computer, whatever order the index lists them in.
+#[test]
+fn registry_without_a_version_takes_the_highest_release() {
+    let root = temp();
+    let d = dirs(&root);
+    let reg = root.join("reg");
+    fs::create_dir_all(&reg).unwrap();
+    let old = package("example/notes", "1.0.0");
+    let new = package("example/notes", "2.0.0");
+    let beta = package("example/beta", "1.0.0-beta.2");
+    fs::write(reg.join("old.tar.gz"), &old).unwrap();
+    fs::write(reg.join("new.tar.gz"), &new).unwrap();
+    fs::write(reg.join("beta.tar.gz"), &beta).unwrap();
+    let p = platform();
+    let art = |f: &str, b: &[u8]| serde_json::json!({p.clone(): {"url": f, "sha256": digest(b), "size": b.len()}});
+    let index = serde_json::json!({"registry_version": 0, "packages": {
+        // An older release first, then one that is not a version, a prerelease and the highest.
+        "example/notes": {"releases": [
+            {"version": "1.0.0", "artifacts": art("old.tar.gz", &old)},
+            {"version": "latest", "artifacts": art("old.tar.gz", &old)},
+            {"version": "3.0.0-rc.1", "artifacts": art("old.tar.gz", &old)},
+            {"version": "2.0.0", "artifacts": art("new.tar.gz", &new)}
+        ]},
+        // Prereleases only: the highest of them.
+        "example/beta": {"releases": [
+            {"version": "1.0.0-beta.1", "artifacts": art("old.tar.gz", &old)},
+            {"version": "1.0.0-beta.2", "artifacts": art("beta.tar.gz", &beta)}
+        ]},
+        // Nothing that is a version: only a named install can take it.
+        "example/named": {"releases": [
+            {"version": "latest", "artifacts": art("old.tar.gz", &old)}
+        ]}
+    }});
+    fs::write(reg.join("index.json"), serde_json::to_vec(&index).unwrap()).unwrap();
+    fs::write(
+        &d.registries,
+        serde_json::to_vec(&serde_json::json!({"version": 0, "registries": [
+            {"name": "fixture", "url": reg.join("index.json")}]}))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let offers = offers(&d, &NoRoots).unwrap();
+    let versions = |id: &str| {
+        offers[0]
+            .packages
+            .iter()
+            .find(|o| o.id == id)
+            .map(|o| o.versions.clone())
+    };
+    assert_eq!(
+        versions("example/notes").unwrap(),
+        ["2.0.0", "1.0.0", "3.0.0-rc.1"]
+    );
+    assert_eq!(
+        versions("example/beta").unwrap(),
+        ["1.0.0-beta.2", "1.0.0-beta.1"]
+    );
+    assert_eq!(versions("example/named"), None);
+
+    // The release `offers` puts first is the one an install without a version stages.
+    let c = stage_from_registry(&d, &NoRoots, "fixture", "example/notes", None).unwrap();
+    assert_eq!(c.release.version, "2.0.0");
+    let c = stage_from_registry(&d, &NoRoots, "fixture", "example/beta", None).unwrap();
+    assert_eq!(c.release.version, "1.0.0-beta.2");
+    // Naming a version still installs it, a prerelease or one that is not a version too.
+    let c = stage_from_registry(&d, &NoRoots, "fixture", "example/notes", Some("1.0.0")).unwrap();
+    assert_eq!(c.release.version, "1.0.0");
+    let e = stage_from_registry(&d, &NoRoots, "fixture", "example/named", None).unwrap_err();
+    assert!(e.contains("lists no example/named"), "{e}");
+    let e =
+        stage_from_registry(&d, &NoRoots, "fixture", "example/named", Some("latest")).unwrap_err();
+    assert!(!e.contains("lists no"), "{e}");
+    done(root);
+}
+
+/// Removes a test's folder, the store's read-only releases in it too.
+fn done(root: PathBuf) {
+    thaw(&root);
+    fs::remove_dir_all(&root).unwrap();
+}
+
+/// Sets every folder under dir, and dir, writable again (on Windows every file too, which its
+/// access list makes read-only), so a test can change or remove it.
+fn thaw(dir: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    #[cfg(windows)]
+    writable(dir, true);
+    for e in fs::read_dir(dir).unwrap().flatten() {
+        let t = e.file_type().unwrap();
+        if t.is_dir() {
+            thaw(&e.path());
+        } else {
+            #[cfg(windows)]
+            if !t.is_symlink() {
+                writable(&e.path(), false);
+            }
+        }
+    }
+}
+
+/// Windows: p's access list private again, which `freeze` made read-only.
+#[cfg(windows)]
+fn writable(p: &Path, folder: bool) {
+    use crate::private_windows::{make_private, open_for_access_list};
+    make_private(&open_for_access_list(p, folder).unwrap(), folder).unwrap();
+}
+
+/// A Windows device's name, as any part of a path, alone or with an extension and in any case,
+/// never reaches the store: there it would open the device (`NUL`, `COM1`) instead of a file in the
+/// package folder. Checked on every system, as `:` is. Names that only start like one stay allowed.
+#[test]
+fn windows_device_names_never_reach_the_store() {
+    let mut refused = vec![
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        "con",
+        "Nul",
+        "aUx",
+        "nul.txt",
+        "NUL.tar.gz",
+        "Con.json",
+        "COM¹",
+        "lpt³.log",
+        "NUL .txt",
+        "CON ",
+    ];
+    let numbered: Vec<String> = (1..=9)
+        .flat_map(|n| [format!("COM{n}"), format!("lpt{n}"), format!("Com{n}.x")])
+        .collect();
+    refused.extend(numbered.iter().map(String::as_str));
+    for name in refused {
+        for p in [
+            name.to_string(),
+            format!("pages/{name}"),
+            format!("{name}/index.html"),
+        ] {
+            assert!(!store_path(&p), "{p:?} is a store path");
+        }
+    }
+    for name in [
+        "CONSOLE",
+        "console.txt",
+        "nulls",
+        "AUXILIARY",
+        "PRNT.md",
+        "COM",
+        "COM0",
+        "COM10",
+        "LPT",
+        "lpt0.x",
+        "lpt10",
+        "COMA",
+        "xCON",
+        "x.con",
+        "con_x",
+        ".con",
+    ] {
+        for p in [name.to_string(), format!("pages/{name}")] {
+            assert!(store_path(&p), "{p:?} is not a store path");
+        }
+    }
+
+    // On the unpack route: an archive entry so named is refused before anything is written; the
+    // same archive with a near-miss name stages.
+    let root = temp();
+    let d = dirs(&root);
+    let m = manifest("example/w", "1", Value::Null);
+    let a = archive(&[
+        ("pluxy-extension.json", &m),
+        ("pages/index.html", b"x"),
+        ("pages/NUL.txt", b"x"),
+    ]);
+    let e = stage(&d, &a, local("w"), None, &NoRoots).unwrap_err();
+    assert!(e.contains("leaves the package folder"), "{e}");
+    let a = archive(&[
+        ("pluxy-extension.json", &m),
+        ("pages/index.html", b"x"),
+        ("pages/CONSOLE.txt", b"x"),
+    ]);
+    stage(&d, &a, local("w"), None, &NoRoots).unwrap();
+    done(root);
+}
+
+#[test]
+fn names_with_a_drive_or_stream_never_reach_the_store() {
+    let root = temp();
+    let d = dirs(&root);
+    let m = manifest("example/w", "1", Value::Null);
+    // Each would name a drive or an alternate data stream on Windows.
+    for name in ["C:/x", "C:x", "pages/index.html:stream"] {
+        let a = archive(&[
+            ("pluxy-extension.json", &m),
+            ("pages/index.html", b"x"),
+            (name, b"x"),
+        ]);
+        let e = stage(&d, &a, local("w"), None, &NoRoots).unwrap_err();
+        assert!(e.contains("leaves the package folder"), "{name}: {e}");
+    }
+    // A folder entry too, not only files.
+    let mut b = tar::Builder::new(Vec::new());
+    let mut h = tar::Header::new_gnu();
+    h.set_size(m.len() as u64);
+    h.set_mode(0o644);
+    h.set_path("pluxy-extension.json").unwrap();
+    h.set_cksum();
+    b.append(&h, m.as_slice()).unwrap();
+    let mut h = tar::Header::new_gnu();
+    h.set_entry_type(tar::EntryType::Directory);
+    h.set_size(0);
+    h.set_mode(0o755);
+    // The name is written as bytes: the tar crate refuses to set a drive path on Windows.
+    h.as_old_mut().name[..2].copy_from_slice(b"D:");
+    h.set_cksum();
+    b.append(&h, std::io::empty()).unwrap();
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    gz.write_all(&b.into_inner().unwrap()).unwrap();
+    let e = stage(&d, &gz.finish().unwrap(), local("w"), None, &NoRoots).unwrap_err();
+    assert!(e.contains("leaves the package folder"), "{e}");
+    // The ui folder is checked before it is joined to the staged folder.
+    let ui = serde_json::json!({"ui": {"version": 0, "dir": "C:/pages",
+        "pages": [{"id": "p", "title": "P", "short": "P", "path": "index.html"}]}});
+    let a = archive(&[
+        ("pluxy-extension.json", &manifest("example/w", "1", ui)),
+        ("pages/index.html", b"x"),
+    ]);
+    let e = stage(&d, &a, local("w"), None, &NoRoots).unwrap_err();
+    assert!(e.contains("must be a folder inside the package"), "{e}");
+    // The positive control on the same route.
+    stage(&d, &package("example/w", "1"), local("w"), None, &NoRoots).unwrap();
+    done(root);
+}
+
+#[test]
+fn page_files_with_spaces_and_unicode_are_served_at_their_address() {
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
+    let name = "my page #1 é.html";
+    let ui = serde_json::json!({"ui": {"version": 0, "dir": "pages",
+        "pages": [{"id": "p", "title": "P", "short": "P", "path": name}]}});
+    let m = manifest("example/notes", "1", ui);
+    let file = format!("pages/{name}");
+    let a = archive(&[("pluxy-extension.json", &m), (&file, b"hello")]);
+    install(&mut c, &a, local("n")).unwrap();
+    let (page, folder, _) = c.page("example/notes", "p").unwrap();
+    // As the webview asks for it: the address's path, still percent-encoded.
+    let u = url::Url::parse(&page).unwrap();
+    assert!(u.fragment().is_none() && u.query().is_none(), "{page}");
+    let (id, sha, got) = asset_request(&folder, u.path()).unwrap();
+    assert_eq!(
+        (id.as_str(), sha.as_str(), got.as_str()),
+        ("example/notes", digest(&a).as_str(), name)
+    );
+    assert_eq!(c.asset(&id, &sha, &got).unwrap().0, b"hello");
+    // An encoded separator or NUL, or another folder, asks for nothing.
+    let base = url::Url::parse(&folder).unwrap().path().to_string();
+    for bad in [
+        "a%2Fb.html",
+        "a%5Cb.html",
+        "a%00.html",
+        "a%zz.html",
+        "%C3.html",
+    ] {
+        assert!(
+            asset_request(&folder, &format!("{base}{bad}")).is_none(),
+            "{bad}"
+        );
+    }
+    assert!(asset_request(&folder, "/example/notes/other/index.html").is_none());
+    done(root);
+}
+
+#[test]
+fn go_platform_names() {
+    assert_eq!(go_platform("macos", "aarch64"), "darwin/arm64");
+    assert_eq!(go_platform("linux", "x86_64"), "linux/amd64");
+    assert_eq!(go_platform("windows", "x86"), "windows/386");
+}
+
+#[cfg(unix)]
+#[test]
+fn installed_releases_are_read_only_to_their_top_folder() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
+    // No folder entries: `pages/` is made for its file.
+    let v1 = archive(&[
+        (
+            "pluxy-extension.json",
+            &manifest("example/notes", "1", Value::Null),
+        ),
+        ("pages/index.html", b"x"),
+    ]);
+    install(&mut c, &v1, local("n")).unwrap();
+    let release = d.store().join(digest(&v1));
+    let mut seen = 0;
+    let mut todo = vec![release.clone()];
+    while let Some(p) = todo.pop() {
+        let m = fs::symlink_metadata(&p).unwrap();
+        assert_eq!(
+            m.permissions().mode() & 0o222,
+            0,
+            "{} is writable",
+            p.display()
+        );
+        seen += 1;
+        if m.is_dir() {
+            todo.extend(fs::read_dir(&p).unwrap().flatten().map(|e| e.path()));
+        }
+    }
+    // The release folder, pages/, and the two files.
+    assert_eq!(seen, 4);
+    done(root);
+}
+
+#[test]
+fn a_catalog_that_cannot_be_read_keeps_the_store() {
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
+    let v1 = package("example/notes", "1.0.0");
+    install(&mut c, &v1, local("n")).unwrap();
+    drop(c);
+    fs::write(d.catalog(), b"{not json").unwrap();
+    let c = Catalog::open(d.clone(), false, &NoRoots);
+    assert!(
+        c.warning.as_deref().is_some_and(|w| w.contains("moved")),
+        "{:?}",
+        c.warning
+    );
+    assert!(c.view(&NoRoots).packages.is_empty());
+    assert_eq!(store_names(&d), BTreeSet::from([digest(&v1)]));
+    // Still kept at the next start, while the damaged catalog is kept aside.
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
+    assert!(
+        c.warning.as_deref().is_some_and(|w| w.contains("kept at")),
+        "{:?}",
+        c.warning
+    );
+    install(&mut c, &package("example/other", "1"), local("o")).unwrap();
+    c.remove("example/other").unwrap();
+    assert!(store_names(&d).contains(&digest(&v1)));
+    done(root);
+
+    // A catalog that is not a file at all: kept the same way.
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
+    install(&mut c, &v1, local("n")).unwrap();
+    drop(c);
+    fs::remove_file(d.catalog()).unwrap();
+    fs::create_dir(d.catalog()).unwrap();
+    let c = Catalog::open(d.clone(), false, &NoRoots);
+    assert!(c.warning.is_some());
+    assert_eq!(store_names(&d), BTreeSet::from([digest(&v1)]));
+    done(root);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_catalog_that_cannot_be_moved_aside_is_not_replaced() {
+    use std::os::unix::fs::PermissionsExt;
+    // Folder permissions do not stop root.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let root = temp();
+    let d = dirs(&root);
+    fs::create_dir_all(&d.root).unwrap();
+    fs::write(d.catalog(), b"{not json").unwrap();
+    fs::set_permissions(&d.root, fs::Permissions::from_mode(0o500)).unwrap();
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
+    assert!(
+        c.warning
+            .as_deref()
+            .is_some_and(|w| w.contains("can be changed")),
+        "{:?}",
+        c.warning
+    );
+    // Writable again, as a folder fixed by hand: the catalog this app opened still saves
+    // nothing over the one it could not read.
+    fs::set_permissions(&d.root, fs::Permissions::from_mode(0o700)).unwrap();
+    let e = install(&mut c, &package("example/notes", "1"), local("n")).unwrap_err();
+    assert!(e.contains("can be changed"), "{e}");
+    assert_eq!(fs::read(d.catalog()).unwrap(), b"{not json");
+    done(root);
+}
+
+#[test]
+fn a_damaged_release_folder_is_replaced_when_installed_again() {
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
+    let v1 = package("example/notes", "1.0.0");
+    install(&mut c, &v1, local("n")).unwrap();
+    install(&mut c, &package("example/notes", "2.0.0"), local("n")).unwrap();
+    let release = d.store().join(digest(&v1));
+    thaw(&release);
+    let file = release.join("pages/index.html");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    fs::write(&file, b"tampered").unwrap();
+    // 1.0.0, the last good release, installed again: its checked copy replaces the folder.
+    install(&mut c, &v1, local("n")).unwrap();
+    assert_eq!(
+        c.asset("example/notes", &digest(&v1), "index.html")
+            .unwrap()
+            .0,
+        b"<p>1.0.0"
+    );
+    done(root);
+}
+
+#[test]
+fn a_local_package_updates_from_a_file_of_another_name() {
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
+    install(
+        &mut c,
+        &package("example/notes", "1.0.0"),
+        local("notes-1.0.0.tar.gz"),
+    )
+    .unwrap();
+    install(
+        &mut c,
+        &package("example/notes", "2.0.0"),
+        local("notes-2.0.0.tar.gz"),
+    )
+    .unwrap();
+    let p = c.get("example/notes").unwrap();
+    assert_eq!(p.active.version, "2.0.0");
+    assert_eq!(p.source, local("notes-2.0.0.tar.gz"));
+    // Another source is still refused: a registry, or the same registry name at another index.
+    let e = install(
+        &mut c,
+        &package("example/notes", "3.0.0"),
+        registry("r", "/a/index.json"),
+    )
+    .unwrap_err();
+    assert!(e.contains("remove it first"), "{e}");
+    install(
+        &mut c,
+        &package("example/reg", "1"),
+        registry("r", "/a/index.json"),
+    )
+    .unwrap();
+    let e = install(
+        &mut c,
+        &package("example/reg", "2"),
+        registry("r", "/b/index.json"),
+    )
+    .unwrap_err();
+    assert!(e.contains("remove it first"), "{e}");
+    install(
+        &mut c,
+        &package("example/reg", "2"),
+        registry("r", "/a/index.json"),
+    )
+    .unwrap();
+    done(root);
+}
+
+#[cfg(unix)]
+#[test]
+fn folders_that_cannot_be_deleted_are_reported() {
+    use std::os::unix::fs::PermissionsExt;
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
+    let v1 = package("example/notes", "1.0.0");
+    install(&mut c, &v1, local("n")).unwrap();
+    assert!(c.take_cleanup().is_none());
+    fs::set_permissions(d.store(), fs::Permissions::from_mode(0o500)).unwrap();
+    // The package is removed; its folder, which the store's permissions keep, is reported.
+    c.remove("example/notes").unwrap();
+    assert!(c.get("example/notes").is_none());
+    let left = c.take_cleanup().unwrap();
+    assert!(left.contains(&digest(&v1)), "{left}");
+    assert!(c.take_cleanup().is_none());
+    fs::set_permissions(d.store(), fs::Permissions::from_mode(0o700)).unwrap();
+    assert_eq!(store_names(&d), BTreeSet::from([digest(&v1)]));
+    done(root);
+}
+
+#[cfg(unix)]
+#[test]
+fn registry_files_must_be_regular_files_in_the_index_folder() {
+    let root = temp();
+    let d = dirs(&root);
+    let reg = root.join("reg");
+    fs::create_dir_all(&reg).unwrap();
+    let v1 = package("example/notes", "1.0.0");
+    let mkfifo = |p: &Path| {
+        let c = std::ffi::CString::new(p.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+    };
+    mkfifo(&reg.join("fifo.tar.gz"));
+    fs::write(root.join("outside.tar.gz"), &v1).unwrap();
+    std::os::unix::fs::symlink(root.join("outside.tar.gz"), reg.join("link.tar.gz")).unwrap();
+    // A folder of the index's that is a link out of it.
+    std::os::unix::fs::symlink(&root, reg.join("sub")).unwrap();
+    fs::create_dir(reg.join("pkgs")).unwrap();
+    fs::write(reg.join("pkgs/n1.tar.gz"), &v1).unwrap();
+    let p = platform();
+    let art = |url: &str| serde_json::json!({p.clone(): {"url": url, "sha256": digest(&v1), "size": v1.len()}});
+    let index = serde_json::json!({"registry_version": 0, "packages": {
+        "example/notes": {"releases": [
+            {"version": "3.0.0", "artifacts": art("fifo.tar.gz")},
+            {"version": "2.0.0", "artifacts": art("link.tar.gz")},
+            {"version": "1.5.0", "artifacts": art("sub/outside.tar.gz")},
+            {"version": "1.0.0", "artifacts": art("pkgs/n1.tar.gz")}
+        ]}
+    }});
+    fs::write(reg.join("index.json"), serde_json::to_vec(&index).unwrap()).unwrap();
+    mkfifo(&reg.join("fifo.json"));
+    fs::write(
+        &d.registries,
+        serde_json::to_vec(&serde_json::json!({"version": 0, "registries": [
+            {"name": "fixture", "url": reg.join("index.json")},
+            {"name": "fifo", "url": reg.join("fifo.json")}]}))
+        .unwrap(),
+    )
+    .unwrap();
+    // Each in a thread: a blocking open would never return.
+    let within = |f: Box<dyn FnOnce() -> String + Send>| {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || tx.send(f()));
+        rx.recv_timeout(Duration::from_secs(10))
+            .expect("a FIFO was waited on")
+    };
+    let dd = d.clone();
+    let e = within(Box::new(move || {
+        stage_from_registry(&dd, &NoRoots, "fixture", "example/notes", Some("3.0.0")).unwrap_err()
+    }));
+    assert!(e.contains("not a regular file"), "{e}");
+    let dd = d.clone();
+    let e = within(Box::new(move || {
+        offers(&dd, &NoRoots).unwrap()[1]
+            .error
+            .clone()
+            .unwrap_or_default()
+    }));
+    assert!(e.contains("not a regular file"), "{e}");
+    for v in ["2.0.0", "1.5.0"] {
+        let e = stage_from_registry(&d, &NoRoots, "fixture", "example/notes", Some(v)).unwrap_err();
+        assert!(
+            e.contains("not a file inside the index's folder"),
+            "{v}: {e}"
+        );
+    }
+    // The positive control on the same route, through a folder of the index's.
+    stage_from_registry(&d, &NoRoots, "fixture", "example/notes", Some("1.0.0")).unwrap();
+    done(root);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_catalog_folder_that_cannot_be_listed_keeps_the_store() {
+    use std::os::unix::fs::PermissionsExt;
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
+    let v1 = package("example/notes", "1.0.0");
+    install(&mut c, &v1, local("n")).unwrap();
+    drop(c);
+    fs::write(d.catalog(), b"{not json").unwrap();
+    // The damaged catalog can be moved aside, but the folder cannot be listed.
+    fs::set_permissions(&d.root, fs::Permissions::from_mode(0o300)).unwrap();
+    let c = Catalog::open(d.clone(), false, &NoRoots);
+    fs::set_permissions(&d.root, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(
+        c.warning.as_deref().is_some_and(|w| w.contains("moved")),
+        "{:?}",
+        c.warning
+    );
+    assert_eq!(store_names(&d), BTreeSet::from([digest(&v1)]));
+    done(root);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_store_that_cannot_be_listed_is_reported() {
+    use std::os::unix::fs::PermissionsExt;
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
+    install(&mut c, &package("example/notes", "1.0.0"), local("n")).unwrap();
+    fs::set_permissions(d.store(), fs::Permissions::from_mode(0o300)).unwrap();
+    c.remove("example/notes").unwrap();
+    fs::set_permissions(d.store(), fs::Permissions::from_mode(0o700)).unwrap();
+    let left = c.take_cleanup().unwrap_or_default();
+    assert!(
+        left.contains("could not list") && left.contains("store"),
+        "{left:?}"
+    );
+    done(root);
+}
+
+#[test]
+fn registry_signatures_are_checked_before_unpacking_and_kept() {
+    use ed25519_dalek::{Signer, SigningKey};
+    let root = temp();
+    let d = dirs(&root);
+    let reg = root.join("reg");
+    fs::create_dir_all(&reg).unwrap();
+    let m = manifest(
+        "example/files",
+        "1.0.0",
+        serde_json::json!({"resources": [{"id": "config", "kind": "file", "operations": ["read"]}]}),
+    );
+    let v1 = archive(&[("pluxy-extension.json", &m), ("pages/index.html", b"<p>1")]);
+    fs::write(reg.join("f1.tar.gz"), &v1).unwrap();
+    // A key made for this test only.
+    let mut seed = [0u8; 32];
+    getrandom::fill(&mut seed).unwrap();
+    let key = SigningKey::from_bytes(&seed);
+    let public = hex(key.verifying_key().as_bytes());
+    let p = platform();
+    let descriptor = |version: &str, sha: &str| {
+        format!(
+            r#"{{"id":"example/files","version":"{version}","tier":"web","platform":"{p}","size":{},"sha256":"{sha}"}}"#,
+            v1.len()
+        )
+    };
+    let signed = |desc: &str| {
+        serde_json::json!({"url": "f1.tar.gz", "sha256": digest(&v1), "size": v1.len(),
+            "key_id": "k1", "public_key": public, "descriptor": desc,
+            "signature": hex(&key.sign(desc.as_bytes()).to_bytes())})
+    };
+    let good = descriptor("1.0.0", &digest(&v1));
+    let mut tampered = signed(&good);
+    tampered["descriptor"] = serde_json::json!(good.replace("\"size\"", " \"size\""));
+    let mut partial = signed(&good);
+    partial.as_object_mut().unwrap().remove("signature");
+    let mut bad_key = signed(&good);
+    bad_key["key_id"] = serde_json::json!("k 1");
+    let other_digest = descriptor("1.0.0", &"0".repeat(64));
+    let index = serde_json::json!({"registry_version": 0, "packages": {
+        "example/files": {"releases": [
+            {"version": "1.6.0", "artifacts": {p.clone(): bad_key}},
+            {"version": "1.5.0", "artifacts": {p.clone(): signed(&other_digest)}},
+            {"version": "1.4.0", "artifacts": {p.clone(): signed(&descriptor("1.4.0", &digest(&v1)))}},
+            {"version": "1.3.0", "artifacts": {p.clone(): signed(&good)}},
+            {"version": "1.2.0", "artifacts": {p.clone(): partial}},
+            {"version": "1.1.0", "artifacts": {p.clone(): tampered}},
+            {"version": "1.0.0", "artifacts": {p.clone(): signed(&good)}}
+        ]}
+    }});
+    fs::write(reg.join("index.json"), serde_json::to_vec(&index).unwrap()).unwrap();
+    let url = reg.join("index.json").display().to_string();
+    fs::write(
+        &d.registries,
+        serde_json::to_vec(&serde_json::json!({"version": 0, "registries": [
+            {"name": "fixture", "url": url}]}))
+        .unwrap(),
+    )
+    .unwrap();
+    for (v, says) in [
+        ("1.6.0", "key_id is not valid"),
+        // The descriptor names an archive the index does not.
+        ("1.5.0", "does not hold"),
+        // Signed for 1.4.0, listed (and holding) another version: the archive holds 1.0.0.
+        ("1.4.0", "not example/files 1.4.0"),
+        // A valid signature of 1.0.0's descriptor offered as 1.3.0.
+        ("1.3.0", "another package, version or tier"),
+        ("1.2.0", "part of a signature"),
+        ("1.1.0", "invalid descriptor signature"),
+    ] {
+        let e = stage_from_registry(&d, &NoRoots, "fixture", "example/files", Some(v)).unwrap_err();
+        assert!(e.contains(says), "{v}: {e}");
+    }
+    // Opened first, as the app does: opening clears staged folders left behind.
+    let mut cat = Catalog::open(d.clone(), false, &NoRoots);
+    let c = stage_from_registry(&d, &NoRoots, "fixture", "example/files", Some("1.0.0")).unwrap();
+    let s = c.release.signed.clone().unwrap();
+    assert_eq!(
+        (
+            s.publisher.as_str(),
+            s.key_id.as_str(),
+            s.public_key.as_str(),
+            s.source.as_str(),
+            s.descriptor.as_str()
+        ),
+        (
+            "example",
+            "k1",
+            public.as_str(),
+            url.as_str(),
+            good.as_str()
+        )
+    );
+    assert_eq!(c.release.declared[0].id, "config");
+    cat.commit(c).unwrap();
+    let f = cat.facts("example/files", &NoRoots).unwrap();
+    assert_eq!(f.source.as_deref(), Some(url.as_str()));
+    assert_eq!(f.signed, Some(s.clone()));
+    let v = cat.view_with(&NoRoots, &|x| x == &s);
+    assert!(v.packages[0].active.signer.as_ref().unwrap().approved);
+    let unapproved = cat.view(&NoRoots);
+    assert!(
+        !unapproved.packages[0]
+            .active
+            .signer
+            .as_ref()
+            .unwrap()
+            .approved
+    );
+    // Kept across a restart, exactly.
+    let again = Catalog::open(d.clone(), false, &NoRoots);
+    assert_eq!(
+        again.facts("example/files", &NoRoots).unwrap().signed,
+        Some(s)
+    );
+    done(root);
+}
+
+// ---- Signed native-tier admission (device_admission.rs) ----
+
+/// Native-tier trust with one test root, for keys generated by the test.
+struct TestRoots {
+    publisher: String,
+    source: String,
+    key_id: String,
+    key: ed25519_dalek::VerifyingKey,
+}
+impl crate::artifact::PublisherKeys for TestRoots {
+    fn publisher_key(
+        &self,
+        source: &str,
+        key_id: &str,
+        publisher: &str,
+    ) -> Result<ed25519_dalek::VerifyingKey, String> {
+        if (source, key_id, publisher) == (&self.source, &self.key_id, &self.publisher) {
+            Ok(self.key)
+        } else {
+            Err("unknown publisher key or changed source".into())
+        }
+    }
+}
+impl Roots for TestRoots {
+    fn configured(&self) -> bool {
+        true
+    }
+    fn curated(&self, source: &str) -> bool {
+        source == self.source
+    }
+    fn reserved(&self, publisher: &str) -> bool {
+        publisher == self.publisher
+    }
+}
+
+fn signing_key() -> ed25519_dalek::SigningKey {
+    let mut seed = [0u8; 32];
+    getrandom::fill(&mut seed).unwrap();
+    ed25519_dalek::SigningKey::from_bytes(&seed)
+}
+
+/// About 200 KiB of data: more than one 64 KiB chunk of a file being hashed.
+fn blob() -> Vec<u8> {
+    (0..200 * 1024u32)
+        .map(|i| (i.wrapping_mul(2_654_435_761) >> 24) as u8)
+        .collect()
+}
+
+/// A native test package's program: on Windows named and starting as a program image (`.exe`,
+/// `MZ`), which admission asks for there; a script elsewhere.
+const TOOL: &str = if cfg!(windows) {
+    "bin/tool.exe"
+} else {
+    "bin/tool"
+};
+
+/// The program `TOOL` holds, marked with tag.
+fn tool_bytes(tag: &str) -> Vec<u8> {
+    if cfg!(windows) {
+        format!("MZ {tag}\n").into_bytes()
+    } else {
+        format!("#!/bin/sh\n# {tag}\n").into_bytes()
+    }
+}
+
+/// `TOOL`'s path in folder dir.
+fn tool_in(dir: &Path) -> PathBuf {
+    TOOL.split('/').fold(dir.to_path_buf(), |p, s| p.join(s))
+}
+
+/// A native tool's archive: its manifest, an executable program for this computer and a data
+/// file of about 200 KiB.
+fn native_package(id: &str, version: &str) -> Vec<u8> {
+    native_package_state(
+        id,
+        version,
+        serde_json::json!({"version": 0, "readable_versions": [0]}),
+    )
+}
+
+/// `native_package`, writing and reading the state versions state names.
+fn native_package_state(id: &str, version: &str, state: Value) -> Vec<u8> {
+    native_archive(id, version, state, TOOL, &tool_bytes(version))
+}
+
+/// `native_package_state`, with program holding bytes as its program.
+fn native_archive(id: &str, version: &str, state: Value, program: &str, bytes: &[u8]) -> Vec<u8> {
+    let m = serde_json::to_vec(&serde_json::json!({
+        "manifest_version": 1, "id": id, "version": version,
+        "app": {"version": 0, "tier": "native", "host_versions": [0],
+            "programs": {platform(): program},
+            "operations": [{"id": "inspect", "description": "Report its state",
+                "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}],
+            "state": state}
+    }))
+    .unwrap();
+    let blob = blob();
+    let mut b = tar::Builder::new(Vec::new());
+    for (name, data, mode) in [
+        ("pluxy-extension.json", m.as_slice(), 0o644),
+        ("data/blob", blob.as_slice(), 0o644),
+        (program, bytes, 0o755),
+    ] {
+        let mut h = tar::Header::new_gnu();
+        h.set_path(name).unwrap();
+        h.set_size(data.len() as u64);
+        h.set_mode(mode);
+        h.set_entry_type(tar::EntryType::Regular);
+        h.set_cksum();
+        b.append(&h, data).unwrap();
+    }
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    gz.write_all(&b.into_inner().unwrap()).unwrap();
+    gz.finish().unwrap()
+}
+
+/// An index artifact for bytes at file; signed by key over a descriptor naming (id, version)
+/// and the native tier.
+fn signed_artifact(
+    file: &str,
+    bytes: &[u8],
+    signed: Option<(&ed25519_dalek::SigningKey, &str, &str)>,
+) -> Value {
+    signed_artifact_as(file, bytes, signed, "native")
+}
+
+/// `signed_artifact`, with the descriptor naming tier.
+fn signed_artifact_as(
+    file: &str,
+    bytes: &[u8],
+    signed: Option<(&ed25519_dalek::SigningKey, &str, &str)>,
+    tier: &str,
+) -> Value {
+    use ed25519_dalek::Signer;
+    let mut a = serde_json::json!({"url": file, "sha256": digest(bytes), "size": bytes.len()});
+    if let Some((key, id, version)) = signed {
+        let descriptor = serde_json::to_string(&serde_json::json!({
+            "id": id, "version": version, "tier": tier, "platform": platform(),
+            "size": bytes.len(), "sha256": digest(bytes)}))
+        .unwrap();
+        a["key_id"] = "k1".into();
+        a["public_key"] = hex(key.verifying_key().as_bytes()).into();
+        a["signature"] = hex(&key.sign(descriptor.as_bytes()).to_bytes()).into();
+        a["descriptor"] = descriptor.into();
+    }
+    a
+}
+
+/// A curated registry (`curated`, the root's source) and one no root names (`other`), both
+/// listing pluxy/tool 1.0.0 and 1.1.0 signed by the root's key, and refusals' fixtures.
+fn native_fixture(root: &Path) -> (Dirs, TestRoots) {
+    let d = dirs(root);
+    let reg = root.join("reg");
+    fs::create_dir_all(&reg).unwrap();
+    let key = signing_key();
+    let other_key = signing_key();
+    let v1 = native_package("pluxy/tool", "1.0.0");
+    let v2 = native_package("pluxy/tool", "1.1.0");
+    // Writes state version 1 and reads 0 and 1: 1.0.0 and 1.1.0 cannot read what it writes.
+    let v3 = native_package_state(
+        "pluxy/tool",
+        "2.0.0",
+        serde_json::json!({"version": 1, "readable_versions": [0, 1]}),
+    );
+    let unsigned = native_package("pluxy/unsigned", "1.0.0");
+    let forged = native_package("pluxy/forged", "1.0.0");
+    let renamed = native_package("pluxy/renamed", "1.0.0");
+    let lookalike = native_package("example/native", "1.0.0");
+    let partial = native_package("pluxy/partial", "1.0.0");
+    let wrong_key = native_package("pluxy/wrongkey", "1.0.0");
+    let signed_page = package("example/signedpage", "1.0.0");
+    let bad_key = native_package("pluxy/badkey", "1.0.0");
+    let long_key = native_package("pluxy/longkey", "1.0.0");
+    let web_desc = package("pluxy/webdesc", "1.0.0");
+    let signed_native = native_package("example/signednative", "1.0.0");
+    let web_native = native_package("example/webnative", "1.0.0");
+    // A script named as the program, with no `.exe`: no program on Windows.
+    let script = native_archive(
+        "pluxy/script",
+        "1.0.0",
+        serde_json::json!({"version": 0, "readable_versions": [0]}),
+        "bin/tool",
+        b"#!/bin/sh\n",
+    );
+    for (f, b) in [
+        ("script", &script),
+        ("badkey", &bad_key),
+        ("longkey", &long_key),
+        ("webdesc", &web_desc),
+        ("partial", &partial),
+        ("wrongkey", &wrong_key),
+        ("signedpage", &signed_page),
+        ("v1", &v1),
+        ("v2", &v2),
+        ("v3", &v3),
+        ("unsigned", &unsigned),
+        ("forged", &forged),
+        ("renamed", &renamed),
+        ("lookalike", &lookalike),
+        ("signednative", &signed_native),
+        ("webnative", &web_native),
+    ] {
+        fs::write(reg.join(f), b).unwrap();
+    }
+    let p = platform();
+    let one = |a: Value| serde_json::json!({"releases": [{"version": "1.0.0", "artifacts": {p.clone(): a}}]});
+    let tool = serde_json::json!({"releases": [
+        {"version": "1.1.0", "artifacts": {p.clone(): signed_artifact("v2", &v2, Some((&key, "pluxy/tool", "1.1.0")))}},
+        {"version": "1.0.0", "artifacts": {p.clone(): signed_artifact("v1", &v1, Some((&key, "pluxy/tool", "1.0.0")))}},
+        {"version": "2.0.0", "artifacts": {p.clone(): signed_artifact("v3", &v3, Some((&key, "pluxy/tool", "2.0.0")))}}
+    ]});
+    // Signed by another key, listing the root's key: the signature does not hold.
+    let mut forged_entry = signed_artifact(
+        "forged",
+        &forged,
+        Some((&other_key, "pluxy/forged", "1.0.0")),
+    );
+    forged_entry["public_key"] = hex(key.verifying_key().as_bytes()).into();
+    // Part of a signature: no public_key.
+    let mut part = signed_artifact("partial", &partial, Some((&key, "pluxy/partial", "1.0.0")));
+    part.as_object_mut().unwrap().remove("public_key");
+    // Signed with the root's key, but the index names another key.
+    let mut wrong = signed_artifact(
+        "wrongkey",
+        &wrong_key,
+        Some((&key, "pluxy/wrongkey", "1.0.0")),
+    );
+    wrong["public_key"] = hex(other_key.verifying_key().as_bytes()).into();
+    // Signed by a key no root names, for a publisher no root names: no provenance here.
+    let page_signed = signed_artifact_as(
+        "signedpage",
+        &signed_page,
+        Some((&other_key, "example/signedpage", "1.0.0")),
+        "web",
+    );
+    let mut page_part = page_signed.clone();
+    page_part.as_object_mut().unwrap().remove("descriptor");
+    // Key IDs that are not 1 to 64 of letters, digits, '.', '_' and '-'.
+    let mut bad = signed_artifact("badkey", &bad_key, Some((&key, "pluxy/badkey", "1.0.0")));
+    bad["key_id"] = "a/b".into();
+    let mut long = signed_artifact("longkey", &long_key, Some((&key, "pluxy/longkey", "1.0.0")));
+    long["key_id"] = "k".repeat(65).into();
+    // Signed by the root's key as a web package: a curated web package.
+    let web = signed_artifact_as(
+        "webdesc",
+        &web_desc,
+        Some((&key, "pluxy/webdesc", "1.0.0")),
+        "web",
+    );
+    let curated = serde_json::json!({"registry_version": 0, "packages": {
+        "pluxy/badkey": one(bad),
+        "pluxy/longkey": one(long),
+        "pluxy/webdesc": one(web),
+        "pluxy/partial": one(part),
+        "pluxy/wrongkey": one(wrong),
+        "example/signedpage": one(page_signed.clone()),
+        "pluxy/tool": tool,
+        "pluxy/unsigned": one(signed_artifact("unsigned", &unsigned, None)),
+        "pluxy/forged": one(forged_entry),
+        // Signed, but its descriptor names another release.
+        "pluxy/renamed": one(signed_artifact("renamed", &renamed, Some((&key, "pluxy/renamed", "2.0.0")))),
+        "example/native": one(signed_artifact("lookalike", &lookalike, None)),
+        "pluxy/script": one(signed_artifact("script", &script, Some((&key, "pluxy/script", "1.0.0")))),
+    }});
+    // Native tools signed by a key no root names: as a native tool, and as a web package.
+    let native_signed = signed_artifact(
+        "signednative",
+        &signed_native,
+        Some((&other_key, "example/signednative", "1.0.0")),
+    );
+    let native_as_web = signed_artifact_as(
+        "webnative",
+        &web_native,
+        Some((&other_key, "example/webnative", "1.0.0")),
+        "web",
+    );
+    let other = serde_json::json!({"registry_version": 0, "packages": {"pluxy/tool": tool,
+        "example/signedpage": one(page_signed), "example/partial": one(page_part),
+        "example/signednative": one(native_signed), "example/webnative": one(native_as_web),
+        "example/native": one(signed_artifact("lookalike", &lookalike, None))}});
+    fs::write(
+        reg.join("curated.json"),
+        serde_json::to_vec(&curated).unwrap(),
+    )
+    .unwrap();
+    fs::write(reg.join("other.json"), serde_json::to_vec(&other).unwrap()).unwrap();
+    fs::write(
+        &d.registries,
+        serde_json::to_vec(&serde_json::json!({"version": 0, "registries": [
+            {"name": "curated", "url": reg.join("curated.json")},
+            {"name": "other", "url": reg.join("other.json")}]}))
+        .unwrap(),
+    )
+    .unwrap();
+    let roots = TestRoots {
+        publisher: "pluxy".into(),
+        source: reg.join("curated.json").display().to_string(),
+        key_id: "k1".into(),
+        key: key.verifying_key(),
+    };
+    (d, roots)
+}
+
+#[test]
+fn only_a_curated_signed_native_tool_installs() {
+    let root = temp();
+    let (d, roots) = native_fixture(&root);
+    let refused = |registry: &str, id: &str, roots: &dyn Roots| {
+        stage_from_registry(&d, roots, registry, id, Some("1.0.0"))
+            .err()
+            .unwrap_or_else(|| panic!("{registry} {id} was staged"))
+    };
+    // The same signed entry, digest and all, from a source no root names.
+    let e = refused("other", "pluxy/tool", &roots);
+    assert!(e.contains("not curated"), "{e}");
+    let e = refused("other", "example/native", &roots);
+    assert!(e.contains("native tool"), "{e}");
+    let e = refused("curated", "example/native", &roots);
+    assert!(e.contains("native tool"), "{e}");
+    let e = refused("curated", "pluxy/unsigned", &roots);
+    assert!(e.contains("needs a curated first-party signature"), "{e}");
+    let e = refused("curated", "pluxy/forged", &roots);
+    assert!(e.contains("invalid descriptor signature"), "{e}");
+    let e = refused("curated", "pluxy/renamed", &roots);
+    assert!(e.contains("names pluxy/renamed 2.0.0"), "{e}");
+    let e = refused("curated", "pluxy/partial", &roots);
+    assert!(e.contains("part of a signature"), "{e}");
+    let e = refused("other", "example/partial", &roots);
+    assert!(e.contains("part of a signature"), "{e}");
+    let e = refused("curated", "pluxy/wrongkey", &roots);
+    assert!(e.contains("not the key its root names"), "{e}");
+    for id in ["pluxy/badkey", "pluxy/longkey"] {
+        let e = refused("curated", id, &roots);
+        assert!(e.contains("key_id is not valid"), "{id}: {e}");
+    }
+    // A curated web package installs, enabled, as curated. Its signature is its root's, which
+    // Access never uses: a reserved publisher's package gets no signer approval or grants.
+    {
+        let mut c = Catalog::open(d.clone(), false, &roots);
+        c.commit(
+            stage_from_registry(&d, &roots, "curated", "pluxy/webdesc", Some("1.0.0")).unwrap(),
+        )
+        .unwrap();
+        let p = c.get("pluxy/webdesc").unwrap();
+        assert!(p.enabled && p.active.signed.is_some(), "{p:?}");
+        let v = c.view(&roots);
+        assert_eq!(v.packages[0].trust, "curated");
+        assert!(!v.packages[0].active.signer.as_ref().unwrap().access);
+        assert!(c.facts("pluxy/webdesc", &roots).unwrap().signed.is_none());
+        // Without its root, it is held as any reserved publisher's package.
+        assert!(c.set_enabled("pluxy/webdesc", true, &NoRoots).is_err());
+        c.remove("pluxy/webdesc").unwrap();
+    }
+    // A curated registry lists only its root's keys: any other signature in it is refused,
+    // whatever the publisher.
+    let e = refused("curated", "example/signedpage", &roots);
+    assert!(e.contains("unknown publisher key"), "{e}");
+    // What the registries list says the same, before anything is fetched; whether a package is
+    // a native tool only its archive tells.
+    let listed = offers(&d, &roots).unwrap();
+    let refusals = |name: &str| -> BTreeSet<String> {
+        listed
+            .iter()
+            .find(|r| r.name == name)
+            .unwrap()
+            .packages
+            .iter()
+            .filter(|o| o.refused.is_some())
+            .map(|o| o.id.clone())
+            .collect()
+    };
+    let set = |ids: &[&str]| ids.iter().map(|s| s.to_string()).collect::<BTreeSet<_>>();
+    assert_eq!(
+        refusals("curated"),
+        set(&[
+            "example/signedpage",
+            "pluxy/badkey",
+            "pluxy/forged",
+            "pluxy/longkey",
+            "pluxy/partial",
+            "pluxy/renamed",
+            "pluxy/unsigned",
+            "pluxy/wrongkey"
+        ])
+    );
+    assert_eq!(refusals("other"), set(&["example/partial", "pluxy/tool"]));
+    // A signature no root vouches for, from a registry no root names, is checked with the
+    // index's key and kept for Access's approved signers; the package stays Unverified.
+    {
+        let registry = "other";
+        let mut c = Catalog::open(d.clone(), false, &roots);
+        c.commit(stage_from_registry(&d, &roots, registry, "example/signedpage", None).unwrap())
+            .unwrap();
+        let p = c.get("example/signedpage").unwrap();
+        let s = p.active.signed.clone().unwrap();
+        let index = root.join("reg").join(format!("{registry}.json"));
+        assert_eq!(
+            (s.publisher.as_str(), s.key_id.as_str(), s.source.as_str()),
+            ("example", "k1", index.display().to_string().as_str()),
+            "{registry}"
+        );
+        assert_ne!(s.public_key, hex(roots.key.as_bytes()));
+        assert_eq!(c.view(&roots).packages[0].trust, "unverified");
+        assert!(p.curated_signature("example/signedpage", &roots).is_err());
+        assert_eq!(
+            c.facts("example/signedpage", &roots).unwrap().signed,
+            Some(s)
+        );
+        // Once a root names its publisher, Access no longer gets its signature.
+        let reserving = TestRoots {
+            publisher: "example".into(),
+            source: roots.source.clone(),
+            key_id: "k1".into(),
+            key: roots.key,
+        };
+        assert!(c
+            .facts("example/signedpage", &reserving)
+            .unwrap()
+            .signed
+            .is_none());
+        // The window shows the signer, and offers Access for it only while Access may use it.
+        let shown = |roots: &dyn Roots| {
+            c.view(roots).packages[0]
+                .active
+                .signer
+                .as_ref()
+                .map(|s| s.access)
+        };
+        assert_eq!(shown(&roots), Some(true));
+        assert_eq!(shown(&reserving), Some(false));
+        c.remove("example/signedpage").unwrap();
+    }
+    // Such a signature never makes a native tool, whatever tier its descriptor names.
+    let e = refused("other", "example/signednative", &roots);
+    assert!(e.contains("another package, version or tier"), "{e}");
+    let e = refused("other", "example/webnative", &roots);
+    assert!(e.contains("native tool"), "{e}");
+    // A build with no roots: nothing is curated.
+    let e = refused("curated", "pluxy/tool", &NoRoots);
+    assert!(e.contains("not configured"), "{e}");
+    // A local file is never curated, even signed and with the reserved publisher's ID; a root's
+    // publisher is reserved as pluxy is.
+    let bytes = fs::read(root.join("reg").join("v1")).unwrap();
+    let e = stage(&d, &bytes, local("v1"), None, &roots).err().unwrap();
+    assert!(e.contains("reserved"), "{e}");
+    let acme = TestRoots {
+        publisher: "acme".into(),
+        ..native_fixture(&root.join("acme")).1
+    };
+    let e = stage(&d, &package("acme/page", "1"), local("p"), None, &acme)
+        .err()
+        .unwrap();
+    assert!(e.contains("reserved"), "{e}");
+    stage(&d, &package("example/page", "1"), local("p"), None, &acme).unwrap();
+    assert!(store_names(&d).is_empty());
+
+    // The positive control on the same route: installed, disabled, not admitted.
+    let mut c = Catalog::open(d.clone(), false, &roots);
+    c.commit(stage_from_registry(&d, &roots, "curated", "pluxy/tool", Some("1.0.0")).unwrap())
+        .unwrap();
+    let v = c.view(&roots);
+    let p = v.packages.iter().find(|p| p.id == "pluxy/tool").unwrap();
+    assert_eq!(
+        (p.trust, p.tier.as_str(), p.enabled, p.authorized),
+        ("curated", "native", false, false)
+    );
+    let signer = p.active.signer.as_ref().unwrap();
+    assert_eq!(
+        (signer.publisher.as_str(), signer.key_id.as_str()),
+        ("pluxy", "k1")
+    );
+    // The label follows the roots this app has now: without the root it is not curated.
+    let v = c.view(&NoRoots);
+    assert_eq!(v.packages[0].trust, "unverified");
+    let e = c.admitted("pluxy/tool", &roots).unwrap_err();
+    assert!(e.contains("disabled"), "{e}");
+    // A catalog with a native tool is version 1, which a build before native tools refuses
+    // (and moves aside) instead of reading it as page packages; without one it stays 0.
+    let version = |d: &Dirs| {
+        serde_json::from_slice::<Value>(&fs::read(d.catalog()).unwrap()).unwrap()["version"].clone()
+    };
+    assert_eq!(version(&d), 1);
+    assert!(Catalog::open(d.clone(), false, &roots)
+        .get("pluxy/tool")
+        .is_some());
+    install(&mut c, &package("example/page", "1"), local("p")).unwrap();
+    c.remove("pluxy/tool").unwrap();
+    assert_eq!(version(&d), 0);
+    c.commit(stage_from_registry(&d, &roots, "curated", "pluxy/tool", Some("1.0.0")).unwrap())
+        .unwrap();
+    let e = c.set_enabled("pluxy/tool", true, &roots).unwrap_err();
+    assert!(e.contains("native confirmation"), "{e}");
+    done(root);
+}
+
+/// The native tool id as `native_candidate_unlocked` checks it, for a catalog the test holds.
+fn candidate(c: &Catalog, id: &str, roots: &dyn Roots) -> Result<Admitted, String> {
+    let (a, tree) = c.native_candidate_record(id, roots)?;
+    admission::verify_tree(&a.dir, &tree)?;
+    Ok(a)
+}
+
+#[test]
+fn admission_is_confirmed_per_release_and_checked_each_time() {
+    let root = temp();
+    let (d, roots) = native_fixture(&root);
+    let mut c = Catalog::open(d.clone(), false, &roots);
+    let install = |c: &mut Catalog, v: &str| {
+        c.commit(stage_from_registry(&d, &roots, "curated", "pluxy/tool", Some(v)).unwrap())
+    };
+    install(&mut c, "1.0.0").unwrap();
+    let sha = c.get("pluxy/tool").unwrap().active.sha256.clone();
+    // A native tool's curated signature never goes to Access, and the window offers none.
+    assert!(c.get("pluxy/tool").unwrap().active.signed.is_some());
+    assert!(c.facts("pluxy/tool", &roots).unwrap().signed.is_none());
+    let v = c.view(&roots);
+    assert!(!v.packages[0].active.signer.as_ref().unwrap().access);
+
+    // What the native confirmation shows, then the admission it confirms.
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
+    let dir = d.store().join(&sha);
+    assert_eq!(
+        (&a.sha256, &a.dir, &a.program),
+        (&sha, &dir, &tool_in(&dir))
+    );
+    assert_eq!(
+        (
+            a.signed.publisher.as_str(),
+            a.signed.key_id.as_str(),
+            a.signed.source.as_str()
+        ),
+        ("pluxy", "k1", roots.source.as_str())
+    );
+    assert_eq!(a.public_key(), hex(roots.key.as_bytes()));
+    assert_eq!(a.signed.public_key, hex(roots.key.as_bytes()));
+    assert_eq!(a.operations[0].id, "inspect");
+    // Every file's digest past its first 64 KiB, against the fixture's own bytes.
+    assert_eq!(
+        c.get("pluxy/tool").unwrap().active.tree["data/blob"],
+        digest(&blob())
+    );
+    // The program's digest at install, from the fixture's own bytes.
+    assert_eq!(a.program_sha256(), digest(&tool_bytes("1.0.0")));
+    // The person asks in the main window; the tool is what runs.
+    #[cfg(native_stack)]
+    {
+        let action = a.confirmation();
+        assert_eq!(action.chain.len(), 1);
+        assert_eq!(action.chain[0].id, "main window");
+        assert_eq!(action.executor.id, "pluxy/tool");
+        assert_eq!(action.executor.digest, sha);
+        assert!(action.native_tool);
+        assert_eq!(action.files, vec![tool_in(&dir)]);
+    }
+    let mut changed = a.clone();
+    changed.version = "9".into();
+    let e = c.admit_checked(&changed, &roots).unwrap_err();
+    assert!(e.contains("changed while it was being confirmed"), "{e}");
+    assert!(c.admitted("pluxy/tool", &roots).is_err());
+    c.admit_checked(&a, &roots).unwrap();
+    assert_eq!(c.admitted("pluxy/tool", &roots).unwrap(), a);
+    assert!(c.view(&roots).packages[0].authorized);
+    // Admitted is checked again each time: against the roots and in safe mode.
+    let e = c.admitted("pluxy/tool", &NoRoots).unwrap_err();
+    assert!(e.contains("not configured"), "{e}");
+    let mut safe = Catalog::open(d.clone(), true, &roots);
+    let e = safe.admitted("pluxy/tool", &roots).unwrap_err();
+    assert!(e.contains("safe mode"), "{e}");
+    let e = safe.admit_checked(&a, &roots).unwrap_err();
+    assert!(e.contains("safe mode"), "{e}");
+    // The admission is kept with the catalog.
+    assert_eq!(
+        Catalog::open(d.clone(), false, &roots)
+            .admitted("pluxy/tool", &roots)
+            .unwrap(),
+        a
+    );
+
+    // A confirmation for another host contract, or for another key, is not this one.
+    let saved = c.packages["pluxy/tool"].admission.clone().unwrap();
+    for change in [
+        (|a: &mut Admission| a.host_contract += 1) as fn(&mut Admission),
+        |a: &mut Admission| a.public_key = hex(signing_key().verifying_key().as_bytes()),
+    ] {
+        let mut x = saved.clone();
+        change(&mut x);
+        c.packages.get_mut("pluxy/tool").unwrap().admission = Some(x);
+        let e = c.admitted("pluxy/tool", &roots).unwrap_err();
+        assert!(e.contains("signing key or host contract changed"), "{e}");
+    }
+    c.packages.get_mut("pluxy/tool").unwrap().admission = Some(saved);
+    assert_eq!(c.admitted("pluxy/tool", &roots).unwrap(), a);
+
+    // Disabling ends it.
+    c.set_enabled("pluxy/tool", false, &roots).unwrap();
+    assert!(c.get("pluxy/tool").unwrap().admission.is_none());
+    assert!(c.admitted("pluxy/tool", &roots).is_err());
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&a, &roots).unwrap();
+    let e = candidate(&c, "pluxy/tool", &roots).unwrap_err();
+    assert!(e.contains("enabled already"), "{e}");
+
+    // A new release, and rolling back, each wait disabled for a fresh confirmation.
+    install(&mut c, "1.1.0").unwrap();
+    let p = c.get("pluxy/tool").unwrap();
+    assert!(!p.enabled && p.admission.is_none(), "{p:?}");
+    let b = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&b, &roots).unwrap();
+    c.rollback("pluxy/tool").unwrap();
+    let p = c.get("pluxy/tool").unwrap();
+    assert!(
+        !p.enabled && p.admission.is_none() && p.active.sha256 == sha,
+        "{p:?}"
+    );
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&a, &roots).unwrap();
+    c.admitted("pluxy/tool", &roots).unwrap();
+
+    // Hashing the files without the catalog's lock gives the same records, and admit_checked
+    // enables only the record that was checked.
+    let m = std::sync::Mutex::new(c);
+    assert_eq!(admitted_unlocked(&m, "pluxy/tool", &roots).unwrap(), a);
+    m.lock()
+        .unwrap()
+        .set_enabled("pluxy/tool", false, &roots)
+        .unwrap();
+    assert!(admitted_unlocked(&m, "pluxy/tool", &roots)
+        .unwrap_err()
+        .contains("disabled"));
+    let a = native_candidate_unlocked(&m, "pluxy/tool", &roots).unwrap();
+    let mut changed = a.clone();
+    changed.installed_at += 1;
+    let e = m
+        .lock()
+        .unwrap()
+        .admit_checked(&changed, &roots)
+        .unwrap_err();
+    assert!(e.contains("changed while it was being confirmed"), "{e}");
+    m.lock().unwrap().admit_checked(&a, &roots).unwrap();
+    assert_eq!(admitted_unlocked(&m, "pluxy/tool", &roots).unwrap(), a);
+    // A record that changes while the files are hashed is refused.
+    let reads = std::cell::Cell::new(0);
+    let e = admission::checked_unlocked(&m, |c| {
+        reads.set(reads.get() + 1);
+        let (mut r, tree) = c.admitted_record("pluxy/tool", &roots)?;
+        if reads.get() == 2 {
+            r.installed_at += 1;
+        }
+        Ok((r, tree))
+    })
+    .unwrap_err();
+    assert!(e.contains("changed while its files were checked"), "{e}");
+    #[cfg(unix)]
+    let c = m.into_inner().unwrap();
+
+    // A changed file in the store: no longer admitted.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        thaw(&dir);
+        let tool = dir.join("bin").join("tool");
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(&tool, "#!/bin/sh\necho changed\n").unwrap();
+        let e = c.admitted("pluxy/tool", &roots).unwrap_err();
+        assert!(e.contains("changed since they were installed"), "{e}");
+        let e = admitted_unlocked(&std::sync::Mutex::new(c), "pluxy/tool", &roots).unwrap_err();
+        assert!(e.contains("changed since they were installed"), "{e}");
+    }
+    done(root);
+}
+
+#[test]
+fn a_package_whose_publisher_a_root_now_reserves_is_disabled() {
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
+    install(&mut c, &package("acme/page", "1"), local("a")).unwrap();
+    install(&mut c, &package("example/page", "1"), local("e")).unwrap();
+    c.page("acme/page", "p").unwrap();
+    // A later build's root names acme: its lookalike is no longer served or enabled.
+    let acme = TestRoots {
+        publisher: "acme".into(),
+        ..native_fixture(&root.join("roots")).1
+    };
+    let mut c = Catalog::open(d.clone(), false, &acme);
+    assert!(!c.get("acme/page").unwrap().enabled);
+    let e = c.page("acme/page", "p").unwrap_err();
+    assert!(e.contains("disabled"), "{e}");
+    let sha = c.get("acme/page").unwrap().active.sha256.clone();
+    assert!(c.asset_file("acme/page", &sha, "index.html").is_none());
+    let w = c.view(&acme).warning.unwrap_or_default();
+    assert!(w.contains("acme/page") && w.contains("reserved"), "{w}");
+    let e = c.set_enabled("acme/page", true, &acme).unwrap_err();
+    assert!(e.contains("reserved"), "{e}");
+    // The positive control: a publisher no root names stays as it was.
+    assert!(c.get("example/page").unwrap().enabled);
+    c.page("example/page", "p").unwrap();
+    c.set_enabled("example/page", false, &acme).unwrap();
+    c.set_enabled("example/page", true, &acme).unwrap();
+    // Removing it still works.
+    c.remove("acme/page").unwrap();
+    done(root);
+}
+
+/// A native package whose app contribution also has extra's fields (imports, exports,
+/// operations).
+fn native_with(id: &str, version: &str, extra: Value) -> Vec<u8> {
+    let mut m = serde_json::json!({
+        "manifest_version": 1, "id": id, "version": version,
+        "app": {"version": 0, "tier": "native", "host_versions": [0],
+            "programs": {platform(): TOOL},
+            "operations": [
+                {"id": "read", "description": "Read", "effect": "read",
+                    "input_schema": {"type": "object"}, "output_schema": {"type": "object"}},
+                {"id": "write", "description": "Write",
+                    "input_schema": {"type": "object"}, "output_schema": {"type": "object"}},
+                {"id": "hidden", "description": "Not exported", "effect": "read",
+                    "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}],
+            "state": {"version": 0, "readable_versions": [0]}}
+    });
+    if let Value::Object(o) = extra {
+        for (k, v) in o {
+            m["app"][k] = v;
+        }
+    }
+    let m = serde_json::to_vec(&m).unwrap();
+    let mut b = tar::Builder::new(Vec::new());
+    for (name, data, mode) in [
+        ("pluxy-extension.json", m.as_slice(), 0o644),
+        (
+            TOOL,
+            tool_bytes(&format!("{id} {version}")).as_slice(),
+            0o755,
+        ),
+    ] {
+        let mut h = tar::Header::new_gnu();
+        h.set_path(name).unwrap();
+        h.set_size(data.len() as u64);
+        h.set_mode(mode);
+        h.set_entry_type(tar::EntryType::Regular);
+        h.set_cksum();
+        b.append(&h, data).unwrap();
+    }
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    gz.write_all(&b.into_inner().unwrap()).unwrap();
+    gz.finish().unwrap()
+}
+
+fn import(package: &str, contract: &[i64], ops: &[&str], required: bool) -> Value {
+    serde_json::json!({"package": package, "contract": contract, "operations": ops, "required": required})
+}
+
+#[test]
+fn imports_exports_and_effects_are_validated() {
+    let check = |tier: &str, extra: Value| {
+        let mut m = serde_json::json!({"manifest_version": 1, "id": "pluxy/a", "version": "1",
+            "app": {"version": 0, "tier": tier, "host_versions": [0]}});
+        if tier == "native" {
+            m["app"]["programs"] = serde_json::json!({platform(): TOOL});
+            m["app"]["operations"] = serde_json::json!([{"id": "op", "description": "d",
+                "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}]);
+            m["app"]["state"] = serde_json::json!({"version": 0, "readable_versions": [0]});
+        }
+        if let Value::Object(o) = extra {
+            for (k, v) in o {
+                m["app"][k] = v;
+            }
+        }
+        let m: Manifest = serde_json::from_value(m).unwrap();
+        validate(&m).and_then(|app| imports::import_decls(&m.id, app.as_ref().unwrap()))
+    };
+    let good = import("pluxy/b", &[1], &["op"], true);
+    assert!(check("web", serde_json::json!({"imports": [good]})).is_ok());
+    assert!(check(
+        "native",
+        serde_json::json!({"imports": [good],
+        "exports": {"contract": 1, "operations": ["op"]}})
+    )
+    .is_ok());
+    let op = |effect: &str, schema: Value| {
+        serde_json::json!({"operations": [{"id": "op", "description": "d", "effect": effect,
+            "input_schema": schema, "output_schema": {"type": "object"}}]})
+    };
+    let launch_schema =
+        serde_json::json!({"type": "object", "required": ["executable", "argv", "cwd"]});
+    assert!(check("native", op("launch", launch_schema)).is_ok());
+    for (tier, bad, says) in [
+        (
+            "web",
+            serde_json::json!({"exports": {"contract": 1, "operations": ["op"]}}),
+            "exports",
+        ),
+        (
+            "native",
+            serde_json::json!({"exports": {"contract": 1, "operations": ["nope"]}}),
+            "app.exports",
+        ),
+        (
+            "native",
+            serde_json::json!({"exports": {"operations": ["op"]}}),
+            "app.exports",
+        ),
+        (
+            "native",
+            serde_json::json!({"exports": {"contract": -1, "operations": ["op"]}}),
+            "app.exports",
+        ),
+        (
+            "native",
+            serde_json::json!({"exports": {"contract": 1, "operations": ["op", "op"]}}),
+            "app.exports",
+        ),
+        (
+            "web",
+            serde_json::json!({"imports": [good, good]}),
+            "app.imports",
+        ),
+        (
+            "web",
+            serde_json::json!({"imports": [import("pluxy/b", &[], &["op"], true)]}),
+            "app.imports",
+        ),
+        (
+            "web",
+            serde_json::json!({"imports": [import("pluxy/b", &[-1], &["op"], true)]}),
+            "app.imports",
+        ),
+        (
+            "web",
+            serde_json::json!({"imports": [import("pluxy/b", &[1], &[], true)]}),
+            "app.imports",
+        ),
+        (
+            "web",
+            serde_json::json!({"imports": [import("pluxy/b", &[1], &["Op"], true)]}),
+            "app.imports",
+        ),
+        (
+            "web",
+            serde_json::json!({"imports": [import("B", &[1], &["op"], true)]}),
+            "app.imports",
+        ),
+        (
+            "web",
+            serde_json::json!({"imports": [import("pluxy/a", &[1], &["op"], true)]}),
+            "imports itself",
+        ),
+        (
+            "native",
+            op("delete", serde_json::json!({"type": "object"})),
+            "effect",
+        ),
+        (
+            "native",
+            op(
+                "launch",
+                serde_json::json!({"type": "object", "required": ["argv", "cwd"]}),
+            ),
+            "launch",
+        ),
+    ] {
+        let e = check(tier, bad.clone()).unwrap_err();
+        assert!(e.contains(says), "{bad}: {e}");
+    }
+    // Secret fields: string properties of the input, value or reference; imports may pass
+    // secret references only to operations they list, and a web package's never.
+    let secret = |secrets: Value, schema: Value| {
+        serde_json::json!({"operations": [{"id": "op", "description": "d", "effect": "read",
+            "secrets": secrets, "input_schema": schema, "output_schema": {"type": "object"}}]})
+    };
+    let keyed = serde_json::json!({"type": "object", "properties": {"key": {"type": "string"}}});
+    let ok = check(
+        "native",
+        secret(serde_json::json!({"key": "reference"}), keyed.clone()),
+    )
+    .unwrap();
+    assert!(ok.is_empty());
+    // A launch's references are allowed (the control for its value's refusal below).
+    assert!(check(
+        "native",
+        serde_json::json!({"operations": [{"id": "op", "description": "d", "effect": "launch",
+            "secrets": {"key": "reference"}, "output_schema": {"type": "object"},
+            "input_schema": {"type": "object", "required": ["executable", "argv", "cwd"],
+                "properties": {"key": {"type": "string"}}}}]}),
+    )
+    .is_ok());
+    let mut passing = import("pluxy/b", &[1], &["op"], true);
+    passing["secrets"] = serde_json::json!(["op"]);
+    assert_eq!(
+        check("native", serde_json::json!({"imports": [passing]})).unwrap()[0].secrets,
+        vec!["op".to_string()]
+    );
+    let mut stray = import("pluxy/b", &[1], &["op"], true);
+    stray["secrets"] = serde_json::json!(["other"]);
+    for (tier, bad, says) in [
+        (
+            "native",
+            secret(serde_json::json!({"key": "copy"}), keyed.clone()),
+            "value or reference",
+        ),
+        (
+            "native",
+            secret(
+                serde_json::json!({"key": "value"}),
+                serde_json::json!({"type": "object"}),
+            ),
+            "string property",
+        ),
+        (
+            "native",
+            secret(
+                serde_json::json!({"key": "value"}),
+                serde_json::json!({"type": "object", "properties": {"key": {"type": "integer"}}}),
+            ),
+            "string property",
+        ),
+        ("native", serde_json::json!({"imports": [stray]}), "secrets"),
+        (
+            "native",
+            serde_json::json!({"operations": [{"id": "op", "description": "d", "effect": "launch",
+                "secrets": {"key": "value"}, "output_schema": {"type": "object"},
+                "input_schema": {"type": "object", "required": ["executable", "argv", "cwd"],
+                    "properties": {"key": {"type": "string"}}}}]}),
+            "a launch's secret field key is a reference",
+        ),
+        (
+            "web",
+            serde_json::json!({"imports": [passing]}),
+            "cannot pass secrets",
+        ),
+    ] {
+        let e = check(tier, bad.clone()).unwrap_err();
+        assert!(e.contains(says), "{bad}: {e}");
+    }
+    let many: Vec<Value> = (0..17)
+        .map(|i| import(&format!("pluxy/t{i}"), &[1], &["op"], true))
+        .collect();
+    assert!(check("web", serde_json::json!({"imports": many}))
+        .unwrap_err()
+        .contains("more than 16"));
+    // An operation with no effect is valid, and asks before each call (`routing_catalog`'s
+    // write).
+    assert!(check("native", Value::Null).is_ok());
+}
+
+#[test]
+fn a_disclose_operation_is_accepted_asks_each_call_and_is_never_remembered() {
+    // Accepted in a manifest, as its own effect.
+    let manifest = serde_json::json!({"manifest_version": 1, "id": "pluxy/reader", "version": "1.0.0",
+        "app": {"version": 0, "tier": "native", "host_versions": [0],
+            "programs": {"linux/amd64": "bin/r"},
+            "operations": [{"id": "detail", "description": "Show a session", "effect": "disclose",
+                "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}],
+            "state": {"version": 0, "readable_versions": [0]}}});
+    let m: Manifest = serde_json::from_value(manifest).unwrap();
+    assert!(validate(&m).unwrap().is_some());
+    // Every effect but an exact read asks each call; only a launch may be remembered.
+    for effect in ["disclose", "write", "launch", "Read", "read ", "", "delete"] {
+        assert!(asks_each_call(effect), "{effect:?}");
+    }
+    assert!(!asks_each_call("read"));
+    for effect in ["disclose", "write", "read", "Launch"] {
+        assert!(!may_remember(effect), "{effect:?}");
+    }
+    assert!(may_remember("launch"));
+    // Its dialogs and the Device page call it what it does.
+    assert_eq!(effect_label("disclose"), "shows content");
+    assert_eq!(effect_label("write"), "write");
+}
+
+#[test]
+fn produced_and_consumed_kinds_are_validated() {
+    let check = |tier: &str, extra: Value| {
+        let mut m = serde_json::json!({"manifest_version": 1, "id": "pluxy/a", "version": "1",
+            "app": {"version": 0, "tier": tier, "host_versions": [0]}});
+        if tier == "native" {
+            m["app"]["programs"] = serde_json::json!({platform(): TOOL});
+            m["app"]["operations"] = serde_json::json!([{"id": "op", "description": "d",
+                "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}]);
+            m["app"]["state"] = serde_json::json!({"version": 0, "readable_versions": [0]});
+        }
+        if let Value::Object(o) = extra {
+            for (k, v) in o {
+                m["app"][k] = v;
+            }
+        }
+        let m: Manifest = serde_json::from_value(m).unwrap();
+        validate(&m).and_then(|app| jobs::decls(&m.id, app.as_ref().unwrap()))
+    };
+    let produce = serde_json::json!({"kind": "pluxy/hub/items", "schema": 1, "operation": "op"});
+    let consume = serde_json::json!({"kind": "pluxy/a/items", "schema": [1], "deliver": "op"});
+    // The controls: a kind produced for another package, and one consumed in its own namespace,
+    // each by its own operation.
+    let two_ops = |extra: Value| {
+        let mut e = serde_json::json!({"operations": [
+            {"id": "op", "description": "d",
+                "input_schema": {"type": "object"}, "output_schema": {"type": "object"}},
+            {"id": "scan", "description": "d",
+                "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}]});
+        if let (Some(m), Value::Object(x)) = (e.as_object_mut(), extra) {
+            m.extend(x);
+        }
+        e
+    };
+    let (p, c) = check(
+        "native",
+        two_ops(serde_json::json!({"produces": [
+            {"kind": "pluxy/hub/items", "schema": 1, "operation": "scan"}],
+            "consumes": [consume]})),
+    )
+    .unwrap();
+    assert_eq!((p.len(), c.len(), c[0].deliver.as_str()), (1, 1, "op"));
+    // A job's operation and a deliver operation take no secrets; the control: a package with a
+    // secret field on another operation produces and consumes.
+    let with_secret = |extra: Value| {
+        let mut e = two_ops(extra);
+        e["operations"].as_array_mut().unwrap().push(serde_json::json!({"id": "keyed",
+            "description": "d", "secrets": {"key": "reference"}, "output_schema": {"type": "object"},
+            "input_schema": {"type": "object", "properties": {"key": {"type": "string"}}}}));
+        e
+    };
+    assert!(check(
+        "native",
+        with_secret(serde_json::json!({"produces": [
+            {"kind": "pluxy/hub/items", "schema": 1, "operation": "scan"}],
+            "consumes": [consume]})),
+    )
+    .is_ok());
+    assert!(check("native", serde_json::json!({"produces": [produce]})).is_ok());
+    // A deliver operation may be read or write (the default), never disclose or launch: a
+    // delivery asks no confirmation. A produce operation keeps its effect: a job start asks.
+    let effect_ops = |deliver: &str, scan: &str| {
+        serde_json::json!({"operations": [
+            {"id": "op", "description": "d", "effect": deliver,
+                "input_schema": {"type": "object", "required": ["executable", "argv", "cwd"]},
+                "output_schema": {"type": "object"}},
+            {"id": "scan", "description": "d", "effect": scan,
+                "input_schema": {"type": "object", "required": ["executable", "argv", "cwd"]},
+                "output_schema": {"type": "object"}}],
+            "produces": [{"kind": "pluxy/hub/items", "schema": 1, "operation": "scan"}],
+            "consumes": [consume]})
+    };
+    for ok in ["read", "write"] {
+        assert!(check("native", effect_ops(ok, "disclose")).is_ok(), "{ok}");
+    }
+    assert!(check("native", effect_ops("read", "launch")).is_ok());
+    for bad in ["disclose", "launch"] {
+        let e = check("native", effect_ops(bad, "read")).unwrap_err();
+        assert!(e.contains("deliveries are the host's calls"), "{bad}: {e}");
+    }
+    for (tier, bad, says) in [
+        ("web", serde_json::json!({"produces": [produce]}), "jobs"),
+        ("web", serde_json::json!({"consumes": [consume]}), "jobs"),
+        (
+            "native",
+            serde_json::json!({"produces": [produce, produce]}),
+            "more than once",
+        ),
+        (
+            "native",
+            serde_json::json!({"consumes": [consume, consume]}),
+            "more than once",
+        ),
+        (
+            "native",
+            serde_json::json!({"consumes": [{"kind": "pluxy/hub/items", "schema": [1], "deliver": "op"}]}),
+            "its own namespace",
+        ),
+        (
+            "native",
+            serde_json::json!({"consumes": [consume],
+                "exports": {"contract": 1, "operations": ["op"]}}),
+            "cannot be exported",
+        ),
+        (
+            "native",
+            serde_json::json!({"produces": [produce], "consumes": [consume]}),
+            "also a deliver operation",
+        ),
+        (
+            "native",
+            serde_json::json!({"produces": [{"kind": "items", "schema": 1, "operation": "op"}]}),
+            "app.produces",
+        ),
+        (
+            "native",
+            serde_json::json!({"produces": [{"kind": "pluxy/hub/items", "operation": "op"}]}),
+            "app.produces",
+        ),
+        (
+            "native",
+            serde_json::json!({"produces": [{"kind": "pluxy/hub/items", "schema": 1, "operation": "nope"}]}),
+            "app.produces",
+        ),
+        (
+            "native",
+            serde_json::json!({"consumes": [{"kind": "pluxy/a/items", "schema": [], "deliver": "op"}]}),
+            "app.consumes",
+        ),
+        (
+            "native",
+            serde_json::json!({"consumes": [{"kind": "pluxy/a/items", "schema": [1], "deliver": "nope"}]}),
+            "app.consumes",
+        ),
+        (
+            "native",
+            with_secret(serde_json::json!({"produces": [
+                {"kind": "pluxy/hub/items", "schema": 1, "operation": "keyed"}]})),
+            "takes no secrets",
+        ),
+        (
+            "native",
+            with_secret(serde_json::json!({"consumes": [
+                {"kind": "pluxy/a/items", "schema": [1], "deliver": "keyed"}]})),
+            "takes no secrets",
+        ),
+    ] {
+        let e = check(tier, bad.clone()).unwrap_err();
+        assert!(e.contains(says), "{bad}: {e}");
+    }
+}
+
+/// A curated registry with tools that import and export, and web packages that import them;
+/// staged and committed into a catalog.
+fn routing_catalog(root: &Path) -> (Catalog, TestRoots) {
+    let d = dirs(root);
+    let reg = root.join("reg");
+    fs::create_dir_all(&reg).unwrap();
+    let mut rnd = [0u8; 32];
+    getrandom::fill(&mut rnd).unwrap();
+    let key = ed25519_dalek::SigningKey::from_bytes(&rnd);
+    let exports = serde_json::json!({"exports": {"contract": 1, "operations": ["read", "write"]}});
+    let tools: Vec<(&str, &str, Value)> = vec![
+        ("pluxy/target", "1.0.0", exports.clone()),
+        ("pluxy/target", "2.0.0", exports),
+        (
+            "pluxy/relay",
+            "1.0.0",
+            serde_json::json!({"imports": [import("pluxy/target", &[1], &["read"], true)]}),
+        ),
+        (
+            "pluxy/needs2",
+            "1.0.0",
+            serde_json::json!({"imports": [import("pluxy/target", &[2], &["read"], true)]}),
+        ),
+        (
+            "pluxy/hidden",
+            "1.0.0",
+            serde_json::json!({"imports": [import("pluxy/target", &[1], &["hidden"], true)]}),
+        ),
+        (
+            "pluxy/opt",
+            "1.0.0",
+            serde_json::json!({"imports": [import("pluxy/missing", &[1], &["read"], false)]}),
+        ),
+        (
+            "pluxy/ca",
+            "1.0.0",
+            serde_json::json!({"exports": {"contract": 1, "operations": ["read"]},
+            "imports": [import("pluxy/cb", &[1], &["read"], false)]}),
+        ),
+        (
+            "pluxy/cb",
+            "1.0.0",
+            serde_json::json!({"exports": {"contract": 1, "operations": ["read"]},
+            "imports": [import("pluxy/cc", &[1], &["read"], false)]}),
+        ),
+        (
+            "pluxy/cc",
+            "1.0.0",
+            serde_json::json!({"exports": {"contract": 1, "operations": ["read"]},
+            "imports": [import("pluxy/ca", &[1], &["read"], false)]}),
+        ),
+        // Swaps: sa's 2.0.0 imports sb, which imports sa; sd's 1.0.0 and se's 2.0.0 require the
+        // target, their other releases import nothing.
+        (
+            "pluxy/sa",
+            "1.0.0",
+            serde_json::json!({"exports": {"contract": 1, "operations": ["read"]}}),
+        ),
+        (
+            "pluxy/sa",
+            "2.0.0",
+            serde_json::json!({"exports": {"contract": 1, "operations": ["read"]},
+            "imports": [import("pluxy/sb", &[1], &["read"], false)]}),
+        ),
+        (
+            "pluxy/sb",
+            "1.0.0",
+            serde_json::json!({"exports": {"contract": 1, "operations": ["read"]},
+            "imports": [import("pluxy/sa", &[1], &["read"], false)]}),
+        ),
+        (
+            "pluxy/sd",
+            "1.0.0",
+            serde_json::json!({"imports": [import("pluxy/target", &[1], &["read"], true)]}),
+        ),
+        ("pluxy/sd", "2.0.0", serde_json::json!({})),
+        ("pluxy/se", "1.0.0", serde_json::json!({})),
+        // Jobs: jhub consumes its items into hidden; jsrc produces them (and jimp's) by read, at
+        // schema 1 (2.0.0 too), jsrc2 at schema 2; jimp consumes its items and imports jsrc.
+        (
+            "pluxy/jhub",
+            "1.0.0",
+            serde_json::json!({"consumes": [{"kind": "pluxy/jhub/items", "schema": [1],
+                "deliver": "hidden"}]}),
+        ),
+        (
+            "pluxy/jsrc",
+            "1.0.0",
+            serde_json::json!({"exports": {"contract": 1, "operations": ["read"]},
+                "produces": [{"kind": "pluxy/jhub/items", "schema": 1, "operation": "read"},
+                    {"kind": "pluxy/jimp/items", "schema": 1, "operation": "read"}]}),
+        ),
+        (
+            "pluxy/jsrc",
+            "2.0.0",
+            serde_json::json!({"exports": {"contract": 1, "operations": ["read"]},
+                "produces": [{"kind": "pluxy/jhub/items", "schema": 1, "operation": "read"}]}),
+        ),
+        (
+            "pluxy/jsrc2",
+            "1.0.0",
+            serde_json::json!({"produces": [{"kind": "pluxy/jhub/items", "schema": 2,
+                "operation": "read"}]}),
+        ),
+        (
+            "pluxy/jimp",
+            "1.0.0",
+            serde_json::json!({"consumes": [{"kind": "pluxy/jimp/items", "schema": [1],
+                "deliver": "hidden"}],
+                "imports": [import("pluxy/jsrc", &[1], &["read"], false)]}),
+        ),
+        (
+            "pluxy/se",
+            "2.0.0",
+            serde_json::json!({"imports": [import("pluxy/target", &[1], &["read"], true)]}),
+        ),
+    ];
+    let mut packages = serde_json::Map::new();
+    let mut add = |id: &str, version: &str, bytes: Vec<u8>, tier: &str| {
+        let file = format!("{}-{version}.tar.gz", id.replace('/', "-"));
+        fs::write(reg.join(&file), &bytes).unwrap();
+        let a = signed_artifact_as(&file, &bytes, Some((&key, id, version)), tier);
+        let e = packages
+            .entry(id.to_string())
+            .or_insert_with(|| serde_json::json!({"releases": []}));
+        e["releases"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({"version": version, "artifacts": {platform(): a}}));
+    };
+    for (id, version, extra) in &tools {
+        add(
+            id,
+            version,
+            native_with(id, version, extra.clone()),
+            "native",
+        );
+    }
+    let web = |id: &str, imports: Value| {
+        let m = manifest(id, "1.0.0", serde_json::json!({"imports": imports}));
+        archive(&[
+            ("pluxy-extension.json", &m),
+            ("pages/index.html", b"<p>guide"),
+        ])
+    };
+    add(
+        "pluxy/guide",
+        "1.0.0",
+        web(
+            "pluxy/guide",
+            serde_json::json!([import("pluxy/target", &[1], &["read", "write"], true)]),
+        ),
+        "web",
+    );
+    let index = serde_json::json!({"registry_version": 0, "packages": packages});
+    fs::write(
+        reg.join("curated.json"),
+        serde_json::to_vec(&index).unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        &d.registries,
+        serde_json::to_vec(&serde_json::json!({"version": 0, "registries": [
+            {"name": "curated", "url": reg.join("curated.json")}]}))
+        .unwrap(),
+    )
+    .unwrap();
+    let roots = TestRoots {
+        publisher: "pluxy".into(),
+        source: reg.join("curated.json").display().to_string(),
+        key_id: "k1".into(),
+        key: key.verifying_key(),
+    };
+    let mut c = Catalog::open(d.clone(), false, &roots);
+    for id in [
+        "pluxy/target",
+        "pluxy/relay",
+        "pluxy/needs2",
+        "pluxy/hidden",
+        "pluxy/opt",
+        "pluxy/ca",
+        "pluxy/cb",
+        "pluxy/cc",
+        "pluxy/sa",
+        "pluxy/sb",
+        "pluxy/sd",
+        "pluxy/se",
+        "pluxy/jhub",
+        "pluxy/jsrc",
+        "pluxy/jsrc2",
+        "pluxy/jimp",
+        "pluxy/guide",
+    ] {
+        c.commit(stage_from_registry(&d, &roots, "curated", id, Some("1.0.0")).unwrap())
+            .unwrap();
+    }
+    // An Unverified web package with the same imports, from a local file.
+    let viewer = manifest(
+        "example/viewer",
+        "1.0.0",
+        serde_json::json!({"imports": [import("pluxy/target", &[1], &["read"], true)]}),
+    );
+    install(
+        &mut c,
+        &archive(&[
+            ("pluxy-extension.json", &viewer),
+            ("pages/index.html", b"<p>v"),
+        ]),
+        local("viewer.tar.gz"),
+    )
+    .unwrap();
+    (c, roots)
+}
+
+#[test]
+fn a_swap_checks_dependencies_and_cycles_when_staged_and_when_committed() {
+    let root = temp();
+    let (mut c, roots) = routing_catalog(&root);
+    let d = dirs(&root);
+    let stage =
+        |id: &str, v: &str| stage_from_registry(&d, &roots, "curated", id, Some(v)).unwrap();
+    // An update that would close a cycle (sa 2.0.0 imports sb, which imports sa) is refused when
+    // staged, and nothing is held for it.
+    enable(&mut c, "pluxy/sa", &roots).unwrap();
+    enable(&mut c, "pluxy/sb", &roots).unwrap();
+    let e = c
+        .swap_update(stage("pluxy/sa", "2.0.0"), &roots)
+        .unwrap_err();
+    assert!(e.contains("cycle") && e.contains("pluxy/sb"), "{e}");
+    assert_eq!(c.get("pluxy/sa").unwrap().active.version, "1.0.0");
+    // With sb disabled the same update commits: the control on the same route.
+    c.set_enabled("pluxy/sb", false, &roots).unwrap();
+    let s = c.swap_update(stage("pluxy/sa", "2.0.0"), &roots).unwrap();
+    c.commit_swap(s, &roots).unwrap();
+    assert_eq!(c.get("pluxy/sa").unwrap().active.version, "2.0.0");
+
+    // A rollback to a release whose required import is not enabled is refused when staged.
+    enable(&mut c, "pluxy/target", &roots).unwrap();
+    enable(&mut c, "pluxy/sd", &roots).unwrap();
+    let s = c.swap_update(stage("pluxy/sd", "2.0.0"), &roots).unwrap();
+    c.commit_swap(s, &roots).unwrap();
+    c.set_enabled("pluxy/target", false, &roots).unwrap();
+    let e = c.swap_rollback("pluxy/sd", &roots).unwrap_err();
+    assert!(e.contains("requires pluxy/target"), "{e}");
+    enable(&mut c, "pluxy/target", &roots).unwrap();
+    let s = c.swap_rollback("pluxy/sd", &roots).unwrap();
+    c.commit_swap(s, &roots).unwrap();
+    assert_eq!(c.get("pluxy/sd").unwrap().active.version, "1.0.0");
+
+    // Staged while its required import was enabled, refused at commit once that is disabled.
+    enable(&mut c, "pluxy/se", &roots).unwrap();
+    let s = c.swap_update(stage("pluxy/se", "2.0.0"), &roots).unwrap();
+    c.swap_current(&s, &roots).unwrap();
+    c.set_enabled("pluxy/target", false, &roots).unwrap();
+    assert!(c.swap_current(&s, &roots).is_err());
+    let e = c.commit_swap(s, &roots).unwrap_err();
+    assert!(e.contains("requires pluxy/target"), "{e}");
+    assert_eq!(c.get("pluxy/se").unwrap().active.version, "1.0.0");
+    // The refused update held nothing: another may be staged.
+    enable(&mut c, "pluxy/target", &roots).unwrap();
+    let s = c.swap_update(stage("pluxy/se", "2.0.0"), &roots).unwrap();
+    c.commit_swap(s, &roots).unwrap();
+    assert_eq!(c.get("pluxy/se").unwrap().active.version, "2.0.0");
+    done(root);
+}
+
+fn enable(c: &mut Catalog, id: &str, roots: &TestRoots) -> Result<(), String> {
+    let a = candidate(c, id, roots)?;
+    c.admit_checked(&a, roots)
+}
+
+#[test]
+fn dependencies_cycles_consent_and_grants() {
+    let root = temp();
+    let (mut c, roots) = routing_catalog(&root);
+    // A required import must be an enabled tool exporting it under an accepted contract.
+    let e = enable(&mut c, "pluxy/relay", &roots).unwrap_err();
+    assert!(
+        e.contains("requires pluxy/target") && e.contains("disabled"),
+        "{e}"
+    );
+    enable(&mut c, "pluxy/target", &roots).unwrap();
+    let e = enable(&mut c, "pluxy/needs2", &roots).unwrap_err();
+    assert!(e.contains("exports contract 1"), "{e}");
+    let e = enable(&mut c, "pluxy/hidden", &roots).unwrap_err();
+    assert!(e.contains("does not export hidden"), "{e}");
+    // An optional import may be missing.
+    enable(&mut c, "pluxy/opt", &roots).unwrap();
+    let a = candidate(&c, "pluxy/relay", &roots).unwrap();
+    #[cfg(native_stack)]
+    {
+        let what = a.confirmation().what;
+        assert!(
+            what.contains("Imports: pluxy/target (export contract [1], required): read"),
+            "{what}"
+        );
+    }
+    c.admit_checked(&a, &roots).unwrap();
+    // Cycles through enabled packages, however long, refuse the package closing them.
+    enable(&mut c, "pluxy/ca", &roots).unwrap();
+    enable(&mut c, "pluxy/cb", &roots).unwrap();
+    let e = enable(&mut c, "pluxy/cc", &roots).unwrap_err();
+    assert!(e.contains("cycle") && e.contains("pluxy/ca"), "{e}");
+    // Grants: the window may call any declared operation; relay only what it imports and
+    // target exports, while relay is the release it runs.
+    assert_eq!(
+        c.main_grant("pluxy/target", "hidden", &roots)
+            .unwrap()
+            .op
+            .id,
+        "hidden"
+    );
+    assert_eq!(
+        c.main_grant("pluxy/target", "write", &roots)
+            .unwrap()
+            .op
+            .effect,
+        "write"
+    );
+    assert!(c.main_grant("pluxy/target", "nope", &roots).is_err());
+    let relay = c.admitted("pluxy/relay", &roots).unwrap();
+    let me = ("pluxy/relay", relay.sha256(), relay.installed_at());
+    let (g, caller) = c.native_grant(me, "pluxy/target", "read", &roots).unwrap();
+    assert_eq!(
+        (g.target.id(), g.op.effect.as_str(), caller.id()),
+        ("pluxy/target", "read", "pluxy/relay")
+    );
+    for (target, op) in [
+        ("pluxy/target", "write"),
+        ("pluxy/target", "hidden"),
+        ("pluxy/ca", "read"),
+    ] {
+        let e = c.native_grant(me, target, op, &roots).unwrap_err();
+        assert_eq!(e.code, "permission", "{target} {op}: {e:?}");
+    }
+    let stale = ("pluxy/relay", relay.sha256(), relay.installed_at() + 1);
+    let e = c
+        .native_grant(stale, "pluxy/target", "read", &roots)
+        .unwrap_err();
+    assert!(e.message.contains("changed since this run"), "{e:?}");
+    // A web package: curated, consent bound to both releases, revocable.
+    let guide = c.get("pluxy/guide").unwrap().active.sha256.clone();
+    let e = c
+        .page_grant(("pluxy/guide", &guide), "pluxy/target", "read", &roots)
+        .unwrap_err();
+    assert!(e.message.contains("not allowed"), "{e:?}");
+    let viewer = c.get("example/viewer").unwrap().active.sha256.clone();
+    let e = c.consent_candidate("example/viewer", &roots).unwrap_err();
+    assert!(e.contains("Unverified"), "{e}");
+    let e = c
+        .page_grant(("example/viewer", &viewer), "pluxy/target", "read", &roots)
+        .unwrap_err();
+    assert!(e.message.contains("Unverified"), "{e:?}");
+    let consent = c.consent_candidate("pluxy/guide", &roots).unwrap();
+    assert_eq!(consent.targets.len(), 1);
+    #[cfg(native_stack)]
+    {
+        let what = c
+            .consent_confirmation("pluxy/guide", &consent, &roots)
+            .unwrap()
+            .what;
+        assert!(
+            what.contains("pluxy/target 1.0.0 read: Read (read)")
+                && what.contains("write: Write (write)"),
+            "{what}"
+        );
+    }
+    assert!(!c.imports_allowed("pluxy/guide", &roots));
+    c.allow_imports("pluxy/guide", &consent, &roots).unwrap();
+    assert!(c.imports_allowed("pluxy/guide", &roots));
+    let g = c
+        .page_grant(("pluxy/guide", &guide), "pluxy/target", "write", &roots)
+        .unwrap();
+    assert_eq!(g.op.effect, "write");
+    for (sha, target, op) in [
+        (guide.as_str(), "pluxy/target", "hidden"),
+        ("0".repeat(64).as_str(), "pluxy/target", "read"),
+    ] {
+        assert!(
+            c.page_grant(("pluxy/guide", sha), target, op, &roots)
+                .is_err(),
+            "{target} {op}"
+        );
+    }
+    // The catalog keeps the consent across reopening.
+    let reopened = Catalog::open(c.dirs.clone(), false, &roots);
+    assert!(reopened.imports_allowed("pluxy/guide", &roots));
+    // A target updated (and enabled again) is not what was allowed: its consent went with its
+    // admission, and calls are refused until allowed again.
+    c.commit(
+        stage_from_registry(
+            &c.dirs.clone(),
+            &roots,
+            "curated",
+            "pluxy/target",
+            Some("2.0.0"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    enable(&mut c, "pluxy/target", &roots).unwrap();
+    let e = c
+        .page_grant(("pluxy/guide", &guide), "pluxy/target", "read", &roots)
+        .unwrap_err();
+    assert!(e.message.contains("not allowed"), "{e:?}");
+    // Native routes take the new release, without consent.
+    assert!(c.native_grant(me, "pluxy/target", "read", &roots).is_ok());
+    let consent = c.consent_candidate("pluxy/guide", &roots).unwrap();
+    c.allow_imports("pluxy/guide", &consent, &roots).unwrap();
+    assert!(c
+        .page_grant(("pluxy/guide", &guide), "pluxy/target", "read", &roots)
+        .is_ok());
+    // A stale consent (the target changed between candidate and confirmation) is refused.
+    let mut old = consent.clone();
+    old.targets[0].installed_at += 1;
+    assert!(c
+        .allow_imports("pluxy/guide", &old, &roots)
+        .unwrap_err()
+        .contains("changed"));
+    // A consent names the caller's release: kept on another one (every change clears it; this
+    // is the check behind that), it covers nothing.
+    c.packages
+        .get_mut("pluxy/guide")
+        .unwrap()
+        .active
+        .installed_at += 1;
+    assert!(!c.imports_allowed("pluxy/guide", &roots));
+    assert!(c
+        .page_grant(("pluxy/guide", &guide), "pluxy/target", "read", &roots)
+        .is_err());
+    c.packages
+        .get_mut("pluxy/guide")
+        .unwrap()
+        .active
+        .installed_at -= 1;
+    assert!(c
+        .page_grant(("pluxy/guide", &guide), "pluxy/target", "read", &roots)
+        .is_ok());
+    c.revoke_imports("pluxy/guide").unwrap();
+    assert!(c
+        .page_grant(("pluxy/guide", &guide), "pluxy/target", "read", &roots)
+        .is_err());
+    // A target disabled and enabled again is a new native decision: the consents naming it go.
+    c.allow_imports("pluxy/guide", &consent, &roots).unwrap();
+    assert!(c
+        .page_grant(("pluxy/guide", &guide), "pluxy/target", "read", &roots)
+        .is_ok());
+    c.set_enabled("pluxy/target", false, &roots).unwrap();
+    enable(&mut c, "pluxy/target", &roots).unwrap();
+    assert!(!c.imports_allowed("pluxy/guide", &roots));
+    assert!(c
+        .page_grant(("pluxy/guide", &guide), "pluxy/target", "read", &roots)
+        .is_err());
+    // Disabling clears consent too.
+    let consent = c.consent_candidate("pluxy/guide", &roots).unwrap();
+    c.allow_imports("pluxy/guide", &consent, &roots).unwrap();
+    c.set_enabled("pluxy/guide", false, &roots).unwrap();
+    c.set_enabled("pluxy/guide", true, &roots).unwrap();
+    assert!(!c.imports_allowed("pluxy/guide", &roots));
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn registrations_and_job_grants_are_the_catalogs() {
+    let root = temp();
+    let (mut c, roots) = routing_catalog(&root);
+    for id in ["pluxy/jhub", "pluxy/jsrc", "pluxy/jsrc2", "pluxy/jimp"] {
+        enable(&mut c, id, &roots).unwrap();
+    }
+    const KIND: &str = "pluxy/jhub/items";
+    let hub = c.admitted("pluxy/jhub", &roots).unwrap();
+    let me = ("pluxy/jhub", hub.sha256(), hub.installed_at());
+    let src = c.admitted("pluxy/jsrc", &roots).unwrap();
+    let named = ("pluxy/jsrc", src.sha256(), src.installed_at());
+    #[cfg(native_stack)]
+    {
+        let what = src.confirmation().what;
+        assert!(
+            what.contains("Produces: pluxy/jhub/items (schema 1, by read)"),
+            "{what}"
+        );
+    }
+    // Only jsrc: jsrc2's schema is not accepted. Its record is the catalog's.
+    let regs = c.registrations(me, KIND, &roots).unwrap();
+    assert_eq!(regs.len(), 1, "{regs:?}");
+    let r = &regs[0];
+    assert_eq!(
+        (
+            r.package.as_str(),
+            r.sha256.as_str(),
+            r.generation,
+            r.schema
+        ),
+        ("pluxy/jsrc", src.sha256(), src.installed_at(), 1)
+    );
+    assert_eq!(r.source, roots.source);
+    // A kind it does not consume, or a caller that is not the release it runs: refused.
+    assert_eq!(
+        c.registrations(me, "pluxy/jimp/items", &roots)
+            .unwrap_err()
+            .code,
+        "permission"
+    );
+    let stale = ("pluxy/jhub", hub.sha256(), hub.installed_at() + 1);
+    assert_eq!(
+        c.registrations(stale, KIND, &roots).unwrap_err().code,
+        "permission"
+    );
+    // The grant: the producer's operation and the consumer's deliver operation.
+    let g = c.job_grant(me, KIND, named, &roots).unwrap();
+    assert_eq!(
+        (g.producer.op.id.as_str(), g.deliver.id.as_str()),
+        ("read", "hidden")
+    );
+    let wrong = ("pluxy/jsrc", hub.sha256(), src.installed_at());
+    let e = c.job_grant(me, KIND, wrong, &roots).unwrap_err();
+    assert!(e.message.contains("not the release"), "{e:?}");
+    let s2 = c.admitted("pluxy/jsrc2", &roots).unwrap();
+    let e = c
+        .job_grant(
+            me,
+            KIND,
+            ("pluxy/jsrc2", s2.sha256(), s2.installed_at()),
+            &roots,
+        )
+        .unwrap_err();
+    assert!(e.message.contains("schema 2"), "{e:?}");
+    // A consumer that imports its producer is refused a job of it.
+    let imp = c.admitted("pluxy/jimp", &roots).unwrap();
+    let e = c
+        .job_grant(
+            ("pluxy/jimp", imp.sha256(), imp.installed_at()),
+            "pluxy/jimp/items",
+            named,
+            &roots,
+        )
+        .unwrap_err();
+    assert!(e.message.contains("imports pluxy/jsrc"), "{e:?}");
+    // The deliver operation takes only the host's deliveries; the window may call the others.
+    assert!(c.main_grant("pluxy/jhub", "read", &roots).is_ok());
+    let e = c.main_grant("pluxy/jhub", "hidden", &roots).unwrap_err();
+    assert!(e.message.contains("host's job deliveries"), "{e:?}");
+    // Disabled, the producer is not registered and its job is refused.
+    c.set_enabled("pluxy/jsrc", false, &roots).unwrap();
+    assert!(c.registrations(me, KIND, &roots).unwrap().is_empty());
+    assert!(c.job_grant(me, KIND, named, &roots).is_err());
+    done(root);
+}
+
+#[test]
+fn an_enabled_native_tool_is_swapped_only_once_the_swap_commits() {
+    let root = temp();
+    let (d, roots) = native_fixture(&root);
+    let mut c = Catalog::open(d.clone(), false, &roots);
+    let stage =
+        |v: &str| stage_from_registry(&d, &roots, "curated", "pluxy/tool", Some(v)).unwrap();
+    c.commit(stage("1.0.0")).unwrap();
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
+    // Not enabled: an update is no swap, and it is installed as before.
+    assert!(!c.swaps("pluxy/tool", &stage("1.1.0").release));
+    c.admit_checked(&a, &roots).unwrap();
+    let v1 = c.admitted("pluxy/tool", &roots).unwrap();
+
+    // Staged into the store and held there, while 1.0.0 stays active, enabled and admitted.
+    let u = stage("1.1.0");
+    assert!(c.swaps("pluxy/tool", &u.release));
+    let sha2 = u.release.sha256.clone();
+    let s = c.swap_update(u, &roots).unwrap();
+    assert_eq!(
+        (s.admitted().version(), s.from_version()),
+        ("1.1.0", "1.0.0")
+    );
+    assert_eq!(s.admitted().dir(), d.store().join(&sha2));
+    s.verify().unwrap();
+    assert_eq!(c.admitted("pluxy/tool", &roots).unwrap(), v1);
+    // Another change collects the store, but not the folder being swapped in.
+    install(&mut c, &package("acme/page", "1"), local("a")).unwrap();
+    assert!(store_names(&d).contains(&sha2));
+    // Ended without a commit: nothing changed, and the folder goes.
+    c.end_swap(s);
+    assert!(!store_names(&d).contains(&sha2));
+    assert_eq!(c.admitted("pluxy/tool", &roots).unwrap(), v1);
+    assert_eq!(c.get("pluxy/tool").unwrap().last_good, None);
+
+    // Committed: 1.1.0 is active, enabled and admitted as its swap's record; 1.0.0 is last good.
+    let s = c.swap_update(stage("1.1.0"), &roots).unwrap();
+    let v2 = s.admitted().clone();
+    c.commit_swap(s, &roots).unwrap();
+    let p = c.get("pluxy/tool").unwrap();
+    assert!(p.enabled && p.authorized(), "{p:?}");
+    assert_eq!(p.last_good.as_ref().unwrap().version, "1.0.0");
+    assert_eq!(c.admitted("pluxy/tool", &roots).unwrap(), v2);
+    assert_eq!(
+        Catalog::open(d.clone(), false, &roots)
+            .admitted("pluxy/tool", &roots)
+            .unwrap(),
+        v2
+    );
+
+    // A rollback is a swap to the last good release, with its own record.
+    let r = c.swap_rollback("pluxy/tool", &roots).unwrap();
+    assert_eq!(
+        (r.admitted().version(), r.from_version()),
+        ("1.0.0", "1.1.0")
+    );
+    // Changed meanwhile (here: disabled), it does not commit.
+    c.set_enabled("pluxy/tool", false, &roots).unwrap();
+    let e = c.commit_swap(r, &roots).unwrap_err();
+    assert!(e.contains("not an enabled native tool"), "{e}");
+    assert_eq!(c.get("pluxy/tool").unwrap().active.version, "1.1.0");
+    let b = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&b, &roots).unwrap();
+    // A swap that another swap overtook does not commit either.
+    let stale = c.swap_rollback("pluxy/tool", &roots).unwrap();
+    let r = c.swap_rollback("pluxy/tool", &roots).unwrap();
+    c.commit_swap(r, &roots).unwrap();
+    let e = c.commit_swap(stale, &roots).unwrap_err();
+    assert!(e.contains("changed during the swap"), "{e}");
+    let p = c.get("pluxy/tool").unwrap();
+    assert_eq!(
+        (
+            p.active.version.as_str(),
+            p.last_good.as_ref().unwrap().version.as_str()
+        ),
+        ("1.0.0", "1.1.0")
+    );
+    assert_eq!(c.admitted("pluxy/tool", &roots).unwrap(), v1);
+    // The same release is no update.
+    let e = c.swap_update(stage("1.0.0"), &roots).unwrap_err();
+    assert!(e.contains("already installed"), "{e}");
+    done(root);
+}
+
+#[test]
+fn a_release_that_cannot_read_the_state_is_refused() {
+    let root = temp();
+    let (d, roots) = native_fixture(&root);
+    let mut c = Catalog::open(d.clone(), false, &roots);
+    let stage =
+        |v: &str| stage_from_registry(&d, &roots, "curated", "pluxy/tool", Some(v)).unwrap();
+    // 2.0.0 writes state version 1 and reads 0 and 1: it may follow 1.0.0, not go back to it.
+    c.commit(stage("2.0.0")).unwrap();
+    let before = store_names(&d);
+    let e = c.commit(stage("1.0.0")).unwrap_err();
+    assert!(
+        e.contains("1.0.0 cannot read the state") && e.contains("version 1"),
+        "{e}"
+    );
+    assert_eq!(store_names(&d), before);
+    c.remove("pluxy/tool").unwrap();
+    c.commit(stage("1.0.0")).unwrap();
+    c.commit(stage("2.0.0")).unwrap();
+    // Disabled: refused as a rollback.
+    let e = c.rollback("pluxy/tool").unwrap_err();
+    assert!(e.contains("cannot read the state"), "{e}");
+    // Enabled: refused as a swap, and it stays admitted.
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&a, &roots).unwrap();
+    let e = c.swap_rollback("pluxy/tool", &roots).unwrap_err();
+    assert!(e.contains("cannot read the state"), "{e}");
+    let e = c.swap_update(stage("1.0.0"), &roots).unwrap_err();
+    assert!(e.contains("cannot read the state"), "{e}");
+    assert_eq!(c.admitted("pluxy/tool", &roots).unwrap(), a);
+    assert_eq!(c.get("pluxy/tool").unwrap().active.version, "2.0.0");
+    done(root);
+}
+
+#[test]
+fn a_swap_is_checked_again_after_its_confirmation_and_one_update_at_a_time_is_held() {
+    let root = temp();
+    let (d, roots) = native_fixture(&root);
+    let mut c = Catalog::open(d.clone(), false, &roots);
+    let stage =
+        |v: &str| stage_from_registry(&d, &roots, "curated", "pluxy/tool", Some(v)).unwrap();
+    c.commit(stage("1.0.0")).unwrap();
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&a, &roots).unwrap();
+
+    // A second update of the package while the first is held is refused, and keeps its files.
+    let s = c.swap_update(stage("1.1.0"), &roots).unwrap();
+    let dir = s.admitted().dir().to_path_buf();
+    let e = c.swap_update(stage("1.1.0"), &roots).unwrap_err();
+    assert!(e.contains("under way"), "{e}");
+    assert!(dir.exists());
+    c.swap_current(&s, &roots).unwrap();
+    // Disabled while its confirmation was open: the check after it fails.
+    c.set_enabled("pluxy/tool", false, &roots).unwrap();
+    let e = c.swap_current(&s, &roots).unwrap_err();
+    assert!(e.contains("not an enabled native tool"), "{e}");
+    c.end_swap(s);
+    assert!(!dir.exists());
+    // Removed while it was open: the same.
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&a, &roots).unwrap();
+    let r = c.swap_update(stage("1.1.0"), &roots).unwrap();
+    c.remove("pluxy/tool").unwrap();
+    assert!(c.swap_current(&r, &roots).is_err());
+    c.end_swap(r);
+    done(root);
+}
+
+/// Windows: the device's folders are private as 0700 makes them on Unix, and a link in a
+/// folder's place is refused, not made private.
+#[cfg(windows)]
+#[test]
+fn private_folders_are_private_on_windows() {
+    use crate::private_windows::tests::{junction, private, temp};
+    let t = temp();
+    let dir = t.0.join("a").join("b");
+    private_dir(&dir).unwrap();
+    assert!(private(&dir));
+    // The folder it made above it too; the one that was there already is left as it was.
+    assert!(private(&t.0.join("a")));
+    assert!(!private(&t.0));
+    // Again on a folder that is no longer private.
+    crate::private_windows::tests::readable_by_everyone(&dir);
+    assert!(!private(&dir));
+    private_dir(&dir).unwrap();
+    assert!(private(&dir));
+    let target = t.0.join("target");
+    fs::create_dir(&target).unwrap();
+    let link = t.0.join("link");
+    junction(&target, &link);
+    assert!(private_dir(&link).is_err());
+    assert!(!private(&target));
+}
+
+/// Windows: an installed release is read-only as 0444/0500 make it on Unix: no file in it can be
+/// written or deleted, and nothing added to its folders, by an account without the backup and
+/// restore privileges (`as_unprivileged`), yet removing the package removes it.
+#[cfg(windows)]
+#[test]
+fn installed_releases_are_read_only_on_windows() {
+    let root = temp();
+    let d = dirs(&root);
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
+    let v1 = package("example/notes", "1.0.0");
+    install(&mut c, &v1, local("n")).unwrap();
+    let release = d.store().join(digest(&v1));
+    let file = release.join("pages").join("index.html");
+    let denied = |what: &str, r: std::io::Result<()>| {
+        assert_eq!(
+            r.map_err(|e| e.kind()),
+            Err(std::io::ErrorKind::PermissionDenied),
+            "{what}"
+        )
+    };
+    as_unprivileged(|| {
+        denied("writing a file", fs::write(&file, b"tampered").map(|_| ()));
+        denied("deleting a file", fs::remove_file(&file));
+        denied(
+            "adding a file",
+            fs::write(release.join("pages").join("new.html"), b"x"),
+        );
+        denied("adding a folder", fs::create_dir(release.join("new")));
+    });
+    assert_eq!(fs::read(&file).unwrap(), b"<p>1.0.0");
+    c.remove("example/notes").unwrap();
+    assert!(c.take_cleanup().is_none());
+    assert!(store_names(&d).is_empty(), "{:?}", store_names(&d));
+    done(root);
+}
+
+/// Runs f on this thread with a copy of the process's token without the backup, restore and
+/// take-ownership privileges (the same user and groups, Administrators included). Windows' own
+/// `DeleteFileW` and `CreateDirectoryW` open with backup intent, which those privileges, where a
+/// process has them enabled (as an administrator's may), let past any access list, as root passes
+/// a Unix mode.
+#[cfg(windows)]
+fn as_unprivileged(f: impl FnOnce()) {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, LUID};
+    use windows_sys::Win32::Security::{
+        AdjustTokenPrivileges, ImpersonateSelf, LookupPrivilegeValueW, RevertToSelf,
+        SecurityImpersonation, LUID_AND_ATTRIBUTES, SE_PRIVILEGE_REMOVED, TOKEN_ADJUST_PRIVILEGES,
+        TOKEN_PRIVILEGES, TOKEN_QUERY,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
+    // SAFETY: each call gets valid pointers to locals; the token is this thread's own copy.
+    unsafe {
+        assert_ne!(ImpersonateSelf(SecurityImpersonation), 0);
+        let mut token: HANDLE = std::ptr::null_mut();
+        assert_ne!(
+            OpenThreadToken(
+                GetCurrentThread(),
+                TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+                0,
+                &mut token
+            ),
+            0
+        );
+        for name in [
+            "SeBackupPrivilege",
+            "SeRestorePrivilege",
+            "SeTakeOwnershipPrivilege",
+        ] {
+            let wide: Vec<u16> = name.encode_utf16().chain([0]).collect();
+            let mut luid = LUID {
+                LowPart: 0,
+                HighPart: 0,
+            };
+            if LookupPrivilegeValueW(std::ptr::null(), wide.as_ptr(), &mut luid) == 0 {
+                continue;
+            }
+            let without = TOKEN_PRIVILEGES {
+                PrivilegeCount: 1,
+                Privileges: [LUID_AND_ATTRIBUTES {
+                    Luid: luid,
+                    Attributes: SE_PRIVILEGE_REMOVED,
+                }],
+            };
+            // A privilege the token does not hold is not there to remove: nothing changes.
+            AdjustTokenPrivileges(
+                token,
+                0,
+                &without,
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+        }
+        CloseHandle(token);
+    }
+    f();
+    // SAFETY: this thread impersonates the copy made above.
+    assert_ne!(unsafe { RevertToSelf() }, 0);
+}
+
+/// Windows: a registry's local artifact is opened beneath the index's folder, never through a
+/// junction in it; and a release whose program is a script, not a `.exe`, is refused.
+#[cfg(windows)]
+#[test]
+fn junctions_and_scripts_are_refused_on_windows() {
+    use crate::private_windows::tests::junction;
+    let root = temp();
+    let d = dirs(&root);
+    let reg = root.join("reg");
+    fs::create_dir_all(reg.join("pkgs")).unwrap();
+    let outside = root.join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    let v1 = package("example/notes", "1.0.0");
+    fs::write(outside.join("n1.tar.gz"), &v1).unwrap();
+    fs::write(reg.join("pkgs").join("n1.tar.gz"), &v1).unwrap();
+    junction(&outside, &reg.join("sub"));
+    let p = platform();
+    let art = |url: &str| serde_json::json!({p.clone(): {"url": url, "sha256": digest(&v1), "size": v1.len()}});
+    let index = serde_json::json!({"registry_version": 0, "packages": {
+        "example/notes": {"releases": [
+            {"version": "2.0.0", "artifacts": art("sub/n1.tar.gz")},
+            {"version": "1.0.0", "artifacts": art("pkgs/n1.tar.gz")}
+        ]}
+    }});
+    fs::write(reg.join("index.json"), serde_json::to_vec(&index).unwrap()).unwrap();
+    fs::write(
+        &d.registries,
+        serde_json::to_vec(&serde_json::json!({"version": 0, "registries": [
+            {"name": "fixture", "url": reg.join("index.json")}]}))
+        .unwrap(),
+    )
+    .unwrap();
+    let e =
+        stage_from_registry(&d, &NoRoots, "fixture", "example/notes", Some("2.0.0")).unwrap_err();
+    assert!(e.contains("not a file inside the index's folder"), "{e}");
+    // The positive control on the same route.
+    stage_from_registry(&d, &NoRoots, "fixture", "example/notes", Some("1.0.0")).unwrap();
+    done(root);
+
+    let root = temp();
+    let (d, roots) = native_fixture(&root);
+    let e = stage_from_registry(&d, &roots, "curated", "pluxy/script", Some("1.0.0")).unwrap_err();
+    assert!(e.contains("is not a program (.exe)"), "{e}");
+    stage_from_registry(&d, &roots, "curated", "pluxy/tool", Some("1.0.0")).unwrap();
+    done(root);
+}
+
+// ---- A native tool's Linux build for WSL (device_admission.rs) ----
+
+/// The Linux build's program in the WSL fixtures' packages.
+const LINUX_TOOL: &str = "bin/tool-linux";
+
+/// A Linux platform that is not this computer's, so the platform a Linux build is staged,
+/// verified and admitted for is never this computer's by accident.
+fn wsl_platform() -> &'static str {
+    if platform() == "linux/arm64" {
+        "linux/amd64"
+    } else {
+        "linux/arm64"
+    }
+}
+
+/// A native tool's archive: its manifest, whose `app` is the fixtures' with app's fields over
+/// it, and files, each (path, bytes, mode).
+fn native_archive_with(
+    id: &str,
+    version: &str,
+    app: Value,
+    files: &[(&str, &[u8], u32)],
+) -> Vec<u8> {
+    let mut m = serde_json::json!({
+        "manifest_version": 1, "id": id, "version": version,
+        "app": {"version": 0, "tier": "native", "host_versions": [0],
+            "programs": {platform(): TOOL, wsl_platform(): LINUX_TOOL},
+            "environments": ["wsl"],
+            "operations": [{"id": "inspect", "description": "Report its state",
+                "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}],
+            "state": {"version": 0, "readable_versions": [0]}}
+    });
+    if let Value::Object(o) = app {
+        for (k, v) in o {
+            if v.is_null() {
+                m["app"].as_object_mut().unwrap().remove(&k);
+            } else {
+                m["app"][k] = v;
+            }
+        }
+    }
+    let m = serde_json::to_vec(&m).unwrap();
+    let mut b = tar::Builder::new(Vec::new());
+    for (name, data, mode) in
+        std::iter::once(("pluxy-extension.json", m.as_slice(), 0o644)).chain(files.iter().copied())
+    {
+        let mut h = tar::Header::new_gnu();
+        h.set_path(name).unwrap();
+        h.set_size(data.len() as u64);
+        h.set_mode(mode);
+        h.set_entry_type(tar::EntryType::Regular);
+        h.set_cksum();
+        b.append(&h, data).unwrap();
+    }
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    gz.write_all(&b.into_inner().unwrap()).unwrap();
+    gz.finish().unwrap()
+}
+
+/// The bytes of a Linux build's program, marked with tag.
+fn linux_tool_bytes(tag: &str) -> Vec<u8> {
+    format!("\x7fELF {tag}\n").into_bytes()
+}
+
+/// This computer's archive of id's release version, running in WSL, with app's fields.
+fn host_build(id: &str, version: &str, app: Value) -> Vec<u8> {
+    native_archive_with(id, version, app, &[(TOOL, &tool_bytes(version), 0o755)])
+}
+
+/// The Linux archive of id's release version, with app's fields.
+fn linux_build(id: &str, version: &str, app: Value) -> Vec<u8> {
+    native_archive_with(
+        id,
+        version,
+        app,
+        &[(LINUX_TOOL, &linux_tool_bytes(version), 0o755)],
+    )
+}
+
+/// Native-tier trust with one curated source and publisher and a key per key ID.
+struct KeyRoots {
+    publisher: String,
+    source: String,
+    keys: BTreeMap<String, ed25519_dalek::VerifyingKey>,
+}
+impl crate::artifact::PublisherKeys for KeyRoots {
+    fn publisher_key(
+        &self,
+        source: &str,
+        key_id: &str,
+        publisher: &str,
+    ) -> Result<ed25519_dalek::VerifyingKey, String> {
+        match self.keys.get(key_id) {
+            Some(k) if (source, publisher) == (&self.source, &self.publisher) => Ok(*k),
+            _ => Err("unknown publisher key or changed source".into()),
+        }
+    }
+}
+impl Roots for KeyRoots {
+    fn configured(&self) -> bool {
+        true
+    }
+    fn curated(&self, source: &str) -> bool {
+        source == self.source
+    }
+    fn reserved(&self, publisher: &str) -> bool {
+        publisher == self.publisher
+    }
+}
+
+/// A curated registry the WSL tests write, signed by the root's keys `k1` and `k2`.
+struct WslIndex {
+    d: Dirs,
+    reg: PathBuf,
+    keys: BTreeMap<String, ed25519_dalek::SigningKey>,
+    packages: serde_json::Map<String, Value>,
+}
+
+impl WslIndex {
+    fn new(root: &Path) -> WslIndex {
+        let reg = root.join("reg");
+        fs::create_dir_all(&reg).unwrap();
+        WslIndex {
+            d: dirs(root),
+            reg,
+            keys: [
+                ("k1".to_string(), signing_key()),
+                ("k2".to_string(), signing_key()),
+            ]
+            .into(),
+            packages: serde_json::Map::new(),
+        }
+    }
+
+    fn roots(&self) -> KeyRoots {
+        KeyRoots {
+            publisher: "pluxy".into(),
+            source: self.reg.join("curated.json").display().to_string(),
+            keys: self
+                .keys
+                .iter()
+                .map(|(k, v)| (k.clone(), v.verifying_key()))
+                .collect(),
+        }
+    }
+
+    /// Lists bytes as id's release version for platform, signed with key_id over a descriptor
+    /// naming the native tier and the platform signed_for.
+    fn list(
+        &mut self,
+        id: &str,
+        version: &str,
+        platform: &str,
+        bytes: &[u8],
+        key_id: &str,
+        signed_for: &str,
+    ) {
+        use ed25519_dalek::Signer;
+        let file = format!(
+            "{}-{version}-{}",
+            id.replace('/', "_"),
+            platform.replace('/', "_")
+        );
+        fs::write(self.reg.join(&file), bytes).unwrap();
+        let key = &self.keys[key_id];
+        let descriptor = serde_json::to_string(&serde_json::json!({
+            "id": id, "version": version, "tier": "native", "platform": signed_for,
+            "size": bytes.len(), "sha256": digest(bytes)}))
+        .unwrap();
+        let a = serde_json::json!({"url": file, "sha256": digest(bytes), "size": bytes.len(),
+            "key_id": key_id, "public_key": hex(key.verifying_key().as_bytes()),
+            "signature": hex(&key.sign(descriptor.as_bytes()).to_bytes()), "descriptor": descriptor});
+        let releases = self
+            .packages
+            .entry(id)
+            .or_insert(serde_json::json!({"releases": []}))["releases"]
+            .as_array_mut()
+            .unwrap();
+        match releases.iter_mut().find(|r| r["version"] == version) {
+            Some(r) => r["artifacts"][platform] = a,
+            None => {
+                releases.push(serde_json::json!({"version": version, "artifacts": {platform: a}}))
+            }
+        }
+    }
+
+    /// Lists id's release version for this computer, and its Linux build for `wsl_platform()`
+    /// as linux gives it, both signed with k1 for their own platforms.
+    fn both(&mut self, id: &str, version: &str, linux: Option<Vec<u8>>) {
+        self.list(
+            id,
+            version,
+            &platform(),
+            &host_build(id, version, Value::Null),
+            "k1",
+            &platform(),
+        );
+        if let Some(l) = linux {
+            self.list(id, version, wsl_platform(), &l, "k1", wsl_platform());
+        }
+    }
+
+    fn write(&self) {
+        let index = serde_json::json!({"registry_version": 0, "packages": self.packages});
+        fs::write(
+            self.reg.join("curated.json"),
+            serde_json::to_vec(&index).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            &self.d.registries,
+            serde_json::to_vec(&serde_json::json!({"version": 0, "registries": [
+                {"name": "curated", "url": self.reg.join("curated.json")}]}))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+}
+
+/// Installs id's release version from the curated registry and enables it, as its native
+/// confirmation would.
+fn install_enabled(c: &mut Catalog, id: &str, version: &str, roots: &dyn Roots) {
+    let d = c.dirs.clone();
+    let staged = stage_from_registry(&d, roots, "curated", id, Some(version)).unwrap();
+    if c.swaps(id, &staged.release) {
+        let s = c.swap_update(staged, roots).unwrap();
+        c.commit_swap(s, roots).unwrap();
+        return;
+    }
+    c.commit(staged).unwrap();
+    let a = candidate(c, id, roots).unwrap();
+    c.admit_checked(&a, roots).unwrap();
+}
+
+/// Stages id's Linux build for platform, as `device_install_wsl` does before its confirmation.
+fn stage_wsl(
+    c: &Catalog,
+    id: &str,
+    platform: &str,
+    roots: &dyn Roots,
+) -> Result<LinuxCandidate, String> {
+    let t = c.linux_target(id, platform, roots)?;
+    stage_linux(&c.dirs, roots, &t)
+}
+
+/// Stages and records id's Linux build for `wsl_platform()`, as a confirmed install does.
+fn install_wsl(c: &mut Catalog, id: &str, roots: &dyn Roots) -> Release {
+    let l = stage_wsl(c, id, wsl_platform(), roots).unwrap();
+    c.commit_linux(l, roots).unwrap();
+    c.get(id).unwrap().linux[wsl_platform()].clone()
+}
+
+fn staging_names(d: &Dirs) -> BTreeSet<String> {
+    fs::read_dir(d.staging())
+        .map(|r| {
+            r.flatten()
+                .map(|e| e.file_name().into_string().unwrap())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn environments_in_a_manifest_are_checked() {
+    let parse = |app: Value| {
+        let m = serde_json::json!({"manifest_version": 1, "id": "pluxy/tool", "version": "1",
+            "app": app});
+        validate(&serde_json::from_value::<Manifest>(m).unwrap()).map(|a| a.unwrap().environments)
+    };
+    let native = |envs: Value| {
+        serde_json::json!({"version": 0, "tier": "native", "host_versions": [0],
+            "programs": {"linux/amd64": "bin/tool"}, "environments": envs,
+            "operations": [{"id": "inspect", "description": "Report",
+                "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}],
+            "state": {"version": 0, "readable_versions": [0]}})
+    };
+    assert_eq!(
+        parse(native(serde_json::json!(["wsl"]))).unwrap(),
+        Some(vec!["wsl".to_string()])
+    );
+    let mut none = native(Value::Null);
+    none.as_object_mut().unwrap().remove("environments");
+    assert_eq!(parse(none).unwrap(), None);
+    let e = parse(native(serde_json::json!(["wsl", "docker"]))).unwrap_err();
+    assert_eq!(
+        e,
+        "app.environments names docker, which this app does not know"
+    );
+    let e = parse(native(serde_json::json!(["wsl", "wsl"]))).unwrap_err();
+    assert!(e.contains("names wsl twice"), "{e}");
+    let web = serde_json::json!({"version": 0, "tier": "web", "host_versions": [0],
+        "environments": ["wsl"]});
+    let e = parse(web).unwrap_err();
+    assert!(e.contains("web app cannot declare environments"), "{e}");
+    // The release keeps them, and the catalog says whether a tool runs in WSL.
+    let root = temp();
+    let mut x = WslIndex::new(&root);
+    x.both("pluxy/tool", "1.0.0", None);
+    x.list(
+        "pluxy/plain",
+        "1.0.0",
+        &platform(),
+        &host_build(
+            "pluxy/plain",
+            "1.0.0",
+            serde_json::json!({"environments": null}),
+        ),
+        "k1",
+        &platform(),
+    );
+    x.write();
+    let roots = x.roots();
+    let mut c = Catalog::open(x.d.clone(), false, &roots);
+    install_enabled(&mut c, "pluxy/tool", "1.0.0", &roots);
+    install_enabled(&mut c, "pluxy/plain", "1.0.0", &roots);
+    assert_eq!(c.get("pluxy/tool").unwrap().active.environments, ["wsl"]);
+    assert!(c.runs_in_wsl("pluxy/tool"));
+    assert!(!c.runs_in_wsl("pluxy/plain") && !c.runs_in_wsl("pluxy/none"));
+    let saved: Value = serde_json::from_slice(&fs::read(x.d.catalog()).unwrap()).unwrap();
+    assert!(saved["packages"]["pluxy/plain"]["active"]
+        .get("environments")
+        .is_none());
+    assert!(saved["packages"]["pluxy/plain"].get("linux").is_none());
+    done(root);
+}
+
+#[test]
+fn a_linux_build_is_recorded_only_once_confirmed() {
+    let root = temp();
+    let mut x = WslIndex::new(&root);
+    let l1 = linux_build("pluxy/tool", "1.0.0", Value::Null);
+    x.both("pluxy/tool", "1.0.0", Some(l1.clone()));
+    x.list(
+        "pluxy/plain",
+        "1.0.0",
+        &platform(),
+        &host_build(
+            "pluxy/plain",
+            "1.0.0",
+            serde_json::json!({"environments": null}),
+        ),
+        "k1",
+        &platform(),
+    );
+    x.list(
+        "pluxy/plain",
+        "1.0.0",
+        wsl_platform(),
+        &linux_build(
+            "pluxy/plain",
+            "1.0.0",
+            serde_json::json!({"environments": null}),
+        ),
+        "k1",
+        wsl_platform(),
+    );
+    x.write();
+    let roots = x.roots();
+    let d = x.d.clone();
+    let mut c = Catalog::open(d.clone(), false, &roots);
+    c.commit(stage_from_registry(&d, &roots, "curated", "pluxy/tool", Some("1.0.0")).unwrap())
+        .unwrap();
+    // Installed but not enabled: nothing to run in WSL yet.
+    let e = stage_wsl(&c, "pluxy/tool", wsl_platform(), &roots).unwrap_err();
+    assert!(e.contains("disabled"), "{e}");
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&a, &roots).unwrap();
+    for bad in ["windows/amd64", "linux/386", "linux", ""] {
+        let e = stage_wsl(&c, "pluxy/tool", bad, &roots).unwrap_err();
+        assert!(e.contains("is not a platform WSL runs"), "{bad}: {e}");
+    }
+    let e = stage_wsl(&c, "pluxy/none", wsl_platform(), &roots).unwrap_err();
+    assert!(e.contains("is not installed on this device"), "{e}");
+    install_enabled(&mut c, "pluxy/plain", "1.0.0", &roots);
+    let e = stage_wsl(&c, "pluxy/plain", wsl_platform(), &roots).unwrap_err();
+    assert_eq!(e, "pluxy/plain does not run in WSL");
+    let m = std::sync::Mutex::new(c);
+    let e = admitted_linux_unlocked(&m, "pluxy/plain", wsl_platform(), &roots).unwrap_err();
+    assert_eq!(e, "pluxy/plain does not run in WSL");
+    let e = admitted_linux_unlocked(&m, "pluxy/tool", wsl_platform(), &roots).unwrap_err();
+    assert_eq!(
+        e,
+        format!(
+            "pluxy/tool's Linux build for {} is not installed: install it for WSL",
+            wsl_platform()
+        )
+    );
+    let mut c = m.into_inner().unwrap();
+    let before = store_names(&d);
+
+    // Staged and checked: what its confirmation names. Cancelled (dropped): nothing is kept.
+    let l = stage_wsl(&c, "pluxy/tool", wsl_platform(), &roots).unwrap();
+    assert_eq!(
+        (l.id(), l.version(), l.platform(), l.sha256()),
+        ("pluxy/tool", "1.0.0", wsl_platform(), digest(&l1).as_str())
+    );
+    #[cfg(native_stack)]
+    {
+        let action = l.confirmation();
+        assert_eq!(
+            action.what,
+            format!(
+                "Install the Linux build of pluxy/tool 1.0.0 ({}, SHA-256 {}) to run it in WSL",
+                wsl_platform(),
+                digest(&l1)
+            )
+        );
+        assert_eq!(action.chain.len(), 1);
+        assert_eq!(action.chain[0].id, "main window");
+        assert_eq!(
+            (action.executor.id.as_str(), action.executor.digest.as_str()),
+            ("pluxy/tool", digest(&l1).as_str())
+        );
+        assert!(action.native_tool && action.files.is_empty() && action.launch.is_none());
+    }
+    assert_eq!(staging_names(&d).len(), 1);
+    drop(l);
+    assert!(staging_names(&d).is_empty());
+    assert!(c.get("pluxy/tool").unwrap().linux.is_empty());
+    assert_eq!(store_names(&d), before);
+    assert!(Catalog::open(d.clone(), false, &roots)
+        .get("pluxy/tool")
+        .unwrap()
+        .linux
+        .is_empty());
+
+    // The package changed while it was being confirmed: nothing is recorded.
+    let l = stage_wsl(&c, "pluxy/tool", wsl_platform(), &roots).unwrap();
+    c.set_enabled("pluxy/tool", false, &roots).unwrap();
+    let e = c.commit_linux(l, &roots).unwrap_err();
+    assert!(e.contains("disabled"), "{e}");
+    assert!(c.get("pluxy/tool").unwrap().linux.is_empty());
+    assert!(staging_names(&d).is_empty());
+    assert_eq!(store_names(&d), before);
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&a, &roots).unwrap();
+    // A staged file changed while it was being confirmed: nothing is recorded.
+    #[cfg(unix)]
+    {
+        let l = stage_wsl(&c, "pluxy/tool", wsl_platform(), &roots).unwrap();
+        thaw(&l.candidate.staged);
+        let tool = l.candidate.staged.join("bin").join("tool-linux");
+        fs::remove_file(&tool).unwrap();
+        fs::write(&tool, "\x7fELF changed\n").unwrap();
+        let e = c.commit_linux(l, &roots).unwrap_err();
+        assert!(e.contains("changed since they were installed"), "{e}");
+        assert!(c.get("pluxy/tool").unwrap().linux.is_empty());
+        assert!(staging_names(&d).is_empty());
+        assert_eq!(store_names(&d), before);
+    }
+
+    // Confirmed: recorded on the package, in the store by its digest, kept with the catalog.
+    let r = install_wsl(&mut c, "pluxy/tool", &roots);
+    assert_eq!(
+        (
+            r.version.as_str(),
+            r.sha256.as_str(),
+            r.tier.as_str(),
+            r.program.as_deref()
+        ),
+        ("1.0.0", digest(&l1).as_str(), "native", Some(LINUX_TOOL))
+    );
+    assert_eq!(r.signed.as_ref().unwrap().key_id, "k1");
+    assert!(store_names(&d).contains(&digest(&l1)));
+    assert!(staging_names(&d).is_empty());
+    let c = Catalog::open(d.clone(), false, &roots);
+    assert_eq!(c.get("pluxy/tool").unwrap().linux[wsl_platform()], r);
+    let m = std::sync::Mutex::new(c);
+    let a = admitted_linux_unlocked(&m, "pluxy/tool", wsl_platform(), &roots).unwrap();
+    let dir = d.store().join(digest(&l1));
+    assert_eq!(
+        (a.id(), a.version(), a.sha256(), a.dir(), a.program()),
+        (
+            "pluxy/tool",
+            "1.0.0",
+            digest(&l1).as_str(),
+            dir.as_path(),
+            dir.join("bin").join("tool-linux").as_path()
+        )
+    );
+    assert_eq!(a.program_sha256(), digest(&linux_tool_bytes("1.0.0")));
+    assert_eq!(a.operations()[0].id, "inspect");
+    // The device's own record is unchanged.
+    let own = admitted_unlocked(&m, "pluxy/tool", &roots).unwrap();
+    assert_eq!(own.program(), tool_in(&d.store().join(&own.sha256)));
+    // Only the platform installed.
+    let other = if wsl_platform() == "linux/arm64" {
+        "linux/amd64"
+    } else {
+        "linux/arm64"
+    };
+    let e = admitted_linux_unlocked(&m, "pluxy/tool", other, &roots).unwrap_err();
+    assert!(
+        e.contains("Linux build") && e.contains("is not installed"),
+        "{e}"
+    );
+    // Disabled, or in safe mode: not admitted.
+    let mut safe = Catalog::open(d.clone(), true, &roots);
+    let e = safe
+        .admitted_linux_record("pluxy/tool", wsl_platform(), &roots)
+        .unwrap_err();
+    assert!(e.contains("safe mode"), "{e}");
+    let e = safe
+        .linux_target("pluxy/tool", wsl_platform(), &roots)
+        .unwrap_err();
+    assert!(e.contains("safe mode"), "{e}");
+    safe.safe_mode = false;
+    safe.set_enabled("pluxy/tool", false, &roots).unwrap();
+    let e = safe
+        .admitted_linux_record("pluxy/tool", wsl_platform(), &roots)
+        .unwrap_err();
+    assert!(e.contains("disabled"), "{e}");
+    done(root);
+}
+
+#[test]
+fn a_linux_build_that_does_not_match_is_refused_and_leaves_nothing() {
+    let root = temp();
+    let mut x = WslIndex::new(&root);
+    let p = wsl_platform();
+    // Each (ID, what its registry lists for p, the refusal).
+    let mut cases: Vec<(&str, String)> = vec![];
+    // Only for another version.
+    x.both("pluxy/version", "1.0.0", None);
+    x.list(
+        "pluxy/version",
+        "1.1.0",
+        p,
+        &linux_build("pluxy/version", "1.1.0", Value::Null),
+        "k1",
+        p,
+    );
+    cases.push((
+        "pluxy/version",
+        format!("registry curated lists no pluxy/version 1.0.0 for {p}"),
+    ));
+    // None at all.
+    x.both("pluxy/missing", "1.0.0", None);
+    cases.push((
+        "pluxy/missing",
+        format!("registry curated lists no pluxy/missing 1.0.0 for {p}"),
+    ));
+    // Signed by the root's other key: another signer.
+    x.both("pluxy/signer", "1.0.0", None);
+    x.list(
+        "pluxy/signer",
+        "1.0.0",
+        p,
+        &linux_build("pluxy/signer", "1.0.0", Value::Null),
+        "k2",
+        p,
+    );
+    cases.push((
+        "pluxy/signer",
+        "signed by pluxy key k2, not by the signer of the installed release".into(),
+    ));
+    // Its manifest does not say it runs in WSL.
+    x.both(
+        "pluxy/nowsl",
+        "1.0.0",
+        Some(linux_build(
+            "pluxy/nowsl",
+            "1.0.0",
+            serde_json::json!({"environments": null}),
+        )),
+    );
+    cases.push((
+        "pluxy/nowsl",
+        format!("pluxy/nowsl 1.0.0 for {p} does not run in WSL"),
+    ));
+    // No program for p.
+    x.both(
+        "pluxy/noprog",
+        "1.0.0",
+        Some(linux_build(
+            "pluxy/noprog",
+            "1.0.0",
+            serde_json::json!({"programs": {platform(): TOOL}}),
+        )),
+    );
+    cases.push(("pluxy/noprog", format!("1.0.0 has no program for {p}")));
+    // Its program's mode does not let it run.
+    x.both("pluxy/mode", "1.0.0", None);
+    x.list(
+        "pluxy/mode",
+        "1.0.0",
+        p,
+        &native_archive_with(
+            "pluxy/mode",
+            "1.0.0",
+            Value::Null,
+            &[(LINUX_TOOL, b"\x7fELF", 0o644)],
+        ),
+        "k1",
+        p,
+    );
+    cases.push((
+        "pluxy/mode",
+        format!("program {LINUX_TOOL} is not an executable file"),
+    ));
+    // It declares more than the release the person enabled.
+    x.both("pluxy/more", "1.0.0", Some(linux_build("pluxy/more", "1.0.0", serde_json::json!({"operations": [
+        {"id": "inspect", "description": "Report its state", "input_schema": {"type": "object"}, "output_schema": {"type": "object"}},
+        {"id": "wipe", "description": "Remove everything", "input_schema": {"type": "object"}, "output_schema": {"type": "object"}}]}))));
+    cases.push(("pluxy/more", "declares other operations".into()));
+    // Signed for another platform (this computer's) though listed for p.
+    x.both("pluxy/platform", "1.0.0", None);
+    x.list(
+        "pluxy/platform",
+        "1.0.0",
+        p,
+        &linux_build("pluxy/platform", "1.0.0", Value::Null),
+        "k1",
+        &platform(),
+    );
+    cases.push((
+        "pluxy/platform",
+        "descriptor platform does not match".into(),
+    ));
+    // Not the archive its signature names.
+    x.both(
+        "pluxy/tampered",
+        "1.0.0",
+        Some(linux_build("pluxy/tampered", "1.0.0", Value::Null)),
+    );
+    cases.push(("pluxy/tampered", "pluxy/tampered 1.0.0".into()));
+    x.write();
+    // One byte changed after it was listed and signed: the same size, another digest.
+    let tampered = x
+        .reg
+        .join(format!("pluxy_tampered-1.0.0-{}", p.replace('/', "_")));
+    let mut b = fs::read(&tampered).unwrap();
+    let last = b.len() - 1;
+    b[last] ^= 1;
+    fs::write(&tampered, b).unwrap();
+    let roots = x.roots();
+    let d = x.d.clone();
+    let mut c = Catalog::open(d.clone(), false, &roots);
+    for (id, _) in &cases {
+        install_enabled(&mut c, id, "1.0.0", &roots);
+    }
+    let before = store_names(&d);
+    for (id, want) in &cases {
+        let e = stage_wsl(&c, id, p, &roots).map(|_| ()).unwrap_err();
+        assert!(e.contains(want.as_str()), "{id}: {e}");
+        assert!(c.get(id).unwrap().linux.is_empty(), "{id}");
+        assert!(staging_names(&d).is_empty(), "{id}");
+        assert_eq!(store_names(&d), before, "{id}");
+    }
+    // The positive control on the same route.
+    x.both(
+        "pluxy/tool",
+        "1.0.0",
+        Some(linux_build("pluxy/tool", "1.0.0", Value::Null)),
+    );
+    x.write();
+    install_enabled(&mut c, "pluxy/tool", "1.0.0", &roots);
+    install_wsl(&mut c, "pluxy/tool", &roots);
+    done(root);
+}
+
+#[test]
+fn a_linux_build_is_dropped_whenever_the_active_release_changes() {
+    let root = temp();
+    let mut x = WslIndex::new(&root);
+    for v in ["1.0.0", "1.1.0"] {
+        x.both(
+            "pluxy/tool",
+            v,
+            Some(linux_build("pluxy/tool", v, Value::Null)),
+        );
+    }
+    x.write();
+    let roots = x.roots();
+    let d = x.d.clone();
+    let mut c = Catalog::open(d.clone(), false, &roots);
+    let gone = |c: &Catalog, r: &Release| {
+        let p = c.get("pluxy/tool").unwrap();
+        assert!(p.linux.is_empty(), "{p:?}");
+        assert!(!store_names(&c.dirs).contains(&r.sha256));
+        let saved: Value = serde_json::from_slice(&fs::read(c.dirs.catalog()).unwrap()).unwrap();
+        assert!(
+            saved["packages"]["pluxy/tool"].get("linux").is_none(),
+            "{saved}"
+        );
+    };
+    install_enabled(&mut c, "pluxy/tool", "1.0.0", &roots);
+    // An update of the enabled tool (a swap).
+    let r = install_wsl(&mut c, "pluxy/tool", &roots);
+    install_enabled(&mut c, "pluxy/tool", "1.1.0", &roots);
+    gone(&c, &r);
+    let e = admitted_linux_unlocked(
+        &std::sync::Mutex::new(Catalog::open(d.clone(), false, &roots)),
+        "pluxy/tool",
+        wsl_platform(),
+        &roots,
+    )
+    .unwrap_err();
+    assert!(e.contains("is not installed: install it for WSL"), "{e}");
+    // A rollback as a swap.
+    let r = install_wsl(&mut c, "pluxy/tool", &roots);
+    assert_eq!(r.version, "1.1.0");
+    let s = c.swap_rollback("pluxy/tool", &roots).unwrap();
+    c.commit_swap(s, &roots).unwrap();
+    gone(&c, &r);
+    // A rollback of the catalog.
+    let r = install_wsl(&mut c, "pluxy/tool", &roots);
+    c.rollback("pluxy/tool").unwrap();
+    gone(&c, &r);
+    // An update committed while disabled.
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&a, &roots).unwrap();
+    let r = install_wsl(&mut c, "pluxy/tool", &roots);
+    c.set_enabled("pluxy/tool", false, &roots).unwrap();
+    // Disabling keeps it: the release is the same.
+    assert_eq!(c.get("pluxy/tool").unwrap().linux[wsl_platform()], r);
+    c.commit(stage_from_registry(&d, &roots, "curated", "pluxy/tool", Some("1.0.0")).unwrap())
+        .unwrap();
+    gone(&c, &r);
+    // Removed.
+    let a = candidate(&c, "pluxy/tool", &roots).unwrap();
+    c.admit_checked(&a, &roots).unwrap();
+    let r = install_wsl(&mut c, "pluxy/tool", &roots);
+    c.remove("pluxy/tool").unwrap();
+    assert!(!store_names(&d).contains(&r.sha256));
+    done(root);
+}
+
+#[test]
+fn a_linux_build_is_checked_again_each_time_it_is_admitted() {
+    let root = temp();
+    let mut x = WslIndex::new(&root);
+    x.both(
+        "pluxy/tool",
+        "1.0.0",
+        Some(linux_build("pluxy/tool", "1.0.0", Value::Null)),
+    );
+    x.write();
+    let roots = x.roots();
+    let d = x.d.clone();
+    let mut c = Catalog::open(d.clone(), false, &roots);
+    install_enabled(&mut c, "pluxy/tool", "1.0.0", &roots);
+    let r = install_wsl(&mut c, "pluxy/tool", &roots);
+    let p = wsl_platform();
+    c.admitted_linux_record("pluxy/tool", p, &roots).unwrap();
+    // Its signature holds for its own platform only.
+    let other = if p == "linux/arm64" {
+        "linux/amd64"
+    } else {
+        "linux/arm64"
+    };
+    c.packages
+        .get_mut("pluxy/tool")
+        .unwrap()
+        .linux
+        .insert(other.into(), r.clone());
+    let e = c
+        .admitted_linux_record("pluxy/tool", other, &roots)
+        .unwrap_err();
+    assert!(e.contains("descriptor platform does not match"), "{e}");
+    // Of another version than the active release: not installed.
+    let mut old = r.clone();
+    old.version = "0.9.0".into();
+    c.packages
+        .get_mut("pluxy/tool")
+        .unwrap()
+        .linux
+        .insert(p.into(), old);
+    let e = c
+        .admitted_linux_record("pluxy/tool", p, &roots)
+        .unwrap_err();
+    assert!(e.contains("is not installed: install it for WSL"), "{e}");
+    // Signed by the root's other key, which verifies, but is not the active release's signer.
+    {
+        use ed25519_dalek::Signer;
+        let mut other_signer = r.clone();
+        let s = other_signer.signed.as_mut().unwrap();
+        let k2 = &x.keys["k2"];
+        s.key_id = "k2".into();
+        s.public_key = hex(k2.verifying_key().as_bytes());
+        s.signature = hex(&k2.sign(s.descriptor.as_bytes()).to_bytes());
+        c.packages
+            .get_mut("pluxy/tool")
+            .unwrap()
+            .linux
+            .insert(p.into(), other_signer);
+        let e = c
+            .admitted_linux_record("pluxy/tool", p, &roots)
+            .unwrap_err();
+        assert!(
+            e.contains("is not signed by the signer of its active release"),
+            "{e}"
+        );
+    }
+    c.packages
+        .get_mut("pluxy/tool")
+        .unwrap()
+        .linux
+        .insert(p.into(), r.clone());
+    // Without the root that signed it: refused.
+    let e = c
+        .admitted_linux_record("pluxy/tool", p, &NoRoots)
+        .unwrap_err();
+    assert!(e.contains("not configured"), "{e}");
+    // A changed file in its store folder: refused.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let m = std::sync::Mutex::new(c);
+        admitted_linux_unlocked(&m, "pluxy/tool", p, &roots).unwrap();
+        let dir = d.store().join(&r.sha256);
+        thaw(&dir);
+        let tool = dir.join("bin").join("tool-linux");
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(&tool, "\x7fELF changed\n").unwrap();
+        let e = admitted_linux_unlocked(&m, "pluxy/tool", p, &roots).unwrap_err();
+        assert!(e.contains("changed since they were installed"), "{e}");
+        // The device's own program is not the Linux build's: it is still admitted.
+        admitted_unlocked(&m, "pluxy/tool", &roots).unwrap();
+    }
+    done(root);
+}
+
+/// macOS: the store's folders keep no extended access list entry, as they keep no group or other
+/// mode bits, so a release put in the store inherits none.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_store_passes_no_access_list_on() {
+    let root = temp();
+    let d = dirs(&root);
+    fs::create_dir_all(d.store()).unwrap();
+    let has = |p: &Path| crate::private_macos::has_entries(&fs::File::open(p).unwrap()).unwrap();
+    for p in [&d.root, &d.store()] {
+        crate::private_macos::add_entry(p, "everyone allow list,file_inherit,directory_inherit");
+        assert!(has(p), "{}", p.display());
+    }
+    let mut c = Catalog::open(d.clone(), false, &NoRoots);
+    let v1 = package("example/notes", "1.0.0");
+    install(&mut c, &v1, local("n")).unwrap();
+    for p in [&d.root, &d.store(), &d.store().join(digest(&v1))] {
+        assert!(!has(p), "{}", p.display());
+    }
+    done(root);
+}

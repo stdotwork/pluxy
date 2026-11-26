@@ -1,0 +1,27 @@
+{
+  "description": "Gemini :countTokens to a Claude upstream. The account's base URL is the fake upstream's, not Anthropic's own, so neither core sends it a request (the scripted reply is never used) and both answer with their own estimate.",
+  "source": [
+    "core/sdk/api/handlers/gemini/gemini_handlers.go:325 (handleCountTokens)",
+    "core/internal/runtime/executor/claude_executor_tokens.go:21 (CountTokens)"
+  ],
+  "client": {
+    "path": "/v1beta/models/claude-test:countTokens",
+    "body": {"contents":[{"role":"user","parts":[{"text":"hi"}]}]}
+  },
+  "upstream": [{"body":{"input_tokens":42}}],
+  "recorded_old_core": {
+    "client": {
+      "body": {"promptTokensDetails":[{"modality":"TEXT","tokenCount":3}],"totalTokens":3},
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": []
+  }
+}

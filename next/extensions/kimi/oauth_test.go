@@ -1,0 +1,133 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stdotwork/pluxy/next/extensions/kimi/kimitest"
+	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/sdk"
+)
+
+type noPrompt struct{}
+
+func (noPrompt) Prompt(protocol.Prompt) error { return nil }
+
+func settingsOf(t *testing.T, raw json.RawMessage) settings {
+	t.Helper()
+	s, err := readSettings(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+// Login stops when the device code expires, even when slow_down has pushed the next poll past
+// the code's end.
+func TestDeviceCodeExpiryStopsPolling(t *testing.T) {
+	srv := kimitest.New(t)
+	srv.CodeLifetime, srv.SlowDown = 3, true
+	start := time.Now()
+	_, err := deviceLogin(context.Background(), settingsOf(t, srv.Settings()), noPrompt{})
+	var e *llm.Error
+	if !errors.As(err, &e) || e.Code != llm.CodeAuth || e.Scope != llm.ScopeCredential {
+		t.Fatalf("err = %v, want an auth error for the expired code", err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("login took %v for a code that expired after 3s", d)
+	}
+}
+
+// A login host that stops answering fails a renewal instead of holding it. The request was
+// sent, so the failure is not retryable.
+func TestRenewalTimesOut(t *testing.T) {
+	t.Setenv(protocol.EnvTestLoginHosts, "1")
+	hung := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-hung:
+		case <-r.Context().Done():
+		}
+	}))
+	defer ts.Close()
+	defer close(hung)
+	old := authClient.Timeout
+	if old <= 0 || old > time.Minute {
+		t.Fatalf("auth client timeout %v, want a bound of at most a minute", old)
+	}
+	authClient.Timeout = 200 * time.Millisecond
+	defer func() { authClient.Timeout = old }()
+	acct := protocol.Account{Settings: json.RawMessage(`{"auth_base_url":"` + ts.URL + `"}`),
+		Credential: &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "a", RefreshToken: "r"}}
+	done := make(chan error, 1)
+	go func() { _, err := refresh(context.Background(), sdk.RefreshCall{Account: acct}); done <- err }()
+	select {
+	case err := <-done:
+		var e *llm.Error
+		if !errors.As(err, &e) || e.Code != llm.CodeUnavailable || e.Retryable {
+			t.Errorf("err = %v, want an unavailable error that is not retryable", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the renewal waits for a login host that never answers")
+	}
+}
+
+// A renewal that fails for now keeps the login host's Retry-After, in seconds or as a date. A 429
+// is retryable; a 503 is not, because the request reached the login host and may have run.
+func TestRenewalRetryAfter(t *testing.T) {
+	t.Setenv(protocol.EnvTestLoginHosts, "1")
+	for _, c := range []struct {
+		status    int
+		header    string
+		min       int64
+		retryable bool
+	}{
+		{http.StatusServiceUnavailable, "900", 900_000, false},
+		{http.StatusTooManyRequests, time.Now().Add(10 * time.Minute).UTC().Format(http.TimeFormat), 500_000, true},
+	} {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Retry-After", c.header)
+			w.WriteHeader(c.status)
+		}))
+		acct := protocol.Account{Settings: json.RawMessage(`{"auth_base_url":"` + ts.URL + `"}`),
+			Credential: &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "a", RefreshToken: "r"}}
+		_, err := refresh(context.Background(), sdk.RefreshCall{Account: acct})
+		ts.Close()
+		var e *llm.Error
+		if !errors.As(err, &e) || e.Retryable != c.retryable || e.RetryAfterMS < c.min {
+			t.Errorf("%d with Retry-After %q: %+v, want retryable %v after at least %dms", c.status, c.header, err, c.retryable, c.min)
+		}
+	}
+}
+
+// A token reply with no access token (a 200 with an empty object) fails a login or a renewal;
+// it is never kept as a credential.
+func TestTokenReplyWithoutAccessTokenFails(t *testing.T) {
+	t.Setenv(protocol.EnvTestLoginHosts, "1")
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/device_authorization") {
+			_, _ = w.Write([]byte(`{"device_code":"d","user_code":"u","verification_uri":"https://example.invalid","expires_in":60,"interval":1}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer ts.Close()
+	set := json.RawMessage(`{"auth_base_url":"` + ts.URL + `"}`)
+	acct := protocol.Account{Settings: set, Credential: &protocol.Credential{Kind: protocol.CredentialOAuth, AccessToken: "a", RefreshToken: "r"}}
+	_, err := refresh(context.Background(), sdk.RefreshCall{Account: acct})
+	var e *llm.Error
+	if !errors.As(err, &e) || e.Code != llm.CodeUpstream || e.Scope != llm.ScopeEndpoint {
+		t.Errorf("renewal err = %v, want an upstream error", err)
+	}
+	g, err := deviceLogin(context.Background(), settingsOf(t, set), noPrompt{})
+	if g != nil || !errors.As(err, &e) || e.Code != llm.CodeUpstream {
+		t.Errorf("login = %+v, %v, want an upstream error", g, err)
+	}
+}

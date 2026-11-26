@@ -1,0 +1,459 @@
+name: Next app platforms
+
+# Builds and unit-tests the desktop app's Rust crate on Windows and macOS, and runs the real app
+# there (next/app/native/platform.ts: a second launch raising the first, the login item, the
+# window and the tray; the test package and the release gate; the signed tool sessions, admission,
+# program, routing, launcher and open; the app's update; on Windows the per-user setup program, on
+# macOS the disk image's install; next/app/native/dialogs.ts: native key entry, confirmations and
+# key rotation). The rest of the Linux native test (Xvfb, portals) stays in next-app.yml.
+
+on:
+  # Pull requests and merge-queue groups run this through ci.yml, which runs it only when what it
+  # builds changed (see the changes job there), and for a pull request only with the full-ci label.
+  workflow_call:
+    inputs:
+      # ci.yml sets this when the change reaches none of what the native jobs build: the app, the
+      # kit, the app tools the tools shard builds (execution, lib/program, lib/files, the app tools'
+      # Cargo.toml and Cargo.lock), the workflows, and the Go packages `go run ./e2e/panelcore`
+      # builds (see ci.yml).
+      skip-native:
+        type: boolean
+        default: false
+  workflow_dispatch:
+  # Not on every push to main: the merge queue already ran this for the last change it merges that
+  # touched what this builds, and the hosted macOS pool is short enough that re-runs on main starved
+  # the queue's own jobs. One run a day on main keeps main's caches fresh for the PR and
+  # merge-queue runs that restore them.
+  schedule:
+    - cron: '17 3 * * *'
+
+concurrency:
+  # A literal name: called from ci.yml, github.workflow is the caller's name, the same for every
+  # workflow it calls.
+  group: next-app-platforms-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+    working-directory: next/app
+
+jobs:
+  app:
+    name: app (${{ matrix.os }})
+    # On macOS, the repository variable PLUXY_MACOS_CLOUD_RUNNER, when set, gives the runner label
+    # to use instead of GitHub's, except in pull requests (docs/ci.md, "Where jobs run"). Windows stays on GitHub's runner:
+    # the registry tests run only on a runner that reports itself GitHub-hosted.
+    runs-on: ${{ matrix.os == 'macos-latest' && github.event_name != 'pull_request' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      # The Rust tests start real cores with `go run`.
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: next/go.mod
+          cache: true
+          cache-dependency-path: next/go.mod
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.3'
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.97.0
+        with:
+          components: rustfmt, clippy
+      - name: Cache Rust dependencies and build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: next/app/src-tauri -> target
+          key: ${{ matrix.os }}
+          # Saved from main only: a cache saved on a PR or merge-group ref is usable only there, and
+          # those filled the repo's 10 GB and evicted main's, which every run restores.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The Rust build embeds the built window (dist/).
+      - name: UI kit install
+        working-directory: next/ui
+        run: bun install --frozen-lockfile
+      - name: Install
+        run: bun install --frozen-lockfile
+      - name: Build the window
+        run: bun run build
+      - name: Rust format
+        if: matrix.os == 'macos-latest'
+        working-directory: next/app/src-tauri
+        run: cargo fmt --check
+      - name: Clippy
+        working-directory: next/app/src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings
+      # The test hooks and the test trust (the test package's features) build here too.
+      - name: Clippy, test features
+        working-directory: next/app/src-tauri
+        run: cargo clippy --locked --all-targets --features native-test,artifact-test-trust -- -D warnings
+      # Unit tests, and each connection mode against a real core with fake extensions, with an
+      # empty temporary home.
+      - name: Rust tests
+        working-directory: next/app/src-tauri
+        run: |
+          export RUSTUP_HOME="${RUSTUP_HOME:-$(cygpath -u "${USERPROFILE:-$HOME}" 2>/dev/null || echo "$HOME")/.rustup}"
+          export CARGO_HOME="${CARGO_HOME:-$(cygpath -u "${USERPROFILE:-$HOME}" 2>/dev/null || echo "$HOME")/.cargo}"
+          export GOCACHE="$(go env GOCACHE)" GOMODCACHE="$(go env GOMODCACHE)" GOPATH="$(go env GOPATH)"
+          test_env="$(mktemp -d)"
+          export HOME="$test_env/home" XDG_CONFIG_HOME="$test_env/config" XDG_DATA_HOME="$test_env/data" XDG_CACHE_HOME="$test_env/cache"
+          mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME"
+          if [ "$RUNNER_OS" = Windows ]; then
+            export USERPROFILE="$(cygpath -w "$HOME")"
+            export APPDATA="$(cygpath -w "$test_env/appdata")" LOCALAPPDATA="$(cygpath -w "$test_env/localappdata")"
+            mkdir -p "$test_env/appdata" "$test_env/localappdata"
+          fi
+          cargo test --locked --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/cargo-test.log"
+          # Record the counts, and refuse a run that ran nothing. (--no-fail-fast: one failing test
+          # binary does not hide the rest.)
+          awk '/^test result:/ { p += $4; f += $6; i += $8 } END {
+            printf "passed %d, failed %d, ignored %d\n", p, f, i
+            if (p == 0) exit 1
+          }' "$RUNNER_TEMP/cargo-test.log" | tee -a "$GITHUB_STEP_SUMMARY"
+          # The native test's own unit tests (in src/native_test.rs and the checks it holds), which
+          # build only with the native-test feature.
+          cargo test --locked --features native-test --lib native_test::
+      # The process ownership tests (`lifetime_...` in src/program_tests.rs and src/spawn_tests.rs):
+      # each must have run and passed here, not been compiled out or skipped.
+      - name: Lifetime tests ran
+        working-directory: next/app/src-tauri
+        run: |
+          case "$RUNNER_OS" in
+            Windows) expected=8 ;;
+            macOS) expected=8 ;;
+          esac
+          ran=$(grep -cE '^test [^ ]*lifetime_[a-z0-9_]* \.\.\. ok$' "$RUNNER_TEMP/cargo-test.log" || true)
+          echo "lifetime tests passed: $ran of $expected" | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$ran" -eq "$expected" ]
+      # A detached launch must leave the app's job. The runner's own job refuses that (the unit
+      # tests check the refusal), so the check that it works runs the breakaway test, the
+      # lifetime tests, the stdin secret test (a detached launch with a piped stdin) and the WSLENV
+      # test (a detached launch of wsl.exe gets WSLENV), whose detached launches then run and must
+      # be in no job, from a process outside that job: started by WMI, or failing that by the Task
+      # Scheduler.
+      - name: Detached launch outside the runner's job
+        if: runner.os == 'Windows'
+        working-directory: next/app/src-tauri
+        shell: pwsh
+        run: |
+          $exe = cargo test --locked --lib --no-run --message-format=json 2>$null |
+            ConvertFrom-Json | Where-Object { $_.reason -eq 'compiler-artifact' -and $_.executable -and $_.target.name -eq 'pluxy_app' } |
+            Select-Object -ExpandProperty executable -Last 1
+          if (-not $exe) { throw 'no unit test program' }
+          $dir = Join-Path $env:RUNNER_TEMP 'outside'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          function Attempt($how) {
+            Remove-Item "$dir\*" -Force -ErrorAction SilentlyContinue
+            # The exit code goes first to a file of its own (a redirection before echo: `echo 0>`
+            # would redirect stream 0), then into place, so done.txt never appears empty.
+            Set-Content "$dir\run.cmd" "@`"$exe`" outside_job lifetime_ a_launchs_stdin_secret_reaches_it_on_its_stdin_only managed_and_detached_launches_of_wsl_exe_start_with_wslenv --include-ignored --test-threads=1 > `"$dir\out.txt`" 2>&1`r`n@> `"$dir\done.tmp`" echo %ERRORLEVEL%`r`n@move /y `"$dir\done.tmp`" `"$dir\done.txt`" > nul"
+            if ($how -eq 'WMI') {
+              $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = "cmd.exe /c `"$dir\run.cmd`""; CurrentDirectory = $dir }
+              if ($r.ReturnValue -ne 0) { return "WMI could not start it ($($r.ReturnValue))" }
+            } else {
+              schtasks /create /f /tn pluxy-outside-job /sc once /st 23:59 /tr "cmd.exe /c `"$dir\run.cmd`"" | Out-Null
+              schtasks /run /tn pluxy-outside-job | Out-Null
+            }
+            for ($i = 0; $i -lt 240 -and -not (Test-Path "$dir\done.txt"); $i++) { Start-Sleep -Milliseconds 500 }
+            if ($how -ne 'WMI') { schtasks /delete /f /tn pluxy-outside-job | Out-Null }
+            if (-not (Test-Path "$dir\done.txt")) { return "$($how): no result within 120 s" }
+            Get-Content "$dir\out.txt" | Write-Host
+            $code = (Get-Content "$dir\done.txt").Trim()
+            if ($code -eq '0' -and (Select-String -Quiet -Path "$dir\out.txt" -Pattern '^test result: ok\. 11 passed')) { return 'ok' }
+            return "$($how): the test failed (exit $code)"
+          }
+          $why = @()
+          foreach ($how in 'WMI', 'Task Scheduler') {
+            $r = Attempt $how
+            if ($r -eq 'ok') { "Detached launch outside the runner's job: passed, started by $how" >> $env:GITHUB_STEP_SUMMARY; exit 0 }
+            $why += $r
+          }
+          "Detached launch outside the runner's job: not proven: $($why -join '; ')" >> $env:GITHUB_STEP_SUMMARY
+          throw ($why -join '; ')
+      # The app's check that its core owns its port (src/managed.rs) rests on macOS refusing
+      # another user's bind over a port a socket of this user's holds. A second, throwaway user
+      # tries every overlapping bind.
+      - name: Bind rules with a second user
+        if: runner.os == 'macOS'
+        run: |
+          other=pluxyprobe
+          sudo sysadminctl -addUser "$other" -password "$(openssl rand -hex 24)" >/dev/null 2>&1
+          trap 'sudo sysadminctl -deleteUser "$other" >/dev/null 2>&1 || true' EXIT
+          python3 - "$other" <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          # Run on macOS by the CI step: proves the bind rules the app's core check rests on.
+          import os, socket, subprocess, sys
+
+          OTHER = sys.argv[1]
+          PROBE = r'''
+          import socket, sys
+          fam = socket.AF_INET6 if ":" in sys.argv[1] else socket.AF_INET
+          s = socket.socket(fam, socket.SOCK_STREAM)
+          s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+          s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+          if fam == socket.AF_INET6:
+              s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+          try:
+              s.bind((sys.argv[1], int(sys.argv[2])))
+              s.listen()
+              print("bound")
+          except OSError as e:
+              print("refused", e.errno)
+          '''
+
+          def held(addr):
+              # As the app binds its core's socket: Rust's TcpListener sets SO_REUSEADDR, not SO_REUSEPORT.
+              s = socket.socket(socket.AF_INET6 if ":" in addr else socket.AF_INET, socket.SOCK_STREAM)
+              s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+              s.bind((addr, 0))
+              s.listen()
+              return s
+
+          def probe(user, addr, port):
+              cmd = ["python3", "-c", PROBE, addr, str(port)]
+              if user:
+                  cmd = ["sudo", "-n", "-u", user] + cmd
+              return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.strip()
+
+          failed = False
+          def expect(what, got, want):
+              global failed
+              ok = got.split()[0] == want
+              failed |= not ok
+              print(f"{'ok  ' if ok else 'FAIL'} {what}: {got} (expected {want})")
+
+          # The app sends its key only to a loopback address, the one its socket holds (`local_origin`,
+          # `owns_listener`): every bind that would take that address's connections is tried.
+          overlapping = {
+              "127.0.0.1": ["127.0.0.1", "0.0.0.0", "::", "::ffff:127.0.0.1"],
+              "::1": ["::1", "::"],
+          }
+          for app_addr, addrs in overlapping.items():
+              s = held(app_addr)
+              port = s.getsockname()[1]
+              for addr in addrs:
+                  expect(f"another user binds {addr}:{port} over the app's {app_addr}", probe(OTHER, addr, port), "refused")
+              s.close()
+
+          # Controls: the probe can bind as the other user, and the kernel does let this same user bind
+          # over its own wildcard socket (what the check leaves to the user's own processes).
+          free = held("127.0.0.1"); fport = free.getsockname()[1]; free.close()
+          expect("another user binds a free port", probe(OTHER, "127.0.0.1", fport), "bound")
+          s = held("0.0.0.0"); port = s.getsockname()[1]
+          expect(f"this user binds 127.0.0.1:{port} over its own 0.0.0.0", probe(None, "127.0.0.1", port), "bound")
+          s.close()
+          sys.exit(1 if failed else 0)
+          PY
+      # The test trust built in: the trust profile and the updater gate, the release gate (which
+      # must refuse a test build), and on Windows the access-list check of the profile
+      # (src/win_acl.rs).
+      - name: Artifact signature and test trust controls
+        working-directory: next/app/src-tauri
+        run: |
+          cargo test --locked --features artifact-test-trust --test artifact_trust --test release_config
+          if [ "$RUNNER_OS" = Windows ]; then
+            cargo test --locked --features artifact-test-trust --lib win_acl::
+          fi
+
+  # The real app on a disposable Windows and macOS runner, as a person would use it, with the
+  # system's own tools reading back what it leaves in the registry or the LaunchAgents folder. The
+  # runner's user is thrown away after the job; the test removes what it made as well. The sessions
+  # are named in next/app/native/shards.ts (PLATFORM_SHARDS), one job per shard; the summary has
+  # the counts.
+  # The package and update shards build the test package first (package.ts test: a folder bundle
+  # and the per-user setup program on Windows, an app bundle and its disk image on macOS), then the
+  # dev app, since the package's builds rename the program they make in target/debug. The update
+  # shard also runs a test core (`go run ./e2e/panelcore`), so it sets up Go; on Windows its install
+  # session installs, updates and uninstalls the setup program's copy, and on macOS it attaches the
+  # disk image and installs, updates and rolls back the bundle copied out of it. The tools shard
+  # (native/platform-tools.ts) runs run.ts's admission, program, routing, launcher and vault sessions
+  # here, on the app built with the test trust (artifact-test-trust) against a test core it starts
+  # with `go run`, so it sets up Go too. The open shard runs platform-tools.ts's open session the
+  # same way, on the same build.
+  # A schedule or manual run has no inputs: null is not true, so it runs these.
+  native:
+    name: native (${{ matrix.os }}, ${{ matrix.shard }})
+    if: inputs.skip-native != true
+    # It writes the account's own folders and settings, so it runs only on a disposable runner
+    # (next/app/native/runner.ts): GitHub's, or on macOS the one PLUXY_MACOS_CLOUD_RUNNER names when
+    # set, outside pull requests (docs/ci.md, "Where jobs run"). Such a runner reports itself self-hosted, so the job names
+    # it to the test in PLUXY_EPHEMERAL_CI_RUNNER, which is empty on every other runner. Windows
+    # stays on GitHub's: this names no cloud runner there (Namespace's trial plan has no Windows),
+    # and the tests need a signed-in desktop. The open shard stays on GitHub's runner on macOS too:
+    # its session runs only on a GitHub-hosted runner (next/app/README.md, "Limits").
+    # So does the update shard: its sessions run `sudo -n`, which Namespace's macOS runner has refused
+    # ("a password is required") since 2026-11-21, though `sudo -n -l` lists NOPASSWD.
+    runs-on: ${{ matrix.os == 'macos-latest' && matrix.shard != 'open' && matrix.shard != 'update' && github.event_name != 'pull_request' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
+    env:
+      PLUXY_EPHEMERAL_CI_RUNNER: ${{ matrix.os == 'macos-latest' && matrix.shard != 'open' && matrix.shard != 'update' && github.event_name != 'pull_request' && vars.PLUXY_MACOS_CLOUD_RUNNER || '' }}
+    # The builds (about 3 minutes with the caches restored), then the native test's own limit
+    # (at most 90 minutes).
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - macos-latest
+        shard:
+          - platform
+          - package
+          - tools
+          - open
+          - update
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      # The tools, open and update shards' sessions start a test core with `go run ./e2e/panelcore`.
+      - name: Set up Go
+        if: matrix.shard == 'tools' || matrix.shard == 'open' || matrix.shard == 'update'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: next/go.mod
+          cache: true
+          cache-dependency-path: next/go.mod
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.3'
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.97.0
+      - name: Cache Rust dependencies and build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: next/app/src-tauri -> target
+          key: ${{ matrix.os }}-native-${{ matrix.shard }}
+          # Saved from main only: a cache saved on a PR or merge-group ref is usable only there, and
+          # those filled the repo's 10 GB and evicted main's, which every run restores.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: UI kit install
+        working-directory: next/ui
+        run: bun install --frozen-lockfile
+      - name: Install
+        run: bun install --frozen-lockfile
+      - name: Build the window
+        run: bun run build
+      # The cores the test package comes with are test releases built here with Go (package.ts).
+      - name: Set up Go
+        if: matrix.shard == 'package'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: next/go.mod
+          cache: true
+          cache-dependency-path: next/go.mod
+      - name: Test package
+        if: matrix.shard == 'package' || matrix.shard == 'update'
+        run: bun run package:test "$RUNNER_TEMP/test-package"
+      # The app with the test hooks (never in a release build): the one the checks start.
+      - name: Build the app for the native test
+        if: matrix.shard != 'tools' && matrix.shard != 'open'
+        working-directory: next/app/src-tauri
+        run: cargo build --locked --features native-test
+      # The tools and open shards: the app with the test hooks and the test trust, the fixture tool
+      # their signed packages hold, and the execution program the launcher and open sessions
+      # install, built into target/app-tools with its native-test feature: on Windows a terminal
+      # launch's console window then does not wait for Enter, and its Command Prompt or PowerShell
+      # after the program runs one fixed command, which the launcher session reads back (never in a
+      # release build). The feature changes nothing about opening files.
+      - name: Build the app and tools for the tools sessions
+        if: matrix.shard == 'tools' || matrix.shard == 'open'
+        working-directory: next/app/src-tauri
+        run: |
+          cargo build --locked --features native-test,artifact-test-trust --bin pluxy-app --example program_fixture
+          cd ../../app-tools
+          cargo build --locked -p execution --features native-test --target-dir ../app/src-tauri/target/app-tools
+      # The tools shard runs five app sessions one after another. Each waits at most (limits in
+      # native/platform-tools.ts and platform.ts): 3 minutes for its test core to start
+      # (CORE_START); 10 minutes for the app (TIMEOUT), then 30 seconds for its output to close
+      # once stopped (STOP_MS) and, if it still runs, 30 seconds more once cleanup stops it again
+      # (STOP_MS); 1 minute for the core to exit (twice STOP_MS); 3 seconds of fixed pauses; and on
+      # Windows 30 seconds for each of the four folders it removes (FREE_MS; five in the launcher
+      # session): 17 minutes 3 seconds, 85 minutes 15 seconds for five. The launcher session also
+      # waits up to 105 s on Windows for its app to start and for it and its agents to end, and up
+      # to 55 s on macOS for its agents and Terminal: about 87 minutes 30 seconds on Windows. 95
+      # minutes lets every session report and clean up even when each app hangs, with over 7
+      # minutes for the short commands it runs besides (PowerShell, icacls), which have no limit of
+      # their own. The open shard runs one such session (its app started outside the runner's job
+      # on Windows, as the launcher session's is) and, on macOS, at most four certificate trust
+      # commands of at most a minute each: about 22 minutes at worst.
+      - name: Native test
+        timeout-minutes: ${{ matrix.shard == 'tools' && 95 || 40 }}
+        env:
+          PLUXY_APP_NATIVE_SHARD: ${{ matrix.shard }}
+          PLUXY_APP_TEST_PACKAGE: ${{ runner.temp }}/test-package
+        run: bun run test:native:platform
+
+  # The real app, built with the native-test feature, in local mode against a test core: its
+  # native key entry, confirmations and key rotation, worked through native input
+  # (native/dialogs.ts). Only on disposable runners: on Windows the app's folders are the
+  # account's own.
+  dialogs:
+    name: dialogs (${{ matrix.os }})
+    # It writes the account's own folders and settings, so it runs only on a disposable runner
+    # (next/app/native/runner.ts): GitHub's, or on macOS the one PLUXY_MACOS_CLOUD_RUNNER names when
+    # set, outside pull requests (docs/ci.md, "Where jobs run"). Such a runner reports itself self-hosted, so the job names
+    # it to the test in PLUXY_EPHEMERAL_CI_RUNNER, which is empty on every other runner. Windows
+    # stays on GitHub's: this names no cloud runner there (Namespace's trial plan has no Windows),
+    # and the tests need a signed-in desktop.
+    runs-on: ${{ matrix.os == 'macos-latest' && github.event_name != 'pull_request' && vars.PLUXY_MACOS_CLOUD_RUNNER || matrix.os }}
+    env:
+      PLUXY_EPHEMERAL_CI_RUNNER: ${{ matrix.os == 'macos-latest' && github.event_name != 'pull_request' && vars.PLUXY_MACOS_CLOUD_RUNNER || '' }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-latest
+          - macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: next/go.mod
+          cache: true
+          cache-dependency-path: next/go.mod
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.3'
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.97.0
+      - name: Cache Rust dependencies and build outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: next/app/src-tauri -> target
+          key: ${{ matrix.os }}-dialogs
+          # Saved from main only: a cache saved on a PR or merge-group ref is usable only there, and
+          # those filled the repo's 10 GB and evicted main's, which every run restores.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: UI kit install
+        working-directory: next/ui
+        run: bun install --frozen-lockfile
+      - name: Install
+        run: bun install --frozen-lockfile
+      - name: Build the window
+        run: bun run build
+      # Its counts (checks passed, expected failures, problems, native input by way) go to the
+      # job summary.
+      - name: Native dialogs session
+        run: bun native/dialogs.ts 2>&1 | tee "$RUNNER_TEMP/dialogs.log"
+      - name: Keep the session's log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dialogs-${{ matrix.os }}
+          path: ${{ runner.temp }}/dialogs.log
+          if-no-files-found: ignore

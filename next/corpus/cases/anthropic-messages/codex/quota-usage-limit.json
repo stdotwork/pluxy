@@ -1,0 +1,214 @@
+{
+  "description": "With quota-response-mode usage-limit, when every account is out of quota until a reset the upstream named more than 5 minutes away, the client gets the final usage-limit reply: a 429 with type usage_limit_reached, the reset, retryable false, X-Should-Retry false and Codex's window headers, no Retry-After; on the request that used up the last account and on the next one. An Anthropic client gets a rate_limit_error whose message ends with the time to the reset.",
+  "source": [
+    "core/sdk/cliproxy/auth/usage_limit_refusal.go",
+    "core/sdk/cliproxy/auth/selector.go",
+    "core/sdk/api/handlers/quota_usage_limit_response_test.go"
+  ],
+  "client": {
+    "path": "/v1/messages",
+    "body": {"model":"gpt-test","max_tokens":64,"messages":[{"role":"user","content":"Say hello"}]}
+  },
+  "upstream": [
+    {
+      "status": 429,
+      "headers": {
+        "Content-Type": "application/json",
+        "x-codex-primary-used-percent": "100",
+        "x-codex-primary-window-minutes": "300",
+        "x-codex-primary-reset-after-seconds": "7200"
+      },
+      "body": {
+        "error": {
+          "type": "usage_limit_reached",
+          "message": "The usage limit has been reached",
+          "plan_type": "plus",
+          "resets_in_seconds": 7200
+        }
+      }
+    },
+    {
+      "status": 429,
+      "headers": {
+        "Content-Type": "application/json",
+        "x-codex-primary-used-percent": "100",
+        "x-codex-primary-window-minutes": "300",
+        "x-codex-primary-reset-after-seconds": "7200"
+      },
+      "body": {
+        "error": {
+          "type": "usage_limit_reached",
+          "message": "The usage limit has been reached",
+          "plan_type": "plus",
+          "resets_in_seconds": 7200
+        }
+      }
+    }
+  ],
+  "exceptions": [
+    {
+      "path": "upstream[*].headers.Accept-Encoding",
+      "kind": "intended",
+      "reason": "The new core's Codex extension asks the upstream only for gzip, which Go's HTTP client decodes itself; today's core also advertises deflate, br and zstd."
+    },
+    {
+      "path": "upstream[*].headers.Session-Id",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "upstream[*].body.prompt_cache_key",
+      "kind": "intended",
+      "reason": "When the client names no session, both cores derive a prompt cache key from the conversation's start so every turn of it shares the upstream's prompt cache; today's core hashes its own session identity (client key and canonical content), the new core's Codex extension the account, the model and the first developer and user messages. The values differ; each core's is stable across a conversation."
+    },
+    {
+      "path": "upstream[*].body.reasoning",
+      "kind": "intended",
+      "reason": "The new core sends the reasoning effort the client asked for (reasoning_effort, a Messages thinking budget's effort or a model-name suffix) whatever the model, and gives a translated request that names none the medium effort today's core gives it; today's core checks the effort against its model catalog and drops it for a model it does not list, such as gpt-test. The *-catalog-model cases and the codex-oauth cases show both cores sending it for a model today's core lists.",
+      "want": {"effort":"medium"}
+    }
+  ],
+  "then": [
+    {
+      "path": "/v1/messages",
+      "body": {
+        "model": "gpt-test",
+        "max_tokens": 64,
+        "messages": [{"role":"user","content":"Say hello"}]
+      }
+    }
+  ],
+  "accounts": 2,
+  "label_accounts": true,
+  "old_core": {
+    "config": {"routing":{"cooldown":{"disable-cooling":false,"quota-response-mode":"usage-limit"}}}
+  },
+  "new_core": {"config":{"routing":{"quota_response_mode":"usage-limit"}}},
+  "volatile": [
+    "client.body.error.resets_at",
+    "then[*].body.error.resets_at",
+    "client.body.error.reset_seconds",
+    "then[*].body.error.reset_seconds",
+    "client.body.error.reset_time",
+    "then[*].body.error.reset_time",
+    "client.headers.X-Codex-Primary-Reset-At",
+    "then[*].headers.X-Codex-Primary-Reset-At",
+    "client.events[*].data.error.resets_at",
+    "then[*].events[*].data.error.resets_at",
+    "client.events[*].data.error.reset_seconds",
+    "then[*].events[*].data.error.reset_seconds",
+    "client.events[*].data.error.reset_time",
+    "then[*].events[*].data.error.reset_time",
+    "client.events[*].data.response.error.resets_at",
+    "then[*].events[*].data.response.error.resets_at",
+    "client.body.error.message",
+    "then[*].body.error.message"
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "error": {
+          "message": "(volatile)",
+          "resets_at": "(volatile)",
+          "retryable": false,
+          "type": "rate_limit_error"
+        },
+        "type": "error"
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id, X-Should-Retry, X-Codex-Primary-Used-Percent, X-Codex-Primary-Window-Minutes, X-Codex-Primary-Reset-At, X-Codex-Secondary-Used-Percent, X-Codex-Secondary-Window-Minutes, X-Codex-Secondary-Reset-At",
+        "Content-Type": "application/json",
+        "X-Codex-Primary-Reset-At": "(volatile)",
+        "X-Codex-Primary-Used-Percent": "100",
+        "X-Codex-Primary-Window-Minutes": "300",
+        "X-Cpa-Trace-Id": "(volatile)",
+        "X-Should-Retry": "false"
+      },
+      "status": 429
+    },
+    "then": [
+      {
+        "body": {
+          "error": {
+            "message": "(volatile)",
+            "resets_at": "(volatile)",
+            "retryable": false,
+            "type": "rate_limit_error"
+          },
+          "type": "error"
+        },
+        "headers": {
+          "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id, X-Should-Retry, X-Codex-Primary-Used-Percent, X-Codex-Primary-Window-Minutes, X-Codex-Primary-Reset-At, X-Codex-Secondary-Used-Percent, X-Codex-Secondary-Window-Minutes, X-Codex-Secondary-Reset-At",
+          "Content-Type": "application/json",
+          "X-Codex-Primary-Reset-At": "(volatile)",
+          "X-Codex-Primary-Used-Percent": "100",
+          "X-Codex-Primary-Window-Minutes": "300",
+          "X-Should-Retry": "false"
+        },
+        "status": 429
+      }
+    ],
+    "upstream": [
+      {
+        "body": {
+          "include": ["reasoning.encrypted_content"],
+          "input": [
+            {"content":[{"text":"Say hello","type":"input_text"}],"role":"user","type":"message"}
+          ],
+          "instructions": "",
+          "max_output_tokens": 64,
+          "model": "gpt-test",
+          "parallel_tool_calls": true,
+          "prompt_cache_key": "0bb04468-244c-51fa-8540-e4ce1d784add",
+          "store": false,
+          "stream": true,
+          "tools": [{"output_format":"png","type":"image_generation"}]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer account-1",
+          "Content-Type": "application/json",
+          "Originator": "codex-tui",
+          "Session-Id": "0bb04468-244c-51fa-8540-e4ce1d784add",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      },
+      {
+        "body": {
+          "include": ["reasoning.encrypted_content"],
+          "input": [
+            {"content":[{"text":"Say hello","type":"input_text"}],"role":"user","type":"message"}
+          ],
+          "instructions": "",
+          "max_output_tokens": 64,
+          "model": "gpt-test",
+          "parallel_tool_calls": true,
+          "prompt_cache_key": "0bb04468-244c-51fa-8540-e4ce1d784add",
+          "store": false,
+          "stream": true,
+          "tools": [{"output_format":"png","type":"image_generation"}]
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip, deflate, br, zstd",
+          "Authorization": "Bearer account-2",
+          "Content-Type": "application/json",
+          "Originator": "codex-tui",
+          "Session-Id": "0bb04468-244c-51fa-8540-e4ce1d784add",
+          "User-Agent": "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)"
+        },
+        "method": "POST",
+        "path": "/v1/responses"
+      }
+    ]
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "theme_version": 0,
+  "id": "pluxy/default",
+  "name": "Default",
+  "description": "Warm paper light and charcoal dark in IBM Plex, with the navigation at the side.",
+  "appearance": "both"
+}

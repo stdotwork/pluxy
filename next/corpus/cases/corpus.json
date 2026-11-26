@@ -1,0 +1,137 @@
+{
+  "description": "Settings that apply to every case.",
+  "volatile": [
+    "client.headers.X-Cpa-Trace-Id",
+    "client.body.error.pluxy",
+    "client.messages[*].error.pluxy"
+  ],
+  "exceptions": [
+    {
+      "path": "client.headers.X-Pluxy-Account",
+      "kind": "intended",
+      "reason": "Replies name their account and errors say what was tried (routing.explain, on by default): the new core adds the X-Pluxy-Account, X-Pluxy-Provider, X-Pluxy-Model and X-Pluxy-Attempts headers to a reply and a `pluxy` member to an error; today's core adds neither. The account IDs and the trace in the member change with every run (the account's public ID is a keyed digest), so the member is volatile here; the e2e tests pin its contents."
+    },
+    {
+      "path": "client.headers.X-Pluxy-Provider",
+      "kind": "intended",
+      "reason": "Replies name their account and errors say what was tried (routing.explain, on by default): the new core adds the X-Pluxy-Account, X-Pluxy-Provider, X-Pluxy-Model and X-Pluxy-Attempts headers to a reply and a `pluxy` member to an error; today's core adds neither. The account IDs and the trace in the member change with every run (the account's public ID is a keyed digest), so the member is volatile here; the e2e tests pin its contents."
+    },
+    {
+      "path": "client.headers.X-Pluxy-Model",
+      "kind": "intended",
+      "reason": "Replies name their account and errors say what was tried (routing.explain, on by default): the new core adds the X-Pluxy-Account, X-Pluxy-Provider, X-Pluxy-Model and X-Pluxy-Attempts headers to a reply and a `pluxy` member to an error; today's core adds neither. The account IDs and the trace in the member change with every run (the account's public ID is a keyed digest), so the member is volatile here; the e2e tests pin its contents."
+    },
+    {
+      "path": "client.headers.X-Pluxy-Attempts",
+      "kind": "intended",
+      "reason": "Replies name their account and errors say what was tried (routing.explain, on by default): the new core adds the X-Pluxy-Account, X-Pluxy-Provider, X-Pluxy-Model and X-Pluxy-Attempts headers to a reply and a `pluxy` member to an error; today's core adds neither. The account IDs and the trace in the member change with every run (the account's public ID is a keyed digest), so the member is volatile here; the e2e tests pin its contents."
+    },
+    {
+      "path": "client.body.error.pluxy",
+      "kind": "intended",
+      "reason": "Replies name their account and errors say what was tried (routing.explain, on by default): the new core adds the X-Pluxy-Account, X-Pluxy-Provider, X-Pluxy-Model and X-Pluxy-Attempts headers to a reply and a `pluxy` member to an error; today's core adds neither. The account IDs and the trace in the member change with every run (the account's public ID is a keyed digest), so the member is volatile here; the e2e tests pin its contents."
+    },
+    {
+      "path": "client.messages[*].error.pluxy",
+      "kind": "intended",
+      "reason": "Replies name their account and errors say what was tried (routing.explain, on by default): the new core adds the X-Pluxy-Account, X-Pluxy-Provider, X-Pluxy-Model and X-Pluxy-Attempts headers to a reply and a `pluxy` member to an error; today's core adds neither. The account IDs and the trace in the member change with every run (the account's public ID is a keyed digest), so the member is volatile here; the e2e tests pin its contents."
+    },
+    {
+      "path": "client.headers.X-Cpa-Trace-Id",
+      "kind": "intended",
+      "reason": "Today's core sends a trace ID only once it has chosen an account; the new core sends one with every reply to a request that may use the API, including one where no account was tried (a cooldown, a body that does not parse)."
+    },
+    {
+      "path": "client.headers.Access-Control-Allow-Headers",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Today's core allows every origin on every route (Access-Control-Allow-Origin: *), an unsafe default this core does not carry over: it sends CORS headers only to the origins listed in cors.allowed_origins, none by default."
+    },
+    {
+      "path": "client.headers.Access-Control-Allow-Methods",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Today's core allows every origin on every route (Access-Control-Allow-Origin: *), an unsafe default this core does not carry over: it sends CORS headers only to the origins listed in cors.allowed_origins, none by default."
+    },
+    {
+      "path": "client.headers.Access-Control-Allow-Origin",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Today's core allows every origin on every route (Access-Control-Allow-Origin: *), an unsafe default this core does not carry over: it sends CORS headers only to the origins listed in cors.allowed_origins, none by default."
+    },
+    {
+      "path": "client.headers.Access-Control-Expose-Headers",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Today's core allows every origin on every route (Access-Control-Allow-Origin: *), an unsafe default this core does not carry over: it sends CORS headers only to the origins listed in cors.allowed_origins, none by default."
+    },
+    {
+      "path": "client.headers.X-Accel-Buffering",
+      "kind": "gap",
+      "reason": "The new core adds X-Accel-Buffering: no to streams so proxies such as nginx do not buffer them; the old core does not."
+    },
+    {
+      "path": "upstream[*].headers.User-Agent",
+      "kind": "gap",
+      "reason": "The old core forwards the client's User-Agent upstream (cli-proxy-openai-compat when the client sends none); the new core sends Go's default."
+    },
+    {
+      "path": "upstream[*].headers.Cache-Control",
+      "kind": "gap",
+      "reason": "The old core adds Cache-Control: no-cache to streamed upstream requests; the new core does not."
+    },
+    {
+      "path": "upstream[*].body.stream_options",
+      "kind": "gap",
+      "absent": true,
+      "reason": "The old core sets stream_options.include_usage true on every streamed upstream request; the new core passes the client's body through unchanged."
+    },
+    {
+      "path": "upstream[*].headers.Sec-Websocket-Extensions",
+      "kind": "intended",
+      "reason": "Both cores offer permessage-deflate without context takeover on either side; the new core's WebSocket library (github.com/coder/websocket) writes the two parameters in the other order."
+    },
+    {
+      "path": "client.messages[*].response.usage.input_tokens_details",
+      "kind": "intended",
+      "absent": true,
+      "reason": "The new core passes a Responses upstream's usage to a WebSocket client as the upstream sent it, as it does for a streamed HTTP reply (today's Codex executor too fills nothing in on that path); today's core's WebSocket path fills in input_tokens_details.cached_tokens and output_tokens_details.reasoning_tokens as 0 when the upstream leaves them out."
+    },
+    {
+      "path": "client.messages[*].response.usage.output_tokens_details",
+      "kind": "intended",
+      "absent": true,
+      "reason": "The new core passes a Responses upstream's usage to a WebSocket client as the upstream sent it, as it does for a streamed HTTP reply (today's Codex executor too fills nothing in on that path); today's core's WebSocket path fills in input_tokens_details.cached_tokens and output_tokens_details.reasoning_tokens as 0 when the upstream leaves them out."
+    },
+    {
+      "path": "client.headers.X-Cpa-Version",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Different management API by design: today's core stamps every management reply with X-CPA-VERSION (its build and plugin support); the new management API sends no build information."
+    },
+    {
+      "path": "client.headers.X-Cpa-Commit",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Different management API by design: today's core stamps every management reply with X-CPA-COMMIT (its build and plugin support); the new management API sends no build information."
+    },
+    {
+      "path": "client.headers.X-Cpa-Build-Date",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Different management API by design: today's core stamps every management reply with X-CPA-BUILD-DATE (its build and plugin support); the new management API sends no build information."
+    },
+    {
+      "path": "client.headers.X-Cpa-Support-Plugin",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Different management API by design: today's core stamps every management reply with X-CPA-SUPPORT-PLUGIN (its build and plugin support); the new management API sends no build information."
+    },
+    {
+      "path": "client.headers.Cache-Control",
+      "kind": "intended",
+      "want": "no-store",
+      "reason": "Different management API by design: the new management API marks every reply Cache-Control: no-store; today's core's management replies carry no Cache-Control."
+    }
+  ]
+}

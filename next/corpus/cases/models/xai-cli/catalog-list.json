@@ -1,0 +1,368 @@
+{
+  "description": "A Grok login whose config lists no models lists today's catalog for it.",
+  "source": [
+    "core/sdk/cliproxy/service_models.go",
+    "core/internal/registry/models/models.json xai"
+  ],
+  "client": {
+    "method": "GET",
+    "path": "/v1/models"
+  },
+  "account_models": [
+    "grok-4.7"
+  ],
+  "old_core": {
+    "account": {
+      "models": null
+    }
+  },
+  "new_core": {
+    "account": {
+      "models": null
+    }
+  },
+  "unordered": [
+    "client.body.data"
+  ],
+  "exceptions": [
+    {
+      "path": "client.body.data",
+      "kind": "intended",
+      "reason": "Today's core lists xAI's image, video and speech models (grok-imagine-*, grok-tts, grok-voice-*) and sends them to xAI's image, video and speech endpoints; the new core has no image, video or speech routes yet, so the xAI extension does not list them. The exception also pins each listed model's merged context_length, max_output_tokens and capabilities.",
+      "want": [
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": false,
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 1000000,
+          "created": 1773014400,
+          "from": "catalogue",
+          "id": "grok-4.20-0309-non-reasoning",
+          "max_output_tokens": 30000,
+          "object": "model",
+          "owned_by": "xai"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "structured_output": true,
+            "tools": false,
+            "vision": true
+          },
+          "context_length": 1000000,
+          "created": 1773014400,
+          "from": "catalogue",
+          "id": "grok-4.20-multi-agent-0309",
+          "max_output_tokens": 30000,
+          "object": "model",
+          "owned_by": "xai"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 500000,
+          "created": 1783526400,
+          "from": "catalogue",
+          "id": "grok-4.5",
+          "max_output_tokens": 65536,
+          "object": "model",
+          "owned_by": "xai"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 500000,
+          "created": 1785974400,
+          "from": "catalogue",
+          "id": "grok-4.6",
+          "max_output_tokens": 65536,
+          "object": "model",
+          "owned_by": "xai"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 500000,
+          "created": 1789948800,
+          "from": "catalogue",
+          "id": "grok-4.7",
+          "max_output_tokens": 500000,
+          "object": "model",
+          "owned_by": "xai"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "reasoning_levels": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ],
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 1000000,
+          "created": 1775606400,
+          "from": "catalogue",
+          "id": "grok-4.3",
+          "max_output_tokens": 30000,
+          "object": "model",
+          "owned_by": "xai"
+        },
+        {
+          "capabilities": {
+            "pdf": true,
+            "reasoning": true,
+            "structured_output": true,
+            "tools": true,
+            "vision": true
+          },
+          "context_length": 1000000,
+          "created": 1773014400,
+          "from": "catalogue",
+          "id": "grok-4.20-0309-reasoning",
+          "max_output_tokens": 30000,
+          "object": "model",
+          "owned_by": "xai"
+        },
+        {
+          "context_length": 131072,
+          "created": 1740960000,
+          "from": "extension",
+          "id": "grok-3-mini",
+          "max_output_tokens": 32768,
+          "object": "model",
+          "owned_by": "xai"
+        },
+        {
+          "context_length": 131072,
+          "created": 1740960000,
+          "from": "extension",
+          "id": "grok-3-mini-fast",
+          "max_output_tokens": 32768,
+          "object": "model",
+          "owned_by": "xai"
+        },
+        {
+          "context_length": 200000,
+          "created": 1740960000,
+          "from": "extension",
+          "id": "grok-composer-2.5-fast",
+          "max_output_tokens": 32768,
+          "object": "model",
+          "owned_by": "xai"
+        },
+        {
+          "context_length": 256000,
+          "created": 1779321600,
+          "from": "extension",
+          "id": "grok-build-0.1",
+          "max_output_tokens": 256000,
+          "object": "model",
+          "owned_by": "xai"
+        },
+        {
+          "context_length": 500000,
+          "created": 1789948800,
+          "from": "extension",
+          "id": "grok-4.7-build-fast",
+          "max_output_tokens": 500000,
+          "object": "model",
+          "owned_by": "xai"
+        }
+      ]
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "data": [
+          {
+            "created": 1735689600,
+            "id": "grok-imagine-image",
+            "object": "model",
+            "owned_by": "xai"
+          },
+          {
+            "created": 1735689600,
+            "id": "grok-imagine-image-quality",
+            "object": "model",
+            "owned_by": "xai"
+          },
+          {
+            "created": 1735689600,
+            "id": "grok-imagine-video",
+            "object": "model",
+            "owned_by": "xai"
+          },
+          {
+            "created": 1735689600,
+            "id": "grok-imagine-video-1.5",
+            "object": "model",
+            "owned_by": "xai"
+          },
+          {
+            "created": 1735689600,
+            "id": "grok-imagine-video-1.5-preview",
+            "object": "model",
+            "owned_by": "xai"
+          },
+          {
+            "created": 1740960000,
+            "id": "grok-3-mini",
+            "object": "model",
+            "owned_by": "xai"
+          },
+          {
+            "created": 1740960000,
+            "id": "grok-3-mini-fast",
+            "object": "model",
+            "owned_by": "xai"
+          },
+          {
+            "created": 1740960000,
+            "id": "grok-composer-2.5-fast",
+            "object": "model",
+            "owned_by": "xai"
+          },
+          {
+            "created": 1773014400,
+            "id": "grok-4.20-0309-non-reasoning",
+            "object": "model",
+            "owned_by": "xai"
+          },
+          {
+            "created": 1773014400,
+            "id": "grok-4.20-0309-reasoning",
+            "object": "model",
+            "owned_by": "xai"
+          },
+          {
+            "created": 1773014400,
+            "id": "grok-4.20-multi-agent-0309",
+            "object": "model",
+            "owned_by": "xai"
+          },
+          {
+            "created": 1773619200,
+            "id": "grok-tts",
+            "object": "model",
+            "owned_by": "xai"
+          },
+          {
+            "created": 1773619200,
+            "id": "grok-voice-tts-1.0",
+            "object": "model",
+            "owned_by": "xai"
+          },
+          {
+            "created": 1775606400,
+            "id": "grok-4.3",
+            "object": "model",
+            "owned_by": "xai"
+          },
+          {
+            "created": 1779321600,
+            "id": "grok-build-0.1",
+            "object": "model",
+            "owned_by": "xai"
+          },
+          {
+            "created": 1783526400,
+            "id": "grok-4.5",
+            "object": "model",
+            "owned_by": "xai"
+          },
+          {
+            "created": 1785974400,
+            "id": "grok-4.6",
+            "object": "model",
+            "owned_by": "xai"
+          },
+          {
+            "created": 1786060800,
+            "id": "grok-imagine-image-2.0",
+            "object": "model",
+            "owned_by": "xai"
+          },
+          {
+            "created": 1787702400,
+            "id": "grok-imagine-video-1.5-lite",
+            "object": "model",
+            "owned_by": "xai"
+          },
+          {
+            "created": 1789948800,
+            "id": "grok-4.7",
+            "object": "model",
+            "owned_by": "xai"
+          },
+          {
+            "created": 1789948800,
+            "id": "grok-4.7-build-fast",
+            "object": "model",
+            "owned_by": "xai"
+          }
+        ],
+        "object": "list"
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      "status": 200
+    },
+    "upstream": []
+  }
+}

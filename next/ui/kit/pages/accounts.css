@@ -1,0 +1,48 @@
+@layer kit {
+  .accounts-meta {
+    margin-top: calc(var(--s) * -2);
+  }
+  .accounts-toolbar,
+  .accounts-batch,
+  .accounts-pager {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: calc(var(--s) * 2);
+    margin-bottom: calc(var(--s) * 3);
+  }
+  .accounts-toolbar .accounts-search {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+  .accounts-toolbar > .field {
+    flex: 1 1 auto;
+  }
+  .accounts-batch {
+    align-items: center;
+    padding: calc(var(--s) * 2);
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--px-shape-radius);
+    background: var(--px-color-surface);
+  }
+  .accounts-pager {
+    align-items: center;
+    justify-content: end;
+    margin-top: calc(var(--s) * 3);
+  }
+  .accounts-pager > .field {
+    display: flex;
+    align-items: center;
+    margin-right: auto;
+  }
+  .accounts-pager select {
+    width: auto;
+  }
+  [data-part="select"] {
+    accent-color: var(--px-color-accent);
+  }
+  [data-part="select"]:focus-visible {
+    outline: 2px solid var(--px-color-focus);
+    outline-offset: 2px;
+  }
+}

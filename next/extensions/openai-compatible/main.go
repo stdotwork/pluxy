@@ -1,0 +1,835 @@
+// Command openai-compatible is a pluxy provider extension for services that speak OpenAI Chat
+// Completions, OpenAI Responses, Anthropic Messages or Gemini GenerateContent with an API key:
+// OpenAI itself and the many services and local servers that copy its API, some of which also
+// serve a Messages or GenerateContent endpoint.
+//
+// Account settings:
+//
+//	{"base_url": "https://api.openai.com/v1", "wire_api": "chat"}
+//
+// wire_api is the API the upstream speaks: "chat" (the default, POST {base_url}/chat/completions),
+// "responses" (POST {base_url}/responses), "messages" (POST {base_url}/messages) or "gemini"
+// (POST {base_url}/models/{model}:generateContent, or :streamGenerateContent?alt=sse; base_url
+// ends in /v1beta). The name follows the Codex CLI's model provider setting. reasoning_levels
+// (default ["low", "medium", "high"]) are the reasoning efforts a Chat or Responses upstream
+// accepts: an effort outside them moves to the nearest, as today's core clamps xhigh to high for
+// a model it has no thinking settings for. A request in the
+// upstream's own format is sent unchanged; a request in another format is translated where a
+// translation exists, and what the translation could not carry is reported with the reply. The
+// account's credential must be of kind api_key; it is sent as a bearer token, for a Messages
+// upstream in x-api-key with the client's anthropic-version (2023-06-01 when the client sent
+// none) and anthropic-beta headers, and for a Gemini upstream in x-goog-api-key.
+//
+// An account check (core's check call) reads the upstream's model list, GET {base_url}/models,
+// with the key sent the same way; it costs the account nothing. An upstream without that list
+// (404) leaves the account not checked.
+//
+// Quota (core's quota call) reads the vendor's normal-key usage or balance endpoint when one
+// exists: OpenRouter's GET /api/v1/key ("quota": "openrouter") or DeepSeek's GET /user/balance
+// ("quota": "deepseek"). When "quota" is unset, it is chosen from base_url's host (openrouter.ai
+// or api.deepseek.com), and any other host (or "quota": "none") answers unsupported.
+//
+// Responses compaction (core's endpoint call for POST /v1/responses/compact) passes the client's
+// body through to POST {base_url}/responses/compact on a Responses account, summarizes through
+// POST {base_url}/chat/completions on a Chat account, and answers unsupported on a Messages or
+// Gemini account (compact.go). OpenAI's Images API (POST /v1/images/generations and
+// /v1/images/edits) passes through to the same paths under base_url on a Chat or Responses
+// account, with a multipart edit sent as multipart (images.go).
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"slices"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/stdotwork/pluxy/next/format/anthropicmessages"
+	"github.com/stdotwork/pluxy/next/format/geminigenerate"
+	"github.com/stdotwork/pluxy/next/format/openaichat"
+	"github.com/stdotwork/pluxy/next/format/openairesponses"
+	"github.com/stdotwork/pluxy/next/format/sse"
+	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/sdk"
+)
+
+const (
+	id      = "pluxy/openai-compatible"
+	version = "0.1.0"
+)
+
+func main() {
+	if err := sdk.Serve(sdk.Extension{ID: id, Version: version, Login: login, LoginMethods: loginMethods, Generate: maskGoogle(generate), CountTokens: maskGoogle(countTokens), Models: listModels, Check: check, Quota: quota, Endpoint: maskGoogle(endpointCall)}); err != nil {
+		fmt.Fprintln(os.Stderr, "openai-compatible:", err)
+		os.Exit(1)
+	}
+}
+
+type settings struct {
+	BaseURL string `json:"base_url"`
+	WireAPI string `json:"wire_api"`
+	// ReasoningLevels are the reasoning efforts the upstream accepts; an effort outside them
+	// moves to the nearest. Default low, medium and high.
+	ReasoningLevels   []string `json:"reasoning_levels"`
+	DeveloperRole     string   `json:"developer_role"`
+	StringContent     *bool    `json:"string_content"`
+	ReasoningPassback *bool    `json:"reasoning_passback"`
+	// Quota names the vendor quota endpoint to read ("openrouter", "deepseek" or "none");
+	// when empty, it is chosen from base_url's host.
+	Quota string `json:"quota"`
+}
+
+// Wire APIs.
+const (
+	wireChat      = "chat"
+	wireResponses = "responses"
+	wireMessages  = "messages"
+	wireGemini    = "gemini"
+)
+
+// anthropicVersion is the Messages API version sent when the client named none.
+const anthropicVersion = "2023-06-01"
+
+// wires maps a wire API to its upstream format and endpoint.
+var wires = map[string]wireInfo{
+	wireChat:      {llm.FormatOpenAIChat, "/chat/completions"},
+	wireResponses: {llm.FormatOpenAIResponses, "/responses"},
+	wireMessages:  {llm.FormatAnthropicMessages, "/messages"},
+	// The model and the method are added per request (see endpoint).
+	wireGemini: {llm.FormatGeminiGenerate, "/models/"},
+}
+
+// endpoint returns the path after base_url for a request to wire. GenerateContent names the
+// model and whether to stream in the path.
+func endpoint(wire string, req llm.Request) string {
+	e := wires[wire].endpoint
+	if wire != wireGemini {
+		return e
+	}
+	if req.Stream {
+		return e + url.PathEscape(req.Model) + ":streamGenerateContent?alt=sse"
+	}
+	return e + url.PathEscape(req.Model) + ":generateContent"
+}
+
+// client has no timeouts after the connection is made: a long generation is not a failure, and
+// cancellation comes from the call's context. It follows a redirect only to the same scheme and
+// host: Go drops Authorization on a redirect to another host but not x-api-key or
+// x-goog-api-key, so following one would send the account's key elsewhere.
+var client = &http.Client{
+	Transport: sdk.Upstream(&http.Transport{
+		DialContext:         (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		TLSHandshakeTimeout: 30 * time.Second,
+		ForceAttemptHTTP2:   true,
+		MaxIdleConns:        100,
+		IdleConnTimeout:     90 * time.Second,
+	}),
+	CheckRedirect: sameOrigin,
+}
+
+// sameOrigin refuses a redirect to another scheme or host; the redirect reply is then treated as
+// the upstream's answer.
+func sameOrigin(req *http.Request, via []*http.Request) error {
+	first := via[0].URL
+	if req.URL.Scheme != first.Scheme || req.URL.Host != first.Host {
+		return http.ErrUseLastResponse
+	}
+	if len(via) >= 10 {
+		return errors.New("stopped after 10 redirects")
+	}
+	return nil
+}
+
+// wireInfo is an upstream format and its endpoint under base_url.
+type wireInfo struct{ format, endpoint string }
+
+// account reads a call's account: its settings, its wire API and its API key.
+func account(call sdk.Call) (settings, wireInfo, string, error) {
+	var s settings
+	if len(call.Account.Settings) > 0 {
+		if err := json.Unmarshal(call.Account.Settings, &s); err != nil {
+			return s, wireInfo{}, "", &llm.Error{Code: llm.CodeInvalidRequest, Message: "account settings are not valid JSON", Scope: llm.ScopeCredential}
+		}
+	}
+	if s.BaseURL == "" {
+		return s, wireInfo{}, "", &llm.Error{Code: llm.CodeInvalidRequest, Message: "account settings need base_url", Scope: llm.ScopeCredential}
+	}
+	if s.WireAPI == "" {
+		s.WireAPI = wireChat
+	}
+	if reason := checkShaping(s); reason != "" {
+		return s, wireInfo{}, "", &llm.Error{Code: llm.CodeInvalidRequest, Message: reason, Scope: llm.ScopeCredential}
+	}
+	wire, ok := wires[s.WireAPI]
+	if !ok {
+		return s, wireInfo{}, "", &llm.Error{Code: llm.CodeInvalidRequest, Message: fmt.Sprintf("account setting wire_api must be %q, %q, %q or %q", wireChat, wireResponses, wireMessages, wireGemini), Scope: llm.ScopeCredential}
+	}
+	if _, err := quotaVendor(s); err != nil {
+		return s, wireInfo{}, "", err
+	}
+	cred := call.Account.Credential
+	if cred == nil || cred.Kind != protocol.CredentialAPIKey || cred.APIKey == "" {
+		return s, wireInfo{}, "", &llm.Error{Code: llm.CodeAuth, Message: "account has no API key", Scope: llm.ScopeCredential}
+	}
+	return s, wire, cred.APIKey, nil
+}
+
+func generate(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
+	s, wire, key, err := account(call)
+	if err != nil {
+		return err
+	}
+	body, tr, err := upstreamBody(call.Request, wire.format, s)
+	if err != nil {
+		return err
+	}
+	// The report travels on the reply's first event.
+	send := &reporting{Stream: out, tr: tr, names: replyNames(call.Request, tr), calls: openairesponses.NewCustomCallCheck(call.Request, tr)}
+	resp, err := postBody(ctx, call, s, wire, key, endpoint(s.WireAPI, call.Request), body)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	send.headers = llm.ExtractRateLimitHeaders(wire.format, resp.Header)
+	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+		return relayStream(ctx, resp.Body, send, wire.format, call.Request.BodyReachesClient(wire.format, true))
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
+	}
+	events, losses, err := decodeResponse(wire.format, raw)
+	if err != nil {
+		return llm.MarkContextOverflow(err)
+	}
+	for _, l := range llm.ReplyLosses(losses, call.Request.BodyReachesClient(wire.format, false)) {
+		logReplyLoss(l)
+	}
+	for _, ev := range events {
+		if err := send.Send(ev); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// upstreamBody returns the body to send for req to an upstream speaking format, and how it was
+// built: the client's body or its translation (buildBody), with the account's reasoning levels
+// (applyReasoning) and, for a Chat upstream, its shaping settings (shapeChat) applied.
+func upstreamBody(req llm.Request, format string, s settings) ([]byte, *llm.Translation, error) {
+	body, tr, err := buildBody(req, format, s)
+	if err != nil {
+		return nil, nil, err
+	}
+	sent := body
+	var losses []llm.Loss
+	if body, losses, err = applyReasoning(body, req, format, s.ReasoningLevels); err != nil {
+		return nil, nil, err
+	}
+	for _, l := range losses {
+		tr.Losses = llm.AddLoss(tr.Losses, l)
+	}
+	if format == llm.FormatOpenAIChat {
+		if body, losses, err = shapeChat(body, s); err != nil {
+			return nil, nil, err
+		}
+		for _, l := range losses {
+			tr.Losses = llm.AddLoss(tr.Losses, l)
+		}
+	}
+	// A client's own body that was changed here, or lost something, was not sent as it came.
+	if tr.Passthrough && (len(tr.Losses) > 0 || !bytes.Equal(sent, body)) {
+		tr.Passthrough = false
+	}
+	return body, tr, nil
+}
+
+// listModels reads the account's model list from GET {base_url}/models, in OpenAI's list shape
+// or Gemini's, which a wire_api "gemini" account answers with (as check reads both), with the
+// account's key. An error lets core fall back to the models the account's config names, or to
+// serving any model when the config names none.
+func listModels(ctx context.Context, call sdk.ModelsCall) (*protocol.ModelList, error) {
+	s, wire, key, err := account(sdk.Call{ID: call.ID, Account: call.Account})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(s.BaseURL, "/")+"/models", nil)
+	if err != nil {
+		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
+	}
+	setKey(req, wire, key, nil)
+	req.Header.Set("Accept", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, upstreamError(resp, "")
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream model list: " + err.Error(), Scope: llm.ScopeEndpoint}
+	}
+	var payload struct {
+		Data []struct {
+			ID          string `json:"id"`
+			DisplayName string `json:"display_name"`
+			Created     int64  `json:"created"`
+			OwnedBy     string `json:"owned_by"`
+		} `json:"data"`
+		Models []struct {
+			Name                       string   `json:"name"`
+			DisplayName                string   `json:"displayName"`
+			Description                string   `json:"description"`
+			Version                    string   `json:"version"`
+			InputTokenLimit            int      `json:"inputTokenLimit"`
+			OutputTokenLimit           int      `json:"outputTokenLimit"`
+			SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil || (payload.Data == nil && payload.Models == nil) {
+		return nil, &llm.Error{Code: llm.CodeUpstream, Message: "upstream model list is not an OpenAI or Gemini list", Scope: llm.ScopeEndpoint}
+	}
+	models := make([]protocol.Model, 0, len(payload.Data)+len(payload.Models))
+	seen := map[string]bool{}
+	add := func(m protocol.Model) {
+		if m.ID == "" || seen[m.ID] {
+			return
+		}
+		seen[m.ID] = true
+		models = append(models, m)
+	}
+	for _, item := range payload.Data {
+		add(protocol.Model{
+			ID:          strings.TrimSpace(item.ID),
+			DisplayName: strings.TrimSpace(item.DisplayName),
+			Created:     item.Created,
+			OwnedBy:     strings.TrimSpace(item.OwnedBy),
+		})
+	}
+	for _, item := range payload.Models {
+		// A model that names its methods and lists neither generateContent nor
+		// streamGenerateContent cannot be called by a request (embedding-only, for one). A model
+		// that lists none is kept: a compatible server may not send the field.
+		if len(item.SupportedGenerationMethods) > 0 && !slices.ContainsFunc(item.SupportedGenerationMethods, generationMethod) {
+			continue
+		}
+		// Gemini names a model "models/<id>", and a request names it by the id alone.
+		name := strings.TrimSpace(item.Name)
+		id := strings.TrimPrefix(name, "models/")
+		m := protocol.Model{
+			ID:                id,
+			DisplayName:       strings.TrimSpace(item.DisplayName),
+			Description:       strings.TrimSpace(item.Description),
+			Version:           strings.TrimSpace(item.Version),
+			InputTokenLimit:   max(item.InputTokenLimit, 0),
+			OutputTokenLimit:  max(item.OutputTokenLimit, 0),
+			GenerationMethods: item.SupportedGenerationMethods,
+		}
+		if id != "" && name != id {
+			m.Name = "models/" + id
+		}
+		add(m)
+	}
+	return &protocol.ModelList{Models: models}, nil
+}
+
+// generationMethod reports whether a Gemini model's supportedGenerationMethods entry is one the
+// wire calls: :generateContent or :streamGenerateContent (see the wire URLs above).
+func generationMethod(method string) bool {
+	return method == "generateContent" || method == "streamGenerateContent"
+}
+
+// check reads the upstream's model list, GET {base_url}/models: free for the account, and refused
+// like a generation when the key is.
+func check(ctx context.Context, call sdk.CheckCall) (*protocol.CheckResult, error) {
+	s, wire, key, err := account(sdk.Call{ID: call.ID, Account: call.Account})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(s.BaseURL, "/")+"/models", nil)
+	if err != nil {
+		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
+	}
+	setKey(req, wire, key, nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, &llm.Error{Code: llm.CodeUnsupported, Message: "the upstream has no model list to check the key with", Scope: llm.ScopeCredential}
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, upstreamError(resp, "")
+	}
+	var list struct {
+		Data   []json.RawMessage `json:"data"`   // OpenAI and Anthropic
+		Models []json.RawMessage `json:"models"` // Gemini
+	}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
+	if json.Unmarshal(raw, &list) != nil || (list.Data == nil && list.Models == nil) {
+		return &protocol.CheckResult{Detail: "the upstream accepted the key"}, nil
+	}
+	return &protocol.CheckResult{Detail: fmt.Sprintf("the upstream lists %d models", len(list.Data)+len(list.Models))}, nil
+}
+
+// setKey puts the key on req as wire's upstream takes it; native is the client's request in its
+// own format, whose Messages headers a Messages upstream gets, or nil.
+func setKey(req *http.Request, wire wireInfo, key string, native *llm.Native) {
+	switch wire.format {
+	case llm.FormatGeminiGenerate:
+		req.Header.Set("X-Goog-Api-Key", key)
+	case llm.FormatAnthropicMessages:
+		req.Header.Set("X-Api-Key", key)
+		req.Header.Set("Anthropic-Version", anthropicVersion)
+		if native != nil && native.Format == wire.format {
+			for _, h := range anthropicmessages.Headers {
+				if v := native.Headers[h]; v != "" {
+					req.Header.Set(h, v)
+				}
+			}
+		}
+	default:
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
+}
+
+// postBody sends body to path under base_url with the key as wire's upstream takes it, and
+// returns the upstream's successful reply; a failure is returned as the error to report.
+func postBody(ctx context.Context, call sdk.Call, s settings, wire wireInfo, key, path string, body []byte) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(s.BaseURL, "/")+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, &llm.Error{Code: llm.CodeInvalidRequest, Message: "bad base_url: " + err.Error(), Scope: llm.ScopeCredential}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	setKey(req, wire, key, call.Request.Native)
+	if call.Request.Stream {
+		req.Header.Set("Accept", "text/event-stream")
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, requestFailed(ctx, err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		defer resp.Body.Close()
+		e := upstreamError(resp, call.Request.Model)
+		e.Headers = llm.ExtractRateLimitHeaders(wire.format, resp.Header)
+		return nil, e
+	}
+	return resp, nil
+}
+
+// requestFailed turns a failed upstream request into a structured error.
+func requestFailed(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return &llm.Error{Code: llm.CodeUnavailable, Message: "upstream unreachable: " + err.Error(), Scope: llm.ScopeEndpoint, Retryable: sdk.Retryable(err)}
+}
+
+// countTokens counts the request's input tokens with the upstream's own count endpoint: a
+// Messages upstream's {base_url}/messages/count_tokens, a Gemini upstream's
+// {base_url}/models/{model}:countTokens. A Chat or Responses upstream has none, so the account
+// cannot count. A request in the upstream's format is sent as it came (a Messages one without the
+// fields only generating uses); a Gemini request to a Messages upstream is rebuilt with the
+// fields count_tokens takes.
+func countTokens(ctx context.Context, call sdk.Call, out *sdk.Stream) error {
+	s, wire, key, err := account(call)
+	if err != nil {
+		return err
+	}
+	req := call.Request
+	req.Stream = false
+	call.Request = req
+	var path string
+	switch wire.format {
+	case llm.FormatAnthropicMessages:
+		path = "/messages/count_tokens"
+	case llm.FormatGeminiGenerate:
+		path = "/models/" + url.PathEscape(req.Model) + ":countTokens"
+	default:
+		return &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
+			Message: "this account's upstream speaks " + formatNames[wire.format] + ", which has no token count endpoint"}
+	}
+	body, tr, err := buildBody(req, wire.format, s)
+	if err != nil {
+		return err
+	}
+	count := anthropicmessages.CountRequest
+	switch {
+	case tr.Passthrough && wire.format == llm.FormatAnthropicMessages:
+		count = anthropicmessages.CountBody
+	case tr.Passthrough:
+		count = nil
+	}
+	if count != nil {
+		if body, err = count(body); err != nil {
+			return err
+		}
+	}
+	resp, err := postBody(ctx, call, s, wire, key, path, body)
+	if err != nil {
+		return noCountEndpoint(err, "token count", path)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, protocol.MaxFrame))
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return &llm.Error{Code: llm.CodeUpstream, Message: "reading upstream response: " + err.Error(), Scope: llm.ScopeEndpoint}
+	}
+	var n int64
+	if wire.format == llm.FormatAnthropicMessages {
+		if n, err = anthropicmessages.DecodeCount(raw); err != nil {
+			return err
+		}
+	} else {
+		var r struct {
+			TotalTokens *int64 `json:"totalTokens"`
+		}
+		if json.Unmarshal(raw, &r) != nil || r.TotalTokens == nil {
+			return &llm.Error{Code: llm.CodeUpstream, Scope: llm.ScopeEndpoint, Message: "the upstream's countTokens reply has no totalTokens", Raw: llm.RawJSON(raw)}
+		}
+		n = *r.TotalTokens
+	}
+	if err := out.Start(llm.ResponseInfo{
+		Model:   req.Model,
+		Format:  wire.format,
+		Headers: llm.ExtractRateLimitHeaders(wire.format, resp.Header),
+	}); err != nil {
+		return err
+	}
+	return out.Finish(llm.Finish{Reason: llm.FinishStop}, &llm.Usage{InputTokens: &n, Raw: llm.RawJSON(raw)})
+}
+
+// formatNames name the upstream formats in messages to clients.
+var formatNames = map[string]string{
+	llm.FormatOpenAIChat:        "Chat Completions",
+	llm.FormatOpenAIResponses:   "OpenAI Responses",
+	llm.FormatAnthropicMessages: "Anthropic Messages",
+	llm.FormatGeminiGenerate:    "Gemini GenerateContent",
+}
+
+// buildBody returns the upstream request body for req in format target and how it was built. A
+// request in the upstream's own format is sent unchanged; every other client format is translated
+// to the target. Under the reject drop policy a translation that drops anything is refused.
+func buildBody(req llm.Request, target string, s settings) ([]byte, *llm.Translation, error) {
+	tr := &llm.Translation{To: target}
+	if n := req.Native; n != nil {
+		tr.From = n.Format
+		if n.Format == target {
+			tr.Passthrough = true
+			return n.Body, tr, nil
+		}
+	}
+	// A service tier or a verbosity from another format goes only to a host whose documentation
+	// says its API takes it (tierHosts); any other upstream may refuse a field it does not list.
+	f := tierFieldsOf(s, target)
+	var encode func(llm.Request) ([]byte, []llm.Loss, error)
+	switch target {
+	case llm.FormatOpenAIChat:
+		encode = func(r llm.Request) ([]byte, []llm.Loss, error) {
+			return openaichat.EncodeRequestWith(r, openaichat.EncodeOptions{ServiceTier: f.serviceTier, Verbosity: f.verbosity, WebSearch: f.webSearch, CandidateCount: f.candidateCount, AssistantAnnotations: f.assistantAnnotations})
+		}
+	case llm.FormatOpenAIResponses:
+		encode = func(r llm.Request) ([]byte, []llm.Loss, error) {
+			return openairesponses.EncodeRequestWith(r, openairesponses.EncodeOptions{ServiceTier: f.serviceTier, Verbosity: f.verbosity, WebSearch: f.webSearch, CodeExecution: f.codeExecution})
+		}
+	case llm.FormatAnthropicMessages:
+		encode = func(r llm.Request) ([]byte, []llm.Loss, error) {
+			return anthropicmessages.EncodeRequestWith(r, anthropicmessages.EncodeOptions{ServiceTier: f.serviceTier, WebSearch: f.webSearch, CodeExecution: f.codeExecution, StructuredOutputRules: f.structuredOutput})
+		}
+	case llm.FormatGeminiGenerate:
+		encode = func(r llm.Request) ([]byte, []llm.Loss, error) {
+			return geminigenerate.EncodeRequestWith(r, geminigenerate.EncodeOptions{ServiceTier: f.serviceTier, WebSearch: f.webSearch, CodeExecution: f.codeExecution, CandidateCount: f.candidateCount})
+		}
+	default:
+		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true,
+			Message: "the upstream speaks an unknown format " + strconv.Quote(target)}
+	}
+	body, losses, err := encode(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	tr.Losses = losses
+	if req.DropPolicy == llm.DropReject && tr.Dropped() {
+		paths := tr.DroppedPaths()
+		// Another account may speak the client's format and carry it whole.
+		return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Scope: llm.ScopeCredential, Retryable: true, Dropped: paths,
+			Message: formatNames[target] + " cannot carry parts of this request: " + strings.Join(paths, ", ")}
+	}
+	return body, tr, nil
+}
+
+// reporting adds the translation report to the reply's response.start event, and gives each tool
+// call the client's own name for the tool when the request was sent under another (names).
+type reporting struct {
+	*sdk.Stream
+	tr      *llm.Translation
+	headers map[string]string
+	names   map[string]string // the upstream's name -> the client's
+	calls   *openairesponses.CustomCallCheck
+}
+
+func (r *reporting) Send(ev llm.Event) error {
+	if ev.Type == llm.EventResponseStart && ev.Response != nil {
+		info := *ev.Response
+		info.Translation = r.tr
+		info.Headers = r.headers
+		ev.Response = &info
+	}
+	r.restore(&ev)
+	if err := r.calls.Check(ev); err != nil {
+		return err
+	}
+	return r.Stream.Send(ev)
+}
+
+// restore gives a tool call the client's own name for the tool.
+func (r *reporting) restore(ev *llm.Event) {
+	// A later candidate's call gets the same name as candidate 0's.
+	if ev.Type == llm.EventCandidate && ev.Candidate != nil && ev.Candidate.Kind == llm.CandidateToolCallStart {
+		if name, ok := r.names[ev.Candidate.Name]; ok {
+			c := *ev.Candidate
+			c.Name = name
+			ev.Candidate = &c
+		}
+		return
+	}
+	if ev.Type != llm.EventItemStart || ev.Item == nil || ev.Item.Kind != llm.ItemToolCall {
+		return
+	}
+	if name, ok := r.names[ev.Item.Name]; ok {
+		item := *ev.Item
+		item.Name = name
+		ev.Item = &item
+	}
+}
+
+// replyNames maps each tool name a translated request was sent under back to the client's
+// (openaichat.ToolNames, geminigenerate.ToolNames or anthropicmessages.ToolNames). A body in the
+// upstream's own format passed through keeps the client's names.
+func replyNames(req llm.Request, tr *llm.Translation) map[string]string {
+	if tr.Passthrough {
+		return nil
+	}
+	var changed map[string]string
+	switch tr.To {
+	case llm.FormatOpenAIChat:
+		changed = openaichat.ToolNames(req)
+	case llm.FormatGeminiGenerate:
+		changed = geminigenerate.ToolNames(req)
+	case llm.FormatAnthropicMessages:
+		changed = anthropicmessages.ToolNames(req)
+	default:
+		return nil
+	}
+	back := map[string]string{}
+	for from, to := range changed {
+		back[to] = from
+	}
+	return back
+}
+
+// eventSender is what the reply is sent to.
+type eventSender interface{ Send(llm.Event) error }
+
+// streamDecoder decodes one upstream stream.
+type streamDecoder interface {
+	Decode(data []byte) ([]llm.Event, error)
+	Close() ([]llm.Event, error)
+	// Usage is the latest usage the upstream reported, put on an error when the stream breaks.
+	Usage() *llm.Usage
+}
+
+// decoders read each upstream format's streamed and non-streamed replies.
+var decoders = map[string]struct {
+	stream   func() streamDecoder
+	response func([]byte) ([]llm.Event, error)
+}{
+	llm.FormatOpenAIChat:        {func() streamDecoder { return openaichat.NewStreamDecoder() }, openaichat.DecodeResponse},
+	llm.FormatOpenAIResponses:   {func() streamDecoder { return openairesponses.NewStreamDecoder() }, openairesponses.DecodeResponse},
+	llm.FormatAnthropicMessages: {func() streamDecoder { return anthropicmessages.NewStreamDecoder() }, anthropicmessages.DecodeResponse},
+	llm.FormatGeminiGenerate:    {func() streamDecoder { return geminigenerate.NewStreamDecoder() }, geminigenerate.DecodeResponse},
+}
+
+// relayStream decodes the upstream stream and sends each event as soon as it is decoded. A
+// blocked send blocks the next upstream read.
+func relayStream(ctx context.Context, body io.Reader, out eventSender, upstreamFormat string, bodyReaches bool) error {
+	r := sse.NewReader(body)
+	dec := decoders[upstreamFormat].stream()
+	// The report in response.start has gone by the time a decoder finds something it had to
+	// leave out of a reply, so its losses are logged, with core's prefix for this extension.
+	defer reportLosses(dec, bodyReaches)
+	for {
+		e, err := r.Next()
+		eof := err == io.EOF
+		var events []llm.Event
+		switch {
+		case eof:
+			events, err = dec.Close()
+			if err != nil {
+				return err
+			}
+		case err != nil:
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return &llm.Error{Code: llm.CodeUpstream, Message: "upstream stream broke: " + err.Error(), Scope: llm.ScopeEndpoint, Usage: dec.Usage()}
+		default:
+			events, err = dec.Decode([]byte(e.Data))
+			if err != nil {
+				return llm.MarkContextOverflow(err)
+			}
+		}
+		for _, ev := range events {
+			if err := out.Send(ev); err != nil {
+				return err
+			}
+			if ev.Terminal() {
+				return nil
+			}
+		}
+		if eof {
+			return nil
+		}
+	}
+}
+
+// reportLosses logs what a stream decoder had to leave out of the reply. A decoder without losses
+// has none to log.
+func reportLosses(dec streamDecoder, bodyReaches bool) {
+	lr, ok := dec.(interface{ Losses() []llm.Loss })
+	if !ok {
+		return
+	}
+	for _, l := range llm.ReplyLosses(lr.Losses(), bodyReaches) {
+		logReplyLoss(l)
+	}
+}
+
+// logReplyLoss writes one thing a reply had to leave out to the extension's log, which core
+// prefixes with the extension's ID. A reply's translation report goes out with its first event, so
+// a loss found while reading the reply has no other way to core.
+func logReplyLoss(l llm.Loss) {
+	fmt.Fprintf(os.Stderr, "reply loss: %s %s (%s)\n", l.Kind, l.Path, l.Detail)
+}
+
+// decodeResponse reads a non-streamed reply along with any reply losses its decoder reported.
+func decodeResponse(format string, raw []byte) ([]llm.Event, []llm.Loss, error) {
+	switch format {
+	case llm.FormatOpenAIChat:
+		return openaichat.DecodeResponseLosses(raw)
+	case llm.FormatGeminiGenerate:
+		return geminigenerate.DecodeResponseLosses(raw)
+	case llm.FormatOpenAIResponses:
+		return openairesponses.DecodeResponseLosses(raw)
+	case llm.FormatAnthropicMessages:
+		return anthropicmessages.DecodeResponseLosses(raw)
+	}
+	events, err := decoders[format].response(raw)
+	return events, nil, err
+}
+
+// upstreamError turns a non-2xx upstream response into a structured error. model is the model
+// the request asked for.
+func upstreamError(resp *http.Response, model string) *llm.Error {
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	var parsed struct {
+		Error struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    any    `json:"code"`
+			Status  string `json:"status"` // Google's error status, such as RESOURCE_EXHAUSTED
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(raw, &parsed)
+	e := &llm.Error{Status: resp.StatusCode, Message: parsed.Error.Message}
+	if c := parsed.Error.Code; parsed.Error.Status != "" {
+		e.ProviderCode = parsed.Error.Status
+	} else if c != nil {
+		e.ProviderCode = fmt.Sprint(c)
+	} else {
+		e.ProviderCode = parsed.Error.Type
+	}
+	if e.Message == "" {
+		e.Message = fmt.Sprintf("upstream returned %s", resp.Status)
+	}
+	if json.Valid(raw) {
+		e.Raw = raw
+	}
+	switch s := resp.StatusCode; {
+	case s >= 300 && s < 400:
+		// A redirect sameOrigin refused to follow.
+		e.Code, e.Scope, e.Status = llm.CodeUpstream, llm.ScopeEndpoint, http.StatusBadGateway
+		e.Message = fmt.Sprintf("upstream redirected (%s) to another host; not followed", resp.Status)
+	case s == http.StatusUnauthorized:
+		e.Code, e.Scope, e.Retryable = llm.CodeAuth, llm.ScopeCredential, true
+	case s == http.StatusForbidden:
+		e.Code, e.Scope, e.Retryable = llm.CodePermission, llm.ScopeCredential, true
+	case s == http.StatusNotFound:
+		e.Code, e.Scope = llm.CodeNotFound, llm.ScopeModel
+		if modelRefused(e, model) {
+			// The upstream confirmed it does not serve the model, so it did not run the
+			// request: another account may serve the model.
+			e.Retryable = true
+		}
+	case s == http.StatusTooManyRequests:
+		// Only the model waits on this account, as today's core cools only the model that answered.
+		e.Code, e.Scope, e.Retryable = llm.CodeRateLimit, llm.ScopeModel, true
+		if model == "" {
+			// A call for no model (login or the model list): the account is the one limited.
+			e.Scope = llm.ScopeCredential
+		}
+		if e.ProviderCode == "insufficient_quota" {
+			e.Code = llm.CodeQuota
+		}
+		e.RetryAfterMS = sdk.RetryAfter(resp.Header.Get("Retry-After"), time.Now())
+	case s == http.StatusServiceUnavailable:
+		// Not retry-safe: a gateway may answer 503 after the model started on the request.
+		e.Code, e.Scope = llm.CodeUnavailable, llm.ScopeEndpoint
+		e.RetryAfterMS = sdk.RetryAfter(resp.Header.Get("Retry-After"), time.Now())
+	case s >= 500:
+		// The upstream may have run the request before failing, so retrying is not known safe.
+		e.Code, e.Scope = llm.CodeUpstream, llm.ScopeEndpoint
+		if s == 529 {
+			e.RetryAfterMS = sdk.RetryAfter(resp.Header.Get("Retry-After"), time.Now())
+		}
+	default:
+		e.Code, e.Scope = llm.CodeInvalidRequest, llm.ScopeRequest
+		_ = llm.MarkContextOverflow(e)
+	}
+	return e
+}
+
+// modelRefused reports whether a 404 is the upstream saying it does not have the requested
+// model, as OpenAI says with code model_not_found and Anthropic and Gemini say by naming the
+// model in the message, rather than a path or other resource it does not serve.
+func modelRefused(e *llm.Error, model string) bool {
+	return e.ProviderCode == "model_not_found" || (model != "" && strings.Contains(e.Message, model))
+}

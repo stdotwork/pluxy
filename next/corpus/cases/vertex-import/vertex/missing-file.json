@@ -1,0 +1,46 @@
+{
+  "description": "An import request without the file field is refused.",
+  "source": [
+    "core/internal/api/handlers/management/vertex_import.go ImportVertexCredential",
+    "core/internal/api/server_management.go POST /v0/management/vertex/import"
+  ],
+  "client": {
+    "path": "/v0/management/vertex/import",
+    "auth": "management-key",
+    "headers": {"Content-Type":"multipart/form-data; boundary=pluxy-corpus-boundary"},
+    "body_text": "--pluxy-corpus-boundary\r\nContent-Disposition: form-data; name=\"location\"\r\n\r\nus-east1\r\n--pluxy-corpus-boundary--\r\n"
+  },
+  "account_models": ["gemini-2.5-pro"],
+  "exceptions": [
+    {
+      "path": "client.body",
+      "kind": "intended",
+      "reason": "Different management API by design: the new management API answers an error as {error: {code, message}}, where today's core answers {error, message}; today's words are the code and the message.",
+      "want": {"error":{"code":"file_required","message":"file required"}}
+    },
+    {
+      "path": "client.headers.Content-Type",
+      "kind": "intended",
+      "reason": "The new core answers application/json; today's core's gin handler adds a charset to the reply.",
+      "want": "application/json"
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {"error":"file required"},
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8",
+        "X-Cpa-Build-Date": "unknown",
+        "X-Cpa-Commit": "none",
+        "X-Cpa-Support-Plugin": "1",
+        "X-Cpa-Version": "dev"
+      },
+      "status": 400
+    },
+    "upstream": []
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "name": "pluxy-app",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.3",
+  "scripts": {
+    "build": "bun build.ts",
+    "check": "tsc --noEmit",
+    "lint": "biome check --error-on-warnings .",
+    "test": "bun test tests",
+    "test:native": "bun native/run.ts",
+    "test:native:platform": "bun native/platform.ts",
+    "package:test": "bun package.ts test",
+    "package:local": "bun package.ts local",
+    "package:release": "bun package.ts release",
+    "verify": "bun run check && bun run lint && bun run test && bun run build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.12.4"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.6",
+    "@tauri-apps/cli": "2.12.4",
+    "@types/bun": "1.4.3",
+    "typescript": "7.0.2"
+  }
+}

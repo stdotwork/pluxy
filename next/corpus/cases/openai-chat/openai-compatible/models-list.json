@@ -1,0 +1,35 @@
+{
+  "description": "The client lists models: the account's model, owned by the account.",
+  "client": {"method":"GET","path":"/v1/models"},
+  "volatile": ["client.body.data[*].created"],
+  "exceptions": [
+    {
+      "path": "client.body.data[*].owned_by",
+      "kind": "intended",
+      "reason": "Model lists name the extension, not the account: an account ID can be an email address or a label, while the extension ID is who provides the model and already appears as the provider on replies.",
+      "want": "pluxy/openai-compatible"
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "data": [{"created":"(volatile)","id":"corpus-model","object":"model","owned_by":"corpus"}],
+        "object": "list"
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8"
+      },
+      "status": 200
+    },
+    "upstream": []
+  },
+  "account_models": ["corpus-model"],
+  "source": [
+    "core/sdk/api/handlers/openai/openai_handlers.go OpenAIModels",
+    "core/internal/registry/model_registry.go convertModelToMap"
+  ]
+}

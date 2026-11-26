@@ -1,0 +1,10 @@
+[package]
+name = "pluxy-program"
+version = "0.1.0"
+description = "The program side of pluxy's app program contract v0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde_json = "1"

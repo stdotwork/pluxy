@@ -1,0 +1,621 @@
+package configdoc
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"maps"
+	"slices"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/stdotwork/pluxy/next/internal/ignite"
+	"github.com/stdotwork/pluxy/next/internal/proxyurl"
+	"github.com/stdotwork/pluxy/next/internal/route"
+	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/sdk/payload"
+)
+
+// place returns where a setting is in the document: the JSON path in a JSON config; in a
+// config.yaml the v8 path, or the older spelling when only that is there (today's core and
+// this one read both, and the v8 one wins when both are set).
+func (d *Doc) place(jsonPath, v8, old string) []string {
+	switch {
+	case !d.YAML:
+		return strings.Split(jsonPath, ".")
+	case old != "" && d.Get(strings.Split(v8, ".")...) == nil && d.Get(strings.Split(old, ".")...) != nil:
+		return strings.Split(old, ".")
+	default:
+		return strings.Split(v8, ".")
+	}
+}
+
+// clientKeys returns where the client keys are: client_keys in a JSON config; in a
+// config.yaml access.api-keys, or the older layout's root api-keys list.
+func (d *Doc) clientKeys() []string {
+	if d.YAML && d.Get("access", "api-keys") == nil {
+		if n := d.Get("api-keys"); n != nil && n.Kind == yaml.SequenceNode {
+			return []string{"api-keys"}
+		}
+	}
+	return d.place("client_keys", "access.api-keys", "")
+}
+
+// ClientKeys returns the client keys the document sets.
+func (d *Doc) ClientKeys() ([]string, error) {
+	n := d.Get(d.clientKeys()...)
+	if isNull(n) {
+		return nil, nil
+	}
+	if n.Kind != yaml.SequenceNode {
+		return nil, fmt.Errorf("%w: %s is not a list", ErrInvalid, strings.Join(d.clientKeys(), "."))
+	}
+	var keys []string
+	for _, c := range n.Content {
+		if c.Kind == yaml.AliasNode && c.Alias != nil {
+			c = c.Alias
+		}
+		if c.Kind != yaml.ScalarNode {
+			return nil, fmt.Errorf("%w: %s holds something other than keys", ErrInvalid, strings.Join(d.clientKeys(), "."))
+		}
+		keys = append(keys, c.Value)
+	}
+	return keys, nil
+}
+
+// AddClientKey adds a client key, written like the keys already there.
+func (d *Doc) AddClientKey(key string) error {
+	path := d.clientKeys()
+	n := d.Get(path...)
+	if isNull(n) {
+		return d.Set(&yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq", Content: []*yaml.Node{String(key)}}, path...)
+	}
+	if _, err := d.ClientKeys(); err != nil {
+		return err
+	}
+	k := String(key)
+	if len(n.Content) > 0 {
+		k.Style = n.Content[len(n.Content)-1].Style &^ yaml.TaggedStyle
+	}
+	n.Content = append(n.Content, k)
+	d.edited = true
+	return nil
+}
+
+// RemoveClientKeys removes every client key for which drop is true, and returns how many keys
+// are left.
+func (d *Doc) RemoveClientKeys(drop func(key string) bool) (int, error) {
+	if _, err := d.ClientKeys(); err != nil {
+		return 0, err
+	}
+	n := d.Get(d.clientKeys()...)
+	if isNull(n) {
+		return 0, nil
+	}
+	kept := slices.DeleteFunc(slices.Clone(n.Content), func(c *yaml.Node) bool {
+		if c.Kind == yaml.AliasNode && c.Alias != nil {
+			return drop(c.Alias.Value)
+		}
+		return drop(c.Value)
+	})
+	if len(kept) != len(n.Content) {
+		n.Content = kept
+		d.edited = true
+	}
+	return len(kept), nil
+}
+
+// clientKeyLabels is where the client keys' names are: client_key_labels, a mapping from a key's
+// ID (the one GET /client-keys lists, never the key) to its label. It is this core's own
+// setting, so it keeps its name in a config.yaml too.
+var clientKeyLabels = []string{"client_key_labels"}
+
+// ErrLabelIndirect is the refusal to set or clear a client key's label that a config.yaml sets
+// through a YAML alias or a merge key (<<): there is no entry of its own to change, and changing
+// the shared one would change other labels too. It reads as the reply to the person.
+var ErrLabelIndirect = errors.New("this key's label is set through an alias or merge in config.yaml, so it cannot be changed here: edit config.yaml")
+
+// labelsInEffect returns the client key labels as the file's readers see them, with aliases and
+// merge keys resolved.
+func (d *Doc) labelsInEffect() (map[string]string, error) {
+	var v struct {
+		Labels map[string]string `yaml:"client_key_labels"`
+	}
+	if err := d.root.Decode(&v); err != nil {
+		return nil, fmt.Errorf("%w: client_key_labels: %v", ErrInvalid, err)
+	}
+	return v.Labels, nil
+}
+
+// RemoveClientKeyLabel removes the entry of the client key with this ID from the labels, if it
+// has one of its own; the mapping goes with its last entry.
+func (d *Doc) RemoveClientKeyLabel(id string) {
+	d.Delete(append(slices.Clone(clientKeyLabels), id)...)
+	if m := d.Get(clientKeyLabels...); m != nil && m.Kind == yaml.MappingNode && len(m.Content) == 0 {
+		d.Delete(clientKeyLabels...)
+	}
+}
+
+// SetClientKeyLabel gives the client key with this ID the label, or removes its label when
+// label is empty; the mapping goes with its last entry. It returns ErrLabelIndirect when the labels
+// (or this key's) are set through an alias or a merge key, or when the change would alter
+// another key's label; the document is then not to be written.
+func (d *Doc) SetClientKeyLabel(id, label string) error {
+	labels := d.Get(clientKeyLabels...)
+	if labels != nil && labels.Kind == yaml.AliasNode {
+		return ErrLabelIndirect
+	}
+	before, err := d.labelsInEffect()
+	if err != nil {
+		return err
+	}
+	if own := child(labels, id); (own != nil && own.Kind == yaml.AliasNode) || (own == nil && before[id] != "") {
+		return ErrLabelIndirect
+	}
+	if label != "" {
+		if err := d.Set(String(label), append(slices.Clone(clientKeyLabels), id)...); err != nil {
+			return err
+		}
+	} else {
+		d.RemoveClientKeyLabel(id)
+	}
+	// What the readers see must be the old labels with this one changed: a shared anchor would
+	// change the labels of the keys that alias it.
+	want := maps.Clone(before)
+	if label == "" {
+		delete(want, id)
+	} else {
+		if want == nil {
+			want = map[string]string{}
+		}
+		want[id] = label
+	}
+	// Read it as it would be written: clearing the label that holds an anchor would leave
+	// an alias without one.
+	b, err := d.encode()
+	if err != nil {
+		return err
+	}
+	written, err := Parse(b, d.YAML)
+	if err != nil {
+		return ErrLabelIndirect
+	}
+	after, err := written.labelsInEffect()
+	if err != nil {
+		return err
+	}
+	if !maps.Equal(after, want) {
+		return ErrLabelIndirect
+	}
+	return nil
+}
+
+// SetManagementKey sets the management key: management_key in a JSON config; in a
+// config.yaml management.secret-key, or the older remote-management.secret-key when only that
+// is there.
+func (d *Doc) SetManagementKey(key string) error {
+	return d.Set(String(key), d.place("management_key", "management.secret-key", "remote-management.secret-key")...)
+}
+
+// Strategies are the routing strategies by today's core's names, and the names it also takes
+// for them; least-active and soonest-reset are this core's own.
+var strategies = map[string]string{
+	"round-robin": "round-robin", "fill-first": "fill-first", "fillfirst": "fill-first", "ff": "fill-first",
+	"weighted-round-robin": "weighted-round-robin", "weightedroundrobin": "weighted-round-robin",
+	"wrr": "weighted-round-robin", "weighted": "weighted-round-robin", "least-active": "least-active",
+	"soonest-reset": "soonest-reset",
+}
+
+// SettingsPatch is a change to the basic and routing settings, with today's core's names for
+// them. A field left out stays as it is.
+type SettingsPatch struct {
+	Routing       *RoutingPatch       `json:"routing"`
+	Observability *ObservabilityPatch `json:"observability"`
+	// TokenCountEstimate answers a token count no account can give with core's estimate (true,
+	// the default) or with an error saying counting is unsupported (false). This core's own
+	// setting, so it keeps its name in a config.yaml.
+	TokenCountEstimate *bool `json:"token_count_estimate"`
+	// ProxyURL is the proxy of every account without one of its own: an http, https, socks5 or
+	// socks5h URL, direct or none; empty removes it (no proxy).
+	ProxyURL *string `json:"proxy-url"`
+	// Payload replaces the payload rules: an object with today's core's lists (default,
+	// default-raw, override, override-raw, filter); null or {} removes them.
+	Payload json.RawMessage `json:"payload"`
+}
+
+// ObservabilityPatch is a change to the usage and log settings.
+type ObservabilityPatch struct {
+	Logs  *LogsPatch  `json:"logs"`
+	Usage *UsagePatch `json:"usage"`
+}
+
+// LogsPatch is a change to the log settings.
+type LogsPatch struct {
+	// LoggingToFile also writes core's log to files.
+	LoggingToFile *bool `json:"logging-to-file"`
+	// LogsMaxTotalSizeMB caps the logs folder's size; 0 is no cap.
+	LogsMaxTotalSizeMB *int64 `json:"logs-max-total-size-mb"`
+	// RequestLog writes every client request to a file.
+	RequestLog *bool `json:"request-log"`
+	// ErrorLogsMaxFiles is how many error logs are kept; 0 is all.
+	ErrorLogsMaxFiles *int64 `json:"error-logs-max-files"`
+}
+
+// UsagePatch is a change to the usage settings.
+type UsagePatch struct {
+	// UsageStatisticsEnabled turns the usage record on or off.
+	UsageStatisticsEnabled *bool `json:"usage-statistics-enabled"`
+}
+
+// RoutingPatch is a change to the routing settings.
+type RoutingPatch struct {
+	// Strategy is round-robin, fill-first, weighted-round-robin, least-active or soonest-reset.
+	Strategy *string `json:"strategy"`
+	// SessionAffinity sends requests of one session to the same account.
+	SessionAffinity *bool `json:"session-affinity"`
+	// SessionAffinityTTL is how long a session stays bound after its last request, such as
+	// "1h".
+	SessionAffinityTTL *string `json:"session-affinity-ttl"`
+	// ForceModelPrefix makes an account with a prefix serve its models only under the prefix.
+	ForceModelPrefix *bool          `json:"force-model-prefix"`
+	Retry            *RetryPatch    `json:"retry"`
+	Cooldown         *CooldownPatch `json:"cooldown"`
+	// Timeouts sets the default upstream timeouts of every account, in milliseconds
+	// (header_ms, idle_ms, total_ms): a field left out stays as it is, 0 turns a limit off and
+	// null removes them all. This core's own setting, so a config.yaml, which today's core
+	// also reads, has no name for it.
+	Timeouts json.RawMessage `json:"timeouts"`
+	// Ignition replaces window ignition's settings (routing.ignition) whole: an object with
+	// enabled, the hours, the waits and the extensions and accounts it runs for; null removes
+	// them, which turns ignition off. This core's own setting, so a config.yaml, which today's core
+	// also reads, has no name for it.
+	Ignition json.RawMessage `json:"ignition"`
+}
+
+// CooldownPatch is a change to the cooldown settings.
+type CooldownPatch struct {
+	// DisableCooling records no blocks after failures.
+	DisableCooling *bool `json:"disable-cooling"`
+	// TransientErrorCooldownSeconds is how long a failing upstream is blocked: 0 for this
+	// core's backoff, -1 for no block.
+	TransientErrorCooldownSeconds *int64 `json:"transient-error-cooldown-seconds"`
+	// QuotaResponseMode is what a client gets when every account is out of quota: retryable
+	// (a retryable 429) or usage-limit (the final usage-limit reply).
+	QuotaResponseMode *string `json:"quota-response-mode"`
+}
+
+// RetryPatch is a change to the retry settings.
+type RetryPatch struct {
+	// RequestRetry is how many rounds a request may run after its first.
+	RequestRetry *int64 `json:"request-retry"`
+	// MaxRetryCredentials is how many accounts one request may try; 0 is no limit.
+	MaxRetryCredentials *int64 `json:"max-retry-credentials"`
+	// MaxRetryInterval is the longest one request waits for a blocked account, in seconds.
+	MaxRetryInterval *int64 `json:"max-retry-interval"`
+}
+
+// ApplySettings writes a settings change into the document, in the file's own names: a JSON
+// config's, or in a config.yaml today's core's.
+func (d *Doc) ApplySettings(p SettingsPatch) error {
+	if err := d.applyRouting(p.Routing); err != nil {
+		return err
+	}
+	if p.TokenCountEstimate != nil {
+		if err := d.Set(Bool(*p.TokenCountEstimate), d.place("token_count_estimate", "token_count_estimate", "")...); err != nil {
+			return err
+		}
+	}
+	if p.ProxyURL != nil {
+		if err := d.applyProxyURL(*p.ProxyURL); err != nil {
+			return err
+		}
+	}
+	if p.Payload != nil {
+		if err := d.applyPayload(p.Payload); err != nil {
+			return err
+		}
+	}
+	return d.applyObservability(p.Observability)
+}
+
+// applyPayload writes the payload rules, refusing a field they do not have and what
+// payload.Validate refuses; null or no rules remove them, in both spellings of a config.yaml.
+func (d *Doc) applyPayload(raw json.RawMessage) error {
+	var r *payload.Rules
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	dec.UseNumber() // a number is written as it was sent
+	if err := dec.Decode(&r); err != nil {
+		return fmt.Errorf("%w: payload: %v", ErrInvalid, err)
+	}
+	if err := payload.Validate(r); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	if r == nil || (len(r.Default) == 0 && len(r.DefaultRaw) == 0 && len(r.Override) == 0 && len(r.OverrideRaw) == 0 && len(r.Filter) == 0) {
+		if d.YAML {
+			d.Delete("requests", "payload")
+			d.Delete("payload")
+		} else {
+			d.Delete("payload")
+		}
+		return nil
+	}
+	b, err := json.Marshal(r)
+	if err != nil {
+		return fmt.Errorf("%w: payload: %v", ErrInvalid, err)
+	}
+	// JSON is YAML: its nodes carry each value's type, which the JSON writer needs. In a
+	// config.yaml they are written in block style.
+	var n yaml.Node
+	if err := yaml.Unmarshal(b, &n); err != nil || n.Kind != yaml.DocumentNode || len(n.Content) != 1 {
+		return fmt.Errorf("%w: payload: %v", ErrInvalid, err)
+	}
+	blockStyle(n.Content[0])
+	return d.Set(n.Content[0], d.place("payload", "requests.payload", "payload")...)
+}
+
+// blockStyle clears the flow and quoting styles of n and everything in it, so the YAML writer
+// chooses them.
+func blockStyle(n *yaml.Node) {
+	n.Style = 0
+	for _, c := range n.Content {
+		blockStyle(c)
+	}
+}
+
+// applyProxyURL writes the global proxy setting; "" removes it, in both spellings of a
+// config.yaml, so an older spelling cannot take over.
+func (d *Doc) applyProxyURL(s string) error {
+	s = strings.TrimSpace(s)
+	if err := proxyurl.Check("proxy-url", s); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	if s == "" {
+		if d.YAML {
+			d.Delete("requests", "proxy-url")
+			d.Delete("proxy-url")
+		} else {
+			d.Delete("proxy_url")
+		}
+		return nil
+	}
+	return d.Set(String(s), d.place("proxy_url", "requests.proxy-url", "proxy-url")...)
+}
+
+// applyObservability writes a change to the usage and log settings.
+func (d *Doc) applyObservability(o *ObservabilityPatch) error {
+	if o == nil {
+		return nil
+	}
+	if l := o.Logs; l != nil {
+		if l.LoggingToFile != nil {
+			if err := d.Set(Bool(*l.LoggingToFile), d.place("logs.to_file", "observability.logs.logging-to-file", "logging-to-file")...); err != nil {
+				return err
+			}
+		}
+		if n := l.LogsMaxTotalSizeMB; n != nil {
+			if *n < 0 || *n > 1<<20 {
+				return fmt.Errorf("%w: observability.logs.logs-max-total-size-mb must be between 0 (no cap) and 1048576", ErrInvalid)
+			}
+			if err := d.Set(Int(*n), d.place("logs.max_total_size_mb", "observability.logs.logs-max-total-size-mb", "logs-max-total-size-mb")...); err != nil {
+				return err
+			}
+		}
+		if l.RequestLog != nil {
+			if err := d.Set(Bool(*l.RequestLog), d.place("logs.request_log", "observability.logs.request-log", "request-log")...); err != nil {
+				return err
+			}
+		}
+		if n := l.ErrorLogsMaxFiles; n != nil {
+			if *n < 0 || *n > 1000000 {
+				return fmt.Errorf("%w: observability.logs.error-logs-max-files must be between 0 (keep all) and 1000000", ErrInvalid)
+			}
+			if err := d.Set(Int(*n), d.place("logs.error_logs_max_files", "observability.logs.error-logs-max-files", "error-logs-max-files")...); err != nil {
+				return err
+			}
+		}
+	}
+	if u := o.Usage; u != nil && u.UsageStatisticsEnabled != nil {
+		if err := d.Set(Bool(*u.UsageStatisticsEnabled), d.place("usage.enabled", "observability.usage.usage-statistics-enabled", "usage-statistics-enabled")...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// applyRouting writes a change to the routing settings.
+func (d *Doc) applyRouting(r *RoutingPatch) error {
+	if r == nil {
+		return nil
+	}
+	if r.Strategy != nil {
+		s, ok := strategies[strings.ToLower(strings.TrimSpace(*r.Strategy))]
+		if !ok {
+			return fmt.Errorf("%w: routing.strategy %q: use round-robin, fill-first, weighted-round-robin, least-active or soonest-reset", ErrInvalid, *r.Strategy)
+		}
+		if !d.YAML && s == "weighted-round-robin" {
+			s = "weighted"
+		}
+		if err := d.Set(String(s), "routing", "strategy"); err != nil {
+			return err
+		}
+	}
+	if r.SessionAffinity != nil {
+		switch {
+		case d.YAML:
+			if err := d.Set(Bool(*r.SessionAffinity), "routing", "session-affinity"); err != nil {
+				return err
+			}
+		default:
+			// Said either way: a JSON config has it on without the setting, and the file should
+			// keep saying what the person chose.
+			if err := d.Set(Bool(*r.SessionAffinity), "routing", "session_affinity", "enabled"); err != nil {
+				return err
+			}
+		}
+	}
+	if r.SessionAffinityTTL != nil {
+		s := strings.TrimSpace(*r.SessionAffinityTTL)
+		ttl, err := time.ParseDuration(s)
+		if err != nil || ttl <= 0 {
+			return fmt.Errorf("%w: routing.session-affinity-ttl %q is not a duration above zero, such as 1h or 30m", ErrInvalid, *r.SessionAffinityTTL)
+		}
+		if d.YAML {
+			err = d.Set(String(s), "routing", "session-affinity-ttl")
+		} else if en := d.Get("routing", "session_affinity", "enabled"); en != nil && en.Kind == yaml.ScalarNode && en.Value == "false" {
+			// In a JSON config the TTL is inside routing.session_affinity, next to its switch.
+			err = fmt.Errorf("%w: routing.session-affinity-ttl needs routing.session-affinity on", ErrInvalid)
+		} else {
+			err = d.Set(Int(max(ttl, time.Second).Milliseconds()), "routing", "session_affinity", "ttl_ms")
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if r.ForceModelPrefix != nil {
+		if err := d.Set(Bool(*r.ForceModelPrefix), d.place("routing.force_model_prefix", "routing.force-model-prefix", "force-model-prefix")...); err != nil {
+			return err
+		}
+	}
+	if t := r.Retry; t != nil {
+		if n := t.RequestRetry; n != nil {
+			if *n < 0 || *n > 1000 {
+				return fmt.Errorf("%w: routing.retry.request-retry must be between 0 and 1000", ErrInvalid)
+			}
+			if err := d.Set(Int(*n), d.place("routing.request_retry", "routing.retry.request-retry", "request-retry")...); err != nil {
+				return err
+			}
+		}
+		if n := t.MaxRetryCredentials; n != nil {
+			if *n < 0 {
+				return fmt.Errorf("%w: routing.retry.max-retry-credentials must not be negative", ErrInvalid)
+			}
+			if err := d.Set(Int(*n), d.place("routing.max_accounts", "routing.retry.max-retry-credentials", "max-retry-credentials")...); err != nil {
+				return err
+			}
+		}
+		if n := t.MaxRetryInterval; n != nil {
+			if *n < 0 || *n > 30*24*60*60 {
+				return fmt.Errorf("%w: routing.retry.max-retry-interval must be between 0 and 2592000 seconds (30 days)", ErrInvalid)
+			}
+			v := *n
+			if !d.YAML {
+				v *= 1000
+			}
+			if err := d.Set(Int(v), d.place("routing.max_wait_ms", "routing.retry.max-retry-interval", "max-retry-interval")...); err != nil {
+				return err
+			}
+		}
+	}
+	if c := r.Cooldown; c != nil {
+		if c.DisableCooling != nil {
+			if err := d.Set(Bool(*c.DisableCooling), d.place("routing.disable_cooling", "routing.cooldown.disable-cooling", "disable-cooling")...); err != nil {
+				return err
+			}
+		}
+		if n := c.TransientErrorCooldownSeconds; n != nil {
+			if *n < -1 || *n > 30*24*60*60 {
+				return fmt.Errorf("%w: routing.cooldown.transient-error-cooldown-seconds must be -1 (no cooldown), 0 (the default) or up to 2592000 seconds (30 days)", ErrInvalid)
+			}
+			v := *n
+			if !d.YAML && v > 0 {
+				v *= 1000
+			}
+			if err := d.Set(Int(v), d.place("routing.transient_error_cooldown_ms", "routing.cooldown.transient-error-cooldown-seconds", "transient-error-cooldown-seconds")...); err != nil {
+				return err
+			}
+		}
+		if m := c.QuotaResponseMode; m != nil {
+			mode := strings.ToLower(strings.TrimSpace(*m))
+			if mode != "retryable" && mode != "usage-limit" {
+				return fmt.Errorf("%w: routing.cooldown.quota-response-mode must be \"retryable\" or \"usage-limit\"", ErrInvalid)
+			}
+			if err := d.Set(String(mode), d.place("routing.quota_response_mode", "routing.cooldown.quota-response-mode", "quota-cooldown-response-mode")...); err != nil {
+				return err
+			}
+		}
+	}
+	if r.Timeouts != nil {
+		if err := d.applyTimeouts(r.Timeouts); err != nil {
+			return err
+		}
+	}
+	if r.Ignition != nil {
+		return d.applyIgnition(r.Ignition)
+	}
+	return nil
+}
+
+// applyIgnition writes window ignition's settings whole: null removes them; anything else must be
+// the section, with no field it does not have, that ignite.Config.Validate accepts. A config.yaml
+// has no name for the section (its Lamplighter plugin settings are read as it, but not written),
+// so a change there is refused, and null changes nothing there, as for the timeouts.
+func (d *Doc) applyIgnition(raw json.RawMessage) error {
+	if string(bytes.TrimSpace(raw)) == "null" {
+		if !d.YAML {
+			d.Delete("routing", "ignition")
+		}
+		return nil
+	}
+	if d.YAML {
+		return fmt.Errorf("%w: routing.ignition is this core's own setting and a config.yaml has no name for it; a config.yaml's plugins.configs.lamplighter is read as it, so change that instead", ErrInvalid)
+	}
+	var c ignite.Config
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&c); err != nil {
+		return fmt.Errorf("%w: routing.ignition: %v", ErrInvalid, err)
+	}
+	if err := c.Validate(); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	b, err := json.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("%w: routing.ignition: %v", ErrInvalid, err)
+	}
+	var n yaml.Node
+	if err := yaml.Unmarshal(b, &n); err != nil || n.Kind != yaml.DocumentNode || len(n.Content) != 1 {
+		return fmt.Errorf("%w: routing.ignition: %v", ErrInvalid, err)
+	}
+	return d.Set(n.Content[0], "routing", "ignition")
+}
+
+// applyTimeouts writes the default upstream timeouts of every account: null removes the section,
+// and otherwise each field sent is written, the ones left out staying as they are. How core
+// checks them lives with the config it checks, so both refuse the same values. A config.yaml has
+// no name for the section, so a change that would write one there is refused.
+func (d *Doc) applyTimeouts(raw json.RawMessage) error {
+	if string(raw) == "null" {
+		if !d.YAML {
+			d.Delete("routing", "timeouts")
+		}
+		return nil
+	}
+	var t protocol.Timeouts
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&t); err != nil {
+		return fmt.Errorf("%w: routing.timeouts: %v", ErrInvalid, err)
+	}
+	if err := route.ValidateTimeouts("routing.timeouts", &t); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	for _, f := range []struct {
+		name string
+		v    *int64
+	}{{"header_ms", t.HeaderMS}, {"idle_ms", t.IdleMS}, {"total_ms", t.TotalMS}} {
+		if f.v == nil {
+			continue
+		}
+		if d.YAML {
+			return fmt.Errorf("%w: routing.timeouts is this core's own setting and a config.yaml has no name for it", ErrInvalid)
+		}
+		if err := d.Set(Int(*f.v), "routing", "timeouts", f.name); err != nil {
+			return err
+		}
+	}
+	return nil
+}

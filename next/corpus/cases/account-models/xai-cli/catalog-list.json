@@ -1,0 +1,416 @@
+{
+  "description": "A Grok login whose config lists no models: the new core's GET /v0/management/accounts/{id}/models against the old core's GET /v0/management/auth-files/models for the same account.",
+  "source": [
+    "core/internal/api/handlers/management/auth_files.go GetAuthFileModels",
+    "core/sdk/cliproxy/service_models.go",
+    "core/internal/registry/models/ catalog for xai"
+  ],
+  "client": {"method":"GET","path":"/v0/management/accounts/corpus/models","auth":"management-key"},
+  "old_client": {
+    "method": "GET",
+    "path": "/v0/management/auth-files/models?name=xai-corpus-1.json",
+    "auth": "management-key"
+  },
+  "account_models": ["grok-4.6"],
+  "old_core": {"account":{"models":null}},
+  "new_core": {"account":{"models":null}},
+  "recorded_old_core": {
+    "client": {
+      "body": {
+        "models": [
+          {"display_name":"Grok 4.7","id":"grok-4.7","owned_by":"xai","type":"xai"},
+          {"display_name":"Grok 4.7 Fast","id":"grok-4.7-build-fast","owned_by":"xai","type":"xai"},
+          {"display_name":"Grok 4.6","id":"grok-4.6","owned_by":"xai","type":"xai"},
+          {"display_name":"Grok Build 0.1","id":"grok-build-0.1","owned_by":"xai","type":"xai"},
+          {"display_name":"Grok 4.5","id":"grok-4.5","owned_by":"xai","type":"xai"},
+          {"display_name":"Grok 4.3","id":"grok-4.3","owned_by":"xai","type":"xai"},
+          {
+            "display_name": "Grok 4.20 0309 Reasoning",
+            "id": "grok-4.20-0309-reasoning",
+            "owned_by": "xai",
+            "type": "xai"
+          },
+          {
+            "display_name": "Grok 4.20 0309 Non Reasoning",
+            "id": "grok-4.20-0309-non-reasoning",
+            "owned_by": "xai",
+            "type": "xai"
+          },
+          {
+            "display_name": "Grok 4.20 Multi Agent 0309",
+            "id": "grok-4.20-multi-agent-0309",
+            "owned_by": "xai",
+            "type": "xai"
+          },
+          {"display_name":"Grok 3 Mini","id":"grok-3-mini","owned_by":"xai","type":"xai"},
+          {"display_name":"Grok 3 Mini Fast","id":"grok-3-mini-fast","owned_by":"xai","type":"xai"},
+          {
+            "display_name": "Composer 2.5 Fast",
+            "id": "grok-composer-2.5-fast",
+            "owned_by": "xai",
+            "type": "xai"
+          },
+          {
+            "display_name": "Grok Imagine Image",
+            "id": "grok-imagine-image",
+            "owned_by": "xai",
+            "type": "xai"
+          },
+          {
+            "display_name": "Grok Imagine Image Quality",
+            "id": "grok-imagine-image-quality",
+            "owned_by": "xai",
+            "type": "xai"
+          },
+          {
+            "display_name": "Grok Imagine Image 2.0",
+            "id": "grok-imagine-image-2.0",
+            "owned_by": "xai",
+            "type": "xai"
+          },
+          {
+            "display_name": "Grok Imagine Video",
+            "id": "grok-imagine-video",
+            "owned_by": "xai",
+            "type": "xai"
+          },
+          {
+            "display_name": "Grok Imagine Video 1.5",
+            "id": "grok-imagine-video-1.5",
+            "owned_by": "xai",
+            "type": "xai"
+          },
+          {
+            "display_name": "Grok Imagine Video 1.5 Preview",
+            "id": "grok-imagine-video-1.5-preview",
+            "owned_by": "xai",
+            "type": "xai"
+          },
+          {
+            "display_name": "Grok Imagine Video 1.5 Lite",
+            "id": "grok-imagine-video-1.5-lite",
+            "owned_by": "xai",
+            "type": "xai"
+          },
+          {"display_name":"Grok TTS","id":"grok-tts","owned_by":"xai","type":"xai"},
+          {
+            "display_name": "Grok Voice TTS 1.0",
+            "id": "grok-voice-tts-1.0",
+            "owned_by": "xai",
+            "type": "xai"
+          }
+        ]
+      },
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json; charset=utf-8",
+        "X-Cpa-Build-Date": "unknown",
+        "X-Cpa-Commit": "none",
+        "X-Cpa-Support-Plugin": "1",
+        "X-Cpa-Version": "dev"
+      },
+      "status": 200
+    },
+    "upstream": []
+  },
+  "exceptions": [
+    {
+      "path": "client.headers.Content-Type",
+      "kind": "intended",
+      "want": "application/json",
+      "reason": "Different management API by design: the new management API answers application/json; today's core's gin handlers add a charset."
+    },
+    {
+      "path": "client.body.models[12]",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Today's core lists xAI's image, video and speech models (grok-imagine-*, grok-tts, grok-voice-*) and sends them to xAI's image, video and speech endpoints; the new core has no image, video or speech routes yet, so the xAI extension does not list them."
+    },
+    {
+      "path": "client.body.models[13]",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Today's core lists xAI's image, video and speech models (grok-imagine-*, grok-tts, grok-voice-*) and sends them to xAI's image, video and speech endpoints; the new core has no image, video or speech routes yet, so the xAI extension does not list them."
+    },
+    {
+      "path": "client.body.models[14]",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Today's core lists xAI's image, video and speech models (grok-imagine-*, grok-tts, grok-voice-*) and sends them to xAI's image, video and speech endpoints; the new core has no image, video or speech routes yet, so the xAI extension does not list them."
+    },
+    {
+      "path": "client.body.models[15]",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Today's core lists xAI's image, video and speech models (grok-imagine-*, grok-tts, grok-voice-*) and sends them to xAI's image, video and speech endpoints; the new core has no image, video or speech routes yet, so the xAI extension does not list them."
+    },
+    {
+      "path": "client.body.models[16]",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Today's core lists xAI's image, video and speech models (grok-imagine-*, grok-tts, grok-voice-*) and sends them to xAI's image, video and speech endpoints; the new core has no image, video or speech routes yet, so the xAI extension does not list them."
+    },
+    {
+      "path": "client.body.models[17]",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Today's core lists xAI's image, video and speech models (grok-imagine-*, grok-tts, grok-voice-*) and sends them to xAI's image, video and speech endpoints; the new core has no image, video or speech routes yet, so the xAI extension does not list them."
+    },
+    {
+      "path": "client.body.models[18]",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Today's core lists xAI's image, video and speech models (grok-imagine-*, grok-tts, grok-voice-*) and sends them to xAI's image, video and speech endpoints; the new core has no image, video or speech routes yet, so the xAI extension does not list them."
+    },
+    {
+      "path": "client.body.models[19]",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Today's core lists xAI's image, video and speech models (grok-imagine-*, grok-tts, grok-voice-*) and sends them to xAI's image, video and speech endpoints; the new core has no image, video or speech routes yet, so the xAI extension does not list them."
+    },
+    {
+      "path": "client.body.models[20]",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Today's core lists xAI's image, video and speech models (grok-imagine-*, grok-tts, grok-voice-*) and sends them to xAI's image, video and speech endpoints; the new core has no image, video or speech routes yet, so the xAI extension does not list them."
+    },
+    {
+      "path": "client.body.models[*].type",
+      "kind": "intended",
+      "absent": true,
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The old list's type is not carried."
+    },
+    {
+      "path": "client.body.models[*].context_length",
+      "kind": "intended",
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's context_length is not in the old list."
+    },
+    {
+      "path": "client.body.models[*].created",
+      "kind": "intended",
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's created is not in the old list."
+    },
+    {
+      "path": "client.body.models[*].description",
+      "kind": "intended",
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's description is not in the old list."
+    },
+    {
+      "path": "client.body.models[0].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[1].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[2].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[3].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[4].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[5].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[6].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[7].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[8].input_modalities",
+      "kind": "intended",
+      "want": ["text","image"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[9].input_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[10].input_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's input_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[*].max_completion_tokens",
+      "kind": "intended",
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's max_completion_tokens is not in the old list."
+    },
+    {
+      "path": "client.body.models[*].name",
+      "kind": "intended",
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's name is not in the old list."
+    },
+    {
+      "path": "client.body.models[0].names",
+      "kind": "intended",
+      "want": ["grok-4.7"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[1].names",
+      "kind": "intended",
+      "want": ["grok-4.7-build-fast"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[2].names",
+      "kind": "intended",
+      "want": ["grok-4.6"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[3].names",
+      "kind": "intended",
+      "want": ["grok-build-0.1"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[4].names",
+      "kind": "intended",
+      "want": ["grok-4.5"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[5].names",
+      "kind": "intended",
+      "want": ["grok-4.3"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[6].names",
+      "kind": "intended",
+      "want": ["grok-4.20-0309-reasoning"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[7].names",
+      "kind": "intended",
+      "want": ["grok-4.20-0309-non-reasoning"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[8].names",
+      "kind": "intended",
+      "want": ["grok-4.20-multi-agent-0309"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[9].names",
+      "kind": "intended",
+      "want": ["grok-3-mini"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[10].names",
+      "kind": "intended",
+      "want": ["grok-3-mini-fast"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[11].names",
+      "kind": "intended",
+      "want": ["grok-composer-2.5-fast"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's names is not in the old list."
+    },
+    {
+      "path": "client.body.models[0].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[1].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[2].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[3].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[4].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[5].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[6].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[7].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[8].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[9].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    },
+    {
+      "path": "client.body.models[10].output_modalities",
+      "kind": "intended",
+      "want": ["text"],
+      "reason": "Different management API by design: the new per-account list describes each model with the extension's full model record (protocol model) and the names clients use for it, where the old list has only id, display_name, type and owned_by. The new list's output_modalities is not in the old list."
+    }
+  ]
+}

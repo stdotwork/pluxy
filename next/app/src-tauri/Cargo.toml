@@ -1,0 +1,214 @@
+[package]
+name = "pluxy-app"
+version = "0.1.0"
+description = "The pluxy desktop app: a window, a tray icon and, if wanted, a core of its own"
+edition = "2021"
+rust-version = "1.89"
+publish = false
+
+[lib]
+name = "pluxy_app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pluxy-app"
+path = "src/main.rs"
+
+[features]
+# For the native test only (native/run.ts): the app probes its webviews' command access and
+# reports on stderr. Never in a release build.
+native-test = []
+# Loads publisher roots only for tests that create an isolated temporary trust profile.
+artifact-test-trust = []
+# The local build (package.ts local): the window's title says so, and the program carries the
+# test build marker, so the release gate refuses it. Never in a release build.
+local-build = []
+
+# The native test's probe of the desktop services (native/session.ts). Not part of any build
+# without the native-test feature.
+[[example]]
+name = "session_probe"
+required-features = ["native-test"]
+
+# The native test's disposable summary tool (native/program.ts packs it into a signed test
+# package); the program host's unit tests run its code too. Never part of a release.
+[[example]]
+name = "program_fixture"
+path = "examples/program_fixture/main.rs"
+
+[build-dependencies]
+serde_json = "1"
+json-patch = "4"
+sha2 = { version = "=0.10.9", default-features = false }
+tauri-utils = { version = "=2.10.2", default-features = false }
+tauri-build = { version = "=2.7.3", features = [] }
+
+[dependencies]
+tauri = { version = "=2.12.4", features = ["tray-icon", "unstable"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+ed25519-dalek = { version = "=2.2.0", default-features = false }
+url = "2"
+# ~3.5: the Windows client for the app's core (client.rs, `core_tcp::CoreConnector`, which checks
+# the core's own process accepted each connection) is written against ureq's unversioned transport
+# API, which changes in minor releases.
+ureq = { version = "~3.5", default-features = false, features = ["rustls"] }
+getrandom = "0.3"
+sha2 = "=0.10.9"
+# Release versions compare by semantic version precedence (src/release.rs).
+semver = "1"
+# Release notes: Markdown to HTML, with raw HTML and images dropped (src/notes.rs).
+pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+pulldown-cmark-escape = "0.11"
+# Release archives of packages installed on this device (src/device.rs) and of the app's own
+# core (src/cores.rs): gzip-compressed tar.
+flate2 = "=1.1.11"
+tar = { version = "=0.4.46", default-features = false }
+# The macOS login item, a LaunchAgent property list (src/startup.rs). Already in the tree through
+# tauri-utils.
+plist = "1"
+# The app's own update (src/updater/): the signature check only; the app installs the update
+# itself and never calls the plugin's install. No default features: no gzip/zip payloads; its
+# HTTP client is never used (the app downloads natively).
+tauri-plugin-updater = { version = "=2.14.1", default-features = false, features = ["rustls-tls"] }
+# Access (src/access.rs): reads relative to a folder the person granted, never leaving it.
+cap-std = "=4.0.3"
+# Bytes a page reads through Access travel as base64 in its channel's JSON.
+base64 = "=0.23.1"
+
+# The single-instance pipe and the Run key (src/instance/win.rs, src/startup/registry.rs); the
+# processes the app starts and holds (src/owned/windows.rs: CreateProcessW, job objects, console
+# control, file identity) and the core's listener check (src/managed.rs); private files
+# (src/private_windows.rs) and the vault's folders (src/vault_windows.rs): access lists, and
+# opening, renaming and listing relative to a held folder; the native test's process and thread
+# listing (src/proc_native.rs, Tool Help); opening an address in the browser (src/updates.rs,
+# ShellExecuteExW). Already in the tree through cap-std and tauri's dirs; the version is the locked
+# one.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = [
+    "Wdk",
+    "Wdk_Foundation",
+    "Wdk_Storage_FileSystem",
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_Networking_WinSock",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_IO",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    # The native test's core steps list processes (src/native_core.rs).
+    "Win32_System_ProcessStatus",
+    "Win32_System_Registry",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# Native key entry and confirmations (src/key_entry_windows.rs, src/confirmation_ui_windows.rs,
+# src/dialog_windows.rs) and the remembered launches' file identities and access checks
+# (src/confirmation_windows.rs): the windows crate Tauri uses, more of its API. The key typed is
+# cleared from memory with zeroize (already here through rustls).
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  "Win32_Storage_FileSystem",
+  "Win32_System_DataExchange",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Memory",
+  "Win32_System_Ole",
+  "Win32_System_Threading",
+  "Win32_UI_Controls",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+] }
+zeroize = "1"
+# The WebView2 bindings wry uses (the same version, so one copy), to watch a page's frame
+# navigations (src/page_frames.rs).
+webview2-com = "=0.39.1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# Native key entry and confirmations on macOS (src/key_entry_macos.rs,
+# src/confirmation_ui_macos.rs, src/dialog_macos.rs) and opening an address in the browser
+# (src/updates.rs, NSWorkspace): the AppKit bindings Tauri uses.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = [
+  "std",
+  "block2",
+  "NSArray",
+  "NSDate",
+  "NSGeometry",
+  "NSObject",
+  "NSRunLoop",
+  "NSString",
+  "NSThread",
+  "NSTimer",
+  "NSURL",
+] }
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+  "std",
+  "block2",
+  "objc2-core-foundation",
+  "NSActionCell",
+  "NSApplication",
+  "NSButton",
+  "NSButtonCell",
+  "NSCell",
+  "NSClipView",
+  "NSColor",
+  "NSControl",
+  "NSEvent",
+  "NSFont",
+  "NSGraphics",
+  "NSGraphicsContext",
+  "NSPanel",
+  "NSPasteboard",
+  "NSResponder",
+  "NSRunningApplication",
+  "NSScrollView",
+  "NSSecureTextField",
+  "NSText",
+  "NSTextField",
+  "NSTextFieldCell",
+  "NSTextView",
+  "NSView",
+  "NSWindow",
+  "NSWorkspace",
+] }
+zeroize = "1"
+
+# The same GTK Tauri uses, to lay page webviews over the window (src/place.rs).
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+# The WebKitGTK Tauri uses, to turn off the notes webviews' context menu (src/updates.rs).
+webkit2gtk = "=2.0.2"
+
+[dev-dependencies]
+json-patch = "4"
+tauri-utils = { version = "=2.10.2", default-features = false }
+
+# GTK's D-Bus layer, for the native test's probe (examples/session_probe.rs) only.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gio = "0.18"
+
+# SHA-256 unoptimized runs at about 16 MB/s, and the program host hashes a tool's program at each
+# start: in the unit tests that tool is the test binary itself, of a hundred megabytes and more.
+[profile.dev.package.sha2]
+opt-level = 3
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

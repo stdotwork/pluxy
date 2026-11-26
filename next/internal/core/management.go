@@ -1,0 +1,270 @@
+package core
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+
+	"github.com/stdotwork/pluxy/next/internal/configdoc"
+	"github.com/stdotwork/pluxy/next/internal/packages"
+	"github.com/stdotwork/pluxy/next/internal/server"
+	"github.com/stdotwork/pluxy/next/management"
+)
+
+// ManagementPrefix is where the management API is served.
+const ManagementPrefix = server.ManagementPrefix + "/"
+
+// maxManagementBody limits a management request body.
+const maxManagementBody = 1 << 20
+
+// Management returns the management API handler, version 0: the account and login calls (see
+// server.NewManagement) and
+//
+//	GET    /v0/management/status    core's live state: desired and active config revision,
+//	                                each extension generation's state, and core's build
+//	POST   /v0/management/reload    reload the config file now; 200 with the status when the
+//	                                new revision is active, 422 with the status (desired.error
+//	                                says why) when it was refused and the active revision stays
+//	GET    /v0/management/setup     kept setup scan, first-run flag and suggested picks
+//	POST   /v0/management/setup/scan   start a background setup scan now
+//	POST   /v0/management/setup/apply  install and enable setup picks
+//	POST   /v0/management/setup/done   end first run
+//	GET    /v0/management/setup/clients/{id}/paste  what to paste into a client tool's settings
+//	GET    /v0/management/packages  installed packages
+//	GET    /v0/management/registries  what each registry offers
+//	POST   /v0/management/packages  install a package (InstallRequest)
+//	POST   /v0/management/packages/{publisher}/{name}/enable, .../disable
+//	DELETE /v0/management/packages/{publisher}/{name}  remove a package
+//	GET    /v0/management/ui        the extensions' pages and where they are served
+//	GET    /v0/management/extensions/{publisher}/{name}/config  an extension's settings
+//	PATCH  /v0/management/extensions/{publisher}/{name}/config  change them
+//	GET    /v0/management/config    the config file, with its secrets replaced by placeholders
+//	POST   /v0/management/config/validate  check a config document without applying it
+//	PUT    /v0/management/config    replace the config file and apply it (WriteConfig)
+//	GET    /v0/management/client-keys  the client keys, masked
+//	POST   /v0/management/client-keys  add a new random client key, with a label if sent; the reply shows it once
+//	PATCH  /v0/management/client-keys/{id}  set or clear a client key's label
+//	DELETE /v0/management/client-keys/{id}  remove a client key (and its label)
+//	POST   /v0/management/management-key/rotate  replace the management key with a new one
+//	POST   /v0/management/management-key/rotate/stage  make a new management key, kept in memory only
+//	POST   /v0/management/management-key/rotate/commit  put the staged management key into use
+//	GET    /v0/management/models    the models served, as GET /v1/models lists them, each with its
+//	                                extension, upstream name and the IDs of the accounts that serve it
+//	POST   /v0/management/models/refresh  ask providers for their model lists again now
+//	GET    /v0/management/settings  the basic and routing settings, by today's core's names
+//	PATCH  /v0/management/settings  change them
+//	GET    /v0/management/login-methods  each extension's login methods (handleAccounts)
+//	POST   /v0/management/accounts/{id}/cooldown/reset  clear an account's cooldowns
+//	GET    /v0/management/accounts/{id}/models  the models an account serves
+//	POST   /v0/management/accounts/{id}/test  send an account one small request
+//	GET    /v0/management/route     what a request for a model would do now (handleRoute)
+//	GET    /v0/management/chains    the fallback chains (handleChains)
+//	PUT    /v0/management/chains/{name}  set a model name's fallback chain
+//	DELETE /v0/management/chains/{name}  remove it
+//	GET    /v0/management/usage     usage totals, breakdowns and a time series (handleUsage)
+//	GET    /v0/management/usage/events  the recorded requests, a page at a time
+//	GET    /v0/management/logs      lines of core's log files (handleLogs)
+//	DELETE /v0/management/logs      empty main.log and delete its rotated files
+//	GET    /v0/management/request-error-logs  the error logs; .../{name} one of them
+//	GET    /v0/management/request-log-by-id/{id}  the request log of a trace ID
+//	GET    /v0/management/requests  the client requests being served now (handleRequests)
+//	POST   /v0/management/requests/{trace}/cancel  cancel one of them
+//	GET    /v0/management/themes  selected theme ID and stored themes
+//	GET    /v0/management/themes/{publisher}/{name}  one stored theme's JSON unchanged
+//	PUT    /v0/management/themes/{publisher}/{name}  store a theme JSON object
+//	DELETE /v0/management/themes/{publisher}/{name}  remove a stored theme
+//	PUT    /v0/management/theme   set or clear the selected theme ID
+//
+// Every call needs the active config's management_key as a bearer token. Without a key in the
+// config the API is not served.
+func (c *Core) Management() *server.Management {
+	m := server.NewManagement(c.Config, c.creds, c.state)
+	m.Check = c.checks.result
+	m.Ignition = c.ignition.View
+	m.Redactor = accountRedactor{c.redactor}
+	m.Handle("GET /status", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, c.Status())
+	})
+	m.Handle("POST /reload", func(w http.ResponseWriter, r *http.Request) {
+		code := http.StatusOK
+		if err := c.Reload("management API"); err != nil {
+			code = http.StatusUnprocessableEntity
+		}
+		writeJSON(w, code, c.Status())
+	})
+	m.Handle("GET /packages", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, management.PackagesReply{Packages: c.Packages()})
+	})
+	m.Handle("GET /registries", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, management.RegistriesReply{Registries: c.Registries(r.Context())})
+	})
+	m.Handle("POST /packages", func(w http.ResponseWriter, r *http.Request) {
+		var req InstallRequest
+		if !readJSON(w, r, &req) {
+			return
+		}
+		v, err := c.Install(r.Context(), req)
+		writePackage(w, v, err)
+	})
+	for verb, enabled := range map[string]bool{"enable": true, "disable": false} {
+		m.Handle("POST /packages/{publisher}/{name}/"+verb, func(w http.ResponseWriter, r *http.Request) {
+			v, err := c.SetEnabled(packageID(r), enabled)
+			writePackage(w, v, err)
+		})
+	}
+	m.Handle("DELETE /packages/{publisher}/{name}", func(w http.ResponseWriter, r *http.Request) {
+		if err := c.RemovePackage(packageID(r)); err != nil {
+			writePackage(w, PackageView{}, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	m.Handle("GET /models", func(w http.ResponseWriter, r *http.Request) {
+		s, release := c.acquire()
+		defer release()
+		writeJSON(w, http.StatusOK, management.ModelsReply{Models: s.Router.ServedModels(r.Context())})
+	})
+	c.handleSetup(m)
+	c.handleSetupImport(m)
+	m.Handle("POST /models/refresh", func(w http.ResponseWriter, r *http.Request) {
+		var req management.RefreshModelsRequest
+		if !readOptionalJSON(w, r, &req) {
+			return
+		}
+		s, release := c.acquire()
+		defer release()
+		if req.Account != "" {
+			if _, ok := c.account(s, req.Account); !ok {
+				writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("no account %q", req.Account))
+				return
+			}
+		}
+		var accounts []management.RefreshAccountResult
+		if !c.opts.SafeMode {
+			accounts = s.Router.RefreshModels(r.Context(), req.Account)
+		}
+		if accounts == nil {
+			accounts = []management.RefreshAccountResult{}
+		}
+		writeJSON(w, http.StatusOK, management.RefreshModelsReply{
+			Models:   s.Router.ServedModels(r.Context()),
+			Accounts: accounts,
+		})
+	})
+	c.handleUI(m)
+	c.handleAccounts(m)
+	c.handleRoute(m)
+	c.handleChains(m)
+	c.handleConfig(m)
+	c.handleUsage(m)
+	c.handleLogs(m)
+	c.handleThemes(m)
+	c.handleRequests(m)
+	return m
+}
+
+func packageID(r *http.Request) string { return r.PathValue("publisher") + "/" + r.PathValue("name") }
+
+// writePackage writes the reply of a package call: the package, or the error with the package
+// when it is installed all the same.
+func writePackage(w http.ResponseWriter, v PackageView, err error) {
+	if err == nil {
+		writeJSON(w, http.StatusOK, management.PackageReply{Package: v})
+		return
+	}
+	code, kind := http.StatusInternalServerError, "internal"
+	switch {
+	case errors.Is(err, packages.ErrNotFound):
+		code, kind = http.StatusNotFound, "not_found"
+	case errors.Is(err, packages.ErrRefused), errors.Is(err, ErrNotStarted):
+		code, kind = http.StatusUnprocessableEntity, "refused"
+	case errors.Is(err, packages.ErrConflict):
+		code, kind = http.StatusConflict, "conflict"
+	case errors.Is(err, packages.ErrFetch):
+		code, kind = http.StatusBadGateway, "fetch_failed"
+	}
+	body := map[string]any{"error": map[string]string{"code": kind, "message": err.Error()}}
+	if v.ID != "" {
+		body["package"] = v
+	}
+	writeJSON(w, code, body)
+}
+
+// readManagementBody reads a management request body, up to maxManagementBody. It writes the
+// error reply and returns false when it cannot: 413 invalid_request for a body larger than core
+// reads, 400 invalid_request for one it cannot read otherwise.
+func readManagementBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	b, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxManagementBody))
+	if err == nil {
+		return b, true
+	}
+	var tooBig *http.MaxBytesError
+	if errors.As(err, &tooBig) {
+		writeError(w, http.StatusRequestEntityTooLarge, "invalid_request", "request body is too large")
+		return nil, false
+	}
+	writeError(w, http.StatusBadRequest, "invalid_request", "request body: "+err.Error())
+	return nil, false
+}
+
+func readOptionalJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	b, ok := readManagementBody(w, r)
+	if !ok {
+		return false
+	}
+	if len(bytes.TrimSpace(b)) == 0 {
+		return true
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(v); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "invalid_request", "message": "request body is not valid JSON: " + err.Error()}})
+		return false
+	}
+	var extra any
+	if dec.Decode(&extra) != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "invalid_request", "message": "request body must be one JSON object"}})
+		return false
+	}
+	return true
+}
+
+func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	b, ok := readManagementBody(w, r)
+	if !ok {
+		return false
+	}
+	if err := json.Unmarshal(b, v); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "invalid_request", "message": "request body is not valid JSON: " + err.Error()}})
+		return false
+	}
+	return true
+}
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+// accountRedactor is the config redactor as the management API uses it for accounts' headers
+// and settings (server.AccountRedactor), so they show the placeholders GET /config shows. It
+// only turns a stale settings placeholder into server.ErrStaleSecret and a refused copy into
+// server.ErrSecretCopy, with the copy's line, which the server package can match: it cannot
+// import configdoc, whose tests import it.
+type accountRedactor struct{ *configdoc.Redactor }
+
+func (r accountRedactor) RestoreSettings(sent, current []byte) ([]byte, error) {
+	b, err := r.Redactor.RestoreSettings(sent, current)
+	switch {
+	case errors.Is(err, configdoc.ErrStale):
+		return nil, server.ErrStaleSecret
+	case errors.Is(err, configdoc.ErrCopy):
+		return nil, fmt.Errorf("%w: %s", server.ErrSecretCopy, strings.TrimPrefix(err.Error(), configdoc.ErrInvalid.Error()+": "))
+	}
+	return b, err
+}

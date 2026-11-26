@@ -1,0 +1,228 @@
+// Command codex is the pluxy provider extension for OpenAI's Codex models. It serves accounts
+// of three kinds: an OpenAI API key; a ChatGPT subscription signed in through OpenAI's login
+// (in a browser, or with a device code); and Sign in with ChatGPT (SIWC), a ChatGPT sign-in whose
+// token calls the OpenAI API. It renews the tokens of both sign-ins. All speak OpenAI Responses
+// over HTTP with server-sent events; a subscription calls the ChatGPT backend's Codex endpoint,
+// and an API key or a SIWC sign-in the OpenAI API.
+//
+// Account settings, all optional:
+//
+//	{"base_url": "https://api.openai.com/v1", "codex_identity": true, "image_generation_tool": true,
+//	 "callback_listen": true, "websockets": false, "alpha_search": false, "images": true,
+//	 "signin_with_chatgpt_identifier": "pluxy", "codex_client_version": "0.159.0",
+//	 "image_generation_off_models": [], "prompt_cache_retention_passthrough": false}
+//
+// base_url is where requests go ({base_url}/responses); the default is
+// https://api.openai.com/v1 for an API key and a SIWC sign-in, and
+// https://chatgpt.com/backend-api/codex for a subscription. codex_identity (default true) sends
+// the User-Agent and originator headers of the Codex terminal client in place of the client's own. image_generation_tool (default true) offers
+// the model the hosted image_generation tool (never to a free plan or a -spark model); both
+// follow what today's core sends.
+// Tests move OpenAI's login to a fake with auth_base_url (sdk.TestLoginHost); in a normal run it is
+// ignored. callback_listen (default true) lets
+// the browser login listen for its redirect on localhost:1455; off, the user pastes the address
+// the browser ended on, as they must when core runs on another machine. websockets (default
+// false, as in today's core) holds sessions for WebSocket clients: their turns go over the
+// upstream's Responses WebSocket ({base_url}/responses with ws or wss), one upstream socket per
+// client socket, so a turn can continue the previous response with previous_response_id.
+// alpha_search (default false, as in today's core) lets an API key account serve Codex's Alpha
+// Search ({base_url}/alpha/search), which not every upstream has; a subscription always serves it.
+// images (default true) serves the Images API ({base_url}/images/generations and /images/edits)
+// on the account; a free ChatGPT plan and a SIWC sign-in never do. signin_with_chatgpt_identifier
+// (default "pluxy") is how a SIWC sign-in names this program: the agent name its login shows the
+// user, and its requests' User-Agent ("<identifier> (<GOOS>; <GOARCH>)"); the other settings
+// above but base_url, callback_listen and websockets do not apply to it (see siwc.go).
+// codex_client_version (default 0.159.0) is the version the User-Agent claims when
+// codex_identity is on, and the model list's client_version. image_generation_off_models lists
+// models (names, or patterns with * and ?) that are not offered the image tool, as a free plan
+// and -spark models are not. prompt_cache_retention_passthrough
+// (default false) sends a client's prompt_cache_retention on, for an upstream that takes it; the
+// ChatGPT backend does not, and a SIWC sign-in never sends it.
+//
+// Every request is sent in the shape the Codex endpoint takes: streamed, not stored, encrypted
+// reasoning included, sampling settings removed (see shape). Requests in Chat Completions,
+// Anthropic Messages and Gemini formats are translated to Responses; a Messages client keeps
+// the encrypted reasoning in its thinking blocks' signatures and gets it back on the next turn.
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path"
+	"regexp"
+	"strings"
+
+	"github.com/stdotwork/pluxy/next/llm"
+	"github.com/stdotwork/pluxy/next/protocol"
+	"github.com/stdotwork/pluxy/next/sdk"
+)
+
+const (
+	id      = "pluxy/codex"
+	version = "0.1.0"
+)
+
+func main() {
+	err := sdk.Serve(sdk.Extension{
+		ID:           id,
+		Version:      version,
+		Generate:     generate,
+		LoginMethods: loginMethods,
+		Login:        login,
+		Refresh:      refresh,
+		Session:      openSession,
+		Models:       listModels,
+		Quota:        quota,
+		Endpoint:     endpoint,
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "codex:", err)
+		os.Exit(1)
+	}
+}
+
+// Default endpoints.
+const (
+	defaultAPIBaseURL          = "https://api.openai.com/v1"
+	defaultSubscriptionBaseURL = "https://chatgpt.com/backend-api/codex"
+	defaultAuthBaseURL         = "https://auth.openai.com"
+)
+
+type settings struct {
+	BaseURL             string `json:"base_url"`
+	CodexIdentity       *bool  `json:"codex_identity"`
+	ImageGenerationTool *bool  `json:"image_generation_tool"`
+	AuthBaseURL         string `json:"auth_base_url"`
+	// CallbackListen (default true) serves the browser login's redirect on this machine; off,
+	// the user always pastes the address the browser ended on.
+	CallbackListen *bool `json:"callback_listen"`
+	// Websockets (default false) sends a WebSocket client's turns over the upstream's Responses
+	// WebSocket, one socket per client socket; off, core sends each turn over HTTP.
+	Websockets *bool `json:"websockets"`
+	// AlphaSearch (default false) lets an API key account serve Codex's Alpha Search; a
+	// subscription always does.
+	AlphaSearch bool `json:"alpha_search"`
+	// Images (default true) serves the Images API (/v1/images/generations and /v1/images/edits)
+	// on the account.
+	Images *bool `json:"images"`
+	// SIWCIdentifier names this program to a SIWC sign-in (see siwcIdentifier).
+	SIWCIdentifier string `json:"signin_with_chatgpt_identifier"`
+	// CodexClientVersion is the version in the User-Agent sent in place of the client's own
+	// and in the ChatGPT model list's client_version; empty means codexClientVersion.
+	CodexClientVersion string `json:"codex_client_version"`
+	// ImageGenerationOffModels lists the models (names or patterns, see imageOff) that are not
+	// offered the image_generation tool.
+	ImageGenerationOffModels []string `json:"image_generation_off_models"`
+	// PromptCacheRetentionPassthrough sends the client's prompt_cache_retention on, where the
+	// upstream takes it.
+	PromptCacheRetentionPassthrough bool `json:"prompt_cache_retention_passthrough"`
+}
+
+func (s settings) identity() bool  { return s.CodexIdentity == nil || *s.CodexIdentity }
+func (s settings) imageTool() bool { return s.ImageGenerationTool == nil || *s.ImageGenerationTool }
+func (s settings) imagesAPI() bool { return s.Images == nil || *s.Images }
+
+// imageOff reports whether the account's image_generation_off_models names model: an exact name
+// or a pattern with * and ?, in any case.
+func (s settings) imageOff(model string) bool {
+	model = strings.ToLower(model)
+	for _, p := range s.ImageGenerationOffModels {
+		if ok, _ := path.Match(strings.ToLower(p), model); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// codexVersionPattern is what a codex_client_version may be: it goes into a header.
+var codexVersionPattern = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._+-]*$`)
+
+func (s settings) authBase() string {
+	if v := sdk.TestLoginHost(s.AuthBaseURL); v != "" {
+		return v
+	}
+	return defaultAuthBaseURL
+}
+
+func readSettings(raw json.RawMessage) (settings, error) {
+	var s settings
+	if len(raw) > 0 && string(raw) != "null" {
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return s, &llm.Error{Code: llm.CodeInvalidRequest, Message: "account settings are not valid: " + err.Error(), Scope: llm.ScopeCredential}
+		}
+	}
+	// The identifier goes into a header and a sign-in URL.
+	if strings.ContainsFunc(s.SIWCIdentifier, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return s, &llm.Error{Code: llm.CodeInvalidRequest, Message: "account settings are not valid: signin_with_chatgpt_identifier holds a control character", Scope: llm.ScopeCredential}
+	}
+	if v := s.CodexClientVersion; v != "" && !codexVersionPattern.MatchString(v) {
+		return s, &llm.Error{Code: llm.CodeInvalidRequest, Message: "account settings are not valid: codex_client_version must be a version such as 0.159.0", Scope: llm.ScopeCredential}
+	}
+	for _, p := range s.ImageGenerationOffModels {
+		if _, err := path.Match(p, ""); err != nil {
+			return s, &llm.Error{Code: llm.CodeInvalidRequest, Message: "account settings are not valid: image_generation_off_models has a malformed pattern " + fmt.Sprintf("%q", p), Scope: llm.ScopeCredential}
+		}
+	}
+	return s, nil
+}
+
+// account is what a generate call needs from the account's credential.
+type account struct {
+	token        string // bearer token: the API key, or the subscription's access token
+	subscription bool
+	accountID    string // ChatGPT account ID, for a subscription
+	planType     string // ChatGPT plan, for a subscription or a SIWC sign-in, when known
+	// siwc marks a Sign in with ChatGPT credential: token calls the OpenAI API under the SIWC
+	// rules (siwc.go). Such an account is not a subscription: it has no ChatGPT account ID to
+	// send, no ChatGPT backend and no usage windows.
+	siwc bool
+}
+
+// credentialData is what a subscription credential keeps in its data. Core treats every string
+// in a credential as secret and removes it from replies, so only values that never appear in a
+// reply belong here; the plan type ("plus") is read from the ID token instead.
+type credentialData struct {
+	IDToken   string `json:"id_token,omitempty"`
+	AccountID string `json:"account_id,omitempty"`
+	// A SIWC credential: SIWC marks it (a boolean, since every string here is redacted from
+	// replies), and ClientID (issued at sign-in), DeviceID and Scope are what renewing it needs.
+	SIWC     bool   `json:"siwc,omitempty"`
+	ClientID string `json:"client_id,omitempty"`
+	DeviceID string `json:"device_id,omitempty"`
+	Scope    string `json:"scope,omitempty"`
+}
+
+func accountOf(c *protocol.Credential) (account, error) {
+	if c != nil {
+		switch {
+		case c.Kind == protocol.CredentialAPIKey && c.APIKey != "":
+			return account{token: c.APIKey}, nil
+		case c.Kind == protocol.CredentialOAuth && c.AccessToken != "":
+			var d credentialData
+			if len(c.Data) > 0 {
+				_ = json.Unmarshal(c.Data, &d)
+			}
+			if d.SIWC {
+				claims, _ := parseIDToken(d.IDToken)
+				return account{token: c.AccessToken, siwc: true, planType: claims.planType}, nil
+			}
+			a := account{token: c.AccessToken, subscription: true}
+			a.accountID = d.AccountID
+			if claims, ok := parseIDToken(d.IDToken); ok {
+				if a.accountID == "" {
+					a.accountID = claims.accountID
+				}
+				a.planType = strings.TrimSpace(claims.planType)
+			}
+			// An ID token with no plan, or one that does not parse, is the free plan, as today's
+			// core reads it (core/internal/watcher/synthesizer/file.go) and as listModels does.
+			// With no ID token there is no plan to read.
+			if d.IDToken != "" && a.planType == "" {
+				a.planType = "free"
+			}
+			return a, nil
+		}
+	}
+	return account{}, &llm.Error{Code: llm.CodeAuth, Message: "the account has no API key or access token; sign in again", Scope: llm.ScopeCredential}
+}

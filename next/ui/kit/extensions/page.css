@@ -1,0 +1,14 @@
+/* An extension page (page.tsx). */
+@layer kit {
+  /* An extension page: the extension's own document, in a frame from the pages site. It fills
+     the pane (the window less the frame above it and the page's own padding), so the pane does
+     not scroll until the window is very short. */
+  .extension-frame {
+    display: block;
+    width: 100%;
+    height: max(16rem, calc(100vh - var(--stick) - var(--s) * 14));
+    border: var(--px-shape-border) solid var(--px-color-border);
+    border-radius: var(--px-shape-radius);
+    background: var(--px-color-surface);
+  }
+}

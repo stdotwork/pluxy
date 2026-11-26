@@ -1,0 +1,76 @@
+{
+  "description": "Two accounts: the first starts a streamed reply and its connection drops halfway. Nothing is retried once the reply has reached the client. Which account goes first is masked: the old core's first pick between two equal accounts changes from run to run.",
+  "source": ["core/sdk/cliproxy/auth/conductor_stream.go (readStreamBootstrap, wrapStreamResult)"],
+  "accounts": 2,
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {"model":"gpt-test","messages":[{"role":"user","content":"Say hello"}],"stream":true}
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"data":{"id":"chatcmpl-corpus","object":"chat.completion.chunk","created":1700000000,"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}},
+        {"data":{"id":"chatcmpl-corpus","object":"chat.completion.chunk","created":1700000000,"model":"gpt-test","choices":[{"index":0,"delta":{"content":"Hel"},"finish_reason":null}]}}
+      ],
+      "abort": true
+    },
+    {
+      "sse": [
+        {"data":{"id":"chatcmpl-corpus-2","object":"chat.completion.chunk","created":1700000000,"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello."},"finish_reason":"stop"}]}},
+        {"data":"[DONE]"}
+      ]
+    }
+  ],
+  "volatile": ["upstream[*].headers.Authorization"],
+  "exceptions": [
+    {
+      "path": "client.events[2].data.error",
+      "kind": "gap",
+      "reason": "Both cores end the stream with an error event and no [DONE], and neither tries the second account; the error's message and code differ (as in stream-connection-dropped).",
+      "want": {
+        "code": "upstream",
+        "message": "upstream stream broke: unexpected EOF",
+        "type": "server_error"
+      }
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"choices":[{"delta":{"content":"","role":"assistant"},"finish_reason":null,"index":0}],"created":1700000000,"id":"chatcmpl-corpus","model":"gpt-test","object":"chat.completion.chunk"}},
+        {"data":{"choices":[{"delta":{"content":"Hel"},"finish_reason":null,"index":0}],"created":1700000000,"id":"chatcmpl-corpus","model":"gpt-test","object":"chat.completion.chunk"}},
+        {"data":{"error":{"code":"internal_server_error","message":"unexpected EOF","type":"server_error"}}}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "messages": [{"content":"Say hello","role":"user"}],
+          "model": "gpt-test",
+          "stream": true,
+          "stream_options": {"include_usage":true}
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "gzip",
+          "Authorization": "(volatile)",
+          "Cache-Control": "no-cache",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/chat/completions"
+      }
+    ]
+  }
+}

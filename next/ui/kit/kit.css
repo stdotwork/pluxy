@@ -1,0 +1,27 @@
+/* The kit's styles. Everything reads the theme tokens (--px-*), and the layout options arrive as
+   attributes on the root element. All of it sits in the layer "kit", so a theme's custom CSS,
+   which is unlayered, wins over any rule here.
+
+   Each file below wraps its rules in @layer kit. A page's CSS sits beside the page and is
+   imported here; the order of the imports is the cascade order. */
+
+@import "./fonts.css";
+@import "./ui.css";
+@import "./shell.css";
+@import "./parts/parts.css";
+@import "./pages/themes.css";
+@import "./extensions/page.css";
+@import "./pages/quota.css";
+@import "./pages/status.css";
+@import "./pages/usage.css";
+
+@import "./pages/config.css";
+
+@import "./pages/logs.css";
+@import "./pages/accounts.css";
+@import "./pages/addAccount.css";
+@import "./pages/routing.css";
+@import "./pages/system.css";
+@import "./pages/accountTools.css";
+@import "./pages/accountSettings.css";
+@import "./pages/setup.css";

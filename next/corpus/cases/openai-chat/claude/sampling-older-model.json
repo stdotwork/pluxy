@@ -1,0 +1,140 @@
+{
+  "description": "temperature and top_p set together on Claude Sonnet 4.5, an older model, without thinking: the new core keeps temperature and leaves out top_p, as Anthropic refuses both together; today's core leaves out both.",
+  "source": [
+    "core/internal/runtime/executor/claude_executor_request.go (normalizeClaudeSamplingForUpstreamDoc: a translated request loses temperature and top_p on every model)",
+    "core/internal/translator/claude/openai/chat-completions/claude_openai_request.go"
+  ],
+  "client": {
+    "path": "/v1/chat/completions",
+    "body": {
+      "model": "claude-sonnet-4-5",
+      "messages": [{"role":"user","content":"Say hello"}],
+      "temperature": 0.5,
+      "top_p": 0.9,
+      "max_tokens": 100,
+      "stream": true
+    }
+  },
+  "upstream": [
+    {
+      "sse": [
+        {"event":"message_start","data":{"type":"message_start","message":{"id":"msg_corpus","type":"message","role":"assistant","content":[],"model":"claude-test-upstream","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":12,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":1}}}},
+        {"event":"ping","data":{"type":"ping"}},
+        {"event":"content_block_start","data":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}},
+        {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello!"}}},
+        {"event":"content_block_stop","data":{"type":"content_block_stop","index":0}},
+        {"event":"message_delta","data":{"type":"message_delta","delta":{"stop_reason":"stop_sequence","stop_sequence":"END"},"usage":{"output_tokens":3}}},
+        {"event":"message_stop","data":{"type":"message_stop"}}
+      ]
+    }
+  ],
+  "volatile": ["client.body.created","client.events[*].data.created"],
+  "exceptions": [
+    {
+      "path": "client.events",
+      "kind": "intended",
+      "want": [
+        {
+          "data": {
+            "choices": [{"delta":{"content":"","role":"assistant"},"finish_reason":null,"index":0}],
+            "created": "(volatile)",
+            "id": "msg_corpus",
+            "model": "claude-test-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [{"delta":{"content":"Hello!"},"finish_reason":null,"index":0}],
+            "created": "(volatile)",
+            "id": "msg_corpus",
+            "model": "claude-test-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {
+          "data": {
+            "choices": [{"delta":{},"finish_reason":"stop","index":0}],
+            "created": "(volatile)",
+            "id": "msg_corpus",
+            "model": "claude-test-upstream",
+            "object": "chat.completion.chunk"
+          }
+        },
+        {"data":"[DONE]"}
+      ],
+      "reason": "The new core writes a Chat stream from a Claude reply as OpenAI's API does: the model that served the reply (Claude's message.model; today's core echoes the requested name), content \"\" with the role in the first chunk, tool arguments as Claude streams them (today's core collects them and sends them whole), the finish reason in its own chunk, and usage only when the client asks for it with stream_options.include_usage (today's core always adds it to the last chunk and in an extra chunk)."
+    },
+    {
+      "path": "upstream[0].body.metadata",
+      "kind": "intended",
+      "reason": "Today's core adds metadata.user_id, a hash it derives from the request, to every request it translates to Claude; the new core does not make up a user identifier for the client.",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.Authorization",
+      "kind": "intended",
+      "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
+      "absent": true
+    },
+    {
+      "path": "upstream[0].headers.X-Api-Key",
+      "kind": "intended",
+      "reason": "The Claude extension sends an API key in x-api-key, as Anthropic's API defines it; today's core sends it as a bearer token whenever the base URL is not api.anthropic.com (it uses x-api-key only there).",
+      "want": "sk-Cq7Vx2Np9Lw4Zr8"
+    },
+    {
+      "path": "upstream[0].body.temperature",
+      "kind": "intended",
+      "reason": "Today's core removes temperature and top_p from every request it translates to Claude, on every model. The Claude extension leaves out only what the model refuses: Claude Sonnet 4.5 takes a temperature other than 1 without thinking, but not temperature and top_p together (Anthropic's OpenAI SDK compatibility page), so temperature is sent and top_p is left out and reported as dropped.",
+      "want": 0.5
+    }
+  ],
+  "recorded_old_core": {
+    "client": {
+      "events": [
+        {"data":{"choices":[{"delta":{"role":"assistant"},"finish_reason":null,"index":0}],"created":"(volatile)","id":"msg_corpus","model":"claude-sonnet-4-5","object":"chat.completion.chunk"}},
+        {"data":{"choices":[{"delta":{"content":"Hello!"},"finish_reason":null,"index":0}],"created":"(volatile)","id":"msg_corpus","model":"claude-sonnet-4-5","object":"chat.completion.chunk"}},
+        {"data":{"choices":[{"delta":{},"finish_reason":"stop","index":0}],"created":"(volatile)","id":"msg_corpus","model":"claude-sonnet-4-5","object":"chat.completion.chunk","usage":{"completion_tokens":3,"prompt_tokens":12,"prompt_tokens_details":{"cache_write_tokens":0,"cached_creation_tokens":0,"cached_tokens":0},"total_tokens":15}}},
+        {"data":{"choices":[],"created":"(volatile)","id":"msg_corpus","model":"claude-sonnet-4-5","object":"chat.completion.chunk","usage":{"completion_tokens":3,"prompt_tokens":12,"prompt_tokens_details":{"cache_write_tokens":0,"cached_creation_tokens":0,"cached_tokens":0},"total_tokens":15}}},
+        {"data":"[DONE]"}
+      ],
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/event-stream",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": [
+      {
+        "body": {
+          "max_tokens": 100,
+          "messages": [
+            {
+              "content": [{"cache_control":{"type":"ephemeral"},"text":"Say hello","type":"text"}],
+              "role": "user"
+            }
+          ],
+          "metadata": {"user_id":"120226d8c5cb65e3acdd1f5e56fb3cf04f8bf909fe34ece9118dcc2d0e8b6c46"},
+          "model": "claude-sonnet-4-5",
+          "stream": true
+        },
+        "headers": {
+          "Accept": "text/event-stream",
+          "Accept-Encoding": "identity",
+          "Anthropic-Version": "2023-06-01",
+          "Authorization": "Bearer sk-Cq7Vx2Np9Lw4Zr8",
+          "Content-Type": "application/json",
+          "User-Agent": "pluxy-corpus/0"
+        },
+        "method": "POST",
+        "path": "/v1/messages?beta=true"
+      }
+    ]
+  }
+}

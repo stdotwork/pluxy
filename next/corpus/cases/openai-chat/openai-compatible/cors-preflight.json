@@ -1,0 +1,45 @@
+{
+  "description": "A CORS preflight (OPTIONS with Origin and Access-Control-Request-* headers, no client key) on a chat endpoint.",
+  "source": [
+    "core/internal/api/server_middleware.go:441 (CORS headers)",
+    "core/internal/api/server_middleware.go:460 (corsAllowHeadersValue)"
+  ],
+  "new_core_config": {"cors":{"allowed_origins":["*"]}},
+  "client": {
+    "method": "OPTIONS",
+    "path": "/v1/chat/completions",
+    "auth": "none",
+    "headers": {
+      "Origin": "https://app.example.test",
+      "Access-Control-Request-Method": "POST",
+      "Access-Control-Request-Headers": "X-Custom-Header, Content-Type"
+    }
+  },
+  "upstream": [],
+  "recorded_old_core": {
+    "client": {
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta, X-Custom-Header",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id"
+      },
+      "status": 204
+    },
+    "upstream": []
+  },
+  "exceptions": [
+    {
+      "path": "client.headers.Access-Control-Allow-Methods",
+      "kind": "intended",
+      "reason": "With CORS turned on for every origin, the new core lists the methods its client routes take (GET, POST, OPTIONS); today's core also lists PUT, PATCH and DELETE, which no client route of the new core takes.",
+      "want": "GET, POST, OPTIONS"
+    },
+    {
+      "path": "client.headers.Access-Control-Expose-Headers",
+      "kind": "intended",
+      "reason": "The new core exposes the headers its client replies carry (the trace ID and Retry-After); today's core also exposes its version and build headers and others its client replies do not send.",
+      "want": "X-CPA-TRACE-ID, Retry-After"
+    }
+  ]
+}

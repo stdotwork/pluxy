@@ -1,0 +1,41 @@
+{
+  "description": "Gemini :countTokens to a Codex upstream, which has no count endpoint: today's core counts locally and makes no upstream request.",
+  "source": [
+    "core/sdk/api/handlers/gemini/gemini_handlers.go:325 (handleCountTokens)",
+    "core/internal/runtime/executor/codex_executor_tokens.go:19 (CountTokens)"
+  ],
+  "client": {
+    "path": "/v1beta/models/gpt-test:countTokens",
+    "body": {"contents":[{"role":"user","parts":[{"text":"hi"}]}]}
+  },
+  "upstream": [],
+  "recorded_old_core": {
+    "client": {
+      "body": {"promptTokensDetails":[{"modality":"TEXT","tokenCount":1}],"totalTokens":1},
+      "headers": {
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Api-Key, X-Goog-Api-Key, Anthropic-Version, Anthropic-Beta",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Expose-Headers": "X-CPA-TRACE-ID, X-CPA-VERSION, X-CPA-COMMIT, X-CPA-BUILD-DATE, X-CPA-SUPPORT-PLUGIN, X-CPA-HOME-VERSION, X-CPA-HOME-BUILD-DATE, X-SERVER-VERSION, X-SERVER-BUILD-DATE, Location, Retry-After, ETag, X-Request-Id, OpenAI-Request-Id",
+        "Content-Type": "application/json",
+        "X-Cpa-Trace-Id": "(volatile)"
+      },
+      "status": 200
+    },
+    "upstream": []
+  },
+  "exceptions": [
+    {
+      "path": "client.body.totalTokens",
+      "kind": "intended",
+      "want": 3,
+      "reason": "The new core answers with its own estimate, a standard-library approximation of o200k_base. Today's core counts the translated Responses body, in which a Gemini client's single user turn is only its text and not the role name, so it counts fewer tokens than the estimate, which counts the role as for every client. With token_count_estimate off it answers an error saying the account cannot count (see anthropic-messages/codex/count-tokens-estimate-off)."
+    },
+    {
+      "path": "client.body.promptTokensDetails[0].tokenCount",
+      "kind": "intended",
+      "want": 3,
+      "reason": "The new core answers with its own estimate, a standard-library approximation of o200k_base. Today's core counts the translated Responses body, in which a Gemini client's single user turn is only its text and not the role name, so it counts fewer tokens than the estimate, which counts the role as for every client. With token_count_estimate off it answers an error saying the account cannot count (see anthropic-messages/codex/count-tokens-estimate-off)."
+    }
+  ]
+}

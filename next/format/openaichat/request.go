@@ -1,0 +1,1284 @@
+// Package openaichat converts between OpenAI Chat Completions and pluxy's internal model, in
+// both directions: core uses it to read client requests and write client replies, and provider
+// extensions use it to build upstream requests and read upstream replies.
+package openaichat
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"slices"
+	"strings"
+
+	"github.com/stdotwork/pluxy/next/format/internal/audioinput"
+	"github.com/stdotwork/pluxy/next/format/internal/clienttools"
+	mediainput "github.com/stdotwork/pluxy/next/format/internal/media"
+	"github.com/stdotwork/pluxy/next/format/internal/rawjson"
+	"github.com/stdotwork/pluxy/next/format/internal/textdoc"
+	"github.com/stdotwork/pluxy/next/llm"
+)
+
+const format = llm.FormatOpenAIChat
+
+type chatRequest struct {
+	Model               string            `json:"model"`
+	Messages            []json.RawMessage `json:"messages"`
+	Stream              bool              `json:"stream"`
+	MaxTokens           *int              `json:"max_tokens"`
+	MaxCompletionTokens *int              `json:"max_completion_tokens"`
+	Temperature         *float64          `json:"temperature"`
+	TopP                *float64          `json:"top_p"`
+	Stop                json.RawMessage   `json:"stop"`
+	Tools               []json.RawMessage `json:"tools"`
+	ParallelToolCalls   *bool             `json:"parallel_tool_calls"`
+	ReasoningEffort     string            `json:"reasoning_effort"`
+	StreamOptions       *struct {
+		IncludeUsage bool `json:"include_usage"`
+	} `json:"stream_options"`
+}
+
+// requestFields are the top-level request fields the model carries. stream_options is written
+// by the encoder itself.
+var requestFields = []string{"model", "messages", "stream", "stream_options", "max_tokens", "max_completion_tokens",
+	"temperature", "top_p", "stop", "tools", "tool_choice", "parallel_tool_calls", "response_format", "reasoning_effort"}
+
+type chatFunction struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+	Strict      *bool           `json:"strict,omitempty"`
+}
+
+type chatTool struct {
+	Type     string       `json:"type"`
+	Function chatFunction `json:"function"`
+}
+
+type chatMessage struct {
+	Role             string            `json:"role"`
+	Content          json.RawMessage   `json:"content"`
+	ToolCalls        []json.RawMessage `json:"tool_calls"`
+	ToolCallID       string            `json:"tool_call_id"`
+	ReasoningContent *string           `json:"reasoning_content"`
+}
+
+type chatToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+// customToolCall is a call to a custom (freeform) tool.
+type customToolCall struct {
+	ID     string `json:"id"`
+	Type   string `json:"type"`
+	Custom struct {
+		Name  string `json:"name"`
+		Input string `json:"input"`
+	} `json:"custom"`
+}
+
+type chatPart struct {
+	Type     string `json:"type"`
+	Text     string `json:"text"`
+	ImageURL *struct {
+		URL    string `json:"url"`
+		Detail string `json:"detail"`
+	} `json:"image_url"`
+	File *struct {
+		FileID   string `json:"file_id"`
+		FileData string `json:"file_data"`
+		Filename string `json:"filename"`
+	} `json:"file"`
+	InputAudio *chatInputAudio `json:"input_audio"`
+}
+
+// chatInputAudio is Chat's input_audio part: the base64 bytes of an audio blob and the format
+// token that names them.
+type chatInputAudio struct {
+	Data   string `json:"data"`
+	Format string `json:"format,omitempty"`
+}
+
+func invalid(msg string, args ...any) *llm.Error {
+	return &llm.Error{Code: llm.CodeInvalidRequest, Message: fmt.Sprintf(msg, args...), Scope: llm.ScopeRequest}
+}
+
+// ParseRequest reads a Chat Completions request body. The result keeps body as its Native form,
+// and every request, message, part and tool keeps the fields the model has no place for in its
+// Origin, so EncodeRequest can write them back. Errors are *llm.Error with code invalid_request.
+func ParseRequest(body []byte) (llm.Request, error) {
+	var in chatRequest
+	if err := json.Unmarshal(body, &in); err != nil {
+		return llm.Request{}, invalid("request body is not valid JSON: %v", err)
+	}
+	if in.Model == "" {
+		return llm.Request{}, invalid("model is required")
+	}
+	if len(in.Messages) == 0 {
+		return llm.Request{}, invalid("messages must not be empty")
+	}
+	top := rawjson.Object(body)
+	req := llm.Request{
+		Model:  in.Model,
+		Stream: in.Stream,
+		Native: &llm.Native{Format: format, Body: append(json.RawMessage(nil), body...)},
+		Options: llm.Options{
+			MaxOutputTokens:   in.MaxCompletionTokens,
+			Temperature:       in.Temperature,
+			TopP:              in.TopP,
+			ParallelToolCalls: in.ParallelToolCalls,
+			ReasoningEffort:   in.ReasoningEffort,
+		},
+	}
+	if req.Options.MaxOutputTokens == nil {
+		req.Options.MaxOutputTokens = in.MaxTokens
+	}
+	if len(in.Stop) > 0 && !bytes.Equal(in.Stop, []byte("null")) {
+		var one string
+		if json.Unmarshal(in.Stop, &one) == nil {
+			req.Options.Stop = []string{one}
+		} else if err := json.Unmarshal(in.Stop, &req.Options.Stop); err != nil {
+			return llm.Request{}, invalid("stop must be a string or a list of strings")
+		}
+	}
+	// Request fields the model reads but whose shape it does not know stay in Origin.Raw, and
+	// so do the fields it does not read inside the ones it does.
+	nested := map[string]json.RawMessage{}
+	if raw, ok := top["stream_options"]; ok {
+		nested["stream_options"] = rawjson.Rest(rawjson.Object(raw), "include_usage")
+	}
+	if raw, ok := top["tool_choice"]; ok {
+		if tc := parseToolChoice(raw); tc != nil {
+			req.Options.ToolChoice = tc
+		} else {
+			nested["tool_choice"] = raw
+		}
+	}
+	if raw, ok := top["response_format"]; ok {
+		if rf := parseResponseFormat(raw); rf != nil {
+			req.Options.ResponseFormat = rf
+			m := rawjson.Object(raw)
+			rest := rawjson.Object(rawjson.Rest(m, "type", "json_schema"))
+			if js := rawjson.Rest(rawjson.Object(m["json_schema"]), "name", "description", "schema", "strict"); js != nil {
+				if rest == nil {
+					rest = map[string]json.RawMessage{}
+				}
+				rest["json_schema"] = js
+			}
+			nested["response_format"] = rawjson.Encode(rest)
+		} else {
+			nested["response_format"] = raw
+		}
+	}
+	// service_tier and verbosity are carried when they are strings; any other value stays in
+	// Origin.Raw.
+	modelled := requestFields
+	if tier, ok := rawjson.Text(top["service_tier"]); ok {
+		req.Options.ServiceTier = tier
+		modelled = rawjson.With(modelled, "service_tier")
+	}
+	if v, ok := rawjson.Text(top["verbosity"]); ok {
+		req.Options.Verbosity = v
+		modelled = rawjson.With(modelled, "verbosity")
+	}
+	if rawN, ok := top["n"]; ok && !bytes.Equal(bytes.TrimSpace(rawN), []byte("null")) {
+		var n int
+		if json.Unmarshal(rawN, &n) == nil && n >= 1 {
+			modelled = rawjson.With(modelled, "n")
+			req.Options.CandidateCount = n
+		}
+	}
+	var webSearchTool *llm.Tool
+	if raw, ok := top["web_search_options"]; ok && rawjson.Object(raw) != nil {
+		webSearchTool = parseWebSearchOptions(raw)
+		modelled = rawjson.With(modelled, "web_search_options")
+	}
+	req.Origin = rawjson.Origin(format, "", top, modelled, nested)
+	for i, raw := range in.Tools {
+		t, err := parseTool(raw, fmt.Sprintf("tools[%d]", i))
+		if err != nil {
+			return llm.Request{}, invalid("tools[%d]: %v", i, err)
+		}
+		req.Tools = append(req.Tools, t)
+	}
+	if webSearchTool != nil {
+		req.Tools = append(req.Tools, *webSearchTool)
+	}
+	for i, raw := range in.Messages {
+		items, err := parseMessage(raw, fmt.Sprintf("messages[%d]", i))
+		if err != nil {
+			return llm.Request{}, invalid("messages[%d]: %v", i, err)
+		}
+		req.Items = append(req.Items, items...)
+	}
+	return req, nil
+}
+
+func parseTool(raw json.RawMessage, path string) (llm.Tool, error) {
+	var t chatTool
+	if err := json.Unmarshal(raw, &t); err != nil {
+		return llm.Tool{}, err
+	}
+	m := rawjson.Object(raw)
+	if t.Type != "function" {
+		// A tool the model cannot interpret survives whole, for an upstream that speaks Chat.
+		return llm.Tool{Type: llm.ToolNative, Origin: &llm.Origin{Format: format, Path: path, Raw: append(json.RawMessage(nil), raw...)}}, nil
+	}
+	fn := rawjson.Rest(rawjson.Object(m["function"]), "name", "description", "parameters", "strict")
+	return llm.Tool{
+		Name: t.Function.Name, Description: t.Function.Description, Parameters: t.Function.Parameters, Strict: t.Function.Strict,
+		Origin: rawjson.Origin(format, path, m, []string{"type", "function"}, map[string]json.RawMessage{"function": fn}),
+	}, nil
+}
+
+// chatAllowedTool is one entry of a tool choice's allowed_tools list: a function, named in
+// function.name as Chat writes it or, as some clients write it, in name.
+type chatAllowedTool struct {
+	Type     string `json:"type"`
+	Function struct {
+		Name string `json:"name"`
+	} `json:"function"`
+	Name string `json:"name"`
+}
+
+func parseToolChoice(raw json.RawMessage) *llm.ToolChoice {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		switch s {
+		case llm.ToolChoiceAuto, llm.ToolChoiceNone, llm.ToolChoiceRequired:
+			return &llm.ToolChoice{Mode: s}
+		}
+		return nil
+	}
+	var o struct {
+		Type     string `json:"type"`
+		Function struct {
+			Name string `json:"name"`
+		} `json:"function"`
+		AllowedTools *struct {
+			Mode  string            `json:"mode"`
+			Tools []chatAllowedTool `json:"tools"`
+		} `json:"allowed_tools"`
+	}
+	if json.Unmarshal(raw, &o) != nil {
+		return nil
+	}
+	if o.Type == "allowed_tools" {
+		return allowedToolChoice(o.AllowedTools)
+	}
+	if o.Type == "function" && o.Function.Name != "" && len(rawjson.Object(raw)) == 2 &&
+		len(rawjson.Object(rawjson.Object(raw)["function"])) == 1 {
+		return &llm.ToolChoice{Mode: llm.ToolChoiceTool, Name: o.Function.Name}
+	}
+	return nil
+}
+
+// allowedToolChoice reads a tool choice's allowed_tools object: its mode (auto or required) and
+// the function tools it names, as the model's allowed list. One that names anything else, or no
+// tool, is nil, so the choice stays whole in the request's fields rather than losing the entries
+// the model has no place for.
+func allowedToolChoice(o *struct {
+	Mode  string            `json:"mode"`
+	Tools []chatAllowedTool `json:"tools"`
+}) *llm.ToolChoice {
+	if o == nil || len(o.Tools) == 0 || (o.Mode != llm.ToolChoiceAuto && o.Mode != llm.ToolChoiceRequired) {
+		return nil
+	}
+	names := make([]string, 0, len(o.Tools))
+	for _, t := range o.Tools {
+		name := t.Function.Name
+		if name == "" {
+			name = t.Name
+		}
+		if t.Type != "function" || name == "" {
+			return nil
+		}
+		names = append(names, name)
+	}
+	return &llm.ToolChoice{Mode: o.Mode, Allowed: names}
+}
+
+func parseResponseFormat(raw json.RawMessage) *llm.ResponseFormat {
+	var o struct {
+		Type       string `json:"type"`
+		JSONSchema *struct {
+			Name        string          `json:"name"`
+			Description string          `json:"description"`
+			Schema      json.RawMessage `json:"schema"`
+			Strict      *bool           `json:"strict"`
+		} `json:"json_schema"`
+	}
+	if json.Unmarshal(raw, &o) != nil {
+		return nil
+	}
+	switch o.Type {
+	case llm.ResponseFormatText, llm.ResponseFormatJSONObject:
+		return &llm.ResponseFormat{Type: o.Type}
+	case llm.ResponseFormatJSONSchema:
+		if o.JSONSchema == nil {
+			return nil
+		}
+		s := o.JSONSchema
+		return &llm.ResponseFormat{Type: o.Type, Name: s.Name, Description: s.Description, Schema: s.Schema, Strict: s.Strict}
+	}
+	return nil
+}
+
+func parseMessage(raw json.RawMessage, path string) ([]llm.Item, error) {
+	var m chatMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, err
+	}
+	obj := rawjson.Object(raw)
+	switch m.Role {
+	case llm.RoleSystem, llm.RoleDeveloper, llm.RoleUser, llm.RoleAssistant:
+	case "tool":
+		// Text parts are the result's text; a result that holds images, files or other parts
+		// keeps them all, in order, as its parts.
+		parts, _, err := parseContent(m.Content, path+".content")
+		if err != nil {
+			return nil, err
+		}
+		it := llm.Item{Type: llm.ItemTypeToolResult, CallID: m.ToolCallID,
+			Origin: rawjson.Origin(format, path, obj, []string{"role", "content", "tool_call_id"}, nil)}
+		var text strings.Builder
+		for _, p := range parts {
+			if p.Type == llm.PartText {
+				text.WriteString(p.Text)
+			} else {
+				it.Content = parts
+			}
+		}
+		it.Output = text.String()
+		return []llm.Item{it}, nil
+	default:
+		return nil, fmt.Errorf("unsupported role %q", m.Role)
+	}
+	parts, textContent, err := parseContent(m.Content, path+".content")
+	if err != nil {
+		return nil, err
+	}
+	var items []llm.Item
+	if m.Role == llm.RoleAssistant && m.ReasoningContent != nil && *m.ReasoningContent != "" {
+		items = append(items, llm.Item{Type: llm.ItemTypeReasoning, Text: *m.ReasoningContent,
+			Origin: &llm.Origin{Format: format, Path: path + ".reasoning_content"}})
+	}
+	origin := rawjson.Origin(format, path, obj, []string{"role", "content", "tool_calls", "tool_call_id", "reasoning_content"}, nil)
+	// A message that only carries tool calls still becomes an item when it has fields of its
+	// own (such as name), so they survive; its tool calls are written back onto it.
+	if len(parts) > 0 || len(m.ToolCalls) == 0 || len(origin.Raw) > 0 {
+		items = append(items, llm.Item{Type: llm.ItemTypeMessage, Role: m.Role, Content: parts, TextContent: textContent, Origin: origin})
+	}
+	for j, rawCall := range m.ToolCalls {
+		cp := fmt.Sprintf("%s.tool_calls[%d]", path, j)
+		co := rawjson.Object(rawCall)
+		var head struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(rawCall, &head); err != nil {
+			return nil, err
+		}
+		switch head.Type {
+		case "", "function":
+			var tc chatToolCall
+			if err := json.Unmarshal(rawCall, &tc); err != nil {
+				return nil, err
+			}
+			fn := rawjson.Rest(rawjson.Object(co["function"]), "name", "arguments")
+			items = append(items, llm.Item{Type: llm.ItemTypeToolCall, CallID: tc.ID, Name: tc.Function.Name, Arguments: tc.Function.Arguments,
+				Origin: rawjson.Origin(format, cp, co, []string{"id", "type", "function"}, map[string]json.RawMessage{"function": fn})})
+		case "custom":
+			var tc customToolCall
+			if err := json.Unmarshal(rawCall, &tc); err != nil {
+				return nil, err
+			}
+			cu := rawjson.Rest(rawjson.Object(co["custom"]), "name", "input")
+			items = append(items, llm.Item{Type: llm.ItemTypeToolCall, CallID: tc.ID, Name: tc.Custom.Name, Arguments: tc.Custom.Input, Custom: true,
+				Origin: rawjson.Origin(format, cp, co, []string{"id", "type", "custom"}, map[string]json.RawMessage{"custom": cu})})
+		default:
+			return nil, fmt.Errorf("tool_calls[%d]: unsupported tool call type %q", j, head.Type)
+		}
+	}
+	return items, nil
+}
+
+// parseContent reads message content: a string (textContent true) or a list of parts.
+func parseContent(raw json.RawMessage, path string) (parts []llm.Part, textContent bool, err error) {
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return nil, false, nil
+	}
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		if s == "" {
+			return nil, true, nil
+		}
+		return []llm.Part{{Type: llm.PartText, Text: s}}, true, nil
+	}
+	var rawParts []json.RawMessage
+	if err := json.Unmarshal(raw, &rawParts); err != nil {
+		return nil, false, fmt.Errorf("content must be a string or a list of parts")
+	}
+	parts = make([]llm.Part, 0, len(rawParts))
+	for i, rp := range rawParts {
+		var p chatPart
+		if err := json.Unmarshal(rp, &p); err != nil {
+			return nil, false, err
+		}
+		pp := fmt.Sprintf("%s[%d]", path, i)
+		obj := rawjson.Object(rp)
+		switch {
+		case p.Type == "text":
+			parts = append(parts, llm.Part{Type: llm.PartText, Text: p.Text, Origin: rawjson.Origin(format, pp, obj, []string{"type", "text"}, nil)})
+		case p.Type == "image_url" && p.ImageURL != nil:
+			img := rawjson.Rest(rawjson.Object(obj["image_url"]), "url", "detail")
+			parts = append(parts, llm.Part{Type: llm.PartImage, URL: p.ImageURL.URL, Detail: p.ImageURL.Detail,
+				Origin: rawjson.Origin(format, pp, obj, []string{"type", "image_url"}, map[string]json.RawMessage{"image_url": img})})
+		case p.Type == "file" && p.File != nil:
+			file := rawjson.Rest(rawjson.Object(obj["file"]), "file_id", "file_data", "filename")
+			parts = append(parts, llm.Part{Type: llm.PartFile, FileID: p.File.FileID, FileData: p.File.FileData, Filename: p.File.Filename,
+				Origin: rawjson.Origin(format, pp, obj, []string{"type", "file"}, map[string]json.RawMessage{"file": file})})
+		case p.Type == "input_audio" && p.InputAudio != nil && p.InputAudio.Data != "":
+			audio := rawjson.Rest(rawjson.Object(obj["input_audio"]), "data", "format")
+			parts = append(parts, llm.Part{Type: llm.PartFile,
+				FileData: audioinput.DataURL(audioinput.MIME(p.InputAudio.Format), p.InputAudio.Data),
+				Origin:   rawjson.Origin(format, pp, obj, []string{"type", "input_audio"}, map[string]json.RawMessage{"input_audio": audio})})
+		default:
+			parts = append(parts, llm.Part{Type: llm.PartNative, Format: format, Data: append(json.RawMessage(nil), rp...),
+				Origin: &llm.Origin{Format: format, Path: pp}})
+		}
+	}
+	return parts, false, nil
+}
+
+type outMessage struct {
+	Role             string            `json:"role"`
+	Content          any               `json:"content,omitempty"`
+	ReasoningContent string            `json:"reasoning_content,omitempty"`
+	ToolCalls        []json.RawMessage `json:"tool_calls,omitempty"`
+	ToolCallID       string            `json:"tool_call_id,omitempty"`
+
+	raw json.RawMessage // kept fields from a Chat source
+}
+
+type outPart struct {
+	Type     string  `json:"type"`
+	Text     *string `json:"text,omitempty"` // set for text parts, even when empty
+	ImageURL *struct {
+		URL    string `json:"url"`
+		Detail string `json:"detail,omitempty"`
+	} `json:"image_url,omitempty"`
+	File *struct {
+		FileID   string `json:"file_id,omitempty"`
+		FileData string `json:"file_data,omitempty"`
+		Filename string `json:"filename,omitempty"`
+	} `json:"file,omitempty"`
+	InputAudio *chatInputAudio `json:"input_audio,omitempty"`
+}
+
+type outRequest struct {
+	Model    string            `json:"model"`
+	Messages []json.RawMessage `json:"messages"`
+	outTail
+}
+
+// outTail holds the request body's fields after its messages, in the body's order, so that one
+// marshal of it gives the body's tail. It is in three parts so that the tools, which are already
+// compact JSON, can be written between the other two without a marshal that would compact them
+// again.
+type outTail struct {
+	tailHead
+	Tools []json.RawMessage `json:"tools,omitempty"`
+	tailRest
+}
+
+// tailHead holds the fields before the tools. It always has stream, so it is never empty.
+type tailHead struct {
+	Stream        bool `json:"stream"`
+	StreamOptions *struct {
+		IncludeUsage bool `json:"include_usage"`
+	} `json:"stream_options,omitempty"`
+	MaxTokens   *int     `json:"max_tokens,omitempty"`
+	Temperature *float64 `json:"temperature,omitempty"`
+	TopP        *float64 `json:"top_p,omitempty"`
+	Stop        []string `json:"stop,omitempty"`
+}
+
+// tailRest holds the fields after the tools.
+type tailRest struct {
+	ToolChoice        any             `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
+	ResponseFormat    any             `json:"response_format,omitempty"`
+	ReasoningEffort   string          `json:"reasoning_effort,omitempty"`
+	ServiceTier       string          `json:"service_tier,omitempty"`
+	Verbosity         string          `json:"verbosity,omitempty"`
+	N                 *int            `json:"n,omitempty"`
+	WebSearchOptions  json.RawMessage `json:"web_search_options,omitempty"`
+}
+
+// encoder builds one Chat Completions request and records what it could not carry over.
+type encoder struct {
+	losses []llm.Loss
+	// foreign is set when a content part or a tool was taken as a client sent it, so it may not be
+	// the compact, escaped JSON a marshal writes. The body is then built by marshaling each
+	// message, which writes it so.
+	foreign bool
+}
+
+func (e *encoder) lose(kind, path, detail string) {
+	e.losses = append(e.losses, llm.Loss{Kind: kind, Path: path, Detail: detail})
+}
+
+// kept returns o's kept fields when o came from Chat, so they are written back; for another
+// format it reports them as dropped.
+func (e *encoder) kept(o *llm.Origin) json.RawMessage {
+	if o == nil {
+		return nil
+	}
+	if o.Format == format {
+		return o.Raw
+	}
+	e.losses = append(e.losses, rawjson.Losses(o, format)...)
+	return nil
+}
+
+// toolArguments returns a tool call's arguments as Chat takes them. Another format can hold
+// arguments that are not a JSON object (Messages takes an input object, a Responses client's
+// custom call holds free text), and Chat would refuse them; such a string is sent as {}, as the
+// Messages and Gemini encoders already do with what they cannot carry. A Chat client's own call
+// keeps the bytes it sent.
+func toolArguments(args string, o *llm.Origin, path string, e *encoder) string {
+	if o != nil && o.Format == format {
+		return args
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal([]byte(args), &m) == nil && m != nil {
+		return args
+	}
+	if strings.TrimSpace(args) != "" {
+		e.lose(llm.LossApproximated, path, "tool arguments that are not a JSON object, sent as {}")
+	}
+	return "{}"
+}
+
+func path(o *llm.Origin, fallback string) string {
+	if o != nil && o.Path != "" {
+		return o.Path
+	}
+	return fallback
+}
+
+func marshal(v any, raw json.RawMessage) json.RawMessage {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return rawjson.Merge(b, raw)
+}
+
+// EncodeRequest builds a Chat Completions request body from req's items, tools and options, and
+// returns what it could not carry over. Fields kept from a Chat source (Origin) are written back.
+// Streamed requests ask for usage. A user turn left with nothing to send after its unsupported
+// parts are dropped is an invalid_request error, never sent empty. It does not look at
+// req.Native; callers that can pass the native body through do so first.
+func EncodeRequest(req llm.Request) ([]byte, []llm.Loss, error) {
+	return EncodeRequestWith(req, EncodeOptions{})
+}
+
+// serviceTiers are the service tiers the Chat Completions create reference lists
+// (https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create).
+var serviceTiers = []string{"auto", "default", "flex", "scale", "priority", "fast"}
+
+// EncodeOptions changes how EncodeRequestWith builds a body.
+type EncodeOptions struct {
+	// ServiceTier and Verbosity say the caller knows its upstream takes the field: a request from
+	// another format then carries the client's service tier or verbosity, and without them it
+	// leaves it out and reports it as dropped, since a third-party upstream may refuse a field it
+	// does not list. A Chat client's own tier and verbosity are written either way.
+	ServiceTier, Verbosity bool
+	// WebSearch says the caller knows its upstream takes web_search_options (only specialized
+	// search models such as gpt-5-search-api accept it): a request from another format then
+	// carries a canonical web search tool on those models and without function tools, and
+	// without it the tool is left out and reported as dropped. A Chat client's own
+	// web_search_options is written either way.
+	WebSearch bool
+	// CandidateCount says the caller knows its upstream takes Chat Completions n (api.openai.com):
+	// a request from another format then carries a candidate count > 1 on documented models
+	// (up to 128), and without it the count is left out and reported as dropped. A Chat client's
+	// own n >= 1 is written back unchanged; a translated count <= 1 sends no field.
+	CandidateCount bool
+	// AssistantAnnotations says the caller knows its upstream takes annotations on replayed
+	// assistant messages (such as OpenRouter's file annotations,
+	// https://openrouter.ai/docs/features/multimodal/pdfs). Without it, annotations on a replayed
+	// Chat assistant message are stripped and reported as approximated, since OpenAI's Chat
+	// Completions request reference lists no such field and strict upstreams such as Mistral
+	// (additionalProperties: false) reject unknown assistant message fields.
+	AssistantAnnotations bool
+}
+
+// EncodeRequestWith builds a Chat Completions request body as EncodeRequest does, changed by opts.
+func EncodeRequestWith(req llm.Request, opts EncodeOptions) ([]byte, []llm.Loss, error) {
+	e := &encoder{}
+	req, lowered := clienttools.Lower(req)
+	e.losses = append(e.losses, lowered...)
+	out := outRequest{
+		Model:    req.Model,
+		Messages: []json.RawMessage{},
+		outTail: outTail{
+			tailHead: tailHead{
+				Stream:      req.Stream,
+				MaxTokens:   req.Options.MaxOutputTokens,
+				Temperature: req.Options.Temperature,
+				TopP:        req.Options.TopP,
+				Stop:        req.Options.Stop,
+			},
+			tailRest: tailRest{ReasoningEffort: req.Options.ReasoningEffort},
+		},
+	}
+	// A request from another format carries a tier or verbosity only if the Chat Completions
+	// reference lists it: another value would be refused. A Chat client's own is written as it is.
+	own := req.SourceFormat() == format
+	if t := req.Options.ServiceTier; t != "" {
+		switch {
+		case !opts.ServiceTier && !own:
+			e.lose(llm.LossDropped, llm.ServiceTierPath(req), llm.ServiceTierUnsent)
+		case !own && !slices.Contains(serviceTiers, t):
+			e.lose(llm.LossDropped, llm.ServiceTierPath(req), fmt.Sprintf("Chat Completions lists no %q service tier", t))
+		default:
+			out.ServiceTier = t
+		}
+	}
+	if v := req.Options.Verbosity; v != "" {
+		switch {
+		case !opts.Verbosity && !own:
+			e.lose(llm.LossDropped, llm.VerbosityPath(req), llm.VerbosityUnsent)
+		case !own && !slices.Contains(llm.Verbosities, v):
+			e.lose(llm.LossDropped, llm.VerbosityPath(req), fmt.Sprintf("Chat Completions lists no %q verbosity", v))
+		default:
+			out.Verbosity = v
+		}
+	}
+	if n := req.Options.CandidateCount; !own && n > 1 {
+		switch {
+		case !opts.CandidateCount:
+			e.lose(llm.LossDropped, llm.CandidateCountPath(req), llm.CandidateCountUnsent)
+		case !supportsCandidateCount(req.Model):
+			e.lose(llm.LossDropped, llm.CandidateCountPath(req), fmt.Sprintf("Chat Completions model %q does not support translated n > 1", req.Model))
+		case n > maxChatCandidates:
+			e.lose(llm.LossDropped, llm.CandidateCountPath(req), fmt.Sprintf("Chat Completions n must be at most %d", maxChatCandidates))
+		default:
+			v := n
+			out.N = &v
+		}
+	}
+	if req.Stream {
+		out.StreamOptions = &struct {
+			IncludeUsage bool `json:"include_usage"`
+		}{IncludeUsage: true}
+	}
+	if rf := req.Options.ResponseFormat; rf != nil {
+		out.ResponseFormat = encodeResponseFormat(rf)
+	}
+	toolNameMap := ToolNames(req)
+	hasFunctionTools := false
+	for _, t := range req.Tools {
+		if t.IsFunction() {
+			hasFunctionTools = true
+			break
+		}
+	}
+	droppedCodeExec := false
+	for i, t := range req.Tools {
+		p := path(t.Origin, fmt.Sprintf("tools[%d]", i))
+		if t.Type == llm.ToolCodeExecution {
+			// OpenAI Chat Completions has no code execution / code interpreter tool
+			// (https://developers.openai.com/api/docs/guides/tools-code-interpreter).
+			e.lose(llm.LossDropped, p, "Chat Completions has no code execution tool")
+			droppedCodeExec = true
+			continue
+		}
+		if t.Type == llm.ToolWebSearch {
+			if t.Origin != nil && t.Origin.Format == format {
+				out.WebSearchOptions = t.Origin.Raw
+				continue
+			}
+			if !opts.WebSearch {
+				e.lose(llm.LossDropped, p, llm.WebSearchUnsent)
+				continue
+			}
+			if t.WebSearch != nil && t.WebSearch.Disabled {
+				e.lose(llm.LossDropped, p, "Chat Completions has no external_web_access setting for web_search_options")
+				continue
+			}
+			if !isSearchModel(req.Model) {
+				e.lose(llm.LossDropped, p, fmt.Sprintf("Chat Completions model %q does not support web_search_options (only specialized search models such as gpt-5-search-api do)", req.Model))
+				continue
+			}
+			if hasFunctionTools {
+				e.lose(llm.LossDropped, p, "Chat Completions web_search_options is not combined with function tools on translated requests")
+				continue
+			}
+			wsOut := map[string]any{}
+			var carried rawjson.WebSearchCarried
+			if ws := t.WebSearch; ws != nil {
+				if ws.SearchContextSize != "" {
+					wsOut["search_context_size"] = ws.SearchContextSize
+					carried.SearchContextSize = true
+				}
+				if u := ws.UserLocation; u != nil {
+					approx := map[string]any{}
+					hasAny := false
+					if rawjson.IsCountryCode(u.Country) {
+						approx["country"] = u.Country
+						hasAny = true
+					}
+					if u.City != "" {
+						approx["city"] = u.City
+						hasAny = true
+					}
+					if u.Region != "" {
+						approx["region"] = u.Region
+						hasAny = true
+					}
+					if u.Timezone != "" {
+						approx["timezone"] = u.Timezone
+						hasAny = true
+					}
+					if hasAny {
+						wsOut["user_location"] = map[string]any{"type": "approximate", "approximate": approx}
+						carried.UserLocation = true
+					}
+				}
+			}
+			e.losses = append(e.losses, rawjson.WebSearchLosses(t, p, format, carried)...)
+			if b, err := json.Marshal(wsOut); err == nil {
+				out.WebSearchOptions = b
+			}
+			continue
+		}
+		if t.Type == llm.ToolNative {
+			if t.Origin != nil && t.Origin.Format == format {
+				out.Tools = append(out.Tools, t.Origin.Raw)
+				e.foreign = true
+			} else {
+				e.lose(llm.LossDropped, p, "Chat Completions has no such tool")
+			}
+			continue
+		}
+		ct := chatTool{Type: "function", Function: chatFunction{Name: ToolName(toolNameMap, t.Name), Description: t.Description, Parameters: t.Parameters, Strict: t.Strict}}
+		out.Tools = append(out.Tools, marshal(ct, e.kept(t.Origin)))
+	}
+	if tc := req.Options.ToolChoice; tc != nil && tc.Mode == llm.ToolChoiceCodeExecution {
+		e.lose(llm.LossDropped, "tool_choice", "Chat Completions has no code execution tool to force")
+		if len(out.Tools) > 0 {
+			out.ParallelToolCalls = req.Options.ParallelToolCalls
+		}
+	} else if len(out.Tools) > 0 {
+		// Chat Completions accepts these only with tools.
+		out.ParallelToolCalls = req.Options.ParallelToolCalls
+		if tc := req.Options.ToolChoice; tc != nil {
+			out.ToolChoice = encodeToolChoice(tc, toolNameMap)
+		}
+	} else if droppedCodeExec && req.Options.ToolChoice != nil && (req.Options.ToolChoice.Mode == llm.ToolChoiceRequired || req.Options.ToolChoice.Mode == llm.ToolChoiceTool) {
+		e.lose(llm.LossDropped, "tool_choice", "Chat Completions has no tools left to force")
+	}
+
+	var msgs []*outMessage
+	reasoning := "" // reasoning waiting for the assistant message it belongs to
+	flushReasoning := func() {
+		if reasoning != "" {
+			empty := ""
+			msgs = append(msgs, &outMessage{Role: llm.RoleAssistant, Content: &empty, ReasoningContent: reasoning})
+			reasoning = ""
+		}
+	}
+	// Chat Completions takes only text in a tool message, so a tool result's images and files
+	// wait for the first item after the run of tool results: a user message takes them at its
+	// start, anything else gets a user message of its own before it.
+	var relay toolMedia
+	flushRelay := func() {
+		if content := relay.take(); content != nil {
+			msgs = append(msgs, &outMessage{Role: llm.RoleUser, Content: content})
+		}
+	}
+	for i, it := range req.Items {
+		p := path(it.Origin, fmt.Sprintf("items[%d]", i))
+		intoUser := it.Type == llm.ItemTypeMessage && it.Role == llm.RoleUser && !emptyForeign(it, format)
+		if it.Type != llm.ItemTypeToolResult && !intoUser {
+			flushRelay()
+		}
+		// Reasoning waits for the assistant message or tool call it belongs to. Native items are
+		// dropped, so they do not end the wait (an Anthropic redacted thinking block sits between
+		// thinking and the text or tool call it leads to).
+		switch {
+		case it.Type == llm.ItemTypeToolCall, it.Type == llm.ItemTypeReasoning, it.Type == llm.ItemTypeNative:
+		case it.Type == llm.ItemTypeMessage && it.Role == llm.RoleAssistant:
+		default:
+			flushReasoning()
+		}
+		switch it.Type {
+		case llm.ItemTypeReasoning:
+			if it.Origin != nil && it.Origin.Format != format && it.Text != "" {
+				e.lose(llm.LossApproximated, p, "reasoning summary sent as the next assistant message's reasoning_content")
+			}
+			e.kept(it.Origin)
+			reasoning = joinReasoning(reasoning, it.Text)
+		case llm.ItemTypeMessage:
+			if emptyForeign(it, format) {
+				// An empty message from another format only holds its own fields; they are
+				// reported, and nothing is sent for it.
+				e.kept(it.Origin)
+				break
+			}
+			content, sendable, dropped, err := e.content(it, p)
+			if err != nil {
+				return nil, nil, err
+			}
+			if media := relay.take(); media != nil {
+				content, sendable = joinContent(media, content), true
+			}
+			if it.Role == llm.RoleUser && dropped && !sendable {
+				return nil, nil, invalid("%s: nothing in this user turn can be sent to Chat Completions", p)
+			}
+			raw := e.kept(it.Origin)
+			if it.Role == llm.RoleAssistant && !opts.AssistantAnnotations && len(raw) > 0 {
+				if m := rawjson.Object(raw); m != nil {
+					if _, ok := m["annotations"]; ok {
+						raw = rawjson.Rest(m, "annotations")
+						e.lose(llm.LossApproximated, rawjson.Join(p, "annotations"), "Chat Completions assistant messages do not take annotations")
+					}
+				}
+			}
+			// Assistant text after tool calls of the same turn (Anthropic Messages allows it) joins
+			// the message holding the calls: tool results must follow that message directly.
+			if n := len(msgs); it.Role == llm.RoleAssistant && n > 0 && reasoning == "" && len(raw) == 0 {
+				if last := msgs[n-1]; last.Role == llm.RoleAssistant && len(last.ToolCalls) > 0 && last.ToolCallID == "" {
+					if content == nil {
+						if dropped {
+							break
+						}
+					} else {
+						last.Content = joinContent(last.Content, content)
+						e.lose(llm.LossApproximated, p, "assistant text after tool calls sent in the message with the calls")
+						break
+					}
+				}
+			}
+			m := &outMessage{Role: it.Role, Content: content, raw: raw}
+			if it.Role == llm.RoleAssistant {
+				m.ReasoningContent, reasoning = reasoning, ""
+			}
+			msgs = append(msgs, m)
+		case llm.ItemTypeToolCall:
+			var last *outMessage
+			if n := len(msgs); n > 0 && msgs[n-1].Role == llm.RoleAssistant && msgs[n-1].ToolCallID == "" && reasoning == "" {
+				last = msgs[n-1]
+			} else {
+				last = &outMessage{Role: llm.RoleAssistant}
+				msgs = append(msgs, last)
+			}
+			if reasoning != "" {
+				last.ReasoningContent, reasoning = reasoning, ""
+			}
+			if it.Custom {
+				var tc customToolCall
+				tc.ID, tc.Type = it.CallID, "custom"
+				tc.Custom.Name, tc.Custom.Input = it.Name, it.Arguments
+				last.ToolCalls = append(last.ToolCalls, customToolCallJSON(tc, e.kept(it.Origin)))
+				break
+			}
+			var tc chatToolCall
+			tc.ID, tc.Type = it.CallID, "function"
+			tc.Function.Name, tc.Function.Arguments = ToolName(toolNameMap, it.Name), toolArguments(it.Arguments, it.Origin, p, e)
+			origin, extra := geminiSignature(it.Origin)
+			raw := e.kept(origin)
+			if extra != nil {
+				raw = rawjson.Merge(extra, raw)
+			}
+			last.ToolCalls = append(last.ToolCalls, chatToolCallJSON(tc, raw))
+		case llm.ItemTypeToolResult:
+			content, err := e.toolResult(it, p, &relay)
+			if err != nil {
+				return nil, nil, err
+			}
+			msgs = append(msgs, &outMessage{Role: "tool", Content: content, ToolCallID: it.CallID, raw: e.kept(it.Origin)})
+		case llm.ItemTypeNative:
+			e.lose(llm.LossDropped, p, "Chat Completions has no such item")
+		default:
+			return nil, nil, &llm.Error{Code: llm.CodeUnsupported, Message: fmt.Sprintf("%s: unsupported item type %q", p, it.Type), Scope: llm.ScopeRequest}
+		}
+	}
+	flushReasoning()
+	flushRelay()
+	for _, m := range msgs {
+		if m.Role == llm.RoleAssistant && m.Content == nil && len(m.ToolCalls) == 0 {
+			m.Content = "" // Chat Completions needs content when there are no tool calls
+		}
+	}
+	var body []byte
+	var err error
+	if e.foreign {
+		for _, m := range msgs {
+			out.Messages = append(out.Messages, marshal(m, m.raw))
+		}
+		body, err = encodeBody(&out)
+	} else {
+		body, err = encodeBodyFast(&out, msgs)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	rawOrigin := e.kept(req.Origin)
+	if own && req.Options.CandidateCount >= 1 {
+		nJSON := json.RawMessage(fmt.Sprintf(`{"n":%d}`, req.Options.CandidateCount))
+		if len(rawOrigin) == 0 {
+			rawOrigin = nJSON
+		} else {
+			rawOrigin = rawjson.Merge(rawOrigin, nJSON)
+		}
+	}
+	return rawjson.Merge(body, rawOrigin), e.losses, nil
+}
+
+// encodeBody returns out as the request body's JSON, writing the messages' JSON as it stands.
+// Each message is already compact JSON (json.Marshal of a value, merged with its kept fields), so
+// marshaling the whole body again would only scan them once more.
+func encodeBody(out *outRequest) ([]byte, error) {
+	model, err := json.Marshal(out.Model)
+	if err != nil {
+		return nil, err
+	}
+	tail, err := json.Marshal(out.outTail)
+	if err != nil {
+		return nil, err
+	}
+	size := len(model) + 2 + len(`,"messages":[]`) + 2 + len(tail)
+	for _, m := range out.Messages {
+		size += len(m) + 1
+	}
+	b := make([]byte, 0, size)
+	b = append(b, `{"model":`...)
+	b = append(b, model...)
+	b = append(b, `,"messages":[`...)
+	for i, m := range out.Messages {
+		if i > 0 {
+			b = append(b, ',')
+		}
+		if m == nil {
+			// marshal gave nothing for it: the same null a marshal of the whole body writes.
+			b = append(b, "null"...)
+			continue
+		}
+		b = append(b, m...)
+	}
+	b = append(b, ']')
+	// The tail always holds stream, so it starts with the object's brace and its fields follow
+	// the messages' array after a comma.
+	b = append(b, ',')
+	return append(b, tail[1:]...), nil
+}
+
+// toolResult returns a tool message's content for a tool result: its text. Its images, files and
+// other parts go to relay, for the user message after the tool messages, as CLIProxyAPI sends
+// them; a result that had nothing but those says so in its text. Chat Completions has no place
+// for the error flag.
+func (e *encoder) toolResult(it llm.Item, itemPath string, relay *toolMedia) (string, error) {
+	if it.IsError {
+		e.lose(llm.LossDropped, rawjson.Join(itemPath, "is_error"), "Chat Completions has no error flag on a tool result")
+	}
+	var mine toolMedia
+	for i, p := range it.Content {
+		pp := path(p.Origin, fmt.Sprintf("%s.content[%d]", itemPath, i))
+		if p.Type == llm.PartText {
+			// Its text is in Output.
+			e.kept(p.Origin)
+			continue
+		}
+		if p.Origin == nil || p.Origin.Path == "" {
+			o := llm.Origin{Path: pp}
+			if p.Origin != nil {
+				o = *p.Origin
+				o.Path = pp
+			}
+			p.Origin = &o
+		}
+		content, _, dropped, err := e.content(llm.Item{Role: llm.RoleUser, Content: []llm.Part{p}}, itemPath)
+		if err != nil {
+			return "", err
+		}
+		if dropped {
+			continue
+		}
+		parts, _ := content.([]json.RawMessage)
+		mine.add(p.Type == llm.PartImage, parts)
+		e.lose(llm.LossApproximated, pp, "a tool result's "+partFormat(p)+", sent in a user message after the tool messages")
+	}
+	relay.parts = append(relay.parts, mine.parts...)
+	relay.images, relay.files = relay.images || mine.images, relay.files || mine.files
+	if it.Output == "" && len(mine.parts) > 0 {
+		return "[The tool returned " + mine.what() + "; they follow in the next user message.]", nil
+	}
+	return it.Output, nil
+}
+
+func partFormat(p llm.Part) string {
+	if p.Type == llm.PartNative {
+		return p.Format + " part"
+	}
+	return p.Type
+}
+
+// toolMedia collects the images and files of tool results for the user message that follows them.
+type toolMedia struct {
+	parts         []json.RawMessage
+	images, files bool
+}
+
+func (m *toolMedia) add(image bool, parts []json.RawMessage) {
+	if len(parts) == 0 {
+		return
+	}
+	m.parts = append(m.parts, parts...)
+	if image {
+		m.images = true
+	} else {
+		m.files = true
+	}
+}
+
+func (m *toolMedia) what() string {
+	switch {
+	case m.images && m.files:
+		return "images and files"
+	case m.images:
+		return "images"
+	}
+	return "files"
+}
+
+// take returns the collected parts after a line that says where they came from, or nil when there
+// are none, and empties m.
+func (m *toolMedia) take() any {
+	if len(m.parts) == 0 {
+		return nil
+	}
+	what := m.what()
+	text := strings.ToUpper(what[:1]) + what[1:] + " returned by the preceding tool call(s):"
+	notice := partJSON(outPart{Type: "text", Text: &text}, nil)
+	out := append([]json.RawMessage{notice}, m.parts...)
+	*m = toolMedia{}
+	return out
+}
+
+// geminiSignature takes the thought signature off a function call from a Gemini request and
+// returns it as the call's extra_content.google.thought_signature, where Gemini's
+// OpenAI-compatible API carries it (https://ai.google.dev/gemini-api/docs/openai), with the
+// origin left without it. Other origins come back unchanged.
+func geminiSignature(o *llm.Origin) (*llm.Origin, json.RawMessage) {
+	if o == nil || o.Format != llm.FormatGeminiGenerate {
+		return o, nil
+	}
+	m := rawjson.Object(o.Raw)
+	sig, ok := m["thoughtSignature"]
+	if !ok {
+		return o, nil
+	}
+	extra, _ := json.Marshal(map[string]any{"extra_content": map[string]any{"google": map[string]json.RawMessage{"thought_signature": sig}}})
+	return &llm.Origin{Format: o.Format, Path: o.Path, Raw: rawjson.Rest(m, "thoughtSignature")}, extra
+}
+
+// emptyForeign reports whether it is a message from a format other than format that has no
+// content and only holds fields of its own (as an Anthropic message whose blocks all became tool
+// calls or results does).
+func emptyForeign(it llm.Item, format string) bool {
+	return len(it.Content) == 0 && !it.TextContent && it.Origin != nil && it.Origin.Format != format && len(it.Origin.Raw) > 0
+}
+
+// joinContent appends the content of one assistant message to another's: as one string when both
+// are strings, otherwise as one list of parts.
+func joinContent(have, next any) any {
+	hs, hok := have.(string)
+	ns, nok := next.(string)
+	switch {
+	case have == nil:
+		return next
+	case hok && nok:
+		return hs + "\n\n" + ns
+	}
+	parts := func(c any) []json.RawMessage {
+		switch v := c.(type) {
+		case string:
+			if v == "" {
+				return nil
+			}
+			text := v
+			b, _ := json.Marshal(outPart{Type: "text", Text: &text})
+			return []json.RawMessage{b}
+		case []json.RawMessage:
+			return v
+		}
+		return nil
+	}
+	return append(parts(have), parts(next)...)
+}
+
+// joinReasoning joins the reasoning of consecutive reasoning items, as today's core does.
+func joinReasoning(have, next string) string {
+	switch {
+	case strings.TrimSpace(have) == "":
+		return next
+	case strings.TrimSpace(next) == "", strings.TrimSpace(have) == strings.TrimSpace(next):
+		return have
+	}
+	return have + "\n\n" + next
+}
+
+func encodeToolChoice(tc *llm.ToolChoice, names map[string]string) any {
+	if len(tc.Allowed) > 0 {
+		tools := make([]any, 0, len(tc.Allowed))
+		for _, name := range tc.Allowed {
+			tools = append(tools, map[string]any{"type": "function", "function": map[string]string{"name": ToolName(names, name)}})
+		}
+		return map[string]any{"type": "allowed_tools", "allowed_tools": map[string]any{"mode": tc.Mode, "tools": tools}}
+	}
+	if tc.Mode == llm.ToolChoiceTool {
+		return map[string]any{"type": "function", "function": map[string]string{"name": ToolName(names, tc.Name)}}
+	}
+	return tc.Mode
+}
+
+func encodeResponseFormat(rf *llm.ResponseFormat) any {
+	if rf.Type != llm.ResponseFormatJSONSchema {
+		return map[string]string{"type": rf.Type}
+	}
+	type schema struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description,omitempty"`
+		Schema      json.RawMessage `json:"schema,omitempty"`
+		Strict      *bool           `json:"strict,omitempty"`
+	}
+	return struct {
+		Type       string `json:"type"`
+		JSONSchema schema `json:"json_schema"`
+	}{rf.Type, schema{rf.Name, rf.Description, rf.Schema, rf.Strict}}
+}
+
+// content encodes a message's parts. sendable reports whether any part with something in it
+// was kept, dropped whether any part was dropped and reported because Chat Completions cannot
+// carry it.
+func (e *encoder) content(it llm.Item, msgPath string) (content any, sendable, dropped bool, err error) {
+	parts := it.Content
+	if len(parts) == 0 {
+		if it.Role == llm.RoleAssistant && !it.TextContent {
+			return nil, false, false, nil // set to "" later unless tool calls are grouped onto it
+		}
+		return "", false, false, nil
+	}
+	if len(parts) == 1 && parts[0].Type == llm.PartText && (it.TextContent || it.Origin == nil) && (parts[0].Origin == nil || len(parts[0].Origin.Raw) == 0) {
+		return parts[0].Text, parts[0].Text != "", false, nil
+	}
+	out := make([]json.RawMessage, 0, len(parts))
+	for i, p := range parts {
+		pp := path(p.Origin, fmt.Sprintf("%s.content[%d]", msgPath, i))
+		switch p.Type {
+		case llm.PartText:
+			text := p.Text
+			out = append(out, partJSON(outPart{Type: "text", Text: &text}, e.kept(p.Origin)))
+			if p.Text != "" {
+				sendable = true
+			}
+		case llm.PartImage:
+			if it.Role == llm.RoleAssistant {
+				e.lose(llm.LossDropped, pp, "Chat Completions does not accept image parts in assistant messages")
+				dropped = true
+				continue
+			}
+			if p.URL == "" && p.FileID != "" {
+				e.lose(llm.LossDropped, pp, "Chat Completions cannot take an image by file id")
+				dropped = true
+				continue
+			}
+			if p.URL == "" {
+				e.lose(llm.LossDropped, pp, "Chat Completions cannot take an image with no URL")
+				dropped = true
+				continue
+			}
+			if (p.Origin == nil || p.Origin.Format != format) && mediainput.IsDataURL(p.URL) {
+				// Only a part translated from another format is checked: a Chat client's own
+				// image is what its upstream takes.
+				if _, problem := mediainput.AnyImage(p.URL); problem != "" {
+					e.lose(llm.LossDropped, pp, "Chat Completions cannot take this inline image: "+problem)
+					dropped = true
+					continue
+				}
+			}
+			op := outPart{Type: "image_url"}
+			op.ImageURL = &struct {
+				URL    string `json:"url"`
+				Detail string `json:"detail,omitempty"`
+			}{URL: p.URL, Detail: p.Detail}
+			out = append(out, partJSON(op, e.kept(p.Origin)))
+			sendable = true
+		case llm.PartFile:
+			if it.Role == llm.RoleAssistant {
+				e.lose(llm.LossDropped, pp, "Chat Completions does not accept file or audio parts in assistant messages")
+				dropped = true
+				continue
+			}
+			// Chat takes audio as input_audio, with its bytes inline; a file part holding audio
+			// is that audio however the client sent it.
+			if mediaType, data, ok := audioinput.Inline(p); ok {
+				op := outPart{Type: "input_audio", InputAudio: &chatInputAudio{Data: data, Format: audioinput.Format(mediaType)}}
+				out = append(out, partJSON(op, e.kept(p.Origin)))
+				sendable = true
+				continue
+			}
+			if p.FileID == "" && p.FileData == "" {
+				// Chat Completions takes a file id or inline data, not a URL.
+				e.lose(llm.LossDropped, pp, "Chat Completions cannot take a file by URL")
+				dropped = true
+				continue
+			}
+			if (p.Origin == nil || p.Origin.Format != format) && p.FileData != "" && !mediainput.FileDataOK(p.FileData) {
+				e.lose(llm.LossDropped, pp, "Chat Completions cannot take this file data: it is not base64 or a URL")
+				dropped = true
+				continue
+			}
+			op := outPart{Type: "file"}
+			op.File = &struct {
+				FileID   string `json:"file_id,omitempty"`
+				FileData string `json:"file_data,omitempty"`
+				Filename string `json:"filename,omitempty"`
+			}{p.FileID, p.FileData, p.Filename}
+			out = append(out, partJSON(op, e.kept(p.Origin)))
+			sendable = true
+		case llm.PartNative:
+			if p.Format == format {
+				out = append(out, p.Data)
+				e.foreign = true
+				sendable = true
+				continue
+			}
+			if p.Format == llm.FormatAnthropicMessages {
+				if text, title, ok := textdoc.FromAnthropic(p.Data); ok {
+					wrapped := textdoc.Wrap(title, text)
+					out = append(out, partJSON(outPart{Type: "text", Text: &wrapped}, nil))
+					e.lose(llm.LossApproximated, pp, "a Messages plain-text document, carried as text")
+					sendable = true
+					continue
+				}
+			}
+			e.lose(llm.LossDropped, pp, "a "+p.Format+" content part Chat Completions cannot carry")
+			dropped = true
+		default:
+			return nil, false, false, &llm.Error{Code: llm.CodeUnsupported, Message: fmt.Sprintf("%s: unsupported content part %q", pp, p.Type), Scope: llm.ScopeRequest}
+		}
+	}
+	if len(out) == 0 && dropped && it.Role == llm.RoleAssistant {
+		return nil, false, true, nil
+	}
+	return out, sendable, dropped, nil
+}
