@@ -2806,7 +2806,7 @@ line with its time and level in front as today's core writes them:
 [2026-11-09 12:00:01.456] [warn ] warning: no client_keys set; anyone who can reach ...
 ```
 
-Lines are `info`, or `warn` for warnings; core has no debug lines, so today's `debug` setting is
+Lines are `info`, `warn` for warnings (lines that start with `warning: `) or `error` for something the person must fix (lines that start with `error: `: a config change that was not applied, an extension that crashed or was stopped after crashes, an account a provider closed or that needs a new sign-in, a failed write of core's own state); a failed client request stays a warning. Core has no debug lines, so today's `debug` setting is
 dropped. Today's core writes only to the file while the setting is on; this core keeps writing
 to standard error too. `main.log` is rotated when it reaches 10 MB, as in today's core: it is
 renamed `main-<time>.log` and a new one begins. `logs.max_total_size_mb` (today's

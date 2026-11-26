@@ -540,7 +540,7 @@ func (g *Managed) crashed(reason string, ran time.Duration) {
 	}
 	if g.crashes >= max(g.policy.QuarantineAfter, 1) {
 		g.state = StateQuarantined
-		g.logf("extension %s %s quarantined after %d crashes in a row (last: %s); reload the config to try again",
+		g.logf("error: extension %s %s quarantined after %d crashes in a row (last: %s); reload the config to try again",
 			g.manifest.ID, g.manifest.Version, g.crashes, reason)
 		return
 	}
@@ -550,7 +550,7 @@ func (g *Managed) crashed(reason string, ran time.Duration) {
 	}
 	backoff = min(backoff, g.policy.RestartBackoffMax)
 	g.state, g.retryAt = StateCrashed, time.Now().Add(backoff)
-	g.logf("extension %s %s %s; restarting in %s", g.manifest.ID, g.manifest.Version, reason, backoff)
+	g.logf("error: extension %s %s %s; restarting in %s", g.manifest.ID, g.manifest.Version, reason, backoff)
 	g.restart = time.AfterFunc(backoff, func() { g.start(true) })
 }
 
