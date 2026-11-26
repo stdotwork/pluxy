@@ -2980,7 +2980,9 @@ fn a_new_copy_that_cannot_be_removed_keeps_its_journal_open_for_the_next_start()
         // Not ended as rolled back with the new copy left unrecorded: open for the next start.
         let open = v.open();
         assert_eq!(open.len(), 1, "{}", e.message);
-        assert_eq!(std::fs::read(new.join("a.txt")).unwrap(), b"a 1\n");
+        // What could not be removed is still there (the removal may have taken the rest first,
+        // in whatever order the folder lists them).
+        assert_eq!(std::fs::read(new.join("sub/b.txt")).unwrap(), b"b 1\n");
         let mut lock = Some(lock);
         if unlocked {
             lock = None;
@@ -2993,7 +2995,7 @@ fn a_new_copy_that_cannot_be_removed_keeps_its_journal_open_for_the_next_start()
         } else {
             // Still not removable: left where it is and named, the journal ended all the same.
             assert_eq!(reports[0]["conflicts"], json!([new]));
-            assert!(new.join("a.txt").exists());
+            assert!(new.join("sub/b.txt").exists());
         }
         drop(lock);
         assert!(v.open().is_empty());
