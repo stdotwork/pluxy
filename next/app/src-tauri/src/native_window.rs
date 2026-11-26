@@ -14,8 +14,9 @@
 //! - `third`: the remembered Exit app quits without asking.
 //! - `no-tray-ask`: in a session with no tray watcher, with the default preferences, closing
 //!   asks first (`__pluxyClosePrompt("no-tray")`), since quitting stops the app's own pluxy; a
-//!   prompt that does not answer leaves the window open and pluxy running; answered Exit app
-//!   with Remember this choice (the prompt's "Don't ask again"), it quits.
+//!   page that does not answer leaves the window open and pluxy running; the window's own prompt
+//!   says "Close and stop pluxy?", and its Keep open keeps the window with pluxy running; Close
+//!   and stop pluxy with "Don't ask again" quits.
 //! - `no-tray`: in a session with no tray watcher and "Don't ask again" saved, closing quits
 //!   without asking, whatever the saved choice.
 //!
@@ -664,41 +665,45 @@ fn third(c: &mut Checks, app: &AppHandle) {
     last_close(c, app, "third", || request_close(app));
 }
 
-/// The no-tray prompt, as the window gets it: the kind it was asked with, and whether it answers.
-/// A stand-in that records the kind and answers false is a window that does not take the
-/// question; one that records it and calls the page's own prompt is the real one.
-fn spy_prompt(app: &AppHandle, answer: bool) -> bool {
-    let call = if answer {
-        "window.__pluxyHeldPrompt(kind)"
-    } else {
-        "false"
-    };
+/// What the open close prompt shows: its kind, title, buttons and switch; None when none is open.
+fn prompt_shown(app: &AppHandle) -> Option<Value> {
     main_eval(
         app,
-        &format!("(() => {{ window.__pluxyHeldPrompt ??= window.__pluxyClosePrompt; if (!window.__pluxyHeldPrompt) return false; window.__pluxyClosePrompt = (kind) => {{ window.__pluxyPromptKinds = [...(window.__pluxyPromptKinds ?? []), kind ?? null]; return {call}; }}; return true; }})()"),
-    ) == Some(json!(true))
+        "(() => { const d = document.querySelector('dialog[data-part=close-prompt]'); if (!d?.open) return null; return { kind: d.dataset.kind ?? null, title: d.querySelector('h2')?.textContent ?? null, buttons: [...d.querySelectorAll('button')].map((b) => b.textContent.trim()), switch: d.querySelector('label')?.textContent?.trim() ?? null }; })()",
+    )
+    .filter(|v| !v.is_null())
 }
 
-fn prompt_kinds(app: &AppHandle) -> Option<Value> {
-    main_eval(app, "window.__pluxyPromptKinds ?? []")
+/// Clicks the open close prompt's button whose text is text, only when a person could: it is laid
+/// out on the page and enabled.
+fn click_shown(app: &AppHandle, text: &str) -> bool {
+    main_eval(
+        app,
+        &format!(
+            "(() => {{ const d = document.querySelector('dialog[data-part=close-prompt]'); if (!d?.open) return false; const b = [...d.querySelectorAll('button')].find((b) => b.textContent.trim() === {}); if (!b || b.disabled || b.getClientRects().length === 0) return false; b.click(); return true; }})()",
+            json!(text)
+        ),
+    ) == Some(json!(true))
 }
 
 fn no_tray_ask(c: &mut Checks, app: &AppHandle) {
     c.check(shell_ready(app, 60), "the window shows the app's shell");
     let core = || app.state::<App>().conn.lock().unwrap().core_pid();
     let pid = core();
-    // A window that does not take the question: it stays open, and pluxy keeps running.
-    let spied = spy_prompt(app, false);
+    // A page that does not take the question (its prompt not in place, as while it loads): the
+    // window stays open, and pluxy keeps running.
+    let held = main_eval(
+        app,
+        "(() => { if (typeof window.__pluxyClosePrompt !== 'function') return false; window.__pluxyHeldPrompt = window.__pluxyClosePrompt; delete window.__pluxyClosePrompt; return true; })()",
+    ) == Some(json!(true));
     let prompts = PROMPTS.load(SeqCst);
     request_close(app);
     sleep(5000);
     c.check(
-        spied
-            && PROMPTS.load(SeqCst) == prompts + 1
-            && prompt_kinds(app) == Some(json!(["no-tray"])),
+        held && PROMPTS.load(SeqCst) == prompts + 1,
         format!(
-            "with no tray, closing asks the window first, as no-tray: {:?}",
-            prompt_kinds(app)
+            "with no tray, closing asks the window first ({} asks)",
+            PROMPTS.load(SeqCst) - prompts
         ),
     );
     c.check(
@@ -708,10 +713,50 @@ fn no_tray_ask(c: &mut Checks, app: &AppHandle) {
             core()
         ),
     );
-    // The real prompt: Exit app with Remember this choice, which here is "Don't ask again".
-    let spied = spy_prompt(app, true);
-    c.check(spied, "the window's own close prompt is in place");
-    last_close(c, app, "no-tray-ask", || answer(app, "exit", true));
+    let restored = main_eval(
+        app,
+        "(() => { window.__pluxyClosePrompt = window.__pluxyHeldPrompt; return typeof window.__pluxyClosePrompt === 'function'; })()",
+    ) == Some(json!(true));
+    c.check(restored, "the window's own close prompt is back in place");
+
+    // The window's own prompt: its words, and Keep open keeps the window with pluxy running.
+    let prompts = PROMPTS.load(SeqCst);
+    request_close(app);
+    let shown = within(5, || prompt_shown(app));
+    let want = json!({
+        "kind": "no-tray",
+        "title": "Close and stop pluxy?",
+        "buttons": ["Keep open", "Close and stop pluxy"],
+        "switch": "Don't ask again",
+    });
+    c.check(
+        PROMPTS.load(SeqCst) == prompts + 1 && shown.as_ref() == Some(&want),
+        format!("with no tray, closing shows Close and stop pluxy? with Keep open: {shown:?}"),
+    );
+    c.check(
+        click_shown(app, "Keep open"),
+        "the prompt's Keep open is shown and clicked",
+    );
+    // Longer than the three seconds an unanswered prompt is waited for.
+    sleep(4000);
+    c.check(
+        prompt_shown(app).is_none()
+            && app.get_window(WINDOW).is_some()
+            && shell_ready(app, 5)
+            && pid.is_some()
+            && core() == pid,
+        format!(
+            "Keep open closes the prompt, and the window stays open with pluxy running ({pid:?}, now {:?})",
+            core()
+        ),
+    );
+    // Close and stop pluxy, with Don't ask again: it quits, and window.ts checks what it kept.
+    last_close(c, app, "no-tray-ask", || {
+        request_close(app);
+        within(5, || prompt_shown(app)).is_some_and(|p| p == want)
+            && click(app, "dialog[data-part=close-prompt] input[role=switch]")
+            && click_shown(app, "Close and stop pluxy")
+    });
 }
 
 fn no_tray(c: &mut Checks, app: &AppHandle) {

@@ -110,8 +110,8 @@ if (noTray) {
   // The defaults: quitting stops the app's own pluxy, so closing asks first.
   const asked = await stage("no-tray-ask");
   check(
-    asked.prompts === 2,
-    `no-tray-ask: closing asked at each of its two closes, unanswered and answered (${asked.prompts} prompts)`,
+    asked.prompts === 3,
+    `no-tray-ask: closing asked at each of its three closes: unanswered, Keep open, Close and stop pluxy (${asked.prompts} prompts)`,
   );
   await coreStopped("no-tray-ask", asked);
   const kept = saved();

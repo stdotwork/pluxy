@@ -3,9 +3,10 @@
 //!
 //! Closing leaves the app in the tray (Keep in the tray, the default), which destroys the window
 //! and its webviews, quits (Quit) or asks (Ask). Without a usable tray the app is never left
-//! running with no way back to it: closing quits whatever the choice. When that would stop the
-//! app's own pluxy, the window asks first, unless the person said not to (`ask_without_tray`, kept
-//! apart from the choice so it still holds the day a tray appears).
+//! running with no way back to it: closing quits whatever the choice. In local and remote mode
+//! pluxy runs on its own and keeps running. When quitting would stop the app's own pluxy (managed
+//! mode), the window asks first, unless the person said not to (`ask_without_tray`, kept apart
+//! from the choice so it still holds the day a tray appears).
 //!
 //! The size is kept in logical pixels and the place in physical ones (monitor layouts, including
 //! displays left of the primary one), never while the window is minimized, maximized or full
@@ -82,6 +83,15 @@ pub fn closing(prefs: &Preferences, tray: bool, managed: bool) -> Closing {
     }
 }
 
+/// Which close prompt the window showed: the one for Ask (`window.__pluxyClosePrompt()`), or the
+/// no-tray one (`window.__pluxyClosePrompt("no-tray")`). Its answer comes back with its kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Prompt {
+    Ask,
+    NoTray,
+}
+
 /// What a close prompt the window did not answer within three seconds (its page still loading,
 /// or busy) does instead: with a tray the window closes to it, from where it opens again; with
 /// none the window stays open, since quitting would stop pluxy without asking.
@@ -92,13 +102,33 @@ pub fn unanswered(asked: Closing) -> Closing {
     }
 }
 
-/// Keeps a close prompt's answer the person asked to remember. With a tray it becomes the close
-/// choice; with none it only stops the no-tray prompt, so the choice stays as it was.
-pub fn remember(prefs: &mut Preferences, action: Close, tray: bool) {
-    if tray {
-        prefs.close_behavior = action;
-    } else {
-        prefs.ask_without_tray = false;
+/// Whether action answers the prompt the window showed: Ask's prompt quits or closes to the tray
+/// (which needs a usable tray, asked through tray only then); the no-tray prompt only quits, since
+/// keeping the window open sends nothing.
+pub fn check(
+    kind: Prompt,
+    action: Close,
+    tray: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    match (kind, action) {
+        (_, Close::Ask) => Err("choose Exit app or Minimize to tray".into()),
+        (Prompt::NoTray, Close::MinimizeToTray) => {
+            Err("with no tray, the window either stays open or closes and stops pluxy".into())
+        }
+        (Prompt::Ask, Close::MinimizeToTray) => tray().map_err(|e| {
+            format!("The system tray is unavailable ({e}); keep the window open or exit the app")
+        }),
+        (_, Close::Exit) => Ok(()),
+    }
+}
+
+/// Keeps a close prompt's answer the person asked to remember, by the prompt they answered, not by
+/// whether a tray shows by then. Ask's "Remember this choice" becomes the close choice; the
+/// no-tray prompt's "Don't ask again" only stops that prompt, so the choice stays as it was.
+pub fn remember(prefs: &mut Preferences, kind: Prompt, action: Close) {
+    match kind {
+        Prompt::Ask => prefs.close_behavior = action,
+        Prompt::NoTray => prefs.ask_without_tray = false,
     }
 }
 
@@ -405,8 +435,8 @@ mod tests {
         assert_eq!(unanswered(Closing::Ask), Closing::ToTray);
     }
 
-    /// "Don't ask again" on the no-tray prompt stops the prompt and leaves the close choice; with
-    /// a tray, Remember this choice saves the choice.
+    /// "Don't ask again" on the no-tray prompt stops the prompt and leaves the close choice; on
+    /// Ask's prompt, Remember this choice saves the choice.
     #[test]
     fn dont_ask_again_without_a_tray_keeps_the_close_choice() {
         for choice in [Close::MinimizeToTray, Close::Ask, Close::Exit] {
@@ -414,7 +444,7 @@ mod tests {
                 close_behavior: choice,
                 ..Preferences::default()
             };
-            remember(&mut p, Close::Exit, false);
+            remember(&mut p, Prompt::NoTray, Close::Exit);
             assert_eq!((p.close_behavior, p.ask_without_tray), (choice, false));
             assert_eq!(closing(&p, false, true), Closing::Quit);
             // The day a tray appears, the choice still holds.
@@ -431,8 +461,56 @@ mod tests {
             );
         }
         let mut p = Preferences::default();
-        remember(&mut p, Close::Exit, true);
+        remember(&mut p, Prompt::Ask, Close::Exit);
         assert_eq!((p.close_behavior, p.ask_without_tray), (Close::Exit, true));
+    }
+
+    /// The answer is kept by the prompt the person answered. A tray that shows by the time they
+    /// answer the no-tray prompt (a desktop's tray host starting late) must not turn "Don't ask
+    /// again" with Close and stop pluxy into the close choice Quit.
+    #[test]
+    fn a_no_tray_answer_is_kept_as_no_tray_even_when_a_tray_shows_by_then() {
+        let tray_now = || Ok(());
+        for choice in [Close::MinimizeToTray, Close::Ask, Close::Exit] {
+            let mut p = Preferences {
+                close_behavior: choice,
+                ..Preferences::default()
+            };
+            assert_eq!(check(Prompt::NoTray, Close::Exit, tray_now), Ok(()));
+            remember(&mut p, Prompt::NoTray, Close::Exit);
+            assert_eq!(
+                (p.close_behavior, p.ask_without_tray),
+                (choice, false),
+                "{choice:?}"
+            );
+            // With the tray that now shows, closing still does what the choice says.
+            assert_eq!(
+                closing(&p, true, true),
+                closing(
+                    &Preferences {
+                        close_behavior: choice,
+                        ..Preferences::default()
+                    },
+                    true,
+                    true
+                )
+            );
+        }
+        // The no-tray prompt has no Keep in the tray; Ask's needs a usable tray.
+        assert!(check(Prompt::NoTray, Close::MinimizeToTray, tray_now).is_err());
+        assert_eq!(check(Prompt::Ask, Close::MinimizeToTray, tray_now), Ok(()));
+        let none = check(Prompt::Ask, Close::MinimizeToTray, || Err("no host".into()));
+        assert!(none.is_err_and(|e| e.contains("no host")));
+        assert!(check(Prompt::Ask, Close::Ask, tray_now).is_err());
+        // The window sends the kind as it names it.
+        assert_eq!(
+            serde_json::from_str::<Prompt>(r#""no-tray""#).unwrap(),
+            Prompt::NoTray
+        );
+        assert_eq!(
+            serde_json::from_str::<Prompt>(r#""ask""#).unwrap(),
+            Prompt::Ask
+        );
     }
 
     #[test]

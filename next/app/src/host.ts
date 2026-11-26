@@ -199,7 +199,8 @@ export const startupSet = (preferences: StartupPreferences) =>
 export type CloseBehavior = "ask" | "exit" | "minimize-to-tray";
 export interface WindowPreferences {
   close_behavior: CloseBehavior;
-  /** Whether the desktop shows the app's tray icon now; without it, closing the window quits. */
+  /** Whether the desktop shows the app's tray icon now; without it, closing the window quits the app
+   * (managed mode asks first, unless ask_without_tray is off; local and remote leave pluxy running). */
   tray: boolean;
   /** With no tray in managed mode, whether closing asks before it quits and stops pluxy. The no-tray
    * prompt's remembered answer turns it off; close_behavior stays as it was. */
@@ -208,6 +209,12 @@ export interface WindowPreferences {
 export const windowGet = () => invoke<WindowPreferences>("window_get");
 export const windowSet = (closeBehavior: CloseBehavior) =>
   invoke<WindowPreferences>("window_set", { closeBehavior });
-/** The answer to the close prompt. Remembered with no tray, it only stops the no-tray prompt. */
-export const windowClose = (action: Exclude<CloseBehavior, "ask">, remember: boolean) =>
-  invoke<void>("window_close", { action, remember });
+/** Which close prompt the window shows: Ask's, or the one asked with no tray in managed mode. */
+export type ClosePromptKind = "ask" | "no-tray";
+/** The answer to the close prompt of that kind. Remembered, Ask's answer becomes the close choice;
+ * the no-tray prompt's only stops that prompt, whether or not a tray shows by then. */
+export const windowClose = (
+  action: Exclude<CloseBehavior, "ask">,
+  remember: boolean,
+  kind: ClosePromptKind,
+) => invoke<void>("window_close", { action, remember, kind });

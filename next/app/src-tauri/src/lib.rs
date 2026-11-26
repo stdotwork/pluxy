@@ -240,7 +240,7 @@ fn status_text(v: &View) -> String {
         }
         (Some(Mode::Managed), _, Some(c)) if c.state == "recovering" => "pluxy: Restarting".into(),
         (Some(Mode::Managed), _, _) => "pluxy: Stopped".into(),
-        (Some(Mode::Local | Mode::Remote), Some(t), _) => {
+        (Some(Mode::Local | Mode::Remote), Some(t), _) if v.signed_in => {
             format!("pluxy: Connected to {}", host_of(t))
         }
         _ => "pluxy: Not connected".into(),
@@ -668,7 +668,9 @@ fn close_requested(app: &AppHandle) {
     std::thread::spawn(move || {
         let tray = usable_tray(&app);
         if let Err(e) = &tray {
-            eprintln!("pluxy-app: no usable tray ({e}): closing the window quits");
+            eprintln!(
+                "pluxy-app: no usable tray ({e}): closing the window quits (in managed mode it asks first)"
+            );
         }
         // Only without a tray does it matter whether quitting stops the app's own pluxy.
         let managed =
@@ -881,34 +883,25 @@ async fn window_set(
     Ok(window_view(app))
 }
 
-/// The window's answer to its close prompt: quit (Exit) or keep the app in the tray (Minimize to
-/// Tray), and whether to remember it. With a tray, remembering saves the close choice; with none
-/// (the no-tray prompt's "Don't ask again") it only stops that prompt (`window::remember`).
+/// The window's answer to the close prompt of kind it showed: quit (Exit) or keep the app in the
+/// tray (Minimize to Tray, only on Ask's prompt), and whether to remember it. Remembered, Ask's
+/// answer becomes the close choice and the no-tray prompt's ("Don't ask again") only stops that
+/// prompt, whether or not a tray shows by the time the person answers (`window::remember`).
 #[tauri::command]
 async fn window_close(
     webview: Webview,
     action: window::Close,
     remember: bool,
+    kind: window::Prompt,
 ) -> Result<(), String> {
     trusted(&webview)?;
     let app = webview.app_handle().clone();
-    let tray = match action {
-        window::Close::Ask => return Err("choose Exit app or Minimize to tray".into()),
-        window::Close::MinimizeToTray => {
-            usable_tray(&app).map_err(|e| {
-                format!(
-                    "The system tray is unavailable ({e}); keep the window open or exit the app"
-                )
-            })?;
-            true
-        }
-        window::Close::Exit => usable_tray(&app).is_ok(),
-    };
+    window::check(kind, action, || usable_tray(&app))?;
     if remember {
         let st = app.state::<App>();
         let mut store = st.window.lock().unwrap();
         let before = store.prefs;
-        window::remember(&mut store.prefs, action, tray);
+        window::remember(&mut store.prefs, kind, action);
         if let Err(e) = store.save() {
             store.prefs = before;
             return Err(e);
@@ -3622,7 +3615,7 @@ pub fn run() {
             }
             match build_tray(&handle) {
                 Ok(()) => handle.state::<App>().has_tray.store(true, Ordering::SeqCst),
-                // No tray: closing the window quits the app.
+                // No tray: closing the window quits the app (in managed mode it asks first).
                 Err(e) => eprintln!("pluxy-app: no tray icon: {e}"),
             }
             // A core that exited before the app state existed had no one to recover it.
@@ -3834,9 +3827,10 @@ mod tests {
     /// never reads "core" there.
     #[test]
     fn the_tray_says_pluxy_in_each_mode() {
-        let at = |mode, target: Option<&str>| View {
+        let at = |mode, target: Option<&str>, signed_in| View {
             mode,
             target: target.map(String::from),
+            signed_in,
             ..View::default()
         };
         let mut running = managed("running", 1);
@@ -3854,22 +3848,37 @@ mod tests {
             ),
             (managed("missing", 1), "pluxy: Not installed", managed_quit),
             (
-                at(Some(Mode::Local), Some("http://127.0.0.1:8317")),
+                at(Some(Mode::Local), Some("http://127.0.0.1:8317"), true),
                 "pluxy: Connected to 127.0.0.1:8317",
                 "Quit",
             ),
             (
-                at(Some(Mode::Remote), Some("https://pluxy.example")),
+                at(Some(Mode::Remote), Some("https://pluxy.example"), true),
                 "pluxy: Connected to pluxy.example",
                 "Quit",
             ),
             (
-                at(Some(Mode::Remote), Some("https://[::1]:9443")),
+                at(Some(Mode::Remote), Some("https://[::1]:9443"), true),
                 "pluxy: Connected to [::1]:9443",
                 "Quit",
             ),
-            (at(Some(Mode::Remote), None), "pluxy: Not connected", "Quit"),
-            (at(None, None), "pluxy: Not connected", "Quit"),
+            // An address but no key yet (or a refused one): not connected until signed in.
+            (
+                at(Some(Mode::Local), Some("http://127.0.0.1:8317"), false),
+                "pluxy: Not connected",
+                "Quit",
+            ),
+            (
+                at(Some(Mode::Remote), Some("https://pluxy.example"), false),
+                "pluxy: Not connected",
+                "Quit",
+            ),
+            (
+                at(Some(Mode::Remote), None, false),
+                "pluxy: Not connected",
+                "Quit",
+            ),
+            (at(None, None, false), "pluxy: Not connected", "Quit"),
         ] {
             assert_eq!(tray_presentation(&v, false).0, status, "{v:?}");
             assert_eq!(quit_text(v.mode), quit, "{v:?}");

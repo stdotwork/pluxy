@@ -192,7 +192,7 @@ app keeps the running version, the one before it and the core it came with, and 
 ones after a switch. Rolling back reaches only an installed version.
 
 A **core program** you name on the Connection page (or `pluxy` beside the app, unless that is the
-core the app came with) is never run in place. **Adopt core** shows its path, size and SHA-256 in the native confirmation;
+core the app came with) is never run in place. **Adopt core** shows its path, size and the first 12 characters of its SHA-256 in the native confirmation;
 once confirmed, the app copies it into a version of its own, `custom-<its SHA-256>`, if it is
 still a regular file of that size and digest (at most 512 MiB; a FIFO or device is refused
 without being read; on Unix it must be executable, on Windows a program image named `.exe` or
@@ -270,12 +270,14 @@ What closing the window does is the Connection page's **Close behavior**: **Mini
 (the default), **Ask every time** or **Exit app**. Ask every time shows "What would you like to
 do?" with Minimize to tray, Exit app, Cancel and **Remember this choice**. Exit app quits as the
 tray's Quit does. Minimize to tray destroys the window and its webviews, so they hold no memory
-while the app sits in the tray. A window that does not answer the question within three seconds
-(its page still loading, or busy) closes to the tray.
+while the app sits in the tray. With a tray, a window that does not answer the question within
+three seconds (its page still loading, or busy) closes to the tray. In local and remote mode,
+quitting the app leaves pluxy running; only in managed mode does it stop the core the app runs.
 
 The tray menu's first line says what pluxy is doing: "pluxy: Running", "pluxy: Stopped",
 "pluxy: Restarting", "pluxy: Stopped restarting" or "pluxy: Not installed" in managed mode,
-"pluxy: Connected to <host>" in local and remote modes, "pluxy: Not connected" otherwise. The
+"pluxy: Connected to <host>" in local and remote modes once the app is signed in, "pluxy: Not
+connected" otherwise. The
 menu has "Open pluxy" (a new window), "Start…" (remembered launches,
 [The launcher](#the-launcher)) and "Quit", which reads "Quit (stops pluxy)" in managed mode,
 where quitting stops the core the app runs. In managed mode, "Start pluxy", "Stop pluxy" and
@@ -285,13 +287,18 @@ the tray says "pluxy: Working…", disables all three and refuses another click.
 in local and remote modes, and the native side refuses them there too, even if a desktop
 delivers a click on a disabled item.
 
-Closing the window quits the app, whatever the choice, when there is no usable tray: the
-app made no tray icon, or the session's `org.kde.StatusNotifierWatcher` is missing or has no
-registered host (asked at each close, since GTK makes an icon even with no desktop to show it).
-The setting then says so. In managed mode, where quitting stops the app's own core, the app
-first asks the window (`__pluxyClosePrompt("no-tray")`); a window that does not answer within
-three seconds stays open. That prompt's remembered answer is kept as `ask_without_tray: false`,
-apart from the Close behavior, which stays as it was for a session that has a tray.
+When there is no usable tray (the app made no tray icon, or the session's
+`org.kde.StatusNotifierWatcher` is missing or has no registered host, asked at each close, since
+GTK makes an icon even with no desktop to show it), closing the window quits the app, whatever
+the choice, and the setting says so. In local and remote mode it quits without asking, and pluxy
+keeps running. In managed mode, where quitting stops the app's own core, the app first asks the
+window (`__pluxyClosePrompt("no-tray")`): "Close and stop pluxy?", saying that closing stops
+pluxy and the coding tools stop getting answers, with **Keep open** (also Escape), which keeps the
+window and sends nothing, **Close and stop pluxy**, which quits, and **Don't ask again**. A window
+that does not answer within three seconds stays open. Don't ask again is kept as
+`ask_without_tray: false`, apart from the Close behavior, which stays as it was for a session
+that has a tray. The answer is kept by the prompt the person answered, even if a tray shows by
+the time they answer.
 
 When an owned core exits unexpectedly, the app retries after 2, 5 and 15 seconds, with at most
 three automatic recovery attempts in a rolling five-minute window. A successful recovery keeps
@@ -469,7 +476,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `app_update_cancel` | **Cancel download** |
 | `app_update_rollback` | Rolls back to a version that ran here and was kept, by its digest, after the native confirmation |
 | `window_get`, `window_set` | Reads or saves the Close behavior, and whether there is a usable tray and whether closing without one asks first (`ask_without_tray`) |
-| `window_close` | Answers the close prompt: Exit app or Minimize to tray, and whether to remember it (with no tray, remembering only stops the no-tray prompt) |
+| `window_close` | Answers the close prompt of the kind it showed (`ask` or `no-tray`): Exit app or Minimize to tray (only `ask`), and whether to remember it (for `no-tray`, remembering only stops that prompt) |
 | `privacy_get`, `privacy_set` | Reads or saves privacy mode |
 | `file_save` | Saves a file one of the window's own pages made (a theme file, a log, the usage table) in the Downloads folder, never over another file, and returns its path |
 
