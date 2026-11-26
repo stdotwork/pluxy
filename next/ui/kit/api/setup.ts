@@ -5,8 +5,11 @@ import type { Host } from "../host";
 import type { Package } from "./packages";
 import { one } from "./path";
 
-/** How a client's own settings stand towards this core. */
-export type SetupClientState = "not-configured" | "configured" | "needs-update" | "refused";
+/**
+ * How a client's own settings stand towards this core. unchecked: core does not read this tool's
+ * settings, so it cannot say, and has no text to paste for it.
+ */
+export type SetupClientState = "not-configured" | "configured" | "needs-update" | "refused" | "unchecked";
 
 /** A coding tool core looked for on its machine. */
 export interface SetupClient {

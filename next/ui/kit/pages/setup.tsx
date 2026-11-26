@@ -183,6 +183,7 @@ const t = strings("setup", {
   noClients: "Found no clients on this machine. Open Other clients below to set one up.",
   "state.configured": "Points at this pluxy",
   "state.not-configured": "Does not point at pluxy yet",
+  "state.unchecked": "Not checked",
   "state.needs-update": "Its settings need an update to work with this pluxy",
   "state.refused":
     "pluxy would not change {config}: it holds something pluxy does not expect. That is fine here, because you paste the text yourself.",
@@ -842,6 +843,8 @@ function PasteText(props: { client: SetupClient }) {
 function ClientRow(props: { client: SetupClient; action?: ClientAction }) {
   const { client, action } = props;
   const [open, setOpen] = useState(false);
+  // Core has no text to paste for a tool whose settings it does not read.
+  const pastable = client.state !== "unchecked";
   return (
     <li data-part="setup-client" data-state={client.installed ? client.state : "not-found"}>
       <div class="setup-row-head">
@@ -870,10 +873,12 @@ function ClientRow(props: { client: SetupClient; action?: ClientAction }) {
               {action.label}
             </Button>
           )}
-          <Button onClick={() => setOpen(!open)}>{open ? t("hidePaste") : t("showPaste")}</Button>
+          {pastable && (
+            <Button onClick={() => setOpen(!open)}>{open ? t("hidePaste") : t("showPaste")}</Button>
+          )}
         </div>
       </div>
-      {open && <PasteText client={client} />}
+      {open && pastable && <PasteText client={client} />}
     </li>
   );
 }

@@ -30,6 +30,7 @@ const (
 	stateConfigured    = management.ClientStateConfigured
 	stateNeedsUpdate   = management.ClientStateNeedsUpdate
 	stateRefused       = management.ClientStateRefused
+	stateUnchecked     = management.ClientStateUnchecked
 )
 
 var errNoFile = errors.New("no file")

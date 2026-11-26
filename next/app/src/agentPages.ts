@@ -43,6 +43,9 @@ export const SETUP_CLIENT_PAGES: Readonly<Record<string, string>> = {
   opencode: "opencode",
   pi: "pi",
   omp: "omp",
+  "claude-desktop": "claude-desktop",
+  "grok-build": "grok-build",
+  hermes: "hermes",
 };
 
 /**

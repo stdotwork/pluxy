@@ -210,7 +210,9 @@ The reply to `GET /setup/clients/{id}/paste`: `tool` (the canonical ID), `name`,
 }
 ```
 
-A client's `state` is `not-configured`, `configured` (it points at this core), `needs-update`, or `refused` (a file the desktop app's writer for that tool would refuse to change; no pick is suggested to apply to it). `sign_ins`
+A client's `state` is `not-configured`, `configured` (it points at this core), `needs-update`, `refused` (a file the desktop app's writer for that tool would refuse to change; no pick is suggested to apply to it), or `unchecked` (core does not read this tool's settings, so it cannot say whether they point at this core; see the last three tools below).
+
+`clients` lists eight tools: `claude-code`, `codex`, `opencode`, `pi`, `omp`, `claude-desktop`, `grok-build` and `hermes`. The last three are looked for where the desktop app's tools for them look: Claude Desktop is the program `claude-desktop` on the `PATH` on Linux and `Claude.app` in `/Applications` or `~/Applications` on macOS (core knows of nothing to look for on Windows); Grok Build is `~/.grok/bin/grok`, else `grok` on the `PATH`; Hermes Agent is `~/.local/bin/hermes` (`bin\hermes.exe` in the `hermes` folder of `%LOCALAPPDATA%` on Windows), else `hermes` on the `PATH`. Core does not run Claude Desktop, so it has no `version`, and does not read the settings of any of the three: their `state` is always `unchecked`, found or not (`installed` says whether core found the tool; `config` names the file the desktop app edits), and they have no paste text (`GET /setup/clients/{id}/paste` answers 404 for them). `sign_ins`
 only says a sign-in exists; core reads no token from it.
 
 An import's `last_import` is there once core has brought that setup across (`POST /setup/import`

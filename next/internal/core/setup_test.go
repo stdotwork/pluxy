@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -765,5 +766,87 @@ func TestSetupStalledRegistry(t *testing.T) {
 	}
 	if d := time.Since(start); d > 5*time.Second {
 		t.Errorf("two stalled registries took %v", d)
+	}
+}
+
+// Claude Desktop, Grok Build and Hermes Agent are looked for where the desktop app's tools for
+// them look, on each system.
+func TestDesktopToolLocations(t *testing.T) {
+	const home = "/home/p"
+	local := t.TempDir()
+	j := filepath.Join
+	eq := func(name string, got, want []string) {
+		t.Helper()
+		if !slices.Equal(got, want) {
+			t.Errorf("%s = %q, want %q", name, got, want)
+		}
+	}
+	eq("claude desktop on linux", claudeDesktopApps("linux", home), nil)
+	eq("claude desktop on windows", claudeDesktopApps("windows", home), nil)
+	eq("claude desktop on macOS", claudeDesktopApps("darwin", home),
+		[]string{j("/Applications", "Claude.app"), j(home, "Applications", "Claude.app")})
+	eq("grok on linux", grokPaths("linux", home), []string{j(home, ".grok", "bin", "grok")})
+	eq("grok on macOS", grokPaths("darwin", home), []string{j(home, ".grok", "bin", "grok")})
+	eq("grok on windows", grokPaths("windows", home), []string{j(home, ".grok", "bin", "grok.exe")})
+	eq("hermes on linux", hermesPaths("linux", home, local), []string{j(home, ".local", "bin", "hermes")})
+	eq("hermes on macOS", hermesPaths("darwin", home, ""), []string{j(home, ".local", "bin", "hermes")})
+	eq("hermes on windows", hermesPaths("windows", home, local), []string{j(local, "hermes", "bin", "hermes.exe")})
+	eq("hermes on windows, blanks around it", hermesPaths("windows", home, " "+local+" "), []string{j(local, "hermes", "bin", "hermes.exe")})
+	for _, bad := range []string{"", "  ", "AppData/Local"} {
+		eq("hermes on windows, LOCALAPPDATA "+bad, hermesPaths("windows", home, bad),
+			[]string{j(home, "AppData", "Local", "hermes", "bin", "hermes.exe")})
+	}
+	for _, goos := range []string{"linux", "darwin", "windows"} {
+		if got := slices.Concat(claudeDesktopApps(goos, ""), grokPaths(goos, ""), hermesPaths(goos, "", "")); len(got) != 0 {
+			t.Errorf("%s with no home folder looks in %q", goos, got)
+		}
+	}
+}
+
+// A macOS application bundle in the home folder counts as Claude Desktop being installed, and the
+// scan does not run it for a version.
+func TestScanFindsClaudeDesktopBundle(t *testing.T) {
+	home := setTestHome(t)
+	t.Setenv("PATH", t.TempDir())
+	var spec clientProbeSpec
+	for _, s := range clientSpecs {
+		if s.id == "claude-desktop" {
+			spec = s
+		}
+	}
+	if spec.id == "" || !spec.noVersion {
+		t.Fatalf("no claude-desktop spec, or it can run the program: %+v", spec)
+	}
+	app := filepath.Join(home, "Applications", "Claude.app")
+	if err := os.MkdirAll(app, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if found := slices.ContainsFunc(spec.apps(home), isDir); found != (runtime.GOOS == "darwin") {
+		t.Errorf("with %s there, found = %v on %s", app, found, runtime.GOOS)
+	}
+}
+
+// Core reads no settings of Claude Desktop, Grok Build or Hermes Agent, so each reports unchecked,
+// with or without a settings file, and a scan kept with another state is corrected on refresh.
+func TestUnreadToolsAreUnchecked(t *testing.T) {
+	home := setTestHome(t)
+	writeTestFile(t, filepath.Join(home, ".grok", "config.toml"), "[models]\ndefault = \"x\"\n")
+	writeTestFile(t, filepath.Join(home, ".hermes", "config.yaml"), "model:\n  provider: pluxy\n")
+	kept := management.SetupFound{}
+	for _, id := range []string{"claude-desktop", "grok-build", "hermes"} {
+		spec, ok := clientSpecByID(id)
+		if !ok {
+			t.Fatalf("no spec for %s", id)
+		}
+		cfg, state := spec.inspect(home, "http://127.0.0.1:8317")
+		if cfg == "" || state != management.ClientStateUnchecked {
+			t.Errorf("%s: inspect = %q, %q, want a file and %q", id, cfg, state, management.ClientStateUnchecked)
+		}
+		kept.Clients = append(kept.Clients, management.SetupClient{ID: id, Installed: true, State: management.ClientStateNotConfigured})
+	}
+	for _, c := range refreshCoreState(kept, "127.0.0.1:8317", false).Clients {
+		if c.State != management.ClientStateUnchecked {
+			t.Errorf("%s: refreshed state %q, want %q", c.ID, c.State, management.ClientStateUnchecked)
+		}
 	}
 }
