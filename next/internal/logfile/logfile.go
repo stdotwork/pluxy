@@ -175,7 +175,10 @@ func (l *Files) Write(p []byte) (int, error) {
 	for _, line := range strings.Split(strings.TrimRight(string(p), "\n"), "\n") {
 		line = strings.TrimPrefix(line, "pluxy: ")
 		level := "info "
-		if strings.HasPrefix(line, "warning:") {
+		switch {
+		case strings.HasPrefix(line, "error:"):
+			level = "error"
+		case strings.HasPrefix(line, "warning:"):
 			level = "warn "
 		}
 		fmt.Fprintf(&b, "[%s] [%s] %s\n", stamp, level, line)

@@ -524,7 +524,7 @@ func (m *Manager) apply(cur Record, cred *protocol.Credential, perr *llm.Error) 
 			log.Printf("credentials: account %q: refused a renewed credential: the account's credential was replaced while it was being renewed", cur.ID)
 			return next, nil
 		case err != nil:
-			log.Printf("credentials: account %q: saving the renewed credential failed: %v", cur.ID, err)
+			log.Printf("error: credentials: account %q: saving the renewed credential failed: %v", cur.ID, err)
 			return cur, credentialError(llm.CodeInternal, "saving the renewed credential failed")
 		}
 		rn := &renewal{at: now}
@@ -548,11 +548,11 @@ func (m *Manager) apply(cur Record, cred *protocol.Credential, perr *llm.Error) 
 			// refusal was about the account as it was.
 			return next, nil
 		case err != nil:
-			log.Printf("credentials: account %q: the provider refused the grant, and saving that failed: %v", cur.ID, err)
+			log.Printf("error: credentials: account %q: the provider refused the grant, and saving that failed: %v", cur.ID, err)
 			m.setRenewal(cur, &renewal{at: now, until: now.Add(failedBackoff), err: perr, refused: true})
 			return cur, perr
 		}
-		log.Printf("credentials: account %q needs a new login: %s", cur.ID, perr.Message)
+		log.Printf("error: credentials: account %q needs a new login: %s", cur.ID, perr.Message)
 		m.setRenewal(next, &renewal{at: now, err: perr})
 		m.changed()
 		return next, perr

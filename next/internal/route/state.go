@@ -637,7 +637,7 @@ func (s *State) failure(a *Account, model string, seq uint64, e *llm.Error, now 
 		}
 		s.notify()
 		s.mu.Unlock()
-		log.Printf("routing: account %q banned: %s", a.ID, singleLine(why))
+		log.Printf("error: routing: account %q banned: %s", a.ID, singleLine(why))
 		return
 	}
 	kind, scope, fixed, base, max := classify(e)

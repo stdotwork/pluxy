@@ -446,7 +446,7 @@ func (c *Core) transact(force bool, why string, change func(packages.State), str
 		c.mu.Lock()
 		c.desired = seen
 		c.mu.Unlock()
-		log.Printf("config change (%s) refused; the config file and the active revision stay: %s", why, c.scrub(err.Error(), orig, b))
+		log.Printf("error: config change (%s) refused; the config file and the active revision stay: %s", why, c.scrub(err.Error(), orig, b))
 		return err
 	}
 	if err != nil {
@@ -457,7 +457,7 @@ func (c *Core) transact(force bool, why string, change func(packages.State), str
 		c.desired.Error = err.Error()
 		c.mu.Unlock()
 		if prev != nil {
-			log.Printf("config revision %d (%s) not applied; revision %d stays active: %v", rev, why, prev.revision, err)
+			log.Printf("error: config revision %d (%s) not applied; revision %d stays active: %v", rev, why, prev.revision, err)
 		}
 		return err
 	}

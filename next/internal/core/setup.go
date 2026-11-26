@@ -207,7 +207,7 @@ func (m *setupManager) listening(listen string, tlsEnable bool) {
 	}
 	m.found = refreshed
 	if err := m.saveLocked(); err != nil {
-		log.Printf("setup: saving %s: %v", m.statePath, err)
+		log.Printf("error: setup: saving %s: %v", m.statePath, err)
 	}
 }
 
@@ -242,7 +242,7 @@ func (m *setupManager) runLoop() {
 		m.scannedAt = &now
 		m.statesFor = coreAddress(listen, tlsEnable)
 		if err := m.saveLocked(); err != nil {
-			log.Printf("setup: saving %s: %v", m.statePath, err)
+			log.Printf("error: setup: saving %s: %v", m.statePath, err)
 		}
 		if !m.rescan {
 			m.scanning = false

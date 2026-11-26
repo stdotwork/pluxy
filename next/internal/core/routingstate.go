@@ -189,14 +189,14 @@ func (c *Core) saveRouting(r *routing) {
 	if r.bad {
 		aside := r.path + ".bad"
 		if err := os.Rename(r.path, aside); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			log.Printf("routing: the blocks are not saved: moving %s, which cannot be read, aside: %v", r.path, err)
+			log.Printf("error: routing: the blocks are not saved: moving %s, which cannot be read, aside: %v", r.path, err)
 			return
 		}
 		log.Printf("routing: moved %s, which cannot be read, to %s", r.path, aside)
 		r.bad = false
 	}
 	if err := writePrivate(r.path, b); err != nil {
-		log.Printf("routing: saving the blocks: %v", err)
+		log.Printf("error: routing: saving the blocks: %v", err)
 		return
 	}
 	r.saved = b
