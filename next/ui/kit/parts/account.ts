@@ -37,6 +37,8 @@ const t = strings("parts.account", {
   seeWhatToDo: "See what to do",
   openExtensions: "Open Extensions",
   noProvider: "No provider",
+  unchecked: "Not checked",
+  uncheckedWhy: "pluxy could not check whether {provider} is running.",
   at: "at {time}",
   tomorrowAt: "tomorrow at {time}",
   dayAt: "{day} at {time}",
@@ -168,6 +170,19 @@ export const conditionState = (c: Condition) => STATE[c.kind];
 
 /** The condition in a word or two, the same as stateText(…, "account") says it. */
 export const conditionWord = (c: Condition) => stateText(conditionState(c), "account");
+
+/**
+ * Whether an account's condition waits on core's status: one that is not turned off and needs
+ * nothing only the person can fix serves or waits only if its provider runs (providerMissing).
+ * While the running extensions are not known (running undefined), such a condition is not
+ * settled: a page that could not read the status says so instead of "Serving".
+ */
+export const conditionUnchecked = (a: Account, c: Condition, running?: ReadonlySet<string>) =>
+  running === undefined && !!a.extension && (c.group === "serving" || c.group === "waiting");
+
+/** The word for a condition not checked yet, and why, for a mark and a reason. */
+export const uncheckedWord = () => t("unchecked");
+export const uncheckedReason = (a: Account) => t("uncheckedWhy", { provider: providerName(a.extension) });
 
 /** A row that says why under the name: one that needs the person, waits, or cools down on a model. */
 export const conditionTall = (c: Condition) =>

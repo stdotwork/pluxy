@@ -7,8 +7,8 @@ import {
   accountCondition,
   accountName,
   type Condition,
+  conditionUnchecked,
   conditionWord,
-  GROUPS,
   type Group,
   providerName,
 } from "../parts/account";
@@ -22,6 +22,7 @@ const t = strings("accounts.words", {
   serving: "{count} serving",
   waiting: "{count} waiting",
   turnedOff: "{count} turned off",
+  notChecked: "{count} not checked",
   signInWith: "a sign-in with {provider}",
   apiKey: "an API key",
   inSettingsFile: "{kind}, set in pluxy's settings file",
@@ -71,10 +72,22 @@ export function groupAccounts(
   return groups;
 }
 
-/** The counts line: "11 accounts at 4 providers · 2 need you · 7 serving · 1 waiting · 1 turned off", no zero counts. */
-export function countsLine(list: Account[], running?: ReadonlySet<string>, now = Date.now()): string {
-  const n: Record<Group, number> = { needs: 0, waiting: 0, serving: 0, off: 0 };
-  for (const a of list) n[accountCondition(a, running, now).group]++;
+/**
+ * The counts line: "11 accounts at 4 providers · 2 need you · 7 serving · 1 waiting · 1 turned
+ * off", no zero counts. unchecked: the status could not be read, so the accounts that serve or wait
+ * only if their provider runs count as "not checked" (conditionUnchecked).
+ */
+export function countsLine(
+  list: Account[],
+  running?: ReadonlySet<string>,
+  now = Date.now(),
+  unchecked = false,
+): string {
+  const n: Record<Group | "unchecked", number> = { needs: 0, waiting: 0, serving: 0, off: 0, unchecked: 0 };
+  for (const a of list) {
+    const c = accountCondition(a, running, now);
+    n[unchecked && conditionUnchecked(a, c, running) ? "unchecked" : c.group]++;
+  }
   const providers = new Set(list.map((a) => a.extension).filter(Boolean)).size;
   const total = providers
     ? `${t("accounts", { count: list.length })} ${t("atProviders", { count: providers })}`
@@ -84,6 +97,7 @@ export function countsLine(list: Account[], running?: ReadonlySet<string>, now =
     n.needs ? t("needYou", { count: n.needs }) : "",
     n.serving ? t("serving", { count: n.serving }) : "",
     n.waiting ? t("waiting", { count: n.waiting }) : "",
+    n.unchecked ? t("notChecked", { count: n.unchecked }) : "",
     n.off ? t("turnedOff", { count: n.off }) : "",
   ]
     .filter(Boolean)
@@ -121,9 +135,6 @@ export function batchTargets(selected: Account[], action: BatchAction): Account[
   if (action === "turnOn" || action === "clearCooldown") return selected;
   return selected.filter((a) => a.source !== "config");
 }
-
-/** The groups that have accounts, in GROUPS order. */
-export const shownGroups = (groups: Record<Group, unknown[]>) => GROUPS.filter((g) => groups[g].length > 0);
 
 /**
  * The account's place in its provider's order, as routing tries them: "First among Claude

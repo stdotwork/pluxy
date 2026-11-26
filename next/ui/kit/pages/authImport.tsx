@@ -29,20 +29,33 @@ export function fileProblem(file: { name: string; size: number }): string | unde
   return undefined;
 }
 
+/**
+ * One line of what was imported, kept as core said it: ids are what names its account (the
+ * file's name, which core makes an ID from, and the ID), masked when it is shown.
+ */
+interface Line {
+  tone: Tone;
+  text: string;
+  ids: string[];
+}
+
 export function AuthImport() {
   const { api, unauthorized } = useKit();
   const p = usePrivacy();
   const input = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   // The lines stay until the page is left.
-  const [lines, setLines] = useState<{ tone: Tone; text: string }[]>([]);
+  const [lines, setLines] = useState<Line[]>([]);
   const run = async (files: File[]) => {
     setBusy(true);
-    const out: { tone: Tone; text: string }[] = [];
+    const out: Line[] = [];
     for (const file of files) {
+      const stem = file.name.replace(/\.json$/i, "");
+      // A file's name, a reason core gives and a caught error can name an account (an e-mail
+      // address, an ID made from a file name): each line is masked as it is shown.
       const refused = fileProblem(file);
       if (refused) {
-        out.push({ tone: "danger", text: refused });
+        out.push({ tone: "danger", text: refused, ids: [stem] });
         continue;
       }
       try {
@@ -50,21 +63,22 @@ export function AuthImport() {
         if (r.status === 401) return unauthorized();
         const why = problem(r);
         if (why !== undefined || !r.body) {
-          out.push({ tone: "danger", text: t("notAdded", { reason: why ?? file.name }) });
+          out.push({ tone: "danger", text: t("notAdded", { reason: why ?? file.name }), ids: [stem] });
           continue;
         }
         for (const a of r.body.imported) {
           out.push({
             tone: "ok",
-            text: t("added", { name: p.id(a.id), provider: providerName(a.extension) }),
+            text: t("added", { name: a.id, provider: providerName(a.extension) }),
+            ids: [a.id, stem],
           });
           if (a.ignored?.length)
-            out.push({ tone: "muted", text: t("leftOut", { settings: a.ignored.join(", ") }) });
+            out.push({ tone: "muted", text: t("leftOut", { settings: a.ignored.join(", ") }), ids: [] });
         }
         for (const reason of r.body.skipped)
-          out.push({ tone: "danger", text: t("notAdded", { reason: p.text(reason) ?? reason }) });
+          out.push({ tone: "danger", text: t("notAdded", { reason }), ids: [stem] });
       } catch (error) {
-        out.push({ tone: "danger", text: t("notAdded", { reason: String(error) }) });
+        out.push({ tone: "danger", text: t("notAdded", { reason: String(error) }), ids: [stem] });
       }
     }
     setLines((old) => [...old, ...out]);
@@ -94,7 +108,7 @@ export function AuthImport() {
         <ul class="auth-import-lines" data-part="upload-results" aria-label={t("results")}>
           {lines.map((l, i) => (
             <li key={i} data-tone={l.tone}>
-              {l.text}
+              {p.text(l.text, l.ids)}
             </li>
           ))}
         </ul>

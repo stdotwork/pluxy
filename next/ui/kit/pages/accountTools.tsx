@@ -32,6 +32,9 @@ export function AccountTools(props: { account: Account; onChanged(): void }) {
   const p = usePrivacy();
   const a = props.account;
   const ids = [...accountIdentities(a), a.id];
+  // A model's name is masked for what names the account's owner, never its ID: an ID such as
+  // "claude" would hide part of every model named after its provider.
+  const owner = accountIdentities(a);
   const models = useLoad(() => api.accountModels(a.id));
   // A change to the account (its models, its excluded ones) changes what it serves: read again.
   const changed = `${a.version ?? ""}/${a.updated_at ?? ""}`;
@@ -99,7 +102,7 @@ export function AccountTools(props: { account: Account; onChanged(): void }) {
                 const names = (m.names ?? []).filter((n) => n !== m.id);
                 return (
                   <li key={m.id} class="mono">
-                    {names.length ? `${m.id} → ${names.join(", ")}` : m.id}
+                    {p.text(names.length ? `${m.id} → ${names.join(", ")}` : m.id, owner)}
                   </li>
                 );
               })}
@@ -122,7 +125,7 @@ export function AccountTools(props: { account: Account; onChanged(): void }) {
               <option value="">{t("first")}</option>
               {served.map((m) => (
                 <option key={m.id} value={m.id}>
-                  {m.id}
+                  {p.text(m.id, owner)}
                 </option>
               ))}
             </select>
@@ -147,7 +150,7 @@ export function AccountTools(props: { account: Account; onChanged(): void }) {
                 <span>{failureWord(result.error?.code, result.error?.status)}</span>
               </span>
             )}
-            <span class="mono">{result.served_model || result.model}</span>
+            <span class="mono">{p.text(result.served_model || result.model, owner)}</span>
             <span>{timeTaken(result.latency_ms)}</span>
             {result.error?.message && <span class="muted">{p.text(result.error.message, ids)}</span>}
             {result.reply && (

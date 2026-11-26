@@ -118,16 +118,20 @@ panel that `extensions/panel` held) that each one replaces. A page's ID is its a
 (`#/<id>`) and its theme hook `data-page`. Why the pages have these names, and the other
 decisions behind them, is in [docs/panel.md](../../docs/panel.md).
 
-The shell matches an address to a page by its ID, the longest match, and ignores what follows a `?`
-(`#/status?x=1` opens Home). An address whose first part names a destination that has no page
-of that ID, such as `#/activity` or `#/activity?trace=<id>`, opens that destination's first page.
+The shell matches an address to a page by its ID or one of the other addresses the page answers
+(an exact old ID, or a prefix ending in `/`), the longest match, and ignores what follows a `?`
+(`#/status?x=1` opens Home; `#/quota`, the retired Quota page's address, opens All accounts).
+An address whose first part names a destination that has no page of that ID, such as `#/activity` or `#/activity?trace=<id>`, opens that destination's first page.
 Any other unknown address opens the first page.
 
 A change of page opens the new page at its top: the frame scrolls the pane there, so a page
 opened from a button far down another one shows from its start. A change inside a page (a tab or
 a filter in its address) keeps the place.
 
-Two pages add to their address. `#/logs/<trace ID>` opens that request's log in the Logs Viewer.
+Three pages add to their address. `#/accounts/<id>` opens that account's own page (the page
+`account`, which answers that prefix), and `#/accounts/<id>/sign-in` opens it with its sign-in in
+place. `#/logs/<trace ID>` opens that
+request's log in the Logs Viewer.
 `#/config/<tab>` opens a tab of the Config Panel: `common` (what `#/config` opens),
 `connectivity`, `network`, `logging`, `advanced` or `source`. `#/config/source?account=<id>`
 opens the Source tab with that account's ID selected; an account's "Open the settings file" leads

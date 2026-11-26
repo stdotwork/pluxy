@@ -92,6 +92,8 @@ export function RequestRow(props: {
   const e = props.event;
   const name = props.name ?? ((id: string) => p.id(id));
   const account = e.account ? name(e.account) : undefined;
+  // A model's name can hold an address or a person's name (an alias, a custom upstream's model).
+  const model = p.text(e.model);
   const when = new Date(e.timestamp);
   const full = Number.isNaN(when.getTime()) ? e.timestamp : when.toLocaleString();
   if (props.compact) {
@@ -106,8 +108,8 @@ export function RequestRow(props: {
         <time class="request-time" dateTime={e.timestamp} title={full}>
           {hhmm(e.timestamp, false)}
         </time>
-        <span class="request-model" title={e.model}>
-          {e.model}
+        <span class="request-model" title={model}>
+          {model}
         </span>
         <span class="request-account" title={e.failed ? undefined : account}>
           {e.failed ? failureWord(e) : account}
@@ -138,8 +140,8 @@ export function RequestRow(props: {
         <time class="request-time" dateTime={e.timestamp} title={full}>
           {hhmm(e.timestamp, true)}
         </time>
-        <span class="request-model" title={e.model}>
-          {e.model}
+        <span class="request-model" title={model}>
+          {model}
         </span>
         <span class="request-account" title={account}>
           {account}
@@ -168,7 +170,7 @@ export function RequestRow(props: {
                     <span class="request-attempt-provider">{providerName(x.provider)}</span>{" "}
                     {x.model && (
                       <>
-                        <span class="request-attempt-model mono">{x.model}</span>{" "}
+                        <span class="request-attempt-model mono">{p.text(x.model)}</span>{" "}
                       </>
                     )}
                     <span class="request-attempt-result" data-result={x.result === "ok" ? "ok" : "failed"}>
@@ -186,7 +188,7 @@ export function RequestRow(props: {
               [
                 t("modelUsed"),
                 e.served_model && e.served_model !== e.model ? (
-                  <span class="mono">{e.served_model}</span>
+                  <span class="mono">{p.text(e.served_model)}</span>
                 ) : undefined,
               ],
               [t("key"), key],

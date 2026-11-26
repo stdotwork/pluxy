@@ -591,6 +591,24 @@ test("the compact request row links to the request on Activity", () => {
   expect(plain(failed)).toContain("Rate limited");
 });
 
+test("privacy mode masks an address in a request's model names, on the compact row and in the open one", () => {
+  const model = "ft:alice.smith@example.com:custom";
+  const e = event({
+    model,
+    served_model: `${model}-2026`,
+    tried: [
+      { account: "acc_1", provider: "pluxy/claude", model, result: "upstream" },
+      { account: "acc_1234abcd", provider: "pluxy/claude", model, result: "ok" },
+    ],
+  });
+  for (const html of [hidden(<RequestRow event={e} compact />), hidden(<RequestRow event={e} open />)]) {
+    expect(shown(html)).not.toContain("alice.smith");
+    expect(shown(html)).toContain("ft:al***@e***.com:custom");
+  }
+  // Off: the model as core sent it.
+  expect(plain(renderToString(<RequestRow event={e} compact />))).toContain(model);
+});
+
 test("a request row says its result, and opens to its facts", async () => {
   const ok = renderToString(<RequestRow event={event()} />);
   expect(ok).toContain('aria-label="Succeeded"');

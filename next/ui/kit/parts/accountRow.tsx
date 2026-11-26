@@ -25,6 +25,7 @@ import {
   providerName,
   resetsIn,
   rowWindows,
+  uncheckedWord,
   windowName,
   windowShort,
 } from "./account";
@@ -55,7 +56,15 @@ const MARK: Record<Group, IconName> = {
 };
 
 /** A group's mark: its shape, in its state colour, with the condition word as its name. */
-export function GroupMark(props: { c: Condition }) {
+export function GroupMark(props: { c: Condition; unchecked?: boolean }) {
+  // A condition that waits on a status pluxy could not read: a muted mark, named Not checked.
+  if (props.unchecked) {
+    return (
+      <span class="group-mark" data-group="unchecked">
+        <Icon name="waiting" label={uncheckedWord()} />
+      </span>
+    );
+  }
   // An account that serves but cools down on a model is marked as waiting: something is held back.
   const group = props.c.kind === "serving" && props.c.resting.length > 0 ? "waiting" : props.c.group;
   return (
@@ -231,7 +240,8 @@ function FixButton(props: {
  * { disabled: false } and POST /accounts/{id}/cooldown/reset): each gives back the reply, or an
  * error to show, or nothing; the page reads the accounts again after one that worked. The row
  * builds its own links, so every page sends a fix to the same place. running is the extensions
- * core runs, for Provider stopped.
+ * core runs, for Provider stopped. unchecked marks a row whose condition waits on a status the
+ * page could not read (conditionUnchecked). requests is the week's count once read: 0 shows.
  */
 export function AccountRow(props: {
   account: Account;
@@ -239,6 +249,7 @@ export function AccountRow(props: {
   wide?: boolean;
   requests?: number;
   running?: ReadonlySet<string>;
+  unchecked?: boolean;
   onTurnOn: (id: string) => Promise<Outcome> | Outcome;
   onClearCooldown: (id: string) => Promise<Outcome> | Outcome;
 }) {
@@ -273,7 +284,7 @@ export function AccountRow(props: {
       class="account-row"
       data-part="account-row"
       data-group={c.group}
-      data-condition={c.kind}
+      data-condition={props.unchecked ? "unchecked" : c.kind}
       data-tall={tall ? "" : undefined}
       data-wide={props.wide ? "" : undefined}
       onClick={(e) => {
@@ -283,14 +294,15 @@ export function AccountRow(props: {
       }}
     >
       <div class="account-grid">
-        <GroupMark c={c} />
+        <GroupMark c={c} unchecked={props.unchecked} />
         <span class="account-who">
           <span class="account-line">
             <a class="account-name" href={href} title={name}>
               {name}
             </a>
             <span class="account-meta">
-              <span class="account-provider">{providerName(a.extension)}</span>
+              {/* An account pluxy cannot read names no provider: nothing to say here. */}
+              {a.extension && <span class="account-provider">{providerName(a.extension)}</span>}
               {plan && <PlanPill plan={plan} />}
             </span>
           </span>
@@ -309,7 +321,7 @@ export function AccountRow(props: {
         </span>
         {props.wide && (
           <span class="account-week">
-            {props.requests ? t("week", { count: props.requests.toLocaleString() }) : ""}
+            {props.requests === undefined ? "" : t("week", { count: props.requests.toLocaleString() })}
           </span>
         )}
         {(props.wide || limited) && <span class="account-fix">{fix}</span>}

@@ -62,6 +62,10 @@ test.beforeAll(async () => {
   await addAccount("privacy-amp", AMP);
   await addAccount("privacy-at", AT);
   await addAccount(EMAIL_ID, EMAIL);
+  // A header that names the owner, shown under the account's settings.
+  expect((await core.mgmt("PATCH", `/accounts/${EMAIL_ID}`, { headers: { "X-User": EMAIL } })).status).toBe(
+    200,
+  );
   await addAccount(IMPORTED_ID, IMPORTED);
   for (const id of TWINS) await addAccount(id, id.replace("_example_com", "@example.com"), 900);
   const accounts = (await core.mgmt<{ accounts: Account[] }>("GET", "/accounts")).body.accounts;
@@ -145,6 +149,10 @@ test("privacy mode masks identities, survives a reload, reaches extension pages 
   await page.getByRole("button", { name: "Done", exact: true }).click();
   await accountRow(page, EMAIL_ID).getByRole("link", { name: EMAIL_MASKED, exact: true }).click();
   await expect(pageTitle(page)).toHaveText(EMAIL_MASKED);
+  await expectMasked(page);
+  // Its settings, models and test request too, with the header that names the owner.
+  await page.getByText("Settings, models and a test request", { exact: true }).click();
+  await expect(page.locator('[data-part="account-settings"]')).toContainText(`X-User: ${EMAIL_MASKED}`);
   await expectMasked(page);
   // Search still matches the real values.
   await goTo(page, "Accounts");

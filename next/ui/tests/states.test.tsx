@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderToString } from "preact-render-to-string";
 import type { Account } from "../kit/api";
-import { accountCondition, conditionWord } from "../kit/parts";
+import { accountCondition, conditionState, conditionUnchecked, conditionWord, GroupMark } from "../kit/parts";
 import { stateText, stateTone } from "../kit/states";
 import { StateBadge } from "../kit/ui";
 
@@ -101,4 +101,50 @@ test("an account's condition word: turned off first, then what keeps requests aw
   expect(badge({ health: { state: "broken" } })).toBe("Cannot be read");
   expect(badge({ disabled: true, health: { state: "banned" } })).toBe("Turned off");
   expect(badge({}, new Set(["test/other"]))).toBe("Provider stopped");
+  // The tone a StateBadge gives the condition: what only the person can fix is danger, a wait warn.
+  const tone = (fields: Partial<Account>, running?: ReadonlySet<string>) =>
+    stateTone(conditionState(accountCondition(account(fields), running)), "account");
+  expect(tone({})).toBe("ok");
+  expect(tone({ cooldowns: [{ scope: "account", kind: "rate_limit", until: later }] })).toBe("warn");
+  expect(tone({ health: { state: "exhausted" } })).toBe("warn");
+  expect(tone({ state: "reauth_required" })).toBe("danger");
+  expect(tone({}, new Set(["test/other"]))).toBe("danger");
+  expect(tone({ disabled: true })).toBe("muted");
+  // The mark says the same word, in its group's colour.
+  const mark = (fields: Partial<Account>, running?: ReadonlySet<string>) =>
+    renderToString(<GroupMark c={accountCondition(account(fields), running)} />);
+  expect(mark({}, new Set(["test/other"]))).toContain('data-group="needs"');
+  expect(mark({}, new Set(["test/other"]))).toContain('aria-label="Provider stopped"');
+  expect(mark({ cooldowns: [{ scope: "model", model: "m", kind: "rate_limit", until: later }] })).toContain(
+    'data-group="waiting"',
+  );
+});
+
+test("while the status is not read, a condition that waits on it is not settled", () => {
+  const account = (fields: Partial<Account>): Account => ({
+    id: "a",
+    source: "login",
+    state: "active",
+    refreshable: false,
+    extension: "test/alpha",
+    ...fields,
+  });
+  const later = new Date(Date.now() + 3_600_000).toISOString();
+  const unchecked = (fields: Partial<Account>, running?: ReadonlySet<string>) => {
+    const a = account(fields);
+    return conditionUnchecked(a, accountCondition(a, running), running);
+  };
+  // Serving and waiting hold only if the provider runs.
+  expect(unchecked({})).toBe(true);
+  expect(unchecked({ cooldowns: [{ scope: "account", kind: "rate_limit", until: later }] })).toBe(true);
+  // Read: settled either way.
+  expect(unchecked({}, new Set(["test/alpha"]))).toBe(false);
+  expect(unchecked({}, new Set(["test/other"]))).toBe(false);
+  // Turned off, or needing the person, does not wait on the provider.
+  expect(unchecked({ disabled: true })).toBe(false);
+  expect(unchecked({ state: "reauth_required" })).toBe(false);
+  expect(unchecked({ health: { state: "broken" }, extension: undefined })).toBe(false);
+  const mark = renderToString(<GroupMark c={accountCondition(account({}))} unchecked />);
+  expect(mark).toContain('data-group="unchecked"');
+  expect(mark).toContain('aria-label="Not checked"');
 });

@@ -6,7 +6,9 @@ import { act } from "preact/test-utils";
 import { type Account, api } from "../kit/api";
 import type { Host, Method, Reply } from "../kit/host";
 import { AccountsPage } from "../kit/pages/accounts";
+import { AuthImport } from "../kit/pages/authImport";
 import { forgetWindows } from "../kit/parts";
+import { PrivacyContext, privacyMasks } from "../kit/privacy";
 import { type Kit, KitContext } from "../kit/ui";
 import { all, button, type FakeNode, mountIn, restoreDom, settle } from "./fakeDom";
 
@@ -36,17 +38,29 @@ interface Call {
   body?: unknown;
 }
 
-/** Each GET /accounts takes the next reply (the last one is kept); "pending" never arrives. */
-async function mount(replies: (Reply<unknown> | "pending")[]) {
+/**
+ * Each GET /accounts takes the next reply (the last one is kept); "pending" never arrives. more
+ * gives GET /status and GET /usage their replies in turn the same way (else a reply that works).
+ */
+async function mount(
+  replies: (Reply<unknown> | "pending")[],
+  more: { status?: Reply<unknown>[]; usage?: Reply<unknown>[] } = {},
+) {
+  const next = (list: Reply<unknown>[] | undefined) => (list && list.length > 1 ? list.shift() : list?.[0]);
   const calls: Call[] = [];
   let reads = 0;
   const host = {
     call: async (method: Method, path: string, body?: unknown): Promise<Reply<unknown>> => {
       calls.push({ method, path, body });
       if (method === "GET" && path === "/status")
-        return { status: 200, body: { extensions: [{ id: "pluxy/claude" }, { id: "pluxy/gemini" }] } };
+        return (
+          next(more.status) ?? {
+            status: 200,
+            body: { extensions: [{ id: "pluxy/claude" }, { id: "pluxy/gemini" }] },
+          }
+        );
       if (method === "GET" && path.startsWith("/usage?"))
-        return { status: 200, body: { total_requests: 0, accounts: [], models: [] } };
+        return next(more.usage) ?? { status: 200, body: { total_requests: 0, accounts: [], models: [] } };
       if (method === "GET" && path === "/accounts") {
         reads++;
         const next = replies.length > 1 ? replies.shift() : replies[0];
@@ -241,4 +255,125 @@ test("once the test's document is gone, nothing the page started still runs", as
   // The page's timers tick against the document; a page left mounted throws here.
   restoreDom();
   expect(() => jest.advanceTimersByTime(120_000)).not.toThrow();
+});
+
+// ---- a round that did not all work ------------------------------------------------------------
+
+test("when the status cannot be read, no account reads Serving: they are Not checked, and the page says why", async () => {
+  const page = await mount([reply(account("a"), account("b", { disabled: true }))], { status: [hiccup] });
+  expect(headings(page.root)).toEqual(["Not checked 1", "Turned off 1"]);
+  expect(page.text()).not.toContain("Serving");
+  expect(page.text()).toContain("1 not checked");
+  expect(page.text()).toContain("Could not check which providers are running.");
+  expect(all(page.root, "button").filter((b) => b.textContent === "Try again")).toHaveLength(1);
+  // The row's mark is named for what is known.
+  const marks = all(page.root, "span").filter((n) =>
+    n.attributes.some((x) => x.name === "data-group" && x.value === "unchecked"),
+  );
+  expect(marks.length).toBeGreaterThan(0);
+});
+
+test("a status read that fails over one read before keeps the groups, under the stale notice", async () => {
+  jest.useFakeTimers();
+  const ok = { status: 200, body: { extensions: [{ id: "pluxy/claude" }] } };
+  const page = await mount([reply(account("a"))], { status: [ok, hiccup] });
+  expect(headings(page.root)).toEqual(["Serving 1"]);
+  expect(page.text()).not.toContain("Could not refresh");
+  await advance(10_000);
+  expect(headings(page.root)).toEqual(["Serving 1"]);
+  expect(page.text()).toContain("Could not refresh. Showing what pluxy said at");
+});
+
+test("a week that was read gives every wide row its count, 0 too; one not read gives none, and says so", async () => {
+  const week = {
+    status: 200,
+    body: { total_requests: 3, accounts: [{ name: "a", total_requests: 3 }], models: [] },
+  };
+  const read = await mount([reply(account("a"), account("b"))], { usage: [week] });
+  expect(read.text()).toContain("3 this week");
+  expect(read.text()).toContain("0 this week");
+  await read.unmount();
+  const failed = await mount([reply(account("a"), account("b"))], { usage: [hiccup] });
+  expect(failed.text()).not.toMatch(/\d this week/);
+  expect(failed.text()).toContain("Could not read this week's requests.");
+});
+
+test("an account pluxy cannot read names no provider on its row", async () => {
+  const page = await mount([reply(account("x", { extension: undefined, health: { state: "broken" } }))]);
+  expect(page.text()).toContain("x");
+  expect(page.text()).not.toContain("No provider");
+});
+
+test("selected accounts the search hides are counted in the bar and the question, and Remove removes what they say", async () => {
+  // Find an account shows above 6 accounts.
+  const others = ["c1", "c2", "c3", "c4", "c5"].map((id) => account(id));
+  const page = await mount([reply(account("alpha"), account("beta"), ...others)]);
+  await click(button(page.root, "Select"));
+  await act(async () => {
+    box(page.root, "alpha").checked = true;
+    box(page.root, "alpha").dispatchEvent(new Event("change"));
+    box(page.root, "beta").checked = true;
+    box(page.root, "beta").dispatchEvent(new Event("change"));
+  });
+  const find = search(page.root);
+  if (!find) throw new Error("no Find an account");
+  await type(find, "alpha");
+  expect(rowNames(page.root)).toEqual(["alpha"]);
+  expect(page.text()).toContain("2 selected, 1 hidden");
+  await click(button(page.root, "Remove…"));
+  expect(page.text()).toContain("Remove 2 accounts?");
+  expect(page.text()).toContain("The search hides 1 of them.");
+  await click(button(page.root, "Remove"));
+  expect(page.changes().sort()).toEqual(["DELETE /accounts/alpha", "DELETE /accounts/beta"]);
+});
+
+// ---- Import files… (the end of Add an account) -------------------------------------------------
+
+test("privacy mode masks Import files…' lines: the file's name, core's reasons and a caught error", async () => {
+  // Core makes an account's ID from its file's name, and says it back in a reason.
+  const replies: (Reply<unknown> | Error)[] = [
+    { status: 409, error: { code: "conflict", message: "account claude-alice-smith-example-com exists" } },
+    { status: 200, body: { imported: [], skipped: ["claude-alice-smith-example-com: no token"] } },
+    new Error("reading claude-alice.smith@example.com.json failed"),
+  ];
+  const host = {
+    call: async (): Promise<Reply<unknown>> => {
+      const next = replies.shift();
+      if (next instanceof Error) throw next;
+      return next as Reply<unknown>;
+    },
+    signedIn: () => true,
+    prefs: { get: () => null, set: () => {} },
+    features: new Set(),
+  } as unknown as Host;
+  const kit = { host, api: api(host), unauthorized: () => {} } as unknown as Kit;
+  const page = await mountIn(
+    <KitContext.Provider value={kit}>
+      <PrivacyContext.Provider value={privacyMasks(true)}>
+        <AuthImport />
+      </PrivacyContext.Provider>
+    </KitContext.Provider>,
+  );
+  const input = all(page.root, "input").find((n) => n.attributes.some((a) => a.value === "file"));
+  if (!input) throw new Error("no file input");
+  const file = (name: string) => new File(["{}"], name, { type: "application/json" });
+  const big = new File([new Uint8Array((1 << 20) + 1)], "claude-alice.smith@example.com-big.json");
+  Object.defineProperty(input, "files", {
+    configurable: true,
+    value: [
+      big,
+      file("claude-alice.smith@example.com.json"),
+      file("claude-alice.smith@example.com.json"),
+      file("claude-alice.smith@example.com.json"),
+    ],
+  });
+  await act(async () => {
+    input.dispatchEvent(new Event("change"));
+  });
+  await settle();
+  const lines = all(page.root, "li").map((n) => n.textContent);
+  expect(lines).toHaveLength(4);
+  for (const line of lines) expect(line).not.toMatch(/alice/);
+  expect(lines[0]).toContain("is larger than 1 MB.");
+  expect(lines[1]).toContain("Not added: account");
 });

@@ -120,14 +120,16 @@ export function StatePane(props: {
   );
 }
 
+/** The stale notice's words: "Could not refresh. Showing what pluxy said at {14:05}." */
+export const staleWords = (at?: number) => t("stale", { time: at === undefined ? "?" : clock(at) });
+
 /** Over rows from an earlier read, when a refresh failed: what is shown, and Try again. */
 export function StaleNotice(props: { at?: number; error?: string; onRetry: () => unknown }) {
   const p = usePrivacy();
   return (
     <div class="stale-notice" title={p.text(props.error)}>
       <Notice tone="warn">
-        {t("stale", { time: props.at === undefined ? "?" : clock(props.at) })}{" "}
-        <Button onClick={props.onRetry}>{t("tryAgain")}</Button>
+        {staleWords(props.at)} <Button onClick={props.onRetry}>{t("tryAgain")}</Button>
       </Notice>
     </div>
   );

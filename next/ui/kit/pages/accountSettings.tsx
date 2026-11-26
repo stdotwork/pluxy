@@ -110,15 +110,19 @@ export function AccountSettings(props: { account: Account }) {
       <Facts
         rows={[
           [t("prefix"), p.text(a.prefix, ids)],
-          // Core sends both with every secret already replaced: shown as they come.
-          [t("proxyUrl"), a.proxy_url && <span class="mono">{a.proxy_url}</span>],
+          // Core sends both with every secret already replaced; privacy mode also hides a user
+          // name in the proxy's address and an address or the account's name in a header.
+          [t("proxyUrl"), a.proxy_url && <span class="mono">{p.text(a.proxy_url, ids)}</span>],
           [
             t("headers"),
             a.headers && Object.keys(a.headers).length > 0 && (
               <pre class="mono account-settings-json">
-                {Object.entries(a.headers)
-                  .map(([name, value]) => `${name}: ${value}`)
-                  .join("\n")}
+                {p.text(
+                  Object.entries(a.headers)
+                    .map(([name, value]) => `${name}: ${value}`)
+                    .join("\n"),
+                  ids,
+                )}
               </pre>
             ),
           ],
@@ -127,9 +131,9 @@ export function AccountSettings(props: { account: Account }) {
           [t("disableCooling"), flag(a.disable_cooling)],
           [t("retry"), a.request_retry ?? t("inherit")],
           [t("maxConcurrency"), a.max_concurrency || t("noLimit")],
-          [t("models"), modelText(a.models)],
-          [t("excluded"), a.excluded_models?.join(", ")],
-          [t("aliases"), pairs(a.model_alias)],
+          [t("models"), p.text(modelText(a.models), ids)],
+          [t("excluded"), p.text(a.excluded_models?.join(", "), ids)],
+          [t("aliases"), p.text(pairs(a.model_alias), ids)],
           [
             t("settings"),
             a.settings && (

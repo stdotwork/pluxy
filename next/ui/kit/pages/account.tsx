@@ -4,7 +4,17 @@
 // opening. The list of every account is accounts.tsx.
 
 import { useEffect, useMemo, useState } from "preact/hooks";
-import { type Account, type LoginMethod, leftOut, problem, runningExtensions, type UsageGroup } from "../api";
+import {
+  type Account,
+  type LoginMethod,
+  leftOut,
+  problem,
+  runningExtensions,
+  type Status,
+  type UsageGroup,
+} from "../api";
+import type { UsageSummary } from "../api/usage";
+import type { UsageEventsReply } from "../api/usageEvents";
 import type { Reply } from "../host";
 import { LoginFlow } from "../loginFlow";
 import {
@@ -14,6 +24,7 @@ import {
   accountReason,
   type Condition,
   clock,
+  conditionUnchecked,
   forgetWindow,
   GroupMark,
   LimitLine,
@@ -21,6 +32,8 @@ import {
   providerName,
   RequestRow,
   StatePane,
+  tryAgainWord,
+  uncheckedReason,
   useNaming,
   useWindows,
   type Windows,
@@ -28,9 +41,9 @@ import {
 import { accountIdentities, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { rich, strings } from "../strings";
-import { Button, Facts, Notice, PageHead, useKit, useLoad, usePoll, when } from "../ui";
+import { Button, Facts, Notice, PageHead, useKit, useLoad, when } from "../ui";
 import { AccountEdit, AccountSettings } from "./accountSettings";
-import { ACCOUNTS_POLL_MS } from "./accounts";
+import { ACCOUNTS_POLL_MS, type Reads, RoundNotice, useRound } from "./accounts";
 import { nameProblem, orderWord, signsInWith } from "./accounts.helpers";
 import { AccountTools } from "./accountTools";
 import { ConfigDialog } from "./configDialog";
@@ -80,7 +93,10 @@ const t = strings("account", {
   byModel: "Requests by model",
   seeRequests: "See its requests",
   noWeek: "No requests in the last 7 days.",
+  weekFailed: "Could not read this week's requests.",
   latest: "Latest requests",
+  latestFailed: "Could not read the latest requests.",
+  statusUnread: "Could not check which providers are running.",
   change: "Change it",
   rename: "Rename",
   renameTitle: "Rename {name}",
@@ -134,10 +150,27 @@ export function AccountPage() {
   return <AccountView key={id} id={id} part={part} />;
 }
 
+/** What the page reads in each round: the accounts, the status, and this account's week and latest requests. */
+type Round = {
+  accounts: { accounts: Account[] };
+  status: Status;
+  week: UsageSummary;
+  latest: UsageEventsReply;
+};
+
 function AccountView(props: { id: string; part: string }) {
   const { api } = useKit();
-  const accounts = useLoad(api.accounts);
-  const status = useLoad(api.status);
+  const filter = { since: "7d", account: props.id, model: "", provider: "", key_id: "", failed: "" };
+  const { reads, run, again } = useRound<Round>(
+    {
+      accounts: api.accounts,
+      status: api.status,
+      week: () => api.usage(`since=7d&account=${encodeURIComponent(props.id)}`),
+      latest: () => api.usageEventsBefore(filter, 0, 6),
+    },
+    ACCOUNTS_POLL_MS,
+  );
+  const accounts = reads.accounts;
   const list = accounts.data?.accounts;
   const a = list?.find((x) => x.id === props.id);
   const naming = useNaming(list);
@@ -149,7 +182,7 @@ function AccountView(props: { id: string; part: string }) {
           kind="failed"
           title={t("failed")}
           details={accounts.error}
-          primary={{ label: t("tryAgain"), onClick: accounts.reload }}
+          primary={{ label: t("tryAgain"), onClick: run }}
         />
       );
     return (
@@ -168,12 +201,9 @@ function AccountView(props: { id: string; part: string }) {
       part={props.part}
       name={naming.of(a)}
       byId={naming.byId}
-      running={runningExtensions(status.data)}
-      reload={() => {
-        accounts.reload();
-        status.reload();
-      }}
-      stale={accounts.phase === "failed" ? accounts.error : undefined}
+      reads={reads}
+      run={run}
+      again={again}
     />
   );
 }
@@ -203,29 +233,26 @@ function Loaded(props: {
   part: string;
   name: string;
   byId: (id: string) => string;
-  running?: ReadonlySet<string>;
-  reload: () => void;
-  stale?: string;
+  reads: Reads<Round>;
+  run: () => unknown;
+  again: () => unknown;
 }) {
   const { api } = useKit();
   const p = usePrivacy();
   const a = props.account;
   const ids = [...accountIdentities(a), a.id];
   const now = Date.now();
-  const c = accountCondition(a, props.running, now);
+  const { accounts, status, week, latest } = props.reads;
+  const running = useMemo(() => runningExtensions(status.data), [status.data]);
+  const c = accountCondition(a, running, now);
+  // A status never read: whether its provider runs is not known, so the page does not say Serving.
+  const unchecked =
+    status.phase === "failed" && status.data === undefined && conditionUnchecked(a, c, running);
   const [refreshed, setRefreshed] = useState(0);
   const one = useMemo(() => [a], [a]);
-  const w = useWindows(one, props.running, refreshed).get(a.id);
-  const filter = { since: "7d", account: a.id, model: "", provider: "", key_id: "", failed: "" };
-  const week = useLoad(() => api.usage(`since=7d&account=${encodeURIComponent(a.id)}`));
-  const latest = useLoad(() => api.usageEventsBefore(filter, 0, 6));
+  const w = useWindows(one, running, refreshed).get(a.id);
   const keys = useLoad(api.clientKeys);
-  const reload = () => {
-    props.reload();
-    week.reload();
-    latest.reload();
-  };
-  usePoll(reload, ACCOUNTS_POLL_MS);
+  const reload = () => void props.again();
   const fix = useRun(reload);
   const [notice, setNotice] = useState<string>();
   const signingIn = props.part === "sign-in" && a.source === "login";
@@ -234,10 +261,16 @@ function Loaded(props: {
   return (
     <article class="account-page" data-part="account-page" data-group={c.group}>
       <PageHead title={props.name} />
-      {props.stale !== undefined && <Notice tone="warn">{p.text(props.stale, ids)}</Notice>}
+      <RoundNotice
+        reads={[accounts, status, week, latest]}
+        unread={unchecked ? [t("statusUnread")] : []}
+        ids={ids}
+        onRetry={props.run}
+      />
       <Opening
         account={a}
         c={c}
+        unchecked={unchecked}
         w={w}
         now={now}
         signingIn={signingIn}
@@ -300,21 +333,32 @@ function Loaded(props: {
                   total={week.data.total_requests}
                   succeeded={week.data.success_count}
                   models={week.data.models}
+                  ids={accountIdentities(a)}
                 />
               ) : week.phase === "failed" ? (
-                <Notice tone="danger">{p.text(week.error, ids)}</Notice>
+                <SectionFailed text={t("weekFailed")} error={week.error} ids={ids} onRetry={props.run} />
               ) : (
                 <p class="muted">{t("loading")}</p>
               )}
             </section>
-            {(latest.data?.events.length ?? 0) > 0 && (
+            {/* None this week: This week says so. One never read says it could not be read. */}
+            {((latest.data?.events.length ?? 0) > 0 || (latest.phase === "failed" && !latest.data)) && (
               <section class="account-section" aria-labelledby="account-latest">
                 <h2 id="account-latest">{t("latest")}</h2>
-                <div class="account-requests">
-                  {latest.data?.events.map((e) => (
-                    <RequestRow key={e.seq} event={e} name={props.byId} keys={keys.data?.keys} />
-                  ))}
-                </div>
+                {latest.data ? (
+                  <div class="account-requests">
+                    {latest.data.events.map((e) => (
+                      <RequestRow key={e.seq} event={e} name={props.byId} keys={keys.data?.keys} />
+                    ))}
+                  </div>
+                ) : (
+                  <SectionFailed
+                    text={t("latestFailed")}
+                    error={latest.error}
+                    ids={ids}
+                    onRetry={props.run}
+                  />
+                )}
               </section>
             )}
           </div>
@@ -325,10 +369,26 @@ function Loaded(props: {
   );
 }
 
+/** A section that could not be read: one line, core's error in its title, and the way to read again. */
+function SectionFailed(props: {
+  text: string;
+  error?: string;
+  ids: readonly string[];
+  onRetry: () => unknown;
+}) {
+  const p = usePrivacy();
+  return (
+    <p class="account-failed" role="alert" title={p.text(props.error, props.ids)}>
+      <span>{props.text}</span> <Button onClick={props.onRetry}>{tryAgainWord()}</Button>
+    </p>
+  );
+}
+
 /** The opening: provider and plan, the condition and why, core's last error, and the one fix. */
 function Opening(props: {
   account: Account;
   c: Condition;
+  unchecked: boolean;
   w?: Windows;
   now: number;
   signingIn: boolean;
@@ -338,7 +398,7 @@ function Opening(props: {
   const p = usePrivacy();
   const { account: a, c } = props;
   const ids = [...accountIdentities(a), a.id];
-  const reason = accountReason(a, c, props.now) ?? t("serving");
+  const reason = props.unchecked ? uncheckedReason(a) : (accountReason(a, c, props.now) ?? t("serving"));
   const fix = accountFix(a, c);
   // See what to do leads here: the opening says what to do in its place.
   const sayWhat = fix?.href === accountHref(a.id);
@@ -360,7 +420,7 @@ function Opening(props: {
         </p>
       )}
       <p class="account-state" data-group={c.group}>
-        <GroupMark c={c} />
+        <GroupMark c={c} unchecked={props.unchecked} />
         <span>{p.text(reason, ids)}</span>
       </p>
       {error && (
@@ -466,7 +526,8 @@ function About(props: { account: Account; all: Account[]; ids: readonly string[]
 }
 
 /** The week's requests, how many succeeded, and the five models it served most. */
-function Week(props: { total: number; succeeded: number; models: UsageGroup[] }) {
+function Week(props: { total: number; succeeded: number; models: UsageGroup[]; ids: readonly string[] }) {
+  const p = usePrivacy();
   if (props.total === 0) return <p class="muted">{t("noWeek")}</p>;
   const percent = Math.floor((props.succeeded / props.total) * 100);
   const top = props.models
@@ -480,8 +541,8 @@ function Week(props: { total: number; succeeded: number; models: UsageGroup[] })
       <ul class="account-bars" aria-label={t("byModel")}>
         {top.map((m) => (
           <li key={m.name} class="account-bar">
-            <span class="account-bar-name mono" title={m.name}>
-              {m.name}
+            <span class="account-bar-name mono" title={p.text(m.name, props.ids)}>
+              {p.text(m.name, props.ids)}
             </span>
             <span class="account-bar-count">{m.total_requests.toLocaleString()}</span>
             <span

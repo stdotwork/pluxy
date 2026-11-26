@@ -4,6 +4,7 @@ import { renderToString } from "preact-render-to-string";
 import type { Account } from "../kit/api";
 import { AccountSettings } from "../kit/pages/accountSettings";
 import { accountChange, draftOf } from "../kit/pages/accountSettings.helpers";
+import { PrivacyContext, privacyMasks } from "../kit/privacy";
 
 // An account as core's reply reads after the browser parsed it.
 const account = (settingsJSON: string, inexact?: boolean): Account => ({
@@ -191,4 +192,30 @@ test("Proxy URL and Custom headers show as core sends them, and an untouched for
   expect(accountChange(a, d)).toEqual({
     change: { headers: { Authorization: "pluxy-redacted-0123456789abcdef01234567", "X-Title": "two" } },
   });
+});
+
+test("privacy mode masks a user name in Proxy URL, an address in Custom headers and the owner in the model rows", () => {
+  const a: Account = {
+    id: "a",
+    label: "alice.smith@example.com",
+    source: "login",
+    state: "active",
+    refreshable: false,
+    proxy_url: "socks5://alice.smith:redacted@proxy.example:1080",
+    headers: { "X-User": "alice.smith@example.com", "X-Title": "pluxy" },
+    models: [{ name: "ft:alice.smith@example.com:custom", alias: "mine" }],
+    excluded_models: ["alice.smith@example.com-*"],
+  };
+  const shown = (on: boolean) =>
+    renderToString(
+      h(PrivacyContext.Provider, { value: privacyMasks(on) }, h(AccountSettings, { account: a })),
+    );
+  // Off: shown as core sends them (the control for the masked run).
+  expect(shown(false)).toContain("socks5://alice.smith:redacted@proxy.example:1080");
+  expect(shown(false)).toContain("X-User: alice.smith@example.com");
+  const on = shown(true);
+  expect(on).not.toContain("alice.smith");
+  expect(on).toContain("socks5://***@proxy.example:1080");
+  expect(on).toContain("X-User: al***@e***.com");
+  expect(on).toContain("X-Title: pluxy");
 });

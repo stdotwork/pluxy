@@ -1,12 +1,13 @@
 // One account's page (kit/pages/account.tsx) through Preact's DOM renderer against a fake host:
 // one Sign in again, a test request to the chosen model, what an account from the settings file
 // cannot change, and Rename's limit.
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, jest, test } from "bun:test";
 import { act } from "preact/test-utils";
 import { type Account, api } from "../kit/api";
 import type { Host, Method, Reply } from "../kit/host";
 import { AccountPage, accountAddress } from "../kit/pages/account";
 import { forgetWindows } from "../kit/parts";
+import { PrivacyContext, privacyMasks } from "../kit/privacy";
 import { type Kit, KitContext } from "../kit/ui";
 import { all, button, type FakeNode, mountIn, restoreDom, settle } from "./fakeDom";
 
@@ -15,6 +16,10 @@ const originalLocation = Object.getOwnPropertyDescriptor(globalThis, "location")
 afterEach(() => {
   restoreDom();
   forgetWindows();
+  if (jest.isFakeTimers()) {
+    jest.clearAllTimers();
+    jest.useRealTimers();
+  }
   if (originalLocation) Object.defineProperty(globalThis, "location", originalLocation);
   else Reflect.deleteProperty(globalThis, "location");
 });
@@ -35,27 +40,40 @@ interface Call {
   body?: unknown;
 }
 
-async function open(a: Account, hash = `#/accounts/${a.id}`) {
+const hiccup: Reply<unknown> = { status: 502, error: { code: "bad_gateway", message: "core hiccup" } };
+
+/** Replies taken in turn, the last one kept; none: undefined, for the default. */
+const turn = (list?: Reply<unknown>[]) => (list && list.length > 1 ? list.shift() : list?.[0]);
+
+async function open(
+  a: Account,
+  hash = `#/accounts/${a.id}`,
+  more: {
+    status?: Reply<unknown>[];
+    usage?: Reply<unknown>[];
+    events?: Reply<unknown>[];
+    models?: string[];
+    privacy?: boolean;
+  } = {},
+) {
   Object.defineProperty(globalThis, "location", { configurable: true, value: { hash } });
   const calls: Call[] = [];
+  const models = more.models ?? ["m1", "m2"];
   const host = {
     call: async (method: Method, path: string, body?: unknown): Promise<Reply<unknown>> => {
       calls.push({ method, path, body });
       if (method === "GET" && path === "/status")
-        return { status: 200, body: { extensions: [{ id: "pluxy/claude" }] } };
+        return turn(more.status) ?? { status: 200, body: { extensions: [{ id: "pluxy/claude" }] } };
       if (method === "GET" && path.startsWith("/usage?"))
-        return { status: 200, body: { total_requests: 0, success_count: 0, models: [] } };
+        return turn(more.usage) ?? { status: 200, body: { total_requests: 0, success_count: 0, models: [] } };
       if (method === "GET" && path.startsWith("/usage/events?"))
-        return { status: 200, body: { events: [], more: false } };
+        return turn(more.events) ?? { status: 200, body: { events: [], more: false } };
       if (method === "GET" && path === "/accounts") return { status: 200, body: { accounts: [a] } };
       if (method === "GET" && path === `/accounts/${a.id}/models`)
         return {
           status: 200,
           body: {
-            models: [
-              { id: "m1", names: null },
-              { id: "m2", names: null },
-            ],
+            models: models.map((id) => ({ id, names: null })),
           },
         };
       if (method === "GET" && path === "/login-methods")
@@ -68,7 +86,12 @@ async function open(a: Account, hash = `#/accounts/${a.id}`) {
           },
         };
       if (method === "POST" && path === `/accounts/${a.id}/test`)
-        return { status: 200, body: { result: { ok: true, model: "m2", latency_ms: 420 } } };
+        return {
+          status: 200,
+          body: {
+            result: { ok: true, model: (body as { model?: string })?.model ?? models[0], latency_ms: 420 },
+          },
+        };
       return { status: 200, body: {} };
     },
     signedIn: () => true,
@@ -84,7 +107,9 @@ async function open(a: Account, hash = `#/accounts/${a.id}`) {
   } as unknown as Kit;
   const page = await mountIn(
     <KitContext.Provider value={kit}>
-      <AccountPage />
+      <PrivacyContext.Provider value={privacyMasks(more.privacy ?? false)}>
+        <AccountPage />
+      </PrivacyContext.Provider>
     </KitContext.Provider>,
   );
   const changes = () => calls.filter((c) => c.method !== "GET");
@@ -190,4 +215,70 @@ test("an account not in pluxy says so and leads back to the list", async () => {
   const page = await open(account(), "#/accounts/gone");
   expect(page.text()).toContain("This account is not in pluxy.");
   expect(controls(page.root, "Back to accounts")).toHaveLength(1);
+});
+
+// ---- reads that did not work --------------------------------------------------------------------
+
+test("when the status cannot be read, the opening does not say Serving and the page says why", async () => {
+  const page = await open(account(), undefined, { status: [hiccup] });
+  expect(page.text()).not.toContain("Serving.");
+  expect(page.text()).toContain("pluxy could not check whether Claude is running.");
+  expect(page.text()).toContain("Could not check which providers are running.");
+  expect(controls(page.root, "Try again")).toHaveLength(1);
+});
+
+test("a week and latest requests never read each say so, with Try again; core's error is not the text", async () => {
+  const page = await open(account(), undefined, { usage: [hiccup], events: [hiccup] });
+  expect(page.text()).toContain("Could not read this week's requests.");
+  expect(page.text()).toContain("Could not read the latest requests.");
+  expect(page.text()).not.toContain("No requests in the last 7 days.");
+  expect(page.text()).not.toContain("core hiccup");
+  expect(controls(page.root, "Try again")).toHaveLength(2);
+});
+
+test("a week with no requests whose refresh fails is shown under the stale notice", async () => {
+  jest.useFakeTimers();
+  const none = { status: 200, body: { total_requests: 0, success_count: 0, models: [] } };
+  const page = await open(account(), undefined, { usage: [none, hiccup] });
+  expect(page.text()).toContain("No requests in the last 7 days.");
+  expect(page.text()).not.toContain("Could not refresh");
+  await act(async () => {
+    jest.advanceTimersByTime(10_000);
+  });
+  await settle();
+  expect(page.text()).toContain("No requests in the last 7 days.");
+  expect(page.text()).toContain("Could not refresh. Showing what pluxy said at");
+});
+
+test("privacy mode masks the owner's address in model names: the week's bars, the latest requests, the models it serves, Test with and the result", async () => {
+  const model = "ft:alice.smith@example.com:custom";
+  const event = {
+    seq: 1,
+    id: "t1",
+    timestamp: "2026-11-27T10:00:00Z",
+    model,
+    account: "acc-1",
+    latency_ms: 300,
+    failed: false,
+  };
+  const page = await open(account({ label: "alice.smith@example.com" }), undefined, {
+    privacy: true,
+    models: [model],
+    usage: [
+      {
+        status: 200,
+        body: { total_requests: 1, success_count: 1, models: [{ name: model, total_requests: 1 }] },
+      },
+    ],
+    events: [{ status: 200, body: { events: [event], more: false } }],
+  });
+  await click(button(page.root, "Send a test request"));
+  expect(page.text()).toContain("Succeeded");
+  const titles = all(page.root, "span").flatMap((n) => n.attributes.filter((x) => x.name === "title"));
+  const shown = `${page.text()}\n${titles.map((x) => x.value).join("\n")}`;
+  expect(shown).not.toContain("alice.smith");
+  expect(shown).toContain("ft:al***@e***.com:custom");
+  // The choice sent is the real model.
+  const select = all(page.root, "select")[0];
+  expect(all(select as FakeNode, "option").map((o) => o.value)).toContain(model);
 });

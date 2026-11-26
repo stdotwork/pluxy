@@ -107,7 +107,12 @@ test("limits show on an account's row and on its page", async ({ page }) => {
   const limits = page.getByRole("region", { name: "Limits" });
   await expect(limits.locator('[data-part="limits"]')).toHaveAttribute("data-state", /^(read|none)$/);
   await expect(limits).toContainText(/Read at \d\d:\d\d/);
+  // Refresh reads the limits from core again, not from what the page read before.
+  const read = page.waitForRequest(
+    (r) => r.method() === "GET" && new URL(r.url()).pathname.endsWith("/accounts/alpha-1/quota"),
+  );
   await limits.getByRole("button", { name: "Refresh", exact: true }).click();
+  await read;
   await expect(limits).toContainText(/Read at \d\d:\d\d/);
 });
 
