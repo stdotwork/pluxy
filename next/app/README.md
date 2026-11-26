@@ -1198,8 +1198,8 @@ the page.
   nothing is written until a read succeeds (**Try again**).
 - **Writes go to the file shown:** each write sends the pinned targets of the reading on screen (the
   add-on refuses a file that changed since). Pi's Update plugin and Uninstall plugin also send the
-  reading's pin of the plugin's folder, and the add-on refuses them when that folder, or the agent
-  folder holding it, changed since (see [Pi](#pi)). While a write or its confirmation waits, the
+  reading's pin of the plugin's folder: the add-on refuses them when that folder, or the agent
+  folder holding it, changed since, and otherwise acts only in that agent folder (see [Pi](#pi)). While a write or its confirmation waits, the
   file and environment choices are locked. Each write's `program_call` carries a ticket, and leaving
   the page withdraws a confirmation still open (`program_cancel`); a Connect whose key window closes
   after the page was left writes nothing.
@@ -1421,9 +1421,13 @@ installed copy's version is unknown; the tool's copy replaces it) and **Uninstal
 first; its entry and folder go, the connection settings stay). **Disconnect** and **Restore
 backup** also remove the plugin's folder once `settings.json` no longer lists it. Pi's three files
 are pinned as on every page, and Update plugin and Uninstall plugin are pinned to the plugin's
-folder the reading found: the add-on refuses them, with nothing changed, when that folder or the
-agent folder holding it is not the one read (a link pointed elsewhere, a folder moved or replaced,
-another copy put there), and Uninstall plugin removes no folder when the reading found none. Install
+folder the reading found: the add-on refuses them, before changing the plugin, when that folder or
+the agent folder holding it is not the one read (a link pointed elsewhere, a folder moved or
+replaced, another copy put there, its marker changed), and Uninstall plugin removes no folder when
+the reading found none. Past that check the add-on works through the agent folder it read, so a
+link pointed elsewhere then changes nothing; a copy moved aside that is not the one read goes back
+under its name and the write is refused; and a stop part way through is put back, or finished, the
+next time the add-on starts (see the [app tools README](../app-tools/README.md#pi-setup)). Install
 plugin, and the removal after Disconnect and Restore backup, act on the plugin folder in the agent
 folder as the tool finds it when it runs. **Start Pi** asks the tool for its recipe (`pi` in a
 terminal, no arguments; `~/.pi/agent/bin/pi` or `~/.local/bin/pi`, where Pi's installer puts it,

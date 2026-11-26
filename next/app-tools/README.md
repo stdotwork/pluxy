@@ -201,6 +201,9 @@ journal store of its own. Linux, macOS and Windows (below for what differs on Wi
 | `status()` | The applied sets, the originals kept for restore and the latest recovery reports. |
 | `Merge`, `Json`, `merge_value` | The three-way merge, and the one for JSON files (written with two-space indentation, keys in the file's order and numbers with their exact digits, through serde_json's `preserve_order` and `arbitrary_precision`; other formatting and comments are not kept, so a format that must keep them brings its own `Merge`). |
 | `Target`, `Pin` | Resolving and pinning, and the checked reads and writes, for a writer that needs them directly. `Pin::from_json` refuses any field `Pin::to_json` does not write. |
+| `Folder::pinned(pin)`, `Folder::empty(root, name, marker)` | A folder a tool owns inside a selected root, known by a marker file in it (pi-setup's plugin folder). `pinned` takes a preview's pin of the marker (`Root { root, path: "<folder>/<marker>" }`), checks the whole pin as a write does and holds the root folder open; `empty` resolves a root now and holds it open for a first copy, where nothing may be. |
+| `put_folder(set, folder, files)`, `remove_folder(set, folder)` | Folder writes (below): `put_folder` writes `files` (by `/`-separated path, the marker among them) as a new copy in the folder's place, `remove_folder` removes the pinned folder, each under a journal. |
+| `hook`, `Step` (feature `test-hooks`) | Tests only: a hook called at each step of this thread's folder writes, to act there as another program would or stop there as a crash would. |
 | `pin_schema()` | The JSON Schema of a pin, in the host's schema subset: what a writer's write operations take as `targets` items (the fixture writer's manifest uses it exactly). |
 | `backup_create(set, pins)` | Manual Backup: keeps the pinned files as they are now (an empty image and `exists: false` for one that does not exist) as one version of `set`, vault backups labelled `bk <set>`; then deletes the oldest versions over `KEEP_BACKUPS` (10): `{"backup", "deleted"}`. |
 | `backup_list(set)` | The versions, newest first: `{"backups": [{"id", "created", "files": [{"selected", "path", "target", "exists", "size"}]}], "keep"}`. |
@@ -247,6 +250,39 @@ How a write goes:
   otherwise puts back, from the backups, each file that holds the new bytes, leaving any file
   another program changed since (or whose backup is gone), its original kept for restore, and
   ends it rolled back. It never writes the new bytes again, and repeating it changes nothing more.
+
+How a folder write goes (`put_folder`, `remove_folder`):
+
+- Every step goes through the handle on the root folder opened when the `Folder` was, never by a
+  path through the root's link again: a link pointed elsewhere meanwhile changes nothing, the
+  write stays in the folder pinned. The journal (`intent.folder`) names the root's resolved path
+  and identity, the folder's name, its marker's name, the pinned copy's identities (folder, marker)
+  and SHA-256, the two hidden names it uses beside the folder (`.<name>.pluxy-<hex>.old` and
+  `.new`) and the new marker's SHA-256.
+- `put_folder` writes the new copy under the `.new` name (on Linux and macOS folders 0755 and
+  files 0644, less the umask; on Windows as their folder passes down). For a pinned folder it then
+  moves the old copy aside to the `.old` name and checks that what moved is the copy pinned: its
+  folder's identity, its marker's identity and its marker's SHA-256. If not, what moved goes back
+  under the folder's name and the write is refused, as changed since the preview. Then it renames
+  the new copy in where nothing is, removes the old copy and commits the journal. If the new copy
+  is in place but the old one cannot be removed, the error says where it is and the journal stays
+  open: the next start removes it.
+- `remove_folder` moves the folder aside and checks it the same way, removes its marker (from then
+  on the removal is finished, not undone) and then the rest.
+- When what moved aside cannot go back (something else is under the folder's name now), the
+  error names where it is and the journal stays open.
+- `reconcile` opens the root by the path and identity the journal names. A copy put in place (the
+  folder under its name holds the new marker, and is not the old copy) is committed and the old
+  copy aside removed; a removal whose marker is gone is committed and finished; anything else is
+  rolled back: the new copy removed and what was moved aside put back under its name. What cannot
+  be put back or removed (something else under the name, or the root gone or replaced) is left
+  where it is, named in the report's `conflicts`, and the journal is ended all the same, so the
+  tool still starts. Repeating it changes nothing more.
+- On Linux and macOS a folder is renamed by its name in the held root, its identity checked just
+  before the rename and what moved checked after. On Windows the folder is opened through the
+  held root, checked, and renamed through its own handle (`rename_open`); cap-std removes files and
+  folders there by the held folder's path as it is at that moment (cap-primitives 4.0.3 joins that
+  path and the name, then removes by path), not through a handle.
 
 In a WSL distribution (`PLUXY_ENVIRONMENT` set, see `lib/program`), a selection on a Windows drive is
 refused (`This file is on a Windows drive; set it up from Windows local.`) when it resolves, before
@@ -1011,9 +1047,13 @@ plugin comes with a new pluxy/pi-setup); the page offers it when the installed c
 differs. Update replaces only the copy the preview pinned: before any change it refuses, as changed
 since the preview, a pinned file or the agent folder that resolves elsewhere now (its link pointed
 elsewhere, the folder moved or replaced) or a copy that is not the one pinned (its folder replaced,
-another version put there); the old copy is moved aside before it is removed, and what moved must be
-the folder pinned, else it is put back and the update refused. A folder of that name without
-pluxy's marker is someone else's: Apply and Update refuse, and nothing removes it. The review read
+its marker changed, another version put there). The plugin folder is written through the library's
+folder writes (`put_folder`, `remove_folder` in `lib/transactions`): through a handle on the agent
+folder the preview pinned, so a link pointed elsewhere after the check changes nothing; the old copy
+is moved aside and must be the copy pinned (its folder, its marker and the marker's bytes), else it
+goes back under its name and the update is refused; each change is journalled, and the next start
+puts back a copy a stop left aside. A folder of that name without pluxy's marker is someone else's:
+Apply and Update refuse, and nothing removes it. The review read
 the plugin's network, process, file and code-loading calls
 (it starts no processes; it fetches the core's model list and `https://models.dev/api.json` for
 prices) and found one hole, patched in the copy: the plugin wrote a patched copy of a Pi module to
@@ -1045,9 +1085,10 @@ stays). **Uninstall** takes only the plugin's entry out of `settings.json` (thro
 Clear and Restore Backup still work afterward) and removes its folder; the connection settings stay,
 as in the old app. Clear, Restore Backup and Uninstall remove pluxy's plugin folder once
 `settings.json` no longer lists it. Uninstall checks the plugin's pin as Update does, before any
-change, and removes only the copy pinned; when the preview found no copy of pluxy's it removes none,
-and refuses if one is there now. Clear and Restore Backup take no plugin pin: they remove pluxy's
-copy in the agent folder as they find it. `preview` and `apply` refuse, before writing, a file Pi
+change, and removes only the copy pinned, the same way; when the preview found no copy of pluxy's
+it removes none, and refuses if one is there at that check. Clear and Restore Backup take no plugin
+pin: they pin pluxy's copy as they find it in the agent folder and remove that one. Install Plugin
+(in Apply) puts the first copy in the agent folder as it resolves then, where nothing is. `preview` and `apply` refuse, before writing, a file Pi
 or the plugin would not take: `settings.json` or `cliproxyapi.json` not strict JSON (a byte order
 mark too) or not an object, `packages` not a list of package sources (a string, or an object with a
 string `source`), `defaultProvider`, `defaultModel`, `baseUrl`, `apiKey` or `providerId` not text.

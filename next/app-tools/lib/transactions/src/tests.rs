@@ -2474,3 +2474,298 @@ fn a_link_where_the_data_folder_goes_is_refused_with_a_trailing_slash_too() {
         json!({})
     );
 }
+
+// ---- folders a tool owns inside a selected root (folder.rs)
+
+/// Takes away the folder link at at, leaving what it points to.
+fn unlink_folder(at: &Path) {
+    #[cfg(unix)]
+    std::fs::remove_file(at).unwrap();
+    #[cfg(windows)]
+    std::fs::remove_dir(at).unwrap();
+}
+
+const MARK: &str = ".mark";
+
+/// A copy of a folder, version v: two files and its marker.
+fn copy(v: &str) -> Vec<(&'static str, Vec<u8>)> {
+    vec![
+        ("a.txt", format!("a {v}\n").into_bytes()),
+        ("sub/b.txt", format!("b {v}\n").into_bytes()),
+        (MARK, format!("{{\"v\": \"{v}\"}}\n").into_bytes()),
+    ]
+}
+
+fn put(tx: &Transactions, f: &Folder, v: &str) -> Result<(), Error> {
+    let c = copy(v);
+    let files: Vec<(&str, &[u8])> = c.iter().map(|(n, b)| (*n, b.as_slice())).collect();
+    tx.put_folder("s", f, &files)
+}
+
+/// The pin of the folder plug in root, as a preview takes it.
+fn plug(root: &Path) -> Pin {
+    Target::resolve(&Selection::Root {
+        root: root.to_path_buf(),
+        path: format!("plug/{MARK}"),
+    })
+    .unwrap()
+    .pin
+}
+
+/// Every entry under dir, not following links: files with their bytes, folders (empty ones
+/// too), links with their text.
+fn entries(dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap() {
+            let p = e.unwrap().path();
+            let rel = p
+                .strip_prefix(dir)
+                .unwrap()
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join("/");
+            let m = std::fs::symlink_metadata(&p).unwrap();
+            if m.file_type().is_symlink() {
+                out.push(format!(
+                    "{rel} -> {}",
+                    std::fs::read_link(&p).unwrap().display()
+                ));
+            } else if m.is_dir() {
+                out.push(format!("{rel}/"));
+                stack.push(p);
+            } else {
+                out.push(format!(
+                    "{rel}: {}",
+                    String::from_utf8_lossy(&std::fs::read(&p).unwrap())
+                ));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// What a folder holding copy v at plug shows in entries.
+fn holding(v: &str) -> Vec<String> {
+    let mut want = vec![
+        "plug/".to_string(),
+        "plug/sub/".to_string(),
+        format!("plug/a.txt: a {v}\n"),
+        format!("plug/sub/b.txt: b {v}\n"),
+        format!("plug/{MARK}: {{\"v\": \"{v}\"}}\n"),
+    ];
+    want.sort();
+    want
+}
+
+/// Whether every journal the vault began is ended as committed.
+fn all_committed(v: &Mem) -> bool {
+    v.journals
+        .borrow()
+        .values()
+        .all(|(_, o)| o.as_deref() == Some("committed"))
+}
+
+/// The hidden name an operation moved plug aside to in root, if any.
+fn aside_in(root: &Path) -> Option<PathBuf> {
+    std::fs::read_dir(root)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| {
+            let n = p.file_name().unwrap().to_string_lossy();
+            n.starts_with(".plug.pluxy-") && n.ends_with(".old")
+        })
+}
+
+#[test]
+fn a_folder_is_put_replaced_and_removed_in_the_root_pinned_whatever_its_link_points_to_after() {
+    let t = Tmp::new();
+    let v = Mem::default();
+    let tx = Transactions::new(&v, t.at("data"));
+    let (a, b, root) = (t.at("a"), t.at("b"), t.at("root"));
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::create_dir_all(&b).unwrap();
+    // A first copy, a new copy over it and its removal, each with the root's link pointed at b
+    // once the place was checked: each stays in a, the folder the root resolved to.
+    for step in ["first", "replace", "remove"] {
+        let _ = std::fs::symlink_metadata(&root).map(|_| unlink_folder(&root));
+        folder_link(&a, &root);
+        let f = match step {
+            "first" => Folder::empty(&root, "plug", MARK).unwrap(),
+            _ => Folder::pinned(&plug(&root)).unwrap(),
+        };
+        let (r, to) = (root.clone(), b.clone());
+        hook(Some(Box::new(move |s| {
+            if s == Step::Checked {
+                unlink_folder(&r);
+                folder_link(&to, &r);
+            }
+            false
+        })));
+        let done = match step {
+            "first" => put(&tx, &f, "1"),
+            "replace" => put(&tx, &f, "2"),
+            _ => tx.remove_folder("s", &f),
+        };
+        hook(None);
+        done.unwrap();
+        let want = match step {
+            "first" => holding("1"),
+            "replace" => holding("2"),
+            _ => Vec::new(),
+        };
+        assert_eq!(entries(&a), want, "{step}");
+        assert!(entries(&b).is_empty(), "{step}: {:?}", entries(&b));
+    }
+    assert!(v.open().is_empty() && all_committed(&v));
+}
+
+#[test]
+fn a_folder_that_is_not_the_one_pinned_is_refused_before_any_change() {
+    let t = Tmp::new();
+    let v = Mem::default();
+    let tx = Transactions::new(&v, t.at("data"));
+    let root = t.at("root");
+    std::fs::create_dir_all(&root).unwrap();
+    put(&tx, &Folder::empty(&root, "plug", MARK).unwrap(), "1").unwrap();
+    let pin = plug(&root);
+    // The marker rewritten in place (same file, other bytes), the folder replaced by an equal
+    // copy: refused as changed, nothing written.
+    std::fs::write(root.join("plug").join(MARK), "{\"v\": \"x\"}\n").unwrap();
+    let e = Folder::pinned(&pin).err().unwrap();
+    assert!(e.message.contains("preview it again"), "{}", e.message);
+    std::fs::write(root.join("plug").join(MARK), "{\"v\": \"1\"}\n").unwrap();
+    std::fs::rename(root.join("plug"), t.at("moved")).unwrap();
+    put(&tx, &Folder::empty(&root, "plug", MARK).unwrap(), "1").unwrap();
+    let e = Folder::pinned(&pin).err().unwrap();
+    assert!(e.message.contains("preview it again"), "{}", e.message);
+    // A first copy where something is already: refused.
+    assert!(Folder::empty(&root, "plug", MARK)
+        .err()
+        .unwrap()
+        .message
+        .contains("there already"));
+    assert!(Folder::pinned(&Pin {
+        selection: Selection::Root {
+            root: root.clone(),
+            path: "plug/sub/b.txt".into(),
+        },
+        ..pin.clone()
+    })
+    .is_err());
+}
+
+#[test]
+fn a_stop_at_any_step_is_reconciled_from_the_folder_the_same_way_each_time() {
+    use Step::*;
+    // A new copy over an old one: undone until the new copy is in place. A removal: undone until
+    // its marker is gone, then finished. A first copy: undone until it is in place.
+    for (op, step, outcome) in [
+        ("replace", Written, "rolled_back"),
+        ("replace", Checked, "rolled_back"),
+        ("replace", Moved, "rolled_back"),
+        ("replace", Placed, "committed"),
+        ("remove", Checked, "rolled_back"),
+        ("remove", Moved, "rolled_back"),
+        ("remove", Unmarked, "committed"),
+        ("first", Written, "rolled_back"),
+        ("first", Checked, "rolled_back"),
+    ] {
+        let case = format!("{op} stopped at {step:?}");
+        let t = Tmp::new();
+        let v = Mem::default();
+        let tx = Transactions::new(&v, t.at("data"));
+        let root = t.at("root");
+        std::fs::create_dir_all(&root).unwrap();
+        if op != "first" {
+            put(&tx, &Folder::empty(&root, "plug", MARK).unwrap(), "1").unwrap();
+        }
+        let f = match op {
+            "first" => Folder::empty(&root, "plug", MARK).unwrap(),
+            _ => Folder::pinned(&plug(&root)).unwrap(),
+        };
+        hook(Some(Box::new(move |s| s == step)));
+        let r = match op {
+            "remove" => tx.remove_folder("s", &f),
+            _ => put(&tx, &f, "2"),
+        };
+        hook(None);
+        drop(f);
+        assert!(r.unwrap_err().message.contains("stopped at"), "{case}");
+        let open = v.open();
+        assert_eq!(open.len(), 1, "{case}");
+        let want = match (op, outcome) {
+            ("replace", "committed") => holding("2"),
+            ("remove", "committed") | ("first", _) => Vec::new(),
+            _ => holding("1"),
+        };
+        for round in ["once", "again"] {
+            let reports = tx.reconcile(&open).unwrap();
+            assert_eq!(reports[0]["outcome"], outcome, "{case}, {round}");
+            assert_eq!(reports[0]["conflicts"], json!([]), "{case}, {round}");
+            // Nothing hidden is left beside it.
+            assert_eq!(entries(&root), want, "{case}, {round}");
+        }
+        assert!(v.open().is_empty(), "{case}");
+    }
+}
+
+#[test]
+fn a_folder_moved_aside_that_cannot_go_back_is_named_and_put_back_by_the_next_start() {
+    for blocker_stays in [false, true] {
+        let t = Tmp::new();
+        let v = Mem::default();
+        let tx = Transactions::new(&v, t.at("data"));
+        let root = t.at("root");
+        std::fs::create_dir_all(&root).unwrap();
+        put(&tx, &Folder::empty(&root, "plug", MARK).unwrap(), "1").unwrap();
+        let f = Folder::pinned(&plug(&root)).unwrap();
+        // Once moved aside: its marker rewritten in place, so it is not the copy pinned, and a
+        // folder put under its name, so it cannot go back.
+        let r = root.clone();
+        hook(Some(Box::new(move |s| {
+            if s == Step::Moved {
+                let aside = aside_in(&r).unwrap();
+                std::fs::write(aside.join(MARK), "{\"v\": \"x\"}\n").unwrap();
+                std::fs::create_dir(r.join("plug")).unwrap();
+            }
+            false
+        })));
+        let e = tx.remove_folder("s", &f).unwrap_err();
+        hook(None);
+        drop(f);
+        let aside = aside_in(&root).unwrap();
+        assert!(
+            e.message.contains(&aside.display().to_string())
+                && e.message.contains("next start puts it back"),
+            "{}",
+            e.message
+        );
+        // Not removed: all there, aside, and the journal open for the next start.
+        assert_eq!(std::fs::read(aside.join("a.txt")).unwrap(), b"a 1\n");
+        let open = v.open();
+        assert_eq!(open.len(), 1);
+        if !blocker_stays {
+            std::fs::remove_dir(root.join("plug")).unwrap();
+        }
+        let reports = tx.reconcile(&open).unwrap();
+        assert_eq!(reports[0]["outcome"], "rolled_back");
+        if blocker_stays {
+            // Still something under the name: left where it is, named in the report, and the
+            // journal ended, so the tool still starts.
+            assert_eq!(reports[0]["conflicts"], json!([aside]));
+            assert!(aside.join("a.txt").exists());
+        } else {
+            assert_eq!(reports[0]["restored"], json!([root.join("plug")]));
+            assert_eq!(
+                std::fs::read(root.join("plug").join("a.txt")).unwrap(),
+                b"a 1\n"
+            );
+            assert!(aside_in(&root).is_none());
+        }
+        assert!(v.open().is_empty());
+    }
+}

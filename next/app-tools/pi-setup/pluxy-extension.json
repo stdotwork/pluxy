@@ -207,7 +207,7 @@
       },
       {
         "id": "update",
-        "description": "Update Pi Plugin: replace pluxy's copy of the CLIProxyAPI provider plugin that the preview pinned, the pluxy-cliproxyapi-provider folder in the previewed agent folder, with the copy this tool carries; refused when that folder, or the agent folder, is not the one previewed. No file outside that folder changes.",
+        "description": "Update Pi Plugin: replace pluxy's copy of the CLIProxyAPI provider plugin that the preview pinned, the pluxy-cliproxyapi-provider folder in the previewed agent folder, with the copy this tool carries, working through that agent folder; refused when that folder, or the agent folder, is not the one previewed, and a copy found changed once moved aside goes back under its name. No file outside that folder changes.",
         "effect": "write",
         "input_schema": {
           "type": "object",
@@ -404,7 +404,7 @@
       },
       {
         "id": "uninstall",
-        "description": "Uninstall Pi Plugin: take pluxy's CLIProxyAPI provider plugin out of the previewed settings.json and remove the pluxy-cliproxyapi-provider folder the preview pinned (none when it found no copy of pluxy's; refused when another is there now), keeping the connection settings and everything else. Saving replaces the file; an edit made in the same instant by another program may be lost.",
+        "description": "Uninstall Pi Plugin: take pluxy's CLIProxyAPI provider plugin out of the previewed settings.json and remove the pluxy-cliproxyapi-provider folder the preview pinned, working through the previewed agent folder (refused when that folder, or the agent folder, is not the one previewed, and a copy found changed once moved aside goes back under its name; none when the preview found no copy of pluxy's, refused when one is there now), keeping the connection settings and everything else. Saving replaces the file; an edit made in the same instant by another program may be lost.",
         "effect": "write",
         "input_schema": {
           "type": "object",

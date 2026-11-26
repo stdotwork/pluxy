@@ -5,18 +5,16 @@
 //! changes only when this program writes the one it carries.
 //!
 //! The folder is pluxy's only when it holds pluxy's marker file; any other folder of that name is
-//! the person's, never written or removed.
+//! the person's, never written or removed. The folder is written, replaced and removed through
+//! pluxy-transactions' [`Folder`]: through a handle on the agent folder, the copy moved aside
+//! checked to be the one pinned, each change journalled and reconciled at the next start.
 
 use crate::pi::FOLDER;
 use pluxy_program::Error;
-use pluxy_transactions::{Pin, Selection, Target};
+use pluxy_transactions::{sha256_of, Folder, Pin, Selection, Target, Transactions};
 use serde_json::Value;
-use std::fs::{self, DirBuilder, File, OpenOptions};
-use std::io::Write;
-#[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The version of the copy this program carries: the upstream version and pluxy's patch level.
 pub const VERSION: &str = "1.4.25-pluxy.1";
@@ -116,19 +114,19 @@ pub fn state(agent: &Path) -> State {
         Ok(m) if !m.is_dir() => return State::Foreign,
         Ok(_) => {}
     }
-    let marker: Option<Value> = fs::read(dir.join(MARKER))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok());
+    of_marker(fs::read(dir.join(MARKER)).ok().as_deref())
+}
+
+/// Whose a plugin folder is by its marker's bytes (None: no marker): pluxy's copy, of the version
+/// it names, or someone else's.
+fn of_marker(bytes: Option<&[u8]>) -> State {
+    let marker: Option<Value> = bytes.and_then(|b| serde_json::from_slice(b).ok());
     match marker {
         Some(m) if m["package"] == PACKAGE => {
             State::Installed(m["version"].as_str().map(String::from))
         }
         _ => State::Foreign,
     }
-}
-
-fn io(what: &str, path: &Path, e: std::io::Error) -> Error {
-    Error::unavailable(format!("cannot {what} {}: {e}", path.display()))
 }
 
 fn foreign(agent: &Path) -> Error {
@@ -146,160 +144,74 @@ pub fn changed(agent: &Path, why: &str) -> Error {
     ))
 }
 
-/// Whether moved, a folder in agent, is the plugin folder pinned: reached through the agent folder
-/// the pin saw (its link, the folder it resolves to), with the plugin folder's and the marker's
-/// identities, whatever the folder's name is now.
-fn is_pinned(agent: &Path, moved: &Path, pinned: &Pin) -> bool {
-    let name = moved.file_name().unwrap_or_default().to_string_lossy();
-    let now = Target::resolve(&Selection::Root {
+/// What the plugin's pin selects in agent: pluxy's marker in the plugin's folder, so the pin holds
+/// the agent folder's link and identity, the plugin folder's identity and the marker's identity
+/// and bytes (the copy's version).
+pub fn selection(agent: &Path) -> Selection {
+    Selection::Root {
         root: agent.to_path_buf(),
-        path: format!("{name}/{MARKER}"),
-    });
-    now.is_ok_and(|t| {
-        let p = &t.pin;
-        p.link == pinned.link
-            && p.link_id == pinned.link_id
-            && p.root == pinned.root
-            && p.root_id == pinned.root_id
-            && p.parent_id == pinned.parent_id
-            && p.file_id == pinned.file_id
+        path: format!("{FOLDER}/{MARKER}"),
+    }
+}
+
+/// pluxy's copy the preview pinned, held open through the agent folder it pinned: refused as
+/// changed since the preview when it is not that copy now (the agent folder's link pointed
+/// elsewhere, the agent or plugin folder moved or replaced, the marker changed).
+pub fn pinned(agent: &Path, pin: &Pin) -> Result<Folder, Error> {
+    Folder::pinned(pin).map_err(|e| {
+        if e.message.contains("preview it again") {
+            e
+        } else {
+            changed(agent, &e.message)
+        }
     })
 }
 
-/// Moves pluxy's copy aside, to a hidden sibling, which it gives. With pinned, what moved must be
-/// the folder pinned: otherwise (the agent folder's link pointed elsewhere or a folder replaced
-/// between the caller's check and the move) it goes back under its name, and the move is refused.
-fn aside(agent: &Path, pinned: Option<&Pin>) -> Result<PathBuf, Error> {
-    let dest = folder(agent);
-    let old = sibling(agent, "old");
-    fs::rename(&dest, &old).map_err(|e| io("move aside", &dest, e))?;
-    match pinned {
-        Some(p) if !is_pinned(agent, &old, p) => Err(match fs::rename(&old, &dest) {
-            Ok(()) => changed(agent, "another folder is there now; it is left as it was"),
-            Err(e) => changed(
-                agent,
-                &format!(
-                    "another folder is there now; it could not be put back from {}: {e}",
-                    old.display()
-                ),
-            ),
-        }),
-        _ => Ok(old),
-    }
-}
-
-/// A sibling of the adapter's folder that no one else uses: `.pluxy-cliproxyapi-provider.<what>-…`.
-fn sibling(agent: &Path, what: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or_default();
-    agent.join(format!(".{FOLDER}.{what}-{}-{nanos}", std::process::id()))
-}
-
-/// Writes the carried files into the new folder dir: on Linux and macOS folders 0755 and files
-/// 0644 (code anyone may read, as npm installs it); on Windows each takes its folder's access list.
-fn write_all(dir: &Path) -> Result<(), Error> {
-    let mut builder = DirBuilder::new();
-    #[cfg(unix)]
-    builder.mode(0o755);
-    builder.create(dir).map_err(|e| io("create", dir, e))?;
-    builder.recursive(true);
-    for (name, bytes) in FILES
-        .iter()
-        .copied()
-        .chain([(MARKER, marker(VERSION).as_bytes())])
-    {
-        let path = dir.join(name);
-        if let Some(parent) = path.parent() {
-            builder
-                .create(parent)
-                .map_err(|e| io("create", parent, e))?;
-        }
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        #[cfg(unix)]
-        options.mode(0o644);
-        let mut f: File = options.open(&path).map_err(|e| io("create", &path, e))?;
-        f.write_all(bytes)
-            .and_then(|_| f.sync_all())
-            .map_err(|e| io("write", &path, e))?;
-    }
-    pluxy_files::sync_dir(dir).map_err(|e| io("sync", dir, e))
-}
-
-/// Puts the carried copy in place: a new folder written beside it, then renamed over pluxy's
-/// older copy (moved aside, checked against pinned when given, and removed) or into the empty
-/// place. Refuses a folder that is not pluxy's.
-fn put(agent: &Path, pinned: Option<&Pin>) -> Result<(), Error> {
-    let dest = folder(agent);
-    let installed = match state(agent) {
-        State::Foreign => return Err(foreign(agent)),
-        State::Absent => false,
-        State::Installed(_) => true,
-    };
-    let new = sibling(agent, "new");
-    if let Err(e) = write_all(&new) {
-        let _ = fs::remove_dir_all(&new);
-        return Err(e);
-    }
-    let old = if installed {
-        match aside(agent, pinned) {
-            Ok(old) => Some(old),
-            Err(e) => {
-                let _ = fs::remove_dir_all(&new);
-                return Err(e);
-            }
-        }
-    } else {
-        None
-    };
-    if let Err(e) = fs::rename(&new, &dest) {
-        let _ = fs::remove_dir_all(&new);
-        if let Some(old) = &old {
-            let _ = fs::rename(old, &dest);
-        }
-        return Err(io("put in place", &dest, e));
-    }
-    if let Some(old) = old {
-        fs::remove_dir_all(&old).map_err(|e| io("remove", &old, e))?;
-    }
-    pluxy_files::sync_dir(agent).map_err(|e| io("sync", agent, e))
+/// Puts the carried copy in folder's place (pluxy's copy pinned, or the empty place), through the
+/// library: a new folder written beside it and renamed in, the old copy moved aside, checked to
+/// be the one pinned, and removed; journalled, so the next start puts back what a stop left aside.
+fn put(tx: &Transactions, folder: &Folder) -> Result<(), Error> {
+    let marker = marker(VERSION);
+    let mut files: Vec<(&str, &[u8])> = FILES.to_vec();
+    files.push((MARKER, marker.as_bytes()));
+    tx.put_folder(crate::SET, folder, &files)
 }
 
 /// Install Pi Plugin: puts the carried copy in agent unless pluxy's copy is there already (an
 /// update is explicit). True when it installed one.
-pub fn ensure(agent: &Path) -> Result<bool, Error> {
+pub fn ensure(tx: &Transactions, agent: &Path) -> Result<bool, Error> {
     match state(agent) {
         State::Installed(_) => Ok(false),
         State::Foreign => Err(foreign(agent)),
-        State::Absent => put(agent, None).map(|_| true),
+        State::Absent => put(tx, &Folder::empty(agent, FOLDER, MARKER)?).map(|_| true),
     }
 }
 
-/// Update Pi Plugin: replaces pluxy's copy, the one pinned, with the carried one.
-pub fn update(agent: &Path, pinned: &Pin) -> Result<(), Error> {
-    match state(agent) {
-        State::Installed(_) => put(agent, Some(pinned)),
-        State::Foreign => Err(foreign(agent)),
-        State::Absent => Err(Error::invalid_request(format!(
-            "the Pi plugin is not installed in {}",
-            agent.display()
-        ))),
-    }
+/// Update Pi Plugin: replaces pluxy's copy the preview pinned (see [`pinned`]) with the carried
+/// one.
+pub fn update(tx: &Transactions, pinned: &Folder) -> Result<(), Error> {
+    put(tx, pinned)
 }
 
-/// Removes pluxy's copy (with the cache the adapter keeps in it), with pinned only the one pinned;
-/// anything else stays. True when it removed one.
-pub fn remove(agent: &Path, pinned: Option<&Pin>) -> Result<bool, Error> {
+/// Removes pluxy's copy (with the cache the adapter keeps in it): with pinned, the copy the
+/// preview pinned (see [`pinned`]); else pluxy's copy as it is in agent now, pinned and held open
+/// as it is read. Anything else stays. True when it removed one.
+pub fn remove(tx: &Transactions, agent: &Path, pinned: Option<&Folder>) -> Result<bool, Error> {
+    if let Some(f) = pinned {
+        return tx.remove_folder(crate::SET, f).map(|_| true);
+    }
     if !matches!(state(agent), State::Installed(_)) {
         return Ok(false);
     }
-    // Moved aside first: a stop part way through leaves a hidden sibling, never a half-removed
-    // folder under the plugin's name that would then read as someone else's.
-    let old = aside(agent, pinned)?;
-    pluxy_files::sync_dir(agent).map_err(|e| io("sync", agent, e))?;
-    fs::remove_dir_all(&old).map_err(|e| io("remove", &old, e))?;
+    let t = Target::resolve(&selection(agent))?;
+    // pluxy's by the marker's bytes the pin holds, read again through its folder's handle.
+    let (_, bytes) = t.read_now()?;
+    if sha256_of(bytes.as_deref()) != t.pin.sha256
+        || !matches!(of_marker(bytes.as_deref()), State::Installed(_))
+    {
+        return Ok(false);
+    }
+    tx.remove_folder(crate::SET, &Folder::pinned(&t.pin)?)?;
     Ok(true)
 }
 

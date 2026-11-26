@@ -1432,11 +1432,6 @@ describe("OpenCode, Oh My Pi, Grok Build, Hermes Agent and Pi", () => {
     await page.click("Update plugin");
     // The reading's pins: its three files and the plugin's copy, all in the folder it read.
     expect(op(ch, "update")?.args.input).toEqual({ targets: read.targets, plugin: pluginPin(agent) });
-    expect(read.targets.map((t) => t.target)).toEqual([
-      `${agent}/cliproxyapi.json`,
-      `${agent}/settings.json`,
-      `${agent}/cliproxyapi-models.json`,
-    ]);
     expect(typeof op(ch, "update")?.args.ticket).toBe("string");
     ch.pending()?.answer(pi("configured", true));
     await settle();

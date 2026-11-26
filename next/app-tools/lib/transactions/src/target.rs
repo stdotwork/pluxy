@@ -99,7 +99,7 @@ pub struct Id {
 impl Id {
     /// The identity in m: on Windows the volume serial number and file index, which a metadata
     /// read through a handle has (an error, never a panic, when one does not).
-    fn of(m: &cap_std::fs::Metadata) -> Result<Id, Error> {
+    pub(crate) fn of(m: &cap_std::fs::Metadata) -> Result<Id, Error> {
         #[cfg(unix)]
         return Ok(Id {
             dev: m.dev(),
@@ -120,11 +120,11 @@ impl Id {
         }
     }
 
-    fn to_json(self) -> Value {
+    pub(crate) fn to_json(self) -> Value {
         json!(format!("{}:{}", self.dev, self.ino))
     }
 
-    fn from_json(v: &Value) -> Result<Option<Id>, Error> {
+    pub(crate) fn from_json(v: &Value) -> Result<Option<Id>, Error> {
         if v.is_null() {
             return Ok(None);
         }
@@ -302,12 +302,12 @@ pub fn sha256_of(image: Option<&[u8]>) -> Option<String> {
     image.map(sha256)
 }
 
-fn io(what: &str, e: std::io::Error) -> Error {
+pub(crate) fn io(what: &str, e: std::io::Error) -> Error {
     Error::unavailable(format!("{what}: {e}"))
 }
 
 /// The error for a selection that resolves differently than when it was previewed.
-fn changed(target: &Path, what: &str) -> Error {
+pub(crate) fn changed(target: &Path, what: &str) -> Error {
     Error::invalid_request(format!(
         "the target changed since the preview ({what}): {}; preview it again",
         target.display()
@@ -401,12 +401,12 @@ fn folder_of(p: &Path) -> &Path {
 }
 
 /// Opens folder by its (resolved) path.
-fn open_dir(folder: &Path) -> Result<Dir, Error> {
+pub(crate) fn open_dir(folder: &Path) -> Result<Dir, Error> {
     Dir::open_ambient_dir(folder, ambient_authority())
         .map_err(|e| io(&format!("{}", folder.display()), e))
 }
 
-fn dir_id(d: &Dir, at: &Path) -> Result<Id, Error> {
+pub(crate) fn dir_id(d: &Dir, at: &Path) -> Result<Id, Error> {
     let m = d
         .dir_metadata()
         .map_err(|e| io(&format!("{}", at.display()), e))?;
@@ -615,6 +615,22 @@ pub(crate) fn refuse_windows_drive(paths: &[&Path]) -> Result<(), Error> {
     Ok(())
 }
 
+/// A selected root resolved now: its link (text and identity) when it is one, the folder it
+/// resolves to, opened, and that folder's identity.
+pub(crate) type Root = (Option<(String, Id)>, PathBuf, Dir, Id);
+
+/// Resolves a selected root now (see [`Root`]).
+pub(crate) fn open_root(root: &Path) -> Result<Root, Error> {
+    absolute(root, "selected root")?;
+    let (rparent, rname) = (folder_of(root), root.file_name().unwrap_or_default());
+    let link = link_at(&open_dir(rparent)?, Path::new(rname), root)?;
+    let croot = canonical(root)?;
+    refuse_windows_drive(&[&canonical(rparent)?, &croot])?;
+    let dir = open_dir(&croot)?;
+    let root_id = dir_id(&dir, &croot)?;
+    Ok((link, croot, dir, root_id))
+}
+
 /// A selection resolved now: the pin, and a handle on the target's folder with the file's name.
 pub struct Target {
     pub pin: Pin,
@@ -677,12 +693,7 @@ impl Target {
                         )));
                     }
                 }
-                let (rparent, rname) = (folder_of(root), root.file_name().unwrap_or_default());
-                let link = link_at(&open_dir(rparent)?, Path::new(rname), root)?;
-                let croot = canonical(root)?;
-                refuse_windows_drive(&[&canonical(rparent)?, &croot])?;
-                let mut dir = open_dir(&croot)?;
-                let root_id = dir_id(&dir, &croot)?;
+                let (link, croot, mut dir, root_id) = open_root(root)?;
                 let mut at = croot.clone();
                 for part in &parts[..parts.len() - 1] {
                     at.push(part);
@@ -1140,7 +1151,7 @@ pub(crate) fn write_private_temp(
 
 /// Windows: dir's handle as a File, borrowed (the ManuallyDrop never closes it).
 #[cfg(windows)]
-fn borrowed(dir: &Dir) -> std::mem::ManuallyDrop<std::fs::File> {
+pub(crate) fn borrowed(dir: &Dir) -> std::mem::ManuallyDrop<std::fs::File> {
     use std::os::windows::io::{AsRawHandle, FromRawHandle};
     std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_handle(dir.as_raw_handle()) })
 }
