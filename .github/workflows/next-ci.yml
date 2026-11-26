@@ -209,10 +209,12 @@ jobs:
           cache: true
           cache-dependency-path: next/go.mod
       - name: Vet
-        run: go vet ./internal/cred/ ./internal/private/... ./internal/core/ ./internal/extconfig/ ./internal/logfile/ ./internal/server/ ./internal/usage/ ./internal/configdoc/
+        run: go vet ./internal/cred/ ./internal/private/... ./internal/core/ ./internal/extconfig/ ./internal/logfile/ ./internal/server/ ./internal/usage/ ./internal/configdoc/ ./internal/home/
       # -v lists each test, so the log shows the Windows access-list tests ran.
       - name: Test
         run: go test -count=1 -v ./internal/cred/
+      - name: Test the home folder checks
+        run: go test -count=1 -v ./internal/home/
       - name: Test the config file, usage files, and the settings and logs folders
         run: go test -count=1 -v -run Windows ./internal/core/ ./internal/extconfig/ ./internal/logfile/ ./internal/server/ ./internal/usage/ ./internal/configdoc/
 
