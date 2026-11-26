@@ -430,7 +430,7 @@ pub(crate) fn run(app: &tauri::AppHandle, main: &Webview, page: &Webview) -> Res
         // Requester and Action on lines of their own, not joined by an escaped line break.
         require(
             shown.contains("Requester: fixture/confirm\nAction: ") && !shown.contains("\\u000a"),
-            format!("notice does not hold real lines: {shown:?}"),
+            &format!("notice does not hold real lines: {shown:?}"),
         )?;
         std::thread::sleep(Duration::from_millis(1100));
         let token = confirm(app, &id, false)?;
