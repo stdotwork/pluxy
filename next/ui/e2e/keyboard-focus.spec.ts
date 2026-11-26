@@ -90,6 +90,7 @@ test("Tab goes through the frame in reading order: the navigation, the status bl
     "Home",
     "Accounts",
     "Activity",
+    "Tools",
     "Settings",
     `Running, ${host}. Open the menu`,
     "Accounts",
