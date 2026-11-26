@@ -378,7 +378,7 @@ test("Logs: a search with no match can be cleared", async ({ page }) => {
   await expect(page.getByLabel("Show", { exact: true })).toHaveValue("");
 });
 
-test("Extensions: with none installed, the empty list leads to what can be installed", async ({ page }) => {
+test("Extensions: with none installed, it says so and the list on offer is still there", async ({ page }) => {
   await page.route("**/v0/management/packages", async (route) => {
     if (route.request().method() !== "GET") return route.fallback();
     await route.fulfill({ json: { packages: [] } });
@@ -386,10 +386,9 @@ test("Extensions: with none installed, the empty list leads to what can be insta
   await openPanel(page, core);
   await signIn(page, core);
   await goTo(page, "Extensions");
-  const empty = page.getByRole("main").locator('[data-part="empty"]').first();
-  await expect(empty).toContainText("No extensions installed.");
-  await empty.getByRole("button", { name: "Not installed", exact: true }).click();
-  const section = page.getByRole("region", { name: "Not installed", exact: true });
-  await expect(section).toBeInViewport();
-  expect(await section.evaluate((s) => s.parentElement === document.activeElement)).toBe(true);
+  const empty = page.getByRole("main").locator('[data-part="state-pane"][data-kind="empty"]').first();
+  await expect(empty).toContainText("No extensions yet");
+  await expect(empty).toContainText("pluxy needs one for each provider you use.");
+  const offers = page.getByRole("region", { name: "Available to install", exact: true });
+  await expect(offers.getByRole("button", { name: /^Install / }).first()).toBeVisible();
 });

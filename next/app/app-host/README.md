@@ -489,7 +489,7 @@ target. Enabling the tool is the person's consent to its imports.
 ### Web packages: native consent
 
 Only a curated web package may call native tools; an Unverified one is refused, always. Its
-imports are refused until the person allows them on the Device extensions page, which calls
+imports are refused until the person allows them on the Add-ons page, which calls
 `device_imports {id, allowed: true}` (main window only) and opens a native confirmation listing
 the caller's source, digest and signer and each target operation with its effect. The consent
 is bound to the caller's release and to each target's release, export contract and operations.

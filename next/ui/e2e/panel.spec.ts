@@ -63,9 +63,8 @@ test("panel shows core, switches layout and theme live, and recovers from custom
 
   // Extensions: the installed packages, one enabled and running, one disabled.
   await goTo(page, "Extensions");
-  const packages = page.locator('[data-part="list"][aria-label="Installed extensions"]');
-  const alpha = packages.locator('[data-part="item"]', { hasText: "test/alpha" });
-  const beta = packages.locator('[data-part="item"]', { hasText: "test/beta" });
+  const alpha = page.getByRole("button", { name: /test\/alpha/ });
+  const beta = page.getByRole("button", { name: /test\/beta/ });
   await expect(alpha).toBeVisible();
   await expect(alpha.locator('[data-part="badge"]')).toHaveText("Running");
   await expect(beta.locator('[data-part="badge"]')).toHaveText("Turned off");

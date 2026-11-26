@@ -33,8 +33,9 @@ const BASELINE: { file: string; key: string; banned: string }[] = [
 /** Banned terms that are wrong only as a standalone label: a text holds one when the whole text, trimmed
  * and compared without regard to case, is the term. `Active` is banned as the condition of an account
  * (docs/terms.md, "Credentials and status": `Serving` and the other condition words instead), but
- * "Active revision", "Least active" and "No active cooldowns" are correct English and are not that status. */
-const WHOLE_TEXT_ONLY = ["Active"];
+ * "Active revision", "Least active" and "No active cooldowns" are correct English and are not that status.
+ * `Ready` is banned the same way: "Version 0.2.0 is ready to install." says nothing about an account. */
+const WHOLE_TEXT_ONLY = ["Active", "Ready"];
 
 export interface Rule {
   /** The banned text as written in the glossary, without its backticks. */

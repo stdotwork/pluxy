@@ -1,5 +1,5 @@
-//! The native test's release feed check, in native-test builds only. On Linux it drives Version
-//! Management as the person would (real DOM clicks, real GTK dialogs through X input) against
+//! The native test's release feed check, in native-test builds only. On Linux it drives the
+//! Updates page as the person would (real DOM clicks, real GTK dialogs through X input) against
 //! the runner's fake https feed (`native/run.ts`), and reads what the window, the notes webview,
 //! the files the app keeps and the runner's stand-in browser show. Expected versions come from
 //! the feed fixture (`native/release-feed.json`), not from the app's parser. Its helpers (clicks,
@@ -113,7 +113,7 @@ fn ask_source(app: &AppHandle, main: &Webview, url: &str) -> Result<String, Stri
 
 /// Sets the feed to url through its native confirmation, confirmed.
 pub(crate) fn set_source(app: &AppHandle, main: &Webview, url: &str) -> Result<(), String> {
-    wait_for("the Version Management page", || {
+    wait_for("the Updates page", || {
         eval(
             main,
             "document.querySelector('[data-part=release-source-input]') !== null",
@@ -202,7 +202,7 @@ pub(crate) fn run(
 
     main.eval("location.hash = '#/versions'")
         .map_err(|e| e.to_string())?;
-    wait_for("the Version Management page", || {
+    wait_for("the Updates page", || {
         eval(
             main,
             "document.querySelector('[data-part=release-check]') !== null",
@@ -308,7 +308,7 @@ pub(crate) fn run(
         )
         .filter(|t| {
             t.as_str()
-                .is_some_and(|t| t.contains("Could not change the release feed"))
+                .is_some_and(|t| t.contains("The update source was not changed"))
         })
     })?;
     evidence["voided"] = json!({
@@ -511,20 +511,19 @@ pub(crate) fn run(
         }
     };
 
-    // Expanded at first, the notes webview over the notes area; Collapse hides the notes and
-    // closes their webview, Expand shows them again in a new one, over what shows of the area
-    // again: Collapse shortens the page, so the pane's scroll position can change, and the area
-    // can then come back partly below the window's edge.
+    // Shown at first, the notes webview over the notes area; Hide closes their webview, Show opens
+    // a new one, over what shows of the area again: Hide shortens the page, so the pane's scroll
+    // position can change, and the area can then come back partly below the window's edge.
     let toggle = "[data-part=release-notes-toggle][data-product=app]";
     let first = area(main, "app");
     let first_follows = near(&first, &placed(app, &label)?);
     click(main, toggle)?;
-    wait_for("Collapse to close the notes webview", || {
+    wait_for("Hide to close the notes webview", || {
         (app.get_webview(&label).is_none() && attr(main, notes_sel, "label").is_null())
             .then_some(())
     })?;
     click(main, toggle)?;
-    let again = wait_for("Expand to open a notes webview", || {
+    let again = wait_for("Show to open a notes webview", || {
         attr(main, notes_sel, "label")
             .as_str()
             .filter(|l| l.starts_with("notes-") && *l != label)

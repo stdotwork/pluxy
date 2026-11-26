@@ -1,6 +1,6 @@
 //! The native test's check of signed native-tier admission (native-test builds with
 //! `artifact-test-trust` only). It drives the real app as the person would: the window's own
-//! commands, the Device extensions page and the real native confirmation (on Linux GTK's, with X
+//! commands, the Add-ons page and the real native confirmation (on Linux GTK's, with X
 //! input from `xdotool`; on Windows and macOS worked through `ui_driver.rs`), against archives,
 //! three local registries and the run's test trust profile that `native/admission.ts` built (the
 //! archives' SHA-256 digests are in `expect.json`, computed there, not by the app). Every refusal goes through `device_install` with a positive control on that
@@ -12,8 +12,8 @@
 //! - `curated`: `pluxy/forged` (signed by a key no root names) and `pluxy/unsigned` are refused;
 //! - with the profile's roots emptied ("no roots"), then with its marker removed (test trust in a
 //!   normal profile), `curated`'s `pluxy/tool` is refused and `example/page` installs from it;
-//! - with the profile restored, `pluxy/tool` installs disabled and labelled curated, the Device
-//!   extensions page shows its full-access warning, enabling opens the native confirmation, which
+//! - with the profile restored, `pluxy/tool` installs disabled and labelled curated, the Add-ons
+//!   page says it runs as the person, enabling opens the native confirmation, which
 //!   names full access, the ID and the digest: Cancel leaves it disabled and unauthorized (no
 //!   admitted record), Confirm enables it and the admitted record names its store folder,
 //!   program, curated source and key;
@@ -34,6 +34,8 @@ use tauri::{AppHandle, Manager, Webview};
 static CALLS: AtomicU64 = AtomicU64::new(0);
 const DIALOG: &str = "pluxy native confirmation";
 const FULL_ACCESS: &str = "full access to your user account";
+/// What the Add-ons page says of a coding-tool add-on before it is turned on.
+const RUNS_AS_YOU: &str = "Runs as you, with your permissions.";
 /// The fixture's program in bin/ (`native/admission.ts`): a program image on Windows.
 const TOOL: &str = if cfg!(windows) { "tool.exe" } else { "tool" };
 
@@ -396,20 +398,20 @@ pub(crate) fn run(app: &AppHandle, main: &Webview, fixtures: PathBuf) -> Result<
         format!("the store with pluxy/tool: {:?}", store(app)?),
     )?;
 
-    // The main window says full access before enabling.
+    // The main window says it runs as the person before it is turned on.
     main.eval("location.hash = '#/device'")
         .map_err(|e| e.to_string())?;
-    wait_for("pluxy/tool on the Device extensions page", || {
+    wait_for("pluxy/tool on the Add-ons page", || {
         eval(
             main,
             "(() => { const b = [...document.querySelectorAll('button.item-name')].find((b) => b.textContent === 'pluxy/tool'); if (b) b.click(); return !!b; })()",
         )
         .filter(|v| v == true)
     })?;
-    wait_for("the full-access warning in the window", || {
+    wait_for("what a coding-tool add-on may do, in the window", || {
         eval(
             main,
-            &format!("document.body.innerText.includes({})", json!(FULL_ACCESS)),
+            &format!("document.body.innerText.includes({})", json!(RUNS_AS_YOU)),
         )
         .filter(|v| v == true)
     })?;

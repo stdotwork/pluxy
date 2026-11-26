@@ -2062,7 +2062,7 @@ function checkRelease(
   const ex = release.expand ?? {};
   check(
     ex.first_follows === true && ex.collapse_closed === true && ex.expand_follows === true,
-    `Expand/Collapse: ${JSON.stringify(ex)}`,
+    `Show/Hide: ${JSON.stringify(ex)}`,
   );
   const sc = release.scrolled ?? {};
   const g = (step: string) => sc[step]?.geometry ?? {};
@@ -2078,7 +2078,9 @@ function checkRelease(
   );
   const off = release.offline ?? {};
   check(
-    off.kept === true && off.same_time === true && /Could not reach the release feed/.test(off.message ?? ""),
+    off.kept === true &&
+      off.same_time === true &&
+      /Could not reach the update source/.test(off.message ?? ""),
     `offline: ${JSON.stringify(off)}`,
   );
   // The notice moved the notes area (so the check below is not vacuous), and the webview followed.

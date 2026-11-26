@@ -1,17 +1,21 @@
-import { useRef, useState } from "preact/hooks";
-import type { Package } from "../api";
+// Extensions: the programs that connect pluxy to each provider. A person sees which are installed
+// and what state each is in, installs more, and opens one to see how it runs, change its settings,
+// turn it off or on, or remove it. Rows, the loading, empty and failed panes and the settings form
+// come from the shared parts.
+
+import { useState } from "preact/hooks";
+import type { Package, Registry, Status } from "../api";
 import { SettingsForm } from "../extensions/settings";
+import { Phases, providerName, StatePane } from "../parts";
 import { useAccountLabels, usePrivacy } from "../privacy";
 import type { PageDef } from "../shell";
 import { strings } from "../strings";
 import {
   Button,
-  Card,
   ConfirmButton,
   Detail,
-  Empty,
   Facts,
-  List,
+  type Loaded,
   MasterDetail,
   Notice,
   PageHead,
@@ -19,98 +23,197 @@ import {
   useAction,
   useKit,
   useLoad,
+  usePoll,
   when,
 } from "../ui";
 
 const t = strings("extensions", {
   title: "Extensions",
   tip: "The programs that connect pluxy to each provider",
+  intro:
+    "Each extension is a program that connects pluxy to one provider. Accounts need their provider's extension.",
+  refresh: "Refresh",
+  safeMode: "pluxy was started in safe mode, so no extension runs. Start pluxy again normally to leave it.",
+  installedHeading: "Installed",
+  loading: "Loading extensions…",
+  couldNotLoad: "Could not read the installed extensions",
+  noneYet: "No extensions yet",
+  noneYetHelp: "pluxy needs one for each provider you use.",
   state: "State",
   version: "Version",
-  registry: "Registry",
-  installed: "Installed",
-  digest: "Digest",
-  whyNotRunning: "Why it is not running",
-  generation: "Generation {generation}",
-  process: "Process",
+  installedFrom: "Installed from",
+  installedAt: "Installed",
+  checksum: "Checksum",
+  whyStopped: "Why it stopped",
+  processId: "Process ID",
   requestsNow: "Requests now",
   restarts: "Restarts",
   lastError: "Last error",
-  isolation:
-    "Extensions run in separate processes, so a crash will not stop core. They are not sandboxed and can access whatever the process can.",
-  disable: "Disable",
-  enable: "Enable",
+  oldCopy: "Finishing requests on the version before",
+  trust: "Extensions run as separate programs with your user's permissions. Install only ones you trust.",
+  turnOff: "Turn off",
+  turnOn: "Turn on",
+  turnOffAbout: "Its accounts stop taking requests until you turn it on again.",
   remove: "Remove",
-  available: "Not installed",
-  refresh: "Refresh",
-  registryError: "Registry {name}: {error}",
-  nothingMore: "Nothing more to install from the registries in core's config.",
-  config: "Config Panel",
-  availableExtensions: "Extensions not installed",
-  extension: "Extension",
+  removeAbout: "Removes the program. Its accounts stay and work again if you install it again.",
+  availableHeading: "Available to install",
+  loadingList: "Loading what is on offer…",
+  couldNotLoadList: "Could not read what is on offer",
   install: "Install",
-  noInstalled: "No extensions installed. Install one from Not installed below.",
-  loading: "Loading…",
-  installedExtensions: "Installed extensions",
+  installing: "Installing…",
+  allInstalled: "Every extension on offer is installed.",
+  noList: "This pluxy has no list to install extensions from.",
+  noListHelp: "A pluxy built from source has none until one is added to its settings file.",
+  openFile: "Open the settings file",
+  listFailed: "Could not read the list {name}: {error}",
 });
 
-function PackageDetail(props: { p: Package; onClose: () => void; onChanged: () => void }) {
+/** How often the lists are read again while an extension is starting. */
+const STARTING_POLL_MS = 1500;
+
+function Copies(props: { id: string; status?: Status }) {
+  const mask = usePrivacy().masker(useAccountLabels(props.status));
+  const copies = (props.status?.extensions ?? [])
+    .filter((e) => e.id === props.id)
+    .sort((a, b) => Number(b.current) - Number(a.current));
+  return (
+    <>
+      {copies.map((g) => (
+        <div key={g.generation} class="ext-copy">
+          {!g.current && <p class="muted">{t("oldCopy")}</p>}
+          <Facts
+            rows={[
+              [t("processId"), g.pid],
+              [t("requestsNow"), g.active_requests],
+              [t("restarts"), g.restarts],
+              [t("lastError"), mask(g.last_error)],
+            ]}
+          />
+        </div>
+      ))}
+    </>
+  );
+}
+
+function PackageDetail(props: { p: Package; status?: Status; onClose: () => void; onChanged: () => void }) {
   const { api } = useKit();
   const { p } = props;
-  const status = useLoad(api.status);
-  const mask = usePrivacy().masker(useAccountLabels(status.data));
-  const act = useAction(props.onChanged);
+  const mask = usePrivacy().masker(useAccountLabels(props.status));
+  const power = useAction(props.onChanged);
   const remove = useAction(() => {
     props.onClose();
     props.onChanged();
   });
-  const running = status.data?.extensions.filter((e) => e.id === p.id) ?? [];
   return (
     <Detail title={p.id} onClose={props.onClose}>
       <Facts
         rows={[
           [t("state"), <StateBadge state={p.state} />],
           [t("version"), <span class="mono">{p.version}</span>],
-          [t("registry"), p.registry],
-          [t("installed"), when(p.installed_at)],
-          [t("digest"), <span class="mono">{p.sha256.slice(0, 16)}</span>],
-          [t("whyNotRunning"), mask(p.error)],
+          [t("installedFrom"), p.registry],
+          [t("installedAt"), when(p.installed_at)],
+          [t("checksum"), <span class="mono">{p.sha256.slice(0, 16)}</span>],
+          [t("whyStopped"), mask(p.error)],
         ]}
       />
-      {running.map((g) => (
-        <Facts
-          key={g.generation}
-          rows={[
-            [
-              t("generation", { generation: g.generation }),
-              <StateBadge state={g.current ? g.state : "draining"} />,
-            ],
-            [t("process"), g.pid],
-            [t("requestsNow"), g.active_requests],
-            [t("restarts"), g.restarts],
-            [t("lastError"), mask(g.last_error)],
-          ]}
-        />
-      ))}
-      <p class="muted">{t("isolation")}</p>
+      <Copies id={p.id} status={props.status} />
+      <p class="muted">{t("trust")}</p>
       {p.state !== "disabled" && <SettingsForm id={p.id} />}
-      {(act.error ?? remove.error) && <Notice tone="danger">{mask(act.error ?? remove.error)}</Notice>}
-      <div class="actions">
-        <Button
-          variant={p.enabled ? "quiet" : "primary"}
-          disabled={act.busy}
-          onClick={() => act.run(() => api.setEnabled(p.id, !p.enabled))}
-        >
-          {p.enabled ? t("disable") : t("enable")}
-        </Button>
-        <ConfirmButton
-          disabled={act.busy || remove.busy}
-          onConfirm={() => remove.run(() => api.removePackage(p.id))}
-        >
-          {t("remove")}
-        </ConfirmButton>
+      <div class="ext-actions">
+        <div class="ext-action">
+          <div class="ext-action-line">
+            <Button
+              variant={p.enabled ? "quiet" : "primary"}
+              disabled={power.busy || remove.busy}
+              onClick={() => power.run(() => api.setEnabled(p.id, !p.enabled))}
+            >
+              {p.enabled ? t("turnOff") : t("turnOn")}
+            </Button>
+            {p.enabled && <span class="muted">{t("turnOffAbout")}</span>}
+          </div>
+          {power.error && <Notice tone="danger">{mask(power.error)}</Notice>}
+        </div>
+        <div class="ext-action">
+          <div class="ext-action-line">
+            <ConfirmButton
+              disabled={power.busy || remove.busy}
+              onConfirm={() => remove.run(() => api.removePackage(p.id))}
+            >
+              {t("remove")}
+            </ConfirmButton>
+            <span class="muted">{t("removeAbout")}</span>
+          </div>
+          {remove.error && <Notice tone="danger">{mask(remove.error)}</Notice>}
+        </div>
       </div>
     </Detail>
+  );
+}
+
+function Installed(props: {
+  packages: Loaded<{ packages: Package[] }>;
+  status: Loaded<Status>;
+  onChanged: () => void;
+}) {
+  const [selected, setSelected] = useState<string>();
+  return (
+    <section class="ext-section" aria-labelledby="ext-installed">
+      <h2 id="ext-installed" class="ext-heading">
+        {t("installedHeading")}
+      </h2>
+      <Phases
+        load={props.packages}
+        loading={t("loading")}
+        failed={{ title: t("couldNotLoad") }}
+        isEmpty={(data) => data.packages.length === 0}
+        empty={
+          <StatePane kind="empty" title={t("noneYet")}>
+            {t("noneYetHelp")}
+          </StatePane>
+        }
+      >
+        {(data) => {
+          const chosen = data.packages.find((p) => p.id === selected);
+          return (
+            <MasterDetail
+              list={
+                <ul class="ext-rows">
+                  {data.packages.map((p) => (
+                    <li key={p.id}>
+                      <button
+                        type="button"
+                        class="ext-row"
+                        aria-current={p.id === selected ? "true" : undefined}
+                        onClick={() => setSelected(p.id)}
+                      >
+                        <span class="ext-who">
+                          <span class="ext-name">{providerName(p.id)}</span>
+                          <span class="ext-id mono">{p.id}</span>
+                        </span>
+                        <span class="ext-version mono">{p.version}</span>
+                        <span class="ext-state">
+                          <StateBadge state={p.state} />
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              }
+              detail={
+                chosen && (
+                  <PackageDetail
+                    p={chosen}
+                    status={props.status.data}
+                    onClose={() => setSelected(undefined)}
+                    onChanged={props.onChanged}
+                  />
+                )
+              }
+            />
+          );
+        }}
+      </Phases>
+    </section>
   );
 }
 
@@ -120,143 +223,143 @@ interface Offer {
   registry: string;
 }
 
-function Available(props: { installed: Set<string>; onInstalled: () => void }) {
+function OfferRow(props: { o: Offer; onInstalled: () => void }) {
   const { api } = useKit();
-  const registries = useLoad(api.registries);
+  const { o } = props;
   const install = useAction(props.onInstalled);
+  return (
+    <li class="ext-offer">
+      <div class="ext-row" data-static="">
+        <span class="ext-who">
+          <span class="ext-name">{providerName(o.id)}</span>
+          <span class="ext-id mono">{o.id}</span>
+        </span>
+        <span class="ext-version mono">{o.version}</span>
+        <span class="ext-state">
+          <Button
+            variant="quiet"
+            disabled={install.busy}
+            label={`${t("install")} ${o.id}`}
+            onClick={() => install.run(() => api.install(o.id, o.registry))}
+          >
+            {install.busy ? t("installing") : t("install")}
+          </Button>
+        </span>
+      </div>
+      {install.error && <Notice tone="danger">{install.error}</Notice>}
+    </li>
+  );
+}
+
+function offersOf(registries: Registry[], installed: Set<string>): Offer[] {
   const offers: Offer[] = [];
-  for (const r of registries.data?.registries ?? []) {
+  for (const r of registries) {
     for (const p of r.packages ?? []) {
       const latest = p.releases[0]; // newest first
-      if (latest && !props.installed.has(p.id))
+      if (latest && !installed.has(p.id))
         offers.push({ id: p.id, version: latest.version, registry: r.name });
     }
   }
-  const broken = (registries.data?.registries ?? []).filter((r) => r.error);
+  return offers;
+}
+
+function Available(props: {
+  registries: Loaded<{ registries: Registry[] }>;
+  installed: Set<string>;
+  onInstalled: () => void;
+}) {
   return (
-    <Card
-      title={t("available")}
-      actions={
-        <Button onClick={registries.reload} disabled={registries.loading}>
-          {t("refresh")}
-        </Button>
-      }
-    >
-      {registries.phase === "loading" && <Notice tone="muted">{t("loading")}</Notice>}
-      {registries.error && <Notice tone="danger">{registries.error}</Notice>}
-      {broken.map((r) => (
-        <Notice key={r.name} tone="warn">
-          {t("registryError", { name: r.name, error: r.error ?? "" })}
-        </Notice>
-      ))}
-      {install.error && <Notice tone="danger">{install.error}</Notice>}
-      {registries.error && offers.length === 0 ? null : registries.data && offers.length === 0 ? (
-        <Empty action={<a href="#/config">{t("config")}</a>}>{t("nothingMore")}</Empty>
-      ) : (
-        <List<Offer>
-          label={t("availableExtensions")}
-          items={offers}
-          id={(o) => `${o.registry}:${o.id}`}
-          columns={[
-            { label: t("extension"), value: (o) => o.id, mono: true },
-            { label: t("version"), value: (o) => o.version, mono: true },
-            { label: t("registry"), value: (o) => o.registry },
-            {
-              label: t("install"),
-              value: (o) => (
-                <Button
-                  disabled={install.busy}
-                  onClick={() => install.run(() => api.install(o.id, o.registry))}
+    <section class="ext-section" aria-labelledby="ext-available">
+      <h2 id="ext-available" class="ext-heading">
+        {t("availableHeading")}
+      </h2>
+      <Phases
+        load={props.registries}
+        loading={t("loadingList")}
+        failed={{ title: t("couldNotLoadList") }}
+        isEmpty={() => false}
+        empty={null}
+      >
+        {(data) => {
+          const offers = offersOf(data.registries, props.installed);
+          const broken = data.registries.filter((r) => r.error);
+          return (
+            <>
+              {broken.map((r) => (
+                <Notice key={r.name} tone="warn">
+                  {t("listFailed", { name: r.name, error: r.error ?? "" })}
+                </Notice>
+              ))}
+              {offers.length > 0 && (
+                <ul class="ext-rows">
+                  {offers.map((o) => (
+                    <OfferRow key={`${o.registry}:${o.id}`} o={o} onInstalled={props.onInstalled} />
+                  ))}
+                </ul>
+              )}
+              {offers.length === 0 && data.registries.length === 0 && (
+                <StatePane
+                  kind="empty"
+                  title={t("noList")}
+                  primary={{ label: t("openFile"), href: "#/config/source" }}
                 >
-                  {t("install")}
-                </Button>
-              ),
-            },
-          ]}
-        />
-      )}
-    </Card>
+                  {t("noListHelp")}
+                </StatePane>
+              )}
+              {offers.length === 0 && data.registries.length > 0 && broken.length === 0 && (
+                <p class="muted">{t("allInstalled")}</p>
+              )}
+            </>
+          );
+        }}
+      </Phases>
+    </section>
   );
 }
 
 export function ExtensionsPage() {
   const { api, extensionsChanged } = useKit();
-  const available = useRef<HTMLDivElement>(null);
-  const loaded = useLoad(api.packages);
-  // After a change, the navigation's extension pages may differ too.
-  const packages = {
-    ...loaded,
-    reload: () => {
-      loaded.reload();
-      extensionsChanged();
-    },
+  const packages = useLoad(api.packages);
+  const status = useLoad(api.status);
+  const registries = useLoad(api.registries);
+  // After a change, the lists and the navigation's extension pages may differ.
+  const changed = () => {
+    packages.reload();
+    status.reload();
+    registries.reload();
+    extensionsChanged();
   };
-  const [selected, setSelected] = useState<string>();
-  const list = packages.data?.packages ?? [];
-  const chosen = list.find((p) => p.id === selected);
-
+  const loading = packages.loading || status.loading || registries.loading;
+  // A program that is starting says so only until its handshake ends: read again meanwhile, so
+  // Starting does not stay on screen after it runs.
+  const starting = (packages.data?.packages ?? []).some((p) => p.state === "starting");
+  usePoll(
+    () => {
+      packages.reload();
+      status.reload();
+    },
+    STARTING_POLL_MS,
+    starting,
+  );
   return (
     <>
       <PageHead
         title={t("title")}
         actions={
-          <Button onClick={packages.reload} disabled={packages.loading}>
+          <Button onClick={changed} disabled={loading}>
             {t("refresh")}
           </Button>
         }
       />
-      {packages.phase === "loading" && <Notice tone="muted">{t("loading")}</Notice>}
-      {packages.error && <Notice tone="danger">{packages.error}</Notice>}
-      <div class="stack">
-        <MasterDetail
-          list={
-            packages.error && list.length === 0 ? null : packages.data && list.length === 0 ? (
-              <Empty
-                action={
-                  <Button
-                    onClick={() => {
-                      available.current?.scrollIntoView?.({ block: "nearest" });
-                      available.current?.focus();
-                    }}
-                  >
-                    {t("available")}
-                  </Button>
-                }
-              >
-                {t("noInstalled")}
-              </Empty>
-            ) : (
-              <List<Package>
-                label={t("installedExtensions")}
-                items={list}
-                id={(p) => p.id}
-                selected={selected}
-                onSelect={setSelected}
-                columns={[
-                  { label: t("extension"), value: (p) => p.id, mono: true },
-                  { label: t("version"), value: (p) => p.version, mono: true },
-                  { label: t("state"), value: (p) => <StateBadge state={p.state} /> },
-                  { label: t("registry"), value: (p) => p.registry },
-                ]}
-              />
-            )
-          }
-          detail={
-            chosen && (
-              // Keyed by state, so the running generations shown reload when the package changes.
-              <PackageDetail
-                key={`${chosen.id} ${chosen.state}`}
-                p={chosen}
-                onClose={() => setSelected(undefined)}
-                onChanged={packages.reload}
-              />
-            )
-          }
+      <div class="stack ext">
+        <p class="muted ext-intro">{t("intro")}</p>
+        {status.data?.safe_mode && <Notice tone="warn">{t("safeMode")}</Notice>}
+        <Installed packages={packages} status={status} onChanged={changed} />
+        <Available
+          registries={registries}
+          installed={new Set((packages.data?.packages ?? []).map((p) => p.id))}
+          onInstalled={changed}
         />
-        {/* Takes focus from the empty list's button, which leads here. */}
-        <div ref={available} tabIndex={-1}>
-          <Available installed={new Set(list.map((p) => p.id))} onInstalled={packages.reload} />
-        </div>
       </div>
     </>
   );

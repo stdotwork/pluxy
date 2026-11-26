@@ -93,6 +93,19 @@ what it holds.
   APIs, and Codex with an API key or signed in with ChatGPT). A pluxy started in safe mode says so at
   the top.
 
+## Extensions
+
+Extensions (Settings, pluxy) lists the programs that connect pluxy to each provider, as rows with the
+provider's name, the package ID, the version and the state, and the extensions on offer to install
+under them. A row opens its facts (where it was installed from, when, a checksum, and for each
+running copy its process ID, the requests it is serving now and its restarts), the settings form its
+schema draws, and two buttons. Turn off stops the program and its accounts stop taking requests until
+Turn on; Remove deletes the program but keeps its accounts, which work again when it is installed
+again, and it asks first. A pluxy started in safe mode says so at the top, because no extension runs
+in it. The list on offer comes from the lists core's config names (`packages.registries`); a pluxy
+with none says so and links to the settings file. A list that cannot be read is named in a notice
+and does not stop the others. An extension that is still starting is read again until it runs.
+
 ## Where an API key added in the panel lives
 
 An API key added on the Add Account page becomes an account in core's credential store: a folder
