@@ -152,7 +152,7 @@ function App(props: { initial: Connection; privacy: PrivacyState }) {
     // it offers to only when core runs here.
     const setup = conn.mode === "remote" ? undefined : setupClientAction(agents, catalog, offers);
     return [
-      ...corePages({ setup }),
+      ...corePages({ general: { signOut: false }, setup }),
       easyModePage(agents, catalog, loadDevice),
       clientListPage(clients, installed, saved, visible.length, saveClients),
       ...visible.flatMap((c) => agents.find((a) => a.id === c.id) ?? []),

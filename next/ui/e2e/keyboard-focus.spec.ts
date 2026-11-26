@@ -97,8 +97,6 @@ test("Tab goes through the frame in reading order: the navigation, the status bl
     "Order & fallback",
     "Limits",
     "Refresh",
-    "Privacy mode",
-    "Sign out",
   ]);
   expect(await page.evaluate(() => document.activeElement?.closest("main") !== null)).toBe(true);
 });

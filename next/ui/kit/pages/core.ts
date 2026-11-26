@@ -7,6 +7,7 @@ import { accountsPage } from "./accounts";
 import { addAccountPage } from "./addAccount";
 import { configPage } from "./config";
 import { extensionsPage } from "./extensions";
+import { type GeneralOptions, generalPage } from "./general";
 import { homePage } from "./home";
 import { logsPage } from "./logs";
 import { quotaPage } from "./quota";
@@ -20,6 +21,8 @@ import { usageTabPage } from "./usage";
 
 /** What a build adds to core's pages; the panel adds nothing. */
 export interface CorePageOptions {
+  /** What General offers: the desktop app has its Sign out on its own page, so it turns this one off. */
+  general?: GeneralOptions;
   setup?: SetupOptions;
   tools?: ToolsOptions;
 }
@@ -32,11 +35,14 @@ export const corePages = (options?: CorePageOptions): PageDef[] => [
   quotaPage(),
   requestsPage(),
   usageTabPage(),
-  setupPage(options?.setup),
   toolsPage(options?.tools),
-  configPage(),
-  systemPage(),
-  extensionsPage(),
+  // Settings' topics, in the order they are listed: this device's, then pluxy's own. General is
+  // first, so the navigation's Settings entry opens on it.
+  generalPage(options?.general),
   themesPage(),
+  configPage(),
+  extensionsPage(),
   logsPage(),
+  systemPage(),
+  setupPage(options?.setup),
 ];

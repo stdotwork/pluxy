@@ -10,7 +10,7 @@ import { ExtensionPage, type ExtensionPageProps } from "./extensions/page";
 import { destinationLabel, Frame, type FrameLink, type FrameStatus } from "./frame";
 import type { Host, Reply } from "./host";
 import { Icon } from "./icons";
-import { PrivacyContext, type PrivacyState, privacyMasks } from "./privacy";
+import { PrivacyContext, type PrivacyState, privacyMasks, usePrivacyOn } from "./privacy";
 import { strings } from "./strings";
 import type { ThemeState } from "./theme/state";
 import { Button, type Kit, KitContext, Notice } from "./ui";
@@ -23,12 +23,9 @@ const t = strings("shell", {
   remember: "Remember on this device",
   signIn: "Sign in",
   refused: "Core refused the management key. Sign in again.",
-  signOut: "Sign out",
   safeAddress: "If custom CSS hides the panel, add ?safe to the URL to disable it.",
-  privacy: "Privacy mode",
-  privacyOn: "Privacy on",
-  privacyEnable: "Turn on privacy mode to hide account emails and identifiers",
-  privacyDisable: "Turn off privacy mode to show full account details",
+  namesHidden: "Names hidden",
+  showNames: "Show names again",
 });
 
 /**
@@ -162,14 +159,26 @@ function SignIn(props: { host: Host; onDone: () => void; reason?: string; safeAd
   );
 }
 
-/** Privacy mode's state, drawing again when it changes. */
-function usePrivacyOn(privacy: PrivacyState): boolean {
-  const [on, setOn] = useState(privacy.on);
-  useEffect(() => {
-    setOn(privacy.on);
-    return privacy.subscribe(() => setOn(privacy.on));
-  }, [privacy]);
-  return on;
+/**
+ * The header strip's button while names are hidden: it says so, and turns hiding off. While names
+ * show there is no button: turning hiding on is the Hide names setting in General.
+ */
+export function NamesHiddenButton(props: { privacy: PrivacyState }) {
+  const hidden = usePrivacyOn(props.privacy);
+  if (!hidden) return null;
+  return (
+    <button
+      type="button"
+      class="strip-button privacy"
+      data-part="privacy-toggle"
+      aria-pressed="true"
+      title={t("showNames")}
+      onClick={() => props.privacy.set(false)}
+    >
+      <Icon name="eyeOff" />
+      <span>{t("namesHidden")}</span>
+    </button>
+  );
 }
 
 export function Shell(props: {
@@ -194,13 +203,25 @@ export function Shell(props: {
   /** What the status block at the navigation's foot says: where pluxy runs, and its state. */
   status?: FrameStatus;
 }) {
-  const { host, themes, privacy } = props;
+  const { themes, privacy } = props;
   const privacyOn = usePrivacyOn(privacy);
   const masks = useMemo(() => privacyMasks(privacyOn), [privacyOn]);
   useEffect(() => {
     document.documentElement.dataset.privacy = privacyOn ? "on" : "off";
   }, [privacyOn]);
-  const [signedIn, setSignedIn] = useState(host.signedIn());
+  const [signedIn, setSignedIn] = useState(props.host.signedIn());
+  // A page that signs the person out (General's Sign out) calls host.signOut(): the shell then
+  // goes back to the sign-in form, as it does when core refuses the key.
+  const host = useMemo<Host>(
+    () => ({
+      ...props.host,
+      signOut() {
+        props.host.signOut();
+        setSignedIn(false);
+      },
+    }),
+    [props.host],
+  );
   const [reason, setReason] = useState<string>();
   const [uiVersion, setUiVersion] = useState(0);
 
@@ -344,37 +365,7 @@ export function Shell(props: {
           page={page}
           rootRef={rootRef}
           announced={announced}
-          headerEnd={
-            <>
-              <button
-                type="button"
-                class="strip-button privacy"
-                data-part="privacy-toggle"
-                aria-pressed={privacyOn}
-                aria-label={t("privacy")}
-                title={t(privacyOn ? "privacyDisable" : "privacyEnable")}
-                onClick={() => privacy.set(!privacyOn)}
-              >
-                <Icon name={privacyOn ? "eyeOff" : "eye"} />
-                {privacyOn && <span aria-hidden="true">{t("privacyOn")}</span>}
-              </button>
-              {host.features.has("signOut") && (
-                <button
-                  type="button"
-                  class="strip-button signout"
-                  data-part="sign-out"
-                  aria-label={t("signOut")}
-                  title={t("signOut")}
-                  onClick={() => {
-                    host.signOut();
-                    setSignedIn(false);
-                  }}
-                >
-                  <Icon name="signOut" />
-                </button>
-              )}
-            </>
-          }
+          headerEnd={<NamesHiddenButton privacy={privacy} />}
         >
           {active?.render()}
         </Frame>

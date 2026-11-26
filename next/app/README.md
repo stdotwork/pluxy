@@ -371,15 +371,15 @@ other launch is an ordinary later launch.
 
 ## Privacy mode
 
-The **Privacy mode** toggle at the header strip's end masks account e-mail addresses and identifiers where
+The **Hide names** setting in General masks account e-mail addresses and identifiers where
 the kit shows them, as in the panel (`ui/kit/privacy.ts`), and extension pages are told in their
-theme snapshot. The app keeps the choice natively, in `privacy-mode.json` beside
+theme snapshot. While it is on, the header strip shows a **Names hidden** button that turns it off. The app keeps the choice natively, in `privacy-mode.json` beside
 `connection.json` (readable only by your user), not in the window's storage, so losing that
 storage cannot turn it off. A file that cannot be read or parsed counts as on.
 
 ## Files the window saves
 
-The Themes page's **Export**, the Logs page's downloads and the Requests page's **Save as spreadsheet** save
+The Themes page's **Save theme file**, the Logs page's downloads and the Requests page's **Save as spreadsheet** save
 a file. In the panel that is a browser download. The app's window opens no address but the app's
 own, so a download link, whose address starts with `blob:`, does nothing there; these pages hand
 the file to the `file_save` command instead (`src-tauri/src/export.rs`). It saves the file in
@@ -1644,7 +1644,7 @@ One more session in managed mode (`native/privacy.ts`) runs the privacy mode che
 (`src-tauri/src/native_privacy.rs`) and then the themes checks (`src-tauri/src/native_themes.rs`):
 the T3 Code theme file `ui/tests/fixtures/t3-docs-nightfall.json`, pasted on the Themes page and
 added, paints the window in its canvas colour with the root's `dark` class, the picker lists it,
-`GET /themes` through the app's host has it as `current`, Export saves `nightfall.json` in the
+`GET /themes` through the app's host has it as `current`, Save theme file saves `nightfall.json` in the
 session's Downloads folder with the theme file's JSON (read from disk at the path the page shows),
 and the next launch paints in it. The session ends on the Themes page in that theme.
 
