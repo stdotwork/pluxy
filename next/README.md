@@ -148,8 +148,11 @@ runs in when there is one, and otherwise the one in pluxy's home:
   config when a `config.json` in the current folder was read instead. With no config anywhere,
   the error names each place it looked in and what to run. A key from `--key` or
   `PLUXY_MANAGEMENT_KEY` is not sent to an address that only the current folder's `config.json`
-  names, unless that file holds the same key: the command refuses, exits 2 and calls nothing. Add
-  `--config ./config.json` to use that pluxy, or `--url` to use another.
+  names, unless that file holds exactly the same key: when the file loads and has an address, the
+  command refuses, exits 2 and calls nothing. A file with no management key, or one listening on
+  port 0, keeps its own error (exit 1) and sends nothing either. When the current folder is pluxy's
+  home, its `config.json` is the current folder's and is checked too. To use that pluxy, leave out
+  the key the message names, so the key in its `config.json` is used; to use another, add `--url`.
 
 pluxy moves and copies nothing into its home. A core started with `-config`, such as the desktop
 app's own core or the [container](#run-it-in-a-container), keeps its files beside that config,

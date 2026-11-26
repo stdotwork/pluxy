@@ -81,12 +81,17 @@ subcommand is a client of the management API of a core that is already running, 
   `pluxy key management`).
 - **A key is not sent where a folder says.** When the key comes from `--key` or
   `PLUXY_MANAGEMENT_KEY` and the address only from `config.json` in the current folder, the command
-  compares that file's `management_key` with the key it was given (in constant time). If they differ it
-  sends nothing and exits 2 (`pluxy: not sending the management key from <where> to <address>, the
-  address in this folder's config.json, which holds a different key`), so a stray file cannot steer a
-  key to another machine. The same key in the file, `--config` (also `--config ./config.json`), `--url`
-  and `PLUXY_URL` are not refused; pluxy's home's `config.json` is not checked, and neither is
-  `pluxy key management`, which calls no core.
+  compares that file's `management_key` with the key it was given, byte for byte (in constant time).
+  When the file loads and has a usable address and the keys differ, it sends nothing and exits 2
+  (`pluxy: not sending the management key from <where> to <address>, the address in this folder's
+  config.json, which holds a different key`), so a stray file cannot steer a key to another machine.
+  A file with no `management_key`, or whose `listen` has port 0, fails first with its own error (exit
+  1) and sends nothing either. When the current folder is pluxy's home, its `config.json` is the
+  folder's and is checked. The same key in the file, `--config` (a deliberate choice of file, so the
+  key given goes to its address), `--url` and `PLUXY_URL` are not refused; pluxy's home's
+  `config.json`, read when the current folder has none, is not checked, and neither is
+  `pluxy key management`, which calls no core. The message says what to do: leave out the key it
+  names, so the key in the folder's `config.json` is used, or add `--url <its address>` to call another.
 - **Environment variables.** Client subcommands read two variables:
 
   | Variable | What it does | Default | Example |

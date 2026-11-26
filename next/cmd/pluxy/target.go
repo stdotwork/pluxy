@@ -87,8 +87,11 @@ func defaultConfig(getenv func(string) string) (path string, src configSource, e
 //
 // A key from --key or PLUXY_MANAGEMENT_KEY is never sent to the address of a config.json that
 // only the current folder put there, unless that file holds the same key: a file in a folder
-// could name any machine. The refusal is a usageError, made before any request. --config, --url
-// and PLUXY_URL are a person's own choice of address and are not refused.
+// could name any machine. The refusal is a usageError, made before any request, and only for a
+// config that loads and has a usable address: one with no management key, or listening on port
+// 0, fails first with its own error (exit 1) and sends nothing either. When the current folder
+// is pluxy's home, its config.json is a folder file and is checked. --config, --url and
+// PLUXY_URL are a person's own choice of address and are not refused.
 func findCore(w where) (target, error) {
 	t := target{http: &http.Client{Timeout: 2 * time.Minute}}
 	t.url, t.urlFrom = firstSet(w.urlFlag, "--url", w.getenv("PLUXY_URL"), "PLUXY_URL")
@@ -148,7 +151,7 @@ func findCore(w where) (target, error) {
 	t.urlFrom = fromConfig
 	if keyGiven && src == fromFolder && !sameKey(t.key, cfg.ManagementKey) {
 		return target{}, usageError{fmt.Sprintf("not sending the management key from %s to %s, the address in this folder's config.json, which holds a different key. "+
-			"To use that pluxy, add --config ./config.json. To use another, add --url <its address>.", t.keyFrom, t.url)}
+			"To use that pluxy, leave out %s so the key in its config.json is used. To use another, add --url <its address>.", t.keyFrom, t.url, t.keyFrom)}
 	}
 	if cfg.TLS.Enable {
 		if pool, err := x509.SystemCertPool(); err == nil {
@@ -164,8 +167,8 @@ func findCore(w where) (target, error) {
 	return t, nil
 }
 
-// sameKey reports whether a and b are the same key, in constant time: it compares their SHA-256
-// digests, so the time taken does not tell how much of one key the other matches or its length.
+// sameKey reports whether a and b are the same key: it compares their SHA-256 digests in
+// constant time, so the keys must match exactly.
 func sameKey(a, b string) bool {
 	da, db := sha256.Sum256([]byte(a)), sha256.Sum256([]byte(b))
 	return subtle.ConstantTimeCompare(da[:], db[:]) == 1
