@@ -39,8 +39,9 @@ const privacy = prefsPrivacy(host);
 render(<Shell host={host} themes={themes} privacy={privacy} pages={corePages()} />, document.body);
 ```
 
-The **Privacy mode** toggle at the header strip's end hides account e-mail addresses and
-identifiers while the person shares their screen (`kit/privacy.ts`). It changes only what pages show: a page passes a
+The **Hide names** setting in General hides account e-mail addresses and
+identifiers while the person shares their screen (`kit/privacy.ts`); while it is on, the header
+strip's end shows a **Names hidden** button that turns it off. It changes only what pages show: a page passes a
 value through `usePrivacy()`'s masks where it shows it (text, `title`, `aria-label`) and keeps the
 real value for calls, search, filters, copying and downloads. A key's name (its label) goes through
 them; a key's value, even masked, never does: it keeps its own handling in both states. Where the desktop app says it saved a file, privacy
@@ -66,11 +67,14 @@ that scrolls:
   (`panel/status.ts`); the desktop app reads its connection: a pluxy it runs says Running, one it only
   connects to says Connected, and a state it cannot show pages in links to Where pluxy runs.
 - **The header strip** over the page holds the page's one `h1`, the destination's tabs, and at
-  its end the page's main actions, then the Privacy mode toggle and, where the host can sign out,
-  the sign-out button. A page gives its title and actions with `PageHead`, as before: inside the
+  its end the page's main actions, then the Names hidden button while names are hidden. Sign out is
+  a row of General where the host can sign out; the desktop app turns that row off
+  (`corePages({ general: { signOut: false } })`) because its Sign out is on Where pluxy runs. A
+  page gives its title and actions with `PageHead`, as before: inside the
   frame the strip draws them, and a page shown outside a frame draws them in place.
 - **Topics**: a destination whose pages are topics (Settings) lists them beside the page, in the
-  groups pluxy, This device and From extensions. In a window under 820 pixels wide the list is a
+  groups This device (General, Themes and the desktop app's pages), pluxy and From extensions,
+  in that order; Settings opens on General. In a window under 820 pixels wide the list is a
   select above the page.
 - **The pane** shows the page, and is the only part that scrolls. A change of page opens the new
   page at its top; a change inside a page keeps the position.
@@ -193,6 +197,7 @@ visit), and `POST /client-keys` sends the name with the new key.
 | Logs Viewer (`logs`) | Settings, a topic | Logs Viewer (`/logs`) |
 | Usage (`usage`) | Activity | No old panel page: the old desktop app's list of recorded requests |
 | Tools (`tools`) | Tools | No old page |
+| General (`settings`) | Settings, the first topic | No old page |
 | Set up pluxy (`setup`) | Settings, a topic | No old page |
 | Config Panel (`config`) | Settings, a topic | Config Panel (`/config`; `/settings` and `/api-keys` led there) |
 | System (`system`) | Settings, a topic | Management Center Info (`/system`) |

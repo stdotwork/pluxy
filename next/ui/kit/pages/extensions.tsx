@@ -24,6 +24,7 @@ import {
 
 const t = strings("extensions", {
   title: "Extensions",
+  tip: "The programs that connect pluxy to each provider",
   state: "State",
   version: "Version",
   registry: "Registry",
@@ -266,5 +267,6 @@ export const extensionsPage = (): PageDef => ({
   dest: "settings",
   kind: "topic",
   title: t("title"),
+  tip: t("tip"),
   render: () => <ExtensionsPage />,
 });

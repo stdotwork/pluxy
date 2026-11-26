@@ -15,7 +15,6 @@ const ICONS = {
   eye: "M1.5 8S3.9 3.5 8 3.5 14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8zM10 8a2 2 0 1 1-4 0 2 2 0 0 1 4 0z",
   eyeOff:
     "M6.4 3.7A6 6 0 0 1 8 3.5c4.1 0 6.5 4.5 6.5 4.5a11 11 0 0 1-1.6 2.1M11 11.6a5.9 5.9 0 0 1-3 .9C3.9 12.5 1.5 8 1.5 8a10.6 10.6 0 0 1 2.9-3.3M2.5 2.5l11 11",
-  signOut: "M6.5 2.5h-4v11h4M6.5 8H14M11 5l3 3-3 3",
   arrow: "M3 8h10M9 4l4 4-4 4",
   // An account's group, one shape each, so the groups differ without their colour: a triangle
   // with a mark (needs you), an hourglass (waiting), a ticked circle (serving), a circle with a

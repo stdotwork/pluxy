@@ -4,11 +4,13 @@
 //!
 //! - `first`: adds accounts whose labels are hostile identities (`$&…`, `@x`, an e-mail address
 //!   that the account ID holds in a file-name form); with privacy mode off the Accounts page
-//!   shows them as they are; the eye toggle masks them in text, tooltips and accessible names;
-//!   an extension page's webview gets `privacy: true` in its welcome, then a theme event with
-//!   `false` and one with `true` again as the toggle changes; the app quits with it on.
-//! - `second`: the next launch starts masked, before anything is clicked; the toggle shows
-//!   everything again (the person's explicit reveal); the app quits with it off.
+//!   shows them as they are; the Hide names switch in General (`#/settings`) masks them in text,
+//!   tooltips and accessible names, and the header strip then shows a Names hidden button; an
+//!   extension page's webview gets `privacy: true` in its welcome, then a theme event with `false`
+//!   (the Names hidden button) and one with `true` again (the switch) as the choice changes; the
+//!   app quits with it on.
+//! - `second`: the next launch starts masked, before anything is clicked; the Names hidden button
+//!   shows everything again (the person's explicit reveal); the app quits with it off.
 //! - `damaged`: native/privacy.ts damaged the saved preference: the app starts masked.
 //!
 //! The label's account key is a canary: it must never be in the window's document. Every check
@@ -39,7 +41,10 @@ const RAW: &[&str] = &[
     "example.com",
     AT,
 ];
+/// The header strip's button, drawn only while names are hidden.
 const TOGGLE: &str = "[data-part=privacy-toggle]";
+/// The Hide names row's switch in General.
+const SWITCH: &str = "[...document.querySelectorAll('[data-part=setting-row]')].find((r) => r.querySelector('.setting-name')?.textContent === 'Hide names')?.querySelector('input[role=switch]')";
 const PAGE: &str = "ext/test/probe/probe";
 
 /// The privacy value of each welcome and theme event a page webview took, in order.
@@ -107,18 +112,37 @@ fn shown(app: &AppHandle) -> String {
     .unwrap_or_default()
 }
 
-fn pressed(app: &AppHandle) -> Option<String> {
+/// Whether the header strip shows its Names hidden button: names are hidden.
+fn hidden(app: &AppHandle) -> bool {
     main_eval(
         app,
         &format!(
-            "document.querySelector({})?.getAttribute('aria-pressed') ?? null",
+            "(() => {{ const e = document.querySelector({}); return !!e && e.getAttribute('aria-pressed') === 'true' && e.textContent.includes('Names hidden'); }})()",
             json!(TOGGLE)
         ),
-    )
-    .and_then(|v| v.as_str().map(String::from))
+    ) == Some(json!(true))
 }
 
-fn toggle(c: &mut Checks, app: &AppHandle, to: bool) {
+/// Turns hiding on with General's Hide names switch, and waits for the header strip to say so.
+fn turn_on(c: &mut Checks, app: &AppHandle) {
+    let _ = main_eval(app, "(location.hash = '#/settings', true)");
+    c.check(
+        until(app, 30, &format!("!!({SWITCH})")),
+        "General has the Hide names switch",
+    );
+    let clicked = main_eval(
+        app,
+        &format!("(() => {{ ({SWITCH}).click(); return true; }})()"),
+    ) == Some(json!(true));
+    c.check(clicked, "the Hide names switch was pressed");
+    c.check(
+        within(10, || hidden(app).then_some(())).is_some(),
+        "the header strip shows the Names hidden button",
+    );
+}
+
+/// Turns hiding off with the header strip's Names hidden button, and waits for it to go.
+fn turn_off(c: &mut Checks, app: &AppHandle) {
     let clicked = main_eval(
         app,
         &format!(
@@ -126,14 +150,10 @@ fn toggle(c: &mut Checks, app: &AppHandle, to: bool) {
             json!(TOGGLE)
         ),
     ) == Some(json!(true));
-    c.check(clicked, "the navigation has the privacy mode toggle");
-    let want = if to { "true" } else { "false" };
+    c.check(clicked, "the header strip has the Names hidden button");
     c.check(
-        within(10, || (pressed(app).as_deref() == Some(want)).then_some(())).is_some(),
-        format!(
-            "the toggle shows privacy mode {}",
-            if to { "on" } else { "off" }
-        ),
+        within(10, || (!hidden(app)).then_some(())).is_some(),
+        "the Names hidden button goes when names show again",
     );
 }
 
@@ -239,12 +259,10 @@ fn first(c: &mut Checks, app: &AppHandle) {
         "core lists the accounts with their labels",
     );
     accounts(c, app);
-    c.check(
-        pressed(app).as_deref() == Some("false"),
-        "privacy mode starts off",
-    );
+    c.check(!hidden(app), "names start shown");
     raw_shown(c, app, &key);
-    toggle(c, app, true);
+    turn_on(c, app);
+    accounts(c, app);
     masked(c, app, Some(&key), "privacy mode on");
 
     // An extension page in its own webview: told in its welcome, then by theme events.
@@ -270,13 +288,19 @@ fn first(c: &mut Checks, app: &AppHandle) {
         d.first() == Some(&Some(true)),
         format!("the page's welcome says privacy is on ({d:?})"),
     );
-    toggle(c, app, false);
+    turn_off(c, app);
     let d = deliveries(2);
     c.check(
         d.last() == Some(&Some(false)),
         format!("a theme event tells the page it is off ({d:?})"),
     );
-    toggle(c, app, true);
+    // The switch is in General: the page's webview may close meanwhile, and then opens again with
+    // a welcome that says on. Either way the third delivery says on.
+    turn_on(c, app);
+    let _ = main_eval(
+        app,
+        &format!("(location.hash = {}, true)", json!(format!("#/{PAGE}"))),
+    );
     let d = deliveries(3);
     c.check(
         d.last() == Some(&Some(true)),
@@ -289,13 +313,13 @@ fn second(c: &mut Checks, app: &AppHandle) {
         return;
     }
     c.check(
-        pressed(app).as_deref() == Some("true"),
-        "after a restart privacy mode is on before anything is clicked",
+        hidden(app),
+        "after a restart names are hidden before anything is clicked",
     );
     accounts(c, app);
     masked(c, app, None, "after a restart");
-    // The person's explicit reveal: the toggle in the app's own window.
-    toggle(c, app, false);
+    // The person's explicit reveal: the Names hidden button in the app's own window.
+    turn_off(c, app);
     c.check(
         within(10, || shown(app).contains(AMP).then_some(())).is_some(),
         "turned off, the $& label shows as it is",
@@ -311,8 +335,8 @@ fn damaged(c: &mut Checks, app: &AppHandle) {
         return;
     }
     c.check(
-        pressed(app).as_deref() == Some("true"),
-        "a damaged saved preference starts with privacy mode on",
+        hidden(app),
+        "a damaged saved preference starts with names hidden",
     );
     accounts(c, app);
     masked(c, app, None, "with a damaged preference");

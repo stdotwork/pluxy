@@ -130,6 +130,16 @@ export function accountIdentities(a: { label?: string; settings?: Record<string,
   return out;
 }
 
+/** Whether names are hidden, drawing again when that changes. */
+export function usePrivacyOn(privacy: PrivacyState): boolean {
+  const [on, setOn] = useState(privacy.on);
+  useEffect(() => {
+    setOn(privacy.on);
+    return privacy.subscribe(() => setOn(privacy.on));
+  }, [privacy]);
+  return on;
+}
+
 /** Whether privacy mode is on, kept where the host build keeps it. */
 export class PrivacyState {
   private listeners = new Set<() => void>();

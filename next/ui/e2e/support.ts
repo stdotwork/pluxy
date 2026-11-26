@@ -145,7 +145,11 @@ export async function goTo(page: Page, name: string) {
     const topic = topics(page).getByRole("link", { name, exact: true });
     // In a narrow window the topics are a select above the page.
     const select = page.locator('[data-part="topics-select"] select');
-    if (!(await topic.isVisible()) && !(await select.isVisible())) await destination.click();
+    if (!(await topic.isVisible()) && !(await select.isVisible())) {
+      await destination.click();
+      // The topics draw after the destination opens: wait for the list or the select.
+      await expect(topic.or(select)).toBeVisible();
+    }
     if (await select.isVisible()) await select.selectOption({ label: name });
     else await topic.click();
   } else await destination.click();
@@ -161,6 +165,7 @@ const TITLES: Record<string, string> = {
   quota: "Quota Management",
   usage: "Requests",
   "activity/usage": "Usage",
+  settings: "General",
   setup: "Set up pluxy",
   config: "Config Panel",
   system: "System",
