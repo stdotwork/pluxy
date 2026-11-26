@@ -296,6 +296,30 @@ func TestScanSignInsAndImports(t *testing.T) {
 	}
 }
 
+// The words of a suggestion and of a sign-in found on the computer are the ones every page uses:
+// "on this computer", never "machine".
+func TestSetupSuggestionAndSignInWordsSayComputer(t *testing.T) {
+	for _, s := range setupSuggestions {
+		if !strings.HasSuffix(s.because, " on this computer") || strings.Contains(s.because, "machine") {
+			t.Errorf("because for %s = %q, want it to end \"on this computer\" and not say machine", s.pick, s.because)
+		}
+	}
+	home := setTestHome(t)
+	os.MkdirAll(filepath.Join(home, ".codex"), 0o700)
+	os.MkdirAll(filepath.Join(home, ".claude"), 0o700)
+	os.WriteFile(filepath.Join(home, ".codex", "auth.json"), []byte("{}"), 0o600)
+	os.WriteFile(filepath.Join(home, ".claude", ".credentials.json"), []byte("{}"), 0o600)
+	signIns := scanSignIns(home)
+	if len(signIns) != 2 {
+		t.Fatalf("signIns = %+v, want both", signIns)
+	}
+	for _, si := range signIns {
+		if !strings.HasSuffix(si.Label, " is signed in on this computer") || strings.Contains(si.Label, "machine") {
+			t.Errorf("sign-in label for %s = %q", si.Provider, si.Label)
+		}
+	}
+}
+
 func TestSetupCoreReachableFromNetwork(t *testing.T) {
 	for _, tc := range []struct {
 		listen string

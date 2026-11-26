@@ -33,7 +33,7 @@ test("a first run opens Setup, installs the suggested provider, adds an account,
   await expect(found.getByText("Claude Code 2.4.1")).toBeVisible();
   const pick = page.locator('[data-part="setup-pick"]').filter({ hasText: "Claude" });
   await expect(pick.getByRole("checkbox")).toBeChecked();
-  await expect(pick).toContainText("Claude Code is installed on this machine");
+  await expect(pick).toContainText("Claude Code is installed on this computer");
 
   // Start installs it, and says so beside the pick.
   await page.getByRole("button", { name: "Start", exact: true }).click();
