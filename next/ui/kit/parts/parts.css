@@ -115,7 +115,7 @@
 
   .account-grid {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    grid-template-columns: auto minmax(10em, 1fr) auto auto;
     align-items: center;
     column-gap: calc(var(--s) * 3);
     min-height: var(--px-size-row);
@@ -128,7 +128,7 @@
   }
 
   .account-row[data-wide] .account-grid {
-    grid-template-columns: auto minmax(0, 1fr) auto minmax(5em, auto) minmax(8em, auto);
+    grid-template-columns: auto minmax(10em, 1fr) auto minmax(5em, auto) minmax(8em, auto);
   }
 
   .account-who {
@@ -204,8 +204,9 @@
     text-align: end;
   }
 
-  /* A narrow pane: the limits go on a line of their own under the name. */
-  @container (max-width: 620px) {
+  /* A narrow pane: the limits go on a line of their own under the name. The width is in the row's
+     own em, so a theme with larger type moves them down sooner. */
+  @container (max-width: 60em) {
     .account-grid,
     .account-row[data-wide] .account-grid {
       grid-template-columns: auto minmax(0, 1fr) auto;
@@ -345,7 +346,7 @@
     min-height: var(--px-size-control);
   }
 
-  @container (max-width: 620px) {
+  @container (max-width: 52em) {
     .request-line {
       grid-template-columns: 8.5ch minmax(0, 1.2fr) minmax(0, 1fr) 7ch auto 16px;
     }
@@ -366,7 +367,7 @@
 
   .setting-grid {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, auto);
+    grid-template-columns: minmax(12em, 1fr) fit-content(50%);
     align-items: start;
     gap: calc(var(--s) * 2) calc(var(--s) * 6);
     padding: 0 calc(var(--s) * 2);
@@ -433,7 +434,7 @@
     padding: calc(var(--s) * 2) calc(var(--s) * 2) 0;
   }
 
-  @container (max-width: 520px) {
+  @container (max-width: 40em) {
     .setting-grid {
       grid-template-columns: minmax(0, 1fr);
     }
@@ -456,7 +457,7 @@
 
   .tool-line {
     display: grid;
-    grid-template-columns: minmax(8em, 1fr) minmax(max-content, auto) minmax(0, 1.2fr) auto;
+    grid-template-columns: minmax(10em, 1fr) minmax(max-content, auto) minmax(0, 1.2fr) auto;
     align-items: center;
     gap: calc(var(--s) * 3);
     min-height: var(--px-size-row);
@@ -485,6 +486,7 @@
   }
 
   .tool-version {
+    flex: none;
     white-space: nowrap;
   }
 
@@ -507,9 +509,22 @@
     padding: 0 calc(var(--s) * 2) calc(var(--s) * 3);
   }
 
-  @container (max-width: 560px) {
+  /* A narrow pane: the state goes under the name, and the path is left out. */
+  @container (max-width: 44em) {
     .tool-line {
-      grid-template-columns: minmax(0, 1fr) auto auto;
+      grid-template-columns: minmax(0, 1fr) auto;
+      row-gap: 0;
+      padding-block: var(--s);
+    }
+
+    .tool-state {
+      grid-row: 2;
+      grid-column: 1;
+    }
+
+    .tool-action {
+      grid-row: 1 / span 2;
+      grid-column: 2;
     }
 
     .tool-path {

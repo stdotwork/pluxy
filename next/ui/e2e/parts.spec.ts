@@ -63,14 +63,21 @@ async function openSpecimen(
   await page.evaluate(() => {
     const main = document.querySelector('[data-part="main"]');
     if (!main) throw new Error("no pane");
-    const box = document.createElement("div");
+    // A section, not a div: the page's own renderer must not take it for the page's wrapper.
+    const box = document.createElement("section");
     box.id = "specimen";
     // A page's own wrapper, so the specimen sits where a page's content does.
     box.className = "content";
     main.prepend(box);
-    const style = document.createElement("style");
-    style.textContent = '[data-part="main"] > :not(#specimen) { display: none !important; }';
-    document.head.append(style);
+    // The page is hidden by its own style property, kept so as the page draws again: the panel's
+    // content security policy refuses a <style> element added now, and the theme engine sets the
+    // document's style sheets.
+    const hide = () => {
+      for (const el of main.children)
+        if (el !== box) (el as HTMLElement).style.setProperty("display", "none", "important");
+    };
+    hide();
+    new MutationObserver(hide).observe(main, { childList: true });
   });
   await page.addScriptTag({ url: `${core.base}/panel/specimen.js` });
   await expect(page.locator('#specimen [data-part="account-row"]').first()).toBeVisible();
@@ -110,6 +117,34 @@ for (const theme of THEMES) {
           return out;
         });
         expect(wide).toEqual([]);
+
+        // The pane shows the specimen alone, and the page's renderer kept out of it.
+        const shown = await page.evaluate(() =>
+          [...(document.querySelector('[data-part="main"]')?.children ?? [])]
+            .filter((el) => getComputedStyle(el).display !== "none")
+            .map((el) => `${el.tagName.toLowerCase()}#${el.id}.${el.className}`),
+        );
+        expect(shown).toEqual(["section#specimen.content"]);
+        expect(await s.locator(":scope > *").count()).toBe(1);
+
+        // No name, setting text or model is squeezed below what can be read: 4em of its own text.
+        const squeezed = await page.evaluate(() =>
+          [
+            ...document.querySelectorAll(
+              "#specimen .account-name, #specimen .setting-about, #specimen .request-model, #specimen .tool-name",
+            ),
+          ]
+            .filter((el) => {
+              const em = Number.parseFloat(getComputedStyle(el).fontSize);
+              // scrollWidth is a whole number of pixels: a pixel's difference is rounding, not a cut.
+              return el.getBoundingClientRect().width + 1 < Math.min(4 * em, el.scrollWidth);
+            })
+            .map(
+              (el) =>
+                `${el.className}: ${(el.textContent ?? "").slice(0, 30)} ${el.getBoundingClientRect().width}px`,
+            ),
+        );
+        expect(squeezed).toEqual([]);
 
         // Every button is as high as the theme's controls (size.control: 28 pixels on the default
         // theme, 36 on Paper, 24 on Terminal, the compact one), and never under 24 pixels.

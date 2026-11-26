@@ -240,7 +240,7 @@ function Specimen() {
           description="Keeps the whole of each request in the log, for support."
           configKey="logging.requests"
         >
-          <Switch label="Log every request" checked={true} onChange={() => {}} />
+          <Switch label="On" checked={true} onChange={() => {}} />
         </SettingRow>
         <SavingSetting />
         <SettingRow
@@ -256,7 +256,7 @@ function Specimen() {
           description="Lets other computers on your network use pluxy."
           error="Not saved: core returned HTTP 500; check Logs Viewer and try again"
         >
-          <Switch label="Allow other computers" checked={false} onChange={() => {}} />
+          <Switch label="Off" checked={false} onChange={() => {}} />
         </SettingRow>
         <SettingRow
           name="Management key"
