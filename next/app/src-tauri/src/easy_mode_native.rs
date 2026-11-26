@@ -309,7 +309,9 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
             let listed = accounts(main)?;
             require(
                 listed.len() == before + 1
-                    && listed.iter().any(|a| !known.iter().any(|k| k["id"] == a["id"])),
+                    && listed
+                        .iter()
+                        .any(|a| !known.iter().any(|k| k["id"] == a["id"])),
                 format!("core's accounts hold no new account: {known:?} then {listed:?}"),
             )?;
             wait_for("the guide to count the new account", || {

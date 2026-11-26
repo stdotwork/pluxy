@@ -140,13 +140,13 @@ function Added(props: { id: string; embedded?: boolean; onAnother: () => void })
             }}
           />
         </label>
-        {error && <Notice tone="danger">{error}</Notice>}
-        {saved && <Notice tone="ok">{t("saved")}</Notice>}
         <div class="actions">
           <Button type="submit" disabled={busy || !ready || unchanged}>
             {t("saveName")}
           </Button>
         </div>
+        {error && <Notice tone="danger">{error}</Notice>}
+        {saved && <Notice tone="ok">{t("saved")}</Notice>}
       </form>
       <div class="actions">
         {!props.embedded && (
@@ -282,7 +282,12 @@ export function AddAccountPage(
             )}
           </Phases>
         )}
-        {!props.embedded && <AuthImport />}
+        {/* Kept mounted while a sign-in is under way, so the lines of an import stay until the page is left. */}
+        {!props.embedded && (
+          <div hidden={selected !== undefined || added !== undefined}>
+            <AuthImport />
+          </div>
+        )}
       </div>
     </>
   );

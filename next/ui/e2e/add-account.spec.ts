@@ -105,7 +105,7 @@ test("an API-key account is added with no ID, named with Save name, and the name
   await expect(page).toHaveURL(new RegExp(`#/accounts/${added?.id}$`));
   await expect(page.getByRole("heading", { level: 1, name: "My work key" })).toBeVisible();
   await goTo(page, "Accounts");
-  await expect(accountRow(page, "My work key")).toBeVisible();
+  await expect(accountRow(page, added?.id ?? "")).toContainText("My work key");
 });
 
 test("a key the provider refuses is said, and Try again goes back to the ways", async ({ page }) => {

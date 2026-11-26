@@ -486,10 +486,14 @@ export function LoginFlow(props: LoginFlowProps) {
       )}
       {prompt && (
         <>
-          {(prompt.kind === "browser" || prompt.kind === "device") && (
-            <p>{t(prompt.kind === "browser" ? "authorize" : "device")}</p>
+          {/* The provider's own words, when it gives some; else ours. */}
+          {prompt.message ? (
+            <p>{p.text(prompt.message)}</p>
+          ) : (
+            (prompt.kind === "browser" || prompt.kind === "device") && (
+              <p>{t(prompt.kind === "browser" ? "authorize" : "device")}</p>
+            )
           )}
-          {prompt.message && <p>{p.text(prompt.message)}</p>}
           {prompt.kind === "device" && prompt.user_code && (
             <strong class="mono" data-part="device-code" aria-live="polite" aria-atomic="true">
               {prompt.user_code}
