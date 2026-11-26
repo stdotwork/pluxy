@@ -37,11 +37,12 @@ test("panel shows core, switches layout and theme live, and recovers from custom
   const { requests, problems } = await open(page);
   await signIn(page, core);
 
-  // The navigation holds the destinations that have a page here: the panel has no Tools.
+  // The navigation holds the destinations that have a page here.
   await expect(nav(page).locator('[data-part="nav-item"]')).toHaveText([
     "Home",
     "Accounts",
     "Activity",
+    "Tools",
     "Settings",
   ]);
   await expect(nav(page).getByRole("link", { name: "Home", exact: true })).toHaveAttribute(
@@ -356,7 +357,7 @@ test("a narrow window shows the rail, then a bar of icons, whatever the theme sa
   await expect(root(page)).toHaveAttribute("data-nav", "sidebar");
   const rail = await nav(page).boundingBox();
   expect(rail && rail.width < 60 && rail.height > 700).toBe(true);
-  for (const name of ["Home", "Accounts", "Activity", "Settings"]) {
+  for (const name of ["Home", "Accounts", "Activity", "Tools", "Settings"]) {
     const entry = nav(page).getByRole("link", { name, exact: true });
     await expect(entry).toBeVisible();
     await expect(entry).toHaveAttribute("title", name);

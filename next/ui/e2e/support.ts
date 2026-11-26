@@ -122,6 +122,7 @@ const PLACES: Record<string, { dest: string; tab?: string; link?: string }> = {
   Routing: { dest: "Accounts", tab: "Order & fallback" },
   "Quota Management": { dest: "Accounts", tab: "Limits" },
   Usage: { dest: "Activity" },
+  Tools: { dest: "Tools" },
 };
 
 /**
@@ -164,6 +165,7 @@ const TITLES: Record<string, string> = {
   extensions: "Extensions",
   themes: "Themes",
   logs: "Logs Viewer",
+  tools: "Tools",
 };
 
 /** Goes to one of core's pages by its ID, as goTo does by title. */
