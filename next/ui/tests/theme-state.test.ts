@@ -153,9 +153,7 @@ test("a theme core cannot turn on goes back to the one before, and so does a fai
   s.core.instead = () => undefined;
   expect(await themes.select("t3/nightfall")).toBeUndefined();
   s.core.instead = (method) => (method === "DELETE" ? { status: 500 } : undefined);
-  expect(await themes.removeTheme("t3/nightfall")).toBe(
-    "pluxy returned HTTP 500; check Logs Viewer and try again",
-  );
+  expect(await themes.removeTheme("t3/nightfall")).toBe("pluxy returned HTTP 500; check Logs and try again");
   expect(themes.current.theme.id).toBe("t3/nightfall");
 });
 

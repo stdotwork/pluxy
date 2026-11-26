@@ -65,7 +65,8 @@ for (const navLayout of ["sidebar", "rail", "top"]) {
       .getByRole("radio", { name: navLayout, exact: false })
       .check();
     await expect(page.locator('[data-part="shell"]')).toHaveAttribute("data-frame", navLayout);
-    await goTo(page, "Logs Viewer");
+    await goTo(page, "Logs");
+    await page.getByRole("tab", { name: "Failed requests", exact: true }).click();
     const rows = page.locator('[data-part="list"] tbody tr');
     await expect(rows).toHaveCount(25);
     const header = page.locator('[data-part="list"] thead th').first();
@@ -96,7 +97,8 @@ test("numbers line up: digits of one width, and a numeric column set against the
   await errorLogsAre(page, 2);
   await openPanel(page, core);
   await signIn(page, core);
-  await goTo(page, "Logs Viewer");
+  await goTo(page, "Logs");
+  await page.getByRole("tab", { name: "Failed requests", exact: true }).click();
   const table = page.locator('[data-part="list"]');
   // The files are read after the page opens: wait for their table before reading its columns.
   await expect(table.getByRole("columnheader", { name: "Size", exact: true })).toBeVisible();
@@ -362,18 +364,18 @@ test("Requests: no request leads to a tool, filters with no match can be cleared
 test("Logs: a search with no match can be cleared", async ({ page }) => {
   await openPanel(page, core);
   await signIn(page, core);
-  await goTo(page, "Logs Viewer");
-  const log = page.getByRole("region", { name: "Core logs", exact: true });
+  await goTo(page, "Logs");
+  const log = page.getByRole("region", { name: "pluxy's log", exact: true });
   const lines = log.locator('[data-part="log-line"]');
   await expect(lines.first()).toBeVisible();
-  await page.getByLabel("Search logs by content or keyword").fill("nothing-like-this");
-  await page.getByLabel("Log level", { exact: true }).selectOption("warn");
+  await page.getByLabel("Find in log").fill("nothing-like-this");
+  await page.getByLabel("Show", { exact: true }).selectOption("warn");
   const empty = log.locator('[data-part="empty"]');
   await expect(empty).toHaveAttribute("data-variant", "filter");
   await empty.getByRole("button", { name: "Clear filters", exact: true }).click();
   await expect(lines.first()).toBeVisible();
-  await expect(page.getByLabel("Search logs by content or keyword")).toHaveValue("");
-  await expect(page.getByLabel("Log level", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("Find in log")).toHaveValue("");
+  await expect(page.getByLabel("Show", { exact: true })).toHaveValue("");
 });
 
 test("Extensions: with none installed, it says so and the list on offer is still there", async ({ page }) => {

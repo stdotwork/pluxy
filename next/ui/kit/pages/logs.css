@@ -1,4 +1,9 @@
 @layer kit {
+  .logs-pane {
+    display: grid;
+    gap: calc(var(--s) * 3);
+    min-width: 0;
+  }
   .logs-controls {
     display: flex;
     flex-wrap: wrap;
@@ -7,8 +12,9 @@
   }
   .logs-search {
     flex: 1;
-    min-width: min(100%, 16em);
+    min-width: min(100%, 14em);
   }
+  /* The box is as tall as the window leaves it, and never short enough to be of no use. */
   .logs-text {
     font-family: var(--px-font-mono);
     font-size: var(--px-font-size-small);
@@ -21,29 +27,71 @@
     border-radius: var(--px-shape-radius);
     color: var(--px-color-code-text);
     background: var(--px-color-code-bg);
-    margin: calc(var(--s) * 3) 0;
+    margin: 0;
   }
   .logs-text[data-wrap] {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
   .logs-core {
-    min-height: 12em;
+    height: max(12em, calc(100vh - 22em));
+    max-height: none;
   }
   .logs-core [data-level="warn"] {
     color: var(--px-color-warn);
   }
-  .logs-confirm {
-    margin-top: calc(var(--s) * 3);
+  .logs-core [data-level="error"] {
+    color: var(--px-color-danger);
   }
-  [data-page="logs"] .item-name {
+  .logs-failed-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    justify-content: space-between;
+    gap: calc(var(--s) * 3) calc(var(--s) * 6);
+    margin-bottom: calc(var(--s) * 3);
+  }
+  .logs-failed-head > p {
+    margin: 0;
+    align-self: center;
+  }
+  .logs-trace-form {
+    display: flex;
+    align-items: end;
+    gap: calc(var(--s) * 2);
+    min-width: 0;
+    max-width: 100%;
+  }
+  .logs-trace-form .field {
+    min-width: 0;
+  }
+  .logs-trace-form input {
+    width: 22em;
+    max-width: 100%;
+  }
+  .logs-time {
+    white-space: nowrap;
+  }
+  /* A trace ID is cut with an ellipsis when the column is narrow; its title holds the whole. */
+  .logs-trace {
+    display: inline-block;
+    max-width: min(31ch, 100%);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
+  }
+  /* A request's name is never broken inside; a narrow table scrolls in its frame instead. */
+  [data-page="logs"] .table .item-name {
+    white-space: nowrap;
+  }
+  [data-page="logs"] .cards .item-name {
     overflow-wrap: anywhere;
   }
   [data-page="logs"] .detail {
     min-width: 0;
   }
-  /* A request's log sits in a card that is a grid: without this its long lines widen the page. */
-  [data-page="logs"] .card > [data-part="card"] {
-    min-width: 0;
+  [data-page="logs"] .detail .logs-text {
+    max-height: 32em;
   }
 }

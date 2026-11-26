@@ -136,8 +136,7 @@ a filter in its address) keeps the place.
 
 Three pages add to their address. `#/accounts/<id>` opens that account's own page (the page
 `account`, which answers that prefix), and `#/accounts/<id>/sign-in` opens it with its sign-in in
-place. `#/logs/<trace ID>` opens that
-request's log in the Logs Viewer.
+place. `#/logs/<trace ID>` opens that request's log on the Logs page, in its Failed requests tab.
 `#/config/<tab>` opens a tab of the Config Panel: `common` (what `#/config` opens),
 `connectivity`, `network`, `logging`, `advanced` or `source`. `#/config/source?account=<id>`
 opens the Source tab with that account's ID selected; an account's "Open the settings file" leads
@@ -199,7 +198,7 @@ visit), and `POST /client-keys` sends the name with the new key.
 | An account's page (`account`) | Accounts, under All accounts: `#/accounts/<id>`, and `#/accounts/<id>/sign-in` with its sign-in open | The details of one auth file on Auth Files |
 | Add Account (`add-account`) | Accounts, under the Accounts page | OAuth Login (`/oauth`) |
 | Routing (`routing`) | Accounts, the tab "Order & fallback" | Routing (`/routing`) |
-| Logs Viewer (`logs`) | Settings, a topic | Logs Viewer (`/logs`) |
+| Logs (`logs`) | Settings, a topic | Logs Viewer (`/logs`) |
 | Usage (`usage`) | Activity | No old panel page: the old desktop app's list of recorded requests |
 | Tools (`tools`) | Tools | No old page |
 | General (`settings`) | Settings, the first topic | No old page |
@@ -235,7 +234,7 @@ feature, it keeps the old label, unless the label named something this core does
 - "Management keys", a count of client keys: the Config Panel lists the client keys.
 - "Debug" and "WebSocket auth": core has neither setting (see the config.yaml table in
   [`next/README.md`](../README.md#what-each-setting-does-here)).
-- "Server version" and "Build date": on the System page, as "Core version" and "Build time".
+- "Server version" and "Build date": on the System page, as "Version" and "Built".
 - "Provider keys", a count of the keys in the config's provider sections: "Credentials" counts
   every account, from the config or from a sign-in.
 - The six "Where to go from here" cards, and the "Manage providers" and "Inspect logs" links: the
@@ -268,7 +267,7 @@ feature, it keeps the old label, unless the label named something this core does
 - The OAuth excluded models and OAuth model alias pages: these rules are now an extension's
   `excluded_models` and `model_alias` settings, written in the Config Panel's Source tab.
 - The OAuth model alias page's "Diagram", which drew each provider's models and their aliases
-  joined by lines: the System page's "Available models" lists each extension's models with their
+  joined by lines: the System page's "Models your tools can ask for" lists each extension's models with their
   aliases and the accounts that serve them. A sign-in's own aliases are changed in "Account model
   aliases" on its Edit form.
 - "Invert page", which flipped the selection on the current page: with "Select" on, each row has
@@ -305,12 +304,12 @@ feature, it keeps the old label, unless the label named something this core does
 - The quota timeline, which drew each account's quota windows over the next days: a richer view of
   the same data. The desktop app does not have it either.
 
-**Logs Viewer**
+**Logs**
 
 - The "Method", "Status" and "Path" filters, and "Show Raw Logs": core's log holds no request
   lines. Requests are on the Activity page and in the request logs.
 - "Full Screen": a theme's `width` layout option `full` does it.
-- New lines every second: "Continuous reading" reads new lines every 2 seconds while the page is
+- New lines every second: "Follow new lines" reads new lines every 2 seconds while the page is
   visible.
 
 **Usage**
@@ -354,7 +353,7 @@ feature, it keeps the old label, unless the label named something this core does
 
 **System**
 
-- "Management UI Version" and "CLI Proxy API Version": one "Core version", since the panel is
+- "Management UI Version" and "CLI Proxy API Version": one "Version", since the panel is
   built into core.
 - "Check for updates" and "Quick Links": they compared with and linked to the upstream project's
   releases and repositories.

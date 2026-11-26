@@ -285,7 +285,7 @@ for (const failure of [
     status: 0,
     shown: "cannot reach pluxy; check that it is running and the address is right, then try again",
   },
-  { status: 500, shown: "pluxy returned HTTP 500; check Logs Viewer and try again" },
+  { status: 500, shown: "pluxy returned HTTP 500; check Logs and try again" },
 ] as const) {
   test(`a ${failure.status} re-read keeps the page and shows ${failure.shown}`, async () => {
     jest.useFakeTimers();

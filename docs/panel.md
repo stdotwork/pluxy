@@ -43,7 +43,8 @@ request", which says under it that it uses one request.
 | An account's page | Replaced the old Auth Files page's details. `#/accounts/<id>` opens it, under All accounts, with the account's name in the header strip; it shows the account's limits, what it did this week and the ways to change it. |
 | Add Account | Replaced OAuth Login. It adds API keys as well as sign-ins, from the login methods each running extension offers, so "OAuth" no longer describes it. |
 | System | Replaced Management Center Info. "Management Center" was the upstream panel's product name. |
-| Routing, Config Panel, Logs Viewer | The old panel's names: these pages do the same job as the old ones did. |
+| Routing, Config Panel | The old panel's names: these pages do the same job as the old ones did. |
+| Logs | Replaced the old panel's Logs Viewer. It holds two things, pluxy's own log and the full logs of failed requests, and "viewer" named neither. |
 | (Quota Management) | Gone: every account's row on All accounts shows its two shortest limits, and its page shows every limit. The old address `#/quota` opens All accounts. |
 | Requests, Usage | The two tabs of Activity; see [The Activity page](#the-activity-page). Requests keeps the ID `usage` of the page it replaced, so `#/usage` and `data-page="usage"` still work; Usage is `activity/usage`. |
 | Tools | A new page, named for what a person does there: connect a coding tool, copy the address for any other program, and make, name and delete the keys tools send. It sits under the Tools destination; in the desktop app its topics sit beside it. |
@@ -74,6 +75,23 @@ what it holds.
   stay on the device (layout, density, custom CSS). Its custom CSS switch is not called safe mode,
   because safe mode is pluxy running with no extensions, shown on System. A notice about the page
   shows one at a time, newest first. A theme file is checked for size before it is read.
+- **Logs** has two tabs. **pluxy's log** follows the log as pluxy writes it: every 2 seconds while the
+  page is visible and Follow new lines is on, which it is by default, as is Wrap lines. Find and Show
+  (All lines, Warnings, Errors) filter the lines already loaded, and Download saves the lines shown, as
+  pluxy wrote them: hiding names masks the screen only. The page keeps the latest 10,000 lines, so
+  a very large log does not freeze the window, and says so. Clear log asks first and deletes the log
+  file; failed requests stay. When pluxy writes no log file, the tab says so and one press on Turn
+  on file logging turns the setting on. **Failed requests** lists the full logs pluxy keeps of its
+  latest failed requests, and opens one beside the list. `#/logs/<trace ID>` opens that tab on the
+  request with that trace ID, which is how Activity and a tool's error lead here; the Trace ID field
+  does the same for an ID copied from a tool, after checking its shape. A request that succeeded has a
+  log only while `observability.logs.request-log` is on, and one over 2 MiB can be neither shown
+  nor downloaded here.
+- **System** says which pluxy this is (its version, commit, build time, address, and whether the
+  newest settings file is in use), lists the models its tools can ask for by provider with a Copy for
+  each name, and gives the base URL each kind of program takes (the OpenAI, Anthropic and Gemini
+  APIs, and Codex with an API key or signed in with ChatGPT). A pluxy started in safe mode says so at
+  the top.
 
 ## Extensions
 
@@ -111,7 +129,7 @@ under the day each request came on, 50 at a time. That is a day by default and a
 requests (`usage.max_age_ms` and `usage.max_events`), so the list has no time range; its end says
 how far back it goes. It is read when the page opens, on Refresh and when a filter changes, not on
 a timer. A row opens to why the request went where it did, in a sentence, what each attempt came
-to, and its facts. The trace links to the request's log in the Logs Viewer for a failed request,
+to, and its facts. The trace links to the request's log on the Logs page for a failed request,
 and for a successful one only while `observability.logs.request-log` is on (the log of a
 successful request is kept only then); otherwise it shows as text to copy. The filters are in the
 address: `failed=1`, `provider`, `account` (the account's ID, which is what a request

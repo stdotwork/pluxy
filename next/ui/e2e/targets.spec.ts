@@ -102,7 +102,7 @@ const PAGES = [
   "Accounts",
   "Add Account",
   "Routing",
-  "Logs Viewer",
+  "Logs",
   "Requests",
   "Usage",
   "Set up pluxy",

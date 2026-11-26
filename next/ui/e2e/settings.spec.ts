@@ -63,7 +63,7 @@ test("Settings opens on General, and its topics are in three groups with a tip e
   expect(labels[1]?.links).toEqual([
     ["Config Panel", "Network, logging, keys and pluxy's settings file"],
     ["Extensions", "The programs that connect pluxy to each provider"],
-    ["Logs Viewer", "pluxy's log and failed requests"],
+    ["Logs", "pluxy's log and failed requests"],
     ["System", "Version, models and addresses"],
     ["Set up pluxy", "The guided setup"],
   ]);

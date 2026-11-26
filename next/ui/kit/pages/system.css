@@ -1,37 +1,34 @@
 @layer kit {
-  .system-tiles {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 12em), 1fr));
-    gap: calc(var(--s) * 3);
+  .system-facts .facts {
+    gap: 0;
   }
-  .system-tile {
-    padding: calc(var(--s) * 3);
-    border: var(--px-shape-border) solid var(--px-color-border);
-    border-radius: var(--px-shape-radius);
-    background: var(--px-color-surface-raised);
-    min-width: 0;
+  .system-facts .facts > div {
+    align-items: center;
+    min-height: var(--px-size-row);
+    padding: calc(var(--s) * 1) 0;
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
   }
-  .system-tile-label,
-  .system-tile-sub {
-    color: var(--px-color-text-muted);
-    font-size: var(--px-font-size-small);
+  .system-facts .facts > div:last-child {
+    border-bottom: 0;
   }
-  .system-tile-value {
-    font-weight: var(--px-font-weight-strong);
-    overflow-wrap: anywhere;
-  }
-  .system-tile-sub {
-    overflow-wrap: anywhere;
+  .system-address,
+  .system-model {
+    display: inline-flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--s) * 2);
   }
   .system-group + .system-group {
     margin-top: calc(var(--s) * 4);
   }
   .system-group h3 {
     display: flex;
+    flex-wrap: wrap;
     gap: calc(var(--s) * 2);
     align-items: baseline;
     margin: 0 0 calc(var(--s) * 2);
   }
+  .system-group-id,
   .system-group-count {
     color: var(--px-color-text-muted);
     font-size: var(--px-font-size-small);
@@ -39,10 +36,26 @@
   }
   .system-hint {
     margin: 0 0 calc(var(--s) * 3);
-    color: var(--px-color-text-muted);
+  }
+  /* The tables of one page share their columns, so the names line up from one provider to the next. */
+  .system-group .table {
+    table-layout: fixed;
+  }
+  .system-group th[scope="col"]:first-child {
+    width: 45%;
   }
   .system-group td,
   .system-group th[scope="row"] {
     overflow-wrap: anywhere;
+  }
+  /* A base URL is never broken inside (its port stays whole): it is cut with an ellipsis when the
+     column is narrow, and its title holds the whole. */
+  .system-url {
+    display: inline-block;
+    max-width: min(24em, 100%);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
   }
 }
