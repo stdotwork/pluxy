@@ -70,22 +70,37 @@ in this package (`types.go`, `client.go`); core's handlers write the same types.
 `pluxy` is one program: `pluxy serve` runs the core (as does `pluxy -config ...` with no subcommand),
 `pluxy init [-config file] [-port n]` writes a first config without starting core, `pluxy -version`
 prints the build's version, commit and date, and `pluxy help` lists every subcommand. Every other
-subcommand is a client of the management API of a core that is already running.
+subcommand is a client of the management API of a core that is already running, except
+`pluxy key management`, which calls no core.
 
-- **Which core.** `--config <path>` (default `config.json`) is read for the address and the management
-  key; or `--url` and `--key` (or `PLUXY_URL` and `PLUXY_MANAGEMENT_KEY`) name a core on another machine.
+- **Which core.** The address and the management key each come from the first of: `--url` and `--key`;
+  `PLUXY_URL` and `PLUXY_MANAGEMENT_KEY`; the config file, which is `--config <path>`, else `config.json`
+  in the current folder, else `config.json` in [pluxy's home](../README.md#pluxys-home). `--verbose` says
+  on standard error which core the command called and where its address and key came from. With no
+  config file anywhere, the error names each place looked in and what to run (exit code 1; 5 for
+  `pluxy key management`).
 - **Environment variables.** Client subcommands read two variables:
 
   | Variable | What it does | Default | Example |
   | --- | --- | --- | --- |
-  | `PLUXY_URL` | Core's base URL for `pluxy` client commands; `--url` overrides it. | Read from `--config` (`config.json`) | `http://127.0.0.1:8317` |
-  | `PLUXY_MANAGEMENT_KEY` | Management API key for `pluxy` client commands; `--key` overrides it. | Read from `--config` (`config.json`) | `<management-key>` |
+  | `PLUXY_URL` | Core's base URL for `pluxy` client commands; `--url` overrides it. | Read from the config file (above) | `http://127.0.0.1:8317` |
+  | `PLUXY_MANAGEMENT_KEY` | Management API key for `pluxy` client commands; `--key` overrides it. | Read from the config file (above) | `<management-key>` |
+
+  `PLUXY_HOME` names pluxy's home ([next/README.md](../README.md#pluxys-home)).
 - **Output.** For people by default: aligned columns, one thing per line, no colour when not a terminal.
   Help asked for (`help`, `-h`, `--help`) goes to standard output and exits 0. With `--json`: the API's
   reply body, unchanged, on standard output and nothing else (`{}` when core replied with an empty body).
   Errors go to standard error: a sentence, or with `--json` the API's error object (including flag and
   usage errors).
 - **Nothing asks a question** unless standard input is a terminal; `--yes` answers yes.
+- **The management key.** `pluxy key management [--show-key]` calls no core: it says where the key the
+  commands use came from, the `management_key` field of the config file read, `PLUXY_MANAGEMENT_KEY` or
+  `--key`, and with `--show-key` prints the key alone on standard output. When there is no key to find it
+  says why: each place it looked or the `--config` file that is not there (exit code 5), or a config
+  file core refuses too, one that does not parse or has no `management_key`, with core's reason
+  (exit code 1). When the key or its place cannot be written to standard output, it exits 1. Its `--json` is `{"from": "config", "config": "<path>"}` (`from` is `config`, `--key` or
+  `PLUXY_MANAGEMENT_KEY`, and `config` is there for `config`), with `key` only with `--show-key`.
+  `pluxy key rotate-management [--show-key] [--yes]` is in the [Core](#core) table.
 - **Signing in.** `pluxy account add` and `pluxy account login` start a sign-in and follow it: the
   address to open or the code to type is printed (on standard error), each value the sign-in asks
   for is sent to it, and core is read again every 2 seconds until it ends. A value a sign-in wants
@@ -141,7 +156,7 @@ subcommand is a client of the management API of a core that is already running.
 | `GET /config`, `POST /config/validate`, `PUT /config` | `pluxy config show`, `pluxy config validate <file>` (not built yet), `pluxy config apply <file>` (not built yet) | The config file with secrets replaced by placeholders; check a document; replace the file |
 | `GET /settings`, `PATCH /settings` | `pluxy settings` | The basic and routing settings by name, [window ignition](../README.md#window-ignition)'s (`routing.ignition`) among them. `pluxy settings` only reads them (a command for `PATCH /settings` is not built yet; the Config Panel changes them) |
 | `GET /client-keys`, `POST /client-keys`, `DELETE /client-keys/{id}` | `pluxy key list`, `pluxy key add`, `pluxy key remove <id>` | Client keys. `id` is stable across restarts. `add` prints the key once |
-| `POST /management-key/rotate` | `pluxy key rotate-management` (not built yet) | A new management key, printed once |
+| `POST /management-key/rotate` | `pluxy key rotate-management [--show-key] [--yes]` | A new management key, which core writes to its config file; the old one stops working at once. The reply is `{"value": "<new key>"}`. The command asks first on a terminal and needs `--yes` without one. It prints the new key with `--show-key`, and without it only when no file it knows holds the key (below). Before it rotates, it calls `GET /config` and compares the `hash` with the config file it read: when they match, core writes the new key to that file. Without `--show-key` it rotates only when it read core's address and key from a config file and the hashes match. Matching contents do not show it is the same file, so after the rotation it checks that the file holds the new key; when it does not, as for a copy of core's config file, the command prints the new key on standard output, says why on standard error, and exits 0. When core's reply is lost or holds no key, the old key's answer (`GET /status`) says whether core rotated; the new key is then read from the file and checked with core, and printed with `--show-key`. It exits 0 only when the new key was printed or is in the file it read; otherwise it exits 1 and says what it knows (the old key still works, or the new key is in the config file core runs on), including when the key cannot be written to standard output. `--json` prints the reply, so it needs `--show-key` too. It ends by naming what must be given the new key: the web panel, the desktop app, `PLUXY_MANAGEMENT_KEY` and `--key` |
 | `GET /logs`, `DELETE /logs`, `GET /request-error-logs[/{name}]`, `GET /request-log-by-id/{id}` | `pluxy logs [--after n] [--limit n]`, `pluxy logs clear`, `pluxy logs errors [name]`, `pluxy logs request <id>` | Core's log and request logs. `logs errors` lists the error logs (name, size in bytes, modified); with a name, and `logs request`, it copies the file's text to standard output as it arrives, however large, and on a terminal shows control and Unicode format characters escaped (`\x1b`) so a logged escape sequence cannot act on it; `pluxy logs` escapes its lines the same way. `--json` is the reply (`?format=json`, which core refuses above 2 MiB with 413 `log_too_large`). `logs clear` says what core reports: `main.log` emptied, how many rotated files it deleted, request and error logs kept. If any file could not be deleted or emptied, `DELETE /logs` still tries the rest and answers 500 `internal` naming how many rotated files it deleted and what is left |
 
 ### Setup
@@ -336,7 +351,6 @@ Core serves the HTTP calls behind these commands today, but the CLI commands the
 
 - `pluxy config validate <file>` (`POST /config/validate`) — not built yet.
 - `pluxy config apply <file>` (`PUT /config`) — not built yet.
-- `pluxy key rotate-management` (`POST /management-key/rotate`) — not built yet.
 - `pluxy ext config <id> [name=value]...` (`GET`, `PATCH /extensions/{id}/config`) — not built yet.
 - `PATCH /settings` has no CLI command yet (`pluxy settings` only reads settings).
 

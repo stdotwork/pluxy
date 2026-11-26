@@ -97,23 +97,89 @@ tick the providers you use, or install one by ID from the terminal with
 `./pluxy setup apply --pick pluxy/claude`.
 
 `pluxy -config config.json -bundled dist/bundled/index.json`, with no subcommand, serves too.
-With no file at the config's path, `pluxy serve -bundled dist/bundled/index.json` writes a first
-config there and starts on it: it listens on `127.0.0.1` port 8317, or a free port when 8317 is
+Without `-config`, pluxy uses `config.json` in the folder it runs in when there is one, and
+otherwise `config.json` in [pluxy's home](#pluxys-home). With no file at the config's path,
+`pluxy serve -bundled dist/bundled/index.json` writes a first config there and starts on it: it listens on `127.0.0.1` port 8317, or a free port when 8317 is
 taken, with one new client key and a new management key, in a file only its user can read. Core
 logs the file's path and the address, never the keys; read them in the file. `pluxy init
 [-config file] [-port n]` writes the same config without starting core (`-port 0`: a free port),
-and never replaces a file. A test that starts a first core sets `PLUXY_INIT_PORT=<port>` to choose
+and never replaces a file; without `-config` it writes the one in pluxy's home. A test that starts a first core sets `PLUXY_INIT_PORT=<port>` to choose
 that port instead, so a test never takes 8317 on the machine it runs on (`0` is a free port); a
 value that is not a port stops core, and no real run sets it. A config with no management key is
 refused at start, with a message saying how to add one. A first start installs no package: install
 the providers you use from the bundled registry ([Packages](#packages)) or the panel. Flags:
 
-- `-config`: the config file (default `config.json`).
+- `-config`: the config file (default: `config.json` in the current folder when there is one, else in [pluxy's home](#pluxys-home)).
 - `-version`: print the build's version, commit and build date on one line, `pluxy <version> (<commit>, <date>)`, and exit. A build that recorded no commit or date (one made with `go run`, with `-buildvcs=false` or outside a git checkout) says so instead: `pluxy dev (no commit or build date recorded)`. It does not read the config. Core logs the same line when it starts.
 - `-safe-mode`: start with no extensions: client requests fail, the management API works.
 - `-watch-interval`: how often core looks for changes to the config file; `0` turns the watch off (default `1s`).
 - `-bundled`: the index of the bundled packages (default `bundled/index.json` beside the program, when it exists); see [Packages](#packages).
 - `-listen-fd`: serve on the listening TCP socket inherited at this file descriptor instead of binding `listen` (which must still be set). A program that starts core, such as the desktop app in managed mode, binds the socket, hands it over and keeps its own copy, so no other program can take the port while core stops or after it exits.
+
+### pluxy's home
+
+pluxy's home is the one folder where a pluxy run by your user account keeps its files:
+`config.json` and, beside it, the `credentials`, `packages`, `logs` and `state` folders core
+makes. It is:
+
+| System | Folder |
+| --- | --- |
+| Linux and other Unix systems | `$XDG_DATA_HOME/pluxy`, which is `~/.local/share/pluxy` when `XDG_DATA_HOME` is unset or not an absolute path |
+| macOS | `~/Library/Application Support/pluxy` |
+| Windows | `%LOCALAPPDATA%\pluxy` |
+
+`PLUXY_HOME` names another folder in its place, as an absolute path. `pluxy help` prints the
+folder it finds.
+
+Without `-config` (or `--config`), every `pluxy` command reads `config.json` in the folder it
+runs in when there is one, and otherwise the one in pluxy's home:
+
+- `pluxy serve` serves it. With no config in either place, its first start writes pluxy's home's
+  config (and, when the folder is not there yet, makes it so only your user can read it; a folder
+  that is already there, such as one `PLUXY_HOME` names, keeps its permissions), so the next `pluxy serve`, from
+  any folder, finds the same one. A start that found its config this way logs which:
+  `config: <path> (pluxy's home)` or `config: <path> (config.json in the current folder)`.
+- `pluxy init` writes pluxy's home's config and never replaces it. In a folder with a
+  `config.json`, it says that file exists, as before.
+- The client commands take core's address and management key, each, from the first of: `--url`
+  and `--key`; `PLUXY_URL` and `PLUXY_MANAGEMENT_KEY`; the config file, which is `--config`, else
+  `config.json` in the current folder, else pluxy's home's. `--verbose` says on standard error
+  which core a command called and where its address and key came from, and names pluxy's home's
+  config when a `config.json` in the current folder was read instead. With no config anywhere,
+  the error names each place it looked in and what to run.
+
+pluxy moves and copies nothing into its home. A core started with `-config`, such as the desktop
+app's own core or the [container](#run-it-in-a-container), keeps its files beside that config,
+as before.
+
+The desktop app's own core is a separate pluxy, with its own keys and accounts, whose config is
+`core/config.json` in the app's data folder (on Linux
+`~/.local/share/dev.pluxy.desktop/core/config.json`). While pluxy's home has no config and that
+one exists, a plain `pluxy serve` writes no first config, since that would make a second pluxy
+beside the app's: it says so and names the two ways on, `pluxy serve -config <the app's config>`
+(while the app is not running that core) and `pluxy init` (a new pluxy in pluxy's home, which
+init writes when asked, naming the app's). The client commands never read the app's core's config
+unless given it with `--config`; when they find no other config, their error names it and offers
+those same ways on.
+
+The management key is the config's `management_key`. `pluxy key management` says where the key
+the commands use came from, and prints it only with `--show-key`. `pluxy key rotate-management`
+replaces it through the management API: core writes the new key to its config file, and the
+command says what must be given the new key
+([details](management/README.md#the-pluxy-command)). The old key stops working at once, so the
+command rotates only when the person can get the new one afterwards: from its standard output with
+`--show-key`, or from the config file it read, when that file has the same contents as the one
+core runs on (the `hash` core's `GET /config` shows). Matching contents do not show it is the
+same file: when the file read does not hold the new key after the rotation, the command prints the
+new key on standard output, says why, and exits 0. When core's reply is lost or holds no key, the
+command asks core with the old key whether it rotated; when it did and the file read still has
+core's file's contents and a key core accepts, the command names that file, prints the key with
+`--show-key`, and exits 0.
+Otherwise, and when the key cannot be written to standard output, it exits 1 and says what it
+knows: that the old key still works, or which file holds the new key.
+
+[docs/design.md](../docs/design.md#where-a-pluxy-keeps-its-files) gives the reasons for this
+folder.
 
 ### Environment variables
 
@@ -121,8 +187,9 @@ Core itself takes no runtime configuration from its environment: everything is s
 
 | Variable | What it does | Default | Example |
 | --- | --- | --- | --- |
-| `PLUXY_URL` | Core's base URL for `pluxy` client subcommands; `--url` overrides it. | Read from `--config` (`config.json`) | `http://127.0.0.1:8400` |
-| `PLUXY_MANAGEMENT_KEY` | Management API key for `pluxy` client subcommands; `--key` overrides it. | Read from `--config` (`config.json`) | `<management-key>` |
+| `PLUXY_URL` | Core's base URL for `pluxy` client subcommands; `--url` overrides it. | Read from the config file (`--config`, else `config.json` in the current folder, else in pluxy's home) | `http://127.0.0.1:8400` |
+| `PLUXY_MANAGEMENT_KEY` | Management API key for `pluxy` client subcommands; `--key` overrides it. | Read from the config file, as `PLUXY_URL` | `<management-key>` |
+| `PLUXY_HOME` | [pluxy's home](#pluxys-home): the folder whose `config.json` `pluxy serve`, `pluxy init` and the client commands use when given no config file and the current folder has no `config.json`. An absolute path. | `$XDG_DATA_HOME/pluxy` (`~/.local/share/pluxy`) on Linux, `~/Library/Application Support/pluxy` on macOS, `%LOCALAPPDATA%\pluxy` on Windows | `/srv/pluxy` |
 | `PLUXY_INIT_PORT` | Tests only: port written into the auto-generated config on a first start (`0` picks a free port); a non-port value stops core. | Unset (`8317`, or a free port if taken) | `0` |
 | `PLUXY_TEST_LOGIN_HOSTS` | Tests only: when set to `1`, core forwards it to extensions so account settings may point login, token and quota endpoints at a test server. | Unset | `1` |
 
@@ -2491,8 +2558,10 @@ config can still be checked and reloaded through management.
 ### Management API
 
 [`management/README.md`](management/README.md) is the API's contract and describes the `pluxy`
-command, its client: `pluxy serve` runs core, and the other subcommands (`pluxy status`,
-`pluxy account list`, `pluxy help` for the rest) call a running core's management API.
+command, its client: `pluxy serve` runs core, `pluxy help` lists the other subcommands without
+calling core, and those (`pluxy status`, `pluxy account list` and the rest) call a running core's
+management API, except `pluxy init`, which writes a first config, and `pluxy key management`,
+which reads one.
 
 Beside the account calls [above](#accounts-added-by-login), management serves these. Every call
 needs `Authorization: Bearer <management_key>`.

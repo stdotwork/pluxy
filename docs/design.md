@@ -135,6 +135,52 @@ panel only through a message channel, asks only for what its manifest declares, 
 receives the management key. Settings are forms the panel draws from the extension's schema.
 Contract: [extension pages](../next/ui/extension-pages/README.md).
 
+## Where a pluxy keeps its files
+
+A pluxy run by a person's user account keeps all its files in one folder, pluxy's home:
+`$XDG_DATA_HOME/pluxy` (`~/.local/share/pluxy`) on Linux and other Unix systems,
+`~/Library/Application Support/pluxy` on macOS and `%LOCALAPPDATA%\pluxy` on Windows, or the
+folder `PLUXY_HOME` names. Every `pluxy` command uses it when it is given no config file and the
+folder it runs in has no `config.json`, so the command works from any folder, and a background
+service, the app, the panel and a terminal can all find the same core.
+
+- **One folder, not a config folder and a data folder.** Core keeps its credentials, packages, logs
+  and state beside its config file, and a container keeps them in one volume. Per-user programs
+  that keep keys and data together do the same: Syncthing has one home folder (`STHOMEDIR`), T3
+  Code `~/.t3` (`T3CODE_HOME`), Ollama `~/.ollama`. The GitHub CLI splits its files four ways, but
+  its config folder holds settings a person edits; pluxy's config holds keys, and core rewrites it.
+- **The data folder.** The XDG Base Directory Specification puts user data in `XDG_DATA_HOME`, and
+  state that is "not important or portable enough", such as logs and history, in
+  `XDG_STATE_HOME`. Credentials are the files pluxy can least afford to lose, so the folder goes
+  with them. Tailscale's daemon does the same when it runs without root
+  (`$XDG_DATA_HOME/tailscale`), and the desktop app already keeps its own core in its data folder.
+  Syncthing moved its home to `XDG_STATE_HOME` in v1.27, a choice made for a program whose data it
+  can sync again.
+- **macOS and Windows.** On macOS, `~/Library/Application Support` is where Go's
+  `os.UserConfigDir`, Syncthing and the desktop app put such files. On Windows the local
+  application data folder keeps keys off a roaming profile, which is copied to a server and to the
+  person's other computers; Syncthing uses it too, and so does the desktop app for every file that
+  holds a key.
+- **One variable.** `PLUXY_HOME` names the whole folder, as `STHOMEDIR` and `T3CODE_HOME` do. It
+  must be an absolute path: the specification has a program ignore a relative one, and a relative
+  one would make each folder pluxy runs in a different home.
+- **Nothing moves, and no second pluxy appears unasked.** A `config.json` in the current folder
+  still comes first, and a core started with `-config` keeps its files beside it, so existing
+  setups and the desktop app's own core run as before; Syncthing keeps using an existing old
+  folder in the same way. pluxy copies nothing into its home. While the desktop app keeps a core
+  of its own and pluxy's home has no config, a plain `pluxy serve` refuses to write a first config
+  there and names the choice, since two pluxys with separate keys and accounts would look like one
+  that lost its accounts. Moving the app's own core into pluxy's home is a separate change.
+
+Sources: the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir/latest/);
+Syncthing's [configuration](https://docs.syncthing.net/users/config.html) and
+[locations](https://github.com/syncthing/syncthing/blob/main/lib/locations/locations.go);
+Tailscale's [state path for a user](https://github.com/tailscale/tailscale/blob/main/paths/paths_unix.go);
+Ollama's [FAQ](https://github.com/ollama/ollama/blob/main/docs/faq.mdx); T3 Code's
+[background service](https://github.com/pingdotgg/t3code/blob/main/docs/user/background-service.md);
+the GitHub CLI's [environment](https://cli.github.com/manual/gh_help_environment); Go's
+[`os` package](https://pkg.go.dev/os). Details: [`next/README.md`](../next/README.md#pluxys-home).
+
 ## The desktop app
 
 The app reaches core in one of three ways: it runs its own core, connects to a core already

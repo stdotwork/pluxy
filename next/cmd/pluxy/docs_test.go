@@ -169,7 +169,7 @@ func parsePluxyUse(text string) (pluxyUse, bool) {
 
 // cliFlags are the flags of every client command, which runCLIWithInput defines for all of them.
 // help (-h, -help) is the flag package's own.
-var cliFlags = []string{"json", "config", "url", "key", "h", "help"}
+var cliFlags = []string{"json", "verbose", "config", "url", "key", "h", "help"}
 
 // commandFlags returns the names of the flags a client command takes.
 func commandFlags(cmd *command) []string {
@@ -187,7 +187,7 @@ func commandFlags(cmd *command) []string {
 // plannedCommands are commands the management README's Resources tables name before they exist
 // (laterCommands in cli_test.go lists the calls behind them). The list only shrinks: a command
 // added to the CLI comes out of it.
-var plannedCommands = []string{"config validate", "config apply", "key rotate-management", "ext config"}
+var plannedCommands = []string{"config validate", "config apply", "ext config"}
 
 // checkPluxyUse returns what is wrong with a `pluxy ...` a doc writes, or "".
 //

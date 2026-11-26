@@ -80,10 +80,13 @@ to talk to one upstream. Commands below run from `next/` unless another folder i
   `next/management/client.go` (`Client.Call`); HTTP routes in `next/internal/server/manage.go`
   (`Management.Handle`) and `next/internal/core/management.go` (`Core.Management`); CLI subcommands
   in `next/cmd/pluxy/cli.go` (account, logs, and setup commands in `next/cmd/pluxy/account.go`,
-  `next/cmd/pluxy/logs.go`, `next/cmd/pluxy/setupcli.go`); panel API wrapper in `next/ui/kit/api`
-  (`next/ui/kit/api/index.ts`) and page in `next/ui/kit/pages`.
+  `next/cmd/pluxy/logs.go`, `next/cmd/pluxy/setupcli.go`, the management key's in
+  `next/cmd/pluxy/keycmd.go`); how a command finds core in `next/cmd/pluxy/target.go`
+  (`findCore`) and pluxy's home in `next/internal/home/home.go`; panel API wrapper in
+  `next/ui/kit/api` (`next/ui/kit/api/index.ts`) and page in `next/ui/kit/pages`.
 - **Tests**: `go test -count=1 -run TestManagement ./internal/core` and
-  `go test -count=1 -run TestEveryRouteHasACommand ./cmd/pluxy`.
+  `go test -count=1 -run TestEveryRouteHasACommand ./cmd/pluxy`; pluxy's home in
+  `next/cmd/pluxy/home_test.go` and `next/e2e/home_test.go`.
 - **Handbook**: `next/management/README.md` ("Resources", "The `pluxy` command").
 
 ### Panel page or UI kit component

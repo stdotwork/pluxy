@@ -27,9 +27,10 @@ cd ~/pluxy
 ./pluxy serve
 ```
 
-With no config in the folder, pluxy writes its own `config.json` and prints its address:
-`127.0.0.1` port 8317, or a free port when CPA still holds 8317. The import adds to this config.
-Leave pluxy running and open a second terminal in `~/pluxy`.
+With no config in the folder or in [pluxy's home](../next/README.md#pluxys-home), pluxy writes
+its own `config.json` in pluxy's home and prints its address: `127.0.0.1` port 8317, or a free
+port when CPA still holds 8317. The import adds to this config. Leave pluxy running and open a
+second terminal in `~/pluxy`.
 
 ### 2. See what the import would do
 

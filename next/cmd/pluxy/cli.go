@@ -24,6 +24,7 @@ import (
 
 	"github.com/stdotwork/pluxy/next/internal/buildinfo"
 	"github.com/stdotwork/pluxy/next/internal/core"
+	"github.com/stdotwork/pluxy/next/internal/home"
 	"github.com/stdotwork/pluxy/next/internal/host"
 	"github.com/stdotwork/pluxy/next/management"
 	"github.com/stdotwork/pluxy/next/protocol"
@@ -56,6 +57,8 @@ type command struct {
 	// are all GETs needs no mark, see changesNothing), so a 409 or 422 did not refuse a change
 	// (an account test the extension cannot run refused nothing).
 	readOnly bool
+	// local: the command calls no core; it needs only to know where the key came from.
+	local bool
 	// flags adds the command's own flags.
 	flags func(fs *flag.FlagSet, o *opts)
 	run   func(x *invocation) error
@@ -78,6 +81,8 @@ type opts struct {
 	method string
 	input  inputFlag
 	noWait bool
+	// showKey is key management's and key rotate-management's: print the management key.
+	showKey bool
 }
 
 // invocation is one run of a command.
@@ -95,6 +100,8 @@ type invocation struct {
 	// being typed calls it before cancelling the sign-in in core, since that call may take
 	// seconds when core does not answer.
 	restoreEcho func()
+	// target is the core called, and where its address and key came from.
+	target target
 }
 
 // call makes one management call. With --json the reply's body goes to standard output as it
@@ -313,6 +320,15 @@ var commands = []command{
 				x.printf("client key %s removed\n", x.args[0])
 			})
 		}},
+	{words: "key management", local: true, summary: "where the management key the pluxy commands use is kept; --show-key prints the key itself",
+		flags: showKeyFlag, run: runKeyManagement},
+	{words: "key rotate-management", routes: []string{"GET /config", "POST /management-key/rotate", "GET /status"},
+		summary: "replace the management key with a new one, which core writes to its config file; --show-key prints it",
+		flags: func(fs *flag.FlagSet, o *opts) {
+			showKeyFlag(fs, o)
+			fs.BoolVar(&o.yes, "yes", false, "rotate without asking")
+		},
+		run: runKeyRotate},
 	{words: "logs", routes: []string{"GET /logs"}, summary: "lines of core's log files",
 		flags: func(fs *flag.FlagSet, o *opts) {
 			fs.StringVar(&o.after, "after", "", "only lines after this time (Unix seconds, as a reply's latest-timestamp)")
@@ -1313,9 +1329,15 @@ func isHelpFlag(arg string) bool {
 func help(w io.Writer, prefix string) {
 	fmt.Fprintln(w, "usage: pluxy serve [-config file] [flags]   run core (pluxy with no subcommand does too)")
 	fmt.Fprintln(w, "       pluxy init [-config file] [-port n]  write a first config (pluxy serve does when there is none)")
-	fmt.Fprintln(w, "       pluxy <command> [--json] [--config file | --url address --key key]")
+	fmt.Fprintln(w, "       pluxy <command> [--json] [--verbose] [--config file | --url address --key key]")
 	fmt.Fprintln(w, "       pluxy -version                       print the build's version, commit and build date")
 	if prefix == "" {
+		fmt.Fprintln(w)
+		if dir, err := home.Dir(os.Getenv); err == nil {
+			fmt.Fprintf(w, "With no config file named, pluxy reads config.json in this folder when there is one, else in\npluxy's home, %s (%s names another).\n", dir, home.Env)
+		} else {
+			fmt.Fprintf(w, "With no config file named, pluxy reads config.json in this folder when there is one, else in\npluxy's home, which cannot be found: %v.\n", err)
+		}
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "examples:")
 		fmt.Fprintln(w, "  pluxy status                        core's state and running extensions")
@@ -1423,7 +1445,8 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 	fs.SetOutput(io.Discard)
 	var o opts
 	jsonOut := fs.Bool("json", false, "print the API's reply body unchanged")
-	configPath := fs.String("config", "config.json", "the config file to read core's address and management key from")
+	configPath := fs.String("config", "", "the config file to read core's address and management key from (default: config.json in this folder, else in pluxy's home)")
+	verbose := fs.Bool("verbose", false, "say on standard error which core is called and where its address and key came from")
 	addr := fs.String("url", "", "core's address, such as http://127.0.0.1:8317 (default: $PLUXY_URL, else from the config)")
 	key := fs.String("key", "", "the management key (default: $PLUXY_MANAGEMENT_KEY, else from the config)")
 	if cmd.flags != nil {
@@ -1485,29 +1508,23 @@ func runCLIWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer, g
 		printError(stderr, *jsonOut, usageError{"--input: " + o.input.bad.Error()})
 		return exitUsage
 	}
-	configSet := false
-	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "config" {
-			configSet = true
-		}
-	})
-	explicitURL := cmpOr(*addr, getenv("PLUXY_URL"))
-	explicitKey := cmpOr(*key, getenv("PLUXY_MANAGEMENT_KEY"))
-	t, err := findCore(*configPath, configSet, explicitURL, explicitKey)
+	t, err := findCore(where{configFlag: *configPath, urlFlag: *addr, keyFlag: *key, getenv: getenv, local: cmd.local})
+	if *verbose && err == nil && !cmd.local {
+		printError(stderr, false, errors.New(t.describe()))
+	}
 	if err != nil {
 		printError(stderr, *jsonOut, err)
 		return exitCode(err, true)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
-	x := &invocation{ctx: ctx, client: &management.Client{URL: t.url, Key: t.key, HTTP: t.http}, args: pos, opts: o, json: *jsonOut, stdin: stdin, stdout: stdout, stderr: stderr, tty: tty}
+	x := &invocation{ctx: ctx, client: &management.Client{URL: t.url, Key: t.key, HTTP: t.http}, args: pos, opts: o, json: *jsonOut, stdin: stdin, stdout: stdout, stderr: stderr, tty: tty, target: t}
 	err = cmd.run(x)
 	if err == nil {
 		return exitOK
 	}
 	err = nameMissingAccount(cmd, pos, err)
-	fromConfig := explicitURL == "" || explicitKey == ""
-	printCLIError(stderr, *jsonOut, cmd, pos, t.url, *configPath, fromConfig, err)
+	printCLIError(stderr, *jsonOut, cmd, pos, t, err)
 	return exitCode(err, cmd.changesNothing())
 }
 
@@ -1534,12 +1551,12 @@ func (e notFoundError) Error() string { return e.msg }
 
 // printCLIError writes a command's error to stderr, adding actionable next steps for common
 // failures in human output while leaving --json output unchanged.
-func printCLIError(stderr io.Writer, asJSON bool, cmd *command, pos []string, targetURL, configPath string, fromConfig bool, err error) {
+func printCLIError(stderr io.Writer, asJSON bool, cmd *command, pos []string, t target, err error) {
 	if asJSON {
 		printError(stderr, true, err)
 		return
 	}
-	msg := fmt.Sprintf("pluxy: %s\n", formatHumanError(cmd, pos, targetURL, configPath, fromConfig, err))
+	msg := fmt.Sprintf("pluxy: %s\n", formatHumanError(cmd, pos, t, err))
 	if stderrIsTerminal(stderr) {
 		_ = writeEscaped(stderr, []byte(msg))
 		return
@@ -1547,10 +1564,19 @@ func printCLIError(stderr io.Writer, asJSON bool, cmd *command, pos []string, ta
 	io.WriteString(stderr, msg)
 }
 
-func formatHumanError(cmd *command, pos []string, targetURL, configPath string, fromConfig bool, err error) string {
+func formatHumanError(cmd *command, pos []string, t target, err error) string {
+	targetURL, configPath := t.url, t.config
+	// inConfig: the address or the key came from a config file, which a hint may name.
+	inConfig := t.urlFrom == fromConfig || t.keyFrom == fromConfig
 	var unreach *management.UnreachableError
 	if errors.As(err, &unreach) {
-		return fmt.Sprintf("no core is listening at %s. Start one with: pluxy serve -config %s, or check --url", unreach.URL, configPath)
+		switch {
+		case t.urlFrom == fromConfig && t.configFrom == fromHome:
+			return fmt.Sprintf("no core is listening at %s, the address in %s. Start it with: pluxy serve, or check --url", unreach.URL, t.configName())
+		case t.urlFrom == fromConfig:
+			return fmt.Sprintf("no core is listening at %s. Start one with: pluxy serve -config %s, or check --url", unreach.URL, quoteArg(configPath))
+		}
+		return fmt.Sprintf("no core is listening at %s (from %s). Start one with: pluxy serve, or check --url", unreach.URL, t.urlFrom)
 	}
 	var ae *management.APIError
 	if errors.As(err, &ae) {
@@ -1565,12 +1591,12 @@ func formatHumanError(cmd *command, pos []string, targetURL, configPath string, 
 				acct = pos[0]
 			}
 			if acct != "" {
-				if fromConfig {
+				if inConfig {
 					return fmt.Sprintf("account %q is defined in %s. Edit its entry there, then run pluxy reload", acct, configPath)
 				}
 				return fmt.Sprintf("account %q is defined in core's config file. Edit its entry there, then run pluxy reload", acct)
 			}
-			if fromConfig {
+			if inConfig {
 				return fmt.Sprintf("%s. Edit %s, then run pluxy reload", ae.Message, configPath)
 			}
 			return fmt.Sprintf("%s. Edit core's config file, then run pluxy reload", ae.Message)
