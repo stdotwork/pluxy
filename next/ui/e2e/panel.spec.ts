@@ -49,12 +49,13 @@ test("panel shows core, switches layout and theme live, and recovers from custom
     "aria-current",
     "page",
   );
-  await expect(pageTitle(page)).toHaveText("Dashboard");
+  await expect(pageTitle(page)).toHaveText("Home");
 
-  // Dashboard: the extensions core runs, from its status.
-  const running = page.getByRole("table", { name: "Running extensions" });
-  await expect(running.getByText("test/local", { exact: true })).toBeVisible();
-  await expect(running.getByText("test/alpha", { exact: true })).toBeVisible();
+  // Home: the config accounts of both extensions, in the group of the accounts that serve.
+  const serving = page.getByRole("region", { name: "Serving", exact: true });
+  for (const id of ["local-1", "alpha-1", "alpha-2"]) {
+    await expect(serving.getByRole("link", { name: id, exact: true })).toBeVisible();
+  }
 
   // Accounts: config accounts of both extensions.
   await goTo(page, "Accounts");

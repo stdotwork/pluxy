@@ -38,7 +38,7 @@ request", which says under it that it uses one request.
 
 | Page | Why this name |
 | --- | --- |
-| Dashboard | The landing page, as in the old panel. Its ID stays `status`, from the earlier Status page, so the address `#/status` and theme rules for `data-page="status"` keep working. |
+| Home | The landing page, in place of the old panel's Dashboard: it answers whether the person's coding tools can be served, so it is named for where a person starts, not for a dashboard of figures. Its ID stays `status`, from the earlier Status page, so the address `#/status` and theme rules for `data-page="status"` keep working. |
 | Accounts | The old Auth Files and AI Providers pages in one, as the tab "All accounts". This core has one kind of account, whether it comes from the config or from a sign-in, so the list groups accounts by what they need from the person (Needs you, Waiting, Serving, Turned off), not by where they come from. |
 | An account's page | Replaced the old Auth Files page's details. `#/accounts/<id>` opens it, under All accounts, with the account's name in the header strip; it shows the account's limits, what it did this week and the ways to change it. |
 | Add Account | Replaced OAuth Login. It adds API keys as well as sign-ins, from the login methods each running extension offers, so "OAuth" no longer describes it. |
@@ -49,8 +49,8 @@ request", which says under it that it uses one request.
 | Tools | A new page, named for what a person does there: connect a coding tool, copy the address for any other program, and make, name and delete the keys tools send. It sits under the Tools destination; in the desktop app its topics sit beside it. |
 | Set up pluxy | A new page, named for what a person does there. The panel opens it by itself on a first start; afterwards it stays among the Settings topics and shows the same things as they are now. |
 
-The navigation has five destinations: Home (the Dashboard), Accounts (All accounts, with Routing as
-the tab "Order & fallback", and each account's own page under All accounts), Activity (Requests and Usage), Tools (the Tools
+The navigation has five destinations: Home, Accounts (All accounts, with Routing as the tab
+"Order & fallback", and each account's own page under All accounts), Activity (Requests and Usage), Tools (the Tools
 page, and in the desktop app its client pages as topics) and Settings, which lists every other page as a topic,
 the extensions' pages last. The old panel's groups (Operate, Gateway, Observe, Control) are gone.
 Since every text goes through the string layer, renaming a page later is a
@@ -97,7 +97,8 @@ usage files (`write_errors` and `dropped` in `GET /usage`), Requests says how ma
 
 The page is in the panel, not only in the desktop app, because core keeps the record and no other
 page lists requests. It shows only what core records: tokens, with no prices or cost views, and the
-app has none either.
+app has none either. Home shows the last 7 days as one bar for each local day, and the ten latest requests; it has no
+breakdown by model, account or key, which is what the Usage tab is for.
 
 ## Themes reach every page
 

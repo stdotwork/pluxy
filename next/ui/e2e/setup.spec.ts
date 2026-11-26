@@ -1,6 +1,6 @@
 // The Setup page on a real first run: a core with nothing installed and no accounts, whose
 // machine holds Claude Code (panelcore -first-run). The case walks a new install from signing
-// in to the Dashboard.
+// in to Home.
 import { expect, test } from "@playwright/test";
 import { goTo, nav, openPanel, signIn, useCore } from "./support";
 
@@ -23,7 +23,7 @@ test("a first run opens Setup, installs the suggested provider, adds an account,
   await openPanel(page, core);
   await signIn(page, core);
 
-  // Setup opens by itself, in place of the Dashboard.
+  // Setup opens by itself, in place of Home.
   await expect(page.getByRole("heading", { level: 1, name: "Set up pluxy" })).toBeVisible();
   await expect(page).toHaveURL(/#\/setup$/);
   await expect(page.locator("html")).toHaveAttribute("data-page", "setup");
@@ -68,16 +68,16 @@ test("a first run opens Setup, installs the suggested provider, adds an account,
   const reply = await fetch(`${core.base}/v1/models`, { headers: { Authorization: `Bearer ${value}` } });
   expect(reply.status).toBe(200);
 
-  // Finish ends the first run and lands on the Dashboard; the panel no longer opens on Setup.
-  // Finish is at the page's end; in a small window the Dashboard still opens at its top.
+  // Finish ends the first run and lands on Home; the panel no longer opens on Setup.
+  // Finish is at the page's end; in a small window Home still opens at its top.
   await page.setViewportSize({ width: 700, height: 500 });
   await page.getByRole("button", { name: "Finish", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeInViewport();
+  await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeInViewport();
   expect(await page.locator("main").evaluate((m) => m.scrollTop)).toBe(0);
   await page.setViewportSize({ width: 1280, height: 800 });
   await openPanel(page, core);
   await expect(nav(page)).toBeVisible();
-  await expect(page.getByRole("heading", { level: 1, name: "Dashboard" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Home" })).toBeVisible();
   await expect(page.getByRole("heading", { level: 1, name: "Set up pluxy" })).toBeHidden();
   // Setup stays among the Settings topics, now as a status of the same things.
   await goTo(page, "Set up pluxy");

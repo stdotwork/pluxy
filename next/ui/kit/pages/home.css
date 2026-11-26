@@ -1,0 +1,274 @@
+/* Home (pages/home.tsx): the verdict strip, the accounts by group beside the last seven days and
+   the latest requests. Hairlines only, `--px-*` tokens only. */
+@layer kit {
+  /* Home keeps its page tight at the top and the foot, so a person's accounts fit in a window of
+     1100 by 760 pixels. */
+  html[data-page="status"] .content {
+    padding-block: calc(var(--s) * 3) calc(var(--s) * 2);
+  }
+
+  .home-strip {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: calc(var(--s) * 3) calc(var(--s) * 6);
+    padding-bottom: calc(var(--s) * 3);
+    margin-bottom: calc(var(--s) * 3);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .home-verdict {
+    display: grid;
+    gap: var(--s);
+    min-width: 0;
+    flex: 1 1 20em;
+  }
+
+  .home-headline {
+    margin: 0;
+    font-size: var(--px-font-size-title);
+    font-weight: var(--px-font-weight-strong);
+  }
+
+  .home-note,
+  .home-counts {
+    margin: 0;
+  }
+
+  .home-counts {
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+  }
+
+  .home-counts:empty {
+    display: none;
+  }
+
+  .home-address {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+    min-width: 0;
+  }
+
+  .home-address-label {
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+  }
+
+  .home-address code {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .home-body {
+    container-type: inline-size;
+  }
+
+  .home-cols {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) var(--px-size-detail);
+    gap: calc(var(--s) * 8);
+    align-items: start;
+  }
+
+  /* A narrow window, or a theme that keeps the page narrow: one column, the accounts first. The
+     width is in the page's own em, so a theme with larger type changes over sooner. */
+  @container (max-width: 56em) {
+    .home-cols {
+      grid-template-columns: minmax(0, 1fr);
+      gap: calc(var(--s) * 6);
+    }
+  }
+
+  .home-accounts,
+  .home-side {
+    display: grid;
+    gap: calc(var(--s) * 2);
+    min-width: 0;
+    align-content: start;
+  }
+
+  .home-group-head {
+    display: flex;
+    align-items: baseline;
+    gap: calc(var(--s) * 2);
+    margin: 0;
+    padding: calc(var(--s) * 1) calc(var(--s) * 2) calc(var(--s) * 0.5);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+  }
+
+  .home-group-count {
+    font-weight: normal;
+  }
+
+  .home-more {
+    margin: 0;
+    padding: calc(var(--s) * 2);
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+  }
+
+  .home-section {
+    display: grid;
+    gap: calc(var(--s) * 2);
+    min-width: 0;
+  }
+
+  .home-section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: calc(var(--s) * 3);
+  }
+
+  .home-section-head h2 {
+    font-size: var(--px-font-size-title);
+  }
+
+  .home-section-head a {
+    font-size: var(--px-font-size-small);
+  }
+
+  .home-hotspot,
+  .home-side-note,
+  .home-side-note p,
+  .home-next {
+    margin: 0;
+    font-size: var(--px-font-size-small);
+  }
+
+  .home-side-note,
+  .home-next {
+    color: var(--px-color-text-muted);
+  }
+
+  .home-side-note {
+    display: grid;
+    gap: calc(var(--s) * 2);
+  }
+
+  .home-side-failed {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+    margin: 0;
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+  }
+
+  /* Under the new-install pane, in line with its text. */
+  .home-next {
+    margin-block-start: calc(var(--s) * 3);
+    padding-inline: calc(var(--s) * 2);
+  }
+
+  /* The new-install pane's main buttons are as high as a page's main action. */
+  html[data-page="status"] .state-pane-actions .btn {
+    min-height: var(--px-size-control-main);
+  }
+
+  .home-latest {
+    border-top: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  /* ---- the last seven days ------------------------------------------------------------------ */
+
+  .days {
+    margin: 0;
+    display: grid;
+    gap: calc(var(--s) * 1.5);
+  }
+
+  .days-plot {
+    position: relative;
+    padding-top: calc(var(--s) * 5);
+  }
+
+  .days-top {
+    position: absolute;
+    top: 0;
+    left: 0;
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+
+  .days-bars {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: calc(var(--s) * 2);
+    height: calc(var(--s) * 20);
+    border-top: var(--px-shape-border) dashed var(--px-color-border);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .day {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: center;
+    height: 100%;
+    border-radius: var(--px-shape-radius);
+  }
+
+  .day:hover {
+    background: color-mix(in srgb, var(--px-color-surface-raised) 70%, transparent);
+  }
+
+  .day-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    width: 72%;
+    max-width: calc(var(--s) * 10);
+  }
+
+  .day-failed,
+  .day-succeeded {
+    display: block;
+    flex-basis: 0;
+    min-height: 2px;
+  }
+
+  .day-succeeded {
+    background: var(--px-color-chart-success);
+  }
+
+  .day-failed {
+    background: var(--px-color-chart-failure);
+  }
+
+  /* A day with no requests keeps a mark on the line, so it reads as a day and not a gap. */
+  .day[data-empty]::after {
+    content: "";
+    width: 72%;
+    max-width: calc(var(--s) * 10);
+    height: 2px;
+    background: var(--px-color-border);
+  }
+
+  .days-names {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: calc(var(--s) * 2);
+    color: var(--px-color-text-muted);
+    font-size: var(--px-font-size-small);
+    text-align: center;
+  }
+
+  .days-readout {
+    min-height: 1.4em;
+    margin: 0;
+    font-size: var(--px-font-size-small);
+    font-variant-numeric: tabular-nums;
+  }
+}

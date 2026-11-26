@@ -62,6 +62,22 @@ test("an account its provider closed waits in Needs you with its reason, and Tur
     condition(accountRow(page.getByRole("region", { name: "Serving" }), "shut-out-1")),
   ).toHaveAccessibleName("Serving");
   expect(await health("shut-out-1")).toBe("ok");
+
+  // Home puts it among the accounts that need the person while it is out.
+  const again = await fetch(`${core.base}/v1/chat/completions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${core.clientKey}`,
+      "Content-Type": "application/json",
+      "X-Pluxy-Account": "shut-out-1",
+    },
+    body: JSON.stringify({ model: "account-closed", messages: [{ role: "user", content: "hi" }] }),
+  });
+  await again.text();
+  await goTo(page, "Home");
+  const homeNeeds = page.getByRole("region", { name: "Needs you", exact: true });
+  await expect(homeNeeds.getByRole("link", { name: "shut-out-1", exact: true })).toBeVisible();
+  await expect(homeNeeds.getByRole("button", { name: "Turn on: shut-out-1", exact: true })).toBeVisible();
 });
 
 test("a closed account set in the settings file can be turned on from its row, its page and Select", async ({

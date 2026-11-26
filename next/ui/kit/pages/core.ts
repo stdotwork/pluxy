@@ -8,11 +8,11 @@ import { accountsPage } from "./accounts";
 import { addAccountPage } from "./addAccount";
 import { configPage } from "./config";
 import { extensionsPage } from "./extensions";
+import { homePage } from "./home";
 import { logsPage } from "./logs";
 import { requestsPage } from "./requests";
 import { routingPage } from "./routing";
 import { type SetupOptions, setupPage } from "./setup";
-import { statusPage } from "./status";
 import { systemPage } from "./system";
 import { themesPage } from "./themes";
 import { type ToolsOptions, toolsPage } from "./tools";
@@ -25,7 +25,7 @@ export interface CorePageOptions {
 }
 
 export const corePages = (options?: CorePageOptions): PageDef[] => [
-  statusPage(),
+  homePage(),
   accountsPage(),
   accountPage(),
   addAccountPage(),

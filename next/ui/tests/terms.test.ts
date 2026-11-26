@@ -27,8 +27,6 @@ const BASELINE: { file: string; key: string; banned: string }[] = [
   { file: "ui/kit/pages/configStrings.tsx", key: "config.maxCredentials", banned: "Credentials" },
   { file: "ui/kit/pages/routing.tsx", key: "routing.credentials", banned: "Credentials" },
   { file: "ui/kit/pages/routing.tsx", key: "routing.credentialsHint", banned: "Credentials" },
-  { file: "ui/kit/pages/status.tsx", key: "dashboard.credentials", banned: "Credentials" },
-  { file: "ui/kit/pages/status.tsx", key: "dashboard.noAccounts", banned: "Credentials" },
   { file: "ui/kit/pages/themes.tsx", key: "themes.notRead", banned: "Load" },
 ];
 

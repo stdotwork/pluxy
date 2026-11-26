@@ -118,6 +118,11 @@ panel that `extensions/panel` held) that each one replaces. A page's ID is its a
 (`#/<id>`) and its theme hook `data-page`. Why the pages have these names, and the other
 decisions behind them, is in [docs/panel.md](../../docs/panel.md).
 
+The shell matches an address to a page by its ID, the longest match, and ignores what follows a `?`
+(`#/status?x=1` opens Home). An address whose first part names a destination that has no page
+of that ID, such as `#/activity` or `#/activity?trace=<id>`, opens that destination's first page.
+Any other unknown address opens the first page.
+
 A change of page opens the new page at its top: the frame scrolls the pane there, so a page
 opened from a button far down another one shows from its start. A change inside a page (a tab or
 a filter in its address) keeps the place.
@@ -131,7 +136,7 @@ selected, because the file does not hold its ID: core makes the ID when it reads
 
 The Setup page (`#/setup`) is the one page the panel opens by itself. Once signed in, the
 shell asks core for `GET /setup`: on a first run (`first_run`), when the address names no page,
-Setup opens in place of the Dashboard. The shell does not wait for the answer, so the Dashboard
+Setup opens in place of Home. The shell does not wait for the answer, so Home
 may show for an instant. A core without the call (it answers 404) gets no Setup page and nothing
 opens by itself. The page stays among the Settings topics after setup, as a status of the same
 things.
@@ -179,7 +184,7 @@ visit), and `POST /client-keys` sends the name with the new key.
 
 | Page (ID) | Where it sits | Replaces (old route) |
 | --- | --- | --- |
-| Dashboard (`status`) | Home | Dashboard (`/`) |
+| Home (`status`) | Home | Dashboard (`/`) |
 | Accounts (`accounts`) | Accounts, the tab "All accounts"; `#/quota` opens it too | Auth Files (`/auth-files`) and AI Providers (`/ai-providers`), with the OAuth excluded models and OAuth model alias pages (`/auth-files/oauth-excluded`, `/auth-files/oauth-model-alias`) |
 | An account's page (`account`) | Accounts, under All accounts: `#/accounts/<id>`, and `#/accounts/<id>/sign-in` with its sign-in open | The details of one auth file on Auth Files |
 | Add Account (`add-account`) | Accounts, under the Accounts page | OAuth Login (`/oauth`) |
@@ -205,10 +210,17 @@ These are the old panel's features that the new pages leave out on purpose. Wher
 feature, it keeps the old label, unless the label named something this core does differently or
 [docs/terms.md](../../docs/terms.md) gives another word for it.
 
-**Dashboard**
+**Home** (the old Dashboard)
 
 - The "Live" badge: the old page showed it whenever it was connected, but did not refresh on its
-  own. The Dashboard refreshes every 60 seconds while it is visible and shows when it last did.
+  own. Home reads again every 60 seconds while it is visible, and says when a read failed and what
+  it still shows.
+- The "Reload config" button and the Config summary: Config reloads on save. Home says only when
+  core refused the last change to its settings, with a link to Config.
+- The "Running extensions" table, the models count, the upstream proxy and the other settings
+  facts: the Extensions, System and Config pages show them.
+- The 10-minute traffic chart and its table: Home shows the last 7 local days, and the Usage page
+  has the numbers behind them.
 - "Management keys", a count of client keys: the Config Panel lists the client keys.
 - "Debug" and "WebSocket auth": core has neither setting (see the config.yaml table in
   [`next/README.md`](../README.md#what-each-setting-does-here)).
