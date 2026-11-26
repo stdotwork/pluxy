@@ -462,8 +462,8 @@ func TestManagementKeyCommands(t *testing.T) {
 	}
 	mustContain(t, "rotate from a stale config", errOut, "does not run on "+stale, "--show-key")
 
-	// A copy with the same contents cannot be told apart beforehand: core rotates, the copy does
-	// not get the new key, and the command fails saying so.
+	// A copy with the same contents cannot be told apart beforehand: core rotates its own file,
+	// the copy does not get the new key, so the command prints the new key, says why, and exits 0.
 	b, err := os.ReadFile(h.homeCfg)
 	if err != nil {
 		t.Fatal(err)
@@ -473,10 +473,13 @@ func TestManagementKeyCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, errOut, code = run(nil, "", false, "key", "rotate-management", "--yes", "--config", copied)
-	if code != exitFailed || out != "" || fileKey() == key {
+	if code != exitOK || fileKey() == key || out != fileKey()+"\n" {
 		t.Errorf("rotate from a copy: %d %q %q (rotated: %v)", code, out, errOut, fileKey() != key)
 	}
-	mustContain(t, "rotate from a copy", errOut, copied+" (--config) does not hold the new key")
+	if c, err := os.ReadFile(copied); err != nil || !bytes.Equal(c, b) {
+		t.Errorf("rotate from a copy changed the copy: %v", err)
+	}
+	mustContain(t, "rotate from a copy", errOut, copied+" (--config) does not hold it", "core wrote it to the config file it runs on")
 
 	// The new key cannot be written out: the command fails and names the file that holds it.
 	key = fileKey()
@@ -517,6 +520,55 @@ func TestManagementKeyCommands(t *testing.T) {
 	mustContain(t, "rotate, call lost", errOut, "the old key still works")
 }
 
+// A rotation that core answers with no new key, an empty object or an empty body, is taken as
+// one whose reply was lost: the command asks core with the old key whether it rotated, and never
+// exits 0 without the key.
+func TestRotateWithNoKeyInTheReply(t *testing.T) {
+	const oldKey = "fake-old-management-key"
+	for _, c := range []struct {
+		name, reply string
+		rotated     bool
+		args        []string
+		want        string
+	}{
+		{"an empty object, not rotated", "{}", false, nil, "the old key still works"},
+		{"an empty body, not rotated", "", false, nil, "the old key still works"},
+		{"an empty object with --json, not rotated", "{}", false, []string{"--json"}, "the old key still works"},
+		{"an empty object, rotated", "{}", true, nil, "the old key no longer works"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var rotated atomic.Bool
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("Authorization") != "Bearer "+oldKey || rotated.Load() {
+					w.WriteHeader(http.StatusUnauthorized)
+					return
+				}
+				switch {
+				case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/management-key/rotate"):
+					rotated.Store(c.rotated)
+					w.Write([]byte(c.reply))
+				case strings.HasSuffix(r.URL.Path, "/status"):
+					w.Write([]byte(`{"version":"dev"}`))
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer srv.Close()
+			h := newTestHome(t)
+			emptyFolder(t)
+			h.env["PLUXY_URL"] = srv.URL
+			h.env["PLUXY_MANAGEMENT_KEY"] = oldKey
+			var out, errOut bytes.Buffer
+			args := append([]string{"key", "rotate-management", "--yes", "--show-key"}, c.args...)
+			code := runCLIWithInput(args, strings.NewReader(""), &out, &errOut, h.getenv, false)
+			if code != exitFailed || out.String() != "" {
+				t.Errorf("%d %q %q, want exit %d and nothing on standard output", code, out.String(), errOut.String(), exitFailed)
+			}
+			mustContain(t, c.name, errOut.String(), c.want)
+		})
+	}
+}
+
 // failingWriter is an output that takes nothing, as /dev/full.
 type failingWriter struct{}
 
@@ -553,6 +605,22 @@ func TestKeyManagementSaysWhyThereIsNoKey(t *testing.T) {
 			t.Errorf("%d %q %q", code, out, errOut)
 		}
 		mustContain(t, "a config that does not parse", errOut, h.homeCfg)
+	})
+	t.Run("a config without a management_key", func(t *testing.T) {
+		h := newTestHome(t)
+		emptyFolder(t)
+		if err := os.MkdirAll(filepath.Dir(h.homeCfg), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(h.homeCfg, []byte(`{"listen": "127.0.0.1:18416", "client_keys": ["fake-client-key-1"]}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// Core refuses such a config, and so does the command, with core's reason.
+		out, errOut, code := run(h)
+		if code != exitFailed || out != "" {
+			t.Errorf("%d %q %q", code, out, errOut)
+		}
+		mustContain(t, "a config without a management_key", errOut, h.homeCfg, "no management key", "pluxy init")
 	})
 	t.Run("a --config that is not there", func(t *testing.T) {
 		h := newTestHome(t)

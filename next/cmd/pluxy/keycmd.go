@@ -29,16 +29,11 @@ func (x *invocation) emit(format string, a ...any) error {
 
 // runKeyManagement is pluxy key management: where the management key the pluxy commands use is
 // kept, and with --show-key the key itself, alone on standard output. It calls no core. When
-// there is no key to find, findCore has already said why (the config file it could not read,
-// or each place it looked), except for a config file without one, said here.
+// there is no key to find, findCore has already said why: each place it looked, or the config
+// file it could not read, which includes one without a management_key (server.LoadConfig
+// refuses it).
 func runKeyManagement(x *invocation) error {
 	t := x.target
-	if t.key == "" {
-		if t.config != "" {
-			return notFoundError{"no management key: none was given with --key or PLUXY_MANAGEMENT_KEY, and " + t.configName() + " has no management_key"}
-		}
-		return notFoundError{"no management key: none was given with --key or PLUXY_MANAGEMENT_KEY, and no config file was read"}
-	}
 	var where string
 	switch t.keyFrom {
 	case fromConfig:
@@ -81,9 +76,10 @@ func runKeyManagement(x *invocation) error {
 // first makes sure the person can get the new key afterwards: from the config file it read, when
 // core's own config file has the same contents (GET /config's hash), so core will write the new
 // key there; else only from standard output, with --show-key. After the rotation it checks that
-// the file holds the new key, and when core's reply is lost it finds out from core and the file
-// whether the key was rotated and where the new one is. It exits 0 only when the new key was
-// delivered or is in the file.
+// the file holds the new key, and prints the key when it does not: a file with core's file's
+// contents need not be core's file. When core's reply is lost, or holds no key, it finds out from
+// core and the file whether the key was rotated and where the new one is. It exits 0 only when
+// the new key was delivered or is in the file.
 func runKeyRotate(x *invocation) error {
 	t := x.target
 	viaConfig := t.urlFrom == fromConfig && t.keyFrom == fromConfig
@@ -128,19 +124,25 @@ func runKeyRotate(x *invocation) error {
 		return err // core refused, and changed nothing
 	case err != nil:
 		return x.rotateUnanswered(err, inFile)
+	case r.Value == "":
+		return x.rotateUnanswered(errors.New("its reply held no new key"), inFile)
 	}
+	// held: the config file read holds the new key. When it does not, the key is printed even
+	// without --show-key, since no file this command knows holds it.
+	held := inFile && fileKey(t.config) == r.Value
 	var werr error
 	switch {
 	case x.json:
 		_, werr = x.stdout.Write(body)
-	case x.opts.showKey:
+	case x.opts.showKey || !held:
 		werr = x.emit("%s\n", r.Value)
 	}
 	x.eprintf("The management key is rotated: the old one no longer works.\n")
-	held := inFile && fileKey(t.config) == r.Value && r.Value != ""
 	switch {
 	case held:
 		x.eprintf("Core wrote the new key to %s; pluxy commands that read that file use it from now on.\n", x.errCell(t.configName()))
+	case !x.opts.showKey:
+		x.eprintf("The new key is printed on standard output because %s does not hold it: core wrote it to the config file it runs on, which had the same contents.\n", x.errCell(t.configName()))
 	case t.config != "":
 		x.eprintf("%s does not hold the new key: core at %s runs on another config file, which does.\n", x.errCell(t.configName()), x.errCell(t.url))
 	}
@@ -150,15 +152,13 @@ func runKeyRotate(x *invocation) error {
 		return fmt.Errorf("the new key could not be written to standard output (%v); it is in %s", werr, t.configName())
 	case werr != nil:
 		return fmt.Errorf("the new key could not be written to standard output (%v), and this command knows no file that holds it: it is in the config file core at %s runs on", werr, t.url)
-	case !held && !x.opts.showKey:
-		return fmt.Errorf("%s does not hold the new key, so core at %s runs on another config file, which had the same contents: the new key is in that one", t.configName(), t.url)
 	}
 	return nil
 }
 
-// rotateUnanswered is the end of a rotation whose reply did not arrive (callErr): core may have
-// made the new key and written it to its config file before the reply was lost. The old key
-// says whether it did; the config file read, when core runs on it, holds the new key, which is
+// rotateUnanswered is the end of a rotation whose reply did not arrive or held no key (callErr):
+// core may have made the new key and written it to its config file before the reply was lost.
+// The old key says whether it did; the config file read, when core runs on it, holds the new key, which is
 // checked with core before it is named or, with --show-key, printed.
 func (x *invocation) rotateUnanswered(callErr error, inFile bool) error {
 	t := x.target

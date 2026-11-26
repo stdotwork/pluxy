@@ -167,10 +167,16 @@ the commands use came from, and prints it only with `--show-key`. `pluxy key rot
 replaces it through the management API: core writes the new key to its config file, and the
 command says what must be given the new key
 ([details](management/README.md#the-pluxy-command)). The old key stops working at once, so the
-command rotates only when the person can get the new one afterwards: from the config file it read,
-once core has shown that file is the one it runs on, or from its standard output with
-`--show-key`. When core's reply is lost or the key cannot be written out, it fails and says
-where the new key is.
+command rotates only when the person can get the new one afterwards: from its standard output with
+`--show-key`, or from the config file it read, when that file has the same contents as the one
+core runs on (the `hash` core's `GET /config` shows). Matching contents do not show it is the
+same file: when the file read does not hold the new key after the rotation, the command prints the
+new key on standard output, says why, and exits 0. When core's reply is lost or holds no key, the
+command asks core with the old key whether it rotated; when it did and the file read still has
+core's file's contents and a key core accepts, the command names that file, prints the key with
+`--show-key`, and exits 0.
+Otherwise, and when the key cannot be written to standard output, it exits 1 and says what it
+knows: that the old key still works, or which file holds the new key.
 
 [docs/design.md](../docs/design.md#where-a-pluxy-keeps-its-files) gives the reasons for this
 folder.
@@ -2552,9 +2558,10 @@ config can still be checked and reloaded through management.
 ### Management API
 
 [`management/README.md`](management/README.md) is the API's contract and describes the `pluxy`
-command, its client: `pluxy serve` runs core, and the other subcommands (`pluxy status`,
-`pluxy account list`, `pluxy help` for the rest) call a running core's management API, except
-`pluxy init`, which writes a first config, and `pluxy key management`, which reads one.
+command, its client: `pluxy serve` runs core, `pluxy help` lists the other subcommands without
+calling core, and those (`pluxy status`, `pluxy account list` and the rest) call a running core's
+management API, except `pluxy init`, which writes a first config, and `pluxy key management`,
+which reads one.
 
 Beside the account calls [above](#accounts-added-by-login), management serves these. Every call
 needs `Authorization: Bearer <management_key>`.
