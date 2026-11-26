@@ -968,7 +968,7 @@ func TestStoredCredentialDoesNotRenew(t *testing.T) {
 func TestRenewalUnderOldSettingsIsDropped(t *testing.T) {
 	newSettings := func(m *Manager, s string) {
 		t.Helper()
-		if _, err := m.SetAccount("acct", func(a *route.Account) error { a.Settings = json.RawMessage(s); return nil }, nil); err != nil {
+		if _, err := m.SetAccount("acct", func(a *route.Account) error { a.Settings = json.RawMessage(s); return nil }, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1045,7 +1045,8 @@ func TestRemoveCallsOnRemove(t *testing.T) {
 
 type immediateLoginProvider struct {
 	*fakeProvider
-	grant *protocol.Grant
+	grant   *protocol.Grant
+	onLogin func() // called as each login starts, when not nil
 }
 
 type immediateLoginCall struct {
@@ -1064,6 +1065,9 @@ func (c *immediateLoginCall) Send(map[string]string) error { return nil }
 func (c *immediateLoginCall) Close()                       {}
 
 func (p *immediateLoginProvider) Login(context.Context, protocol.Account, protocol.Login) LoginCall {
+	if p.onLogin != nil {
+		p.onLogin()
+	}
 	return &immediateLoginCall{grant: p.grant}
 }
 

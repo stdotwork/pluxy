@@ -3,9 +3,11 @@ package cred
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"reflect"
 	"slices"
@@ -80,7 +82,10 @@ type Manager struct {
 	store    *Store
 	provs    Providers
 	reserved func(id string) bool
+	publicID func(id string) string
+	taken    func(id string) bool
 	now      func() time.Time
+	random   io.Reader // the random bytes of new account IDs
 
 	// ctx outlives every caller: renewals and logins run on it, so a client that gives up
 	// waiting never cancels a renewal halfway (the provider may already have rotated the
@@ -127,6 +132,12 @@ type renewal struct {
 type Options struct {
 	// Reserved reports IDs that core's config already uses, which logins may not take.
 	Reserved func(id string) bool
+	// PublicID returns an account's public ID (route.State.PublicID). Neither a new account's ID
+	// nor its public ID may be another account's ID or public ID. Nil: only IDs are compared.
+	PublicID func(id string) string
+	// Taken reports whether an account outside the store (one core's config sets) has id as its
+	// ID or its public ID, which a new account's ID and its public ID may then not be.
+	Taken func(id string) bool
 	// OnReauth is called after an existing account signs in again with a new credential.
 	OnReauth func(id string)
 	// OnRemove is called after an account is deleted from the store.
@@ -136,8 +147,8 @@ type Options struct {
 // NewManager returns the manager for store's accounts on provs.
 func NewManager(store *Store, provs Providers, opts Options) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &Manager{store: store, provs: provs, reserved: opts.Reserved, onReauth: opts.OnReauth, onRemove: opts.OnRemove,
-		now: time.Now, ctx: ctx, cancel: cancel,
+	m := &Manager{store: store, provs: provs, reserved: opts.Reserved, publicID: opts.PublicID, taken: opts.Taken,
+		onReauth: opts.OnReauth, onRemove: opts.OnRemove, now: time.Now, random: rand.Reader, ctx: ctx, cancel: cancel,
 		flights: map[string]*flight{}, renewals: map[string]*renewal{}, logins: map[string]*login{}}
 	if m.reserved == nil {
 		m.reserved = func(string) bool { return false }
@@ -611,15 +622,16 @@ func describeState(r Record) string {
 
 // SetDisabled disables or enables account id. Enabling does not clear a refused grant.
 func (m *Manager) SetDisabled(id string, disabled bool) (Record, error) {
-	return m.SetAccount(id, nil, &disabled)
+	return m.SetAccount(id, nil, &disabled, nil)
 }
 
 // SetAccount changes the routing fields and settings of account id (its route.Account) with
 // change, which may be nil, then checks them, and sets its disabled flag when disabled is not
-// nil, in one update. change is given the account as it is now, each time the update is tried
-// again, and an error from it changes nothing and is returned as it is. The account's ID and
-// credential stay as they are.
-func (m *Manager) SetAccount(id string, change func(*route.Account) error, disabled *bool) (Record, error) {
+// nil and the label a person gave it when label is not nil ("" takes that label away, leaving
+// the provider's), in one update. change is given the account as it is now, each time the
+// update is tried again, and an error from it changes nothing and is returned as it is. The
+// account's ID and credential stay as they are. The caller checks the label.
+func (m *Manager) SetAccount(id string, change func(*route.Account) error, disabled *bool, label *string) (Record, error) {
 	for {
 		cur, ok := m.store.Get(id)
 		if !ok {
@@ -640,6 +652,9 @@ func (m *Manager) SetAccount(id string, change func(*route.Account) error, disab
 			if disabled != nil {
 				r.Disabled = *disabled
 			}
+			if label != nil {
+				r.setLabel(*label)
+			}
 		})
 		if errors.Is(err, ErrStale) {
 			continue // a renewal landed meanwhile; apply the change to the new version
@@ -653,7 +668,8 @@ func (m *Manager) SetAccount(id string, change func(*route.Account) error, disab
 
 // Create adds account r, made elsewhere than by a login (an imported credential file), and
 // routes to it at once, as a finished login does. Like a login, it may not take an ID core's
-// config uses, nor, whatever its case, one a login still running will take. Its routing fields
+// config uses, nor, whatever its case, one a login still running will take, nor an ID that, or
+// whose public ID, is another account's ID or public ID (idTaken). Its routing fields
 // are checked as SetAccount checks them: one that routing refuses would stop every account
 // routing.
 func (m *Manager) Create(r Record) (Record, error) {
@@ -672,6 +688,12 @@ func (m *Manager) Create(r Record) (Record, error) {
 			m.mu.Unlock()
 			return Record{}, fmt.Errorf("%w: a login for account %q is running (%s)", ErrConflict, l.account, l.id)
 		}
+	}
+	// An ID the store has, whatever its case, is left to the store, which refuses it (ErrExists).
+	dup := slices.ContainsFunc(m.store.List(), func(s Record) bool { return strings.EqualFold(s.ID, r.ID) })
+	if !dup && m.idTaken(r.ID) {
+		m.mu.Unlock()
+		return Record{}, idTakenError(r.ID)
 	}
 	rec, err := m.store.Create(r)
 	m.mu.Unlock()

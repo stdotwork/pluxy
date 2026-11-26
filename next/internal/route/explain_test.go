@@ -39,6 +39,23 @@ func TestPublicID(t *testing.T) {
 	}
 }
 
+// An account ID shaped like a public ID, acc_ and 8 lower-case hex digits (the ID core gives an
+// account added without one), is its own public ID; any other ID, even one that differs only in
+// letter case or length, is digested.
+func TestPublicIDOfCoreMadeID(t *testing.T) {
+	s := NewState()
+	s.SetPublicKey([]byte("key-one"))
+	if got := s.PublicID("acc_1a2b3c4d"); got != "acc_1a2b3c4d" {
+		t.Errorf("PublicID(acc_1a2b3c4d) = %q, want it unchanged", got)
+	}
+	for _, id := range []string{"jane@example.com", "acc_1A2B3C4D", "acc_1a2b3c4", "acc_1a2b3c4d5", "acc_1a2b3c4g", "xacc_1a2b3c4d"} {
+		got := s.PublicID(id)
+		if got == id || len(got) != len("acc_")+8 || !strings.HasPrefix(got, "acc_") {
+			t.Errorf("PublicID(%q) = %q, want a digest", id, got)
+		}
+	}
+}
+
 // An error that ends a request says what it tried, by public ID, provider, upstream model and a
 // result code, and which accounts it left out and why. It never holds the upstream's words.
 func TestErrorExplainsTheRequest(t *testing.T) {

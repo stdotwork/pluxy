@@ -2,9 +2,11 @@ package cred
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"maps"
 	"net"
@@ -28,14 +30,16 @@ const (
 
 // LoginRequest starts a login.
 type LoginRequest struct {
-	// Account is the account to add: its ID, routing fields and settings. For a new login to an
-	// existing account (Reauth) only the ID is read; the account keeps its fields.
+	// Account is the account to add: its ID, routing fields and settings. Without an ID, core
+	// makes one (newAccountID); an ID is refused while it or its public ID is taken (idTaken). For
+	// a new login to an existing account (Reauth) only the ID is read; the account keeps its fields.
 	Account route.Account
 	// Extension is the ID of the extension that signs in and owns the account. Empty: the one
 	// extension that runs (for a reauth, the account's own).
 	Extension string
-	// Label names the new account for people when the provider's grant carries none. A new
-	// login to an existing account (Reauth) keeps the account's label.
+	// Label is the label a person gave the new account. It wins over the provider's (the grant's),
+	// which the record keeps apart as ProviderLabel. A new login to an existing account (Reauth)
+	// ignores it.
 	Label string
 	// Registration, when set with Reauth, is the registration of the account the caller
 	// checked: the login is refused if the account was removed and added again since, so a
@@ -92,13 +96,15 @@ func (l *login) notifyFirst() {
 }
 
 // StartLogin starts a login and returns it once the provider has sent its first prompt or
-// finished, or ctx ends.
+// finished, or ctx ends. A new account without an ID gets one core makes, which the login's
+// view names (LoginView.Account).
 func (m *Manager) StartLogin(ctx context.Context, req LoginRequest) (LoginView, error) {
 	id := req.Account.ID
-	if !ValidID(id) {
+	fresh := id == "" && !req.Reauth
+	if !fresh && !ValidID(id) {
 		return LoginView{}, fmt.Errorf("%w: account ID %q is not valid: use letters, digits, '.', '_' and '-' (at most 128)", ErrInvalid, id)
 	}
-	if m.reserved(id) {
+	if !fresh && m.reserved(id) {
 		return LoginView{}, fmt.Errorf("%w: account %q is set in core's config", ErrConflict, id)
 	}
 	ext := req.Extension
@@ -130,6 +136,10 @@ func (m *Manager) StartLogin(ctx context.Context, req LoginRequest) (LoginView, 
 	l := &login{account: id, extension: ext, method: req.Method, reauth: req.Reauth, fields: req.Account, label: req.Label, first: make(chan struct{}), state: LoginPending}
 	m.mu.Lock()
 	m.dropOldLogins()
+	if fresh {
+		id = m.newAccountID()
+		l.account, l.fields.ID = id, id
+	}
 	for _, o := range m.logins {
 		if o.account == id && o.state == LoginPending {
 			m.mu.Unlock()
@@ -152,6 +162,9 @@ func (m *Manager) StartLogin(ctx context.Context, req LoginRequest) (LoginView, 
 		return LoginView{}, fmt.Errorf("%w: account %q was removed and added again", ErrConflict, id)
 	case exists:
 		l.registration, l.fields = rec.Registration, rec.Account
+	case !fresh && m.idTaken(id):
+		m.mu.Unlock()
+		return LoginView{}, idTakenError(id)
 	}
 	m.loginSeq++
 	l.id = "login-" + strconv.FormatUint(m.loginSeq, 10)
@@ -197,7 +210,8 @@ func (m *Manager) runLogin(l *login) {
 			m.mu.Lock()
 			if err != nil {
 				l.state, l.err = LoginFailed, &llm.Error{Code: llm.CodeInternal, Message: err.Error()}
-				if errors.Is(err, ErrExists) || errors.Is(err, ErrNotFound) || errors.Is(err, ErrStale) || errors.Is(err, ErrIdentity) {
+				if errors.Is(err, ErrExists) || errors.Is(err, ErrNotFound) || errors.Is(err, ErrStale) || errors.Is(err, ErrIdentity) ||
+					errors.Is(err, ErrConflict) {
 					l.err.Code = llm.CodeInvalidRequest
 				}
 			} else {
@@ -236,7 +250,11 @@ func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 				r.Credential = *g.Credential
 				r.State, r.Reason = StateActive, ""
 				if g.Label != "" {
-					r.Label = g.Label
+					// A label a person gave stays; one that was the provider's follows it.
+					if !r.Named {
+						r.Label = g.Label
+					}
+					r.ProviderLabel = g.Label
 				}
 				if len(g.Identity) > 0 {
 					r.Identity = g.Identity
@@ -260,12 +278,18 @@ func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 			return nil
 		}
 	}
+	// The config may have changed since the login started: the new account's ID and its public ID
+	// must still be no config account's ID or public ID. (A config reload between this check and
+	// the store's Create below is not caught.)
 	if m.reserved(l.account) {
-		return fmt.Errorf("account %q is now set in core's config", l.account)
+		return fmt.Errorf("%w: account %q is now set in core's config", ErrConflict, l.account)
 	}
-	label := g.Label
+	if m.configTaken(l.account) {
+		return fmt.Errorf("%w: account ID %q or its public ID is now an account's ID or public ID in core's config; choose another account ID", ErrConflict, l.account)
+	}
+	label := l.label
 	if label == "" {
-		label = l.label
+		label = g.Label
 	}
 	fields := l.fields
 	if len(g.Settings) > 0 {
@@ -276,8 +300,8 @@ func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 		maps.Copy(defaults, explicit)
 		fields.Settings, _ = json.Marshal(defaults)
 	}
-	_, err := m.store.Create(Record{ID: l.account, Extension: l.extension, State: StateActive, Label: label, Identity: g.Identity,
-		Account: fields, Credential: *g.Credential})
+	_, err := m.store.Create(Record{ID: l.account, Extension: l.extension, State: StateActive, Label: label, Named: l.label != "", ProviderLabel: g.Label,
+		Identity: g.Identity, Account: fields, Credential: *g.Credential})
 	if err != nil {
 		return err
 	}
@@ -289,7 +313,8 @@ func (m *Manager) finishLogin(l *login, g *protocol.Grant) error {
 // sameIdentity checks that grant g, from a new login to the account cur, signs in to the same
 // upstream account: every field of the account's stored identity must be in g's, with the same
 // value (letter case aside). An account stored without an identity (added before its extension
-// reported one) is checked by label instead, when both have one. Neither: nothing to check.
+// reported one) is checked by the provider's label instead (Record.identityLabel, never a label
+// a person gave it), when both have one. Neither: nothing to check.
 func sameIdentity(cur Record, g *protocol.Grant) error {
 	if len(cur.Identity) > 0 {
 		for _, k := range slices.Sorted(maps.Keys(cur.Identity)) {
@@ -299,10 +324,69 @@ func sameIdentity(cur Record, g *protocol.Grant) error {
 		}
 		return nil
 	}
-	if cur.Label != "" && g.Label != "" && !strings.EqualFold(cur.Label, g.Label) {
+	if want := cur.identityLabel(); want != "" && g.Label != "" && !strings.EqualFold(want, g.Label) {
 		return fmt.Errorf("%w (its label differs from account %q's); to use the other account, add it as a new one", ErrIdentity, cur.ID)
 	}
 	return nil
+}
+
+// newAccountID returns a new account ID: "acc_" and 8 lower-case hex digits from m.random, drawn
+// again while it is taken (idTaken). route.State gives such an ID as its own public ID, so the
+// account has one ID everywhere. Call with m.mu held.
+func (m *Manager) newAccountID() string {
+	b := make([]byte, 4)
+	for {
+		if _, err := io.ReadFull(m.random, b); err != nil {
+			panic("cred: reading random bytes: " + err.Error()) // crypto/rand does not fail
+		}
+		if id := "acc_" + hex.EncodeToString(b); !m.idTaken(id) {
+			return id
+		}
+	}
+}
+
+// publicIDOf returns the public ID of account id (Options.PublicID), or id when there is none.
+func (m *Manager) publicIDOf(id string) string {
+	if m.publicID == nil {
+		return id
+	}
+	return m.publicID(id)
+}
+
+// configTaken reports whether an account outside the store (core's config, Options.Taken) has id
+// or id's public ID as its ID or public ID.
+func (m *Manager) configTaken(id string) bool {
+	return m.taken != nil && (m.taken(id) || m.taken(m.publicIDOf(id)))
+}
+
+// idTaken reports whether id or its public ID is the ID (letter case aside, as the store compares
+// IDs) or the public ID of an account core knows, of a login still running, or of an account
+// outside the store (configTaken). A new account may then not have id, or two accounts would
+// answer to one ID. Call with m.mu held.
+func (m *Manager) idTaken(id string) bool {
+	if m.configTaken(id) {
+		return true
+	}
+	pub := m.publicIDOf(id)
+	clash := func(k string) bool {
+		pk := m.publicIDOf(k)
+		return strings.EqualFold(k, id) || strings.EqualFold(k, pub) || pk == id || pk == pub
+	}
+	if slices.ContainsFunc(m.store.List(), func(r Record) bool { return clash(r.ID) }) ||
+		slices.ContainsFunc(m.store.Broken(), func(b Broken) bool { return clash(b.ID) }) {
+		return true
+	}
+	for _, l := range m.logins {
+		if l.state == LoginPending && clash(l.account) {
+			return true
+		}
+	}
+	return false
+}
+
+// idTakenError refuses a new account an ID that is taken (idTaken).
+func idTakenError(id string) error {
+	return fmt.Errorf("%w: account ID %q or its public ID is another account's ID or public ID; choose another account ID", ErrConflict, id)
 }
 
 // Login returns login id.
