@@ -289,4 +289,20 @@
   .tool-key-rename label {
     flex: 1 1 14em;
   }
+
+  /* A narrow page: the question while Delete asks takes the line, and its answers the next. */
+  @container (max-width: 600px) {
+    .tool-key-actions:has(.confirm) {
+      flex-basis: 100%;
+    }
+
+    .tool-key-actions .confirm {
+      flex: 1 1 100%;
+      justify-content: flex-end;
+    }
+
+    .tool-key-actions .confirm-question {
+      flex: 1 1 100%;
+    }
+  }
 }
