@@ -57,7 +57,7 @@ test("an account its provider closed says so, and Enable brings it back", async 
   await expect(detail.getByRole("button", { name: "Disable", exact: true })).toBeVisible();
   expect(await health("shut-out-1")).toBe("ok");
 
-  // The Dashboard counts it among the accounts that are not serving while it is out.
+  // Home puts it among the accounts that need the person while it is out.
   const again = await fetch(`${core.base}/v1/chat/completions`, {
     method: "POST",
     headers: {
@@ -68,9 +68,11 @@ test("an account its provider closed says so, and Enable brings it back", async 
     body: JSON.stringify({ model: "account-closed", messages: [{ role: "user", content: "hi" }] }),
   });
   await again.text();
-  await goTo(page, "Dashboard");
-  const status = page.getByRole("region", { name: "Credential status", exact: true });
-  await expect(status.locator("dl")).toContainText("Unavailable1");
+  await goTo(page, "Home");
+  const needs = page.getByRole("region", { name: "Needs you", exact: true });
+  // The test provider names the account it signed in "Test account".
+  await expect(needs.getByRole("link", { name: "Test account", exact: true })).toBeVisible();
+  await expect(needs.getByRole("button", { name: "Turn on: Test account", exact: true })).toBeVisible();
 });
 
 test("a banned account set in core's config can be enabled from its details and by batch", async ({
