@@ -19,7 +19,7 @@ test("each of core's pages sits under the destination a person looks for it in",
     accounts: ["accounts", "account", "add-account", "routing"],
     activity: ["usage", "activity/usage"],
     tools: ["tools"],
-    settings: ["setup", "config", "system", "extensions", "themes", "logs"],
+    settings: ["settings", "themes", "config", "extensions", "logs", "system", "setup"],
   });
 });
 
@@ -27,7 +27,7 @@ test("a destination opens its first page that sits under no other; one with no p
   const pages = corePages();
   expect(destinationHome(pages, "home")?.id).toBe("status");
   expect(destinationHome(pages, "accounts")?.id).toBe("accounts");
-  expect(destinationHome(pages, "settings")?.id).toBe("setup");
+  expect(destinationHome(pages, "settings")?.id).toBe("settings");
   expect(destinationHome(pages, "tools")?.id).toBe("tools");
   // A destination with no page has none, so its navigation entry is not shown.
   expect(
@@ -81,14 +81,49 @@ test("Settings lists its topics by section, the extensions' pages last", () => {
   ];
   const placed = place(pages, "themes");
   expect(placed?.topics.map((g) => [g.section, ids(g.pages)])).toEqual([
-    ["core", ["setup", "config", "system", "extensions", "themes", "logs"]],
-    ["device", ["connection"]],
+    ["device", ["settings", "themes", "connection"]],
+    ["core", ["config", "extensions", "logs", "system", "setup"]],
     ["extensions", ["ext/a/b/c"]],
   ]);
   expect(placed?.current).toBe("themes");
   expect(placed?.tabs).toEqual([]);
-  // The panel alone: one section, so the frame draws no section label.
-  expect(place(corePages(), "themes")?.topics.map((g) => g.section)).toEqual(["core"]);
+  // The panel alone: this device's two topics, then pluxy's own.
+  expect(place(corePages(), "themes")?.topics.map((g) => g.section)).toEqual(["device", "core"]);
+});
+
+test("Settings opens on General, with This device listed first, in the panel and in the app", () => {
+  const app: PageDef[] = [
+    ...corePages({ general: { signOut: false } }),
+    {
+      id: "connection",
+      title: "Where pluxy runs",
+      dest: "settings",
+      kind: "topic",
+      section: "device",
+      render,
+    },
+    { id: "versions", title: "Updates", dest: "settings", kind: "topic", section: "device", render },
+    { id: "device", title: "Add-ons", dest: "settings", kind: "topic", section: "device", render },
+    { id: "launcher", title: "Launcher", dest: "settings", kind: "topic", section: "device", render },
+  ];
+  for (const pages of [corePages(), app]) {
+    expect(destinationHome(pages, "settings")?.id).toBe("settings");
+    const sections = place(pages, "settings")?.topics ?? [];
+    expect(sections.map((g) => g.section)).toEqual(["device", "core"]);
+    expect(place(pages, "settings")?.current).toBe("settings");
+  }
+  // This device's topics are General and Themes, then the app's own; every topic has a tip.
+  expect(ids(place(app, "settings")?.topics[0]?.pages ?? [])).toEqual([
+    "settings",
+    "themes",
+    "connection",
+    "versions",
+    "device",
+    "launcher",
+  ]);
+  const settingsTopics = corePages().filter((p) => p.dest === "settings" && p.kind === "topic");
+  expect(settingsTopics.filter((p) => p.tip === undefined).map((p) => p.id)).toEqual([]);
+  expect(currentId(app, "#/settings")).toBe("settings");
 });
 
 test("a destination with one tab shows no tabs, and a page with no listing has neither", () => {

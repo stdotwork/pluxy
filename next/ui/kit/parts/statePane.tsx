@@ -27,6 +27,8 @@ export interface PaneAction {
   label: string;
   onClick?: () => unknown;
   href?: string;
+  /** The button waits, for a button that must not be pressed again until something outside ends. */
+  disabled?: boolean;
 }
 
 function PaneButton(props: { action: PaneAction; variant: "primary" | "quiet" }) {
@@ -39,7 +41,7 @@ function PaneButton(props: { action: PaneAction; variant: "primary" | "quiet" })
     );
   }
   return (
-    <Button variant={props.variant} onClick={a.onClick}>
+    <Button variant={props.variant} onClick={a.onClick} disabled={a.disabled}>
       {a.label}
     </Button>
   );

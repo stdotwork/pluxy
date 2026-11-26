@@ -1,5 +1,7 @@
 // The OpenCode page's form logic (opencode.tsx), apart from the page so its unit tests need no
-// webview: the models' Attachments default, and whether the form can be applied.
+// webview: the models' Attachments default, and why the form cannot be written yet.
+
+import { hasControl, length, trimText } from "./textRules";
 
 export const PACKAGE = "pluxy/opencode";
 /** The client label the tool's CLI recipe gives its launches, which the launcher keys recent
@@ -13,7 +15,7 @@ export interface Model {
 }
 
 /** What the tool's preview reads back of the config file; `refused` (with `reason`) for a file
- * OpenCode would not take, which apply and clear refuse and Restore Backup still reaches. */
+ * OpenCode would not take, which apply and clear refuse and Restore backup still reaches. */
 export interface ReadBack {
   state: "configured" | "not-configured" | "needs-update" | "refused";
   reason?: string;
@@ -23,7 +25,7 @@ export interface ReadBack {
   default_model?: string | null;
   models?: Model[];
   old_provider?: boolean;
-  /** OpenCode 2's `providers.pluxy` is in the file: OpenCode would use it, so Apply refuses. */
+  /** OpenCode 2's `providers.pluxy` is in the file: OpenCode would use it, so apply refuses. */
   v2_provider?: boolean;
 }
 
@@ -60,22 +62,26 @@ export const withModels = (have: Model[], found: Model[]) => [
 
 /** The longest model ID or display name the tool takes. */
 const TEXT_MAX = 240;
+/** The most models one apply writes (the tool's limit). */
+export const MODELS_MAX = 256;
 
-/** Whether the form can be applied: 1 to 256 models with IDs the tool takes (no control characters
- * or #, at most 240 characters) and names of at most 240, and the default one of them. */
-export function ready(models: Model[], model: string): boolean {
-  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it refuses
-  const bad = /[\u0000-\u001f\u007f#]/;
-  return (
-    models.length >= 1 &&
-    models.length <= 256 &&
-    models.every(
-      (m) =>
-        m.id.trim() !== "" &&
-        m.id.trim().length <= TEXT_MAX &&
-        !bad.test(m.id) &&
-        m.name.trim().length <= TEXT_MAX,
-    ) &&
-    models.some((m) => m.id === model)
-  );
+/** Why the form cannot be written yet, as the tool's apply would refuse it (opencode's
+ * `Settings::from_input`, which trims each ID and name first): no models, more than the tool takes,
+ * an ID or name it would refuse (an ID empty, with a control character or #, a name with a control
+ * character, either more than 240 characters), an ID listed twice, or a default that is not one of
+ * the models. Empty when it can be written. */
+export type Held = "none" | "too-many" | "text" | "twice" | "model";
+
+const idOk = (id: string) => id !== "" && length(id) <= TEXT_MAX && !hasControl(id) && !id.includes("#");
+const nameOk = (name: string) => length(name) <= TEXT_MAX && !hasControl(name);
+
+export function heldOf(models: Model[], model: string): Held[] {
+  const held: Held[] = [];
+  if (models.length === 0) return ["none"];
+  if (models.length > MODELS_MAX) held.push("too-many");
+  const ids = models.map((m) => trimText(m.id));
+  if (!models.every((m, i) => idOk(ids[i] as string) && nameOk(trimText(m.name)))) held.push("text");
+  if (new Set(ids).size < ids.length) held.push("twice");
+  if (!ids.includes(trimText(model))) held.push("model");
+  return held;
 }

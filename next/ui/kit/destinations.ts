@@ -9,10 +9,10 @@ export const DESTINATIONS = ["home", "accounts", "activity", "tools", "settings"
 export type Destination = (typeof DESTINATIONS)[number];
 
 /**
- * The labelled groups a destination's topics are listed in, in order: pluxy's own, this
- * device's (the desktop app's), and the pages extensions bring.
+ * The labelled groups a destination's topics are listed in, in order: this device's (General,
+ * Themes and the desktop app's pages), pluxy's own, and the pages extensions bring.
  */
-export const TOPIC_SECTIONS = ["core", "device", "extensions"] as const;
+export const TOPIC_SECTIONS = ["device", "core", "extensions"] as const;
 export type TopicSection = (typeof TOPIC_SECTIONS)[number];
 
 /**

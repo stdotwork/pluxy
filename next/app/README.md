@@ -2,7 +2,7 @@
 
 The desktop app is the UI kit's second build ([`../ui`](../ui/README.md)), in a Tauri 2 window,
 with a tray icon. It shows core's pages in the same places and with the same themes as the web
-panel, then adds its own: Beginner Mode, Manage Clients and the client pages as topics beside the Tools page, and Connection, Version Management, Device
+panel, then adds its own: Beginner Mode, Manage Clients and the client pages as topics beside the Tools page, and Where pluxy runs, Version Management, Device
 extensions and Launcher among the Settings topics. Extension pages, from core and
 from packages installed on this device, open in webviews of their own.
 
@@ -13,7 +13,7 @@ what happened to each feature of the old desktop app.
 
 | Folder | What it holds |
 | --- | --- |
-| `src/` | The window: the kit's shell and pages, the app's host (`host.ts`), the Connection page, and how extension pages are drawn (`nativePage.tsx`) |
+| `src/` | The window: the kit's shell and pages, the app's host (`host.ts`), the first launch screen, the not-running pane and the Where pluxy runs page (`firstLaunch.tsx`, `connection.tsx`, every word of them in `connectionCopy.ts`), and how extension pages are drawn (`nativePage.tsx`) |
 | `page/` | The small document an extension page's webview loads, which holds the page's sandboxed frame, and the release notes' style sheet |
 | `src-tauri/` | The native side: commands, the connection to core, the app's own core, extension page webviews, the tray |
 | `native/` | The native test (`run.ts`), its sessions and fixtures |
@@ -22,7 +22,7 @@ what happened to each feature of the old desktop app.
 
 ## How the app reaches core
 
-The Connection page picks one of three modes. The app keeps the choice in `connection.json` in
+The first thing a new person sees is one question, **Where should pluxy run?**, with two answers: **On this computer** (the `managed` mode below; one click, nothing to type) and **Connect to a pluxy that is already running** (the address is typed, and the address decides between the `local` and `remote` modes below; the native key window then asks for its management key). The **Where pluxy runs** page (Settings, This device) shows the same two choices again later. The app keeps the choice in `connection.json` in
 its config folder (on Linux `~/.config/dev.pluxy.desktop/`), readable only by your user. On
 Windows it is in the local application data folder instead (`%LOCALAPPDATA%\dev.pluxy.desktop\`),
 and so is the app's own core's folder (`core/`), since both can hold a management key: the config
@@ -31,15 +31,15 @@ server and to the person's other computers.
 
 | Mode | What the app does | When the app quits |
 | --- | --- | --- |
-| Run core here (`managed`) | Runs one of its own core versions ([below](#the-apps-own-core)) with a config of its own, `core/config.json` in the app's data folder. The first start has the core write that config (`pluxy init -port 0`): a free loopback port, which then stays the core's, new random keys, and folders for credentials and packages beside it. After that the file is yours to edit; the app only reads its `management_key`. | Stops that core (SIGTERM, then a kill after 10 seconds). On Linux the core also gets SIGTERM if the app dies without stopping it; on macOS it runs on, holding its port, until it is stopped. |
-| Core on this computer (`local`) | Connects to a core that already runs on a loopback address (`127.0.0.0/8`, `::1` or `localhost`), such as a system service. You give its address and management key. | Leaves it running. The app never starts or stops it. |
-| Remote core (`remote`) | Connects over https only, so the key is never sent in the clear. You can name a PEM file of certificate authorities to trust for that core, for a certificate you made yourself; without one, the usual public roots are used. The core's address is shown next to the app's name. | Leaves it running. |
+| On this computer (`managed`) | Runs one of its own core versions ([below](#the-apps-own-core)) with a config of its own, `core/config.json` in the app's data folder. The first start has the core write that config (`pluxy init -port 0`): a free loopback port, which then stays the core's, new random keys, and folders for credentials and packages beside it. After that the file is yours to edit; the app only reads its `management_key`. | Stops that core (SIGTERM, then a kill after 10 seconds). On Linux the core also gets SIGTERM if the app dies without stopping it; on macOS it runs on, holding its port, until it is stopped. |
+| Connect to a pluxy that is already running, on this computer (`local`) | Connects to a core that already runs on a loopback address (`127.0.0.0/8`, `::1` or `localhost`), such as a system service. You give its address (`http://` is accepted only here) and management key. | Leaves it running. The app never starts or stops it. |
+| Connect to a pluxy that is already running, on another computer (`remote`) | Connects over https only, so the key is never sent in the clear. You can name a PEM file of certificate authorities to trust for that core, for a certificate you made yourself; without one, the usual public roots are used. The core's address is shown next to the app's name. | Leaves it running. |
 
 Addresses are origins only (scheme, host and port). A key you give is checked against that core
 (`GET /v0/management/status`) before the app switches to it. It is kept in `connection.json` only
 when you tick "Keep the key on this device"; otherwise it lasts until the app quits.
 
-The native side holds the management key. "Enter management key" on the Connection page opens a
+The native side holds the management key. "Enter management key" (on the not-running pane and on Where pluxy runs), and Continue and Connect on the address form, open a
 native dialog with a hidden entry, "Keep the key on this device", and OK/Cancel: a GTK dialog on
 Linux, a Win32 dialog with a password edit control on Windows, and a sheet on the window with an
 `NSSecureTextField` on macOS. On Windows and macOS the dialog is modal to the app's window only:
@@ -75,8 +75,13 @@ A call that left with the old key during a rotation is sent once more with the n
 waits at most 30 seconds for core's reply to a rotation, since other calls and Quit wait for it;
 without a reply it says the key may have changed and where to find it.
 
-Until the app is connected and signed in, the window shows only the Connection page, so a wrong
-address or key can always be fixed there.
+Until the app is connected and signed in, the window shows no pages of core's. With no place chosen it
+shows the first launch screen. Once a place is chosen, it shows the frame with its destinations
+turned off and one pane that says what happened and offers the one way on (stopped, stopped with an
+error, restarting, stopped restarting, not installed, not signed in, not answering, or cannot
+connect; `firstLaunch.tsx`, the case chosen from the connection alone in `connectionCopy.ts`
+`paneOf`). **Where pluxy runs** opens inside that frame, so a wrong address or key can always be
+fixed there. In safe mode (`--safe-mode`) the pane also links to this device's add-ons.
 
 ## The app's own core
 
@@ -85,10 +90,11 @@ under `cores/versions/` in the app's data folder (on Windows the local applicati
 which stays on this computer; a store there that is not on a fixed local drive, such as a network
 share, is refused). A packaged app installs the core it comes with
 ([below](#the-core-the-app-comes-with)). Until one is installed, the app runs no core
-and the window shows only the Connection page, with **Core versions**. There, the app lists
-what is installed, which version runs and which ran before it, and what the core source offers.
+and the window shows the not-running pane (**No pluxy is installed**) and Where pluxy runs, which
+holds the versions under **Versions and advanced**. There, the app lists
+what is installed, which version runs and which ran before it, and what the release list offers.
 
-The **core source** is the full path of an index file. The app has no built-in source and reads
+The **release list** (the `core_source` setting; the app has no built-in one) is the full path of an index file. The app has no built-in source and reads
 nothing until you set one. The index has the release feed's format (format 1, `releases`); the
 app reads only releases with `product` `core`, their `version`, and their `artifacts`:
 
@@ -142,7 +148,7 @@ version again moves its old folder aside first, which Windows refuses while a pr
 so there the app stops the core first when it runs that version, and starts it again if the
 install fails.
 
-**Switching** to a version (an install, **Roll back to** an installed version, or an adoption)
+**Switching** to a version (an install, **Switch to this version** for an installed version, or an adoption)
 stops the running core, keeps a copy of `core/config.json` (or a mark that there was none) and
 records the new version as the candidate, then starts it. On Linux and macOS the app binds the
 `listen` address in `core/config.json` itself (an IP address and port, or `localhost` and a port)
@@ -157,7 +163,7 @@ anyway), before the app sends anything there, it answers
 version it was signed as, and the app has saved the new selection. If not, the app puts the
 config back as it was, removes a version it installed for this switch, and runs the version that
 worked before (when the switch was to the selected version itself, and reinstalled it, copied a
-damaged adopted program in again, or ran it with **Roll back to** and it failed, the one before it,
+damaged adopted program in again, or ran it with **Switch to this version** and it failed, the one before it,
 which is then selected once it runs); the page says why the new one did not start. If the config
 cannot be put back, no core runs: the candidate stays recorded with the copy, and the app tries
 again at its next start. Once it is put back, a mark beside the config says so, and a later start
@@ -191,8 +197,9 @@ starts holds it. The
 app keeps the running version, the one before it and the core it came with, and removes older
 ones after a switch. Rolling back reaches only an installed version.
 
-A **core program** you name on the Connection page (or `pluxy` beside the app, unless that is the
-core the app came with) is never run in place. **Adopt core** shows its path, size and the first 12 characters of its SHA-256 in the native confirmation;
+A **core program** you name as **Your own pluxy program** under Versions and advanced on Where pluxy runs (or
+`pluxy` beside the app, unless that is the core the app came with, which the not-running pane offers
+as **Use this program**) is never run in place. Using it shows its path, size and the first 12 characters of its SHA-256 in the native confirmation;
 once confirmed, the app copies it into a version of its own, `custom-<its SHA-256>`, if it is
 still a regular file of that size and digest (at most 512 MiB; a FIFO or device is refused
 without being read; on Unix it must be executable, on Windows a program image named `.exe` or
@@ -243,10 +250,10 @@ own program. The app never runs the files beside it, only the copy, with the che
 gets before it starts. A copy that no longer passes them is copied in again at the next start.
 
 - A file that differs from the manifest, is missing or is a link: nothing is installed, and the
-  Connection page says that the core that came with the app is damaged, and to reinstall or
+  Where pluxy runs says that the core that came with the app is damaged, and to reinstall or
   update the app.
 - The app's cores already hold that version with other files (a release of the same number from
-  another core source): nothing is installed, the installed one stays, and the Connection page
+  another release list): nothing is installed, the installed one stays, and Where pluxy runs
   says that the app's cores hold that version with other files than the one that came with the
   app.
 
@@ -256,7 +263,7 @@ after the app's version changes (an update, or an older app), the app moves a se
 to its own core, with the switch above, which puts back the earlier version if the new one does
 not start. A core it came with that does not start is not tried again until the app's version
 changes. A version you chose stays: an install, an adoption, a rollback, also to the core an
-earlier app came with. **Roll back to** the core the app came with switches to it as any rollback
+earlier app came with. **Switch to this version** on the core the app came with switches to it as any rollback
 does, with the native confirmation. A selection made before the app recorded who made it counts
 as yours.
 
@@ -266,10 +273,10 @@ through Adopt.
 
 ## The window and the tray
 
-What closing the window does is the Connection page's **Close behavior**: **Minimize to tray**
-(the default), **Ask every time** or **Exit app**. Ask every time shows "What would you like to
-do?" with Minimize to tray, Exit app, Cancel and **Remember this choice**. Exit app quits as the
-tray's Quit does. Minimize to tray destroys the window and its webviews, so they hold no memory
+What closing the window does is the **When you close the window** row on Where pluxy runs: **Keep in the tray**
+(the default), **Quit** or **Ask**. Ask shows "Keep pluxy in the tray?" with Keep in the tray, Quit
+(which reads "Quit (stops pluxy)" when the app runs pluxy) and Cancel, and **Remember this choice**. Quit quits as the
+tray's Quit does. Keeping the app in the tray destroys the window and its webviews, so they hold no memory
 while the app sits in the tray. With a tray, a window that does not answer the question within
 three seconds (its page still loading, or busy) closes to the tray. In local and remote mode,
 quitting the app leaves pluxy running; only in managed mode does it stop the core the app runs.
@@ -296,7 +303,7 @@ window (`__pluxyClosePrompt("no-tray")`): "Close and stop pluxy?", saying that c
 pluxy and the coding tools stop getting answers, with **Keep open** (also Escape), which keeps the
 window and sends nothing, **Close and stop pluxy**, which quits, and **Don't ask again**. A window
 that does not answer within three seconds stays open. Don't ask again is kept as
-`ask_without_tray: false`, apart from the Close behavior, which stays as it was for a session
+`ask_without_tray: false`, apart from the close choice, which stays as it was for a session
 that has a tray. The answer is kept by the prompt the person answered, even if a tray shows by
 the time they answer.
 
@@ -304,11 +311,12 @@ When an owned core exits unexpectedly, the app retries after 2, 5 and 15 seconds
 three automatic recovery attempts in a rolling five-minute window. A successful recovery keeps
 that budget, so a core that keeps crashing still stops being restarted. After the third failed
 recovery or another crash within that window, the tray shows "pluxy: Stopped restarting" and the
-Connection page shows the reason. An explicit Start, Stop or Restart, from the tray or the
+not-running pane shows the reason. An explicit Start, Stop or Restart, from the tray or the
 window, or a mode change, cancels any scheduled recovery and clears the budget. A core you
-stopped stays stopped, and so does one that Start core on launch left unstarted; the
+stopped stays stopped, and so does one that **Start pluxy with the app** left unstarted; the
 connection's `core.stop_reason` tells them apart (`stopped_by_user` or `not_started`) until
-something starts it.
+something starts it, and the pane says which ("It was stopped from the tray." or "The app is set not
+to start it when it opens.").
 
 The window opens at the size and place it last had, kept when it closes and when the app quits:
 the size in logical pixels, the place in physical ones, never noted while minimized, maximized
@@ -325,7 +333,7 @@ runs only while its page is visible, stops until the window is restored.
 
 The app runs once per profile: your user and the app's data folder (on Linux
 `~/.local/share/dev.pluxy.desktop/`), not the place the program is installed. Launching it again
-on that profile, from the app menu, a shortcut or the login autostart entry (Silent launch applies
+on that profile, from the app menu, a shortcut or the login autostart entry (**Start in the tray** applies
 only to a login launch that is the first), shows the first app's window (a new one if it was
 closed to the tray) and exits with status 0, starting no core, tray icon or webview. Another `HOME` or `XDG_*` folder is another
 profile, with its own app and core.
@@ -363,15 +371,15 @@ other launch is an ordinary later launch.
 
 ## Privacy mode
 
-The **Privacy mode** toggle at the header strip's end masks account e-mail addresses and identifiers where
+The **Hide names** setting in General masks account e-mail addresses and identifiers where
 the kit shows them, as in the panel (`ui/kit/privacy.ts`), and extension pages are told in their
-theme snapshot. The app keeps the choice natively, in `privacy-mode.json` beside
+theme snapshot. While it is on, the header strip shows a **Names hidden** button that turns it off. The app keeps the choice natively, in `privacy-mode.json` beside
 `connection.json` (readable only by your user), not in the window's storage, so losing that
 storage cannot turn it off. A file that cannot be read or parsed counts as on.
 
 ## Files the window saves
 
-The Themes page's **Export**, the Logs page's downloads and the Requests page's **Save as spreadsheet** save
+The Themes page's **Save theme file**, the Logs page's downloads and the Requests page's **Save as spreadsheet** save
 a file. In the panel that is a browser download. The app's window opens no address but the app's
 own, so a download link, whose address starts with `blob:`, does nothing there; these pages hand
 the file to the `file_save` command instead (`src-tauri/src/export.rs`). It saves the file in
@@ -381,25 +389,28 @@ new file gets ` (1)`, ` (2)` and so on before its extension.
 
 ## Startup preferences
 
-The Connection page has three startup choices:
+Where pluxy runs has three startup rows (**Open at sign-in**, **Start in the tray** and **Start pluxy
+with the app**), each saved the moment it is changed (the row says "Saving…", and puts the control
+back with the reason when the save fails). A row is not drawn until the native side has answered, and
+**Start in the tray** and **Start pluxy with the app** are drawn only when the app runs pluxy itself.
 
-- **Launch at startup** registers pluxy for your Linux login. Saving it writes
+- **Open at sign-in** registers pluxy for your Linux login. Turning it on writes
   `$XDG_CONFIG_HOME/autostart/dev.pluxy.desktop.desktop` (or
   `~/.config/autostart/dev.pluxy.desktop.desktop`). Its Exec command names the app by absolute
-  path with `--autostart`. Silent launch controls whether a login launch shows a window.
-  Turning Launch at startup off and saving removes pluxy's entry. Merely opening the app does
+  path with `--autostart`. Start in the tray controls whether a login launch shows a window.
+  Turning Open at sign-in off removes pluxy's entry (and turns Start in the tray off). Merely opening the app does
   not register it. The displayed choice is read from that entry, including desktop disable flags.
   A file without pluxy's ownership marker is shown as a conflict and left alone.
-- **Silent launch** suppresses the window only for an autostart launch in managed mode when
+- **Start in the tray** (disabled until Open at sign-in is on, and when there is no tray) suppresses the window only for an autostart launch in managed mode when
   the session has a StatusNotifier watcher and a registered tray host. Local and remote modes
   host no core, so they open normally. In that case no window or webview is
   created. Without a host the app logs why and opens a window. Opening the app from its menu
   or shortcut always shows the window.
-- **Start core on launch** starts the app's own core in managed mode. Turning it off leaves
-  the saved managed connection stopped until you press Start core. Local and remote modes
+- **Start pluxy with the app** starts the app's own core in managed mode. Turning it off leaves
+  the saved managed connection stopped until you press Start pluxy. Local and remote modes
   only connect; their core processes are never started or stopped by these choices.
 
-The defaults are login registration off, Silent launch off, and Start core on launch on.
+The defaults are login registration off, Start in the tray off, and Start pluxy with the app on.
 Preferences live in `startup.json` beside `connection.json`, readable only by your user.
 A malformed file is moved to `startup.damaged-<random>.json` and defaults are used; failure to
 read or keep it aside is logged and still does not prevent startup. Saving preferences does
@@ -430,8 +441,8 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `core_start` | Starts the app's own core only if it is not running (managed mode) |
 | `core_stop` | Stops the app's own core, as the tray's Stop does (managed mode); refused in local and remote modes, which it never stops |
 | `core_restart` | Starts the app's own core again (managed mode) |
-| `core_versions` | The app's own core versions, what the core source offers, and how the last change ended |
-| `core_install`, `core_rollback`, `core_adopt` | Asks to install a release from the core source, to run an installed version again, or to adopt the chosen core program; each opens a native confirmation and applies nothing itself |
+| `core_versions` | The app's own core versions, what the release list offers, and how the last change ended |
+| `core_install`, `core_rollback`, `core_adopt` | Asks to install a release from the release list, to run an installed version again, or to adopt the chosen core program; each opens a native confirmation and applies nothing itself |
 | `core_call` | One management API call to the connected core; refuses the management key's own routes |
 | `management_key_rotate` | Rotates the management key natively after the native confirmation, keeps and shows the new key natively, and returns only how it went (200 with how the key is kept, 204 when cancelled) |
 | `sign_out` | Forgets the key (local and remote modes) |
@@ -475,8 +486,8 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `app_update_start` | **Update now**: downloads, checks and installs the newer release, then restarts the app; the window hears `pluxy-app-update` as it goes |
 | `app_update_cancel` | **Cancel download** |
 | `app_update_rollback` | Rolls back to a version that ran here and was kept, by its digest, after the native confirmation |
-| `window_get`, `window_set` | Reads or saves the Close behavior, and whether there is a usable tray and whether closing without one asks first (`ask_without_tray`) |
-| `window_close` | Answers the close prompt of the kind it showed (`ask` or `no-tray`): Exit app or Minimize to tray (only `ask`), and whether to remember it (for `no-tray`, remembering only stops that prompt) |
+| `window_get`, `window_set` | Reads or saves **When you close the window**, and whether there is a usable tray and whether closing without one asks first (`ask_without_tray`) |
+| `window_close` | Answers the close prompt of the kind it showed (`ask` or `no-tray`): Quit or Keep in the tray (only `ask`), and whether to remember it (for `no-tray`, remembering only stops that prompt) |
 | `privacy_get`, `privacy_set` | Reads or saves privacy mode |
 | `file_save` | Saves a file one of the window's own pages made (a theme file, a log, the usage table) in the Downloads folder, never over another file, and returns its path |
 
@@ -1161,9 +1172,9 @@ asks first, and cancelling leaves both as they are.
 
 ## The tool pages
 
-The Claude Code, Codex and Claude Desktop pages share one frame (`src/clientPage.tsx`, styled by
-`src/toolPage.css` on the kit's hairlines); the other tool pages below keep their own until they
-move to it. Each is the window's own page, not an extension page, because Connect gives the tool a
+The eight tool pages (Claude Code, Codex, Claude Desktop, OpenCode, Oh My Pi, Grok Build, Hermes
+Agent and Pi) share one frame (`src/clientPage.tsx`, styled by `src/toolPage.css` on the kit's
+hairlines). Each is the window's own page, not an extension page, because Connect gives the tool a
 key: only the window can name a vault secret for an operation, and the key's value never reaches
 the page.
 
@@ -1177,7 +1188,8 @@ the page.
   tool's add-on missing it says so and links to Add-ons; with it off it offers **Turn on add-on**
   (the native confirmation enables it); in safe mode it says tool add-ons are paused. It reads no
   file then. When the packages cannot be read, it says so with **Try again**, and reads and offers
-  nothing until they are.
+  nothing until they are. A read of them that fails later (the native side says they changed, and
+  reading them again fails) does the same, even when an earlier read found the add-on on.
 - **Reading:** the default settings file is read as the page opens, again for another WSL
   environment, and again when the person comes back to **Default**. Another file is chosen under
   **Settings file, key and backups** and read with **Read this file**; choosing another file drops
@@ -1185,7 +1197,9 @@ the page.
   fails after a good one leaves the reading on screen with a line saying it may be out of date, and
   nothing is written until a read succeeds (**Try again**).
 - **Writes go to the file shown:** each write sends the pinned targets of the reading on screen
-  (the add-on refuses a file that changed since). While a write or its confirmation waits, the
+  (the add-on refuses a file that changed since). Pi's plugin folder is not pinned yet: installing,
+  updating and removing the plugin act on the plugin folder in Pi's agent folder as the add-on finds
+  it when it runs (see [Pi](#pi)). While a write or its confirmation waits, the
   file and environment choices are locked. Each write's `program_call` carries a ticket, and
   leaving the page withdraws a confirmation still open (`program_cancel`); a Connect whose key
   window closes after the page was left writes nothing.
@@ -1227,7 +1241,10 @@ the page.
   through `nativeReply`, which turns the native side's words into the page's (`core` becomes
   `pluxy`, a client key a key, the vault the app). In privacy mode the pages mask what they show
   of paths (the home folder's user name, and all but the last two parts), WSL users' names,
-  account IDs, and the errors and reasons the native side gives.
+  account IDs, the errors and reasons the native side gives (the Start section's too), and the
+  e-mail addresses, URL credentials and paths in model IDs and names shown as text (model lists,
+  default model choices, the unserved line and **Remove model**'s question). A field being edited
+  shows its value as typed.
 
 `readExtraTools` (`src/clientPage.tsx`) reads Claude Desktop, Grok Build and Hermes Agent for
 the Tools list in the app: each add-on that is on previews its tool's default settings; a reading
@@ -1307,172 +1324,107 @@ after a change.
 
 ## OpenCode
 
-The OpenCode page sets up and starts OpenCode with this core (`src/opencode.tsx`). It needs the
-curated native tool `pluxy/opencode` ([app tools](../app-tools/README.md#opencode)) and, for
-**Start CLI** and **Start app**, the execution program, both installed and enabled on the Device
-extensions page. Like the Claude Code page it is the window's own page, because **Apply** gives the
-tool the client key.
-
-**Refresh** previews the config file: OpenCode's global config
+The OpenCode page (`src/opencode.tsx`) needs the curated native tool `pluxy/opencode`
+([app tools](../app-tools/README.md#opencode)). Its default file is OpenCode's global config
 (`~/.config/opencode/opencode.jsonc`, or `opencode.json` when only that exists, as OpenCode picks
-the file it writes), a selected file (for example the one `OPENCODE_CONFIG` names; a link, as stow
-makes, is followed and kept) or a file in a selected folder (for example `OPENCODE_CONFIG_DIR`). It
-shows whether pluxy's integration is applied, the file it writes to, whether a key is in it and the
-default model, never the key, and warns when the old desktop app's `cpa-gui` provider is still
-there, or when OpenCode 2's own `providers.pluxy` is (OpenCode uses that one, so Apply stays off
-until it is removed). A file OpenCode would not take is shown with the reason: Apply and Clear
-stay off, Restore backup and the backups still work on it. Choosing another file
-drops the last preview: every write uses the pins of the preview on screen. **Models** lists the models OpenCode shows under the pluxy provider: **Import models from
-core** adds the core's served models, **Add model** one by ID; each has a display name, an
-**Attachments** switch (images and PDFs; new models start from the old app's list of model names
-that take images) and **Remove**; **Default model** is one of them. The **Client key** is
-one of the vault's secrets (plain ones, or client keys bound to this tool), or a new one through
-native key entry (**Add key…**).
-
-**Apply** (or **Update** / **Repair** once applied),
-**Clear** and **Restore backup** each preview the file again and call the
-tool, whose native confirmation names the file it resolves to, the key's label for Apply, and that
-an edit made in the same instant by another program may be lost; comments and everything else in
-the file stay. **Backup and restore** is the shared backup browser. **Start CLI** asks the tool for
-its CLI recipe (`opencode` in a terminal, no arguments; `~/.opencode/bin/opencode`, where OpenCode's
-install script puts it, when that exists) and starts it through the launcher in the chosen working
-folder (recently used ones offered), terminal and optional program path. **Start app** starts
-OpenCode Desktop (`/opt/OpenCode/ai.opencode`, or OpenCode 1's `ai.opencode.desktop` there, where its
-.deb and .rpm install it, or a given path such as an AppImage) in the home folder. Each launch's confirmation shows it in full; the key is not
-part of a launch: OpenCode reads it from its config. There is no Restart App: the app never stops a
-program it did not start, so quit OpenCode and start it again to load a new configuration.
+the file it writes); the others are a file (for example the one `OPENCODE_CONFIG` names; a link, as
+stow makes, is followed and kept) or a file in a folder (for example `OPENCODE_CONFIG_DIR`). The
+head notes the old desktop app's `cpa-gui` provider when the file still has it, which pluxy leaves
+alone; when the file has OpenCode 2's own `providers.pluxy` (OpenCode uses that one instead of
+what pluxy writes), it says so and Connect is held until it is removed. **Models** holds the **Model
+list**, the models OpenCode shows under the pluxy provider: **Import models from pluxy** adds what
+pluxy serves, only when pressed, and **Add model** one by ID; each has a display name, an
+**Attachments** switch (images and PDFs; a new model starts from the old app's list of model names
+that take images) and **Remove model**, which asks first. **Default model** is one of them. Connect
+is held, with each reason, until the list has 1 to 256 models, each listed once, whose IDs OpenCode
+takes (no `#` or control characters) and whose display names have no control characters, each at
+most 240 characters once trimmed (as the tool trims them), and the default is one of them
+(`src/opencodeForm.ts`).
+**Start OpenCode** asks the tool for its recipe (`opencode` in a terminal, no arguments;
+`~/.opencode/bin/opencode`, where OpenCode's install script puts it, when that exists). **Start
+OpenCode Desktop** starts the app (`/opt/OpenCode/ai.opencode`, or OpenCode 1's
+`ai.opencode.desktop` there, where its .deb and .rpm install it, or a path the person gives, such as
+an AppImage) in the home folder. The app never stops a program it did not start, so quit OpenCode
+and start it again to load new settings.
 
 ## Oh My Pi
 
-The Oh My Pi page sets up and starts Oh My Pi with this core (`src/omp.tsx`). It needs the curated
-native tool `pluxy/omp-setup` ([app tools](../app-tools/README.md#omp-setup)) and, for **Start
-CLI**, the execution program, both installed and enabled on the Device extensions page. Like the
-Claude Code page it is the window's own page, because **Apply** gives the tool the client key.
-
-**Refresh** previews Oh My Pi's two files, `models.yml` and `config.yml`: in its agent folder
-(`~/.omp/agent`), in a selected agent folder (for example a profile's
-`~/.omp/profiles/<name>/agent`, or the folder `PI_CODING_AGENT_DIR` names; the folder may be a link,
-as chezmoi can make) or as two selected files (a link, as stow makes, is followed and kept). It
-shows whether pluxy's integration is applied, the files it writes to, whether a key is in the models
-file and the default model role, never the key, and warns when the old desktop app's
-`easy-cliproxyapi` provider is still there. **Default model** is the model Oh My Pi starts with
-through this core (the core's served models are suggested; **Refresh models** reloads them); Oh My
-Pi lists the core's other models itself. The **Client key** is one of the vault's secrets (a captured
-client key only when it is this tool's), or a new one through native key entry (**Add key…**).
-
-Files Oh My Pi would not take show as refused, with the reason: **Apply** and **Clear**
-stay off, and **Restore backup** and the backups stay available. Choosing other files drops the last
-preview. **Apply** (or **Update** / **Repair** once applied),
-**Clear** and **Restore backup** call the tool with the files the last preview pinned
-(the tool refuses them if a file changed since), and its native confirmation names both files they
-resolve to, the key's label for Apply, and that an edit
-made in the same instant by another program may be lost; comments and everything else in the files
-stay, including the person's own models under the pluxy provider. **Backup and restore** is the
-shared backup browser. **Start CLI** asks the tool for its recipe (`omp` in a terminal, no
-arguments; `~/.bun/bin/omp` or `~/.local/bin/omp`, where bun and Oh My Pi's install script put it,
-when one exists) and starts it through the launcher in the chosen working directory (recently used
-ones offered), terminal and optional program path. Each launch's confirmation shows it in full; the
-key is not part of a launch: Oh My Pi reads it from its models file. Oh My Pi has no desktop app.
+The Oh My Pi page (`src/omp.tsx`) needs the curated native tool `pluxy/omp-setup`
+([app tools](../app-tools/README.md#omp-setup)). It reads and writes Oh My Pi's two files,
+`models.yml` and `config.yml`, together: by default in its agent folder (`~/.omp/agent`), or in a
+folder (for example a profile's `~/.omp/profiles/<name>/agent`, or the folder `PI_CODING_AGENT_DIR`
+names; the folder may be a link, as chezmoi can make), or as two files (a link, as stow makes, is
+followed and kept). The head notes the old desktop app's `easy-cliproxyapi` provider when it is
+still there, which pluxy leaves alone. **Models** holds the **Default model**, the one model Oh My
+Pi starts with (pluxy's served models are suggested, and **Refresh suggestions** reads them again);
+Oh My Pi lists pluxy's other models itself. Connect is held, with the reason, until it is one model
+ID (at most 240 characters, no spaces, commas or control characters, not starting with `@` or `*`). Everything else in the files stays,
+including the person's own models under the pluxy provider. **Start Oh My Pi** asks the tool for its
+recipe (`omp` in a terminal, no arguments; `~/.bun/bin/omp` or `~/.local/bin/omp`, where bun and
+Oh My Pi's install script put it, when one exists). Oh My Pi has no desktop app.
 
 ## Grok Build
 
-The Grok Build page sets up and starts Grok Build with this core (`src/grok.tsx`). It needs the
-curated native tool `pluxy/grok-setup` ([app tools](../app-tools/README.md#grok-setup)) and, for
-**Start CLI**, the execution program, both installed and enabled on the Device extensions page. Like
-the Claude Code page it is the window's own page, because **Apply** gives the tool the client key.
-
-**Refresh** previews Grok Build's `config.toml`: its user config (`~/.grok/config.toml`),
-a selected file (such as `$GROK_HOME/config.toml`; a link is followed and kept) or a file in a
-selected folder; it shows the status, the file it writes to, Grok Build's default model now and
-whether a key is in pluxy's entry, never the key, and notes model entries an older app left
-(`cpa-gui/…`), which pluxy leaves alone. A file Grok Build would not take shows as refused, with the
-reason: Apply and Clear stay off, Restore backup and the backups stay available. The **Model catalog** holds the models pluxy's entries
-list: those the file has, and the core's served models, added (all selected, as the old app wrote
-them all) when **Refresh models** is pressed, never in the background. Each can be left out or
-given its **Context window**; the **Default model** is one of the selected models. Apply stays off,
-with a notice, while more than 256 models are selected. The **Client key** is one of the
-vault's plain secrets or this tool's client keys, or a new one through native key entry.
-
-**Apply** (or **Update** / **Repair** once applied),
-**Clear** and **Restore backup** call the tool on the file the last preview
-pinned (changing the file selection drops that preview; the tool refuses a file changed since),
-whose native confirmation names the file, the key's label for Apply, and that an edit made in
-the same instant by another program may be lost; **Backup and restore** keeps the file in manual
-backups, as on the Claude Code page. **Start CLI** asks the tool for its recipe (`~/.grok/bin/grok`
-when Grok Build's installer put it there, else `grok` from PATH, in a terminal with no arguments)
-and starts it through the launcher in the chosen working folder, terminal and optional program
-path. The key is not part of the launch: Grok Build reads it from config.toml. Grok Build has no
-Linux desktop app.
+The Grok Build page (`src/grok.tsx`) needs the curated native tool `pluxy/grok-setup`
+([app tools](../app-tools/README.md#grok-setup)). Its default file is Grok Build's user config
+(`~/.grok/config.toml`); the others are a file (such as `$GROK_HOME/config.toml`; a link is
+followed and kept) or a file in a folder. The head notes model entries an older app left
+(`cpa-gui/…`), which pluxy leaves alone. **Models** holds the **Model list**, the models pluxy's
+entries list: those the file has, and what pluxy serves, added (all listed, as the old app wrote
+them all) when **Import models from pluxy** is pressed, never in the background. Each can be turned
+off or given its **Context window** (Grok Build compacts by it); the **Default model** is one of the
+models listed. Connect is held, with one line for each reason (no model listed, a window that is not
+a whole number from 1 to 100000000, an ID with spaces or control characters or a name with control
+characters, either over 240 characters once trimmed, a model listed twice, no default model, more
+than 256 models listed; `src/grokForm.ts`). Entries pluxy wrote for models turned off are removed on Connect; the person's
+own entries stay. **Start Grok Build** asks the tool for its recipe (`~/.grok/bin/grok` when Grok
+Build's installer put it there, else `grok` from PATH, in a terminal with no arguments). Grok Build
+has no Linux desktop app.
 
 ## Hermes Agent
 
-The Hermes Agent page sets up and starts Hermes Agent with this core (`src/hermes.tsx`). It needs
-the curated native tool `pluxy/hermes-setup` ([app tools](../app-tools/README.md#hermes-setup))
-and, for **Start CLI**, the execution program, both installed and enabled on the Device extensions
-page. Like the Claude Code page it is the window's own page, because **Apply** gives the tool the
-client key.
-
-**Refresh** previews Hermes Agent's `config.yaml`: in its default home (`~/.hermes`, or the
-profile `~/.hermes/active_profile` names), in a selected Hermes home folder (the folder
-`HERMES_HOME` names, or a profile's `~/.hermes/profiles/<name>`; the folder may be a link, as
-chezmoi can make) or as a selected file (a link, as stow makes, is followed and kept). It shows
-whether pluxy's integration is applied, the file it writes to, the provider's address, whether a
-key is in the file, the selected provider and the default model, never the key, and warns when the
-old desktop app's `cpa-gui` provider is still there. **Default model** is the model Hermes Agent
-starts with through this core (the core's served models are suggested; **Refresh models** reloads
-them). The **Client key** is one of the vault's secrets (a captured client key only when it
-is this tool's), or a new one through native key entry (**Add key…**).
-
-A file Hermes would not take shows as refused, with the reason: **Apply** and **Clear**
-stay off, and **Restore backup** and the backups stay available. Choosing another file or folder
-drops the last preview. **Apply** (or **Update** / **Repair** once applied), **Clear** and **Restore backup** call the tool with the file
-the last preview pinned (the tool refuses it if the file changed since), and its native
-confirmation names the file it resolves to, the key's label for Apply, and that an edit made
-in the same instant by another program may be lost; comments and everything else in the file stay,
-including the person's own settings under the pluxy provider. **Backup and restore** is the shared
-backup browser. **Start CLI** asks the tool for its recipe (`hermes` in a terminal, no arguments,
-which starts a chat; `~/.local/bin/hermes`, where Hermes's installer puts it, when it exists) and
-starts it through the launcher in the chosen working directory (recently used ones offered),
-terminal and optional program path. Each launch's confirmation shows it in full; the key is not
-part of a launch: Hermes Agent reads it from its config file. Hermes Agent's desktop app is not
-offered: its Linux packages are not released.
+The Hermes Agent page (`src/hermes.tsx`) needs the curated native tool `pluxy/hermes-setup`
+([app tools](../app-tools/README.md#hermes-setup)). Its default file is `config.yaml` in Hermes
+Agent's home (`~/.hermes`, or the profile `~/.hermes/active_profile` names); the others are a
+folder (the folder `HERMES_HOME` names, or a profile's `~/.hermes/profiles/<name>`; the folder may
+be a link, as chezmoi can make) or a file (a link, as stow makes, is followed and kept). The head
+notes the old desktop app's `cpa-gui` provider when it is still there, which pluxy leaves alone.
+**Models** holds the **Default model**, the model Hermes Agent starts with (pluxy's served models
+are suggested, and **Refresh suggestions** reads them again). Connect is held, with the reason,
+until it is one model ID of at most 240 characters with no spaces, control characters or `${` (Hermes
+expands it), which YAML 1.1 (as Hermes reads the file) reads as text: an ID such as `1.5`,
+`2026-11-14` or `yes` would be a number, a date or yes/no, and has its own line. Everything else
+in the file stays, including the person's own settings under the pluxy provider. **Start Hermes Agent** asks
+the tool for its recipe (`hermes` in a terminal, no arguments, which starts a chat;
+`~/.local/bin/hermes`, where Hermes's installer puts it, when it exists). Hermes Agent's desktop app
+is not offered: its Linux packages are not released.
 
 ## Pi
 
-The Pi page sets up and starts Pi with this core (`src/pi.tsx`). It needs the curated native tool
-`pluxy/pi-setup` ([app tools](../app-tools/README.md#pi-setup)) and, for **Start CLI**, the
-execution program, both installed and enabled on the Device extensions page. Like the Claude Code
-page it is the window's own page, because **Apply** gives the tool the client key.
-
-Pi reaches the core through the CLIProxyAPI provider plugin. The tool carries a reviewed copy of
-it and installs it as a local Pi package in Pi's agent folder; it never runs `pi install` or npm.
-**Refresh** previews Pi's files, `cliproxyapi.json`, `settings.json` and the plugin's model
-cache `cliproxyapi-models.json`, in its agent folder (`~/.pi/agent`) or in a selected agent folder
-(the one `PI_CODING_AGENT_DIR` names; the folder may be a link, as chezmoi can make), or as the
-linked files in a folder (links, as stow makes, are followed and kept). Files Pi would not take
-are still read: the page says why, leaves Apply, Clear and Uninstall off, and keeps Restore backup
-and the backups. It shows whether the plugin is
-installed and its version (with **Update available** when the tool carries another), whether
-pluxy's integration is applied, the files it writes to, whether a key is in `cliproxyapi.json` and
-Pi's default provider and model, never the key; it warns when `settings.json` still lists the npm
-copy an older app installed, or when a folder of the plugin's name is not pluxy's. **Model** is the
-model Pi starts with through this core (the core's served models are suggested; **Refresh models**
-reloads them; the plugin itself lists the core's Codex catalog in Pi). The **Client key**
-is one of the vault's secrets, or a new one through native key entry (**Add key…**).
-
-**Install plugin** (or **Apply**, **Update** / **Repair** once installed) installs the plugin when it is not there and writes the core's
-address, the key and Pi's defaults. **Plugin management** has **Update plugin** (the tool's copy
-replaces the installed one) and **Uninstall plugin** (its entry and folder go; the connection
-settings stay). **Clear** and **Restore backup** also remove the plugin's folder once
-`settings.json` no longer lists it. Each of these previews the files again and calls the tool,
-whose native confirmation names the files it resolves to (or the agent folder, for Update), the
-key's label for Apply, and that an edit made in the same instant by another program may be lost;
-everything else in the files stays. **Backup and restore** is the shared backup browser. **Start
-CLI** asks the tool for its recipe (`pi` in a terminal, no arguments; `~/.pi/agent/bin/pi` or
-`~/.local/bin/pi`, where Pi's installer puts it, when one exists) and starts it through the
-launcher in the chosen working directory (recently used ones offered), terminal and optional
-program path. The key is not part of a launch: the plugin reads it from `cliproxyapi.json`. Pi has
-no desktop app.
+The Pi page (`src/pi.tsx`) needs the curated native tool `pluxy/pi-setup`
+([app tools](../app-tools/README.md#pi-setup)). Pi reaches pluxy through the CLIProxyAPI provider
+plugin. The tool carries a reviewed copy of it and installs it as a local Pi package in Pi's agent
+folder; it never runs `pi install` or npm. The page reads and writes Pi's files together,
+`cliproxyapi.json`, `settings.json` and the plugin's model list `cliproxyapi-models.json`: by
+default in its agent folder (`~/.pi/agent`), or in a folder (the one `PI_CODING_AGENT_DIR` names;
+the folder may be a link, as chezmoi can make), or as the linked files in a folder (links, as stow
+makes, are followed and kept). While the plugin is not installed, Connect is **Install plugin**: one
+press makes the key, installs the plugin and writes pluxy's address, the key and Pi's defaults.
+When a folder of the plugin's name is there that pluxy did not install, the head says so and Install
+plugin is held until it is moved. The head also notes when `settings.json` still lists the npm copy
+an older app installed, which Connect replaces. **Models** holds the **Default model**, the model Pi
+starts with (pluxy's served models are suggested, and **Refresh suggestions** reads them again; the
+plugin itself lists pluxy's Codex models in Pi; Connect is held until it is one model ID, with no
+spaces or control characters, of at most 240 characters), and the **Pi plugin**: its version,
+**Update plugin** (offered only when the tool carries a newer copy than the one installed, or the
+installed copy's version is unknown; the tool's copy replaces it) and **Uninstall plugin** (asks
+first; its entry and folder go, the connection settings stay). **Disconnect** and **Restore
+backup** also remove the plugin's folder once `settings.json` no longer lists it. Pi's three files
+are pinned as on every page, but the plugin's folder is not yet: Install plugin, Update plugin,
+Uninstall plugin and that removal act on the plugin folder in the agent folder as the tool finds it
+when it runs, not on one the reading pinned. **Start Pi** asks the tool for its recipe (`pi` in a
+terminal, no arguments; `~/.pi/agent/bin/pi` or `~/.local/bin/pi`, where Pi's installer puts it,
+when one exists). Pi has no desktop app.
 
 ## Agent usage and Codex sessions
 
@@ -1485,11 +1437,11 @@ as above, and reach their tools only through the router.
 
 ## Setup
 
-On a first run of a core (a new "Run core here" core is one), the window opens the kit's Setup
+On a first run of a core (a new "On this computer" core is one), the window opens the kit's Setup
 page ([`../ui`](../ui/README.md), `#/setup`) in place of Home when the window's address
 names no page, as the web panel does:
 what core found on its machine, the providers to install, an account, the clients, and Finish. It
-opens once the app is connected and signed in, so the Connection page still comes first. After
+opens once the app is connected and signed in, so the first launch screen still comes first. After
 Finish the page stays among the Settings topics and shows the same things as they are now.
 
 The app adds one thing to the page. Under "Point a client at pluxy", a client core found gets a
@@ -1512,13 +1464,13 @@ mode, in its two steps. **Connect a model** is the Add Account page's own sign-i
 device code and API-key method core's extensions offer); it counts core's accounts, and **Next:
 connect an agent** stays off until there is one. **Connect an agent** lists the agent clients this
 window can set up (the eight client pages above, Claude Code to Pi) whose optional tool is
-installed on this device or offered by a registry, and the launcher (`pluxy/execution`) that
-**Start CLI** runs through: **Install** installs a tool from its registry, **Enable** opens the
+installed on this device or offered by a registry, and the launcher (`pluxy/execution`) that each
+page's **Start** runs through: **Install** installs a tool from its registry, **Enable** opens the
 tool's native confirmation ("full access to your user account"), answered in that dialog only,
 and **Set up** shows the client's own page below, where its configuration is applied and the
 client started as on that page. The guide writes nothing itself and keeps no draft: a cancelled
-confirmation, or leaving the guide, leaves files and packages as they were; Disconnect (Clear,
-on the pages not yet on the shared parts) and Restore backup on the client's page undo an apply.
+confirmation, or leaving the guide, leaves files and packages as they were; Disconnect and Restore backup on the client's page undo an
+apply.
 
 A client joins the list by being an agent page: a window page that names the package it drives
 (`AgentPage` in `src/easyMode.tsx`), listed in `agentPages` in `src/agentPages.ts`. The list itself
@@ -1600,8 +1552,8 @@ core does not outlive the app.
 In separate runs, the startup sequence enables login registration through the main webview command,
 checks the entry in its temporary XDG config folder, launches it with the real Desktop Entry consumer (gio launch), checks
 zero windows/webviews and no web process, and verifies that the app's real tray item belongs to
-its PID in the tray watcher's registered item list. It checks login with Silent launch on and
-off, an app-menu launch with Silent launch on, managed-core startup, core startup off, foreign
+its PID in the tray watcher's registered item list. It checks login with Start in the tray on and
+off, an app-menu launch with Start in the tray on, managed-core startup, core startup off, foreign
 core ownership, and removal. In the core-startup-off launch it waits past the first recovery
 delay and checks that no core started and no recovery ran, then starts the core with the
 tray's Start pluxy and crashes it: that core is recovered. A separate session with no watcher verifies that a silent login
@@ -1677,22 +1629,22 @@ file.
 In managed mode, two more sessions run the window checks (`native/window.ts`, which launches
 the app through the stages in `src-tauri/src/native_window.rs`), one with a tray watcher and
 one without. They close the window as its window manager would (a GTK delete event) and answer the prompt in the window:
-the default Minimize to tray closes it without asking; with Ask every time saved, Cancel keeps
-it, Minimize to tray and the remembered choices close it with no webview or web
+the default Keep in the tray closes it without asking; with Ask saved, Cancel keeps
+it, Keep in the tray and the remembered choices close it with no webview or web
 process left, and the app's own tray item (through the watcher and its menu, `session_probe tray`)
-opens it again at the size and place it had; Exit app, from the prompt or the setting, quits and
+opens it again at the size and place it had; Quit, from the prompt or the setting, quits and
 stops the app's own core; the next launch opens where the window was. A pending test sign-in's
 polls are counted while the window shows, while it is unmapped (as a window manager minimizes it;
 GDK then reports it minimized) and once it is mapped again. Without a tray watcher, closing asks
 the window first (as `no-tray`); a window that does not answer stays open with the core running,
-and Exit app with Remember this choice quits and saves `ask_without_tray: false` with the Close
-behavior unchanged; after that, closing quits without asking, with Minimize to tray or Ask saved.
+and Quit with Remember this choice quits and saves `ask_without_tray: false` with the close
+choice unchanged; after that, closing quits without asking, with Keep in the tray or Ask saved.
 
 One more session in managed mode (`native/privacy.ts`) runs the privacy mode checks
 (`src-tauri/src/native_privacy.rs`) and then the themes checks (`src-tauri/src/native_themes.rs`):
 the T3 Code theme file `ui/tests/fixtures/t3-docs-nightfall.json`, pasted on the Themes page and
 added, paints the window in its canvas colour with the root's `dark` class, the picker lists it,
-`GET /themes` through the app's host has it as `current`, Export saves `nightfall.json` in the
+`GET /themes` through the app's host has it as `current`, Save theme file saves `nightfall.json` in the
 session's Downloads folder with the theme file's JSON (read from disk at the path the page shows),
 and the next launch paints in it. The session ends on the Themes page in that theme.
 
@@ -1713,7 +1665,7 @@ ends on that page in GTK's dark variant.
 Then, in a session of its own (`native/instances-session.ts`), with the core program adopted in
 each profile, it launches the app again and again on one profile and checks that each later launch exits 0 within 10 seconds, starts no app or core of its own (it counts the
 app and core processes), and has the first show its window, also after the window was hidden and
-after it was closed to the tray, and for a login launch (`--autostart` with Silent launch on) as
+after it was closed to the tray, and for a login launch (`--autostart` with Start in the tray on) as
 well; that the socket is in the runtime folder, where `instance/address`
 says; that a launch with other `HOME` and `XDG_*` folders is an app and
 core of its own; that after the first app is killed with SIGKILL (its lock file and socket stay)
@@ -1973,7 +1925,7 @@ The folder holds:
 | `local-build.json` | The app's path, the core's version and the IDs of the providers it carries. |
 
 Start it with `next/app/local-build/bin/pluxy-app-local` from the repository's root (or from the
-folder you gave). On first launch, choose **Run core here** and press **Connect** with both fields empty: the app copies the
+folder you gave). On first launch, choose **On this computer**: the app copies the
 core it came with into its own cores, starts it on a free loopback port and connects. Setup and
 Extensions then offer the providers; none is installed until you install it, and installing one
 needs no network, since the archives are in the folder.
@@ -1986,7 +1938,7 @@ How it differs from a release:
   `~/.local/share/dev.pluxy.desktop.local` (under `$XDG_CONFIG_HOME` and `$XDG_DATA_HOME` when
   set), and its login entry, if you turn one on, to its own file
   (`dev.pluxy.desktop.local.desktop`), so it never shares anything with an installed release. The
-  entry's name is written when you turn **Launch at startup** on, so an entry an earlier build
+  entry's name is written when you turn **Open at sign-in** on, so an entry an earlier build
   wrote keeps that build's name until you turn it off and on again.
 - **Marked as a local build.** The window's title, the tray's tooltip and its Open item, and the
   login item's name say "pluxy (local build)". The `local-build` Cargo feature also puts the test
@@ -2007,7 +1959,7 @@ To remove it, quit the app (its core stops with it), then delete the build folde
 
 ```bash
 rm -rf next/app/local-build ~/.config/dev.pluxy.desktop.local ~/.local/share/dev.pluxy.desktop.local
-rm -f ~/.config/autostart/dev.pluxy.desktop.local.desktop   # only if you turned on Launch at startup
+rm -f ~/.config/autostart/dev.pluxy.desktop.local.desktop   # only if you turned on Open at sign-in
 ```
 
 ### Building it again
@@ -2290,7 +2242,7 @@ installed, and as an app bundle on macOS
   then exits.
 - On macOS, deleting the app (dragging it to the Trash) leaves its login item behind: the file
   `~/Library/LaunchAgents/dev.pluxy.desktop.plist` stays and names a program that is gone. Turn
-  **Launch at startup** off before deleting the app, or delete that file.
+  **Open at sign-in** off before deleting the app, or delete that file.
 - Opening an address in the system's handler for https addresses (normally the default browser; an
   app that claims the address's domain may take it instead) works on all three systems: GIO on
   Linux, the `https` class's `open` verb (`ShellExecuteExW`) on Windows, `NSWorkspace` on macOS;

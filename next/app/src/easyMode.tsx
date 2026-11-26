@@ -29,7 +29,7 @@ import { type Item, items } from "./easyModeItems";
 /** An agent client's setup page in the window, and the optional tool it drives. */
 export type AgentPage = PageDef & { package: string };
 
-/** The launcher every client's Start CLI runs through. */
+/** The launcher every tool page's Start runs through. */
 export const LAUNCHER = "pluxy/execution";
 
 const t = strings("easyMode", {

@@ -10,7 +10,7 @@ theme can change three things:
 2. **Layout options:** choices the UI implements, such as where the navigation sits or whether
    lists show as a table or as cards.
 3. **Custom CSS:** a stylesheet applied on top, for anything tokens and layout options do not
-   cover. Safe mode turns it off.
+   cover. The Custom CSS switch on the Themes page turns it off.
 
 Tokens and layout options are the stable part of the contract: a theme that only uses them keeps
 working as the UI changes. Custom CSS can only rely on the hooks listed under
@@ -279,8 +279,7 @@ These stay stable within a theme contract version:
 | `data-part="header-tabs"` | A destination's tabs in the header strip |
 | `data-part="header-tab"` | One of them; the current one has `aria-current="page"` |
 | `data-part="header-actions"` | The page's main actions, at the header strip's end |
-| `data-part="privacy-toggle"` | The header strip's privacy mode switch; `aria-pressed="true"` while it masks account e-mail addresses and identifiers, and the root then has `data-privacy="on"`. |
-| `data-part="sign-out"` | The header strip's sign-out button |
+| `data-part="privacy-toggle"` | The header strip's Names hidden button, drawn only while names are hidden (the Hide names setting in General turns that on); `aria-pressed="true"`, and the root then has `data-privacy="on"`. |
 | `data-part="topics"` | The list of a destination's topics beside the page |
 | `data-part="nav-group"` | A group of topics under its label; `data-group` is `core`, `device` or `extensions` (the extensions' pages) |
 | `data-part="topic"` | One topic; the current one has `aria-current="page"` |
@@ -291,6 +290,7 @@ These stay stable within a theme contract version:
 | `data-part="item"` | One item in a list; a selected one has `aria-current="true"` |
 | `data-part="detail"` | The detail pane |
 | `data-part="card"` | A card or panel grouping related content |
+| `data-part="settings-section"` | A section of the Themes page: its heading, a hairline and what it holds. Always a hairline section, never a box |
 | `data-part="button"` | A button; `data-variant` is `primary` (a view's main action, filled), `quiet` (the ordinary button, outlined), `ghost` (no border until hovered) or `danger` (outlined, in the danger colour) |
 | `data-part="badge"` | A state badge; `data-tone` is `ok`, `warn`, `danger` or `muted` |
 | `data-part="field"` | A labelled form control |
@@ -377,7 +377,7 @@ On the Themes page:
 
 - **Add a theme** takes a theme file, or JSON pasted into the box. The UI checks it first: a file
   it refuses is not stored, and the page says why. A theme that is added is turned on at once.
-- **Export** saves the file of the theme that is on as `<name>.json`, a built-in theme's too. The
+- **Save theme file** saves the file of the theme that is on as `<name>.json`, a built-in theme's too. The
   file holds the JSON that was added; its spacing and the order of its fields can differ. The
   panel downloads it; the desktop app saves it in your Downloads folder and says where. To add a
   built-in theme's file back as a theme of your own, change its `id` first: the page refuses a
@@ -388,7 +388,7 @@ A window follows a change made in another window or with `pluxy theme` when it n
 or shows again.
 
 Each device keeps its own appearance (system, light or dark), layout and density choices, the
-person's own CSS and safe mode. It also keeps a copy of the theme last applied, so a window opens
+person's own CSS and whether custom CSS is on. It also keeps a copy of the theme last applied, so a window opens
 in that theme before core answers and on the sign-in page.
 
 ### The `pluxy theme` commands
@@ -419,16 +419,17 @@ that is on stays on, except an ID whose publisher is `pluxy`: a newer panel or d
 a built-in theme this core does not list, so core accepts it, and a window that does not hold that
 theme shows the default.
 
-## Safe mode
+## Turning custom CSS off
 
-Safe mode turns off all custom CSS: the theme's and the person's own. Tokens and layout options
-keep working. Use it when custom CSS has hidden or broken the UI. It is kept on each device, not by
-core.
+With the Custom CSS switch off, all custom CSS is off: the theme's and the person's own. Tokens and
+layout options keep working. Use it when custom CSS has hidden or broken the UI. It is kept on each
+device, not by core. (The page does not call it safe mode: that is pluxy's own mode with no
+extensions, shown on System.)
 
-- On the Themes page: the "Safe mode" switch.
+- On the Themes page: the "Custom CSS" switch.
 - If custom CSS hides that switch: open the panel with `?safe` in the address, for example
-  `http://127.0.0.1:8400/panel/?safe`. Safe mode then stays on, also after reloading, until it is
-  turned off on the Themes page. The panel's sign-in page says so too, with `safeAddress` set on
+  `http://127.0.0.1:8400/panel/?safe`. Custom CSS then stays off, also after reloading, until the
+  switch on the Themes page is turned on. The panel's sign-in page says so too, with `safeAddress` set on
   the shell: a host whose address cannot take `?safe`, such as the desktop app, leaves it out.
 
 ## Changes to this contract

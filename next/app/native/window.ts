@@ -138,23 +138,23 @@ if (noTray) {
   const first = await stage("first");
   check(
     first.prompts === 3,
-    `first: the default closed without asking, then Ask every time asked at each of its three closes (${first.prompts} prompts)`,
+    `first: the default closed without asking, then Ask asked at each of its three closes (${first.prompts} prompts)`,
   );
   await coreStopped("first", first);
   const kept = saved();
-  check(kept.close_behavior === "exit", `first: window.json keeps Exit app (${JSON.stringify(kept)})`);
+  check(kept.close_behavior === "exit", `first: window.json keeps Quit (${JSON.stringify(kept)})`);
   check(kept.geometry !== undefined, `first: window.json keeps the window's size and place`);
 
   const second = await stage("second");
-  check(second.prompts === 1, `second: Ask every time asked once (${second.prompts} prompts)`);
+  check(second.prompts === 1, `second: Ask asked once (${second.prompts} prompts)`);
   await coreStopped("second", second);
   check(
     saved().close_behavior === "exit",
-    `second: Remember this choice kept Exit app (${saved().close_behavior})`,
+    `second: Remember this choice kept Quit (${saved().close_behavior})`,
   );
 
   const third = await stage("third");
-  check(third.prompts === 0, `third: the remembered Exit app quit without asking (${third.prompts} prompts)`);
+  check(third.prompts === 0, `third: the remembered Quit quit without asking (${third.prompts} prompts)`);
   await coreStopped("third", third);
 }
 

@@ -1,4 +1,4 @@
-// Text on the badges and the Themes page's segment buttons is readable (WCAG AA, 4.5:1 for text
+// Text on the badges and the Themes page's segment buttons, theme cards and setting rows is readable (WCAG AA, 4.5:1 for text
 // this size) in every built-in theme, in light and in dark.
 import { expect, type Page, test } from "@playwright/test";
 import { measureContrast } from "./contrast";
@@ -95,13 +95,18 @@ for (const theme of THEMES) {
       expect(low).toEqual([]);
     });
 
-    test(`segment labels are readable on the Themes page: ${name}`, async ({ page }) => {
+    test(`segment labels, theme names and setting words are readable on the Themes page: ${name}`, async ({
+      page,
+    }) => {
       await open(page, theme, appearance);
       await goTo(page, "Themes");
       const spans = page.locator(".segment span");
       expect(await spans.count()).toBeGreaterThan(0);
-      // The text of each segment: its label, and the note under it where it has one.
-      const parts = page.locator(".segment span, .segment span small");
+      // The text of each segment: its label, and the note under it where it has one; each theme's
+      // name and description; each setting's name and sentence.
+      const parts = page.locator(
+        ".segment span, .segment span small, .theme-name, .theme-about, .setting-name, .setting-description",
+      );
       const measured = await measureContrast(parts);
       const texts = await parts.allTextContents();
       const low = measured

@@ -11,14 +11,13 @@
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { Reply } from "../../ui/kit/host";
 import { strings } from "../../ui/kit/strings";
-import { Button, Card, Choices, Facts, Notice, useAction, useLoad, whenText } from "../../ui/kit/ui";
+import { Button, Choices, Facts, Notice, useAction, useLoad, whenText } from "../../ui/kit/ui";
 import { cancelled } from "./clientPage";
 import type { Selection } from "./environment";
 import { reply } from "./host";
 import { nativeReply, useShown } from "./toolWords";
 
 const t = strings("backups", {
-  title: "Backup and restore",
   intro: "A backup is a copy of the file as it is on disk now. The app keeps the newest {keep}.",
   create: "Create backup",
   versions: "Saved copies",
@@ -72,17 +71,15 @@ const fill = (s: string, v: Record<string, string | number>) =>
 /** The backup browser of the writer tool pkg. pins gives the files a backup or restore is of: the
  * pins of the page's last preview (the tool refuses them if a file changed since), or nothing.
  * environment, when given, is the environment every call goes to (environment.ts: null for this
- * computer, or a WSL distribution and user); pages without one leave it out. bare leaves out the
- * card and its title, for a page that puts the browser under a heading of its own (the pages on the
- * shared parts, under Settings file, key and backups). onBusy hears when a write starts and ends,
- * so the page can hold its file choice meanwhile. */
+ * computer, or a WSL distribution and user); pages without one leave it out. The page puts it under
+ * a heading of its own (Backups, under Settings file, key and backups). onBusy hears when a write
+ * starts and ends, so the page can hold its file choice meanwhile. */
 export function Backups(props: {
   pkg: string;
   pins: () => Promise<unknown[] | undefined>;
   disabled?: boolean;
   onChange?: () => void;
   environment?: Selection;
-  bare?: boolean;
   onBusy?: (busy: boolean) => void;
 }) {
   const shown = useShown();
@@ -168,7 +165,7 @@ export function Backups(props: {
     .filter((e): e is string => !!e)
     .map((e) => shown.text(e));
 
-  const body = (
+  return (
     <div class="backups">
       <p class="muted">{fill(t("intro"), { keep: list.data?.keep ?? 10 })}</p>
       {list.phase === "loading" && <p class="muted">{t("loading")}</p>}
@@ -261,5 +258,4 @@ export function Backups(props: {
       )}
     </div>
   );
-  return props.bare ? body : <Card title={t("title")}>{body}</Card>;
 }

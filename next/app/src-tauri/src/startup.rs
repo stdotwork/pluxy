@@ -362,7 +362,7 @@ fn render_entry(executable: &Path, identifier: &str) -> Result<Vec<u8>, String> 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = (executable, identifier);
-        Err("Launch at startup is supported on Linux, macOS and Windows only".into())
+        Err("Open at sign-in is supported on Linux, macOS and Windows only".into())
     }
 }
 

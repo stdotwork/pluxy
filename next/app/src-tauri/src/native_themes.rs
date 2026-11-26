@@ -3,10 +3,10 @@
 //! server and bus), in managed mode against the bundled test packages:
 //!
 //! - `add`: on the Themes page, the T3 Code theme file `ui/tests/fixtures/t3-docs-nightfall.json`,
-//!   unchanged, is pasted into "Or paste a theme file's JSON" and added: the window paints in its
+//!   unchanged, is pasted into "Or paste a theme file" and added: the window paints in its
 //!   canvas colour (`--px-color-bg` and `--app-theme-canvas` on the root element), the root has
 //!   class `dark`, and the picker lists Nightfall, chosen; `GET /themes` through the app's host
-//!   (the `core_call` command) has `t3/nightfall` as `current`. Then Export is pressed: the page
+//!   (the `core_call` command) has `t3/nightfall` as `current`. Then Save theme file is pressed: the page
 //!   says where the file was saved (in privacy mode only its folder and name), that is
 //!   `nightfall.json` in the session's Downloads folder, and the file there, read from disk,
 //!   holds the theme file's JSON. The app saves it
@@ -29,7 +29,7 @@ const ID: &str = "t3/nightfall";
 const NAME: &str = "Nightfall";
 /// The file's `canvas`, #1a1b26, as red, green and blue.
 const CANVAS: [i64; 3] = [0x1a, 0x1b, 0x26];
-const PASTE: &str = "Or paste a theme file's JSON";
+const PASTE: &str = "Or paste a theme file";
 
 #[derive(Default)]
 struct Checks {
@@ -220,7 +220,7 @@ fn add(c: &mut Checks, app: &AppHandle) {
         15,
         &format!(
             "document.body.innerText.includes({})",
-            json!(format!("Added and applied {NAME}."))
+            json!(format!("Added and turned on {NAME}."))
         ),
     );
     // What the page said instead, if anything.
@@ -231,7 +231,7 @@ fn add(c: &mut Checks, app: &AppHandle) {
     .unwrap_or(Value::Null);
     c.check(
         added,
-        format!("the page says {NAME} was added and applied (notices: {notices})"),
+        format!("the page says {NAME} was added and turned on (notices: {notices})"),
     );
     painted(c, app, "added");
     chosen(c, app, "added");
@@ -246,17 +246,12 @@ fn add(c: &mut Checks, app: &AppHandle) {
     export(c, app);
 }
 
-/// Presses Export and checks the file the page says it saved.
+/// Presses Save theme file and checks the file the page says it saved.
 fn export(c: &mut Checks, app: &AppHandle) {
-    let press = format!(
-        "(() => {{ const b = document.querySelector({}); if (!b) return false; b.click(); return true; }})()",
-        json!(format!(
-            "button[aria-label=\"Export {NAME} as a theme file\"]"
-        ))
-    );
+    let press = "(() => { const b = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Save theme file'); if (!b) return false; b.click(); return true; })()";
     if !c.check(
-        main_eval(app, &press) == Some(json!(true)),
-        format!("the Themes page has Export for {NAME}, pressed"),
+        main_eval(app, press) == Some(json!(true)),
+        format!("the Themes page has Save theme file for {NAME}, pressed"),
     ) {
         return;
     }

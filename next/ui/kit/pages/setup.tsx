@@ -57,7 +57,7 @@ import {
 
 const t = strings("setup", {
   title: "Set up pluxy",
-  tip: "What pluxy found, and what is still missing",
+  tip: "The guided setup",
   introFirst: "pluxy looks at this machine and offers what fits.",
   introUntilStart: "Nothing is installed until you press Start, and nothing on this page is required.",
   introOptional: "Nothing on this page is required.",

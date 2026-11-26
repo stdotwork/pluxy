@@ -30,16 +30,18 @@ builds and runs only the amd64 programs; no CI job runs the Linux arm64 ones.
 The app sets up eight agent clients, each from a page in the window and a curated native tool,
 which has full access to your user account. Every client page works the same way:
 
-- **Refresh** previews the client's files: its default place in your home folder, a file you select
-  or a folder you select. A link to the file or folder, as stow and chezmoi make, is followed and
-  kept as a link.
-- **Apply**, **Clear** and **Restore backup** write only the files that
-  preview pinned, after a native confirmation that names them and the key's label. Clear keeps the
-  edits you made since Apply; Restore backup puts the original bytes back.
-- **Backup and restore** keeps up to 10 manual backups of the client's files in the app's vault.
+- The page reads the client's files as it opens: its default place in your home folder, or, with
+  **Read this file**, a file or folder you select. A link to the file or folder, as stow and
+  chezmoi make, is followed and kept as a link.
+- **Connect** (or **Update**, **Save**), **Disconnect** and **Restore backup** write only the files
+  that reading pinned, after a native confirmation that names them and the key's label. Disconnect
+  keeps the edits you made since Connect; Restore backup puts the original bytes back. Pi's plugin
+  folder is not pinned yet: installing, updating and removing Pi's plugin act on the plugin folder
+  as the tool finds it when it runs ([README](README.md#pi)).
+- **Backups** keeps up to 10 manual backups of the client's files in the app's vault.
 - The key comes from the vault and goes to the tool on its private pipe. It is written into the
   client's own config file, and never into a launch's arguments or environment.
-- **Start CLI** (and Start app, where the client has one) starts the client through the launcher
+- **Start** (and the client's app, where it has one) starts the client through the launcher
   (`pluxy/execution`), after the launcher's native confirmation.
 
 ### Files each client's tool writes
@@ -138,9 +140,9 @@ so that is not support.
   is refused.
 - **Enabled:** no process until something calls it. The app starts it for a call and stops it 30
   seconds after its last call ends, with every process in its group. Opening the Launcher page, or
-  a client page with a Start CLI card (all but Claude Desktop's), asks the launcher for its terminal
-  list, so it starts `pluxy/execution` for that one call when the launcher is enabled. A client
-  page's Start CLI card asks again each time this device's packages change while it is open.
+  a client page whose Start starts in a terminal (all but Claude Desktop's), asks the launcher for
+  its terminal list, so it starts `pluxy/execution` for that one call when the launcher is enabled.
+  A client page's Start asks again each time this device's packages change while it is open.
 - **The usage hub** syncs only while its page is open. **The Codex session reader** reads only when
   its page asks.
 - **Launches are not the tool's.** A detached launch runs on after its tool stops and after the app
@@ -161,8 +163,8 @@ drops are proposals the owner has not reviewed yet; their rows say so.
 | --- | --- | --- | --- |
 | Claude Code, Codex, Claude Desktop, OpenCode, Oh My Pi, Grok Build, Hermes Agent and Pi setup and launch | Kept | The main clients | A window page and a tool for each ([above](#agent-clients)) |
 | Kimi Code, OpenClaw, ZCode, DeepSeek Harness, WorkBuddy, Antigravity CLI, Copilot CLI and VSCode Copilot setup and launch | Deferred | The rebuild covers the main clients first; these follow later | Not in the app yet |
-| Client setup inside WSL distributions | Deferred | Part of the later Windows work; the Claude Code page is the first, in part | On the Claude Code page: its Linux build runs in a WSL distribution and user the app knows (`pluxy/wsl` lists, checks and prepares them), and Start CLI starts it there; Apply does not work there yet (the vault's secrets and client keys are Linux only), and the other clients follow later ([README](README.md), "In WSL") |
-| Executable and folder overrides, terminal choice and recent working folders | Kept | They let a launch use the person's own install and folders | Each client's Start CLI and the Launcher page |
+| Client setup inside WSL distributions | Deferred | Part of the later Windows work; the Claude Code page is the first, in part | On the Claude Code page: its Linux build runs in a WSL distribution and user the app knows (`pluxy/wsl` lists, checks and prepares them), and **Start Claude Code** starts it there; **Connect** makes and keeps the key on Windows, and the tool's write in the distribution gets it after its confirmation; the other clients follow later ([README](README.md), "In WSL") |
+| Executable and folder overrides, terminal choice and recent working folders | Kept | They let a launch use the person's own install and folders | Each tool page's Start section and the Launcher page |
 | Showing, hiding, searching and resetting the list of clients | Kept | The person chooses which clients the navigation shows | The Manage Clients page ([README](README.md#manage-clients)): by default the navigation lists the clients whose tool is installed |
 | Codex's OAuth sign-in method and its OpenAI provider-identity switch | Deferred | Not built now: the core takes no ChatGPT login from a client, so the sign-in could not reach it. A later change could add a separate Codex profile for it | Codex uses a client key |
 | Codex model catalog fetched silently | Dropped | The catalog changes only when the person asks | **Import models from core** on the Codex page |

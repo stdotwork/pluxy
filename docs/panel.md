@@ -56,6 +56,25 @@ the extensions' pages last. The old panel's groups (Operate, Gateway, Observe, C
 Since every text goes through the string layer, renaming a page later is a
 change of text; the page ID stays, because it is the page's address and theme hook.
 
+## Settings
+
+Settings lists its pages as topics beside the page, in three groups: This device (General, Themes and,
+in the desktop app, its own pages), pluxy (Config, Extensions, Logs, System, Setup) and From
+extensions. It opens on General, the topic a person changes most. Every topic has a tip that says
+what it holds.
+
+- **General** holds what is set for one window or browser: Appearance, Hide names and, in the panel,
+  Sign out. Each applies and saves at once; there is no Save button. Appearance is only here, so a
+  setting is not on two pages; when the theme that is on has one appearance, the row says so and
+  links to Themes. Hide names is the wording for hiding names while sharing a screen; while it is
+  on, the header strip shows a Names hidden button that turns it off. Sign out asks once, because
+  without the management key a person cannot sign back in. The desktop app leaves Sign out off
+  General, since it is on Where pluxy runs, beside the connection it ends.
+- **Themes** says which things pluxy keeps (the theme that is on, shared by every window) and which
+  stay on the device (layout, density, custom CSS). Its custom CSS switch is not called safe mode,
+  because safe mode is pluxy running with no extensions, shown on System. A notice about the page
+  shows one at a time, newest first. A theme file is checked for size before it is read.
+
 ## Where an API key added in the panel lives
 
 An API key added on the Add Account page becomes an account in core's credential store: a folder

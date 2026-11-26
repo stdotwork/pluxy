@@ -784,6 +784,23 @@ test("a failed pane holds core's error, masked, under Details", () => {
   expect(html).not.toContain("bob@example.com");
 });
 
+test("a pane button can wait: disabled, with its label saying what it waits for", async () => {
+  const m = await mountIn(
+    <StatePane
+      kind="empty"
+      title="No pluxy is installed"
+      primary={{ label: "Answer the confirmation window…", onClick: noop, disabled: true }}
+      secondary={{ label: "Change where pluxy runs", href: "#/connection" }}
+    />,
+  );
+  const wait = all(m.root, "button")[0] as FakeNode;
+  expect(wait.textContent).toBe("Answer the confirmation window…");
+  expect(wait.disabled).toBe(true);
+  const link = all(m.root, "a")[0] as FakeNode;
+  expect(link.attributes.find((a) => a.name === "href")?.value).toBe("#/connection");
+  await m.unmount();
+});
+
 // ---- SettingRow -------------------------------------------------------------------------------
 
 test("a setting that saves on change says Saving…, then goes back with a notice when the save fails", async () => {

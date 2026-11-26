@@ -1050,7 +1050,7 @@ version field, so none is checked. The key may not hold spaces; the model is one
 
 `pluxy/execution` prepares the launches of pluxy's desktop app: an agent in a terminal, a program
 run directly, or a file opened in the person's own app. The app's Launcher page, its tray's
-Start… menu and the client pages' Start CLI and Start App use it, and so does the Codex session
+Start… menu and the tool pages' Start section use it, and so does the Codex session
 reader to open a session's file. It never starts a process itself and never holds a secret's
 value: the host confirms each launch natively, spawns exactly what was confirmed when the program asks, and resolves secrets from
 its vault at the spawn (`../app/app-host/README.md`, "Launches and managed runtimes").
