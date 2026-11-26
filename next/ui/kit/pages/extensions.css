@@ -107,6 +107,11 @@
 
   /* ---- the detail ---- */
 
+  /* Room for "Installed from" in a narrow detail, in the mono theme too. */
+  .ext .facts > div {
+    grid-template-columns: minmax(9em, 0.4fr) 1fr;
+  }
+
   .ext-copy {
     display: grid;
     gap: var(--s);
