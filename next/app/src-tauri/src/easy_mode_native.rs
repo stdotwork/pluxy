@@ -7,9 +7,9 @@
 //!
 //! - open: the window lists Beginner Mode and shows its two steps, Connect a model first;
 //! - login: before any sign-in the guide counts core's accounts and, with none, keeps Next
-//!   disabled; a sign-in with test/alpha's "Test API key" method in the guide's own Add Account
-//!   adds the account to core (read back with `GET /accounts`), and the guide then counts it and
-//!   enables Next;
+//!   disabled; a sign-in with test/alpha's "Test API key" method in the guide's own Add an account
+//!   (no account ID asked: core makes it) adds an account to core that was not there before (read
+//!   back with `GET /accounts`), and the guide then counts it and enables Next;
 //! - clients: Connect an agent lists Claude Code as offered by a registry (not installed) and
 //!   pluxy/execution as enabled; Install installs pluxy/claude-code from the curated registry,
 //!   asking nothing; Enable opens the native confirmation, which says "full access to your user
@@ -220,7 +220,6 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
     let e = &c.x["easy"];
     let settings = p(&e["settings"]);
     let original = s(&c.x["bytes"]["easy"]);
-    let account = s(&e["account"]);
     let records = p(&c.x["records"]);
     let work = std::fs::canonicalize(p(&c.x["work"])).map_err(|e| e.to_string())?;
     let terminal = std::fs::canonicalize(p(&c.x["terminal"])).map_err(|e| e.to_string())?;
@@ -262,11 +261,12 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
         })(),
     )?;
 
-    // ---- login: the guide's Add Account signs in with test/alpha's API-key method
+    // ---- login: the guide's Add an account signs in with test/alpha's API-key method
     step(
         "login",
         (|| {
-            let before = accounts(main)?.len();
+            let known = accounts(main)?;
+            let before = known.len();
             let step1 = "[data-part=easy-step][data-step='1']";
             let sources = "[data-part=easy-sources]";
             wait_for("the guide's source count", || {
@@ -291,26 +291,26 @@ pub(super) fn run(c: &Ctx) -> Result<(), String> {
                 next_enabled() == Some(json!(before > 0)),
                 format!("with {before} accounts, Next is {:?}", next_enabled()),
             )?;
-            fill(main, step1, "Account ID", &account)?;
             // test/alpha's API-key method.
             until(
                 main,
                 "test/alpha's Test API key method",
                 &format!(
-                    "const t = [...({}?.querySelectorAll('[data-part=method]') ?? [])].find((t) => t.closest('[data-extension]')?.dataset.extension === 'test/alpha' && [...t.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Test API key')); \
-                     const b = t && [...t.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Test API key'); if (!b || b.disabled) return false; b.click(); return true;",
+                    "const t = [...({}?.querySelectorAll('[data-part=method]') ?? [])].find((t) => t.closest('[data-extension]')?.dataset.extension === 'test/alpha' && t.textContent.includes('Test API key')); \
+                     const b = t && [...t.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Start'); if (!b || b.disabled) return false; b.click(); return true;",
                     within(step1)
                 ),
             )?;
             fill(main, step1, "API key", &s(&e["api_key"]))?;
-            click(main, step1, "Add account")?;
+            click(main, step1, "Continue")?;
             wait_for("the sign-in to succeed", || {
-                text(main, step1).filter(|t| t.contains("Signed in."))
+                text(main, step1).filter(|t| t.contains("Added "))
             })?;
             let listed = accounts(main)?;
             require(
-                listed.iter().any(|a| a["id"] == account.as_str()),
-                format!("core's accounts lack {account}: {listed:?}"),
+                listed.len() == before + 1
+                    && listed.iter().any(|a| !known.iter().any(|k| k["id"] == a["id"])),
+                format!("core's accounts hold no new account: {known:?} then {listed:?}"),
             )?;
             wait_for("the guide to count the new account", || {
                 text(main, sources)

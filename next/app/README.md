@@ -1461,7 +1461,7 @@ is still there and unchanged.
 ## Beginner Mode
 
 Beginner Mode (`src/easyMode.tsx`, a topic of Tools; the Tools entry itself opens the kit's Tools page) is the guided setup of the old app's Easy
-mode, in its two steps. **Connect a model** is the Add Account page's own sign-in (every browser,
+mode, in its two steps. **Connect a model** is the Add an account page's own sign-in (every browser,
 device code and API-key method core's extensions offer); it counts core's accounts, and **Next:
 connect an agent** stays off until there is one. **Connect an agent** lists the agent clients this
 window can set up (the eight client pages above, Claude Code to Pi) whose optional tool is

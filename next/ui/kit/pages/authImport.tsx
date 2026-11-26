@@ -88,7 +88,7 @@ export function AuthImport() {
     <section class="auth-import" data-part="auth-import">
       <p class="muted">
         {t("ask")}{" "}
-        <Button disabled={busy} busy={busy} onClick={() => input.current?.click()}>
+        <Button variant="quiet" disabled={busy} busy={busy} onClick={() => input.current?.click()}>
           {t("choose")}
         </Button>
       </p>

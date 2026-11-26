@@ -164,7 +164,7 @@ test("an account from the settings file leads to it; a signed-in one renews and 
   const signInPart = page.locator('[data-part="account-sign-in"]');
   await signInPart.getByRole("button", { name: "Test browser", exact: true }).click();
   await signInPart.getByLabel("Address the browser ended on").fill("http://localhost/callback?code=ok");
-  await signInPart.getByRole("button", { name: "Submit" }).click();
+  await signInPart.getByRole("button", { name: "Continue", exact: true }).click();
   await expect(page.getByRole("main").getByText("Signed in again.", { exact: true })).toBeVisible();
   await expect(page).toHaveURL(/#\/accounts\/tools-oauth$/);
 });

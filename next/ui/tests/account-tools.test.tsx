@@ -54,6 +54,8 @@ async function open(
     events?: Reply<unknown>[];
     models?: string[];
     privacy?: boolean;
+    /** An answer to any call, ahead of the defaults. */
+    reply?: (call: Call) => Reply<unknown> | undefined;
   } = {},
 ) {
   Object.defineProperty(globalThis, "location", { configurable: true, value: { hash } });
@@ -62,6 +64,8 @@ async function open(
   const host = {
     call: async (method: Method, path: string, body?: unknown): Promise<Reply<unknown>> => {
       calls.push({ method, path, body });
+      const given = more.reply?.({ method, path, body });
+      if (given) return given;
       if (method === "GET" && path === "/status")
         return turn(more.status) ?? { status: 200, body: { extensions: [{ id: "pluxy/claude" }] } };
       if (method === "GET" && path.startsWith("/usage?"))
@@ -116,6 +120,12 @@ async function open(
   return { ...page, calls, changes };
 }
 
+/** Lets the effects of a render that no act wrapped (a read that came in) run: Preact runs them after the next paint. */
+async function painted() {
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  await settle();
+}
+
 /** The buttons and links that read exactly label. */
 const controls = (root: FakeNode, label: string) =>
   [...all(root, "button"), ...all(root, "a")].filter((n) => n.textContent === label);
@@ -145,10 +155,41 @@ test("an account that needs signing in again offers Sign in again once, in its o
 
 test("on its sign-in address the page shows the sign-in in place of the opening's link", async () => {
   const page = await open(account({ state: "reauth_required" }), "#/accounts/acc-1/sign-in");
-  // The one control left is the sign-in's own start button; the link that led here is gone.
-  const signIn = controls(page.root, "Sign in again");
-  expect(signIn.map((n) => n.localName)).toEqual(["button"]);
+  // The link that led here is gone and the sign-in has no second `Sign in again` button: its
+  // heading is all that is left of the words, and its one way to sign in starts at once.
+  await painted();
+  expect(controls(page.root, "Sign in again")).toHaveLength(0);
   expect(all(page.root, "h2").some((h) => h.textContent === "Sign in again")).toBe(true);
+  expect(page.calls.some((c) => c.method === "POST" && c.path === "/accounts/acc-1/login")).toBe(true);
+});
+
+test("Cancel on a sign-in with one way to sign in stops it and leaves the sign-in for the account's page", async () => {
+  const page = await open(account({ state: "reauth_required" }), "#/accounts/acc-1/sign-in", {
+    reply: (c) =>
+      c.method === "POST" && c.path === "/accounts/acc-1/login"
+        ? {
+            status: 200,
+            body: {
+              login: {
+                id: "login-1",
+                account: "acc-1",
+                extension: "pluxy/claude",
+                method: "browser",
+                state: "pending",
+                prompt: { kind: "browser", url: "https://claude.example/sign-in" },
+              },
+            },
+          }
+        : c.method === "DELETE"
+          ? { status: 204 }
+          : undefined,
+  });
+  await painted();
+  await click(button(page.root, "Cancel"));
+  expect(page.changes().map((c) => `${c.method} ${c.path}`)).toContain("DELETE /logins/login-1");
+  expect((globalThis as unknown as { location: { hash: string } }).location.hash).toBe("#/accounts/acc-1");
+  // It does not start again behind the person's back.
+  expect(page.calls.filter((c) => c.method === "POST" && c.path === "/accounts/acc-1/login")).toHaveLength(1);
 });
 
 test("Send a test request sends the model chosen in Test with", async () => {

@@ -192,7 +192,7 @@ drops are proposals the owner has not reviewed yet; their rows say so.
 | --- | --- | --- | --- |
 | Easy mode, shown as Beginner Mode: sign in, then set up an agent | Kept | The guided workflow is useful | The window's Beginner Mode page |
 | Its spotlight tour | Dropped | It pointed at elements of pages the guide now shares with the rest of the app | Each step shows its own short text |
-| Its "API Access" form | Dropped | It sent the API key through the core's request proxy; API-key sign-in is part of Add Account | Step 1 is Add Account |
+| Its "API Access" form | Dropped | It sent the API key through the core's request proxy; API-key sign-in is part of Add an account | Step 1 is Add an account |
 | Its full-screen mode, Exit button and own theme and language switchers | Dropped | The app's shell owns navigation, themes and language | — |
 
 ### The app itself

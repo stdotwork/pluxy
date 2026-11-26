@@ -607,8 +607,11 @@ function SignInAgain(props: { account: Account; onDone: () => void }) {
           keptInputs={Object.keys(a.settings ?? {})}
           onSuccess={props.onDone}
           onReset={() => {
-            setChosen(undefined);
-            setAttempt((n) => n + 1);
+            // Back to the methods when there are several; with one there is nothing to choose, so the sign-in is left.
+            if (available.length > 1) {
+              setChosen(undefined);
+              setAttempt((n) => n + 1);
+            } else location.hash = accountHref(a.id);
           }}
         />
       )}

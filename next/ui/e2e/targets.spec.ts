@@ -100,7 +100,7 @@ async function expectLargeEnough(page: Page) {
 const PAGES = [
   "Home",
   "Accounts",
-  "Add Account",
+  "Add an account",
   "Routing",
   "Logs Viewer",
   "Requests",

@@ -91,7 +91,7 @@ go build -ldflags "-X github.com/stdotwork/pluxy/next/internal/buildinfo.Version
 
 `pluxy-pack` gives a source build the same provider packages a release ships. Without
 `-bundled` (or a `bundled` folder beside the program), core has no registry: Setup has no
-providers to offer and Extensions has nothing to install. Add Account has no sign-in methods
+providers to offer and Extensions has nothing to install. Add an account has no sign-in methods
 unless the config names an extension directly. After starting core, open Setup in the panel and
 tick the providers you use, or install one by ID from the terminal with
 `./pluxy setup apply --pick pluxy/claude`.
@@ -3323,7 +3323,7 @@ Each file of the auth folder becomes an account added by login, with the file's 
 nor is a file larger than 1 MiB, nor anything but a `.json` file at the top of the folder.
 
 To add one file to a running core instead, send it to the management API's
-[`POST /accounts/import`](#accounts-added-by-login) (the panel's "Import files…" on Add Account): it
+[`POST /accounts/import`](#accounts-added-by-login) (the panel's "Import files…" on Add an account): it
 reads the file the same way and the account serves at once.
 
 Both cores renewing the same login signs one of them out: the provider replaces the refresh

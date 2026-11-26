@@ -14,7 +14,7 @@ test("with no account, Accounts names the page that adds one", async ({ page }) 
   const empty = page.locator('main [data-part="state-pane"]');
   await expect(empty).toContainText("No accounts yet.");
   await empty.getByRole("link", { name: "Add an account", exact: true }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "Add Account" })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1, name: "Add an account" })).toBeVisible();
 });
 
 test("a first run opens Setup, installs the suggested provider, adds an account, shows what to paste and finishes", async ({
@@ -43,12 +43,12 @@ test("a first run opens Setup, installs the suggested provider, adds an account,
     expect.objectContaining({ id: "pluxy/claude", enabled: true }),
   );
 
-  // The sign-in of the Add Account page, on this page: an API key adds an account.
+  // The sign-in of the Add an account page, on this page: an API key adds an account, with no ID asked for.
   const account = page.getByRole("region", { name: "Connect an account" });
   const tile = account.locator('[data-part="method"]').filter({ hasText: "Test API key" });
-  await tile.getByRole("button", { name: "Test API key" }).click();
-  await tile.getByLabel("API key", { exact: true }).fill("test-good-key");
-  await tile.getByRole("button", { name: "Add account" }).click();
+  await tile.getByRole("button", { name: "Start" }).click();
+  await account.getByLabel("API key", { exact: true }).fill("test-good-key");
+  await account.getByRole("button", { name: "Continue", exact: true }).click();
   await expect(account).toContainText("1 account connected");
   const accounts = await core.mgmt<{ accounts: { extension: string }[] }>("GET", "/accounts");
   expect(accounts.body.accounts.map((a) => a.extension)).toEqual(["pluxy/claude"]);

@@ -89,7 +89,7 @@ render function, and where it sits:
 | --- | --- |
 | `dest` | The destination the page belongs to |
 | `kind` | `"tab"`: one of the destination's tabs in the header strip. `"topic"`: one of its topics beside the page. Left out: the page is reached from the navigation entry itself or from another page |
-| `under` | The ID of the page it sits under. The header strip then shows the way back (`Accounts / Add Account`), and no tabs |
+| `under` | The ID of the page it sits under. The header strip then shows the way back (`Accounts / Add an account`), and no tabs |
 | `addresses` | Other addresses the page answers: an exact old ID (All accounts answers `quota`, the Quota page it replaced), or a prefix ending in `/` for whatever follows it (an account's page answers `accounts/`, so `#/accounts/<id>` opens it). Where several pages match, the longest match wins |
 | `label` | Its name in its tab or topic entry, when the title does not fit there (Routing's tab reads "Order & fallback") |
 | `section` | The group a topic is listed in: `core` (the default), `device` or `extensions` |
@@ -197,7 +197,7 @@ visit), and `POST /client-keys` sends the name with the new key.
 | Home (`status`) | Home | Dashboard (`/`) |
 | Accounts (`accounts`) | Accounts, the tab "All accounts"; `#/quota` opens it too | Auth Files (`/auth-files`) and AI Providers (`/ai-providers`), with the OAuth excluded models and OAuth model alias pages (`/auth-files/oauth-excluded`, `/auth-files/oauth-model-alias`) |
 | An account's page (`account`) | Accounts, under All accounts: `#/accounts/<id>`, and `#/accounts/<id>/sign-in` with its sign-in open | The details of one auth file on Auth Files |
-| Add Account (`add-account`) | Accounts, under the Accounts page | OAuth Login (`/oauth`) |
+| Add an account (`add-account`) | Accounts, under the Accounts page | OAuth Login (`/oauth`) |
 | Routing (`routing`) | Accounts, the tab "Order & fallback" | Routing (`/routing`) |
 | Logs Viewer (`logs`) | Settings, a topic | Logs Viewer (`/logs`) |
 | Usage (`usage`) | Activity | No old panel page: the old desktop app's list of recorded requests |
@@ -251,7 +251,7 @@ feature, it keeps the old label, unless the label named something this core does
   name, an ID, a provider's name, a condition or the last error, and the groups keep accounts in a
   fixed order (soonest back, then by name).
 - "Card layout": every account is one row, the same on every page and every theme.
-- "Upload file" on the list: importing CLIProxyAPI auth files is at the end of Add Account,
+- "Upload file" on the list: importing CLIProxyAPI auth files is at the end of Add an account,
   "Import files…".
 - OpenAI-compatible provider groups (one name and base URL holding several keys): each key is an
   account of its own, with the same base URL.
@@ -274,10 +274,13 @@ feature, it keeps the old label, unless the label named something this core does
 - "Invert page", which flipped the selection on the current page: with "Select" on, each row has
   its own checkbox.
 
-**Add Account**
+**Add an account**
 
 - Sign-in cards written for each provider: one flow serves every login method that a running
-  extension offers. "Cancel" works for every method.
+  extension offers, under the provider's name. "Cancel" works for every method and goes back to
+  the ways to sign in.
+- The account ID: a person never types or sees one. Core makes it, and the name is asked after
+  the sign-in ("Name", "Save name"), prefilled with what the provider called the account.
 - "Bind SIWC": a Sign in with ChatGPT account is added with the Codex extension's own sign-in
   method for it.
 - The Kimi China and International sponsor tiles and "Join Open Platform": promotion, not a

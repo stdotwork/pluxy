@@ -26,7 +26,7 @@ test("Import files… adds an auth file, and refuses one that is not JSON or is 
   });
   await openPanel(page, core);
   await signIn(page, core);
-  await goTo(page, "Add Account");
+  await goTo(page, "Add an account");
   await expect(page.getByText("Have auth files from CLIProxyAPI?")).toBeVisible();
 
   // An auth file of today's core, of a type the import takes.

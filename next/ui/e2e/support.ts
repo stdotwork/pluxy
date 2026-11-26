@@ -118,7 +118,7 @@ export const pageTitle = (page: Page) => page.locator('[data-part="page-title"]'
 const PLACES: Record<string, { dest: string; tab?: string; link?: string }> = {
   Home: { dest: "Home" },
   Accounts: { dest: "Accounts" },
-  "Add Account": { dest: "Accounts", link: "Add an account" },
+  "Add an account": { dest: "Accounts", link: "Add an account" },
   Routing: { dest: "Accounts", tab: "Order & fallback" },
   Requests: { dest: "Activity" },
   Usage: { dest: "Activity", tab: "Usage" },
@@ -159,7 +159,7 @@ export async function goTo(page: Page, name: string) {
 const TITLES: Record<string, string> = {
   status: "Home",
   accounts: "Accounts",
-  "add-account": "Add Account",
+  "add-account": "Add an account",
   routing: "Routing",
   usage: "Requests",
   "activity/usage": "Usage",

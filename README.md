@@ -101,8 +101,7 @@ name it: `./pluxy ext available` lists them, and `./pluxy ext install pluxy/clau
 ### 4. Connect an account
 
 On the same page, **Connect an account** now lists the ways to sign in that the installed
-providers offer, such as "Claude subscription" (a sign-in in the browser) or "API key". Pick one,
-fill in what it asks for and press **Add account**. The **Add Account** page does the same later.
+providers offer, such as "Claude subscription" (a sign-in in the browser) or "API key". Press **Start** on one, fill in what it asks for and press **Continue**. The **Add an account** page does the same later.
 From a terminal, `./pluxy account add <provider>` does the same, and `./pluxy account methods`
 lists the providers and their ways to sign in.
 

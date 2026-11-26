@@ -174,7 +174,7 @@ const t = strings("setup", {
   extensions: "Extensions",
   accountsConnected: { one: "{count} account connected.", other: "{count} accounts connected." },
   accountsLink: "See them on Accounts",
-  accountSkip: "You can skip this and add an account later on the Add Account page.",
+  accountSkip: "You can skip this and add an account later on the Add an account page.",
   signInFound: "{label}. You can sign in to the same account here.",
 
   clients: "Point a client at pluxy",
@@ -689,7 +689,7 @@ export function Start(props: {
   );
 }
 
-/** The Add Account page's sign-in, once a provider is installed and core has no account. */
+/** The Add an account page's sign-in, once a provider is installed and core has no account. */
 export function Account(props: {
   setup: Setup;
   choices: Choices;
