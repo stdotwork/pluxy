@@ -1,0 +1,276 @@
+/* Activity: the Requests and Usage tabs. */
+@layer kit {
+  .activity {
+    display: grid;
+    gap: calc(var(--s) * 4);
+    align-content: start;
+    min-width: 0;
+  }
+
+  .activity > * {
+    min-width: 0;
+  }
+
+  /* ---- Requests ---------------------------------------------------------------------------- */
+
+  .activity-filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--s) * 2) calc(var(--s) * 3);
+  }
+
+  /* The two-choice control names itself to assistive technology; its choices say the rest. */
+  .activity-filters .choices > .label,
+  .usage-range .choices > .label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .activity-filters select {
+    width: auto;
+    max-width: 100%;
+    min-width: 10em;
+  }
+
+  .activity-day {
+    min-width: 0;
+  }
+
+  .activity-day-heading {
+    margin: 0;
+    padding: calc(var(--s) * 2) calc(var(--s) * 2);
+    font-size: var(--px-font-size-small);
+    font-weight: var(--px-font-weight-strong);
+    color: var(--px-color-text-muted);
+    border-bottom: var(--px-shape-border) solid var(--px-color-border);
+  }
+
+  .activity-request {
+    min-width: 0;
+  }
+
+  .activity-request .request-story p,
+  .activity-request .request-story ul {
+    margin: 0 0 calc(var(--s) * 2);
+  }
+
+  .request-left-out {
+    padding-inline-start: calc(var(--s) * 5);
+  }
+
+  .activity-end {
+    margin: 0;
+    color: var(--px-color-text-muted);
+  }
+
+  /* ---- Usage ------------------------------------------------------------------------------- */
+
+  .usage-top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: calc(var(--s) * 2) calc(var(--s) * 4);
+  }
+
+  .usage-figures {
+    margin: 0;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .usage-note,
+  .usage-hotspot {
+    margin: 0;
+  }
+
+  .usage-note {
+    color: var(--px-color-text-muted);
+  }
+
+  .usage-filter {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: calc(var(--s) * 3);
+  }
+
+  .usage-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: calc(var(--s) * 2);
+    min-height: var(--px-size-control);
+    padding: 0 calc(var(--s) * 3);
+    border: var(--px-shape-border) solid var(--px-color-input-border);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--px-color-text);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .usage-chip:hover {
+    background: var(--px-color-surface-raised);
+  }
+
+  .usage-chart {
+    display: grid;
+    gap: calc(var(--s) * 2);
+    min-width: 0;
+  }
+
+  .usage-chart svg {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+
+  .usage-chart .chart-grid,
+  .usage-chart .chart-axis {
+    stroke: var(--px-color-border);
+    stroke-width: 1;
+  }
+
+  .usage-chart .chart-label {
+    fill: var(--px-color-text-muted);
+    font-size: 11px;
+  }
+
+  .usage-chart .chart-hit {
+    fill: transparent;
+  }
+
+  .usage-chart .chart-bar:hover .chart-hit,
+  .usage-chart .chart-bar:focus .chart-hit {
+    fill: var(--px-color-surface-raised);
+  }
+
+  .usage-chart .chart-bar:focus {
+    outline: none;
+  }
+
+  .usage-chart .chart-bar:focus-visible .chart-hit {
+    stroke: var(--px-color-text);
+    stroke-width: 2;
+  }
+
+  .usage-chart [data-outcome="success"] {
+    fill: var(--px-color-text);
+  }
+
+  .usage-chart [data-outcome="failure"] {
+    fill: var(--px-color-chart-failure);
+  }
+
+  .usage-readout {
+    margin: 0;
+    min-height: 1.5em;
+    color: var(--px-color-text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .usage-chart-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: calc(var(--s) * 2) calc(var(--s) * 4);
+  }
+
+  .usage-chart .chart-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: calc(var(--s) * 4);
+    margin: 0;
+    color: var(--px-color-text-muted);
+  }
+
+  .usage-chart .chart-swatch {
+    display: inline-block;
+    width: calc(var(--s) * 2.5);
+    height: calc(var(--s) * 2.5);
+    margin-inline-end: calc(var(--s) * 1.5);
+    border-radius: 2px;
+  }
+
+  .usage-chart .chart-swatch[data-outcome="success"] {
+    background: var(--px-color-text);
+  }
+
+  .usage-chart .chart-swatch[data-outcome="failure"] {
+    background: var(--px-color-chart-failure);
+  }
+
+  .usage-by {
+    display: grid;
+    gap: calc(var(--s) * 3);
+    justify-items: start;
+    min-width: 0;
+  }
+
+  .usage-breakdown {
+    width: 100%;
+    min-width: 0;
+  }
+
+  /* The breakdown scrolls inside its frame on a narrow window. The edge that has more to see
+     fades out under a heavier line than the kit's hairline, so the cut is plain to see. */
+  .usage-breakdown .table-frame::before,
+  .usage-breakdown .table-frame::after {
+    width: calc(var(--s) * 10);
+    border-inline-width: 2px;
+    border-inline-color: var(--px-color-text-muted);
+  }
+
+  .usage-breakdown .table {
+    min-width: 36em;
+  }
+
+  .usage-name {
+    min-height: var(--px-size-control);
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: start;
+    text-decoration: underline;
+    text-decoration-color: var(--px-color-border);
+    text-underline-offset: 3px;
+    cursor: pointer;
+  }
+
+  .usage-name:hover {
+    text-decoration-color: currentColor;
+  }
+
+  .usage-bar-col {
+    width: 30%;
+    min-width: 8em;
+  }
+
+  .usage-bar {
+    display: flex;
+    height: calc(var(--s) * 2);
+    border-radius: 2px;
+    background: var(--px-color-surface-raised);
+    overflow: hidden;
+  }
+
+  .usage-bar i {
+    display: block;
+    height: 100%;
+  }
+
+  .usage-bar [data-outcome="success"] {
+    background: var(--px-color-text);
+  }
+
+  .usage-bar [data-outcome="failure"] {
+    background: var(--px-color-chart-failure);
+  }
+}

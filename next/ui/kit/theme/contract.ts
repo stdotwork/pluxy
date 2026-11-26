@@ -184,6 +184,12 @@ export const PARTS = [
   "state-pane",
   "plan-pill",
   "limits",
+  "activity",
+  "activity-filters",
+  "usage-chart",
+  "usage-chip",
+  "usage-numbers",
+  "usage-breakdown",
 ] as const;
 
 export type Part = (typeof PARTS)[number];

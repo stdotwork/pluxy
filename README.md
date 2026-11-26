@@ -143,7 +143,7 @@ Then look at the usage record:
 ./pluxy usage
 ```
 
-It shows one request with its tokens, under the model you asked for. The panel's Usage page shows
+It shows one request with its tokens, under the model you asked for. The panel's Activity page shows
 the same record. `./pluxy help` lists every command.
 
 ## Where to read more

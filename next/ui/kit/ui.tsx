@@ -668,7 +668,7 @@ export function overflowSides(box: {
  * The box a table scrolls in. When the table is wider than the box, data-more on the frame
  * names the side (or sides) with columns out of view, and the frame fades that side out.
  */
-function TableFrame(props: { children: ComponentChildren }) {
+export function TableFrame(props: { children: ComponentChildren }) {
   const wrap = useRef<HTMLDivElement>(null);
   const [more, setMore] = useState<ReturnType<typeof overflowSides>>();
   useLayoutEffect(() => {

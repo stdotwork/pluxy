@@ -227,11 +227,11 @@ test("a page change moves focus to the page heading and announces the title", as
     .getByRole("link", { name: "Activity", exact: true });
   await link.focus();
   await page.keyboard.press("Enter");
-  const heading = page.getByRole("heading", { level: 1, name: "Usage", exact: true });
+  const heading = page.getByRole("heading", { level: 1, name: "Activity: Requests", exact: true });
   await expect(heading).toBeVisible();
   await expect(heading, `focus is on ${await focused(page)}`).toBeFocused();
-  await expect(page.locator('[data-part="page-announcer"]')).toHaveText("Usage · pluxy");
-  await expect(page).toHaveTitle(/^Usage · /);
+  await expect(page.locator('[data-part="page-announcer"]')).toHaveText("Requests · pluxy");
+  await expect(page).toHaveTitle(/^Requests · /);
 
   // A second change announces the new title in the same place.
   await page

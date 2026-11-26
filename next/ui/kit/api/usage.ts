@@ -51,6 +51,16 @@ export interface UsageSummary extends Omit<UsageGroup, "name" | "provider"> {
    * cannot open). They stay in the record core keeps in memory. Absent from a core that predates it.
    */
   write_errors?: number;
+  /**
+   * The requests core dropped since it started because its disk writer's queue was full. They stay
+   * in the record core keeps in memory. Absent from a core that predates it.
+   */
+  dropped?: number;
+  /**
+   * When the oldest request core keeps arrived, matching the filter or not, the day files
+   * included; absent when it keeps none.
+   */
+  oldest?: string;
 }
 
 export const usageApi = (host: Host) => ({
