@@ -98,6 +98,8 @@ test("numbers line up: digits of one width, and a numeric column set against the
   await signIn(page, core);
   await goTo(page, "Logs Viewer");
   const table = page.locator('[data-part="list"]');
+  // The files are read after the page opens: wait for their table before reading its columns.
+  await expect(table.getByRole("columnheader", { name: "Size", exact: true })).toBeVisible();
   const column = await table.locator("thead th").allTextContents();
   const requests = column.indexOf("Size");
   expect(requests).toBeGreaterThan(0);

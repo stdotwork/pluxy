@@ -18,6 +18,10 @@
     min-width: 0;
   }
 
+  .accounts-count {
+    white-space: nowrap;
+  }
+
   .accounts-tools {
     flex: 0 0 auto;
     max-width: 100%;
@@ -287,6 +291,10 @@
   .account-more {
     display: grid;
     gap: calc(var(--s) * 4);
+  }
+
+  .account-more .account-tools {
+    margin-top: calc(var(--s) * 4);
   }
 
   .account-more h3 {

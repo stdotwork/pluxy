@@ -209,7 +209,17 @@ export function AccountsPage() {
         {(d) => (
           <div class="accounts-page" data-selecting={selecting ? "" : undefined}>
             <div class="accounts-top">
-              <p class="accounts-counts muted">{countsLine(d.accounts, running, now)}</p>
+              <p class="accounts-counts muted">
+                {/* A long line wraps between its counts, never inside one. */}
+                {countsLine(d.accounts, running, now)
+                  .split(" · ")
+                  .map((part, i, all) => (
+                    <span key={part}>
+                      <span class="accounts-count">{i < all.length - 1 ? `${part} ·` : part}</span>
+                      {i < all.length - 1 && " "}
+                    </span>
+                  ))}
+              </p>
               <div class="accounts-tools">
                 {(d.accounts.length > SEARCH_ABOVE || query !== "") && (
                   <label class="accounts-find">
