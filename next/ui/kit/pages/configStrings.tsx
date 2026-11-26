@@ -2,7 +2,6 @@ import { strings } from "../strings";
 
 export const configText = strings("config", {
   title: "Config Panel",
-  short: "Config",
   tip: "Gateway configuration",
   common: "Common",
   connectivity: "Connectivity",

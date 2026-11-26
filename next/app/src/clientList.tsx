@@ -12,7 +12,6 @@ import { automatic, type Client, encode, matching, savable, toggled } from "./cl
 
 const t = strings("clients", {
   title: "Manage Clients",
-  short: "Clients",
   tip: "Choose which agent clients the navigation lists",
   description:
     "Choose the clients to keep in the navigation, then save. Installed clients come first. The client you are on stays listed while you are on it.",
@@ -124,9 +123,9 @@ export const clientListPage = (
   onSave: (ids: string[] | undefined) => void,
 ): PageDef => ({
   id: "clients",
-  group: "control",
+  dest: "tools",
+  kind: "topic",
   title: t("title"),
-  short: t("short"),
   tip: t("tip"),
   render: () => (
     <ClientList clients={clients} installed={installed} saved={saved} listed={listed} onSave={onSave} />

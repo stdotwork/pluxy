@@ -9,7 +9,6 @@ import { Button, Card, type Choice, Choices, Notice, PageHead, Switch, useThemeS
 
 const t = strings("themes", {
   title: "Themes",
-  short: "Theme",
   theme: "Theme",
   notRead: "Could not load themes from core: {error}. Refresh and try again.",
   currentUnusable:
@@ -486,8 +485,8 @@ export function ThemesPage() {
 
 export const themesPage = (): PageDef => ({
   id: "themes",
-  group: "control",
+  dest: "settings",
+  kind: "topic",
   title: t("title"),
-  short: t("short"),
   render: () => <ThemesPage />,
 });

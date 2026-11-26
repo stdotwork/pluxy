@@ -1,6 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { expect, type Page, test } from "@playwright/test";
-import { openPanel, signIn, useCore } from "./support";
+import { goToId, openPanel, signIn, useCore } from "./support";
 
 // panelcore compiles core and the fixture extensions before announcing readiness.
 test.setTimeout(300_000);
@@ -16,7 +16,7 @@ async function screenshot(page: Page, name: string) {
 }
 
 async function goTo(page: Page, id: string, title: string) {
-  await page.locator(`[data-part="nav-item"][href="#/${id}"]`).click();
+  await goToId(page, id);
   await expect(page.locator('[data-part="page-title"]')).toHaveText(title);
 }
 

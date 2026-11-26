@@ -33,7 +33,6 @@ import { type AccessGrant, access, type DevicePackage, type DeviceRelease, devic
 
 const t = strings("device", {
   title: "Device extensions",
-  short: "Device",
   tip: "Extension pages installed on this computer",
   intro:
     "Local extensions on this computer, separate from core's. Pages get no app commands, settings, or files unless granted. Native tools come from curated sources and need native confirmation.",
@@ -484,9 +483,10 @@ export function DevicePage(props: { onChanged: () => void }) {
 
 export const devicePage = (onChanged: () => void): PageDef => ({
   id: "device",
-  group: "control",
+  dest: "settings",
+  kind: "topic",
+  section: "device",
   title: t("title"),
-  short: t("short"),
   tip: t("tip"),
   render: () => <DevicePage onChanged={onChanged} />,
 });

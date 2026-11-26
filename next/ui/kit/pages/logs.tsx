@@ -23,7 +23,6 @@ import {
 
 const t = strings("logs", {
   title: "Logs Viewer",
-  short: "Logs",
   tip: "Request tracing",
   core: "Core logs",
   content: "Log content",
@@ -466,9 +465,9 @@ export function LogsPage() {
 
 export const logsPage = (): PageDef => ({
   id: "logs",
-  group: "observe",
+  dest: "settings",
+  kind: "topic",
   title: t("title"),
-  short: t("short"),
   tip: t("tip"),
   render: () => <LogsPage />,
 });

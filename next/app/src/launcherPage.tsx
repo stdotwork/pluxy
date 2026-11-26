@@ -29,7 +29,6 @@ import { lifetimeFor } from "./launcherForm";
 
 const t = strings("launcher", {
   title: "Launcher",
-  short: "Launch",
   tip: "Start remembered agents and terminals",
   intro:
     "Start remembered launches in one click here or from the tray's Start… menu. New or changed launches ask for confirmation. Detached launches keep running after you quit.",
@@ -347,9 +346,10 @@ export function LauncherPage() {
 
 export const launcherPage = (): PageDef => ({
   id: "launcher",
-  group: "control",
+  dest: "settings",
+  kind: "topic",
+  section: "device",
   title: t("title"),
-  short: t("short"),
   tip: t("tip"),
   render: () => <LauncherPage />,
 });

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { openPanel, signIn, useCore } from "./support";
+import { goToId, openPanel, signIn, useCore } from "./support";
 
 test.setTimeout(300_000);
 const core = useCore();
@@ -13,7 +13,7 @@ for (const theme of ["default", "terminal"]) {
     }, theme);
     await openPanel(page, core);
     await signIn(page, core);
-    await page.locator('[data-part="nav-item"][href="#/system"]').click();
+    await goToId(page, "system");
     await expect(page.locator('[data-part="page-title"]')).toHaveText("System");
 
     const status = await core.mgmt<{ version: string; active: { revision: number } }>("GET", "/status");
@@ -70,6 +70,6 @@ test("a model list core cannot give shows the error", async ({ page }) => {
       body: JSON.stringify({ error: { code: "internal", message: "no model list today" } }),
     }),
   );
-  await page.locator('[data-part="nav-item"][href="#/system"]').click();
+  await goToId(page, "system");
   await expect(page.getByRole("alert")).toHaveText("no model list today");
 });

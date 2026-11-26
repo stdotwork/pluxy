@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
-import { nav, openPanel, signIn, useCore } from "./support";
+import { goTo, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 
@@ -64,7 +64,7 @@ test("usage keeps object-like model names and nanosecond timestamps", async ({ p
   );
   await openPanel(page, core);
   await signIn(page, core);
-  await nav(page).getByRole("link", { name: "Usage", exact: true }).click();
+  await goTo(page, "Usage");
   await expect(page.getByRole("heading", { level: 1, name: "Usage", exact: true })).toBeVisible();
 
   const rows = page.locator('[data-page="usage"] [data-part="item"]');

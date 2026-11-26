@@ -111,10 +111,10 @@ anything.
 | `color.diff-remove` | Removed lines in a diff | `#b42318` / `#ff7b72` |
 | `color.nav` | Navigation background | `var(--px-color-surface)` |
 | `color.nav-text` | The product name in the navigation, and a hovered entry's text | `var(--px-color-text)` |
-| `color.nav-muted` | Navigation entries and group labels | `var(--px-color-text-muted)` |
+| `color.nav-muted` | Navigation entries, and the status block's second line | `var(--px-color-text-muted)` |
 | `color.nav-hover` | Background of a hovered navigation entry | `var(--px-color-surface-raised)` |
 | `color.nav-selected` | Background of the current navigation entry; its text is `color.accent` | `color-mix(in srgb, var(--px-color-accent) 14%, transparent)` |
-| `color.nav-border` | The navigation's border, and the lines between its groups | `var(--px-color-border)` |
+| `color.nav-border` | The navigation's border, and the line over its status block | `var(--px-color-border)` |
 | `color.overlay` | Dialog background | `var(--px-color-surface)` |
 | `color.input-border` | Border of text inputs, selects and text areas | `var(--px-color-border)` |
 | `color.placeholder` | Placeholder text in an empty input | `var(--px-color-text-muted)` |
@@ -150,6 +150,9 @@ colour of its own.
 | `space.unit` | The spacing step; paddings and gaps are multiples of it | `4px` |
 | `density` | Multiplies every spacing step: `0.75` is compact, `1.25` roomy. A number from `0.5` to `2`. | `1` |
 | `size.nav` | Width of the side navigation | `200px` |
+| `size.rail` | Width of the navigation as a rail of icons | `48px` |
+| `size.header` | Height of the header strip over the page, and of the product name's row in the navigation. The strip grows when its content needs more | `44px` |
+| `size.topics` | Width of the list of topics beside a page | `180px` |
 | `size.width-wide` | Content width for the `wide` width option | `1200px` |
 | `size.width-narrow` | Content width for the `narrow` width option | `760px` |
 | `size.detail` | Width of the detail pane beside a list | `360px` |
@@ -179,13 +182,20 @@ reader announces stay the same in every layout.
 
 | Option | Values (default first) | What it changes |
 | --- | --- | --- |
-| `nav` | `sidebar`, `rail`, `top` | Navigation as a labelled side column, a narrow column of short labels, or a bar across the top |
+| `nav` | `sidebar`, `rail`, `top` | Navigation as a labelled side column, a narrow column of icons, or a row across the top |
 | `list` | `table`, `cards` | Lists of accounts and extensions as table rows or as cards |
 | `detail` | `side`, `below` | Where the details of a selected item open: in a pane beside the list, or under it |
 | `width` | `wide`, `full`, `narrow` | Content width: `size.width-wide`, the whole window, or `size.width-narrow` |
-| `tabs` | `top`, `side` | Where a page's tabs appear: across the top or in a side column |
+| `tabs` | `top`, `side` | Where tabs appear. A page's own tabs: across its top or in a side column. A destination's tabs: in the header strip or in a list beside the page |
 
-On a window narrower than 720 pixels, `sidebar` shows as `top` and `side` shows as `below`.
+The window is a frame that does not scroll: the navigation, the header strip over the page and
+the status block at the navigation's foot stay where they are, and only the page area scrolls.
+
+A narrow window overrides `nav`, and the `data-part="shell"` element's `data-frame` says what is
+drawn. Under 820 pixels wide the navigation is the rail whatever the theme says, and a list beside
+the page (topics, or tabs with `tabs: side`) becomes a select above it. Under 560 pixels the
+navigation is a row of icons across the top (`data-frame="bar"`). Under 720 pixels `side` shows as
+`below`.
 
 ### The user's choices come first
 
@@ -230,12 +240,26 @@ These stay stable within a theme contract version:
 | `class="dark"` | Root element, while the appearance is dark |
 | `data-nav`, `data-list`, `data-detail`, `data-width`, `data-tabs` | Root element, set to the active layout value |
 | `data-page="<page id>"` | Root element: `status`, `accounts`, `add-account`, `routing`, `quota`, `logs`, `usage`, `setup`, `config`, `system`, `extensions`, `themes`, or an extension page's ID |
-| `data-part="shell"` | The whole UI below the root |
+| `data-part="shell"` | The whole UI below the root. Signed in, `data-frame` says how the navigation is drawn: `sidebar`, `rail` or `top` (the `nav` option), or `bar` in a very narrow window; `data-narrow` is set while the window is under 820 pixels wide |
 | `data-part="nav"` | The navigation |
-| `data-part="nav-group"` | A group of navigation entries under its label; `data-group` is `operate`, `gateway`, `observe`, `control` or `extensions` (the extensions' pages) |
-| `data-part="nav-item"` | One navigation entry; the current one has `aria-current="page"` |
-| `data-part="main"` | The page area |
-| `data-part="page-title"` | A page's title |
+| `data-part="nav-idle"` | The navigation drawn where nothing in it can be chosen yet: the desktop app before it is connected. It has the same content and the same `data-slot` |
+| `data-part="brand"` | The product name at the navigation's start |
+| `data-part="nav-item"` | One of the navigation's destinations; `data-dest` is `home`, `accounts`, `activity`, `tools` or `settings`. The current one has `aria-current="page"`; one that cannot be chosen has `aria-disabled="true"` |
+| `data-part="icon"` | An icon (an SVG drawn in the text's colour), such as a destination's |
+| `data-part="status"` | The status block at the navigation's foot: a dot, a word for pluxy's state and where it runs; `data-state` is `running`, `down`, `stopped` or `unknown` |
+| `data-part="status-menu"` | The menu the status block opens |
+| `data-part="header"` | The header strip over the page |
+| `data-part="page-title"` | The page's title, in the header strip |
+| `data-part="header-tabs"` | A destination's tabs in the header strip |
+| `data-part="header-tab"` | One of them; the current one has `aria-current="page"` |
+| `data-part="header-actions"` | The page's main actions, at the header strip's end |
+| `data-part="privacy-toggle"` | The header strip's privacy mode switch; `aria-pressed="true"` while it masks account e-mail addresses and identifiers, and the root then has `data-privacy="on"`. |
+| `data-part="sign-out"` | The header strip's sign-out button |
+| `data-part="topics"` | The list of a destination's topics beside the page |
+| `data-part="nav-group"` | A group of topics under its label; `data-group` is `core`, `device` or `extensions` (the extensions' pages) |
+| `data-part="topic"` | One topic; the current one has `aria-current="page"` |
+| `data-part="topics-select"` | The select that replaces a list beside the page in a narrow window |
+| `data-part="main"` | The page area, the one part that scrolls |
 | `data-part="list"` | A list of items, whichever `list` layout it uses |
 | `data-part="item"` | One item in a list; a selected one has `aria-current="true"` |
 | `data-part="detail"` | The detail pane |
@@ -285,7 +309,6 @@ These stay stable within a theme contract version:
 | `data-part="account-edit-row"` | One model or model alias row in the Edit form. |
 | `data-part="account-edit-discard"` | The Edit form's question before unsaved changes are discarded. |
 | `data-part="subscription-end"` | The Quota card's line with the day a subscription ends. |
-| `data-part="privacy-toggle"` | The navigation's privacy mode switch; `aria-pressed="true"` while it masks account e-mail addresses and identifiers, and the root then has `data-privacy="on"`. |
 | `data-part="setup-found"` | The Setup page's list of what core found on its machine; `aria-busy="true"` while core looks again. |
 | `data-part="setup-pick"` | One provider on the Setup page's checklist; `data-state` is `offered`, `installed` or `failed`. |
 | `data-part="setup-client"` | One client on the Setup page; `data-state` is `not-configured`, `configured`, `needs-update`, `refused` or `not-found`. |

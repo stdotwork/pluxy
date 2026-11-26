@@ -56,7 +56,6 @@ import { keptTerminal, launcherProblem, useDeviceChanged } from "./startCli";
 
 const t = strings("claudeCode", {
   title: "Claude Code",
-  short: "Claude",
   tip: "Set up and start Claude Code with this core",
   intro:
     "Points Claude Code at this core with a client key and role models. Apply, Clear, and Restore backup ask for confirmation and keep other settings. Restart Claude Code afterward.",
@@ -550,9 +549,9 @@ export function ClaudeCodePage() {
 export const claudeCodePage = (): AgentPage => ({
   id: "claude-code",
   package: PACKAGE,
-  group: "control",
+  dest: "tools",
+  kind: "topic",
   title: t("title"),
-  short: t("short"),
   tip: t("tip"),
   render: () => <ClaudeCodePage />,
 });

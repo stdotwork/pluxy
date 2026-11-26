@@ -24,7 +24,6 @@ import {
 
 const t = strings("usage", {
   title: "Usage",
-  short: "Usage",
   tip: "Recorded requests",
   since: "Since",
   sinceHint: "e.g. 24h or 2026-01-01T00:00:00Z",
@@ -390,9 +389,8 @@ export function UsagePage() {
 
 export const usagePage = (): PageDef => ({
   id: "usage",
-  group: "observe",
+  dest: "activity",
   title: t("title"),
-  short: t("short"),
   tip: t("tip"),
   render: () => <UsagePage />,
 });

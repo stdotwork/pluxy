@@ -516,20 +516,20 @@ pub(crate) fn run(
         "area": first,
     });
 
-    // Scrolled: the notes webview covers only the part of its area that shows, below the
-    // navigation bar pinned at the top, and hides once none of it does. The page gets room to
-    // scroll, and the top navigation; unscrolled, the webview sits over its area (control).
-    main.eval("window.__navWas = document.documentElement.dataset.nav; document.documentElement.dataset.nav = 'top'; document.querySelector('[data-part=main]').style.paddingBottom = '3000px'; window.scrollTo(0, 0)")
+    // Scrolled: the notes webview covers only the part of its area that shows, inside the pane
+    // (the one part of the window that scrolls) and so below the header strip, and hides once
+    // none of it does. The pane gets room to scroll; unscrolled, the webview sits over its area
+    // (control). "nav" is the pane's top edge: the strip and anything else above it end there.
+    main.eval("{ const m = document.querySelector('[data-part=main]'); m.style.paddingBottom = '3000px'; m.scrollTo(0, 0); }")
         .map_err(|e| e.to_string())?;
     let geometry = "(() => { const r = document.querySelector('[data-part=release-notes][data-product=app]').getBoundingClientRect(); \
-        const n = document.querySelector('[data-part=nav]').getBoundingClientRect(); const v = document.documentElement; \
-        return {left: r.left, top: r.top, right: r.right, bottom: r.bottom, nav: n.bottom, nav_top: n.top, \
-        position: getComputedStyle(document.querySelector('[data-part=nav]')).position, \
-        view_width: v.clientWidth, view_height: v.clientHeight, scroll: window.scrollY}; })()";
+        const m = document.querySelector('[data-part=main]'); const p = m.getBoundingClientRect(); const v = document.documentElement; \
+        return {left: r.left, top: r.top, right: r.right, bottom: r.bottom, nav: p.top, pane_left: p.left, \
+        view_width: v.clientWidth, view_height: v.clientHeight, scroll: m.scrollTop}; })()";
     // What should show of the area, from the page's own numbers.
     let shows = |g: &Value| -> Value {
         let f = |k: &str| g[k].as_f64().unwrap_or(f64::NAN);
-        let (x, y) = (f("left").max(0.0), f("top").max(f("nav")));
+        let (x, y) = (f("left").max(f("pane_left")), f("top").max(f("nav")));
         let (w, h) = (
             f("right").min(f("view_width")) - x,
             f("bottom").min(f("view_height")) - y,
@@ -540,10 +540,12 @@ pub(crate) fn run(
             Value::Null
         }
     };
-    // Scrolls the page to y, then waits until the webview is where the area shows (or hidden).
+    // Scrolls the pane to y, then waits until the webview is where the area shows (or hidden).
     let scrolled = |y: f64| -> Result<Value, String> {
-        main.eval(format!("window.scrollTo(0, {y})"))
-            .map_err(|e| e.to_string())?;
+        main.eval(format!(
+            "document.querySelector('[data-part=main]').scrollTo(0, {y})"
+        ))
+        .map_err(|e| e.to_string())?;
         std::thread::sleep(Duration::from_millis(300));
         let mut last = json!(null);
         wait_for(&format!("the notes webview placed at scroll {y}"), || {
@@ -563,11 +565,11 @@ pub(crate) fn run(
     let unscrolled = scrolled(0.0)?;
     let top = unscrolled["geometry"]["top"].as_f64().unwrap_or(0.0);
     let nav = unscrolled["geometry"]["nav"].as_f64().unwrap_or(0.0);
-    // Partly above the navigation bar, then wholly out of sight, then back.
+    // Partly above the pane's top edge, then wholly out of sight, then back.
     let partly = scrolled((top - nav + 100.0).max(0.0))?;
     let hidden = scrolled(top + 1000.0)?;
     let back = scrolled(0.0)?;
-    main.eval("document.documentElement.dataset.nav = window.__navWas; document.querySelector('[data-part=main]').style.paddingBottom = ''; window.scrollTo(0, 0)")
+    main.eval("{ const m = document.querySelector('[data-part=main]'); m.style.paddingBottom = ''; m.scrollTo(0, 0); }")
         .map_err(|e| e.to_string())?;
     evidence["scrolled"] = json!({
         "unscrolled": unscrolled, "partly": partly, "hidden": hidden, "back": back,

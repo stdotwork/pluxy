@@ -29,7 +29,6 @@ import { connectionGet, reply } from "./host";
 
 const t = strings("hermes", {
   title: "Hermes Agent",
-  short: "Hermes",
   tip: "Set up and start Hermes Agent with this core",
   intro:
     "Adds this core to Hermes Agent's config.yaml with a client key and default model. Apply, Clear, and Restore backup ask for confirmation and keep other settings. Restart Hermes Agent afterward.",
@@ -302,9 +301,9 @@ export function HermesPage() {
 export const hermesPage = (): AgentPage => ({
   id: "hermes",
   package: PACKAGE,
-  group: "control",
+  dest: "tools",
+  kind: "topic",
   title: t("title"),
-  short: t("short"),
   tip: t("tip"),
   render: () => <HermesPage />,
 });

@@ -1,5 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
-import { goTo, nav, openPanel, signIn, useCore } from "./support";
+import { goTo, goToId, nav, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 
@@ -100,9 +100,9 @@ test("the Dashboard sums up the requests core recorded and the accounts it holds
 
   if (process.env.DASHBOARD_SHOTS) {
     for (const theme of ["default", "terminal", "paper"]) {
-      await page.locator('nav a[href="#/themes"]').click();
+      await goToId(page, "themes");
       await page.getByRole("radio", { name: new RegExp(`^${theme}`, "i") }).check();
-      await page.locator('nav a[data-part="nav-item"][href="#/status"]').click();
+      await goToId(page, "status");
       await expect(stat(page, "Requests handled").locator("strong")).toHaveText("4");
       await page.screenshot({ path: `${process.env.DASHBOARD_SHOTS}/${theme}.png`, fullPage: true });
     }

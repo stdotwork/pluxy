@@ -43,7 +43,6 @@ import { launcherProblem } from "./startCli";
 
 const t = strings("claudeDesktop", {
   title: "Claude Desktop",
-  short: "Desk",
   tip: "Set up and start Claude Desktop with this core",
   intro:
     "Configures Claude Desktop's third-party gateway (Linux beta) with a client key and model list. Apply, Clear, and Restore backup ask for confirmation and keep other settings. Quit and reopen Claude Desktop afterward.",
@@ -442,9 +441,9 @@ export function ClaudeDesktopPage() {
 export const claudeDesktopPage = (): AgentPage => ({
   id: "claude-desktop",
   package: PACKAGE,
-  group: "control",
+  dest: "tools",
+  kind: "topic",
   title: t("title"),
-  short: t("short"),
   tip: t("tip"),
   render: () => <ClaudeDesktopPage />,
 });

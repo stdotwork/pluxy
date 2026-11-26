@@ -182,23 +182,17 @@ interface Rect {
   height: number;
 }
 
-/** The part of el the person can see: inside the viewport and below a navigation bar pinned at
- * its top. None when nothing of el shows, so its notes webview hides rather than cover the rest. */
+/** The part of el the person can see: inside the viewport and inside the frame's pane, the part
+ * of the window that scrolls, so never over the header strip or the navigation. None when
+ * nothing of el shows, so its notes webview hides rather than cover the rest. */
 function visibleRect(el: Element): Rect | null {
   const r = el.getBoundingClientRect();
-  let top = 0;
-  const nav = document.querySelector("[data-part=nav]");
-  if (nav) {
-    const n = nav.getBoundingClientRect();
-    const position = getComputedStyle(nav).position;
-    const pinned = (position === "sticky" || position === "fixed") && n.top <= 0.5;
-    if (pinned && n.left < r.right && n.right > r.left) top = Math.max(top, n.bottom);
-  }
   const view = document.documentElement;
-  const x = Math.max(r.left, 0);
-  const y = Math.max(r.top, top);
-  const width = Math.min(r.right, view.clientWidth) - x;
-  const height = Math.min(r.bottom, view.clientHeight) - y;
+  const pane = el.closest("[data-part=main]")?.getBoundingClientRect();
+  const x = Math.max(r.left, pane?.left ?? 0, 0);
+  const y = Math.max(r.top, pane?.top ?? 0, 0);
+  const width = Math.min(r.right, pane?.right ?? Infinity, view.clientWidth) - x;
+  const height = Math.min(r.bottom, pane?.bottom ?? Infinity, view.clientHeight) - y;
   return width >= 1 && height >= 1 ? { x, y, width, height } : null;
 }
 

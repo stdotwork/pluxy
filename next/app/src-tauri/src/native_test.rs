@@ -621,7 +621,7 @@ fn shrunk_page(app: &AppHandle, main: &Webview, label: &str) -> Value {
     };
     let _ = main.eval(
         "{ document.getElementById('pluxy-test-spacer')?.remove(); \
-         document.scrollingElement.scrollTop = 0; }",
+         document.querySelector('[data-part=main]').scrollTop = 0; }",
     );
     if let (Some(size), Some(w)) = (size, app.get_window(WINDOW)) {
         let _ = w.set_size(size);
@@ -709,7 +709,7 @@ fn shrunk_page_steps(
         "{{ const s = document.createElement('div'); s.id = 'pluxy-test-spacer'; \
          s.style.height = (2 * innerHeight) + 'px'; \
          document.querySelector('[data-part=extension-frame]').after(s); \
-         document.scrollingElement.scrollTop = {scroll}; }}"
+         document.querySelector('[data-part=main]').scrollTop = {scroll}; }}"
     ))
     .map_err(|e| e.to_string())?;
     within(10, || {
@@ -717,7 +717,7 @@ fn shrunk_page_steps(
             .as_f64()
             .filter(|now| (now - (y - scroll)).abs() <= 1.0)
     })
-    .ok_or("the window did not scroll")?;
+    .ok_or("the pane did not scroll")?;
     r["scroll"] = json!(scroll);
     let scrolled = settled(&mut *r, "scrolled");
     if top && scrolled {

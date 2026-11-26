@@ -3,16 +3,12 @@
   :root {
     --s: calc(var(--px-space-unit, 4px) * var(--px-density, 1));
     --t: var(--px-motion-duration, 120ms) var(--px-motion-easing, ease-out);
-    --rail: calc(var(--s) * 18);
-    /* The room the page's sticky top takes: what sticks below it starts here. */
+    /* The room the frame takes above the pane (shell.css sets it): a part that fills the rest of
+       the window's height leaves this much out. */
     --stick: calc(var(--s) * 4);
     /* Digits of one width everywhere, so numbers in table cells, counters and meter labels line
        up and do not shift as they change. */
     font-variant-numeric: tabular-nums;
-  }
-
-  html[data-nav="top"] {
-    --stick: calc(var(--s) * 18);
   }
 
   *,
@@ -210,6 +206,12 @@
     white-space: nowrap;
   }
 
+  /* A link drawn as a button: it leads to another page. */
+  a.btn {
+    display: inline-block;
+    text-decoration: none;
+  }
+
   .btn[data-size="small"] {
     font-size: var(--px-font-size-small);
     padding: 0 calc(var(--s) * 1.5);
@@ -342,8 +344,8 @@
   /* Lists: table or cards */
 
   /* A table scrolls in its own frame, sideways when it is wide and down when it is long, and
-     its header row stays at the frame's top. The frame is never taller than the window below
-     the page's sticky top, so the header and the last row fit in view together. */
+     its header row stays at the frame's top. The frame is never taller than the pane the page is
+     shown in, so the header and the last row fit in view together. */
   .table-wrap {
     overflow: auto;
     max-height: max(calc(100vh - var(--stick) - var(--s) * 4), calc(var(--s) * 60));
@@ -647,11 +649,6 @@
 
   /* Narrow windows: details go below the list. */
   @media (max-width: 720px) {
-    /* The side navigation is a bar across the top here. */
-    html {
-      --stick: calc(var(--s) * 18);
-    }
-
     html[data-detail="side"] .master[data-open] {
       grid-template-columns: minmax(0, 1fr);
     }

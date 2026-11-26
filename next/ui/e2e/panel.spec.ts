@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { goTo, nav, openPanel, signIn, useCore } from "./support";
+import { goTo, headerTabs, nav, openPanel, pageTitle, signIn, topics, useCore } from "./support";
 
 const core = useCore();
 
@@ -37,13 +37,18 @@ test("panel shows core, switches layout and theme live, and recovers from custom
   const { requests, problems } = await open(page);
   await signIn(page, core);
 
-  // Shared pages appear in their navigation groups.
-  await expect(
-    nav(page).getByRole("group", { name: "Operate" }).getByRole("link", { name: "Dashboard" }),
-  ).toBeVisible();
-  await expect(
-    nav(page).getByRole("group", { name: "Control" }).getByRole("link", { name: "Themes" }),
-  ).toBeVisible();
+  // The navigation holds the destinations that have a page here: the panel has no Tools.
+  await expect(nav(page).locator('[data-part="nav-item"]')).toHaveText([
+    "Home",
+    "Accounts",
+    "Activity",
+    "Settings",
+  ]);
+  await expect(nav(page).getByRole("link", { name: "Home", exact: true })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await expect(pageTitle(page)).toHaveText("Dashboard");
 
   // Dashboard: the extensions core runs, from its status.
   const running = page.getByRole("table", { name: "Running extensions" });
@@ -332,44 +337,132 @@ test("the Themes page says what is still true, and what to do about a file it ca
   ]);
 });
 
-test("in a window shorter than the side navigation, the navigation scrolls to its last entry", async ({
+test("a narrow window shows the rail, then a bar of icons, whatever the theme says, and every entry keeps its name", async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 1100, height: 320 });
   await open(page);
   await signIn(page, core);
-  const bar = nav(page);
-  const last = bar.getByRole("link").last();
-  // The navigation is taller than the window: its last entry starts out of view.
-  expect(await bar.evaluate((n) => n.scrollHeight > n.clientHeight)).toBe(true);
-  await expect(last).not.toBeInViewport();
-  // The wheel over the navigation reaches it, on a page too short to scroll itself.
-  await bar.hover({ position: { x: 20, y: 20 } });
-  await page.mouse.wheel(0, 4000);
-  await expect(last).toBeInViewport({ ratio: 0.95 });
+  const frame = page.locator('[data-part="shell"]');
+  await expect(frame).toHaveAttribute("data-frame", "sidebar");
+  await goTo(page, "Themes");
+  await expect(topics(page).getByRole("link", { name: "Themes", exact: true })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+
+  // Under 820 pixels: a rail of icons at the side. The theme's own option is unchanged.
+  await page.setViewportSize({ width: 700, height: 800 });
+  await expect(frame).toHaveAttribute("data-frame", "rail");
+  await expect(root(page)).toHaveAttribute("data-nav", "sidebar");
+  const rail = await nav(page).boundingBox();
+  expect(rail && rail.width < 60 && rail.height > 700).toBe(true);
+  for (const name of ["Home", "Accounts", "Activity", "Settings"]) {
+    const entry = nav(page).getByRole("link", { name, exact: true });
+    await expect(entry).toBeVisible();
+    await expect(entry).toHaveAttribute("title", name);
+  }
+  // The topics are a select above the page, on the current topic; choosing another opens it.
+  await expect(topics(page)).toHaveCount(0);
+  const select = page.getByRole("combobox", { name: "Settings topics" });
+  await expect(select.locator("option:checked")).toHaveText("Themes");
+  await select.selectOption({ label: "System" });
+  await expect(page).toHaveURL(/#\/system$/);
+  await expect(pageTitle(page)).toHaveText("System");
+  // Nothing is wider than the window.
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBe(0);
+
+  // Under 560 pixels: the same icons in a bar across the top.
+  await page.setViewportSize({ width: 500, height: 800 });
+  await expect(frame).toHaveAttribute("data-frame", "bar");
+  const bar = await nav(page).boundingBox();
+  expect(bar && bar.width === 500 && bar.height < 70 && bar.y === 0).toBe(true);
+  await nav(page).getByRole("link", { name: "Accounts", exact: true }).click();
+  await expect(headerTabs(page).getByRole("link")).toHaveText(["Accounts", "Order & fallback", "Limits"]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBe(0);
 });
 
-test("with the navigation on top in a narrow window, the current page's entry is in view and the bar shows there is more", async ({
+test("the header strip names the page, shows a destination's tabs, and the way back from a page under another", async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 700, height: 800 });
   await open(page);
   await signIn(page, core);
-  const bar = nav(page);
-  const themes = bar.getByRole("link", { name: "Themes", exact: true });
-  // The bar is wider than the window: its last entries start out of view.
-  expect(await bar.evaluate((n) => n.scrollWidth > n.clientWidth)).toBe(true);
-  await expect(themes).not.toBeInViewport();
-  // Opening the page by its address, not by a click on the entry (which would scroll to it).
-  await page.evaluate(() => {
-    location.hash = "#/themes";
-  });
-  await expect(page.getByRole("heading", { name: "Themes", level: 1 })).toBeVisible();
-  await expect(themes).toBeInViewport({ ratio: 0.95 });
-  // The cue at the edges: shadows that stay put while the entries scroll under them.
-  await expect(bar).toHaveCSS("background-attachment", /local.*scroll/);
-  await bar.getByRole("link", { name: "Dashboard", exact: true }).click();
-  await expect(bar.getByRole("link", { name: "Dashboard", exact: true })).toBeInViewport({ ratio: 0.95 });
+  await goTo(page, "Accounts");
+  // The three pages of Accounts are tabs; the heading names the destination and the page.
+  const tabs = headerTabs(page);
+  await expect(tabs.getByRole("link")).toHaveText(["Accounts", "Order & fallback", "Limits"]);
+  await expect(tabs.getByRole("link", { name: "Accounts", exact: true })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await tabs.getByRole("link", { name: "Order & fallback", exact: true }).click();
+  await expect(page).toHaveURL(/#\/routing$/);
+  await expect(page).toHaveTitle(/^Routing · /);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveAccessibleName("Accounts: Routing");
+  await expect(tabs.getByRole("link", { name: "Order & fallback", exact: true })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await expect(nav(page).getByRole("link", { name: "Accounts", exact: true })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  // The page's own action is drawn in the strip, and works there.
+  const strip = page.locator('[data-part="header"]');
+  await expect(strip.getByRole("button", { name: "Refresh", exact: true })).toBeVisible();
+
+  // Add Account sits under Accounts: no tabs, and the way back.
+  await goTo(page, "Add Account");
+  await expect(tabs).toHaveCount(0);
+  await expect(page.getByRole("heading", { level: 1 })).toHaveAccessibleName("Add Account");
+  await strip.getByRole("link", { name: "Accounts", exact: true }).click();
+  await expect(page).toHaveURL(/#\/accounts$/);
+
+  // With tabs at the side, a destination's tabs are a list beside the page.
+  await goTo(page, "Themes");
+  await page.getByRole("radiogroup", { name: "Tabs" }).getByRole("radio", { name: "Side" }).check();
+  await goTo(page, "Accounts");
+  await expect(tabs).toHaveCount(0);
+  const beside = page.getByRole("navigation", { name: "Accounts pages" });
+  await expect(beside.getByRole("link")).toHaveText(["Accounts", "Order & fallback", "Limits"]);
+  await beside.getByRole("link", { name: "Limits", exact: true }).click();
+  await expect(page).toHaveURL(/#\/quota$/);
+});
+
+test("the status block says where pluxy runs; its menu copies the address and closes on Escape and on a click outside", async ({
+  page,
+  context,
+}) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await open(page);
+  await signIn(page, core);
+  const status = page.locator('[data-part="status"]');
+  const host = new URL(core.base).host;
+  await expect(status).toHaveAttribute("data-state", "running");
+  await expect(status).toContainText("Running");
+  await expect(status).toContainText(host);
+  const block = status.getByRole("button", { name: `Running, ${host}. Open the menu` });
+  const menu = page.locator('[data-part="status-menu"]');
+  await expect(menu).toHaveCount(0);
+
+  await block.click();
+  await expect(block).toHaveAttribute("aria-expanded", "true");
+  await expect(menu).toContainText(core.base);
+  await menu.getByRole("button", { name: "Copy" }).click();
+  await expect(menu.getByRole("button", { name: "Copied" })).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(core.base);
+
+  // Escape closes it and puts focus back on the block.
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(block).toBeFocused();
+  await expect(block).toHaveAttribute("aria-expanded", "false");
+
+  // By keyboard: Enter opens it, and a click outside closes it.
+  await page.keyboard.press("Enter");
+  await expect(menu).toBeVisible();
+  await page.locator("main").click({ position: { x: 5, y: 5 } });
+  await expect(menu).toHaveCount(0);
 });
 
 test("a change of page opens the new page at its top; a change inside a page keeps the place", async ({
@@ -378,13 +471,19 @@ test("a change of page opens the new page at its top; a change inside a page kee
   await page.setViewportSize({ width: 1280, height: 250 });
   await open(page);
   await signIn(page, core);
-  const scrolled = () => page.evaluate(() => window.scrollY);
+  // Only the pane scrolls: the window never does, and the navigation and the header strip stay.
+  const pane = page.locator("main");
+  const scrolled = () => pane.evaluate((m) => m.scrollTop);
   const scrollDown = async () => {
-    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await pane.evaluate((m) => m.scrollTo(0, m.scrollHeight));
     await expect.poll(scrolled).toBeGreaterThan(100);
+    expect(await page.evaluate(() => window.scrollY)).toBe(0);
+    await expect(page.locator('[data-part="header"]')).toBeInViewport({ ratio: 1 });
+    await expect(nav(page)).toBeInViewport({ ratio: 1 });
+    await expect(page.locator('[data-part="status"]')).toBeInViewport({ ratio: 1 });
   };
 
-  // A tab of the Config page is in the address, and is the same page: the window stays put.
+  // A tab of the Config page is in the address, and is the same page: the pane stays put.
   await page.evaluate(() => {
     location.hash = "#/config";
   });
@@ -400,12 +499,12 @@ test("a change of page opens the new page at its top; a change inside a page kee
     "aria-selected",
     "true",
   );
-  // The Network tab is shorter, so the window may move up to its end, but not to its top.
+  // The Network tab is shorter, so the pane may move up to its end, but not to its top.
   expect(await scrolled()).toBeGreaterThan(100);
 
   // Another page, by a navigation entry and by the address: each opens at its top.
   await scrollDown();
-  await nav(page).getByRole("link", { name: "Accounts", exact: true }).click();
+  await goTo(page, "Accounts");
   await expect(page.getByRole("heading", { name: "Accounts", level: 1 })).toBeInViewport();
   expect(await scrolled()).toBe(0);
   await page.evaluate(() => {
@@ -420,7 +519,7 @@ test("a change of page opens the new page at its top; a change inside a page kee
   expect(await scrolled()).toBe(0);
 });
 
-test("the sign-in page fills the window, says how to open the panel without custom CSS, and the rail's sign-out has its name", async ({
+test("the sign-in page fills the window, says how to open the panel without custom CSS, and the sign-out button has its name", async ({
   page,
 }) => {
   await open(page);
@@ -432,12 +531,13 @@ test("the sign-in page fills the window, says how to open the panel without cust
   expect(Math.abs(box.x + box.width / 2 - 640)).toBeLessThan(2);
   await expect(card).toContainText("add ?safe to the URL to disable it.");
 
-  // The rail shows short labels: the sign-out control still has its whole name.
+  // The sign-out control is an icon in the header strip: it has its whole name.
   await signIn(page, core);
   await goTo(page, "Themes");
   await page.getByRole("radiogroup", { name: "Theme" }).getByRole("radio", { name: "Terminal" }).check();
   await expect(root(page)).toHaveAttribute("data-nav", "rail");
-  const out = nav(page).locator(".signout");
+  await expect(page.locator('[data-part="shell"]')).toHaveAttribute("data-frame", "rail");
+  const out = page.locator('[data-part="header"] [data-part="sign-out"]');
   await expect(out).toHaveAccessibleName("Sign out");
   await expect(out).toHaveAttribute("title", "Sign out");
   await out.click();
@@ -462,7 +562,9 @@ test("what an add came to is brought into view, and a theme from a file leaves n
   // The Add button at the window's lower edge, as after scrolling down to it: the reason shows
   // under it, outside the window unless the page brings it in.
   await paste.fill('{"foo": 1}');
-  await add.evaluate((b) => window.scrollBy(0, b.getBoundingClientRect().bottom - window.innerHeight + 4));
+  await add.evaluate((b) =>
+    b.closest("main")?.scrollBy(0, b.getBoundingClientRect().bottom - window.innerHeight + 4),
+  );
   await add.click();
   await expect(page.getByRole("alert")).toContainText("Not added:");
   await expect(page.getByRole("alert")).toBeInViewport({ ratio: 0.95 });

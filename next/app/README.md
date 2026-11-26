@@ -2,7 +2,8 @@
 
 The desktop app is the UI kit's second build ([`../ui`](../ui/README.md)), in a Tauri 2 window,
 with a tray icon. It shows core's pages in the same places and with the same themes as the web
-panel, then adds its own Connection and Device extensions pages. Extension pages, from core and
+panel, then adds its own: Beginner Mode, Manage Clients and the client pages as the topics of Tools, and Connection, Version Management, Device
+extensions and Launcher among the Settings topics. Extension pages, from core and
 from packages installed on this device, open in webviews of their own.
 
 Linux is the only platform the app supports now; Windows, macOS and WSL are later work
@@ -344,7 +345,7 @@ other launch is an ordinary later launch.
 
 ## Privacy mode
 
-The navigation's **Privacy mode** toggle masks account e-mail addresses and identifiers where
+The **Privacy mode** toggle at the header strip's end masks account e-mail addresses and identifiers where
 the kit shows them, as in the panel (`ui/kit/privacy.ts`), and extension pages are told in their
 theme snapshot. The app keeps the choice natively, in `privacy-mode.json` beside
 `connection.json` (readable only by your user), not in the window's storage, so losing that
@@ -503,7 +504,7 @@ Permissions and extension settings still use the shared kit's channel. No page r
 
 ## Version Management and release notes
 
-The Version Management page (Control group) shows, for the app ("Desktop app") and for
+The Version Management page (a Settings topic) shows, for the app ("Desktop app") and for
 core, the current version, the latest version on the chosen channel and when it was published,
 then the app release's notes. Stable shows the
 highest stable version; Preview (latest) shows the highest version on either channel, so it is a
@@ -533,8 +534,8 @@ started before a feed change (even back to the same address), is ignored.
 
 The window gets only versions, channels, dates and whether a release has notes or a notes
 address; never notes text or a notes address. Each release's notes open in a webview of their
-own (`notes-<n>`, at most two), placed over the part of the notes area that shows: below a
-navigation bar pinned at the top, and hidden when none of it shows, and placed again whenever the page moves the area (scrolling,
+own (`notes-<n>`, at most two), placed over the part of the notes area that shows: inside the pane, never over
+the header strip or the navigation, and hidden when none of it shows, and placed again whenever the page moves the area (scrolling,
 resizing, a notice appearing above it), so it never covers the rest
 of the window. It has a web context of its own, cleared at each start. No capability names it. It loads one document from the
 `pluxy-notes:` scheme, which serves each notes webview only its own document and style sheet:
@@ -802,7 +803,7 @@ The Device extensions page manages app packages (see
 [the app package contract](app-host/README.md)) installed on this computer: page-only packages
 (`app.tier` `web`) and curated native tools (`native`). They are apart from
 the extensions of the core the app is connected to: installing one never installs it in core,
-and core's Extensions page never lists it. Their pages are listed in the navigation with core's
+and core's Extensions page never lists it. Their pages are listed among the Settings topics with core's
 extension pages.
 
 A package comes from a release archive (the [protocol's format](../protocol/README.md#release-archives))
@@ -1453,8 +1454,8 @@ no desktop app.
 
 ## Agent usage and Codex sessions
 
-Two more pages come from optional native tools' own pages, listed in the navigation with core's
-extension pages once their package is installed and enabled: **Agent usage**, from the usage hub
+Two more pages come from optional native tools' own pages, listed among the Settings topics with
+core's extension pages once their package is installed and enabled: **Agent usage**, from the usage hub
 `pluxy/agent-usage` and its parsers ([its README](../app-tools/agent-usage/README.md)), and
 **Codex sessions**, from the read-only reader `pluxy/codex-sessions`
 ([app tools](../app-tools/README.md#codex-sessions)). They are extension pages in page webviews,
@@ -1467,7 +1468,7 @@ page ([`../ui`](../ui/README.md), `#/setup`) in place of the Dashboard when the 
 names no page, as the web panel does:
 what core found on its machine, the providers to install, an account, the clients, and Finish. It
 opens once the app is connected and signed in, so the Connection page still comes first. After
-Finish the page stays in the navigation and shows the same things as they are now.
+Finish the page stays among the Settings topics and shows the same things as they are now.
 
 The app adds one thing to the page. Under "Point a client at pluxy", a client core found gets a
 **Set up** button beside "Show what to paste" when the window has a page for it and its optional
@@ -1484,7 +1485,7 @@ is still there and unchanged.
 
 ## Beginner Mode
 
-Beginner Mode (`src/easyMode.tsx`, in the Operate group) is the guided setup of the old app's Easy
+Beginner Mode (`src/easyMode.tsx`, the first topic of Tools, so the Tools entry opens it) is the guided setup of the old app's Easy
 mode, in its two steps. **Connect a model** is the Add Account page's own sign-in (every browser,
 device code and API-key method core's extensions offer); it counts core's accounts, and **Next:
 connect an agent** stays off until there is one. **Connect an agent** lists the agent clients this
@@ -1503,10 +1504,10 @@ A client joins the list by being an agent page: a window page that names the pac
 
 ### Manage Clients
 
-The navigation lists a client's page only while the person wants it there. By default (automatic) it
+Tools lists a client's page among its topics only while the person wants it there. By default (automatic) it
 lists the clients whose tool is installed on this device, enabled or not, with the installed ones
 first; a tool a registry only offers is not listed, since Beginner Mode is where it is installed. The
-**Manage Clients** page (Control group) has a checkbox for every client with a search box, **Restore
+**Manage Clients** page (a topic of Tools) has a checkbox for every client with a search box, **Restore
 automatic display** and **Save**; Save is off for an empty selection ("Keep at least one client
 visible."). The choice is kept in the window's prefs (`pluxy.agent-clients`, on this device, like the
 Themes page's layout choices), and saving automatic removes it. Whichever client page is open stays listed while it is
@@ -1792,8 +1793,8 @@ do not link to (nothing opens) and follows the rendered link, a link whose addre
 renderer escapes (`a[1]?q=x|y`) and "View full release notes" (the stand-in browser gets exactly
 those); asks the notes webview to download its own style sheet
 (refused, nothing saved) and right-clicks it (no menu); collapses the notes (their webview closes) and expands
-them again (a new one, over the notes area); scrolls the page with the navigation bar on top and
-finds the notes webview over only the part of its area below that bar, hidden once the area is
+them again (a new one, over the notes area); scrolls the pane and
+finds the notes webview over only the part of its area inside the pane, hidden once the area is
 out of sight, and back over it unscrolled; stops the feed and finds the offline error with the last good copy and its time, and the notes webview moved down
 with its area when that notice appeared above it; and
 leaves the page, closing the notes webviews. The runner checks the feed server saw exactly one

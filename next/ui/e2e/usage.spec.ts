@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
-import { nav, openPanel, signIn, useCore } from "./support";
+import { goTo, goToId, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 
@@ -35,7 +35,7 @@ test("filters recorded requests and exports the matching rows", async ({ page })
   }
   await openPanel(page, core);
   await signIn(page, core);
-  await nav(page).getByRole("link", { name: "Usage", exact: true }).click();
+  await goTo(page, "Usage");
   await expect(page.getByRole("heading", { level: 1, name: "Usage", exact: true })).toBeVisible();
   const requests: string[] = [];
   page.on("request", (request) => {
@@ -64,9 +64,9 @@ test("filters recorded requests and exports the matching rows", async ({ page })
   );
   if (process.env.USAGE_SHOTS) {
     for (const theme of ["default", "terminal"]) {
-      await nav(page).getByRole("link", { name: "Themes", exact: true }).click();
+      await goTo(page, "Themes");
       await page.getByRole("radio", { name: new RegExp(`^${theme}`, "i") }).check();
-      await page.locator('nav a[href="#/usage"]').click();
+      await goToId(page, "usage");
       await expect(rows).toHaveCount(2);
       await page.screenshot({ path: `${process.env.USAGE_SHOTS}/${theme}-rows.png`, fullPage: true });
       await page.getByLabel("Model", { exact: true }).fill("fake-model");

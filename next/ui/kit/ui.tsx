@@ -404,13 +404,43 @@ export function Card(props: { title?: string; actions?: ComponentChildren; child
   );
 }
 
+/**
+ * Where a page's head goes when the page is shown in the frame (frame.tsx): the frame's header
+ * strip draws the title and the actions. undefined takes either back.
+ */
+export interface HeadSlot {
+  setTitle(title: string | undefined): void;
+  setActions(actions: ComponentChildren): void;
+}
+
+export const HeadContext = createContext<HeadSlot | undefined>(undefined);
+
+/**
+ * A page's title and its main actions. In the frame they are drawn in the header strip, which
+ * holds the page's one h1; a page shown outside a frame draws them itself, in place.
+ */
 export function PageHead(props: { title: string; actions?: ComponentChildren }) {
+  const slot = useContext(HeadContext);
+  useLayoutEffect(() => {
+    if (!slot) return;
+    slot.setTitle(props.title);
+    return () => slot.setTitle(undefined);
+  }, [slot, props.title]);
+  // After every render: the actions are drawn elsewhere, with what this render gave them.
+  useLayoutEffect(() => slot?.setActions(props.actions));
+  useLayoutEffect(() => () => slot?.setActions(undefined), [slot]);
+  if (slot) return null;
   return (
     <header class="page-head">
       <h1 data-part="page-title">{props.title}</h1>
       {props.actions && <div class="actions">{props.actions}</div>}
     </header>
   );
+}
+
+/** Draws the heads inside it in place, not in the frame's header strip. */
+export function InlineHeads(props: { children: ComponentChildren }) {
+  return <HeadContext.Provider value={undefined}>{props.children}</HeadContext.Provider>;
 }
 
 export function Notice(props: { tone: Tone; children: ComponentChildren }) {

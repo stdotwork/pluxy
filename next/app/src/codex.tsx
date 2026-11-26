@@ -31,7 +31,6 @@ import { keptTerminal, launcherProblem, useDeviceChanged } from "./startCli";
 
 const t = strings("codex", {
   title: "Codex",
-  short: "Codex",
   tip: "Set up and start Codex with this core",
   intro:
     "Points Codex's config.toml at this core with a client key and model catalog. Apply, Clear, and Restore backup ask for confirmation and keep other settings. Restart Codex afterward.",
@@ -660,9 +659,9 @@ export function CodexPage() {
 export const codexPage = (): AgentPage => ({
   id: "codex",
   package: PACKAGE,
-  group: "control",
+  dest: "tools",
+  kind: "topic",
   title: t("title"),
-  short: t("short"),
   tip: t("tip"),
   render: () => <CodexPage />,
 });

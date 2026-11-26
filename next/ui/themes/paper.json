@@ -17,6 +17,7 @@
     "font.size": "15px",
     "font.size-title": "24px",
     "density": "1.25",
+    "size.header": "52px",
     "shape.radius": "14px",
     "shadow.raised": "0 1px 3px rgb(80 50 20 / 0.10)"
   },

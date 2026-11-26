@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { goTo, openPanel, signIn, useCore } from "./support";
+import { goTo, goToId, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 
@@ -124,9 +124,9 @@ test("quota is read on request and shows plan, limits and reset times", async ({
 
   if (process.env.QUOTA_SHOTS) {
     for (const theme of ["default", "terminal", "paper"]) {
-      await page.locator('nav a[href="#/themes"]').click();
+      await goToId(page, "themes");
       await page.getByRole("radio", { name: new RegExp(`^${theme}`, "i") }).check();
-      await page.locator('nav a[href="#/quota"]').click();
+      await goToId(page, "quota");
       await page.getByRole("button", { name: "Refresh all", exact: true }).click();
       await expect(page.getByRole("button", { name: "Refresh all" })).toBeEnabled();
       await page.getByLabel("Search accounts", { exact: true }).fill("quota-");

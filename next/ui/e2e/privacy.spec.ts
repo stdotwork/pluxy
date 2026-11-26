@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { expect, type Page, test } from "@playwright/test";
 import type { Account } from "../kit/api/accounts";
 import type { ClientKey } from "../kit/api/config";
-import { goTo, nav, openPanel, signIn, useCore } from "./support";
+import { goTo, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 
@@ -207,7 +207,7 @@ test("privacy mode masks identities, survives a reload, reaches extension pages 
   for (const k of keys) await expect(clients.getByText(k.masked, { exact: true })).toBeVisible();
 
   // An extension page is told, through the theme event, and its page library marks its root.
-  await nav(page).getByRole("link", { name: "Alpha usage" }).click();
+  await goTo(page, "Alpha usage");
   const frame = page.frameLocator('iframe[title="Alpha usage"]');
   await expect(frame.locator("#state")).toHaveText("connected as test/alpha, page usage");
   await expect(frame.locator("html")).toHaveAttribute("data-privacy", "on");
@@ -223,7 +223,7 @@ test("privacy mode masks identities, survives a reload, reaches extension pages 
   await expectMasked(page);
 
   // The person turns it off: everything shows again, and the extension page hears it.
-  await nav(page).getByRole("link", { name: "Alpha usage" }).click();
+  await goTo(page, "Alpha usage");
   await expect(frame.locator("html")).toHaveAttribute("data-privacy", "on");
   await toggle(page).click();
   await expect(toggle(page)).toHaveAttribute("aria-pressed", "false");

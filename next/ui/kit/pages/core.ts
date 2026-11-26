@@ -1,5 +1,5 @@
-// The pages core offers, which the panel shows and the desktop app shows before its own. Within
-// each navigation group they are listed in this order. A new core page adds one entry.
+// The pages core offers, which the panel shows and the desktop app shows before its own. A
+// destination's tabs and topics are listed in this order. A new core page adds one entry.
 // A function, so the titles are read in the locale set when the shell renders.
 
 import type { PageDef } from "../shell";
@@ -27,11 +27,11 @@ export const corePages = (options?: CorePageOptions): PageDef[] => [
   addAccountPage(),
   routingPage(),
   quotaPage(),
-  logsPage(),
   usagePage(),
   setupPage(options?.setup),
   configPage(),
   systemPage(),
   extensionsPage(),
   themesPage(),
+  logsPage(),
 ];

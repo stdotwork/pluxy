@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import type { Account } from "../kit/api/accounts";
 import type { CoreSettings } from "../kit/api/settings";
-import { goTo, nav, openPanel, signIn, useCore } from "./support";
+import { goTo, goToId, openPanel, signIn, useCore } from "./support";
 
 const core = useCore();
 async function seed(id: string, priority: number) {
@@ -93,7 +93,7 @@ for (const theme of ["default", "terminal"]) {
     expect(limited.status).toBe(429);
     await openPanel(page, core);
     await signIn(page, core);
-    await nav(page).locator('a[href="#/routing"]').click();
+    await goToId(page, "routing");
     await expect(page.getByRole("heading", { level: 1, name: /Routing$/ })).toBeVisible();
     await expect(page.locator('[data-part="tier"]')).toHaveCount(3);
     await expect(page.getByText(/^Cooling /).first()).toBeVisible();
