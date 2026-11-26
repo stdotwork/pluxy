@@ -2981,7 +2981,10 @@ fn a_new_copy_that_cannot_be_removed_keeps_its_journal_open_for_the_next_start()
         let open = v.open();
         assert_eq!(open.len(), 1, "{}", e.message);
         // What could not be removed is still there (the removal may have taken the rest first,
-        // in whatever order the folder lists them).
+        // in whatever order the folder lists them). On Windows the lock holds the file open with
+        // no sharing, so only Linux and macOS can read it back.
+        assert!(new.join("sub/b.txt").exists());
+        #[cfg(unix)]
         assert_eq!(std::fs::read(new.join("sub/b.txt")).unwrap(), b"b 1\n");
         let mut lock = Some(lock);
         if unlocked {
