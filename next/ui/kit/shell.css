@@ -256,12 +256,17 @@
     white-space: nowrap;
   }
 
+  /* The menu is as wide as its widest line (the address and Copy): at least 17rem, and at most
+     the room the window has beside where it opens (--menu-room). Narrower than that, the address
+     wraps; it is never cut. */
   .status-menu {
+    --menu-room: calc(100vw - var(--s) * 4);
     position: absolute;
     inset-block-end: calc(100% + var(--s) * 1);
     inset-inline-start: calc(var(--s) * 2);
-    width: max(100% - var(--s) * 4, 17rem);
-    max-width: calc(100vw - var(--s) * 4);
+    width: max-content;
+    min-width: min(max(100% - var(--s) * 4, 17rem), var(--menu-room));
+    max-width: var(--menu-room);
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     padding: calc(var(--s) * 1);
@@ -282,9 +287,7 @@
   .status-address code {
     flex: 1;
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
   }
 
   .status-copy,
@@ -383,9 +386,9 @@
   }
 
   .shell[data-frame="rail"] .status-menu {
+    --menu-room: calc(100vw - var(--px-size-rail) - var(--s) * 3);
     inset-block-end: calc(var(--s) * 2);
     inset-inline-start: calc(100% + var(--s) * 1);
-    width: 17rem;
   }
 
   /* On top: the destinations in a row, Settings and the status block at its end. */
@@ -433,7 +436,6 @@
   .shell:is([data-frame="top"], [data-frame="bar"]) .status-menu {
     inset-block: 100% auto;
     inset-inline: auto 0;
-    width: 17rem;
     margin-top: calc(var(--s) * 1);
   }
 
@@ -531,13 +533,22 @@
     outline-offset: -2px;
   }
 
+  /* The page's actions take the room left beside the title and the tabs, at its end. Those that do
+     not fit there wrap to a second row and the strip grows to hold it, so the tabs (stretched to
+     the strip's height) keep the current tab's line on the strip's border, under every control. */
   .strip-end {
+    flex: 1 1 0;
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
+    justify-content: flex-end;
     gap: calc(var(--s) * 2);
-    margin-inline-start: auto;
     padding-block: calc(var(--s) * 1);
-    min-width: 0;
+    min-width: min-content;
+  }
+
+  .strip-end .actions {
+    justify-content: flex-end;
   }
 
   .strip-end .actions:empty {
