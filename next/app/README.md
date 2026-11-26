@@ -473,7 +473,7 @@ extension page webviews inside it. Each command also refuses any caller but `mai
 | `vault_secrets`, `vault_secret_remove` | The vault's secrets, by ID and label (and a client key's binding), never their values; removes one |
 | `client_key_capture` | After a native confirmation, asks the connected core for a new client key for a native tool and keeps it in the vault, bound to that core and tool; returns its ID, label and binding, never the key |
 | `client_key_enter` | Opens native key entry for an existing client key of the connected core and keeps it the same way once core accepts it |
-| `core_alias_create` | After a native confirmation, adds a model alias (`fork`, so the model keeps its name) to the `model_alias` of each account added by login that serves the model in the connected core; refuses an alias core already serves for anything else and a model only accounts set in core's config serve, and takes the alias out again when core then does not serve it; returns the accounts that have it (Linux) |
+| `core_alias_create` | After a native confirmation, adds a model alias (`fork`, so the model keeps its name) to the `model_alias` of each account added by login that serves the model in the connected core; refuses an alias core already serves for anything else and a model only accounts set in core's config serve, and takes the alias out again when core then does not serve it; returns the accounts that have it |
 | `launcher_state` | The launcher's state: whether the execution program can be used, the remembered launches with their source, the recent folders and the notice setting |
 | `launcher_terminals` | The terminals the execution program finds, Automatic first |
 | `launcher_launch` | A new launch, prepared by the execution program (in a WSL environment the window names, by `pluxy/wsl`); it always opens the native confirmation |
@@ -1205,8 +1205,9 @@ the page.
   window closes after the page was left writes nothing.
 - **Connect {tool}** is one press. It uses the vault's key bound to this add-on and to the pluxy the
   app is connected to (or the one the person chose); with none, it makes one with
-  `client_key_capture`, named for the tool (`Claude Code`, `Codex`, `Claude Desktop`), in its
-  own native confirmation, then writes the settings in the add-on's confirmation. A cancel stops
+  `client_key_capture`, named for the tool (`Claude Code`, `Codex`, `Claude Desktop`) in the vault
+  and in pluxy, which shows that name for the key in Activity and the web panel, in its own native
+  confirmation, then writes the settings in the add-on's confirmation. A cancel stops
   quietly and a key that could not be made writes nothing. When the key was made but the write did
   not happen, the page says the key is kept, and the next Connect uses it, even before the key
   list is read again. Connect, Update and Save say each reason they are held, such as the app not
@@ -2038,7 +2039,9 @@ app supported there:
     with client keys), and a launcher check of its own
     (`src-tauri/src/launcher_platform_native.rs`), in the app built with the test trust, in local
     mode against a test core. The client keys are made on that test core, not on the app's own core
-    as on Linux. On Windows the client-key check reads the agent's command line from Windows, but
+    as on Linux, and after them the vault session makes a model alias on it through its native
+    confirmation (`src-tauri/src/core_alias_native.rs`; on Linux the `claude-desktop` session's
+    `alias` step checks it). On Windows the client-key check reads the agent's command line from Windows, but
     its environment is the agent's own report, as Windows gives no supported way to read another
     process's. The launcher check starts a stand-in agent in each terminal kind (Console window,
     Command Prompt and PowerShell on Windows; a real Terminal window on macOS), through an npm
@@ -2110,8 +2113,8 @@ Access gives no page anything there: approving a signer and making a grant are L
 signer or grant can be made. On Windows its commands and a page's Access calls are refused; on
 macOS its list, revocation and a page's calls answer, with nothing granted.
 
-Still refused at run time there: a native tool's `files` frames (saving a file), core aliases and
-installing a package from a file. Changing the release feed works there through the native
+Still refused at run time there: a native tool's `files` frames (saving a file) and installing a
+package from a file. Changing the release feed works there through the native
 confirmation. The app updates itself, with test updater trust only, as an AppImage on Linux, on
 Windows x86_64 as the program set of a folder bundle or of a copy the per-user setup program
 installed, and as an app bundle on macOS

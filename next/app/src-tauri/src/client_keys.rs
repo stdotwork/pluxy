@@ -571,7 +571,6 @@ mod tests {
         .is_err());
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_new_key_is_asked_for_under_its_label() {
         let reply = json!({"key": {"id": "0123456789abcdef01234567", "masked": "sk******YZ",
