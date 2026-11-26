@@ -164,6 +164,10 @@ func firstStart(configPath string, inHome, inherited bool) error {
 	if errors.Is(err, fs.ErrExist) {
 		return nil // another first start wrote it in the meantime: core reads that one
 	}
+	var refused *home.Refusal
+	if errors.As(err, &refused) {
+		return errors.New(refused.Text(stderrShows(os.Stderr))) // it says what is wrong and what to do
+	}
 	if err != nil {
 		return fmt.Errorf("no config at %s, and a first one could not be written: %w", configPath, err)
 	}
@@ -248,6 +252,11 @@ func initConfig(args []string, stdout, stderr io.Writer, getenv func(string) str
 	}
 	fc, err := core.WriteFirstConfig(path, portVal)
 	if err != nil {
+		var refused *home.Refusal
+		if errors.As(err, &refused) {
+			fmt.Fprintf(stderr, "pluxy: %s\n", refused.Text(stderrShows(stderr)))
+			return exitFailed
+		}
 		if errors.Is(err, os.ErrExist) {
 			var pe *os.PathError
 			if errors.As(err, &pe) && pe.Path != "" {

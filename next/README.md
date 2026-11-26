@@ -135,10 +135,17 @@ Without `-config` (or `--config`), every `pluxy` command reads `config.json` in 
 runs in when there is one, and otherwise the one in pluxy's home:
 
 - `pluxy serve` serves it. With no config in either place, its first start writes pluxy's home's
-  config (and, when the folder is not there yet, makes it so only your user can read it; a folder
-  that is already there, such as one `PLUXY_HOME` names, keeps its permissions), so the next `pluxy serve`, from
-  any folder, finds the same one. A start that found its config this way logs which:
-  `config: <path> (pluxy's home)` or `config: <path> (config.json in the current folder)`.
+  config, so the next `pluxy serve`, from any folder, finds the same one. A start that found its
+  config this way logs which: `config: <path> (pluxy's home)` or
+  `config: <path> (config.json in the current folder)`.
+- A first config, written by a first start or `pluxy init`, in pluxy's home or at a `-config`
+  path, goes only into a folder no other user can change, since it holds the management key. A
+  missing folder is made so only your user can read it. A folder that is already there, such as
+  one `PLUXY_HOME` names, is refused when it is a link, belongs to another user, or (on Linux and
+  macOS) group or others can write in it: nothing is written, and the command exits 1, saying why
+  and what to do (`chmod go-w <folder>` for the last). The folders above it are not checked. On
+  Windows a folder that other accounts can open is given the private access list of the
+  [credentials folder](#accounts-added-by-login).
 - `pluxy init` writes pluxy's home's config and never replaces it. In a folder with a
   `config.json`, it says that file exists, as before.
 - The client commands take core's address and management key, each, from the first of: `--url`
