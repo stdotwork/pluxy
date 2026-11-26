@@ -56,7 +56,7 @@ export type Api = ReturnType<typeof api>;
 const t = strings("api", {
   // One sentence with no full stop: pages put it after their own words ("Not saved: ...").
   unreachable: "cannot reach pluxy; check that it is running and the address is right, then try again",
-  answered: "pluxy returned HTTP {status}; check Logs Viewer and try again",
+  answered: "pluxy returned HTTP {status}; check Logs and try again",
 });
 
 /** A reply's error as one line for people. */

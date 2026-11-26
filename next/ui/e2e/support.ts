@@ -171,7 +171,7 @@ const TITLES: Record<string, string> = {
   system: "System",
   extensions: "Extensions",
   themes: "Themes",
-  logs: "Logs Viewer",
+  logs: "Logs",
   tools: "Tools",
 };
 

@@ -264,8 +264,8 @@ test("Home's day bars take focus and say their day, and the log text scrolls fro
   await bars.first().focus();
   await expect(page.locator(".days-readout")).toContainText(": 0 requests, 0 failed");
 
-  await goTo(page, "Logs Viewer");
-  const coreLog = page.getByRole("region", { name: "Core logs", exact: true });
+  await goTo(page, "Logs");
+  const coreLog = page.getByRole("region", { name: "pluxy's log", exact: true });
   // Its lines load after the page opens: wait for them, so no later render replaces the region.
   await expect(coreLog.locator('[data-part="log-line"]').first()).toBeVisible();
   await expect(coreLog).toHaveAttribute("tabindex", "0");

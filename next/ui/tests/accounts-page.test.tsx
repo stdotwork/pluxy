@@ -9,7 +9,11 @@ import { AccountsPage } from "../kit/pages/accounts";
 import { type Kit, KitContext } from "../kit/ui";
 import { all, button, mountIn, restoreDom, settle } from "./fakeDom";
 
-afterEach(() => {
+// The page keeps a timer that reads the clock each second: a page left mounted would fire it in a
+// later test, after its document is gone.
+const unmounts: (() => Promise<void>)[] = [];
+afterEach(async () => {
+  for (const unmount of unmounts.splice(0)) await unmount();
   restoreDom();
   if (jest.isFakeTimers()) {
     jest.clearAllTimers();
@@ -69,6 +73,7 @@ async function mount(
       <AccountsPage />
     </KitContext.Provider>,
   );
+  unmounts.push(page.unmount);
   return {
     ...page,
     reads: () => accountReads,

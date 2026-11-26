@@ -60,7 +60,7 @@ const t = strings("accountTools", {
   milliseconds: "{count} ms",
   testPassed: "Request succeeded",
   testFailed: "Request failed",
-  missingResult: "Core returned no test result. Try again or check Logs Viewer.",
+  missingResult: "Core returned no test result. Try again or check Logs.",
   refresh: "Refresh OAuth credential",
   refreshed: "Credential refreshed.",
   signIn: "Sign in again",

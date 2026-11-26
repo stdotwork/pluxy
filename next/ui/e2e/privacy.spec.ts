@@ -163,15 +163,11 @@ test("privacy mode masks identities, survives a reload, reaches extension pages 
 
   // Log views: the core log's lines and an error request log.
   await page.goto(`${core.base}/panel/#/logs`);
-  const coreLog = page.getByRole("region", { name: "Core logs", exact: true });
+  const coreLog = page.getByRole("region", { name: "pluxy's log", exact: true });
   await expect(coreLog).toContainText(`account "${EMAIL_MASKED}" added`);
-  const errors = page.getByRole("region", { name: "Error request logs", exact: true });
-  await errors
-    .locator('[data-part="item"]')
-    .filter({ hasText: trace })
-    .getByRole("button", { name: "Open", exact: true })
-    .click();
-  const detail = page.getByRole("complementary", { name: "Details: Error request log details" });
+  await page.getByRole("tab", { name: "Failed requests", exact: true }).click();
+  await page.locator('[data-part="item"]').filter({ hasText: trace }).getByRole("button").click();
+  const detail = page.getByRole("complementary", { name: `Details: ${trace}` });
   await expect(detail).toContainText(`ask ${EMAIL_MASKED} about ${AMP_MASKED}`);
   await expectMasked(page);
 
@@ -287,7 +283,7 @@ test("with names hidden, Requests and Logs say that a saved file holds the real 
   await openPanel(page, core);
   await signIn(page, core);
   const requests = page.getByText("Names are hidden on screen only. The saved file has them.");
-  const logs = page.getByText("A downloaded log holds the text as core wrote it.");
+  const logs = page.getByText("A download has the log as pluxy wrote it.");
   await page.goto(`${core.base}/panel/#/usage`);
   const save = page.getByRole("button", { name: "Save as spreadsheet", exact: true });
   await expect(save).toBeVisible();

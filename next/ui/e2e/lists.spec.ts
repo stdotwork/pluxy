@@ -361,18 +361,18 @@ test("Requests: no request leads to a tool, filters with no match can be cleared
 test("Logs: a search with no match can be cleared", async ({ page }) => {
   await openPanel(page, core);
   await signIn(page, core);
-  await goTo(page, "Logs Viewer");
-  const log = page.getByRole("region", { name: "Core logs", exact: true });
+  await goTo(page, "Logs");
+  const log = page.getByRole("region", { name: "pluxy's log", exact: true });
   const lines = log.locator('[data-part="log-line"]');
   await expect(lines.first()).toBeVisible();
-  await page.getByLabel("Search logs by content or keyword").fill("nothing-like-this");
-  await page.getByLabel("Log level", { exact: true }).selectOption("warn");
+  await page.getByLabel("Find in log").fill("nothing-like-this");
+  await page.getByLabel("Show", { exact: true }).selectOption("warn");
   const empty = log.locator('[data-part="empty"]');
   await expect(empty).toHaveAttribute("data-variant", "filter");
   await empty.getByRole("button", { name: "Clear filters", exact: true }).click();
   await expect(lines.first()).toBeVisible();
-  await expect(page.getByLabel("Search logs by content or keyword")).toHaveValue("");
-  await expect(page.getByLabel("Log level", { exact: true })).toHaveValue("");
+  await expect(page.getByLabel("Find in log")).toHaveValue("");
+  await expect(page.getByLabel("Show", { exact: true })).toHaveValue("");
 });
 
 test("Extensions: with none installed, the empty list leads to what can be installed", async ({ page }) => {
